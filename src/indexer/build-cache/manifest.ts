@@ -16,8 +16,13 @@ import {
 import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot } from "../../util/paths.js";
 import { getGitBlobHashes } from "../../util/git.js";
 import { stringifyUnknown } from "../../util/ast.js";
+import {
+  cacheAbsolutePath,
+  cacheRelativePath,
+  cacheRoot,
+  fileSignature,
+} from "./module-cache.js";
 import type { BuildOptions } from "../types.js";
-import { cacheRoot, fileSignature } from "./module-cache.js";
 import type { ManifestBuildOptions } from "./options.js";
 
 type PackageJsonDependencyInfo = {
@@ -84,8 +89,7 @@ export async function collectWorkspaceManifestDependencyEdges(
   return edges;
 }
 
-export const MANIFEST_VERSION = 3;
-
+export const MANIFEST_VERSION = 4;
 export type ManifestFileEntry = GraphCacheEntry;
 
 export type IndexManifest = {
@@ -112,6 +116,31 @@ export type IndexManifest = {
   symlinkDirectories?: string[];
 };
 
+export function transformManifestEntries(
+  projectRoot: string,
+  files: Record<string, ManifestFileEntry>,
+  toRelative: boolean,
+): Record<string, ManifestFileEntry> {
+  const transformed: Record<string, ManifestFileEntry> = {};
+  for (const [file, entry] of Object.entries(files)) {
+    const key = toRelative ? cacheRelativePath(projectRoot, file) : cacheAbsolutePath(projectRoot, file);
+    transformed[key] = {
+      ...entry,
+      edges: entry.edges.map((edge) => ({
+        ...edge,
+        from: toRelative ? cacheRelativePath(projectRoot, edge.from) : cacheAbsolutePath(projectRoot, edge.from),
+        to:
+          edge.to.type === "file"
+            ? {
+                ...edge.to,
+                path: toRelative ? cacheRelativePath(projectRoot, edge.to.path) : cacheAbsolutePath(projectRoot, edge.to.path),
+              }
+            : edge.to,
+      })),
+    };
+  }
+  return transformed;
+}
 type ConfigHashResult = {
   hash: string;
   error?: string;
@@ -234,16 +263,22 @@ export async function loadManifest(projectRoot: string, opts?: BuildOptions): Pr
     const raw = await fsp.readFile(manifestPath, "utf8");
     const parsed = JSON.parse(raw) as IndexManifest;
     if (
-      parsed.version !== MANIFEST_VERSION ||
+      (parsed.version !== MANIFEST_VERSION && parsed.version !== 3) ||
       typeof parsed.projectRoot !== "string" ||
       !/^[a-f0-9]{64}$/.test(parsed.buildOptions?.implementationFingerprint ?? "")
     ) {
       return null;
     }
-    const activeRootIdentity = fileIdentityKey(path.resolve(projectRoot));
-    const manifestRootIdentity = fileIdentityKey(path.resolve(parsed.projectRoot));
-    if (manifestRootIdentity !== activeRootIdentity) return null;
-    return parsed;
+    const oldFiles = parsed.files ?? {};
+    const relativeFiles =
+      parsed.version === 3 ? transformManifestEntries(parsed.projectRoot, oldFiles, true) : oldFiles;
+    const migrated: IndexManifest = {
+      ...parsed,
+      version: MANIFEST_VERSION,
+      files: transformManifestEntries(projectRoot, relativeFiles, false),
+      transientFiles: sanitizeManifestTransientFilesForRoot(projectRoot, parsed.transientFiles),
+    };
+    return migrated;
   } catch {
     return null;
   }

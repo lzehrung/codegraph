@@ -2,6 +2,7 @@ import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } 
 import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { supportForFile } from "../../languages.js";
 import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
@@ -21,9 +22,9 @@ import { lruMapGet, lruMapSet } from "../../util/lruMap.js";
 import { initCacheReport } from "./reports.js";
 import { getImplementationFingerprint } from "./options.js";
 
-// v3: implementation fingerprint and root-namespaced custom cache directories.
-const PARSED_CACHE_VERSION = 3;
-const MODULE_CACHE_SCHEMA_VERSION = 1;
+// v4: relative file keys and explicit cache-anchor policy.
+const PARSED_CACHE_VERSION = 4;
+const MODULE_CACHE_SCHEMA_VERSION = 2;
 const MODULE_CACHE_TABLE = "module_cache";
 const MODULE_CACHE_SCHEMA_VERSION_KEY = "module_cache.schema_version";
 const MODULE_CACHE_COLUMNS: readonly SqliteTableColumn[] = [
@@ -83,21 +84,110 @@ function reportMissingNodeSqlite(logLevel: import("../../logging.js").LogLevel |
     error,
   );
 }
-
-function projectCacheNamespace(projectRoot: string): string {
+export function projectCacheNamespace(projectRoot: string): string {
   const rootIdentity = fileIdentityKey(path.resolve(projectRoot));
   const hash = crypto.createHash("sha256").update(rootIdentity).digest("hex");
   return `project-${hash}`;
 }
 
-export function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
-  if (!opts?.cacheDir) return path.join(projectRoot, ".codegraph-cache", "index-v1");
-  const namespace = projectCacheNamespace(projectRoot);
-  const configuredCacheDir = path.resolve(opts.cacheDir);
-  if (path.basename(configuredCacheDir) === namespace) return configuredCacheDir;
-  return path.join(configuredCacheDir, namespace);
+export type CacheAnchorResolution = {
+  anchor: string;
+  layer: "explicit" | "environment" | "manifest" | "git" | "project" | "user";
+};
+
+function isWritableDirectory(candidate: string): boolean {
+  try {
+    return fs.statSync(candidate).isDirectory() && fs.accessSync(candidate, fs.constants.W_OK) === undefined;
+  } catch {
+    return false;
+  }
 }
 
+function isForbiddenAnchor(candidate: string): boolean {
+  const resolved = path.resolve(candidate);
+  const home = path.resolve(os.homedir());
+  const parsed = path.parse(resolved);
+  return fileIdentityKey(resolved) === fileIdentityKey(home) || fileIdentityKey(resolved) === fileIdentityKey(parsed.root);
+}
+
+function findRepositoryAnchor(projectRoot: string): CacheAnchorResolution {
+  const start = path.resolve(projectRoot);
+  let current = start;
+  while (true) {
+    const manifest = path.join(current, ".codegraph", "manifest.json");
+    if (fs.existsSync(manifest) && isWritableDirectory(current) && !isForbiddenAnchor(current)) {
+      return { anchor: current, layer: "manifest" };
+    }
+    const gitPath = path.join(current, ".git");
+    if (fs.existsSync(gitPath) && isWritableDirectory(current) && !isForbiddenAnchor(current)) {
+      return { anchor: current, layer: "git" };
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return { anchor: start, layer: "project" };
+}
+
+function resolveCodegraphUserCacheRoot(): string {
+  const base =
+    process.platform === "win32"
+      ? process.env.LOCALAPPDATA?.trim() || path.join(os.homedir(), "AppData", "Local")
+      : process.env.XDG_CACHE_HOME?.trim() || path.join(os.homedir(), ".cache");
+  return path.join(base, "codegraph");
+}
+export function resolveCacheAnchor(projectRoot: string, opts?: BuildOptions): CacheAnchorResolution {
+  const explicit = opts?.cacheDir?.trim();
+  if (explicit) return { anchor: path.resolve(explicit), layer: "explicit" };
+  const environment = process.env.CODEGRAPH_CACHE_DIR?.trim();
+  if (environment) return { anchor: path.resolve(environment), layer: "environment" };
+  const location = opts?.cacheLocation;
+  if (location === "project") return { anchor: path.resolve(projectRoot), layer: "project" };
+  if (location === "user") return { anchor: resolveCodegraphUserCacheRoot(), layer: "user" };
+  if (location && location !== "repo") return { anchor: path.resolve(location), layer: "explicit" };
+  return findRepositoryAnchor(projectRoot);
+}
+
+export function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
+  const root = path.resolve(projectRoot);
+  const resolution = resolveCacheAnchor(root, opts);
+  const anchor = isWritableDirectory(resolution.anchor) ? resolution.anchor : root;
+  const sameRoot = fileIdentityKey(anchor) === fileIdentityKey(root);
+  if (
+    sameRoot &&
+    !opts?.cacheDir &&
+    !process.env.CODEGRAPH_CACHE_DIR?.trim() &&
+    (!opts?.cacheLocation || opts.cacheLocation === "project")
+  ) {
+    return path.join(root, ".codegraph-cache", "index-v1");
+  }
+  const namespace = projectCacheNamespace(root);
+  const explicitBase = opts?.cacheDir?.trim() || process.env.CODEGRAPH_CACHE_DIR?.trim();
+  if (explicitBase) {
+    const configured = path.resolve(explicitBase);
+    if (path.basename(configured) === namespace) return configured;
+    return path.join(configured, namespace);
+  }
+  const base = opts?.cacheLocation === "user"
+    ? resolveCodegraphUserCacheRoot()
+    : path.join(anchor, ".codegraph-cache");
+  const candidate = path.join(path.resolve(base), "index-v1", namespace);
+  if (!sameRoot && !opts?.cacheLocation) {
+    const legacy = path.join(root, ".codegraph-cache", "index-v1");
+    if (!fs.existsSync(candidate) && fs.existsSync(legacy)) return legacy;
+  }
+  return candidate;
+}
+export function cacheRelativePath(projectRoot: string, file: string): string {
+  const root = path.resolve(projectRoot);
+  const absolute = path.isAbsolute(file) ? file : path.resolve(root, file);
+  const relative = path.relative(root, absolute).replace(/\\/g, "/");
+  return relative || ".";
+}
+
+export function cacheAbsolutePath(projectRoot: string, file: string): string {
+  return path.isAbsolute(file) ? normalizePath(file) : normalizePath(path.resolve(projectRoot, file));
+}
 export function cacheDatabasePath(projectRoot: string, opts: BuildOptions | undefined, filename: string): string {
   return path.join(cacheRoot(projectRoot, opts), filename).replace(/\\/g, "/");
 }
@@ -114,7 +204,7 @@ function recreateModuleCacheTable(db: SqliteDatabase): void {
   recreateSqliteTable(db, MODULE_CACHE_TABLE, createModuleCacheTable);
 }
 
-function migrateModuleCacheTable(db: SqliteDatabase): void {
+function migrateModuleCacheTable(db: SqliteDatabase, projectRoot: string): void {
   const columns = sqliteTableColumns(db, MODULE_CACHE_TABLE);
   if (!columns.size) {
     createModuleCacheTable(db);
@@ -128,16 +218,22 @@ function migrateModuleCacheTable(db: SqliteDatabase): void {
   if (!columns.has("version")) db.exec("ALTER TABLE module_cache ADD COLUMN version INTEGER NOT NULL DEFAULT 0;");
   if (!columns.has("payload")) db.exec("ALTER TABLE module_cache ADD COLUMN payload TEXT NOT NULL DEFAULT '{}';");
   if (!columns.has("updated_at")) db.exec("ALTER TABLE module_cache ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;");
+  const rows = db.prepare("SELECT file FROM module_cache").all() as Array<{ file: string }>;
+  const update = db.prepare("UPDATE module_cache SET file = ? WHERE file = ?");
+  for (const row of rows) {
+    const relative = cacheRelativePath(projectRoot, row.file);
+    if (relative !== row.file) update.run(relative, row.file);
+  }
 }
 
-function ensureModuleCacheSchema(db: SqliteDatabase): void {
+function ensureModuleCacheSchema(db: SqliteDatabase, projectRoot: string): void {
   ensureSqliteVersionedTableSchema({
     db,
     tableName: MODULE_CACHE_TABLE,
     schemaVersionKey: MODULE_CACHE_SCHEMA_VERSION_KEY,
     schemaVersion: MODULE_CACHE_SCHEMA_VERSION,
     createTable: createModuleCacheTable,
-    migrateTable: migrateModuleCacheTable,
+    migrateTable: (database) => migrateModuleCacheTable(database, projectRoot),
   });
   db.exec("CREATE INDEX IF NOT EXISTS idx_module_cache_sig ON module_cache(sig);");
 }
@@ -158,7 +254,7 @@ function getDiskModuleCache(projectRoot: string, opts?: BuildOptions): DiskModul
   }
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
-  ensureModuleCacheSchema(db);
+  ensureModuleCacheSchema(db, projectRoot);
   db.exec("CREATE TEMP TABLE IF NOT EXISTS live_module_cache_files(file TEXT PRIMARY KEY) WITHOUT ROWID;");
   const cache: DiskModuleCache = {
     db,
@@ -206,7 +302,7 @@ export function pruneDiskModuleCache(projectRoot: string, liveFiles: Iterable<st
     const cache = getDiskModuleCache(projectRoot, opts);
     const deleted = cache.db.transaction(() => {
       cache.clearLiveFiles.run();
-      for (const file of liveFiles) cache.insertLiveFile.run(file);
+      for (const file of liveFiles) cache.insertLiveFile.run(cacheRelativePath(projectRoot, file));
       const result = cache.pruneStaleFiles.run();
       cache.clearLiveFiles.run();
       return Number(result.changes);
@@ -335,6 +431,20 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   );
 }
 
+function transformModulePaths(projectRoot: string, module: ModuleIndex, toRelative: boolean): ModuleIndex {
+  const copy = structuredClone(module);
+  const transform = (file: string): string => (toRelative ? cacheRelativePath(projectRoot, file) : cacheAbsolutePath(projectRoot, file));
+  copy.file = transform(copy.file);
+  for (const local of copy.locals) local.file = transform(local.file);
+  for (const entry of copy.exports) {
+    if (entry.type === "local") entry.target.file = transform(entry.target.file);
+  }
+  for (const binding of copy.imports) {
+    if (typeof binding.resolved === "string") binding.resolved = transform(binding.resolved);
+  }
+  return copy;
+}
+
 export function tryLoadFromCache(
   projectRoot: string,
   file: string,
@@ -362,12 +472,14 @@ export function tryLoadFromCache(
   if (mode === "disk") {
     try {
       const cache = getDiskModuleCache(projectRoot, opts);
-      const row = cache.load.get(file) as { sig: string; version: number; payload: Uint8Array } | undefined;
+      const row = cache.load.get(cacheRelativePath(projectRoot, file)) as
+        | { sig: string; version: number; payload: Uint8Array }
+        | undefined;
       if (row && row.sig === sig && row.version === PARSED_CACHE_VERSION) {
         const parsed: unknown = JSON.parse(brotliDecompressSync(row.payload).toString("utf8"));
         if (isModuleIndex(parsed)) {
           if (cacheEnabled && cacheReport) cacheReport.hits += 1;
-          return parsed;
+          return transformModulePaths(projectRoot, parsed, false);
         }
       }
     } catch (error) {
@@ -375,7 +487,6 @@ export function tryLoadFromCache(
         reportMissingNodeSqlite(opts?.logLevel, error);
         return null;
       }
-      // cache read failed
     }
     if (cacheEnabled && cacheReport) cacheReport.misses += 1;
   }
@@ -400,10 +511,10 @@ export function writeToCache(
   } else if (mode === "disk") {
     try {
       const cache = getDiskModuleCache(projectRoot, opts);
-      const payload = brotliCompressSync(JSON.stringify(mod), {
+      const payload = brotliCompressSync(JSON.stringify(transformModulePaths(projectRoot, mod, true)), {
         params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
       });
-      cache.write.run(file, sig, PARSED_CACHE_VERSION, payload, Date.now());
+      cache.write.run(cacheRelativePath(projectRoot, file), sig, PARSED_CACHE_VERSION, payload, Date.now());
     } catch (error) {
       if (isNodeSqliteUnavailableError(error)) {
         reportMissingNodeSqlite(opts?.logLevel, error);

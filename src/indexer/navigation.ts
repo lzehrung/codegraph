@@ -63,7 +63,8 @@ export async function goToDefinition(
   const sqlResult = await goToSqlDefinition(index, req);
   if (sqlResult) return sqlResult;
 
-  const context = parsedContext ?? (await ensureParsedContext(file, index.parsed?.get(fileIdentityKey(file))));
+  const context =
+    parsedContext ?? (await ensureParsedContext(file, index.parsed?.get(fileIdentityKey(file)), index.languageExtensions));
   const sup = context.sup;
   const lang = context.lang;
   const source = context.source;
@@ -243,7 +244,7 @@ export async function findReferences(
 
   const definitionFile = def.file;
   const parsedDef = index.parsed?.get(fileIdentityKey(definitionFile));
-  const parsedContext = await ensureParsedContext(definitionFile, parsedDef);
+  const parsedContext = await ensureParsedContext(definitionFile, parsedDef, index.languageExtensions);
 
   const mod = index.byFile.get(fileIdentityKey(definitionFile));
   if (!mod) return { status: "not_found", reason: "Module not found" };
@@ -313,7 +314,7 @@ export async function findReferences(
     const ensureCandidateParsed = async (): Promise<ParsedFileContext> => {
       if (!candidateParsedContext) {
         const parsedEntry = index.parsed?.get(fileIdentityKey(fileId));
-        candidateParsedContext = await ensureParsedContext(fileId, parsedEntry);
+        candidateParsedContext = await ensureParsedContext(fileId, parsedEntry, index.languageExtensions);
       }
       return candidateParsedContext;
     };
@@ -457,7 +458,7 @@ export async function findReferences(
       let cached = perFileCache.get(fileIdentityKey(ref.file));
       if (!cached) {
         const parsedEntry = index.parsed?.get(fileIdentityKey(ref.file));
-        const parsed = await ensureParsedContext(ref.file, parsedEntry);
+        const parsed = await ensureParsedContext(ref.file, parsedEntry, index.languageExtensions);
         cached = { source: parsed.source, tree: parsed.tree, sup: parsed.sup };
         perFileCache.set(fileIdentityKey(ref.file), cached);
       }

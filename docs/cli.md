@@ -21,6 +21,9 @@ The `graph` command without output-format flags writes Mermaid to stdout. Use `-
 Numeric options such as `--limit`, `--threads`, `--depth`, `--max-refs`, and token bounds must be integers in their documented ranges; invalid numeric values fail instead of being silently clamped or ignored.
 
 Default workflow:
+## Cache location
+
+Index caches store project-relative paths, so a cache can be moved with its project. Cache selection precedence is `--cache-dir`, `CODEGRAPH_CACHE_DIR`, `cache.location` in project config (then user config), repository metadata, then the project root. `cache.location` accepts `project`, `repo`, `user`, or an absolute path; `--root` remains the project scope boundary.
 
 - code review: `codegraph review`
 - blast-radius follow-up: `codegraph impact --base HEAD --head WORKTREE`

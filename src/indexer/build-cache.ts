@@ -6,6 +6,7 @@ export {
   normalizeIndexedFileInputs,
   sanitizeManifestEntriesForRoot,
   sanitizeManifestTransientFilesForRoot,
+  transformManifestEntries,
   verifyManifestEntries,
   writeManifest,
   type IndexManifest,

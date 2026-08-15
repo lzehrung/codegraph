@@ -617,10 +617,13 @@ async function buildIndexFromFileListShared(
       }
     }
   }
+  // Installed package exports are mutable outside source/lockfile signatures; never reuse
+  // persisted edges when node-module resolution is enabled without an environment fingerprint.
   const cachedGraphEntries =
     manifest &&
     !languageExtensionsChanged &&
     !implementationChanged &&
+    !graphOptions.resolveNodeModules &&
     graphOptionsEqual(manifest.graphOptions, graphOptions)
       ? new Map<string, ManifestFileEntry>(
           Object.entries(manifestFiles).filter(([file]) => !staleCachedEdgeFiles.has(file)),
@@ -889,7 +892,7 @@ async function buildIndexFromFileListShared(
       manifestEntries: manifestEntriesForIndex,
     });
     if (manifestEntries) {
-      await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries));
+      await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries, projectRoot));
     }
     if (buildStartedAt !== undefined) {
       emitIndexLifecycleProgress(opts, "complete", "build", index.byFile.size, performance.now() - buildStartedAt);
@@ -1628,7 +1631,7 @@ export async function buildProjectIndexIncremental(
         manifestEntries: projectIndexManifestEntries(manifestEntries),
         buildReport: report,
       });
-      await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries));
+      await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries, projectRoot));
       if (updateStartedAt !== undefined) {
         emitIndexLifecycleProgress(opts, "complete", "update", index.byFile.size, performance.now() - updateStartedAt);
       } else {
