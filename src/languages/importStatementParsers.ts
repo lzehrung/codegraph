@@ -22,7 +22,8 @@ export type ParsedRustImportStatement =
 export function parseRustImportStatement(stmtText: string): ParsedRustImportStatement | null {
   const trimmed = stmtText.trim();
 
-  const modMatch = trimmed.match(/^mod\s+([A-Za-z_][\w]*)\s*;?$/);
+  // Rust identifiers permit Unicode XID_Start/XID_Continue, not just ASCII.
+  const modMatch = trimmed.match(/^mod\s+([\p{L}_][\p{L}\p{N}_]*)\s*;?$/u);
   if (modMatch?.[1]) {
     return {
       kind: "module",
@@ -32,7 +33,9 @@ export function parseRustImportStatement(stmtText: string): ParsedRustImportStat
     };
   }
 
-  const externMatch = trimmed.match(/^extern\s+crate\s+([A-Za-z_][\w]*)(?:\s+as\s+([A-Za-z_][\w]*))?\s*;?$/);
+  const externMatch = trimmed.match(
+    /^extern\s+crate\s+([\p{L}_][\p{L}\p{N}_]*)(?:\s+as\s+([\p{L}_][\p{L}\p{N}_]*))?\s*;?$/u,
+  );
   if (externMatch?.[1]) {
     return {
       kind: "module",
@@ -47,7 +50,7 @@ export function parseRustImportStatement(stmtText: string): ParsedRustImportStat
   if (!useBody) return null;
   if (useBody.includes("{") || useBody.includes(",")) return null;
 
-  const aliasMatch = useBody.match(/^(.*?)\s+as\s+([A-Za-z_][\w]*)$/);
+  const aliasMatch = useBody.match(/^(.*?)\s+as\s+([\p{L}_][\p{L}\p{N}_]*)$/u);
   const rawPath = aliasMatch?.[1]?.trim() ?? useBody;
   const alias = aliasMatch?.[2];
 
@@ -141,7 +144,8 @@ function parsePhpImportClause(rawClause: string, importType: PhpImportType): Par
         memberType = "const";
       }
       const body = (typedMemberMatch?.[2] ?? member).trim();
-      const aliasMatch = body.match(/^(.*?)\s+as\s+([A-Za-z_][\w]*)$/i);
+      // PHP identifiers permit any byte >= 0x80, which in practice means non-ASCII UTF-8.
+      const aliasMatch = body.match(/^(.*?)\s+as\s+([\p{L}_][\p{L}\p{N}_]*)$/iu);
       const fullPath = `${prefix}${(aliasMatch?.[1] ?? body).trim()}`;
       const parts = fullPath.split("\\").filter(Boolean);
       const imported = parts[parts.length - 1];
@@ -158,7 +162,7 @@ function parsePhpImportClause(rawClause: string, importType: PhpImportType): Par
     return results;
   }
 
-  const aliasMatch = clause.match(/^(.*?)\s+as\s+([A-Za-z_][\w]*)$/i);
+  const aliasMatch = clause.match(/^(.*?)\s+as\s+([\p{L}_][\p{L}\p{N}_]*)$/iu);
   const fullPath = (aliasMatch?.[1] ?? clause).trim();
   const parts = fullPath.split("\\").filter(Boolean);
   const imported = parts[parts.length - 1];
@@ -362,7 +366,10 @@ export type ParsedKotlinImportStatement =
     };
 
 export function parseKotlinImportStatement(stmtText: string): ParsedKotlinImportStatement | null {
-  const match = stmtText.trim().match(/^\s*import\s+([A-Za-z_][\w.]*(?:\.\*)?)(?:\s+as\s+([A-Za-z_][\w]*))?\s*$/m);
+  // Kotlin identifiers permit Unicode letters, not just ASCII.
+  const match = stmtText
+    .trim()
+    .match(/^\s*import\s+([\p{L}_][\p{L}\p{N}_.]*(?:\.\*)?)(?:\s+as\s+([\p{L}_][\p{L}\p{N}_]*))?\s*$/mu);
   const rawSpec = match?.[1];
   if (!rawSpec) return null;
   if (rawSpec.endsWith(".*")) {
@@ -397,7 +404,8 @@ export type ParsedJavaImportStatement =
     };
 
 export function parseJavaImportStatement(stmtText: string): ParsedJavaImportStatement | null {
-  const match = stmtText.trim().match(/^\s*import\s+(static\s+)?([A-Za-z_][\w.]*(?:\.\*)?)\s*;?\s*$/);
+  // Java identifiers permit Unicode letters, not just ASCII.
+  const match = stmtText.trim().match(/^\s*import\s+(static\s+)?([\p{L}_][\p{L}\p{N}_.]*(?:\.\*)?)\s*;?\s*$/u);
   const rawSpec = match?.[2];
   if (!rawSpec) return null;
   const isStatic = !!match?.[1];
@@ -423,7 +431,8 @@ export function parseJavaImportStatement(stmtText: string): ParsedJavaImportStat
 export function parseCsharpUsingDirective(stmtText: string): ParsedCsharpUsingDirective | null {
   const trimmed = stmtText.trim();
 
-  const aliasMatch = trimmed.match(/^(?:global\s+)?using\s+([A-Za-z_][\w]*)\s*=\s*([A-Za-z_][\w.]*)\s*;?$/);
+  // C# identifiers permit Unicode letter categories, not just ASCII.
+  const aliasMatch = trimmed.match(/^(?:global\s+)?using\s+([\p{L}_][\p{L}\p{N}_]*)\s*=\s*([\p{L}_][\p{L}\p{N}_.]*)\s*;?$/u);
   if (aliasMatch?.[1] && aliasMatch[2]) {
     return {
       from: aliasMatch[2],
@@ -432,7 +441,7 @@ export function parseCsharpUsingDirective(stmtText: string): ParsedCsharpUsingDi
     };
   }
 
-  const staticMatch = trimmed.match(/^(?:global\s+)?using\s+static\s+([A-Za-z_][\w.]*)\s*;?$/);
+  const staticMatch = trimmed.match(/^(?:global\s+)?using\s+static\s+([\p{L}_][\p{L}\p{N}_.]*)\s*;?$/u);
   if (staticMatch?.[1]) {
     return {
       from: staticMatch[1],
@@ -440,7 +449,7 @@ export function parseCsharpUsingDirective(stmtText: string): ParsedCsharpUsingDi
     };
   }
 
-  const plainMatch = trimmed.match(/^(?:global\s+)?using\s+([A-Za-z_][\w.]*)\s*;?$/);
+  const plainMatch = trimmed.match(/^(?:global\s+)?using\s+([\p{L}_][\p{L}\p{N}_.]*)\s*;?$/u);
   if (!plainMatch?.[1]) return null;
   return {
     from: plainMatch[1],

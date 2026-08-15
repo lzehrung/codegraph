@@ -275,12 +275,13 @@ export function collectModuleSpecifiersFromSource(
               .map((entry) => entry.trim())
               .filter(Boolean);
             for (const spec of list) {
-              const parsed = spec.match(/^([A-Za-z_][\w.]*)(?:\s+as\s+[A-Za-z_][\w_]*)?$/);
+              // Python module/package names permit Unicode identifiers (PEP 3131).
+              const parsed = spec.match(/^([\p{L}_][\p{L}\p{N}_.]*)(?:\s+as\s+[\p{L}_][\p{L}\p{N}_]*)?$/u);
               if (parsed?.[1]) out.push({ spec: parsed[1] });
             }
             continue;
           }
-          const mFrom = /^\s*from\s+(\.*)([A-Za-z_][\w.]*)?\s+import\b/.exec(stmtText);
+          const mFrom = /^\s*from\s+(\.*)([\p{L}_][\p{L}\p{N}_.]*)?\s+import\b/u.exec(stmtText);
           if (mFrom) {
             const dots = mFrom[1] ?? "";
             const name = mFrom[2] ?? "";

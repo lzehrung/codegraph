@@ -23,13 +23,14 @@ function splitNamedImports(namedBlock: string): string[] {
 }
 
 function parseNamedImportSpecifier(spec: string): { imported: string; local: string; typeOnly: boolean } | null {
-  const typeOnlyMatch = spec.match(/^type\s+([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+  // JS/TS identifiers permit Unicode ID_Start/ID_Continue plus $/_, not just ASCII.
+  const typeOnlyMatch = spec.match(/^type\s+([\p{L}_$][\p{L}\p{N}_$]*)(?:\s+as\s+([\p{L}_$][\p{L}\p{N}_$]*))?$/u);
   if (typeOnlyMatch) {
     const imported = typeOnlyMatch[1]!;
     return { imported, local: typeOnlyMatch[2] ?? imported, typeOnly: true };
   }
 
-  const namedMatch = spec.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+  const namedMatch = spec.match(/^([\p{L}_$][\p{L}\p{N}_$]*)(?:\s+as\s+([\p{L}_$][\p{L}\p{N}_$]*))?$/u);
   if (!namedMatch) return null;
   const imported = namedMatch[1]!;
   return { imported, local: namedMatch[2] ?? imported, typeOnly: false };
@@ -61,7 +62,7 @@ async function collectEsImports(
     if (!moduleSpecifier) continue;
     const typeOnly = typeOnlyImport.test(match[0]);
     const resolved = await context.resolveFrom(moduleSpecifier);
-    const namespaceMatch = clause.match(/^\*\s+as\s+([A-Za-z_$][\w$]*)$/);
+    const namespaceMatch = clause.match(/^\*\s+as\s+([\p{L}_$][\p{L}\p{N}_$]*)$/u);
     if (namespaceMatch) {
       context.pushBinding({
         kind: "namespace",
@@ -110,7 +111,7 @@ async function collectCommonJsRequireDeclarations(
   maskedSource: string,
 ): Promise<void> {
   const defaultRequirePattern =
-    /(?:^|[;{}])\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*(["'])(?<module>[^"']+)\2\s*\)/gm;
+    /(?:^|[;{}])\s*(?:export\s+)?(?:const|let|var)\s+([\p{L}_$][\p{L}\p{N}_$]*)\s*=\s*require\s*\(\s*(["'])(?<module>[^"']+)\2\s*\)/gmu;
   for (const match of source.matchAll(defaultRequirePattern)) {
     if (!matchStartsInCode(maskedSource, match)) continue;
     const local = match[1]!;
@@ -138,7 +139,7 @@ async function collectCommonJsRequireDeclarations(
     if (!moduleSpecifier) continue;
     const resolved = await context.resolveFrom(moduleSpecifier);
     for (const spec of specs) {
-      const namedMatch = spec.match(/^([A-Za-z_$][\w$]*)(?::\s*([A-Za-z_$][\w$]*))?$/);
+      const namedMatch = spec.match(/^([\p{L}_$][\p{L}\p{N}_$]*)(?::\s*([\p{L}_$][\p{L}\p{N}_$]*))?$/u);
       if (!namedMatch) continue;
       const imported = namedMatch[1]!;
       const local = namedMatch[2] ?? imported;
@@ -160,7 +161,7 @@ async function collectCommonJsImportEquals(
   maskedSource: string,
 ): Promise<void> {
   const importEqualsPattern =
-    /(?:^|[;{}])\s*import\s+([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*(["'])(?<module>[^"']+)\2\s*\)/gm;
+    /(?:^|[;{}])\s*import\s+([\p{L}_$][\p{L}\p{N}_$]*)\s*=\s*require\s*\(\s*(["'])(?<module>[^"']+)\2\s*\)/gmu;
   for (const match of source.matchAll(importEqualsPattern)) {
     if (!matchStartsInCode(maskedSource, match)) continue;
     const local = match[1]!;

@@ -29,7 +29,8 @@ function parseObjectPatternBindings(patternText: string): Array<{ imported: stri
   const out: Array<{ imported: string; local: string }> = [];
   for (const part of parts) {
     const withoutDefault = part.replace(/\s*=\s*.+$/, "").trim();
-    const match = withoutDefault.match(/^([A-Za-z_$][\w$]*)(?::\s*([A-Za-z_$][\w$]*))?$/);
+    // JS/TS identifiers permit Unicode ID_Start/ID_Continue plus $/_, not just ASCII.
+    const match = withoutDefault.match(/^([\p{L}_$][\p{L}\p{N}_$]*)(?::\s*([\p{L}_$][\p{L}\p{N}_$]*))?$/u);
     if (!match) continue;
     const imported = match[1]!;
     const local = match[2] ?? imported;

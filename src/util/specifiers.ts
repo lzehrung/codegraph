@@ -45,8 +45,10 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
     const literalMask = buildJsLikeLiteralMask(src);
     // Capture groups: 1 import-from, 2 side-effect import, 3 export-from,
     // 4 destructured require, 5 require(), 6 import(), 7 import = require, 8 declare module.
+    // JS/TS identifiers permit Unicode ID_Start/ID_Continue plus $/_, not just ASCII, so the
+    // import-equals alias uses \p{L}\p{N} rather than \w (which is ASCII-only).
     const combined =
-      /^\s*import\s+[^\n;]*?\s+from\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bexport\s+[^\n;]*?\s+from\s+["']([^"']+)["']|\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\brequire\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\bimport\s*\(\s*["']([^"']+)["']\s*\)|^\s*import\s+[A-Za-z_$][\w$]*\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|^\s*declare\s+module\s+["']([^"']+)["']/gm;
+      /^\s*import\s+[^\n;]*?\s+from\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bexport\s+[^\n;]*?\s+from\s+["']([^"']+)["']|\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\brequire\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\bimport\s*\(\s*["']([^"']+)["']\s*\)|^\s*import\s+[\p{L}_$][\p{L}\p{N}_$]*\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|^\s*declare\s+module\s+["']([^"']+)["']/gmu;
 
     for (const match of src.matchAll(combined)) {
       if (!matchStartsInCode(literalMask, match)) continue;
@@ -250,9 +252,10 @@ export function extractPythonSpecifiers(source: string): string[] {
   const out: string[] = [];
   try {
     const cleaned = stripPythonCommentsAndStrings(source);
-    const reImport = /^\s*import\s+([A-Za-z_][\w.]*)/gm;
+    // Python module/package names permit Unicode identifiers (PEP 3131).
+    const reImport = /^\s*import\s+([\p{L}_][\p{L}\p{N}_.]*)/gmu;
     for (const match of cleaned.matchAll(reImport)) out.push(match[1]!);
-    const reFrom = /^\s*from\s+(\.+(?:[A-Za-z_][\w.]*)?|[A-Za-z_][\w.]*)\s+import/gm;
+    const reFrom = /^\s*from\s+(\.+(?:[\p{L}_][\p{L}\p{N}_.]*)?|[\p{L}_][\p{L}\p{N}_.]*)\s+import/gmu;
     for (const match of cleaned.matchAll(reFrom)) out.push(match[1]!);
   } catch {
     /* parse fallback: ignore */

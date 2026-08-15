@@ -37,7 +37,8 @@ function normalizeGoImports(context: LanguageSpecificImportContext): void {
     return;
   }
   const aliasByFrom = new Map<string, string>();
-  const importPattern = /^\s*(?:import\s+)?(?:(?<alias>[._A-Za-z][\w]*)\s+)?["'`](?<from>[^"'`]+)["'`]/gm;
+  // Go identifiers permit Unicode letters (per the Go spec's "letter" production), not just ASCII.
+  const importPattern = /^\s*(?:import\s+)?(?:(?<alias>[._\p{L}][\p{L}\p{N}_]*)\s+)?["'`](?<from>[^"'`]+)["'`]/gmu;
   for (const match of context.source.matchAll(importPattern)) {
     const from = match.groups?.from;
     if (!from) continue;
@@ -85,7 +86,8 @@ async function appendJavaTextImports(context: LanguageSpecificImportContext): Pr
   if (context.languageId !== "java" || context.getBindings().length) {
     return;
   }
-  const importPattern = /^\s*import\s+(static\s+)?([A-Za-z_][\w.]*(?:\.\*)?)\s*;/gm;
+  // Java identifiers permit Unicode letters, not just ASCII.
+  const importPattern = /^\s*import\s+(static\s+)?([\p{L}_][\p{L}\p{N}_.]*(?:\.\*)?)\s*;/gmu;
   for (const match of context.source.matchAll(importPattern)) {
     const isStatic = !!match[1];
     const rawSpec = match[2];
@@ -121,7 +123,8 @@ async function appendKotlinTextImports(context: LanguageSpecificImportContext): 
   if (context.languageId !== "kotlin" || context.getBindings().length) {
     return;
   }
-  const importPattern = /^\s*import\s+([A-Za-z_][\w.]*(?:\.\*)?)(?:\s+as\s+([A-Za-z_][\w]*))?\s*$/gm;
+  // Kotlin identifiers permit Unicode letters, not just ASCII.
+  const importPattern = /^\s*import\s+([\p{L}_][\p{L}\p{N}_.]*(?:\.\*)?)(?:\s+as\s+([\p{L}_][\p{L}\p{N}_]*))?\s*$/gmu;
   for (const match of context.source.matchAll(importPattern)) {
     const rawSpec = match[1];
     if (!rawSpec) continue;
