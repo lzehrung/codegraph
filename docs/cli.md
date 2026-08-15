@@ -45,6 +45,8 @@ Current-state, index-backed commands validate freshness automatically and defaul
 
 Use `--cache disk` for reuse across CLI processes, `--cache memory` for reuse within one process, and `--cache off` for a deliberate cold run. `--cache-verify` validates manifest entries before reuse and `--cache-strict` adds content hashing plus full rediscovery; both trade speed for certainty. `codegraph init` is optional lifecycle metadata plus cache warmup; query commands do not require `.codegraph/manifest.json`.
 
+Lifecycle exceptions (`src/cli/options.ts` `LIFECYCLE_BUILD_OPTIONS` / `STATUS_BUILD_*`): `init`/`status`/`sync` omit `--cache` because they always use the disk cache path. `status` also omits `--cache-verify`, `--progress`, `--no-progress`, `--workers`, and `--threads` because it only hashes config/build options and lists project files for signature hashing (no index build).
+
 Keep `--root` stable for repeat queries. Use `--progress` to force redirected progress logs, `--no-progress` to suppress them, and `codegraph doctor` or `--report` when backend or cache behavior needs diagnosis.
 
 ## Project config
@@ -91,7 +93,7 @@ The CLI accepts the shortest unambiguous form across command families; explicit 
 - File targets accept `file:line[:column]` locations copied from search output. `file` uses the line as its default offset; `chunk`, `deps`, `rdeps`, `path`, `dumpmod`, `packet`, and `explain` ignore the location suffix when they only need a file.
 - `goto` and `refs` accept exactly one navigation form: `file:line:column`, separate positional coordinates, a portable symbol handle, or a coordinate-free qualified `file::symbol` path. Do not combine a qualified path with line or column inputs. With only a file, `refs` returns references for every definition; `goto` resolves a single-definition file or returns candidate locations instead of guessing.
 - `callers`, `callees`, `supertypes`, `subtypes`, `implementations`, `rename-preview`, and `refactor-plan` accept a portable handle, a unique exact symbol name, a single-definition file, or `file:line[:column]`. Ambiguous names return copyable handle choices.
-- `grep <regex>` defaults to text regex search; Tree-sitter queries remain explicit with `--query`. `sql <db> "SELECT ..."` is equivalent to `--db/--query`.
+- `grep <regex>` defaults to text regex search; Tree-sitter queries remain explicit with `--query`. Equivalent aliases: `--pattern` / `--regex` for the search expression. Filter with `--glob`, `--include-glob`, `--ignore-glob`; bound text hits with `--max-hits` (default 5000, max 200000); case-insensitive with `-i` / `--ignore-case`. `sql <db> "SELECT ..."` is equivalent to `--db/--query`.
 - `artifact`, `packet`, and `mcp` infer their only subcommand (`build`, `get`, and `serve`). `impact` and git-backed `drift` default to `HEAD..WORKTREE` while accepting explicit ranges.
 
 These defaults never approve writes silently: interactive installer changes require a preview and confirmation, noninteractive changes require `--yes`, rename/refactor commands remain read-only, and ambiguous semantic targets are never selected automatically.
@@ -147,6 +149,12 @@ codegraph graph --root . --sql-artifacts --json
 # SQLite export
 codegraph graph --sqlite ./codegraph.sqlite
 
+# Stable sorted JSON for golden tests / byte-identical diffs
+codegraph graph --root . ./src --json --stable
+
+# Capture graph stderr (backend warnings, progress) to a file
+codegraph graph --root . ./src --json --stderr-file graph.stderr.log
+
 # Project lifecycle marker and cache warmup
 codegraph init --root .
 codegraph status --root . --json
@@ -197,6 +205,12 @@ codegraph index
 
 # Print full JSON index including locals, imports, and exports
 codegraph index --json
+
+# Force a full rebuild instead of incremental reuse
+codegraph index --full
+
+# Emit verbose index build diagnostics on stderr
+codegraph index --verbose
 
 # Use concurrency and incremental cache
 codegraph index --threads 8 --cache disk
@@ -509,6 +523,7 @@ codegraph apisurface
 
 # Unresolved imports
 codegraph unresolved
+codegraph unresolved --verbose
 
 # Hotspots
 codegraph hotspots ./src --limit 20
@@ -596,6 +611,9 @@ codegraph impact --base main --head feature --ref-context block --ref-block-max-
 # Verify missing imports, exports, and declarations in changed lines
 codegraph impact --base main --head feature --verify-refs
 
+# Include candidate test suggestions in the impact report
+codegraph impact --base main --head feature --include-tests
+
 # Add LCOV and coverage-aware suggestions
 codegraph impact --base main --head feature --lcov coverage/lcov.info --coverage-report coverage/coverage-final.json
 
@@ -614,6 +632,9 @@ codegraph review --base origin/main --head HEAD --duplicates impacted
 
 # File-level graph delta between revisions
 codegraph graph-delta --git-base origin/main --git-head HEAD --json > graph-delta.json
+
+# Disable fast graph extraction for changed files while keeping incremental selection
+codegraph graph-delta --git-base origin/main --git-head HEAD --incremental-strict --json
 ```
 
 ```bash

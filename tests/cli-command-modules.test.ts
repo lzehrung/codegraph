@@ -2680,7 +2680,7 @@ describe("CLI command modules", () => {
     ).rejects.toThrow("skill exit 2");
 
     expect(stderrLines).toEqual([
-      "Usage: codegraph skill <install|print-path|doctor> [--agent <name> | --target <dir>] [--force]",
+      "Usage: codegraph skill <install|print-path|doctor> [--agent <name> | --target <dir>] [--force] [--json | --pretty]",
     ]);
   });
 

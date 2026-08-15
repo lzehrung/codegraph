@@ -361,7 +361,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   [
     "grep",
     commandSchema(
-      ["--ignore-case", "--json", "-i", "--no-gitignore"],
+      ["--ignore-case", "--json", "--pretty", "-i", "--no-gitignore"],
       ["--glob", "--ignore-glob", "--include-glob", "--max-hits", "--pattern", "--query", "--regex", "--root"],
       {
         kind: "any",
@@ -639,10 +639,10 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "skill",
-    commandSchema(["--force", "--json"], ["--agent", "--target"], {
+    commandSchema(["--force", "--json", "--pretty"], ["--agent", "--target"], {
       kind: "max",
       max: 2,
-      usage: "Usage: codegraph skill <install|print-path|doctor> [--agent <name> | --target <dir>] [--force] [--json]",
+      usage: "Usage: codegraph skill <install|print-path|doctor> [--agent <name> | --target <dir>] [--force] [--json | --pretty]",
     }),
   ],
   [
@@ -668,11 +668,11 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "sql",
-    commandSchema(["--json"], ["--db", "--query", "--sqlite"], {
+    commandSchema(["--json", "--pretty"], ["--db", "--query", "--sqlite"], {
       kind: "max",
       max: 2,
       usage:
-        'Usage: codegraph sql <sqlite-path> "SELECT ..." [--json] OR codegraph sql --db <sqlite path> --query "SELECT ..." [--json]',
+        'Usage: codegraph sql <sqlite-path> "SELECT ..." [--json | --pretty] OR codegraph sql --db <sqlite path> --query "SELECT ..." [--json | --pretty]',
     }),
   ],
   [

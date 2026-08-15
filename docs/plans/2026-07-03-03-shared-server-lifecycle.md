@@ -1,5 +1,7 @@
 # Shared server lifecycle
 
+Status: Planned - not implemented
+
 ## Goal
 
 Make long-running MCP HTTP servers easier to start, inspect, and stop without introducing a mandatory background daemon for every user.
