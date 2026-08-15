@@ -14,6 +14,17 @@ export type ReviewChangeCollection = {
   diffChangesByFile: Map<string, FileChange>;
 };
 
+/** Paths whose prior identity disappeared: pure deletes, plus rename sources. */
+export function deletedPathsForChange(change: FileChange): string[] {
+  if (change.kind === "deleted") {
+    return [change.path];
+  }
+  if (change.kind === "renamed" && change.oldPath) {
+    return [change.oldPath];
+  }
+  return [];
+}
+
 export async function collectReviewChanges(
   projectRoot: string,
   appliedOptions: ReviewOptions,

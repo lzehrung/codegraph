@@ -18,7 +18,7 @@ import { normalizePath, toProjectDisplayPath } from "./util/paths.js";
 import { fileExists } from "./util/workspace.js";
 import { discoverProjectFiles, type ProjectFileInfo } from "./util/projectFiles.js";
 import { collectReviewCandidateTests } from "./review/candidates.js";
-import { collectReviewChanges } from "./review/changes.js";
+import { collectReviewChanges, deletedPathsForChange } from "./review/changes.js";
 import { buildDeletedFileSnapshots, type DeletedFileSnapshot } from "./review/deleted.js";
 import {
   assembleReviewReport,
@@ -169,7 +169,15 @@ async function buildReviewIndex(input: {
     })),
   );
   const existenceByFile = new Map(existenceChecks.map((entry) => [entry.file, entry.exists] as const));
-  const deletedFiles = changedFileList.filter((file) => diffKindsByFile.get(file) === "deleted");
+  const deletedFiles = Array.from(
+    new Set(
+      changedFileList.flatMap((file) => {
+        const change = diffChangesByFile.get(file);
+        if (change) return deletedPathsForChange(change);
+        return diffKindsByFile.get(file) === "deleted" ? [file] : [];
+      }),
+    ),
+  );
   const deletedSnapshots = await buildDeletedFileSnapshots(projectRoot, deletedFiles, {
     ...((appliedOptions.gitBase ?? appliedOptions.changedSince)
       ? { revision: appliedOptions.gitBase ?? appliedOptions.changedSince }

@@ -1627,6 +1627,54 @@ describe("Review report", () => {
     }
   });
 
+  it("treats rename oldPath as deleted for importer impact and candidate tests", async () => {
+    const root = await mkTmpDir("dg-review-rename-oldpath-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    const srcDir = path.join(root, "src");
+    const testsDir = path.join(root, "tests");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.mkdir(testsDir, { recursive: true });
+    const oldModule = path.join(srcDir, "legacy.ts");
+    const consumer = path.join(srcDir, "consumer.ts");
+    const testFile = path.join(testsDir, "legacy.test.ts");
+    await fsp.writeFile(oldModule, `export const legacyValue = 1;\n`, "utf8");
+    await fsp.writeFile(
+      consumer,
+      `import { legacyValue } from './legacy';\nexport const seen = legacyValue;\n`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      testFile,
+      `import { legacyValue } from '../src/legacy';\nexport const seen = legacyValue;\n`,
+      "utf8",
+    );
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+    await buildProjectIndex(root, { cache: "disk" });
+    runGit(root, ["mv", "src/legacy.ts", "src/renamed.ts"]);
+
+    const report = await buildReviewReport(root, {
+      gitBase: "HEAD",
+      gitHead: "WORKTREE",
+      cache: "disk",
+    });
+
+    expect(report.changedFiles.some((entry) => entry.file === "src/renamed.ts")).toBe(true);
+    expect(report.changedFiles.some((entry) => entry.file === "src/legacy.ts")).toBe(false);
+    expect(report.graphDelta).toContainEqual({
+      from: "src/consumer.ts",
+      to: { type: "file", path: "src/legacy.ts" },
+      raw: "./legacy",
+    });
+    expect(report.candidateTests).toContainEqual({
+      file: "tests/legacy.test.ts",
+      confidence: "high",
+      reason: "importsChanged",
+    });
+  });
+
   it("includes importer edges for deleted files in graphDelta", async () => {
     const root = await mkTmpDir("dg-review-deleted-edges-");
     const srcDir = path.join(root, "src");
