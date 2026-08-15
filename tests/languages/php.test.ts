@@ -8,6 +8,7 @@ import { findImplementations } from "../../src/indexer/type-hierarchy.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
+import { expectUnicodeSymbolRangeIdentity } from "./unicodeSymbolRange.js";
 
 const definition: LanguageTestDefinition = {
   id: "php",
@@ -664,5 +665,15 @@ class Example {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("PHP Unicode symbol ranges (C11)", () => {
+  it("publishes a UTF-16 string index for a function name preceded by multibyte text", async () => {
+    await expectUnicodeSymbolRangeIdentity({
+      fileName: "widget.php",
+      source: "<?php\n// café ☕ prüfung\n/* über */ function créer() {\n\treturn 1;\n}\n",
+      symbolName: "créer",
+    });
   });
 });

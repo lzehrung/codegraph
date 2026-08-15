@@ -4,6 +4,7 @@ import { runLanguageTests } from "./runner.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import type { LanguageTestDefinition } from "./types.js";
+import { expectUnicodeSymbolRangeIdentity } from "./unicodeSymbolRange.js";
 
 const definition: LanguageTestDefinition = {
   id: "csharp",
@@ -108,6 +109,17 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("C# Unicode symbol ranges (C11)", () => {
+  it("publishes a UTF-16 string index for a method name preceded by multibyte text", async () => {
+    await expectUnicodeSymbolRangeIdentity({
+      fileName: "Widget.cs",
+      source:
+        "// café ☕ prüfung\n/* über */ public class Widget {\n\tpublic int Créer() {\n\t\treturn 1;\n\t}\n}\n",
+      symbolName: "Créer",
+    });
+  });
+});
 
 describe("C# global using directives", () => {
   it("keeps global, alias, and static forms as resolved import bindings", async () => {

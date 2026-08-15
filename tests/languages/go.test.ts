@@ -1,5 +1,7 @@
+import { describe, it } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
+import { expectUnicodeSymbolRangeIdentity } from "./unicodeSymbolRange.js";
 
 const definition: LanguageTestDefinition = {
   id: "go",
@@ -246,3 +248,13 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("Go Unicode symbol ranges (C11)", () => {
+  it("publishes a UTF-16 string index for a function name preceded by multibyte text", async () => {
+    await expectUnicodeSymbolRangeIdentity({
+      fileName: "widget.go",
+      source: "package widget\n\n// café ☕ prüfung\n/* über */ func créer() int {\n\treturn 1\n}\n",
+      symbolName: "créer",
+    });
+  });
+});

@@ -7,6 +7,7 @@ import { listCandidateTestFiles } from "../../src/impact/context.js";
 import { normalizePath } from "../../src/util/paths.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
+import { expectUnicodeSymbolRangeIdentity } from "./unicodeSymbolRange.js";
 import { C_SUPPORT, CPP_SUPPORT, supportForFile } from "../../src/languages.js";
 import { parseSyntaxTree } from "@lzehrung/codegraph-native";
 
@@ -221,5 +222,15 @@ describe("C++ configured include roots", () => {
         fs.rm(outside, { recursive: true, force: true }),
       ]);
     }
+  });
+});
+
+describe("C++ Unicode symbol ranges (C11)", () => {
+  it("publishes a UTF-16 string index for a function name preceded by multibyte text", async () => {
+    await expectUnicodeSymbolRangeIdentity({
+      fileName: "widget.cpp",
+      source: "// café ☕ prüfung\n/* über */ int créer() {\n\treturn 1;\n}\n",
+      symbolName: "créer",
+    });
   });
 });
