@@ -999,6 +999,7 @@ function collectReachableFiles(
   let queueHead = 0;
   while (queueHead < queue.length) {
     const current = queue[queueHead++];
+    if (!current) continue;
     const existing = reachable.get(current.file);
     if (existing && existing.distance <= current.distance) continue;
     reachable.set(current.file, current);

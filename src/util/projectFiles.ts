@@ -557,12 +557,12 @@ async function listEntriesFromSafeSymlinkDirectories(
     options.resolvedSafeSymlinkDirectories ?? (await resolveSafeSymlinkDirectories(root, realRoot, ignore, options));
   if (!safeSymlinkDirectories.length) return [];
   const filesByPath = new Map<string, string>();
-  const filesByDirectory = await mapLimitSemaphore(
-    safeSymlinkDirectories,
+  const filesByDirectory = await mapLimitSemaphore<string, string[]>(
+    Array.from(safeSymlinkDirectories),
     REALPATH_FILTER_CONCURRENCY,
     async (directory) =>
       (
-        await fg(patterns, {
+        (await fg(patterns, {
           cwd: directory,
           absolute: true,
           dot: true,
@@ -570,7 +570,7 @@ async function listEntriesFromSafeSymlinkDirectories(
           ignore: locationIndependentIgnores,
           ...(options.onlyFiles !== undefined ? { onlyFiles: options.onlyFiles } : {}),
           ...(options.markDirectories !== undefined ? { markDirectories: options.markDirectories } : {}),
-        })
+        })) as string[]
       ).filter((filePath) => {
         const cleanPath = filePath.endsWith("/") ? filePath.slice(0, -1) : filePath;
         return !rootRelativeIgnoreMatchers.some((matcher) => matchesDiscoveryGlob(cleanPath, globRoot, matcher));
@@ -690,12 +690,12 @@ export async function discoverProjectFiles(
       const fileName = path.basename(cleanMatch);
 
       for (let definitionIndex = 0; definitionIndex < PROJECT_FILE_DEFINITIONS.length; definitionIndex++) {
-        const def = PROJECT_FILE_DEFINITIONS[definitionIndex];
+        const def = PROJECT_FILE_DEFINITIONS[definitionIndex]!;
         if (isDir && def.kind !== "dir") continue;
         if (!isDir && def.kind !== "file") continue;
 
         const matchesPattern = def.patterns.some((pattern, patternIndex) => {
-          const matcher = projectFileDefinitionMatchers[definitionIndex][patternIndex];
+          const matcher = projectFileDefinitionMatchers[definitionIndex]![patternIndex];
           return matcher ? matcher.test(fileName) : pattern === fileName;
         });
 

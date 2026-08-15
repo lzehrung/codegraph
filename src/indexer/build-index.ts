@@ -1454,7 +1454,7 @@ export async function buildProjectIndexIncremental(
         opts,
         gitSigMap,
         cacheEnabled,
-        needsContentHash: cacheEnabled || useManifest || opts?.cacheStrict === true,
+        needsContentHash: cacheEnabled || opts?.cacheStrict === true,
         concurrency: conc,
       });
       const modules = new Map<FileId, ModuleIndex>();
