@@ -1789,7 +1789,7 @@ describe("Cache invalidation and strict hashing", () => {
     expect(incremental.bloomFilters).toBeUndefined();
   });
 
-  it("falls back when project snapshot bloom filters are malformed", async () => {
+  it("rejects same-length invalid-base64 bloom payloads", async () => {
     const root = await mkTmpDir("dg-snapshot-bloom-malformed-");
     const entryPath = path.join(root, "entry.ts");
     await fsp.writeFile(entryPath, "export const guarded = 1;\n", "utf8");
@@ -1797,14 +1797,12 @@ describe("Cache invalidation and strict hashing", () => {
     await buildProjectIndex(root, { threads: 2, cache: "disk", useBloomFilters: true });
     const snapshotPath = projectSnapshotPathFor(root);
     const snapshot = (await readProjectSnapshot(snapshotPath)) as {
-      bloomFilters?: Record<string, unknown>;
+      bloomFilters?: Record<string, { bitsBase64?: string }>;
     };
+    const [key, original] = Object.entries(snapshot.bloomFilters ?? {})[0] ?? [];
+    if (!key || !original?.bitsBase64) throw new Error("missing persisted bloom filter");
     snapshot.bloomFilters = {
-      [normalize(entryPath)]: {
-        size: 1_000,
-        hashCount: 3,
-        bitsBase64: "AAAA",
-      },
+      [key]: { ...original, bitsBase64: `!${original.bitsBase64.slice(1)}` },
     };
     await writeProjectSnapshot(snapshotPath, snapshot);
 

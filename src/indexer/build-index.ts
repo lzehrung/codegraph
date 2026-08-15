@@ -892,7 +892,12 @@ async function buildIndexFromFileListShared(
       manifestEntries: manifestEntriesForIndex,
     });
     if (manifestEntries) {
-      await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries, projectRoot));
+      await writeProjectIndexSnapshot(
+        projectRoot,
+        opts,
+        index,
+        projectSnapshotFilesSignature(manifestEntries, projectRoot),
+      );
     }
     if (buildStartedAt !== undefined) {
       emitIndexLifecycleProgress(opts, "complete", "build", index.byFile.size, performance.now() - buildStartedAt);
@@ -1311,6 +1316,10 @@ export async function buildProjectIndexIncremental(
       };
     }
     const changedFiles = new Set<string>();
+    const forceNodeModuleReResolution = normalizeGraphOptions(opts?.graph).resolveNodeModules;
+    if (forceNodeModuleReResolution) {
+      for (const file of allFiles) changedFiles.add(file);
+    }
     const markAsChanged = (file: string): void => {
       if (allFiles.has(file)) changedFiles.add(file);
     };
@@ -1556,7 +1565,9 @@ export async function buildProjectIndexIncremental(
       }
       expandStarImports(modules, opts);
       const retainedTrackedEntries = Object.entries(trackedEntries).filter(([file]) => !deletedTrackedFiles.has(file));
-      const cachedGraphEntries = new Map<string, ManifestFileEntry>(retainedTrackedEntries);
+      const cachedGraphEntries = normalizeGraphOptions(opts?.graph).resolveNodeModules
+        ? new Map<string, ManifestFileEntry>()
+        : new Map<string, ManifestFileEntry>(retainedTrackedEntries);
       const manifestEntries = new Map<string, ManifestFileEntry>(cachedGraphEntries);
       const baseGraph: Graph | undefined =
         cachedGraphEntries.size > 0 ? { nodes: new Set<string>(), edges: [] } : undefined;
@@ -1631,7 +1642,12 @@ export async function buildProjectIndexIncremental(
         manifestEntries: projectIndexManifestEntries(manifestEntries),
         buildReport: report,
       });
-      await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries, projectRoot));
+      await writeProjectIndexSnapshot(
+        projectRoot,
+        opts,
+        index,
+        projectSnapshotFilesSignature(manifestEntries, projectRoot),
+      );
       if (updateStartedAt !== undefined) {
         emitIndexLifecycleProgress(opts, "complete", "update", index.byFile.size, performance.now() - updateStartedAt);
       } else {
