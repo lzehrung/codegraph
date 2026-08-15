@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as agentFacade from "../src/agent.js";
 import { type AgentSession } from "../src/agent/session.js";
+import { setAfterConfinedPathVerifiedForTests } from "../src/util/confinedFile.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
 
 const { createAgentSession, formatAgentFileViewResponse, getCodegraphFileView, getCodegraphFileViewWithSession } =
@@ -42,6 +43,7 @@ async function writeSparseFile(root: string, relativePath: string, size: number)
 }
 
 afterEach(async () => {
+  setAfterConfinedPathVerifiedForTests(undefined);
   await Promise.all(Array.from(tempPaths, async (tempPath) => await fs.rm(tempPath, { recursive: true, force: true })));
   tempPaths.clear();
 });
@@ -227,6 +229,58 @@ describe("agent file view", () => {
     );
   });
 
+  it("refuses a TOCTOU symlink swap between confinement and open", async () => {
+    // Deterministic interleaving: setAfterConfinedPathVerifiedForTests runs after realpath
+    // confinement succeeds and before lstat/open, swapping the verified path for an outside symlink.
+    const root = await makeTempDir("cg-file-view-toctou-root-");
+    const outside = await makeTempDir("cg-file-view-toctou-outside-");
+    const victimRelative = "victim.txt";
+    const victimPath = path.join(root, victimRelative);
+    const outsideFile = path.join(outside, "secret.txt");
+    const outsideMarker = "TOCTOU_OUTSIDE_SECRET_CONTENT";
+    await fs.writeFile(victimPath, "inside-safe-content\n", "utf8");
+    await fs.writeFile(outsideFile, `${outsideMarker}\n`, "utf8");
+
+    const probeLink = path.join(root, "symlink-probe");
+    try {
+      await fs.symlink(outsideFile, probeLink, "file");
+      await fs.unlink(probeLink);
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    setAfterConfinedPathVerifiedForTests(async (realPath) => {
+      if (path.resolve(realPath) !== path.resolve(victimPath)) return;
+      await fs.unlink(victimPath);
+      await fs.symlink(outsideFile, victimPath, "file");
+    });
+
+    await expect(getCodegraphFileView({ root, file: victimRelative, limit: 10, maxBytes: 100 })).rejects.toThrow(
+      /File view target is not a file:|File changed between verification and open:/,
+    );
+  });
+
+  it("still reads ordinary text through an in-root symlink", async () => {
+    const root = await makeTempDir("cg-file-view-inroot-symlink-");
+    const targetFile = path.join(root, "target-notes.txt");
+    const linkedFile = path.join(root, "alias-notes.txt");
+    await fs.writeFile(targetFile, "in-root-symlink-body\n", "utf8");
+    try {
+      await fs.symlink(targetFile, linkedFile, "file");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const result = await getCodegraphFileView({ root, file: "alias-notes.txt", limit: 10, maxBytes: 100 });
+    expect(result).toMatchObject({
+      file: "alias-notes.txt",
+      text: "in-root-symlink-body\n",
+      content: "1\tin-root-symlink-body\n2\t",
+    });
+  });
+
   it("redacts a sensitive in-root symlink target even when the requested filename is benign", async () => {
     const root = await makeTempDir("cg-file-view-sensitive-symlink-");
     const targetFile = path.join(root, ".env");
@@ -268,8 +322,10 @@ describe("agent file view", () => {
       throw error;
     }
 
-    const openSpy = vi.spyOn(fs, "open");
     const readFileSpy = vi.spyOn(fs, "readFile");
+    const probe = await fs.open(targetFile, "r");
+    const handleReadSpy = vi.spyOn(Object.getPrototypeOf(probe), "read");
+    await probe.close();
 
     try {
       const redacted = await getCodegraphFileView({ root, file: "id_rsa", limit: 10, maxBytes: 100 });
@@ -282,11 +338,12 @@ describe("agent file view", () => {
         sensitive: { kind: "key-material", redacted: true, allowSensitiveRequired: true },
       });
       expect(JSON.stringify(redacted)).not.toContain(secretValue);
-      expect(openSpy).not.toHaveBeenCalled();
+      // Descriptor open+fstat is required for TOCTOU-safe size metadata; content must stay unread.
       expect(readFileSpy).not.toHaveBeenCalled();
+      expect(handleReadSpy).not.toHaveBeenCalled();
     } finally {
-      openSpy.mockRestore();
       readFileSpy.mockRestore();
+      handleReadSpy.mockRestore();
     }
   });
 
@@ -456,7 +513,7 @@ describe("agent file view", () => {
     let grewFile = false;
 
     openSpy.mockImplementation(async (target, flags) => {
-      if (!grewFile && target === filePath && flags === "r") {
+      if (!grewFile && path.resolve(String(target)) === path.resolve(filePath)) {
         grewFile = true;
         const growthHandle = await originalOpen(filePath, "w");
         const chunk = Buffer.alloc(64 * 1024, 0x61);
@@ -625,8 +682,9 @@ describe("agent file view", () => {
           sensitive: { kind: "key-material", redacted: true, allowSensitiveRequired: true },
         });
         expect(JSON.stringify(redacted)).not.toContain(marker);
-        expect(openSpy).not.toHaveBeenCalled();
         expect(readFileSpy).not.toHaveBeenCalled();
+        expect(openSpy).toHaveBeenCalled();
+        openSpy.mockClear();
 
         const allowed = await getCodegraphFileView({
           root,
@@ -644,7 +702,7 @@ describe("agent file view", () => {
           sensitive: { kind: "key-material", redacted: false, allowSensitiveRequired: true },
         });
         expect(openSpy).toHaveBeenCalledTimes(1);
-        expect(openSpy).toHaveBeenCalledWith(path.join(root, file), "r");
+        expect(openSpy.mock.calls[0]?.[0]).toBe(path.join(root, file));
         expect(readFileSpy).not.toHaveBeenCalled();
       } finally {
         openSpy.mockRestore();
@@ -694,8 +752,10 @@ describe("agent file view", () => {
         });
         expect(JSON.stringify(redacted)).not.toContain(marker);
       }
-      expect(openSpy).not.toHaveBeenCalled();
+      // Metadata uses descriptor open+fstat; content bytes must remain unread.
       expect(readFileSpy).not.toHaveBeenCalled();
+      expect(openSpy).toHaveBeenCalled();
+      openSpy.mockClear();
 
       const allowed = await getCodegraphFileView({
         root,
@@ -712,7 +772,7 @@ describe("agent file view", () => {
         sensitive: { kind: "key-material", redacted: false, allowSensitiveRequired: true },
       });
       expect(openSpy).toHaveBeenCalledTimes(1);
-      expect(openSpy).toHaveBeenCalledWith(path.join(root, "signing.key"), "r");
+      expect(openSpy.mock.calls[0]?.[0]).toBe(path.join(root, "signing.key"));
       expect(readFileSpy).not.toHaveBeenCalled();
     } finally {
       openSpy.mockRestore();
@@ -738,13 +798,16 @@ describe("agent file view", () => {
         content: `1\tSensitive key material omitted.\n2\tSize: ${oversizedBytes} bytes.`,
         sensitive: { kind: "key-material", redacted: true, allowSensitiveRequired: true },
       });
-      expect(openSpy).not.toHaveBeenCalled();
+      // Descriptor open+fstat is required for TOCTOU-safe size metadata; content stays unread.
+      expect(openSpy).toHaveBeenCalledTimes(1);
       expect(readFileSpy).not.toHaveBeenCalled();
+      openSpy.mockClear();
 
       await expect(
         getCodegraphFileView({ root, file, limit: 10, maxBytes: 100, allowSensitive: true }),
       ).rejects.toThrow(`File exceeds the 16777216-byte file view input limit: ${filePath}`);
-      expect(openSpy).not.toHaveBeenCalled();
+      // Open binds the descriptor for the size check; no content read follows.
+      expect(openSpy).toHaveBeenCalledTimes(1);
       expect(readFileSpy).not.toHaveBeenCalled();
     } finally {
       openSpy.mockRestore();

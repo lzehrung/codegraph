@@ -1,7 +1,27 @@
-import fs from "node:fs/promises";
+import { constants as fsConstants, type Stats } from "node:fs";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 
 import { isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "./paths.js";
+
+export type ConfinedReadableFile = {
+  handle: FileHandle;
+  realPath: string;
+  displayPath: string;
+  size: number;
+};
+
+type ConfinedFileTestHook = (realPath: string) => void | Promise<void>;
+
+let afterConfinedPathVerifiedForTests: ConfinedFileTestHook | undefined;
+
+/**
+ * Test-only seam between path confinement and the open that binds a descriptor.
+ * Production code must leave this unset.
+ */
+export function setAfterConfinedPathVerifiedForTests(hook: ConfinedFileTestHook | undefined): void {
+  afterConfinedPathVerifiedForTests = hook;
+}
 
 export async function resolveReadableFile(
   realRoot: string,
@@ -13,6 +33,35 @@ export async function resolveReadableFile(
   const displayPath =
     toProjectRelativePath(root, candidatePath) ?? toProjectRelativePath(realRoot, realPath) ?? normalizePath(realPath);
   return { realPath, displayPath };
+}
+
+/**
+ * Resolve a project path, open it, and verify the opened descriptor before any read.
+ *
+ * Flow: realpath confinement → optional test hook → `lstat` (must be a regular file) →
+ * open the realpath'd target → `fstat` on that descriptor → identity check → callers read
+ * only through the returned handle (never re-resolve the path string).
+ *
+ * POSIX: open uses `O_RDONLY | O_NOFOLLOW` so a leaf symlink swap fails the open with ELOOP.
+ * win32: Node's `fs.open` has no portable `O_NOFOLLOW` (`fs.constants.O_NOFOLLOW` is absent).
+ * Guarantee there is post-open identity: `fstat.ino` must match `lstat.ino`; `dev` is compared
+ * only when both sides are non-zero because win32 `lstat` often reports `dev=0` while `fstat`
+ * has the volume serial. A symlink swap after `lstat` yields a different inode on follow.
+ *
+ * In-root symlinks still work: confinement realpaths them first, then the open targets the
+ * resolved regular file inside the root—not the symlink leaf.
+ */
+export async function openConfinedReadableFile(
+  realRoot: string,
+  root: string,
+  filePath: string,
+): Promise<ConfinedReadableFile> {
+  const { realPath, displayPath } = await resolveReadableFile(realRoot, root, filePath);
+  if (afterConfinedPathVerifiedForTests) {
+    await afterConfinedPathVerifiedForTests(realPath);
+  }
+  const { handle, size } = await openVerifiedRegularFile(realPath);
+  return { handle, realPath, displayPath, size };
 }
 
 export async function resolveProjectFile(realRoot: string, root: string, filePath: string): Promise<string> {
@@ -60,6 +109,59 @@ export async function findNearestExistingPath(filePath: string): Promise<string>
     }
   }
   return current;
+}
+
+async function openVerifiedRegularFile(realPath: string): Promise<{ handle: FileHandle; size: number }> {
+  const preStat = await fs.lstat(realPath);
+  assertRegularFileStat(preStat, realPath);
+
+  const openFlags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
+  let handle: FileHandle;
+  try {
+    handle = await fs.open(realPath, openFlags);
+  } catch (error) {
+    throw rewriteNoFollowOpenError(error, realPath);
+  }
+
+  try {
+    const postStat = await handle.stat();
+    assertRegularFileStat(postStat, realPath);
+    if (!sameFileIdentity(preStat, postStat)) {
+      throw new Error(
+        `File changed between verification and open: ${normalizePath(realPath)} (possible path confinement race)`,
+      );
+    }
+    return { handle, size: postStat.size };
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+function sameFileIdentity(preStat: Stats, postStat: Stats): boolean {
+  if (preStat.ino !== postStat.ino) return false;
+  // win32 lstat often reports dev=0 while fstat has the volume serial; only compare when both are set.
+  if (preStat.dev === 0 || postStat.dev === 0) return true;
+  return preStat.dev === postStat.dev;
+}
+
+function assertRegularFileStat(stat: Stats, filePath: string): void {
+  if (stat.isFile()) return;
+  throw new Error(`File view target is not a file: ${filePath}`);
+}
+
+function rewriteNoFollowOpenError(error: unknown, filePath: string): Error {
+  if (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "ELOOP" || error.code === "EMLINK" || error.code === "EINVAL")
+  ) {
+    return new Error(
+      `File changed between verification and open: ${normalizePath(filePath)} (possible path confinement race)`,
+    );
+  }
+  if (error instanceof Error) return error;
+  return new Error(String(error));
 }
 
 function isMissingPathError(error: unknown): boolean {
