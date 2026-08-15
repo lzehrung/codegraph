@@ -974,8 +974,9 @@ function collectReachableFiles(
     relation: "anchor",
   }));
 
-  while (queue.length) {
-    const current = queue.shift()!;
+  let queueHead = 0;
+  while (queueHead < queue.length) {
+    const current = queue[queueHead++];
     const existing = reachable.get(current.file);
     if (existing && existing.distance <= current.distance) continue;
     reachable.set(current.file, current);

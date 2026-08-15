@@ -34,19 +34,17 @@ export async function collectWorkspaceManifestDependencyEdges(
   allowedManifestFiles?: ReadonlySet<string>,
   logLevel?: LogLevel,
 ): Promise<Edge[]> {
-  const manifestPaths = await listProjectFiles(projectRoot, ["**/package.json"], {
-    ...discovery,
-    ...(logLevel ? { logLevel } : {}),
-  });
-  const scopedManifestPaths = allowedManifestFiles
-    ? manifestPaths.filter((manifestPath) => allowedManifestFiles.has(manifestPath))
-    : manifestPaths;
-  if (!scopedManifestPaths.length) return [];
-
+  const manifestPaths = allowedManifestFiles
+    ? [...allowedManifestFiles].filter((manifestPath) => path.basename(manifestPath) === "package.json")
+    : await listProjectFiles(projectRoot, ["**/package.json"], {
+        ...discovery,
+        ...(logLevel ? { logLevel } : {}),
+      });
+  if (!manifestPaths.length) return [];
   const manifestByPackageName = new Map<string, string>();
   const parsedByPath = new Map<string, PackageJsonDependencyInfo>();
 
-  for (const manifestPath of scopedManifestPaths) {
+  for (const manifestPath of manifestPaths) {
     try {
       const raw = await fsp.readFile(manifestPath, "utf8");
       const parsed = JSON.parse(raw) as PackageJsonDependencyInfo;
