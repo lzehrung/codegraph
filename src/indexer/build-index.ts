@@ -64,11 +64,14 @@ import {
   tryLoadFromCache,
   tryLoadPersistedBloomFilters,
   tryLoadProjectIndexSnapshot,
+  tryLoadProjectSnapshotModules,
   verifyManifestEntries,
+  writeModulesToCache,
   writeProjectIndexSnapshot,
   writeToCache,
   type FileSignature,
   type ManifestFileEntry,
+  type PendingModuleCacheWrite,
 } from "./build-cache.js";
 import { cacheRoot } from "./build-cache/module-cache.js";
 import {
@@ -119,6 +122,7 @@ type IndexedFileGraphContext = {
 
 type IndexedFileModuleResult = {
   module: ModuleIndex;
+  cacheWrite?: PendingModuleCacheWrite | undefined;
   graphContext: IndexedFileGraphContext;
 };
 
@@ -316,15 +320,17 @@ async function buildIndexedModuleForFile(args: {
 
   const sigInfo = args.fileSignatures.get(args.file);
   const cacheable = !prepared.nativeFallbackReason && !lacksParserContext;
+  let cacheWrite: PendingModuleCacheWrite | undefined;
   if (sigInfo && cacheable) {
     const cacheSig = args.cacheEnabled
       ? await moduleCacheSignatureForFile(args.file, sigInfo, args.opts)
       : sigInfo.cacheSig;
-    writeToCache(args.projectRoot, args.file, cacheSig, mod, args.opts);
+    cacheWrite = { file: args.file, sig: cacheSig, mod };
   }
 
   return {
     module: mod,
+    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
     graphContext: {
       source,
       sup,
@@ -764,13 +770,14 @@ async function buildIndexFromFileListShared(
               if (filter) bloomFilterCache.set(file, filter);
             }
           }
-          return [file, mod, edges] as const;
+          return [file, mod, edges, undefined] as const;
         }
         if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
         const support = supportForFile(file, opts?.languageExtensions);
-        if (!support) return [file, createEmptyModuleIndex(file), []] as const;
+        if (!support) return [file, createEmptyModuleIndex(file), [], undefined] as const;
         ensureBuildProgressStarted();
         let graphContext: IndexedFileGraphContext | undefined;
+        let cacheWrite: PendingModuleCacheWrite | undefined;
         if (!mod) {
           const built = await buildIndexedModuleForFile({
             file,
@@ -791,6 +798,7 @@ async function buildIndexFromFileListShared(
           });
           mod = built.module;
           graphContext = built.graphContext;
+          cacheWrite = built.cacheWrite;
         } else {
           collectJsonDependencies(mod.imports, jsonDependencies);
         }
@@ -815,11 +823,11 @@ async function buildIndexFromFileListShared(
           allFiles: normalizedFiles,
           ...(sqlFactCache ? { sqlFactCache } : {}),
         });
-        return [file, mod ?? createEmptyModuleIndex(file), edges] as const;
+        return [file, mod ?? createEmptyModuleIndex(file), edges, cacheWrite] as const;
       } catch (error) {
         if (isNativeRequiredUnavailableError(error) || isNodeSqliteUnavailableError(error)) throw error;
         if (isUnsupportedParserInputError(error) || isNonNativeParserUnavailableError(error)) {
-          return [file, createEmptyModuleIndex(file), []] as const;
+          return [file, createEmptyModuleIndex(file), [], undefined] as const;
         }
         recordFileFailure(report, file, error);
         logWithLevel(opts?.logLevel, "warn", `Warning: Failed to process file ${file}:`, error);
@@ -851,9 +859,14 @@ async function buildIndexFromFileListShared(
         if (edge.to.type === "file") graph.nodes.add(edge.to.path);
       }
     };
-    for (const [file, mod, edges] of fileResults) {
+    const pendingCacheWrites: PendingModuleCacheWrite[] = [];
+    for (const [file, mod, edges, cacheWrite] of fileResults) {
       modules.set(fileIdentityKey(file), mod);
       appendUniqueGraphEdges(edges);
+      if (cacheWrite) pendingCacheWrites.push(cacheWrite);
+    }
+    if (pendingCacheWrites.length) {
+      writeModulesToCache(projectRoot, pendingCacheWrites, opts);
     }
     const workspaceManifestEdges = await collectWorkspaceManifestDependencyEdges(
       projectRoot,
@@ -1434,7 +1447,7 @@ export async function buildProjectIndexIncremental(
         opts,
         gitSigMap,
         cacheEnabled,
-        needsContentHash: cacheEnabled || useManifest || opts?.cacheStrict === true,
+        needsContentHash: cacheEnabled || manifestUsed || opts?.cacheStrict === true,
         concurrency: conc,
       });
       const modules = new Map<FileId, ModuleIndex>();
@@ -1479,12 +1492,19 @@ export async function buildProjectIndexIncremental(
         completeCheckProgress(allFiles.size);
         return unchangedSnapshot;
       }
+      const snapshotModules = cacheEnabled ? await tryLoadProjectSnapshotModules(projectRoot, opts) : null;
       const persistedBloomFilters = bloomFilterCache ? await tryLoadPersistedBloomFilters(projectRoot, opts) : null;
       for (const file of allFiles) {
         if (changedFiles.has(file)) continue;
         const sigInfo = fileSignatures.get(file)!;
-        const cacheSig = cacheEnabled ? await moduleCacheSignatureForFile(file, sigInfo, opts) : sigInfo.cacheSig;
-        const cached = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
+        let cached: ModuleIndex | null = null;
+        const snapshotMod = snapshotModules?.get(fileIdentityKey(file));
+        if (snapshotMod) {
+          cached = snapshotMod;
+        } else if (cacheEnabled) {
+          const cacheSig = await moduleCacheSignatureForFile(file, sigInfo, opts);
+          cached = tryLoadFromCache(projectRoot, file, cacheSig, opts, report);
+        }
         if (cached) {
           if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
           modules.set(fileIdentityKey(file), cached);
@@ -1536,7 +1556,7 @@ export async function buildProjectIndexIncremental(
               fileSignatures,
               cacheEnabled,
             });
-            return [file, built.module] as const;
+            return [file, built.module, built.cacheWrite] as const;
           } catch (error) {
             if (isNativeRequiredUnavailableError(error) || isNodeSqliteUnavailableError(error)) throw error;
             if (isUnsupportedParserInputError(error) || isNonNativeParserUnavailableError(error)) {
@@ -1544,7 +1564,7 @@ export async function buildProjectIndexIncremental(
             }
             recordFileFailure(report, file, error);
             logWithLevel(opts?.logLevel, "warn", `Warning: Failed to process file ${file}:`, error);
-            return [file, createEmptyModuleIndex(file)] as const;
+            return [file, createEmptyModuleIndex(file), undefined] as const;
           } finally {
             if (opts?.onProgress) {
               opts.onProgress({
@@ -1558,8 +1578,13 @@ export async function buildProjectIndexIncremental(
             }
           }
         });
-        for (const [file, mod] of fileResults) {
+        const pendingIncrementalCacheWrites: PendingModuleCacheWrite[] = [];
+        for (const [file, mod, cacheWrite] of fileResults) {
           modules.set(fileIdentityKey(file), mod);
+          if (cacheWrite) pendingIncrementalCacheWrites.push(cacheWrite);
+        }
+        if (pendingIncrementalCacheWrites.length) {
+          writeModulesToCache(projectRoot, pendingIncrementalCacheWrites, opts);
         }
         if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
       }

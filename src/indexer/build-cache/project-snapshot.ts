@@ -36,6 +36,16 @@ import type { ManifestFileEntry } from "./manifest.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
 const PROJECT_SNAPSHOT_VERSION = 5;
+export const BLOOM_FILTER_SNAPSHOT_VERSION = 1;
+export const BLOOM_FILTER_SNAPSHOT_FILENAME = "bloom-filters.json";
+
+export type BloomFilterSnapshotPayload = {
+  version: number;
+  projectRoot: string;
+  implementationFingerprint: string;
+  projectSnapshotIdentity: string;
+  bloomFilters: Record<string, SerializedBloomFilter>;
+};
 const BLOOM_FILTER_MIN_SIZE = 1_000;
 const BLOOM_FILTER_MAX_SIZE = 1_000_000;
 const BLOOM_FILTER_MIN_HASH_COUNT = 1;
@@ -457,11 +467,54 @@ export async function tryLoadProjectIndexSnapshot(
  * `graph.edges` / `modules`. Returns `null` when disk caching is off, `useBloomFilters` is
  * disabled, or no valid snapshot with bloom data exists.
  */
+export async function tryLoadProjectSnapshotModules(
+  projectRoot: string,
+  opts: BuildOptions | undefined,
+): Promise<Map<string, ModuleIndex> | null> {
+  if ((opts?.cache ?? "off") !== "disk") return null;
+  try {
+    const rawPayload = (await readParsedSnapshot(projectSnapshotPath(projectRoot, opts))).payload;
+    const migratedPayload = migrateProjectSnapshotPayload(rawPayload, projectRoot);
+    const payload =
+      migratedPayload && typeof migratedPayload === "object" && !Array.isArray(migratedPayload)
+        ? transformSnapshotPaths(migratedPayload as ProjectIndexSnapshotPayload, projectRoot, false)
+        : migratedPayload;
+    const nativeRuntimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
+    const implementationFingerprint = getImplementationFingerprint();
+    if (
+      !isProjectIndexSnapshotPayload(payload) ||
+      !projectRootMatches(projectRoot, payload.projectRoot) ||
+      payload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
+      payload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint ||
+      payload.implementationFingerprint !== implementationFingerprint
+    ) {
+      return null;
+    }
+    const modules = new Map<string, ModuleIndex>();
+    for (const mod of payload.modules) {
+      modules.set(fileIdentityKey(mod.file), mod);
+    }
+    return modules;
+  } catch {
+    return null;
+  }
+}
+
 export async function tryLoadPersistedBloomFilters(
   projectRoot: string,
   opts: BuildOptions | undefined,
 ): Promise<BloomFilterCache | null> {
   if ((opts?.cache ?? "off") !== "disk" || (opts?.useBloomFilters ?? true) === false) return null;
+  try {
+    const sidecarPath = bloomFilterSnapshotPath(projectRoot, opts);
+    const sidecarParsed = (await readParsedSnapshot(sidecarPath)).payload;
+    const sidecarBloom = persistedBloomFiltersFromSidecar(sidecarParsed, projectRoot);
+    if (sidecarBloom) {
+      return deserializeBloomFilterCache(sidecarBloom, projectRoot);
+    }
+  } catch {
+    // Fall back to legacy project snapshot payload if sidecar is unavailable or corrupt
+  }
   try {
     const payload = (await readParsedSnapshot(projectSnapshotPath(projectRoot, opts))).payload;
     const bloomFilters = persistedBloomFiltersFromSnapshot(payload, projectRoot);
@@ -470,6 +523,24 @@ export async function tryLoadPersistedBloomFilters(
   } catch {
     return null;
   }
+}
+
+function persistedBloomFiltersFromSidecar(
+  value: unknown,
+  projectRoot: string,
+): Record<string, SerializedBloomFilter> | null {
+  if (!value || typeof value !== "object") return null;
+  const payload = value as Partial<BloomFilterSnapshotPayload>;
+  if (
+    payload.version !== BLOOM_FILTER_SNAPSHOT_VERSION ||
+    typeof payload.projectRoot !== "string" ||
+    !projectRootMatches(projectRoot, payload.projectRoot) ||
+    payload.implementationFingerprint !== getImplementationFingerprint()
+  ) {
+    return null;
+  }
+  if (!isSerializedBloomFilterRecord(payload.bloomFilters)) return null;
+  return payload.bloomFilters;
 }
 
 /** Light validation for bloom hydration: snapshot version, root identity, and bloom section only. */
@@ -540,6 +611,29 @@ export async function writeProjectIndexSnapshot(
     const identity = await snapshotFileIdentity(snapshotPath);
     setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, compressed });
     index.projectSnapshotIdentity = projectSnapshotIdentity;
+    if (serializedBloomFilters) {
+      try {
+        const bloomPayload: BloomFilterSnapshotPayload = {
+          version: BLOOM_FILTER_SNAPSHOT_VERSION,
+          projectRoot: serializedProjectRoot(projectRoot),
+          implementationFingerprint: getImplementationFingerprint(),
+          projectSnapshotIdentity,
+          bloomFilters: serializedBloomFilters,
+        };
+        const bloomPath = bloomFilterSnapshotPath(projectRoot, opts);
+        const bloomCompressed = brotliCompressSync(JSON.stringify(bloomPayload), {
+          params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
+        });
+        await writeSnapshotAtomically(bloomPath, bloomCompressed);
+        const bloomIdentity = await snapshotFileIdentity(bloomPath);
+        setBoundedSnapshotCache(parsedSnapshotCache, bloomPath, {
+          identity: bloomIdentity,
+          compressed: bloomCompressed,
+        });
+      } catch {
+        // Bloom sidecar write failure must not fail indexing
+      }
+    }
   } catch {
     delete index.projectSnapshotIdentity;
     // Snapshot writes are an optimization; cache write failures must not fail indexing.
@@ -548,6 +642,15 @@ export async function writeProjectIndexSnapshot(
 
 function projectSnapshotPath(projectRoot: string, opts: BuildOptions | undefined): string {
   return path.join(cacheRoot(projectRoot, opts), "project-index-snapshot.json");
+}
+
+function bloomFilterSnapshotPath(projectRoot: string, opts: BuildOptions | undefined): string {
+  const root = path.resolve(cacheRoot(projectRoot, opts));
+  const snapshotPath = path.resolve(root, BLOOM_FILTER_SNAPSHOT_FILENAME);
+  if (!isFilePathWithinRoot(root, snapshotPath)) {
+    throw new Error(`Bloom filter snapshot escaped cache root: ${snapshotPath}`);
+  }
+  return snapshotPath;
 }
 
 export async function tryLoadDetailedSymbolGraphSnapshot(
@@ -1112,10 +1215,7 @@ function isSerializedBloomFilter(value: unknown): value is SerializedBloomFilter
   } catch {
     return false;
   }
-  return (
-    decoded.length === expectedBytes &&
-    decoded.toString("base64") === filter.bitsBase64
-  );
+  return decoded.length === expectedBytes && decoded.toString("base64") === filter.bitsBase64;
 }
 
 function isModuleIndex(value: unknown): value is ModuleIndex {

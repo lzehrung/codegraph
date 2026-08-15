@@ -107,7 +107,9 @@ function isForbiddenAnchor(candidate: string): boolean {
   const resolved = path.resolve(candidate);
   const home = path.resolve(os.homedir());
   const parsed = path.parse(resolved);
-  return fileIdentityKey(resolved) === fileIdentityKey(home) || fileIdentityKey(resolved) === fileIdentityKey(parsed.root);
+  return (
+    fileIdentityKey(resolved) === fileIdentityKey(home) || fileIdentityKey(resolved) === fileIdentityKey(parsed.root)
+  );
 }
 
 function findRepositoryAnchor(projectRoot: string): CacheAnchorResolution {
@@ -168,9 +170,7 @@ export function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
     if (path.basename(configured) === namespace) return configured;
     return path.join(configured, namespace);
   }
-  const base = opts?.cacheLocation === "user"
-    ? resolveCodegraphUserCacheRoot()
-    : path.join(anchor, ".codegraph-cache");
+  const base = opts?.cacheLocation === "user" ? resolveCodegraphUserCacheRoot() : path.join(anchor, ".codegraph-cache");
   const candidate = path.join(path.resolve(base), "index-v1", namespace);
   if (!sameRoot && !opts?.cacheLocation) {
     const legacy = path.join(root, ".codegraph-cache", "index-v1");
@@ -238,7 +238,7 @@ function ensureModuleCacheSchema(db: SqliteDatabase, projectRoot: string): void 
   db.exec("CREATE INDEX IF NOT EXISTS idx_module_cache_sig ON module_cache(sig);");
 }
 
-function getDiskModuleCache(projectRoot: string, opts?: BuildOptions): DiskModuleCache {
+export function getDiskModuleCache(projectRoot: string, opts?: BuildOptions): DiskModuleCache {
   const dbPath = diskCacheDatabasePath(projectRoot, opts);
   const existing = diskModuleCaches.get(dbPath);
   if (existing) return existing;
@@ -433,7 +433,8 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
 
 function transformModulePaths(projectRoot: string, module: ModuleIndex, toRelative: boolean): ModuleIndex {
   const copy = structuredClone(module);
-  const transform = (file: string): string => (toRelative ? cacheRelativePath(projectRoot, file) : cacheAbsolutePath(projectRoot, file));
+  const transform = (file: string): string =>
+    toRelative ? cacheRelativePath(projectRoot, file) : cacheAbsolutePath(projectRoot, file);
   copy.file = transform(copy.file);
   for (const local of copy.locals) local.file = transform(local.file);
   for (const entry of copy.exports) {
@@ -493,28 +494,48 @@ export function tryLoadFromCache(
   return null;
 }
 
-export function writeToCache(
+export type PendingModuleCacheWrite = {
+  file: string;
+  sig: string;
+  mod: ModuleIndex;
+};
+
+export function writeModulesToCache(
   projectRoot: string,
-  file: string,
-  sig: string,
-  mod: ModuleIndex,
+  writes: readonly PendingModuleCacheWrite[],
   opts?: BuildOptions,
 ): void {
+  if (!writes.length) return;
   const mode = opts?.cache ?? "off";
   if (mode === "memory") {
-    lruMapSet(
-      memoryCache,
-      memoryCacheKey(projectRoot, file),
-      { version: PARSED_CACHE_VERSION, sig, mod },
-      MAX_MEMORY_CACHE_ENTRIES,
-    );
+    for (const write of writes) {
+      lruMapSet(
+        memoryCache,
+        memoryCacheKey(projectRoot, write.file),
+        { version: PARSED_CACHE_VERSION, sig: write.sig, mod: write.mod },
+        MAX_MEMORY_CACHE_ENTRIES,
+      );
+    }
   } else if (mode === "disk") {
     try {
       const cache = getDiskModuleCache(projectRoot, opts);
-      const payload = brotliCompressSync(JSON.stringify(transformModulePaths(projectRoot, mod, true)), {
-        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
-      });
-      cache.write.run(cacheRelativePath(projectRoot, file), sig, PARSED_CACHE_VERSION, payload, Date.now());
+      const now = Date.now();
+      const preparedWrites: Array<{ file: string; sig: string; payload: Buffer }> = [];
+      for (const write of writes) {
+        const payload = brotliCompressSync(JSON.stringify(transformModulePaths(projectRoot, write.mod, true)), {
+          params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
+        });
+        preparedWrites.push({
+          file: cacheRelativePath(projectRoot, write.file),
+          sig: write.sig,
+          payload,
+        });
+      }
+      cache.db.transaction(() => {
+        for (const item of preparedWrites) {
+          cache.write.run(item.file, item.sig, PARSED_CACHE_VERSION, item.payload, now);
+        }
+      })();
     } catch (error) {
       if (isNodeSqliteUnavailableError(error)) {
         reportMissingNodeSqlite(opts?.logLevel, error);
@@ -523,4 +544,14 @@ export function writeToCache(
       logWithLevel(opts?.logLevel, "warn", "Warning: Failed to write to cache:", error);
     }
   }
+}
+
+export function writeToCache(
+  projectRoot: string,
+  file: string,
+  sig: string,
+  mod: ModuleIndex,
+  opts?: BuildOptions,
+): void {
+  writeModulesToCache(projectRoot, [{ file, sig, mod }], opts);
 }

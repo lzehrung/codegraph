@@ -6,7 +6,8 @@ import { brotliDecompressSync } from "node:zlib";
 
 import { buildProjectIndex, findDuplicates, type BuildReport } from "../src/index.js";
 import { closeDuplicateUnitCacheDatabase } from "../src/duplicates.js";
-import { SqliteDatabase } from "../src/sqlite-driver.js";
+import * as buildCache from "../src/indexer/build-cache.js";
+import { SqliteDatabase, SqliteStatement } from "../src/sqlite-driver.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
 function cacheDir(root: string): string {
@@ -125,6 +126,49 @@ describe("disk cache uses sqlite backend", () => {
       sql.filter((statement) => statement.startsWith("SELECT sig, version, payload FROM module_cache")),
     ).toHaveLength(1);
     expect(sql.filter((statement) => statement.startsWith("INSERT INTO module_cache"))).toHaveLength(1);
+  });
+  it("rolls back a failed module cache batch without a partial row", async () => {
+    const root = await mkTmpDir("dg-disk-cache-batch-rollback-");
+    const firstPath = path.join(root, "first.ts");
+    const secondPath = path.join(root, "second.ts");
+    await fsp.writeFile(firstPath, "export const first = 1;\n", "utf8");
+    await fsp.writeFile(secondPath, "export const second = 2;\n", "utf8");
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const first = Array.from(index.byFile.values()).find((mod) => mod.file.endsWith("/first.ts"));
+    const second = Array.from(index.byFile.values()).find((mod) => mod.file.endsWith("/second.ts"));
+    if (!first || !second) throw new Error("missing seeded modules");
+
+    const db = new DatabaseSync(moduleCacheDbPath(root));
+    db.exec("DELETE FROM module_cache;");
+    db.close();
+
+    const originalRun = SqliteStatement.prototype.run;
+    let cacheWrites = 0;
+    const runSpy = vi.spyOn(SqliteStatement.prototype, "run").mockImplementation(function (
+      this: SqliteStatement,
+      ...params
+    ) {
+      if (params.length === 5 && params[2] === 4) {
+        cacheWrites++;
+        if (cacheWrites === 2) throw new Error("simulated aborted cache batch");
+      }
+      return originalRun.call(this, ...params);
+    });
+    try {
+      buildCache.writeModulesToCache(
+        root,
+        [
+          { file: firstPath, sig: "first-signature", mod: first },
+          { file: secondPath, sig: "second-signature", mod: second },
+        ],
+        { cache: "disk" },
+      );
+    } finally {
+      runSpy.mockRestore();
+    }
+
+    expect(cacheWrites).toBe(2);
+    expect(readRowCount(moduleCacheDbPath(root), "SELECT COUNT(*) AS count FROM module_cache")).toBe(0);
   });
 
   it("prunes module cache rows for files outside the successful manifest", async () => {

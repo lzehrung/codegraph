@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { LANG_CONFIGS } from "../bootstrap/treeSitterLanguages.js";
-import { chunkFile, type Chunk } from "../chunking/chunkFile.js";
+import { chunkFile, chunkFileWithSymbols, type Chunk } from "../chunking/chunkFile.js";
 import { chunkTextFile } from "../chunking/chunkTextFile.js";
 import {
   countDuplicateTokens,
@@ -25,7 +25,13 @@ import { maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { collectLineStartOffsets } from "../util/lines.js";
 import { assertFilePathWithinRoot, fileIdentityKey, normalizePath, toProjectDisplayPath } from "../util/paths.js";
 import { logWithLevel } from "../logging.js";
-import { duplicateUnitCacheVariant, tryLoadDuplicateUnitsFromCache, writeDuplicateUnitsToCache } from "./unitCache.js";
+import {
+  duplicateUnitCacheVariant,
+  tryLoadDuplicateUnitsFromCache,
+  writeDuplicateUnitsBatchToCache,
+  writeDuplicateUnitsToCache,
+  type PendingDuplicateUnitCacheWrite,
+} from "./unitCache.js";
 import type {
   CollectedDuplicateUnits,
   DuplicateAstContext,
@@ -290,6 +296,29 @@ export function makeDuplicateChunks(
   return chunkTextFile({ source, filePath, languageId, minTokens, maxTokens, tokenizer: countDuplicateTokens });
 }
 
+export function makeDuplicateChunksWithSymbols(
+  filePath: string,
+  languageId: string,
+  textOnly: boolean,
+  source: string,
+  minTokens: number,
+  maxTokens: number,
+): { chunks: Chunk[]; symbolChunks: Chunk[] } {
+  const langConfig = LANG_CONFIGS[chunkLanguageAliases[languageId] ?? languageId];
+  if (langConfig && !textOnly) {
+    return chunkFileWithSymbols({
+      language: langConfig,
+      source,
+      filePath,
+      minTokens,
+      maxTokens,
+      tokenizer: countDuplicateTokens,
+    });
+  }
+  const chunks = chunkTextFile({ source, filePath, languageId, minTokens, maxTokens, tokenizer: countDuplicateTokens });
+  return { chunks, symbolChunks: [] };
+}
+
 export function makeSymbolSourceChunks(
   filePath: string,
   languageId: string,
@@ -506,6 +535,7 @@ export async function collectDuplicateUnits(
   let belowThresholdUnits = 0;
   const belowThresholdUnitsByFile = new Map<string, number>();
 
+  const pendingWrites: PendingDuplicateUnitCacheWrite[] = [];
   for (const file of normalizedFiles) {
     const cachedUnits = tryLoadDuplicateUnitsFromCache(index, file, variant);
     const fileUnits =
@@ -521,7 +551,7 @@ export async function collectDuplicateUnits(
         astContextCache,
       ));
     if (!cachedUnits) {
-      writeDuplicateUnitsToCache(index, file, variant, fileUnits);
+      pendingWrites.push({ file, variant, units: fileUnits });
     }
     for (const unit of fileUnits) {
       if (!shouldKeepUnit(unit, options.includeSmall, options.minTokens)) {
@@ -531,6 +561,9 @@ export async function collectDuplicateUnits(
       }
       units.push(unit);
     }
+  }
+  if (pendingWrites.length) {
+    writeDuplicateUnitsBatchToCache(index, pendingWrites);
   }
 
   units.sort((left, right) => {
@@ -567,8 +600,14 @@ export async function buildDuplicateUnitsForFile(
   }
 
   const astContext = language.textOnly ? undefined : await getDuplicateAstContext(index, file, source, astContextCache);
-  const chunks = makeDuplicateChunks(file, language.id, language.textOnly, source, minTokens, maxTokens);
-  const symbolChunks = makeSymbolSourceChunks(file, language.id, language.textOnly, source, maxTokens);
+  const { chunks, symbolChunks } = makeDuplicateChunksWithSymbols(
+    file,
+    language.id,
+    language.textOnly,
+    source,
+    minTokens,
+    maxTokens,
+  );
   const symbolUnits = (moduleIndex?.locals ?? [])
     .map((symbol) => {
       const chunk = findChunkForSymbol(symbol, symbolChunks);
