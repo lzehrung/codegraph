@@ -12,6 +12,7 @@ import { logWithLevel, type LogLevel } from "../logging.js";
 export const DEFAULT_GIT_TIMEOUT_MS = 30_000;
 
 const gitRepositoryChecks = new Map<string, Promise<boolean>>();
+const MAX_GIT_HASH_OBJECT_ARGUMENT_BYTES = 24 * 1024;
 
 let gitExecutableForTests: string | null = null;
 
@@ -297,22 +298,9 @@ export async function getGitBlobHashes(
     const { stdout: trackedStdout } = await runGit(projectRoot, ["ls-files", "-z"], {
       maxBuffer: 64 * 1024 * 1024,
     });
-    const trackedRel = trackedStdout
-      .toString()
-      .split("\0")
-      .map((line) => line.trim())
-      .filter((rel) => rel && relFileSet.has(rel));
+    const trackedRel = trackedStdout.split("\0").filter((rel) => rel && relFileSet.has(rel));
     if (!trackedRel.length) return new Map();
-    // hash-object --stdin-paths resolves stdin paths against the repository root, not the
-    // spawned cwd (unlike ls-files), so projectRoot-relative paths break whenever projectRoot
-    // is a subdirectory of the repo. Absolute paths resolve correctly regardless of root depth.
-    const { stdout: hashStdout } = await runGit(projectRoot, ["hash-object", "--stdin-paths"], {
-      input: trackedRel.map((rel) => path.resolve(projectRoot, rel)).join("\n"),
-    });
-    const hashes = hashStdout
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
+    const hashes = await hashGitPaths(projectRoot, trackedRel);
     if (hashes.length !== trackedRel.length) {
       logWithLevel(
         opts?.logLevel,
@@ -344,6 +332,42 @@ export async function getGitBlobHashes(
     );
     return new Map();
   }
+}
+
+async function hashGitPaths(projectRoot: string, trackedRel: string[]): Promise<string[]> {
+  const batches: string[][] = [];
+  let currentBatch: string[] = [];
+  let currentBatchBytes = 0;
+
+  for (const rel of trackedRel) {
+    // `hash-object --stdin-paths` accepts newline-delimited input, so it cannot represent a
+    // pathname containing a newline. Passing an absolute pathname as an argv value keeps every
+    // legal Git pathname atomic and also works when projectRoot is below the repository root.
+    const absolutePath = path.resolve(projectRoot, rel);
+    const pathBytes = Buffer.byteLength(absolutePath, "utf8") + 1;
+    const wouldExceedBatchLimit =
+      currentBatch.length && currentBatchBytes + pathBytes > MAX_GIT_HASH_OBJECT_ARGUMENT_BYTES;
+    if (wouldExceedBatchLimit) {
+      batches.push(currentBatch);
+      currentBatch = [];
+      currentBatchBytes = 0;
+    }
+    currentBatch.push(absolutePath);
+    currentBatchBytes += pathBytes;
+  }
+  if (currentBatch.length) batches.push(currentBatch);
+
+  const hashes: string[] = [];
+  for (const batch of batches) {
+    const { stdout } = await runGit(projectRoot, ["hash-object", "--", ...batch]);
+    hashes.push(
+      ...stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean),
+    );
+  }
+  return hashes;
 }
 
 /**

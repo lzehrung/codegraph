@@ -195,4 +195,21 @@ index 0000000..1111111 100644
     const parsed = parseUnifiedDiff(diffText);
     expect(parsed.files).toEqual([expect.objectContaining({ path: 'quote"test.ts', kind: "modified" })]);
   });
+
+  it("preserves trailing whitespace in an unquoted destination header path", () => {
+    const pathWithTrailingSpace = `trailing${" "}`;
+    const diffText = [
+      `diff --git a/${pathWithTrailingSpace} b/${pathWithTrailingSpace}`,
+      "index 0000000..1111111 100644",
+      `--- a/${pathWithTrailingSpace}`,
+      `+++ b/${pathWithTrailingSpace}`,
+      "@@ -0,0 +1 @@",
+      "+export const value = 1;",
+      "",
+    ].join("\n");
+
+    const parsed = parseUnifiedDiff(diffText);
+
+    expect(parsed.files).toEqual([expect.objectContaining({ path: pathWithTrailingSpace, kind: "modified" })]);
+  });
 });

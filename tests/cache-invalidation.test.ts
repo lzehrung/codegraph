@@ -891,6 +891,27 @@ describe("Cache invalidation and strict hashing", () => {
     }
   });
 
+  it("returns git signatures for tracked paths containing leading whitespace", async () => {
+    const root = await mkTmpDir("dg-git-sig-special-paths-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "cache@test.local"]);
+    runGit(root, ["config", "user.name", "Cache Test"]);
+
+    const filePaths = [path.join(root, " leading-and-internal whitespace.ts"), path.join(root, "ordinary.ts")];
+    await Promise.all(
+      filePaths.map((file, index) => fsp.writeFile(file, `export const value${index} = ${index};\n`, "utf8")),
+    );
+    runGit(root, ["add", "-A"]);
+    runGit(root, ["commit", "-m", "special paths"]);
+
+    const hashes = await gitModule.getGitBlobHashes(root, filePaths);
+
+    expect(hashes.size).toBe(filePaths.length);
+    for (const filePath of filePaths) {
+      expect(hashes.get(normalize(filePath))).toMatch(/^[0-9a-f]{40}$/);
+    }
+  });
+
   it("surfaces a genuine git invocation failure instead of silently discarding signatures", async () => {
     const root = await mkTmpDir("dg-git-sig-invocation-failure-");
     // No `git init`: the directory is not a repository, so `git ls-files` genuinely fails

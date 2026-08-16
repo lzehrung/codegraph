@@ -132,9 +132,8 @@ function decodeStreamChunk(decoder: StringDecoder, chunk: unknown): string {
 }
 
 function decodeGitPath(rawPath: string): string {
-  const trimmed = rawPath.trim();
-  if (!trimmed.startsWith('"') || !trimmed.endsWith('"')) {
-    return trimmed;
+  if (!rawPath.startsWith('"') || !rawPath.endsWith('"')) {
+    return rawPath;
   }
 
   // Git quotes a path when it contains non-ASCII or special bytes, escaping each raw byte
@@ -142,7 +141,7 @@ function decodeGitPath(rawPath: string): string {
   // `\NNN` escapes that must be recombined as raw bytes and decoded together as UTF-8 -
   // decoding each escape as its own code point (the previous approach) mojibakes every
   // non-ASCII path (e.g. "café.ts" became "cafÃ©.ts").
-  const inner = trimmed.slice(1, -1);
+  const inner = rawPath.slice(1, -1);
   const bytes: number[] = [];
   for (let index = 0; index < inner.length; ) {
     const char = inner[index]!;
