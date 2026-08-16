@@ -6,6 +6,8 @@ import { brotliDecompressSync } from "node:zlib";
 
 import { buildProjectIndex, findDuplicates, type BuildReport } from "../src/index.js";
 import { closeDuplicateUnitCacheDatabase } from "../src/duplicates.js";
+import { tryLoadDuplicateUnitsFromCache, writeDuplicateUnitsToCache } from "../src/duplicates/unitCache.js";
+import { buildInternalUnit, formatDuplicateSqlHandle } from "../src/duplicates/units.js";
 import { SqliteDatabase } from "../src/sqlite-driver.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
@@ -79,6 +81,22 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
   await fsp.mkdir(path.join(root, "src"), { recursive: true });
   await fsp.writeFile(path.join(root, "src", "a.ts"), duplicateSource, "utf8");
   await fsp.writeFile(path.join(root, "src", "b.ts"), duplicateSource, "utf8");
+}
+
+async function writeDuplicateSqlProject(root: string): Promise<void> {
+  const duplicateSource = `
+CREATE TABLE invoice_entries (
+  id INTEGER PRIMARY KEY,
+  customer_id INTEGER NOT NULL,
+  subtotal_cents INTEGER NOT NULL,
+  tax_cents INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`;
+  await fsp.mkdir(path.join(root, "schema"), { recursive: true });
+  await fsp.writeFile(path.join(root, "schema", "a.sql"), duplicateSource, "utf8");
+  await fsp.writeFile(path.join(root, "schema", "b.sql"), duplicateSource, "utf8");
 }
 
 describe("disk cache uses sqlite backend", () => {
@@ -393,6 +411,47 @@ describe("disk cache uses sqlite backend", () => {
     expect(units[0]).not.toHaveProperty("text");
     expect(units[0]).not.toHaveProperty("normalizedTokens");
     expect(() => JSON.parse(Buffer.from(row!.payload).toString("utf8"))).toThrow();
+  });
+
+  it("persists SQL duplicate identities relative to the project root", async () => {
+    const root = await mkTmpDir("dg-disk-cache-portable-sql-duplicates-");
+    await writeDuplicateSqlProject(root);
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const file = normalizePathForSql(path.join(root, "schema", "a.sql"));
+    const source = await fsp.readFile(file, "utf8");
+    const unit = buildInternalUnit(
+      {
+        file: "schema/a.sql",
+        startLine: 1,
+        endLine: 8,
+        languageId: "sql",
+        kind: "symbol",
+        name: "invoice_entries",
+      },
+      file,
+      source,
+      3,
+      2,
+      index.nativeMode,
+      { sqlHandle: formatDuplicateSqlHandle("schema/a.sql", "invoice_entries", 1) },
+    );
+    writeDuplicateUnitsToCache(index, file, "portable-sql", [unit], root);
+
+    const db = new DatabaseSync(duplicateCacheDbPath(root));
+    const row = db.prepare("SELECT payload FROM duplicate_unit_cache WHERE file = ?").get("schema/a.sql") as
+      | { payload: Uint8Array }
+      | undefined;
+    db.close();
+
+    expect(row).toBeDefined();
+    const units = JSON.parse(brotliDecompressSync(row!.payload).toString("utf8")) as Array<Record<string, unknown>>;
+    expect(units[0]?.sqlHandle).toBe(formatDuplicateSqlHandle("schema/a.sql", "invoice_entries", 1));
+    expect(JSON.stringify(units[0])).not.toContain(normalizePathForSql(root));
+
+    const loaded = tryLoadDuplicateUnitsFromCache(index, file, "portable-sql", root);
+    expect(loaded?.[0]?.absoluteFile).toBe(normalizePathForSql(file));
+    expect(loaded?.[0]?.id?.startsWith(`${normalizePathForSql(file)}:`)).toBe(true);
+    expect(loaded?.[0]?.sqlHandle).toBe(formatDuplicateSqlHandle("schema/a.sql", "invoice_entries", 1));
   });
 
   it("ignores duplicate cache rows written by an older payload version", async () => {

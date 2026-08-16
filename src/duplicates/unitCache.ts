@@ -420,14 +420,27 @@ export function serializeDuplicateUnits(units: DuplicateInternalUnit[]): Duplica
     signatures: [...unit.signatures],
   }));
 }
-function transformDuplicatePath(root: string, value: string, toRelative: boolean): string {
-  const separator = value.indexOf("::");
-  if (separator >= 0) {
-    const file = value.slice(0, separator);
-    const resolved = toRelative ? cacheRelativePath(root, file) : cacheAbsolutePath(root, file);
-    return `${resolved}${value.slice(separator)}`;
+function transformDuplicateHandle(root: string, value: string): string {
+  const parts = value.split(":");
+  let filePartIndex = -1;
+  if (parts[0] === "file" || parts[0] === "chunk") {
+    filePartIndex = 1;
+  } else if (parts[0] === "sql" || parts[0] === "symbol") {
+    filePartIndex = 2;
   }
-  return toRelative ? cacheRelativePath(root, value) : cacheAbsolutePath(root, value);
+  if (filePartIndex < 0 || parts.length <= filePartIndex) return value;
+  const encodedFile = parts[filePartIndex];
+  if (encodedFile === undefined) return value;
+  try {
+    parts[filePartIndex] = encodeURIComponent(cacheRelativePath(root, decodeURIComponent(encodedFile)));
+    return parts.join(":");
+  } catch {
+    return value;
+  }
+}
+
+function duplicateUnitId(unit: DuplicateSerializedUnit, absoluteFile: string): string {
+  return `${normalizePath(absoluteFile)}:${unit.startLine}:${unit.endLine}:${unit.kind}:${unit.name ?? ""}`;
 }
 
 function transformDuplicateUnits(
@@ -435,16 +448,22 @@ function transformDuplicateUnits(
   units: DuplicateSerializedUnit[],
   toRelative: boolean,
 ): DuplicateSerializedUnit[] {
-  return units.map((unit) => ({
-    ...unit,
-    file: cacheRelativePath(root, unit.file),
-    absoluteFile: transformDuplicatePath(root, unit.absoluteFile, toRelative),
-    handle: transformDuplicatePath(root, unit.handle, toRelative),
-    fileHandle: transformDuplicatePath(root, unit.fileHandle, toRelative),
-    ...(unit.sqlHandle ? { sqlHandle: transformDuplicatePath(root, unit.sqlHandle, toRelative) } : {}),
-    chunkHandle: transformDuplicatePath(root, unit.chunkHandle, toRelative),
-    ...(unit.symbolHandle ? { symbolHandle: transformDuplicatePath(root, unit.symbolHandle, toRelative) } : {}),
-  }));
+  return units.map((unit) => {
+    const absoluteFile = toRelative
+      ? cacheRelativePath(root, unit.absoluteFile)
+      : cacheAbsolutePath(root, unit.absoluteFile);
+    return {
+      ...unit,
+      file: cacheRelativePath(root, unit.file),
+      absoluteFile,
+      id: duplicateUnitId(unit, absoluteFile),
+      handle: transformDuplicateHandle(root, unit.handle),
+      fileHandle: transformDuplicateHandle(root, unit.fileHandle),
+      ...(unit.sqlHandle ? { sqlHandle: transformDuplicateHandle(root, unit.sqlHandle) } : {}),
+      chunkHandle: transformDuplicateHandle(root, unit.chunkHandle),
+      ...(unit.symbolHandle ? { symbolHandle: transformDuplicateHandle(root, unit.symbolHandle) } : {}),
+    };
+  });
 }
 
 export function isDuplicateSerializedUnit(value: unknown): value is DuplicateSerializedUnit {

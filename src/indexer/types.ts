@@ -136,7 +136,7 @@ export type ProjectIndex = {
  */
 export type LanguageExtensionMap = import("../languages.js").LanguageExtensionMap;
 
-export type CacheLocation = "project" | "repo" | "user" | string;
+export type CacheLocation = string;
 
 export type BuildOptions = {
   onProgress?: ((progress: ProgressUpdate) => void) | undefined;

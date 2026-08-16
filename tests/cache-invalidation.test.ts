@@ -2225,8 +2225,7 @@ describe("Cache invalidation and strict hashing", () => {
     await buildProjectIndex(root, { cache: "disk" });
     const manifest = await readManifest(root);
 
-    expect(manifest.symlinkDirectories).toBeDefined();
-    expect((manifest.symlinkDirectories ?? []).map(normalize)).toContain(normalize(linkedPackage));
+    expect(manifest.symlinkDirectories).toContain("linked-core");
   });
 
   it("prunes stale symlink directory hints from the manifest after warm re-verification", async () => {
@@ -2245,7 +2244,7 @@ describe("Cache invalidation and strict hashing", () => {
 
     await buildProjectIndex(root, { cache: "disk" });
     const staleManifest = await readManifest(root);
-    expect((staleManifest.symlinkDirectories ?? []).map(normalize)).toContain(normalize(linkedPackage));
+    expect(staleManifest.symlinkDirectories).toContain("linked-core");
 
     await fsp.rm(linkedPackage, { recursive: true, force: true });
     await buildProjectIndex(root, { cache: "disk" });
@@ -2281,7 +2280,7 @@ describe("Cache invalidation and strict hashing", () => {
 
     expect(rebuilt.byFile.has(fileIdentityKey(normalize(path.join(linkedPackage, "src", "index.ts"))))).toBe(true);
     const refreshedManifest = await readManifest(root);
-    expect((refreshedManifest.symlinkDirectories ?? []).map(normalize)).toContain(normalize(linkedPackage));
+    expect(refreshedManifest.symlinkDirectories).toContain("linked-core");
   });
 
   it("persists an empty symlinkDirectories list for projects without symlinks", async () => {
@@ -2322,6 +2321,39 @@ describe("Cache invalidation and strict hashing", () => {
     const report: BuildReport = { timings: {} };
     const moved = await buildProjectIndexIncremental(movedRoot, { cache: "disk", threads: 1, report });
     expect(moved.byFile.has(fileIdentityKey(normalize(path.join(movedRoot, "entry.ts"))))).toBe(true);
+    expect(report.cache?.misses ?? 0).toBe(0);
+    expect(report.files?.cached).toBeGreaterThan(0);
+  });
+
+  it("reuses symlink directory hints after moving a project tree", async () => {
+    const sourceRoot = await mkTmpDir("dg-cache-move-symlink-source-");
+    const movedRoot = `${sourceRoot}-moved`;
+    const sourcePackage = path.join(sourceRoot, "packages", "core");
+    const sourceLink = path.join(sourceRoot, "linked-core");
+    await fsp.mkdir(sourcePackage, { recursive: true });
+    await fsp.writeFile(path.join(sourcePackage, "entry.ts"), "export const entry = 1;\n", "utf8");
+
+    try {
+      await fsp.symlink(sourcePackage, sourceLink, "junction");
+    } catch (error) {
+      if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+
+    await buildProjectIndex(sourceRoot, { cache: "disk", threads: 1 });
+    const persisted = await readManifest(sourceRoot);
+    expect(persisted.symlinkDirectories).toEqual(["linked-core"]);
+
+    await fsp.rename(sourceRoot, movedRoot);
+    const movedPackage = path.join(movedRoot, "packages", "core");
+    const movedLink = path.join(movedRoot, "linked-core");
+    await fsp.rm(movedLink, { recursive: true, force: true });
+    await fsp.symlink(movedPackage, movedLink, "junction");
+
+    const report: BuildReport = { timings: {} };
+    const moved = await buildProjectIndexIncremental(movedRoot, { cache: "disk", threads: 1, report });
+
+    expect(moved.byFile.has(fileIdentityKey(normalize(path.join(movedLink, "entry.ts"))))).toBe(true);
     expect(report.cache?.misses ?? 0).toBe(0);
     expect(report.files?.cached).toBeGreaterThan(0);
   });
