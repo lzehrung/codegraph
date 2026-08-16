@@ -16,12 +16,7 @@ import {
 import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot } from "../../util/paths.js";
 import { getGitBlobHashes } from "../../util/git.js";
 import { stringifyUnknown } from "../../util/ast.js";
-import {
-  cacheAbsolutePath,
-  cacheRelativePath,
-  cacheRoot,
-  fileSignature,
-} from "./module-cache.js";
+import { cacheAbsolutePath, cacheRelativePath, cacheRoot, fileSignature } from "./module-cache.js";
 import type { BuildOptions } from "../types.js";
 import type { ManifestBuildOptions } from "./options.js";
 
@@ -133,7 +128,9 @@ export function transformManifestEntries(
           edge.to.type === "file"
             ? {
                 ...edge.to,
-                path: toRelative ? cacheRelativePath(projectRoot, edge.to.path) : cacheAbsolutePath(projectRoot, edge.to.path),
+                path: toRelative
+                  ? cacheRelativePath(projectRoot, edge.to.path)
+                  : cacheAbsolutePath(projectRoot, edge.to.path),
               }
             : edge.to,
       })),
@@ -177,6 +174,24 @@ export function sanitizeManifestTransientFilesForRoot(projectRoot: string, files
     if (isFilePathWithinRoot(projectRoot, file)) sanitizedFiles.add(file);
   }
   return [...sanitizedFiles];
+}
+
+function resolveManifestSymlinkDirectories(
+  projectRoot: string,
+  storedProjectRoot: string,
+  directories: unknown,
+): string[] | undefined {
+  if (directories === undefined) return undefined;
+  if (!Array.isArray(directories)) return undefined;
+  const resolvedDirectories = new Set<string>();
+  for (const directory of directories) {
+    if (typeof directory !== "string") continue;
+    const storedDirectory = cacheAbsolutePath(storedProjectRoot, directory);
+    if (!isFilePathWithinRoot(storedProjectRoot, storedDirectory)) continue;
+    const relativeDirectory = cacheRelativePath(storedProjectRoot, storedDirectory);
+    resolvedDirectories.add(cacheAbsolutePath(projectRoot, relativeDirectory));
+  }
+  return [...resolvedDirectories];
 }
 
 export async function computeConfigHash(projectRoot: string, logLevel?: LogLevel): Promise<ConfigHashResult> {
@@ -272,11 +287,17 @@ export async function loadManifest(projectRoot: string, opts?: BuildOptions): Pr
     const oldFiles = parsed.files ?? {};
     const relativeFiles =
       parsed.version === 3 ? transformManifestEntries(parsed.projectRoot, oldFiles, true) : oldFiles;
+    const symlinkDirectories = resolveManifestSymlinkDirectories(
+      projectRoot,
+      parsed.projectRoot,
+      parsed.symlinkDirectories,
+    );
     const migrated: IndexManifest = {
       ...parsed,
       version: MANIFEST_VERSION,
       files: transformManifestEntries(projectRoot, relativeFiles, false),
       transientFiles: sanitizeManifestTransientFilesForRoot(projectRoot, parsed.transientFiles),
+      ...(symlinkDirectories !== undefined ? { symlinkDirectories } : {}),
     };
     return migrated;
   } catch {
