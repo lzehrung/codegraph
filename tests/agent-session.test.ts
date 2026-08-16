@@ -1,5 +1,6 @@
 import { disposeSessionQueryIndex, ensureSessionQueryIndex } from "../src/agent/query-index/sessionStore.js";
 import * as updateModule from "../src/agent/query-index/update.js";
+import * as sessionLifecycleModule from "../src/agent/sessionLifecycle.js";
 import fs from "node:fs/promises";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import { createHash } from "node:crypto";
@@ -941,30 +942,32 @@ describe("agent session", () => {
     }
   });
 
-describe("query index sessionStore generation retries (S12)", () => {
-  it("bounds query index generation retries under sustained invalidation and surfaces a clear error", async () => {
-    const root = await mkRepo();
-    const session = createAgentSession({ root });
-    const snapshot = await session.loadProject();
+  describe("query index sessionStore generation retries (S12)", () => {
+    it("bounds query index generation retries under sustained invalidation and surfaces a clear error", async () => {
+      const root = await mkRepo();
+      const session = createAgentSession({ root });
+      const snapshot = await session.loadProject();
 
-    let attempts = 0;
-    const realEnsureQueryIndex = updateModule.ensureQueryIndex;
-    const ensureQueryIndexSpy = vi.spyOn(updateModule, "ensureQueryIndex").mockImplementation(async (snap) => {
-      attempts += 1;
-      const res = await realEnsureQueryIndex(snap);
-      disposeSessionQueryIndex(session);
-      return res;
+      let attempts = 0;
+      const realEnsureQueryIndex = updateModule.ensureQueryIndex;
+      const ensureQueryIndexSpy = vi.spyOn(updateModule, "ensureQueryIndex").mockImplementation(async (snap) => {
+        attempts += 1;
+        const res = await realEnsureQueryIndex(snap);
+        disposeSessionQueryIndex(session);
+        return res;
+      });
+      const invalidationHookSpy = vi.spyOn(sessionLifecycleModule, "registerSessionInvalidationHook");
+
+      try {
+        await expect(ensureSessionQueryIndex(session, snapshot)).rejects.toThrow(
+          /Query index generation changed repeatedly while loading/i,
+        );
+        expect(attempts).toBe(3);
+        expect(invalidationHookSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        invalidationHookSpy.mockRestore();
+        ensureQueryIndexSpy.mockRestore();
+      }
     });
-
-    try {
-      await expect(ensureSessionQueryIndex(session, snapshot)).rejects.toThrow(
-        /Query index generation changed repeatedly while loading/i,
-      );
-      expect(attempts).toBe(3);
-    } finally {
-      ensureQueryIndexSpy.mockRestore();
-    }
   });
-});
-
 });

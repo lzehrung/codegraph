@@ -10,6 +10,7 @@ type SessionQueryIndexState = {
 };
 
 const QUERY_INDEX_BY_SESSION = new WeakMap<AgentSession, SessionQueryIndexState>();
+const QUERY_INDEX_INVALIDATION_HOOKS = new WeakSet<AgentSession>();
 const MAX_QUERY_INDEX_GENERATION_RETRIES = 3;
 
 function closeHandle(handle: QueryIndexHandle): void {
@@ -23,6 +24,13 @@ function closeState(state: SessionQueryIndexState): void {
     return;
   }
   void state.handle.then(closeHandle, () => undefined);
+}
+
+function disposeSessionQueryIndexOnInvalidation(session: AgentSession): () => void {
+  return () => {
+    QUERY_INDEX_INVALIDATION_HOOKS.delete(session);
+    disposeSessionQueryIndex(session);
+  };
 }
 
 export async function ensureSessionQueryIndex(
@@ -43,7 +51,10 @@ export async function ensureSessionQueryIndex(
 
     const handle = ensureQueryIndex(snapshot);
     const state: SessionQueryIndexState = { identity, handle };
-    if (!existing) registerSessionInvalidationHook(session, () => disposeSessionQueryIndex(session));
+    if (!QUERY_INDEX_INVALIDATION_HOOKS.has(session)) {
+      QUERY_INDEX_INVALIDATION_HOOKS.add(session);
+      registerSessionInvalidationHook(session, disposeSessionQueryIndexOnInvalidation(session));
+    }
     QUERY_INDEX_BY_SESSION.set(session, state);
     handle.catch(() => {
       if (QUERY_INDEX_BY_SESSION.get(session) === state) QUERY_INDEX_BY_SESSION.delete(session);

@@ -2976,6 +2976,27 @@ describe("MCP refresh coalescing", () => {
       releaseSecondWarmup.resolve();
     }
   });
+
+  it("bounds a request invalidated by repeated refreshes", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-refresh-retry-bound-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const token = 1;\n", "utf8");
+    const backingSession = createAgentSession({ root });
+    let refreshes = 0;
+    const session: AgentSession = {
+      ...backingSession,
+      loadProject: async (options) => {
+        refreshes += 1;
+        await handlers.refresh_index({ warmup: "off" });
+        return await backingSession.loadProject(options);
+      },
+    };
+    const handlers = createCodegraphMcpHandlers({ root, session });
+
+    await expect(handlers.goto({ file: "auth.ts", line: 1, column: 14 })).rejects.toThrow(
+      /Workspace refresh changed repeatedly while serving the request/i,
+    );
+    expect(refreshes).toBe(3);
+  });
 });
 
 describe("MCP session teardown regressions (S2)", () => {

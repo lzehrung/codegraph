@@ -350,7 +350,11 @@ type CodegraphMcpHandlerDefinitions = {
   }) => Promise<CodegraphMcpFreshResult<CodegraphArtifactBuildResult>>;
 };
 
-type WithAbortSignal<T extends { query_sqlite: unknown }> = { [K in Exclude<keyof T, "query_sqlite">]: T[K] extends (request: infer Request) => Promise<infer Result> ? (request: Request, signal?: AbortSignal) => Promise<Result> : never; } & Pick<T, "query_sqlite">;
+type WithAbortSignal<T extends { query_sqlite: unknown }> = {
+  [K in Exclude<keyof T, "query_sqlite">]: T[K] extends (request: infer Request) => Promise<infer Result>
+    ? (request: Request, signal?: AbortSignal) => Promise<Result>
+    : never;
+} & Pick<T, "query_sqlite">;
 
 export type CodegraphMcpHandlers = WithAbortSignal<CodegraphMcpHandlerDefinitions>;
 
@@ -376,6 +380,7 @@ type SqliteArtifactFileSignature = {
 };
 
 const MAX_MCP_FRESHNESS_CHANGED_FILES = 25;
+const MAX_MCP_FRESHNESS_RETRIES = 3;
 const SQLITE_ARTIFACT_STAT_CONCURRENCY = 64;
 
 function assertMcpSessionOptions(options: CodegraphMcpHandlerOptions): void {
@@ -479,13 +484,14 @@ function createCodegraphMcpHandlersForSession(
   const withFreshness = async <T extends object>(
     run: () => Promise<T>,
   ): Promise<T & { freshness: AgentFreshnessResult }> => {
-    while (true) {
+    for (let attempt = 0; attempt < MAX_MCP_FRESHNESS_RETRIES; attempt += 1) {
       if (refreshPromise) await refreshPromise;
       const epoch = refreshEpoch;
       const freshness = await checkMcpFreshness();
       const result = await run();
       if (epoch === refreshEpoch && !refreshPromise) return { ...result, freshness };
     }
+    throw new Error("Workspace refresh changed repeatedly while serving the request; retry after refresh completes.");
   };
   const formatSqliteFreshnessError = (freshness: AgentFreshnessResult): string => {
     if (freshness.state === "fresh") return "SQLite artifact freshness check unexpectedly failed.";
