@@ -84,7 +84,7 @@ Public-stable APIs (documented integration surface):
   config loading, language metadata, native runtime checks.
 - Indexer aliases: `queryWorkspaceSymbols`, `queryCallHierarchy`,
   `queryTypeHierarchy`, `queryImplementations`.
-- Session presets (`src/presets.ts`): `SESSION_PRESETS`, `getSessionPreset(name)`,
+- Session presets (`src/presets.ts`): `SESSION_PRESETS`, `getSessionPreset(name, root)`,
   `mergePreset(base, override)` - typed preset maps for `createCodeReviewSession`
   options; not a CLI surface.
 - Partial-result helpers (`src/util/partialResults.ts`): `success`, `partial`,
