@@ -1422,9 +1422,16 @@ async function handleLegacyMcpHttpPost(
     openSseStreams: 0,
   };
   sessionRef.current = session;
+  // The SDK transport reports every per-request validation rejection through onerror
+  // too (bad Accept header, wrong Content-Type, malformed JSON, an unsupported
+  // protocol version, ...) — each of those already answered its own request with a
+  // 4xx response and left the transport fully usable. Deleting the session here would
+  // tear down an otherwise healthy session over one malformed follow-up request. Only
+  // onclose reflects the transport actually shutting down (an explicit DELETE, an
+  // eviction we triggered, or a real fatal failure), so session teardown is driven by
+  // onclose alone; onerror only logs.
   transport.onerror = (error) => {
     console.error(`[codegraph] MCP HTTP session transport error: ${error.message}`);
-    if (initializedSessionId !== undefined) void sessionStore.delete(initializedSessionId);
   };
   transport.onclose = () => {
     if (initializedSessionId !== undefined) void sessionStore.delete(initializedSessionId);
@@ -1433,6 +1440,14 @@ async function handleLegacyMcpHttpPost(
   try {
     await protocolServer.connect(transport);
     await handleLegacyMcpSessionRequest(session, request, response, body);
+    if (initializedSessionId === undefined) {
+      // The transport answered a pre-session 4xx (invalid Accept header, wrong
+      // Content-Type, malformed JSON, ...) without throwing and without ever reaching
+      // onsessioninitialized, so nothing else releases this capacity reservation or
+      // closes this ad hoc protocol server/transport pair.
+      releaseCapacityReservation();
+      await closeMcpSession(session);
+    }
   } catch (error) {
     if (initializedSessionId !== undefined) {
       await sessionStore.delete(initializedSessionId);
