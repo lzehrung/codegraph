@@ -6,9 +6,9 @@ Source: `coverage/js/lcov.info`
 
 | Metric | Hit | Found | Coverage |
 | --- | ---: | ---: | ---: |
-| Lines | 27202 | 29924 | 90.90% |
-| Functions | 4548 | 4828 | 94.20% |
-| Branches | 20520 | 25845 | 79.40% |
+| Lines | 27353 | 30141 | 90.75% |
+| Functions | 4559 | 4839 | 94.21% |
+| Branches | 20655 | 26070 | 79.23% |
 
 ## Least-covered Files
 
@@ -18,6 +18,7 @@ Source: `coverage/js/lcov.info`
 | `src/languages/definitions/javascript.ts` | 62.50% | 83.33% | 57.89% |
 | `src/cli/explore.ts` | 62.50% | 100.00% | 50.00% |
 | `src/languages/definitions/typescript.ts` | 62.86% | 81.82% | 42.86% |
+| `src/impact/call-compatibility/textScanner.ts` | 66.04% | 100.00% | 70.75% |
 | `src/cli/index.ts` | 66.67% | 100.00% | 58.97% |
 | `src/indexer.ts` | 66.67% | 66.67% | 100.00% |
 | `src/cli/bootstrap.ts` | 66.67% | 50.00% | n/a |
@@ -27,7 +28,6 @@ Source: `coverage/js/lcov.info`
 | `src/languages/definitions/sql.ts` | 66.67% | 0.00% | n/a |
 | `src/languages/definitions/svelte.ts` | 66.67% | 0.00% | n/a |
 | `src/languages/definitions/vue.ts` | 66.67% | 0.00% | n/a |
-| `src/impact/call-compatibility/textScanner.ts` | 67.52% | 100.00% | 72.12% |
 | `src/agent/handles.ts` | 68.00% | 91.67% | 45.45% |
 | `src/cli/artifact.ts` | 70.00% | 100.00% | 72.22% |
 | `src/agent/query-index/workerPool.ts` | 70.97% | 62.50% | 56.25% |
