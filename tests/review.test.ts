@@ -82,12 +82,9 @@ describe("Review report", () => {
     const srcDir = path.join(root, "src");
     await fsp.mkdir(srcDir, { recursive: true });
     const tsFile = path.join(srcDir, "api.ts");
-    // Go is deliberately chosen: it has no receiver member-call resolution, so it
-    // exercises the limited-language branch. Python moved into the receiver-aware
-    // set, so it can no longer serve as the negative case here.
-    const goFile = path.join(srcDir, "helper.go");
+    const pythonFile = path.join(srcDir, "helper.py");
     await fsp.writeFile(tsFile, "export function helper(a: string, b: number) { return a + b; }\n", "utf8");
-    await fsp.writeFile(goFile, "package main\n\nfunc Helper(a string, b int) string {\n\treturn a\n}\n", "utf8");
+    await fsp.writeFile(pythonFile, "def helper(a: str, b: int) -> str:\n    return a\n", "utf8");
 
     const diffText = [
       "diff --git a/src/api.ts b/src/api.ts",
@@ -97,24 +94,21 @@ describe("Review report", () => {
       "@@ -1,1 +1,1 @@",
       "-export function helper(a: string) { return a; }",
       "+export function helper(a: string, b: number) { return a + b; }",
-      "diff --git a/src/helper.go b/src/helper.go",
+      "diff --git a/src/helper.py b/src/helper.py",
       "index 1234567..abcdef0 100644",
-      "--- a/src/helper.go",
-      "+++ b/src/helper.go",
-      "@@ -1,5 +1,5 @@",
-      " package main",
-      " ",
-      "-func Helper(a string) string {",
-      "+func Helper(a string, b int) string {",
-      " \treturn a",
-      " }",
+      "--- a/src/helper.py",
+      "+++ b/src/helper.py",
+      "@@ -1,2 +1,2 @@",
+      "-def helper(a: str) -> str:",
+      "+def helper(a: str, b: int) -> str:",
+      "     return a",
       "",
     ].join("\n");
 
     const report = await buildReviewReport(root, { diffText });
 
     expect(report.diagnostics?.memberResolutionCoverage?.receiverAwareLanguages).toContain("ts");
-    expect(report.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("go");
+    expect(report.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("python");
   });
 
   it("includes definition snippets and callsites when enabled", async () => {

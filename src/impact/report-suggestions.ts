@@ -643,9 +643,15 @@ function readIdentifier(text: string, index: number): { name: string; end: numbe
 function skipDecorator(text: string, index: number): number | null {
   if (text[index] !== "@") return null;
   let cursor = skipWhitespaceAndComments(text, index + 1);
-  const name = readIdentifier(text, cursor);
-  if (!name) return null;
-  cursor = skipWhitespaceAndComments(text, name.end);
+  let segment = readIdentifier(text, cursor);
+  if (!segment) return null;
+  cursor = skipWhitespaceAndComments(text, segment.end);
+  while (text[cursor] === ".") {
+    cursor = skipWhitespaceAndComments(text, cursor + 1);
+    segment = readIdentifier(text, cursor);
+    if (!segment) return null;
+    cursor = skipWhitespaceAndComments(text, segment.end);
+  }
   if (text[cursor] === "(") {
     const args = findBalancedParentheses(text, cursor);
     if (!args) return null;
@@ -797,7 +803,7 @@ function findConstructorParamCount(classBodyInner: string): number | null {
     }
     if (depth !== 0) continue;
     if (classBodyInner.startsWith("constructor", index) && !/[A-Za-z0-9_$]/.test(classBodyInner[index - 1] ?? "")) {
-      let cursor = skipWhitespaceAndComments(classBodyInner, index + "constructor".length);
+      const cursor = skipWhitespaceAndComments(classBodyInner, index + "constructor".length);
       if (classBodyInner[cursor] !== "(") continue;
       const params = findBalancedParentheses(classBodyInner, cursor);
       if (!params) return null;

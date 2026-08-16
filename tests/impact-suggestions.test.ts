@@ -645,6 +645,34 @@ index 1111111..2222222 100644
     expect(breaking?.range?.start.line).toBe(1);
   });
 
+  it("detects arity changes for qualified decorated export functions", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+-export @tracing.logged() function helperFunction(input: string): string {
++export @tracing.logged() function helperFunction(input: string, extra: number): string {
+   return input;
+ }
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const breaking = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "helperFunction" &&
+        entry.details?.includes("signature changed") &&
+        entry.confidence === "high",
+    );
+    expect(breaking).toBeDefined();
+    expect(breaking?.range?.start.line).toBe(1);
+  });
+
   it("detects constructor arity changes for export default class APIs", async () => {
     const diffText = `diff --git a/helpers.ts b/helpers.ts
 index 1111111..2222222 100644

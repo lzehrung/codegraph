@@ -383,11 +383,10 @@ export type CompactImpactReport = {
     name: string;
     kind: ChangedSymbol["kind"];
     exported: boolean;
-    range: {
-      start: { line: number; column: number };
-      end: { line: number; column: number };
-    };
+    range: Range;
     typeOnly?: boolean;
+    changedLines?: readonly number[];
+    signatureChanged?: boolean;
     callCompatibility?: CallCompatibilityHint[];
   }>;
   impacted: Array<{
@@ -398,16 +397,8 @@ export type CompactImpactReport = {
     confidence?: number;
     depth?: number;
     typeOnly?: boolean;
-    explain?: {
-      exported?: boolean;
-      fanIn?: number;
-      sameFile?: boolean;
-      typeOnly?: boolean;
-      reason?: ImpactReason;
-      depth?: number;
-      refsCount?: number;
-      hints?: string[];
-    };
+    refs?: ImpactItem["refs"];
+    explain?: ImpactItem["explain"];
   }>;
   suggestions?: Array<{
     file: number;

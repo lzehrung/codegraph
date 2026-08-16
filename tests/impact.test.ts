@@ -1064,6 +1064,52 @@ index 1234567..abcdef0 100644
       expect(Array.isArray(compact.files)).toBe(true);
     });
 
+    it("preserves changed-symbol and impacted-reference details", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
+      const index = await createTestIndex("typescript");
+      const file = path.join(samplePath, "utils.ts").replace(/\\/g, "/");
+      const range: Range = {
+        start: { line: 1, column: 1, index: 0 },
+        end: { line: 1, column: 10, index: 9 },
+      };
+      const changedSymbol: ChangedSymbol = {
+        id: `${file}::helper::1::1` as SymbolHandle,
+        file,
+        name: "helper",
+        kind: SymbolKind.Function,
+        exported: true,
+        range,
+        changedLines: [1],
+        signatureChanged: true,
+      };
+      const impacted: ImpactItem = {
+        file,
+        symbols: ["helper"],
+        reasons: ["directRef"],
+        severity: 1,
+        refs: [{ range }],
+        explain: { resolutionConfidence: "medium" },
+      };
+      const report = await buildImpactReport(
+        samplePath,
+        index,
+        [{ path: file, kind: "modified", hunks: [] }],
+        [changedSymbol],
+        [impacted],
+        [],
+        { compact: true },
+      );
+
+      if (!("files" in report)) {
+        throw new Error("Expected result to be a compact report");
+      }
+
+      expect(report.changedSymbols[0]?.changedLines).toEqual([1]);
+      expect(report.changedSymbols[0]?.signatureChanged).toBe(true);
+      expect(report.impacted[0]?.refs).toEqual([{ range }]);
+      expect(report.impacted[0]?.explain?.resolutionConfidence).toBe("medium");
+    });
+
     it("should generate compact report when compact=true", async () => {
       const index = await createTestIndex("typescript");
 

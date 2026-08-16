@@ -130,6 +130,12 @@ function compactChangedSymbol(symbol: ChangedSymbol, file: number): CompactImpac
   if (symbol.typeOnly !== undefined) {
     compact.typeOnly = symbol.typeOnly;
   }
+  if (symbol.changedLines !== undefined) {
+    compact.changedLines = symbol.changedLines;
+  }
+  if (symbol.signatureChanged !== undefined) {
+    compact.signatureChanged = symbol.signatureChanged;
+  }
   if (symbol.callCompatibility?.length) {
     compact.callCompatibility = symbol.callCompatibility;
   }
@@ -154,6 +160,7 @@ function compactImpactItem(item: ImpactItem, file: number): CompactImpactReport[
     ...(item.confidence !== undefined ? { confidence: item.confidence } : {}),
     ...(item.depth !== undefined ? { depth: item.depth } : {}),
     ...(item.typeOnly !== undefined ? { typeOnly: item.typeOnly } : {}),
+    ...(item.refs !== undefined ? { refs: item.refs } : {}),
     ...(item.explain !== undefined ? { explain: item.explain } : {}),
   };
   return compact;
