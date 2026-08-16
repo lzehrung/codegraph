@@ -16,14 +16,14 @@ import {
   sqliteTableColumns,
   type SqliteTableColumn,
 } from "../../util/sqliteSchema.js";
-import type { BuildOptions, BuildReport, ModuleIndex } from "../types.js";
-import { assertFilePathWithinRoot, fileIdentityKey, normalizePath } from "../../util/paths.js";
+import type { BuildOptions, BuildReport, ExportEntry, ModuleIndex } from "../types.js";
+import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot, normalizePath } from "../../util/paths.js";
 import { lruMapGet, lruMapSet } from "../../util/lruMap.js";
 import { initCacheReport } from "./reports.js";
 import { getImplementationFingerprint } from "./options.js";
 
-// v4: relative file keys and explicit cache-anchor policy.
-const PARSED_CACHE_VERSION = 4;
+// v5: external reexports preserve their unresolved module specifier.
+const PARSED_CACHE_VERSION = 5;
 const MODULE_CACHE_SCHEMA_VERSION = 2;
 const MODULE_CACHE_TABLE = "module_cache";
 const MODULE_CACHE_SCHEMA_VERSION_KEY = "module_cache.schema_version";
@@ -431,6 +431,30 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   );
 }
 
+export function transformPersistedExportFromModule(
+  projectRoot: string,
+  entry: Exclude<ExportEntry, { type: "local" }>,
+  toRelative: boolean,
+): void {
+  if (toRelative) {
+    const isResolvedProjectFile =
+      path.isAbsolute(entry.fromModule) && isFilePathWithinRoot(projectRoot, entry.fromModule);
+    if (!isResolvedProjectFile) {
+      entry.moduleSpecifier ??= entry.fromModule;
+      return;
+    }
+    entry.fromModule = cacheRelativePath(projectRoot, entry.fromModule);
+    return;
+  }
+
+  if (entry.moduleSpecifier === entry.fromModule) return;
+  entry.fromModule = assertFilePathWithinRoot(
+    projectRoot,
+    cacheAbsolutePath(projectRoot, entry.fromModule),
+    "Persisted cache path",
+  );
+}
+
 function transformModulePaths(projectRoot: string, module: ModuleIndex, toRelative: boolean): ModuleIndex {
   const copy = structuredClone(module);
   const transform = (file: string): string =>
@@ -443,7 +467,7 @@ function transformModulePaths(projectRoot: string, module: ModuleIndex, toRelati
     if (entry.type === "local") {
       entry.target.file = transform(entry.target.file);
     } else {
-      entry.fromModule = transform(entry.fromModule);
+      transformPersistedExportFromModule(projectRoot, entry, toRelative);
     }
   }
   for (const binding of copy.imports) {
