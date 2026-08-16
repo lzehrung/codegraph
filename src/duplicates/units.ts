@@ -42,7 +42,7 @@ export function lineSpan(unit: Pick<DuplicateUnitRef, "startLine" | "endLine">):
   return Math.max(1, unit.endLine - unit.startLine + 1);
 }
 
-export const textLanguageByExtension: Record<string, string> = {
+const textLanguageByExtension: Record<string, string> = {
   ".json": "json",
   ".jsonc": "jsonc",
   ".lock": "text",
@@ -52,12 +52,12 @@ export const textLanguageByExtension: Record<string, string> = {
   ".yml": "yaml",
 };
 
-export const chunkLanguageAliases: Record<string, string> = {
+const chunkLanguageAliases: Record<string, string> = {
   js: "javascript",
   ts: "typescript",
 };
 
-export const symbolUnitKinds = new Set<SymbolKind>([
+const symbolUnitKinds = new Set<SymbolKind>([
   SymbolKind.Function,
   SymbolKind.Class,
   SymbolKind.Interface,
@@ -66,7 +66,7 @@ export const symbolUnitKinds = new Set<SymbolKind>([
   SymbolKind.Table,
   SymbolKind.View,
 ]);
-export function hashText(value: string): string {
+function hashText(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
@@ -75,7 +75,7 @@ export function shortHashText(value: string): string {
 }
 
 /** Builds hashed token windows used as local structural fingerprints. */
-export function makeShingles(tokens: readonly string[], size: number): string[] {
+function makeShingles(tokens: readonly string[], size: number): string[] {
   if (tokens.length < size) return [];
   const shingles: string[] = [];
   for (let i = 0; i <= tokens.length - size; i++) {
@@ -85,7 +85,7 @@ export function makeShingles(tokens: readonly string[], size: number): string[] 
 }
 
 /** Keeps stable representative fingerprints from nearby shingle windows. */
-export function winnowShingles(shingles: readonly string[], windowSize: number, maxFingerprints: number): Set<string> {
+function winnowShingles(shingles: readonly string[], windowSize: number, maxFingerprints: number): Set<string> {
   if (!shingles.length) return new Set();
   if (shingles.length <= windowSize) return new Set(shingles.slice(0, maxFingerprints));
 
@@ -102,7 +102,7 @@ export function winnowShingles(shingles: readonly string[], windowSize: number, 
   return fingerprints;
 }
 
-export function languageForFile(filePath: string): LanguageForFileResult | undefined {
+function languageForFile(filePath: string): LanguageForFileResult | undefined {
   const support = supportForFile(filePath);
   if (support) {
     return { id: support.id, textOnly: false };
@@ -114,19 +114,19 @@ export function languageForFile(filePath: string): LanguageForFileResult | undef
   return undefined;
 }
 
-export function formatDuplicateFileHandle(file: string): string {
+function formatDuplicateFileHandle(file: string): string {
   return ["file", encodeURIComponent(file)].join(":");
 }
 
-export function formatDuplicateChunkHandle(file: string, line: number): string {
+function formatDuplicateChunkHandle(file: string, line: number): string {
   return ["chunk", encodeURIComponent(file), String(line)].join(":");
 }
 
-export function formatDuplicateSqlHandle(file: string, name: string, line: number): string {
+function formatDuplicateSqlHandle(file: string, name: string, line: number): string {
   return ["sql", encodeURIComponent(name), encodeURIComponent(file), String(line)].join(":");
 }
 
-export function sqlHandleForDuplicateSymbol(symbol: SymbolDef, file: string): string | undefined {
+function sqlHandleForDuplicateSymbol(symbol: SymbolDef, file: string): string | undefined {
   if (symbol.kind !== SymbolKind.Routine && symbol.kind !== SymbolKind.Table && symbol.kind !== SymbolKind.View) {
     return undefined;
   }
@@ -134,7 +134,7 @@ export function sqlHandleForDuplicateSymbol(symbol: SymbolDef, file: string): st
   return formatDuplicateSqlHandle(file, symbol.localName, symbol.range.start.line);
 }
 
-export function formatDuplicateSymbolHandle(file: string, name: string, line: number, column: number): string {
+function formatDuplicateSymbolHandle(file: string, name: string, line: number, column: number): string {
   return ["symbol", encodeURIComponent(file), encodeURIComponent(name), String(line), String(column)].join(":");
 }
 
@@ -143,7 +143,7 @@ export function normalizeDetectionFile(filePath: string, projectRoot: string | u
   return assertFilePathWithinRoot(projectRoot, filePath, "Duplicate input file");
 }
 
-export function internalUnitId(unit: DuplicateUnitDraft, absoluteFile: string): string {
+function internalUnitId(unit: DuplicateUnitDraft, absoluteFile: string): string {
   return `${normalizePath(absoluteFile)}:${unit.startLine}:${unit.endLine}:${unit.kind}:${unit.name ?? ""}`;
 }
 
@@ -502,6 +502,7 @@ export async function collectDuplicateUnits(
     options.maxTokens,
     options.shingleSize,
     options.windowSize,
+    options.projectRoot,
   );
   let belowThresholdUnits = 0;
   const belowThresholdUnitsByFile = new Map<string, number>();

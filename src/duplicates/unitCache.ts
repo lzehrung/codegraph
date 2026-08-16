@@ -131,11 +131,14 @@ export function duplicateUnitCacheVariant(
   maxTokens: number,
   shingleSize: number,
   windowSize: number,
+  projectRoot?: string,
 ): string {
+  const normalizedProjectRoot = normalizePath(projectRoot ?? index.projectRoot ?? "");
   const nativeMode = normalizedDuplicateUnitCacheNativeMode(index.nativeMode);
   return JSON.stringify({
     version: DUPLICATE_UNIT_CACHE_VERSION,
     tokenizerRevision: DUPLICATE_TOKENIZER_REVISION,
+    projectRoot: normalizedProjectRoot,
     nativeMode,
     nativeDuplicateTokens: isNativeDuplicateTokenizationAvailable(index.nativeMode),
     nativeSyntaxLanguages: getNativeTreeSitterSupportedLanguageIds(index.nativeMode),
@@ -341,7 +344,8 @@ export function tryLoadDuplicateUnitsFromCache(
     try {
       const entry = duplicateUnitDiskCache(index);
       const row = entry?.statements?.load.get(file, variant) as
-        { sig: string; version: number; payload: Uint8Array } | undefined;
+        | { sig: string; version: number; payload: Uint8Array }
+        | undefined;
       if (!row || row.sig !== sig || row.version !== DUPLICATE_UNIT_CACHE_VERSION) return null;
       const parsed = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as unknown;
       return deserializeDuplicateUnits(parsed);

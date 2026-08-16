@@ -29,7 +29,8 @@ function readSqliteMetadata(dbPath: string, key: string): string | undefined {
   const db = new DatabaseSync(dbPath);
   try {
     const row = db.prepare("SELECT value FROM cache_schema_metadata WHERE key = ?").get(key) as
-      { value?: unknown } | undefined;
+      | { value?: unknown }
+      | undefined;
     return typeof row?.value === "string" ? row.value : undefined;
   } finally {
     db.close();
@@ -412,7 +413,8 @@ describe("disk cache uses sqlite backend", () => {
 
     const after = new DatabaseSync(duplicateCacheDbPath(root));
     const row = after.prepare("SELECT version FROM duplicate_unit_cache WHERE file = ?").get(aFile) as
-      { version: number } | undefined;
+      | { version: number }
+      | undefined;
     after.close();
     expect(row?.version).toBe(3);
   });

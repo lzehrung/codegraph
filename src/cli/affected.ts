@@ -111,11 +111,11 @@ function maybeAddTest(
   file: string,
   reason: string,
   depth: number,
-  omittedCounts: AffectedOmittedCounts,
+  filteredTests: Set<string>,
 ): void {
   if (!state.matchesTestFile(file)) return;
   if (!state.passesFilter(file)) {
-    omittedCounts.filteredTests += 1;
+    filteredTests.add(fileIdentityKey(file));
     return;
   }
   addAffectedTest(affected, file, reason, depth);
@@ -125,7 +125,7 @@ async function addDeletedImporterTests(
   affected: Map<string, AffectedTestAccumulator>,
   state: AffectedTraversalState,
   deletedFiles: readonly string[],
-  omittedCounts: AffectedOmittedCounts,
+  filteredTests: Set<string>,
 ): Promise<void> {
   if (!state.maxDepth) return;
 
@@ -151,7 +151,7 @@ async function addDeletedImporterTests(
         current.file,
         `deleted import from ${reasonSource}, depth ${current.depth}`,
         current.depth,
-        omittedCounts,
+        filteredTests,
       );
       if (current.depth >= state.maxDepth) continue;
       const nextDepth = current.depth + 1;
@@ -170,7 +170,8 @@ async function collectAffectedTests(
   state: AffectedTraversalState,
 ): Promise<{ affected: Map<string, AffectedTestAccumulator>; omittedCounts: AffectedOmittedCounts }> {
   const affected = new Map<string, AffectedTestAccumulator>();
-  const omittedCounts: AffectedOmittedCounts = { changedFiles: 0, filteredTests: 0 };
+  const filteredTests = new Set<string>();
+  let omittedChangedFiles = 0;
   const resolver = createGraphFileResolver(state.index.graph.nodes);
   const graphNodeKeys = new Set(Array.from(state.index.graph.nodes, fileIdentityKey));
   const adjacency = state.index.graphAdjacency ?? graphAdjacencyFor(state.index.graph);
@@ -180,14 +181,14 @@ async function collectAffectedTests(
     const changedDisplayPath = toProjectDisplayPath(state.projectRoot, changedFile);
     const changedLooksLikeTest = isTestFilePath(changedDisplayPath, pathPatterns);
     if (changedLooksLikeTest) {
-      maybeAddTest(affected, state, changedFile, "changed test file", 0, omittedCounts);
+      maybeAddTest(affected, state, changedFile, "changed test file", 0, filteredTests);
     }
 
     if (!state.maxDepth) continue;
 
     const startFile = resolver(changedFile);
     if (!graphNodeKeys.has(fileIdentityKey(startFile))) {
-      omittedCounts.changedFiles += 1;
+      omittedChangedFiles += 1;
       continue;
     }
 
@@ -210,14 +211,20 @@ async function collectAffectedTests(
           neighbor,
           `reverse dependency from ${changedDisplayPath}, depth ${nextDepth}`,
           nextDepth,
-          omittedCounts,
+          filteredTests,
         );
       }
     }
   }
 
-  await addDeletedImporterTests(affected, state, deletedFiles, omittedCounts);
-  return { affected, omittedCounts };
+  await addDeletedImporterTests(affected, state, deletedFiles, filteredTests);
+  return {
+    affected,
+    omittedCounts: {
+      changedFiles: omittedChangedFiles,
+      filteredTests: filteredTests.size,
+    },
+  };
 }
 
 function formatAffectedEntry(projectRoot: string, entry: AffectedTestAccumulator): AffectedTestEntry {

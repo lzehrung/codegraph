@@ -249,8 +249,8 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const GREP_HELP_TEXT = `codegraph grep - Search source text or syntax trees
 
-Usage: codegraph grep <regex> [--root <path>] [--ignore-case] [--max-hits <n>] [--json]
-       codegraph grep --query <tree-sitter-query> [--root <path>] [--json]
+Usage: codegraph grep <regex> [--root <path>] [--pattern|--regex <expr>] [--glob|--include-glob|--ignore-glob <glob>] [--ignore-case|-i] [--max-hits <n>] [--json | --pretty]
+       codegraph grep --query <tree-sitter-query> [--root <path>] [--json | --pretty]
 
 A bare positional is a text regex. Use --query explicitly for Tree-sitter queries.
 --json returns an envelope { items, limit, totalSeen, truncated, omitted }. For text greps, limit is the effective --max-hits cap (default 5000, max 200000). The scan probes one hit past that cap, so truncated is exact while totalSeen and omitted are lower bounds on observed hits whenever truncated is true. For --query AST greps, which are uncapped today, limit is null and truncated is always false.
@@ -258,7 +258,7 @@ A bare positional is a text regex. Use --query explicitly for Tree-sitter querie
 
 export const SQL_HELP_TEXT = `codegraph sql - Query a graph SQLite export read-only
 
-Usage: codegraph sql <sqlite-path> "SELECT ..." [--json]
+Usage: codegraph sql <sqlite-path> "SELECT ..." [--json | --pretty]
        codegraph sql --db <sqlite-path> --query "SELECT ..." [--json]
 `;
 
@@ -653,6 +653,13 @@ export const LINKS_HELP_TEXT = `codegraph links - Check local Markdown links
 Usage: codegraph links [project-root] [--root <path>] [--json | --pretty] [--verbose]
 
 Checks local Markdown file, reference, fragment, and root-boundary targets. External links are skipped.
+
+Discovery options:
+  --include-glob <glob> Restrict discovered files to extra glob(s), relative to each scan root
+  --ignore-glob <glob>  Exclude extra discovered files by glob, relative to each scan root
+  --no-gitignore        Do not honor .gitignore during discovery
+
+Config discovery.ignoreGlobs / discovery.includeGlobs from codegraph.config.json also apply.
 `;
 
 export const APISURFACE_HELP_TEXT = `codegraph apisurface - Summarize exported API symbols
@@ -685,9 +692,9 @@ Usage: codegraph chunk <file-path> [--language <id>] [--min-tokens <n>] [--max-t
 export const SKILL_HELP_TEXT = `codegraph skill - Install or inspect the bundled agent skill
 
 Usage:
-  codegraph skill install [--agent <name> | --target <dir>] [--force] [--json]
-  codegraph skill print-path [--agent <name> | --target <dir>] [--json]
-  codegraph skill doctor [--agent <name> | --target <dir>] [--json]
+  codegraph skill install [--agent <name> | --target <dir>] [--force] [--json | --pretty]
+  codegraph skill print-path [--agent <name> | --target <dir>] [--json | --pretty]
+  codegraph skill doctor [--agent <name> | --target <dir>] [--json | --pretty]
 `;
 
 export const DUMPMOD_HELP_TEXT = `codegraph dumpmod - Dump one indexed module

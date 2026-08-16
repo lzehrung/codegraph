@@ -14,13 +14,13 @@ Checklist for landing a new first-class source language without drifting from re
 - Register it from `src/languages/all.ts`.
 - Export support from `src/languages.ts` when the public support surface expects it.
 - Confirm `src/bootstrap/treeSitterLanguages.ts` derives the intended chunking config for the new language.
-- Add the file extension to discovery and resolution in `src/util.ts`.
+- Add the file extension to discovery patterns in `src/util/projectFiles.ts` (`DEFAULT_PROJECT_PATTERNS`) and any language-specific resolution helpers under `src/util/`.
 - Update CLI help in `src/cli.ts` when a command accepts a language override and cannot derive it from the registered chunking configs.
 
 ## 3. Wire the native runtime path
 
 - Add the native grammar dependency in `packages/codegraph-native/Cargo.toml`.
-- Register the native language id and smoke coverage in `packages/codegraph-native/src/lib.rs`.
+- Register the native language id in `packages/codegraph-native/src/languages.rs` (the registry); `packages/codegraph-native/src/lib.rs` only delegates. Add smoke coverage alongside that registration.
 - Rebuild the native addon before trusting any native parity failures.
 - If reduced-mode recovery needs language-specific heuristics, add them in the existing regex/graph-only recovery paths rather than adding a second grammar backend.
 

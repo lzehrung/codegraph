@@ -11,7 +11,7 @@ export function isRustCfgTestStatement(source: string, statementText: string, st
 export function utf8ByteOffsetToStringIndex(source: string, byteOffset: number): number {
   if (byteOffset <= 0) return 0;
   let bytesSeen = 0;
-  for (let index = 0; index < source.length;) {
+  for (let index = 0; index < source.length; ) {
     if (bytesSeen >= byteOffset) return index;
     const codePoint = source.codePointAt(index);
     if (codePoint === undefined) return source.length;

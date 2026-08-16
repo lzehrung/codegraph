@@ -219,37 +219,30 @@ index 1234567..abcdef0 100644
   });
 
   describe("Compact report compatibility", () => {
-    it("should work with compact format (no refs in compact format)", async () => {
+    it("preserves reference context in compact format", async () => {
       const index = await createTestIndex("typescript");
-
-      const diffText = `diff --git a/utils.ts b/utils.ts
-index 1234567..abcdef0 100644
---- a/utils.ts
-+++ b/utils.ts
-@@ -1,3 +1,4 @@
- export function helper() {
-   return 42;
-+  console.log("added");
- }
-`;
-
+      const diffText = [
+        "diff --git a/utils.ts b/utils.ts",
+        "index 1234567..abcdef0 100644",
+        "--- a/utils.ts",
+        "+++ b/utils.ts",
+        "@@ -1,3 +1,4 @@",
+        " export function helperFunction(): string {",
+        '   return "Hello from utils";',
+        '+  console.log("added");',
+        " }",
+        "",
+      ].join("\n");
       const report = await analyzeImpactFromDiff(process.cwd() + "/tests/samples/typescript", index, {
         provider: "raw",
         diffText,
         refContext: "line",
         compact: true,
       });
-
-      // Compact reports should not have refs field
       if (!("files" in report)) {
         throw new Error("Expected compact report");
       }
-
-      for (const item of report.impacted) {
-        if ("refs" in item) {
-          expect(item.refs).toBeUndefined();
-        }
-      }
+      expect(report.impacted.flatMap((item) => item.refs ?? [])).not.toHaveLength(0);
     });
   });
 });

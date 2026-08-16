@@ -5,6 +5,12 @@ import { findReferences } from "../indexer/navigation.js";
 import { fileIdentityKey, resolveFilePathFromRoot, toProjectDisplayPath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { maskJsLikeCommentsAndStrings } from "../util/comments.js";
+import {
+  findBalancedAngleBrackets,
+  findBalancedBraces,
+  findBalancedParentheses,
+} from "./call-compatibility/textScanner.js";
+import type { Range } from "../types.js";
 import { listCandidateTestFiles } from "./context.js";
 import { collectHunkLineText, collectRemovedLines } from "./hunks.js";
 import { normalizeImpactFilePath } from "./path.js";
@@ -240,6 +246,7 @@ function collectConfigAndBreakingSuggestions(
       for (const change of signatureChanges) {
         upsertBreakingSuggestion({
           file: normalized,
+          ...(change.range ? { range: change.range } : {}),
           kind: "breakingChange",
           symbol: change.name,
           details: change.details,
@@ -487,6 +494,7 @@ type SignatureChange = {
   name: string;
   details: string;
   confidence: "high" | "medium";
+  range?: Range;
 };
 
 function countParams(raw: string): number {
@@ -600,40 +608,102 @@ function countNewlines(text: string): number {
   return count;
 }
 
-function readBalancedParenContent(text: string, openParenIndex: number): { content: string; endIndex: number } | null {
-  let depth = 0;
-  let quote: string | null = null;
-  let escaping = false;
-  for (let index = openParenIndex; index < text.length; index += 1) {
-    const ch = text[index]!;
-    if (quote) {
-      if (escaping) {
-        escaping = false;
+function skipWhitespaceAndComments(text: string, index: number): number {
+  let cursor = index;
+  while (cursor < text.length) {
+    const ch = text[cursor];
+    if (!ch) break;
+    if (/\s/.test(ch)) {
+      cursor += 1;
+      continue;
+    }
+    if (ch === "/" && text[cursor + 1] === "/") {
+      const newline = text.indexOf("\n", cursor + 2);
+      cursor = newline < 0 ? text.length : newline + 1;
+      continue;
+    }
+    if (ch === "/" && text[cursor + 1] === "*") {
+      const close = text.indexOf("*/", cursor + 2);
+      cursor = close < 0 ? text.length : close + 2;
+      continue;
+    }
+    break;
+  }
+  return cursor;
+}
+
+function readIdentifier(text: string, index: number): { name: string; end: number } | null {
+  const ch = text[index];
+  if (!ch || !/[A-Za-z_$]/.test(ch)) return null;
+  let end = index + 1;
+  while (end < text.length && /[\w$]/.test(text[end]!)) end += 1;
+  return { name: text.slice(index, end), end };
+}
+
+function skipDecorator(text: string, index: number): number | null {
+  if (text[index] !== "@") return null;
+  let cursor = skipWhitespaceAndComments(text, index + 1);
+  let segment = readIdentifier(text, cursor);
+  if (!segment) return null;
+  cursor = skipWhitespaceAndComments(text, segment.end);
+  while (text[cursor] === ".") {
+    cursor = skipWhitespaceAndComments(text, cursor + 1);
+    segment = readIdentifier(text, cursor);
+    if (!segment) return null;
+    cursor = skipWhitespaceAndComments(text, segment.end);
+  }
+  if (text[cursor] === "(") {
+    const args = findBalancedParentheses(text, cursor);
+    if (!args) return null;
+    return args.end;
+  }
+  return cursor;
+}
+
+function skipOptionalGenerics(text: string, index: number): number {
+  const cursor = skipWhitespaceAndComments(text, index);
+  if (text[cursor] !== "<") return cursor;
+  const close = findBalancedAngleBrackets(text, cursor);
+  return close < 0 ? cursor : close + 1;
+}
+
+function skipHeritageClause(text: string, index: number): number {
+  let cursor = skipWhitespaceAndComments(text, index);
+  while (true) {
+    const keyword = readIdentifier(text, cursor);
+    if (!keyword || (keyword.name !== "extends" && keyword.name !== "implements")) {
+      return cursor;
+    }
+    cursor = skipWhitespaceAndComments(text, keyword.end);
+    while (cursor < text.length) {
+      const ch = text[cursor];
+      if (!ch) break;
+      if (ch === "{") return cursor;
+      if (ch === "<") {
+        const close = findBalancedAngleBrackets(text, cursor);
+        if (close < 0) return cursor;
+        cursor = close + 1;
         continue;
       }
-      if (ch === "\\") {
-        escaping = true;
+      if (ch === "(") {
+        const balanced = findBalancedParentheses(text, cursor);
+        if (!balanced) return cursor;
+        cursor = balanced.end;
         continue;
       }
-      if (ch === quote) quote = null;
-      continue;
-    }
-    if (ch === '"' || ch === "'" || ch === "`") {
-      quote = ch;
-      continue;
-    }
-    if (ch === "(") {
-      depth += 1;
-      continue;
-    }
-    if (ch === ")") {
-      depth -= 1;
-      if (!depth) {
-        return { content: text.slice(openParenIndex + 1, index), endIndex: index };
+      if (ch === ",") {
+        cursor = skipWhitespaceAndComments(text, cursor + 1);
+        continue;
       }
+      if (/\s/.test(ch)) {
+        cursor = skipWhitespaceAndComments(text, cursor);
+        const next = readIdentifier(text, cursor);
+        if (next && (next.name === "extends" || next.name === "implements")) break;
+        continue;
+      }
+      cursor += 1;
     }
   }
-  return null;
 }
 
 function functionSuffixStartsAfterParams(text: string, closeParenIndex: number): boolean {
@@ -692,52 +762,235 @@ function arrowSuffixStartsAfterParams(text: string, closeParenIndex: number): bo
   return false;
 }
 
+function lineRangeAt(text: string, index: number, startLine: number): Range {
+  const line = startLine + countNewlines(text.slice(0, index));
+  return {
+    start: { line, column: 1 },
+    end: { line, column: 1 },
+  };
+}
+
+function findConstructorParamCount(classBodyInner: string): number | null {
+  let depth = 0;
+  let quote: string | null = null;
+  let escaped = false;
+  for (let index = 0; index < classBodyInner.length; index += 1) {
+    const ch = classBodyInner[index];
+    if (!ch) continue;
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "{") {
+      depth += 1;
+      continue;
+    }
+    if (ch === "}") {
+      if (depth) depth -= 1;
+      continue;
+    }
+    if (depth !== 0) continue;
+    if (classBodyInner.startsWith("constructor", index) && !/[A-Za-z0-9_$]/.test(classBodyInner[index - 1] ?? "")) {
+      const cursor = skipWhitespaceAndComments(classBodyInner, index + "constructor".length);
+      if (classBodyInner[cursor] !== "(") continue;
+      const params = findBalancedParentheses(classBodyInner, cursor);
+      if (!params) return null;
+      return countParams(params.inner);
+    }
+  }
+  return 0;
+}
+
+function tryParseExportedFunction(
+  text: string,
+  index: number,
+  hunkIndex: number,
+  startLine: number,
+  isDefault: boolean,
+): { signature: ExportSignatureWithLocation; end: number } | null {
+  let cursor = skipWhitespaceAndComments(text, index);
+  const maybeAsync = readIdentifier(text, cursor);
+  if (maybeAsync?.name === "async") {
+    cursor = skipWhitespaceAndComments(text, maybeAsync.end);
+  }
+  const keyword = readIdentifier(text, cursor);
+  if (keyword?.name !== "function") return null;
+  cursor = skipWhitespaceAndComments(text, keyword.end);
+  if (text[cursor] === "*") cursor = skipWhitespaceAndComments(text, cursor + 1);
+  const name = readIdentifier(text, cursor);
+  if (name) {
+    cursor = name.end;
+  } else if (!isDefault) {
+    return null;
+  }
+  const exportName = name?.name ?? "default";
+  cursor = skipOptionalGenerics(text, cursor);
+  cursor = skipWhitespaceAndComments(text, cursor);
+  if (text[cursor] !== "(") return null;
+  const params = findBalancedParentheses(text, cursor);
+  if (!params || !functionSuffixStartsAfterParams(text, params.end - 1)) return null;
+  return {
+    signature: {
+      name: exportName,
+      paramCount: countParams(params.inner),
+      hunkIndex,
+      line: lineRangeAt(text, index, startLine).start.line,
+    },
+    end: params.end,
+  };
+}
+
+function tryParseExportedArrow(
+  text: string,
+  index: number,
+  hunkIndex: number,
+  startLine: number,
+): { signature: ExportSignatureWithLocation; end: number } | null {
+  let cursor = skipWhitespaceAndComments(text, index);
+  const binding = readIdentifier(text, cursor);
+  if (binding?.name !== "const" && binding?.name !== "let" && binding?.name !== "var") return null;
+  cursor = skipWhitespaceAndComments(text, binding.end);
+  const name = readIdentifier(text, cursor);
+  if (!name) return null;
+  cursor = skipWhitespaceAndComments(text, name.end);
+  if (text[cursor] !== "=") return null;
+  cursor = skipWhitespaceAndComments(text, cursor + 1);
+  const maybeAsync = readIdentifier(text, cursor);
+  if (maybeAsync?.name === "async") {
+    cursor = skipWhitespaceAndComments(text, maybeAsync.end);
+  }
+  cursor = skipOptionalGenerics(text, cursor);
+  cursor = skipWhitespaceAndComments(text, cursor);
+  if (text[cursor] === "(") {
+    const params = findBalancedParentheses(text, cursor);
+    if (!params || !arrowSuffixStartsAfterParams(text, params.end - 1)) return null;
+    return {
+      signature: {
+        name: name.name,
+        paramCount: countParams(params.inner),
+        hunkIndex,
+        line: lineRangeAt(text, index, startLine).start.line,
+      },
+      end: params.end,
+    };
+  }
+  const single = readIdentifier(text, cursor);
+  if (!single) return null;
+  cursor = skipWhitespaceAndComments(text, single.end);
+  if (!(text[cursor] === "=" && text[cursor + 1] === ">")) return null;
+  return {
+    signature: {
+      name: name.name,
+      paramCount: 1,
+      hunkIndex,
+      line: lineRangeAt(text, index, startLine).start.line,
+    },
+    end: cursor + 2,
+  };
+}
+
+function tryParseExportedClass(
+  text: string,
+  index: number,
+  hunkIndex: number,
+  startLine: number,
+  isDefault: boolean,
+): { signature: ExportSignatureWithLocation; end: number } | null {
+  let cursor = skipWhitespaceAndComments(text, index);
+  const maybeAbstract = readIdentifier(text, cursor);
+  if (maybeAbstract?.name === "abstract") {
+    cursor = skipWhitespaceAndComments(text, maybeAbstract.end);
+  }
+  const keyword = readIdentifier(text, cursor);
+  if (keyword?.name !== "class") return null;
+  cursor = skipWhitespaceAndComments(text, keyword.end);
+  const name = readIdentifier(text, cursor);
+  let exportName = isDefault ? "default" : name?.name;
+  if (name) {
+    exportName = isDefault ? name.name : name.name;
+    cursor = name.end;
+  } else if (!isDefault) {
+    return null;
+  }
+  cursor = skipOptionalGenerics(text, cursor);
+  cursor = skipHeritageClause(text, cursor);
+  cursor = skipWhitespaceAndComments(text, cursor);
+  if (text[cursor] !== "{") return null;
+  const body = findBalancedBraces(text, cursor);
+  if (!body) return null;
+  const paramCount = findConstructorParamCount(body.inner);
+  if (paramCount === null) return null;
+  return {
+    signature: {
+      name: exportName ?? "default",
+      paramCount,
+      hunkIndex,
+      line: lineRangeAt(text, index, startLine).start.line,
+    },
+    end: body.end,
+  };
+}
+
 function collectExportSignaturesFromText(
   text: string,
   hunkIndex: number,
   startLine: number,
 ): ExportSignatureWithLocation[] {
   const output: ExportSignatureWithLocation[] = [];
-  const pushMatch = (match: RegExpExecArray, name: string, rawParams: string): void => {
-    output.push({
-      name,
-      paramCount: countParams(rawParams),
-      hunkIndex,
-      line: startLine + countNewlines(text.slice(0, match.index)),
-    });
-  };
   const scanText = maskJsLikeCommentsAndStrings(text);
-
-  const functionRe =
-    /^\s*export\s+(?:default\s+)?(?:async\s+)?function\s*(?:\*\s*)?(?:([A-Za-z_$][\w$]*))?(?:\s*<[^>]+>)?\s*\(/gm;
-  for (let match; (match = functionRe.exec(scanText));) {
-    const params = readBalancedParenContent(scanText, functionRe.lastIndex - 1);
-    if (params && functionSuffixStartsAfterParams(scanText, params.endIndex)) {
-      pushMatch(match, match[1] ?? "default", params.content);
-      functionRe.lastIndex = params.endIndex + 1;
+  let index = 0;
+  while (index < scanText.length) {
+    const exportAt = scanText.indexOf("export", index);
+    if (exportAt < 0) break;
+    const before = exportAt === 0 ? "" : (scanText[exportAt - 1] ?? "");
+    const after = scanText[exportAt + "export".length] ?? "";
+    if ((before && /[A-Za-z0-9_$]/.test(before)) || (after && /[A-Za-z0-9_$]/.test(after))) {
+      index = exportAt + "export".length;
+      continue;
     }
-  }
 
-  const arrowRe = /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:<[^>]+>\s*)?\(/gm;
-  for (let match; (match = arrowRe.exec(scanText));) {
-    const name = match[1];
-    const params = readBalancedParenContent(scanText, arrowRe.lastIndex - 1);
-    if (name && params && arrowSuffixStartsAfterParams(scanText, params.endIndex)) {
-      pushMatch(match, name, params.content);
-      arrowRe.lastIndex = params.endIndex + 1;
+    let cursor = skipWhitespaceAndComments(scanText, exportAt + "export".length);
+    while (true) {
+      const nextDecorator = skipDecorator(scanText, cursor);
+      if (nextDecorator === null) break;
+      cursor = skipWhitespaceAndComments(scanText, nextDecorator);
     }
-  }
 
-  const singleParamArrowRe = /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?([A-Za-z_$][\w$]*)\s*=>/gm;
-  for (let match; (match = singleParamArrowRe.exec(scanText));) {
-    const name = match[1];
-    if (!name) continue;
-    output.push({
-      name,
-      paramCount: 1,
-      hunkIndex,
-      line: startLine + countNewlines(text.slice(0, match.index)),
-    });
+    let isDefault = false;
+    const maybeDefault = readIdentifier(scanText, cursor);
+    if (maybeDefault?.name === "default") {
+      isDefault = true;
+      cursor = skipWhitespaceAndComments(scanText, maybeDefault.end);
+      while (true) {
+        const nextDecorator = skipDecorator(scanText, cursor);
+        if (nextDecorator === null) break;
+        cursor = skipWhitespaceAndComments(scanText, nextDecorator);
+      }
+    }
+
+    const parsed =
+      tryParseExportedFunction(scanText, cursor, hunkIndex, startLine, isDefault) ??
+      tryParseExportedClass(scanText, cursor, hunkIndex, startLine, isDefault) ??
+      (!isDefault ? tryParseExportedArrow(scanText, cursor, hunkIndex, startLine) : null);
+
+    if (parsed) {
+      output.push(parsed.signature);
+      index = parsed.end;
+      continue;
+    }
+    index = exportAt + "export".length;
   }
 
   return output;
@@ -802,11 +1055,16 @@ function detectExportSignatureChanges(change: FileChange): SignatureChange[] {
   const output: SignatureChange[] = [];
   for (const removedSig of removed) {
     const matched = bestAddedMatchForRemoved(removedSig);
+    const range: Range = {
+      start: { line: removedSig.line, column: 1 },
+      end: { line: removedSig.line, column: 1 },
+    };
     if (matched && matched.paramCount !== removedSig.paramCount) {
       output.push({
         name: removedSig.name,
         details: `Exported function signature changed from ${removedSig.paramCount} parameter(s) to ${matched.paramCount}. This is likely a breaking API change.`,
         confidence: "high",
+        range,
       });
       continue;
     }
@@ -820,6 +1078,7 @@ function detectExportSignatureChanges(change: FileChange): SignatureChange[] {
         name: removedSig.name,
         details: renameDetails,
         confidence: "medium",
+        range,
       });
     }
   }

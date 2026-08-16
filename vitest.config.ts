@@ -24,13 +24,15 @@ export default defineConfig({
       ],
       reporter: ["text", "html", "lcov"],
       reportsDirectory: "./coverage/js",
-      // Set below the measured baseline with headroom for run-to-run variance:
-      // lines 90.39, statements 87.81, functions 93.73, branches 78.88.
+      // Set below the measured baseline with headroom for run-to-run variance.
+      // PR 6 added targeted branch coverage for query-index prepare paths, project-name
+      // parsers, compile-cache fallbacks, dumpmod/pretty/errorMessage formatters, and
+      // parsed-cache LRU identity; ratchet branches only as far as those justify.
       thresholds: {
         lines: 88,
         statements: 86,
         functions: 92,
-        branches: 74,
+        branches: 76,
       },
     },
   },

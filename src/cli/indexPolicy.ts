@@ -21,7 +21,12 @@ export type CliIndexBehavior =
 
 /** Wiring family of a `current-query` command; each family owns a behavioral CLI test. */
 export type CliCurrentQueryFamily =
-  "navigation" | "graph-query" | "structural-summary" | "duplicate-analysis" | "diff-aware" | "affected-tests";
+  | "navigation"
+  | "graph-query"
+  | "structural-summary"
+  | "duplicate-analysis"
+  | "diff-aware"
+  | "affected-tests";
 
 export type CliIndexPolicyEntry = {
   command: string;

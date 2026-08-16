@@ -293,7 +293,9 @@ export async function buildDeletedFileSnapshots(
   for (const file of deletedFiles) {
     const support = supportForFile(file);
     if (!support) continue;
-    const source = revisionSources.get(file) ?? reconstructDeletedSourceFromDiff(opts.diffChangesByFile?.get(file));
+    const source =
+      revisionSources.get(file) ??
+      reconstructDeletedSourceFromDiff(findDiffChangeForDeletedPath(file, opts.diffChangesByFile));
     if (source === null) continue;
     const normalizedFile = normalizePath(file);
     const imports = await collectImportsForFile(normalizedFile, projectRoot, {
@@ -311,8 +313,27 @@ export async function buildDeletedFileSnapshots(
   return snapshots;
 }
 
+function findDiffChangeForDeletedPath(
+  deletedPath: string,
+  diffChangesByFile?: ReadonlyMap<FileId, FileChange>,
+): FileChange | undefined {
+  if (!diffChangesByFile) return undefined;
+  const normalizedDeletedPath = normalizePath(deletedPath);
+  const direct = diffChangesByFile.get(deletedPath) ?? diffChangesByFile.get(normalizedDeletedPath);
+  if (direct) return direct;
+  for (const change of diffChangesByFile.values()) {
+    if (change.oldPath && normalizePath(change.oldPath) === normalizedDeletedPath) {
+      return change;
+    }
+  }
+  return undefined;
+}
+
 function reconstructDeletedSourceFromDiff(change: FileChange | undefined): string | null {
-  if (!change || change.kind !== "deleted" || !change.hunks.length) {
+  if (!change || !change.hunks.length) {
+    return null;
+  }
+  if (change.kind !== "deleted" && change.kind !== "renamed") {
     return null;
   }
   const oldLines: string[] = [];

@@ -25,7 +25,8 @@ describe("Incremental cache modes", () => {
     const db = new DatabaseSync(dbPath, { readOnly: true });
     try {
       const row = db.prepare("SELECT sig, version, payload, updated_at FROM module_cache WHERE file = ?").get(file) as
-        { sig: string; version: number; payload: Uint8Array; updated_at: number } | undefined;
+        | { sig: string; version: number; payload: Uint8Array; updated_at: number }
+        | undefined;
       return row ?? null;
     } finally {
       db.close();

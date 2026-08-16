@@ -82,12 +82,9 @@ describe("Review report", () => {
     const srcDir = path.join(root, "src");
     await fsp.mkdir(srcDir, { recursive: true });
     const tsFile = path.join(srcDir, "api.ts");
-    // Go is deliberately chosen: it has no receiver member-call resolution, so it
-    // exercises the limited-language branch. Python moved into the receiver-aware
-    // set, so it can no longer serve as the negative case here.
-    const goFile = path.join(srcDir, "helper.go");
+    const pythonFile = path.join(srcDir, "helper.py");
     await fsp.writeFile(tsFile, "export function helper(a: string, b: number) { return a + b; }\n", "utf8");
-    await fsp.writeFile(goFile, "package main\n\nfunc Helper(a string, b int) string {\n\treturn a\n}\n", "utf8");
+    await fsp.writeFile(pythonFile, "def helper(a: str, b: int) -> str:\n    return a\n", "utf8");
 
     const diffText = [
       "diff --git a/src/api.ts b/src/api.ts",
@@ -97,24 +94,21 @@ describe("Review report", () => {
       "@@ -1,1 +1,1 @@",
       "-export function helper(a: string) { return a; }",
       "+export function helper(a: string, b: number) { return a + b; }",
-      "diff --git a/src/helper.go b/src/helper.go",
+      "diff --git a/src/helper.py b/src/helper.py",
       "index 1234567..abcdef0 100644",
-      "--- a/src/helper.go",
-      "+++ b/src/helper.go",
-      "@@ -1,5 +1,5 @@",
-      " package main",
-      " ",
-      "-func Helper(a string) string {",
-      "+func Helper(a string, b int) string {",
-      " \treturn a",
-      " }",
+      "--- a/src/helper.py",
+      "+++ b/src/helper.py",
+      "@@ -1,2 +1,2 @@",
+      "-def helper(a: str) -> str:",
+      "+def helper(a: str, b: int) -> str:",
+      "     return a",
       "",
     ].join("\n");
 
     const report = await buildReviewReport(root, { diffText });
 
     expect(report.diagnostics?.memberResolutionCoverage?.receiverAwareLanguages).toContain("ts");
-    expect(report.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("go");
+    expect(report.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("python");
   });
 
   it("includes definition snippets and callsites when enabled", async () => {
@@ -1625,6 +1619,54 @@ describe("Review report", () => {
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("treats rename oldPath as deleted for importer impact and candidate tests", async () => {
+    const root = await mkTmpDir("dg-review-rename-oldpath-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    const srcDir = path.join(root, "src");
+    const testsDir = path.join(root, "tests");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.mkdir(testsDir, { recursive: true });
+    const oldModule = path.join(srcDir, "legacy.ts");
+    const consumer = path.join(srcDir, "consumer.ts");
+    const testFile = path.join(testsDir, "legacy.test.ts");
+    await fsp.writeFile(oldModule, `export const legacyValue = 1;\n`, "utf8");
+    await fsp.writeFile(
+      consumer,
+      `import { legacyValue } from './legacy';\nexport const seen = legacyValue;\n`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      testFile,
+      `import { legacyValue } from '../src/legacy';\nexport const seen = legacyValue;\n`,
+      "utf8",
+    );
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+    await buildProjectIndex(root, { cache: "disk" });
+    runGit(root, ["mv", "src/legacy.ts", "src/renamed.ts"]);
+
+    const report = await buildReviewReport(root, {
+      gitBase: "HEAD",
+      gitHead: "WORKTREE",
+      cache: "disk",
+    });
+
+    expect(report.changedFiles.some((entry) => entry.file === "src/renamed.ts")).toBe(true);
+    expect(report.changedFiles.some((entry) => entry.file === "src/legacy.ts")).toBe(false);
+    expect(report.graphDelta).toContainEqual({
+      from: "src/consumer.ts",
+      to: { type: "file", path: "src/legacy.ts" },
+      raw: "./legacy",
+    });
+    expect(report.candidateTests).toContainEqual({
+      file: "tests/legacy.test.ts",
+      confidence: "high",
+      reason: "importsChanged",
+    });
   });
 
   it("includes importer edges for deleted files in graphDelta", async () => {

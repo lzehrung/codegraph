@@ -273,7 +273,7 @@ export async function handleSkillCommand(context: SkillCommandContext): Promise<
   }
 
   context.writeStderrLine(
-    "Usage: codegraph skill <install|print-path|doctor> [--agent <name> | --target <dir>] [--force]",
+    "Usage: codegraph skill <install|print-path|doctor> [--agent <name> | --target <dir>] [--force] [--json | --pretty]",
   );
   context.exit(2);
 }

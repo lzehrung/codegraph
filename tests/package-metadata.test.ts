@@ -531,7 +531,7 @@ describe("package metadata", () => {
     expect(vitestConfig).toContain("lines: 88");
     expect(vitestConfig).toContain("statements: 86");
     expect(vitestConfig).toContain("functions: 92");
-    expect(vitestConfig).toContain("branches: 74");
+    expect(vitestConfig).toContain("branches: 76");
     expect(coverageScript).toContain("cargo llvm-cov");
     expect(coverageScript).toContain("coverage/native");
     expect(coverageScript).toContain("tests/bench-harness.test.ts");

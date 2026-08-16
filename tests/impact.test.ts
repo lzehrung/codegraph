@@ -2,16 +2,20 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import { SymbolKind } from "../src/index.js";
 import { parseUnifiedDiff } from "../src/impact/parse.js";
 import { analyzeImpactFromDiff, listCandidateTestFiles } from "../src/impact/index.js";
+import { analyzeImpact } from "../src/impact/analyzer.js";
+import { createImpactDiagnostics } from "../src/impact/collect.js";
 import { buildImpactReport } from "../src/impact/report.js";
 import { summarizeAnalysis } from "../src/analysisSummary.js";
-import { CompactImpactReport, type ImpactItem } from "../src/impact/types.js";
-import type { BuildReport, ProjectIndex } from "../src/indexer/types.js";
+import { CompactImpactReport, type ChangedSymbol, type FileChange, type ImpactItem } from "../src/impact/types.js";
+import type { BuildReport, ProjectIndex, SymbolHandle } from "../src/indexer/types.js";
 import type { Range } from "../src/types.js";
 import { createTestIndex } from "./test-utils.js";
 import { buildProjectIndexFromFiles } from "../src/index.js";
+import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 
 describe("Impact Analysis", () => {
   describe("Diff Parsing", () => {
@@ -1039,6 +1043,73 @@ index 1234567..abcdef0 100644
   });
 
   describe("Compact Report Format", () => {
+    it("types compact: true as CompactImpactReport without a cast", async () => {
+      const index = await createTestIndex("typescript");
+      const report = await analyzeImpactFromDiff(path.resolve(process.cwd(), "tests", "samples", "typescript"), index, {
+        provider: "raw",
+        diffText: `diff --git a/utils.ts b/utils.ts
+index 1234567..abcdef0 100644
+--- a/utils.ts
++++ b/utils.ts
+@@ -1,3 +1,4 @@
+ export function helper() {
+   return 42;
++  console.log("added");
+ }
+`,
+        compact: true,
+      });
+      const compact: CompactImpactReport = report;
+      expect(compact.format).toBe("compact");
+      expect(Array.isArray(compact.files)).toBe(true);
+    });
+
+    it("preserves changed-symbol and impacted-reference details", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
+      const index = await createTestIndex("typescript");
+      const file = path.join(samplePath, "utils.ts").replace(/\\/g, "/");
+      const range: Range = {
+        start: { line: 1, column: 1, index: 0 },
+        end: { line: 1, column: 10, index: 9 },
+      };
+      const changedSymbol: ChangedSymbol = {
+        id: `${file}::helper::1::1` as SymbolHandle,
+        file,
+        name: "helper",
+        kind: SymbolKind.Function,
+        exported: true,
+        range,
+        changedLines: [1],
+        signatureChanged: true,
+      };
+      const impacted: ImpactItem = {
+        file,
+        symbols: ["helper"],
+        reasons: ["directRef"],
+        severity: 1,
+        refs: [{ range }],
+        explain: { resolutionConfidence: "medium" },
+      };
+      const report = await buildImpactReport(
+        samplePath,
+        index,
+        [{ path: file, kind: "modified", hunks: [] }],
+        [changedSymbol],
+        [impacted],
+        [],
+        { compact: true },
+      );
+
+      if (!("files" in report)) {
+        throw new Error("Expected result to be a compact report");
+      }
+
+      expect(report.changedSymbols[0]?.changedLines).toEqual([1]);
+      expect(report.changedSymbols[0]?.signatureChanged).toBe(true);
+      expect(report.impacted[0]?.refs).toEqual([{ range }]);
+      expect(report.impacted[0]?.explain?.resolutionConfidence).toBe("medium");
+    });
+
     it("should generate compact report when compact=true", async () => {
       const index = await createTestIndex("typescript");
 
@@ -1312,6 +1383,171 @@ index 1234567..abcdef0 100644
       });
 
       expect(report.impacted.map((item) => item.file)).not.toContain("main.ts");
+    });
+  });
+
+  describe("Direct Reference Accuracy (C6 and C7)", () => {
+    it("C6: counts only eligible references in refsDroppedByMaxRefs without double-counting filtered tests or ignored files", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-impact-c6-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        await fsp.mkdir(path.join(root, "tests"), { recursive: true });
+        await fsp.mkdir(path.join(root, "src", "ignored"), { recursive: true });
+
+        const libFile = normalizePath(path.join(root, "src", "lib.ts"));
+        const test1File = normalizePath(path.join(root, "tests", "unit1.test.ts"));
+        const app1File = normalizePath(path.join(root, "src", "app1.ts"));
+        const test2File = normalizePath(path.join(root, "tests", "unit2.test.ts"));
+        const ignoredFile = normalizePath(path.join(root, "src", "ignored", "app3.ts"));
+        const app2File = normalizePath(path.join(root, "src", "app2.ts"));
+
+        await fsp.writeFile(libFile, "export function execute(): number { return 42; }\n", "utf8");
+        await fsp.writeFile(test1File, 'import { execute } from "../src/lib.js";\nexecute();\n', "utf8");
+        await fsp.writeFile(app1File, 'import { execute } from "./lib.js";\nexecute();\n', "utf8");
+        await fsp.writeFile(test2File, 'import { execute } from "../src/lib.js";\nexecute();\n', "utf8");
+        await fsp.writeFile(ignoredFile, 'import { execute } from "../lib.js";\nexecute();\n', "utf8");
+        await fsp.writeFile(app2File, 'import { execute } from "./lib.js";\nexecute();\n', "utf8");
+
+        const files = [libFile, test1File, app1File, test2File, ignoredFile, app2File];
+        const index = await buildProjectIndexFromFiles(root, files, { cache: "off" });
+
+        const libModule = index.byFile.get(fileIdentityKey(libFile));
+        const def = libModule?.locals.find((l) => l.localName === "execute");
+        expect(def).toBeDefined();
+
+        const changedSymbol: ChangedSymbol = {
+          id: `${libFile}::execute::1::1` as SymbolHandle,
+          file: libFile,
+          name: "execute",
+          kind: SymbolKind.Function,
+          exported: true,
+          range: def!.range,
+        };
+
+        const fileChange: FileChange = {
+          path: libFile,
+          kind: "modified",
+          hunks: [
+            {
+              oldStart: 1,
+              newStart: 1,
+              lines: [
+                "-export function execute(): number { return 42; }",
+                "+export function execute(): number { return 43; }",
+              ],
+            },
+          ],
+        };
+
+        const diagnostics = createImpactDiagnostics(1, 0);
+        const impacted = await analyzeImpact(index, [changedSymbol], [fileChange], {
+          projectRoot: root,
+          maxRefs: 1,
+          includeTests: false,
+          ignoreGlobs: ["**/ignored/**"],
+          diagnostics,
+        });
+
+        // 6 references scanned total:
+        // - 1 in lib.ts (kept, eligible) -> impacted
+        // - 2 in unit1.test.ts & unit2.test.ts -> filteredTests
+        // - 1 in ignored/app3.ts -> filteredIgnored
+        // - 2 in app1.ts & app2.ts -> droppedByMaxRefs (maxRefs: 1)
+        expect(diagnostics.refsScanned).toBe(6);
+        expect(diagnostics.refsFilteredTests).toBe(2);
+        expect(diagnostics.refsFilteredIgnored).toBe(1);
+        expect(diagnostics.refsDroppedByMaxRefs).toBe(2);
+        expect(impacted.length).toBe(1);
+        expect(
+          diagnostics.refsFilteredTests +
+            diagnostics.refsFilteredIgnored +
+            diagnostics.refsDroppedByMaxRefs +
+            impacted.length,
+        ).toBe(diagnostics.refsScanned);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("C7: merges bestReason into explain.reason independently of which evidence had higher severity score", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-impact-c7-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        const otherFile = normalizePath(path.join(root, "src", "other.ts"));
+        const serviceFile = normalizePath(path.join(root, "src", "service.ts"));
+
+        await fsp.writeFile(otherFile, "export function otherHelper(): number { return 1; }\n", "utf8");
+
+        await fsp.writeFile(
+          serviceFile,
+          [
+            'import * as other from "./other.js";',
+            "function directHelper(): number { return 2; }",
+            "export function run(): number {",
+            "  other.otherHelper();",
+            "  return directHelper();",
+            "}",
+          ].join("\n"),
+          "utf8",
+        );
+
+        const index = await buildProjectIndexFromFiles(root, [otherFile, serviceFile], { cache: "off" });
+        const otherModule = index.byFile.get(fileIdentityKey(otherFile));
+        const serviceModule = index.byFile.get(fileIdentityKey(serviceFile));
+
+        const otherDef = otherModule?.locals.find((l) => l.localName === "otherHelper");
+        const directDef = serviceModule?.locals.find((l) => l.localName === "directHelper");
+        expect(otherDef).toBeDefined();
+        expect(directDef).toBeDefined();
+
+        const changedSymbols: ChangedSymbol[] = [
+          {
+            id: `${otherFile}::otherHelper::1::1` as SymbolHandle,
+            file: otherFile,
+            name: "otherHelper",
+            kind: SymbolKind.Function,
+            exported: true,
+            range: otherDef!.range,
+          },
+          {
+            id: `${serviceFile}::directHelper::2::1` as SymbolHandle,
+            file: serviceFile,
+            name: "directHelper",
+            kind: SymbolKind.Function,
+            exported: false,
+            typeOnly: true,
+            range: directDef!.range,
+          },
+        ];
+
+        const fileChanges: FileChange[] = [
+          {
+            path: otherFile,
+            kind: "modified",
+            hunks: [
+              { oldStart: 1, newStart: 1, lines: ["-export function otherHelper()", "+export function otherHelper()"] },
+            ],
+          },
+          {
+            path: serviceFile,
+            kind: "modified",
+            hunks: [{ oldStart: 2, newStart: 2, lines: ["-function directHelper()", "+function directHelper()"] }],
+          },
+        ];
+
+        const impacted = await analyzeImpact(index, changedSymbols, fileChanges, {
+          projectRoot: root,
+        });
+
+        const serviceImpact = impacted.find((item) => item.file === serviceFile);
+        expect(serviceImpact).toBeDefined();
+        expect(serviceImpact?.reasons).toContain("directRef");
+        expect(serviceImpact?.reasons).toContain("namespaceMember");
+        // explain.reason must be highest priority reason present in reasons ("directRef" > "namespaceMember")
+        expect(serviceImpact?.explain?.reason).toBe("directRef");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
     });
   });
 });

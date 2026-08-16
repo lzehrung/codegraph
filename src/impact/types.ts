@@ -95,7 +95,12 @@ export type ImpactReason =
   | "fileLevelChange"; // fallback for changed files without symbol-level mapping
 
 export type ImpactSuggestionKind =
-  "missingImport" | "missingExport" | "missingDeclaration" | "configImpact" | "breakingChange" | "untestedChange";
+  | "missingImport"
+  | "missingExport"
+  | "missingDeclaration"
+  | "configImpact"
+  | "breakingChange"
+  | "untestedChange";
 
 export type ImpactSuggestionConfidence = "high" | "medium" | "low";
 
@@ -378,11 +383,10 @@ export type CompactImpactReport = {
     name: string;
     kind: ChangedSymbol["kind"];
     exported: boolean;
-    range: {
-      start: { line: number; column: number };
-      end: { line: number; column: number };
-    };
+    range: Range;
     typeOnly?: boolean;
+    changedLines?: readonly number[];
+    signatureChanged?: boolean;
     callCompatibility?: CallCompatibilityHint[];
   }>;
   impacted: Array<{
@@ -393,16 +397,8 @@ export type CompactImpactReport = {
     confidence?: number;
     depth?: number;
     typeOnly?: boolean;
-    explain?: {
-      exported?: boolean;
-      fanIn?: number;
-      sameFile?: boolean;
-      typeOnly?: boolean;
-      reason?: ImpactReason;
-      depth?: number;
-      refsCount?: number;
-      hints?: string[];
-    };
+    refs?: ImpactItem["refs"];
+    explain?: ImpactItem["explain"];
   }>;
   suggestions?: Array<{
     file: number;

@@ -66,13 +66,28 @@ The server exposes the same bounded primitives as the CLI and library session la
 - `get_file`: bounded project file read with `offset`/`limit` line pagination, exact `number<TAB>line` content, and optional direct graph context.
 - `get_symbol`: resolve a stable search or explain handle.
 - `goto`: definition lookup by portable handle, qualified `file::symbol` path, or file position.
-- `refs`: references by portable handle, qualified `file::symbol` path, or file position. The response pairs `references` with `limit`, `totalSeen`, `truncated`, and `omitted`; `truncated` is exact because the lookup probes one reference past the limit. When truncated, `totalSeen` and `omitted` are lower bounds from the bounded probe, not full corpus-wide counts.
-- `file_deps`, `path`: dependency navigation; pass `direction: "deps"` or `"rdeps"` to `file_deps`. `file_deps.file` accepts a portable symbol handle or qualified symbol path and traverses its declaring file. `dependencies`/`reverseDependencies` carry the same `limit`/`totalSeen`/`truncated`/`omitted` metadata as `refs`, so a capped prefix is always distinguishable from a complete result; when truncated, `totalSeen` and `omitted` are lower bounds from the bounded probe, not full graph-wide counts.
+- `refs`: references by portable handle, qualified `file::symbol` path, or file position. Collection `limit` defaults to 25 and caps at 500 (`DEFAULT_MCP_COLLECTION_LIMIT` / `MAX_MCP_COLLECTION_LIMIT` in `src/mcp/tools.ts`). The response pairs `references` with `limit`, `totalSeen`, `truncated`, and `omitted`; `truncated` is exact because the lookup probes one reference past the limit. When truncated, `totalSeen` and `omitted` are lower bounds from the bounded probe, not full corpus-wide counts.
+- `file_deps`, `path`: dependency navigation; pass `direction: "deps"` or `"rdeps"` to `file_deps`. `file_deps` uses the same collection `limit` default 25 / max 500 as `refs`. `file_deps.file` accepts a portable symbol handle or qualified symbol path and traverses its declaring file. `dependencies`/`reverseDependencies` carry the same `limit`/`totalSeen`/`truncated`/`omitted` metadata as `refs`, so a capped prefix is always distinguishable from a complete result; when truncated, `totalSeen` and `omitted` are lower bounds from the bounded probe, not full graph-wide counts.
 - `impact`: compact git-range impact analysis (`format: "compact"`, `impacted`, diagnostics). Bounded by default.
 - `review`: git-range review report (`riskSummary`, `reviewTasks`, candidate tests). MCP is a bounded transport: `projectFiles`, `changedFiles` (including per-file `symbols`), `graphDelta`, and `candidateTests` are capped at the response's `limits` with exact per-collection `omittedCounts`, and `summary` totals stay accurate for the full report. Library callers that need the complete unbounded report call `buildReviewReport` directly instead of going through MCP.
-- `query_sqlite`: bounded read-only SQLite artifact query with freshness metadata.
+- `query_sqlite`: bounded read-only SQLite artifact query with freshness metadata. Row `limit` defaults to 100 and caps at 500 (`src/sqlite/rowBounds.ts`).
 - `refresh_index`: invalidate the in-memory session and optionally rebuild the base or symbol snapshot.
 - `artifact_build`: artifact creation, available only with write access enabled.
+
+## Per-tool schema summary
+
+Compact contracts for high-traffic tools (`src/mcp/tools.ts`). Write gating: only `artifact_build` requires write access (`--allow-build`); all others are read-only.
+
+| Tool             | Required | Key enums / fields                                                                | Defaults                                                      | Maxima                                  | Write gate            |
+| ---------------- | -------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------- | --------------------------------------- | --------------------- |
+| `search`         | `query`  | `mode`: hybrid\|symbol\|path\|text\|graph\|sql; optional `from`, `depth`, `limit` | `depth` 1, `limit` 20                                         | `limit` 100                             | no                    |
+| `explore`        | `query`  | optional `limit`, `maxPackets`, `maxPaths`, `includeSource`                       | `limit` 5, `maxPackets` 3, `maxPaths` 3, `includeSource` true | `limit` 50, packets/paths 10            | no                    |
+| `packet_get`     | `target` | optional `maxSymbols`, `maxSnippets`, `maxDuplicates`                             | (unset uses server defaults)                                  | symbols 200, snippets 50, duplicates 20 | no                    |
+| `query_sqlite`   | `query`  | optional `params[]`, `limit`                                                      | `limit` 100                                                   | `limit` 500                             | no                    |
+| `refresh_index`  | (none)   | optional `warmup`: off\|base\|symbols                                             | (omit = invalidate only)                                      | -                                       | no                    |
+| `artifact_build` | (none)   | optional `outDir`, `sqlite`, `graphJson`, `report`, `questions`, `force`          | -                                                             | -                                       | yes (`--allow-build`) |
+
+`refs` / `file_deps` collection limits: default 25, maximum 500. Legacy alias tool names are accepted by `tools/call` but omitted from `tools/list`.
 
 ## Session lifecycle
 
@@ -108,14 +123,14 @@ Positions use 1-based lines and 0-based UTF-16 columns, matching the rest of cod
 
 Position-based `goto` and `refs` requests (`file`, `line`, `column`) remain the primary navigation form. Alternatively, `goto.handle` and `refs.handle` accept an exact qualified identity, `<project-relative-file>::<local-symbol>`, without coordinates; each tool rejects mixed modes. `file_deps.file` accepts that identity or a portable `symbol:` handle, resolves its declaration, and returns file-graph dependencies; use `calls` for symbol-level callers and callees. Duplicate local names return an ambiguity error rather than selecting one.
 
-MCP tool name ↔ CLI command mapping for the common handle-driven follow-ups:
+MCP tool name <-> CLI command mapping for the common handle-driven follow-ups:
 
-- `workspace_symbols` ↔ `codegraph symbols`
-- `search` ↔ `codegraph search`
-- `packet_get` ↔ `codegraph packet get`
-- `get_symbol` ↔ `codegraph explain`
-- `calls` ↔ `codegraph callers` / `codegraph callees`
-- `type_hierarchy` ↔ `codegraph supertypes` / `codegraph subtypes`
+- `workspace_symbols` <-> `codegraph symbols`
+- `search` <-> `codegraph search`
+- `packet_get` <-> `codegraph packet get`
+- `get_symbol` <-> `codegraph explain`
+- `calls` <-> `codegraph callers` / `codegraph callees`
+- `type_hierarchy` <-> `codegraph supertypes` / `codegraph subtypes`
 
 ### Rename preview
 
