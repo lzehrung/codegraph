@@ -368,7 +368,7 @@ describe("agent file view", () => {
       const stat = await originalLstat(candidate, options as { bigint: true });
       if (path.resolve(String(candidate)) !== path.resolve(victimPath)) return stat;
       return Object.assign(Object.create(stat), {
-        birthtimeMs: stat.birthtimeMs + 1n,
+        birthtimeNs: stat.birthtimeNs + 1n,
         dev: 0n,
       });
     });
@@ -377,6 +377,27 @@ describe("agent file view", () => {
       await expect(getCodegraphFileView({ root, file: "victim.txt", limit: 10, maxBytes: 100 })).rejects.toThrow(
         /File changed between verification and open:/,
       );
+    } finally {
+      lstat.mockRestore();
+    }
+  });
+
+  it("accepts a matched fallback identity when lstat does not expose a device", async () => {
+    const root = await makeTempDir("cg-file-view-lstat-device-fallback-match-");
+    const victimPath = path.join(root, "victim.txt");
+    await fs.writeFile(victimPath, "inside-safe-content\n", "utf8");
+
+    const originalLstat = fs.lstat.bind(fs);
+    const lstat = vi.spyOn(fs, "lstat").mockImplementation(async (candidate, options) => {
+      const stat = await originalLstat(candidate, options as { bigint: true });
+      if (path.resolve(String(candidate)) !== path.resolve(victimPath)) return stat;
+      // Birth time is unchanged; only the device id is unavailable, as on some lstat paths.
+      return Object.assign(Object.create(stat), { dev: 0n });
+    });
+
+    try {
+      const view = await getCodegraphFileView({ root, file: "victim.txt", limit: 10, maxBytes: 100 });
+      expect(view.content).toBe("1\tinside-safe-content\n2\t");
     } finally {
       lstat.mockRestore();
     }
@@ -476,7 +497,9 @@ describe("agent file view", () => {
 
     const readFileSpy = vi.spyOn(fs, "readFile");
     const probe = await fs.open(targetFile, "r");
-    const handleReadSpy = vi.spyOn(Object.getPrototypeOf(probe), "read");
+    const handleProto = Object.getPrototypeOf(probe);
+    const handleReadSpy = vi.spyOn(handleProto, "read");
+    const handleReadFileSpy = vi.spyOn(handleProto, "readFile");
     await probe.close();
 
     try {
@@ -493,9 +516,11 @@ describe("agent file view", () => {
       // Descriptor open+fstat is required for TOCTOU-safe size metadata; content must stay unread.
       expect(readFileSpy).not.toHaveBeenCalled();
       expect(handleReadSpy).not.toHaveBeenCalled();
+      expect(handleReadFileSpy).not.toHaveBeenCalled();
     } finally {
       readFileSpy.mockRestore();
       handleReadSpy.mockRestore();
+      handleReadFileSpy.mockRestore();
     }
   });
 

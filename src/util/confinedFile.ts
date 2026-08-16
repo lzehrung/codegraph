@@ -163,8 +163,12 @@ async function openVerifiedRegularFile(
 
 function sameFileIdentity(preStat: BigIntStats, postStat: BigIntStats): boolean {
   if (preStat.ino !== postStat.ino) return false;
-  if (preStat.dev !== 0n && postStat.dev !== 0n) return preStat.dev === postStat.dev;
-  return preStat.birthtimeMs === postStat.birthtimeMs;
+  // Birth time (nanosecond precision) must always match: an unlink+recreate on the same
+  // filesystem can reuse the same inode, and no descriptor is held open across the pre-open
+  // checks to pin identity, so ino/dev equality alone cannot prove it is the same file.
+  if (preStat.birthtimeNs !== postStat.birthtimeNs) return false;
+  if (preStat.dev === 0n || postStat.dev === 0n) return true;
+  return preStat.dev === postStat.dev;
 }
 
 function assertRegularFileStat(stat: BigIntStats, filePath: string): void {
