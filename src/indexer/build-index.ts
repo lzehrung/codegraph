@@ -782,7 +782,7 @@ async function buildIndexFromFileListShared(
             ...(sqlFactCache ? { sqlFactCache } : {}),
           });
           if (bloomFilterCache) {
-            const persistedFilter = persistedBloomFilters?.get(file);
+            const persistedFilter = persistedBloomFilters?.get(file, sigInfo);
             if (persistedFilter) {
               bloomFilterCache.set(file, persistedFilter);
             } else {
@@ -1512,7 +1512,9 @@ export async function buildProjectIndexIncremental(
         completeCheckProgress(allFiles.size);
         return unchangedSnapshot;
       }
-      const snapshotModules = cacheEnabled ? await tryLoadProjectSnapshotModules(projectRoot, opts) : null;
+      const snapshotModules = cacheEnabled
+        ? await tryLoadProjectSnapshotModules(projectRoot, opts, fileSignatures)
+        : null;
       const persistedBloomFilters = bloomFilterCache ? await tryLoadPersistedBloomFilters(projectRoot, opts) : null;
       for (const file of allFiles) {
         if (changedFiles.has(file)) continue;
@@ -1530,7 +1532,7 @@ export async function buildProjectIndexIncremental(
           modules.set(fileIdentityKey(file), cached);
           collectJsonDependencies(cached.imports, jsonDependencies);
           if (bloomFilterCache) {
-            const persistedFilter = persistedBloomFilters?.get(file);
+            const persistedFilter = persistedBloomFilters?.get(file, sigInfo);
             if (persistedFilter) {
               bloomFilterCache.set(file, persistedFilter);
             } else {

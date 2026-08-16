@@ -31,12 +31,18 @@ import {
   type SymbolVisibility,
 } from "../../graphs/symbol-graph.js";
 import { getImplementationFingerprint, normalizeGraphOptions } from "./options.js";
-import { cacheAbsolutePath, cacheRelativePath, cacheRoot, transformPersistedExportFromModule } from "./module-cache.js";
+import {
+  cacheAbsolutePath,
+  cacheRelativePath,
+  cacheRoot,
+  transformPersistedExportFromModule,
+  type FileSignature,
+} from "./module-cache.js";
 import type { ManifestFileEntry } from "./manifest.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
 const PROJECT_SNAPSHOT_VERSION = 8;
-export const BLOOM_FILTER_SNAPSHOT_VERSION = 1;
+export const BLOOM_FILTER_SNAPSHOT_VERSION = 2;
 export const BLOOM_FILTER_SNAPSHOT_FILENAME = "bloom-filters.json";
 
 export type BloomFilterSnapshotPayload = {
@@ -44,6 +50,7 @@ export type BloomFilterSnapshotPayload = {
   projectRoot: string;
   implementationFingerprint: string;
   projectSnapshotIdentity: string;
+  fileSignatures: Record<string, SnapshotFileSignature>;
   bloomFilters: Record<string, SerializedBloomFilter>;
 };
 const BLOOM_FILTER_MIN_SIZE = 1_000;
@@ -94,6 +101,15 @@ type SerializedBloomFilter = {
   bitsBase64: string;
 };
 
+type SnapshotFileSignature = {
+  sig: string;
+  gitSig?: string;
+};
+
+export type PersistedBloomFilters = {
+  get: (file: string, signature: Pick<FileSignature, "sig" | "gitSig">) => BloomFilter | undefined;
+};
+
 type SnapshotAnalysisReport = {
   backend?: BackendReport;
   graph?: GraphReport;
@@ -119,6 +135,7 @@ type ProjectIndexSnapshotPayload = {
   implementationFingerprint: string;
   projectFiles?: ProjectFileInfo[];
   bloomFilters?: Record<string, SerializedBloomFilter>;
+  fileSignatures: Record<string, SnapshotFileSignature>;
   analysis?: AnalysisSummary;
   analysisReport?: SnapshotAnalysisReport;
 };
@@ -217,6 +234,11 @@ function transformSnapshotPaths(
     }
     copy.bloomFilters = bloomFilters;
   }
+  const fileSignatures: Record<string, SnapshotFileSignature> = {};
+  for (const [file, signature] of Object.entries(copy.fileSignatures)) {
+    fileSignatures[transformPath(root, file, toRelative)] = signature;
+  }
+  copy.fileSignatures = fileSignatures;
   return copy;
 }
 function migrateProjectSnapshotPayload(value: unknown, currentRoot: string): unknown {
@@ -463,10 +485,9 @@ export async function tryLoadProjectIndexSnapshot(
 }
 
 /**
- * Load only the bloom-filter section of the last-written project snapshot, without requiring
- * the whole snapshot to match this build's files signature or native runtime fingerprint.
- * Bloom filters are a pure function of a file's text, so a filter persisted for a given file
- * is safe to reuse after its snapshot's root and implementation fingerprints are validated.
+ * Load only the bloom-filter section of the last-written project snapshot. Hydration checks
+ * each requested file against its persisted signature before returning a filter, so a stale
+ * snapshot can still accelerate unchanged files without suppressing newly added references.
  * Only the bloom section is then read, so a corrupt payload is rejected without walking
  * `graph.edges` / `modules`. Returns `null` when disk caching is off, `useBloomFilters` is
  * disabled, or no valid snapshot with bloom data exists.
@@ -474,6 +495,7 @@ export async function tryLoadProjectIndexSnapshot(
 export async function tryLoadProjectSnapshotModules(
   projectRoot: string,
   opts: BuildOptions | undefined,
+  fileSignatures: ReadonlyMap<string, Pick<FileSignature, "sig" | "gitSig">>,
 ): Promise<Map<string, ModuleIndex> | null> {
   if ((opts?.cache ?? "off") !== "disk") return null;
   try {
@@ -496,6 +518,9 @@ export async function tryLoadProjectSnapshotModules(
     }
     const modules = new Map<string, ModuleIndex>();
     for (const mod of payload.modules) {
+      const signature = fileSignatures.get(fileIdentityKey(mod.file));
+      const snapshotSignature = payload.fileSignatures[fileIdentityKey(mod.file)];
+      if (!signature || !snapshotSignature || !snapshotSignatureMatches(snapshotSignature, signature)) continue;
       modules.set(fileIdentityKey(mod.file), mod);
     }
     return modules;
@@ -507,14 +532,14 @@ export async function tryLoadProjectSnapshotModules(
 export async function tryLoadPersistedBloomFilters(
   projectRoot: string,
   opts: BuildOptions | undefined,
-): Promise<BloomFilterCache | null> {
+): Promise<PersistedBloomFilters | null> {
   if ((opts?.cache ?? "off") !== "disk" || (opts?.useBloomFilters ?? true) === false) return null;
   try {
     const sidecarPath = bloomFilterSnapshotPath(projectRoot, opts);
     const sidecarParsed = (await readParsedSnapshot(sidecarPath)).payload;
     const sidecarBloom = persistedBloomFiltersFromSidecar(sidecarParsed, projectRoot);
     if (sidecarBloom) {
-      return deserializeBloomFilterCache(sidecarBloom, projectRoot);
+      return createPersistedBloomFilters(sidecarBloom.bloomFilters, sidecarBloom.fileSignatures, projectRoot);
     }
   } catch {
     // Fall back to legacy project snapshot payload if sidecar is unavailable or corrupt
@@ -523,7 +548,7 @@ export async function tryLoadPersistedBloomFilters(
     const payload = (await readParsedSnapshot(projectSnapshotPath(projectRoot, opts))).payload;
     const bloomFilters = persistedBloomFiltersFromSnapshot(payload, projectRoot);
     if (!bloomFilters) return null;
-    return deserializeBloomFilterCache(bloomFilters, projectRoot);
+    return createPersistedBloomFilters(bloomFilters.bloomFilters, bloomFilters.fileSignatures, projectRoot);
   } catch {
     return null;
   }
@@ -532,38 +557,79 @@ export async function tryLoadPersistedBloomFilters(
 function persistedBloomFiltersFromSidecar(
   value: unknown,
   projectRoot: string,
-): Record<string, SerializedBloomFilter> | null {
+): Pick<BloomFilterSnapshotPayload, "bloomFilters" | "fileSignatures"> | null {
   if (!value || typeof value !== "object") return null;
   const payload = value as Partial<BloomFilterSnapshotPayload>;
   if (
     payload.version !== BLOOM_FILTER_SNAPSHOT_VERSION ||
     typeof payload.projectRoot !== "string" ||
     !projectRootMatches(projectRoot, payload.projectRoot) ||
-    payload.implementationFingerprint !== getImplementationFingerprint()
+    payload.implementationFingerprint !== getImplementationFingerprint() ||
+    typeof payload.projectSnapshotIdentity !== "string" ||
+    !/^[a-f0-9]{64}$/.test(payload.projectSnapshotIdentity)
   ) {
     return null;
   }
-  if (!isSerializedBloomFilterRecord(payload.bloomFilters)) return null;
-  return payload.bloomFilters;
+  const bloomFilters = payload.bloomFilters;
+  const fileSignatures = payload.fileSignatures;
+  if (!isSerializedBloomFilterRecord(bloomFilters) || !isSnapshotFileSignatureRecord(fileSignatures)) {
+    return null;
+  }
+  return { bloomFilters, fileSignatures };
 }
 
 /** Light validation for bloom hydration: snapshot version, root identity, and bloom section only. */
 function persistedBloomFiltersFromSnapshot(
   value: unknown,
   projectRoot: string,
-): Record<string, SerializedBloomFilter> | null {
+): Pick<ProjectIndexSnapshotPayload, "bloomFilters" | "fileSignatures"> | null {
   const migrated = migrateProjectSnapshotPayload(value, projectRoot);
   if (!migrated || typeof migrated !== "object") return null;
   const payload = migrated as Partial<ProjectIndexSnapshotPayload>;
   if (
     payload.version !== PROJECT_SNAPSHOT_VERSION ||
     typeof payload.projectRoot !== "string" ||
+    !projectRootMatches(projectRoot, payload.projectRoot) ||
     payload.implementationFingerprint !== getImplementationFingerprint()
   ) {
     return null;
   }
-  if (!isSerializedBloomFilterRecord(payload.bloomFilters)) return null;
-  return payload.bloomFilters;
+  const bloomFilters = payload.bloomFilters;
+  const fileSignatures = payload.fileSignatures;
+  if (!isSerializedBloomFilterRecord(bloomFilters) || !isSnapshotFileSignatureRecord(fileSignatures)) {
+    return null;
+  }
+  return { bloomFilters, fileSignatures };
+}
+
+function createPersistedBloomFilters(
+  bloomFilters: Record<string, SerializedBloomFilter>,
+  fileSignatures: Record<string, SnapshotFileSignature>,
+  projectRoot: string,
+): PersistedBloomFilters {
+  const filters = deserializeBloomFilterCache(bloomFilters, projectRoot);
+  const signatures = new Map<string, SnapshotFileSignature>(
+    Object.entries(fileSignatures).map(([file, signature]) => [
+      fileIdentityKey(cacheAbsolutePath(projectRoot, file)),
+      signature,
+    ]),
+  );
+  return {
+    get: (file, signature) => {
+      const persistedSignature = signatures.get(fileIdentityKey(file));
+      if (!persistedSignature || !snapshotSignatureMatches(persistedSignature, signature)) return undefined;
+      return filters.get(file);
+    },
+  };
+}
+
+function snapshotSignatureMatches(
+  snapshotSignature: SnapshotFileSignature,
+  currentSignature: Pick<FileSignature, "sig" | "gitSig">,
+): boolean {
+  const matchingGitSignature =
+    !!snapshotSignature.gitSig && !!currentSignature.gitSig && snapshotSignature.gitSig === currentSignature.gitSig;
+  return matchingGitSignature || snapshotSignature.sig === currentSignature.sig;
 }
 
 export async function writeProjectIndexSnapshot(
@@ -573,6 +639,7 @@ export async function writeProjectIndexSnapshot(
   filesSignature: string,
 ): Promise<void> {
   const projectSnapshotIdentity = createProjectSnapshotIdentity(filesSignature, opts);
+  const fileSignatures = serializeSnapshotFileSignatures(index.manifestEntries, projectRoot);
   const serializedBloomFilters = index.bloomFilters
     ? serializeBloomFilterCache(
         index.bloomFilters,
@@ -594,6 +661,7 @@ export async function writeProjectIndexSnapshot(
         edges: index.graph.edges,
       },
       modules: [...index.byFile.values()],
+      fileSignatures,
       ...(index.languageExtensions ? { languageExtensions: index.languageExtensions } : {}),
       ...(normalizedSnapshotNativeMode(index.nativeMode)
         ? { nativeMode: normalizedSnapshotNativeMode(index.nativeMode) }
@@ -622,6 +690,7 @@ export async function writeProjectIndexSnapshot(
           projectRoot: serializedProjectRoot(projectRoot),
           implementationFingerprint: getImplementationFingerprint(),
           projectSnapshotIdentity,
+          fileSignatures,
           bloomFilters: serializedBloomFilters,
         };
         const bloomPath = bloomFilterSnapshotPath(projectRoot, opts);
@@ -1057,6 +1126,7 @@ function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSna
     payload.graph.edges.every(isGraphEdge) &&
     Array.isArray(payload.modules) &&
     payload.modules.every(isModuleIndex) &&
+    isSnapshotFileSignatureRecord(payload.fileSignatures) &&
     (payload.nativeMode === undefined || isSnapshotNativeMode(payload.nativeMode)) &&
     (payload.bloomFilters === undefined || isSerializedBloomFilterRecord(payload.bloomFilters)) &&
     (payload.analysis === undefined || isAnalysisSummary(payload.analysis)) &&
@@ -1177,6 +1247,32 @@ function serializeBloomFilterCache(
   }
   return Object.keys(serialized).length ? serialized : undefined;
 }
+
+function serializeSnapshotFileSignatures(
+  entries: ProjectIndex["manifestEntries"],
+  projectRoot: string,
+): Record<string, SnapshotFileSignature> {
+  const serialized: Record<string, SnapshotFileSignature> = {};
+  for (const [file, entry] of entries ?? []) {
+    serialized[cacheRelativePath(projectRoot, file)] = {
+      sig: entry.sig,
+      ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
+    };
+  }
+  return serialized;
+}
+
+function isSnapshotFileSignatureRecord(value: unknown): value is Record<string, SnapshotFileSignature> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.values(value).every(isSnapshotFileSignature);
+}
+
+function isSnapshotFileSignature(value: unknown): value is SnapshotFileSignature {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const signature = value as Partial<SnapshotFileSignature>;
+  return typeof signature.sig === "string" && (signature.gitSig === undefined || typeof signature.gitSig === "string");
+}
+
 function deserializeBloomFilterCache(
   serialized: Record<string, SerializedBloomFilter>,
   projectRoot: string,
