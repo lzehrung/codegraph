@@ -7,7 +7,7 @@ import type { BloomFilterCache } from "../util/bloomFilter.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import { retainedParsedCache } from "./parsed-cache.js";
 import { buildReferenceCandidateIndex } from "./reference-candidates.js";
-import { cacheRoot } from "./build-cache/module-cache.js";
+import { cacheRoot } from "./build-cache/location.js";
 import type { BuildOptions, BuildReport, ModuleIndex, ProjectIndex, ProjectIndexManifestEntry } from "./types.js";
 
 export async function finalizeProjectIndex(args: {

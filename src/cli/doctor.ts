@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { cacheRoot, resolveCacheAnchor } from "../indexer/build-cache/module-cache.js";
+import { cacheRoot, resolveCacheAnchor } from "../indexer/build-cache/location.js";
 import {
   isNativeTreeSitterAvailable,
   getNativeBindingOrigin,

@@ -14,7 +14,6 @@ export {
 } from "./build-cache/manifest.js";
 export {
   buildBloomFilterForFile,
-  cacheRoot,
   cacheSignatureForFile,
   clearMemoryCache,
   closeDiskCacheDatabase,
@@ -26,6 +25,7 @@ export {
   type FileSignature,
   type PendingModuleCacheWrite,
 } from "./build-cache/module-cache.js";
+export { cacheRoot } from "./build-cache/location.js";
 export {
   BLOOM_FILTER_SNAPSHOT_FILENAME,
   BLOOM_FILTER_SNAPSHOT_VERSION,

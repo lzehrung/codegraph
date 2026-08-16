@@ -16,7 +16,8 @@ import {
 import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot } from "../../util/paths.js";
 import { getGitBlobHashes } from "../../util/git.js";
 import { stringifyUnknown } from "../../util/ast.js";
-import { cacheAbsolutePath, cacheRelativePath, cacheRoot, fileSignature } from "./module-cache.js";
+import { cacheAbsolutePath, cacheRelativePath, fileSignature } from "./module-cache.js";
+import { cacheRoot } from "./location.js";
 import type { BuildOptions } from "../types.js";
 import type { ManifestBuildOptions } from "./options.js";
 

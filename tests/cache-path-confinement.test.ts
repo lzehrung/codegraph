@@ -16,9 +16,11 @@ import {
 } from "../src/indexer/build-cache/module-cache.js";
 import { loadManifest } from "../src/indexer/build-cache/manifest.js";
 import {
+  BLOOM_FILTER_SNAPSHOT_FILENAME,
   tryLoadPersistedBloomFilters,
   tryLoadProjectIndexSnapshot,
 } from "../src/indexer/build-cache/project-snapshot.js";
+import { cacheRoot } from "../src/indexer/build-cache/location.js";
 import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 import { isNonNativeParserAvailable } from "../src/parserBackend.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
@@ -356,18 +358,17 @@ describe("persisted cache rehydration is confined to the project root", () => {
     await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
     await buildProjectIndex(root, { cache: "disk", threads: 1, useBloomFilters: true });
 
-    const snapshotPath = snapshotPathFor(root);
-    const raw = await fsp.readFile(snapshotPath);
+    const bloomSnapshotPath = path.join(cacheRoot(root, { cache: "disk" }), BLOOM_FILTER_SNAPSHOT_FILENAME);
+    const raw = await fsp.readFile(bloomSnapshotPath);
     const payload = JSON.parse(brotliDecompressSync(raw).toString("utf8")) as {
       bloomFilters?: Record<string, unknown>;
     };
     const sampleFilter = Object.values(payload.bloomFilters ?? {})[0];
     expect(sampleFilter).toBeDefined();
     payload.bloomFilters = { "../../outside.ts": sampleFilter };
-    await fsp.writeFile(snapshotPath, brotliCompressSync(Buffer.from(JSON.stringify(payload))));
+    await fsp.writeFile(bloomSnapshotPath, brotliCompressSync(Buffer.from(JSON.stringify(payload))));
+    await fsp.rm(snapshotPathFor(root));
 
-    // The bloom-only fast path reads this section directly, bypassing the whole-snapshot
-    // transform, so it must apply the same confinement check on its own before reuse.
     const bloomFilters = await tryLoadPersistedBloomFilters(root, { cache: "disk" });
     expect(bloomFilters).toBeNull();
   });

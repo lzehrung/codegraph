@@ -74,7 +74,7 @@ import {
   type ManifestFileEntry,
   type PendingModuleCacheWrite,
 } from "./build-cache.js";
-import { cacheRoot } from "./build-cache/module-cache.js";
+import { cacheRoot } from "./build-cache/location.js";
 import {
   type BuildOptions,
   type BuildReport,

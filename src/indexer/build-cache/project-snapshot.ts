@@ -34,10 +34,10 @@ import { getImplementationFingerprint, normalizeGraphOptions } from "./options.j
 import {
   cacheAbsolutePath,
   cacheRelativePath,
-  cacheRoot,
   transformPersistedExportFromModule,
   type FileSignature,
 } from "./module-cache.js";
+import { cacheRoot } from "./location.js";
 import type { ManifestFileEntry } from "./manifest.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
