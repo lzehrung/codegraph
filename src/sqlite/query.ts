@@ -11,11 +11,12 @@ import {
 import {
   resolveRawSqlQueryWorkerPath,
   runRawSqlQueryInWorker,
+  SqliteQueryCancelledError,
   SqliteQueryDeadlineExceededError,
 } from "./rawQueryWorkerPool.js";
 
 export { queryGraphSqlite } from "./canned-query.js";
-export { SqliteQueryDeadlineExceededError };
+export { SqliteQueryCancelledError, SqliteQueryDeadlineExceededError };
 
 /** Hard wall-clock budget for a single raw `query_sqlite` execution. */
 export const DEFAULT_SQLITE_QUERY_DEADLINE_MS = 10_000;
@@ -25,6 +26,7 @@ export type QueryGraphSqliteRawOptions = {
   maxBytes?: number | undefined;
   maxCellBytes?: number | undefined;
   deadlineMs?: number | undefined;
+  signal?: AbortSignal | undefined;
 };
 
 /**
@@ -65,18 +67,24 @@ export async function queryGraphSqliteRaw(
       maxBytes,
       maxCellBytes,
       deadlineMs,
+      ...(options?.signal ? { signal: options.signal } : {}),
     });
   }
 
-  return await runRawSqlQueryInWorker({ outputPath, sql, params, maxRows, maxBytes, maxCellBytes }, deadlineMs);
+  return await runRawSqlQueryInWorker(
+    { outputPath, sql, params, maxRows, maxBytes, maxCellBytes },
+    deadlineMs,
+    options?.signal,
+  );
 }
 
 async function queryGraphSqliteRawInProcessBounded(
   outputPath: string,
   sql: string,
   params: Array<string | number | null>,
-  bounds: { maxRows: number; maxBytes: number; maxCellBytes: number; deadlineMs: number },
+  bounds: { maxRows: number; maxBytes: number; maxCellBytes: number; deadlineMs: number; signal?: AbortSignal },
 ): Promise<RawSqlResult> {
+  if (bounds.signal?.aborted) throw new SqliteQueryCancelledError();
   return await withReadOnlySqliteDatabase(outputPath, (db) => {
     try {
       const stmt = db.prepare(sql);
@@ -87,6 +95,7 @@ async function queryGraphSqliteRawInProcessBounded(
         stmt.raw().iterate(params) as Iterable<Array<unknown>>,
         deadlineAt,
         bounds.deadlineMs,
+        bounds.signal,
       );
       // Always stream via iterate so per-cell and cumulative budgets apply before append.
       return collectBoundedRawSqlRows(columns, rows, {
@@ -106,8 +115,14 @@ async function queryGraphSqliteRawInProcessBounded(
 /** Throws once the wall-clock deadline has passed between two already-produced rows. See
  * the fallback caveat on `queryGraphSqliteRaw`: a slow-before-first-row query is not
  * caught here, only slow-*between*-rows iteration is. */
-function* withPerRowDeadline<T>(rows: Iterable<T>, deadlineAt: number, deadlineMs: number): Generator<T> {
+function* withPerRowDeadline<T>(
+  rows: Iterable<T>,
+  deadlineAt: number,
+  deadlineMs: number,
+  signal: AbortSignal | undefined,
+): Generator<T> {
   for (const row of rows) {
+    if (signal?.aborted) throw new SqliteQueryCancelledError();
     if (Date.now() > deadlineAt) {
       throw new SqliteQueryDeadlineExceededError(deadlineMs);
     }

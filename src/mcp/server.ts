@@ -172,6 +172,10 @@ type OriginValidator = (request: IncomingMessage, response: ServerResponse) => b
 
 export type CodegraphMcpFreshResult<T extends object> = T & { freshness: AgentFreshnessResult };
 
+type McpToolExecutionOptions = {
+  signal?: AbortSignal | undefined;
+};
+
 /**
  * Truncation metadata for a capped collection response, per finding #44:
  * lets a machine caller tell a complete result apart from a capped prefix.
@@ -321,11 +325,14 @@ export type CodegraphMcpHandlers = {
     refreshed: true;
     warmup: CodegraphMcpWarmupMode;
   }>;
-  query_sqlite: (request: {
-    query: string;
-    params?: Array<string | number | null> | undefined;
-    limit?: number | undefined;
-  }) => Promise<CodegraphMcpFreshResult<RawSqlResult>>;
+  query_sqlite: (
+    request: {
+      query: string;
+      params?: Array<string | number | null> | undefined;
+      limit?: number | undefined;
+    },
+    options?: McpToolExecutionOptions,
+  ) => Promise<CodegraphMcpFreshResult<RawSqlResult>>;
   artifact_build: (request: {
     outDir?: string | undefined;
     sqlite?: boolean | undefined;
@@ -959,7 +966,7 @@ function createCodegraphMcpHandlersForSession(
         return boundReviewReportForTransport(report);
       }),
 
-    query_sqlite: async (request) => {
+    query_sqlite: async (request, executionOptions) => {
       if (!sqlitePath) {
         throw new Error("No SQLite artifact is available. Run artifact_build first or pass artifactPath.");
       }
@@ -980,6 +987,7 @@ function createCodegraphMcpHandlersForSession(
       }
       const result = await queryGraphSqliteRaw(realSqlitePath, request.query, request.params ?? [], {
         maxRows: normalizeSqliteRowLimit(request.limit),
+        ...(executionOptions?.signal ? { signal: executionOptions.signal } : {}),
       });
       return { ...boundRawSqlResult(result, DEFAULT_SQLITE_BYTE_LIMIT), freshness: artifactFreshness };
     },
@@ -1107,7 +1115,12 @@ export function createCodegraphMcpProtocolServer(
       console.error(`[codegraph] installed-version check failed: ${errorMessage(error)}`);
     }
     try {
-      const result = await callMcpTool(handlers, request.params.name, request.params.arguments ?? {});
+      const result = await callMcpTool(
+        handlers,
+        request.params.name,
+        request.params.arguments ?? {},
+        ctx.mcpReq.signal,
+      );
       await emitFirstToolCallVisibility(
         "info",
         1,
@@ -1557,7 +1570,12 @@ function isMcpNodeRequest(request: IncomingMessage): request is IncomingMessage 
   return request.method !== undefined && request.url !== undefined;
 }
 
-async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: unknown): Promise<unknown> {
+async function callMcpTool(
+  handlers: CodegraphMcpHandlers,
+  name: string,
+  input: unknown,
+  signal?: AbortSignal,
+): Promise<unknown> {
   switch (name) {
     case "search":
       return await handlers.search(parseMcpToolInput(searchSchema, input, "search"));
@@ -1614,7 +1632,9 @@ async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: 
     case "review":
       return await handlers.review(parseMcpToolInput(reviewSchema, input, "review"));
     case "query_sqlite":
-      return await handlers.query_sqlite(parseMcpToolInput(querySqliteSchema, input, "query_sqlite"));
+      return await handlers.query_sqlite(parseMcpToolInput(querySqliteSchema, input, "query_sqlite"), {
+        ...(signal ? { signal } : {}),
+      });
     case "refresh_index":
       return await handlers.refresh_index(parseMcpToolInput(refreshIndexSchema, input, "refresh_index"));
     case "artifact_build":

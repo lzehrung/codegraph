@@ -53,6 +53,7 @@ describe("inspectDistForTests", () => {
       await fsp.mkdir(path.join(root, "dist", "bin"), { recursive: true });
       await setFileMtime(path.join(root, "dist", "bin", "cli.js"), distTime, "export {};\n");
       await setFileMtime(path.join(root, "dist", "bin", "queryIndexWorker.js"), distTime, "export {};\n");
+      await setFileMtime(path.join(root, "dist", "bin", "rawQueryWorker.js"), distTime, "export {};\n");
       await setFileMtime(path.join(root, "src", "index.ts"), srcTime);
 
       expect(inspectDistForTests(root)).toMatchObject({
@@ -77,6 +78,7 @@ describe("inspectDistForTests", () => {
       await fsp.mkdir(path.join(root, "dist", "bin"), { recursive: true });
       await setFileMtime(path.join(root, "dist", "bin", "cli.js"), distTime, "export {};\n");
       await setFileMtime(path.join(root, "dist", "bin", "queryIndexWorker.js"), distTime, "export {};\n");
+      await setFileMtime(path.join(root, "dist", "bin", "rawQueryWorker.js"), distTime, "export {};\n");
 
       expect(inspectDistForTests(root)).toMatchObject({
         needsBuild: false,
@@ -101,6 +103,7 @@ describe("inspectDistForTests", () => {
       await fsp.mkdir(path.join(root, "dist", "bin"), { recursive: true });
       await setFileMtime(path.join(root, "dist", "bin", "cli.js"), distTime, "export {};\n");
       await setFileMtime(path.join(root, "dist", "bin", "queryIndexWorker.js"), distTime, "export {};\n");
+      await setFileMtime(path.join(root, "dist", "bin", "rawQueryWorker.js"), distTime, "export {};\n");
 
       expect(inspectDistForTests(root)).toMatchObject({ needsBuild: false, reason: "fresh" });
 
@@ -130,6 +133,7 @@ describe("inspectDistForTests", () => {
       await fsp.mkdir(path.join(root, "dist", "bin"), { recursive: true });
       await setFileMtime(path.join(root, "dist", "bin", "cli.js"), distTime, "export {};\n");
       await setFileMtime(path.join(root, "dist", "bin", "queryIndexWorker.js"), distTime, "export {};\n");
+      await setFileMtime(path.join(root, "dist", "bin", "rawQueryWorker.js"), distTime, "export {};\n");
 
       expect(inspectDistForTests(root)).toMatchObject({ needsBuild: false, reason: "fresh" });
 
