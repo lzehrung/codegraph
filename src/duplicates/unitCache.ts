@@ -27,7 +27,7 @@ import type {
   DuplicateUnitDiskStatements,
 } from "./types.js";
 import { lruMapGet } from "../util/lruMap.js";
-import { fileIdentityKey, normalizePath } from "../util/paths.js";
+import { assertFilePathWithinRoot, fileIdentityKey, normalizePath } from "../util/paths.js";
 import { cacheAbsolutePath, cacheRelativePath } from "../indexer/build-cache/module-cache.js";
 
 // v4: project-relative file fields and handles.
@@ -455,7 +455,7 @@ function transformDuplicateUnits(
   return units.map((unit) => {
     const absoluteFile = toRelative
       ? cacheRelativePath(root, unit.absoluteFile)
-      : cacheAbsolutePath(root, unit.absoluteFile);
+      : assertFilePathWithinRoot(root, cacheAbsolutePath(root, unit.absoluteFile), "Persisted duplicate unit path");
     return {
       ...unit,
       file: cacheRelativePath(root, unit.file),
