@@ -2759,7 +2759,7 @@ function normalizeSqlitePath(value: unknown): string {
 }
 
 describe("MCP tool registry dispatch", () => {
-  it("routes every advertised tool to a schema-valid handler", async () => {
+  it("routes every registered tool without advertising legacy aliases", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-registry-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function ok(): number { return 1; }\n", "utf8");
     runGit(root, ["init"]);
@@ -2790,7 +2790,9 @@ describe("MCP tool registry dispatch", () => {
       artifact_build: vi.spyOn(handlers, "artifact_build"),
     };
     const advertisedTools = listCodegraphMcpTools();
-    expect(advertisedTools.map((tool) => tool.name)).toEqual(MCP_TOOL_REGISTRY.map((tool) => tool.name));
+    expect(advertisedTools.map((tool) => tool.name)).toEqual(
+      MCP_TOOL_REGISTRY.filter((tool) => tool.advertised !== false).map((tool) => tool.name),
+    );
     expect(advertisedTools.some((tool) => "dispatch" in tool)).toBe(false);
     const handle = "auth.ts::ok";
     const toolInputs: Record<string, Record<string, unknown>> = {
@@ -2823,7 +2825,7 @@ describe("MCP tool registry dispatch", () => {
       rdeps: { file: "auth.ts" },
     };
 
-    for (const tool of advertisedTools) {
+    for (const tool of MCP_TOOL_REGISTRY) {
       const input = toolInputs[tool.name];
       expect(input, "missing valid input for " + tool.name).toBeDefined();
       try {

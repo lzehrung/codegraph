@@ -150,7 +150,7 @@ export type McpToolDispatch =
   | { handler: "refresh_index" }
   | { handler: "artifact_build" };
 
-export type McpToolDefinition = Tool & { dispatch: McpToolDispatch };
+export type McpToolDefinition = Tool & { dispatch: McpToolDispatch; advertised?: boolean };
 
 export const MCP_TOOL_REGISTRY: McpToolDefinition[] = [
   {
@@ -406,6 +406,7 @@ export const MCP_TOOL_REGISTRY: McpToolDefinition[] = [
   {
     name: "callers",
     description: "Legacy alias for calls with direction callers.",
+    advertised: false,
     inputSchema: objectSchema(
       {
         handle: stringProperty,
@@ -425,6 +426,7 @@ export const MCP_TOOL_REGISTRY: McpToolDefinition[] = [
   {
     name: "callees",
     description: "Legacy alias for calls with direction callees.",
+    advertised: false,
     inputSchema: objectSchema(
       {
         handle: stringProperty,
@@ -444,6 +446,7 @@ export const MCP_TOOL_REGISTRY: McpToolDefinition[] = [
   {
     name: "supertypes",
     description: "Legacy alias for type_hierarchy with direction supertypes.",
+    advertised: false,
     inputSchema: objectSchema(
       {
         handle: stringProperty,
@@ -462,6 +465,7 @@ export const MCP_TOOL_REGISTRY: McpToolDefinition[] = [
   {
     name: "subtypes",
     description: "Legacy alias for type_hierarchy with direction subtypes.",
+    advertised: false,
     inputSchema: objectSchema(
       {
         handle: stringProperty,
@@ -480,6 +484,7 @@ export const MCP_TOOL_REGISTRY: McpToolDefinition[] = [
   {
     name: "deps",
     description: "Legacy alias for file_deps with direction deps.",
+    advertised: false,
     inputSchema: objectSchema(
       {
         file: dependencyFileProperty,
@@ -498,6 +503,7 @@ export const MCP_TOOL_REGISTRY: McpToolDefinition[] = [
   {
     name: "rdeps",
     description: "Legacy alias for file_deps with direction rdeps.",
+    advertised: false,
     inputSchema: objectSchema(
       {
         file: dependencyFileProperty,
@@ -516,5 +522,7 @@ export const MCP_TOOL_REGISTRY: McpToolDefinition[] = [
 ];
 
 export function listCodegraphMcpTools(): Tool[] {
-  return MCP_TOOL_REGISTRY.map(({ dispatch: _dispatch, ...tool }) => tool);
+  return MCP_TOOL_REGISTRY.filter((tool) => tool.advertised !== false).map(
+    ({ dispatch: _dispatch, advertised: _advertised, ...tool }) => tool,
+  );
 }
