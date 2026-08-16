@@ -1151,7 +1151,7 @@ describe("codegraph MCP handlers", () => {
       const payload = readObject((await response.json()) as unknown);
       const error = readObject(payload.error);
 
-      expect(response.status).toBe(413);
+      expect([response.status, response.headers.get("connection")]).toEqual([413, "close"]);
       expect(error.message).toBe("MCP request body is too large");
     } finally {
       await httpServer.close();
@@ -1171,45 +1171,51 @@ describe("codegraph MCP handlers", () => {
     try {
       const endpoint = new URL(httpServer.url);
       const partialBody = '{"jsonrpc":"2.0","id":1,"method":"initialize"';
-      const response = await new Promise<{ status: number; payload: JsonRpcObject }>((resolve, reject) => {
-        let responseReceived = false;
-        const request = httpRequest(
-          {
-            hostname: endpoint.hostname,
-            port: endpoint.port,
-            path: endpoint.pathname,
-            method: "POST",
-            headers: {
-              accept: "application/json",
-              "content-type": "application/json",
-              "content-length": String(Buffer.byteLength(partialBody) + 1),
+      const response = await new Promise<{ status: number; payload: JsonRpcObject; connection: string | undefined }>(
+        (resolve, reject) => {
+          let responseReceived = false;
+          const request = httpRequest(
+            {
+              hostname: endpoint.hostname,
+              port: endpoint.port,
+              path: endpoint.pathname,
+              method: "POST",
+              headers: {
+                accept: "application/json",
+                "content-type": "application/json",
+                "content-length": String(Buffer.byteLength(partialBody) + 1),
+              },
             },
-          },
-          (incoming) => {
-            let responseBody = "";
-            incoming.setEncoding("utf8");
-            incoming.on("data", (chunk: string) => {
-              responseBody += chunk;
-            });
-            incoming.on("end", () => {
-              responseReceived = true;
-              try {
-                resolve({ status: incoming.statusCode ?? 0, payload: readJsonRpcObject(JSON.parse(responseBody)) });
-              } catch (error) {
-                reject(error instanceof Error ? error : new Error(String(error)));
-              } finally {
-                request.destroy();
-              }
-            });
-          },
-        );
-        request.on("error", (error) => {
-          if (!responseReceived) reject(error);
-        });
-        request.write(partialBody);
-      });
+            (incoming) => {
+              let responseBody = "";
+              incoming.setEncoding("utf8");
+              incoming.on("data", (chunk: string) => {
+                responseBody += chunk;
+              });
+              incoming.on("end", () => {
+                responseReceived = true;
+                try {
+                  resolve({
+                    status: incoming.statusCode ?? 0,
+                    payload: readJsonRpcObject(JSON.parse(responseBody)),
+                    connection: incoming.headers.connection,
+                  });
+                } catch (error) {
+                  reject(error instanceof Error ? error : new Error(String(error)));
+                } finally {
+                  request.destroy();
+                }
+              });
+            },
+          );
+          request.on("error", (error) => {
+            if (!responseReceived) reject(error);
+          });
+          request.write(partialBody);
+        },
+      );
 
-      expect(response.status).toBe(408);
+      expect([response.status, response.connection]).toEqual([408, "close"]);
       expect(readObject(response.payload.error).message).toBe("MCP request body timed out");
     } finally {
       await httpServer.close();

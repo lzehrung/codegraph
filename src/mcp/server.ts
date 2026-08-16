@@ -1310,6 +1310,12 @@ async function handleMcpHttpRequest(
   createProtocolServer: () => Server,
   bodyTimeoutMs: number,
 ): Promise<void> {
+  const writeClosingJsonRpcError = (statusCode: number, message: string): void => {
+    response.setHeader("connection", "close");
+
+    writeJsonRpcError(response, statusCode, message);
+  };
+
   const requestPath = getRequestPath(request);
   if (requestPath !== MCP_HTTP_PATH) {
     writeJsonResponse(response, 404, { error: "Not found" });
@@ -1326,11 +1332,11 @@ async function handleMcpHttpRequest(
     if (request.method === "POST") {
       const parsedBody = await readJsonRequestBody(request, MAX_MCP_HTTP_BODY_BYTES, bodyTimeoutMs);
       if (parsedBody.status === "too_large") {
-        writeJsonRpcError(response, 413, "MCP request body is too large");
+        writeClosingJsonRpcError(413, "MCP request body is too large");
         return;
       }
       if (parsedBody.status === "timeout") {
-        writeJsonRpcError(response, 408, "MCP request body timed out");
+        writeClosingJsonRpcError(408, "MCP request body timed out");
         return;
       }
       if (parsedBody.status === "invalid_json") {
