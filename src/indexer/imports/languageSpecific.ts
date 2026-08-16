@@ -1,5 +1,6 @@
 import path from "node:path";
 import {
+  JAVA_DOTTED_NAME_SOURCE,
   parseCsharpUsingDirective,
   parseJavaImportStatement,
   parseKotlinImportStatement,
@@ -86,8 +87,10 @@ async function appendJavaTextImports(context: LanguageSpecificImportContext): Pr
   if (context.languageId !== "java" || context.getBindings().length) {
     return;
   }
-  // Java identifiers permit Unicode letters, not just ASCII.
-  const importPattern = /^\s*import\s+(static\s+)?([\p{L}_][\p{L}\p{N}_.]*(?:\.\*)?)\s*;/gmu;
+  const importPattern = new RegExp(
+    String.raw`^\s*import\s+(static\s+)?(${JAVA_DOTTED_NAME_SOURCE}(?:\.\*)?)\s*;`,
+    "gmu",
+  );
   for (const match of context.source.matchAll(importPattern)) {
     const isStatic = !!match[1];
     const rawSpec = match[2];

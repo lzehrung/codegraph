@@ -1,5 +1,10 @@
 import path from "node:path";
-import { PHP_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE } from "../util/identifiers.js";
+import {
+  CSHARP_IDENTIFIER_SOURCE,
+  JAVA_IDENTIFIER_SOURCE,
+  PHP_IDENTIFIER_SOURCE,
+  XID_IDENTIFIER_SOURCE,
+} from "../util/identifiers.js";
 import { isAbsoluteFilePath, normalizePath } from "../util/paths.js";
 
 export type ParsedRustImportStatement =
@@ -397,6 +402,25 @@ export function parseKotlinImportStatement(stmtText: string): ParsedKotlinImport
   };
 }
 
+export const JAVA_DOTTED_NAME_SOURCE = String.raw`${JAVA_IDENTIFIER_SOURCE}(?:\.${JAVA_IDENTIFIER_SOURCE})*`;
+const JAVA_IMPORT_PATTERN = new RegExp(
+  String.raw`^\s*import\s+(static\s+)?(${JAVA_DOTTED_NAME_SOURCE}(?:\.\*)?)\s*;?\s*$`,
+  "u",
+);
+
+const CSHARP_DOTTED_NAME_SOURCE = String.raw`${CSHARP_IDENTIFIER_SOURCE}(?:\.${CSHARP_IDENTIFIER_SOURCE})*`;
+const CSHARP_USING_ALIAS_PATTERN = new RegExp(
+  String.raw`^(?:global\s+)?using\s+(${CSHARP_IDENTIFIER_SOURCE})\s*=\s*(${CSHARP_DOTTED_NAME_SOURCE})\s*;?$`,
+  "u",
+);
+const CSHARP_USING_STATIC_PATTERN = new RegExp(
+  String.raw`^(?:global\s+)?using\s+static\s+(${CSHARP_DOTTED_NAME_SOURCE})\s*;?$`,
+  "u",
+);
+const CSHARP_USING_PLAIN_PATTERN = new RegExp(
+  String.raw`^(?:global\s+)?using\s+(${CSHARP_DOTTED_NAME_SOURCE})\s*;?$`,
+  "u",
+);
 export type ParsedJavaImportStatement =
   | {
       kind: "named";
@@ -411,8 +435,7 @@ export type ParsedJavaImportStatement =
     };
 
 export function parseJavaImportStatement(stmtText: string): ParsedJavaImportStatement | null {
-  // Java identifiers permit Unicode letters, not just ASCII.
-  const match = stmtText.trim().match(/^\s*import\s+(static\s+)?([\p{L}_][\p{L}\p{N}_.]*(?:\.\*)?)\s*;?\s*$/u);
+  const match = stmtText.trim().match(JAVA_IMPORT_PATTERN);
   const rawSpec = match?.[2];
   if (!rawSpec) return null;
   const isStatic = !!match?.[1];
@@ -438,10 +461,7 @@ export function parseJavaImportStatement(stmtText: string): ParsedJavaImportStat
 export function parseCsharpUsingDirective(stmtText: string): ParsedCsharpUsingDirective | null {
   const trimmed = stmtText.trim();
 
-  // C# identifiers permit Unicode letter categories, not just ASCII.
-  const aliasMatch = trimmed.match(
-    /^(?:global\s+)?using\s+([\p{L}_][\p{L}\p{N}_]*)\s*=\s*([\p{L}_][\p{L}\p{N}_.]*)\s*;?$/u,
-  );
+  const aliasMatch = trimmed.match(CSHARP_USING_ALIAS_PATTERN);
   if (aliasMatch?.[1] && aliasMatch[2]) {
     return {
       from: aliasMatch[2],
@@ -450,7 +470,7 @@ export function parseCsharpUsingDirective(stmtText: string): ParsedCsharpUsingDi
     };
   }
 
-  const staticMatch = trimmed.match(/^(?:global\s+)?using\s+static\s+([\p{L}_][\p{L}\p{N}_.]*)\s*;?$/u);
+  const staticMatch = trimmed.match(CSHARP_USING_STATIC_PATTERN);
   if (staticMatch?.[1]) {
     return {
       from: staticMatch[1],
@@ -458,7 +478,7 @@ export function parseCsharpUsingDirective(stmtText: string): ParsedCsharpUsingDi
     };
   }
 
-  const plainMatch = trimmed.match(/^(?:global\s+)?using\s+([\p{L}_][\p{L}\p{N}_.]*)\s*;?$/u);
+  const plainMatch = trimmed.match(CSHARP_USING_PLAIN_PATTERN);
   if (!plainMatch?.[1]) return null;
   return {
     from: plainMatch[1],

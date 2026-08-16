@@ -84,12 +84,27 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
       imported: "Créer",
       isStatic: false,
     });
+    // JLS JavaLetter includes `$` and connecting-punctuation characters at every position,
+    // not just Unicode letters/digits.
+    expect(parseJavaImportStatement("import com.example.$Widget;")).toEqual({
+      kind: "named",
+      from: "com.example.$Widget",
+      imported: "$Widget",
+      isStatic: false,
+    });
   });
 
   it("C#: using alias to a Unicode-named alias", () => {
     expect(parseCsharpUsingDirective("using créer = Some.Namespace;")).toEqual({
       from: "Some.Namespace",
       alias: "créer",
+      isStatic: false,
+    });
+    // A verbatim identifier (`@` prefix) escapes a reserved keyword; `@class` is a legal
+    // C# identifier distinct from the `class` keyword.
+    expect(parseCsharpUsingDirective("using @class = Some.@class;")).toEqual({
+      from: "Some.@class",
+      alias: "@class",
       isStatic: false,
     });
   });

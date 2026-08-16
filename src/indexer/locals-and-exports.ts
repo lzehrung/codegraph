@@ -381,9 +381,14 @@ export function collectLocalsAndExportsFromSource(
 
   // Lazily build once: converts every native capture's UTF-8 byte offsets to UTF-16
   // string indexes in O(1) per capture instead of rescanning the source per offset.
+  // `ensureTree()` builds the same map internally when native mode is active, so route
+  // through it first and reuse that map instead of scanning the source a second time.
   let byteIndexMap: ByteToStringIndexMap | null = null;
   const ensureByteIndexMap = (): ByteToStringIndexMap => {
-    if (!byteIndexMap) byteIndexMap = buildByteToStringIndexMap(source);
+    if (byteIndexMap) return byteIndexMap;
+    const enrichmentTree = ensureTree();
+    byteIndexMap =
+      enrichmentTree instanceof ProjectedSyntaxTree ? enrichmentTree.byteIndexMap : buildByteToStringIndexMap(source);
     return byteIndexMap;
   };
 

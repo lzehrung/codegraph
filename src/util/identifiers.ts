@@ -13,3 +13,18 @@ export const PYTHON_IDENTIFIER_SOURCE = XID_IDENTIFIER_SOURCE;
  * first character.
  */
 export const PHP_IDENTIFIER_SOURCE = String.raw`[A-Za-z_\u{80}-\u{10FFFF}][A-Za-z0-9_\u{80}-\u{10FFFF}]*`;
+
+/**
+ * Java identifiers (JLS `JavaLetter`/`JavaLetterOrDigit`) permit Unicode letters, `$`,
+ * connecting-punctuation characters (e.g. `_`), and currency symbols at the first position;
+ * continuation additionally allows Unicode digits and combining marks.
+ */
+export const JAVA_IDENTIFIER_SOURCE = String.raw`[\p{L}\p{Sc}\p{Pc}$][\p{L}\p{N}\p{Sc}\p{Pc}\p{Mn}\p{Mc}$]*`;
+
+/**
+ * C# identifiers (ECMA-334 `identifier-start-character`/`identifier-part-character`) permit
+ * Unicode letter categories or an underscore at the first position, plus an optional leading
+ * `@` for a verbatim identifier (escaping a keyword, e.g. `@class`); continuation additionally
+ * allows decimal digits, connecting-punctuation, combining marks, and formatting characters.
+ */
+export const CSHARP_IDENTIFIER_SOURCE = String.raw`@?[\p{L}\p{Pc}_][\p{L}\p{N}\p{Pc}\p{Mn}\p{Mc}\p{Cf}_]*`;

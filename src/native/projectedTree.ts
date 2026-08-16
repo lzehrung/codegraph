@@ -14,12 +14,13 @@ export type ProjectedPosition = {
 export class ProjectedSyntaxTree {
   readonly source: string;
   private readonly nodesById: Map<number, ProjectedSyntaxNode>;
-  private readonly byteMap: ByteToStringIndexMap;
+  /** Shared byte-offset -> UTF-16 string-index map; reuse this instead of rebuilding one. */
+  readonly byteIndexMap: ByteToStringIndexMap;
   readonly rootNode: ProjectedSyntaxNode;
 
   constructor(source: string, tree: NativeSyntaxTree) {
     this.source = source;
-    this.byteMap = buildByteToStringIndexMap(source);
+    this.byteIndexMap = buildByteToStringIndexMap(source);
     this.nodesById = new Map();
     for (const node of tree.nodes) {
       this.nodesById.set(node.id, new ProjectedSyntaxNode(this, node));
@@ -36,11 +37,11 @@ export class ProjectedSyntaxTree {
   }
 
   stringIndexForByte(byteIndex: number): number {
-    return stringIndexForByte(this.byteMap, byteIndex);
+    return stringIndexForByte(this.byteIndexMap, byteIndex);
   }
 
   positionForPoint(point: NativePoint): ProjectedPosition {
-    return stringPositionForBytePoint(this.byteMap, point);
+    return stringPositionForBytePoint(this.byteIndexMap, point);
   }
 }
 
