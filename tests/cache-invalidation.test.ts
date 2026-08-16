@@ -1911,7 +1911,7 @@ describe("Cache invalidation and strict hashing", () => {
       nativeRuntimeFingerprint?: string;
       implementationFingerprint?: string;
     };
-    expect(rewrittenSnapshot.version).toBe(5);
+    expect(rewrittenSnapshot.version).toBe(6);
     expect(initial.byFile.has(fileIdentityKey(normalize(entryPath)))).toBe(true);
     expect(rebuilt.byFile.has(fileIdentityKey(normalize(entryPath)))).toBe(true);
     expect(rebuilt.bloomFilters?.get(normalize(entryPath))?.mightContain("versioned")).toBe(true);
@@ -2369,13 +2369,29 @@ describe("Cache invalidation and strict hashing", () => {
   it("reuses relative caches after moving a project tree", async () => {
     const sourceRoot = await mkTmpDir("dg-cache-move-source-");
     const movedRoot = `${sourceRoot}-moved`;
-    await fsp.writeFile(path.join(sourceRoot, "entry.ts"), "export const entry = 1;\n", "utf8");
+    await fsp.writeFile(path.join(sourceRoot, "dependency.ts"), "export const dependency = 1;\n", "utf8");
+    await fsp.writeFile(path.join(sourceRoot, "entry.ts"), "export { dependency } from './dependency';\n", "utf8");
     await buildProjectIndex(sourceRoot, { cache: "disk", threads: 1 });
+    const snapshot = (await readProjectSnapshot(projectSnapshotPathFor(sourceRoot))) as {
+      version?: number;
+      modules?: Array<{ file?: string; exports?: Array<{ type?: string; fromModule?: string }> }>;
+    };
+    const entryModule = snapshot.modules?.find((module) => module.file === "entry.ts");
+    const reexport = entryModule?.exports?.find((entry) => entry.type === "reexport");
+    if (!reexport) throw new Error("expected persisted reexport");
+    snapshot.version = 5;
+    reexport.fromModule = normalize(path.join(sourceRoot, "dependency.ts"));
+    await writeProjectSnapshot(projectSnapshotPathFor(sourceRoot), snapshot);
     await fsp.rename(sourceRoot, movedRoot);
 
     const report: BuildReport = { timings: {} };
     const moved = await buildProjectIndexIncremental(movedRoot, { cache: "disk", threads: 1, report });
     expect(moved.byFile.has(fileIdentityKey(normalize(path.join(movedRoot, "entry.ts"))))).toBe(true);
+    const resolved = resolveExport(moved, normalize(path.join(movedRoot, "entry.ts")), "dependency");
+    expect(resolved?.kind).toBe("resolved");
+    if (resolved?.kind === "resolved") {
+      expect(resolved.def.file).toBe(normalize(path.join(movedRoot, "dependency.ts")));
+    }
     expect(report.cache?.misses ?? 0).toBe(0);
     expect(report.files?.cached).toBeGreaterThan(0);
   });

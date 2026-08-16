@@ -362,6 +362,7 @@ export function tryLoadDuplicateUnitsFromCache(
     if (!row || row.sig !== sig || row.version !== DUPLICATE_UNIT_CACHE_VERSION) return null;
     const parsed = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as unknown;
     if (!Array.isArray(parsed)) return null;
+    if (root && !validatePersistedDuplicateUnits(root, parsed)) return null;
     return deserializeDuplicateUnits(root ? transformDuplicateUnits(root, parsed, false) : parsed);
   } catch {
     return null;
@@ -441,6 +442,49 @@ function transformDuplicateHandle(root: string, value: string): string {
   } catch {
     return value;
   }
+}
+
+function duplicateHandleFilePartIndex(value: string): number | null {
+  const parts = value.split(":");
+  if (parts[0] === "file" && parts.length === 2) return 1;
+  if (parts[0] === "chunk" && parts.length === 3) return 1;
+  if (parts[0] === "symbol" && parts.length === 5) return 1;
+  if (parts[0] === "sql" && parts.length === 4) return 2;
+  return null;
+}
+
+function hasPersistedDuplicateHandlePathWithinRoot(root: string, value: string): boolean {
+  const filePartIndex = duplicateHandleFilePartIndex(value);
+  const handlePrefix = value.split(":")[0];
+  if (filePartIndex === null) {
+    return handlePrefix !== "file" && handlePrefix !== "chunk" && handlePrefix !== "symbol" && handlePrefix !== "sql";
+  }
+  const encodedFile = value.split(":")[filePartIndex];
+  if (!encodedFile) return false;
+  try {
+    assertFilePathWithinRoot(
+      root,
+      cacheAbsolutePath(root, decodeURIComponent(encodedFile)),
+      "Persisted duplicate handle path",
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function validatePersistedDuplicateUnits(root: string, value: unknown[]): value is DuplicateSerializedUnit[] {
+  return value.every((unit) => {
+    if (!isDuplicateSerializedUnit(unit)) return false;
+    try {
+      assertFilePathWithinRoot(root, cacheAbsolutePath(root, unit.file), "Persisted duplicate unit file");
+      assertFilePathWithinRoot(root, cacheAbsolutePath(root, unit.absoluteFile), "Persisted duplicate unit path");
+    } catch {
+      return false;
+    }
+    const handles = [unit.handle, unit.fileHandle, unit.chunkHandle, unit.symbolHandle, unit.sqlHandle];
+    return handles.every((handle) => handle === undefined || hasPersistedDuplicateHandlePathWithinRoot(root, handle));
+  });
 }
 
 function duplicateUnitId(unit: DuplicateSerializedUnit, absoluteFile: string): string {

@@ -118,7 +118,9 @@ export function transformManifestEntries(
 ): Record<string, ManifestFileEntry> {
   const transformed: Record<string, ManifestFileEntry> = {};
   for (const [file, entry] of Object.entries(files)) {
-    const key = toRelative ? cacheRelativePath(projectRoot, file) : cacheAbsolutePath(projectRoot, file);
+    const key = toRelative
+      ? cacheRelativePath(projectRoot, file)
+      : assertFilePathWithinRoot(projectRoot, cacheAbsolutePath(projectRoot, file), "Persisted manifest file key");
     transformed[key] = {
       ...entry,
       edges: entry.edges.map((edge) => ({

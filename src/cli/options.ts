@@ -15,6 +15,8 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--native",
   "--cache",
   "--cache-dir",
+  "--changed-since",
+  "--git-base",
   "--git-head",
   "--symbols-detailed-scope",
   "--symbols-detailed-max-edges",
