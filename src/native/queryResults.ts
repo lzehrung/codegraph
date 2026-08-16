@@ -15,9 +15,9 @@ export function capturesNamed(match: NativeMatch, name: string): NativeCapture[]
 }
 
 /**
- * Rust's Tree-sitter captures expose UTF-8 byte offsets. `Range` and every downstream
+ * Native Tree-sitter captures use UTF-8 byte offsets. `Range` and every downstream
  * consumer (source slicing, portable handles, rename edits) expect UTF-16 string indexes,
- * so every capture must convert through the caller's per-file `byteIndexMap` here.
+ * so every native capture converts through the caller's per-file `byteIndexMap` here.
  */
 export function rangeFromNativeCapture(capture: NativeCapture, byteIndexMap: ByteToStringIndexMap): Range {
   const startPosition = stringPositionForBytePoint(byteIndexMap, capture.start);

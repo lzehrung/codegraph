@@ -9,10 +9,14 @@ import {
   parsePhpImportStatement,
   parseRustImportStatement,
 } from "../src/languages/importStatementParsers.js";
-import { extractPythonSpecifiers } from "../src/util.js";
+import { extractJsTsSpecifiers, extractPythonSpecifiers } from "../src/util.js";
 import { buildProjectIndex } from "../src/index.js";
+import { collectJsTextImports } from "../src/indexer/imports/jsTextImports.js";
+import { collectNativeCaptureImportBindings } from "../src/indexer/imports/nativeCaptures.js";
+import { finalizeLanguageSpecificImports } from "../src/indexer/imports/languageSpecific.js";
 import { collectPythonImportsFromSource } from "../src/indexer/imports/python.js";
 import type { ImportBinding } from "../src/indexer/types.js";
+import type { NativeMatch } from "../src/native/treeSitterNative.js";
 
 // C11-adjacent finding: several import/alias extractors used an ASCII-only [A-Za-z_][\w]*
 // character class, which silently drops the binding (or the whole statement) for any
@@ -21,23 +25,23 @@ import type { ImportBinding } from "../src/indexer/types.js";
 // letters, Go's Unicode "letter" production, JS/TS ID_Start/ID_Continue, PEP 3131 Python).
 describe("Import/alias extraction accepts Unicode identifiers", () => {
   it("Rust: extern crate alias, use alias, and module name", () => {
-    expect(parseRustImportStatement("mod créer;")).toEqual({
+    expect(parseRustImportStatement("mod \u2118\u0301;")).toEqual({
       kind: "module",
-      from: "créer",
-      local: "créer",
+      from: "\u2118\u0301",
+      local: "\u2118\u0301",
       isExternCrate: false,
     });
-    expect(parseRustImportStatement("extern crate créer as créé;")).toEqual({
+    expect(parseRustImportStatement("extern crate \u2118 as alias\u0301;")).toEqual({
       kind: "module",
-      from: "créer",
-      local: "créé",
+      from: "\u2118",
+      local: "alias\u0301",
       isExternCrate: true,
     });
-    expect(parseRustImportStatement("use std::foo as créer;")).toEqual({
+    expect(parseRustImportStatement("use std::foo as alias\u0301;")).toEqual({
       kind: "member",
       from: "std",
       imported: "foo",
-      local: "créer",
+      local: "alias\u0301",
     });
   });
 
@@ -119,24 +123,159 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("JS text fallback preserves every Unicode identifier import form", async () => {
+    const bindings: ImportBinding[] = [];
+    await collectJsTextImports({
+      source: [
+        'import { \u2118 as namedAlias\u200c, type typeName\u200d as typeAlias } from \"es\";',
+        'import * as namespaceAlias\u200d from \"namespace\";',
+        'const defaultAlias\u200c = require(\"default\");',
+        'const { \u2118: objectAlias\u200d, propertyName\u200c } = require(\"properties\");',
+        'import equalsAlias\u200d = require(\"equals\");',
+      ].join("\n"),
+      languageId: "ts",
+      resolveFrom: async (from) => ({ external: from }),
+      pushBinding: (binding) => bindings.push(binding),
+    });
+
+    expect(bindings).toEqual([
+      {
+        kind: "named",
+        local: "namedAlias\u200c",
+        imported: "\u2118",
+        from: "es",
+        resolved: { external: "es" },
+        typeOnly: false,
+      },
+      {
+        kind: "named",
+        local: "typeAlias",
+        imported: "typeName\u200d",
+        from: "es",
+        resolved: { external: "es" },
+        typeOnly: true,
+      },
+      {
+        kind: "namespace",
+        localNS: "namespaceAlias\u200d",
+        from: "namespace",
+        resolved: { external: "namespace" },
+        typeOnly: false,
+      },
+      {
+        kind: "default",
+        local: "defaultAlias\u200c",
+        from: "default",
+        resolved: { external: "default" },
+        mechanism: "cjs",
+      },
+      {
+        kind: "named",
+        local: "objectAlias\u200d",
+        imported: "\u2118",
+        from: "properties",
+        resolved: { external: "properties" },
+        mechanism: "cjs",
+      },
+      {
+        kind: "named",
+        local: "propertyName\u200c",
+        imported: "propertyName\u200c",
+        from: "properties",
+        resolved: { external: "properties" },
+        mechanism: "cjs",
+      },
+      {
+        kind: "default",
+        local: "equalsAlias\u200d",
+        from: "equals",
+        resolved: { external: "equals" },
+        mechanism: "cjs",
+      },
+    ]);
+  });
 });
 
-// Two additional sibling fixes were made for the same defect class but could not be proven
-// to change observable behavior against this codebase's actual extraction pipeline, so they
-// are documented here rather than asserted as regression tests:
-//
-// - src/util/specifiers.ts's combined JS/TS regex (import X = require(...) alternative): the
-//   module specifier is still recovered via the separate bare `require(...)` alternative in
-//   the same combined pattern even when the "import X =" alias fails to match, and
-//   extractJsTsSpecifiers's return type never exposes the alias/local name at all. The fix
-//   (Unicode-aware alias class) is still correct and removes a latent dependency on that
-//   alternative-pattern fallback, but there is no independently observable before/after
-//   difference through this function's public contract.
-// - src/indexer/imports/languageSpecific.ts's normalizeGoImports alias regex: Go's native
-//   query captures already expose the import alias identifier as raw capture text (unaffected
-//   by any JS regex), so a named Unicode alias is already correct via the primary native path
-//   before this fix. The only alias values normalizeGoImports's regex result changes behavior
-//   for are the single-character "." (dot-import) and "_" (blank-import) sentinels, both of
-//   which were already covered by the old ASCII character class. The fix is still correct
-//   (defense in depth against a change to the native query), but not independently provable
-//   as a behavior change in this codebase today.
+describe("Unicode import parser seams", () => {
+  it("parses native object-pattern captures with ECMAScript-only identifier characters", async () => {
+    const bindings: ImportBinding[] = [];
+    const source = "const { \u2118: localAlias\u200d } = require('properties');";
+    const point = { row: 0, column: 0, index: 0 };
+    const match: NativeMatch = {
+      patternIndex: 0,
+      captures: [
+        { name: "from", text: "'properties'", nodeType: "string", start: point, end: point },
+        { name: "pattern", text: "{ \u2118: localAlias\u200d }", nodeType: "object_pattern", start: point, end: point },
+      ],
+    };
+    const resolveFrom = async (from: string) => ({ external: from });
+    const pushBinding = (binding: ImportBinding) => bindings.push(binding);
+    const getBindings = () => bindings;
+    const replaceBindings = (next: ImportBinding[]) => bindings.splice(0, bindings.length, ...next);
+
+    await collectNativeCaptureImportBindings(
+      {
+        source,
+        languageId: "ts",
+        isTypeOnly: () => false,
+        resolveFrom,
+        pushBinding,
+        languageContext: {
+          file: "consumer.ts",
+          projectRoot: process.cwd(),
+          source,
+          languageId: "ts",
+          resolveFrom,
+          pushBinding,
+          getBindings,
+          replaceBindings,
+        },
+        applyStatementOverride: async () => false,
+      },
+      [match],
+    );
+
+    expect(bindings).toEqual([
+      {
+        kind: "named",
+        local: "localAlias\u200d",
+        imported: "\u2118",
+        from: "properties",
+        resolved: { external: "properties" },
+        typeOnly: false,
+      },
+    ]);
+  });
+
+  it("normalizes a Unicode Go import alias from text", async () => {
+    const bindings: ImportBinding[] = [
+      { kind: "namespace", localNS: "fallback", from: "example.test/dep", resolved: { external: "example.test/dep" } },
+    ];
+    const resolveFrom = async (from: string) => ({ external: from });
+    const pushBinding = (binding: ImportBinding) => bindings.push(binding);
+    const getBindings = () => bindings;
+    const replaceBindings = (next: ImportBinding[]) => bindings.splice(0, bindings.length, ...next);
+
+    await finalizeLanguageSpecificImports({
+      file: "consumer.go",
+      projectRoot: process.cwd(),
+      source: 'import \u4e2d "example.test/dep"',
+      languageId: "go",
+      resolveFrom,
+      pushBinding,
+      getBindings,
+      replaceBindings,
+    });
+
+    expect(bindings).toEqual([
+      { kind: "namespace", localNS: "\u4e2d", from: "example.test/dep", resolved: { external: "example.test/dep" } },
+    ]);
+  });
+
+  it("extracts Unicode import-equals bindings in the specifier fallback", () => {
+    expect(extractJsTsSpecifiers("import alias\u200d = require('package');\n")).toEqual([
+      { spec: "package", exportCondition: "require" },
+    ]);
+  });
+});

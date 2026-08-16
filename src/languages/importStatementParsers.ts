@@ -1,4 +1,5 @@
 import path from "node:path";
+import { XID_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { isAbsoluteFilePath, normalizePath } from "../util/paths.js";
 
 export type ParsedRustImportStatement =
@@ -19,11 +20,18 @@ export type ParsedRustImportStatement =
       from: string;
     };
 
+const RUST_MODULE_PATTERN = new RegExp(String.raw`^mod\s+(${XID_IDENTIFIER_SOURCE})\s*;?$`, "u");
+const RUST_EXTERN_CRATE_PATTERN = new RegExp(
+  String.raw`^extern\s+crate\s+(${XID_IDENTIFIER_SOURCE})(?:\s+as\s+(${XID_IDENTIFIER_SOURCE}))?\s*;?$`,
+  "u",
+);
+const RUST_USE_ALIAS_PATTERN = new RegExp(String.raw`^(.*?)\s+as\s+(${XID_IDENTIFIER_SOURCE})$`, "u");
+
 export function parseRustImportStatement(stmtText: string): ParsedRustImportStatement | null {
   const trimmed = stmtText.trim();
 
   // Rust identifiers permit Unicode XID_Start/XID_Continue, not just ASCII.
-  const modMatch = trimmed.match(/^mod\s+([\p{L}_][\p{L}\p{N}_]*)\s*;?$/u);
+  const modMatch = trimmed.match(RUST_MODULE_PATTERN);
   if (modMatch?.[1]) {
     return {
       kind: "module",
@@ -33,9 +41,7 @@ export function parseRustImportStatement(stmtText: string): ParsedRustImportStat
     };
   }
 
-  const externMatch = trimmed.match(
-    /^extern\s+crate\s+([\p{L}_][\p{L}\p{N}_]*)(?:\s+as\s+([\p{L}_][\p{L}\p{N}_]*))?\s*;?$/u,
-  );
+  const externMatch = trimmed.match(RUST_EXTERN_CRATE_PATTERN);
   if (externMatch?.[1]) {
     return {
       kind: "module",
@@ -50,7 +56,7 @@ export function parseRustImportStatement(stmtText: string): ParsedRustImportStat
   if (!useBody) return null;
   if (useBody.includes("{") || useBody.includes(",")) return null;
 
-  const aliasMatch = useBody.match(/^(.*?)\s+as\s+([\p{L}_][\p{L}\p{N}_]*)$/u);
+  const aliasMatch = useBody.match(RUST_USE_ALIAS_PATTERN);
   const rawPath = aliasMatch?.[1]?.trim() ?? useBody;
   const alias = aliasMatch?.[2];
 
