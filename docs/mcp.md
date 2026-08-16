@@ -200,7 +200,7 @@ An MCP `explore` request whose entire query resolves to an indexed project-relat
 - Tool calls do not accept per-request root overrides.
 - Tools are read-only by default.
 - `artifact_build` requires `--allow-build` and a fresh or auto-refreshed MCP index.
-- `query_sqlite` rejects mutating SQL, recursive queries, synthetic payload functions, and stale artifact queries it cannot refresh safely.
+- `query_sqlite` rejects mutating SQL, recursive queries, synthetic payload functions, and stale artifact queries it cannot refresh safely. Each query has a 10-second execution deadline.
 - `get_file` rejects raw reads and structural text-config summaries over the 16 MiB input limit. Accepted reads use separate output-page bounds from `maxBytes`, `offset`, and `limit`; binary input is rejected, and sensitive formats require `allowSensitive: true` for raw values.
 - SQLite responses are row- and byte-bounded.
 

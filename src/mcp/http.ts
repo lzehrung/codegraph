@@ -28,39 +28,52 @@ export async function readJsonRequestBody(
     return { status: "too_large" };
   }
 
-  const chunks: Buffer[] = [];
-  let bytes = 0;
-  let timedOut = false;
-  const deadline = setTimeout(() => {
-    timedOut = true;
-    request.destroy();
-  }, timeoutMs);
-  deadline.unref?.();
-  try {
-    for await (const chunk of request) {
+  return await new Promise<ParsedJsonBody>((resolve) => {
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let settled = false;
+    const deadline = setTimeout(() => settle({ status: "timeout" }, true), timeoutMs);
+    deadline.unref?.();
+
+    const cleanup = (): void => {
+      clearTimeout(deadline);
+      request.off("data", onData);
+      request.off("end", onEnd);
+      request.off("error", onFailure);
+      request.off("aborted", onFailure);
+    };
+    const settle = (result: ParsedJsonBody, drain: boolean): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (drain) request.resume();
+      resolve(result);
+    };
+    const onData = (chunk: string | Buffer): void => {
       const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
       bytes += buffer.byteLength;
       if (bytes > maxBytes) {
-        request.resume();
-        return { status: "too_large" };
+        settle({ status: "too_large" }, true);
+        return;
       }
       chunks.push(buffer);
-    }
-  } catch {
-    if (timedOut) return { status: "timeout" };
-    return { status: "invalid_json" };
-  } finally {
-    clearTimeout(deadline);
-  }
-  if (timedOut) return { status: "timeout" };
+    };
+    const onEnd = (): void => {
+      const rawBody = Buffer.concat(chunks).toString("utf8");
+      try {
+        const body: unknown = rawBody.length ? JSON.parse(rawBody) : null;
+        settle({ status: "ok", body }, false);
+      } catch {
+        settle({ status: "invalid_json" }, false);
+      }
+    };
+    const onFailure = (): void => settle({ status: "invalid_json" }, true);
 
-  const rawBody = Buffer.concat(chunks).toString("utf8");
-  try {
-    const body: unknown = rawBody.length ? JSON.parse(rawBody) : null;
-    return { status: "ok", body };
-  } catch {
-    return { status: "invalid_json" };
-  }
+    request.on("data", onData);
+    request.once("end", onEnd);
+    request.once("error", onFailure);
+    request.once("aborted", onFailure);
+  });
 }
 
 export function emptyAllowedHostHeaderRules(): AllowedHostHeaderRules {

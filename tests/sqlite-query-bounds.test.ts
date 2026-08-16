@@ -10,7 +10,7 @@ import {
   MAX_SQLITE_ROW_LIMIT,
   SQLITE_TRUNCATED_MARKER,
 } from "../src/mcp/sqliteGuard.js";
-import { queryGraphSqliteRaw } from "../src/sqlite/query.js";
+import { queryGraphSqliteRaw, SqliteQueryDeadlineExceededError } from "../src/sqlite/query.js";
 
 async function withTempDb(run: (dbPath: string) => Promise<void>): Promise<void> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sqlite-bounds-"));
@@ -19,6 +19,21 @@ async function withTempDb(run: (dbPath: string) => Promise<void>): Promise<void>
     await run(dbPath);
   } finally {
     await fsp.rm(root, { recursive: true, force: true });
+  }
+}
+
+async function removeWithRetry(root: string): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    try {
+      await fsp.rm(root, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error)) throw error;
+      if (error.code !== "EBUSY" && error.code !== "ENOTEMPTY") throw error;
+      if (Date.now() > deadline) throw error;
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    }
   }
 }
 
@@ -100,5 +115,40 @@ describe("SQLite query byte/cell bounds during iterate", () => {
     for (const row of result.rows) {
       expect(String(row[0]).endsWith(SQLITE_TRUNCATED_MARKER)).toBe(true);
     }
+  });
+});
+
+describe("SQLite raw query execution deadline", () => {
+  it("terminates an over-budget query without delaying a following query", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sqlite-deadline-"));
+    const dbPath = path.join(root, "graph.sqlite");
+    try {
+      const db = new DatabaseSync(dbPath);
+      db.exec("CREATE TABLE values_table (n INTEGER);");
+      db.prepare("INSERT INTO values_table (n) VALUES (?)").run(42);
+      db.close();
+
+      const slowSql =
+        "WITH RECURSIVE spin(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM spin WHERE x < 8000000) " +
+        "SELECT count(*) FROM spin;";
+      const startedAt = Date.now();
+      await expect(queryGraphSqliteRaw(dbPath, slowSql, [], { deadlineMs: 100 })).rejects.toMatchObject({
+        name: "SqliteQueryDeadlineExceededError",
+        message: expect.stringMatching(/exceeded its 100ms execution budget/),
+      });
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+
+      const result = await queryGraphSqliteRaw(dbPath, "SELECT n FROM values_table;", [], { deadlineMs: 5_000 });
+      expect(result.rows).toEqual([[42]]);
+      expect(result.truncated).toBeFalsy();
+    } finally {
+      await removeWithRetry(root);
+    }
+  });
+
+  it("exports a named deadline error for callers", () => {
+    const error = new SqliteQueryDeadlineExceededError(250);
+    expect(error.name).toBe("SqliteQueryDeadlineExceededError");
+    expect(error.message).toBe("SQLite query exceeded its 250ms execution budget and was terminated.");
   });
 });
