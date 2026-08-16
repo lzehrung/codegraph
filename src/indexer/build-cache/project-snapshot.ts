@@ -235,7 +235,7 @@ function transformSnapshotPaths(
     copy.bloomFilters = bloomFilters;
   }
   const fileSignatures: Record<string, SnapshotFileSignature> = {};
-  for (const [file, signature] of Object.entries(copy.fileSignatures)) {
+  for (const [file, signature] of Object.entries(copy.fileSignatures ?? {})) {
     fileSignatures[transformPath(root, file, toRelative)] = signature;
   }
   copy.fileSignatures = fileSignatures;
@@ -289,10 +289,6 @@ function migrateDetailedSymbolGraphPayload(value: unknown, currentRoot: string):
     graph: transformDetailedGraph(relativeGraph, currentRoot, false),
   };
 }
-function projectRootMatches(projectRoot: string, storedProjectRoot: string): boolean {
-  return fileIdentityKey(path.resolve(projectRoot)) === fileIdentityKey(path.resolve(storedProjectRoot));
-}
-
 function compareSnapshotPath(left: string, right: string): number {
   if (left < right) return -1;
   if (left > right) return 1;
@@ -509,7 +505,6 @@ export async function tryLoadProjectSnapshotModules(
     const implementationFingerprint = getImplementationFingerprint();
     if (
       !isProjectIndexSnapshotPayload(payload) ||
-      !projectRootMatches(projectRoot, payload.projectRoot) ||
       payload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
       payload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint ||
       payload.implementationFingerprint !== implementationFingerprint
@@ -563,7 +558,6 @@ function persistedBloomFiltersFromSidecar(
   if (
     payload.version !== BLOOM_FILTER_SNAPSHOT_VERSION ||
     typeof payload.projectRoot !== "string" ||
-    !projectRootMatches(projectRoot, payload.projectRoot) ||
     payload.implementationFingerprint !== getImplementationFingerprint() ||
     typeof payload.projectSnapshotIdentity !== "string" ||
     !/^[a-f0-9]{64}$/.test(payload.projectSnapshotIdentity)
@@ -592,7 +586,6 @@ function persistedBloomFiltersFromSnapshot(
   if (
     payload.version !== PROJECT_SNAPSHOT_VERSION ||
     typeof payload.projectRoot !== "string" ||
-    !projectRootMatches(projectRoot, payload.projectRoot) ||
     payload.implementationFingerprint !== getImplementationFingerprint()
   ) {
     return null;

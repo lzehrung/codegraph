@@ -55,9 +55,10 @@ function resolveCodegraphUserCacheRoot(): string {
   return path.join(base, "codegraph");
 }
 
-export function projectCacheNamespace(projectRoot: string): string {
-  const rootIdentity = fileIdentityKey(path.resolve(projectRoot));
-  const hash = crypto.createHash("sha256").update(rootIdentity).digest("hex");
+export function projectCacheNamespace(projectRoot: string, anchor?: string): string {
+  const root = path.resolve(projectRoot);
+  const identity = anchor ? fileIdentityKey(path.relative(path.resolve(anchor), root)) || "." : fileIdentityKey(root);
+  const hash = crypto.createHash("sha256").update(identity).digest("hex");
   return `project-${hash}`;
 }
 
@@ -96,7 +97,10 @@ export function resolveCacheLocation(projectRoot: string, opts?: BuildOptions): 
   ) {
     return { path: path.join(root, ".codegraph-cache", "index-v1"), anchor, layer: effectiveLayer };
   }
-  const namespace = projectCacheNamespace(root);
+  const namespace = projectCacheNamespace(
+    root,
+    effectiveLayer === "git" || effectiveLayer === "manifest" ? anchor : undefined,
+  );
   const explicitBase = opts?.cacheDir?.trim() || process.env.CODEGRAPH_CACHE_DIR?.trim();
   if (explicitBase) {
     const configured = path.resolve(explicitBase);

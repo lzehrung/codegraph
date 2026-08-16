@@ -5,6 +5,7 @@ import { parseAgentSymbolHandle } from "../agent/handles.js";
 import {
   SymbolKind,
   type BuildOptions,
+  type CacheLocation,
   type FindReferencesResult,
   type GoToResult,
   type ModuleIndex,
@@ -28,6 +29,7 @@ export type NavigationCommandContext = {
   nativeMode: NativeRuntimeMode;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
   progressHandler: BuildOptions["onProgress"];
+  cacheLocation: CacheLocation | undefined;
   writeJSONLine: (value: unknown) => void;
   writeStdoutLine: (message: string) => void;
   writeStderrLine: (message: string) => void;
@@ -38,10 +40,13 @@ export type NavigationCommandContext = {
 // inputs are unchanged. Pass --cache off to opt out of persisted reuse for one invocation.
 function indexOptions(context: NavigationCommandContext): LoadCurrentProjectIndexOptions {
   const cache = parseCacheModeOption(context.getOpt("--cache"));
+  const cacheDir = context.getOpt("--cache-dir");
   return {
     onProgress: context.progressHandler,
     discovery: context.discoveryOptions,
     ...(cache ? { cache } : {}),
+    ...(cacheDir ? { cacheDir } : {}),
+    ...(context.cacheLocation ? { cacheLocation: context.cacheLocation } : {}),
     ...(context.hasFlag("--cache-strict") ? { cacheStrict: true } : {}),
     ...(context.hasFlag("--cache-verify") ? { cacheVerify: true } : {}),
     ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),

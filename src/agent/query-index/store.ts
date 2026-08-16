@@ -322,8 +322,13 @@ export class QueryIndexStore {
     }
   }
 
-  candidateChunksForTerms(terms: readonly string[], paths: readonly string[]): StoredQueryIndexChunk[] {
+  candidateChunksForTerms(
+    terms: readonly string[],
+    paths: readonly string[],
+    limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT,
+  ): StoredQueryIndexChunk[] {
     if (!terms.length || !paths.length) return [];
+    const normalizedLimit = normalizedCandidateLimit(limit);
     const ftsTerms = terms.filter((term) => codePointLength(term) >= 3);
     const directTerms = terms.filter((term) => codePointLength(term) < 3);
     const conditions: string[] = [];
@@ -345,9 +350,10 @@ export class QueryIndexStore {
       : "";
     const candidates = new Map<string, StoredQueryIndexChunk>();
     const batchSize = 500;
-    for (let offset = 0; offset < paths.length; offset += batchSize) {
+    for (let offset = 0; offset < paths.length && candidates.size < normalizedLimit; offset += batchSize) {
       const batch = paths.slice(offset, offset + batchSize);
       const placeholders = batch.map(() => "?").join(", ");
+      const remaining = normalizedLimit - candidates.size;
       const rows = this.db
         .prepare(
           `
@@ -359,10 +365,12 @@ export class QueryIndexStore {
           WHERE files.path IN (${placeholders})
             AND (${conditions.join(" OR ")})
           ORDER BY files.path, chunks.ordinal
+          LIMIT ?
         `,
         )
         .all(
           ...(ftsTerms.length ? [ftsQuery, ...batch, ...directParameters] : [...batch, ...directParameters]),
+          remaining,
         ) as Array<Record<string, unknown>>;
       for (const row of rows) {
         const chunk = storedCandidateChunkFromRow(row);

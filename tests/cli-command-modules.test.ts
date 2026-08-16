@@ -1237,6 +1237,10 @@ describe("CLI command modules", () => {
     expect(pretty).toMatchObject({ stderr: "", exitCode: undefined });
     expect(pretty.stdout).toContain("Package:\n  Name: @lzehrung/codegraph");
     expect(pretty.stdout).toMatch(/^Package:/m);
+    expect(pretty.stdout).toMatch(/^Cache:/m);
+    expect(pretty.stdout).toMatch(/^ {2}Path: /m);
+    expect(pretty.stdout).toMatch(/^ {2}Anchor: /m);
+    expect(pretty.stdout).toMatch(/^ {2}Layer: /m);
     expect(pretty.stdout).toMatch(/^Native:/m);
     expect(pretty.stdout).toMatch(/^ {2}Origin:/m);
     expect(pretty.stdout).toMatch(/^ {2}Update:/m);

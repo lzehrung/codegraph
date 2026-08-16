@@ -827,6 +827,33 @@ index 1234567..abcdef0 100644
     }
   });
 
+  test("should merge codegraph.config.json cache.location into session build options", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-cache-location-"));
+    try {
+      await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
+      const cacheLocation = path.join(root, "custom-cache");
+      await fsp.mkdir(cacheLocation, { recursive: true });
+      await fsp.writeFile(
+        path.join(root, "codegraph.config.json"),
+        JSON.stringify({ cache: { location: cacheLocation } }),
+        "utf8",
+      );
+
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        const session = await createCodeReviewSession({ root, buildOptions: { cache: "memory" } });
+        expect(session.getStatus()).toBe("ready");
+        expect(buildSpy.mock.calls.length).toBeGreaterThan(0);
+        const options = buildSpy.mock.calls[0]?.[1] as BuildOptions | undefined;
+        expect(options?.cacheLocation).toBe(cacheLocation);
+      } finally {
+        buildSpy.mockRestore();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("should include new source files on manual refresh", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-manual-added-file-"));
     try {
@@ -1393,6 +1420,20 @@ describe("SessionManager", () => {
       manager.getOrCreateSession("shared", {
         root: sampleRoot,
         buildOptions: sampleBuildOptions({ cache: "disk" }),
+      }),
+    ).rejects.toThrow(/different configuration/);
+  });
+
+  test("should reject reusing a session id when cacheLocation drifts", async () => {
+    await manager.getOrCreateSession("shared", {
+      root: sampleRoot,
+      buildOptions: sampleBuildOptions({ cacheLocation: "project" }),
+    });
+
+    await expect(
+      manager.getOrCreateSession("shared", {
+        root: sampleRoot,
+        buildOptions: sampleBuildOptions({ cacheLocation: "user" }),
       }),
     ).rejects.toThrow(/different configuration/);
   });

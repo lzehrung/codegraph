@@ -761,6 +761,30 @@ describe("persistent query index", () => {
     store.close();
   });
 
+  it("bounds candidateChunksForTerms SQL prefetch via the limit parameter", async () => {
+    const root = await createRepo();
+    const databasePath = path.join(root, "query-candidate-limit.sqlite");
+    const store = new QueryIndexStore(databasePath);
+    const files = Array.from({ length: 20 }, (_, index) =>
+      preparedFile(`src/file${String(index).padStart(2, "0")}.ts`, ["const alphaNoise = 1;"]),
+    );
+    store.replaceFiles(files, [], {
+      ...expectedQueryIndexVersionMetadata(),
+      projectSnapshotIdentity: "snap-4",
+      projectRootIdentity: "root-4",
+      createdByCodegraphVersion: "test",
+      updatedAt: new Date().toISOString(),
+    });
+    const paths = files.map((file) => file.path);
+
+    const unbounded = store.candidateChunksForTerms(["alpha"], paths);
+    expect(unbounded).toHaveLength(20);
+
+    const bounded = store.candidateChunksForTerms(["alpha"], paths, 5);
+    expect(bounded).toHaveLength(5);
+    store.close();
+  });
+
   it("rejects absolute and traversing paths from persisted rows", async () => {
     const root = await createRepo();
     expect(() => resolveQueryIndexSourcePath(root, "../outside.ts")).toThrow(/Invalid query index relative path/u);

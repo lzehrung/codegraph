@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../indexer/build-index.js";
-import { type BuildOptions, type BuildReport } from "../indexer/types.js";
+import { type BuildOptions, type BuildReport, type CacheLocation } from "../indexer/types.js";
 import { summarizeAnalysis, type AnalysisSummary } from "../analysisSummary.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
@@ -60,6 +60,7 @@ export type IndexCommandContext = {
   languageExtensions: LanguageExtensionMap | undefined;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
   progressHandler: BuildOptions["onProgress"];
+  cacheLocation: CacheLocation | undefined;
   graphOptions: GraphBuildOptions | undefined;
   reportEnabled: boolean;
   reportFile: string | undefined;
@@ -87,6 +88,7 @@ export async function handleIndexCommand(context: IndexCommandContext): Promise<
   }
   const threads = parseNonNegativeIntegerOption(context.getOpt("--threads"), "--threads", 0);
   const cache = parseCacheModeOption(context.getOpt("--cache"));
+  const cacheDir = context.getOpt("--cache-dir");
   const cacheStrict = context.hasFlag("--cache-strict");
   const full = context.hasFlag("--json") || context.hasFlag("--full");
   const cacheVerify = context.hasFlag("--cache-verify");
@@ -108,6 +110,8 @@ export async function handleIndexCommand(context: IndexCommandContext): Promise<
     ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
     ...(context.languageExtensions ? { languageExtensions: context.languageExtensions } : {}),
     ...context.workerOpts,
+    ...(cacheDir ? { cacheDir } : {}),
+    ...(context.cacheLocation ? { cacheLocation: context.cacheLocation } : {}),
     cache: cache ?? "disk",
     cacheStrict,
     cacheVerify,

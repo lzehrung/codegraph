@@ -80,6 +80,7 @@ function normalizeBuildOptions(options?: BuildOptions): Record<string, unknown> 
   return {
     cache: options.cache,
     cacheDir: options.cacheDir ? path.resolve(options.cacheDir) : undefined,
+    cacheLocation: options.cacheLocation,
     cacheStrict: options.cacheStrict,
     useBloomFilters: options.useBloomFilters,
     graph: options.graph
@@ -245,7 +246,14 @@ export class CodeReviewSession implements ICodeReviewSession {
     const graph = mergeGraphOptions(config.graph, this.buildOptions?.graph);
     const languageExtensions =
       normalizeLanguageExtensions(this.buildOptions?.languageExtensions) ?? config.languages?.extensions;
-    if (!hasDiscoveryOptions(discovery) && !config.graph && !this.buildOptions?.graph && !languageExtensions) {
+    const cacheLocation = this.buildOptions?.cacheLocation ?? config.cache?.location;
+    if (
+      !hasDiscoveryOptions(discovery) &&
+      !config.graph &&
+      !this.buildOptions?.graph &&
+      !languageExtensions &&
+      !cacheLocation
+    ) {
       return this.buildOptions;
     }
     return {
@@ -253,6 +261,7 @@ export class CodeReviewSession implements ICodeReviewSession {
       ...(hasDiscoveryOptions(discovery) ? { discovery } : {}),
       ...(config.graph || this.buildOptions?.graph ? { graph } : {}),
       ...(languageExtensions ? { languageExtensions } : {}),
+      ...(cacheLocation ? { cacheLocation } : {}),
     };
   }
 

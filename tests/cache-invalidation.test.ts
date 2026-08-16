@@ -2560,4 +2560,67 @@ describe("Cache invalidation and strict hashing", () => {
     expect(fileIdentityKey(resolution.anchor)).toBe(fileIdentityKey(projectRoot));
     expect(resolution.layer).toBe("project");
   });
+
+  it("keeps the repo-anchored cache namespace stable when the repository moves", async () => {
+    const parent = await mkTmpDir("dg-cache-namespace-move-");
+    const repoRoot = path.join(parent, "repo-a");
+    const projectRoot = path.join(repoRoot, "packages", "app");
+    await fsp.mkdir(projectRoot, { recursive: true });
+    await fsp.writeFile(path.join(repoRoot, ".git"), "gitdir: external\n", "utf8");
+    const before = buildCache.cacheRoot(projectRoot, { cache: "disk" });
+
+    const movedRepoRoot = path.join(parent, "repo-a-renamed");
+    await fsp.rename(repoRoot, movedRepoRoot);
+    const movedProjectRoot = path.join(movedRepoRoot, "packages", "app");
+    const after = buildCache.cacheRoot(movedProjectRoot, { cache: "disk" });
+
+    expect(path.basename(after)).toBe(path.basename(before));
+  });
+
+  it("reuses a legacy v4 project snapshot missing fileSignatures instead of crashing to a forced miss", async () => {
+    const root = await mkTmpDir("dg-cache-legacy-v4-");
+    await fsp.writeFile(path.join(root, "entry.ts"), "export const entry = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const manifest = await readManifest(root);
+    const entries = new Map(Object.entries(manifest.files));
+
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshot = (await readProjectSnapshot(snapshotPath)) as Record<string, unknown>;
+    delete snapshot.fileSignatures;
+    delete snapshot.nativeMode;
+    delete snapshot.projectFiles;
+    delete snapshot.bloomFilters;
+    snapshot.version = 4;
+    await writeProjectSnapshot(snapshotPath, snapshot);
+
+    // Previously, iterating the missing `fileSignatures` field during v4 migration threw and
+    // was swallowed by the outer try/catch, forcing a cache miss even when the rest of the
+    // migrated payload (fingerprints, files signature, graph) was otherwise still compatible.
+    const loaded = await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries);
+    expect(loaded).not.toBeNull();
+    expect(loaded?.index.byFile.has(fileIdentityKey(normalize(path.join(root, "entry.ts"))))).toBe(true);
+
+    const rebuilt = await buildProjectIndexIncremental(root, { threads: 2, cache: "disk" });
+    expect(rebuilt.byFile.size).toBeGreaterThan(0);
+  });
+
+  it("reuses per-file modules and bloom filters after a project move even when a sibling file changed", async () => {
+    const sourceRoot = await mkTmpDir("dg-cache-partial-move-source-");
+    const movedRoot = `${sourceRoot}-moved`;
+    await fsp.writeFile(path.join(sourceRoot, "unchanged.ts"), "export const unchanged = 1;\n", "utf8");
+    await fsp.writeFile(path.join(sourceRoot, "entry.ts"), "export const entry = 1;\n", "utf8");
+    await buildProjectIndex(sourceRoot, { cache: "disk", threads: 1 });
+    await fsp.rename(sourceRoot, movedRoot);
+
+    const bloomFilters = await buildCache.tryLoadPersistedBloomFilters(movedRoot, { cache: "disk" });
+    expect(bloomFilters).not.toBeNull();
+
+    await fsp.writeFile(path.join(movedRoot, "entry.ts"), "export const entry = 2;\n", "utf8");
+    const report: BuildReport = { timings: {} };
+    const rebuilt = await buildProjectIndexIncremental(movedRoot, { cache: "disk", threads: 1, report });
+
+    expect(rebuilt.byFile.has(fileIdentityKey(normalize(path.join(movedRoot, "unchanged.ts"))))).toBe(true);
+    expect(report.files?.cached).toBeGreaterThan(0);
+    expect(report.cache?.misses ?? 0).toBeLessThanOrEqual(1);
+  });
 });

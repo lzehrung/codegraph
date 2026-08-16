@@ -22,15 +22,15 @@ Numeric options such as `--limit`, `--threads`, `--depth`, `--max-refs`, and tok
 
 Default workflow:
 
-## Cache location
-
-Index caches store project-relative paths, so a cache can be moved with its project. Cache selection precedence is `--cache-dir`, `CODEGRAPH_CACHE_DIR`, `cache.location` in project config (then user config), repository metadata, then the project root. `cache.location` accepts `project`, `repo`, `user`, or an absolute path; `--root` remains the project scope boundary.
-
 - code review: `codegraph review`
 - blast-radius follow-up: `codegraph impact --base HEAD --head WORKTREE`
 - unfamiliar repo: `codegraph explore "how does auth reach db?" --root .`
 - first-turn map: `codegraph orient --root . --budget small`
 - targeted follow-up: `codegraph search "<query>" --json` then `codegraph explain <handle|file|symbol>`
+
+## Cache location
+
+Index caches store project-relative paths, so a cache can be moved with its project. Cache selection precedence is `--cache-dir`, `CODEGRAPH_CACHE_DIR`, `cache.location` in project config (then user config), repository metadata, then the project root. `cache.location` accepts `project`, `repo`, `user`, or an absolute path; `--root` remains the project scope boundary.
 
 ## Runtime selection
 

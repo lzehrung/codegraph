@@ -210,7 +210,7 @@ function pushNestedSection(body: string[], title: string, nestedBody: readonly s
   }
 }
 
-/** Pretty formatter for `codegraph doctor`. Stable Package/Native(+Origin/Update) nesting matches JSON. */
+/** Pretty formatter for `codegraph doctor`. Stable Package/Cache/Native(+Origin/Update) nesting matches JSON. */
 export function formatDoctorSummary(report: DoctorReport): string {
   const lines: string[] = [];
   const pkg = asRecord(report.package);
@@ -221,6 +221,17 @@ export function formatDoctorSummary(report: DoctorReport): string {
       ["Name", readField(pkg, "name")],
       ["Version", readField(pkg, "version")],
       ["Package root", readField(pkg, "packageRoot")],
+    ]),
+  );
+
+  const cache = asRecord(report.cache);
+  pushSection(
+    lines,
+    "Cache",
+    formatLabeledFields([
+      ["Path", readField(cache, "path")],
+      ["Anchor", readField(cache, "anchor")],
+      ["Layer", readField(cache, "layer")],
     ]),
   );
 
