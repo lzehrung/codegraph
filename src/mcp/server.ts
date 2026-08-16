@@ -350,11 +350,7 @@ type CodegraphMcpHandlerDefinitions = {
   }) => Promise<CodegraphMcpFreshResult<CodegraphArtifactBuildResult>>;
 };
 
-type WithAbortSignal<T> = {
-  [K in keyof T]: T[K] extends (request: infer Request) => Promise<infer Result>
-    ? (request: Request, signal?: AbortSignal) => Promise<Result>
-    : never;
-};
+type WithAbortSignal<T extends { query_sqlite: unknown }> = { [K in Exclude<keyof T, "query_sqlite">]: T[K] extends (request: infer Request) => Promise<infer Result> ? (request: Request, signal?: AbortSignal) => Promise<Result> : never; } & Pick<T, "query_sqlite">;
 
 export type CodegraphMcpHandlers = WithAbortSignal<CodegraphMcpHandlerDefinitions>;
 
