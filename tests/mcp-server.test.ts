@@ -2968,3 +2968,85 @@ describe("MCP transport isolation regressions (S8)", () => {
     }
   });
 });
+
+describe("MCP legacy session capacity and error-handling regressions", () => {
+  it("releases the initialization capacity reservation when legacy Accept header validation rejects the request", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-capacity-accept-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      port: 0,
+      httpSessionIdleMs: 0,
+      httpSessionMaxCount: 1,
+    });
+
+    const initializeRequest = {
+      jsonrpc: "2.0",
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "codegraph-capacity-test", version: "1.0.0" },
+      },
+    };
+
+    try {
+      // No override supplies an Accept header, so postRawHttpJson's default
+      // ("application/json" without "text/event-stream") trips the legacy transport's
+      // own 406 validation before any session is created.
+      const rejected = await postRawHttpJson(httpServer.url, { ...initializeRequest, id: 1 }, {});
+      expect(rejected.status).toBe(406);
+
+      // With httpSessionMaxCount 1, a leaked capacity reservation from the rejected
+      // attempt would make this second initialize 503 instead of succeeding.
+      const accepted = await postMcpJson(httpServer.url, { ...initializeRequest, id: 2 });
+      expect(accepted.response.status).toBe(200);
+      expect(accepted.response.headers.get("mcp-session-id")).toBeTruthy();
+    } finally {
+      await httpServer.close();
+    }
+  });
+
+  it("keeps a healthy session usable after a request-scoped SDK validation error on a follow-up request", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-request-error-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export function ok(): number { return 1; }\n", "utf8");
+    const httpServer = await startCodegraphMcpHttpServer({ root, port: 0 });
+
+    try {
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-session-error-test", version: "1.0.0" },
+        },
+      });
+      const sessionId = initialize.response.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+      if (!sessionId) throw new Error("Missing sessionId");
+
+      // A follow-up request against the same session with a bad Accept header trips
+      // the transport's own request-scoped validation (406) through onerror, without
+      // throwing and without the transport ever closing.
+      const badAccept = await postRawHttpJson(
+        httpServer.url,
+        { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+        { "mcp-session-id": sessionId },
+      );
+      expect(badAccept.status).toBe(406);
+
+      // The session must still be usable: a prior bug deleted it from the store on
+      // every onerror, which would turn this into a 400 "Invalid or missing session ID".
+      const followUp = await postMcpJson(
+        httpServer.url,
+        { jsonrpc: "2.0", id: 3, method: "tools/list", params: {} },
+        sessionId,
+      );
+      expect(followUp.response.status).toBe(200);
+    } finally {
+      await httpServer.close();
+    }
+  });
+});

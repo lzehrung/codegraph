@@ -714,7 +714,7 @@ const result = await queryGraphSqliteRaw(
 console.log(result.columns, result.rows);
 ```
 
-`queryGraphSqliteRaw()` is intentionally read-only. It accepts result-producing statements such as `SELECT` and `PRAGMA` and rejects mutating SQL. Its defaults bound rows, cells, response bytes, and execution to 10 seconds; callers can further tighten `{ maxRows, maxBytes, maxCellBytes, deadlineMs }`.
+`queryGraphSqliteRaw()` is intentionally read-only. It accepts result-producing statements such as `SELECT` and `PRAGMA` and rejects mutating SQL. Its defaults bound rows, cells, and response bytes, and callers can further tighten `{ maxRows, maxBytes, maxCellBytes, deadlineMs }`. The 10-second default execution budget (`deadlineMs`) is enforced by running the query in a dedicated worker thread that is force-terminated on expiry, so it interrupts a query even mid-execution; in a degraded install where that worker asset cannot be located, the query instead runs in-process under a weaker per-row check that cannot interrupt a single blocking native call (a logged, one-time-per-process condition).
 
 ## SQL artifact facts
 

@@ -13,6 +13,11 @@ export class SqliteQueryDeadlineExceededError extends Error {
   }
 }
 
+/** Resolves the compiled worker entry: a compiled sibling next to this module
+ * (production/standalone layouts, where the whole `dist/` tree ships), falling back to
+ * the package-root-relative compiled path (running this module from `src/`, where only
+ * `dist/` is built). Throwing here is the trigger `queryGraphSqliteRaw` uses to fall
+ * back to the strictly weaker in-process per-row deadline check. */
 export function resolveRawSqlQueryWorkerPath(): string {
   const selfDirectory = path.dirname(fileURLToPath(import.meta.url));
   const sibling = path.resolve(selfDirectory, "rawQueryWorker.js");
@@ -23,6 +28,16 @@ export function resolveRawSqlQueryWorkerPath(): string {
   throw new Error(`Raw SQLite query worker file not found: ${compiled}`);
 }
 
+/**
+ * Runs a single bounded raw SQL read in a dedicated worker thread with a hard execution
+ * deadline. On expiry, Piscina's `signal` option force-terminates the worker thread and
+ * rejects immediately — the caller never waits longer than `deadlineMs`, regardless of
+ * how long the underlying query actually takes, because termination does not need the
+ * blocked thread's cooperation. `pool.destroy()` is fire-and-forget rather than awaited,
+ * so an orphaned worker still finishing one already-in-flight synchronous native call
+ * never delays this call's rejection or a subsequent query against the same file
+ * (concurrent read-only SQLite connections do not block each other).
+ */
 export async function runRawSqlQueryInWorker(task: RawQueryWorkerTask, deadlineMs: number): Promise<RawSqlResult> {
   const pool = new Piscina({
     filename: resolveRawSqlQueryWorkerPath(),
