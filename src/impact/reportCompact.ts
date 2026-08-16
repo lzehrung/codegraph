@@ -151,6 +151,7 @@ function compactImpactItem(item: ImpactItem, file: number): CompactImpactReport[
     confidence?: number;
     depth?: number;
     typeOnly?: boolean;
+    refs?: ImpactItem["refs"];
     explain?: NonNullable<ImpactItem["explain"]>;
   } = {
     file,
