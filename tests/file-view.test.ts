@@ -364,12 +364,12 @@ describe("agent file view", () => {
     await fs.writeFile(victimPath, "inside-safe-content\n", "utf8");
 
     const originalLstat = fs.lstat.bind(fs);
-    const lstat = vi.spyOn(fs, "lstat").mockImplementation(async (candidate) => {
-      const stat = await originalLstat(candidate);
+    const lstat = vi.spyOn(fs, "lstat").mockImplementation(async (candidate, options) => {
+      const stat = await originalLstat(candidate, options as { bigint: true });
       if (path.resolve(String(candidate)) !== path.resolve(victimPath)) return stat;
       return Object.assign(Object.create(stat), {
-        birthtimeMs: stat.birthtimeMs + 1,
-        dev: 0,
+        birthtimeMs: stat.birthtimeMs + 1n,
+        dev: 0n,
       });
     });
 
