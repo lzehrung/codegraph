@@ -439,6 +439,8 @@ console.log(packet.kind, refs.references, rows.rows, rows.freshness.state);
 ```
 
 `serveCodegraphMcp()` (from `@lzehrung/codegraph/mcp`) starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. MCP file and artifact paths are confined after realpath resolution.
+
+`CodegraphMcpServerOptions.mcpToolConcurrency` caps concurrent calls per protocol session (default `4`); saturation returns a retryable busy error. `httpBodyTimeoutMs` bounds HTTP request-body receipt (default `30_000` ms), returning HTTP 408 on expiry. Concurrent `refresh_index` calls serialize and each applies its requested `warmup` after the preceding refresh completes. Client cancellation returns promptly but retains its concurrency slot until shared work settles, so cancellation cannot create unbounded background work.
 `query_sqlite` is read-only and row- and byte-bounded. It returns freshness metadata for fresh artifact reads, refreshes codegraph-owned SQLite artifacts after small edits when write access is enabled, and rejects stale artifact queries it cannot refresh safely.
 `artifact_build` is disabled by default and requires `readOnly: false` or CLI `--allow-build`; it refuses to write outputs from a stale MCP index until `refresh_index` succeeds. MCP `orient` and `packet_get` calls use the server-configured root; they do not accept per-request root overrides.
 

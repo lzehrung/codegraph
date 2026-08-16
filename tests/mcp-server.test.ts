@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import {
+  awaitMcpToolOperation,
   callMcpTool,
   createCodegraphMcpHandlers,
   createCodegraphMcpProtocolServer,
@@ -2765,6 +2766,29 @@ describe("MCP tool registry dispatch", () => {
     runGit(root, ["add", "."]);
     runGit(root, ["commit", "-m", "base"]);
     const handlers = createCodegraphMcpHandlers({ root });
+    const handlerSpies = {
+      search: vi.spyOn(handlers, "search"),
+      workspace_symbols: vi.spyOn(handlers, "workspace_symbols"),
+      rename_preview: vi.spyOn(handlers, "rename_preview"),
+      refactor_plan: vi.spyOn(handlers, "refactor_plan"),
+      calls: vi.spyOn(handlers, "calls"),
+      type_hierarchy: vi.spyOn(handlers, "type_hierarchy"),
+      implementations: vi.spyOn(handlers, "implementations"),
+      explore: vi.spyOn(handlers, "explore"),
+      orient: vi.spyOn(handlers, "orient"),
+      packet_get: vi.spyOn(handlers, "packet_get"),
+      get_file: vi.spyOn(handlers, "get_file"),
+      get_symbol: vi.spyOn(handlers, "get_symbol"),
+      goto: vi.spyOn(handlers, "goto"),
+      refs: vi.spyOn(handlers, "refs"),
+      file_deps: vi.spyOn(handlers, "file_deps"),
+      path: vi.spyOn(handlers, "path"),
+      impact: vi.spyOn(handlers, "impact"),
+      review: vi.spyOn(handlers, "review"),
+      query_sqlite: vi.spyOn(handlers, "query_sqlite"),
+      refresh_index: vi.spyOn(handlers, "refresh_index"),
+      artifact_build: vi.spyOn(handlers, "artifact_build"),
+    };
     const advertisedTools = listCodegraphMcpTools();
     expect(advertisedTools.map((tool) => tool.name)).toEqual(MCP_TOOL_REGISTRY.map((tool) => tool.name));
     expect(advertisedTools.some((tool) => "dispatch" in tool)).toBe(false);
@@ -2809,5 +2833,105 @@ describe("MCP tool registry dispatch", () => {
         expect(message, tool.name).not.toMatch(/Unknown MCP tool|Invalid parameters for/i);
       }
     }
+
+    for (const [name, spy] of Object.entries(handlerSpies)) {
+      expect(spy, name).toHaveBeenCalled();
+    }
+    expect(handlerSpies.calls).toHaveBeenCalledWith(expect.objectContaining({ direction: "callers" }), undefined);
+    expect(handlerSpies.calls).toHaveBeenCalledWith(expect.objectContaining({ direction: "callees" }), undefined);
+    expect(handlerSpies.type_hierarchy).toHaveBeenCalledWith(
+      expect.objectContaining({ direction: "supertypes" }),
+      undefined,
+    );
+    expect(handlerSpies.type_hierarchy).toHaveBeenCalledWith(
+      expect.objectContaining({ direction: "subtypes" }),
+      undefined,
+    );
+    expect(handlerSpies.file_deps).toHaveBeenCalledWith(expect.objectContaining({ direction: "deps" }), undefined);
+    expect(handlerSpies.file_deps).toHaveBeenCalledWith(expect.objectContaining({ direction: "rdeps" }), undefined);
+  });
+});
+
+describe("MCP refresh coalescing", () => {
+  it("serializes every queued request's requested warmup", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-refresh-coalesce-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const backingSession = createAgentSession({ root });
+    const firstWarmupReached = Promise.withResolvers<void>();
+    const releaseFirstWarmup = Promise.withResolvers<void>();
+    const secondWarmupReached = Promise.withResolvers<void>();
+    const releaseSecondWarmup = Promise.withResolvers<void>();
+    const loadModes: Array<"skip" | "full"> = [];
+    let activeLoads = 0;
+    let maxActiveLoads = 0;
+    let fullWarmups = 0;
+    const session: AgentSession = {
+      ...backingSession,
+      loadProject: async (options) => {
+        const mode = options?.symbolGraph === "skip" ? "skip" : "full";
+        loadModes.push(mode);
+        activeLoads += 1;
+        maxActiveLoads = Math.max(maxActiveLoads, activeLoads);
+        try {
+          if (mode === "skip") {
+            firstWarmupReached.resolve();
+            await releaseFirstWarmup.promise;
+          } else {
+            fullWarmups += 1;
+            if (fullWarmups === 1) {
+              secondWarmupReached.resolve();
+              await releaseSecondWarmup.promise;
+            }
+          }
+          return await backingSession.loadProject(options);
+        } finally {
+          activeLoads -= 1;
+        }
+      },
+    };
+    const handlers = createCodegraphMcpHandlers({ root, session });
+
+    const first = handlers.refresh_index({ warmup: "base" });
+    await firstWarmupReached.promise;
+    const second = handlers.refresh_index({ warmup: "symbols" });
+    const third = handlers.refresh_index({ warmup: "symbols" });
+    releaseFirstWarmup.resolve();
+
+    try {
+      await secondWarmupReached.promise;
+      for (let turn = 0; turn < 4; turn += 1) await Promise.resolve();
+      expect(loadModes).toEqual(["skip", "full"]);
+      expect(maxActiveLoads).toBe(1);
+
+      releaseSecondWarmup.resolve();
+      await expect(first).resolves.toEqual({ refreshed: true, warmup: "base" });
+      await expect(second).resolves.toEqual({ refreshed: true, warmup: "symbols" });
+      await expect(third).resolves.toEqual({ refreshed: true, warmup: "symbols" });
+      expect(loadModes).toEqual(["skip", "full", "full"]);
+      expect(maxActiveLoads).toBe(1);
+    } finally {
+      releaseFirstWarmup.resolve();
+      releaseSecondWarmup.resolve();
+    }
+  });
+});
+
+describe("MCP cancellation accounting", () => {
+  it("keeps a tool-call slot reserved until a cancelled operation settles", async () => {
+    const controller = new AbortController();
+    const operation = Promise.withResolvers<string>();
+    let released = 0;
+    const pending = awaitMcpToolOperation(controller.signal, operation.promise, () => {
+      released += 1;
+    });
+
+    controller.abort();
+    await expect(pending).rejects.toThrow("MCP tool call was cancelled.");
+    expect(released).toBe(0);
+
+    operation.resolve("finished");
+    await vi.waitFor(() => {
+      expect(released).toBe(1);
+    });
   });
 });

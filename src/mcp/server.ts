@@ -1013,18 +1013,15 @@ function createCodegraphMcpHandlersForSession(
 
     refresh_index: async (request) => {
       const warmup = request.warmup ?? "off";
-      if (refreshPromise) {
-        await refreshPromise;
-        return { refreshed: true, warmup };
-      }
-      const epoch = ++refreshEpoch;
+      const previousRefresh = refreshPromise;
       const refresh = (async () => {
+        if (previousRefresh) await previousRefresh.catch(() => undefined);
+        ++refreshEpoch;
         session.invalidate();
         sqlitePath = configuredSqlitePath;
         sqliteOutDir = configuredSqliteOutDir;
         sqliteCanRefresh = configuredSqliteCanRefresh;
         await startCodegraphMcpWarmup(session, warmup);
-        if (epoch !== refreshEpoch) throw new Error("MCP index refresh was superseded.");
       })();
       refreshPromise = refresh;
       try {
@@ -1103,60 +1100,56 @@ export function createCodegraphMcpProtocolServer(
       throw new Error("MCP tool execution is busy; retry shortly.");
     }
     inFlightToolCalls += 1;
-    try {
-      const isFirstToolCall = toolCallState.firstToolCallPending;
-      toolCallState.firstToolCallPending = false;
-      const progressToken = isFirstToolCall ? getToolCallProgressToken(request.params) : undefined;
-      const emitFirstToolCallVisibility = async (
-        level: "info" | "error",
-        progress: number,
-        message: string,
-      ): Promise<void> => {
-        if (!isFirstToolCall) return;
-        try {
-          await ctx.mcpReq.log(level, message, "codegraph");
-          if (progressToken !== undefined) {
-            await ctx.mcpReq.notify({
-              method: "notifications/progress",
-              params: { progressToken, progress, total: 1, message },
-            });
-          }
-        } catch (error) {
-          console.error(`[codegraph] MCP cold-start visibility failed: ${errorMessage(error)}`);
+    const isFirstToolCall = toolCallState.firstToolCallPending;
+    toolCallState.firstToolCallPending = false;
+    const progressToken = isFirstToolCall ? getToolCallProgressToken(request.params) : undefined;
+    const emitFirstToolCallVisibility = async (
+      level: "info" | "error",
+      progress: number,
+      message: string,
+    ): Promise<void> => {
+      if (!isFirstToolCall) return;
+      try {
+        await ctx.mcpReq.log(level, message, "codegraph");
+        if (progressToken !== undefined) {
+          await ctx.mcpReq.notify({
+            method: "notifications/progress",
+            params: { progressToken, progress, total: 1, message },
+          });
         }
+      } catch (error) {
+        console.error(`[codegraph] MCP cold-start visibility failed: ${errorMessage(error)}`);
+      }
+    };
+    await emitFirstToolCallVisibility(
+      "info",
+      0,
+      `Codegraph is warming the first tool call for '${request.params.name}'.`,
+    );
+    try {
+      installedVersion.check();
+    } catch (error) {
+      console.error(`[codegraph] installed-version check failed: ${errorMessage(error)}`);
+    }
+    try {
+      const operation = callMcpTool(handlers, request.params.name, request.params.arguments ?? {}, ctx.mcpReq.signal);
+      const releaseToolCall = (): void => {
+        inFlightToolCalls -= 1;
       };
+      const result = await awaitMcpToolOperation(ctx.mcpReq.signal, operation, releaseToolCall);
       await emitFirstToolCallVisibility(
         "info",
-        0,
-        `Codegraph is warming the first tool call for '${request.params.name}'.`,
+        1,
+        `Codegraph finished warming the first tool call for '${request.params.name}'.`,
       );
-      try {
-        installedVersion.check();
-      } catch (error) {
-        console.error(`[codegraph] installed-version check failed: ${errorMessage(error)}`);
-      }
-      try {
-        const result = await withAbortSignal(
-          ctx.mcpReq.signal,
-          async () =>
-            await callMcpTool(handlers, request.params.name, request.params.arguments ?? {}, ctx.mcpReq.signal),
-        );
-        await emitFirstToolCallVisibility(
-          "info",
-          1,
-          `Codegraph finished warming the first tool call for '${request.params.name}'.`,
-        );
-        return toToolResult(result);
-      } catch (error) {
-        await emitFirstToolCallVisibility(
-          "error",
-          1,
-          `Codegraph failed while warming the first tool call for '${request.params.name}'.`,
-        );
-        throw error;
-      }
-    } finally {
-      inFlightToolCalls -= 1;
+      return toToolResult(result);
+    } catch (error) {
+      await emitFirstToolCallVisibility(
+        "error",
+        1,
+        `Codegraph failed while warming the first tool call for '${request.params.name}'.`,
+      );
+      throw error;
     }
   });
 
@@ -1609,13 +1602,22 @@ function isMcpNodeRequest(request: IncomingMessage): request is IncomingMessage 
   return request.method !== undefined && request.url !== undefined;
 }
 
-function withAbortSignal<T>(signal: AbortSignal | undefined, run: () => Promise<T>): Promise<T> {
-  if (!signal) return run();
+export function awaitMcpToolOperation<T>(
+  signal: AbortSignal | undefined,
+  operation: Promise<T>,
+  onSettled: () => void,
+): Promise<T> {
+  void operation.then(onSettled, onSettled);
+  return withAbortSignal(signal, operation);
+}
+
+function withAbortSignal<T>(signal: AbortSignal | undefined, operation: Promise<T>): Promise<T> {
+  if (!signal) return operation;
   if (signal.aborted) return Promise.reject(new Error("MCP tool call was cancelled."));
   const cancellation = Promise.withResolvers<never>();
   const onAbort = (): void => cancellation.reject(new Error("MCP tool call was cancelled."));
   signal.addEventListener("abort", onAbort, { once: true });
-  return Promise.race([run(), cancellation.promise]).finally(() => signal.removeEventListener("abort", onAbort));
+  return Promise.race([operation, cancellation.promise]).finally(() => signal.removeEventListener("abort", onAbort));
 }
 
 export async function callMcpTool(

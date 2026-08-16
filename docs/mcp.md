@@ -33,6 +33,10 @@ Stdio servers exit when the client closes stdin, when an IPC parent disconnects,
 
 HTTP protocol sessions track last activity, cap concurrent legacy sessions (default 32), and evict idle sessions on a timer (default 30 minutes). Capacity and idle eviction skip sessions with in-flight requests or open SSE streams; when every slot is active, a new `initialize` receives an actionable JSON-RPC capacity error instead of evicting a working client. Transport errors and protocol session closes also remove the session.
 
+Each MCP protocol session permits four concurrent tool calls by default; a saturated session returns a retryable busy error rather than queueing unbounded work. The programmatic server options `mcpToolConcurrency` and `httpBodyTimeoutMs` tune that cap and the 30-second HTTP request-body deadline; an HTTP body that misses its deadline receives `408 Request Timeout`.
+
+Client cancellation returns promptly, but does not discard shared index or artifact work. A cancelled call continues to occupy its concurrency slot until its underlying operation settles, preventing a burst of abandoned requests from exceeding the configured resource bound.
+
 Use stdio for a client-owned subprocess. Use HTTP for one long-running codegraph process per repository, then point every MCP-capable IDE, terminal, or agent client at the same local URL. Exact config keys vary by client, but the MCP settings should use HTTP/Streamable HTTP transport plus the `/mcp` URL instead of a `command`/`args` stdio launch.
 
 codegraph uses the official MCP SDK v2 to serve current 2026-07-28 clients while retaining compatibility with 2025-era clients. MCP protocol connections and HTTP protocol sessions keep separate transport state, but all share the server's one warm codegraph analysis session for the configured root. Tool request schemas set `additionalProperties: false` and reject unknown fields with an actionable invalid-parameter error instead of silently ignoring typos.
@@ -100,7 +104,7 @@ Text and hybrid searches reuse a prepared handle for `.codegraph-cache/index-v1/
 
 If the sidecar is busy or unavailable, MCP uses the same exact in-memory matcher. [How it works](./how-it-works.md#cache-and-session-behavior) explains the search cache.
 
-Use `refresh_index` to rebuild the snapshot, reset SQLite artifact state, or recover after a change burst exceeds automatic limits. With write access, `query_sqlite` refreshes codegraph SQLite artifacts after small edits; otherwise it refuses stale rows. `artifact_build` refuses stale indexes, so run `refresh_index` after large change bursts.
+Use `refresh_index` to rebuild the snapshot, reset SQLite artifact state, or recover after a change burst exceeds automatic limits. Concurrent refresh requests serialize; each request runs its own requested `warmup` (`off`, `base`, or `symbols`) after an active refresh completes. With write access, `query_sqlite` refreshes codegraph SQLite artifacts after small edits; otherwise it refuses stale rows. `artifact_build` refuses stale indexes, so run `refresh_index` after large change bursts.
 `get_file` reads live bytes from disk after path confinement. It does not require a fresh index; only an explicit `includeGraphContext: true` checks indexed freshness and adds direct graph context, so returned file bytes and `totalLines` remain live even when `freshness` reports stale context.
 Tool schemas are flat JSON objects for broad client compatibility; argument combinations such as `refs` handle-vs-position mode are validated by the server. Legacy paired names (`callers`, `callees`, `supertypes`, `subtypes`, `deps`, and `rdeps`) remain accepted by `tools/call` as aliases, but only the unified tools appear in `tools/list`.
 
