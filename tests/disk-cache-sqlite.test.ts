@@ -6,7 +6,11 @@ import { brotliCompressSync, brotliDecompressSync } from "node:zlib";
 
 import { buildProjectIndex, findDuplicates, type BuildReport } from "../src/index.js";
 import { closeDuplicateUnitCacheDatabase } from "../src/duplicates.js";
-import { tryLoadDuplicateUnitsFromCache, writeDuplicateUnitsToCache } from "../src/duplicates/unitCache.js";
+import {
+  tryLoadDuplicateUnitsFromCache,
+  writeDuplicateUnitsBatchToCache,
+  writeDuplicateUnitsToCache,
+} from "../src/duplicates/unitCache.js";
 import { buildInternalUnit, formatDuplicateSqlHandle, formatDuplicateSymbolHandle } from "../src/duplicates/units.js";
 import * as buildCache from "../src/indexer/build-cache.js";
 import { SqliteDatabase, SqliteStatement } from "../src/sqlite-driver.js";
@@ -562,6 +566,39 @@ describe("disk cache uses sqlite backend", () => {
     expect(loaded?.[0]?.absoluteFile).toBe(normalizePathForSql(file));
     expect(loaded?.[0]?.symbolHandle).toBe(persistedNamedHandle);
     expect(loaded?.[1]?.symbolHandle).toBe(persistedEmptyNameHandle);
+  });
+
+  it("honors a projectRoot override in the batched duplicate-unit cache writer", async () => {
+    const root = await mkTmpDir("dg-disk-cache-batch-scoped-root-");
+    await writeDuplicateProject(root);
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const file = normalizePathForSql(path.join(root, "src", "a.ts"));
+    const source = await fsp.readFile(file, "utf8");
+    const scopedRoot = path.join(root, "src");
+    const unit = buildInternalUnit(
+      {
+        file: "src/a.ts",
+        startLine: 1,
+        endLine: 8,
+        languageId: "typescript",
+        kind: "symbol",
+        name: "normalizeInvoiceRows",
+      },
+      file,
+      source,
+      3,
+      2,
+      index.nativeMode,
+      { symbolHandle: formatDuplicateSymbolHandle(file, "normalizeInvoiceRows", 1, 0) },
+    );
+
+    writeDuplicateUnitsBatchToCache(index, [{ file, variant: "batch-scoped", units: [unit] }], scopedRoot);
+
+    const loadedWithScopedRoot = tryLoadDuplicateUnitsFromCache(index, file, "batch-scoped", scopedRoot);
+    expect(loadedWithScopedRoot?.[0]?.id).toBe(unit.id);
+
+    const loadedWithIndexRoot = tryLoadDuplicateUnitsFromCache(index, file, "batch-scoped", index.projectRoot);
+    expect(loadedWithIndexRoot).toBeNull();
   });
 
   it("rejects duplicate units whose persisted absolute file escapes the project", async () => {

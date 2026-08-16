@@ -378,12 +378,13 @@ export type PendingDuplicateUnitCacheWrite = {
 export function writeDuplicateUnitsBatchToCache(
   index: ProjectIndex,
   writes: readonly PendingDuplicateUnitCacheWrite[],
+  projectRoot?: string,
 ): void {
   if (!writes.length) return;
-  const root = index.projectRoot ?? "";
+  const root = projectRoot ?? index.projectRoot ?? "";
   if (index.cacheMode === "memory") {
     for (const write of writes) {
-      const sig = duplicateUnitCacheSignature(index, write.file);
+      const sig = duplicateUnitCacheSignature(index, write.file, projectRoot);
       if (!sig) continue;
       writeDuplicateUnitMemoryCache(duplicateUnitCacheKey(write.file, write.variant), {
         sig,
@@ -402,7 +403,7 @@ export function writeDuplicateUnitsBatchToCache(
       payload: Buffer;
     }> = [];
     for (const write of writes) {
-      const sig = duplicateUnitCacheSignature(index, write.file);
+      const sig = duplicateUnitCacheSignature(index, write.file, projectRoot);
       if (!sig) continue;
       const payload = brotliCompressSync(
         JSON.stringify(transformDuplicateUnits(root, serializeDuplicateUnits(write.units), true)),

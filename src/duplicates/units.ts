@@ -564,7 +564,7 @@ export async function collectDuplicateUnits(
     }
   }
   if (pendingWrites.length) {
-    writeDuplicateUnitsBatchToCache(index, pendingWrites);
+    writeDuplicateUnitsBatchToCache(index, pendingWrites, options.projectRoot);
   }
 
   units.sort((left, right) => {

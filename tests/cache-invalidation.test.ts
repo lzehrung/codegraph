@@ -2577,6 +2577,22 @@ describe("Cache invalidation and strict hashing", () => {
     expect(path.basename(after)).toBe(path.basename(before));
   });
 
+  it("reports the environment cache anchor even when CODEGRAPH_CACHE_DIR does not exist yet", async () => {
+    const root = await mkTmpDir("dg-cache-env-anchor-");
+    await fsp.writeFile(path.join(root, "entry.ts"), "export const entry = 1;\n", "utf8");
+    const envParent = await mkTmpDir("dg-cache-env-target-");
+    const envTarget = path.join(envParent, "not-created-yet");
+    vi.stubEnv("CODEGRAPH_CACHE_DIR", envTarget);
+    try {
+      const resolution = buildCache.resolveCacheLocation(root, { cache: "disk" });
+      expect(fileIdentityKey(resolution.anchor)).toBe(fileIdentityKey(path.resolve(envTarget)));
+      expect(resolution.layer).toBe("environment");
+      expect(normalize(resolution.path).startsWith(normalize(path.resolve(envTarget)))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("reuses a legacy v4 project snapshot missing fileSignatures instead of crashing to a forced miss", async () => {
     const root = await mkTmpDir("dg-cache-legacy-v4-");
     await fsp.writeFile(path.join(root, "entry.ts"), "export const entry = 1;\n", "utf8");
@@ -2622,5 +2638,15 @@ describe("Cache invalidation and strict hashing", () => {
     expect(rebuilt.byFile.has(fileIdentityKey(normalize(path.join(movedRoot, "unchanged.ts"))))).toBe(true);
     expect(report.files?.cached).toBeGreaterThan(0);
     expect(report.cache?.misses ?? 0).toBeLessThanOrEqual(1);
+  });
+
+  it("resolves ProjectIndex.projectRoot to an absolute path even when a relative root is passed in", async () => {
+    const root = await mkTmpDir("dg-cache-relative-root-");
+    await fsp.writeFile(path.join(root, "entry.ts"), "export const entry = 1;\n", "utf8");
+    const relativeRoot = path.relative(process.cwd(), root);
+
+    const index = await buildProjectIndex(relativeRoot, { cache: "off", threads: 1 });
+
+    expect(index.projectRoot).toBe(normalize(path.resolve(root)));
   });
 });

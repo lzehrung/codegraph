@@ -319,6 +319,23 @@ export function findStaleNpmRetirementPaths(packageRoot: string, limit = 20): st
     return [];
   }
 }
+/**
+ * Best-effort, dependency-light read of `cache.location` from `codegraph.config.json` in the
+ * current working directory. Deliberately avoids importing `../config.js` (which pulls in zod
+ * and the full config schema): doctor is a fast, low-dependency health check, and the eager
+ * dist-module-loading budget in `cli-startup-eager-modules.test.ts` enforces that. Malformed or
+ * missing config is silently ignored; the fuller schema validation still applies to real builds.
+ */
+function readProjectCacheLocation(root: string): string | undefined {
+  try {
+    const raw = fs.readFileSync(path.join(root, "codegraph.config.json"), "utf8");
+    const parsed = JSON.parse(raw) as { cache?: { location?: unknown } };
+    const location = parsed.cache?.location;
+    return typeof location === "string" && location.trim() ? location.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export function buildDoctorReport(indexPath?: string): DoctorReport {
   const packageIdentity = getCodegraphPackageIdentity();
@@ -326,7 +343,8 @@ export function buildDoctorReport(indexPath?: string): DoctorReport {
   const origin = getNativeBindingOrigin();
   const runtimeIdentity = captureCodegraphRuntimeIdentity(origin);
   const update = createInstalledVersionChecker(runtimeIdentity, { warn: () => undefined }).check(true);
-  const cacheResolution = resolveCacheLocation(process.cwd());
+  const cacheLocation = readProjectCacheLocation(process.cwd());
+  const cacheResolution = resolveCacheLocation(process.cwd(), cacheLocation ? { cacheLocation } : undefined);
   return {
     package: packageIdentity,
     cache: {

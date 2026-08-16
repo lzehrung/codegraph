@@ -85,7 +85,9 @@ export type CacheLocationResolution = CacheAnchorResolution & { path: string };
 export function resolveCacheLocation(projectRoot: string, opts?: BuildOptions): CacheLocationResolution {
   const root = path.resolve(projectRoot);
   const resolution = resolveCacheAnchor(root, opts);
-  const anchorWritable = resolution.layer === "explicit" || isWritableDirectory(resolution.anchor);
+  const anchorCreatable =
+    resolution.layer === "explicit" || resolution.layer === "environment" || resolution.layer === "user";
+  const anchorWritable = anchorCreatable || isWritableDirectory(resolution.anchor);
   const anchor = anchorWritable ? resolution.anchor : root;
   const effectiveLayer = anchorWritable ? resolution.layer : "project";
   const sameRoot = fileIdentityKey(anchor) === fileIdentityKey(root);

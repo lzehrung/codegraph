@@ -523,7 +523,7 @@ function createIndexBuildRunState(
   if (report) initNativeBackendReport(report);
   const cacheMode = opts?.cache ?? "off";
   return {
-    normalizedProjectRoot: normalizePath(projectRoot),
+    normalizedProjectRoot: normalizePath(path.resolve(projectRoot)),
     report,
     timings: report?.timings,
     totalStart: performance.now(),

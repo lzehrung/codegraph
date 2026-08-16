@@ -32,7 +32,7 @@ export async function finalizeProjectIndex(args: {
   const languageExtensions = normalizeLanguageExtensions(args.opts?.languageExtensions);
   const parsed = retainedParsedCache(args.parsedMap, args.opts);
   return {
-    projectRoot: args.projectRoot,
+    projectRoot: args.normalizedProjectRoot,
     graph: args.graph,
     graphAdjacency: buildGraphAdjacency(args.graph),
     modules: args.modules,

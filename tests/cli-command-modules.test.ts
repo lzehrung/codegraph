@@ -1384,6 +1384,27 @@ describe("CLI command modules", () => {
     }
   });
 
+  test("doctor reports the effective cache.location from codegraph.config.json", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-doctor-cache-config-"));
+    const cacheLocation = path.join(tempDir, "custom-cache");
+    await fsp.mkdir(cacheLocation, { recursive: true });
+    await fsp.writeFile(
+      path.join(tempDir, "codegraph.config.json"),
+      JSON.stringify({ cache: { location: cacheLocation } }),
+      "utf8",
+    );
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const report = buildDoctorReport();
+      expect(report.cache.layer).toBe("explicit");
+      expect(report.cache.anchor).toBe(cacheLocation.replace(/\\/g, "/"));
+    } finally {
+      process.chdir(previousCwd);
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("builds doctor reports for explicit index artifact paths", async () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-doctor-module-"));
     const artifactPath = path.join(tempDir, "codegraph.json");
