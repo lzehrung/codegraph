@@ -743,7 +743,7 @@ const result = await queryGraphSqliteRaw(
 console.log(result.columns, result.rows);
 ```
 
-`queryGraphSqliteRaw()` is intentionally read-only. It accepts result-producing statements such as `SELECT` and `PRAGMA` and rejects mutating SQL. Pass `{ maxRows }` to bound raw result rows.
+`queryGraphSqliteRaw()` is intentionally read-only. It accepts result-producing statements such as `SELECT` and `PRAGMA` and rejects mutating SQL. Its defaults bound rows, cells, response bytes, and execution to 10 seconds; callers can further tighten `{ maxRows, maxBytes, maxCellBytes, deadlineMs }`.
 
 ## SQL artifact facts
 

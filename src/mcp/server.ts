@@ -72,7 +72,6 @@ import { DEFAULT_WORKSPACE_SYMBOL_LIMIT, MAX_WORKSPACE_SYMBOL_LIMIT } from "../i
 import type { BuildOptions, FindReferencesResult, GoToResult } from "../indexer/types.js";
 import {
   assertMcpSqliteQueryResourceBounded,
-  boundRawSqlResult,
   DEFAULT_SQLITE_BYTE_LIMIT,
   normalizeSqliteRowLimit,
 } from "./sqliteGuard.js";
@@ -1007,8 +1006,9 @@ function createCodegraphMcpHandlersForSession(
       }
       const result = await queryGraphSqliteRaw(realSqlitePath, request.query, request.params ?? [], {
         maxRows: normalizeSqliteRowLimit(request.limit),
+        maxBytes: DEFAULT_SQLITE_BYTE_LIMIT,
       });
-      return { ...boundRawSqlResult(result, DEFAULT_SQLITE_BYTE_LIMIT), freshness: artifactFreshness };
+      return { ...result, truncated: Boolean(result.truncated), freshness: artifactFreshness };
     },
 
     refresh_index: async (request) => {

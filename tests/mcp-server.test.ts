@@ -1158,6 +1158,64 @@ describe("codegraph MCP handlers", () => {
     }
   });
 
+  it("returns a timeout response while draining an incomplete HTTP MCP body", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-timeout-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+      httpBodyTimeoutMs: 25,
+    });
+
+    try {
+      const endpoint = new URL(httpServer.url);
+      const partialBody = '{"jsonrpc":"2.0","id":1,"method":"initialize"';
+      const response = await new Promise<{ status: number; payload: JsonRpcObject }>((resolve, reject) => {
+        let responseReceived = false;
+        const request = httpRequest(
+          {
+            hostname: endpoint.hostname,
+            port: endpoint.port,
+            path: endpoint.pathname,
+            method: "POST",
+            headers: {
+              accept: "application/json",
+              "content-type": "application/json",
+              "content-length": String(Buffer.byteLength(partialBody) + 1),
+            },
+          },
+          (incoming) => {
+            let responseBody = "";
+            incoming.setEncoding("utf8");
+            incoming.on("data", (chunk: string) => {
+              responseBody += chunk;
+            });
+            incoming.on("end", () => {
+              responseReceived = true;
+              try {
+                resolve({ status: incoming.statusCode ?? 0, payload: readJsonRpcObject(JSON.parse(responseBody)) });
+              } catch (error) {
+                reject(error instanceof Error ? error : new Error(String(error)));
+              } finally {
+                request.destroy();
+              }
+            });
+          },
+        );
+        request.on("error", (error) => {
+          if (!responseReceived) reject(error);
+        });
+        request.write(partialBody);
+      });
+
+      expect(response.status).toBe(408);
+      expect(readObject(response.payload.error).message).toBe("MCP request body timed out");
+    } finally {
+      await httpServer.close();
+    }
+  });
+
   it("reuses one session across search, get_symbol, refs, and query_sqlite handlers", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
@@ -2920,7 +2978,6 @@ describe("MCP refresh coalescing", () => {
   });
 });
 
-
 describe("MCP session teardown regressions (S2)", () => {
   it("closes sidecar query index handle and runs session invalidation hooks on server close", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-s2-teardown-"));
@@ -3076,9 +3133,7 @@ describe("MCP transport isolation regressions (S8)", () => {
       await call1Closed.promise;
       const call2 = await call2Promise;
       expect(call2.response.status).toBe(200);
-      expect(readToolJsonResult(call2.payload).symbols).toEqual([
-        expect.objectContaining({ name: "secondarySymbol" }),
-      ]);
+      expect(readToolJsonResult(call2.payload).symbols).toEqual([expect.objectContaining({ name: "secondarySymbol" })]);
 
       const call3 = await postMcpJson(
         httpServer.url,
@@ -3091,9 +3146,7 @@ describe("MCP transport isolation regressions (S8)", () => {
         sessionId,
       );
       expect(call3.response.status).toBe(200);
-      expect(readToolJsonResult(call3.payload).symbols).toEqual([
-        expect.objectContaining({ name: "validateUser" }),
-      ]);
+      expect(readToolJsonResult(call3.payload).symbols).toEqual([expect.objectContaining({ name: "validateUser" })]);
     } finally {
       await httpServer.close();
     }
