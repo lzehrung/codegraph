@@ -175,6 +175,10 @@ type OriginValidator = (request: IncomingMessage, response: ServerResponse) => b
 
 export type CodegraphMcpFreshResult<T extends object> = T & { freshness: AgentFreshnessResult };
 
+type McpToolExecutionOptions = {
+  signal?: AbortSignal | undefined;
+};
+
 /**
  * Truncation metadata for a capped collection response, per finding #44:
  * lets a machine caller tell a complete result apart from a capped prefix.
@@ -324,14 +328,18 @@ type CodegraphMcpHandlerDefinitions = {
     head: string;
     reviewDepth?: ReviewDepth | undefined;
   }) => Promise<CodegraphMcpFreshResult<ReviewReportForTransport>>;
-  refresh_index: (request: {
-    warmup?: CodegraphMcpWarmupMode | undefined;
-  }) => Promise<{ refreshed: true; warmup: CodegraphMcpWarmupMode }>;
-  query_sqlite: (request: {
-    query: string;
-    params?: Array<string | number | null> | undefined;
-    limit?: number | undefined;
-  }) => Promise<CodegraphMcpFreshResult<RawSqlResult>>;
+  refresh_index: (request: { warmup?: CodegraphMcpWarmupMode | undefined }) => Promise<{
+    refreshed: true;
+    warmup: CodegraphMcpWarmupMode;
+  }>;
+  query_sqlite: (
+    request: {
+      query: string;
+      params?: Array<string | number | null> | undefined;
+      limit?: number | undefined;
+    },
+    options?: McpToolExecutionOptions,
+  ) => Promise<CodegraphMcpFreshResult<RawSqlResult>>;
   artifact_build: (request: {
     outDir?: string | undefined;
     sqlite?: boolean | undefined;
@@ -985,7 +993,7 @@ function createCodegraphMcpHandlersForSession(
         return boundReviewReportForTransport(report);
       }),
 
-    query_sqlite: async (request) => {
+    query_sqlite: async (request, executionOptions) => {
       if (!sqlitePath) {
         throw new Error("No SQLite artifact is available. Run artifact_build first or pass artifactPath.");
       }
@@ -1007,6 +1015,7 @@ function createCodegraphMcpHandlersForSession(
       const result = await queryGraphSqliteRaw(realSqlitePath, request.query, request.params ?? [], {
         maxRows: normalizeSqliteRowLimit(request.limit),
         maxBytes: DEFAULT_SQLITE_BYTE_LIMIT,
+        ...(executionOptions?.signal ? { signal: executionOptions.signal } : {}),
       });
       return { ...result, truncated: Boolean(result.truncated), freshness: artifactFreshness };
     },
@@ -1700,7 +1709,9 @@ export async function callMcpTool(
     case "review":
       return await handlers.review(parseMcpToolInput(reviewSchema, input, name), signal);
     case "query_sqlite":
-      return await handlers.query_sqlite(parseMcpToolInput(querySqliteSchema, input, name), signal);
+      return await handlers.query_sqlite(parseMcpToolInput(querySqliteSchema, input, name), {
+        ...(signal ? { signal } : {}),
+      });
     case "refresh_index":
       return await handlers.refresh_index(parseMcpToolInput(refreshIndexSchema, input, name), signal);
     case "artifact_build":

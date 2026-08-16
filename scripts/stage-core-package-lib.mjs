@@ -10,7 +10,10 @@ export const CORE_PACKAGE_ENTRIES = Object.freeze([
   "languages.js",
 ]);
 
-export const CORE_PACKAGE_EXTRA_FILES = Object.freeze(["agent/query-index/queryIndexWorker.js"]);
+export const CORE_PACKAGE_EXTRA_FILES = Object.freeze([
+  "agent/query-index/queryIndexWorker.js",
+  "sqlite/rawQueryWorker.js",
+]);
 
 const IMPORT_PATTERN =
   /(?:import|export)\s+(?:type\s+)?(?:[^;]*?\s+from\s+)?["'](\.[^"']+)["']|import\(["'](\.[^"']+)["']\)/g;

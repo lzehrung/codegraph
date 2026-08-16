@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bundledCli = path.join(rootDir, "dist", "bin", "cli.js");
+const bundledRawQueryWorker = path.join(rootDir, "dist", "bin", "rawQueryWorker.js");
 const unbundledCli = path.join(rootDir, "dist", "cli.js");
 
 function run(entry: string, args: string[], cwd: string = rootDir, env: NodeJS.ProcessEnv = process.env) {
@@ -21,6 +22,7 @@ function run(entry: string, args: string[], cwd: string = rootDir, env: NodeJS.P
 describe("bundled CLI entry", () => {
   it("ships a split ESM bin entry that matches unbundled --version", () => {
     expect(fs.existsSync(bundledCli)).toBe(true);
+    expect(fs.existsSync(bundledRawQueryWorker)).toBe(true);
     expect(fs.existsSync(unbundledCli)).toBe(true);
 
     const bundled = run(bundledCli, ["--version"]);

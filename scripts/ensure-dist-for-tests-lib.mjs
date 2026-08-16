@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const requiredDistEntries = ["dist/index.js", "dist/cli.js", "dist/bin/cli.js", "dist/bin/queryIndexWorker.js"];
+const requiredDistEntries = [
+  "dist/index.js",
+  "dist/cli.js",
+  "dist/bin/cli.js",
+  "dist/bin/queryIndexWorker.js",
+  "dist/bin/rawQueryWorker.js",
+];
 const freshnessInputs = [
   "package.json",
   "tsconfig.json",

@@ -20,6 +20,7 @@ describe("codegraph-core package surface", () => {
     expect(files.length).toBeGreaterThan(100);
     expect(files.some(isForbiddenCorePackagePath)).toBe(false);
     expect(files).toContain("agent/query-index/queryIndexWorker.js");
+    expect(files).toContain("sqlite/rawQueryWorker.js");
     expect(files).toContain("graphs/types.d.ts");
     expect(files).toContain("agent/semantic.d.ts");
     expect(files).toContain("chunking/types.d.ts");

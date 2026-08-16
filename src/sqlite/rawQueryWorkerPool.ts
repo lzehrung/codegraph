@@ -6,6 +6,20 @@ import { findPackageRoot } from "../util/packageInfo.js";
 import type { RawSqlResult } from "./types.js";
 import type { RawQueryWorkerTask } from "./rawQueryWorker.js";
 
+export const MAX_RAW_SQL_QUERY_WORKERS = 2;
+
+export type RawSqlQueryWorkerPool = {
+  run(task: RawQueryWorkerTask, options: { signal: AbortSignal }): Promise<RawSqlResult>;
+  destroy(): Promise<void>;
+};
+
+type RawSqlQueryWorkerPoolFactory = () => RawSqlQueryWorkerPool;
+
+export type RawSqlQueryWorkerLifecycleState = {
+  activeWorkers: number;
+  maxWorkers: number;
+};
+
 export class SqliteQueryDeadlineExceededError extends Error {
   constructor(deadlineMs: number) {
     super(`SQLite query exceeded its ${deadlineMs}ms execution budget and was terminated.`);
@@ -13,11 +27,100 @@ export class SqliteQueryDeadlineExceededError extends Error {
   }
 }
 
-/** Resolves the compiled worker entry: a compiled sibling next to this module
- * (production/standalone layouts, where the whole `dist/` tree ships), falling back to
- * the package-root-relative compiled path (running this module from `src/`, where only
- * `dist/` is built). Throwing here is the trigger `queryGraphSqliteRaw` uses to fall
- * back to the strictly weaker in-process per-row deadline check. */
+export class SqliteQueryCancelledError extends Error {
+  constructor() {
+    super("SQLite query was cancelled by the MCP client.");
+    this.name = "SqliteQueryCancelledError";
+  }
+}
+
+export class SqliteQueryWorkerCleanupCapacityExceededError extends Error {
+  constructor(maxWorkers: number) {
+    super(
+      `SQLite query cleanup capacity is exhausted: ${maxWorkers} terminated worker${maxWorkers === 1 ? " is" : "s are"} still exiting. Retry after cleanup completes.`,
+    );
+    this.name = "SqliteQueryWorkerCleanupCapacityExceededError";
+  }
+}
+
+/**
+ * Keeps raw-query worker cleanup bounded. A timed-out native SQLite call can delay
+ * `Piscina.destroy()` until its current synchronous step returns, so each slot remains
+ * reserved until that destroy promise settles instead of being forgotten in the background.
+ */
+export class RawSqlQueryWorkerLifecycle {
+  private readonly activeWorkerSlots = new Set<symbol>();
+
+  constructor(private readonly maxWorkers = MAX_RAW_SQL_QUERY_WORKERS) {}
+
+  state(): RawSqlQueryWorkerLifecycleState {
+    return { activeWorkers: this.activeWorkerSlots.size, maxWorkers: this.maxWorkers };
+  }
+
+  async run(
+    task: RawQueryWorkerTask,
+    deadlineMs: number,
+    signal: AbortSignal | undefined,
+    createPool: RawSqlQueryWorkerPoolFactory,
+  ): Promise<RawSqlResult> {
+    if (signal?.aborted) throw new SqliteQueryCancelledError();
+    if (this.activeWorkerSlots.size >= this.maxWorkers) {
+      throw new SqliteQueryWorkerCleanupCapacityExceededError(this.maxWorkers);
+    }
+
+    const slot = Symbol("raw-sql-query-worker");
+    this.activeWorkerSlots.add(slot);
+    let pool: RawSqlQueryWorkerPool | undefined;
+    let cleanupInBackground = false;
+    const deadlineSignal = AbortSignal.timeout(deadlineMs);
+    const combinedSignal = signal ? AbortSignal.any([signal, deadlineSignal]) : deadlineSignal;
+
+    try {
+      pool = createPool();
+      return await pool.run(task, { signal: combinedSignal });
+    } catch (error) {
+      if (combinedSignal.aborted || (error instanceof Error && error.name === "AbortError")) {
+        cleanupInBackground = true;
+        if (signal?.aborted) throw new SqliteQueryCancelledError();
+        throw new SqliteQueryDeadlineExceededError(deadlineMs);
+      }
+      throw error;
+    } finally {
+      if (!pool) {
+        this.activeWorkerSlots.delete(slot);
+      } else {
+        const cleanup = pool.destroy();
+        if (cleanupInBackground) {
+          void cleanup.then(
+            () => {
+              this.activeWorkerSlots.delete(slot);
+            },
+            () => {
+              this.activeWorkerSlots.delete(slot);
+            },
+          );
+        } else {
+          try {
+            await cleanup;
+          } finally {
+            this.activeWorkerSlots.delete(slot);
+          }
+        }
+      }
+    }
+  }
+}
+
+const rawSqlQueryWorkerLifecycle = new RawSqlQueryWorkerLifecycle();
+
+export function getRawSqlQueryWorkerLifecycleState(): RawSqlQueryWorkerLifecycleState {
+  return rawSqlQueryWorkerLifecycle.state();
+}
+
+/** Resolves the compiled worker entry the same way `queryIndexWorker.js` is resolved:
+ * a compiled sibling next to this module (production/standalone layouts, where the
+ * whole `dist/` tree ships), falling back to the package-root-relative compiled path
+ * (vitest running this module from `src/`, where only `dist/` is built). */
 export function resolveRawSqlQueryWorkerPath(): string {
   const selfDirectory = path.dirname(fileURLToPath(import.meta.url));
   const sibling = path.resolve(selfDirectory, "rawQueryWorker.js");
@@ -25,7 +128,9 @@ export function resolveRawSqlQueryWorkerPath(): string {
   const packageRoot = findPackageRoot(selfDirectory);
   const compiled = path.join(packageRoot, "dist", "sqlite", "rawQueryWorker.js");
   if (fs.existsSync(compiled)) return compiled;
-  throw new Error(`Raw SQLite query worker file not found: ${compiled}`);
+  const bundled = path.join(packageRoot, "dist", "bin", "rawQueryWorker.js");
+  if (fs.existsSync(bundled)) return bundled;
+  throw new Error(`Raw SQLite query worker file not found: ${bundled}`);
 }
 
 /**
@@ -45,8 +150,9 @@ export function resolveRawSqlQueryWorkerPath(): string {
  * `sqlite3_step()` — a recursive CTE, or a plan that must fully sort/scan before it can
  * produce a first row — keeps running on the orphaned worker thread in the background
  * until that native call returns naturally; only then does the thread actually exit.
- * We do not make the caller wait for that: `pool.destroy()` is fired and forgotten here,
- * not awaited, so a subsequent query (in its own fresh pool) is never delayed by it.
+ * The caller does not wait for that cleanup, but the lifecycle retains its worker slot
+ * until `pool.destroy()` settles. The bounded slot count makes delayed cleanup observable
+ * and prevents repeated cancellation from accumulating an unbounded number of workers.
  * Concurrent read-only SQLite connections against the same file do not block each other,
  * so the lingering background reader does not stop that subsequent query from succeeding.
  * Verified directly: an aborted 200M-row recursive-CTE count rejects this call in
@@ -57,22 +163,22 @@ export function resolveRawSqlQueryWorkerPath(): string {
  * delayed until that native call returns — a platform limit of `worker_threads`, not of
  * this module, and orthogonal to the per-call deadline this function guarantees.
  */
-export async function runRawSqlQueryInWorker(task: RawQueryWorkerTask, deadlineMs: number): Promise<RawSqlResult> {
+export async function runRawSqlQueryInWorker(
+  task: RawQueryWorkerTask,
+  deadlineMs: number,
+  signal?: AbortSignal,
+): Promise<RawSqlResult> {
   const workerPath = resolveRawSqlQueryWorkerPath();
-  const pool = new Piscina({
-    filename: workerPath,
-    minThreads: 1,
-    maxThreads: 1,
-    idleTimeout: 5_000,
-  });
-  try {
-    return (await pool.run(task, { signal: AbortSignal.timeout(deadlineMs) })) as RawSqlResult;
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new SqliteQueryDeadlineExceededError(deadlineMs);
-    }
-    throw error;
-  } finally {
-    void pool.destroy().catch(() => {});
-  }
+  return await rawSqlQueryWorkerLifecycle.run(
+    task,
+    deadlineMs,
+    signal,
+    () =>
+      new Piscina<RawQueryWorkerTask, RawSqlResult>({
+        filename: workerPath,
+        minThreads: 1,
+        maxThreads: 1,
+        idleTimeout: 5_000,
+      }),
+  );
 }
