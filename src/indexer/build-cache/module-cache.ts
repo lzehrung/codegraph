@@ -17,13 +17,19 @@ import {
   type SqliteTableColumn,
 } from "../../util/sqliteSchema.js";
 import type { BuildOptions, BuildReport, ExportEntry, ModuleIndex } from "../types.js";
-import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot, normalizePath } from "../../util/paths.js";
+import {
+  assertFilePathWithinRoot,
+  fileIdentityKey,
+  isAbsoluteFilePath,
+  isFilePathWithinRoot,
+  normalizePath,
+} from "../../util/paths.js";
 import { lruMapGet, lruMapSet } from "../../util/lruMap.js";
 import { initCacheReport } from "./reports.js";
 import { getImplementationFingerprint } from "./options.js";
 
-// v5: external reexports preserve their unresolved module specifier.
-const PARSED_CACHE_VERSION = 5;
+// v6: only reexports resolved inside the project are persisted as cache-relative paths.
+const PARSED_CACHE_VERSION = 6;
 const MODULE_CACHE_SCHEMA_VERSION = 2;
 const MODULE_CACHE_TABLE = "module_cache";
 const MODULE_CACHE_SCHEMA_VERSION_KEY = "module_cache.schema_version";
@@ -438,9 +444,10 @@ export function transformPersistedExportFromModule(
 ): void {
   if (toRelative) {
     const isResolvedProjectFile =
-      path.isAbsolute(entry.fromModule) && isFilePathWithinRoot(projectRoot, entry.fromModule);
+      isAbsoluteFilePath(entry.fromModule) && isFilePathWithinRoot(projectRoot, entry.fromModule);
     if (!isResolvedProjectFile) {
       entry.moduleSpecifier ??= entry.fromModule;
+      entry.fromModule = entry.moduleSpecifier;
       return;
     }
     entry.fromModule = cacheRelativePath(projectRoot, entry.fromModule);

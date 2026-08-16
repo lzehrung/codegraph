@@ -17,6 +17,7 @@ import {
   assertFilePathWithinRoot,
   fileIdentityKey,
   initializeFileIdentityCaseSensitivity,
+  isFilePathWithinRoot,
   normalizePath,
 } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
@@ -192,15 +193,19 @@ async function resolveCrossModuleSymbolExports(
       continue;
     }
     if (entry.fromModule.startsWith(".")) {
+      entry.moduleSpecifier ??= entry.fromModule;
       const resolved = await resolveSpecifier(file, entry.fromModule, projectRoot, matchPath, workspaceConfig, {
         resolveNodeModules: !!graphOptions.resolveNodeModules,
         ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
       });
-      if (typeof resolved === "string") entry.fromModule = resolved;
+      if (typeof resolved === "string" && isFilePathWithinRoot(projectRoot, resolved)) entry.fromModule = resolved;
       continue;
     }
     const pkgResolved = await resolveWorkspacePackage(entry.fromModule, workspaceConfig);
-    if (pkgResolved) entry.fromModule = pkgResolved;
+    if (pkgResolved) {
+      entry.moduleSpecifier ??= entry.fromModule;
+      if (isFilePathWithinRoot(projectRoot, pkgResolved)) entry.fromModule = pkgResolved;
+    }
   }
 }
 
