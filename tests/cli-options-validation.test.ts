@@ -38,6 +38,15 @@ describe("CLI enum option parsers", () => {
 });
 
 describe("parseCliArgs value-option guard", () => {
+  it("parses --changed-since and --git-base as valued Git range options", () => {
+    const review = parseCliArgs("review", ["--changed-since", "HEAD~1"]);
+    const graphDelta = parseCliArgs("graph-delta", ["--git-base", "HEAD~1", "--git-head", "HEAD"]);
+
+    expect(review.options.get("--changed-since")).toEqual(["HEAD~1"]);
+    expect(graphDelta.options.get("--git-base")).toEqual(["HEAD~1"]);
+    expect(graphDelta.options.get("--git-head")).toEqual(["HEAD"]);
+  });
+
   it("does not consume a following flag as a value", () => {
     expect(() => parseCliArgs("graph", ["--threads", "--json"])).toThrow(/Missing value for --threads option/);
   });

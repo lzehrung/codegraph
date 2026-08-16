@@ -562,6 +562,69 @@ describe("disk cache uses sqlite backend", () => {
     expect(tryLoadDuplicateUnitsFromCache(reopenedIndex, file, "confinement", root)).toBeNull();
   });
 
+  it("rejects duplicate units with malformed or out-of-root encoded handle paths", async () => {
+    const root = await mkTmpDir("dg-disk-cache-duplicate-handle-confinement-");
+    await writeDuplicateProject(root);
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const file = normalizePathForSql(path.join(root, "src", "a.ts"));
+    const source = await fsp.readFile(file, "utf8");
+    const unit = buildInternalUnit(
+      {
+        file: "src/a.ts",
+        startLine: 1,
+        endLine: 8,
+        languageId: "typescript",
+        kind: "symbol",
+        name: "normalizeInvoiceRows",
+      },
+      file,
+      source,
+      3,
+      2,
+      index.nativeMode,
+      {
+        sqlHandle: formatDuplicateSqlHandle("src/a.ts", "normalizeInvoiceRows", 1),
+        symbolHandle: formatDuplicateSymbolHandle("src/a.ts", "normalizeInvoiceRows", 1, 0),
+      },
+    );
+    writeDuplicateUnitsToCache(index, file, "handle-confinement", [unit], root);
+    closeDuplicateUnitCacheDatabase(root);
+
+    const fieldValues: Array<[string, string]> = [
+      ["file", "../outside.ts"],
+      ["handle", "sql:normalizeInvoiceRows:..%2Foutside.ts:1"],
+      ["fileHandle", "file:%E0%A4%A"],
+      ["chunkHandle", "chunk:..%2Foutside.ts:1"],
+      ["symbolHandle", "symbol:..%2Foutside.ts:normalizeInvoiceRows:1:0"],
+      ["sqlHandle", "sql:normalizeInvoiceRows:..%2Foutside.ts:1"],
+    ];
+    const reopenedIndex = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+
+    for (const [field, value] of fieldValues) {
+      const db = new DatabaseSync(duplicateCacheDbPath(root));
+      const row = db
+        .prepare("SELECT payload FROM duplicate_unit_cache WHERE file = ? AND variant = ?")
+        .get("src/a.ts", "handle-confinement") as { payload: Uint8Array } | undefined;
+      if (!row) throw new Error("expected duplicate cache row");
+      const units = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as Array<Record<string, unknown>>;
+      units[0] = { ...units[0], [field]: value };
+      db.prepare("UPDATE duplicate_unit_cache SET payload = ? WHERE file = ? AND variant = ?").run(
+        brotliCompressSync(JSON.stringify(units)),
+        "src/a.ts",
+        "handle-confinement",
+      );
+      db.close();
+
+      expect(tryLoadDuplicateUnitsFromCache(reopenedIndex, file, "handle-confinement", root)).toBeNull();
+
+      const reset = new DatabaseSync(duplicateCacheDbPath(root));
+      reset
+        .prepare("UPDATE duplicate_unit_cache SET payload = ? WHERE file = ? AND variant = ?")
+        .run(row.payload, "src/a.ts", "handle-confinement");
+      reset.close();
+    }
+  });
+
   it("ignores duplicate cache rows written by an older payload version", async () => {
     const root = await mkTmpDir("dg-disk-cache-stale-duplicates-");
     await writeDuplicateProject(root);

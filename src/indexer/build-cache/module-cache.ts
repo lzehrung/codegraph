@@ -107,7 +107,9 @@ function isForbiddenAnchor(candidate: string): boolean {
   const resolved = path.resolve(candidate);
   const home = path.resolve(os.homedir());
   const parsed = path.parse(resolved);
-  return fileIdentityKey(resolved) === fileIdentityKey(home) || fileIdentityKey(resolved) === fileIdentityKey(parsed.root);
+  return (
+    fileIdentityKey(resolved) === fileIdentityKey(home) || fileIdentityKey(resolved) === fileIdentityKey(parsed.root)
+  );
 }
 
 function findRepositoryAnchor(projectRoot: string): CacheAnchorResolution {
@@ -168,9 +170,7 @@ export function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
     if (path.basename(configured) === namespace) return configured;
     return path.join(configured, namespace);
   }
-  const base = opts?.cacheLocation === "user"
-    ? resolveCodegraphUserCacheRoot()
-    : path.join(anchor, ".codegraph-cache");
+  const base = opts?.cacheLocation === "user" ? resolveCodegraphUserCacheRoot() : path.join(anchor, ".codegraph-cache");
   const candidate = path.join(path.resolve(base), "index-v1", namespace);
   if (!sameRoot && !opts?.cacheLocation) {
     const legacy = path.join(root, ".codegraph-cache", "index-v1");
@@ -440,7 +440,11 @@ function transformModulePaths(projectRoot: string, module: ModuleIndex, toRelati
   copy.file = transform(copy.file);
   for (const local of copy.locals) local.file = transform(local.file);
   for (const entry of copy.exports) {
-    if (entry.type === "local") entry.target.file = transform(entry.target.file);
+    if (entry.type === "local") {
+      entry.target.file = transform(entry.target.file);
+    } else {
+      entry.fromModule = transform(entry.fromModule);
+    }
   }
   for (const binding of copy.imports) {
     if (typeof binding.resolved === "string") binding.resolved = transform(binding.resolved);

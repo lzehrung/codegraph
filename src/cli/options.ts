@@ -15,6 +15,8 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--native",
   "--cache",
   "--cache-dir",
+  "--changed-since",
+  "--git-base",
   "--git-head",
   "--symbols-detailed-scope",
   "--symbols-detailed-max-edges",
@@ -100,7 +102,9 @@ const CLI_VALUE_OPTIONS = new Set<string>([
 ]);
 
 type CliPositionalPolicy =
-  { kind: "any" } | { kind: "max"; max: number; usage: string } | { kind: "none"; usage: string };
+  | { kind: "any" }
+  | { kind: "max"; max: number; usage: string }
+  | { kind: "none"; usage: string };
 
 type CliCommandSchema = {
   flags?: readonly string[];

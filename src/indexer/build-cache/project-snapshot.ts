@@ -35,7 +35,7 @@ import { cacheAbsolutePath, cacheRelativePath, cacheRoot } from "./module-cache.
 import type { ManifestFileEntry } from "./manifest.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
-const PROJECT_SNAPSHOT_VERSION = 5;
+const PROJECT_SNAPSHOT_VERSION = 6;
 const BLOOM_FILTER_MIN_SIZE = 1_000;
 const BLOOM_FILTER_MAX_SIZE = 1_000_000;
 const BLOOM_FILTER_MIN_HASH_COUNT = 1;
@@ -168,7 +168,11 @@ function transformModule(root: string, module: ModuleIndex, toRelative: boolean)
   copy.file = file(copy.file);
   for (const local of copy.locals) local.file = file(local.file);
   for (const entry of copy.exports) {
-    if (entry.type === "local") entry.target.file = file(entry.target.file);
+    if (entry.type === "local") {
+      entry.target.file = file(entry.target.file);
+    } else {
+      entry.fromModule = file(entry.fromModule);
+    }
   }
   for (const binding of copy.imports) {
     if (typeof binding.resolved === "string") binding.resolved = file(binding.resolved);
@@ -208,7 +212,7 @@ function transformSnapshotPaths(
 function migrateProjectSnapshotPayload(value: unknown, currentRoot: string): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const payload = value as Partial<ProjectIndexSnapshotPayload>;
-  if (payload.version !== 4 || typeof payload.projectRoot !== "string") return value;
+  if ((payload.version !== 4 && payload.version !== 5) || typeof payload.projectRoot !== "string") return value;
   const relative = transformSnapshotPaths(value as ProjectIndexSnapshotPayload, payload.projectRoot, true);
   const migrated = transformSnapshotPaths(relative, currentRoot, false);
   migrated.version = PROJECT_SNAPSHOT_VERSION;
@@ -1117,10 +1121,7 @@ function isSerializedBloomFilter(value: unknown): value is SerializedBloomFilter
   } catch {
     return false;
   }
-  return (
-    decoded.length === expectedBytes &&
-    decoded.toString("base64") === filter.bitsBase64
-  );
+  return decoded.length === expectedBytes && decoded.toString("base64") === filter.bitsBase64;
 }
 
 function isModuleIndex(value: unknown): value is ModuleIndex {

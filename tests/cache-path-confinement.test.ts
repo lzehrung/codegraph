@@ -14,6 +14,7 @@ import {
   tryLoadFromCache,
   writeToCache,
 } from "../src/indexer/build-cache/module-cache.js";
+import { loadManifest } from "../src/indexer/build-cache/manifest.js";
 import { tryLoadPersistedBloomFilters } from "../src/indexer/build-cache/project-snapshot.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
@@ -106,6 +107,45 @@ describe("persisted cache rehydration is confined to the project root", () => {
     clearMemoryCache();
   });
 
+  it("rejects module cache reexports whose persisted target path escapes the project root", async () => {
+    const root = await mkTmpDir("dg-confine-module-reexport-");
+    const file = path.join(root, "barrel.ts");
+    const sig = "sig-traversal-reexport";
+
+    writeToCache(root, file, sig, moduleFor(file), { cache: "disk" });
+    closeDiskCacheDatabase(root, { cache: "disk" });
+
+    const dbPath = cacheDatabasePath(root, { cache: "disk" }, "index-cache.sqlite");
+    const db = new DatabaseSync(dbPath);
+    try {
+      const maliciousModule: ModuleIndex = {
+        file: "barrel.ts",
+        exports: [
+          {
+            type: "reexport",
+            exportedAs: "outside",
+            fromModule: "../../outside.ts",
+            sourceSpecifier: "./outside",
+          },
+        ],
+        imports: [],
+        locals: [],
+      };
+      const maliciousPayload = brotliCompressSync(Buffer.from(JSON.stringify(maliciousModule)));
+      db.prepare("UPDATE module_cache SET payload = ? WHERE file = ?").run(
+        maliciousPayload,
+        cacheRelativePath(root, file),
+      );
+    } finally {
+      db.close();
+    }
+
+    expect(tryLoadFromCache(root, file, sig, { cache: "disk" })).toBeNull();
+
+    closeDiskCacheDatabase(root, { cache: "disk" });
+    clearMemoryCache();
+  });
+
   it("rejects a persisted project snapshot whose projectFiles escape the project root", async () => {
     const root = await mkTmpDir("dg-confine-snapshot-projectfiles-");
     await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
@@ -148,6 +188,45 @@ describe("persisted cache rehydration is confined to the project root", () => {
     const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
     expect([...index.graph.nodes].some((file) => file.includes("outside.ts"))).toBe(false);
     expect([...index.byFile.keys()].some((file) => file.endsWith("a.ts"))).toBe(true);
+  });
+
+  it("rejects a persisted project snapshot whose reexport target escapes the project root", async () => {
+    const root = await mkTmpDir("dg-confine-snapshot-reexport-");
+    await fsp.writeFile(path.join(root, "dependency.ts"), "export const dependency = 1;\n", "utf8");
+    await fsp.writeFile(path.join(root, "barrel.ts"), "export { dependency } from './dependency';\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+
+    const snapshotPath = snapshotPathFor(root);
+    const raw = await fsp.readFile(snapshotPath);
+    const payload = JSON.parse(brotliDecompressSync(raw).toString("utf8")) as {
+      modules?: Array<{ file?: string; exports?: Array<Record<string, unknown>> }>;
+    };
+    const barrel = payload.modules?.find((module) => module.file === "barrel.ts");
+    const reexport = barrel?.exports?.find((entry) => entry.type === "reexport");
+    if (!reexport) throw new Error("Expected the persisted barrel reexport.");
+    reexport.fromModule = "../../outside.ts";
+    await fsp.writeFile(snapshotPath, brotliCompressSync(Buffer.from(JSON.stringify(payload))));
+
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const barrelModule = [...index.byFile.values()].find((module) => module.file.endsWith("barrel.ts"));
+    const rebuiltReexport = barrelModule?.exports.find((entry) => entry.type === "reexport");
+    expect(rebuiltReexport?.type).toBe("reexport");
+    if (rebuiltReexport?.type === "reexport") {
+      expect(rebuiltReexport.fromModule).not.toContain("outside.ts");
+    }
+  });
+
+  it("rejects manifest file keys that escape the project root before cache probes", async () => {
+    const root = await mkTmpDir("dg-confine-manifest-key-");
+    await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+
+    const manifestPath = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
+    const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as { files?: Record<string, unknown> };
+    manifest.files = { "../../outside.ts": { sig: "tampered", edges: [] } };
+    await fsp.writeFile(manifestPath, JSON.stringify(manifest), "utf8");
+
+    expect(await loadManifest(root, { cache: "disk" })).toBeNull();
   });
 
   it("rejects persisted bloom filters keyed by a path that escapes the project root", async () => {
