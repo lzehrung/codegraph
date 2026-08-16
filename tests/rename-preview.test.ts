@@ -7,6 +7,7 @@ import { workspaceSymbolsInSnapshot, workspaceSymbolsWithSession } from "../src/
 import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { isSymlinkUnavailable, mkTmpDir } from "./helpers/filesystem.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import { setAfterConfinedPathVerifiedForTests } from "../src/util/confinedFile.js";
 
 async function renameFixture() {
   const root = await mkTmpDir("cg-rename-preview-");
@@ -481,6 +482,39 @@ describe("rename preview", () => {
     });
     expect(deleted.safe).toBe(false);
     expect(deleted.unsafeSites.some((site) => site.reason === "unresolved_reference")).toBe(true);
+  });
+
+  it("reports a verified file replacement as an unresolved reference", async () => {
+    const { root, serviceFile, session, target } = await renameFixture();
+    const replacement = path.join(root, "replacement.ts");
+    await fsp.writeFile(replacement, "export function service(): number { return 2; }\n");
+    let swapped = false;
+    setAfterConfinedPathVerifiedForTests(async (realPath) => {
+      if (swapped || path.resolve(realPath) !== path.resolve(serviceFile)) return;
+      swapped = true;
+      await fsp.rename(replacement, serviceFile);
+    });
+
+    try {
+      const result = await previewRenameWithSession(session, {
+        root,
+        handle: target.handle,
+        newName: "renamedService",
+      });
+
+      expect(result.safe).toBe(false);
+      expect(result.unsafeSites).toContainEqual(
+        expect.objectContaining({
+          reason: "unresolved_reference",
+          provenance: expect.objectContaining({
+            reason: expect.stringMatching(/changed between verification and open/i),
+          }),
+        }),
+      );
+      expect(result.unsafeSites).not.toContainEqual(expect.objectContaining({ reason: "outside_root" }));
+    } finally {
+      setAfterConfinedPathVerifiedForTests(undefined);
+    }
   });
 
   it("refuses source symlinks that resolve outside the project root", async (context) => {

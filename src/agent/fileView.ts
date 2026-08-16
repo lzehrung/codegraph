@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { BuildOptions } from "../indexer/types.js";
-import { resolveProjectFile, resolveReadableFile } from "../util/confinedFile.js";
+import { openConfinedReadableFile, resolveProjectFile, type ConfinedReadableFile } from "../util/confinedFile.js";
 import { fileIdentityKey, normalizePath, toProjectDisplayPath } from "../util/paths.js";
 import {
   createAgentSession,
@@ -135,59 +135,64 @@ export async function getCodegraphFileViewWithSession(
 ): Promise<AgentFileViewResponse> {
   const root = path.resolve(request.root);
   const realRoot = await fs.realpath(root);
-  const resolvedFile = await resolveReadableFile(realRoot, root, request.file);
-  const offset = boundedPositiveInteger(request.offset, 1, Number.MAX_SAFE_INTEGER);
-  const limit = boundedPositiveInteger(request.limit, DEFAULT_FILE_VIEW_LINES, MAX_FILE_VIEW_LINES);
-  const maxBytes = boundedPositiveInteger(request.maxBytes, DEFAULT_FILE_VIEW_BYTES, MAX_FILE_VIEW_BYTES);
-  const displaySensitiveKind = classifySensitiveFile(resolvedFile.displayPath);
-  let sensitiveKind = classifySensitiveFile(resolvedFile.realPath);
-  const keyMaterialAlias = displaySensitiveKind === "key-material" || sensitiveKind === "key-material";
-  if (keyMaterialAlias) sensitiveKind = "key-material";
-  else if (!sensitiveKind) sensitiveKind = displaySensitiveKind;
+  const opened = await openConfinedReadableFile(realRoot, root, request.file);
+  try {
+    const offset = boundedPositiveInteger(request.offset, 1, Number.MAX_SAFE_INTEGER);
+    const limit = boundedPositiveInteger(request.limit, DEFAULT_FILE_VIEW_LINES, MAX_FILE_VIEW_LINES);
+    const maxBytes = boundedPositiveInteger(request.maxBytes, DEFAULT_FILE_VIEW_BYTES, MAX_FILE_VIEW_BYTES);
+    const displaySensitiveKind = classifySensitiveFile(opened.displayPath);
+    let sensitiveKind = classifySensitiveFile(opened.realPath);
+    const keyMaterialAlias = displaySensitiveKind === "key-material" || sensitiveKind === "key-material";
+    if (keyMaterialAlias) sensitiveKind = "key-material";
+    else if (!sensitiveKind) sensitiveKind = displaySensitiveKind;
 
-  let page: FilePage;
-  let truncated: boolean;
-  let sensitive: AgentFileViewSensitiveInfo | undefined;
-  if (sensitiveKind && !request.allowSensitive) {
-    const summary = await buildSensitiveSummary(resolvedFile.realPath, sensitiveKind);
-    page = paginateText(summary.text, offset, limit);
-    truncated = summary.scanTruncated;
-    sensitive = { kind: sensitiveKind, redacted: true, allowSensitiveRequired: true };
-  } else {
-    page = await readTextFilePage(resolvedFile.realPath, offset, limit, maxBytes);
-    truncated = page.truncated;
-    if (sensitiveKind) {
-      sensitive = { kind: sensitiveKind, redacted: false, allowSensitiveRequired: true };
+    let page: FilePage;
+    let truncated: boolean;
+    let sensitive: AgentFileViewSensitiveInfo | undefined;
+    if (sensitiveKind && !request.allowSensitive) {
+      const summary = await buildSensitiveSummary(opened, sensitiveKind);
+      page = paginateText(summary.text, offset, limit);
+      truncated = summary.scanTruncated;
+      sensitive = { kind: sensitiveKind, redacted: true, allowSensitiveRequired: true };
+    } else {
+      page = await readTextFilePage(opened, offset, limit, maxBytes);
+      truncated = page.truncated;
+      if (sensitiveKind) {
+        sensitive = { kind: sensitiveKind, redacted: false, allowSensitiveRequired: true };
+      }
     }
-  }
 
-  let freshness: AgentFreshnessResult = { state: "fresh" };
-  let graphContext: AgentFileGraphContext | undefined;
-  if (request.includeGraphContext) {
-    const activeSession =
-      session ??
-      createAgentSession({
-        root,
-        ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
-      });
-    if (activeSession.checkFreshness) {
-      freshness = await activeSession.checkFreshness();
+    let freshness: AgentFreshnessResult = { state: "fresh" };
+    let graphContext: AgentFileGraphContext | undefined;
+    if (request.includeGraphContext) {
+      const activeSession =
+        session ??
+        createAgentSession({
+          root,
+          ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
+        });
+      if (activeSession.checkFreshness) {
+        freshness = await activeSession.checkFreshness();
+      }
+      // Path-only index lookup; byte reads already use the confined descriptor above.
+      const projectFile = await resolveProjectFile(realRoot, root, request.file);
+      const snapshot = await activeSession.loadProject({ symbolGraph: "skip" });
+      graphContext = buildFileGraphContext(snapshot, projectFile);
     }
-    const projectFile = await resolveProjectFile(realRoot, root, request.file);
-    const snapshot = await activeSession.loadProject({ symbolGraph: "skip" });
-    graphContext = buildFileGraphContext(snapshot, projectFile);
-  }
 
-  return buildResponse({
-    file: resolvedFile.displayPath,
-    offset,
-    limit,
-    page,
-    truncated,
-    freshness,
-    ...(graphContext ? { graphContext } : {}),
-    ...(sensitive ? { sensitive } : {}),
-  });
+    return buildResponse({
+      file: opened.displayPath,
+      offset,
+      limit,
+      page,
+      truncated,
+      freshness,
+      ...(graphContext ? { graphContext } : {}),
+      ...(sensitive ? { sensitive } : {}),
+    });
+  } finally {
+    await opened.handle.close();
+  }
 }
 
 export function formatAgentFileViewResponse(response: AgentFileViewResponse): string {
@@ -277,10 +282,15 @@ function buildResponse(args: {
   };
 }
 
-async function readTextFilePage(filePath: string, offset: number, limit: number, maxBytes: number): Promise<FilePage> {
-  await assertReadableTextFile(filePath);
-
-  const handle = await fs.open(filePath, "r");
+async function readTextFilePage(
+  opened: ConfinedReadableFile,
+  offset: number,
+  limit: number,
+  maxBytes: number,
+): Promise<FilePage> {
+  assertReadableTextFile(opened);
+  const filePath = opened.realPath;
+  const handle = opened.handle;
   const selectedLines: string[] = [];
   let lineNumber = 1;
   let remainingBytes = maxBytes;
@@ -336,33 +346,29 @@ async function readTextFilePage(filePath: string, offset: number, limit: number,
     currentLineChunks = [];
   };
 
-  try {
-    const buffer = Buffer.allocUnsafe(READ_BUFFER_BYTES);
-    while (true) {
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
-      if (!bytesRead) break;
-      const chunk = buffer.subarray(0, bytesRead);
-      totalBytes += bytesRead;
-      assertFileViewSourceBytes(totalBytes, filePath);
-      if (chunk.includes(0)) {
-        throw new Error(`Binary files are not supported: ${filePath}`);
-      }
-      validateUtf8Chunk(chunk, utf8State, filePath);
-      let segmentStart = 0;
-      for (let index = 0; index < chunk.length; index += 1) {
-        if (chunk[index] !== 0x0a) continue;
-        consumeSegment(chunk.subarray(segmentStart, index));
-        finishLine();
-        lineNumber += 1;
-        segmentStart = index + 1;
-      }
-      consumeSegment(chunk.subarray(segmentStart));
+  const buffer = Buffer.allocUnsafe(READ_BUFFER_BYTES);
+  while (true) {
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+    if (!bytesRead) break;
+    const chunk = buffer.subarray(0, bytesRead);
+    totalBytes += bytesRead;
+    assertFileViewSourceBytes(totalBytes, filePath);
+    if (chunk.includes(0)) {
+      throw new Error(`Binary files are not supported: ${filePath}`);
     }
-    assertUtf8Complete(utf8State, filePath);
-    finishLine();
-  } finally {
-    await handle.close();
+    validateUtf8Chunk(chunk, utf8State, filePath);
+    let segmentStart = 0;
+    for (let index = 0; index < chunk.length; index += 1) {
+      if (chunk[index] !== 0x0a) continue;
+      consumeSegment(chunk.subarray(segmentStart, index));
+      finishLine();
+      lineNumber += 1;
+      segmentStart = index + 1;
+    }
+    consumeSegment(chunk.subarray(segmentStart));
   }
+  assertUtf8Complete(utf8State, filePath);
+  finishLine();
 
   let nextOffset: number | undefined;
   if (lastReturnedLine !== undefined && lastReturnedLine < lineNumber) {
@@ -497,19 +503,20 @@ export function classifySensitiveFile(filePath: string): AgentFileViewSensitiveK
   return undefined;
 }
 
-async function buildSensitiveSummary(filePath: string, kind: AgentFileViewSensitiveKind): Promise<SensitiveSummary> {
+async function buildSensitiveSummary(
+  opened: ConfinedReadableFile,
+  kind: AgentFileViewSensitiveKind,
+): Promise<SensitiveSummary> {
   if (kind === "key-material") {
-    const stat = await fs.stat(filePath);
-    if (!stat.isFile()) throw new Error(`File view target is not a file: ${filePath}`);
     return {
-      text: `Sensitive key material omitted.\nSize: ${stat.size} bytes.`,
+      text: `Sensitive key material omitted.\nSize: ${opened.size} bytes.`,
       scanTruncated: false,
     };
   }
-  const scan = await scanTextFilePrefix(filePath, SENSITIVE_SCAN_BYTES);
+  const scan = await scanTextFilePrefix(opened, SENSITIVE_SCAN_BYTES);
 
-  const text = UTF8_DECODER.decode(trimToUtf8Boundary(scan.prefix));
-  const keys = extractSensitiveKeys(text).slice(0, SENSITIVE_KEY_LIMIT);
+  const decoded = UTF8_DECODER.decode(trimToUtf8Boundary(scan.prefix));
+  const keys = extractSensitiveKeys(decoded).slice(0, SENSITIVE_KEY_LIMIT);
   const keySummary = keys.length ? keys.join(", ") : "No keys detected in bounded structural scan.";
   return {
     text: `Sensitive ${kind} values omitted.\nKeys: ${keySummary}`,
@@ -518,48 +525,44 @@ async function buildSensitiveSummary(filePath: string, kind: AgentFileViewSensit
 }
 
 async function scanTextFilePrefix(
-  filePath: string,
+  opened: ConfinedReadableFile,
   prefixLimit: number,
 ): Promise<{ prefix: Buffer; totalBytes: number }> {
-  await assertReadableTextFile(filePath);
-  const handle = await fs.open(filePath, "r");
+  assertReadableTextFile(opened);
+  const filePath = opened.realPath;
+  const handle = opened.handle;
   const prefixChunks: Buffer[] = [];
   let prefixBytes = 0;
   let totalBytes = 0;
   const utf8State = createUtf8ValidationState();
-  try {
-    const buffer = Buffer.allocUnsafe(READ_BUFFER_BYTES);
-    while (true) {
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
-      if (!bytesRead) break;
-      const chunk = buffer.subarray(0, bytesRead);
-      if (chunk.includes(0)) {
-        throw new Error(`Binary files are not supported: ${filePath}`);
-      }
-      validateUtf8Chunk(chunk, utf8State, filePath);
-      if (prefixBytes < prefixLimit) {
-        const bytesToKeep = Math.min(chunk.length, prefixLimit - prefixBytes);
-        prefixChunks.push(Buffer.from(chunk.subarray(0, bytesToKeep)));
-        prefixBytes += bytesToKeep;
-      }
-      totalBytes += chunk.length;
-      assertFileViewSourceBytes(totalBytes, filePath);
+  const buffer = Buffer.allocUnsafe(READ_BUFFER_BYTES);
+  while (true) {
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+    if (!bytesRead) break;
+    const chunk = buffer.subarray(0, bytesRead);
+    if (chunk.includes(0)) {
+      throw new Error(`Binary files are not supported: ${filePath}`);
     }
-    assertUtf8Complete(utf8State, filePath);
-  } finally {
-    await handle.close();
+    validateUtf8Chunk(chunk, utf8State, filePath);
+    if (prefixBytes < prefixLimit) {
+      const bytesToKeep = Math.min(chunk.length, prefixLimit - prefixBytes);
+      prefixChunks.push(Buffer.from(chunk.subarray(0, bytesToKeep)));
+      prefixBytes += bytesToKeep;
+    }
+    totalBytes += chunk.length;
+    assertFileViewSourceBytes(totalBytes, filePath);
   }
+  assertUtf8Complete(utf8State, filePath);
   return {
     prefix: prefixChunks.length === 1 ? prefixChunks[0]! : Buffer.concat(prefixChunks),
     totalBytes,
   };
 }
 
-async function assertReadableTextFile(filePath: string): Promise<void> {
-  assertTextFileExtension(filePath);
-  const stat = await fs.stat(filePath);
-  if (!stat.isFile()) throw new Error(`File view target is not a file: ${filePath}`);
-  assertFileViewSourceBytes(stat.size, filePath);
+function assertReadableTextFile(opened: ConfinedReadableFile): void {
+  assertTextFileExtension(opened.displayPath);
+  assertTextFileExtension(opened.realPath);
+  assertFileViewSourceBytes(opened.size, opened.realPath);
 }
 
 function assertFileViewSourceBytes(totalBytes: number, filePath: string): void {

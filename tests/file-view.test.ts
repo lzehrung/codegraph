@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as agentFacade from "../src/agent.js";
 import { type AgentSession } from "../src/agent/session.js";
+import { setAfterConfinedPathVerifiedForTests } from "../src/util/confinedFile.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
 
 const { createAgentSession, formatAgentFileViewResponse, getCodegraphFileView, getCodegraphFileViewWithSession } =
@@ -41,7 +43,16 @@ async function writeSparseFile(root: string, relativePath: string, size: number)
   return filePath;
 }
 
+function isMkfifoUnavailable(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "EPERM" || error.code === "ENOTSUP")
+  );
+}
+
 afterEach(async () => {
+  setAfterConfinedPathVerifiedForTests(undefined);
   await Promise.all(Array.from(tempPaths, async (tempPath) => await fs.rm(tempPath, { recursive: true, force: true })));
   tempPaths.clear();
 });
@@ -227,6 +238,222 @@ describe("agent file view", () => {
     );
   });
 
+  it("refuses a TOCTOU symlink swap between confinement and open", async () => {
+    // Deterministic interleaving: setAfterConfinedPathVerifiedForTests runs after realpath
+    // confinement succeeds (lstat already captured) and before the descriptor opens, swapping the
+    // verified path for an outside symlink.
+    const root = await makeTempDir("cg-file-view-toctou-root-");
+    const outside = await makeTempDir("cg-file-view-toctou-outside-");
+    const victimRelative = "victim.txt";
+    const victimPath = path.join(root, victimRelative);
+    const outsideFile = path.join(outside, "secret.txt");
+    const outsideMarker = "TOCTOU_OUTSIDE_SECRET_CONTENT";
+    await fs.writeFile(victimPath, "inside-safe-content\n", "utf8");
+    await fs.writeFile(outsideFile, `${outsideMarker}\n`, "utf8");
+
+    const probeLink = path.join(root, "symlink-probe");
+    try {
+      await fs.symlink(outsideFile, probeLink, "file");
+      await fs.unlink(probeLink);
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    setAfterConfinedPathVerifiedForTests(async (realPath) => {
+      if (path.resolve(realPath) !== path.resolve(victimPath)) return;
+      await fs.unlink(victimPath);
+      await fs.symlink(outsideFile, victimPath, "file");
+    });
+
+    await expect(getCodegraphFileView({ root, file: victimRelative, limit: 10, maxBytes: 100 })).rejects.toThrow(
+      /Confined file target is not a file:|File changed between verification and open:/,
+    );
+  });
+
+  it("refuses a TOCTOU FIFO swap between confinement and open without hanging", async () => {
+    // Guards the O_NONBLOCK fix: opening a FIFO with O_RDONLY blocks until a writer connects,
+    // so without O_NONBLOCK a verified regular file swapped for a FIFO would hang this open
+    // forever instead of failing fast once fstat proves the descriptor is not a regular file.
+    // FIFOs are a POSIX filesystem feature; Windows has no equivalent node reachable through
+    // fs.open, so this race cannot be reproduced there.
+    if (process.platform === "win32") return;
+    const root = await makeTempDir("cg-file-view-fifo-race-root-");
+    const victimRelative = "victim.txt";
+    const victimPath = path.join(root, victimRelative);
+    const fifoPath = path.join(root, "victim.fifo");
+    await fs.writeFile(victimPath, "inside-safe-content\n", "utf8");
+
+    try {
+      execFileSync("mkfifo", [fifoPath]);
+    } catch (error) {
+      if (isMkfifoUnavailable(error)) return;
+      throw error;
+    }
+
+    setAfterConfinedPathVerifiedForTests(async (realPath) => {
+      if (path.resolve(realPath) !== path.resolve(victimPath)) return;
+      await fs.unlink(victimPath);
+      await fs.rename(fifoPath, victimPath);
+    });
+
+    await expect(getCodegraphFileView({ root, file: victimRelative, limit: 10, maxBytes: 100 })).rejects.toThrow(
+      /Confined file target is not a file:/,
+    );
+  }, 5_000);
+
+  it("refuses a TOCTOU hard-link replacement between confinement and open", async () => {
+    const root = await makeTempDir("cg-file-view-hardlink-race-root-");
+    const outside = await makeTempDir("cg-file-view-hardlink-race-outside-");
+    const victimRelative = "victim.txt";
+    const victimPath = path.join(root, victimRelative);
+    const outsideFile = path.join(outside, "secret.txt");
+    await fs.writeFile(victimPath, "inside-safe-content\n", "utf8");
+    await fs.writeFile(outsideFile, "TOCTOU_OUTSIDE_SECRET_CONTENT\n", "utf8");
+
+    setAfterConfinedPathVerifiedForTests(async (realPath) => {
+      if (path.resolve(realPath) !== path.resolve(victimPath)) return;
+      await fs.unlink(victimPath);
+      await fs.link(outsideFile, victimPath);
+    });
+
+    await expect(getCodegraphFileView({ root, file: victimRelative, limit: 10, maxBytes: 100 })).rejects.toThrow(
+      /File changed between verification and open:/,
+    );
+  });
+
+  it("refuses a symlink-alias target swap while resolving confinement", async () => {
+    const root = await makeTempDir("cg-file-view-alias-race-root-");
+    const safeFile = path.join(root, "safe.txt");
+    const replacementFile = path.join(root, "replacement.txt");
+    const aliasFile = path.join(root, "alias.txt");
+    await fs.writeFile(safeFile, "inside-safe-content\n", "utf8");
+    await fs.writeFile(replacementFile, "TOCTOU_REPLACEMENT_CONTENT\n", "utf8");
+    try {
+      await fs.symlink(safeFile, aliasFile, "file");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const originalRealpath = fs.realpath.bind(fs);
+    const realpath = vi.spyOn(fs, "realpath");
+    let swapped = false;
+    realpath.mockImplementation(async (candidate) => {
+      const resolved = await originalRealpath(candidate);
+      if (!swapped && path.resolve(String(candidate)) === path.resolve(aliasFile)) {
+        swapped = true;
+        await fs.unlink(aliasFile);
+        await fs.symlink(replacementFile, aliasFile, "file");
+      }
+      return resolved;
+    });
+
+    try {
+      await expect(getCodegraphFileView({ root, file: "alias.txt", limit: 10, maxBytes: 100 })).rejects.toThrow(
+        /File changed during confinement:|File changed between verification and open:/,
+      );
+    } finally {
+      realpath.mockRestore();
+    }
+  });
+
+  it("rejects a mismatched fallback identity when lstat does not expose a device", async () => {
+    const root = await makeTempDir("cg-file-view-lstat-device-fallback-");
+    const victimPath = path.join(root, "victim.txt");
+    await fs.writeFile(victimPath, "inside-safe-content\n", "utf8");
+
+    const originalLstat = fs.lstat.bind(fs);
+    const lstat = vi.spyOn(fs, "lstat").mockImplementation(async (candidate, options) => {
+      const stat = await originalLstat(candidate, options as { bigint: true });
+      if (path.resolve(String(candidate)) !== path.resolve(victimPath)) return stat;
+      return Object.assign(Object.create(stat), {
+        birthtimeNs: stat.birthtimeNs + 1n,
+        dev: 0n,
+      });
+    });
+
+    try {
+      await expect(getCodegraphFileView({ root, file: "victim.txt", limit: 10, maxBytes: 100 })).rejects.toThrow(
+        /File changed between verification and open:/,
+      );
+    } finally {
+      lstat.mockRestore();
+    }
+  });
+
+  it("accepts a matched fallback identity when lstat does not expose a device", async () => {
+    const root = await makeTempDir("cg-file-view-lstat-device-fallback-match-");
+    const victimPath = path.join(root, "victim.txt");
+    await fs.writeFile(victimPath, "inside-safe-content\n", "utf8");
+
+    const originalLstat = fs.lstat.bind(fs);
+    const lstat = vi.spyOn(fs, "lstat").mockImplementation(async (candidate, options) => {
+      const stat = await originalLstat(candidate, options as { bigint: true });
+      if (path.resolve(String(candidate)) !== path.resolve(victimPath)) return stat;
+      // Birth time is unchanged; only the device id is unavailable, as on some lstat paths.
+      return Object.assign(Object.create(stat), { dev: 0n });
+    });
+
+    try {
+      const view = await getCodegraphFileView({ root, file: "victim.txt", limit: 10, maxBytes: 100 });
+      expect(view.content).toBe("1\tinside-safe-content\n2\t");
+    } finally {
+      lstat.mockRestore();
+    }
+  });
+
+  it("refuses a TOCTOU parent-directory symlink swap between confinement and open", async () => {
+    const root = await makeTempDir("cg-file-view-parent-symlink-race-root-");
+    const outside = await makeTempDir("cg-file-view-parent-symlink-race-outside-");
+    const victimRelative = path.join("inside", "victim.txt");
+    const insideDirectory = path.join(root, "inside");
+    const victimPath = path.join(root, victimRelative);
+    const outsideVictim = path.join(outside, "victim.txt");
+    await fs.mkdir(insideDirectory);
+    await fs.writeFile(victimPath, "inside-safe-content\n", "utf8");
+    await fs.writeFile(outsideVictim, "TOCTOU_OUTSIDE_SECRET_CONTENT\n", "utf8");
+
+    const probeLink = path.join(root, "symlink-probe");
+    try {
+      await fs.symlink(outside, probeLink, "junction");
+      await fs.unlink(probeLink);
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    setAfterConfinedPathVerifiedForTests(async (realPath) => {
+      if (path.resolve(realPath) !== path.resolve(victimPath)) return;
+      await fs.rm(insideDirectory, { recursive: true });
+      await fs.symlink(outside, insideDirectory, "junction");
+    });
+
+    await expect(getCodegraphFileView({ root, file: victimRelative, limit: 10, maxBytes: 100 })).rejects.toThrow(
+      /File changed between verification and open:/,
+    );
+  });
+
+  it("still reads ordinary text through an in-root symlink", async () => {
+    const root = await makeTempDir("cg-file-view-inroot-symlink-");
+    const targetFile = path.join(root, "target-notes.txt");
+    const linkedFile = path.join(root, "alias-notes.txt");
+    await fs.writeFile(targetFile, "in-root-symlink-body\n", "utf8");
+    try {
+      await fs.symlink(targetFile, linkedFile, "file");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const result = await getCodegraphFileView({ root, file: "alias-notes.txt", limit: 10, maxBytes: 100 });
+    expect(result).toMatchObject({
+      file: "alias-notes.txt",
+      text: "in-root-symlink-body\n",
+      content: "1\tin-root-symlink-body\n2\t",
+    });
+  });
+
   it("redacts a sensitive in-root symlink target even when the requested filename is benign", async () => {
     const root = await makeTempDir("cg-file-view-sensitive-symlink-");
     const targetFile = path.join(root, ".env");
@@ -268,8 +495,12 @@ describe("agent file view", () => {
       throw error;
     }
 
-    const openSpy = vi.spyOn(fs, "open");
     const readFileSpy = vi.spyOn(fs, "readFile");
+    const probe = await fs.open(targetFile, "r");
+    const handleProto = Object.getPrototypeOf(probe);
+    const handleReadSpy = vi.spyOn(handleProto, "read");
+    const handleReadFileSpy = vi.spyOn(handleProto, "readFile");
+    await probe.close();
 
     try {
       const redacted = await getCodegraphFileView({ root, file: "id_rsa", limit: 10, maxBytes: 100 });
@@ -282,11 +513,14 @@ describe("agent file view", () => {
         sensitive: { kind: "key-material", redacted: true, allowSensitiveRequired: true },
       });
       expect(JSON.stringify(redacted)).not.toContain(secretValue);
-      expect(openSpy).not.toHaveBeenCalled();
+      // Descriptor open+fstat is required for TOCTOU-safe size metadata; content must stay unread.
       expect(readFileSpy).not.toHaveBeenCalled();
+      expect(handleReadSpy).not.toHaveBeenCalled();
+      expect(handleReadFileSpy).not.toHaveBeenCalled();
     } finally {
-      openSpy.mockRestore();
       readFileSpy.mockRestore();
+      handleReadSpy.mockRestore();
+      handleReadFileSpy.mockRestore();
     }
   });
 
@@ -456,7 +690,7 @@ describe("agent file view", () => {
     let grewFile = false;
 
     openSpy.mockImplementation(async (target, flags) => {
-      if (!grewFile && target === filePath && flags === "r") {
+      if (!grewFile && path.resolve(String(target)) === path.resolve(filePath)) {
         grewFile = true;
         const growthHandle = await originalOpen(filePath, "w");
         const chunk = Buffer.alloc(64 * 1024, 0x61);
@@ -625,8 +859,9 @@ describe("agent file view", () => {
           sensitive: { kind: "key-material", redacted: true, allowSensitiveRequired: true },
         });
         expect(JSON.stringify(redacted)).not.toContain(marker);
-        expect(openSpy).not.toHaveBeenCalled();
         expect(readFileSpy).not.toHaveBeenCalled();
+        expect(openSpy).toHaveBeenCalled();
+        openSpy.mockClear();
 
         const allowed = await getCodegraphFileView({
           root,
@@ -644,7 +879,7 @@ describe("agent file view", () => {
           sensitive: { kind: "key-material", redacted: false, allowSensitiveRequired: true },
         });
         expect(openSpy).toHaveBeenCalledTimes(1);
-        expect(openSpy).toHaveBeenCalledWith(path.join(root, file), "r");
+        expect(openSpy.mock.calls[0]?.[0]).toBe(path.join(root, file));
         expect(readFileSpy).not.toHaveBeenCalled();
       } finally {
         openSpy.mockRestore();
@@ -694,8 +929,10 @@ describe("agent file view", () => {
         });
         expect(JSON.stringify(redacted)).not.toContain(marker);
       }
-      expect(openSpy).not.toHaveBeenCalled();
+      // Metadata uses descriptor open+fstat; content bytes must remain unread.
       expect(readFileSpy).not.toHaveBeenCalled();
+      expect(openSpy).toHaveBeenCalled();
+      openSpy.mockClear();
 
       const allowed = await getCodegraphFileView({
         root,
@@ -712,7 +949,7 @@ describe("agent file view", () => {
         sensitive: { kind: "key-material", redacted: false, allowSensitiveRequired: true },
       });
       expect(openSpy).toHaveBeenCalledTimes(1);
-      expect(openSpy).toHaveBeenCalledWith(path.join(root, "signing.key"), "r");
+      expect(openSpy.mock.calls[0]?.[0]).toBe(path.join(root, "signing.key"));
       expect(readFileSpy).not.toHaveBeenCalled();
     } finally {
       openSpy.mockRestore();
@@ -738,13 +975,16 @@ describe("agent file view", () => {
         content: `1\tSensitive key material omitted.\n2\tSize: ${oversizedBytes} bytes.`,
         sensitive: { kind: "key-material", redacted: true, allowSensitiveRequired: true },
       });
-      expect(openSpy).not.toHaveBeenCalled();
+      // Descriptor open+fstat is required for TOCTOU-safe size metadata; content stays unread.
+      expect(openSpy).toHaveBeenCalledTimes(1);
       expect(readFileSpy).not.toHaveBeenCalled();
+      openSpy.mockClear();
 
       await expect(
         getCodegraphFileView({ root, file, limit: 10, maxBytes: 100, allowSensitive: true }),
       ).rejects.toThrow(`File exceeds the 16777216-byte file view input limit: ${filePath}`);
-      expect(openSpy).not.toHaveBeenCalled();
+      // Open binds the descriptor for the size check; no content read follows.
+      expect(openSpy).toHaveBeenCalledTimes(1);
       expect(readFileSpy).not.toHaveBeenCalled();
     } finally {
       openSpy.mockRestore();
@@ -756,8 +996,9 @@ describe("agent file view", () => {
     const root = await makeTempDir("cg-file-view-key-directory-");
     await fs.mkdir(path.join(root, "identity.pem"));
 
-    await expect(getCodegraphFileView({ root, file: "identity.pem", limit: 10, maxBytes: 100 })).rejects.toThrow(
-      /File view target is not a file:/,
+    const directoryPath = path.join(root, "identity.pem");
+    await expect(getCodegraphFileView({ root, file: directoryPath, limit: 10, maxBytes: 100 })).rejects.toThrow(
+      `Confined file target is not a file: ${directoryPath.replace(/\\/g, "/")}`,
     );
   });
 

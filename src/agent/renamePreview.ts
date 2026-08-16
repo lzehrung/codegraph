@@ -11,7 +11,7 @@ import { SymbolKind, type BuildOptions, type ProjectIndex, type Reference, type 
 import { supportForFile } from "../languages.js";
 import type { Range } from "../types.js";
 import { ensureParsedContext } from "../indexer/parse-context.js";
-import { resolveReadableFile } from "../util/confinedFile.js";
+import { openConfinedReadableFile } from "../util/confinedFile.js";
 import { errorMessage } from "../util/errors.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { classifySensitiveFile } from "./fileView.js";
@@ -644,60 +644,67 @@ async function loadRenameFile(
   if (cached) return await cached;
   const load = (async (): Promise<LoadedRenameFile | null> => {
     try {
-      const resolved = await resolveReadableFile(realRoot, snapshot.root, file);
-      const sensitiveKind = classifySensitiveFile(resolved.displayPath) ?? classifySensitiveFile(resolved.realPath);
-      if (sensitiveKind) {
-        unsafeSites.push({
-          location: { file: resolved.displayPath, range: zeroRange() },
-          text: "",
-          reason: "sensitive_file",
-          provenance: {
-            ...provenance,
-            confidence: "low",
-            reason: `Rename preview does not read ${sensitiveKind} files.`,
-          },
-        });
-        return null;
-      }
-      if (isGeneratedRenameFile(resolved.displayPath) || isGeneratedRenameFile(resolved.realPath)) {
-        unsafeSites.push({
-          location: { file: resolved.displayPath, range: zeroRange() },
-          text: "",
-          reason: "generated_file",
-          provenance: {
-            ...provenance,
-            confidence: "low",
-            reason: "Generated or vendored files are not edited by rename preview.",
-          },
-        });
-        return null;
-      }
-      const before = await fs.stat(resolved.realPath);
-      const indexedSignature = snapshot.fileSignatures?.get(file) ?? snapshot.fileSignatures?.get(resolved.realPath);
-      if (indexedSignature && (indexedSignature.size !== before.size || indexedSignature.mtimeMs !== before.mtimeMs)) {
-        unsafeSites.push({
-          location: { file: resolved.displayPath, range: zeroRange() },
-          text: "",
-          reason: "unresolved_reference",
-          provenance: { ...provenance, confidence: "low", reason: "File changed after indexing." },
-        });
-        return null;
-      }
-      const bytes = await fs.readFile(resolved.realPath);
-      if (bytes.includes(0)) throw new Error("Binary source contains NUL bytes.");
-      let source: string;
+      const opened = await openConfinedReadableFile(realRoot, snapshot.root, file);
       try {
-        source = strictUtf8Decoder.decode(bytes);
-      } catch {
-        throw new Error("Malformed UTF-8 source cannot be renamed safely.");
+        const sensitiveKind = classifySensitiveFile(opened.displayPath) ?? classifySensitiveFile(opened.realPath);
+        if (sensitiveKind) {
+          unsafeSites.push({
+            location: { file: opened.displayPath, range: zeroRange() },
+            text: "",
+            reason: "sensitive_file",
+            provenance: {
+              ...provenance,
+              confidence: "low",
+              reason: `Rename preview does not read ${sensitiveKind} files.`,
+            },
+          });
+          return null;
+        }
+        if (isGeneratedRenameFile(opened.displayPath) || isGeneratedRenameFile(opened.realPath)) {
+          unsafeSites.push({
+            location: { file: opened.displayPath, range: zeroRange() },
+            text: "",
+            reason: "generated_file",
+            provenance: {
+              ...provenance,
+              confidence: "low",
+              reason: "Generated or vendored files are not edited by rename preview.",
+            },
+          });
+          return null;
+        }
+        const before = await opened.handle.stat();
+        const indexedSignature = snapshot.fileSignatures?.get(file) ?? snapshot.fileSignatures?.get(opened.realPath);
+        if (
+          indexedSignature &&
+          (indexedSignature.size !== before.size || indexedSignature.mtimeMs !== before.mtimeMs)
+        ) {
+          unsafeSites.push({
+            location: { file: opened.displayPath, range: zeroRange() },
+            text: "",
+            reason: "unresolved_reference",
+            provenance: { ...provenance, confidence: "low", reason: "File changed after indexing." },
+          });
+          return null;
+        }
+        const bytes = await opened.handle.readFile();
+        if (bytes.includes(0)) throw new Error("Binary source contains NUL bytes.");
+        let source: string;
+        try {
+          source = strictUtf8Decoder.decode(bytes);
+        } catch {
+          throw new Error("Malformed UTF-8 source cannot be renamed safely.");
+        }
+        return {
+          displayPath: opened.displayPath,
+          realPath: opened.realPath,
+          source,
+          beforeSize: before.size,
+          beforeMtimeMs: before.mtimeMs,
+        };
+      } finally {
+        await opened.handle.close();
       }
-      return {
-        displayPath: resolved.displayPath,
-        realPath: resolved.realPath,
-        source,
-        beforeSize: before.size,
-        beforeMtimeMs: before.mtimeMs,
-      };
     } catch (error: unknown) {
       const message = errorMessage(error);
       let reason: RenameUnsafeSite["reason"] = "unresolved_reference";
