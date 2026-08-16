@@ -367,7 +367,6 @@ export function tryLoadDuplicateUnitsFromCache(
   } catch {
     return null;
   }
-
 }
 
 export type PendingDuplicateUnitCacheWrite = {

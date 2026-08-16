@@ -11,7 +11,13 @@ import { buildDoctorReport, findStaleNpmRetirementPaths } from "../src/cli/docto
 import { handleGraphCommand, type GraphCommandContext } from "../src/cli/graph.js";
 import { handleGraphDeltaCommand } from "../src/cli/graphDelta.js";
 import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/cli/graphQueries.js";
-import { CLI_HELP_TEXT, FILE_HELP_TEXT, MCP_SERVE_HELP_TEXT, PACKET_HELP_TEXT } from "../src/cli/help.js";
+import {
+  CLI_HELP_TEXT,
+  FILE_HELP_TEXT,
+  MCP_SERVE_HELP_TEXT,
+  PACKET_HELP_TEXT,
+  SQL_HELP_TEXT,
+} from "../src/cli/help.js";
 import { handleImpactCommand, type ImpactCommandContext } from "../src/cli/impact.js";
 import { handleIndexCommand, type IndexCommandContext } from "../src/cli/index.js";
 import { handleHotspotsCommand, handleInspectCommand, type InspectCommandContext } from "../src/cli/inspect.js";
@@ -330,6 +336,10 @@ describe("CLI command modules", () => {
 
     expect(commands).toContain("  mcp");
     expect(commands).toContain("Serve MCP tools for agent graph navigation");
+  });
+
+  test("documents --pretty for both SQL command forms", () => {
+    expect(SQL_HELP_TEXT).toContain('codegraph sql --db <sqlite-path> --query "SELECT ..." [--json | --pretty]');
   });
 
   test("lists all public top-level commands in CLI help", () => {

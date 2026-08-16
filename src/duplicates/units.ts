@@ -128,7 +128,7 @@ function formatDuplicateChunkHandle(file: string, line: number): string {
   return ["chunk", encodeURIComponent(file), String(line)].join(":");
 }
 
-function formatDuplicateSqlHandle(file: string, name: string, line: number): string {
+export function formatDuplicateSqlHandle(file: string, name: string, line: number): string {
   return ["sql", encodeURIComponent(name), encodeURIComponent(file), String(line)].join(":");
 }
 
@@ -140,7 +140,7 @@ function sqlHandleForDuplicateSymbol(symbol: SymbolDef, file: string): string | 
   return formatDuplicateSqlHandle(file, symbol.localName, symbol.range.start.line);
 }
 
-function formatDuplicateSymbolHandle(file: string, name: string, line: number, column: number): string {
+export function formatDuplicateSymbolHandle(file: string, name: string, line: number, column: number): string {
   return ["symbol", encodeURIComponent(file), encodeURIComponent(name), String(line), String(column)].join(":");
 }
 

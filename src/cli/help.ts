@@ -260,7 +260,7 @@ A bare positional is a text regex. Use --query explicitly for Tree-sitter querie
 export const SQL_HELP_TEXT = `codegraph sql - Query a graph SQLite export read-only
 
 Usage: codegraph sql <sqlite-path> "SELECT ..." [--json | --pretty]
-       codegraph sql --db <sqlite-path> --query "SELECT ..." [--json]
+       codegraph sql --db <sqlite-path> --query "SELECT ..." [--json | --pretty]
 `;
 
 export const SYMBOLS_HELP_TEXT = `codegraph symbols - Deterministic workspace-symbol lookup

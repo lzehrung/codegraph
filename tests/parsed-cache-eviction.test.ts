@@ -22,7 +22,7 @@ describe("parsed AST cache eviction", () => {
         parsedCacheMaxEntries: 2,
       });
 
-      expect(index.parsed).toHaveLength(2);
+      expect(index.parsed?.size).toBe(2);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

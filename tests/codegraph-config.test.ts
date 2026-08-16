@@ -6,7 +6,7 @@ import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions, mergeG
 import { searchCodegraph } from "../src/agent/search.js";
 import { buildProjectIndex, type BuildReport } from "../src/indexer/build-index.js";
 import { diffBuildOptions, summarizeBuildOptions } from "../src/indexer/build-cache.js";
-import { cacheRoot } from "../src/indexer/build-cache/location.js";
+import { cacheRoot, projectCacheNamespace } from "../src/indexer/build-cache/location.js";
 import { normalizeLanguageExtensions, supportForFile } from "../src/languages.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { runTsxScriptOrThrow } from "./helpers/cli.js";
@@ -99,6 +99,16 @@ describe("codegraph config", () => {
     await writeConfig(root, { cache: { location: absoluteCache } });
 
     await expect(loadCodegraphConfig(root)).resolves.toEqual({ cache: { location: absoluteCache } });
+  });
+
+  it("preserves an explicit cache location before its directory exists", async () => {
+    const root = await mkRepo();
+    const location = path.join(root, "new-cache-anchor");
+
+    expect(cacheRoot(root, { cache: "disk", cacheLocation: location })).toBe(
+      path.join(location, ".codegraph-cache", "index-v1", projectCacheNamespace(root)),
+    );
+    await expect(fs.stat(location)).rejects.toThrow();
   });
 
   it("merges config discovery with explicit discovery overrides", () => {

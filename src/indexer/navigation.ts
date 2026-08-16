@@ -64,7 +64,8 @@ export async function goToDefinition(
   if (sqlResult) return sqlResult;
 
   const context =
-    parsedContext ?? (await ensureParsedContext(file, index.parsed?.get(fileIdentityKey(file)), index.languageExtensions));
+    parsedContext ??
+    (await ensureParsedContext(file, index.parsed?.get(fileIdentityKey(file)), index.languageExtensions));
   const sup = context.sup;
   const lang = context.lang;
   const source = context.source;

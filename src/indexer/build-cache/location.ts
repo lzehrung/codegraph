@@ -76,7 +76,7 @@ export function resolveCacheAnchor(projectRoot: string, opts?: BuildOptions): Ca
 export function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
   const root = path.resolve(projectRoot);
   const resolution = resolveCacheAnchor(root, opts);
-  const anchor = isWritableDirectory(resolution.anchor) ? resolution.anchor : root;
+  const anchor = resolution.layer === "explicit" || isWritableDirectory(resolution.anchor) ? resolution.anchor : root;
   const sameRoot = fileIdentityKey(anchor) === fileIdentityKey(root);
   if (
     sameRoot &&
