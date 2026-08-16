@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -40,6 +41,14 @@ async function writeSparseFile(root: string, relativePath: string, size: number)
   await fs.writeFile(filePath, "");
   await fs.truncate(filePath, size);
   return filePath;
+}
+
+function isMkfifoUnavailable(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "EPERM" || error.code === "ENOTSUP")
+  );
 }
 
 afterEach(async () => {
@@ -261,6 +270,37 @@ describe("agent file view", () => {
       /Confined file target is not a file:|File changed between verification and open:/,
     );
   });
+
+  it("refuses a TOCTOU FIFO swap between confinement and open without hanging", async () => {
+    // Guards the O_NONBLOCK fix: opening a FIFO with O_RDONLY blocks until a writer connects,
+    // so without O_NONBLOCK a verified regular file swapped for a FIFO would hang this open
+    // forever instead of failing fast once fstat proves the descriptor is not a regular file.
+    // FIFOs are a POSIX filesystem feature; Windows has no equivalent node reachable through
+    // fs.open, so this race cannot be reproduced there.
+    if (process.platform === "win32") return;
+    const root = await makeTempDir("cg-file-view-fifo-race-root-");
+    const victimRelative = "victim.txt";
+    const victimPath = path.join(root, victimRelative);
+    const fifoPath = path.join(root, "victim.fifo");
+    await fs.writeFile(victimPath, "inside-safe-content\n", "utf8");
+
+    try {
+      execFileSync("mkfifo", [fifoPath]);
+    } catch (error) {
+      if (isMkfifoUnavailable(error)) return;
+      throw error;
+    }
+
+    setAfterConfinedPathVerifiedForTests(async (realPath) => {
+      if (path.resolve(realPath) !== path.resolve(victimPath)) return;
+      await fs.unlink(victimPath);
+      await fs.rename(fifoPath, victimPath);
+    });
+
+    await expect(getCodegraphFileView({ root, file: victimRelative, limit: 10, maxBytes: 100 })).rejects.toThrow(
+      /Confined file target is not a file:/,
+    );
+  }, 5_000);
 
   it("refuses a TOCTOU hard-link replacement between confinement and open", async () => {
     const root = await makeTempDir("cg-file-view-hardlink-race-root-");

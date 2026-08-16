@@ -1,4 +1,4 @@
-import { constants as fsConstants, type Stats } from "node:fs";
+import { constants as fsConstants, type BigIntStats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 
@@ -14,7 +14,7 @@ export type ConfinedReadableFile = {
 type ConfinedFileTestHook = (realPath: string) => void | Promise<void>;
 type PreparedReadableFile = {
   displayPath: string;
-  expectedStats: readonly Stats[];
+  expectedStats: readonly BigIntStats[];
   realPath: string;
 };
 
@@ -39,10 +39,10 @@ export async function resolveReadableFile(
   if (lexicalRelativePath === null) {
     throw new Error(`File is outside project root: ${normalizePath(candidatePath)} (root: ${normalizePath(realRoot)})`);
   }
-  const candidateStat = await fs.stat(candidatePath);
+  const candidateStat = await fs.stat(candidatePath, { bigint: true });
   assertRegularFileStat(candidateStat, candidatePath);
   const realPath = await assertRealPathCandidateWithinRoot(realRoot, candidatePath, "File");
-  const expectedStat = await fs.lstat(realPath);
+  const expectedStat = await fs.lstat(realPath, { bigint: true });
   assertRegularFileStat(expectedStat, realPath);
   const displayPath =
     toProjectRelativePath(root, candidatePath) ?? toProjectRelativePath(realRoot, realPath) ?? normalizePath(realPath);
@@ -132,9 +132,13 @@ export async function findNearestExistingPath(filePath: string): Promise<string>
 
 async function openVerifiedRegularFile(
   realPath: string,
-  expectedStats: readonly Stats[],
+  expectedStats: readonly BigIntStats[],
 ): Promise<{ handle: FileHandle; size: number }> {
-  const openFlags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
+  // O_NONBLOCK guards against a verified regular file being swapped for a FIFO before this open:
+  // without it, opening a FIFO for O_RDONLY blocks until a writer connects, hanging the caller
+  // before the fstat() below can reject the non-regular target. POSIX ignores O_NONBLOCK on
+  // regular files, so normal reads through the returned handle are unaffected.
+  const openFlags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
   let handle: FileHandle;
   try {
     handle = await fs.open(realPath, openFlags);
@@ -143,27 +147,27 @@ async function openVerifiedRegularFile(
   }
 
   try {
-    const postStat = await handle.stat();
+    const postStat = await handle.stat({ bigint: true });
     assertRegularFileStat(postStat, realPath);
     if (!expectedStats.every((expectedStat) => sameFileIdentity(expectedStat, postStat))) {
       throw new Error(
         `File changed between verification and open: ${normalizePath(realPath)} (possible path confinement race)`,
       );
     }
-    return { handle, size: postStat.size };
+    return { handle, size: Number(postStat.size) };
   } catch (error) {
     await handle.close().catch(() => undefined);
     throw error;
   }
 }
 
-function sameFileIdentity(preStat: Stats, postStat: Stats): boolean {
+function sameFileIdentity(preStat: BigIntStats, postStat: BigIntStats): boolean {
   if (preStat.ino !== postStat.ino) return false;
-  if (preStat.dev !== 0 && postStat.dev !== 0) return preStat.dev === postStat.dev;
+  if (preStat.dev !== 0n && postStat.dev !== 0n) return preStat.dev === postStat.dev;
   return preStat.birthtimeMs === postStat.birthtimeMs;
 }
 
-function assertRegularFileStat(stat: Stats, filePath: string): void {
+function assertRegularFileStat(stat: BigIntStats, filePath: string): void {
   if (stat.isFile()) return;
   throw new Error(`Confined file target is not a file: ${normalizePath(filePath)}`);
 }
