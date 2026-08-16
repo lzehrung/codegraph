@@ -228,7 +228,21 @@ async function buildIndexedModuleForFile(args: {
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
 
   if (prepared.syntaxTree) {
-    tree = new ProjectedSyntaxTree(source, prepared.syntaxTree);
+    const parsedTree = new ProjectedSyntaxTree(source, prepared.syntaxTree);
+    tree = parsedTree;
+    setParsedCacheEntry(
+      args.parsedMap,
+      args.file,
+      {
+        source,
+        tree: parsedTree,
+        sup,
+        ...(resolvedLang ? { lang: resolvedLang } : {}),
+        ...(embeddedBlocks ? { embeddedBlocks } : {}),
+        nativeQueries,
+      },
+      args.parsedCacheMaxEntries,
+    );
   } else if (!nativeQueries && !graphOnlyLanguage && sup.id !== "sql") {
     const parseAttempt = attemptParsePreparedFileContext(prepared);
     const parsed = parseAttempt.parsed;
@@ -252,6 +266,7 @@ async function buildIndexedModuleForFile(args: {
     if (parsed) {
       tree = parsed.tree;
       resolvedLang = parsed.lang ?? resolvedLang;
+      setParsedCacheEntry(args.parsedMap, args.file, parsed, args.parsedCacheMaxEntries);
     }
   }
   const lacksParserContext = !nativeQueries && !tree;
