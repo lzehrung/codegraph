@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { listChangedFiles, listUntrackedFiles, getUnifiedDiff } from "../src/util.js";
+import { decodeGitPath } from "../src/util/git.js";
 import { parseUnifiedDiff } from "../src/impact/parse.js";
 import { runGit as git } from "./helpers/git.js";
 
@@ -248,6 +249,25 @@ describe("git diff semantics: rename detection is deterministic regardless of us
       ]);
     } finally {
       await removeGitTempDir(root);
+    }
+  });
+});
+
+describe("Git C-style quoted path decoding", () => {
+  it("preserves unquoted paths and decodes supported quote escapes", () => {
+    const cases = [
+      ["unquoted path with trailing ", "unquoted path with trailing "],
+      ['"café.ts"', "café.ts"],
+      ['"caf\\303\\251.ts"', "café.ts"],
+      ['"emoji \\360\\237\\230\\200.ts"', "emoji 😀.ts"],
+      ['"quote\\" and slash\\\\.ts"', 'quote" and slash\\.ts'],
+      ['"tab\\tline\\ncarriage\\r.ts"', "tab\tline\ncarriage\r.ts"],
+      ['"\\1\\12\\123"', "\x01\nS"],
+      ['"unknown\\qtrailing\\"', "unknown\\qtrailing\\"],
+    ];
+
+    for (const [rawPath, expected] of cases) {
+      expect(decodeGitPath(rawPath)).toBe(expected);
     }
   });
 });

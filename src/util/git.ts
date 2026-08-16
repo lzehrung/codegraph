@@ -16,6 +16,55 @@ const MAX_GIT_HASH_OBJECT_ARGUMENT_BYTES = 24 * 1024;
 
 let gitExecutableForTests: string | null = null;
 
+/** Decodes Git's optional C-style quoted pathname representation without trimming legal path bytes. */
+export function decodeGitPath(rawPath: string): string {
+  if (!rawPath.startsWith('"') || !rawPath.endsWith('"')) {
+    return rawPath;
+  }
+
+  const inner = rawPath.slice(1, -1);
+  const bytes: number[] = [];
+  for (let index = 0; index < inner.length; ) {
+    const char = inner[index]!;
+    if (char !== "\\") {
+      const codePoint = inner.codePointAt(index)!;
+      bytes.push(...Buffer.from(String.fromCodePoint(codePoint), "utf8"));
+      index += codePoint > 0xffff ? 2 : 1;
+      continue;
+    }
+    const octal = inner.slice(index + 1, index + 4).match(/^[0-7]{1,3}/);
+    if (octal) {
+      bytes.push(parseInt(octal[0], 8) & 0xff);
+      index += 1 + octal[0].length;
+      continue;
+    }
+    const next = inner[index + 1];
+    if (next === "\\" || next === '"') {
+      bytes.push(next.charCodeAt(0));
+      index += 2;
+      continue;
+    }
+    if (next === "n") {
+      bytes.push(0x0a);
+      index += 2;
+      continue;
+    }
+    if (next === "r") {
+      bytes.push(0x0d);
+      index += 2;
+      continue;
+    }
+    if (next === "t") {
+      bytes.push(0x09);
+      index += 2;
+      continue;
+    }
+    bytes.push(0x5c);
+    index += 1;
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
 /** Test-only override of the Git executable path. Pass null to restore. */
 export function setGitExecutableForTests(executable: string | null): void {
   gitExecutableForTests = executable;

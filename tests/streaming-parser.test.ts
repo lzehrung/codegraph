@@ -212,4 +212,21 @@ index 0000000..1111111 100644
 
     expect(parsed.files).toEqual([expect.objectContaining({ path: pathWithTrailingSpace, kind: "modified" })]);
   });
+
+  it("decodes escaped copy paths across diff and file headers", () => {
+    const diffText = `diff --git "a/source\\t.ts" "b/copied\\t.ts"
+similarity index 100%
+copy from "source\\t.ts"
+copy to "copied\\t.ts"
+--- "a/source\\t.ts"
++++ "b/copied\\t.ts"
+@@ -1 +1 @@
+-old
++new
+`;
+
+    expect(parseUnifiedDiff(diffText).files).toEqual([
+      expect.objectContaining({ kind: "added", path: "copied\t.ts", oldPath: "source\t.ts" }),
+    ]);
+  });
 });

@@ -6,9 +6,9 @@ Source: `coverage/js/lcov.info`
 
 | Metric    |   Hit | Found | Coverage |
 | --------- | ----: | ----: | -------: |
-| Lines     | 27353 | 30141 |   90.75% |
-| Functions |  4559 |  4839 |   94.21% |
-| Branches  | 20655 | 26070 |   79.23% |
+| Lines     | 27455 | 30228 |   90.83% |
+| Functions |  4563 |  4842 |   94.24% |
+| Branches  | 20694 | 26098 |   79.29% |
 
 ## Least-covered Files
 
@@ -43,6 +43,7 @@ These files have line records but no function or branch records, so they are tra
 | --------------------------------------- | ------: | --------: | -------: |
 | `src/cliBootstrap.ts`                   |   0.00% |       n/a |      n/a |
 | `src/languages/definitions/jsFamily.ts` | 100.00% |       n/a |      n/a |
+| `src/util/identifiers.ts`               | 100.00% |       n/a |      n/a |
 | `src/duplicate-keywords.ts`             | 100.00% |       n/a |      n/a |
 | `src/impact/types.ts`                   | 100.00% |       n/a |      n/a |
 | `src/languages/definitions/adoc.ts`     | 100.00% |       n/a |      n/a |
@@ -50,6 +51,5 @@ These files have line records but no function or branch records, so they are tra
 | `src/languages/definitions/hbs.ts`      | 100.00% |       n/a |      n/a |
 | `src/languages/definitions/markdown.ts` | 100.00% |       n/a |      n/a |
 | `src/languages/definitions/mdx.ts`      | 100.00% |       n/a |      n/a |
-| `src/languages/definitions/rst.ts`      | 100.00% |       n/a |      n/a |
 
 Generated from LCOV by `node ./scripts/coverage-markdown.mjs`.

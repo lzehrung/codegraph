@@ -1,5 +1,6 @@
 import { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
+import { decodeGitPath } from "../util/git.js";
 import type { Diff, FileChange, Hunk } from "./types.js";
 
 type ParsedFileChange = FileChange & {
@@ -129,60 +130,6 @@ function decodeStreamChunk(decoder: StringDecoder, chunk: unknown): string {
   if (Buffer.isBuffer(chunk)) return decoder.write(chunk);
   if (chunk instanceof Uint8Array) return decoder.write(Buffer.from(chunk));
   return String(chunk);
-}
-
-function decodeGitPath(rawPath: string): string {
-  if (!rawPath.startsWith('"') || !rawPath.endsWith('"')) {
-    return rawPath;
-  }
-
-  // Git quotes a path when it contains non-ASCII or special bytes, escaping each raw byte
-  // independently as `\NNN` (octal). A multi-byte UTF-8 character becomes several consecutive
-  // `\NNN` escapes that must be recombined as raw bytes and decoded together as UTF-8 -
-  // decoding each escape as its own code point (the previous approach) mojibakes every
-  // non-ASCII path (e.g. "café.ts" became "cafÃ©.ts").
-  const inner = rawPath.slice(1, -1);
-  const bytes: number[] = [];
-  for (let index = 0; index < inner.length; ) {
-    const char = inner[index]!;
-    if (char !== "\\") {
-      const codePoint = inner.codePointAt(index)!;
-      bytes.push(...Buffer.from(String.fromCodePoint(codePoint), "utf8"));
-      index += codePoint > 0xffff ? 2 : 1;
-      continue;
-    }
-    const octal = inner.slice(index + 1, index + 4).match(/^[0-7]{1,3}/);
-    if (octal) {
-      bytes.push(parseInt(octal[0], 8) & 0xff);
-      index += 1 + octal[0].length;
-      continue;
-    }
-    const next = inner[index + 1];
-    if (next === "\\" || next === '"') {
-      bytes.push(next.charCodeAt(0));
-      index += 2;
-      continue;
-    }
-    if (next === "n") {
-      bytes.push(0x0a);
-      index += 2;
-      continue;
-    }
-    if (next === "r") {
-      bytes.push(0x0d);
-      index += 2;
-      continue;
-    }
-    if (next === "t") {
-      bytes.push(0x09);
-      index += 2;
-      continue;
-    }
-    // Unrecognized escape: keep the backslash literally.
-    bytes.push(0x5c);
-    index += 1;
-  }
-  return Buffer.from(bytes).toString("utf8");
 }
 
 function stripDiffGitPrefix(pathValue: string, prefix: "a/" | "b/"): string {
