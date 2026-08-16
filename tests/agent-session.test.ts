@@ -9,6 +9,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import { AGENT_FRESHNESS_CHECK_INTERVAL_MS, createAgentSession, listAgentSessionFiles } from "../src/agent/session.js";
+import type { QueryIndexHandle } from "../src/agent/query-index/update.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import { createProjectSnapshotIdentity } from "../src/indexer/build-cache.js";
@@ -966,6 +967,70 @@ describe("agent session", () => {
         expect(invalidationHookSpy).toHaveBeenCalledTimes(1);
       } finally {
         invalidationHookSpy.mockRestore();
+        ensureQueryIndexSpy.mockRestore();
+      }
+    });
+
+    it("reuses a replacement state when invalidation races a waiting caller", async () => {
+      const root = await mkRepo();
+      const session = createAgentSession({ root });
+      const snapshot = await session.loadProject();
+      const firstBuildStarted = Promise.withResolvers<void>();
+      const releaseFirstBuild = Promise.withResolvers<void>();
+      const firstHandle: QueryIndexHandle = {
+        store: null,
+        diagnostics: {
+          sidecarState: "created",
+          filesRead: 0,
+          filesAdded: 0,
+          filesUpdated: 0,
+          filesDeleted: 0,
+          fileCandidates: 0,
+          chunkCandidates: 0,
+          openMs: 0,
+          updateMs: 0,
+          candidateMs: 0,
+          scoringMs: 0,
+        },
+      };
+      const replacementHandle: QueryIndexHandle = {
+        store: null,
+        diagnostics: {
+          sidecarState: "created",
+          filesRead: 0,
+          filesAdded: 0,
+          filesUpdated: 0,
+          filesDeleted: 0,
+          fileCandidates: 0,
+          chunkCandidates: 0,
+          openMs: 0,
+          updateMs: 0,
+          candidateMs: 0,
+          scoringMs: 0,
+        },
+      };
+      let attempts = 0;
+      const ensureQueryIndexSpy = vi.spyOn(updateModule, "ensureQueryIndex").mockImplementation(() => {
+        attempts += 1;
+        if (attempts === 1) {
+          firstBuildStarted.resolve();
+          return releaseFirstBuild.promise.then(() => firstHandle);
+        }
+        return Promise.resolve(replacementHandle);
+      });
+
+      try {
+        const waitingLoad = ensureSessionQueryIndex(session, snapshot);
+        await firstBuildStarted.promise;
+        disposeSessionQueryIndex(session);
+        const replacementLoad = ensureSessionQueryIndex(session, snapshot);
+        releaseFirstBuild.resolve();
+
+        await expect(waitingLoad).resolves.toBe(replacementHandle);
+        await expect(replacementLoad).resolves.toBe(replacementHandle);
+        expect(attempts).toBe(2);
+      } finally {
+        disposeSessionQueryIndex(session);
         ensureQueryIndexSpy.mockRestore();
       }
     });

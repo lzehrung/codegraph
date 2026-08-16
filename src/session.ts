@@ -1056,6 +1056,7 @@ export class SessionManager {
         if (existing?.isReady()) {
           continue;
         }
+        if (!existing) this.assertCapacityForNewSession();
         const session = new CodeReviewSession(options);
         replacementSessions.push(existing ? { id, existing, session } : { id, session });
         warmupPromises.push(this.trackSession(id, options, session, true, () => {}));

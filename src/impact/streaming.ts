@@ -106,7 +106,7 @@ class ImpactStreamAbandonedError extends Error {
  * Default cap on buffered-but-unread stream chunks before `ImpactStreamOverflowError` is
  * raised. True backpressure (pausing the producer until the consumer catches up) would
  * require the `onImpactItem` emission callback to be genuinely awaitable, which means
- * awaiting it at every synchronous call site in `direct.ts`/`transitive.ts` — an invasive
+ * awaiting it at every synchronous call site in `direct.ts`/`transitive.ts` - an invasive
  * redesign of code outside this module. A hard cap is the non-invasive alternative: it
  * turns unbounded memory growth into an explicit, surfaced failure instead.
  */
@@ -235,8 +235,8 @@ export type ImpactStreamingContext = {
  * `streamSummary: "light"` when a caller only needs the progressive chunks and
  * a cheap terminal count/detail summary.
  *
- * Cancellation: if the consumer stops iterating early — a `for await` `break`, or an
- * explicit `.return()` on the generator — the async-generator return protocol resumes
+ * Cancellation: if the consumer stops iterating early - a `for await` `break`, or an
+ * explicit `.return()` on the generator - the async-generator return protocol resumes
  * this function's execution at its `finally` block, which aborts an internal
  * `AbortController`. The background `analyzeImpact()` producer's `onImpactItem` callback
  * checks that signal and throws once it fires, unwinding `analyzeImpact`'s in-progress
@@ -419,8 +419,8 @@ export async function* analyzeImpactStreaming(
       error: errorMessage(error),
     };
   } finally {
-    // Runs on normal completion, on a caught error, and — via the async-generator return
-    // protocol — when the consumer stops iterating early. In the early-abandonment case
+    // Runs on normal completion, on a caught error, and - via the async-generator return
+    // protocol - when the consumer stops iterating early. In the early-abandonment case
     // this is what actually stops the background analysis: it flips the shared abort
     // signal that the `onImpactItem` producer callback above checks and throws from.
     abortController.abort();

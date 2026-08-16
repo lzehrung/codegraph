@@ -45,6 +45,7 @@ export async function ensureSessionQueryIndex(
       if (!existing.closing) return resolved;
     }
     if (existing) {
+      if (QUERY_INDEX_BY_SESSION.get(session) !== existing) continue;
       QUERY_INDEX_BY_SESSION.delete(session);
       closeState(existing);
     }

@@ -18,6 +18,14 @@ vi.mock("../src/sqlite/rawQueryWorkerPool.js", async (importOriginal) => {
   };
 });
 
+import {
+  SqliteQueryCancelledError,
+  SqliteQueryDeadlineExceededError as PublicSqliteQueryDeadlineExceededError,
+} from "../src/sqlite.js";
+import {
+  SqliteQueryCancelledError as RootSqliteQueryCancelledError,
+  SqliteQueryDeadlineExceededError as RootSqliteQueryDeadlineExceededError,
+} from "../src/index.js";
 import { queryGraphSqliteRaw, SqliteQueryDeadlineExceededError } from "../src/sqlite/query.js";
 
 async function withTempDb(run: (dbPath: string) => Promise<void>): Promise<void> {
@@ -81,6 +89,24 @@ describe("SQLite raw query in-process deadline fallback", () => {
     });
   });
 
+  it("rejects a zero-row query that completes after the fallback deadline", async () => {
+    await withTempDb(async (dbPath) => {
+      const db = new DatabaseSync(dbPath);
+      db.exec("CREATE TABLE t (n INTEGER);");
+      db.close();
+
+      const slowEmptySql =
+        "WITH RECURSIVE spin(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM spin WHERE x < 8000000) " +
+        "SELECT x FROM spin WHERE x < 0;";
+
+      const start = Date.now();
+      await expect(queryGraphSqliteRaw(dbPath, slowEmptySql, [], { deadlineMs: 20 })).rejects.toMatchObject({
+        name: "SqliteQueryDeadlineExceededError",
+      });
+      expect(Date.now() - start).toBeGreaterThan(200);
+    });
+  });
+
   it("still succeeds for an ordinary query that finishes comfortably inside its deadline", async () => {
     await withTempDb(async (dbPath) => {
       const db = new DatabaseSync(dbPath);
@@ -93,8 +119,12 @@ describe("SQLite raw query in-process deadline fallback", () => {
     });
   });
 
-  it("exports a named deadline error for callers regardless of which path produced it", () => {
-    const error = new SqliteQueryDeadlineExceededError(250);
+  it("exports named cancellation and deadline errors from public library barrels", () => {
+    expect(PublicSqliteQueryDeadlineExceededError).toBe(SqliteQueryDeadlineExceededError);
+    expect(RootSqliteQueryDeadlineExceededError).toBe(SqliteQueryDeadlineExceededError);
+    expect(RootSqliteQueryCancelledError).toBe(SqliteQueryCancelledError);
+
+    const error = new PublicSqliteQueryDeadlineExceededError(250);
     expect(error).toBeInstanceOf(Error);
     expect(error.name).toBe("SqliteQueryDeadlineExceededError");
     expect(error.message).toBe("SQLite query exceeded its 250ms execution budget and was terminated.");

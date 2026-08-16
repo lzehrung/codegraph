@@ -1240,6 +1240,27 @@ describe("SessionManager", () => {
     }
   });
 
+  test("enforces capacity when warming net-new sessions", async () => {
+    const limitedManager = new SessionManager({ maxSessions: 1, evictionIntervalMs: 0 });
+    try {
+      await limitedManager.getOrCreateSession("existing", {
+        root: sampleRoot,
+        buildOptions: sampleBuildOptions(),
+      });
+
+      await expect(
+        limitedManager.warmup([
+          {
+            id: "warm",
+            options: { root: sampleRoot, buildOptions: sampleBuildOptions() },
+          },
+        ]),
+      ).rejects.toThrow("Session capacity reached (1)");
+    } finally {
+      limitedManager.disposeAll();
+    }
+  });
+
   test("falls back to default capacity when maxSessions is NaN", async () => {
     const nanManager = new SessionManager({ maxSessions: Number.NaN, evictionIntervalMs: 0 });
     try {

@@ -163,6 +163,11 @@ export const DEFAULT_MCP_HTTP_SESSION_EVICTION_INTERVAL_MS = 60_000;
 export const DEFAULT_MCP_HTTP_BODY_TIMEOUT_MS = 30_000;
 export const DEFAULT_MCP_TOOL_CONCURRENCY = 4;
 
+function normalizeMcpToolConcurrency(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_MCP_TOOL_CONCURRENCY;
+  return Math.max(1, Math.floor(value));
+}
+
 type LegacyMcpSession = {
   server: Server;
   transport: NodeStreamableHTTPServerTransport;
@@ -656,7 +661,7 @@ function createCodegraphMcpHandlersForSession(
       // Probe one entry past the display limit so `truncated` is exact
       // rather than a `results.length === limit` heuristic (which cannot
       // tell "exactly limit reachable files" apart from "more exist"),
-      // without re-walking the whole reachable graph for an exact total —
+      // without re-walking the whole reachable graph for an exact total -
       // see finding #44.
       limit: limit + 1,
     };
@@ -895,7 +900,7 @@ function createCodegraphMcpHandlersForSession(
           if (parseQualifiedSymbolPath(handle)) {
             const snapshot = await session.loadProject({ symbolGraph: "skip" });
             const resolved = requireSemanticSymbol(snapshot, handle);
-            // Probe one reference past the display limit so `truncated` is exact — see
+            // Probe one reference past the display limit so `truncated` is exact - see
             // `collectMcpDependencyEntries` for the rationale (finding #44).
             const result = await findReferences(snapshot.index, { def: resolved.def }, { maxReferences: limit + 1 });
             return boundedReferencesFromResult(result, limit);
@@ -1104,10 +1109,11 @@ export function createCodegraphMcpProtocolServer(
     },
   );
   let inFlightToolCalls = 0;
+  const toolConcurrency = normalizeMcpToolConcurrency(maxConcurrentToolCalls);
 
   server.setRequestHandler("tools/list", () => ({ tools: listCodegraphMcpTools() }));
   server.setRequestHandler("tools/call", async (request, ctx): Promise<CallToolResult> => {
-    if (inFlightToolCalls >= maxConcurrentToolCalls) {
+    if (inFlightToolCalls >= toolConcurrency) {
       throw new Error("MCP tool execution is busy; retry shortly.");
     }
     inFlightToolCalls += 1;
@@ -1441,7 +1447,7 @@ async function handleLegacyMcpHttpPost(
   sessionRef.current = session;
   // The SDK transport reports every per-request validation rejection through onerror
   // too (bad Accept header, wrong Content-Type, malformed JSON, an unsupported
-  // protocol version, ...) — each of those already answered its own request with a
+  // protocol version, ...) - each of those already answered its own request with a
   // 4xx response and left the transport fully usable. Deleting the session here would
   // tear down an otherwise healthy session over one malformed follow-up request. Only
   // onclose reflects the transport actually shutting down (an explicit DELETE, an

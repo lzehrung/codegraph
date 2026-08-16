@@ -51,7 +51,7 @@ describe("RawSqlQueryWorkerLifecycle", () => {
 
     expect(lifecycle.state()).toEqual({ activeWorkers: 2, maxWorkers: 2 });
     await expect(lifecycle.run(task, 10_000, undefined, () => createAbortablePool(Promise.resolve()))).rejects.toThrow(
-      /cleanup capacity/i,
+      /worker capacity/i,
     );
 
     firstCleanup.resolve();
@@ -59,5 +59,21 @@ describe("RawSqlQueryWorkerLifecycle", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(lifecycle.state()).toEqual({ activeWorkers: 0, maxWorkers: 2 });
+  });
+
+  it("describes capacity exhaustion caused by an active query", async () => {
+    const lifecycle = new RawSqlQueryWorkerLifecycle(1);
+    const complete = Promise.withResolvers<{ columns: string[]; rows: Array<Array<unknown>> }>();
+    const active = lifecycle.run(task, 10_000, undefined, () => ({
+      run: async () => await complete.promise,
+      destroy: async () => {},
+    }));
+
+    await expect(lifecycle.run(task, 10_000, undefined, () => createAbortablePool(Promise.resolve()))).rejects.toThrow(
+      /active or cleaning-up worker/i,
+    );
+
+    complete.resolve({ columns: [], rows: [] });
+    await expect(active).resolves.toEqual({ columns: [], rows: [] });
   });
 });

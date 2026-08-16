@@ -19,10 +19,9 @@ export type RawQueryWorkerTask = {
 /**
  * Worker entry point. Mirrors the previous in-process body of `queryGraphSqliteRaw`
  * exactly: open the database read-only, assert the statement is read-only, and stream
- * rows through the shared row/byte-bounded collector. Running this inside a worker
- * thread lets the pool enforce a hard execution deadline by terminating the thread —
- * which works even mid-synchronous-iteration, since thread termination does not need
- * the blocked thread's cooperation.
+ * rows through the shared row/byte-bounded collector. The pool rejects the caller at its
+ * deadline and requests worker termination. A native SQLite step already in progress
+ * can continue until it returns, while the lifecycle retains its bounded cleanup slot.
  */
 export default async function runRawQueryWorkerTask(task: RawQueryWorkerTask): Promise<RawSqlResult> {
   return await withReadOnlySqliteDatabase(task.outputPath, (db) => {

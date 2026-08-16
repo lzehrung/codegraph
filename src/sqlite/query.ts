@@ -18,7 +18,7 @@ import {
 export { queryGraphSqlite } from "./canned-query.js";
 export { SqliteQueryCancelledError, SqliteQueryDeadlineExceededError };
 
-/** Hard wall-clock budget for a single raw `query_sqlite` execution — see the caveat on
+/** Hard wall-clock budget for a single raw `query_sqlite` execution - see the caveat on
  * `queryGraphSqliteRaw` about when this is actually enforceable. */
 export const DEFAULT_SQLITE_QUERY_DEADLINE_MS = 10_000;
 
@@ -35,20 +35,22 @@ let loggedInProcessDeadlineFallback = false;
  * Runs a bounded read-only raw SQL query.
  *
  * Preferred path: the query executes in a dedicated worker thread with a hard
- * `deadlineMs` budget (`rawQueryWorkerPool.ts`). On expiry the worker thread is
- * terminated outright, which stops the query even while it is blocked inside a single
- * synchronous `DatabaseSync` call — a client disconnect or a slow non-recursive
- * statement (large join, `ORDER BY random()`, ...) can no longer hold the host event
- * loop hostage indefinitely.
+ * `deadlineMs` budget (`rawQueryWorkerPool.ts`). At expiry the caller receives a
+ * deadline error and the pool requests worker termination. A synchronous
+ * `DatabaseSync` call already inside SQLite may continue until that native step returns,
+ * but the lifecycle retains a bounded cleanup slot and the host event loop stays free.
  *
  * Degraded fallback: if the compiled worker asset cannot be located (a corrupted or
- * partial install — the normal build/publish/standalone pipelines all ship it), the
- * query instead runs in-process under a *per-row* elapsed-time budget. That fallback is
- * strictly weaker: the budget is only checked between rows the native iterator has
- * already produced, so a statement that is slow to produce its very first row (for
- * example a full-table scan with no matching rows) is not bounded by it. It exists to
- * keep the common case usable in a degraded install, not as a substitute for the worker
- * deadline.
+ * partial install - the normal build/publish/standalone pipelines all ship it), the
+ * query instead runs in-process under a *per-row* elapsed-time budget. `node:sqlite`'s
+ * `DatabaseSync` exposes no interrupt/cancellation API, so once execution is inside a
+ * single synchronous native call there is nothing in-process that can preempt it.
+ *
+ * The fallback checks only after each native iterator step returns, including a terminal
+ * empty result. A statement that is slow to produce its first row or discover that it
+ * has no rows still blocks for its full cost before the deadline can be observed. This
+ * fallback exists to keep a degraded install usable, not as a substitute for the worker
+ * deadline; a one-time process warning makes the weakened guarantee observable.
  */
 export async function queryGraphSqliteRaw(
   outputPath: string,
@@ -88,7 +90,7 @@ export async function queryGraphSqliteRaw(
   );
 }
 
-/** Degraded fallback for `queryGraphSqliteRaw` — see its doc comment for the enforcement
+/** Degraded fallback for `queryGraphSqliteRaw` - see its doc comment for the enforcement
  * caveat this path cannot avoid. */
 async function queryGraphSqliteRawInProcessBounded(
   outputPath: string,
@@ -124,20 +126,23 @@ async function queryGraphSqliteRawInProcessBounded(
   });
 }
 
-/** Throws once the wall-clock deadline has passed between two already-produced rows. See
- * the fallback caveat on `queryGraphSqliteRaw`: a slow-before-first-row query is not
- * caught here, only slow-*between*-rows iteration is. */
+/** Throws once the wall-clock deadline has passed after a native iterator step returns.
+ * See the fallback caveat on `queryGraphSqliteRaw`: a slow-before-first-row query is not
+ * interrupted here, only detected after that synchronous iteration step completes. */
 function* withPerRowDeadline<T>(
   rows: Iterable<T>,
   deadlineAt: number,
   deadlineMs: number,
   signal: AbortSignal | undefined,
 ): Generator<T> {
-  for (const row of rows) {
+  const iterator = rows[Symbol.iterator]();
+  while (true) {
     if (signal?.aborted) throw new SqliteQueryCancelledError();
+    const next = iterator.next();
     if (Date.now() > deadlineAt) {
       throw new SqliteQueryDeadlineExceededError(deadlineMs);
     }
-    yield row;
+    if (next.done) return;
+    yield next.value;
   }
 }

@@ -37,7 +37,7 @@ export class SqliteQueryCancelledError extends Error {
 export class SqliteQueryWorkerCleanupCapacityExceededError extends Error {
   constructor(maxWorkers: number) {
     super(
-      `SQLite query cleanup capacity is exhausted: ${maxWorkers} terminated worker${maxWorkers === 1 ? " is" : "s are"} still exiting. Retry after cleanup completes.`,
+      `SQLite query worker capacity is exhausted: ${maxWorkers} active or cleaning-up worker${maxWorkers === 1 ? " is" : "s are"} using the available slots. Retry after a query completes or cleanup finishes.`,
     );
     this.name = "SqliteQueryWorkerCleanupCapacityExceededError";
   }
@@ -135,33 +135,25 @@ export function resolveRawSqlQueryWorkerPath(): string {
 
 /**
  * Runs a single bounded raw SQL read in a dedicated worker thread with a hard execution
- * deadline. A fresh single-thread pool is created per call and destroyed afterward —
- * matching the existing `prepareQueryIndexFilesInWorker` pattern — since `query_sqlite`
+ * deadline. A fresh single-thread pool is created per call and destroyed afterward -
+ * matching the existing `prepareQueryIndexFilesInWorker` pattern - since `query_sqlite`
  * calls are interactive, not a hot loop, and a persistent pool would need a shutdown hook
  * this module has no access to register.
  *
- * On deadline expiry, Piscina's `signal` option force-terminates the worker thread
- * (`worker.terminate()`) and rejects immediately — the caller never waits longer than
- * `deadlineMs`, and the host event loop is never blocked by the query regardless of how
- * long it runs. Cancellation is real (no further JS runs on that thread and the query
- * can never touch this process's caller again), but it has one unavoidable limit shared
- * by every in-process cancellation mechanism: `terminate()` cannot preempt a single
- * already-in-flight synchronous native call. A query whose entire cost is inside one
- * `sqlite3_step()` — a recursive CTE, or a plan that must fully sort/scan before it can
- * produce a first row — keeps running on the orphaned worker thread in the background
- * until that native call returns naturally; only then does the thread actually exit.
- * The caller does not wait for that cleanup, but the lifecycle retains its worker slot
- * until `pool.destroy()` settles. The bounded slot count makes delayed cleanup observable
- * and prevents repeated cancellation from accumulating an unbounded number of workers.
+ * On deadline expiry, Piscina rejects the caller after requesting worker termination, so
+ * the caller never waits longer than `deadlineMs` and the host event loop is never
+ * blocked by the query. A `terminate()` request cannot preempt a single already-in-flight
+ * synchronous native call: a query whose entire cost is inside one `sqlite3_step()`, such
+ * as a recursive CTE or a plan that must fully sort or scan before a first row, continues
+ * on its orphaned worker thread until that native call returns naturally.
+ *
+ * The caller does not wait for cleanup, but the lifecycle retains its worker slot until
+ * `pool.destroy()` settles. The bounded slot count makes delayed cleanup observable and
+ * prevents repeated cancellation from accumulating an unbounded number of workers.
  * Concurrent read-only SQLite connections against the same file do not block each other,
  * so the lingering background reader does not stop that subsequent query from succeeding.
- * Verified directly: an aborted 200M-row recursive-CTE count rejects this call in
- * ~`deadlineMs`, and an immediately following query against the same file succeeds in
- * milliseconds. The one place the orphaned thread is still observable is process
- * shutdown: Node cannot fully tear a process down while one of its Worker threads is
- * blocked in native code, so a process exit racing a runaway query can itself be
- * delayed until that native call returns — a platform limit of `worker_threads`, not of
- * this module, and orthogonal to the per-call deadline this function guarantees.
+ * Process shutdown can still wait for a Worker blocked in native code, a `worker_threads`
+ * platform limit that is orthogonal to this function's prompt caller deadline.
  */
 export async function runRawSqlQueryInWorker(
   task: RawQueryWorkerTask,

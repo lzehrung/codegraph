@@ -252,6 +252,8 @@ export {
   updateGraphSqlite,
   queryGraphSqlite,
   queryGraphSqliteRaw,
+  SqliteQueryCancelledError,
+  SqliteQueryDeadlineExceededError,
   SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY,
   type SqliteGraphOptions,
   type SqliteGraphUpdateOptions,

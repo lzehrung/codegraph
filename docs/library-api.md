@@ -732,7 +732,11 @@ console.log(mermaid);
 ## Read-only SQL from code
 
 ```ts
-import { queryGraphSqliteRaw } from "@lzehrung/codegraph-core";
+import {
+  queryGraphSqliteRaw,
+  SqliteQueryCancelledError,
+  SqliteQueryDeadlineExceededError,
+} from "@lzehrung/codegraph-core";
 
 const result = await queryGraphSqliteRaw(
   "./codegraph.sqlite",
@@ -743,7 +747,9 @@ const result = await queryGraphSqliteRaw(
 console.log(result.columns, result.rows);
 ```
 
-`queryGraphSqliteRaw()` is intentionally read-only. It accepts result-producing statements such as `SELECT` and `PRAGMA` and rejects mutating SQL. Its defaults bound rows, cells, and response bytes, and callers can further tighten `{ maxRows, maxBytes, maxCellBytes, deadlineMs }`. The 10-second default execution budget (`deadlineMs`) is enforced by running the query in a dedicated worker thread that is force-terminated on expiry, so it interrupts a query even mid-execution; in a degraded install where that worker asset cannot be located, the query instead runs in-process under a weaker per-row check that cannot interrupt a single blocking native call (a logged, one-time-per-process condition).
+`queryGraphSqliteRaw()` is intentionally read-only. It accepts result-producing statements such as `SELECT` and `PRAGMA`, rejects mutating SQL, and bounds rows, cells, response bytes, and `{ deadlineMs }`.
+
+The 10-second default deadline rejects the caller promptly and requests worker termination. A native SQLite step already in progress can continue in a bounded cleanup slot until it returns; degraded installs without the worker asset use a weaker in-process check after each iterator step. Callers can catch the exported `SqliteQueryDeadlineExceededError` and `SqliteQueryCancelledError`.
 
 ## SQL artifact facts
 
