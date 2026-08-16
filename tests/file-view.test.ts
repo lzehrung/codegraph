@@ -281,6 +281,66 @@ describe("agent file view", () => {
     );
   });
 
+  it("refuses a symlink-alias target swap while resolving confinement", async () => {
+    const root = await makeTempDir("cg-file-view-alias-race-root-");
+    const safeFile = path.join(root, "safe.txt");
+    const replacementFile = path.join(root, "replacement.txt");
+    const aliasFile = path.join(root, "alias.txt");
+    await fs.writeFile(safeFile, "inside-safe-content\n", "utf8");
+    await fs.writeFile(replacementFile, "TOCTOU_REPLACEMENT_CONTENT\n", "utf8");
+    try {
+      await fs.symlink(safeFile, aliasFile, "file");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const originalRealpath = fs.realpath.bind(fs);
+    const realpath = vi.spyOn(fs, "realpath");
+    let swapped = false;
+    realpath.mockImplementation(async (candidate) => {
+      const resolved = await originalRealpath(candidate);
+      if (!swapped && path.resolve(String(candidate)) === path.resolve(aliasFile)) {
+        swapped = true;
+        await fs.unlink(aliasFile);
+        await fs.symlink(replacementFile, aliasFile, "file");
+      }
+      return resolved;
+    });
+
+    try {
+      await expect(getCodegraphFileView({ root, file: "alias.txt", limit: 10, maxBytes: 100 })).rejects.toThrow(
+        /File changed during confinement:|File changed between verification and open:/,
+      );
+    } finally {
+      realpath.mockRestore();
+    }
+  });
+
+  it("rejects a mismatched fallback identity when lstat does not expose a device", async () => {
+    const root = await makeTempDir("cg-file-view-lstat-device-fallback-");
+    const victimPath = path.join(root, "victim.txt");
+    await fs.writeFile(victimPath, "inside-safe-content\n", "utf8");
+
+    const originalLstat = fs.lstat.bind(fs);
+    const lstat = vi.spyOn(fs, "lstat").mockImplementation(async (candidate) => {
+      const stat = await originalLstat(candidate);
+      if (path.resolve(String(candidate)) !== path.resolve(victimPath)) return stat;
+      return Object.assign(Object.create(stat), {
+        birthtimeMs: stat.birthtimeMs + 1,
+        dev: 0,
+      });
+    });
+
+    try {
+      await expect(getCodegraphFileView({ root, file: "victim.txt", limit: 10, maxBytes: 100 })).rejects.toThrow(
+        /File changed between verification and open:/,
+      );
+    } finally {
+      lstat.mockRestore();
+    }
+  });
+
   it("refuses a TOCTOU parent-directory symlink swap between confinement and open", async () => {
     const root = await makeTempDir("cg-file-view-parent-symlink-race-root-");
     const outside = await makeTempDir("cg-file-view-parent-symlink-race-outside-");

@@ -14,7 +14,7 @@ export type ConfinedReadableFile = {
 type ConfinedFileTestHook = (realPath: string) => void | Promise<void>;
 type PreparedReadableFile = {
   displayPath: string;
-  expectedStat: Stats;
+  expectedStats: readonly Stats[];
   realPath: string;
 };
 
@@ -39,7 +39,8 @@ export async function resolveReadableFile(
   if (lexicalRelativePath === null) {
     throw new Error(`File is outside project root: ${normalizePath(candidatePath)} (root: ${normalizePath(realRoot)})`);
   }
-  const candidateStat = await fs.lstat(candidatePath);
+  const candidateStat = await fs.stat(candidatePath);
+  assertRegularFileStat(candidateStat, candidatePath);
   const realPath = await assertRealPathCandidateWithinRoot(realRoot, candidatePath, "File");
   const expectedStat = await fs.lstat(realPath);
   assertRegularFileStat(expectedStat, realPath);
@@ -47,42 +48,42 @@ export async function resolveReadableFile(
   if (!isFilePathWithinRoot(realRoot, finalRealPath)) {
     throw new Error(`File is outside project root: ${normalizePath(finalRealPath)} (root: ${normalizePath(realRoot)})`);
   }
-  if (candidateStat.isFile() && !sameFileIdentity(candidateStat, expectedStat)) {
-    throw new Error(
-      `File changed during confinement: ${normalizePath(candidatePath)} (possible path confinement race)`,
-    );
-  }
   const displayPath =
     toProjectRelativePath(root, candidatePath) ?? toProjectRelativePath(realRoot, realPath) ?? normalizePath(realPath);
-  return { realPath, displayPath, expectedStat };
+  return { realPath, displayPath, expectedStats: [candidateStat, expectedStat] };
 }
 
 /**
  * Resolve a project path, open it, and verify the opened descriptor before any read.
  *
- * Flow: capture the lexical file identity -> realpath confinement -> capture the resolved regular
- * file identity -> optional test hook -> open the realpath'd target -> `fstat` on that descriptor
- * -> identity check -> callers read only through the returned handle (never re-resolve the path string).
+ * Flow: capture the lexical file identity (following any alias) -> realpath confinement -> capture
+ * the resolved regular file identity -> optional test hook -> open the realpath'd target -> `fstat`
+ * on that descriptor -> compare it to every pre-open identity -> callers read only through the
+ * returned handle (never re-resolve the path string).
  *
  * POSIX: open uses `O_RDONLY | O_NOFOLLOW` so a leaf symlink swap fails the open with ELOOP.
  * win32: Node's `fs.open` has no portable `O_NOFOLLOW` (`fs.constants.O_NOFOLLOW` is absent).
- * Guarantee there is post-open identity: `fstat.ino` must match `lstat.ino`; `dev` is compared
- * only when both sides are non-zero because win32 `lstat` often reports `dev=0` while `fstat`
- * has the volume serial. A symlink swap after `lstat` yields a different inode on follow.
+ * Guarantee there is post-open identity: `fstat.ino` must match every pre-open identity. `dev` is
+ * compared when both sides expose it. When win32 `lstat.dev` is zero while `fstat.dev` has the
+ * volume serial, the creation time must also match, so a cross-volume junction swap cannot pass
+ * on a colliding inode alone.
  *
  * In-root symlinks still work: confinement realpaths them first, then the open targets the
- * resolved regular file inside the root—not the symlink leaf.
+ * resolved regular file inside the root, not the symlink leaf.
+ *
+ * A pre-existing in-root hard link remains indistinguishable from one whose other directory entry
+ * is outside the root. Pathname confinement proves the opened descriptor, not hard-link provenance.
  */
 export async function openConfinedReadableFile(
   realRoot: string,
   root: string,
   filePath: string,
 ): Promise<ConfinedReadableFile> {
-  const { realPath, displayPath, expectedStat } = await resolveReadableFile(realRoot, root, filePath);
+  const { realPath, displayPath, expectedStats } = await resolveReadableFile(realRoot, root, filePath);
   if (afterConfinedPathVerifiedForTests) {
     await afterConfinedPathVerifiedForTests(realPath);
   }
-  const { handle, size } = await openVerifiedRegularFile(realPath, expectedStat);
+  const { handle, size } = await openVerifiedRegularFile(realPath, expectedStats);
   return { handle, realPath, displayPath, size };
 }
 
@@ -135,7 +136,7 @@ export async function findNearestExistingPath(filePath: string): Promise<string>
 
 async function openVerifiedRegularFile(
   realPath: string,
-  expectedStat: Stats,
+  expectedStats: readonly Stats[],
 ): Promise<{ handle: FileHandle; size: number }> {
   const openFlags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
   let handle: FileHandle;
@@ -148,7 +149,7 @@ async function openVerifiedRegularFile(
   try {
     const postStat = await handle.stat();
     assertRegularFileStat(postStat, realPath);
-    if (!sameFileIdentity(expectedStat, postStat)) {
+    if (!expectedStats.every((expectedStat) => sameFileIdentity(expectedStat, postStat))) {
       throw new Error(
         `File changed between verification and open: ${normalizePath(realPath)} (possible path confinement race)`,
       );
@@ -162,9 +163,8 @@ async function openVerifiedRegularFile(
 
 function sameFileIdentity(preStat: Stats, postStat: Stats): boolean {
   if (preStat.ino !== postStat.ino) return false;
-  // win32 lstat often reports dev=0 while fstat has the volume serial; only compare when both are set.
-  if (preStat.dev === 0 || postStat.dev === 0) return true;
-  return preStat.dev === postStat.dev;
+  if (preStat.dev !== 0 && postStat.dev !== 0) return preStat.dev === postStat.dev;
+  return preStat.birthtimeMs === postStat.birthtimeMs;
 }
 
 function assertRegularFileStat(stat: Stats, filePath: string): void {
