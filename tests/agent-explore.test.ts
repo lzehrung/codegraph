@@ -844,7 +844,11 @@ describe("agent explore", () => {
   it("pins omission counts at and just past the limit for candidate tests and blast radius", async () => {
     const root = await mkExploreRepo();
     await writeFile(root, "tests/auth.test.ts", "import { validateUser } from '../src/auth';\nvalidateUser('bob');\n");
-    await writeFile(root, "tests/auth-spec.test.ts", "import { validateUser } from '../src/auth';\nvalidateUser('carol');\n");
+    await writeFile(
+      root,
+      "tests/auth-spec.test.ts",
+      "import { validateUser } from '../src/auth';\nvalidateUser('carol');\n",
+    );
 
     const exploreAll = await exploreCodegraph({ root, query: "validateUser" });
     expect(exploreAll.candidateTests.length).toBeGreaterThanOrEqual(2);
