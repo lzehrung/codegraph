@@ -165,7 +165,7 @@ function sameFileIdentity(preStat: Stats, postStat: Stats): boolean {
 
 function assertRegularFileStat(stat: Stats, filePath: string): void {
   if (stat.isFile()) return;
-  throw new Error(`File view target is not a file: ${normalizePath(filePath)}`);
+  throw new Error(`Confined file target is not a file: ${normalizePath(filePath)}`);
 }
 
 function rewriteNoFollowOpenError(error: unknown, filePath: string): Error {

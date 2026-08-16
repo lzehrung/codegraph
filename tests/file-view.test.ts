@@ -231,7 +231,8 @@ describe("agent file view", () => {
 
   it("refuses a TOCTOU symlink swap between confinement and open", async () => {
     // Deterministic interleaving: setAfterConfinedPathVerifiedForTests runs after realpath
-    // confinement succeeds and before lstat/open, swapping the verified path for an outside symlink.
+    // confinement succeeds (lstat already captured) and before the descriptor opens, swapping the
+    // verified path for an outside symlink.
     const root = await makeTempDir("cg-file-view-toctou-root-");
     const outside = await makeTempDir("cg-file-view-toctou-outside-");
     const victimRelative = "victim.txt";
@@ -257,7 +258,7 @@ describe("agent file view", () => {
     });
 
     await expect(getCodegraphFileView({ root, file: victimRelative, limit: 10, maxBytes: 100 })).rejects.toThrow(
-      /File view target is not a file:|File changed between verification and open:/,
+      /Confined file target is not a file:|File changed between verification and open:/,
     );
   });
 
@@ -932,7 +933,7 @@ describe("agent file view", () => {
 
     const directoryPath = path.join(root, "identity.pem");
     await expect(getCodegraphFileView({ root, file: directoryPath, limit: 10, maxBytes: 100 })).rejects.toThrow(
-      `File view target is not a file: ${directoryPath.replace(/\\/g, "/")}`,
+      `Confined file target is not a file: ${directoryPath.replace(/\\/g, "/")}`,
     );
   });
 
