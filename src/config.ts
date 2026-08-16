@@ -20,6 +20,16 @@ const stringArraySchema = z.array(z.string().trim().min(1));
 
 const languageExtensionsSchema = z.record(z.string().trim().min(1), z.string().trim().min(1));
 
+const cacheLocationSchema = z
+  .string()
+  .trim()
+  .refine(
+    (location) => location === "project" || location === "repo" || location === "user" || path.isAbsolute(location),
+    {
+      message: 'Cache location must be "project", "repo", "user", or an absolute path.',
+    },
+  );
+
 const codegraphConfigSchema = z
   .object({
     discovery: z
@@ -44,7 +54,7 @@ const codegraphConfigSchema = z
       .optional(),
     cache: z
       .object({
-        location: z.string().trim().min(1),
+        location: cacheLocationSchema,
       })
       .optional(),
   })
@@ -199,8 +209,9 @@ export async function loadCodegraphConfig(projectRoot: string): Promise<Codegrap
   const discovery = normalizeDiscoveryConfig(parsed.data.discovery);
   const resolutionHints = normalizeResolutionHints(parsed.data.graph?.resolutionHints);
   const graph = resolutionHints.length ? { resolutionHints } : undefined;
+  const cacheLocation = parsed.data.cache?.location ?? userCacheLocation;
   return {
-    cache: { location: parsed.data.cache?.location ?? userCacheLocation ?? "project" },
+    ...(cacheLocation ? { cache: { location: cacheLocation } } : {}),
     ...(discovery ? { discovery } : {}),
     ...(graph ? { graph } : {}),
     ...(languageExtensions ? { languages: { extensions: languageExtensions } } : {}),

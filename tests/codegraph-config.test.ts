@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions, mergeGraphOptions } from "../src/config.js";
 import { searchCodegraph } from "../src/agent/search.js";
 import { buildProjectIndex, type BuildReport } from "../src/indexer/build-index.js";
 import { diffBuildOptions, summarizeBuildOptions } from "../src/indexer/build-cache.js";
+import { cacheRoot } from "../src/indexer/build-cache/location.js";
 import { normalizeLanguageExtensions, supportForFile } from "../src/languages.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { runTsxScriptOrThrow } from "./helpers/cli.js";
@@ -63,6 +64,41 @@ describe("codegraph config", () => {
     const config = await loadCodegraphConfig(root);
 
     expect(config.discovery?.ignoreGlobs).toEqual(["tests/samples/**"]);
+  });
+
+  it("preserves repository cache anchoring when project config has no cache location", async () => {
+    const repositoryRoot = await mkRepo();
+    const projectRoot = path.join(repositoryRoot, "packages", "app");
+    await fs.mkdir(projectRoot, { recursive: true });
+    await fs.writeFile(path.join(repositoryRoot, ".git"), "gitdir: external\n", "utf8");
+    await writeConfig(projectRoot, {});
+    vi.stubEnv("APPDATA", path.join(repositoryRoot, "missing-appdata"));
+    vi.stubEnv("XDG_CONFIG_HOME", path.join(repositoryRoot, "missing-xdg-config"));
+
+    try {
+      const config = await loadCodegraphConfig(projectRoot);
+      const resolvedCacheRoot = cacheRoot(projectRoot, {
+        cache: "disk",
+        ...(config.cache ? { cacheLocation: config.cache.location } : {}),
+      });
+
+      expect(config.cache).toBeUndefined();
+      expect(resolvedCacheRoot).not.toBe(path.join(projectRoot, ".codegraph-cache", "index-v1"));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("rejects relative cache locations and accepts absolute cache directories", async () => {
+    const root = await mkRepo();
+    await writeConfig(root, { cache: { location: "relative-cache" } });
+
+    await expect(loadCodegraphConfig(root)).rejects.toThrow(/Invalid codegraph\.config\.json/);
+
+    const absoluteCache = path.join(root, "cache");
+    await writeConfig(root, { cache: { location: absoluteCache } });
+
+    await expect(loadCodegraphConfig(root)).resolves.toEqual({ cache: { location: absoluteCache } });
   });
 
   it("merges config discovery with explicit discovery overrides", () => {
