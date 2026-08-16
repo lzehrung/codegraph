@@ -72,7 +72,7 @@ describe("Incremental cache modes", () => {
 
     const row = readDiskCacheRow(root, storedFile);
     expect(row).not.toBeNull();
-    expect(row?.version).toBe(4);
+    expect(row?.version).toBe(6);
     expect(typeof row?.sig).toBe("string");
     const payload = JSON.parse(row?.payload ? brotliDecompressSync(row.payload).toString("utf8") : "null") as unknown;
     expect(typeof payload).toBe("object");

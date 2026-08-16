@@ -19,7 +19,12 @@ import {
   tryLoadPersistedBloomFilters,
   tryLoadProjectIndexSnapshot,
 } from "../src/indexer/build-cache/project-snapshot.js";
+import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
+import { isNonNativeParserAvailable } from "../src/parserBackend.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
+
+const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
+const nonNativeParserDescribe = isNonNativeParserAvailable() ? describe : describe.skip;
 
 function moduleFor(file: string): ModuleIndex {
   return {
@@ -36,7 +41,64 @@ function snapshotPathFor(root: string): string {
   return path.join(root, ".codegraph-cache", "index-v1", "project-index-snapshot.json");
 }
 
+async function expectWorkspaceExternalReexportCacheRoundTrip(native: "off" | "required"): Promise<void> {
+  const workspaceRoot = await mkTmpDir("dg-cache-workspace-external-reexport-");
+  const appRoot = path.join(workspaceRoot, "packages", "app");
+  const externalPackageRoot = path.join(workspaceRoot, "packages", "external");
+  const moduleSpecifier = "@fixture/external";
+  await fsp.mkdir(path.join(externalPackageRoot, "src"), { recursive: true });
+  await fsp.mkdir(appRoot, { recursive: true });
+  await fsp.writeFile(
+    path.join(workspaceRoot, "package.json"),
+    JSON.stringify({ private: true, workspaces: ["packages/*"] }),
+    "utf8",
+  );
+  await fsp.writeFile(
+    path.join(externalPackageRoot, "package.json"),
+    JSON.stringify({ name: moduleSpecifier, main: "./src/index.ts" }),
+    "utf8",
+  );
+  await fsp.writeFile(path.join(externalPackageRoot, "src", "index.ts"), "export const value = 1;\n", "utf8");
+  await fsp.writeFile(path.join(appRoot, "barrel.ts"), `export { value } from "${moduleSpecifier}";\n`, "utf8");
+
+  const cold = await buildProjectIndex(appRoot, { cache: "disk", native, threads: 1 });
+  const coldBarrel = [...cold.byFile.values()].find((module) => module.file.endsWith("barrel.ts"));
+  const coldReexport = coldBarrel?.exports.find((entry) => entry.type === "reexport");
+  expect(coldReexport?.type).toBe("reexport");
+  if (coldReexport?.type === "reexport") {
+    expect(coldReexport.fromModule).toBe(moduleSpecifier);
+    expect(coldReexport.moduleSpecifier).toBe(moduleSpecifier);
+  }
+
+  closeDiskCacheDatabase(appRoot, { cache: "disk" });
+  clearMemoryCache();
+
+  const warm = await buildProjectIndex(appRoot, { cache: "disk", native, threads: 1 });
+  const warmBarrel = [...warm.byFile.values()].find((module) => module.file.endsWith("barrel.ts"));
+  const warmReexport = warmBarrel?.exports.find((entry) => entry.type === "reexport");
+  expect(warmReexport?.type).toBe("reexport");
+  if (warmReexport?.type === "reexport") {
+    expect(warmReexport.fromModule).toBe(moduleSpecifier);
+    expect(warmReexport.moduleSpecifier).toBe(moduleSpecifier);
+  }
+
+  closeDiskCacheDatabase(appRoot, { cache: "disk" });
+  clearMemoryCache();
+}
+
 describe("persisted cache rehydration is confined to the project root", () => {
+  nativeDescribe("workspace-external reexports", () => {
+    it("retains the raw specifier across cold and warm native index builds", async () => {
+      await expectWorkspaceExternalReexportCacheRoundTrip("required");
+    });
+  });
+
+  nonNativeParserDescribe("workspace-external reexports", () => {
+    it("retains the raw specifier across cold and warm fallback index builds", async () => {
+      await expectWorkspaceExternalReexportCacheRoundTrip("off");
+    });
+  });
+
   it("rejects module cache rows whose persisted relative file path escapes the project root", async () => {
     const root = await mkTmpDir("dg-confine-module-");
     const file = path.join(root, "a.ts");

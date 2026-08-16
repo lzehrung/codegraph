@@ -35,7 +35,7 @@ import { cacheAbsolutePath, cacheRelativePath, cacheRoot, transformPersistedExpo
 import type { ManifestFileEntry } from "./manifest.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
-const PROJECT_SNAPSHOT_VERSION = 7;
+const PROJECT_SNAPSHOT_VERSION = 8;
 const BLOOM_FILTER_MIN_SIZE = 1_000;
 const BLOOM_FILTER_MAX_SIZE = 1_000_000;
 const BLOOM_FILTER_MIN_HASH_COUNT = 1;
