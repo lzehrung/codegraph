@@ -17,7 +17,7 @@ import {
   type SqliteTableColumn,
 } from "../../util/sqliteSchema.js";
 import type { BuildOptions, BuildReport, ModuleIndex } from "../types.js";
-import { fileIdentityKey, normalizePath } from "../../util/paths.js";
+import { assertFilePathWithinRoot, fileIdentityKey, normalizePath } from "../../util/paths.js";
 import { lruMapGet, lruMapSet } from "../../util/lruMap.js";
 import { initCacheReport } from "./reports.js";
 import { getImplementationFingerprint } from "./options.js";
@@ -433,7 +433,10 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
 
 function transformModulePaths(projectRoot: string, module: ModuleIndex, toRelative: boolean): ModuleIndex {
   const copy = structuredClone(module);
-  const transform = (file: string): string => (toRelative ? cacheRelativePath(projectRoot, file) : cacheAbsolutePath(projectRoot, file));
+  const transform = (file: string): string =>
+    toRelative
+      ? cacheRelativePath(projectRoot, file)
+      : assertFilePathWithinRoot(projectRoot, cacheAbsolutePath(projectRoot, file), "Persisted cache path");
   copy.file = transform(copy.file);
   for (const local of copy.locals) local.file = transform(local.file);
   for (const entry of copy.exports) {
@@ -478,8 +481,9 @@ export function tryLoadFromCache(
       if (row && row.sig === sig && row.version === PARSED_CACHE_VERSION) {
         const parsed: unknown = JSON.parse(brotliDecompressSync(row.payload).toString("utf8"));
         if (isModuleIndex(parsed)) {
+          const rehydrated = transformModulePaths(projectRoot, parsed, false);
           if (cacheEnabled && cacheReport) cacheReport.hits += 1;
-          return transformModulePaths(projectRoot, parsed, false);
+          return rehydrated;
         }
       }
     } catch (error) {

@@ -427,9 +427,9 @@ export function serializeDuplicateUnits(units: DuplicateInternalUnit[]): Duplica
 function transformDuplicateHandle(root: string, value: string): string {
   const parts = value.split(":");
   let filePartIndex = -1;
-  if (parts[0] === "file" || parts[0] === "chunk") {
+  if (parts[0] === "file" || parts[0] === "chunk" || parts[0] === "symbol") {
     filePartIndex = 1;
-  } else if (parts[0] === "sql" || parts[0] === "symbol") {
+  } else if (parts[0] === "sql") {
     filePartIndex = 2;
   }
   if (filePartIndex < 0 || parts.length <= filePartIndex) return value;

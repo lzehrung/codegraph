@@ -9,7 +9,7 @@ import type { ProjectFileInfo } from "../../util/projectFiles.js";
 import { BloomFilter, BloomFilterCache } from "../../util/bloomFilter.js";
 import { summarizeAnalysis } from "../../analysisSummary.js";
 import type { AnalysisSummary } from "../../analysisSummary.js";
-import { fileIdentityKey, isFilePathWithinRoot, normalizePath } from "../../util/paths.js";
+import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot, normalizePath } from "../../util/paths.js";
 import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
 import { SymbolKind } from "../types.js";
 import type {
@@ -152,7 +152,7 @@ function transformPath(root: string, value: string, toRelative: boolean): string
   if (toRelative) {
     return path.isAbsolute(value) ? cacheRelativePath(root, value) : value;
   }
-  return cacheAbsolutePath(root, value);
+  return assertFilePathWithinRoot(root, cacheAbsolutePath(root, value), "Persisted cache path");
 }
 
 function transformHandle(root: string, value: string, toRelative: boolean): string {
@@ -1076,8 +1076,13 @@ function deserializeBloomFilterCache(
 ): BloomFilterCache {
   const cache = new BloomFilterCache();
   for (const [file, filter] of Object.entries(serialized)) {
-    cache.set(
+    const absoluteFile = assertFilePathWithinRoot(
+      projectRoot,
       cacheAbsolutePath(projectRoot, file),
+      "Persisted cache path",
+    );
+    cache.set(
+      absoluteFile,
       BloomFilter.fromBuffer(Buffer.from(filter.bitsBase64, "base64"), filter.size, filter.hashCount),
     );
   }

@@ -7,7 +7,7 @@ import { brotliDecompressSync } from "node:zlib";
 import { buildProjectIndex, findDuplicates, type BuildReport } from "../src/index.js";
 import { closeDuplicateUnitCacheDatabase } from "../src/duplicates.js";
 import { tryLoadDuplicateUnitsFromCache, writeDuplicateUnitsToCache } from "../src/duplicates/unitCache.js";
-import { buildInternalUnit, formatDuplicateSqlHandle } from "../src/duplicates/units.js";
+import { buildInternalUnit, formatDuplicateSqlHandle, formatDuplicateSymbolHandle } from "../src/duplicates/units.js";
 import { SqliteDatabase } from "../src/sqlite-driver.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
@@ -452,6 +452,72 @@ describe("disk cache uses sqlite backend", () => {
     expect(loaded?.[0]?.absoluteFile).toBe(normalizePathForSql(file));
     expect(loaded?.[0]?.id?.startsWith(`${normalizePathForSql(file)}:`)).toBe(true);
     expect(loaded?.[0]?.sqlHandle).toBe(formatDuplicateSqlHandle("schema/a.sql", "invoice_entries", 1));
+  });
+
+  it("persists symbol duplicate identities relative to the project root, canonicalizing the file component distinct from SQL handles", async () => {
+    const root = await mkTmpDir("dg-disk-cache-portable-symbol-duplicates-");
+    await writeDuplicateProject(root);
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const file = normalizePathForSql(path.join(root, "src", "a.ts"));
+    const source = await fsp.readFile(file, "utf8");
+    const namedHandle = formatDuplicateSymbolHandle(file, "normalizeInvoiceRows", 1, 0);
+    const persistedNamedHandle = formatDuplicateSymbolHandle("src/a.ts", "normalizeInvoiceRows", 1, 0);
+    // A symbol handle is `symbol:<file>:<name>:<line>:<column>` (file at index 1), while a SQL
+    // handle is `sql:<name>:<file>:<line>` (file at index 2). Reusing the SQL index for symbol
+    // handles would rewrite the encoded *name* as if it were the file.
+    const emptyNameHandle = formatDuplicateSymbolHandle(file, "", 1, 0);
+    const persistedEmptyNameHandle = formatDuplicateSymbolHandle("src/a.ts", "", 1, 0);
+
+    const namedUnit = buildInternalUnit(
+      {
+        file: "src/a.ts",
+        startLine: 1,
+        endLine: 8,
+        languageId: "typescript",
+        kind: "symbol",
+        name: "normalizeInvoiceRows",
+      },
+      file,
+      source,
+      3,
+      2,
+      index.nativeMode,
+      { symbolHandle: namedHandle },
+    );
+    const emptyNameUnit = buildInternalUnit(
+      {
+        file: "src/a.ts",
+        startLine: 1,
+        endLine: 8,
+        languageId: "typescript",
+        kind: "symbol",
+        name: "",
+      },
+      file,
+      source,
+      3,
+      2,
+      index.nativeMode,
+      { symbolHandle: emptyNameHandle },
+    );
+    writeDuplicateUnitsToCache(index, file, "portable-symbol", [namedUnit, emptyNameUnit], root);
+
+    const db = new DatabaseSync(duplicateCacheDbPath(root));
+    const row = db.prepare("SELECT payload FROM duplicate_unit_cache WHERE file = ?").get("src/a.ts") as
+      | { payload: Uint8Array }
+      | undefined;
+    db.close();
+
+    expect(row).toBeDefined();
+    const units = JSON.parse(brotliDecompressSync(row!.payload).toString("utf8")) as Array<Record<string, unknown>>;
+    expect(units[0]?.symbolHandle).toBe(persistedNamedHandle);
+    expect(units[1]?.symbolHandle).toBe(persistedEmptyNameHandle);
+    expect(JSON.stringify(units)).not.toContain(normalizePathForSql(root));
+
+    const loaded = tryLoadDuplicateUnitsFromCache(index, file, "portable-symbol", root);
+    expect(loaded?.[0]?.absoluteFile).toBe(normalizePathForSql(file));
+    expect(loaded?.[0]?.symbolHandle).toBe(persistedNamedHandle);
+    expect(loaded?.[1]?.symbolHandle).toBe(persistedEmptyNameHandle);
   });
 
   it("ignores duplicate cache rows written by an older payload version", async () => {
