@@ -43,7 +43,7 @@ describe("SQLite raw query in-process deadline fallback", () => {
       const perRowSlowSql =
         "WITH RECURSIVE outer_r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM outer_r WHERE x < 500) " +
         "SELECT x, (" +
-        "  WITH RECURSIVE inner_r(y) AS (SELECT 1 UNION ALL SELECT y + 1 FROM inner_r WHERE y < 200000) " +
+        "  WITH RECURSIVE inner_r(y) AS (SELECT 1 UNION ALL SELECT y + 1 FROM inner_r WHERE y < 200000 + outer_r.x) " +
         "  SELECT count(*) FROM inner_r" +
         ") FROM outer_r;";
 
