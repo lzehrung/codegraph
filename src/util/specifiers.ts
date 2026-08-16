@@ -1,5 +1,6 @@
 import path from "node:path";
 import { buildJsLikeLiteralMask, stripJsLikeComments, stripPythonCommentsAndStrings } from "./comments.js";
+import { PYTHON_IDENTIFIER_SOURCE } from "./identifiers.js";
 import { normalizePath } from "./paths.js";
 
 export type ModuleSpecifierResolutionKind = "document" | "source" | "stylesheet";
@@ -248,14 +249,21 @@ export function extractJsTsDynamicSpecifiers(source: string, fromFile: string, p
   return out;
 }
 
+// Python module/package names are dotted sequences of PEP 3131 Unicode identifiers; a
+// per-segment character class (rather than Unicode letters/digits spanning the dots) keeps
+// a digit from matching directly after a `.` separator.
+const PYTHON_DOTTED_NAME_SOURCE = String.raw`${PYTHON_IDENTIFIER_SOURCE}(?:\.${PYTHON_IDENTIFIER_SOURCE})*`;
+
 export function extractPythonSpecifiers(source: string): string[] {
   const out: string[] = [];
   try {
     const cleaned = stripPythonCommentsAndStrings(source);
-    // Python module/package names permit Unicode identifiers (PEP 3131).
-    const reImport = /^\s*import\s+([\p{L}_][\p{L}\p{N}_.]*)/gmu;
+    const reImport = new RegExp(String.raw`^\s*import\s+(${PYTHON_DOTTED_NAME_SOURCE})`, "gmu");
     for (const match of cleaned.matchAll(reImport)) out.push(match[1]!);
-    const reFrom = /^\s*from\s+(\.+(?:[\p{L}_][\p{L}\p{N}_.]*)?|[\p{L}_][\p{L}\p{N}_.]*)\s+import/gmu;
+    const reFrom = new RegExp(
+      String.raw`^\s*from\s+(\.+(?:${PYTHON_DOTTED_NAME_SOURCE})?|${PYTHON_DOTTED_NAME_SOURCE})\s+import`,
+      "gmu",
+    );
     for (const match of cleaned.matchAll(reFrom)) out.push(match[1]!);
   } catch {
     /* parse fallback: ignore */

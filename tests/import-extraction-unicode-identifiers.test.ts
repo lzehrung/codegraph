@@ -10,6 +10,8 @@ import {
   parseRustImportStatement,
 } from "../src/languages/importStatementParsers.js";
 import { extractJsTsSpecifiers, extractPythonSpecifiers } from "../src/util.js";
+import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
+import { supportById } from "../src/languages.js";
 import { buildProjectIndex } from "../src/index.js";
 import { collectJsTextImports } from "../src/indexer/imports/jsTextImports.js";
 import { collectNativeCaptureImportBindings } from "../src/indexer/imports/nativeCaptures.js";
@@ -55,6 +57,15 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
         importType: "class",
       },
     ]);
+    // PHP permits any byte >= 0x80 in an identifier, not just Unicode letters/digits
+    // (\p{L}/\p{N}); an emoji alias is valid PHP even though it is outside \p{L}.
+    expect(parsePhpImportStatement("use App\\Foo as \u{1f600};")).toEqual([
+      expect.objectContaining({ local: "\u{1f600}" }),
+    ]);
+    expect(parsePhpImportStatement("use App\\{Foo as \u{1f600}, Bar};")).toEqual([
+      expect.objectContaining({ imported: "Foo", local: "\u{1f600}" }),
+      expect.objectContaining({ imported: "Bar", local: "Bar" }),
+    ]);
   });
 
   it("Kotlin: import alias", () => {
@@ -85,6 +96,14 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
   it("Python fallback module-specifier extraction: import/from with Unicode module names", () => {
     expect(extractPythonSpecifiers("import créer\n")).toEqual(["créer"]);
     expect(extractPythonSpecifiers("from créer import x\n")).toContain("créer");
+    // PEP 3131 XID_Continue includes combining marks; a per-code-point \p{L}/\p{N} class
+    // stops before the trailing combining acute accent, silently dropping it from the
+    // captured module name.
+    expect(extractPythonSpecifiers("import café\u0301\n")).toEqual(["café\u0301"]);
+    // A dotted segment must itself start with an identifier character: matching the whole
+    // continuation class (letters/digits/dots) across the separator let a digit immediately
+    // follow a `.`, which Python's grammar never allows.
+    expect(extractPythonSpecifiers("import pkg.2mod\n")).toEqual(["pkg"]);
   });
 
   it("Python import bindings accept combining-mark continuations", async () => {
@@ -277,5 +296,22 @@ describe("Unicode import parser seams", () => {
     expect(extractJsTsSpecifiers("import alias\u200d = require('package');\n")).toEqual([
       { spec: "package", exportCondition: "require" },
     ]);
+  });
+
+  it("parses Unicode Python module names from native-query statement captures", () => {
+    const support = supportById("python")!;
+    // Mirrors the shape collectModuleSpecifiersFromSource reads from a native compact
+    // imports execution: one match per statement, with the full statement text under a
+    // "stmt" capture.
+    const specs = collectModuleSpecifiersFromSource(support, undefined, "import café\u0301\nfrom pkg import x\n", {
+      compactNativeImports: {
+        imports: [
+          { patternIndex: 0, captures: [{ name: "stmt", text: "import café\u0301" }] },
+          { patternIndex: 0, captures: [{ name: "stmt", text: "from pkg import x" }] },
+        ],
+      },
+    });
+
+    expect(specs).toEqual([{ spec: "café\u0301" }, { spec: "pkg" }]);
   });
 });

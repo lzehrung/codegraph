@@ -6,9 +6,9 @@ Source: `coverage/js/lcov.info`
 
 | Metric    |   Hit | Found | Coverage |
 | --------- | ----: | ----: | -------: |
-| Lines     | 27455 | 30228 |   90.83% |
+| Lines     | 27458 | 30231 |   90.83% |
 | Functions |  4563 |  4842 |   94.24% |
-| Branches  | 20694 | 26098 |   79.29% |
+| Branches  | 20693 | 26098 |   79.29% |
 
 ## Least-covered Files
 
@@ -42,8 +42,8 @@ These files have line records but no function or branch records, so they are tra
 | File                                    |   Lines | Functions | Branches |
 | --------------------------------------- | ------: | --------: | -------: |
 | `src/cliBootstrap.ts`                   |   0.00% |       n/a |      n/a |
-| `src/languages/definitions/jsFamily.ts` | 100.00% |       n/a |      n/a |
 | `src/util/identifiers.ts`               | 100.00% |       n/a |      n/a |
+| `src/languages/definitions/jsFamily.ts` | 100.00% |       n/a |      n/a |
 | `src/duplicate-keywords.ts`             | 100.00% |       n/a |      n/a |
 | `src/impact/types.ts`                   | 100.00% |       n/a |      n/a |
 | `src/languages/definitions/adoc.ts`     | 100.00% |       n/a |      n/a |

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import path from "node:path";
 import { stringifyUnknown } from "./ast.js";
 import { normalizePath } from "./paths.js";
@@ -15,6 +16,17 @@ const gitRepositoryChecks = new Map<string, Promise<boolean>>();
 const MAX_GIT_HASH_OBJECT_ARGUMENT_BYTES = 24 * 1024;
 
 let gitExecutableForTests: string | null = null;
+
+/** Git's C-style path quoting single-character escapes for otherwise-unrepresentable control bytes. */
+const GIT_QUOTED_PATH_SINGLE_BYTE_ESCAPES: Record<string, number> = {
+  a: 0x07,
+  b: 0x08,
+  f: 0x0c,
+  n: 0x0a,
+  r: 0x0d,
+  t: 0x09,
+  v: 0x0b,
+};
 
 /** Decodes Git's optional C-style quoted pathname representation without trimming legal path bytes. */
 export function decodeGitPath(rawPath: string): string {
@@ -44,18 +56,9 @@ export function decodeGitPath(rawPath: string): string {
       index += 2;
       continue;
     }
-    if (next === "n") {
-      bytes.push(0x0a);
-      index += 2;
-      continue;
-    }
-    if (next === "r") {
-      bytes.push(0x0d);
-      index += 2;
-      continue;
-    }
-    if (next === "t") {
-      bytes.push(0x09);
+    const singleByteEscape = GIT_QUOTED_PATH_SINGLE_BYTE_ESCAPES[next ?? ""];
+    if (singleByteEscape !== undefined) {
+      bytes.push(singleByteEscape);
       index += 2;
       continue;
     }
@@ -171,9 +174,16 @@ export async function runGit(
       return;
     }
 
+    // Decode incrementally per stream: a naive `chunk.toString()` on each independent
+    // Buffer can split a multibyte UTF-8 sequence across chunk boundaries, replacing both
+    // halves with U+FFFD. StringDecoder buffers a dangling partial sequence until the next
+    // chunk completes it.
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
+
     stdoutStream.on("data", (chunk: Buffer | string) => {
-      const textChunk = typeof chunk === "string" ? chunk : chunk.toString();
-      totalBytes += Buffer.byteLength(textChunk, "utf8");
+      const chunkBytes = typeof chunk === "string" ? Buffer.byteLength(chunk, "utf8") : chunk.length;
+      totalBytes += chunkBytes;
       if (totalBytes > maxBuffer) {
         killGitChild(child);
         settle(() =>
@@ -181,15 +191,17 @@ export async function runGit(
         );
         return;
       }
-      stdout += textChunk;
+      stdout += typeof chunk === "string" ? chunk : stdoutDecoder.write(chunk);
     });
     stderrStream.on("data", (chunk: Buffer | string) => {
-      stderr += typeof chunk === "string" ? chunk : chunk.toString();
+      stderr += typeof chunk === "string" ? chunk : stderrDecoder.write(chunk);
     });
     child.on("error", (error) => {
       settle(() => reject(createGitError(projectRoot, args, error)));
     });
     child.on("close", (code, signalName) => {
+      stdout += stdoutDecoder.end();
+      stderr += stderrDecoder.end();
       settle(() => {
         if (timedOut) {
           reject(

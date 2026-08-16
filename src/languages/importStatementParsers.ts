@@ -1,5 +1,5 @@
 import path from "node:path";
-import { XID_IDENTIFIER_SOURCE } from "../util/identifiers.js";
+import { PHP_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { isAbsoluteFilePath, normalizePath } from "../util/paths.js";
 
 export type ParsedRustImportStatement =
@@ -109,6 +109,8 @@ export type ParsedPhpImportStatement =
 
 export type PhpImportType = "class" | "function" | "const";
 
+const PHP_USE_ALIAS_PATTERN = new RegExp(String.raw`^(.*?)\s+as\s+(${PHP_IDENTIFIER_SOURCE})$`, "iu");
+
 function splitTopLevelCommaList(input: string): string[] {
   const items: string[] = [];
   let depth = 0;
@@ -150,8 +152,7 @@ function parsePhpImportClause(rawClause: string, importType: PhpImportType): Par
         memberType = "const";
       }
       const body = (typedMemberMatch?.[2] ?? member).trim();
-      // PHP identifiers permit any byte >= 0x80, which in practice means non-ASCII UTF-8.
-      const aliasMatch = body.match(/^(.*?)\s+as\s+([\p{L}_][\p{L}\p{N}_]*)$/iu);
+      const aliasMatch = body.match(PHP_USE_ALIAS_PATTERN);
       const fullPath = `${prefix}${(aliasMatch?.[1] ?? body).trim()}`;
       const parts = fullPath.split("\\").filter(Boolean);
       const imported = parts[parts.length - 1];
@@ -168,7 +169,7 @@ function parsePhpImportClause(rawClause: string, importType: PhpImportType): Par
     return results;
   }
 
-  const aliasMatch = clause.match(/^(.*?)\s+as\s+([\p{L}_][\p{L}\p{N}_]*)$/iu);
+  const aliasMatch = clause.match(PHP_USE_ALIAS_PATTERN);
   const fullPath = (aliasMatch?.[1] ?? clause).trim();
   const parts = fullPath.split("\\").filter(Boolean);
   const imported = parts[parts.length - 1];
