@@ -118,7 +118,9 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
       }
       // PEP 3131 permits Unicode identifiers (XID_Start/XID_Continue); an ASCII-only
       // character class here silently drops every non-ASCII imported name's binding.
-      const aliasMatch = item.match(/^([\p{L}_][\p{L}\p{N}_]*)(?:\s+as\s+([\p{L}_][\p{L}\p{N}_]*))?$/u);
+      const aliasMatch = item.match(
+        /^([_\p{XID_Start}][_\p{XID_Continue}]*)(?:\s+as\s+([_\p{XID_Start}][_\p{XID_Continue}]*))?$/u,
+      );
       if (!aliasMatch) continue;
       const imported = aliasMatch[1]!;
       const local = aliasMatch[2] ?? imported;
@@ -126,7 +128,8 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
     }
   }
 
-  const importPattern = /^(?:\s*)import\s+([\p{L}_][\p{L}\p{N}_.]*)\s*(?:as\s+([\p{L}_][\p{L}\p{N}_]*))?/gmu;
+  const importPattern =
+    /^(?:\s*)import\s+([_\p{XID_Start}][.\p{XID_Continue}_]*)\s*(?:as\s+([_\p{XID_Start}][_\p{XID_Continue}]*))?/gmu;
   for (const match of pySrc.matchAll(importPattern)) {
     const dotted = match[1]!;
     const local = match[2] ?? dotted.split(".")[0]!;

@@ -45,10 +45,10 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
     const literalMask = buildJsLikeLiteralMask(src);
     // Capture groups: 1 import-from, 2 side-effect import, 3 export-from,
     // 4 destructured require, 5 require(), 6 import(), 7 import = require, 8 declare module.
-    // JS/TS identifiers permit Unicode ID_Start/ID_Continue plus $/_, not just ASCII, so the
-    // import-equals alias uses \p{L}\p{N} rather than \w (which is ASCII-only).
+    // JS/TS identifiers permit Unicode ID_Start/ID_Continue plus $/_, with ZWNJ and ZWJ as
+    // continuation characters, so import-equals aliases must not use ASCII-only \w.
     const combined =
-      /^\s*import\s+[^\n;]*?\s+from\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bexport\s+[^\n;]*?\s+from\s+["']([^"']+)["']|\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\brequire\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\bimport\s*\(\s*["']([^"']+)["']\s*\)|^\s*import\s+[\p{L}_$][\p{L}\p{N}_$]*\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|^\s*declare\s+module\s+["']([^"']+)["']/gmu;
+      /^\s*import\s+[^\n;]*?\s+from\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bexport\s+[^\n;]*?\s+from\s+["']([^"']+)["']|\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\brequire\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\bimport\s*\(\s*["']([^"']+)["']\s*\)|^\s*import\s+[$_\p{ID_Start}][$_\p{ID_Continue}\u200c\u200d]*\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|^\s*declare\s+module\s+["']([^"']+)["']/gmu;
 
     for (const match of src.matchAll(combined)) {
       if (!matchStartsInCode(literalMask, match)) continue;

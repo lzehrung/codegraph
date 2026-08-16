@@ -11,6 +11,8 @@ import {
 } from "../src/languages/importStatementParsers.js";
 import { extractPythonSpecifiers } from "../src/util.js";
 import { buildProjectIndex } from "../src/index.js";
+import { collectPythonImportsFromSource } from "../src/indexer/imports/python.js";
+import type { ImportBinding } from "../src/indexer/types.js";
 
 // C11-adjacent finding: several import/alias extractors used an ASCII-only [A-Za-z_][\w]*
 // character class, which silently drops the binding (or the whole statement) for any
@@ -79,6 +81,21 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
   it("Python fallback module-specifier extraction: import/from with Unicode module names", () => {
     expect(extractPythonSpecifiers("import créer\n")).toEqual(["créer"]);
     expect(extractPythonSpecifiers("from créer import x\n")).toContain("créer");
+  });
+
+  it("Python import bindings accept combining-mark continuations", async () => {
+    const bindings: ImportBinding[] = [];
+    await collectPythonImportsFromSource({
+      projectRoot: process.cwd(),
+      file: path.join(process.cwd(), "consumer.py"),
+      source: "from package import café as alias\nimport package.café as moduleAlias\n",
+      pushBinding: (binding) => bindings.push(binding),
+    });
+
+    expect(bindings).toEqual([
+      expect.objectContaining({ kind: "named", from: "package", imported: "café", local: "alias" }),
+      expect.objectContaining({ kind: "namespace", from: "package.café", localNS: "moduleAlias" }),
+    ]);
   });
 
   it("JS CommonJS destructuring require(): Unicode property name binding", async () => {
