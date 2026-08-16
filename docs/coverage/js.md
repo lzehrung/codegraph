@@ -8,7 +8,7 @@ Source: `coverage/js/lcov.info`
 | --------- | ----: | ----: | -------: |
 | Lines     | 27468 | 30241 |   90.83% |
 | Functions |  4563 |  4842 |   94.24% |
-| Branches  | 20694 | 26100 |   79.29% |
+| Branches  | 20696 | 26100 |   79.30% |
 
 ## Least-covered Files
 

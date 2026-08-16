@@ -15,16 +15,20 @@ export const PYTHON_IDENTIFIER_SOURCE = XID_IDENTIFIER_SOURCE;
 export const PHP_IDENTIFIER_SOURCE = String.raw`[A-Za-z_\u{80}-\u{10FFFF}][A-Za-z0-9_\u{80}-\u{10FFFF}]*`;
 
 /**
- * Java identifiers (JLS `JavaLetter`/`JavaLetterOrDigit`) permit Unicode letters, `$`,
- * connecting-punctuation characters (e.g. `_`), and currency symbols at the first position;
- * continuation additionally allows Unicode digits and combining marks.
+ * Java identifiers (`Character.isJavaIdentifierStart`/`isJavaIdentifierPart`) permit a
+ * Unicode letter (Lu/Ll/Lt/Lm/Lo), a letter-number (Nl, e.g. Roman numerals), a currency
+ * symbol (Sc, e.g. `$`), or a connecting-punctuation character (Pc, e.g. `_`) at every
+ * position; continuation additionally allows decimal digits (Nd) and identifier-ignorable
+ * formatting characters (Cf, e.g. ZWNJ/ZWJ). Combining marks and non-decimal number
+ * categories (No) are not part of the Java grammar.
  */
-export const JAVA_IDENTIFIER_SOURCE = String.raw`[\p{L}\p{Sc}\p{Pc}$][\p{L}\p{N}\p{Sc}\p{Pc}\p{Mn}\p{Mc}$]*`;
+export const JAVA_IDENTIFIER_SOURCE = String.raw`[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Cf}]*`;
 
 /**
- * C# identifiers (ECMA-334 `identifier-start-character`/`identifier-part-character`) permit
- * Unicode letter categories or an underscore at the first position, plus an optional leading
- * `@` for a verbatim identifier (escaping a keyword, e.g. `@class`); continuation additionally
- * allows decimal digits, connecting-punctuation, combining marks, and formatting characters.
+ * C# identifiers (ECMA-334 `identifier-start-character`/`identifier-part-character`) permit a
+ * Unicode letter (Lu/Ll/Lt/Lm/Lo), a letter-number (Nl), or a literal underscore at the first
+ * position, plus an optional leading `@` for a verbatim identifier (escaping a keyword, e.g.
+ * `@class`); continuation additionally allows decimal digits (Nd), connecting-punctuation
+ * (Pc), combining marks (Mn/Mc), and formatting characters (Cf).
  */
-export const CSHARP_IDENTIFIER_SOURCE = String.raw`@?[\p{L}\p{Pc}_][\p{L}\p{N}\p{Pc}\p{Mn}\p{Mc}\p{Cf}_]*`;
+export const CSHARP_IDENTIFIER_SOURCE = String.raw`@?[\p{L}\p{Nl}_][\p{L}\p{Nl}_\p{Nd}\p{Pc}\p{Mn}\p{Mc}\p{Cf}]*`;

@@ -92,6 +92,18 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
       imported: "$Widget",
       isStatic: false,
     });
+    // Character.isJavaIdentifierStart accepts a letter-number (Nl) such as a Roman numeral,
+    // and isJavaIdentifierPart accepts an identifier-ignorable formatting character (Cf,
+    // e.g. ZWNJ) in continuation.
+    expect(parseJavaImportStatement("import com.example.\u2160Widget\u200c;")).toEqual({
+      kind: "named",
+      from: "com.example.\u2160Widget\u200c",
+      imported: "\u2160Widget\u200c",
+      isStatic: false,
+    });
+    // A non-decimal number character (No, e.g. the "½" fraction) is not accepted by
+    // isJavaIdentifierPart and must not be folded into the imported name.
+    expect(parseJavaImportStatement("import com.example.Widget\u00bd;")).toBeNull();
   });
 
   it("C#: using alias to a Unicode-named alias", () => {
@@ -107,6 +119,16 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
       alias: "@class",
       isStatic: false,
     });
+    // ECMA-334 identifier-start-character accepts a letter-number (Nl, e.g. a Roman numeral)
+    // and identifier-part-character accepts a combining mark (Mn) in continuation.
+    expect(parseCsharpUsingDirective("using \u2160Alias = Some.cafe\u0301;")).toEqual({
+      from: "Some.cafe\u0301",
+      alias: "\u2160Alias",
+      isStatic: false,
+    });
+    // A connecting-punctuation character other than `_` (e.g. U+203F UNDERTIE) is a valid
+    // identifier-part-character but not a valid identifier-start-character.
+    expect(parseCsharpUsingDirective("using \u203fname = Some.Namespace;")).toBeNull();
   });
   it("Python fallback module-specifier extraction: import/from with Unicode module names", () => {
     expect(extractPythonSpecifiers("import créer\n")).toEqual(["créer"]);
