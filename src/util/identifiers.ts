@@ -18,11 +18,11 @@ export const PHP_IDENTIFIER_SOURCE = String.raw`[A-Za-z_\u{80}-\u{10FFFF}][A-Za-
  * Java identifiers (`Character.isJavaIdentifierStart`/`isJavaIdentifierPart`) permit a
  * Unicode letter (Lu/Ll/Lt/Lm/Lo), a letter-number (Nl, e.g. Roman numerals), a currency
  * symbol (Sc, e.g. `$`), or a connecting-punctuation character (Pc, e.g. `_`) at every
- * position; continuation additionally allows decimal digits (Nd) and identifier-ignorable
- * formatting characters (Cf, e.g. ZWNJ/ZWJ). Combining marks and non-decimal number
+ * position; continuation additionally allows decimal digits (Nd), combining marks (Mn/Mc),
+ * and identifier-ignorable formatting characters (Cf, e.g. ZWNJ/ZWJ). Non-decimal number
  * categories (No) are not part of the Java grammar.
  */
-export const JAVA_IDENTIFIER_SOURCE = String.raw`[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Cf}]*`;
+export const JAVA_IDENTIFIER_SOURCE = String.raw`[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mn}\p{Mc}\p{Cf}]*`;
 
 /**
  * C# identifiers (ECMA-334 `identifier-start-character`/`identifier-part-character`) permit a

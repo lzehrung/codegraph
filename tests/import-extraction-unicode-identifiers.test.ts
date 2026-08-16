@@ -104,6 +104,14 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
     // A non-decimal number character (No, e.g. the "½" fraction) is not accepted by
     // isJavaIdentifierPart and must not be folded into the imported name.
     expect(parseJavaImportStatement("import com.example.Widget\u00bd;")).toBeNull();
+    // isJavaIdentifierPart accepts combining marks (Mn/Mc); a decomposed identifier such as
+    // "café" written as "cafe" + combining acute accent (U+0301) is a single valid import.
+    expect(parseJavaImportStatement("import com.example.cafe\u0301;")).toEqual({
+      kind: "named",
+      from: "com.example.cafe\u0301",
+      imported: "cafe\u0301",
+      isStatic: false,
+    });
   });
 
   it("C#: using alias to a Unicode-named alias", () => {
