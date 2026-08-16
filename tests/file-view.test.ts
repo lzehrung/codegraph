@@ -261,6 +261,57 @@ describe("agent file view", () => {
     );
   });
 
+  it("refuses a TOCTOU hard-link replacement between confinement and open", async () => {
+    const root = await makeTempDir("cg-file-view-hardlink-race-root-");
+    const outside = await makeTempDir("cg-file-view-hardlink-race-outside-");
+    const victimRelative = "victim.txt";
+    const victimPath = path.join(root, victimRelative);
+    const outsideFile = path.join(outside, "secret.txt");
+    await fs.writeFile(victimPath, "inside-safe-content\n", "utf8");
+    await fs.writeFile(outsideFile, "TOCTOU_OUTSIDE_SECRET_CONTENT\n", "utf8");
+
+    setAfterConfinedPathVerifiedForTests(async (realPath) => {
+      if (path.resolve(realPath) !== path.resolve(victimPath)) return;
+      await fs.unlink(victimPath);
+      await fs.link(outsideFile, victimPath);
+    });
+
+    await expect(getCodegraphFileView({ root, file: victimRelative, limit: 10, maxBytes: 100 })).rejects.toThrow(
+      /File changed between verification and open:/,
+    );
+  });
+
+  it("refuses a TOCTOU parent-directory symlink swap between confinement and open", async () => {
+    const root = await makeTempDir("cg-file-view-parent-symlink-race-root-");
+    const outside = await makeTempDir("cg-file-view-parent-symlink-race-outside-");
+    const victimRelative = path.join("inside", "victim.txt");
+    const insideDirectory = path.join(root, "inside");
+    const victimPath = path.join(root, victimRelative);
+    const outsideVictim = path.join(outside, "victim.txt");
+    await fs.mkdir(insideDirectory);
+    await fs.writeFile(victimPath, "inside-safe-content\n", "utf8");
+    await fs.writeFile(outsideVictim, "TOCTOU_OUTSIDE_SECRET_CONTENT\n", "utf8");
+
+    const probeLink = path.join(root, "symlink-probe");
+    try {
+      await fs.symlink(outside, probeLink, "junction");
+      await fs.unlink(probeLink);
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    setAfterConfinedPathVerifiedForTests(async (realPath) => {
+      if (path.resolve(realPath) !== path.resolve(victimPath)) return;
+      await fs.rm(insideDirectory, { recursive: true });
+      await fs.symlink(outside, insideDirectory, "junction");
+    });
+
+    await expect(getCodegraphFileView({ root, file: victimRelative, limit: 10, maxBytes: 100 })).rejects.toThrow(
+      /File changed between verification and open:/,
+    );
+  });
+
   it("still reads ordinary text through an in-root symlink", async () => {
     const root = await makeTempDir("cg-file-view-inroot-symlink-");
     const targetFile = path.join(root, "target-notes.txt");
