@@ -1068,6 +1068,13 @@ export class SessionManager {
         if (pending) {
           pending.cancelled = true;
           pending.retainPending = false;
+          void pending.promise
+            .finally(() => {
+              if (this.pendingSessions.get(replacement.id) === pending && !pending.retainPending) {
+                this.pendingSessions.delete(replacement.id);
+              }
+            })
+            .catch(() => {});
         }
         replacement.session.dispose();
       }

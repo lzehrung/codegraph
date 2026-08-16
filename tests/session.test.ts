@@ -1312,6 +1312,33 @@ describe("SessionManager", () => {
     }
   });
 
+  test("releases failed warmup capacity after initialization rejects", async () => {
+    const limitedManager = new SessionManager({ maxSessions: 1, evictionIntervalMs: 0 });
+    const missingRoot = path.join(os.tmpdir(), `cg-session-warmup-missing-${Date.now()}`);
+    try {
+      await expect(
+        limitedManager.warmup([
+          {
+            id: "broken",
+            options: { root: missingRoot, buildOptions: sampleBuildOptions() },
+          },
+        ]),
+      ).rejects.toThrow();
+
+      await vi.waitFor(() => {
+        expect(Reflect.get(limitedManager, "pendingSessions").size).toBe(0);
+      });
+      await expect(
+        limitedManager.getOrCreateSession("after-failed-init", {
+          root: sampleRoot,
+          buildOptions: sampleBuildOptions(),
+        }),
+      ).resolves.toBeInstanceOf(CodeReviewSession);
+    } finally {
+      limitedManager.disposeAll();
+    }
+  });
+
   test("falls back to default capacity when maxSessions is NaN", async () => {
     const nanManager = new SessionManager({ maxSessions: Number.NaN, evictionIntervalMs: 0 });
     try {

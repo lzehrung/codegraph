@@ -308,7 +308,7 @@ const allStats = manager.getAllStats();
 console.log(Boolean(pr1Session), Boolean(pr2Session), Boolean(sameSession), allStats);
 ```
 
-`SessionManager` defaults to 32 live or initializing sessions and scans for expired sessions every 60 seconds. Set `{ maxSessions, evictionIntervalMs }` to tune those bounds; `maxSessions` also applies to net-new `warmup()` sessions, and a request over capacity throws until another session is disposed or expires. Set `evictionIntervalMs: 0` to disable periodic cleanup.
+`SessionManager` defaults to 32 live or initializing sessions and scans for expired sessions every 60 seconds. Set `{ maxSessions, evictionIntervalMs }` to tune those bounds; `maxSessions` also applies to net-new `warmup()` sessions. An over-capacity request throws until capacity frees after a session is disposed, expires, or a canceled or failed warmup initialization settles. Set `evictionIntervalMs: 0` to disable periodic cleanup.
 
 ## Streaming impact analysis
 
