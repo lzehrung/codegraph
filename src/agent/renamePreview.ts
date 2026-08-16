@@ -708,7 +708,7 @@ async function loadRenameFile(
     } catch (error: unknown) {
       const message = errorMessage(error);
       let reason: RenameUnsafeSite["reason"] = "unresolved_reference";
-      if (/outside project root|changed between verification and open/i.test(message)) reason = "outside_root";
+      if (/outside project root/i.test(message)) reason = "outside_root";
       else if (/binary source|malformed UTF-8/i.test(message)) reason = "unsupported_syntax";
       unsafeSites.push({
         location: { file: normalizeAgentFilePath(snapshot.root, file), range: zeroRange() },

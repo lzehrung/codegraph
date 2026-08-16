@@ -44,10 +44,6 @@ export async function resolveReadableFile(
   const realPath = await assertRealPathCandidateWithinRoot(realRoot, candidatePath, "File");
   const expectedStat = await fs.lstat(realPath);
   assertRegularFileStat(expectedStat, realPath);
-  const finalRealPath = await fs.realpath(realPath);
-  if (!isFilePathWithinRoot(realRoot, finalRealPath)) {
-    throw new Error(`File is outside project root: ${normalizePath(finalRealPath)} (root: ${normalizePath(realRoot)})`);
-  }
   const displayPath =
     toProjectRelativePath(root, candidatePath) ?? toProjectRelativePath(realRoot, realPath) ?? normalizePath(realPath);
   return { realPath, displayPath, expectedStats: [candidateStat, expectedStat] };
@@ -169,7 +165,7 @@ function sameFileIdentity(preStat: Stats, postStat: Stats): boolean {
 
 function assertRegularFileStat(stat: Stats, filePath: string): void {
   if (stat.isFile()) return;
-  throw new Error(`File view target is not a file: ${filePath}`);
+  throw new Error(`File view target is not a file: ${normalizePath(filePath)}`);
 }
 
 function rewriteNoFollowOpenError(error: unknown, filePath: string): Error {

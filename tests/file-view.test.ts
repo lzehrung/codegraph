@@ -930,8 +930,9 @@ describe("agent file view", () => {
     const root = await makeTempDir("cg-file-view-key-directory-");
     await fs.mkdir(path.join(root, "identity.pem"));
 
-    await expect(getCodegraphFileView({ root, file: "identity.pem", limit: 10, maxBytes: 100 })).rejects.toThrow(
-      /File view target is not a file:/,
+    const directoryPath = path.join(root, "identity.pem");
+    await expect(getCodegraphFileView({ root, file: directoryPath, limit: 10, maxBytes: 100 })).rejects.toThrow(
+      `File view target is not a file: ${directoryPath.replace(/\\/g, "/")}`,
     );
   });
 
