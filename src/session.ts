@@ -798,12 +798,12 @@ export class CodeReviewSession implements ICodeReviewSession {
 }
 
 function normalizeSessionManagerCapacity(value: number | undefined): number {
-  if (value === undefined) return DEFAULT_SESSION_MANAGER_MAX_SESSIONS;
+  if (value === undefined || !Number.isFinite(value)) return DEFAULT_SESSION_MANAGER_MAX_SESSIONS;
   return Math.max(1, Math.floor(value));
 }
 
 function normalizeSessionManagerEvictionInterval(value: number | undefined): number {
-  if (value === undefined) return DEFAULT_SESSION_MANAGER_EVICTION_INTERVAL_MS;
+  if (value === undefined || !Number.isFinite(value)) return DEFAULT_SESSION_MANAGER_EVICTION_INTERVAL_MS;
   return Math.max(0, Math.floor(value));
 }
 

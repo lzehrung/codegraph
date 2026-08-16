@@ -1,7 +1,12 @@
 import { describe, test, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from "vitest";
 import type { ICodeReviewSession } from "../src/index.js";
 import type { BuildOptions, BuildReport, LanguageExtensionMap } from "../src/indexer/types.js";
-import { CodeReviewSession, SessionManager, createCodeReviewSession } from "../src/session.js";
+import {
+  CodeReviewSession,
+  DEFAULT_SESSION_MANAGER_MAX_SESSIONS,
+  SessionManager,
+  createCodeReviewSession,
+} from "../src/session.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import * as navigation from "../src/indexer/navigation.js";
 import path from "node:path";
@@ -1232,6 +1237,15 @@ describe("SessionManager", () => {
       ).rejects.toThrow("Session capacity reached (1)");
     } finally {
       limitedManager.disposeAll();
+    }
+  });
+
+  test("falls back to default capacity when maxSessions is NaN", async () => {
+    const nanManager = new SessionManager({ maxSessions: Number.NaN, evictionIntervalMs: 0 });
+    try {
+      expect(Reflect.get(nanManager, "maxSessions")).toBe(DEFAULT_SESSION_MANAGER_MAX_SESSIONS);
+    } finally {
+      nanManager.disposeAll();
     }
   });
 
