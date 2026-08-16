@@ -1575,6 +1575,12 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     expect(envelope.items.map((hit) => normalize(hit.file))).toEqual([normalize(path.relative(tmpDir, appFile))]);
   });
 
+  it("documents pretty output for Tree-sitter grep queries", async () => {
+    const help = await runCliCommand(["help", "grep"]);
+
+    expect(help).toContain("codegraph grep --query <tree-sitter-query> [--root <path>] [--json | --pretty]");
+  });
+
   it("grep rejects ambiguous usage (both --query and --pattern)", async () => {
     await expect(
       runCliCommand(["grep", "--json", "--root", tsRoot, "--query", "(identifier) @id", "--pattern", "foo"]),
