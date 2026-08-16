@@ -5,7 +5,13 @@ import fsp from "node:fs/promises";
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
-import { buildProjectIndex, buildProjectIndexIncremental, resolveExport, type BuildReport } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexIncremental,
+  findReferences,
+  resolveExport,
+  type BuildReport,
+} from "../src/index.js";
 import type { ModuleIndex, ProjectIndex } from "../src/indexer/types.js";
 import * as indexer from "../src/indexer.js";
 import * as buildCache from "../src/indexer/build-cache.js";
@@ -1771,6 +1777,79 @@ describe("Cache invalidation and strict hashing", () => {
     bloomSpy.mockRestore();
   });
 
+  it("rejects stale snapshot modules after the manifest has advanced", async () => {
+    const root = await mkTmpDir("dg-stale-snapshot-modules-");
+    const entryPath = path.join(root, "entry.ts");
+    await fsp.writeFile(entryPath, "export const staleSnapshotValue = 1;\n", "utf8");
+    await buildProjectIndex(root, { threads: 1, cache: "disk", useBloomFilters: true });
+
+    const snapshotPath = projectSnapshotPathFor(root);
+    const staleSnapshot = await fsp.readFile(snapshotPath);
+    await fsp.writeFile(entryPath, "export const currentSnapshotValue = 2;\n", "utf8");
+    await buildProjectIndexIncremental(root, { threads: 1, cache: "disk", useBloomFilters: true });
+    await fsp.writeFile(snapshotPath, staleSnapshot);
+
+    const recovered = await buildProjectIndexIncremental(root, {
+      threads: 1,
+      cache: "disk",
+      useBloomFilters: true,
+    });
+    const entry = recovered.byFile.get(fileIdentityKey(normalize(entryPath)));
+
+    expect(entry?.locals.some((local) => local.localName === "currentSnapshotValue")).toBe(true);
+    expect(entry?.locals.some((local) => local.localName === "staleSnapshotValue")).toBe(false);
+  });
+
+  it("rejects stale bloom sidecars and recovers semantic references", async () => {
+    const root = await mkTmpDir("dg-stale-bloom-sidecar-");
+    const definitionPath = path.join(root, "definition.ts");
+    const consumerPath = path.join(root, "consumer.ts");
+    const triggerPath = path.join(root, "trigger.ts");
+    await fsp.writeFile(definitionPath, "export class Worker { staleBloomMethod() {} }\n", "utf8");
+    await fsp.writeFile(
+      consumerPath,
+      'import { Worker } from "./definition";\nexport const consumer = new Worker().staleBloomMethod();\n',
+      "utf8",
+    );
+    await fsp.writeFile(triggerPath, "export const trigger = 1;\n", "utf8");
+    await buildProjectIndex(root, { threads: 1, cache: "disk", useBloomFilters: true });
+
+    const snapshotPath = projectSnapshotPathFor(root);
+    const sidecarPath = path.join(root, ".codegraph-cache", "index-v1", "bloom-filters.json");
+    const staleSnapshot = await fsp.readFile(snapshotPath);
+    const staleSidecar = await fsp.readFile(sidecarPath);
+    await fsp.writeFile(definitionPath, "export class Worker { currentBloomMethod() {} }\n", "utf8");
+    await fsp.writeFile(
+      consumerPath,
+      'import { Worker } from "./definition";\nexport const consumer = new Worker().currentBloomMethod();\n',
+      "utf8",
+    );
+    await buildProjectIndexIncremental(root, { threads: 1, cache: "disk", useBloomFilters: true });
+    await fsp.writeFile(snapshotPath, staleSnapshot);
+    await fsp.writeFile(sidecarPath, staleSidecar);
+    await fsp.writeFile(triggerPath, "export const trigger = 2;\n", "utf8");
+
+    const recovered = await buildProjectIndexIncremental(root, {
+      threads: 1,
+      cache: "disk",
+      useBloomFilters: true,
+    });
+    const definition = recovered.byFile
+      .get(fileIdentityKey(normalize(definitionPath)))
+      ?.locals.find((local) => local.localName === "currentBloomMethod");
+    if (!definition) throw new Error("Expected current bloom definition");
+
+    const references = await findReferences(recovered, { def: definition });
+
+    expect(recovered.bloomFilters?.get(normalize(consumerPath))?.mightContain("currentBloomMethod")).toBe(true);
+    expect(references.status).toBe("ok");
+    if (references.status === "ok") {
+      expect(references.references.some((reference) => normalize(reference.file) === normalize(consumerPath))).toBe(
+        true,
+      );
+    }
+  });
+
   it("does not hydrate persisted bloom filters when bloom filters are disabled", async () => {
     const root = await mkTmpDir("dg-snapshot-bloom-disabled-");
     const entryPath = path.join(root, "entry.ts");
@@ -1859,7 +1938,7 @@ describe("Cache invalidation and strict hashing", () => {
       nativeRuntimeFingerprint?: string;
       implementationFingerprint?: string;
     };
-    expect(rewrittenSnapshot.version).toBe(5);
+    expect(rewrittenSnapshot.version).toBe(6);
     expect(initial.byFile.has(fileIdentityKey(normalize(entryPath)))).toBe(true);
     expect(rebuilt.byFile.has(fileIdentityKey(normalize(entryPath)))).toBe(true);
     expect(rebuilt.bloomFilters?.get(normalize(entryPath))?.mightContain("versioned")).toBe(true);
