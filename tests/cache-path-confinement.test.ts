@@ -15,7 +15,10 @@ import {
   writeToCache,
 } from "../src/indexer/build-cache/module-cache.js";
 import { loadManifest } from "../src/indexer/build-cache/manifest.js";
-import { tryLoadPersistedBloomFilters } from "../src/indexer/build-cache/project-snapshot.js";
+import {
+  tryLoadPersistedBloomFilters,
+  tryLoadProjectIndexSnapshot,
+} from "../src/indexer/build-cache/project-snapshot.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
 function moduleFor(file: string): ModuleIndex {
@@ -146,6 +149,39 @@ describe("persisted cache rehydration is confined to the project root", () => {
     clearMemoryCache();
   });
 
+  it("preserves unresolved external reexports through a module-cache round trip", async () => {
+    const root = await mkTmpDir("dg-confine-module-external-reexport-");
+    const file = path.join(root, "barrel.ts");
+    const sig = "sig-external-reexport";
+    const externalSpecifier = "external-package/subpath";
+    const module: ModuleIndex = {
+      file,
+      exports: [
+        {
+          type: "reexport",
+          exportedAs: "externalValue",
+          fromModule: externalSpecifier,
+          sourceSpecifier: "externalValue",
+        },
+      ],
+      imports: [],
+      locals: [],
+    };
+
+    writeToCache(root, file, sig, module, { cache: "disk" });
+    const loaded = tryLoadFromCache(root, file, sig, { cache: "disk" });
+    const reexport = loaded?.exports.find((entry) => entry.type === "reexport");
+
+    expect(reexport?.type).toBe("reexport");
+    if (reexport?.type === "reexport") {
+      expect(reexport.fromModule).toBe(externalSpecifier);
+      expect(reexport.moduleSpecifier).toBe(externalSpecifier);
+    }
+
+    closeDiskCacheDatabase(root, { cache: "disk" });
+    clearMemoryCache();
+  });
+
   it("rejects a persisted project snapshot whose projectFiles escape the project root", async () => {
     const root = await mkTmpDir("dg-confine-snapshot-projectfiles-");
     await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
@@ -214,6 +250,30 @@ describe("persisted cache rehydration is confined to the project root", () => {
     if (rebuiltReexport?.type === "reexport") {
       expect(rebuiltReexport.fromModule).not.toContain("outside.ts");
     }
+  });
+
+  it("preserves unresolved external reexports through a project-snapshot round trip", async () => {
+    const root = await mkTmpDir("dg-confine-snapshot-external-reexport-");
+    const externalSpecifier = "external-package/subpath";
+    await fsp.writeFile(
+      path.join(root, "barrel.ts"),
+      `export { externalValue } from "${externalSpecifier}";\n`,
+      "utf8",
+    );
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const manifest = await loadManifest(root, { cache: "disk" });
+    if (!manifest) throw new Error("Expected manifest for persisted snapshot.");
+
+    const snapshot = await tryLoadProjectIndexSnapshot(
+      root,
+      { cache: "disk", threads: 1 },
+      new Map(Object.entries(manifest.files)),
+    );
+    const barrel = [...(snapshot?.index.byFile.values() ?? [])].find((module) => module.file.endsWith("barrel.ts"));
+    const reexport = barrel?.exports.find((entry) => entry.type === "reexport");
+
+    expect(reexport?.type).toBe("reexport");
+    if (reexport?.type === "reexport") expect(reexport.fromModule).toBe(externalSpecifier);
   });
 
   it("rejects manifest file keys that escape the project root before cache probes", async () => {

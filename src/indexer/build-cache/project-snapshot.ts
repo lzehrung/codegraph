@@ -31,11 +31,11 @@ import {
   type SymbolVisibility,
 } from "../../graphs/symbol-graph.js";
 import { getImplementationFingerprint, normalizeGraphOptions } from "./options.js";
-import { cacheAbsolutePath, cacheRelativePath, cacheRoot } from "./module-cache.js";
+import { cacheAbsolutePath, cacheRelativePath, cacheRoot, transformPersistedExportFromModule } from "./module-cache.js";
 import type { ManifestFileEntry } from "./manifest.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
-const PROJECT_SNAPSHOT_VERSION = 6;
+const PROJECT_SNAPSHOT_VERSION = 7;
 const BLOOM_FILTER_MIN_SIZE = 1_000;
 const BLOOM_FILTER_MAX_SIZE = 1_000_000;
 const BLOOM_FILTER_MIN_HASH_COUNT = 1;
@@ -171,7 +171,7 @@ function transformModule(root: string, module: ModuleIndex, toRelative: boolean)
     if (entry.type === "local") {
       entry.target.file = file(entry.target.file);
     } else {
-      entry.fromModule = file(entry.fromModule);
+      transformPersistedExportFromModule(root, entry, toRelative);
     }
   }
   for (const binding of copy.imports) {
