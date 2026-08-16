@@ -582,7 +582,10 @@ function persistedBloomFiltersFromSidecar(
 function persistedBloomFiltersFromSnapshot(
   value: unknown,
   projectRoot: string,
-): Pick<ProjectIndexSnapshotPayload, "bloomFilters" | "fileSignatures"> | null {
+): {
+  bloomFilters: Record<string, SerializedBloomFilter>;
+  fileSignatures: Record<string, SnapshotFileSignature>;
+} | null {
   const migrated = migrateProjectSnapshotPayload(value, projectRoot);
   if (!migrated || typeof migrated !== "object") return null;
   const payload = migrated as Partial<ProjectIndexSnapshotPayload>;

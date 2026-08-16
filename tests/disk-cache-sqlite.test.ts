@@ -166,7 +166,7 @@ describe("disk cache uses sqlite backend", () => {
       this: SqliteStatement,
       ...params
     ) {
-      if (params.length === 5 && params[2] === 4) {
+      if (params.length === 5 && (params[0] === "first.ts" || params[0] === "second.ts")) {
         cacheWrites++;
         if (cacheWrites === 2) throw new Error("simulated aborted cache batch");
       }
