@@ -1261,6 +1261,57 @@ describe("SessionManager", () => {
     }
   });
 
+  test("retains failed warmup capacity until initialization settles", async () => {
+    const limitedManager = new SessionManager({ maxSessions: 1, evictionIntervalMs: 0 });
+    const originalBuild = indexerBuild.buildProjectIndexIncremental;
+    const buildStarted = Promise.withResolvers<void>();
+    const releaseBuild = Promise.withResolvers<void>();
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      buildStarted.resolve();
+      await releaseBuild.promise;
+      return await originalBuild(...args);
+    });
+
+    try {
+      const warmup = expect(
+        limitedManager.warmup([
+          {
+            id: "warm-a",
+            options: { root: sampleRoot, buildOptions: sampleBuildOptions() },
+          },
+          {
+            id: "warm-b",
+            options: { root: sampleRoot, buildOptions: sampleBuildOptions() },
+          },
+        ]),
+      ).rejects.toThrow("Session capacity reached (1)");
+      await buildStarted.promise;
+      await warmup;
+
+      await expect(
+        limitedManager.getOrCreateSession("after-failed-warmup", {
+          root: sampleRoot,
+          buildOptions: sampleBuildOptions(),
+        }),
+      ).rejects.toThrow("Session capacity reached (1)");
+
+      releaseBuild.resolve();
+      await vi.waitFor(() => {
+        expect(Reflect.get(limitedManager, "pendingSessions").size).toBe(0);
+      });
+      await expect(
+        limitedManager.getOrCreateSession("after-failed-warmup", {
+          root: sampleRoot,
+          buildOptions: sampleBuildOptions(),
+        }),
+      ).resolves.toBeInstanceOf(CodeReviewSession);
+    } finally {
+      releaseBuild.resolve();
+      buildSpy.mockRestore();
+      limitedManager.disposeAll();
+    }
+  });
+
   test("falls back to default capacity when maxSessions is NaN", async () => {
     const nanManager = new SessionManager({ maxSessions: Number.NaN, evictionIntervalMs: 0 });
     try {

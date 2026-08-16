@@ -1067,7 +1067,7 @@ export class SessionManager {
         const pending = this.pendingSessions.get(replacement.id);
         if (pending) {
           pending.cancelled = true;
-          this.pendingSessions.delete(replacement.id);
+          pending.retainPending = false;
         }
         replacement.session.dispose();
       }
