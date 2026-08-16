@@ -79,11 +79,12 @@ describe("bundled CLI entry", () => {
       .readdirSync(binDir)
       .filter((name) => name.endsWith(".js"))
       .sort();
-    // Bundle emits exactly two self-contained entrypoints (cli + queryIndexWorker).
-    expect(outputs).toEqual(["cli.js", "queryIndexWorker.js"]);
+    // Bundle emits exactly three self-contained entrypoints (cli + queryIndexWorker + rawQueryWorker).
+    expect(outputs).toEqual(["cli.js", "queryIndexWorker.js", "rawQueryWorker.js"]);
     const entry = fs.readFileSync(bundledCli, "utf8");
     expect(entry).toContain("queryIndexWorker.js");
     expect(fs.existsSync(path.join(binDir, "queryIndexWorker.js"))).toBe(true);
+    expect(fs.existsSync(path.join(binDir, "rawQueryWorker.js"))).toBe(true);
   });
 
   it("keeps a leading shebang so package managers can exec the bin directly", () => {
