@@ -1,11 +1,5 @@
 import { normalizeQuerySearchText } from "./content.js";
-import {
-  codePointLength,
-  escapeFtsTrigramTerm,
-  QUERY_INDEX_CANDIDATE_ROW_LIMIT,
-  type QueryIndexStore,
-  type StoredQueryIndexChunk,
-} from "./store.js";
+import { QUERY_INDEX_CANDIDATE_ROW_LIMIT, type QueryIndexStore, type StoredQueryIndexChunk } from "./store.js";
 
 export const QUERY_INDEX_CANDIDATE_VERSION = 6;
 
@@ -22,7 +16,11 @@ export type QueryIndexCandidate = StoredQueryIndexChunk & {
   matchedLine: number;
 };
 
-function scoreCandidateChunk(normalizedText: string, rankTerms: readonly string[]): QueryIndexCandidateScore {
+function scoreCandidateChunk(
+  normalizedText: string,
+  rankTerms: readonly string[],
+  normalizedRankPhrase = rankTerms.join(" "),
+): QueryIndexCandidateScore {
   if (!normalizedText.length || !rankTerms.length) {
     return { score: 0, matched: [], exactPhrase: false, proximity: false, matchedTerms: 0 };
   }
@@ -46,8 +44,7 @@ function scoreCandidateChunk(normalizedText: string, rankTerms: readonly string[
   let proximity = false;
   if (matched.length === rankTerms.length && rankTerms.length > 1) {
     score += 12;
-    const normalizedPhrase = rankTerms.join(" ");
-    if (normalizedText.includes(normalizedPhrase)) {
+    if (normalizedText.includes(normalizedRankPhrase)) {
       score += 30;
       exactPhrase = true;
     } else {
@@ -67,10 +64,14 @@ function scoreCandidateChunk(normalizedText: string, rankTerms: readonly string[
   return { score, matched, exactPhrase, proximity, matchedTerms: matched.length };
 }
 
-function firstMatchingLine(text: string, rankTerms: readonly string[]): number {
+function firstMatchingLine(
+  text: string,
+  rankTerms: readonly string[],
+  normalizedRankPhrase = rankTerms.join(" "),
+): number {
   const lines = text.split(/\r?\n/);
   const matchIndex = lines.findIndex(
-    (line) => scoreCandidateChunk(normalizeQuerySearchText(line), rankTerms).score > 0,
+    (line) => scoreCandidateChunk(normalizeQuerySearchText(line), rankTerms, normalizedRankPhrase).score > 0,
   );
   return matchIndex >= 0 ? matchIndex : 0;
 }
@@ -89,6 +90,7 @@ function compareCandidateChunks(left: QueryIndexCandidate, right: QueryIndexCand
 export function findQueryIndexChunkCandidates(
   store: QueryIndexStore,
   rankTerms: readonly string[],
+  normalizedRankPhrase = rankTerms.join(" "),
 ): QueryIndexCandidate[] {
   const terms = rankTerms.filter((term) => term.length);
   const eligiblePaths = store.eligibleFilePaths(terms);
@@ -96,8 +98,8 @@ export function findQueryIndexChunkCandidates(
     .candidateChunksForTerms(terms, eligiblePaths)
     .map((chunk) => ({
       ...chunk,
-      score: scoreCandidateChunk(chunk.normalizedText, terms),
-      matchedLine: firstMatchingLine(chunk.text, terms),
+      score: scoreCandidateChunk(chunk.normalizedText, terms, normalizedRankPhrase),
+      matchedLine: firstMatchingLine(chunk.text, terms, normalizedRankPhrase),
     }))
     .filter((candidate) => candidate.score.score > 0)
     .sort(compareCandidateChunks)

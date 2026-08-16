@@ -34,12 +34,13 @@ export async function collectWorkspaceManifestDependencyEdges(
   allowedManifestFiles?: ReadonlySet<string>,
   logLevel?: LogLevel,
 ): Promise<Edge[]> {
+  const discoveredManifestPaths = await listProjectFiles(projectRoot, ["**/package.json"], {
+    ...discovery,
+    ...(logLevel ? { logLevel } : {}),
+  });
   const manifestPaths = allowedManifestFiles
-    ? [...allowedManifestFiles].filter((manifestPath) => path.basename(manifestPath) === "package.json")
-    : await listProjectFiles(projectRoot, ["**/package.json"], {
-        ...discovery,
-        ...(logLevel ? { logLevel } : {}),
-      });
+    ? discoveredManifestPaths.filter((manifestPath) => allowedManifestFiles.has(manifestPath))
+    : discoveredManifestPaths;
   if (!manifestPaths.length) return [];
   const manifestByPackageName = new Map<string, string>();
   const parsedByPath = new Map<string, PackageJsonDependencyInfo>();

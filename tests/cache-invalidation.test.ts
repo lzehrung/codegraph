@@ -118,6 +118,32 @@ describe("navigation package cache invalidation", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("rebuilds cache-off indexes after a same-metadata source mutation", async () => {
+    const root = await mkTmpDir("codegraph-cache-off-signature-");
+    const sourceFile = path.join(root, "source.ts");
+    const firstSource = "export const first = 1;\n";
+    const secondSource = "export const nextt = 2;\n";
+    try {
+      await fsp.writeFile(sourceFile, firstSource, "utf8");
+      const firstIndex = await buildProjectIndex(root, { cache: "off" });
+      expect(moduleForPath(firstIndex, sourceFile)?.locals.some((local) => local.localName === "first")).toBe(true);
+
+      const originalStat = await fsp.stat(sourceFile);
+      await fsp.writeFile(sourceFile, secondSource, "utf8");
+      await fsp.utimes(sourceFile, originalStat.atime, originalStat.mtime);
+      const changedStat = await fsp.stat(sourceFile);
+      expect(changedStat.size).toBe(originalStat.size);
+      expect(Math.abs(changedStat.mtimeMs - originalStat.mtimeMs)).toBeLessThan(3);
+
+      const rebuiltIndex = await buildProjectIndex(root, { cache: "off" });
+      const rebuiltModule = moduleForPath(rebuiltIndex, sourceFile);
+      expect(rebuiltModule?.locals.some((local) => local.localName === "nextt")).toBe(true);
+      expect(rebuiltModule?.locals.some((local) => local.localName === "first")).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 function projectSnapshotPathFor(root: string): string {

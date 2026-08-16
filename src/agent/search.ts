@@ -713,8 +713,9 @@ async function addTextResults(
     try {
       store.withReadSnapshot(projectSnapshotIdentity, () => {
         const candidateStarted = performance.now();
-        const candidateChunks = findQueryIndexChunkCandidates(store, query.rankTokens);
+        const candidateChunks = findQueryIndexChunkCandidates(store, query.rankTokens, query.normalizedRankPhrase);
         diagnostics.candidateMs += performance.now() - candidateStarted;
+        diagnostics.fileCandidates += new Set(candidateChunks.map((chunk) => chunk.path)).size;
         diagnostics.chunkCandidates += candidateChunks.length;
         const allowedPaths = new Set(snapshot.files.map((file) => normalizeAgentFilePath(snapshot.root, file)));
         const scoringStarted = performance.now();
@@ -804,7 +805,7 @@ function addTextFileResults(
       label: result.label,
       file: relFile,
       line: chunk.startLine,
-      ...(includeSnippets ? { snippet: makeSnippet(chunk.text, query) } : {}),
+      ...(includeSnippets ? { snippet: makeSnippet(chunk.text, query, candidate?.matchedLine) } : {}),
     });
     addFileFollowUps(result, relFile);
   }

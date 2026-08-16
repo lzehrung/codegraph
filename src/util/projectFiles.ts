@@ -336,15 +336,12 @@ export async function listProjectFiles(
     picomatch(globPattern, { dot: true }),
   );
   const patternMatchers = patterns.map((pattern) => picomatch(normalizeGlobPattern(pattern), { dot: true }));
-  const projectFileDefinitionMatchers = PROJECT_FILE_DEFINITIONS.map((definition) =>
-    definition.patterns.map((pattern) =>
-      pattern.includes("*") || pattern.includes("?")
-        ? new RegExp("^" + pattern.replace(/\./g, "\\.").replace(/\*/g, ".*") + "$")
-        : undefined,
-    ),
-  );
   const translatedUserIgnoreGlobs = translateGlobRootIgnoreGlobsForScanRoot(root, globRoot, userIgnoreGlobs);
   const fastGlobIgnoreGlobs = [...DEFAULT_PROJECT_FILE_IGNORES, ...translatedUserIgnoreGlobs];
+  // Include globs are an explicit request to re-open otherwise ignored roots. Probe
+  // those roots for safe directory links before the later filter reapplies the default
+  // ignores, so an included link is not lost before it can be traversed.
+  const symlinkProbeIgnoreGlobs = includeGlobs.length ? translatedUserIgnoreGlobs : fastGlobIgnoreGlobs;
 
   try {
     const useGitignore = options?.useGitignore ?? true;
@@ -385,7 +382,7 @@ export async function listProjectFiles(
     const safeSymlinkDirectories = await resolveSafeSymlinkDirectories(
       root,
       realRoot,
-      fastGlobIgnoreGlobs,
+      symlinkProbeIgnoreGlobs,
       symlinkOptions,
     );
     const linkedFiles = await listEntriesFromSafeSymlinkDirectories(root, realRoot, patterns, fastGlobIgnoreGlobs, {

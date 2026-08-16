@@ -132,6 +132,17 @@ describe("persistent query index", () => {
     expect(authEvidence?.line).toBe(1);
   });
 
+  it("reports both candidate files and candidate chunks for sidecar searches", async () => {
+    const root = await createRepo();
+    const session = createSession(root);
+
+    await search(session, root, "validateUser");
+    const diagnostics = (await session.loadProject()).buildReport?.queryIndex;
+
+    expect(diagnostics?.fileCandidates).toBe(2);
+    expect(diagnostics?.chunkCandidates).toBeGreaterThan(0);
+  });
+
   it("keeps compressed indexed text below the amplification target", async () => {
     const root = await createRepo();
     const source = Array.from(
