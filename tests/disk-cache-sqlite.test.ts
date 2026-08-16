@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
-import { brotliDecompressSync } from "node:zlib";
+import { brotliCompressSync, brotliDecompressSync } from "node:zlib";
 
 import { buildProjectIndex, findDuplicates, type BuildReport } from "../src/index.js";
 import { closeDuplicateUnitCacheDatabase } from "../src/duplicates.js";
@@ -518,6 +518,48 @@ describe("disk cache uses sqlite backend", () => {
     expect(loaded?.[0]?.absoluteFile).toBe(normalizePathForSql(file));
     expect(loaded?.[0]?.symbolHandle).toBe(persistedNamedHandle);
     expect(loaded?.[1]?.symbolHandle).toBe(persistedEmptyNameHandle);
+  });
+
+  it("rejects duplicate units whose persisted absolute file escapes the project", async () => {
+    const root = await mkTmpDir("dg-disk-cache-duplicate-unit-confinement-");
+    await writeDuplicateProject(root);
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const file = normalizePathForSql(path.join(root, "src", "a.ts"));
+    const source = await fsp.readFile(file, "utf8");
+    const unit = buildInternalUnit(
+      {
+        file: "src/a.ts",
+        startLine: 1,
+        endLine: 8,
+        languageId: "typescript",
+        kind: "symbol",
+        name: "normalizeInvoiceRows",
+      },
+      file,
+      source,
+      3,
+      2,
+      index.nativeMode,
+    );
+    writeDuplicateUnitsToCache(index, file, "confinement", [unit], root);
+    closeDuplicateUnitCacheDatabase(root);
+
+    const db = new DatabaseSync(duplicateCacheDbPath(root));
+    const row = db
+      .prepare("SELECT payload FROM duplicate_unit_cache WHERE file = ? AND variant = ?")
+      .get("src/a.ts", "confinement") as { payload: Uint8Array } | undefined;
+    if (!row) throw new Error("expected duplicate cache row");
+    const units = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as Array<Record<string, unknown>>;
+    units[0] = { ...units[0], absoluteFile: "../outside.ts" };
+    db.prepare("UPDATE duplicate_unit_cache SET payload = ? WHERE file = ? AND variant = ?").run(
+      brotliCompressSync(JSON.stringify(units)),
+      "src/a.ts",
+      "confinement",
+    );
+    db.close();
+
+    const reopenedIndex = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    expect(tryLoadDuplicateUnitsFromCache(reopenedIndex, file, "confinement", root)).toBeNull();
   });
 
   it("ignores duplicate cache rows written by an older payload version", async () => {

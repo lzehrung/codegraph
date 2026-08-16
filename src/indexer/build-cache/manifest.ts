@@ -123,14 +123,24 @@ export function transformManifestEntries(
       ...entry,
       edges: entry.edges.map((edge) => ({
         ...edge,
-        from: toRelative ? cacheRelativePath(projectRoot, edge.from) : cacheAbsolutePath(projectRoot, edge.from),
+        from: toRelative
+          ? cacheRelativePath(projectRoot, edge.from)
+          : assertFilePathWithinRoot(
+              projectRoot,
+              cacheAbsolutePath(projectRoot, edge.from),
+              "Persisted manifest edge source",
+            ),
         to:
           edge.to.type === "file"
             ? {
                 ...edge.to,
                 path: toRelative
                   ? cacheRelativePath(projectRoot, edge.to.path)
-                  : cacheAbsolutePath(projectRoot, edge.to.path),
+                  : assertFilePathWithinRoot(
+                      projectRoot,
+                      cacheAbsolutePath(projectRoot, edge.to.path),
+                      "Persisted manifest edge target",
+                    ),
               }
             : edge.to,
       })),

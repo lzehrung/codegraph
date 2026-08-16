@@ -5,7 +5,13 @@ import fsp from "node:fs/promises";
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
-import { buildProjectIndex, buildProjectIndexIncremental, resolveExport, type BuildReport } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexFromFiles,
+  buildProjectIndexIncremental,
+  resolveExport,
+  type BuildReport,
+} from "../src/index.js";
 import type { ModuleIndex, ProjectIndex } from "../src/indexer/types.js";
 import * as indexer from "../src/indexer.js";
 import * as buildCache from "../src/indexer/build-cache.js";
@@ -1117,6 +1123,55 @@ describe("Cache invalidation and strict hashing", () => {
     expect(report.timings?.graphMs).toEqual(expect.any(Number));
     expect(report.timings?.writeManifestMs).toBeUndefined();
     expect(report.timings?.totalMs).toEqual(expect.any(Number));
+  });
+
+  it("rejects manifest edges outside the project before probing or reusing them", async () => {
+    const root = await mkTmpDir("dg-manifest-edge-confinement-");
+    const sourcePath = path.join(root, "source.ts");
+    const dependencyPath = path.join(root, "dependency.ts");
+    const outsideRoot = await mkTmpDir("dg-manifest-edge-outside-");
+    const outsideSource = normalize(path.join(outsideRoot, "source.ts"));
+    const outsideDependency = normalize(path.join(outsideRoot, "dependency.ts"));
+    await fsp.writeFile(sourcePath, "import { value } from './dependency';\nexport { value };\n", "utf8");
+    await fsp.writeFile(dependencyPath, "export const value = 1;\n", "utf8");
+    await fsp.writeFile(outsideSource, "export const outsideSource = true;\n", "utf8");
+    await fsp.writeFile(outsideDependency, "export const outsideDependency = true;\n", "utf8");
+
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const manifestPath = manifestPathFor(root);
+    const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as IndexManifest;
+    const sourceEntry = manifest.files["source.ts"];
+    if (!sourceEntry?.edges.length) throw new Error("expected a persisted source edge");
+    sourceEntry.edges[0] = {
+      ...sourceEntry.edges[0],
+      from: normalize(path.relative(root, outsideSource)),
+      to: { type: "file", path: normalize(path.relative(root, outsideDependency)) },
+    };
+    await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+
+    const existsSpy = vi.spyOn(incrementalPlan, "pathExists");
+    const accessSpy = vi.spyOn(fsp, "access");
+    try {
+      const rebuilt = await buildProjectIndexFromFiles(root, [sourcePath, dependencyPath], {
+        cache: "disk",
+        threads: 1,
+      });
+
+      expect(existsSpy).not.toHaveBeenCalledWith(outsideDependency);
+      expect(accessSpy).not.toHaveBeenCalledWith(outsideDependency);
+      expect(rebuilt.graph.edges).not.toContainEqual(
+        expect.objectContaining({ from: outsideSource, to: { type: "file", path: outsideDependency } }),
+      );
+      expect(rebuilt.graph.edges).toContainEqual(
+        expect.objectContaining({
+          from: normalize(sourcePath),
+          to: { type: "file", path: normalize(dependencyPath) },
+        }),
+      );
+    } finally {
+      existsSpy.mockRestore();
+      accessSpy.mockRestore();
+    }
   });
 
   it("loads unchanged incremental indexes from a project snapshot", async () => {
