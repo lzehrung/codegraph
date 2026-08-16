@@ -2545,4 +2545,19 @@ describe("Cache invalidation and strict hashing", () => {
     expect(cachePath).not.toBe(path.join(projectRoot, ".codegraph-cache", "index-v1"));
     expect(cachePath).not.toBe(siblingCachePath);
   });
+
+  it("reports the legacy in-project anchor and layer when reusing a legacy cache under a git anchor", async () => {
+    const repoRoot = await mkTmpDir("dg-cache-legacy-anchor-repo-");
+    const projectRoot = path.join(repoRoot, "packages", "app");
+    await fsp.mkdir(projectRoot, { recursive: true });
+    await fsp.writeFile(path.join(repoRoot, ".git"), "gitdir: external\n", "utf8");
+    const legacyCachePath = path.join(projectRoot, ".codegraph-cache", "index-v1");
+    await fsp.mkdir(legacyCachePath, { recursive: true });
+
+    const resolution = buildCache.resolveCacheLocation(projectRoot, { cache: "disk" });
+
+    expect(resolution.path).toBe(legacyCachePath);
+    expect(fileIdentityKey(resolution.anchor)).toBe(fileIdentityKey(projectRoot));
+    expect(resolution.layer).toBe("project");
+  });
 });

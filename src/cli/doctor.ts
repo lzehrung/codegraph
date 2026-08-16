@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { cacheRoot, resolveCacheAnchor } from "../indexer/build-cache/location.js";
+import { resolveCacheLocation } from "../indexer/build-cache/location.js";
 import {
   isNativeTreeSitterAvailable,
   getNativeBindingOrigin,
@@ -315,11 +315,11 @@ export function buildDoctorReport(indexPath?: string): DoctorReport {
   const origin = getNativeBindingOrigin();
   const runtimeIdentity = captureCodegraphRuntimeIdentity(origin);
   const update = createInstalledVersionChecker(runtimeIdentity, { warn: () => undefined }).check(true);
-  const cacheResolution = resolveCacheAnchor(process.cwd());
+  const cacheResolution = resolveCacheLocation(process.cwd());
   return {
     package: packageIdentity,
     cache: {
-      path: normalizePathForDisplay(cacheRoot(process.cwd())),
+      path: normalizePathForDisplay(cacheResolution.path),
       anchor: normalizePathForDisplay(cacheResolution.anchor),
       layer: cacheResolution.layer,
     },

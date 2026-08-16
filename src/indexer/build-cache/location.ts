@@ -73,10 +73,20 @@ export function resolveCacheAnchor(projectRoot: string, opts?: BuildOptions): Ca
   return findRepositoryAnchor(projectRoot);
 }
 
-export function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
+export type CacheLocationResolution = CacheAnchorResolution & { path: string };
+
+/**
+ * Resolves the effective on-disk cache path along with the anchor/layer that actually
+ * produced it. This can differ from `resolveCacheAnchor`'s intended anchor when that
+ * anchor is not writable (falls back to the project root) or when an existing legacy
+ * in-project cache is reused instead of the configured anchor.
+ */
+export function resolveCacheLocation(projectRoot: string, opts?: BuildOptions): CacheLocationResolution {
   const root = path.resolve(projectRoot);
   const resolution = resolveCacheAnchor(root, opts);
-  const anchor = resolution.layer === "explicit" || isWritableDirectory(resolution.anchor) ? resolution.anchor : root;
+  const anchorWritable = resolution.layer === "explicit" || isWritableDirectory(resolution.anchor);
+  const anchor = anchorWritable ? resolution.anchor : root;
+  const effectiveLayer = anchorWritable ? resolution.layer : "project";
   const sameRoot = fileIdentityKey(anchor) === fileIdentityKey(root);
   if (
     sameRoot &&
@@ -84,20 +94,26 @@ export function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
     !process.env.CODEGRAPH_CACHE_DIR?.trim() &&
     (!opts?.cacheLocation || opts.cacheLocation === "project")
   ) {
-    return path.join(root, ".codegraph-cache", "index-v1");
+    return { path: path.join(root, ".codegraph-cache", "index-v1"), anchor, layer: effectiveLayer };
   }
   const namespace = projectCacheNamespace(root);
   const explicitBase = opts?.cacheDir?.trim() || process.env.CODEGRAPH_CACHE_DIR?.trim();
   if (explicitBase) {
     const configured = path.resolve(explicitBase);
-    if (path.basename(configured) === namespace) return configured;
-    return path.join(configured, namespace);
+    const configuredPath = path.basename(configured) === namespace ? configured : path.join(configured, namespace);
+    return { path: configuredPath, anchor, layer: effectiveLayer };
   }
   const base = opts?.cacheLocation === "user" ? resolveCodegraphUserCacheRoot() : path.join(anchor, ".codegraph-cache");
   const candidate = path.join(path.resolve(base), "index-v1", namespace);
   if (!sameRoot && !opts?.cacheLocation) {
     const legacy = path.join(root, ".codegraph-cache", "index-v1");
-    if (!fs.existsSync(candidate) && fs.existsSync(legacy)) return legacy;
+    if (!fs.existsSync(candidate) && fs.existsSync(legacy)) {
+      return { path: legacy, anchor: root, layer: "project" };
+    }
   }
-  return candidate;
+  return { path: candidate, anchor, layer: effectiveLayer };
+}
+
+export function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
+  return resolveCacheLocation(projectRoot, opts).path;
 }
