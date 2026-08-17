@@ -32,3 +32,19 @@ export const JAVA_IDENTIFIER_SOURCE = String.raw`[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}
  * (Pc), combining marks (Mn/Mc), and formatting characters (Cf).
  */
 export const CSHARP_IDENTIFIER_SOURCE = String.raw`@?[\p{L}\p{Nl}_][\p{L}\p{Nl}_\p{Nd}\p{Pc}\p{Mn}\p{Mc}\p{Cf}]*`;
+
+/**
+ * Go identifiers (`unicode_letter`/`unicode_digit` in the Go spec's `identifier` production)
+ * permit a Unicode letter (Lu/Ll/Lt/Lm/Lo) or underscore at every position; continuation
+ * additionally allows decimal digits (Nd). Letter-numbers (Nl), other number categories
+ * (No), and combining marks are not part of the Go grammar.
+ */
+export const GO_IDENTIFIER_SOURCE = String.raw`[\p{L}_][\p{L}\p{Nd}_]*`;
+
+/**
+ * Kotlin identifiers (the `Letter`/`UnicodeDigit` lexer fragments in the Kotlin grammar)
+ * permit a Unicode letter (Lu/Ll/Lt/Lm/Lo) or underscore at every position; continuation
+ * additionally allows decimal digits (Nd). Letter-numbers (Nl), other number categories
+ * (No), and combining marks are not part of the Kotlin grammar.
+ */
+export const KOTLIN_IDENTIFIER_SOURCE = String.raw`[\p{L}_][\p{L}\p{Nd}_]*`;

@@ -1,12 +1,14 @@
 import path from "node:path";
 import {
   JAVA_DOTTED_NAME_SOURCE,
+  KOTLIN_DOTTED_NAME_SOURCE,
   parseCsharpUsingDirective,
   parseJavaImportStatement,
   parseKotlinImportStatement,
   parsePhpImportStatement,
   parseRustImportStatement,
 } from "../../languages/importStatementParsers.js";
+import { GO_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rustTestModules.js";
 import { getPhpComposerImplicitFiles } from "../../util/resolution.js";
 import type { ImportBinding } from "../types.js";
@@ -38,8 +40,13 @@ function normalizeGoImports(context: LanguageSpecificImportContext): void {
     return;
   }
   const aliasByFrom = new Map<string, string>();
-  // Go identifiers permit Unicode letters (per the Go spec's "letter" production), not just ASCII.
-  const importPattern = /^\s*(?:import\s+)?(?:(?<alias>[._\p{L}][\p{L}\p{N}_]*)\s+)?["'`](?<from>[^"'`]+)["'`]/gmu;
+  // Go alias is either the standalone dot-import token or a real Go identifier (Unicode
+  // letter/underscore start, decimal-digit continuation); the blank identifier "_" is a
+  // valid identifier already covered by GO_IDENTIFIER_SOURCE.
+  const importPattern = new RegExp(
+    String.raw`^\s*(?:import\s+)?(?:(?<alias>\.|${GO_IDENTIFIER_SOURCE})\s+)?["'\u0060](?<from>[^"'\u0060]+)["'\u0060]`,
+    "gmu",
+  );
   for (const match of context.source.matchAll(importPattern)) {
     const from = match.groups?.from;
     if (!from) continue;
@@ -126,8 +133,10 @@ async function appendKotlinTextImports(context: LanguageSpecificImportContext): 
   if (context.languageId !== "kotlin" || context.getBindings().length) {
     return;
   }
-  // Kotlin identifiers permit Unicode letters, not just ASCII.
-  const importPattern = /^\s*import\s+([\p{L}_][\p{L}\p{N}_.]*(?:\.\*)?)(?:\s+as\s+([\p{L}_][\p{L}\p{N}_]*))?\s*$/gmu;
+  const importPattern = new RegExp(
+    String.raw`^\s*import\s+(${KOTLIN_DOTTED_NAME_SOURCE}(?:\.\*)?)(?:\s+as\s+(${KOTLIN_IDENTIFIER_SOURCE}))?\s*$`,
+    "gmu",
+  );
   for (const match of context.source.matchAll(importPattern)) {
     const rawSpec = match[1];
     if (!rawSpec) continue;

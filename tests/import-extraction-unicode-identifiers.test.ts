@@ -75,6 +75,12 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
       imported: "Foo",
       local: "créer",
     });
+    // A dotted segment must itself start with a valid identifier character; a digit
+    // immediately after "." is not part of Kotlin's grammar.
+    expect(parseKotlinImportStatement("import pkg.2mod")).toBeNull();
+    // Kotlin's UnicodeDigit continuation is Nd only; a non-decimal number category (No,
+    // e.g. the "½" fraction) is not a valid identifier continuation.
+    expect(parseKotlinImportStatement("import com.example.Widget\u00bd")).toBeNull();
   });
 
   it("Java: import of a Unicode-named class", () => {

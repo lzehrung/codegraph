@@ -2,6 +2,7 @@ import path from "node:path";
 import {
   CSHARP_IDENTIFIER_SOURCE,
   JAVA_IDENTIFIER_SOURCE,
+  KOTLIN_IDENTIFIER_SOURCE,
   PHP_IDENTIFIER_SOURCE,
   XID_IDENTIFIER_SOURCE,
 } from "../util/identifiers.js";
@@ -365,6 +366,11 @@ function resolvePhpIncludePath(expr: string, fromFile?: string): string | null {
   return `./${relativePath}`;
 }
 
+export const KOTLIN_DOTTED_NAME_SOURCE = String.raw`${KOTLIN_IDENTIFIER_SOURCE}(?:\.${KOTLIN_IDENTIFIER_SOURCE})*`;
+const KOTLIN_IMPORT_PATTERN = new RegExp(
+  String.raw`^\s*import\s+(${KOTLIN_DOTTED_NAME_SOURCE}(?:\.\*)?)(?:\s+as\s+(${KOTLIN_IDENTIFIER_SOURCE}))?\s*$`,
+  "mu",
+);
 export type ParsedKotlinImportStatement =
   | {
       kind: "named";
@@ -378,10 +384,7 @@ export type ParsedKotlinImportStatement =
     };
 
 export function parseKotlinImportStatement(stmtText: string): ParsedKotlinImportStatement | null {
-  // Kotlin identifiers permit Unicode letters, not just ASCII.
-  const match = stmtText
-    .trim()
-    .match(/^\s*import\s+([\p{L}_][\p{L}\p{N}_.]*(?:\.\*)?)(?:\s+as\s+([\p{L}_][\p{L}\p{N}_]*))?\s*$/mu);
+  const match = stmtText.trim().match(KOTLIN_IMPORT_PATTERN);
   const rawSpec = match?.[1];
   if (!rawSpec) return null;
   if (rawSpec.endsWith(".*")) {

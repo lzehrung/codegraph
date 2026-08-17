@@ -318,4 +318,14 @@ copy to "copied\\t.ts"
     const parsed = parseUnifiedDiff(diffText);
     expect(parsed.files).toEqual([expect.objectContaining({ path: "café with space.ts", kind: "modified" })]);
   });
+
+  it("resolves an ambiguous path from the diff --git header alone when Git emits no --- / +++ lines", () => {
+    // A mode-only change has no content hunks, so Git never emits --- / +++ lines to
+    // disambiguate; the equal-halves preference in the header split itself must still
+    // recover the real path "foo b/bar" instead of misreading it as a rename.
+    const diffText = ["diff --git a/foo b/bar b/foo b/bar", "old mode 100644", "new mode 100755", ""].join("\n");
+
+    const parsed = parseUnifiedDiff(diffText);
+    expect(parsed.files).toEqual([expect.objectContaining({ path: "foo b/bar", kind: "modified", modeChanged: true })]);
+  });
 });

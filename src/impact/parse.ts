@@ -201,16 +201,44 @@ const QUOTED_PATH_SEGMENT = `"(?:[^"\\\\]|\\\\.)*"`;
 // Git quotes each side of the header independently, so a rename between an ASCII and a
 // non-ASCII path (or vice versa) can have only one side quoted. Quoted branches are tried
 // first since they are unambiguous (the closing quote is exact); the unquoted/unquoted
-// fallback keeps the earliest-" b/"-split heuristic, which can pick the wrong boundary for
-// an unquoted path that itself contains the literal text " b/". `buildInitiatedFile` stores
-// this guess only as `_oldPathFromHeader`/`_newPathFromHeader`; `finalizeFile` overrides it
-// with the unambiguous single-path `--- a/X`/`+++ b/Y` (and rename/copy from/to) lines
-// whenever Git emits them, so the wrong split only survives for pure renames/copies that
+// fallback below (`resolveAmbiguousHeaderPaths`) prefers the split whose halves are equal,
+// which resolves the common same-path case even when an unquoted path itself contains the
+// literal text " b/". `buildInitiatedFile` stores its guess only as
+// `_oldPathFromHeader`/`_newPathFromHeader`; `finalizeFile` still overrides it with the
+// unambiguous single-path `--- a/X`/`+++ b/Y` (and rename/copy from/to) lines whenever Git
+// emits them, so a genuinely undecidable split only survives for pure renames/copies that
 // have no content hunks and therefore no `---`/`+++` lines to correct it.
 const DIFF_GIT_HEADER_BOTH_QUOTED = new RegExp(`^(${QUOTED_PATH_SEGMENT}) (${QUOTED_PATH_SEGMENT})$`);
 const DIFF_GIT_HEADER_A_QUOTED = new RegExp(`^(${QUOTED_PATH_SEGMENT}) b\\/(.+)$`);
 const DIFF_GIT_HEADER_B_QUOTED = new RegExp(`^a\\/(.+?) (${QUOTED_PATH_SEGMENT})$`);
-const DIFF_GIT_HEADER_PLAIN = /^a\/(.+?) b\/(.+)$/;
+
+/**
+ * The unquoted/unquoted fallback for `diff --git a/X b/Y`: try every position where the
+ * text " b/" occurs and prefer the split whose two halves are literally equal, since a
+ * changed file's old and new paths are the same string in every case that reaches this
+ * fallback (Git always emits `rename from`/`rename to` or `copy from`/`copy to` lines
+ * instead when the paths genuinely differ). Only when no split produces equal halves - an
+ * undecidable case with no other information available - fall back to the earliest split.
+ */
+function resolveAmbiguousHeaderPaths(remainder: string): { aSpec: string; bSpec: string } | null {
+  if (!remainder.startsWith("a/")) return null;
+  const afterA = remainder.slice(2);
+  const separator = " b/";
+  const splitIndices: number[] = [];
+  for (let index = afterA.indexOf(separator); index !== -1; index = afterA.indexOf(separator, index + 1)) {
+    splitIndices.push(index);
+  }
+  if (!splitIndices.length) return null;
+
+  let chosen = splitIndices[0]!;
+  for (const index of splitIndices) {
+    if (afterA.slice(0, index) === afterA.slice(index + separator.length)) {
+      chosen = index;
+      break;
+    }
+  }
+  return { aSpec: `a/${afterA.slice(0, chosen)}`, bSpec: `b/${afterA.slice(chosen + separator.length)}` };
+}
 
 function buildInitiatedFile(aSpec: string, bSpec: string): ParsedFileChange {
   const aPath = stripDiffGitPrefix(decodeGitPath(aSpec), "a/");
@@ -238,9 +266,9 @@ function initiateFile(line: string): ParsedFileChange | null {
   const bQuoted = remainder.match(DIFF_GIT_HEADER_B_QUOTED);
   if (bQuoted) return buildInitiatedFile(`a/${bQuoted[1]}`, bQuoted[2]!);
 
-  const plain = remainder.match(DIFF_GIT_HEADER_PLAIN);
+  const plain = resolveAmbiguousHeaderPaths(remainder);
   if (!plain) return null;
-  return buildInitiatedFile(`a/${plain[1]}`, `b/${plain[2]}`);
+  return buildInitiatedFile(plain.aSpec, plain.bSpec);
 }
 
 function initiateHunk(line: string): Hunk | null {
