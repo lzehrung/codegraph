@@ -314,6 +314,11 @@ export async function loadManifest(projectRoot: string, opts?: BuildOptions): Pr
     const migrated: IndexManifest = {
       ...parsed,
       version: MANIFEST_VERSION,
+      // Entries, edges, transientFiles, and symlinkDirectories above are already rebased to the
+      // active `projectRoot`. Update the stored provenance to match, or `cachedFileEdgesProjectRoot`
+      // (build-index.ts) keeps pointing at the pre-move root and `collectEdgesForFile`
+      // (graph-edge-collector.ts) rejects every cached edge, forcing a full reparse after a move.
+      projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
       files: transformManifestEntries(projectRoot, relativeFiles, false),
       transientFiles: sanitizeManifestTransientFilesForRoot(projectRoot, parsed.projectRoot, parsed.transientFiles),
       ...(symlinkDirectories !== undefined ? { symlinkDirectories } : {}),

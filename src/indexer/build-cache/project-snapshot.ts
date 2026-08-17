@@ -515,10 +515,16 @@ export async function tryLoadProjectSnapshotModules(
     const normalizedFileSignatures = new Map(
       Object.entries(payload.fileSignatures).map(([file, signature]) => [fileIdentityKey(file), signature]),
     );
+    // `fileSignatures` (caller-supplied) is keyed by whatever discovered display path each file
+    // was found under, not necessarily `fileIdentityKey`-normalized; on a case-insensitive
+    // filesystem an uppercase path segment would otherwise miss this lookup.
+    const normalizedCurrentSignatures = new Map(
+      Array.from(fileSignatures, ([file, signature]) => [fileIdentityKey(file), signature]),
+    );
     const modules = new Map<string, ModuleIndex>();
     for (const mod of payload.modules) {
       const moduleKey = fileIdentityKey(mod.file);
-      const signature = fileSignatures.get(moduleKey);
+      const signature = normalizedCurrentSignatures.get(moduleKey);
       const snapshotSignature = normalizedFileSignatures.get(moduleKey);
       if (!signature || !snapshotSignature || !snapshotSignatureMatches(snapshotSignature, signature)) continue;
       modules.set(moduleKey, mod);

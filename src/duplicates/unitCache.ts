@@ -165,7 +165,10 @@ export function duplicateUnitCacheSignature(
   const root = projectRoot ?? index.projectRoot;
   const entry =
     index.manifestEntries?.get(file) ?? (root ? index.manifestEntries?.get(cacheRelativePath(root, file)) : undefined);
-  return entry?.gitSig ?? entry?.sig;
+  // `cacheSig` is git- or content-hash-derived and distinguishes a same-size edit whose mtime
+  // got restored; falling back straight to `sig` would let a non-Git project reuse stale
+  // duplicate units for a file whose content actually changed.
+  return entry?.cacheSig ?? entry?.gitSig ?? entry?.sig;
 }
 
 export function duplicateUnitCacheKey(file: string, variant: string): string {

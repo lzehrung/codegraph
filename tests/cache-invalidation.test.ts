@@ -316,6 +316,27 @@ describe("Cache invalidation and strict hashing", () => {
     expect(persistedBloomFilters?.get(utilFile, collidingSignature)).toBeUndefined();
   });
 
+  it("resolves snapshot module reuse when the caller's fileSignatures map is keyed by a raw display path", async () => {
+    const root = await mkTmpDir("dg-snapshot-display-path-");
+    const utilPath = path.join(root, "util.ts").replace(/\\/g, "/");
+    await fsp.writeFile(utilPath, "export function a(){ return 1 }\n", "utf8");
+
+    const idx1 = await buildProjectIndex(root, { threads: 1, cache: "disk", cacheStrict: false });
+    const utilFile = Array.from(idx1.byFile.keys()).find((f) => f.endsWith("/util.ts") || f.endsWith("\\util.ts"))!;
+    const currentSignature = await buildCache.fileSignature(utilPath, false, undefined, { forceContentHash: true });
+
+    // `prepareFileSignatures` (build-index.ts) keys its map by whatever raw display path each
+    // file was discovered under, not `fileIdentityKey`. On a case-insensitive filesystem a
+    // mixed-case root (as `mkTmpDir` produces on Windows) makes that key differ from the
+    // lowercase `fileIdentityKey` form the snapshot module lookup uses internally.
+    const snapshotModules = await buildCache.tryLoadProjectSnapshotModules(
+      root,
+      { cache: "disk", cacheStrict: false },
+      new Map([[utilPath, currentSignature]]),
+    );
+    expect(snapshotModules?.has(fileIdentityKey(utilFile))).toBe(true);
+  });
+
   it("preserves content-hash cacheSig for changed files' manifestEntries after an incremental build", async () => {
     const root = await mkTmpDir("dg-incremental-cachesig-");
     const filePath = path.join(root, "entry.ts");
@@ -2568,6 +2589,27 @@ describe("Cache invalidation and strict hashing", () => {
     }
     expect(report.cache?.misses ?? 0).toBe(0);
     expect(report.files?.cached).toBeGreaterThan(0);
+  });
+
+  it("reuses cached graph edges (not just modules) after moving a project tree", async () => {
+    const sourceRoot = await mkTmpDir("dg-cache-move-edges-source-");
+    const movedRoot = `${sourceRoot}-moved`;
+    await fsp.writeFile(path.join(sourceRoot, "dependency.ts"), "export const dependency = 1;\n", "utf8");
+    await fsp.writeFile(path.join(sourceRoot, "entry.ts"), "export { dependency } from './dependency';\n", "utf8");
+    await buildProjectIndex(sourceRoot, { cache: "disk", threads: 1 });
+    await fsp.rename(sourceRoot, movedRoot);
+
+    // A stale `manifest.projectRoot` (left pointing at the pre-move root after rebasing entries)
+    // makes `collectEdgesForFile`'s `cachedFileEdgesProjectRoot` check reject every cached edge,
+    // forcing every unchanged file back through source parsing on the very next rebuild.
+    const prepSpy = vi.spyOn(filePrep, "prepareSourceInput");
+    try {
+      const moved = await buildProjectIndex(movedRoot, { cache: "disk", threads: 1 });
+      expect(moved.byFile.has(fileIdentityKey(normalize(path.join(movedRoot, "entry.ts"))))).toBe(true);
+      expect(prepSpy).not.toHaveBeenCalled();
+    } finally {
+      prepSpy.mockRestore();
+    }
   });
 
   it("reuses symlink directory hints after moving a project tree", async () => {
