@@ -108,7 +108,7 @@ async function attachReferenceContext(
     let cached = perFileCache.get(fileKey);
     if (!cached) {
       const parsedEntry = index.parsed?.get(fileKey);
-      const parsed = await ensureParsedContext(ref.file, parsedEntry);
+      const parsed = await ensureParsedContext(ref.file, parsedEntry, index.languageExtensions);
       cached = { source: parsed.source, tree: parsed.tree, sup: parsed.sup };
       perFileCache.set(fileKey, cached);
     }

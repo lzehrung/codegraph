@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { resolveCacheLocation } from "../indexer/build-cache/location.js";
 import {
@@ -320,15 +321,15 @@ export function findStaleNpmRetirementPaths(packageRoot: string, limit = 20): st
   }
 }
 /**
- * Best-effort, dependency-light read of `cache.location` from `codegraph.config.json` in the
- * current working directory. Deliberately avoids importing `../config.js` (which pulls in zod
- * and the full config schema): doctor is a fast, low-dependency health check, and the eager
+ * Best-effort, dependency-light read of `cache.location`, mirroring `loadCodegraphConfig`'s
+ * project-over-user precedence without importing `../config.js` (which pulls in zod and the
+ * full config schema): doctor is a fast, low-dependency health check, and the eager
  * dist-module-loading budget in `cli-startup-eager-modules.test.ts` enforces that. Malformed or
  * missing config is silently ignored; the fuller schema validation still applies to real builds.
  */
-function readProjectCacheLocation(root: string): string | undefined {
+function readCacheLocationField(configPath: string): string | undefined {
   try {
-    const raw = fs.readFileSync(path.join(root, "codegraph.config.json"), "utf8");
+    const raw = fs.readFileSync(configPath, "utf8");
     const parsed = JSON.parse(raw) as { cache?: { location?: unknown } };
     const location = parsed.cache?.location;
     return typeof location === "string" && location.trim() ? location.trim() : undefined;
@@ -337,13 +338,25 @@ function readProjectCacheLocation(root: string): string | undefined {
   }
 }
 
+function readUserCacheLocation(): string | undefined {
+  const configRoot =
+    process.platform === "win32"
+      ? process.env.APPDATA?.trim() || path.join(os.homedir(), "AppData", "Roaming")
+      : process.env.XDG_CONFIG_HOME?.trim() || path.join(os.homedir(), ".config");
+  return readCacheLocationField(path.join(configRoot, "codegraph", "config.json"));
+}
+
+function readEffectiveCacheLocation(root: string): string | undefined {
+  return readCacheLocationField(path.join(root, "codegraph.config.json")) ?? readUserCacheLocation();
+}
+
 export function buildDoctorReport(indexPath?: string): DoctorReport {
   const packageIdentity = getCodegraphPackageIdentity();
   const loadError = getNativeTreeSitterLoadError();
   const origin = getNativeBindingOrigin();
   const runtimeIdentity = captureCodegraphRuntimeIdentity(origin);
   const update = createInstalledVersionChecker(runtimeIdentity, { warn: () => undefined }).check(true);
-  const cacheLocation = readProjectCacheLocation(process.cwd());
+  const cacheLocation = readEffectiveCacheLocation(process.cwd());
   const cacheResolution = resolveCacheLocation(process.cwd(), cacheLocation ? { cacheLocation } : undefined);
   return {
     package: packageIdentity,

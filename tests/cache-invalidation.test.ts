@@ -2649,4 +2649,47 @@ describe("Cache invalidation and strict hashing", () => {
 
     expect(index.projectRoot).toBe(normalize(path.resolve(root)));
   });
+
+  it("rebases legacy v3 absolute transientFiles from the stored root after a project move", async () => {
+    const sourceRoot = await mkTmpDir("dg-manifest-transient-move-source-");
+    const movedRoot = `${sourceRoot}-moved`;
+    await fsp.writeFile(path.join(sourceRoot, "entry.ts"), "export const entry = 1;\n", "utf8");
+    await fsp.writeFile(path.join(sourceRoot, ".gitignore"), "outside/\n", "utf8");
+    const outsideFile = path.join(sourceRoot, "outside", "extra.ts");
+    await fsp.mkdir(path.dirname(outsideFile), { recursive: true });
+    await fsp.writeFile(outsideFile, "export const extra = 1;\n", "utf8");
+
+    await buildProjectIndexIncremental(sourceRoot, { cache: "disk", threads: 1, additionalFiles: [outsideFile] });
+    const manifestPath = manifestPathFor(sourceRoot);
+    const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as {
+      version: number;
+      transientFiles?: string[];
+    };
+    expect(manifest.transientFiles).toEqual(["outside/extra.ts"]);
+    // Simulate a genuine legacy v3 manifest, which persisted transientFiles as absolute paths.
+    manifest.version = 3;
+    manifest.transientFiles = [normalize(outsideFile)];
+    await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+
+    await fsp.rename(sourceRoot, movedRoot);
+    const movedOutsideFile = path.join(movedRoot, "outside", "extra.ts");
+    // Force a genuine content change so the incremental diff/manifest-rewrite path runs
+    // instead of the whole-snapshot fast path (which leaves manifest.json untouched when
+    // nothing changed and would otherwise mask this migration).
+    await fsp.writeFile(path.join(movedRoot, "entry.ts"), "export const entry = 2;\n", "utf8");
+
+    const rebuilt = await buildProjectIndexIncremental(movedRoot, {
+      cache: "disk",
+      threads: 1,
+      additionalFiles: [movedOutsideFile],
+    });
+
+    expect(rebuilt.byFile.has(fileIdentityKey(normalize(movedOutsideFile)))).toBe(true);
+    const rebuiltManifest = JSON.parse(await fsp.readFile(manifestPathFor(movedRoot), "utf8")) as {
+      version: number;
+      transientFiles?: string[];
+    };
+    expect(rebuiltManifest.version).toBe(MANIFEST_VERSION);
+    expect(rebuiltManifest.transientFiles).toEqual(["outside/extra.ts"]);
+  });
 });

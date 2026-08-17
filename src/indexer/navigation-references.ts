@@ -132,6 +132,7 @@ export async function buildPhpQualifiedNames(
     const definitionParsed = await ensureParsedContext(
       definitionFile,
       index.parsed?.get(fileIdentityKey(definitionFile)),
+      index.languageExtensions,
     );
     if (definitionParsed.sup.id !== "php") {
       return [];
@@ -152,7 +153,7 @@ async function collectNamedNodeReferences(
 ): Promise<{ ranges: Range[]; parsed: ParsedFileContext } | null> {
   try {
     const parsedEntry = index.parsed?.get(fileIdentityKey(fileId));
-    const parsed = await ensureParsedContext(fileId, parsedEntry);
+    const parsed = await ensureParsedContext(fileId, parsedEntry, index.languageExtensions);
     const identifierTypes = new Set<string>([
       ...parsed.sup.nodeTypes.identifier,
       ...(parsed.sup.nodeTypes.propertyIdentifier ?? []),

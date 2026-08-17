@@ -1,6 +1,6 @@
 import path from "node:path";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
-import { ensureParsedContext } from "../indexer/parse-context.js";
+import { ensureParsedContext, type ParsedFileContext } from "../indexer/parse-context.js";
 import { SymbolKind, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
 import { supportForFile } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
@@ -929,7 +929,12 @@ async function collectVerifiedCallsiteReferences(
     if (!support || !supportsCallCompatibilityLanguage(support.id)) {
       continue;
     }
-    const parsed = await tryEnsureParsedContext(file, index.parsed?.get(fileIdentityKey(file)), diagnostics);
+    const parsed = await tryEnsureParsedContext(
+      file,
+      index.parsed?.get(fileIdentityKey(file)),
+      index.languageExtensions,
+      diagnostics,
+    );
     if (!parsed) {
       continue;
     }
@@ -991,17 +996,16 @@ function classifyCompatibility(
   return { status: "compatible", reason: "compatible_argument_count" };
 }
 
-async function tryEnsureParsedContext(
+function tryEnsureParsedContext(
   file: string,
   parsedEntry: Parameters<typeof ensureParsedContext>[1],
+  languageExtensions: Parameters<typeof ensureParsedContext>[2],
   diagnostics: ImpactDiagnostics["callCompatibility"] | undefined,
-): Promise<Awaited<ReturnType<typeof ensureParsedContext>> | null> {
-  try {
-    return await ensureParsedContext(file, parsedEntry);
-  } catch {
+): Promise<ParsedFileContext | null> {
+  return ensureParsedContext(file, parsedEntry, languageExtensions).catch(() => {
     incrementSkippedReason(diagnostics, "parse-failed");
     return null;
-  }
+  });
 }
 
 function incrementSkippedReason(diagnostics: ImpactDiagnostics["callCompatibility"] | undefined, reason: string): void {
@@ -1035,6 +1039,7 @@ async function buildCallCompatibilityHintForReference(input: {
   const parsedCallsite = await tryEnsureParsedContext(
     ref.file,
     index.parsed?.get(fileIdentityKey(ref.file)),
+    index.languageExtensions,
     diagnostics,
   );
   if (!parsedCallsite) {
@@ -1113,6 +1118,7 @@ export async function attachCallCompatibilityHints(
     const parsedDefinition = await tryEnsureParsedContext(
       changedSymbol.file,
       index.parsed?.get(fileIdentityKey(changedSymbol.file)),
+      index.languageExtensions,
       diagnostics,
     );
     if (!parsedDefinition) {

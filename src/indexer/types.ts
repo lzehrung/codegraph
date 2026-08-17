@@ -142,7 +142,15 @@ export type BuildOptions = {
   onProgress?: ((progress: ProgressUpdate) => void) | undefined;
   threads?: number;
   cache?: "off" | "memory" | "disk";
+  /** Explicit disk-cache directory. Highest-precedence anchor; also settable via `CODEGRAPH_CACHE_DIR`. */
   cacheDir?: string;
+  /**
+   * Disk-cache anchor when `cacheDir`/`CODEGRAPH_CACHE_DIR` are unset: `"project"` anchors at
+   * `projectRoot`, `"user"` anchors at the platform user cache directory, `"repo"` (or omitted)
+   * searches ancestor directories for repository metadata and falls back to `projectRoot`. Any
+   * other value is treated as an absolute anchor directory (like `cacheDir`), not a final cache
+   * path: the resolved cache lives in a namespaced subdirectory under the anchor.
+   */
   cacheLocation?: CacheLocation;
   cacheStrict?: boolean;
   useBloomFilters?: boolean;

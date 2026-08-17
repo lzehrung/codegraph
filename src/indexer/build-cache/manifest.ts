@@ -177,12 +177,19 @@ export function sanitizeManifestEntriesForRoot(
   return sanitizedEntries;
 }
 
-export function sanitizeManifestTransientFilesForRoot(projectRoot: string, files: unknown): string[] {
+export function sanitizeManifestTransientFilesForRoot(
+  projectRoot: string,
+  storedProjectRoot: string,
+  files: unknown,
+): string[] {
   if (!Array.isArray(files)) return [];
   const sanitizedFiles = new Set<string>();
   for (const value of files) {
     if (typeof value !== "string") continue;
-    const file = path.resolve(projectRoot, value).replace(/\\/g, "/");
+    const storedFile = cacheAbsolutePath(storedProjectRoot, value);
+    if (!isFilePathWithinRoot(storedProjectRoot, storedFile)) continue;
+    const relativeFile = cacheRelativePath(storedProjectRoot, storedFile);
+    const file = cacheAbsolutePath(projectRoot, relativeFile);
     if (isFilePathWithinRoot(projectRoot, file)) sanitizedFiles.add(file);
   }
   return [...sanitizedFiles];
@@ -308,7 +315,7 @@ export async function loadManifest(projectRoot: string, opts?: BuildOptions): Pr
       ...parsed,
       version: MANIFEST_VERSION,
       files: transformManifestEntries(projectRoot, relativeFiles, false),
-      transientFiles: sanitizeManifestTransientFilesForRoot(projectRoot, parsed.transientFiles),
+      transientFiles: sanitizeManifestTransientFilesForRoot(projectRoot, parsed.projectRoot, parsed.transientFiles),
       ...(symlinkDirectories !== undefined ? { symlinkDirectories } : {}),
     };
     return migrated;

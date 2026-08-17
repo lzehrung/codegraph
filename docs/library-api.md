@@ -624,6 +624,25 @@ const incremental = await buildProjectIndexIncremental(root, {
 
 `BuildOptions.onProgress` reports index lifecycle and file progress. A rebuild emits `phase: "start"` with `mode: "build"` or `"update"`, zero or more `phase: "update"` events, and `phase: "complete"` with `elapsedMs`; a reusable snapshot emits no progress events.
 
+## Cache location
+
+`BuildOptions.cacheDir` and `BuildOptions.cacheLocation` control where the disk cache
+(`cache: "disk"`) is written; they have no effect for `cache: "memory"` or `"off"`. Persisted
+cache contents store project-relative paths, so a cache can be moved along with its project.
+
+Anchor selection precedence: `cacheDir` (an explicit final directory), then `CODEGRAPH_CACHE_DIR`,
+then `cacheLocation`, then repository metadata (nearest ancestor `.git`/`.codegraph`), then the
+project root. `cacheLocation` accepts `"project"` (anchor at `projectRoot`), `"user"` (anchor at
+the platform user cache directory), `"repo"` (the default repository-metadata search), or an
+absolute path. Unlike `cacheDir`, an absolute `cacheLocation` is an anchor, not the final cache
+directory: the resolved cache lives in a project-namespaced subdirectory underneath it, since one
+anchor can be shared by multiple projects.
+
+`createAgentSession()` (when `useConfig` is not disabled) and `createCodeReviewSession()` both
+read `cache.location` from `codegraph.config.json` (project config, falling back to user
+config) the same way they merge `discovery`, `graph`, and `languages.extensions`; an explicit
+`buildOptions.cacheLocation`/`cacheDir` always takes precedence over the config value.
+
 ## Project file discovery and graph building
 
 `listProjectFiles` defaults to source files plus common project manifests and lockfiles across supported languages, for example `package.json`, `requirements.txt`, `pyproject.toml`, and `Cargo.toml`.

@@ -1241,9 +1241,11 @@ export async function buildProjectIndexIncremental(
       opts?.additionalFiles ?? [],
       "Additional index file",
     );
-    const previousTransientFiles = sanitizeManifestTransientFilesForRoot(projectRoot, manifest.transientFiles).filter(
-      (file) => Object.hasOwn(trackedEntries, file),
-    );
+    const previousTransientFiles = sanitizeManifestTransientFilesForRoot(
+      projectRoot,
+      projectRoot,
+      manifest.transientFiles,
+    ).filter((file) => Object.hasOwn(trackedEntries, file));
     const previousTransientFileSet = new Set(previousTransientFiles);
     const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
     const gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];

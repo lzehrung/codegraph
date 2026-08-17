@@ -167,7 +167,11 @@ async function buildImportCandidates(index: ProjectIndex): Promise<ImportCandida
     if (!moduleIndex.imports.length) continue;
     const file = moduleIndex.file;
     try {
-      const parsed = await ensureParsedContext(file, index.parsed?.get(fileIdentityKey(file)));
+      const parsed = await ensureParsedContext(
+        file,
+        index.parsed?.get(fileIdentityKey(file)),
+        index.languageExtensions,
+      );
       const scope = getCachedScope(index, file, moduleIndex, parsed);
       for (const binding of scope.all) {
         if (!binding.import) continue;

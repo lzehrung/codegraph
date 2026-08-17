@@ -634,6 +634,37 @@ describe("agent session", () => {
     expect(buildSpy.mock.calls[0]?.[1]?.languageExtensions).toEqual({ ".custom": "ts" });
   });
 
+  it("merges codegraph.config.json cache.location into incremental agent build options", async () => {
+    const root = await mkRepo();
+    const cacheLocation = path.join(root, "custom-cache");
+    await fs.writeFile(
+      path.join(root, "codegraph.config.json"),
+      JSON.stringify({ cache: { location: cacheLocation } }),
+    );
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+
+    await createAgentSession({ root }).loadProject({ symbolGraph: "skip" });
+
+    expect(buildSpy.mock.calls[0]?.[1]?.cacheLocation).toBe(cacheLocation);
+  });
+
+  it("prefers an explicit buildOptions.cacheLocation over codegraph.config.json", async () => {
+    const root = await mkRepo();
+    const configCacheLocation = path.join(root, "config-cache");
+    const explicitCacheLocation = path.join(root, "explicit-cache");
+    await fs.writeFile(
+      path.join(root, "codegraph.config.json"),
+      JSON.stringify({ cache: { location: configCacheLocation } }),
+    );
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+
+    await createAgentSession({ root, buildOptions: { cacheLocation: explicitCacheLocation } }).loadProject({
+      symbolGraph: "skip",
+    });
+
+    expect(buildSpy.mock.calls[0]?.[1]?.cacheLocation).toBe(explicitCacheLocation);
+  });
+
   it("uses programmatic language extensions when listing agent session files", async () => {
     const root = await mkRepo();
     await fs.writeFile(path.join(root, "feature.custom"), "export const customFeature = 1;\n");

@@ -1,4 +1,4 @@
-import { type LanguageSupport } from "../languages.js";
+import { type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { resolveMemberAccessDefinition, supportsReceiverMemberResolution } from "./navigation-goto.js";
@@ -342,7 +342,13 @@ export async function findReferences(
               : fileIdentityKey(targetFile) === fileIdentityKey(definitionFile);
           if (!matchesDef) continue;
           const parsed = await ensureCandidateParsed();
-          const ranges = await collectNamespaceMemberRefs(fileId, imp.localNS, exportedName, parsed);
+          const ranges = await collectNamespaceMemberRefs(
+            fileId,
+            imp.localNS,
+            exportedName,
+            parsed,
+            index.languageExtensions,
+          );
           for (const range of ranges) {
             if (hasReachedMaxReferences()) break;
             pushRef({
@@ -540,8 +546,9 @@ export async function collectNamespaceMemberRefs(
   ns: string,
   member: string,
   parsedContext?: ParsedFileContext,
+  languageExtensions?: LanguageExtensionMap,
 ): Promise<Range[]> {
-  const parsed = parsedContext ?? (await ensureParsedContext(file, undefined));
+  const parsed = parsedContext ?? (await ensureParsedContext(file, undefined, languageExtensions));
   const sup = parsed.sup;
   const source = parsed.source;
   const tree = parsed.tree;

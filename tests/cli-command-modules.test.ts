@@ -1405,6 +1405,32 @@ describe("CLI command modules", () => {
     }
   });
 
+  test("doctor falls back to the platform user config when project config has no cache.location", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-doctor-user-cache-config-"));
+    const userConfigRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-doctor-user-config-root-"));
+    const cacheLocation = path.join(tempDir, "user-custom-cache");
+    await fsp.mkdir(path.join(userConfigRoot, "codegraph"), { recursive: true });
+    await fsp.writeFile(
+      path.join(userConfigRoot, "codegraph", "config.json"),
+      JSON.stringify({ cache: { location: cacheLocation } }),
+      "utf8",
+    );
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    vi.stubEnv("APPDATA", userConfigRoot);
+    vi.stubEnv("XDG_CONFIG_HOME", userConfigRoot);
+    try {
+      const report = buildDoctorReport();
+      expect(report.cache.layer).toBe("explicit");
+      expect(report.cache.anchor).toBe(cacheLocation.replace(/\\/g, "/"));
+    } finally {
+      process.chdir(previousCwd);
+      vi.unstubAllEnvs();
+      await fsp.rm(tempDir, { recursive: true, force: true });
+      await fsp.rm(userConfigRoot, { recursive: true, force: true });
+    }
+  });
+
   test("builds doctor reports for explicit index artifact paths", async () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-doctor-module-"));
     const artifactPath = path.join(tempDir, "codegraph.json");

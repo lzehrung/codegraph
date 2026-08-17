@@ -99,6 +99,7 @@ type AgentDiscoverySettings = {
   discoveryOptions?: ProjectFileDiscoveryOptions;
   graphOptions?: BuildOptions["graph"];
   languageExtensions?: BuildOptions["languageExtensions"];
+  cacheLocation?: BuildOptions["cacheLocation"];
 };
 
 type AgentSessionFilePlan = AgentDiscoverySettings & {
@@ -120,6 +121,7 @@ async function resolveAgentDiscoverySettings(options: AgentSessionOptions): Prom
   const graphOptions = config.graph || options.buildOptions?.graph ? graph : undefined;
   const languageExtensions =
     normalizeLanguageExtensions(options.buildOptions?.languageExtensions) ?? config.languages?.extensions;
+  const cacheLocation = options.buildOptions?.cacheLocation ?? config.cache?.location;
   const discoveryOptions = hasDiscoveryOptions(discovery)
     ? { ...discovery, globRoot: discovery.globRoot ?? options.root }
     : undefined;
@@ -127,11 +129,13 @@ async function resolveAgentDiscoverySettings(options: AgentSessionOptions): Prom
     ...(discoveryOptions ? { discoveryOptions } : {}),
     ...(graphOptions ? { graphOptions } : {}),
     ...(languageExtensions ? { languageExtensions } : {}),
+    ...(cacheLocation ? { cacheLocation } : {}),
   };
 }
 
 async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promise<AgentSessionFilePlan> {
-  const { discoveryOptions, graphOptions, languageExtensions } = await resolveAgentDiscoverySettings(options);
+  const { discoveryOptions, graphOptions, languageExtensions, cacheLocation } =
+    await resolveAgentDiscoverySettings(options);
   // Prefer the manifest-plus-Git reconciliation over a full recursive scan whenever it
   // can be trusted. Preserve its changed/untracked evidence so the indexer does not
   // repeat the same Git subprocesses immediately afterward.
@@ -140,6 +144,7 @@ async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promis
     ...(discoveryOptions ? { discovery: discoveryOptions } : {}),
     ...(graphOptions ? { graph: graphOptions } : {}),
     ...(languageExtensions ? { languageExtensions } : {}),
+    ...(cacheLocation ? { cacheLocation } : {}),
   };
   const incrementalPlan = await resolveIncrementalFilePlan(options.root, incrementalOptions);
   if (incrementalPlan) {
@@ -149,6 +154,7 @@ async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promis
       ...(discoveryOptions ? { discoveryOptions } : {}),
       ...(graphOptions ? { graphOptions } : {}),
       ...(languageExtensions ? { languageExtensions } : {}),
+      ...(cacheLocation ? { cacheLocation } : {}),
     };
   }
   const { DEFAULT_PROJECT_PATTERNS } = await import("../util/projectFiles.js");
@@ -160,6 +166,7 @@ async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promis
     ...(discoveryOptions ? { discoveryOptions } : {}),
     ...(graphOptions ? { graphOptions } : {}),
     ...(languageExtensions ? { languageExtensions } : {}),
+    ...(cacheLocation ? { cacheLocation } : {}),
   };
 }
 
@@ -324,7 +331,8 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   const loadBase = async (): Promise<AgentProjectBaseSnapshot> => {
     if (cachedBase) return cachedBase;
     const loadPromise = (async () => {
-      const { files, discoveryOptions, graphOptions, languageExtensions, incrementalPlan } = await loadFilePlan();
+      const { files, discoveryOptions, graphOptions, languageExtensions, cacheLocation, incrementalPlan } =
+        await loadFilePlan();
       const buildOptions: IncrementalBuildOptions = {
         ...options.buildOptions,
         ...(graphOptions ? { graph: graphOptions } : {}),
@@ -341,6 +349,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
           : {}),
         ...(discoveryOptions ? { discovery: discoveryOptions } : {}),
         ...(languageExtensions ? { languageExtensions } : {}),
+        ...(cacheLocation ? { cacheLocation } : {}),
       };
       if (options.buildOptions?.useNativeWorkers === undefined && files.length >= NATIVE_WORKER_AUTO_FILE_THRESHOLD) {
         buildOptions.useNativeWorkers = true;
@@ -375,11 +384,12 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   const loadSymbolGraph = async (base: AgentProjectBaseSnapshot): Promise<SymbolGraph> => {
     if (cachedSymbolGraph) return cachedSymbolGraph;
     const loadPromise = (async () => {
-      const { graphOptions } = await loadFilePlan();
+      const { graphOptions, cacheLocation } = await loadFilePlan();
       const cacheOptions: BuildOptions = {
         ...options.buildOptions,
         ...(graphOptions ? { graph: graphOptions } : {}),
         cache: options.buildOptions?.cache ?? "disk",
+        ...(cacheLocation ? { cacheLocation } : {}),
       };
       const persisted = await tryLoadDetailedSymbolGraphSnapshot(options.root, cacheOptions, base.index);
       if (persisted) return persisted;

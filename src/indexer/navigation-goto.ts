@@ -169,7 +169,7 @@ export async function resolveMemberAccessDefinition(params: {
     const objDef = await resolveReceiverDefinition(obj, source, sup, resolveExpression);
 
     if (objDef) {
-      const targetContext = await ensureParsedContext(objDef.file);
+      const targetContext = await ensureParsedContext(objDef.file, undefined, index.languageExtensions);
       const start = objDef.range.start;
       const targetPosition = {
         row: start.line - 1,
@@ -529,7 +529,7 @@ async function resolveMemberDefinitionForBase(
   baseDef: SymbolDef,
   member: string,
 ): Promise<SymbolDef | undefined> {
-  const targetContext = await ensureParsedContext(baseDef.file);
+  const targetContext = await ensureParsedContext(baseDef.file, undefined, index.languageExtensions);
   const start = baseDef.range.start;
   const targetPosition = {
     row: start.line - 1,

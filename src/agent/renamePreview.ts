@@ -525,7 +525,11 @@ async function addScopeConflicts(
   const file = normalizeAgentFilePath(snapshot.root, target.file);
   let localCollision: SymbolDef | undefined;
   try {
-    const parsed = await ensureParsedContext(target.file, snapshot.index.parsed?.get(fileIdentityKey(target.file)));
+    const parsed = await ensureParsedContext(
+      target.file,
+      snapshot.index.parsed?.get(fileIdentityKey(target.file)),
+      snapshot.index.languageExtensions,
+    );
     const scopeIndex = getCachedScope(snapshot.index, target.file, moduleIndex, parsed);
     const targetBinding = scopeIndex.all.find(
       (binding) =>
@@ -604,6 +608,7 @@ async function addScopeConflicts(
       const parsed = await ensureParsedContext(
         reference.file,
         snapshot.index.parsed?.get(fileIdentityKey(reference.file)),
+        snapshot.index.languageExtensions,
       );
       const scopeIndex = getCachedScope(snapshot.index, reference.file, consumer, parsed);
       const activeBinding = scopeIndex.all.find((binding) => binding.import === activeImport);
@@ -783,7 +788,11 @@ async function collectTextualRenameEdits(
     if (!loaded) continue;
     let parsed;
     try {
-      parsed = await ensureParsedContext(file, input.snapshot.index.parsed?.get(fileIdentityKey(file)));
+      parsed = await ensureParsedContext(
+        file,
+        input.snapshot.index.parsed?.get(fileIdentityKey(file)),
+        input.snapshot.index.languageExtensions,
+      );
     } catch (error: unknown) {
       input.unsafeSites.push({
         location: { file: loaded.displayPath, range: zeroRange() },
