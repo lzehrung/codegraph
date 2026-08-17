@@ -6,9 +6,9 @@ Source: `coverage/js/lcov.info`
 
 | Metric    |   Hit | Found | Coverage |
 | --------- | ----: | ----: | -------: |
-| Lines     | 27601 | 30381 |   90.85% |
-| Functions |  4609 |  4895 |   94.16% |
-| Branches  | 20774 | 26174 |   79.37% |
+| Lines     | 28185 | 30997 |   90.93% |
+| Functions |  4694 |  4989 |   94.09% |
+| Branches  | 21296 | 26821 |   79.40% |
 
 ## Least-covered Files
 
@@ -20,7 +20,6 @@ Source: `coverage/js/lcov.info`
 | `src/cli/explore.ts`                           | 62.50% |   100.00% |   50.00% |
 | `src/languages/definitions/typescript.ts`      | 62.86% |    81.82% |   42.86% |
 | `src/impact/call-compatibility/textScanner.ts` | 66.04% |   100.00% |   70.75% |
-| `src/cli/index.ts`                             | 66.67% |   100.00% |   58.97% |
 | `src/indexer.ts`                               | 66.67% |    66.67% |  100.00% |
 | `src/cli/bootstrap.ts`                         | 66.67% |    50.00% |      n/a |
 | `src/languages/definitions/css.ts`             | 66.67% |     0.00% |      n/a |
@@ -29,6 +28,7 @@ Source: `coverage/js/lcov.info`
 | `src/languages/definitions/sql.ts`             | 66.67% |     0.00% |      n/a |
 | `src/languages/definitions/svelte.ts`          | 66.67% |     0.00% |      n/a |
 | `src/languages/definitions/vue.ts`             | 66.67% |     0.00% |      n/a |
+| `src/cli/index.ts`                             | 67.39% |   100.00% |   60.47% |
 | `src/agent/handles.ts`                         | 68.00% |    91.67% |   45.45% |
 | `src/cli/artifact.ts`                          | 70.00% |   100.00% |   72.22% |
 | `src/agent/query-index/workerPool.ts`          | 70.97% |    62.50% |   56.25% |
@@ -42,6 +42,7 @@ These files have line records but no function or branch records, so they are tra
 | File                                    |   Lines | Functions | Branches |
 | --------------------------------------- | ------: | --------: | -------: |
 | `src/cliBootstrap.ts`                   |   0.00% |       n/a |      n/a |
+| `src/util/identifiers.ts`               | 100.00% |       n/a |      n/a |
 | `src/languages/definitions/jsFamily.ts` | 100.00% |       n/a |      n/a |
 | `src/duplicate-keywords.ts`             | 100.00% |       n/a |      n/a |
 | `src/impact/types.ts`                   | 100.00% |       n/a |      n/a |
@@ -50,6 +51,5 @@ These files have line records but no function or branch records, so they are tra
 | `src/languages/definitions/hbs.ts`      | 100.00% |       n/a |      n/a |
 | `src/languages/definitions/markdown.ts` | 100.00% |       n/a |      n/a |
 | `src/languages/definitions/mdx.ts`      | 100.00% |       n/a |      n/a |
-| `src/languages/definitions/rst.ts`      | 100.00% |       n/a |      n/a |
 
 Generated from LCOV by `node ./scripts/coverage-markdown.mjs`.

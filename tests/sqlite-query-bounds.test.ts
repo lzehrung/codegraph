@@ -12,29 +12,13 @@ import {
 } from "../src/mcp/sqliteGuard.js";
 import { queryGraphSqliteRaw, SqliteQueryDeadlineExceededError } from "../src/sqlite/query.js";
 
-// A deadline-terminated query's worker thread is force-terminated but, if it was blocked
+// A deadline-exceeded query requests worker termination but, if it was blocked
 // inside a single synchronous native SQLite call, keeps running that call in the
 // background until it returns naturally (see rawQueryWorkerPool.ts). On Windows this can
 // hold the temp db file open for a short window after the deadline test's assertions
 // already ran. This is a real platform race (an actual lingering OS file lock, not
 // simulated timing logic), so it is retried against the real clock instead of being
 // modeled with fake timers.
-async function removeWithRetry(root: string): Promise<void> {
-  const deadline = Date.now() + 10_000;
-  for (;;) {
-    try {
-      await fsp.rm(root, { recursive: true, force: true });
-      return;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "EBUSY" && code !== "ENOTEMPTY") throw error;
-      if (Date.now() > deadline) throw error;
-      const { promise, resolve } = Promise.withResolvers<void>();
-      setTimeout(resolve, 100);
-      await promise;
-    }
-  }
-}
 
 async function withTempDb(run: (dbPath: string) => Promise<void>): Promise<void> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sqlite-bounds-"));
