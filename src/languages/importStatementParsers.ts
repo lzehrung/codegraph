@@ -1,4 +1,11 @@
 import path from "node:path";
+import {
+  CSHARP_IDENTIFIER_SOURCE,
+  JAVA_IDENTIFIER_SOURCE,
+  KOTLIN_IDENTIFIER_SOURCE,
+  PHP_IDENTIFIER_SOURCE,
+  XID_IDENTIFIER_SOURCE,
+} from "../util/identifiers.js";
 import { isAbsoluteFilePath, normalizePath } from "../util/paths.js";
 
 export type ParsedRustImportStatement =
@@ -19,10 +26,18 @@ export type ParsedRustImportStatement =
       from: string;
     };
 
+const RUST_MODULE_PATTERN = new RegExp(String.raw`^mod\s+(${XID_IDENTIFIER_SOURCE})\s*;?$`, "u");
+const RUST_EXTERN_CRATE_PATTERN = new RegExp(
+  String.raw`^extern\s+crate\s+(${XID_IDENTIFIER_SOURCE})(?:\s+as\s+(${XID_IDENTIFIER_SOURCE}))?\s*;?$`,
+  "u",
+);
+const RUST_USE_ALIAS_PATTERN = new RegExp(String.raw`^(.*?)\s+as\s+(${XID_IDENTIFIER_SOURCE})$`, "u");
+
 export function parseRustImportStatement(stmtText: string): ParsedRustImportStatement | null {
   const trimmed = stmtText.trim();
 
-  const modMatch = trimmed.match(/^mod\s+([A-Za-z_][\w]*)\s*;?$/);
+  // Rust identifiers permit Unicode XID_Start/XID_Continue, not just ASCII.
+  const modMatch = trimmed.match(RUST_MODULE_PATTERN);
   if (modMatch?.[1]) {
     return {
       kind: "module",
@@ -32,7 +47,7 @@ export function parseRustImportStatement(stmtText: string): ParsedRustImportStat
     };
   }
 
-  const externMatch = trimmed.match(/^extern\s+crate\s+([A-Za-z_][\w]*)(?:\s+as\s+([A-Za-z_][\w]*))?\s*;?$/);
+  const externMatch = trimmed.match(RUST_EXTERN_CRATE_PATTERN);
   if (externMatch?.[1]) {
     return {
       kind: "module",
@@ -47,7 +62,7 @@ export function parseRustImportStatement(stmtText: string): ParsedRustImportStat
   if (!useBody) return null;
   if (useBody.includes("{") || useBody.includes(",")) return null;
 
-  const aliasMatch = useBody.match(/^(.*?)\s+as\s+([A-Za-z_][\w]*)$/);
+  const aliasMatch = useBody.match(RUST_USE_ALIAS_PATTERN);
   const rawPath = aliasMatch?.[1]?.trim() ?? useBody;
   const alias = aliasMatch?.[2];
 
@@ -100,6 +115,8 @@ export type ParsedPhpImportStatement =
 
 export type PhpImportType = "class" | "function" | "const";
 
+const PHP_USE_ALIAS_PATTERN = new RegExp(String.raw`^(.*?)\s+as\s+(${PHP_IDENTIFIER_SOURCE})$`, "iu");
+
 function splitTopLevelCommaList(input: string): string[] {
   const items: string[] = [];
   let depth = 0;
@@ -141,7 +158,7 @@ function parsePhpImportClause(rawClause: string, importType: PhpImportType): Par
         memberType = "const";
       }
       const body = (typedMemberMatch?.[2] ?? member).trim();
-      const aliasMatch = body.match(/^(.*?)\s+as\s+([A-Za-z_][\w]*)$/i);
+      const aliasMatch = body.match(PHP_USE_ALIAS_PATTERN);
       const fullPath = `${prefix}${(aliasMatch?.[1] ?? body).trim()}`;
       const parts = fullPath.split("\\").filter(Boolean);
       const imported = parts[parts.length - 1];
@@ -158,7 +175,7 @@ function parsePhpImportClause(rawClause: string, importType: PhpImportType): Par
     return results;
   }
 
-  const aliasMatch = clause.match(/^(.*?)\s+as\s+([A-Za-z_][\w]*)$/i);
+  const aliasMatch = clause.match(PHP_USE_ALIAS_PATTERN);
   const fullPath = (aliasMatch?.[1] ?? clause).trim();
   const parts = fullPath.split("\\").filter(Boolean);
   const imported = parts[parts.length - 1];
@@ -349,6 +366,11 @@ function resolvePhpIncludePath(expr: string, fromFile?: string): string | null {
   return `./${relativePath}`;
 }
 
+export const KOTLIN_DOTTED_NAME_SOURCE = String.raw`${KOTLIN_IDENTIFIER_SOURCE}(?:\.${KOTLIN_IDENTIFIER_SOURCE})*`;
+const KOTLIN_IMPORT_PATTERN = new RegExp(
+  String.raw`^\s*import\s+(${KOTLIN_DOTTED_NAME_SOURCE}(?:\.\*)?)(?:\s+as\s+(${KOTLIN_IDENTIFIER_SOURCE}))?\s*$`,
+  "mu",
+);
 export type ParsedKotlinImportStatement =
   | {
       kind: "named";
@@ -362,7 +384,7 @@ export type ParsedKotlinImportStatement =
     };
 
 export function parseKotlinImportStatement(stmtText: string): ParsedKotlinImportStatement | null {
-  const match = stmtText.trim().match(/^\s*import\s+([A-Za-z_][\w.]*(?:\.\*)?)(?:\s+as\s+([A-Za-z_][\w]*))?\s*$/m);
+  const match = stmtText.trim().match(KOTLIN_IMPORT_PATTERN);
   const rawSpec = match?.[1];
   if (!rawSpec) return null;
   if (rawSpec.endsWith(".*")) {
@@ -383,6 +405,25 @@ export function parseKotlinImportStatement(stmtText: string): ParsedKotlinImport
   };
 }
 
+export const JAVA_DOTTED_NAME_SOURCE = String.raw`${JAVA_IDENTIFIER_SOURCE}(?:\.${JAVA_IDENTIFIER_SOURCE})*`;
+const JAVA_IMPORT_PATTERN = new RegExp(
+  String.raw`^\s*import\s+(static\s+)?(${JAVA_DOTTED_NAME_SOURCE}(?:\.\*)?)\s*;?\s*$`,
+  "u",
+);
+
+const CSHARP_DOTTED_NAME_SOURCE = String.raw`${CSHARP_IDENTIFIER_SOURCE}(?:\.${CSHARP_IDENTIFIER_SOURCE})*`;
+const CSHARP_USING_ALIAS_PATTERN = new RegExp(
+  String.raw`^(?:global\s+)?using\s+(${CSHARP_IDENTIFIER_SOURCE})\s*=\s*(${CSHARP_DOTTED_NAME_SOURCE})\s*;?$`,
+  "u",
+);
+const CSHARP_USING_STATIC_PATTERN = new RegExp(
+  String.raw`^(?:global\s+)?using\s+static\s+(${CSHARP_DOTTED_NAME_SOURCE})\s*;?$`,
+  "u",
+);
+const CSHARP_USING_PLAIN_PATTERN = new RegExp(
+  String.raw`^(?:global\s+)?using\s+(${CSHARP_DOTTED_NAME_SOURCE})\s*;?$`,
+  "u",
+);
 export type ParsedJavaImportStatement =
   | {
       kind: "named";
@@ -397,7 +438,7 @@ export type ParsedJavaImportStatement =
     };
 
 export function parseJavaImportStatement(stmtText: string): ParsedJavaImportStatement | null {
-  const match = stmtText.trim().match(/^\s*import\s+(static\s+)?([A-Za-z_][\w.]*(?:\.\*)?)\s*;?\s*$/);
+  const match = stmtText.trim().match(JAVA_IMPORT_PATTERN);
   const rawSpec = match?.[2];
   if (!rawSpec) return null;
   const isStatic = !!match?.[1];
@@ -423,7 +464,7 @@ export function parseJavaImportStatement(stmtText: string): ParsedJavaImportStat
 export function parseCsharpUsingDirective(stmtText: string): ParsedCsharpUsingDirective | null {
   const trimmed = stmtText.trim();
 
-  const aliasMatch = trimmed.match(/^(?:global\s+)?using\s+([A-Za-z_][\w]*)\s*=\s*([A-Za-z_][\w.]*)\s*;?$/);
+  const aliasMatch = trimmed.match(CSHARP_USING_ALIAS_PATTERN);
   if (aliasMatch?.[1] && aliasMatch[2]) {
     return {
       from: aliasMatch[2],
@@ -432,7 +473,7 @@ export function parseCsharpUsingDirective(stmtText: string): ParsedCsharpUsingDi
     };
   }
 
-  const staticMatch = trimmed.match(/^(?:global\s+)?using\s+static\s+([A-Za-z_][\w.]*)\s*;?$/);
+  const staticMatch = trimmed.match(CSHARP_USING_STATIC_PATTERN);
   if (staticMatch?.[1]) {
     return {
       from: staticMatch[1],
@@ -440,7 +481,7 @@ export function parseCsharpUsingDirective(stmtText: string): ParsedCsharpUsingDi
     };
   }
 
-  const plainMatch = trimmed.match(/^(?:global\s+)?using\s+([A-Za-z_][\w.]*)\s*;?$/);
+  const plainMatch = trimmed.match(CSHARP_USING_PLAIN_PATTERN);
   if (!plainMatch?.[1]) return null;
   return {
     from: plainMatch[1],

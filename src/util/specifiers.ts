@@ -1,5 +1,6 @@
 import path from "node:path";
 import { buildJsLikeLiteralMask, stripJsLikeComments, stripPythonCommentsAndStrings } from "./comments.js";
+import { PYTHON_IDENTIFIER_SOURCE } from "./identifiers.js";
 import { normalizePath } from "./paths.js";
 
 export type ModuleSpecifierResolutionKind = "document" | "source" | "stylesheet";
@@ -45,8 +46,10 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
     const literalMask = buildJsLikeLiteralMask(src);
     // Capture groups: 1 import-from, 2 side-effect import, 3 export-from,
     // 4 destructured require, 5 require(), 6 import(), 7 import = require, 8 declare module.
+    // JS/TS identifiers permit Unicode ID_Start/ID_Continue plus $/_, with ZWNJ and ZWJ as
+    // continuation characters, so import-equals aliases must not use ASCII-only \w.
     const combined =
-      /^\s*import\s+[^\n;]*?\s+from\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bexport\s+[^\n;]*?\s+from\s+["']([^"']+)["']|\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\brequire\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\bimport\s*\(\s*["']([^"']+)["']\s*\)|^\s*import\s+[A-Za-z_$][\w$]*\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|^\s*declare\s+module\s+["']([^"']+)["']/gm;
+      /^\s*import\s+[^\n;]*?\s+from\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bexport\s+[^\n;]*?\s+from\s+["']([^"']+)["']|\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\brequire\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\bimport\s*\(\s*["']([^"']+)["']\s*\)|^\s*import\s+[$_\p{ID_Start}][$_\p{ID_Continue}\u200c\u200d]*\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|^\s*declare\s+module\s+["']([^"']+)["']/gmu;
 
     for (const match of src.matchAll(combined)) {
       if (!matchStartsInCode(literalMask, match)) continue;
@@ -246,13 +249,21 @@ export function extractJsTsDynamicSpecifiers(source: string, fromFile: string, p
   return out;
 }
 
+// Python module/package names are dotted sequences of PEP 3131 Unicode identifiers; a
+// per-segment character class (rather than Unicode letters/digits spanning the dots) keeps
+// a digit from matching directly after a `.` separator.
+const PYTHON_DOTTED_NAME_SOURCE = String.raw`${PYTHON_IDENTIFIER_SOURCE}(?:\.${PYTHON_IDENTIFIER_SOURCE})*`;
+
 export function extractPythonSpecifiers(source: string): string[] {
   const out: string[] = [];
   try {
     const cleaned = stripPythonCommentsAndStrings(source);
-    const reImport = /^\s*import\s+([A-Za-z_][\w.]*)/gm;
+    const reImport = new RegExp(String.raw`^\s*import\s+(${PYTHON_DOTTED_NAME_SOURCE})`, "gmu");
     for (const match of cleaned.matchAll(reImport)) out.push(match[1]!);
-    const reFrom = /^\s*from\s+(\.+(?:[A-Za-z_][\w.]*)?|[A-Za-z_][\w.]*)\s+import/gm;
+    const reFrom = new RegExp(
+      String.raw`^\s*from\s+(\.+(?:${PYTHON_DOTTED_NAME_SOURCE})?|${PYTHON_DOTTED_NAME_SOURCE})\s+import`,
+      "gmu",
+    );
     for (const match of cleaned.matchAll(reFrom)) out.push(match[1]!);
   } catch {
     /* parse fallback: ignore */

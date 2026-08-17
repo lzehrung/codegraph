@@ -1,5 +1,6 @@
 import { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
+import { decodeGitPath } from "../util/git.js";
 import type { Diff, FileChange, Hunk } from "./types.js";
 
 type ParsedFileChange = FileChange & {
@@ -131,25 +132,17 @@ function decodeStreamChunk(decoder: StringDecoder, chunk: unknown): string {
   return String(chunk);
 }
 
-function decodeGitPath(rawPath: string): string {
-  const trimmed = rawPath.trim();
-  if (!trimmed.startsWith('"') || !trimmed.endsWith('"')) {
-    return trimmed;
-  }
+function stripDiffGitPrefix(pathValue: string, prefix: "a/" | "b/"): string {
+  return pathValue.startsWith(prefix) ? pathValue.slice(prefix.length) : pathValue;
+}
 
-  const inner = trimmed.slice(1, -1);
-  const decoded = inner.replace(/\\(\\|"|n|r|t|[0-7]{1,3})/g, (match, token: string) => {
-    if (token === "\\") return "\\";
-    if (token === '"') return '"';
-    if (token === "n") return "\n";
-    if (token === "r") return "\r";
-    if (token === "t") return "\t";
-    if (/^[0-7]{1,3}$/.test(token)) {
-      return String.fromCharCode(parseInt(token, 8));
-    }
-    return match;
-  });
-  return decoded;
+// Git appends a bare trailing tab to `--- `/`+++ ` header lines whenever the pathname
+// contains a space (quoted or not), to keep the path boundary unambiguous the way the
+// traditional `diff -u` timestamp field did. It is a line-format marker, never part of the
+// real filename, so strip it before quote-decoding: leaving it in place would make a quoted
+// path fail `decodeGitPath`'s closing-quote check entirely.
+function stripTrailingHeaderTab(rawPath: string): string {
+  return rawPath.endsWith("\t") ? rawPath.slice(0, -1) : rawPath;
 }
 
 function parseHeaderLine(currentFile: ParsedFileChange, line: string): void {
@@ -195,25 +188,87 @@ function parseHeaderLine(currentFile: ParsedFileChange, line: string): void {
     return;
   }
   if (line.startsWith("--- ")) {
-    currentFile._fromPath = decodeGitPath(line.slice(4));
+    currentFile._fromPath = decodeGitPath(stripTrailingHeaderTab(line.slice(4)));
     return;
   }
   if (line.startsWith("+++ ")) {
-    currentFile._toPath = decodeGitPath(line.slice(4));
+    currentFile._toPath = decodeGitPath(stripTrailingHeaderTab(line.slice(4)));
   }
 }
 
-function initiateFile(line: string): ParsedFileChange | null {
-  const match = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
-  if (!match) return null;
+const DIFF_GIT_HEADER_PREFIX = "diff --git ";
+const QUOTED_PATH_SEGMENT = `"(?:[^"\\\\]|\\\\.)*"`;
+// Git quotes each side of the header independently, so a rename between an ASCII and a
+// non-ASCII path (or vice versa) can have only one side quoted. Quoted branches are tried
+// first since they are unambiguous (the closing quote is exact); the unquoted/unquoted
+// fallback below (`resolveAmbiguousHeaderPaths`) prefers the split whose halves are equal,
+// which resolves the common same-path case even when an unquoted path itself contains the
+// literal text " b/". `buildInitiatedFile` stores its guess only as
+// `_oldPathFromHeader`/`_newPathFromHeader`; `finalizeFile` still overrides it with the
+// unambiguous single-path `--- a/X`/`+++ b/Y` (and rename/copy from/to) lines whenever Git
+// emits them, so a genuinely undecidable split only survives for pure renames/copies that
+// have no content hunks and therefore no `---`/`+++` lines to correct it.
+const DIFF_GIT_HEADER_BOTH_QUOTED = new RegExp(`^(${QUOTED_PATH_SEGMENT}) (${QUOTED_PATH_SEGMENT})$`);
+const DIFF_GIT_HEADER_A_QUOTED = new RegExp(`^(${QUOTED_PATH_SEGMENT}) b\\/(.+)$`);
+const DIFF_GIT_HEADER_B_QUOTED = new RegExp(`^a\\/(.+?) (${QUOTED_PATH_SEGMENT})$`);
+
+/**
+ * The unquoted/unquoted fallback for `diff --git a/X b/Y`: try every position where the
+ * text " b/" occurs and prefer the split whose two halves are literally equal, since a
+ * changed file's old and new paths are the same string in every case that reaches this
+ * fallback (Git always emits `rename from`/`rename to` or `copy from`/`copy to` lines
+ * instead when the paths genuinely differ). Only when no split produces equal halves - an
+ * undecidable case with no other information available - fall back to the earliest split.
+ */
+function resolveAmbiguousHeaderPaths(remainder: string): { aSpec: string; bSpec: string } | null {
+  if (!remainder.startsWith("a/")) return null;
+  const afterA = remainder.slice(2);
+  const separator = " b/";
+  const splitIndices: number[] = [];
+  for (let index = afterA.indexOf(separator); index !== -1; index = afterA.indexOf(separator, index + 1)) {
+    splitIndices.push(index);
+  }
+  if (!splitIndices.length) return null;
+
+  let chosen = splitIndices[0]!;
+  for (const index of splitIndices) {
+    if (afterA.slice(0, index) === afterA.slice(index + separator.length)) {
+      chosen = index;
+      break;
+    }
+  }
+  return { aSpec: `a/${afterA.slice(0, chosen)}`, bSpec: `b/${afterA.slice(chosen + separator.length)}` };
+}
+
+function buildInitiatedFile(aSpec: string, bSpec: string): ParsedFileChange {
+  const aPath = stripDiffGitPrefix(decodeGitPath(aSpec), "a/");
+  const bPath = stripDiffGitPrefix(decodeGitPath(bSpec), "b/");
   return {
-    path: decodeGitPath(match[2]!),
+    path: bPath,
     kind: "modified" as const,
     oldPath: "",
     hunks: [],
-    _oldPathFromHeader: decodeGitPath(match[1]!),
-    _newPathFromHeader: decodeGitPath(match[2]!),
+    _oldPathFromHeader: aPath,
+    _newPathFromHeader: bPath,
   };
+}
+
+function initiateFile(line: string): ParsedFileChange | null {
+  if (!line.startsWith(DIFF_GIT_HEADER_PREFIX)) return null;
+  const remainder = line.slice(DIFF_GIT_HEADER_PREFIX.length);
+
+  const bothQuoted = remainder.match(DIFF_GIT_HEADER_BOTH_QUOTED);
+  if (bothQuoted) return buildInitiatedFile(bothQuoted[1]!, bothQuoted[2]!);
+
+  const aQuoted = remainder.match(DIFF_GIT_HEADER_A_QUOTED);
+  if (aQuoted) return buildInitiatedFile(aQuoted[1]!, `b/${aQuoted[2]}`);
+
+  const bQuoted = remainder.match(DIFF_GIT_HEADER_B_QUOTED);
+  if (bQuoted) return buildInitiatedFile(`a/${bQuoted[1]}`, bQuoted[2]!);
+
+  const plain = resolveAmbiguousHeaderPaths(remainder);
+  if (!plain) return null;
+  return buildInitiatedFile(plain.aSpec, plain.bSpec);
 }
 
 function initiateHunk(line: string): Hunk | null {
@@ -227,17 +282,31 @@ function initiateHunk(line: string): Hunk | null {
 }
 
 function finalizeFile(file: ParsedFileChange): void {
-  const renameFrom = file._renameFrom ?? file._oldPathFromHeader;
-  const renameTo = file._renameTo ?? file._newPathFromHeader;
+  // The `diff --git a/X b/Y` header line is ambiguous when both sides are unquoted and one
+  // side's path itself contains the literal separator text " b/" (e.g. a file named
+  // "foo b/bar"): the earliest-split fallback can pick the wrong boundary. The `--- a/X` and
+  // `+++ b/Y` lines each carry exactly one path with an unambiguous prefix, so prefer them
+  // (and the equally unambiguous rename/copy from/to lines) over the header split whenever
+  // Git emitted them; only fall back to the header split when no other source is available
+  // (pure renames/copies without content hunks omit `---`/`+++` entirely).
+  const unambiguousOldPath =
+    file._fromPath !== undefined && file._fromPath !== "/dev/null"
+      ? stripDiffGitPrefix(file._fromPath, "a/")
+      : undefined;
+  const unambiguousNewPath =
+    file._toPath !== undefined && file._toPath !== "/dev/null" ? stripDiffGitPrefix(file._toPath, "b/") : undefined;
+
+  const renameFrom = file._renameFrom ?? unambiguousOldPath ?? file._oldPathFromHeader;
+  const renameTo = file._renameTo ?? unambiguousNewPath ?? file._newPathFromHeader;
   const copyFrom = file._copyFrom;
-  const copyTo = file._copyTo ?? file._newPathFromHeader;
+  const copyTo = file._copyTo ?? unambiguousNewPath ?? file._newPathFromHeader;
 
   if (file._hasNewFileMode || file._fromPath === "/dev/null") {
     file.kind = "added";
-    file.path = file._newPathFromHeader ?? file.path;
+    file.path = unambiguousNewPath ?? file._newPathFromHeader ?? file.path;
   } else if (file._hasDeletedFileMode || file._toPath === "/dev/null") {
     file.kind = "deleted";
-    file.path = file._oldPathFromHeader ?? file.path;
+    file.path = unambiguousOldPath ?? file._oldPathFromHeader ?? file.path;
   } else if (copyFrom && copyTo) {
     file.kind = "added";
     file.path = copyTo;
@@ -246,6 +315,8 @@ function finalizeFile(file: ParsedFileChange): void {
     file.kind = "renamed";
     file.path = renameTo;
     file.oldPath = renameFrom;
+  } else {
+    file.path = unambiguousNewPath ?? file.path;
   }
 
   if (file._isBinary) {

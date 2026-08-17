@@ -7,6 +7,7 @@ import { chunkFile } from "../../src/chunking/chunkFile.js";
 import { buildProjectIndex, goToDefinition } from "../../src/index.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
+import { expectUnicodeSymbolRangeIdentity } from "./unicodeSymbolRange.js";
 
 const definition: LanguageTestDefinition = {
   id: "rust",
@@ -266,5 +267,15 @@ impl Example {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Rust Unicode symbol ranges (C11)", () => {
+  it("publishes a UTF-16 string index for a function name preceded by multibyte text", async () => {
+    await expectUnicodeSymbolRangeIdentity({
+      fileName: "widget.rs",
+      source: "// café ☕ prüfung\n/* über */ fn créer() -> i32 {\n\t1\n}\n",
+      symbolName: "créer",
+    });
   });
 });

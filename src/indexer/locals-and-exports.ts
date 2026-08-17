@@ -1,6 +1,7 @@
 import type { LogLevel } from "../logging.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
 import { capturesByName, capturesNamed, rangeFromNativeCapture } from "../native/queryResults.js";
+import { buildByteToStringIndexMap, type ByteToStringIndexMap } from "../native/byteIndex.js";
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
 import {
   assertNativeRequiredAvailable,
@@ -378,6 +379,19 @@ export function collectLocalsAndExportsFromSource(
     return tree;
   };
 
+  // Lazily build once: converts every native capture's UTF-8 byte offsets to UTF-16
+  // string indexes in O(1) per capture instead of rescanning the source per offset.
+  // `ensureTree()` builds the same map internally when native mode is active, so route
+  // through it first and reuse that map instead of scanning the source a second time.
+  let byteIndexMap: ByteToStringIndexMap | null = null;
+  const ensureByteIndexMap = (): ByteToStringIndexMap => {
+    if (byteIndexMap) return byteIndexMap;
+    const enrichmentTree = ensureTree();
+    byteIndexMap =
+      enrichmentTree instanceof ProjectedSyntaxTree ? enrichmentTree.byteIndexMap : buildByteToStringIndexMap(source);
+    return byteIndexMap;
+  };
+
   const locals: SymbolDef[] = [];
   const seenLocals = new Set<string>();
   const toKind = (s: string): SymbolKind => {
@@ -431,7 +445,7 @@ export function collectLocalsAndExportsFromSource(
       for (const match of nativeQueries.locals) {
         for (const capture of match.captures) {
           if (capture.name !== "name" && capture.name !== "tname") continue;
-          const nativeRange = rangeFromNativeCapture(capture);
+          const nativeRange = rangeFromNativeCapture(capture, ensureByteIndexMap());
           const node =
             enrichmentTree?.rootNode.descendantForIndex(nativeRange.start.index ?? 0, nativeRange.end.index ?? 0) ??
             undefined;
@@ -528,7 +542,7 @@ export function collectLocalsAndExportsFromSource(
   ): void => {
     const nodeForCapture = (capture: NativeCapture | undefined): SyntaxNodeLike | undefined => {
       if (!capture || !treeForEnrichment) return undefined;
-      const range = rangeFromNativeCapture(capture);
+      const range = rangeFromNativeCapture(capture, ensureByteIndexMap());
       return treeForEnrichment.rootNode.descendantForIndex(range.start.index ?? 0, range.end.index ?? 0) ?? undefined;
     };
 
@@ -749,7 +763,12 @@ export function collectLocalsAndExportsFromSource(
       if (map["cjs_export_name"] && map["cjs_fn"]) {
         const exportedAs = map["cjs_export_name"].text;
         const fnNode = nodeForCapture(map["cjs_fn"]);
-        const sym = buildSymbolDef(exportedAs, SymbolKind.Function, rangeFromNativeCapture(map["cjs_fn"]), fnNode);
+        const sym = buildSymbolDef(
+          exportedAs,
+          SymbolKind.Function,
+          rangeFromNativeCapture(map["cjs_fn"], ensureByteIndexMap()),
+          fnNode,
+        );
         locals.push(sym);
         exports.push({ type: "local", exportedAs, target: sym });
         continue;
@@ -792,7 +811,7 @@ export function collectLocalsAndExportsFromSource(
           const sym = buildSymbolDef(
             "__default_export__",
             SymbolKind.Default,
-            rangeFromNativeCapture(map["anon_default"]),
+            rangeFromNativeCapture(map["anon_default"], ensureByteIndexMap()),
             defaultNode,
           );
           locals.push(sym);

@@ -1669,3 +1669,30 @@ describe("Go to Definition", () => {
     });
   });
 });
+
+describe("Go to Definition: Unicode identifiers (C11)", () => {
+  it("resolves a call to a Unicode-named function to its exact identifier position", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-goto-unicode-"));
+    try {
+      const defFile = path.join(root, "u1.py").replace(/\\/g, "/");
+      const useFile = path.join(root, "consumer.py").replace(/\\/g, "/");
+      const defSource = 'x = "ééé"\ndef créer():\n    return 1\n';
+      const useSource = "from u1 import créer\n\ncréer()\n";
+      await fsp.writeFile(defFile, defSource, "utf8");
+      await fsp.writeFile(useFile, useSource, "utf8");
+      const index = await createTestIndexFromFiles(root, [defFile, useFile]);
+
+      const callColumn = useSource.split("\n")[2]!.indexOf("créer") + 1;
+      const result = await goToDefinition(index, { file: useFile, line: 3, column: callColumn });
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(defFile));
+      // The definition range must land exactly on "créer" in def source, not offset by the
+      // byte length of the preceding non-ASCII string literal.
+      expect(result.definition.range.start.index).toBe(defSource.indexOf("créer"));
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});

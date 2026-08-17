@@ -1,8 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { listChangedFiles, listUntrackedFiles, getUnifiedDiff } from "../src/util.js";
+import { decodeGitPath, runGit, setGitExecutableForTests } from "../src/util/git.js";
+import { parseUnifiedDiff } from "../src/impact/parse.js";
 import { runGit as git } from "./helpers/git.js";
 
 function makeGitTempDir(prefix: string): Promise<string> {
@@ -147,6 +149,157 @@ describe("git diff semantics", () => {
       await expect(getUnifiedDiff(root, { base: "definitely-not-a-ref", head: "HEAD" })).rejects.toThrow(
         /definitely-not-a-ref/,
       );
+    } finally {
+      await removeGitTempDir(root);
+    }
+  });
+});
+
+describe("git diff semantics: non-ASCII, space, and rename path handling (C12)", () => {
+  it("returns non-ASCII, space, and leading/trailing-space filenames as real UTF-8, not git's quoted/escaped form", async () => {
+    const root = await makeGitTempDir("codegraph-git-c12-names-");
+    try {
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "tests@example.com"]);
+      git(root, ["config", "user.name", "Tests"]);
+
+      await fs.writeFile(path.join(root, "café.ts"), "export const a = 1;\n", "utf8");
+      await fs.writeFile(path.join(root, "with space.ts"), "export const b = 1;\n", "utf8");
+      await fs.writeFile(path.join(root, " leading.ts"), "export const c = 1;\n", "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+
+      await fs.writeFile(path.join(root, "café.ts"), "export const a = 2;\n", "utf8");
+      await fs.writeFile(path.join(root, "with space.ts"), "export const b = 2;\n", "utf8");
+      await fs.writeFile(path.join(root, " leading.ts"), "export const c = 2;\n", "utf8");
+
+      const changed = await listChangedFiles(root, { changedSince: "HEAD" });
+      const names = changed.map((entry) => path.basename(entry)).sort();
+      expect(names).toEqual(["café.ts", " leading.ts", "with space.ts"].sort());
+
+      // getUnifiedDiff returns git's raw output verbatim (still quoted/octal-escaped for
+      // café.ts, since that quoting comes from git itself); parseUnifiedDiff is what decodes
+      // it, so assert against the parsed result rather than the raw diff text.
+      const diff = await getUnifiedDiff(root, { changedSince: "HEAD" });
+      const parsedDiff = parseUnifiedDiff(diff);
+      expect(parsedDiff.files.map((file) => file.path).sort()).toEqual(
+        ["café.ts", " leading.ts", "with space.ts"].sort(),
+      );
+    } finally {
+      await removeGitTempDir(root);
+    }
+  });
+
+  it("propagates a rename to a non-ASCII (quoted) path through listChangedFiles and the parsed diff", async () => {
+    const root = await makeGitTempDir("codegraph-git-c12-rename-");
+    try {
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "tests@example.com"]);
+      git(root, ["config", "user.name", "Tests"]);
+
+      await fs.writeFile(path.join(root, "plain.ts"), "export function run() {\n  return 1;\n}\n", "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+
+      git(root, ["mv", "plain.ts", "café-renamed.ts"]);
+      git(root, ["add", "-A"]);
+
+      const changed = await listChangedFiles(root, { base: "HEAD", head: "STAGED" });
+      expect(changed.map((entry) => path.basename(entry))).toEqual(["café-renamed.ts"]);
+
+      const diff = await getUnifiedDiff(root, { base: "HEAD", head: "STAGED" });
+      const parsed = parseUnifiedDiff(diff);
+      expect(parsed.files).toEqual([
+        expect.objectContaining({ kind: "renamed", path: "café-renamed.ts", oldPath: "plain.ts" }),
+      ]);
+    } finally {
+      await removeGitTempDir(root);
+    }
+  });
+});
+
+describe("git diff semantics: rename detection is deterministic regardless of user config (C4)", () => {
+  it("still reports a pure rename with diff.renames=false configured locally", async () => {
+    const root = await makeGitTempDir("codegraph-git-c4-renames-config-");
+    try {
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "tests@example.com"]);
+      git(root, ["config", "user.name", "Tests"]);
+      // A user (or repo) can disable git's default rename detection entirely. gitDiffArgs
+      // must pass --find-renames explicitly so codegraph's own output does not silently
+      // depend on this config.
+      git(root, ["config", "diff.renames", "false"]);
+
+      const original = "export function widget() {\n  return 1;\n}\n".repeat(3);
+      await fs.writeFile(path.join(root, "widget.ts"), original, "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+      const base = git(root, ["rev-parse", "HEAD"]);
+
+      git(root, ["mv", "widget.ts", "renamed-widget.ts"]);
+      git(root, ["add", "-A"]);
+      git(root, ["commit", "-m", "rename"]);
+      const head = git(root, ["rev-parse", "HEAD"]);
+
+      const diff = await getUnifiedDiff(root, { base, head });
+      const parsed = parseUnifiedDiff(diff);
+
+      expect(parsed.files).toEqual([
+        expect.objectContaining({ kind: "renamed", path: "renamed-widget.ts", oldPath: "widget.ts" }),
+      ]);
+    } finally {
+      await removeGitTempDir(root);
+    }
+  });
+});
+
+describe("Git C-style quoted path decoding", () => {
+  it("preserves unquoted paths and decodes supported quote escapes", () => {
+    const cases = [
+      ["unquoted path with trailing ", "unquoted path with trailing "],
+      ['"café.ts"', "café.ts"],
+      ['"caf\\303\\251.ts"', "café.ts"],
+      ['"emoji \\360\\237\\230\\200.ts"', "emoji 😀.ts"],
+      ['"quote\\" and slash\\\\.ts"', 'quote" and slash\\.ts'],
+      ['"tab\\tline\\ncarriage\\r.ts"', "tab\tline\ncarriage\r.ts"],
+      ['"bell\\avtab\\vformfeed\\fbackspace\\b.ts"', "bell\x07vtab\x0bformfeed\x0cbackspace\x08.ts"],
+      ['"\\1\\12\\123"', "\x01\nS"],
+      ['"unknown\\qtrailing\\"', "unknown\\qtrailing\\"],
+    ];
+
+    for (const [rawPath, expected] of cases) {
+      expect(decodeGitPath(rawPath)).toBe(expected);
+    }
+  });
+});
+
+describe("git subprocess stdout decoding across chunk boundaries", () => {
+  afterEach(() => {
+    setGitExecutableForTests(null);
+  });
+
+  it("reassembles a multibyte UTF-8 sequence split across separate stdout writes", async () => {
+    const root = await makeGitTempDir("codegraph-git-chunk-split-");
+    try {
+      // The emoji U+1F600 encodes as 4 UTF-8 bytes (F0 9F 98 80); writing the first two
+      // bytes, then yielding a macrotask before writing the rest, forces two independent
+      // stdout "data" events. Decoding each chunk independently (the previous
+      // `chunk.toString()` behavior) would replace both halves with U+FFFD instead of
+      // reassembling the character. The 20ms delay runs inside the spawned child process
+      // (a separate OS process/JS realm from this test), not this test file, so Vitest fake
+      // timers cannot control it; a real, short delay is the only way to force two distinct
+      // pipe writes.
+      const script = [
+        "process.stdout.write(Buffer.from([0x41, 0xf0, 0x9f]));",
+        "setTimeout(() => {",
+        "  process.stdout.write(Buffer.from([0x98, 0x80, 0x42]));",
+        "  process.exit(0);",
+        "}, 20);",
+      ].join("\n");
+
+      setGitExecutableForTests(process.execPath);
+      const { stdout } = await runGit(root, ["-e", script]);
+      expect(stdout).toBe("A\u{1f600}B");
     } finally {
       await removeGitTempDir(root);
     }

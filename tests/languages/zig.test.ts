@@ -1,5 +1,7 @@
+import { describe, it } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
+import { expectUnicodeSymbolRangeIdentity } from "./unicodeSymbolRange.js";
 
 const definition: LanguageTestDefinition = {
   id: "zig",
@@ -97,3 +99,16 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("Zig symbol ranges after preceding multibyte text (C11)", () => {
+  // Zig identifiers are ASCII-only (an arbitrary identifier needs @"..." syntax), so this
+  // uses an ASCII declaration name preceded by multibyte text on an earlier line and on the
+  // same line, unlike the other languages' Unicode-identifier fixtures.
+  it("publishes a UTF-16 string index for an ASCII function name preceded by multibyte text", async () => {
+    await expectUnicodeSymbolRangeIdentity({
+      fileName: "widget.zig",
+      source: '// café ☕ prüfung\nconst greeting = "über"; fn create_widget() i32 {\n    return 1;\n}\n',
+      symbolName: "create_widget",
+    });
+  });
+});

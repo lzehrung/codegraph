@@ -54,7 +54,7 @@ export function deduplicateEdges(edges: Edge[], rawIsIdentity = false): Edge[] {
   return [...deduplicated.values()];
 }
 
-function hasBetterProvenance(candidate: Edge, previous: Edge): boolean {
+export function hasBetterProvenance(candidate: Edge, previous: Edge): boolean {
   let candidateResolutionRank = 0;
   if (candidate.resolved === "precise") candidateResolutionRank = 2;
   else if (candidate.resolved === "heuristic") candidateResolutionRank = 1;

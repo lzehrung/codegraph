@@ -1,5 +1,7 @@
+import { describe, it } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
+import { expectUnicodeSymbolRangeIdentity } from "./unicodeSymbolRange.js";
 
 const definition: LanguageTestDefinition = {
   id: "swift",
@@ -95,3 +97,13 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("Swift Unicode symbol ranges (C11)", () => {
+  it("publishes a UTF-16 string index for a function name preceded by multibyte text", async () => {
+    await expectUnicodeSymbolRangeIdentity({
+      fileName: "widget.swift",
+      source: "// café ☕ prüfung\n/* über */ func créer() -> Int {\n\treturn 1\n}\n",
+      symbolName: "créer",
+    });
+  });
+});

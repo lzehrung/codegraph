@@ -1,4 +1,5 @@
 import { maskJsLikeCommentsStringsAndRegex, stripJsLikeComments } from "../../util/comments.js";
+import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import type { ImportBindingSink, ImportResolver } from "./context.js";
 
 export type JsTextImportExtractionContext = ImportBindingSink & {
@@ -6,6 +7,28 @@ export type JsTextImportExtractionContext = ImportBindingSink & {
   languageId: string;
   resolveFrom: ImportResolver;
 };
+
+const TYPE_NAMED_IMPORT_SPECIFIER_PATTERN = new RegExp(
+  String.raw`^type\s+(${ECMASCRIPT_IDENTIFIER_SOURCE})(?:\s+as\s+(${ECMASCRIPT_IDENTIFIER_SOURCE}))?$`,
+  "u",
+);
+const NAMED_IMPORT_SPECIFIER_PATTERN = new RegExp(
+  String.raw`^(${ECMASCRIPT_IDENTIFIER_SOURCE})(?:\s+as\s+(${ECMASCRIPT_IDENTIFIER_SOURCE}))?$`,
+  "u",
+);
+const NAMESPACE_IMPORT_PATTERN = new RegExp(String.raw`^\*\s+as\s+(${ECMASCRIPT_IDENTIFIER_SOURCE})$`, "u");
+const DEFAULT_REQUIRE_PATTERN = new RegExp(
+  String.raw`(?:^|[;{}])\s*(?:export\s+)?(?:const|let|var)\s+(${ECMASCRIPT_IDENTIFIER_SOURCE})\s*=\s*require\s*\(\s*(["'])(?<module>[^"']+)\2\s*\)`,
+  "gmu",
+);
+const NAMED_REQUIRE_SPECIFIER_PATTERN = new RegExp(
+  String.raw`^(${ECMASCRIPT_IDENTIFIER_SOURCE})(?::\s*(${ECMASCRIPT_IDENTIFIER_SOURCE}))?$`,
+  "u",
+);
+const IMPORT_EQUALS_REQUIRE_PATTERN = new RegExp(
+  String.raw`(?:^|[;{}])\s*import\s+(${ECMASCRIPT_IDENTIFIER_SOURCE})\s*=\s*require\s*\(\s*(["'])(?<module>[^"']+)\2\s*\)`,
+  "gmu",
+);
 
 function sourceForTextImportExtraction(context: JsTextImportExtractionContext): string {
   if (context.languageId === "ts" || context.languageId === "tsx" || context.languageId === "js") {
@@ -23,13 +46,14 @@ function splitNamedImports(namedBlock: string): string[] {
 }
 
 function parseNamedImportSpecifier(spec: string): { imported: string; local: string; typeOnly: boolean } | null {
-  const typeOnlyMatch = spec.match(/^type\s+([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+  // JS/TS identifiers permit Unicode ID_Start/ID_Continue plus $/_, not just ASCII.
+  const typeOnlyMatch = spec.match(TYPE_NAMED_IMPORT_SPECIFIER_PATTERN);
   if (typeOnlyMatch) {
     const imported = typeOnlyMatch[1]!;
     return { imported, local: typeOnlyMatch[2] ?? imported, typeOnly: true };
   }
 
-  const namedMatch = spec.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+  const namedMatch = spec.match(NAMED_IMPORT_SPECIFIER_PATTERN);
   if (!namedMatch) return null;
   const imported = namedMatch[1]!;
   return { imported, local: namedMatch[2] ?? imported, typeOnly: false };
@@ -61,7 +85,7 @@ async function collectEsImports(
     if (!moduleSpecifier) continue;
     const typeOnly = typeOnlyImport.test(match[0]);
     const resolved = await context.resolveFrom(moduleSpecifier);
-    const namespaceMatch = clause.match(/^\*\s+as\s+([A-Za-z_$][\w$]*)$/);
+    const namespaceMatch = clause.match(NAMESPACE_IMPORT_PATTERN);
     if (namespaceMatch) {
       context.pushBinding({
         kind: "namespace",
@@ -109,8 +133,7 @@ async function collectCommonJsRequireDeclarations(
   source: string,
   maskedSource: string,
 ): Promise<void> {
-  const defaultRequirePattern =
-    /(?:^|[;{}])\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*(["'])(?<module>[^"']+)\2\s*\)/gm;
+  const defaultRequirePattern = DEFAULT_REQUIRE_PATTERN;
   for (const match of source.matchAll(defaultRequirePattern)) {
     if (!matchStartsInCode(maskedSource, match)) continue;
     const local = match[1]!;
@@ -138,7 +161,7 @@ async function collectCommonJsRequireDeclarations(
     if (!moduleSpecifier) continue;
     const resolved = await context.resolveFrom(moduleSpecifier);
     for (const spec of specs) {
-      const namedMatch = spec.match(/^([A-Za-z_$][\w$]*)(?::\s*([A-Za-z_$][\w$]*))?$/);
+      const namedMatch = spec.match(NAMED_REQUIRE_SPECIFIER_PATTERN);
       if (!namedMatch) continue;
       const imported = namedMatch[1]!;
       const local = namedMatch[2] ?? imported;
@@ -159,8 +182,7 @@ async function collectCommonJsImportEquals(
   source: string,
   maskedSource: string,
 ): Promise<void> {
-  const importEqualsPattern =
-    /(?:^|[;{}])\s*import\s+([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*(["'])(?<module>[^"']+)\2\s*\)/gm;
+  const importEqualsPattern = IMPORT_EQUALS_REQUIRE_PATTERN;
   for (const match of source.matchAll(importEqualsPattern)) {
     if (!matchStartsInCode(maskedSource, match)) continue;
     const local = match[1]!;

@@ -1,4 +1,5 @@
 import type { Range } from "../types.js";
+import { stringIndexForByte, stringPositionForBytePoint, type ByteToStringIndexMap } from "./byteIndex.js";
 import type { NativeCapture, NativeMatch } from "./treeSitterNative.js";
 
 export function capturesByName(match: NativeMatch): Record<string, NativeCapture | undefined> {
@@ -13,17 +14,24 @@ export function capturesNamed(match: NativeMatch, name: string): NativeCapture[]
   return match.captures.filter((capture) => capture.name === name);
 }
 
-export function rangeFromNativeCapture(capture: NativeCapture): Range {
+/**
+ * Native Tree-sitter captures use UTF-8 byte offsets. `Range` and every downstream
+ * consumer (source slicing, portable handles, rename edits) expect UTF-16 string indexes,
+ * so every native capture converts through the caller's per-file `byteIndexMap` here.
+ */
+export function rangeFromNativeCapture(capture: NativeCapture, byteIndexMap: ByteToStringIndexMap): Range {
+  const startPosition = stringPositionForBytePoint(byteIndexMap, capture.start);
+  const endPosition = stringPositionForBytePoint(byteIndexMap, capture.end);
   return {
     start: {
       line: capture.start.row + 1,
-      column: capture.start.column + 1,
-      index: capture.start.index,
+      column: startPosition.column + 1,
+      index: stringIndexForByte(byteIndexMap, capture.start.index),
     },
     end: {
       line: capture.end.row + 1,
-      column: capture.end.column + 1,
-      index: capture.end.index,
+      column: endPosition.column + 1,
+      index: stringIndexForByte(byteIndexMap, capture.end.index),
     },
   };
 }

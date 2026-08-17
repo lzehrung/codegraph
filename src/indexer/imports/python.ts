@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolvePythonModule } from "../../util/resolution.js";
 import { stripPythonCommentsAndStrings } from "../../util/comments.js";
+import { PYTHON_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import type { ImportBindingSink, ResolvedImportTarget } from "./context.js";
 
 export type PythonImportExtractionContext = ImportBindingSink & {
@@ -105,6 +106,15 @@ async function pushDefaultImport(context: PythonImportExtractionContext, dotted:
   });
 }
 
+const PYTHON_NAMED_IMPORT_PATTERN = new RegExp(
+  String.raw`^(${PYTHON_IDENTIFIER_SOURCE})(?:\s+as\s+(${PYTHON_IDENTIFIER_SOURCE}))?$`,
+  "u",
+);
+const PYTHON_MODULE_IMPORT_PATTERN = new RegExp(
+  String.raw`^(?:\s*)import\s+(${PYTHON_IDENTIFIER_SOURCE}(?:\.${PYTHON_IDENTIFIER_SOURCE})*)\s*(?:as\s+(${PYTHON_IDENTIFIER_SOURCE}))?`,
+  "gmu",
+);
+
 export async function collectPythonImportsFromSource(context: PythonImportExtractionContext): Promise<void> {
   const pySrc = stripPythonCommentsAndStrings(context.source);
   const fromLinePattern = /^\s*from\s+([^\s]+)\s+import\s+([^\n#]+)/gm;
@@ -116,7 +126,9 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
         await pushStarImport(context, mod);
         continue;
       }
-      const aliasMatch = item.match(/^([A-Za-z_][\w_]*)(?:\s+as\s+([A-Za-z_][\w_]*))?$/);
+      // PEP 3131 permits Unicode identifiers (XID_Start/XID_Continue); an ASCII-only
+      // character class here silently drops every non-ASCII imported name's binding.
+      const aliasMatch = item.match(PYTHON_NAMED_IMPORT_PATTERN);
       if (!aliasMatch) continue;
       const imported = aliasMatch[1]!;
       const local = aliasMatch[2] ?? imported;
@@ -124,7 +136,7 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
     }
   }
 
-  const importPattern = /^(?:\s*)import\s+([A-Za-z_][\w.]*)\s*(?:as\s+([A-Za-z_][\w_]*))?/gm;
+  const importPattern = PYTHON_MODULE_IMPORT_PATTERN;
   for (const match of pySrc.matchAll(importPattern)) {
     const dotted = match[1]!;
     const local = match[2] ?? dotted.split(".")[0]!;

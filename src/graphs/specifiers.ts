@@ -28,6 +28,7 @@ import {
   isGraphOnlyLanguage,
 } from "../documentLinks.js";
 import { sliceText, unquote } from "../util/ast.js";
+import { PYTHON_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { isRustCfgTestStatement, utf8ByteOffsetToStringIndex } from "../util/rustTestModules.js";
 import { extractJsTsSpecifiers, extractPythonSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
 
@@ -228,6 +229,18 @@ function extractCssModuleSpecifiers(source: string): ModuleSpecifier[] {
   return out;
 }
 
+// Python module/package names are dotted sequences of PEP 3131 Unicode identifiers; a
+// per-segment character class (rather than Unicode letters/digits spanning the dots) keeps
+// a digit from matching directly after a `.` separator.
+const PYTHON_NATIVE_IMPORT_SPEC_PATTERN = new RegExp(
+  String.raw`^(${PYTHON_IDENTIFIER_SOURCE}(?:\.${PYTHON_IDENTIFIER_SOURCE})*)(?:\s+as\s+${PYTHON_IDENTIFIER_SOURCE})?$`,
+  "u",
+);
+const PYTHON_NATIVE_FROM_PATTERN = new RegExp(
+  String.raw`^\s*from\s+(\.*)(${PYTHON_IDENTIFIER_SOURCE}(?:\.${PYTHON_IDENTIFIER_SOURCE})*)?\s+import\b`,
+  "u",
+);
+
 export function collectModuleSpecifiersFromSource(
   support: LanguageSupport,
   _lang: unknown,
@@ -275,12 +288,12 @@ export function collectModuleSpecifiersFromSource(
               .map((entry) => entry.trim())
               .filter(Boolean);
             for (const spec of list) {
-              const parsed = spec.match(/^([A-Za-z_][\w.]*)(?:\s+as\s+[A-Za-z_][\w_]*)?$/);
+              const parsed = spec.match(PYTHON_NATIVE_IMPORT_SPEC_PATTERN);
               if (parsed?.[1]) out.push({ spec: parsed[1] });
             }
             continue;
           }
-          const mFrom = /^\s*from\s+(\.*)([A-Za-z_][\w.]*)?\s+import\b/.exec(stmtText);
+          const mFrom = PYTHON_NATIVE_FROM_PATTERN.exec(stmtText);
           if (mFrom) {
             const dots = mFrom[1] ?? "";
             const name = mFrom[2] ?? "";

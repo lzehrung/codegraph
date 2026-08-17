@@ -248,6 +248,12 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
     expect(parseGoImportAlias('import . "github.com/acme/pkg"')).toBe(".");
     expect(parseGoImportAlias('import _ "github.com/acme/pkg"')).toBe("_");
     expect(parseGoImportAlias('import "fmt"')).toBeNull();
+    // The dot-import token is standalone; ".alias" is not valid Go syntax and must not be
+    // captured as an identifier.
+    expect(parseGoImportAlias('import .alias "github.com/acme/pkg"')).toBeNull();
+    // Go's unicode_digit is Nd only; a non-decimal number character (No, e.g. "½") is not a
+    // valid identifier continuation.
+    expect(parseGoImportAlias('import a\u00bd "github.com/acme/pkg"')).toBeNull();
     expect(edgeKey(externalEdge)).toBe("C:/repo/src/main.ts|external:react|react|1");
     expect(compareEdges(fileEdge, externalEdge)).toBeLessThan(0);
     expect(compareEdges(fileEdge, laterFileEdge)).toBeLessThan(0);

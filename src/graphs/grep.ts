@@ -1,6 +1,7 @@
 import fsp from "node:fs/promises";
 import { prepareSourceInput } from "../languages/filePrep.js";
 import { logWithLevel } from "../logging.js";
+import { buildByteToStringIndexMap, stringPositionForBytePoint } from "../native/byteIndex.js";
 import { getUnifiedQueryExecution } from "../native/treeSitterNative.js";
 import { toProjectDisplayPath } from "../util/paths.js";
 import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
@@ -38,13 +39,17 @@ export async function* streamAstGrep(
       const matches = getUnifiedQueryExecution(source, support, querySource).matches;
       if (!matches) continue;
 
+      // Native captures expose UTF-8 byte offsets/columns; convert once per file so every
+      // capture reports the same UTF-16 column the rest of the JS APIs (and text grep) use.
+      const byteIndexMap = buildByteToStringIndexMap(source);
       for (const match of matches) {
         for (const capture of match.captures) {
+          const start = stringPositionForBytePoint(byteIndexMap, capture.start);
           yield {
             file: toProjectDisplayPath(projectRoot, file),
             capture: capture.name,
-            line: capture.start.row + 1,
-            column: capture.start.column + 1,
+            line: start.row + 1,
+            column: start.column + 1,
             snippet: capture.text.replace(/\n/g, " "),
           };
         }

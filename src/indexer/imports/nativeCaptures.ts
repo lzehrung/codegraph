@@ -1,6 +1,7 @@
 import { capturesByName, capturesNamed } from "../../native/queryResults.js";
 import type { NativeCapture, NativeMatch } from "../../native/treeSitterNative.js";
 import { unquote } from "../../util/ast.js";
+import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rustTestModules.js";
 import { parseGoImportAlias } from "../shared.js";
 import type { ImportBinding } from "../types.js";
@@ -17,6 +18,11 @@ type ImportCaptureExtractionContext = {
   applyStatementOverride: (stmtText: string, typeOnly: boolean, statementStartIndex?: number) => Promise<boolean>;
 };
 
+const OBJECT_PATTERN_BINDING_PATTERN = new RegExp(
+  String.raw`^(${ECMASCRIPT_IDENTIFIER_SOURCE})(?::\s*(${ECMASCRIPT_IDENTIFIER_SOURCE}))?$`,
+  "u",
+);
+
 function parseObjectPatternBindings(patternText: string): Array<{ imported: string; local: string }> {
   const trimmed = patternText.trim();
   if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return [];
@@ -29,7 +35,8 @@ function parseObjectPatternBindings(patternText: string): Array<{ imported: stri
   const out: Array<{ imported: string; local: string }> = [];
   for (const part of parts) {
     const withoutDefault = part.replace(/\s*=\s*.+$/, "").trim();
-    const match = withoutDefault.match(/^([A-Za-z_$][\w$]*)(?::\s*([A-Za-z_$][\w$]*))?$/);
+    // JS/TS identifiers permit Unicode ID_Start/ID_Continue plus $/_, not just ASCII.
+    const match = withoutDefault.match(OBJECT_PATTERN_BINDING_PATTERN);
     if (!match) continue;
     const imported = match[1]!;
     const local = match[2] ?? imported;

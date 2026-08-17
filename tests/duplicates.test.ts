@@ -2434,9 +2434,7 @@ export function sharedOversizedClone(rows) {
       const parsed = await ensureParsedContext(displayFile);
       index.parsed = new Map([[fileIdentityKey(displayFile), parsed]]);
 
-      const queryFile = displayFile.includes("Util.ts")
-        ? displayFile.replace("Util.ts", "util.ts")
-        : displayFile.replace("util.ts", "Util.ts");
+      const queryFile = displayFile.replace(/Util\.ts$/i, "UTIL.ts");
       expect(queryFile).not.toBe(displayFile);
       expect(fileIdentityKey(queryFile)).toBe(fileIdentityKey(displayFile));
       expect(index.parsed.has(queryFile)).toBe(false);

@@ -806,6 +806,13 @@ nativeDescribe("native semantic coverage", () => {
         { file: ".regressions/macros.rs", line: 6, column: 5, expectedStatus: "ok" },
         { file: ".regressions/macros.rs", line: 1, column: 14, expectedStatus: "ok" },
       ),
+      sampleExpectation(
+        "python",
+        [".regressions/unicode_def.py", ".regressions/unicode_consumer.py"],
+        [{ file: ".regressions/unicode_def.py", names: ["x", "créer"] }],
+        { file: ".regressions/unicode_consumer.py", line: 3, column: 1, expectedStatus: "ok" },
+        { file: ".regressions/unicode_def.py", line: 2, column: 5, expectedStatus: "ok" },
+      ),
     ];
 
     for (const testCase of cases) {

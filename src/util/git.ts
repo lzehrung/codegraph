@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import path from "node:path";
 import { stringifyUnknown } from "./ast.js";
 import { normalizePath } from "./paths.js";
@@ -12,8 +13,60 @@ import { logWithLevel, type LogLevel } from "../logging.js";
 export const DEFAULT_GIT_TIMEOUT_MS = 30_000;
 
 const gitRepositoryChecks = new Map<string, Promise<boolean>>();
+const MAX_GIT_HASH_OBJECT_ARGUMENT_BYTES = 24 * 1024;
 
 let gitExecutableForTests: string | null = null;
+
+/** Git's C-style path quoting single-character escapes for otherwise-unrepresentable control bytes. */
+const GIT_QUOTED_PATH_SINGLE_BYTE_ESCAPES: Record<string, number> = {
+  a: 0x07,
+  b: 0x08,
+  f: 0x0c,
+  n: 0x0a,
+  r: 0x0d,
+  t: 0x09,
+  v: 0x0b,
+};
+
+/** Decodes Git's optional C-style quoted pathname representation without trimming legal path bytes. */
+export function decodeGitPath(rawPath: string): string {
+  if (!rawPath.startsWith('"') || !rawPath.endsWith('"')) {
+    return rawPath;
+  }
+
+  const inner = rawPath.slice(1, -1);
+  const bytes: number[] = [];
+  for (let index = 0; index < inner.length; ) {
+    const char = inner[index]!;
+    if (char !== "\\") {
+      const codePoint = inner.codePointAt(index)!;
+      bytes.push(...Buffer.from(String.fromCodePoint(codePoint), "utf8"));
+      index += codePoint > 0xffff ? 2 : 1;
+      continue;
+    }
+    const octal = inner.slice(index + 1, index + 4).match(/^[0-7]{1,3}/);
+    if (octal) {
+      bytes.push(parseInt(octal[0], 8) & 0xff);
+      index += 1 + octal[0].length;
+      continue;
+    }
+    const next = inner[index + 1];
+    if (next === "\\" || next === '"') {
+      bytes.push(next.charCodeAt(0));
+      index += 2;
+      continue;
+    }
+    const singleByteEscape = GIT_QUOTED_PATH_SINGLE_BYTE_ESCAPES[next ?? ""];
+    if (singleByteEscape !== undefined) {
+      bytes.push(singleByteEscape);
+      index += 2;
+      continue;
+    }
+    bytes.push(0x5c);
+    index += 1;
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
 
 /** Test-only override of the Git executable path. Pass null to restore. */
 export function setGitExecutableForTests(executable: string | null): void {
@@ -121,9 +174,16 @@ export async function runGit(
       return;
     }
 
+    // Decode incrementally per stream: a naive `chunk.toString()` on each independent
+    // Buffer can split a multibyte UTF-8 sequence across chunk boundaries, replacing both
+    // halves with U+FFFD. StringDecoder buffers a dangling partial sequence until the next
+    // chunk completes it.
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
+
     stdoutStream.on("data", (chunk: Buffer | string) => {
-      const textChunk = typeof chunk === "string" ? chunk : chunk.toString();
-      totalBytes += Buffer.byteLength(textChunk, "utf8");
+      const chunkBytes = typeof chunk === "string" ? Buffer.byteLength(chunk, "utf8") : chunk.length;
+      totalBytes += chunkBytes;
       if (totalBytes > maxBuffer) {
         killGitChild(child);
         settle(() =>
@@ -131,15 +191,17 @@ export async function runGit(
         );
         return;
       }
-      stdout += textChunk;
+      stdout += typeof chunk === "string" ? chunk : stdoutDecoder.write(chunk);
     });
     stderrStream.on("data", (chunk: Buffer | string) => {
-      stderr += typeof chunk === "string" ? chunk : chunk.toString();
+      stderr += typeof chunk === "string" ? chunk : stderrDecoder.write(chunk);
     });
     child.on("error", (error) => {
       settle(() => reject(createGitError(projectRoot, args, error)));
     });
     child.on("close", (code, signalName) => {
+      stdout += stdoutDecoder.end();
+      stderr += stderrDecoder.end();
       settle(() => {
         if (timedOut) {
           reject(
@@ -211,14 +273,17 @@ export function assertSafeRevision(value: string, label: string): string {
 
 export function gitDiffArgs(base: string, head: string, extraArgs: string[] = []): string[] {
   const safeBase = assertSafeRevision(base, "base");
+  // Explicit so rename detection stops depending on the user's `diff.renames` config
+  // (git defaults it to true since 2.9, but a disabled config would silently change output).
+  const renameArgs = ["--find-renames"];
   if (isGitWorktreeSentinel(head)) {
-    return ["diff", ...extraArgs, "--end-of-options", safeBase];
+    return ["diff", ...renameArgs, ...extraArgs, "--end-of-options", safeBase];
   }
   if (isGitIndexSentinel(head)) {
-    return ["diff", "--cached", ...extraArgs, "--end-of-options", safeBase];
+    return ["diff", "--cached", ...renameArgs, ...extraArgs, "--end-of-options", safeBase];
   }
   const safeHead = assertSafeRevision(head, "head");
-  return ["diff", ...extraArgs, "--end-of-options", `${safeBase}..${safeHead}`];
+  return ["diff", ...renameArgs, ...extraArgs, "--end-of-options", `${safeBase}..${safeHead}`];
 }
 
 export async function getGitHead(projectRoot: string): Promise<string | null> {
@@ -294,19 +359,9 @@ export async function getGitBlobHashes(
     const { stdout: trackedStdout } = await runGit(projectRoot, ["ls-files", "-z"], {
       maxBuffer: 64 * 1024 * 1024,
     });
-    const trackedRel = trackedStdout
-      .toString()
-      .split("\0")
-      .map((line) => line.trim())
-      .filter((rel) => rel && relFileSet.has(rel));
+    const trackedRel = trackedStdout.split("\0").filter((rel) => rel && relFileSet.has(rel));
     if (!trackedRel.length) return new Map();
-    const { stdout: hashStdout } = await runGit(projectRoot, ["hash-object", "--stdin-paths"], {
-      input: trackedRel.join("\n"),
-    });
-    const hashes = hashStdout
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
+    const hashes = await hashGitPaths(projectRoot, trackedRel);
     if (hashes.length !== trackedRel.length) {
       logWithLevel(
         opts?.logLevel,
@@ -340,6 +395,42 @@ export async function getGitBlobHashes(
   }
 }
 
+async function hashGitPaths(projectRoot: string, trackedRel: string[]): Promise<string[]> {
+  const batches: string[][] = [];
+  let currentBatch: string[] = [];
+  let currentBatchBytes = 0;
+
+  for (const rel of trackedRel) {
+    // `hash-object --stdin-paths` accepts newline-delimited input, so it cannot represent a
+    // pathname containing a newline. Passing an absolute pathname as an argv value keeps every
+    // legal Git pathname atomic and also works when projectRoot is below the repository root.
+    const absolutePath = path.resolve(projectRoot, rel);
+    const pathBytes = Buffer.byteLength(absolutePath, "utf8") + 1;
+    const wouldExceedBatchLimit =
+      currentBatch.length && currentBatchBytes + pathBytes > MAX_GIT_HASH_OBJECT_ARGUMENT_BYTES;
+    if (wouldExceedBatchLimit) {
+      batches.push(currentBatch);
+      currentBatch = [];
+      currentBatchBytes = 0;
+    }
+    currentBatch.push(absolutePath);
+    currentBatchBytes += pathBytes;
+  }
+  if (currentBatch.length) batches.push(currentBatch);
+
+  const hashes: string[] = [];
+  for (const batch of batches) {
+    const { stdout } = await runGit(projectRoot, ["hash-object", "--", ...batch]);
+    hashes.push(
+      ...stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean),
+    );
+  }
+  return hashes;
+}
+
 /**
  * List files changed in Git.
  * - base/head: compares commits in the explicit range `${base}..${head ?? "HEAD"}`.
@@ -354,10 +445,10 @@ export async function listChangedFiles(
     head?: string | undefined;
   },
 ): Promise<string[]> {
-  let args = ["diff", "--name-only", "--diff-filter=ACDMRTUXB"];
+  let args = ["diff", "--find-renames", "--name-only", "-z", "--diff-filter=ACDMRTUXB"];
   if (opts.base) {
     const head = opts.head ?? "HEAD";
-    args = gitDiffArgs(opts.base, head, ["--name-only", "--diff-filter=ACDMRTUXB"]);
+    args = gitDiffArgs(opts.base, head, ["--name-only", "-z", "--diff-filter=ACDMRTUXB"]);
   } else if (opts.changedSince) {
     args.push("--end-of-options", assertSafeRevision(opts.changedSince, "changedSince"));
   } else {
@@ -366,10 +457,11 @@ export async function listChangedFiles(
   args.push("--");
   try {
     const stdout = await runGitCollectStdout(projectRoot, args);
-    const relFiles = stdout
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
+    // -z NUL-delimits entries; git also quotes/octal-escapes non-ASCII bytes in the
+    // unquoted -name-only form, corrupting them, so -z is required, not cosmetic. The
+    // trailing split segment is always empty, not a filename, and a real filename can
+    // legitimately start or end with whitespace, so filter without trimming.
+    const relFiles = stdout.split("\0").filter(Boolean);
     const out: string[] = [];
     for (const rel of relFiles) {
       const abs = normalizePath(path.resolve(projectRoot, rel));
@@ -431,7 +523,7 @@ export async function getUnifiedDiff(
     head?: string | undefined;
   },
 ): Promise<string> {
-  let args = ["diff", "--unified=0", "--no-color", "--diff-filter=ACDMRTUXB"];
+  let args = ["diff", "--find-renames", "--unified=0", "--no-color", "--diff-filter=ACDMRTUXB"];
   if (opts.base) {
     const head = opts.head ?? "HEAD";
     args = gitDiffArgs(opts.base, head, ["--unified=0", "--no-color", "--diff-filter=ACDMRTUXB"]);

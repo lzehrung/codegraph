@@ -151,3 +151,181 @@ ${hunkLines.join("\n")}
     await expect(parseUnifiedDiffStreaming(stream)).rejects.toThrow("stream error");
   });
 });
+
+describe("Quoted diff --git headers (C12)", () => {
+  it("decodes a non-ASCII path quoted and octal-escaped on both sides", () => {
+    // Real `git diff` output for a non-ASCII filename: git quotes the path and escapes each
+    // UTF-8 byte independently as \\NNN (octal). Recombining those bytes correctly requires
+    // decoding them as raw bytes and re-parsing as UTF-8, not as individual code points.
+    const diffText = `diff --git "a/caf\\303\\251.ts" "b/caf\\303\\251.ts"
+index 0000000..1111111 100644
+--- "a/caf\\303\\251.ts"
++++ "b/caf\\303\\251.ts"
+@@ -1 +1 @@
+-old
++new
+`;
+    const parsed = parseUnifiedDiff(diffText);
+    expect(parsed.files).toEqual([expect.objectContaining({ path: "café.ts", kind: "modified" })]);
+  });
+
+  it("decodes a rename where only the destination side needs quoting", () => {
+    const diffText = `diff --git a/plain.ts "b/\\346\\227\\245\\346\\234\\254/renamed.ts"
+similarity index 100%
+rename from plain.ts
+rename to "\\346\\227\\245\\346\\234\\254/renamed.ts"
+`;
+    const parsed = parseUnifiedDiff(diffText);
+    expect(parsed.files).toEqual([
+      expect.objectContaining({ path: "日本/renamed.ts", oldPath: "plain.ts", kind: "renamed" }),
+    ]);
+  });
+
+  it("decodes an escaped double-quote character inside a quoted filename", () => {
+    // A literal `"` in a path is itself one of the characters git must quote/escape; this
+    // exercises the \\" escape specifically, independent of any octal-byte decoding.
+    const diffText = `diff --git "a/quote\\"test.ts" "b/quote\\"test.ts"
+index 0000000..1111111 100644
+--- "a/quote\\"test.ts"
++++ "b/quote\\"test.ts"
+@@ -1 +1 @@
+-old
++new
+`;
+    const parsed = parseUnifiedDiff(diffText);
+    expect(parsed.files).toEqual([expect.objectContaining({ path: 'quote"test.ts', kind: "modified" })]);
+  });
+
+  it("preserves trailing whitespace in an unquoted destination header path", () => {
+    const pathWithTrailingSpace = `trailing${" "}`;
+    const diffText = [
+      `diff --git a/${pathWithTrailingSpace} b/${pathWithTrailingSpace}`,
+      "index 0000000..1111111 100644",
+      `--- a/${pathWithTrailingSpace}`,
+      `+++ b/${pathWithTrailingSpace}`,
+      "@@ -0,0 +1 @@",
+      "+export const value = 1;",
+      "",
+    ].join("\n");
+
+    const parsed = parseUnifiedDiff(diffText);
+
+    expect(parsed.files).toEqual([expect.objectContaining({ path: pathWithTrailingSpace, kind: "modified" })]);
+  });
+
+  it("decodes escaped copy paths across diff and file headers", () => {
+    const diffText = `diff --git "a/source\\t.ts" "b/copied\\t.ts"
+similarity index 100%
+copy from "source\\t.ts"
+copy to "copied\\t.ts"
+--- "a/source\\t.ts"
++++ "b/copied\\t.ts"
+@@ -1 +1 @@
+-old
++new
+`;
+
+    expect(parseUnifiedDiff(diffText).files).toEqual([
+      expect.objectContaining({ kind: "added", path: "copied\t.ts", oldPath: "source\t.ts" }),
+    ]);
+  });
+
+  it("disambiguates an unquoted path containing the literal header separator text using --- and +++", () => {
+    // Git does not C-quote a plain space, so a real filename containing " b/" makes the
+    // `diff --git a/X b/Y` line ambiguous at the regex level (multiple valid " b/" splits).
+    // The single-path `---`/`+++` lines are never ambiguous and must win over the header
+    // guess.
+    const diffText = [
+      "diff --git a/foo b/bar b/foo b/bar",
+      "index 0000000..1111111 100644",
+      "--- a/foo b/bar",
+      "+++ b/foo b/bar",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n");
+
+    const parsed = parseUnifiedDiff(diffText);
+    expect(parsed.files).toEqual([expect.objectContaining({ path: "foo b/bar", kind: "modified" })]);
+  });
+
+  it("disambiguates an ambiguous added-file path using the +++ header", () => {
+    const diffText = [
+      "diff --git a/new b/file.ts b/new b/file.ts",
+      "new file mode 100644",
+      "index 0000000..1111111",
+      "--- /dev/null",
+      "+++ b/new b/file.ts",
+      "@@ -0,0 +1 @@",
+      "+export const value = 1;",
+      "",
+    ].join("\n");
+
+    const parsed = parseUnifiedDiff(diffText);
+    expect(parsed.files).toEqual([expect.objectContaining({ path: "new b/file.ts", kind: "added" })]);
+  });
+
+  it("disambiguates an ambiguous deleted-file path using the --- header", () => {
+    const diffText = [
+      "diff --git a/old b/file.ts b/old b/file.ts",
+      "deleted file mode 100644",
+      "index 1111111..0000000",
+      "--- a/old b/file.ts",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-export const value = 1;",
+      "",
+    ].join("\n");
+
+    const parsed = parseUnifiedDiff(diffText);
+    expect(parsed.files).toEqual([expect.objectContaining({ path: "old b/file.ts", kind: "deleted" })]);
+  });
+
+  it("strips Git's trailing disambiguation tab from an unquoted --- / +++ path containing a space", () => {
+    // Real `git diff` appends a bare trailing tab to `---`/`+++` lines whenever the
+    // pathname contains a space, quoted or not (a holdover from the traditional `diff -u`
+    // timestamp field). It must not become part of the resolved path.
+    const diffText = [
+      "diff --git a/with space.ts b/with space.ts",
+      "index 0000000..1111111 100644",
+      "--- a/with space.ts\t",
+      "+++ b/with space.ts\t",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n");
+
+    const parsed = parseUnifiedDiff(diffText);
+    expect(parsed.files).toEqual([expect.objectContaining({ path: "with space.ts", kind: "modified" })]);
+  });
+
+  it("strips Git's trailing disambiguation tab from a quoted --- / +++ path", () => {
+    // The trailing tab sits outside the closing quote, so leaving it in place would make
+    // decodeGitPath's `endsWith('"')` check fail and return the raw quoted text unparsed.
+    const diffText = [
+      'diff --git "a/caf\\303\\251 with space.ts" "b/caf\\303\\251 with space.ts"',
+      "index 0000000..1111111 100644",
+      '--- "a/caf\\303\\251 with space.ts"\t',
+      '+++ "b/caf\\303\\251 with space.ts"\t',
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n");
+
+    const parsed = parseUnifiedDiff(diffText);
+    expect(parsed.files).toEqual([expect.objectContaining({ path: "café with space.ts", kind: "modified" })]);
+  });
+
+  it("resolves an ambiguous path from the diff --git header alone when Git emits no --- / +++ lines", () => {
+    // A mode-only change has no content hunks, so Git never emits --- / +++ lines to
+    // disambiguate; the equal-halves preference in the header split itself must still
+    // recover the real path "foo b/bar" instead of misreading it as a rename.
+    const diffText = ["diff --git a/foo b/bar b/foo b/bar", "old mode 100644", "new mode 100755", ""].join("\n");
+
+    const parsed = parseUnifiedDiff(diffText);
+    expect(parsed.files).toEqual([expect.objectContaining({ path: "foo b/bar", kind: "modified", modeChanged: true })]);
+  });
+});
