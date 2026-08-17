@@ -19,10 +19,11 @@ export const PHP_IDENTIFIER_SOURCE = String.raw`[A-Za-z_\u{80}-\u{10FFFF}][A-Za-
  * Unicode letter (Lu/Ll/Lt/Lm/Lo), a letter-number (Nl, e.g. Roman numerals), a currency
  * symbol (Sc, e.g. `$`), or a connecting-punctuation character (Pc, e.g. `_`) at every
  * position; continuation additionally allows decimal digits (Nd), combining marks (Mn/Mc),
- * and identifier-ignorable formatting characters (Cf, e.g. ZWNJ/ZWJ). Non-decimal number
- * categories (No) are not part of the Java grammar.
+ * and `Character.isIdentifierIgnorable` characters: formatting characters (Cf, e.g.
+ * ZWNJ/ZWJ) plus the ISO control ranges U+0000-U+0008, U+000E-U+001B, and U+007F-U+009F.
+ * Non-decimal number categories (No) are not part of the Java grammar.
  */
-export const JAVA_IDENTIFIER_SOURCE = String.raw`[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mn}\p{Mc}\p{Cf}]*`;
+export const JAVA_IDENTIFIER_SOURCE = String.raw`[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mn}\p{Mc}\p{Cf}\u0000-\u0008\u000E-\u001B\u007F-\u009F]*`;
 
 /**
  * C# identifiers (ECMA-334 `identifier-start-character`/`identifier-part-character`) permit a
