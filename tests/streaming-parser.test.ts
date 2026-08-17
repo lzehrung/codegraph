@@ -229,4 +229,93 @@ copy to "copied\\t.ts"
       expect.objectContaining({ kind: "added", path: "copied\t.ts", oldPath: "source\t.ts" }),
     ]);
   });
+
+  it("disambiguates an unquoted path containing the literal header separator text using --- and +++", () => {
+    // Git does not C-quote a plain space, so a real filename containing " b/" makes the
+    // `diff --git a/X b/Y` line ambiguous at the regex level (multiple valid " b/" splits).
+    // The single-path `---`/`+++` lines are never ambiguous and must win over the header
+    // guess.
+    const diffText = [
+      "diff --git a/foo b/bar b/foo b/bar",
+      "index 0000000..1111111 100644",
+      "--- a/foo b/bar",
+      "+++ b/foo b/bar",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n");
+
+    const parsed = parseUnifiedDiff(diffText);
+    expect(parsed.files).toEqual([expect.objectContaining({ path: "foo b/bar", kind: "modified" })]);
+  });
+
+  it("disambiguates an ambiguous added-file path using the +++ header", () => {
+    const diffText = [
+      "diff --git a/new b/file.ts b/new b/file.ts",
+      "new file mode 100644",
+      "index 0000000..1111111",
+      "--- /dev/null",
+      "+++ b/new b/file.ts",
+      "@@ -0,0 +1 @@",
+      "+export const value = 1;",
+      "",
+    ].join("\n");
+
+    const parsed = parseUnifiedDiff(diffText);
+    expect(parsed.files).toEqual([expect.objectContaining({ path: "new b/file.ts", kind: "added" })]);
+  });
+
+  it("disambiguates an ambiguous deleted-file path using the --- header", () => {
+    const diffText = [
+      "diff --git a/old b/file.ts b/old b/file.ts",
+      "deleted file mode 100644",
+      "index 1111111..0000000",
+      "--- a/old b/file.ts",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-export const value = 1;",
+      "",
+    ].join("\n");
+
+    const parsed = parseUnifiedDiff(diffText);
+    expect(parsed.files).toEqual([expect.objectContaining({ path: "old b/file.ts", kind: "deleted" })]);
+  });
+
+  it("strips Git's trailing disambiguation tab from an unquoted --- / +++ path containing a space", () => {
+    // Real `git diff` appends a bare trailing tab to `---`/`+++` lines whenever the
+    // pathname contains a space, quoted or not (a holdover from the traditional `diff -u`
+    // timestamp field). It must not become part of the resolved path.
+    const diffText = [
+      "diff --git a/with space.ts b/with space.ts",
+      "index 0000000..1111111 100644",
+      "--- a/with space.ts\t",
+      "+++ b/with space.ts\t",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n");
+
+    const parsed = parseUnifiedDiff(diffText);
+    expect(parsed.files).toEqual([expect.objectContaining({ path: "with space.ts", kind: "modified" })]);
+  });
+
+  it("strips Git's trailing disambiguation tab from a quoted --- / +++ path", () => {
+    // The trailing tab sits outside the closing quote, so leaving it in place would make
+    // decodeGitPath's `endsWith('"')` check fail and return the raw quoted text unparsed.
+    const diffText = [
+      'diff --git "a/caf\\303\\251 with space.ts" "b/caf\\303\\251 with space.ts"',
+      "index 0000000..1111111 100644",
+      '--- "a/caf\\303\\251 with space.ts"\t',
+      '+++ "b/caf\\303\\251 with space.ts"\t',
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n");
+
+    const parsed = parseUnifiedDiff(diffText);
+    expect(parsed.files).toEqual([expect.objectContaining({ path: "café with space.ts", kind: "modified" })]);
+  });
 });
