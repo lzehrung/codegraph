@@ -269,6 +269,53 @@ describe("Cache invalidation and strict hashing", () => {
     expect(mod3.locals.some((l) => l.localName === "b")).toBe(true);
   });
 
+  it("does not reuse a stale snapshot module or bloom filter when sig matches but cacheSig differs", async () => {
+    const root = await mkTmpDir("dg-snapshot-cachesig-");
+    const utilPath = path.join(root, "util.ts");
+    const v1 = `export function a(){ return 1 }\n`;
+    await fsp.writeFile(utilPath, v1, "utf8");
+
+    // Non-strict, non-git: `sig` alone is the cheap `mtime:size` form, so this scenario is
+    // exactly the one where the snapshot/bloom fast paths must fall back to the stronger
+    // content-hash-derived `cacheSig` rather than the weak `sig`.
+    const idx1 = await buildProjectIndex(root, { threads: 1, cache: "disk", cacheStrict: false });
+    const utilFile = Array.from(idx1.byFile.keys()).find((f) => f.endsWith("/util.ts") || f.endsWith("\\util.ts"))!;
+    const persistedSignature = Array.from(idx1.manifestEntries ?? []).find(
+      ([file]) => fileIdentityKey(file) === utilFile,
+    )?.[1];
+    if (!persistedSignature) throw new Error("Expected a persisted manifest entry for util.ts.");
+
+    // A genuinely unchanged file (identical sig and cacheSig) must still be reused.
+    const unchangedSnapshotModules = await buildCache.tryLoadProjectSnapshotModules(
+      root,
+      { cache: "disk", cacheStrict: false },
+      new Map([[fileIdentityKey(utilFile), persistedSignature]]),
+    );
+    expect(unchangedSnapshotModules?.has(fileIdentityKey(utilFile))).toBe(true);
+
+    // Simulate the reported collision directly (independent of filesystem mtime-write precision):
+    // the OS reports the exact same `mtime:size` `sig` string as before, but the real content
+    // (and therefore `cacheSig`) has changed.
+    const v2 = `export function b(){ return 2 }\n`; // same length as v1
+    await fsp.writeFile(utilPath, v2, "utf8");
+    const realCurrentSignature = await buildCache.fileSignature(utilFile, false, undefined, { forceContentHash: true });
+    expect(realCurrentSignature.cacheSig).not.toBe(persistedSignature.cacheSig);
+    const collidingSignature = { ...realCurrentSignature, sig: persistedSignature.sig };
+
+    const snapshotModules = await buildCache.tryLoadProjectSnapshotModules(
+      root,
+      { cache: "disk", cacheStrict: false },
+      new Map([[fileIdentityKey(utilFile), collidingSignature]]),
+    );
+    expect(snapshotModules?.has(fileIdentityKey(utilFile))).toBe(false);
+
+    const persistedBloomFilters = await buildCache.tryLoadPersistedBloomFilters(root, {
+      cache: "disk",
+      cacheStrict: false,
+    });
+    expect(persistedBloomFilters?.get(utilFile, collidingSignature)).toBeUndefined();
+  });
+
   it("rebuilds when the generated language-definition fingerprint changes without source changes", async () => {
     const root = await mkTmpDir("dg-implementation-fingerprint-");
     const entryPath = path.join(root, "entry.ts");
@@ -1233,9 +1280,14 @@ describe("Cache invalidation and strict hashing", () => {
       expect(await fsp.readFile(manifestPathFor(root), "utf8")).toBe(manifestBefore);
       const moduleIndex = incremental.byFile.get(fileIdentityKey(normalize(filePath)));
       expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
-      expect([...(incremental.manifestEntries?.entries() ?? [])]).toEqual([
-        ...(initial.manifestEntries?.entries() ?? []),
-      ]);
+      // Compare sig/gitSig identity only: `cacheSig` is an optional strengthening field whose
+      // presence depends on which internal reuse path populated the entry (fresh computation
+      // vs. disk-manifest-derived reuse), not a guarantee both builds must expose identically.
+      const toIdentity = (entries: [string, { sig: string; gitSig?: string }][]) =>
+        entries.map(([file, entry]) => [file, { sig: entry.sig, gitSig: entry.gitSig }]);
+      expect(toIdentity([...(incremental.manifestEntries?.entries() ?? [])])).toEqual(
+        toIdentity([...(initial.manifestEntries?.entries() ?? [])]),
+      );
     } finally {
       prepSpy.mockRestore();
       signatureSpy.mockRestore();

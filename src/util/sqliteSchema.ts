@@ -86,6 +86,11 @@ export function ensureSqliteVersionedTableSchema(args: {
     // on-disk schema is actually behind; an already-current schema needs no work every
     // time the database is opened.
     args.migrateTable(args.db);
+  } else {
+    // Already current: skip the migration scan, but still guarantee the table exists via
+    // the idempotent `CREATE TABLE IF NOT EXISTS`, in case the version marker survived
+    // while the table itself was dropped or only partially restored.
+    args.createTable(args.db);
   }
   writeSqliteSchemaVersion(args.db, args.schemaVersionKey, args.schemaVersion);
 }

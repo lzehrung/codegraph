@@ -479,15 +479,22 @@ function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: BuildOption
   }
 }
 
-function toProjectIndexManifestEntry(entry: Pick<ManifestFileEntry, "sig" | "gitSig">): ProjectIndexManifestEntry {
+function toProjectIndexManifestEntry(
+  entry: Pick<ManifestFileEntry, "sig" | "gitSig"> & { cacheSig?: string },
+): ProjectIndexManifestEntry {
+  // A git signature alone is already a strong content identity (`fileSignature()` derives
+  // `cacheSig` the same way: `gitSig ?? contentHash ?? sig`), so entries sourced from the disk
+  // manifest (which does not persist `cacheSig`) still get one whenever `gitSig` is available.
+  const cacheSig = entry.cacheSig ?? entry.gitSig;
   return {
     sig: entry.sig,
     ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
+    ...(cacheSig ? { cacheSig } : {}),
   };
 }
 
 function projectIndexManifestEntries(
-  entries: Iterable<readonly [string, Pick<ManifestFileEntry, "sig" | "gitSig">]>,
+  entries: Iterable<readonly [string, Pick<ManifestFileEntry, "sig" | "gitSig"> & { cacheSig?: string }]>,
 ): Map<string, ProjectIndexManifestEntry> {
   return new Map(Array.from(entries, ([file, entry]) => [file, toProjectIndexManifestEntry(entry)]));
 }

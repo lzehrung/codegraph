@@ -104,10 +104,11 @@ type SerializedBloomFilter = {
 type SnapshotFileSignature = {
   sig: string;
   gitSig?: string;
+  cacheSig?: string;
 };
 
 export type PersistedBloomFilters = {
-  get: (file: string, signature: Pick<FileSignature, "sig" | "gitSig">) => BloomFilter | undefined;
+  get: (file: string, signature: Pick<FileSignature, "sig" | "gitSig" | "cacheSig">) => BloomFilter | undefined;
 };
 
 type SnapshotAnalysisReport = {
@@ -491,7 +492,7 @@ export async function tryLoadProjectIndexSnapshot(
 export async function tryLoadProjectSnapshotModules(
   projectRoot: string,
   opts: BuildOptions | undefined,
-  fileSignatures: ReadonlyMap<string, Pick<FileSignature, "sig" | "gitSig">>,
+  fileSignatures: ReadonlyMap<string, Pick<FileSignature, "sig" | "gitSig" | "cacheSig">>,
 ): Promise<Map<string, ModuleIndex> | null> {
   if ((opts?.cache ?? "off") !== "disk") return null;
   try {
@@ -511,12 +512,16 @@ export async function tryLoadProjectSnapshotModules(
     ) {
       return null;
     }
+    const normalizedFileSignatures = new Map(
+      Object.entries(payload.fileSignatures).map(([file, signature]) => [fileIdentityKey(file), signature]),
+    );
     const modules = new Map<string, ModuleIndex>();
     for (const mod of payload.modules) {
-      const signature = fileSignatures.get(fileIdentityKey(mod.file));
-      const snapshotSignature = payload.fileSignatures[fileIdentityKey(mod.file)];
+      const moduleKey = fileIdentityKey(mod.file);
+      const signature = fileSignatures.get(moduleKey);
+      const snapshotSignature = normalizedFileSignatures.get(moduleKey);
       if (!signature || !snapshotSignature || !snapshotSignatureMatches(snapshotSignature, signature)) continue;
-      modules.set(fileIdentityKey(mod.file), mod);
+      modules.set(moduleKey, mod);
     }
     return modules;
   } catch {
@@ -621,11 +626,19 @@ function createPersistedBloomFilters(
 
 function snapshotSignatureMatches(
   snapshotSignature: SnapshotFileSignature,
-  currentSignature: Pick<FileSignature, "sig" | "gitSig">,
+  currentSignature: Pick<FileSignature, "sig" | "gitSig" | "cacheSig">,
 ): boolean {
   const matchingGitSignature =
     !!snapshotSignature.gitSig && !!currentSignature.gitSig && snapshotSignature.gitSig === currentSignature.gitSig;
-  return matchingGitSignature || snapshotSignature.sig === currentSignature.sig;
+  if (matchingGitSignature) return true;
+  // `cacheSig` is git- or content-hash-derived (forced whenever caching is enabled without a git
+  // signature; see `fileSignature()`), so when both sides have it, it is a strictly stronger and
+  // authoritative identity check than the cheap `mtime:size` `sig`. Comparing bare `sig` alone
+  // would wrongly treat a same-size edit whose mtime got restored as unchanged.
+  if (snapshotSignature.cacheSig !== undefined && currentSignature.cacheSig !== undefined) {
+    return snapshotSignature.cacheSig === currentSignature.cacheSig;
+  }
+  return snapshotSignature.sig === currentSignature.sig;
 }
 
 export async function writeProjectIndexSnapshot(
@@ -1124,6 +1137,7 @@ function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSna
     payload.modules.every(isModuleIndex) &&
     isSnapshotFileSignatureRecord(payload.fileSignatures) &&
     (payload.nativeMode === undefined || isSnapshotNativeMode(payload.nativeMode)) &&
+    (payload.languageExtensions === undefined || isLanguageExtensionMap(payload.languageExtensions)) &&
     (payload.bloomFilters === undefined || isSerializedBloomFilterRecord(payload.bloomFilters)) &&
     (payload.analysis === undefined || isAnalysisSummary(payload.analysis)) &&
     (payload.analysisReport === undefined || isSnapshotAnalysisReport(payload.analysisReport)) &&
@@ -1253,6 +1267,7 @@ function serializeSnapshotFileSignatures(
     serialized[cacheRelativePath(projectRoot, file)] = {
       sig: entry.sig,
       ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
+      ...(entry.cacheSig ? { cacheSig: entry.cacheSig } : {}),
     };
   }
   return serialized;
@@ -1266,7 +1281,11 @@ function isSnapshotFileSignatureRecord(value: unknown): value is Record<string, 
 function isSnapshotFileSignature(value: unknown): value is SnapshotFileSignature {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const signature = value as Partial<SnapshotFileSignature>;
-  return typeof signature.sig === "string" && (signature.gitSig === undefined || typeof signature.gitSig === "string");
+  return (
+    typeof signature.sig === "string" &&
+    (signature.gitSig === undefined || typeof signature.gitSig === "string") &&
+    (signature.cacheSig === undefined || typeof signature.cacheSig === "string")
+  );
 }
 
 function deserializeBloomFilterCache(
@@ -1291,6 +1310,11 @@ function deserializeBloomFilterCache(
 function isSerializedBloomFilterRecord(value: unknown): value is Record<string, SerializedBloomFilter> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   return Object.values(value).every(isSerializedBloomFilter);
+}
+
+function isLanguageExtensionMap(value: unknown): value is Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.values(value).every((entry) => typeof entry === "string");
 }
 
 function isSerializedBloomFilter(value: unknown): value is SerializedBloomFilter {

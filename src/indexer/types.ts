@@ -81,6 +81,13 @@ export type ResolvedExport = { kind: "resolved"; def: SymbolDef } | { kind: "nam
 export type ProjectIndexManifestEntry = {
   sig: string;
   gitSig?: string;
+  /**
+   * Content-identity signature (`FileSignature.cacheSig`), when it was available at signature
+   * computation time. Stronger than `sig` alone: unlike the cheap `mtime:size` fast path used
+   * when `cacheStrict` is off, this is git- or content-hash-derived and does not falsely match
+   * a changed file whose mtime and size happen to be restored to their prior values.
+   */
+  cacheSig?: string;
 };
 
 export type SqlNavigationCache = {
