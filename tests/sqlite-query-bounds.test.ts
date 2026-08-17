@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 
 import {
@@ -54,7 +54,7 @@ async function removeWithRetry(root: string): Promise<void> {
       return;
     } catch (error) {
       if (!(error instanceof Error) || !("code" in error)) throw error;
-      if (error.code !== "EBUSY" && error.code !== "ENOTEMPTY") throw error;
+      if (error.code !== "EBUSY" && error.code !== "ENOTEMPTY" && error.code !== "EPERM") throw error;
       if (Date.now() > deadline) throw error;
       await new Promise<void>((resolve) => setTimeout(resolve, 100));
     }
@@ -62,6 +62,15 @@ async function removeWithRetry(root: string): Promise<void> {
 }
 
 describe("SQLite query byte/cell bounds during iterate", () => {
+  it("retries Windows-style EPERM cleanup races", async () => {
+    const removeSpy = vi.spyOn(fsp, "rm").mockRejectedValueOnce(Object.assign(new Error("locked"), { code: "EPERM" }));
+    try {
+      await withTempDb(async () => {});
+      expect(removeSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      removeSpy.mockRestore();
+    }
+  });
   it("applies per-cell and cumulative caps before appending huge existing TEXT cells", async () => {
     await withTempDb(async (dbPath) => {
       const db = new DatabaseSync(dbPath);

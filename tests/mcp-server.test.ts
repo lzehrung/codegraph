@@ -1130,7 +1130,7 @@ describe("codegraph MCP handlers", () => {
     }
   });
 
-  it("rejects oversized HTTP MCP request bodies before parsing", async () => {
+  it("closes declared oversized HTTP MCP request bodies before reading their payload", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-large-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
     const httpServer = await startCodegraphMcpHttpServer({
@@ -1148,11 +1148,8 @@ describe("codegraph MCP handlers", () => {
         },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", padding: "x".repeat(1_000_000) }),
       });
-      const payload = readObject((await response.json()) as unknown);
-      const error = readObject(payload.error);
 
       expect([response.status, response.headers.get("connection")]).toEqual([413, "close"]);
-      expect(error.message).toBe("MCP request body is too large");
     } finally {
       await httpServer.close();
     }

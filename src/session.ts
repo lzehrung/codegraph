@@ -995,7 +995,6 @@ export class SessionManager {
       session.dispose();
     }
     this.sessions.clear();
-    clearInterval(this.evictionTimer);
   }
 
   /**

@@ -1709,6 +1709,20 @@ describe("SessionManager", () => {
     expect(manager.getSessionIds()).toHaveLength(0);
   });
 
+  test("keeps periodic expiration cleanup after disposeAll", () => {
+    vi.useFakeTimers();
+    const reusableManager = new SessionManager({ evictionIntervalMs: 10 });
+    const cleanupSpy = vi.spyOn(reusableManager, "cleanupExpired");
+
+    try {
+      reusableManager.disposeAll();
+      vi.advanceTimersByTime(10);
+      expect(cleanupSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.clearAllTimers();
+    }
+  });
+
   test("should cleanup expired sessions", async () => {
     await manager.getOrCreateSession("session-1", {
       root: sampleRoot,
