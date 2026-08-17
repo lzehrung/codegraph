@@ -316,6 +316,25 @@ describe("Cache invalidation and strict hashing", () => {
     expect(persistedBloomFilters?.get(utilFile, collidingSignature)).toBeUndefined();
   });
 
+  it("preserves content-hash cacheSig for changed files' manifestEntries after an incremental build", async () => {
+    const root = await mkTmpDir("dg-incremental-cachesig-");
+    const filePath = path.join(root, "entry.ts");
+    await fsp.writeFile(filePath, "export const value = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", cacheStrict: false, threads: 1 });
+
+    // Non-git: a content change here is the exact scenario snapshotSignatureMatches relies on
+    // cacheSig to distinguish from a same-mtime/size collision. Prove the incremental write path
+    // actually persists that stronger identity instead of leaving it undefined.
+    await fsp.writeFile(filePath, "export const value = 2;\n", "utf8");
+    const incremental = await buildProjectIndexIncremental(root, { cache: "disk", cacheStrict: false, threads: 1 });
+
+    const entry = Array.from(incremental.manifestEntries ?? []).find(
+      ([file]) => fileIdentityKey(file) === fileIdentityKey(filePath),
+    )?.[1];
+    expect(entry?.cacheSig).toBeDefined();
+    expect(entry?.cacheSig).toMatch(/^[a-f0-9]{40}$/);
+  });
+
   it("rebuilds when the generated language-definition fingerprint changes without source changes", async () => {
     const root = await mkTmpDir("dg-implementation-fingerprint-");
     const entryPath = path.join(root, "entry.ts");
@@ -2643,6 +2662,14 @@ describe("Cache invalidation and strict hashing", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it("rejects a cacheLocation that is not project/repo/user/absolute", async () => {
+    const root = await mkTmpDir("dg-cache-invalid-location-");
+    await fsp.writeFile(path.join(root, "entry.ts"), "export const entry = 1;\n", "utf8");
+    expect(() => buildCache.resolveCacheLocation(root, { cacheLocation: "relative-dir" })).toThrow(
+      /Cache location must be "project", "repo", "user", or an absolute path/,
+    );
   });
 
   it("reuses a legacy v4 project snapshot missing fileSignatures instead of crashing to a forced miss", async () => {

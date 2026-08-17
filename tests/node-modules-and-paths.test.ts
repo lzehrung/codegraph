@@ -130,6 +130,31 @@ describe("Node modules resolution (opt-in) and path normalization", () => {
       typeof warmResolved === "string" && warmResolved.replace(/\\/g, "/").includes("node_modules/my-pkg/index.js"),
     ).toBe(true);
   });
+  it("does not reuse a stale per-file module cache entry when resolveNodeModules turns off for a warm non-incremental build", async () => {
+    const root = await mkTmpDir("dg-nm-warm-toggle-off-");
+    const nm = path.join(root, "node_modules", "my-pkg");
+    const main = path.join(root, "main.js");
+    await fsp.mkdir(nm, { recursive: true });
+    await fsp.writeFile(main, 'import { thing } from "my-pkg";\nexport const used = thing;\n', "utf8");
+    await fsp.writeFile(path.join(nm, "index.js"), "module.exports = 1;\n", "utf8");
+    await fsp.writeFile(path.join(nm, "package.json"), JSON.stringify({ name: "my-pkg", main: "index.js" }), "utf8");
+
+    const warm = await buildProjectIndex(root, {
+      cache: "disk",
+      graph: { resolveNodeModules: true },
+      threads: 1,
+    });
+    const warmModule = warm.byFile.get(fileIdentityKey(main));
+    const warmResolved = warmModule?.imports[0]?.resolved;
+    expect(
+      typeof warmResolved === "string" && warmResolved.replace(/\\/g, "/").includes("node_modules/my-pkg/index.js"),
+    ).toBe(true);
+
+    const cold = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const coldModule = cold.byFile.get(fileIdentityKey(main));
+    const coldResolved = coldModule?.imports[0]?.resolved;
+    expect(typeof coldResolved === "string" && coldResolved.includes("node_modules")).toBe(false);
+  });
   it("normalizes paths to forward slashes in nodes and edges", async () => {
     const root = await mkTmpDir("dg-paths-");
     const a = path.join(root, "a.ts");

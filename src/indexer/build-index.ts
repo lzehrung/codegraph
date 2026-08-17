@@ -403,15 +403,20 @@ function graphEdgeKey(edge: Edge): string {
 async function moduleCacheSignatureForFile(file: string, sigInfo: FileSignature, opts?: BuildOptions): Promise<string> {
   const baseSignature = await cacheSignatureForFile(file, sigInfo, opts);
   const normalizedExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
-  if (!normalizedExtensions) return baseSignature;
+  const resolveNodeModules = normalizeGraphOptions(opts?.graph).resolveNodeModules;
+  if (!normalizedExtensions && !resolveNodeModules) return baseSignature;
   // Combine via a hash rather than raw concatenation: the disk cache stores this string in a
   // SQLite TEXT column, and node:sqlite's DatabaseSync silently truncates TEXT bind parameters
   // at embedded NUL bytes, so a raw separator character risks the stored and freshly-computed
   // signatures never matching (permanent cache miss) if either baseSignature or the serialized
-  // extensions ever contained one.
+  // extensions ever contained one. A cached ModuleIndex's ImportBinding.resolved values differ
+  // depending on whether resolveNodeModules was on at write time (resolved node_modules targets
+  // vs. external), so that state must be part of the key too, not just gate reuse for one
+  // direction of the toggle.
   const hash = crypto.createHash("sha1");
   hash.update(baseSignature);
-  hash.update(JSON.stringify(Object.entries(normalizedExtensions)));
+  hash.update(JSON.stringify(Object.entries(normalizedExtensions ?? {})));
+  hash.update(resolveNodeModules ? "\0resolveNodeModules" : "");
   return hash.digest("hex");
 }
 
@@ -1705,7 +1710,18 @@ export async function buildProjectIndexIncremental(
         modules,
         parsedMap,
         bloomFilterCache,
-        manifestEntries: projectIndexManifestEntries(manifestEntries),
+        manifestEntries: projectIndexManifestEntries(
+          // `manifestEntries` (a `ManifestFileEntry`) never carries `cacheSig` -- that field
+          // only lives on `FileSignature`. Overlay each entry with the `cacheSig` this build
+          // actually computed (content-hash-derived for non-git files, since caching is enabled
+          // whenever this path runs) so incremental writes preserve the same strong identity a
+          // cold build produces, instead of leaving snapshot/bloom reuse to fall back to the
+          // weak `mtime:size` `sig`.
+          Array.from(manifestEntries, ([file, entry]) => {
+            const cacheSig = fileSignatures.get(file)?.cacheSig;
+            return [file, { ...entry, ...(cacheSig ? { cacheSig } : {}) }] as const;
+          }),
+        ),
         buildReport: report,
       });
       await writeProjectIndexSnapshot(

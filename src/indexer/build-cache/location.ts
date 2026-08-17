@@ -70,7 +70,12 @@ export function resolveCacheAnchor(projectRoot: string, opts?: BuildOptions): Ca
   const location = opts?.cacheLocation;
   if (location === "project") return { anchor: path.resolve(projectRoot), layer: "project" };
   if (location === "user") return { anchor: resolveCodegraphUserCacheRoot(), layer: "user" };
-  if (location && location !== "repo") return { anchor: path.resolve(location), layer: "explicit" };
+  if (location && location !== "repo") {
+    if (!path.isAbsolute(location)) {
+      throw new Error(`Cache location must be "project", "repo", "user", or an absolute path. Received: "${location}"`);
+    }
+    return { anchor: path.resolve(location), layer: "explicit" };
+  }
   return findRepositoryAnchor(projectRoot);
 }
 
