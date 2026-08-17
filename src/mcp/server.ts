@@ -1341,8 +1341,7 @@ async function handleMcpHttpRequest(
     if (request.method === "POST") {
       const parsedBody = await readJsonRequestBody(request, MAX_MCP_HTTP_BODY_BYTES, bodyTimeoutMs);
       if (parsedBody.status === "too_large") {
-        await parsedBody.drained;
-        writeClosingJsonRpcError(413, "MCP request body is too large");
+        writeJsonRpcError(response, 413, "MCP request body is too large");
         return;
       }
       if (parsedBody.status === "timeout") {

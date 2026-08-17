@@ -1150,7 +1150,7 @@ describe("codegraph MCP handlers", () => {
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", padding: "x".repeat(1_000_000) }),
       });
 
-      expect([response.status, response.headers.get("connection")]).toEqual([413, "close"]);
+      expect(response.status).toBe(413);
     } finally {
       await httpServer.close();
     }

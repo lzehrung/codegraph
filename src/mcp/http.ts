@@ -4,7 +4,7 @@ import os from "node:os";
 
 export type ParsedJsonBody =
   | { status: "ok"; body: unknown }
-  | { status: "too_large"; drained: Promise<void> }
+  | { status: "too_large" }
   | { status: "timeout" }
   | { status: "invalid_json" };
 
@@ -24,7 +24,8 @@ export async function readJsonRequestBody(
 ): Promise<ParsedJsonBody> {
   const contentLength = getContentLength(request);
   if (contentLength !== undefined && contentLength > maxBytes) {
-    return { status: "too_large", drained: drainRequestBody(request, timeoutMs) };
+    drainRequestBody(request, timeoutMs);
+    return { status: "too_large" };
   }
 
   return await new Promise<ParsedJsonBody>((resolve) => {
@@ -52,7 +53,8 @@ export async function readJsonRequestBody(
       const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
       bytes += buffer.byteLength;
       if (bytes > maxBytes) {
-        settle({ status: "too_large", drained: drainRequestBody(request, timeoutMs) }, false);
+        drainRequestBody(request, timeoutMs);
+        settle({ status: "too_large" }, false);
         return;
       }
       chunks.push(buffer);
@@ -75,11 +77,13 @@ export async function readJsonRequestBody(
   });
 }
 
-function drainRequestBody(request: IncomingMessage, timeoutMs: number): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  let settled = false;
-  const onDrained = (): void => settle();
-  const deadline = setTimeout(onDrained, timeoutMs);
+function drainRequestBody(request: IncomingMessage, timeoutMs: number): void {
+  const onDrained = (): void => cleanup();
+  const onTimedOut = (): void => {
+    cleanup();
+    request.destroy();
+  };
+  const deadline = setTimeout(onTimedOut, timeoutMs);
   deadline.unref?.();
 
   const cleanup = (): void => {
@@ -88,18 +92,11 @@ function drainRequestBody(request: IncomingMessage, timeoutMs: number): Promise<
     request.off("error", onDrained);
     request.off("aborted", onDrained);
   };
-  const settle = (): void => {
-    if (settled) return;
-    settled = true;
-    cleanup();
-    resolve();
-  };
 
   request.once("end", onDrained);
   request.once("error", onDrained);
   request.once("aborted", onDrained);
   request.resume();
-  return promise;
 }
 
 export function emptyAllowedHostHeaderRules(): AllowedHostHeaderRules {
