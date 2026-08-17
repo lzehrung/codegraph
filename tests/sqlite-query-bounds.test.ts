@@ -199,6 +199,6 @@ describe("SQLite raw query execution deadline", () => {
     const error = new SqliteQueryDeadlineExceededError(250);
     expect(error).toBeInstanceOf(Error);
     expect(error.name).toBe("SqliteQueryDeadlineExceededError");
-    expect(error.message).toBe("SQLite query exceeded its 250ms execution budget and was terminated.");
+    expect(error.message).toBe("SQLite query exceeded its 250ms execution budget; termination was requested.");
   });
 });

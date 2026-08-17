@@ -1260,9 +1260,12 @@ export async function startCodegraphMcpHttpServer(
   let closeResourcesPromise: Promise<void> | undefined;
   const closeResources = (): Promise<void> => {
     closeResourcesPromise ??= (async () => {
-      session.invalidate();
-      sessionStore.stop();
-      await closeMcpResources(sessionStore.sessions, modernHandler.close);
+      try {
+        session.invalidate();
+      } finally {
+        sessionStore.stop();
+        await closeMcpResources(sessionStore.sessions, modernHandler.close);
+      }
     })();
     return closeResourcesPromise;
   };
@@ -1338,6 +1341,7 @@ async function handleMcpHttpRequest(
     if (request.method === "POST") {
       const parsedBody = await readJsonRequestBody(request, MAX_MCP_HTTP_BODY_BYTES, bodyTimeoutMs);
       if (parsedBody.status === "too_large") {
+        await parsedBody.drained;
         writeClosingJsonRpcError(413, "MCP request body is too large");
         return;
       }

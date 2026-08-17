@@ -306,9 +306,15 @@ const sameSession = await manager.getOrCreateSession("pr-123", {
 manager.cleanupExpired();
 const allStats = manager.getAllStats();
 console.log(Boolean(pr1Session), Boolean(pr2Session), Boolean(sameSession), allStats);
+
+manager.dispose();
 ```
 
-`SessionManager` defaults to 32 live or initializing sessions and scans for expired sessions every 60 seconds. Set `{ maxSessions, evictionIntervalMs }` to tune those bounds; `maxSessions` also applies to net-new `warmup()` sessions. Capacity frees immediately after a ready session is disposed or expires, or after a canceled or failed initialization settles. Set `evictionIntervalMs: 0` to disable periodic cleanup.
+`SessionManager` defaults to 32 live or initializing sessions and scans for expired sessions every 60 seconds. Set `{ maxSessions, evictionIntervalMs }` to tune those bounds; `maxSessions` also applies to net-new `warmup()` sessions.
+
+- Capacity frees immediately after a ready session is disposed or expires, or after a canceled or failed initialization settles.
+- Set `evictionIntervalMs: 0` to disable periodic cleanup.
+- Call `manager.dispose()` when the manager is no longer needed; it disposes all sessions, stops the interval, and is terminal. `disposeAll()` remains reusable.
 
 ## Streaming impact analysis
 

@@ -1194,6 +1194,10 @@ describe("SessionManager", () => {
     manager = new SessionManager();
   });
 
+  afterEach(() => {
+    manager.dispose();
+  });
+
   test("should create and retrieve sessions", async () => {
     const session = await manager.getOrCreateSession("test-session", {
       root: sampleRoot,
@@ -1720,6 +1724,27 @@ describe("SessionManager", () => {
       expect(cleanupSpy).toHaveBeenCalledTimes(1);
     } finally {
       vi.clearAllTimers();
+    }
+  });
+
+  test("stops periodic cleanup and prevents reuse after terminal disposal", async () => {
+    vi.useFakeTimers();
+    const disposableManager = new SessionManager({ evictionIntervalMs: 10 });
+    const cleanupSpy = vi.spyOn(disposableManager, "cleanupExpired");
+
+    try {
+      disposableManager.dispose();
+      vi.advanceTimersByTime(10);
+      expect(cleanupSpy).not.toHaveBeenCalled();
+      await expect(
+        disposableManager.getOrCreateSession("replacement", {
+          root: sampleRoot,
+          buildOptions: sampleBuildOptions(),
+        }),
+      ).rejects.toThrow("Session manager is disposed.");
+      await expect(disposableManager.warmup([])).rejects.toThrow("Session manager is disposed.");
+    } finally {
+      vi.useRealTimers();
     }
   });
 

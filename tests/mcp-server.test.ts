@@ -2,6 +2,7 @@ import { registerSessionInvalidationHook } from "../src/agent/sessionLifecycle.j
 import { ensureSessionQueryIndex } from "../src/agent/query-index/sessionStore.js";
 import fs from "node:fs/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -1130,7 +1131,7 @@ describe("codegraph MCP handlers", () => {
     }
   });
 
-  it("closes declared oversized HTTP MCP request bodies before reading their payload", async () => {
+  it("rejects declared oversized HTTP MCP request bodies without buffering their payload", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-large-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
     const httpServer = await startCodegraphMcpHttpServer({
@@ -3060,6 +3061,44 @@ describe("MCP session teardown regressions (S2)", () => {
       expect(handle.store?.closed).toBe(true);
     } finally {
       await httpServer.close();
+    }
+  });
+
+  it("closes legacy protocol transports when session invalidation fails during server shutdown", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-invalidation-close-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const session = createAgentSession({ root });
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+      session,
+    });
+    const transportCloseSpy = vi.spyOn(NodeStreamableHTTPServerTransport.prototype, "close");
+    const invalidationSpy = vi.spyOn(session, "invalidate").mockImplementation(() => {
+      throw new Error("session invalidation failed");
+    });
+
+    try {
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-invalidation-close-test", version: "1.0.0" },
+        },
+      });
+      expect(initialize.response.status).toBe(200);
+      transportCloseSpy.mockClear();
+
+      await expect(httpServer.close()).rejects.toThrow("session invalidation failed");
+      expect(transportCloseSpy).toHaveBeenCalled();
+    } finally {
+      invalidationSpy.mockRestore();
+      transportCloseSpy.mockRestore();
+      await httpServer.close().catch(() => {});
     }
   });
 });

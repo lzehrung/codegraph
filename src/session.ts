@@ -823,6 +823,7 @@ export class SessionManager {
   private pendingSessions = new Map<string, PendingSession>();
   private readonly maxSessions: number;
   private readonly evictionTimer: ReturnType<typeof setInterval> | undefined;
+  private disposed = false;
 
   constructor(options: SessionManagerOptions = {}) {
     this.maxSessions = normalizeSessionManagerCapacity(options.maxSessions);
@@ -934,10 +935,15 @@ export class SessionManager {
     return promise;
   }
 
+  private assertNotDisposed(): void {
+    if (this.disposed) throw new Error("Session manager is disposed.");
+  }
+
   /**
    * Create or get a session for a repository
    */
   async getOrCreateSession(sessionId: string, options: SessionOptions): Promise<CodeReviewSession> {
+    this.assertNotDisposed();
     const pending = this.getPendingCompatibleSession(sessionId, options);
     if (pending) {
       return await pending;
@@ -998,6 +1004,17 @@ export class SessionManager {
   }
 
   /**
+   * Dispose all sessions and stop periodic expiration cleanup.
+   * This manager cannot be reused afterward.
+   */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    clearInterval(this.evictionTimer);
+    this.disposeAll();
+  }
+
+  /**
    * Get all session IDs
    */
   getSessionIds(): string[] {
@@ -1036,6 +1053,7 @@ export class SessionManager {
    * @param sessions - Array of session configs to pre-warm
    */
   async warmup(sessions: Array<{ id: string; options: SessionOptions }>): Promise<void> {
+    this.assertNotDisposed();
     const requestedFingerprints = new Map<string, string>();
     const replacementSessions: Array<{
       id: string;
