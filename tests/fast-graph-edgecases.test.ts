@@ -44,7 +44,7 @@ describe("Fast graph edge cases", () => {
     // A separate runtime import (`{ f }`) and type-only import (`type { T }`) to the same
     // target module must both survive dedup, not collapse onto one entry.
     expect(toUtil).toHaveLength(2);
-    expect(toUtil.some((edge) => edge.typeOnly === true)).toBe(true);
+    expect(toUtil.some((edge) => edge.typeOnly)).toBe(true);
     expect(toUtil.some((edge) => !edge.typeOnly)).toBe(true);
   });
 

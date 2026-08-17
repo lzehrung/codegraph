@@ -27,4 +27,26 @@ describe("grep default patterns", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("reports UTF-16 columns for AST-grep captures after multibyte text on the same line (C11)", async () => {
+    const root = await mkTmpDir("cg-grep-multibyte-column-");
+    const file = path.join(root, "entry.ts");
+
+    // "café" precedes the captured import source on the same line: "é" is one UTF-16 code
+    // unit but two UTF-8 bytes, so a byte-based column would report one column too far right.
+    const source = "const café = 1; import { helper } from './dep';\n";
+    await fsp.writeFile(file, source, "utf8");
+    const target = "'./dep'";
+    const expectedColumn = source.indexOf(target) + 1;
+
+    try {
+      const hits = await astGrep(root, "(import_statement source: (string) @mod)", ["**/*.ts"]);
+
+      expect(hits).toEqual([
+        expect.objectContaining({ capture: "mod", line: 1, column: expectedColumn, snippet: target }),
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
