@@ -1220,6 +1220,36 @@ describe("codegraph MCP handlers", () => {
     }
   });
 
+  it("invalidates prebuilt resources when HTTP server binding fails", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-listen-failure-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const occupiedServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+    });
+    const session = createAgentSession({ root });
+    let invalidated = false;
+    registerSessionInvalidationHook(session, () => {
+      invalidated = true;
+    });
+
+    try {
+      await expect(
+        startCodegraphMcpHttpServer({
+          root,
+          host: "127.0.0.1",
+          port: occupiedServer.port,
+          session,
+        }),
+      ).rejects.toThrow();
+      expect(invalidated).toBe(true);
+    } finally {
+      await occupiedServer.close();
+      await fs.rm(root, { force: true, recursive: true });
+    }
+  });
+
   it("reuses one session across search, get_symbol, refs, and query_sqlite handlers", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");

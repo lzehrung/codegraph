@@ -64,6 +64,8 @@ export class RawSqlQueryWorkerLifecycle {
     createPool: RawSqlQueryWorkerPoolFactory,
   ): Promise<RawSqlResult> {
     if (signal?.aborted) throw new SqliteQueryCancelledError();
+    const deadlineSignal = AbortSignal.timeout(deadlineMs);
+    const combinedSignal = signal ? AbortSignal.any([signal, deadlineSignal]) : deadlineSignal;
     if (this.activeWorkerSlots.size >= this.maxWorkers) {
       throw new SqliteQueryWorkerCleanupCapacityExceededError(this.maxWorkers);
     }
@@ -72,8 +74,6 @@ export class RawSqlQueryWorkerLifecycle {
     this.activeWorkerSlots.add(slot);
     let pool: RawSqlQueryWorkerPool | undefined;
     let cleanupInBackground = false;
-    const deadlineSignal = AbortSignal.timeout(deadlineMs);
-    const combinedSignal = signal ? AbortSignal.any([signal, deadlineSignal]) : deadlineSignal;
 
     try {
       pool = createPool();

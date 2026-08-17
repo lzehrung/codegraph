@@ -205,6 +205,7 @@ export {
   createCodeReviewSession,
   type ICodeReviewSession,
   type SessionOptions,
+  type SessionManagerOptions,
   type SessionStatus,
   type SessionStats,
   type SessionStaleReason,

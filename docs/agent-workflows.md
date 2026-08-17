@@ -290,9 +290,10 @@ Available presets:
 ### Managing multiple sessions
 
 ```ts
-import { SessionManager } from "@lzehrung/codegraph";
+import { SessionManager, type SessionManagerOptions } from "@lzehrung/codegraph";
 
-const manager = new SessionManager();
+const options: SessionManagerOptions = { maxSessions: 32 };
+const manager = new SessionManager(options);
 const pr1Session = await manager.getOrCreateSession("pr-123", {
   root: "/path/to/repo",
 });

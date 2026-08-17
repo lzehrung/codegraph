@@ -76,4 +76,23 @@ describe("RawSqlQueryWorkerLifecycle", () => {
     complete.resolve({ columns: [], rows: [] });
     await expect(active).resolves.toEqual({ columns: [], rows: [] });
   });
+
+  it("releases no worker slot when an invalid deadline is rejected before startup", async () => {
+    const lifecycle = new RawSqlQueryWorkerLifecycle(1);
+
+    await expect(
+      lifecycle.run(task, -1, undefined, () => ({
+        run: async () => ({ columns: [], rows: [] }),
+        destroy: async () => {},
+      })),
+    ).rejects.toThrow();
+    expect(lifecycle.state()).toEqual({ activeWorkers: 0, maxWorkers: 1 });
+
+    await expect(
+      lifecycle.run(task, 10_000, undefined, () => ({
+        run: async () => ({ columns: [], rows: [] }),
+        destroy: async () => {},
+      })),
+    ).resolves.toEqual({ columns: [], rows: [] });
+  });
 });

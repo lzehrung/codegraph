@@ -1287,7 +1287,12 @@ export async function startCodegraphMcpHttpServer(
     void closeResources();
   });
 
-  await listenOnHttpServer(server, options.port, host);
+  try {
+    await listenOnHttpServer(server, options.port, host);
+  } catch (error) {
+    await closeResources();
+    throw error;
+  }
   const address = server.address();
   const actualPort = getHttpServerPort(address);
   const urlHost = formatHostForUrl(host);

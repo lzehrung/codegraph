@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from "vitest";
-import type { ICodeReviewSession } from "../src/index.js";
+import type { ICodeReviewSession, SessionManagerOptions as PublicSessionManagerOptions } from "../src/index.js";
 import type { BuildOptions, BuildReport, LanguageExtensionMap } from "../src/indexer/types.js";
 import {
   CodeReviewSession,
@@ -1196,6 +1196,14 @@ describe("SessionManager", () => {
 
   afterEach(() => {
     manager.dispose();
+  });
+
+  test("exports SessionManagerOptions from the package root", () => {
+    const options: PublicSessionManagerOptions = { evictionIntervalMs: 0, maxSessions: 1 };
+    const typedManager = new SessionManager(options);
+
+    expect(typedManager).toBeInstanceOf(SessionManager);
+    typedManager.dispose();
   });
 
   test("should create and retrieve sessions", async () => {
