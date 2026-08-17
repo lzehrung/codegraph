@@ -750,6 +750,8 @@ console.log(result.columns, result.rows);
 
 `queryGraphSqliteRaw()` is intentionally read-only. It accepts result-producing statements such as `SELECT` and `PRAGMA`, rejects mutating SQL, and bounds rows, cells, response bytes, and `{ deadlineMs }`.
 
+`deadlineMs` must be a non-negative integer no greater than `2_147_483_647`; invalid values throw `RangeError` before the worker or fallback execution path is selected.
+
 The 10-second default deadline rejects the caller promptly and requests worker termination. A native SQLite step already in progress can continue in a bounded cleanup slot until it returns; degraded installs without the worker asset use a weaker in-process check after each iterator step. Callers can catch the exported `SqliteQueryDeadlineExceededError`, `SqliteQueryCancelledError`, and `SqliteQueryWorkerCleanupCapacityExceededError`; cancellation is a stable generic message so it exposes no MCP client details.
 
 ## SQL artifact facts

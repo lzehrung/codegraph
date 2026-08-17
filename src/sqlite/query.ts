@@ -23,13 +23,25 @@ export { SqliteQueryCancelledError, SqliteQueryDeadlineExceededError, SqliteQuer
  * `queryGraphSqliteRaw` about when this is actually enforceable. */
 export const DEFAULT_SQLITE_QUERY_DEADLINE_MS = 10_000;
 
+const MAX_SQLITE_QUERY_DEADLINE_MS = 2_147_483_647;
+
 export type QueryGraphSqliteRawOptions = {
   maxRows?: number | undefined;
   maxBytes?: number | undefined;
   maxCellBytes?: number | undefined;
+  /** Non-negative integer milliseconds through 2_147_483_647. Invalid values throw RangeError. */
   deadlineMs?: number | undefined;
   signal?: AbortSignal | undefined;
 };
+
+function normalizeSqliteQueryDeadlineMs(value: number): number {
+  if (!Number.isInteger(value) || value < 0 || value > MAX_SQLITE_QUERY_DEADLINE_MS) {
+    throw new RangeError(
+      `SQLite query deadlineMs must be a non-negative integer no greater than ${MAX_SQLITE_QUERY_DEADLINE_MS}.`,
+    );
+  }
+  return value;
+}
 
 let loggedInProcessDeadlineFallback = false;
 /**
@@ -62,7 +74,7 @@ export async function queryGraphSqliteRaw(
   const maxRows = normalizeSqliteRowLimit(options?.maxRows ?? MAX_SQLITE_ROW_LIMIT);
   const maxBytes = options?.maxBytes ?? DEFAULT_SQLITE_BYTE_LIMIT;
   const maxCellBytes = options?.maxCellBytes ?? MAX_SQLITE_CELL_BYTES;
-  const deadlineMs = options?.deadlineMs ?? DEFAULT_SQLITE_QUERY_DEADLINE_MS;
+  const deadlineMs = normalizeSqliteQueryDeadlineMs(options?.deadlineMs ?? DEFAULT_SQLITE_QUERY_DEADLINE_MS);
 
   try {
     resolveRawSqlQueryWorkerPath();

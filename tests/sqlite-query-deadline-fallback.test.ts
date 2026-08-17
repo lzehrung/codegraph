@@ -45,6 +45,15 @@ async function withTempDb(run: (dbPath: string) => Promise<void>): Promise<void>
 }
 
 describe("SQLite raw query in-process deadline fallback", () => {
+  it("rejects invalid deadlineMs values before selecting the fallback execution path", async () => {
+    for (const deadlineMs of [NaN, -1, 1.5, 2_147_483_648, Infinity]) {
+      await expect(queryGraphSqliteRaw("missing.sqlite", "SELECT 1;", [], { deadlineMs })).rejects.toMatchObject({
+        name: "RangeError",
+        message: "SQLite query deadlineMs must be a non-negative integer no greater than 2147483647.",
+      });
+    }
+  });
+
   it("still enforces the deadline between rows when the worker asset is unavailable", async () => {
     await withTempDb(async (dbPath) => {
       const db = new DatabaseSync(dbPath);

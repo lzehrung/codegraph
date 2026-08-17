@@ -136,6 +136,15 @@ describe("SQLite query byte/cell bounds during iterate", () => {
 });
 
 describe("SQLite raw query execution deadline", () => {
+  it("rejects invalid deadlineMs values before selecting the worker execution path", async () => {
+    for (const deadlineMs of [NaN, -1, 1.5, 2_147_483_648, Infinity]) {
+      await expect(queryGraphSqliteRaw("missing.sqlite", "SELECT 1;", [], { deadlineMs })).rejects.toMatchObject({
+        name: "RangeError",
+        message: "SQLite query deadlineMs must be a non-negative integer no greater than 2147483647.",
+      });
+    }
+  });
+
   it("terminates an over-budget query with a bounded error while a subsequent query on the same file still succeeds", async () => {
     await withTempDb(async (dbPath) => {
       const db = new DatabaseSync(dbPath);
