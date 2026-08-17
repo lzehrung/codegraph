@@ -172,6 +172,20 @@ function normalizeGlobPattern(globPattern: string): string {
   return globPattern.trim().replace(/\\/g, "/");
 }
 
+/**
+ * Whether an include glob explicitly re-opens a default-ignored root, so a default ignore
+ * should stay active for every OTHER root the includes never mention. Compares literal
+ * (non-wildcard) path segments rather than attempting general glob-vs-glob intersection.
+ */
+function isIgnoreGlobReopenedByIncludes(ignoreGlob: string, includeGlobs: readonly string[]): boolean {
+  const literalSegments = ignoreGlob.split("/").filter((segment) => segment && !segment.includes("*"));
+  if (!literalSegments.length) return false;
+  return includeGlobs.some((includeGlob) => {
+    const includeSegments = includeGlob.split("/");
+    return literalSegments.every((segment) => includeSegments.includes(segment));
+  });
+}
+
 function isLocationIndependentGlob(globPattern: string): boolean {
   return globPattern.startsWith("**/");
 }
@@ -340,8 +354,17 @@ export async function listProjectFiles(
   const fastGlobIgnoreGlobs = [...DEFAULT_PROJECT_FILE_IGNORES, ...translatedUserIgnoreGlobs];
   // Include globs are an explicit request to re-open otherwise ignored roots. Probe
   // those roots for safe directory links before the later filter reapplies the default
-  // ignores, so an included link is not lost before it can be traversed.
-  const symlinkProbeIgnoreGlobs = includeGlobs.length ? translatedUserIgnoreGlobs : fastGlobIgnoreGlobs;
+  // ignores, so an included link is not lost before it can be traversed. Default ignores
+  // an include never mentions (e.g. node_modules when only src/** is included) stay
+  // active, so the probe does not walk unrelated large ignored trees.
+  const symlinkProbeIgnoreGlobs = includeGlobs.length
+    ? [
+        ...translatedUserIgnoreGlobs,
+        ...DEFAULT_PROJECT_FILE_IGNORES.filter(
+          (ignoreGlob) => !isIgnoreGlobReopenedByIncludes(ignoreGlob, includeGlobs),
+        ),
+      ]
+    : fastGlobIgnoreGlobs;
 
   try {
     const useGitignore = options?.useGitignore ?? true;

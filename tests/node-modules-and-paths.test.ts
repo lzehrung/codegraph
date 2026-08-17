@@ -5,6 +5,7 @@ import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } fro
 import { resolveFromNodeModules } from "../src/util/resolution/node.js";
 import { collectGraph } from "../src/index.js";
 import { mkTmpDir, normalizeTestPath } from "./helpers/filesystem.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 describe("Node modules resolution (opt-in) and path normalization", () => {
   it("treats packages as external by default; resolves to file with flag", async () => {
@@ -102,6 +103,32 @@ describe("Node modules resolution (opt-in) and path normalization", () => {
     expect(second.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path.endsWith("/first.js"))).toBe(
       false,
     );
+  });
+
+  it("does not reuse a stale per-file module cache entry when resolveNodeModules turns on for a warm non-incremental build", async () => {
+    const root = await mkTmpDir("dg-nm-warm-toggle-");
+    const nm = path.join(root, "node_modules", "my-pkg");
+    const main = path.join(root, "main.js");
+    await fsp.mkdir(nm, { recursive: true });
+    await fsp.writeFile(main, 'import { thing } from "my-pkg";\nexport const used = thing;\n', "utf8");
+    await fsp.writeFile(path.join(nm, "index.js"), "module.exports = 1;\n", "utf8");
+    await fsp.writeFile(path.join(nm, "package.json"), JSON.stringify({ name: "my-pkg", main: "index.js" }), "utf8");
+
+    const cold = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const coldModule = cold.byFile.get(fileIdentityKey(main));
+    const coldResolved = coldModule?.imports[0]?.resolved;
+    expect(typeof coldResolved === "string" && coldResolved.includes("node_modules")).toBe(false);
+
+    const warm = await buildProjectIndex(root, {
+      cache: "disk",
+      graph: { resolveNodeModules: true },
+      threads: 1,
+    });
+    const warmModule = warm.byFile.get(fileIdentityKey(main));
+    const warmResolved = warmModule?.imports[0]?.resolved;
+    expect(
+      typeof warmResolved === "string" && warmResolved.replace(/\\/g, "/").includes("node_modules/my-pkg/index.js"),
+    ).toBe(true);
   });
   it("normalizes paths to forward slashes in nodes and edges", async () => {
     const root = await mkTmpDir("dg-paths-");

@@ -785,6 +785,30 @@ describe("persistent query index", () => {
     store.close();
   });
 
+  it("gives each term its own prefetch budget so a rare term is not starved by a common early-path term", async () => {
+    const root = await createRepo();
+    const databasePath = path.join(root, "query-candidate-fairness.sqlite");
+    const store = new QueryIndexStore(databasePath);
+    const alphaFiles = Array.from({ length: 20 }, (_, index) =>
+      preparedFile(`src/a${String(index).padStart(3, "0")}.ts`, ["const alphaNoise = 1;"]),
+    );
+    const betaFile = preparedFile("src/zz-beta.ts", ["const betaValue = 1;"]);
+    const files = [...alphaFiles, betaFile];
+    store.replaceFiles(files, [], {
+      ...expectedQueryIndexVersionMetadata(),
+      projectSnapshotIdentity: "snap-5",
+      projectRootIdentity: "root-5",
+      createdByCodegraphVersion: "test",
+      updatedAt: new Date().toISOString(),
+    });
+    const paths = files.map((file) => file.path);
+
+    const candidates = store.candidateChunksForTerms(["alpha", "beta"], paths, 10);
+
+    expect(candidates.some((candidate) => candidate.path === "src/zz-beta.ts")).toBe(true);
+    store.close();
+  });
+
   it("rejects absolute and traversing paths from persisted rows", async () => {
     const root = await createRepo();
     expect(() => resolveQueryIndexSourcePath(root, "../outside.ts")).toThrow(/Invalid query index relative path/u);

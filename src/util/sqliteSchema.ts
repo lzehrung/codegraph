@@ -81,7 +81,10 @@ export function ensureSqliteVersionedTableSchema(args: {
     (schemaVersion.status === "ok" && schemaVersion.version > args.schemaVersion)
   ) {
     recreateSqliteTable(args.db, args.tableName, args.createTable);
-  } else {
+  } else if (schemaVersion.status === "missing" || schemaVersion.version < args.schemaVersion) {
+    // Only pay for the migration (which can include an O(rows) backfill scan) when the
+    // on-disk schema is actually behind; an already-current schema needs no work every
+    // time the database is opened.
     args.migrateTable(args.db);
   }
   writeSqliteSchemaVersion(args.db, args.schemaVersionKey, args.schemaVersion);

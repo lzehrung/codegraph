@@ -327,12 +327,18 @@ export function findStaleNpmRetirementPaths(packageRoot: string, limit = 20): st
  * dist-module-loading budget in `cli-startup-eager-modules.test.ts` enforces that. Malformed or
  * missing config is silently ignored; the fuller schema validation still applies to real builds.
  */
+function isValidCacheLocationValue(location: string): boolean {
+  return location === "project" || location === "repo" || location === "user" || path.isAbsolute(location);
+}
+
 function readCacheLocationField(configPath: string): string | undefined {
   try {
     const raw = fs.readFileSync(configPath, "utf8");
     const parsed = JSON.parse(raw) as { cache?: { location?: unknown } };
     const location = parsed.cache?.location;
-    return typeof location === "string" && location.trim() ? location.trim() : undefined;
+    if (typeof location !== "string") return undefined;
+    const trimmed = location.trim();
+    return trimmed && isValidCacheLocationValue(trimmed) ? trimmed : undefined;
   } catch {
     return undefined;
   }

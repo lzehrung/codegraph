@@ -630,13 +630,14 @@ const incremental = await buildProjectIndexIncremental(root, {
 (`cache: "disk"`) is written; they have no effect for `cache: "memory"` or `"off"`. Persisted
 cache contents store project-relative paths, so a cache can be moved along with its project.
 
-Anchor selection precedence: `cacheDir` (an explicit final directory), then `CODEGRAPH_CACHE_DIR`,
-then `cacheLocation`, then repository metadata (nearest ancestor `.git`/`.codegraph`), then the
-project root. `cacheLocation` accepts `"project"` (anchor at `projectRoot`), `"user"` (anchor at
-the platform user cache directory), `"repo"` (the default repository-metadata search), or an
-absolute path. Unlike `cacheDir`, an absolute `cacheLocation` is an anchor, not the final cache
-directory: the resolved cache lives in a project-namespaced subdirectory underneath it, since one
-anchor can be shared by multiple projects.
+Anchor selection precedence: `cacheDir`, then `CODEGRAPH_CACHE_DIR`, then `cacheLocation`, then
+repository metadata (nearest ancestor `.git`/`.codegraph`), then the project root. `cacheLocation`
+accepts `"project"` (anchor at `projectRoot`), `"user"` (anchor at the platform user cache
+directory), `"repo"` (the default repository-metadata search), or an absolute path. None of
+`cacheDir`, `CODEGRAPH_CACHE_DIR`, or an absolute `cacheLocation` is the final cache directory:
+each is an anchor, and the resolved cache lives in a project-namespaced subdirectory underneath
+it, since one anchor can be shared by multiple projects. The project root's own default location
+(no anchor configured) is the one exception, since only one project can occupy it.
 
 `createAgentSession()` (when `useConfig` is not disabled) and `createCodeReviewSession()` both
 read `cache.location` from `codegraph.config.json` (project config, falling back to user

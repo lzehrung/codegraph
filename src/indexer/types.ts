@@ -142,7 +142,11 @@ export type BuildOptions = {
   onProgress?: ((progress: ProgressUpdate) => void) | undefined;
   threads?: number;
   cache?: "off" | "memory" | "disk";
-  /** Explicit disk-cache directory. Highest-precedence anchor; also settable via `CODEGRAPH_CACHE_DIR`. */
+  /**
+   * Highest-precedence disk-cache anchor; also settable via `CODEGRAPH_CACHE_DIR`. Like an
+   * absolute `cacheLocation`, this is an anchor, not the final cache directory: the resolved
+   * cache lives in a namespaced subdirectory underneath it.
+   */
   cacheDir?: string;
   /**
    * Disk-cache anchor when `cacheDir`/`CODEGRAPH_CACHE_DIR` are unset: `"project"` anchors at

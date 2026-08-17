@@ -329,52 +329,57 @@ export class QueryIndexStore {
   ): StoredQueryIndexChunk[] {
     if (!terms.length || !paths.length) return [];
     const normalizedLimit = normalizedCandidateLimit(limit);
-    const ftsTerms = terms.filter((term) => codePointLength(term) >= 3);
-    const directTerms = terms.filter((term) => codePointLength(term) < 3);
-    const conditions: string[] = [];
-    const directParameters: string[] = [];
-    if (ftsTerms.length) {
-      conditions.push("chunks.chunk_id IN (SELECT rowid FROM fts_matches)");
-    }
-    for (const term of directTerms) {
-      conditions.push("instr(chunks.normalized_text, ?) > 0");
-      directParameters.push(term);
-    }
-    for (const term of terms) {
-      conditions.push("instr(replace(chunks.normalized_text, ' ', ''), ?) > 0");
-      directParameters.push(term);
-    }
-    const ftsQuery = ftsTerms.map(escapeFtsTrigramTerm).join(" OR ");
-    const prefix = ftsTerms.length
-      ? "WITH fts_matches AS (SELECT rowid FROM chunk_search WHERE chunk_search MATCH ?)"
-      : "";
+    // Bound each term independently instead of sharing one global, path-ordered budget:
+    // a common term matching thousands of early-path chunks would otherwise exhaust the
+    // budget before a rarer term's (or a multi-term) match later in path order is read.
+    const perTermLimit = Math.max(1, Math.ceil(normalizedLimit / terms.length));
     const candidates = new Map<string, StoredQueryIndexChunk>();
     const batchSize = 500;
-    for (let offset = 0; offset < paths.length && candidates.size < normalizedLimit; offset += batchSize) {
-      const batch = paths.slice(offset, offset + batchSize);
-      const placeholders = batch.map(() => "?").join(", ");
-      const remaining = normalizedLimit - candidates.size;
-      const rows = this.db
-        .prepare(
-          `
-          ${prefix}
-          SELECT files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
-                 chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
-          FROM chunks
-          JOIN files ON files.file_id = chunks.file_id
-          WHERE files.path IN (${placeholders})
-            AND (${conditions.join(" OR ")})
-          ORDER BY files.path, chunks.ordinal
-          LIMIT ?
-        `,
-        )
-        .all(
-          ...(ftsTerms.length ? [ftsQuery, ...batch, ...directParameters] : [...batch, ...directParameters]),
-          remaining,
-        ) as Array<Record<string, unknown>>;
-      for (const row of rows) {
-        const chunk = storedCandidateChunkFromRow(row);
-        if (chunk) candidates.set(`${chunk.path}\0${chunk.ordinal}`, chunk);
+    for (const term of terms) {
+      const isFtsEligible = codePointLength(term) >= 3;
+      const conditions: string[] = [];
+      const parameters: string[] = [];
+      if (isFtsEligible) {
+        conditions.push("chunks.chunk_id IN (SELECT rowid FROM fts_matches)");
+      } else {
+        conditions.push("instr(chunks.normalized_text, ?) > 0");
+        parameters.push(term);
+      }
+      conditions.push("instr(replace(chunks.normalized_text, ' ', ''), ?) > 0");
+      parameters.push(term);
+      const prefix = isFtsEligible
+        ? "WITH fts_matches AS (SELECT rowid FROM chunk_search WHERE chunk_search MATCH ?)"
+        : "";
+      let termMatches = 0;
+      for (let offset = 0; offset < paths.length && termMatches < perTermLimit; offset += batchSize) {
+        const batch = paths.slice(offset, offset + batchSize);
+        const placeholders = batch.map(() => "?").join(", ");
+        const remaining = perTermLimit - termMatches;
+        const rows = this.db
+          .prepare(
+            `
+            ${prefix}
+            SELECT files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
+                   chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
+            FROM chunks
+            JOIN files ON files.file_id = chunks.file_id
+            WHERE files.path IN (${placeholders})
+              AND (${conditions.join(" OR ")})
+            ORDER BY files.path, chunks.ordinal
+            LIMIT ?
+          `,
+          )
+          .all(
+            ...(isFtsEligible ? [escapeFtsTrigramTerm(term), ...batch, ...parameters] : [...batch, ...parameters]),
+            remaining,
+          ) as Array<Record<string, unknown>>;
+        for (const row of rows) {
+          const chunk = storedCandidateChunkFromRow(row);
+          if (!chunk) continue;
+          const key = `${chunk.path}\0${chunk.ordinal}`;
+          if (!candidates.has(key)) termMatches += 1;
+          candidates.set(key, chunk);
+        }
       }
     }
     return [...candidates.values()];

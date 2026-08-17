@@ -747,7 +747,14 @@ async function buildIndexFromFileListShared(
           if (initialManifestEntry) manifestEntries.set(file, initialManifestEntry);
         }
         const cacheSig = cacheEnabled ? await moduleCacheSignatureForFile(file, sigInfo, opts) : sigInfo.cacheSig;
-        let mod: ModuleIndex | null = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
+        // A cached ModuleIndex's ImportBinding.resolved values were computed under the
+        // resolveNodeModules state active at write time; reusing them when that state
+        // just turned on would return stale (unresolved) node-module import targets even
+        // though graph-edge reuse is already disabled for this mode above.
+        const canReuseModuleCache = cacheEnabled && !graphOptions.resolveNodeModules;
+        let mod: ModuleIndex | null = canReuseModuleCache
+          ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report)
+          : null;
         if (mod && fileReport) {
           fileReport.cached = (fileReport.cached ?? 0) + 1;
         }

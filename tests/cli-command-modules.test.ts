@@ -1405,6 +1405,25 @@ describe("CLI command modules", () => {
     }
   });
 
+  test("doctor ignores a relative cache.location that would fail real schema validation", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-doctor-invalid-cache-config-"));
+    await fsp.writeFile(
+      path.join(tempDir, "codegraph.config.json"),
+      JSON.stringify({ cache: { location: "relative-cache-dir" } }),
+      "utf8",
+    );
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const report = buildDoctorReport();
+      expect(report.cache.layer).not.toBe("explicit");
+      expect(report.cache.anchor).not.toContain("relative-cache-dir");
+    } finally {
+      process.chdir(previousCwd);
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("doctor falls back to the platform user config when project config has no cache.location", async () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-doctor-user-cache-config-"));
     const userConfigRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-doctor-user-config-root-"));
