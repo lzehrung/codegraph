@@ -912,6 +912,30 @@ describe("Cache invalidation and strict hashing", () => {
     }
   });
 
+  // `hash-object --stdin-paths` newline-delimits its input, so it cannot represent a
+  // pathname that itself contains a newline; this is the specific case the argv-based
+  // implementation in `hashGitPaths` exists to support. NTFS rejects `\n` in filenames, so
+  // this only runs on POSIX filesystems.
+  it.skipIf(process.platform === "win32")(
+    "returns a git signature for a tracked path containing a newline",
+    async () => {
+      const root = await mkTmpDir("dg-git-sig-newline-path-");
+      runGit(root, ["init"]);
+      runGit(root, ["config", "user.email", "cache@test.local"]);
+      runGit(root, ["config", "user.name", "Cache Test"]);
+
+      const filePath = path.join(root, "line1\nline2.ts");
+      await fsp.writeFile(filePath, "export const value = 1;\n", "utf8");
+      runGit(root, ["add", "-A"]);
+      runGit(root, ["commit", "-m", "newline path"]);
+
+      const hashes = await gitModule.getGitBlobHashes(root, [filePath]);
+
+      expect(hashes.size).toBe(1);
+      expect(hashes.get(normalize(filePath))).toMatch(/^[0-9a-f]{40}$/);
+    },
+  );
+
   it("surfaces a genuine git invocation failure instead of silently discarding signatures", async () => {
     const root = await mkTmpDir("dg-git-sig-invocation-failure-");
     // No `git init`: the directory is not a repository, so `git ls-files` genuinely fails
