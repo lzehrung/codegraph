@@ -13,10 +13,11 @@ import {
   runRawSqlQueryInWorker,
   SqliteQueryCancelledError,
   SqliteQueryDeadlineExceededError,
+  SqliteQueryWorkerCleanupCapacityExceededError,
 } from "./rawQueryWorkerPool.js";
 
 export { queryGraphSqlite } from "./canned-query.js";
-export { SqliteQueryCancelledError, SqliteQueryDeadlineExceededError };
+export { SqliteQueryCancelledError, SqliteQueryDeadlineExceededError, SqliteQueryWorkerCleanupCapacityExceededError };
 
 /** Hard wall-clock budget for a single raw `query_sqlite` execution - see the caveat on
  * `queryGraphSqliteRaw` about when this is actually enforceable. */
@@ -136,13 +137,22 @@ function* withPerRowDeadline<T>(
   signal: AbortSignal | undefined,
 ): Generator<T> {
   const iterator = rows[Symbol.iterator]();
-  while (true) {
-    if (signal?.aborted) throw new SqliteQueryCancelledError();
-    const next = iterator.next();
-    if (Date.now() > deadlineAt) {
-      throw new SqliteQueryDeadlineExceededError(deadlineMs);
+  let completed = false;
+  try {
+    while (true) {
+      if (signal?.aborted) throw new SqliteQueryCancelledError();
+      const next = iterator.next();
+      if (signal?.aborted) throw new SqliteQueryCancelledError();
+      if (Date.now() > deadlineAt) {
+        throw new SqliteQueryDeadlineExceededError(deadlineMs);
+      }
+      if (next.done) {
+        completed = true;
+        return;
+      }
+      yield next.value;
     }
-    if (next.done) return;
-    yield next.value;
+  } finally {
+    if (!completed) iterator.return?.();
   }
 }

@@ -46,6 +46,13 @@ function compareImpactItems(left: ImpactItem, right: ImpactItem): number {
   return 0;
 }
 
+function throwIfImpactAnalysisAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  const error = new Error("Impact analysis was cancelled.");
+  error.name = "AbortError";
+  throw error;
+}
+
 export async function analyzeImpact(
   index: ProjectIndex,
   changedSymbols: ChangedSymbol[],
@@ -62,6 +69,7 @@ export async function analyzeImpact(
     refContextLines,
     refBlockMaxLines,
     onImpactItem,
+    signal,
   } = options;
   const diagnostics = options.diagnostics;
   const projectRoot =
@@ -76,6 +84,7 @@ export async function analyzeImpact(
   const isIgnored = projectRoot ? createImpactIgnoreMatcher(projectRoot, ignoreGlobs) : () => false;
   const referenceCache = createReferenceLookupCache();
   const workBudget = createImpactWorkBudget(options);
+  throwIfImpactAnalysisAborted(signal);
 
   const impacted = new Map<FileId, ImpactItem>();
   const processedSymbols = new Set<string>();
@@ -159,6 +168,7 @@ export async function analyzeImpact(
         return !isIgnored(file);
       },
     });
+    throwIfImpactAnalysisAborted(signal);
     syncBudgetDiagnostics(diagnostics, workBudget);
     await analyzeDirectReferences({
       index,
@@ -172,6 +182,7 @@ export async function analyzeImpact(
       emitImpactItem,
     });
     syncBudgetDiagnostics(diagnostics, workBudget);
+    throwIfImpactAnalysisAborted(signal);
   }
 
   // Seed transitive impact from changed files.  This is NOT redundant with
@@ -179,17 +190,21 @@ export async function analyzeImpact(
   // (they no longer exist), so they would never enter `impacted` through the symbol
   // loop above.  seedTransitiveFromFiles plants them directly so the transitive pass
   // can propagate their impact to dependents.
+  throwIfImpactAnalysisAborted(signal);
   if (!options.membersOnly && !isImpactDeadlineExceeded(workBudget)) {
     seedTransitiveFromFiles(index, impacted, changedFiles, normalizedOptions, reverseDeps, emitImpactItem);
   }
+  throwIfImpactAnalysisAborted(signal);
 
   // Transitive impact via graph traversal (skip if membersOnly)
   if (!options.membersOnly && !isImpactDeadlineExceeded(workBudget)) {
     analyzeTransitiveImpact(impacted, depth, normalizedOptions, isIndexTestFile, reverseDeps, emitImpactItem);
   }
+  throwIfImpactAnalysisAborted(signal);
 
   syncBudgetDiagnostics(diagnostics, workBudget);
   const sorted = Array.from(impacted.values()).sort(compareImpactItems);
+  throwIfImpactAnalysisAborted(signal);
   for (const item of sorted) {
     emitImpactItem(item, "final");
   }

@@ -21,12 +21,18 @@ vi.mock("../src/sqlite/rawQueryWorkerPool.js", async (importOriginal) => {
 import {
   SqliteQueryCancelledError,
   SqliteQueryDeadlineExceededError as PublicSqliteQueryDeadlineExceededError,
+  SqliteQueryWorkerCleanupCapacityExceededError as PublicSqliteQueryWorkerCleanupCapacityExceededError,
 } from "../src/sqlite.js";
 import {
   SqliteQueryCancelledError as RootSqliteQueryCancelledError,
   SqliteQueryDeadlineExceededError as RootSqliteQueryDeadlineExceededError,
+  SqliteQueryWorkerCleanupCapacityExceededError as RootSqliteQueryWorkerCleanupCapacityExceededError,
 } from "../src/index.js";
-import { queryGraphSqliteRaw, SqliteQueryDeadlineExceededError } from "../src/sqlite/query.js";
+import {
+  queryGraphSqliteRaw,
+  SqliteQueryDeadlineExceededError,
+  SqliteQueryWorkerCleanupCapacityExceededError,
+} from "../src/sqlite/query.js";
 
 async function withTempDb(run: (dbPath: string) => Promise<void>): Promise<void> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sqlite-deadline-fallback-"));
@@ -119,14 +125,20 @@ describe("SQLite raw query in-process deadline fallback", () => {
     });
   });
 
-  it("exports named cancellation and deadline errors from public library barrels", () => {
+  it("exports named cancellation, deadline, and capacity errors from public library barrels", () => {
     expect(PublicSqliteQueryDeadlineExceededError).toBe(SqliteQueryDeadlineExceededError);
+    expect(PublicSqliteQueryWorkerCleanupCapacityExceededError).toBe(SqliteQueryWorkerCleanupCapacityExceededError);
     expect(RootSqliteQueryDeadlineExceededError).toBe(SqliteQueryDeadlineExceededError);
     expect(RootSqliteQueryCancelledError).toBe(SqliteQueryCancelledError);
+    expect(RootSqliteQueryWorkerCleanupCapacityExceededError).toBe(SqliteQueryWorkerCleanupCapacityExceededError);
 
-    const error = new PublicSqliteQueryDeadlineExceededError(250);
-    expect(error).toBeInstanceOf(Error);
-    expect(error.name).toBe("SqliteQueryDeadlineExceededError");
-    expect(error.message).toBe("SQLite query exceeded its 250ms execution budget and was terminated.");
+    const deadline = new PublicSqliteQueryDeadlineExceededError(250);
+    expect(deadline).toBeInstanceOf(Error);
+    expect(deadline.name).toBe("SqliteQueryDeadlineExceededError");
+    expect(deadline.message).toBe("SQLite query exceeded its 250ms execution budget and was terminated.");
+    expect(new SqliteQueryCancelledError().message).toBe("SQLite query was cancelled.");
+    expect(new PublicSqliteQueryWorkerCleanupCapacityExceededError(2).message).toContain(
+      "SQLite query worker capacity is exhausted",
+    );
   });
 });

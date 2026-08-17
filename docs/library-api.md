@@ -736,6 +736,7 @@ import {
   queryGraphSqliteRaw,
   SqliteQueryCancelledError,
   SqliteQueryDeadlineExceededError,
+  SqliteQueryWorkerCleanupCapacityExceededError,
 } from "@lzehrung/codegraph-core";
 
 const result = await queryGraphSqliteRaw(
@@ -749,7 +750,7 @@ console.log(result.columns, result.rows);
 
 `queryGraphSqliteRaw()` is intentionally read-only. It accepts result-producing statements such as `SELECT` and `PRAGMA`, rejects mutating SQL, and bounds rows, cells, response bytes, and `{ deadlineMs }`.
 
-The 10-second default deadline rejects the caller promptly and requests worker termination. A native SQLite step already in progress can continue in a bounded cleanup slot until it returns; degraded installs without the worker asset use a weaker in-process check after each iterator step. Callers can catch the exported `SqliteQueryDeadlineExceededError` and `SqliteQueryCancelledError`.
+The 10-second default deadline rejects the caller promptly and requests worker termination. A native SQLite step already in progress can continue in a bounded cleanup slot until it returns; degraded installs without the worker asset use a weaker in-process check after each iterator step. Callers can catch the exported `SqliteQueryDeadlineExceededError`, `SqliteQueryCancelledError`, and `SqliteQueryWorkerCleanupCapacityExceededError`; cancellation is a stable generic message so it exposes no MCP client details.
 
 ## SQL artifact facts
 
@@ -956,7 +957,7 @@ Use the exported TypeScript APIs when another program is composing deterministic
 
 - `buildReviewReport()` returns a review bundle with `schemaVersion`, changed files, changed symbols, `graphDelta`, candidate tests, `riskSummary`, `reviewTasks`, an offline `markdownLinks` result for Markdown sources in the analysis scope when there are changes, optional duplicate sibling-check tasks, optional `sqlContext`, compatibility hints when available, and diagnostics. Accepts an optional third argument, `{ index?, loadIndex?, duplicateAnalysis?, loadDuplicateAnalysis? }`, so a caller that already holds a warm `ProjectIndex` (or wants to defer loading it until review work actually needs it) and, for repeated review calls, a `DuplicatePreparedAnalysis` from `prepareDuplicateAnalysis()` can skip redundant rebuilds. The MCP `review` tool uses the lazy forms to avoid paying index or duplicate-analysis cost on no-change reviews.
 - `analyzeImpactFromDiff()` returns the full or compact impact report shape for batch consumers, including an offline `markdownLinks` result for Markdown sources in the analysis scope when diffs are non-empty and changed-symbol `callCompatibility` hints when available.
-- `analyzeImpactStreaming()` emits progress and incremental chunks, then a final `complete.report` summary. Streaming always returns `format: "stream-summary"`. By default this includes the same key structured fields needed by pack builders: changed files, changed symbols, impacted items, Markdown link findings, suggestions, export summaries, re-export chains, ranked top impacts, surface area, clusters, cycles, graph edges, diagnostics, and warning text. Set `streamSummary: "light"` to drop suggestions, export summaries, re-export chains, ranked top impacts, graph metadata, cycles, clusters, and surface area from the final report.
+- `analyzeImpactStreaming()` emits progress and incremental chunks, then a final `complete.report` summary on success. Streaming always returns `format: "stream-summary"`. By default this includes the same key structured fields needed by pack builders: changed files, changed symbols, impacted items, Markdown link findings, suggestions, export summaries, re-export chains, ranked top impacts, surface area, clusters, cycles, graph edges, diagnostics, and warning text. Set `streamSummary: "light"` to drop suggestions, export summaries, re-export chains, ranked top impacts, graph metadata, cycles, clusters, and surface area from the final report. A bounded queue overflow instead emits terminal `error` without `complete`; ending iteration early cancels later analysis batches, but cannot interrupt a synchronous lookup already in progress.
 
 Review-pack builders should preserve symbol handles, diff snippets, callsites, `callCompatibility`, diagnostics, candidate-test confidence, impact reasons, and graph edge metadata. Render prose only at the final UI or prompt boundary.
 

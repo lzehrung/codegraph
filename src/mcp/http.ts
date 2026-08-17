@@ -23,14 +23,12 @@ export async function readJsonRequestBody(
   timeoutMs: number,
 ): Promise<ParsedJsonBody> {
   const contentLength = getContentLength(request);
-  if (contentLength !== undefined && contentLength > maxBytes) {
-    request.resume();
-    return { status: "too_large" };
-  }
+  const knownTooLarge = contentLength !== undefined && contentLength > maxBytes;
 
   return await new Promise<ParsedJsonBody>((resolve) => {
     const chunks: Buffer[] = [];
     let bytes = 0;
+    let tooLarge = knownTooLarge;
     let settled = false;
     const deadline = setTimeout(() => settle({ status: "timeout" }, true), timeoutMs);
     deadline.unref?.();
@@ -50,15 +48,21 @@ export async function readJsonRequestBody(
       resolve(result);
     };
     const onData = (chunk: string | Buffer): void => {
+      if (tooLarge) return;
       const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
       bytes += buffer.byteLength;
       if (bytes > maxBytes) {
-        settle({ status: "too_large" }, true);
+        tooLarge = true;
+        chunks.length = 0;
         return;
       }
       chunks.push(buffer);
     };
     const onEnd = (): void => {
+      if (tooLarge) {
+        settle({ status: "too_large" }, false);
+        return;
+      }
       const rawBody = Buffer.concat(chunks).toString("utf8");
       try {
         const body: unknown = rawBody.length ? JSON.parse(rawBody) : null;

@@ -308,7 +308,7 @@ const allStats = manager.getAllStats();
 console.log(Boolean(pr1Session), Boolean(pr2Session), Boolean(sameSession), allStats);
 ```
 
-`SessionManager` defaults to 32 live or initializing sessions and scans for expired sessions every 60 seconds. Set `{ maxSessions, evictionIntervalMs }` to tune those bounds; `maxSessions` also applies to net-new `warmup()` sessions. An over-capacity request throws until capacity frees after a session is disposed, expires, or a canceled or failed warmup initialization settles. Set `evictionIntervalMs: 0` to disable periodic cleanup.
+`SessionManager` defaults to 32 live or initializing sessions and scans for expired sessions every 60 seconds. Set `{ maxSessions, evictionIntervalMs }` to tune those bounds; `maxSessions` also applies to net-new `warmup()` sessions. Capacity frees immediately after a ready session is disposed or expires, or after a canceled or failed initialization settles. Set `evictionIntervalMs: 0` to disable periodic cleanup.
 
 ## Streaming impact analysis
 
@@ -338,6 +338,8 @@ for await (const chunk of analyzeImpactStreaming(root, index, {
   }
 }
 ```
+
+Handle `error` as terminal: an overfull bounded queue does not emit `complete`. Breaking iteration or calling `.return()` cancels background work at its next analysis boundary; a synchronous lookup already in progress cannot be interrupted.
 
 Use the same pattern through a warm session when repeated review passes matter:
 

@@ -5,4 +5,5 @@ export {
   queryGraphSqliteRaw,
   SqliteQueryCancelledError,
   SqliteQueryDeadlineExceededError,
+  SqliteQueryWorkerCleanupCapacityExceededError,
 } from "./sqlite/query.js";

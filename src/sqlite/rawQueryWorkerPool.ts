@@ -29,7 +29,7 @@ export class SqliteQueryDeadlineExceededError extends Error {
 
 export class SqliteQueryCancelledError extends Error {
   constructor() {
-    super("SQLite query was cancelled by the MCP client.");
+    super("SQLite query was cancelled.");
     this.name = "SqliteQueryCancelledError";
   }
 }

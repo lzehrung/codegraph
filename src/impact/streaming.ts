@@ -31,7 +31,7 @@ export type ImpactStreamChunk =
   | { type: "projectFiles"; files: ProjectFileInfo[] }
   | import("../types.js").ProgressUpdate
   | { type: "changedSymbol"; symbol: ChangedSymbol }
-  | { type: "impactItem"; item: ImpactItem; partial?: boolean }
+  | { type: "impactItem"; item: ImpactItem; partial?: true }
   | {
       type: "complete";
       summary: { totalChanged: number; totalImpacted: number };
@@ -40,7 +40,7 @@ export type ImpactStreamChunk =
   | { type: "error"; error: string };
 
 type PublicImpactStreamingOptions<Options> = Options extends unknown
-  ? Omit<Options, "diagnostics" | "fileLevelFallbackPaths" | "onImpactItem">
+  ? Omit<Options, "diagnostics" | "fileLevelFallbackPaths" | "onImpactItem" | "signal">
   : never;
 
 type WithoutCompact<Options> = Options extends unknown ? Omit<Options, "compact"> : never;
@@ -238,12 +238,10 @@ export type ImpactStreamingContext = {
  * Cancellation: if the consumer stops iterating early - a `for await` `break`, or an
  * explicit `.return()` on the generator - the async-generator return protocol resumes
  * this function's execution at its `finally` block, which aborts an internal
- * `AbortController`. The background `analyzeImpact()` producer's `onImpactItem` callback
- * checks that signal and throws once it fires, unwinding `analyzeImpact`'s in-progress
- * work (no further batches or transitive passes run) instead of letting the whole
- * analysis complete unread. This needs no signal parameter on the public API: `yield*`
- * delegation (used by `session.ts`'s `analyzeImpactStream`) forwards a caller's
- * `.return()` through automatically.
+ * `AbortController`. The background `analyzeImpact()` producer receives that signal and
+ * checks it at analysis work boundaries and before emitting items, so it does not start
+ * later batches or transitive work after abandonment. An in-progress synchronous lookup
+ * still runs until it returns because it cannot be preempted by JavaScript.
  */
 export async function* analyzeImpactStreaming(
   projectRoot: string,
@@ -337,6 +335,7 @@ export async function* analyzeImpactStreaming(
       fileLevelFallback,
       fileLevelFallbackPaths,
       diagnostics,
+      signal: abortController.signal,
       onImpactItem: (item, phase) => {
         if (abortController.signal.aborted) {
           throw new ImpactStreamAbandonedError();

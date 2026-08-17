@@ -1401,7 +1401,8 @@ describe("SessionManager", () => {
     }
   });
 
-  test("should allow immediate recreation after disposing a pending session", async () => {
+  test("retains pending initialization capacity after disposal until it settles", async () => {
+    const limitedManager = new SessionManager({ maxSessions: 1, evictionIntervalMs: 0 });
     const originalBuild = indexerBuild.buildProjectIndexIncremental;
     let releaseBuild: (() => void) | null = null;
     const buildGate = new Promise<void>((resolve) => {
@@ -1413,31 +1414,42 @@ describe("SessionManager", () => {
     });
 
     try {
-      const firstSession = manager.getOrCreateSession("pending", {
+      const firstSession = limitedManager.getOrCreateSession("pending", {
         root: sampleRoot,
         buildOptions: sampleBuildOptions(),
       });
 
       await Promise.resolve();
-      manager.disposeSession("pending");
-      const secondSession = manager.getOrCreateSession("pending", {
+      limitedManager.disposeSession("pending");
+      await expect(
+        limitedManager.getOrCreateSession("pending", {
+          root: sampleRoot,
+          buildOptions: sampleBuildOptions(),
+        }),
+      ).rejects.toThrow(/still cancelling initialization/);
+      await expect(
+        limitedManager.getOrCreateSession("replacement", {
+          root: sampleRoot,
+          buildOptions: sampleBuildOptions(),
+        }),
+      ).rejects.toThrow("Session capacity reached (1)");
+
+      releaseBuild?.();
+      await expect(firstSession).rejects.toThrow(/disposed during initialization/);
+
+      const replacement = await limitedManager.getOrCreateSession("replacement", {
         root: sampleRoot,
         buildOptions: sampleBuildOptions(),
       });
-      releaseBuild?.();
-
-      await expect(firstSession).rejects.toThrow(/disposed during initialization/);
-      await expect(secondSession).resolves.toMatchObject({
-        getStatus: expect.any(Function),
-      });
-      expect((await secondSession).getStatus()).toBe("ready");
-      expect(manager.getSession("pending")).toBe(await secondSession);
+      expect(replacement.getStatus()).toBe("ready");
     } finally {
       buildSpy.mockRestore();
+      limitedManager.disposeAll();
     }
   });
 
-  test("should allow immediate recreation after disposeAll cancels a pending session", async () => {
+  test("retains pending initialization capacity after disposeAll until it settles", async () => {
+    const limitedManager = new SessionManager({ maxSessions: 1, evictionIntervalMs: 0 });
     const originalBuild = indexerBuild.buildProjectIndexIncremental;
     let releaseBuild: (() => void) | null = null;
     const buildGate = new Promise<void>((resolve) => {
@@ -1449,27 +1461,31 @@ describe("SessionManager", () => {
     });
 
     try {
-      const firstSession = manager.getOrCreateSession("pending", {
+      const firstSession = limitedManager.getOrCreateSession("pending", {
         root: sampleRoot,
         buildOptions: sampleBuildOptions(),
       });
 
       await Promise.resolve();
-      manager.disposeAll();
-      const secondSession = manager.getOrCreateSession("pending", {
+      limitedManager.disposeAll();
+      await expect(
+        limitedManager.getOrCreateSession("replacement", {
+          root: sampleRoot,
+          buildOptions: sampleBuildOptions(),
+        }),
+      ).rejects.toThrow("Session capacity reached (1)");
+
+      releaseBuild?.();
+      await expect(firstSession).rejects.toThrow(/disposed during initialization/);
+
+      const replacement = await limitedManager.getOrCreateSession("replacement", {
         root: sampleRoot,
         buildOptions: sampleBuildOptions(),
       });
-      releaseBuild?.();
-
-      await expect(firstSession).rejects.toThrow(/disposed during initialization/);
-      await expect(secondSession).resolves.toMatchObject({
-        getStatus: expect.any(Function),
-      });
-      expect((await secondSession).getStatus()).toBe("ready");
-      expect(manager.getSession("pending")).toBe(await secondSession);
+      expect(replacement.getStatus()).toBe("ready");
     } finally {
       buildSpy.mockRestore();
+      limitedManager.disposeAll();
     }
   });
 

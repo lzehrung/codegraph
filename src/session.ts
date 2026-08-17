@@ -811,17 +811,16 @@ function normalizeSessionManagerEvictionInterval(value: number | undefined): num
  * Session manager for multiple concurrent sessions
  * Useful for agents handling multiple repositories or PRs
  */
+
+type PendingSession = {
+  cancelled: boolean;
+  fingerprint: string;
+  retainPending: boolean;
+  promise: Promise<CodeReviewSession>;
+};
 export class SessionManager {
   private sessions = new Map<string, CodeReviewSession>();
-  private pendingSessions = new Map<
-    string,
-    {
-      cancelled: boolean;
-      fingerprint: string;
-      retainPending: boolean;
-      promise: Promise<CodeReviewSession>;
-    }
-  >();
+  private pendingSessions = new Map<string, PendingSession>();
   private readonly maxSessions: number;
   private readonly evictionTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -832,6 +831,18 @@ export class SessionManager {
       this.evictionTimer = setInterval(() => this.cleanupExpired(), evictionIntervalMs);
       this.evictionTimer.unref?.();
     }
+  }
+
+  private cancelPendingSession(sessionId: string, pending: PendingSession): void {
+    pending.cancelled = true;
+    pending.retainPending = false;
+    void pending.promise
+      .finally(() => {
+        if (this.pendingSessions.get(sessionId) === pending && !pending.retainPending) {
+          this.pendingSessions.delete(sessionId);
+        }
+      })
+      .catch(() => {});
   }
 
   private assertCapacityForNewSession(): void {
@@ -868,6 +879,9 @@ export class SessionManager {
   ): Promise<CodeReviewSession> | undefined {
     const pending = this.pendingSessions.get(sessionId);
     if (!pending) return undefined;
+    if (pending.cancelled) {
+      throw new Error(`Session "${sessionId}" is still cancelling initialization. Retry after it settles.`);
+    }
     const requestedFingerprint = sessionIdentityFingerprint(resolveSessionIdentity(options));
     if (pending.fingerprint !== requestedFingerprint) {
       const existing = this.sessions.get(sessionId);
@@ -962,10 +976,7 @@ export class SessionManager {
    */
   disposeSession(sessionId: string): void {
     const pending = this.pendingSessions.get(sessionId);
-    if (pending) {
-      pending.cancelled = true;
-      this.pendingSessions.delete(sessionId);
-    }
+    if (pending) this.cancelPendingSession(sessionId, pending);
     const session = this.sessions.get(sessionId);
     if (session) {
       session.dispose();
@@ -977,10 +988,9 @@ export class SessionManager {
    * Dispose of all sessions
    */
   disposeAll(): void {
-    for (const pending of this.pendingSessions.values()) {
-      pending.cancelled = true;
+    for (const [sessionId, pending] of this.pendingSessions) {
+      this.cancelPendingSession(sessionId, pending);
     }
-    this.pendingSessions.clear();
     for (const session of this.sessions.values()) {
       session.dispose();
     }
@@ -1065,17 +1075,7 @@ export class SessionManager {
     } catch (error) {
       for (const replacement of replacementSessions) {
         const pending = this.pendingSessions.get(replacement.id);
-        if (pending) {
-          pending.cancelled = true;
-          pending.retainPending = false;
-          void pending.promise
-            .finally(() => {
-              if (this.pendingSessions.get(replacement.id) === pending && !pending.retainPending) {
-                this.pendingSessions.delete(replacement.id);
-              }
-            })
-            .catch(() => {});
-        }
+        if (pending) this.cancelPendingSession(replacement.id, pending);
         replacement.session.dispose();
       }
       throw error;

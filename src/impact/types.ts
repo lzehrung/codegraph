@@ -571,4 +571,6 @@ export type ImpactOptions = DiffProviderOptions & {
   diagnostics?: ImpactDiagnostics;
   /** @internal Internal callback used by streaming analysis to emit progressive impact snapshots */
   onImpactItem?: (item: ImpactItem, phase: "partial" | "final") => void;
+  /** @internal Cancellation signal used to stop background streaming analysis at work boundaries. */
+  signal?: AbortSignal;
 };
