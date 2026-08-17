@@ -319,6 +319,22 @@ describe("agent search", () => {
     ).toBeTruthy();
   });
 
+  it("does not grant exact-phrase boost for deduped rank-token join alone", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-phrase-"));
+    await fs.mkdir(path.join(root, "src"));
+    // Contains deduped join "alpha beta" but not full repeated phrase "alpha beta alpha".
+    await fs.writeFile(path.join(root, "src", "repeat.ts"), "export const value = 'alpha beta gamma';\n");
+    const response = await searchCodegraph({
+      root,
+      query: "alpha beta alpha",
+      mode: "text",
+      limit: 10,
+    });
+    const hit = response.results.find((result) => result.file === "src/repeat.ts");
+    expect(hit).toBeTruthy();
+    expect(hit?.rankReasons.some((reason) => /exact phrase/i.test(reason))).toBe(false);
+  });
+
   it("keeps implementation results ahead of documentation phrases in hybrid mode", async () => {
     const root = await mkRepo();
 

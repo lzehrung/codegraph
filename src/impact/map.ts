@@ -49,7 +49,7 @@ export async function locateChangedSymbolsWithLines(
 
   let parsedEntry;
   try {
-    parsedEntry = await ensureParsedContext(file, index.parsed?.get(fileIdentityKey(file)));
+    parsedEntry = await ensureParsedContext(file, index.parsed?.get(fileIdentityKey(file)), index.languageExtensions);
   } catch {
     return { changedSymbols: [], changedLines, parseFailed: true };
   }
@@ -286,7 +286,7 @@ export async function mapChangedLinesToSymbols(
 
   let parsedEntry;
   try {
-    parsedEntry = await ensureParsedContext(file, index.parsed?.get(fileIdentityKey(file)));
+    parsedEntry = await ensureParsedContext(file, index.parsed?.get(fileIdentityKey(file)), index.languageExtensions);
   } catch {
     return new Map();
   }

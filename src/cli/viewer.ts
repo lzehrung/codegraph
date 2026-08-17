@@ -14,7 +14,7 @@ import {
   isAllowedHostHeader,
   listenOnHttpServer,
 } from "../mcp/http.js";
-import { cacheRoot } from "../indexer/build-cache/module-cache.js";
+import { cacheRoot } from "../indexer/build-cache/location.js";
 import { parseOptionalBoundedIntegerOption } from "./options.js";
 import { assertFilePathWithinRoot, resolveFilePathFromRoot } from "../util/paths.js";
 import { errorMessage } from "../util/errors.js";

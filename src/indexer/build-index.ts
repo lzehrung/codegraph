@@ -17,6 +17,7 @@ import {
   assertFilePathWithinRoot,
   fileIdentityKey,
   initializeFileIdentityCaseSensitivity,
+  isFilePathWithinRoot,
   normalizePath,
 } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
@@ -64,13 +65,16 @@ import {
   tryLoadFromCache,
   tryLoadPersistedBloomFilters,
   tryLoadProjectIndexSnapshot,
+  tryLoadProjectSnapshotModules,
   verifyManifestEntries,
+  writeModulesToCache,
   writeProjectIndexSnapshot,
   writeToCache,
   type FileSignature,
   type ManifestFileEntry,
+  type PendingModuleCacheWrite,
 } from "./build-cache.js";
-import { cacheRoot } from "./build-cache/module-cache.js";
+import { cacheRoot } from "./build-cache/location.js";
 import {
   type BuildOptions,
   type BuildReport,
@@ -119,6 +123,7 @@ type IndexedFileGraphContext = {
 
 type IndexedFileModuleResult = {
   module: ModuleIndex;
+  cacheWrite?: PendingModuleCacheWrite | undefined;
   graphContext: IndexedFileGraphContext;
 };
 
@@ -192,15 +197,19 @@ async function resolveCrossModuleSymbolExports(
       continue;
     }
     if (entry.fromModule.startsWith(".")) {
+      entry.moduleSpecifier ??= entry.fromModule;
       const resolved = await resolveSpecifier(file, entry.fromModule, projectRoot, matchPath, workspaceConfig, {
         resolveNodeModules: !!graphOptions.resolveNodeModules,
         ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
       });
-      if (typeof resolved === "string") entry.fromModule = resolved;
+      if (typeof resolved === "string" && isFilePathWithinRoot(projectRoot, resolved)) entry.fromModule = resolved;
       continue;
     }
     const pkgResolved = await resolveWorkspacePackage(entry.fromModule, workspaceConfig);
-    if (pkgResolved) entry.fromModule = pkgResolved;
+    if (pkgResolved) {
+      entry.moduleSpecifier ??= entry.fromModule;
+      if (isFilePathWithinRoot(projectRoot, pkgResolved)) entry.fromModule = pkgResolved;
+    }
   }
 }
 
@@ -331,15 +340,17 @@ async function buildIndexedModuleForFile(args: {
 
   const sigInfo = args.fileSignatures.get(args.file);
   const cacheable = !prepared.nativeFallbackReason && !lacksParserContext;
+  let cacheWrite: PendingModuleCacheWrite | undefined;
   if (sigInfo && cacheable) {
     const cacheSig = args.cacheEnabled
       ? await moduleCacheSignatureForFile(args.file, sigInfo, args.opts)
       : sigInfo.cacheSig;
-    writeToCache(args.projectRoot, args.file, cacheSig, mod, args.opts);
+    cacheWrite = { file: args.file, sig: cacheSig, mod };
   }
 
   return {
     module: mod,
+    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
     graphContext: {
       source,
       sup,
@@ -392,15 +403,20 @@ function graphEdgeKey(edge: Edge): string {
 async function moduleCacheSignatureForFile(file: string, sigInfo: FileSignature, opts?: BuildOptions): Promise<string> {
   const baseSignature = await cacheSignatureForFile(file, sigInfo, opts);
   const normalizedExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
-  if (!normalizedExtensions) return baseSignature;
+  const resolveNodeModules = normalizeGraphOptions(opts?.graph).resolveNodeModules;
+  if (!normalizedExtensions && !resolveNodeModules) return baseSignature;
   // Combine via a hash rather than raw concatenation: the disk cache stores this string in a
   // SQLite TEXT column, and node:sqlite's DatabaseSync silently truncates TEXT bind parameters
   // at embedded NUL bytes, so a raw separator character risks the stored and freshly-computed
   // signatures never matching (permanent cache miss) if either baseSignature or the serialized
-  // extensions ever contained one.
+  // extensions ever contained one. A cached ModuleIndex's ImportBinding.resolved values differ
+  // depending on whether resolveNodeModules was on at write time (resolved node_modules targets
+  // vs. external), so that state must be part of the key too, not just gate reuse for one
+  // direction of the toggle.
   const hash = crypto.createHash("sha1");
   hash.update(baseSignature);
-  hash.update(JSON.stringify(Object.entries(normalizedExtensions)));
+  hash.update(JSON.stringify(Object.entries(normalizedExtensions ?? {})));
+  hash.update(resolveNodeModules ? "\0resolveNodeModules" : "");
   return hash.digest("hex");
 }
 
@@ -468,15 +484,22 @@ function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: BuildOption
   }
 }
 
-function toProjectIndexManifestEntry(entry: Pick<ManifestFileEntry, "sig" | "gitSig">): ProjectIndexManifestEntry {
+function toProjectIndexManifestEntry(
+  entry: Pick<ManifestFileEntry, "sig" | "gitSig"> & { cacheSig?: string },
+): ProjectIndexManifestEntry {
+  // A git signature alone is already a strong content identity (`fileSignature()` derives
+  // `cacheSig` the same way: `gitSig ?? contentHash ?? sig`), so entries sourced from the disk
+  // manifest (which does not persist `cacheSig`) still get one whenever `gitSig` is available.
+  const cacheSig = entry.cacheSig ?? entry.gitSig;
   return {
     sig: entry.sig,
     ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
+    ...(cacheSig ? { cacheSig } : {}),
   };
 }
 
 function projectIndexManifestEntries(
-  entries: Iterable<readonly [string, Pick<ManifestFileEntry, "sig" | "gitSig">]>,
+  entries: Iterable<readonly [string, Pick<ManifestFileEntry, "sig" | "gitSig"> & { cacheSig?: string }]>,
 ): Map<string, ProjectIndexManifestEntry> {
   return new Map(Array.from(entries, ([file, entry]) => [file, toProjectIndexManifestEntry(entry)]));
 }
@@ -512,7 +535,7 @@ function createIndexBuildRunState(
   if (report) initNativeBackendReport(report);
   const cacheMode = opts?.cache ?? "off";
   return {
-    normalizedProjectRoot: normalizePath(projectRoot),
+    normalizedProjectRoot: normalizePath(path.resolve(projectRoot)),
     report,
     timings: report?.timings,
     totalStart: performance.now(),
@@ -556,11 +579,12 @@ async function prepareFileSignatures(args: {
   opts: BuildOptions | undefined;
   gitSigMap: Map<string, string>;
   cacheEnabled: boolean;
+  needsContentHash: boolean;
   concurrency: number;
 }): Promise<Map<string, FileSignature>> {
   const entries = await mapLimit(args.files, args.concurrency, async (file) => {
     const gitSig = args.gitSigMap.get(file);
-    const sigInfo = await fileSignature(file, args.opts?.cacheStrict, gitSig, {
+    const sigInfo = await fileSignature(file, args.needsContentHash ? args.opts?.cacheStrict : false, gitSig, {
       forceContentHash: args.cacheEnabled && !gitSig,
     });
     return [file, sigInfo] as const;
@@ -632,10 +656,13 @@ async function buildIndexFromFileListShared(
       }
     }
   }
+  // Installed package exports are mutable outside source/lockfile signatures; never reuse
+  // persisted edges when node-module resolution is enabled without an environment fingerprint.
   const cachedGraphEntries =
     manifest &&
     !languageExtensionsChanged &&
     !implementationChanged &&
+    !graphOptions.resolveNodeModules &&
     graphOptionsEqual(manifest.graphOptions, graphOptions)
       ? new Map<string, ManifestFileEntry>(
           Object.entries(manifestFiles).filter(([file]) => !staleCachedEdgeFiles.has(file)),
@@ -670,6 +697,7 @@ async function buildIndexFromFileListShared(
     opts,
     gitSigMap,
     cacheEnabled,
+    needsContentHash: true,
     concurrency: conc,
   });
   const sqlCorpusSig = sqlCorpusSignature(sqlFiles, fileSignatures);
@@ -731,7 +759,14 @@ async function buildIndexFromFileListShared(
           if (initialManifestEntry) manifestEntries.set(file, initialManifestEntry);
         }
         const cacheSig = cacheEnabled ? await moduleCacheSignatureForFile(file, sigInfo, opts) : sigInfo.cacheSig;
-        let mod: ModuleIndex | null = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
+        // A cached ModuleIndex's ImportBinding.resolved values were computed under the
+        // resolveNodeModules state active at write time; reusing them when that state
+        // just turned on would return stale (unresolved) node-module import targets even
+        // though graph-edge reuse is already disabled for this mode above.
+        const canReuseModuleCache = cacheEnabled && !graphOptions.resolveNodeModules;
+        let mod: ModuleIndex | null = canReuseModuleCache
+          ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report)
+          : null;
         if (mod && fileReport) {
           fileReport.cached = (fileReport.cached ?? 0) + 1;
         }
@@ -766,7 +801,7 @@ async function buildIndexFromFileListShared(
             ...(sqlFactCache ? { sqlFactCache } : {}),
           });
           if (bloomFilterCache) {
-            const persistedFilter = persistedBloomFilters?.get(file);
+            const persistedFilter = persistedBloomFilters?.get(file, sigInfo);
             if (persistedFilter) {
               bloomFilterCache.set(file, persistedFilter);
             } else {
@@ -774,13 +809,14 @@ async function buildIndexFromFileListShared(
               if (filter) bloomFilterCache.set(file, filter);
             }
           }
-          return [file, mod, edges] as const;
+          return [file, mod, edges, undefined] as const;
         }
         if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
         const support = supportForFile(file, opts?.languageExtensions);
-        if (!support) return [file, createEmptyModuleIndex(file), []] as const;
+        if (!support) return [file, createEmptyModuleIndex(file), [], undefined] as const;
         ensureBuildProgressStarted();
         let graphContext: IndexedFileGraphContext | undefined;
+        let cacheWrite: PendingModuleCacheWrite | undefined;
         if (!mod) {
           const built = await buildIndexedModuleForFile({
             file,
@@ -801,6 +837,7 @@ async function buildIndexFromFileListShared(
           });
           mod = built.module;
           graphContext = built.graphContext;
+          cacheWrite = built.cacheWrite;
         } else {
           collectJsonDependencies(mod.imports, jsonDependencies);
         }
@@ -825,11 +862,11 @@ async function buildIndexFromFileListShared(
           allFiles: normalizedFiles,
           ...(sqlFactCache ? { sqlFactCache } : {}),
         });
-        return [file, mod ?? createEmptyModuleIndex(file), edges] as const;
+        return [file, mod ?? createEmptyModuleIndex(file), edges, cacheWrite] as const;
       } catch (error) {
         if (isNativeRequiredUnavailableError(error) || isNodeSqliteUnavailableError(error)) throw error;
         if (isUnsupportedParserInputError(error) || isNonNativeParserUnavailableError(error)) {
-          return [file, createEmptyModuleIndex(file), []] as const;
+          return [file, createEmptyModuleIndex(file), [], undefined] as const;
         }
         recordFileFailure(report, file, error);
         logWithLevel(opts?.logLevel, "warn", `Warning: Failed to process file ${file}:`, error);
@@ -861,9 +898,14 @@ async function buildIndexFromFileListShared(
         if (edge.to.type === "file") graph.nodes.add(edge.to.path);
       }
     };
-    for (const [file, mod, edges] of fileResults) {
+    const pendingCacheWrites: PendingModuleCacheWrite[] = [];
+    for (const [file, mod, edges, cacheWrite] of fileResults) {
       modules.set(fileIdentityKey(file), mod);
       appendUniqueGraphEdges(edges);
+      if (cacheWrite) pendingCacheWrites.push(cacheWrite);
+    }
+    if (pendingCacheWrites.length) {
+      writeModulesToCache(projectRoot, pendingCacheWrites, opts);
     }
     const workspaceManifestEdges = await collectWorkspaceManifestDependencyEdges(
       projectRoot,
@@ -904,7 +946,12 @@ async function buildIndexFromFileListShared(
       manifestEntries: manifestEntriesForIndex,
     });
     if (manifestEntries) {
-      await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries));
+      await writeProjectIndexSnapshot(
+        projectRoot,
+        opts,
+        index,
+        projectSnapshotFilesSignature(manifestEntries, projectRoot),
+      );
     }
     if (buildStartedAt !== undefined) {
       emitIndexLifecycleProgress(opts, "complete", "build", index.byFile.size, performance.now() - buildStartedAt);
@@ -1213,9 +1260,11 @@ export async function buildProjectIndexIncremental(
       opts?.additionalFiles ?? [],
       "Additional index file",
     );
-    const previousTransientFiles = sanitizeManifestTransientFilesForRoot(projectRoot, manifest.transientFiles).filter(
-      (file) => Object.hasOwn(trackedEntries, file),
-    );
+    const previousTransientFiles = sanitizeManifestTransientFilesForRoot(
+      projectRoot,
+      projectRoot,
+      manifest.transientFiles,
+    ).filter((file) => Object.hasOwn(trackedEntries, file));
     const previousTransientFileSet = new Set(previousTransientFiles);
     const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
     const gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];
@@ -1323,6 +1372,10 @@ export async function buildProjectIndexIncremental(
       };
     }
     const changedFiles = new Set<string>();
+    const forceNodeModuleReResolution = normalizeGraphOptions(opts?.graph).resolveNodeModules;
+    if (forceNodeModuleReResolution) {
+      for (const file of allFiles) changedFiles.add(file);
+    }
     const markAsChanged = (file: string): void => {
       if (allFiles.has(file)) changedFiles.add(file);
     };
@@ -1435,6 +1488,7 @@ export async function buildProjectIndexIncremental(
         opts,
         gitSigMap,
         cacheEnabled,
+        needsContentHash: cacheEnabled || manifestUsed || opts?.cacheStrict === true,
         concurrency: conc,
       });
       const modules = new Map<FileId, ModuleIndex>();
@@ -1479,18 +1533,27 @@ export async function buildProjectIndexIncremental(
         completeCheckProgress(allFiles.size);
         return unchangedSnapshot;
       }
+      const snapshotModules = cacheEnabled
+        ? await tryLoadProjectSnapshotModules(projectRoot, opts, fileSignatures)
+        : null;
       const persistedBloomFilters = bloomFilterCache ? await tryLoadPersistedBloomFilters(projectRoot, opts) : null;
       for (const file of allFiles) {
         if (changedFiles.has(file)) continue;
         const sigInfo = fileSignatures.get(file)!;
-        const cacheSig = cacheEnabled ? await moduleCacheSignatureForFile(file, sigInfo, opts) : sigInfo.cacheSig;
-        const cached = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
+        let cached: ModuleIndex | null = null;
+        const snapshotMod = snapshotModules?.get(fileIdentityKey(file));
+        if (snapshotMod) {
+          cached = snapshotMod;
+        } else if (cacheEnabled) {
+          const cacheSig = await moduleCacheSignatureForFile(file, sigInfo, opts);
+          cached = tryLoadFromCache(projectRoot, file, cacheSig, opts, report);
+        }
         if (cached) {
           if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
           modules.set(fileIdentityKey(file), cached);
           collectJsonDependencies(cached.imports, jsonDependencies);
           if (bloomFilterCache) {
-            const persistedFilter = persistedBloomFilters?.get(file);
+            const persistedFilter = persistedBloomFilters?.get(file, sigInfo);
             if (persistedFilter) {
               bloomFilterCache.set(file, persistedFilter);
             } else {
@@ -1536,7 +1599,7 @@ export async function buildProjectIndexIncremental(
               fileSignatures,
               cacheEnabled,
             });
-            return [file, built.module] as const;
+            return [file, built.module, built.cacheWrite] as const;
           } catch (error) {
             if (isNativeRequiredUnavailableError(error) || isNodeSqliteUnavailableError(error)) throw error;
             if (isUnsupportedParserInputError(error) || isNonNativeParserUnavailableError(error)) {
@@ -1544,7 +1607,7 @@ export async function buildProjectIndexIncremental(
             }
             recordFileFailure(report, file, error);
             logWithLevel(opts?.logLevel, "warn", `Warning: Failed to process file ${file}:`, error);
-            return [file, createEmptyModuleIndex(file)] as const;
+            return [file, createEmptyModuleIndex(file), undefined] as const;
           } finally {
             if (opts?.onProgress) {
               opts.onProgress({
@@ -1558,8 +1621,13 @@ export async function buildProjectIndexIncremental(
             }
           }
         });
-        for (const [file, mod] of fileResults) {
+        const pendingIncrementalCacheWrites: PendingModuleCacheWrite[] = [];
+        for (const [file, mod, cacheWrite] of fileResults) {
           modules.set(fileIdentityKey(file), mod);
+          if (cacheWrite) pendingIncrementalCacheWrites.push(cacheWrite);
+        }
+        if (pendingIncrementalCacheWrites.length) {
+          writeModulesToCache(projectRoot, pendingIncrementalCacheWrites, opts);
         }
         if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
       }
@@ -1568,7 +1636,9 @@ export async function buildProjectIndexIncremental(
       }
       expandStarImports(modules, opts);
       const retainedTrackedEntries = Object.entries(trackedEntries).filter(([file]) => !deletedTrackedFiles.has(file));
-      const cachedGraphEntries = new Map<string, ManifestFileEntry>(retainedTrackedEntries);
+      const cachedGraphEntries = normalizeGraphOptions(opts?.graph).resolveNodeModules
+        ? new Map<string, ManifestFileEntry>()
+        : new Map<string, ManifestFileEntry>(retainedTrackedEntries);
       const manifestEntries = new Map<string, ManifestFileEntry>(cachedGraphEntries);
       const baseGraph: Graph | undefined =
         cachedGraphEntries.size > 0 ? { nodes: new Set<string>(), edges: [] } : undefined;
@@ -1640,10 +1710,26 @@ export async function buildProjectIndexIncremental(
         modules,
         parsedMap,
         bloomFilterCache,
-        manifestEntries: projectIndexManifestEntries(manifestEntries),
+        manifestEntries: projectIndexManifestEntries(
+          // `manifestEntries` (a `ManifestFileEntry`) never carries `cacheSig` -- that field
+          // only lives on `FileSignature`. Overlay each entry with the `cacheSig` this build
+          // actually computed (content-hash-derived for non-git files, since caching is enabled
+          // whenever this path runs) so incremental writes preserve the same strong identity a
+          // cold build produces, instead of leaving snapshot/bloom reuse to fall back to the
+          // weak `mtime:size` `sig`.
+          Array.from(manifestEntries, ([file, entry]) => {
+            const cacheSig = fileSignatures.get(file)?.cacheSig;
+            return [file, { ...entry, ...(cacheSig ? { cacheSig } : {}) }] as const;
+          }),
+        ),
         buildReport: report,
       });
-      await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries));
+      await writeProjectIndexSnapshot(
+        projectRoot,
+        opts,
+        index,
+        projectSnapshotFilesSignature(manifestEntries, projectRoot),
+      );
       if (updateStartedAt !== undefined) {
         emitIndexLifecycleProgress(opts, "complete", "update", index.byFile.size, performance.now() - updateStartedAt);
       } else {

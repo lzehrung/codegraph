@@ -1,4 +1,4 @@
-import { type LanguageSupport } from "../languages.js";
+import { type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { resolveMemberAccessDefinition, supportsReceiverMemberResolution } from "./navigation-goto.js";
@@ -63,7 +63,9 @@ export async function goToDefinition(
   const sqlResult = await goToSqlDefinition(index, req);
   if (sqlResult) return sqlResult;
 
-  const context = parsedContext ?? (await ensureParsedContext(file, index.parsed?.get(fileIdentityKey(file))));
+  const context =
+    parsedContext ??
+    (await ensureParsedContext(file, index.parsed?.get(fileIdentityKey(file)), index.languageExtensions));
   const sup = context.sup;
   const lang = context.lang;
   const source = context.source;
@@ -243,7 +245,7 @@ export async function findReferences(
 
   const definitionFile = def.file;
   const parsedDef = index.parsed?.get(fileIdentityKey(definitionFile));
-  const parsedContext = await ensureParsedContext(definitionFile, parsedDef);
+  const parsedContext = await ensureParsedContext(definitionFile, parsedDef, index.languageExtensions);
 
   const mod = index.byFile.get(fileIdentityKey(definitionFile));
   if (!mod) return { status: "not_found", reason: "Module not found" };
@@ -313,7 +315,7 @@ export async function findReferences(
     const ensureCandidateParsed = async (): Promise<ParsedFileContext> => {
       if (!candidateParsedContext) {
         const parsedEntry = index.parsed?.get(fileIdentityKey(fileId));
-        candidateParsedContext = await ensureParsedContext(fileId, parsedEntry);
+        candidateParsedContext = await ensureParsedContext(fileId, parsedEntry, index.languageExtensions);
       }
       return candidateParsedContext;
     };
@@ -340,7 +342,13 @@ export async function findReferences(
               : fileIdentityKey(targetFile) === fileIdentityKey(definitionFile);
           if (!matchesDef) continue;
           const parsed = await ensureCandidateParsed();
-          const ranges = await collectNamespaceMemberRefs(fileId, imp.localNS, exportedName, parsed);
+          const ranges = await collectNamespaceMemberRefs(
+            fileId,
+            imp.localNS,
+            exportedName,
+            parsed,
+            index.languageExtensions,
+          );
           for (const range of ranges) {
             if (hasReachedMaxReferences()) break;
             pushRef({
@@ -457,7 +465,7 @@ export async function findReferences(
       let cached = perFileCache.get(fileIdentityKey(ref.file));
       if (!cached) {
         const parsedEntry = index.parsed?.get(fileIdentityKey(ref.file));
-        const parsed = await ensureParsedContext(ref.file, parsedEntry);
+        const parsed = await ensureParsedContext(ref.file, parsedEntry, index.languageExtensions);
         cached = { source: parsed.source, tree: parsed.tree, sup: parsed.sup };
         perFileCache.set(fileIdentityKey(ref.file), cached);
       }
@@ -538,8 +546,9 @@ export async function collectNamespaceMemberRefs(
   ns: string,
   member: string,
   parsedContext?: ParsedFileContext,
+  languageExtensions?: LanguageExtensionMap,
 ): Promise<Range[]> {
-  const parsed = parsedContext ?? (await ensureParsedContext(file, undefined));
+  const parsed = parsedContext ?? (await ensureParsedContext(file, undefined, languageExtensions));
   const sup = parsed.sup;
   const source = parsed.source;
   const tree = parsed.tree;

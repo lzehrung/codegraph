@@ -132,6 +132,17 @@ describe("persistent query index", () => {
     expect(authEvidence?.line).toBe(1);
   });
 
+  it("reports both candidate files and candidate chunks for sidecar searches", async () => {
+    const root = await createRepo();
+    const session = createSession(root);
+
+    await search(session, root, "validateUser");
+    const diagnostics = (await session.loadProject()).buildReport?.queryIndex;
+
+    expect(diagnostics?.fileCandidates).toBe(2);
+    expect(diagnostics?.chunkCandidates).toBeGreaterThan(0);
+  });
+
   it("keeps compressed indexed text below the amplification target", async () => {
     const root = await createRepo();
     const source = Array.from(
@@ -747,6 +758,54 @@ describe("persistent query index", () => {
     expect(candidates[0]?.path).toBe("src/zz-top.ts");
     expect(candidates.some((candidate) => candidate.path === "src/zz-top.ts")).toBe(true);
     expect(candidates).toHaveLength(QUERY_INDEX_CANDIDATE_ROW_LIMIT);
+    store.close();
+  });
+
+  it("bounds candidateChunksForTerms SQL prefetch via the limit parameter", async () => {
+    const root = await createRepo();
+    const databasePath = path.join(root, "query-candidate-limit.sqlite");
+    const store = new QueryIndexStore(databasePath);
+    const files = Array.from({ length: 20 }, (_, index) =>
+      preparedFile(`src/file${String(index).padStart(2, "0")}.ts`, ["const alphaNoise = 1;"]),
+    );
+    store.replaceFiles(files, [], {
+      ...expectedQueryIndexVersionMetadata(),
+      projectSnapshotIdentity: "snap-4",
+      projectRootIdentity: "root-4",
+      createdByCodegraphVersion: "test",
+      updatedAt: new Date().toISOString(),
+    });
+    const paths = files.map((file) => file.path);
+
+    const unbounded = store.candidateChunksForTerms(["alpha"], paths);
+    expect(unbounded).toHaveLength(20);
+
+    const bounded = store.candidateChunksForTerms(["alpha"], paths, 5);
+    expect(bounded).toHaveLength(5);
+    store.close();
+  });
+
+  it("gives each term its own prefetch budget so a rare term is not starved by a common early-path term", async () => {
+    const root = await createRepo();
+    const databasePath = path.join(root, "query-candidate-fairness.sqlite");
+    const store = new QueryIndexStore(databasePath);
+    const alphaFiles = Array.from({ length: 20 }, (_, index) =>
+      preparedFile(`src/a${String(index).padStart(3, "0")}.ts`, ["const alphaNoise = 1;"]),
+    );
+    const betaFile = preparedFile("src/zz-beta.ts", ["const betaValue = 1;"]);
+    const files = [...alphaFiles, betaFile];
+    store.replaceFiles(files, [], {
+      ...expectedQueryIndexVersionMetadata(),
+      projectSnapshotIdentity: "snap-5",
+      projectRootIdentity: "root-5",
+      createdByCodegraphVersion: "test",
+      updatedAt: new Date().toISOString(),
+    });
+    const paths = files.map((file) => file.path);
+
+    const candidates = store.candidateChunksForTerms(["alpha", "beta"], paths, 10);
+
+    expect(candidates.some((candidate) => candidate.path === "src/zz-beta.ts")).toBe(true);
     store.close();
   });
 

@@ -11,6 +11,7 @@ import { runGit as git } from "./helpers/git.js";
 import { captureCli, runCliOrThrow, runTsxScriptOrThrow } from "./helpers/cli.js";
 import { copyFixtureSubset, createTwoCommitCycleProject, readOnlySamplePath } from "./helpers/filesystem.js";
 import { decompactFileGraph, type CompactFileGraphPayload } from "./helpers/compactGraph.js";
+import { cacheRoot } from "../src/indexer/build-cache/location.js";
 
 const sourceCliPath = path.resolve(process.cwd(), "src", "cli.ts");
 
@@ -997,6 +998,44 @@ describe("CLI regressions", () => {
     expect(hotspots).toEqual(coldHotspots);
     expect(result.stderr).toContain("Index cache: manifest=");
     expect(result.stderr).toContain("lastCommit=");
+  });
+
+  it("honors --cache-dir for index, goto, hotspots, and inspect instead of silently writing to the default location", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-cache-dir-"));
+    await fsp.writeFile(path.join(tmpDir, "main.ts"), "export const main = 1;\n", "utf8");
+    await fsp.writeFile(
+      path.join(tmpDir, "usage.ts"),
+      "import { main } from './main';\nexport const used = main;\n",
+      "utf8",
+    );
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-cache-dir-target-"));
+    const expectedCachePath = cacheRoot(tmpDir, { cache: "disk", cacheDir });
+
+    await runCliCommand(["index", "--json", "--root", tmpDir, "--cache-dir", cacheDir]);
+    await expect(fsp.stat(path.join(expectedCachePath, "manifest.json"))).resolves.toBeTruthy();
+    await expect(fsp.stat(path.join(tmpDir, ".codegraph-cache", "index-v1", "manifest.json"))).rejects.toThrow();
+
+    await fsp.rm(expectedCachePath, { recursive: true, force: true });
+    const gotoStdout = await runCliCommand([
+      "goto",
+      `${path.join(tmpDir, "usage.ts")}:1:10`,
+      "--root",
+      tmpDir,
+      "--cache-dir",
+      cacheDir,
+      "--json",
+    ]);
+    expect(JSON.parse(gotoStdout)).toMatchObject({ status: "ok" });
+    await expect(fsp.stat(path.join(expectedCachePath, "manifest.json"))).resolves.toBeTruthy();
+
+    await fsp.rm(expectedCachePath, { recursive: true, force: true });
+    const hotspotsStdout = await runCliCommand(["hotspots", "--root", tmpDir, "--cache-dir", cacheDir, "--json"]);
+    expect(JSON.parse(hotspotsStdout)).toBeInstanceOf(Array);
+    await expect(fsp.stat(path.join(expectedCachePath, "manifest.json"))).resolves.toBeTruthy();
+
+    const inspectStdout = await runCliCommand(["inspect", "--root", tmpDir, "--cache-dir", cacheDir, "--json"]);
+    const inspectReport = JSON.parse(inspectStdout) as { indexCache?: { manifestPath?: string } };
+    expect(normalize(inspectReport.indexCache?.manifestPath ?? "")).toContain(normalize(cacheDir));
   });
 
   it("inspect emits backend, file summary, scoped hotspots, and recommended commands", async () => {

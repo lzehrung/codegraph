@@ -278,6 +278,34 @@ describe("workspace symbol lookup", () => {
     }
   });
 
+  it("resolves import bindings in files with a custom configured extension", async () => {
+    const isolatedRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-workspace-symbols-customext-"));
+    try {
+      const sourceDir = path.join(isolatedRoot, "src");
+      const targetFile = path.join(sourceDir, "service.ts");
+      const importerFile = path.join(sourceDir, "importer.mylang");
+      await fs.mkdir(sourceDir, { recursive: true });
+      await fs.writeFile(targetFile, "export class Service {}\n");
+      await fs.writeFile(
+        importerFile,
+        "import { Service as LocalService } from './service';\nexport function useService() { return LocalService; }\n",
+      );
+      const languageExtensions = { ".mylang": "ts" };
+      const isolatedIndex = await buildProjectIndexFromFiles(isolatedRoot, [targetFile, importerFile], {
+        cache: "off",
+        languageExtensions,
+      });
+
+      const result = await workspaceSymbols(isolatedIndex, { query: "LocalService", includeImports: true });
+
+      expect(result.importScanFailures).toBe(0);
+      expect(result.symbols).toHaveLength(1);
+      expect(result.symbols[0]).toMatchObject({ name: "LocalService", imported: true });
+    } finally {
+      await fs.rm(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
   it("reports failed import scans and omitted aliases instead of silently dropping them", async () => {
     const importerEntry = [...index.byFile.entries()].find(([file]) => file.endsWith("/src/importer.ts"));
     expect(importerEntry).toBeDefined();

@@ -44,4 +44,21 @@ describe("finalizeProjectIndex", () => {
     expect(index.projectFiles).toEqual(projectFiles);
     expect(mocks.discoverProjectFiles).not.toHaveBeenCalled();
   });
+
+  it("returns the resolved normalizedProjectRoot instead of the raw possibly-relative projectRoot", async () => {
+    const index = await finalizeProjectIndex({
+      projectRoot: ".",
+      normalizedProjectRoot: "/repo",
+      opts: undefined,
+      timings: undefined,
+      totalStart: performance.now(),
+      graph: { nodes: new Set(), edges: [] },
+      modules: new Map(),
+      parsedMap: new Map(),
+      bloomFilterCache: undefined,
+      projectFiles: Promise.resolve([]),
+    });
+
+    expect(index.projectRoot).toBe("/repo");
+  });
 });

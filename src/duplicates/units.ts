@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { LANG_CONFIGS } from "../bootstrap/treeSitterLanguages.js";
-import { chunkFile, type Chunk } from "../chunking/chunkFile.js";
+import { chunkFile, chunkFileWithSymbols, type Chunk } from "../chunking/chunkFile.js";
 import { chunkTextFile } from "../chunking/chunkTextFile.js";
 import {
   countDuplicateTokens,
@@ -25,7 +25,13 @@ import { maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { collectLineStartOffsets } from "../util/lines.js";
 import { assertFilePathWithinRoot, fileIdentityKey, normalizePath, toProjectDisplayPath } from "../util/paths.js";
 import { logWithLevel } from "../logging.js";
-import { duplicateUnitCacheVariant, tryLoadDuplicateUnitsFromCache, writeDuplicateUnitsToCache } from "./unitCache.js";
+import {
+  duplicateUnitCacheVariant,
+  tryLoadDuplicateUnitsFromCache,
+  writeDuplicateUnitsBatchToCache,
+  writeDuplicateUnitsToCache,
+  type PendingDuplicateUnitCacheWrite,
+} from "./unitCache.js";
 import type {
   CollectedDuplicateUnits,
   DuplicateAstContext,
@@ -122,7 +128,7 @@ function formatDuplicateChunkHandle(file: string, line: number): string {
   return ["chunk", encodeURIComponent(file), String(line)].join(":");
 }
 
-function formatDuplicateSqlHandle(file: string, name: string, line: number): string {
+export function formatDuplicateSqlHandle(file: string, name: string, line: number): string {
   return ["sql", encodeURIComponent(name), encodeURIComponent(file), String(line)].join(":");
 }
 
@@ -134,7 +140,7 @@ function sqlHandleForDuplicateSymbol(symbol: SymbolDef, file: string): string | 
   return formatDuplicateSqlHandle(file, symbol.localName, symbol.range.start.line);
 }
 
-function formatDuplicateSymbolHandle(file: string, name: string, line: number, column: number): string {
+export function formatDuplicateSymbolHandle(file: string, name: string, line: number, column: number): string {
   return ["symbol", encodeURIComponent(file), encodeURIComponent(name), String(line), String(column)].join(":");
 }
 
@@ -288,6 +294,29 @@ export function makeDuplicateChunks(
     return chunkFile({ language: langConfig, source, filePath, minTokens, maxTokens, tokenizer: countDuplicateTokens });
   }
   return chunkTextFile({ source, filePath, languageId, minTokens, maxTokens, tokenizer: countDuplicateTokens });
+}
+
+export function makeDuplicateChunksWithSymbols(
+  filePath: string,
+  languageId: string,
+  textOnly: boolean,
+  source: string,
+  minTokens: number,
+  maxTokens: number,
+): { chunks: Chunk[]; symbolChunks: Chunk[] } {
+  const langConfig = LANG_CONFIGS[chunkLanguageAliases[languageId] ?? languageId];
+  if (langConfig && !textOnly) {
+    return chunkFileWithSymbols({
+      language: langConfig,
+      source,
+      filePath,
+      minTokens,
+      maxTokens,
+      tokenizer: countDuplicateTokens,
+    });
+  }
+  const chunks = chunkTextFile({ source, filePath, languageId, minTokens, maxTokens, tokenizer: countDuplicateTokens });
+  return { chunks, symbolChunks: [] };
 }
 
 export function makeSymbolSourceChunks(
@@ -507,8 +536,9 @@ export async function collectDuplicateUnits(
   let belowThresholdUnits = 0;
   const belowThresholdUnitsByFile = new Map<string, number>();
 
+  const pendingWrites: PendingDuplicateUnitCacheWrite[] = [];
   for (const file of normalizedFiles) {
-    const cachedUnits = tryLoadDuplicateUnitsFromCache(index, file, variant);
+    const cachedUnits = tryLoadDuplicateUnitsFromCache(index, file, variant, options.projectRoot);
     const fileUnits =
       cachedUnits ??
       (await buildDuplicateUnitsForFile(
@@ -522,7 +552,7 @@ export async function collectDuplicateUnits(
         astContextCache,
       ));
     if (!cachedUnits) {
-      writeDuplicateUnitsToCache(index, file, variant, fileUnits);
+      pendingWrites.push({ file, variant, units: fileUnits });
     }
     for (const unit of fileUnits) {
       if (!shouldKeepUnit(unit, options.includeSmall, options.minTokens)) {
@@ -532,6 +562,9 @@ export async function collectDuplicateUnits(
       }
       units.push(unit);
     }
+  }
+  if (pendingWrites.length) {
+    writeDuplicateUnitsBatchToCache(index, pendingWrites, options.projectRoot);
   }
 
   units.sort((left, right) => {
@@ -568,8 +601,14 @@ export async function buildDuplicateUnitsForFile(
   }
 
   const astContext = language.textOnly ? undefined : await getDuplicateAstContext(index, file, source, astContextCache);
-  const chunks = makeDuplicateChunks(file, language.id, language.textOnly, source, minTokens, maxTokens);
-  const symbolChunks = makeSymbolSourceChunks(file, language.id, language.textOnly, source, maxTokens);
+  const { chunks, symbolChunks } = makeDuplicateChunksWithSymbols(
+    file,
+    language.id,
+    language.textOnly,
+    source,
+    minTokens,
+    maxTokens,
+  );
   const symbolUnits = (moduleIndex?.locals ?? [])
     .map((symbol) => {
       const chunk = findChunkForSymbol(symbol, symbolChunks);

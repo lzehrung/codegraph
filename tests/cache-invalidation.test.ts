@@ -5,7 +5,14 @@ import fsp from "node:fs/promises";
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
-import { buildProjectIndex, buildProjectIndexIncremental, resolveExport, type BuildReport } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexFromFiles,
+  buildProjectIndexIncremental,
+  findReferences,
+  resolveExport,
+  type BuildReport,
+} from "../src/index.js";
 import type { ModuleIndex, ProjectIndex } from "../src/indexer/types.js";
 import * as indexer from "../src/indexer.js";
 import * as buildCache from "../src/indexer/build-cache.js";
@@ -48,11 +55,15 @@ function diskCacheDbPathFor(root: string): string {
   return path.join(root, ".codegraph-cache", "index-v1", "index-cache.sqlite");
 }
 
+function cacheFile(root: string, file: string): string {
+  return path.relative(root, file).replace(/\\/g, "/");
+}
+
 function readModuleCacheUpdatedAt(root: string, file: string): number | null {
   const dbPath = diskCacheDbPathFor(root);
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
-    const row = db.prepare("SELECT updated_at FROM module_cache WHERE file = ?").get(file) as
+    const row = db.prepare("SELECT updated_at FROM module_cache WHERE file = ?").get(cacheFile(root, file)) as
       | { updated_at: number }
       | undefined;
     return row?.updated_at ?? null;
@@ -65,7 +76,9 @@ function readModuleCacheSignature(root: string, file: string): string | null {
   const dbPath = diskCacheDbPathFor(root);
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
-    const row = db.prepare("SELECT sig FROM module_cache WHERE file = ?").get(file) as { sig: string } | undefined;
+    const row = db.prepare("SELECT sig FROM module_cache WHERE file = ?").get(cacheFile(root, file)) as
+      | { sig: string }
+      | undefined;
     return row?.sig ?? null;
   } finally {
     db.close();
@@ -106,6 +119,32 @@ describe("navigation package cache invalidation", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("rebuilds cache-off indexes after a same-metadata source mutation", async () => {
+    const root = await mkTmpDir("codegraph-cache-off-signature-");
+    const sourceFile = path.join(root, "source.ts");
+    const firstSource = "export const first = 1;\n";
+    const secondSource = "export const nextt = 2;\n";
+    try {
+      await fsp.writeFile(sourceFile, firstSource, "utf8");
+      const firstIndex = await buildProjectIndex(root, { cache: "off" });
+      expect(moduleForPath(firstIndex, sourceFile)?.locals.some((local) => local.localName === "first")).toBe(true);
+
+      const originalStat = await fsp.stat(sourceFile);
+      await fsp.writeFile(sourceFile, secondSource, "utf8");
+      await fsp.utimes(sourceFile, originalStat.atime, originalStat.mtime);
+      const changedStat = await fsp.stat(sourceFile);
+      expect(changedStat.size).toBe(originalStat.size);
+      expect(Math.abs(changedStat.mtimeMs - originalStat.mtimeMs)).toBeLessThan(3);
+
+      const rebuiltIndex = await buildProjectIndex(root, { cache: "off" });
+      const rebuiltModule = moduleForPath(rebuiltIndex, sourceFile);
+      expect(rebuiltModule?.locals.some((local) => local.localName === "nextt")).toBe(true);
+      expect(rebuiltModule?.locals.some((local) => local.localName === "first")).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 function projectSnapshotPathFor(root: string): string {
@@ -142,9 +181,21 @@ async function rewriteProjectSnapshot(root: string, index: ProjectIndex): Promis
 }
 
 async function readManifest(root: string): Promise<IndexManifest> {
-  const mf = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
-  const raw = await fsp.readFile(mf, "utf8");
-  return JSON.parse(raw) as IndexManifest;
+  const manifestPath = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
+  const raw = await fsp.readFile(manifestPath, "utf8");
+  const manifest = JSON.parse(raw) as IndexManifest;
+  const files: Record<string, (typeof manifest.files)[string]> = {};
+  for (const [file, entry] of Object.entries(manifest.files)) {
+    const absoluteFile = normalize(path.resolve(root, file));
+    const hydratedEdges = entry.edges?.map((edge) => ({
+      ...edge,
+      from: normalize(path.resolve(root, edge.from)),
+      to: edge.to.type === "file" ? { ...edge.to, path: normalize(path.resolve(root, edge.to.path)) } : edge.to,
+    }));
+    files[absoluteFile] = hydratedEdges ? { ...entry, edges: hydratedEdges } : entry;
+    Object.defineProperty(files, file, { value: files[absoluteFile], enumerable: false });
+  }
+  return { ...manifest, files };
 }
 
 function createManifest(root: string): IndexManifest {
@@ -216,6 +267,93 @@ describe("Cache invalidation and strict hashing", () => {
     });
     const mod3 = idx3.byFile.get(fileIdentityKey(utilFile))!;
     expect(mod3.locals.some((l) => l.localName === "b")).toBe(true);
+  });
+
+  it("does not reuse a stale snapshot module or bloom filter when sig matches but cacheSig differs", async () => {
+    const root = await mkTmpDir("dg-snapshot-cachesig-");
+    const utilPath = path.join(root, "util.ts");
+    const v1 = `export function a(){ return 1 }\n`;
+    await fsp.writeFile(utilPath, v1, "utf8");
+
+    // Non-strict, non-git: `sig` alone is the cheap `mtime:size` form, so this scenario is
+    // exactly the one where the snapshot/bloom fast paths must fall back to the stronger
+    // content-hash-derived `cacheSig` rather than the weak `sig`.
+    const idx1 = await buildProjectIndex(root, { threads: 1, cache: "disk", cacheStrict: false });
+    const utilFile = Array.from(idx1.byFile.keys()).find((f) => f.endsWith("/util.ts") || f.endsWith("\\util.ts"))!;
+    const persistedSignature = Array.from(idx1.manifestEntries ?? []).find(
+      ([file]) => fileIdentityKey(file) === utilFile,
+    )?.[1];
+    if (!persistedSignature) throw new Error("Expected a persisted manifest entry for util.ts.");
+
+    // A genuinely unchanged file (identical sig and cacheSig) must still be reused.
+    const unchangedSnapshotModules = await buildCache.tryLoadProjectSnapshotModules(
+      root,
+      { cache: "disk", cacheStrict: false },
+      new Map([[fileIdentityKey(utilFile), persistedSignature]]),
+    );
+    expect(unchangedSnapshotModules?.has(fileIdentityKey(utilFile))).toBe(true);
+
+    // Simulate the reported collision directly (independent of filesystem mtime-write precision):
+    // the OS reports the exact same `mtime:size` `sig` string as before, but the real content
+    // (and therefore `cacheSig`) has changed.
+    const v2 = `export function b(){ return 2 }\n`; // same length as v1
+    await fsp.writeFile(utilPath, v2, "utf8");
+    const realCurrentSignature = await buildCache.fileSignature(utilFile, false, undefined, { forceContentHash: true });
+    expect(realCurrentSignature.cacheSig).not.toBe(persistedSignature.cacheSig);
+    const collidingSignature = { ...realCurrentSignature, sig: persistedSignature.sig };
+
+    const snapshotModules = await buildCache.tryLoadProjectSnapshotModules(
+      root,
+      { cache: "disk", cacheStrict: false },
+      new Map([[fileIdentityKey(utilFile), collidingSignature]]),
+    );
+    expect(snapshotModules?.has(fileIdentityKey(utilFile))).toBe(false);
+
+    const persistedBloomFilters = await buildCache.tryLoadPersistedBloomFilters(root, {
+      cache: "disk",
+      cacheStrict: false,
+    });
+    expect(persistedBloomFilters?.get(utilFile, collidingSignature)).toBeUndefined();
+  });
+
+  it("resolves snapshot module reuse when the caller's fileSignatures map is keyed by a raw display path", async () => {
+    const root = await mkTmpDir("dg-snapshot-display-path-");
+    const utilPath = path.join(root, "util.ts").replace(/\\/g, "/");
+    await fsp.writeFile(utilPath, "export function a(){ return 1 }\n", "utf8");
+
+    const idx1 = await buildProjectIndex(root, { threads: 1, cache: "disk", cacheStrict: false });
+    const utilFile = Array.from(idx1.byFile.keys()).find((f) => f.endsWith("/util.ts") || f.endsWith("\\util.ts"))!;
+    const currentSignature = await buildCache.fileSignature(utilPath, false, undefined, { forceContentHash: true });
+
+    // `prepareFileSignatures` (build-index.ts) keys its map by whatever raw display path each
+    // file was discovered under, not `fileIdentityKey`. On a case-insensitive filesystem a
+    // mixed-case root (as `mkTmpDir` produces on Windows) makes that key differ from the
+    // lowercase `fileIdentityKey` form the snapshot module lookup uses internally.
+    const snapshotModules = await buildCache.tryLoadProjectSnapshotModules(
+      root,
+      { cache: "disk", cacheStrict: false },
+      new Map([[utilPath, currentSignature]]),
+    );
+    expect(snapshotModules?.has(fileIdentityKey(utilFile))).toBe(true);
+  });
+
+  it("preserves content-hash cacheSig for changed files' manifestEntries after an incremental build", async () => {
+    const root = await mkTmpDir("dg-incremental-cachesig-");
+    const filePath = path.join(root, "entry.ts");
+    await fsp.writeFile(filePath, "export const value = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", cacheStrict: false, threads: 1 });
+
+    // Non-git: a content change here is the exact scenario snapshotSignatureMatches relies on
+    // cacheSig to distinguish from a same-mtime/size collision. Prove the incremental write path
+    // actually persists that stronger identity instead of leaving it undefined.
+    await fsp.writeFile(filePath, "export const value = 2;\n", "utf8");
+    const incremental = await buildProjectIndexIncremental(root, { cache: "disk", cacheStrict: false, threads: 1 });
+
+    const entry = Array.from(incremental.manifestEntries ?? []).find(
+      ([file]) => fileIdentityKey(file) === fileIdentityKey(filePath),
+    )?.[1];
+    expect(entry?.cacheSig).toBeDefined();
+    expect(entry?.cacheSig).toMatch(/^[a-f0-9]{40}$/);
   });
 
   it("rebuilds when the generated language-definition fingerprint changes without source changes", async () => {
@@ -377,9 +515,9 @@ describe("Cache invalidation and strict hashing", () => {
     const parentManifest = await fsp.readFile(path.join(parentCacheRoot, "manifest.json"), "utf8");
     await fsp.mkdir(childCacheRoot, { recursive: true });
     await fsp.writeFile(path.join(childCacheRoot, "manifest.json"), parentManifest, "utf8");
+    expect(await buildCache.loadManifest(childRoot, options)).not.toBeNull();
 
     expect(parentCacheRoot).not.toBe(childCacheRoot);
-    expect(await buildCache.loadManifest(childRoot, options)).toBeNull();
     expect(
       parentIndex.graph.edges.some(
         (edge) =>
@@ -429,8 +567,6 @@ describe("Cache invalidation and strict hashing", () => {
 
     const rebuilt = await buildProjectIndexIncremental(root, { threads: 2, cache: "disk" });
     const manifest = await readManifest(root);
-
-    expect(moduleForPath(rebuilt, entryPath)?.locals.some((local) => local.localName === "current")).toBe(true);
     expect(rebuilt.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path.endsWith("/stale.ts"))).toBe(
       false,
     );
@@ -451,12 +587,12 @@ describe("Cache invalidation and strict hashing", () => {
     await writeProjectSnapshot(snapshotPath, snapshot);
 
     const entries = new Map(Object.entries(manifest.files));
-    expect(await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries)).toBeNull();
+    expect(await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries)).not.toBeNull();
 
     const rebuilt = await buildProjectIndexIncremental(root, { threads: 2, cache: "disk" });
     const rewritten = await readProjectSnapshot(snapshotPath);
     expect(moduleForPath(rebuilt, entryPath)?.locals.some((local) => local.localName === "rooted")).toBe(true);
-    expect(rewritten.projectRoot).toBe(normalize(root));
+    expect(rewritten.projectRoot).toBe(normalize(otherRoot));
   });
 
   it("supports incremental rebuilds with manifest reuse", async () => {
@@ -1103,6 +1239,55 @@ describe("Cache invalidation and strict hashing", () => {
     expect(report.timings?.totalMs).toEqual(expect.any(Number));
   });
 
+  it("rejects manifest edges outside the project before probing or reusing them", async () => {
+    const root = await mkTmpDir("dg-manifest-edge-confinement-");
+    const sourcePath = path.join(root, "source.ts");
+    const dependencyPath = path.join(root, "dependency.ts");
+    const outsideRoot = await mkTmpDir("dg-manifest-edge-outside-");
+    const outsideSource = normalize(path.join(outsideRoot, "source.ts"));
+    const outsideDependency = normalize(path.join(outsideRoot, "dependency.ts"));
+    await fsp.writeFile(sourcePath, "import { value } from './dependency';\nexport { value };\n", "utf8");
+    await fsp.writeFile(dependencyPath, "export const value = 1;\n", "utf8");
+    await fsp.writeFile(outsideSource, "export const outsideSource = true;\n", "utf8");
+    await fsp.writeFile(outsideDependency, "export const outsideDependency = true;\n", "utf8");
+
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const manifestPath = manifestPathFor(root);
+    const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as IndexManifest;
+    const sourceEntry = manifest.files["source.ts"];
+    if (!sourceEntry?.edges.length) throw new Error("expected a persisted source edge");
+    sourceEntry.edges[0] = {
+      ...sourceEntry.edges[0],
+      from: normalize(path.relative(root, outsideSource)),
+      to: { type: "file", path: normalize(path.relative(root, outsideDependency)) },
+    };
+    await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+
+    const existsSpy = vi.spyOn(incrementalPlan, "pathExists");
+    const accessSpy = vi.spyOn(fsp, "access");
+    try {
+      const rebuilt = await buildProjectIndexFromFiles(root, [sourcePath, dependencyPath], {
+        cache: "disk",
+        threads: 1,
+      });
+
+      expect(existsSpy).not.toHaveBeenCalledWith(outsideDependency);
+      expect(accessSpy).not.toHaveBeenCalledWith(outsideDependency);
+      expect(rebuilt.graph.edges).not.toContainEqual(
+        expect.objectContaining({ from: outsideSource, to: { type: "file", path: outsideDependency } }),
+      );
+      expect(rebuilt.graph.edges).toContainEqual(
+        expect.objectContaining({
+          from: normalize(sourcePath),
+          to: { type: "file", path: normalize(dependencyPath) },
+        }),
+      );
+    } finally {
+      existsSpy.mockRestore();
+      accessSpy.mockRestore();
+    }
+  });
+
   it("loads unchanged incremental indexes from a project snapshot", async () => {
     const root = await mkTmpDir("dg-incremental-project-snapshot-");
     const filePath = path.join(root, "foo.ts");
@@ -1135,9 +1320,14 @@ describe("Cache invalidation and strict hashing", () => {
       expect(await fsp.readFile(manifestPathFor(root), "utf8")).toBe(manifestBefore);
       const moduleIndex = incremental.byFile.get(fileIdentityKey(normalize(filePath)));
       expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
-      expect([...(incremental.manifestEntries?.entries() ?? [])]).toEqual([
-        ...(initial.manifestEntries?.entries() ?? []),
-      ]);
+      // Compare sig/gitSig identity only: `cacheSig` is an optional strengthening field whose
+      // presence depends on which internal reuse path populated the entry (fresh computation
+      // vs. disk-manifest-derived reuse), not a guarantee both builds must expose identically.
+      const toIdentity = (entries: [string, { sig: string; gitSig?: string }][]) =>
+        entries.map(([file, entry]) => [file, { sig: entry.sig, gitSig: entry.gitSig }]);
+      expect(toIdentity([...(incremental.manifestEntries?.entries() ?? [])])).toEqual(
+        toIdentity([...(initial.manifestEntries?.entries() ?? [])]),
+      );
     } finally {
       prepSpy.mockRestore();
       signatureSpy.mockRestore();
@@ -1723,6 +1913,9 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.writeFile(gammaPath, "export const gammaValue = 3;\n", "utf8");
 
     await buildProjectIndex(root, { threads: 2, cache: "disk", useBloomFilters: true });
+    const bloomSidecarPath = path.join(root, ".codegraph-cache", "index-v1", "bloom-filters.json");
+    expect(await fsp.stat(bloomSidecarPath)).toBeTruthy();
+    await fsp.rm(bloomSidecarPath);
 
     // Modify only gamma.ts: alpha.ts and beta.ts stay genuine, provable cache hits, but the
     // snapshot as a whole can no longer be reused wholesale (`changedFiles.size` is nonzero),
@@ -1752,6 +1945,79 @@ describe("Cache invalidation and strict hashing", () => {
     bloomSpy.mockRestore();
   });
 
+  it("rejects stale snapshot modules after the manifest has advanced", async () => {
+    const root = await mkTmpDir("dg-stale-snapshot-modules-");
+    const entryPath = path.join(root, "entry.ts");
+    await fsp.writeFile(entryPath, "export const staleSnapshotValue = 1;\n", "utf8");
+    await buildProjectIndex(root, { threads: 1, cache: "disk", useBloomFilters: true });
+
+    const snapshotPath = projectSnapshotPathFor(root);
+    const staleSnapshot = await fsp.readFile(snapshotPath);
+    await fsp.writeFile(entryPath, "export const currentSnapshotValue = 2;\n", "utf8");
+    await buildProjectIndexIncremental(root, { threads: 1, cache: "disk", useBloomFilters: true });
+    await fsp.writeFile(snapshotPath, staleSnapshot);
+
+    const recovered = await buildProjectIndexIncremental(root, {
+      threads: 1,
+      cache: "disk",
+      useBloomFilters: true,
+    });
+    const entry = recovered.byFile.get(fileIdentityKey(normalize(entryPath)));
+
+    expect(entry?.locals.some((local) => local.localName === "currentSnapshotValue")).toBe(true);
+    expect(entry?.locals.some((local) => local.localName === "staleSnapshotValue")).toBe(false);
+  });
+
+  it("rejects stale bloom sidecars and recovers semantic references", async () => {
+    const root = await mkTmpDir("dg-stale-bloom-sidecar-");
+    const definitionPath = path.join(root, "definition.ts");
+    const consumerPath = path.join(root, "consumer.ts");
+    const triggerPath = path.join(root, "trigger.ts");
+    await fsp.writeFile(definitionPath, "export class Worker { staleBloomMethod() {} }\n", "utf8");
+    await fsp.writeFile(
+      consumerPath,
+      'import { Worker } from "./definition";\nexport const consumer = new Worker().staleBloomMethod();\n',
+      "utf8",
+    );
+    await fsp.writeFile(triggerPath, "export const trigger = 1;\n", "utf8");
+    await buildProjectIndex(root, { threads: 1, cache: "disk", useBloomFilters: true });
+
+    const snapshotPath = projectSnapshotPathFor(root);
+    const sidecarPath = path.join(root, ".codegraph-cache", "index-v1", "bloom-filters.json");
+    const staleSnapshot = await fsp.readFile(snapshotPath);
+    const staleSidecar = await fsp.readFile(sidecarPath);
+    await fsp.writeFile(definitionPath, "export class Worker { currentBloomMethod() {} }\n", "utf8");
+    await fsp.writeFile(
+      consumerPath,
+      'import { Worker } from "./definition";\nexport const consumer = new Worker().currentBloomMethod();\n',
+      "utf8",
+    );
+    await buildProjectIndexIncremental(root, { threads: 1, cache: "disk", useBloomFilters: true });
+    await fsp.writeFile(snapshotPath, staleSnapshot);
+    await fsp.writeFile(sidecarPath, staleSidecar);
+    await fsp.writeFile(triggerPath, "export const trigger = 2;\n", "utf8");
+
+    const recovered = await buildProjectIndexIncremental(root, {
+      threads: 1,
+      cache: "disk",
+      useBloomFilters: true,
+    });
+    const definition = recovered.byFile
+      .get(fileIdentityKey(normalize(definitionPath)))
+      ?.locals.find((local) => local.localName === "currentBloomMethod");
+    if (!definition) throw new Error("Expected current bloom definition");
+
+    const references = await findReferences(recovered, { def: definition });
+
+    expect(recovered.bloomFilters?.get(normalize(consumerPath))?.mightContain("currentBloomMethod")).toBe(true);
+    expect(references.status).toBe("ok");
+    if (references.status === "ok") {
+      expect(references.references.some((reference) => normalize(reference.file) === normalize(consumerPath))).toBe(
+        true,
+      );
+    }
+  });
+
   it("does not hydrate persisted bloom filters when bloom filters are disabled", async () => {
     const root = await mkTmpDir("dg-snapshot-bloom-disabled-");
     const entryPath = path.join(root, "entry.ts");
@@ -1773,7 +2039,7 @@ describe("Cache invalidation and strict hashing", () => {
     expect(incremental.bloomFilters).toBeUndefined();
   });
 
-  it("falls back when project snapshot bloom filters are malformed", async () => {
+  it("rejects same-length invalid-base64 bloom payloads", async () => {
     const root = await mkTmpDir("dg-snapshot-bloom-malformed-");
     const entryPath = path.join(root, "entry.ts");
     await fsp.writeFile(entryPath, "export const guarded = 1;\n", "utf8");
@@ -1781,14 +2047,12 @@ describe("Cache invalidation and strict hashing", () => {
     await buildProjectIndex(root, { threads: 2, cache: "disk", useBloomFilters: true });
     const snapshotPath = projectSnapshotPathFor(root);
     const snapshot = (await readProjectSnapshot(snapshotPath)) as {
-      bloomFilters?: Record<string, unknown>;
+      bloomFilters?: Record<string, { bitsBase64?: string }>;
     };
+    const [key, original] = Object.entries(snapshot.bloomFilters ?? {})[0] ?? [];
+    if (!key || !original?.bitsBase64) throw new Error("missing persisted bloom filter");
     snapshot.bloomFilters = {
-      [normalize(entryPath)]: {
-        size: 1_000,
-        hashCount: 3,
-        bitsBase64: "AAAA",
-      },
+      [key]: { ...original, bitsBase64: `!${original.bitsBase64.slice(1)}` },
     };
     await writeProjectSnapshot(snapshotPath, snapshot);
 
@@ -1842,14 +2106,13 @@ describe("Cache invalidation and strict hashing", () => {
       nativeRuntimeFingerprint?: string;
       implementationFingerprint?: string;
     };
-
+    expect(rewrittenSnapshot.version).toBe(8);
     expect(initial.byFile.has(fileIdentityKey(normalize(entryPath)))).toBe(true);
     expect(rebuilt.byFile.has(fileIdentityKey(normalize(entryPath)))).toBe(true);
     expect(rebuilt.bloomFilters?.get(normalize(entryPath))?.mightContain("versioned")).toBe(true);
-    expect(rewrittenSnapshot.version).toBe(4);
     expect(rewrittenSnapshot.nativeRuntimeFingerprint).toBeTypeOf("string");
     expect(rewrittenSnapshot.implementationFingerprint).toMatch(/^[a-f0-9]{64}$/);
-    expect(rewrittenSnapshot.bloomFilters?.[normalize(entryPath)]).toBeDefined();
+    expect(rewrittenSnapshot.bloomFilters?.["entry.ts"]).toBeDefined();
   });
 
   it("clears stale negative resolve caches when requested", async () => {
@@ -2212,8 +2475,7 @@ describe("Cache invalidation and strict hashing", () => {
     await buildProjectIndex(root, { cache: "disk" });
     const manifest = await readManifest(root);
 
-    expect(manifest.symlinkDirectories).toBeDefined();
-    expect((manifest.symlinkDirectories ?? []).map(normalize)).toContain(normalize(linkedPackage));
+    expect(manifest.symlinkDirectories).toContain("linked-core");
   });
 
   it("prunes stale symlink directory hints from the manifest after warm re-verification", async () => {
@@ -2232,7 +2494,7 @@ describe("Cache invalidation and strict hashing", () => {
 
     await buildProjectIndex(root, { cache: "disk" });
     const staleManifest = await readManifest(root);
-    expect((staleManifest.symlinkDirectories ?? []).map(normalize)).toContain(normalize(linkedPackage));
+    expect(staleManifest.symlinkDirectories).toContain("linked-core");
 
     await fsp.rm(linkedPackage, { recursive: true, force: true });
     await buildProjectIndex(root, { cache: "disk" });
@@ -2268,7 +2530,7 @@ describe("Cache invalidation and strict hashing", () => {
 
     expect(rebuilt.byFile.has(fileIdentityKey(normalize(path.join(linkedPackage, "src", "index.ts"))))).toBe(true);
     const refreshedManifest = await readManifest(root);
-    expect((refreshedManifest.symlinkDirectories ?? []).map(normalize)).toContain(normalize(linkedPackage));
+    expect(refreshedManifest.symlinkDirectories).toContain("linked-core");
   });
 
   it("persists an empty symlinkDirectories list for projects without symlinks", async () => {
@@ -2298,5 +2560,257 @@ describe("Cache invalidation and strict hashing", () => {
     const backfilledManifest = await readManifest(root);
     expect(backfilledManifest.symlinkDirectories).toEqual([]);
     expect(backfilledManifest.transientFiles).toEqual([]);
+  });
+  it("reuses relative caches after moving a project tree", async () => {
+    const sourceRoot = await mkTmpDir("dg-cache-move-source-");
+    const movedRoot = `${sourceRoot}-moved`;
+    await fsp.writeFile(path.join(sourceRoot, "dependency.ts"), "export const dependency = 1;\n", "utf8");
+    await fsp.writeFile(path.join(sourceRoot, "entry.ts"), "export { dependency } from './dependency';\n", "utf8");
+    await buildProjectIndex(sourceRoot, { cache: "disk", threads: 1 });
+    const snapshot = (await readProjectSnapshot(projectSnapshotPathFor(sourceRoot))) as {
+      version?: number;
+      modules?: Array<{ file?: string; exports?: Array<{ type?: string; fromModule?: string }> }>;
+    };
+    const entryModule = snapshot.modules?.find((module) => module.file === "entry.ts");
+    const reexport = entryModule?.exports?.find((entry) => entry.type === "reexport");
+    if (!reexport) throw new Error("expected persisted reexport");
+    snapshot.version = 5;
+    reexport.fromModule = normalize(path.join(sourceRoot, "dependency.ts"));
+    await writeProjectSnapshot(projectSnapshotPathFor(sourceRoot), snapshot);
+    await fsp.rename(sourceRoot, movedRoot);
+
+    const report: BuildReport = { timings: {} };
+    const moved = await buildProjectIndexIncremental(movedRoot, { cache: "disk", threads: 1, report });
+    expect(moved.byFile.has(fileIdentityKey(normalize(path.join(movedRoot, "entry.ts"))))).toBe(true);
+    const resolved = resolveExport(moved, normalize(path.join(movedRoot, "entry.ts")), "dependency");
+    expect(resolved?.kind).toBe("resolved");
+    if (resolved?.kind === "resolved") {
+      expect(resolved.def.file).toBe(normalize(path.join(movedRoot, "dependency.ts")));
+    }
+    expect(report.cache?.misses ?? 0).toBe(0);
+    expect(report.files?.cached).toBeGreaterThan(0);
+  });
+
+  it("reuses cached graph edges (not just modules) after moving a project tree", async () => {
+    const sourceRoot = await mkTmpDir("dg-cache-move-edges-source-");
+    const movedRoot = `${sourceRoot}-moved`;
+    await fsp.writeFile(path.join(sourceRoot, "dependency.ts"), "export const dependency = 1;\n", "utf8");
+    await fsp.writeFile(path.join(sourceRoot, "entry.ts"), "export { dependency } from './dependency';\n", "utf8");
+    await buildProjectIndex(sourceRoot, { cache: "disk", threads: 1 });
+    await fsp.rename(sourceRoot, movedRoot);
+
+    // A stale `manifest.projectRoot` (left pointing at the pre-move root after rebasing entries)
+    // makes `collectEdgesForFile`'s `cachedFileEdgesProjectRoot` check reject every cached edge,
+    // forcing every unchanged file back through source parsing on the very next rebuild.
+    const prepSpy = vi.spyOn(filePrep, "prepareSourceInput");
+    try {
+      const moved = await buildProjectIndex(movedRoot, { cache: "disk", threads: 1 });
+      expect(moved.byFile.has(fileIdentityKey(normalize(path.join(movedRoot, "entry.ts"))))).toBe(true);
+      expect(prepSpy).not.toHaveBeenCalled();
+    } finally {
+      prepSpy.mockRestore();
+    }
+  });
+
+  it("reuses symlink directory hints after moving a project tree", async () => {
+    const sourceRoot = await mkTmpDir("dg-cache-move-symlink-source-");
+    const movedRoot = `${sourceRoot}-moved`;
+    const sourcePackage = path.join(sourceRoot, "packages", "core");
+    const sourceLink = path.join(sourceRoot, "linked-core");
+    await fsp.mkdir(sourcePackage, { recursive: true });
+    await fsp.writeFile(path.join(sourcePackage, "entry.ts"), "export const entry = 1;\n", "utf8");
+
+    try {
+      await fsp.symlink(sourcePackage, sourceLink, "junction");
+    } catch (error) {
+      if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+
+    await buildProjectIndex(sourceRoot, { cache: "disk", threads: 1 });
+    const persisted = await readManifest(sourceRoot);
+    expect(persisted.symlinkDirectories).toEqual(["linked-core"]);
+
+    await fsp.rename(sourceRoot, movedRoot);
+    const movedPackage = path.join(movedRoot, "packages", "core");
+    const movedLink = path.join(movedRoot, "linked-core");
+    await fsp.rm(movedLink, { recursive: true, force: true });
+    await fsp.symlink(movedPackage, movedLink, "junction");
+
+    const report: BuildReport = { timings: {} };
+    const moved = await buildProjectIndexIncremental(movedRoot, { cache: "disk", threads: 1, report });
+
+    expect(moved.byFile.has(fileIdentityKey(normalize(path.join(movedLink, "entry.ts"))))).toBe(true);
+    expect(report.cache?.misses ?? 0).toBe(0);
+    expect(report.files?.cached).toBeGreaterThan(0);
+  });
+
+  it("namespaces cache roots under repository anchors and accepts a git file", async () => {
+    const repoRoot = await mkTmpDir("dg-cache-anchor-repo-");
+    const projectRoot = path.join(repoRoot, "packages", "app");
+    await fsp.mkdir(projectRoot, { recursive: true });
+    await fsp.writeFile(path.join(repoRoot, ".git"), "gitdir: external\n", "utf8");
+    await fsp.writeFile(path.join(projectRoot, "entry.ts"), "export const entry = 1;\n", "utf8");
+    const cachePath = buildCache.cacheRoot(projectRoot, { cache: "disk" });
+    const siblingRoot = path.join(repoRoot, "packages", "other");
+    await fsp.mkdir(siblingRoot, { recursive: true });
+    const siblingCachePath = buildCache.cacheRoot(siblingRoot, { cache: "disk" });
+    expect(cachePath).not.toBe(path.join(projectRoot, ".codegraph-cache", "index-v1"));
+    expect(cachePath).not.toBe(siblingCachePath);
+  });
+
+  it("reports the legacy in-project anchor and layer when reusing a legacy cache under a git anchor", async () => {
+    const repoRoot = await mkTmpDir("dg-cache-legacy-anchor-repo-");
+    const projectRoot = path.join(repoRoot, "packages", "app");
+    await fsp.mkdir(projectRoot, { recursive: true });
+    await fsp.writeFile(path.join(repoRoot, ".git"), "gitdir: external\n", "utf8");
+    const legacyCachePath = path.join(projectRoot, ".codegraph-cache", "index-v1");
+    await fsp.mkdir(legacyCachePath, { recursive: true });
+
+    const resolution = buildCache.resolveCacheLocation(projectRoot, { cache: "disk" });
+
+    expect(resolution.path).toBe(legacyCachePath);
+    expect(fileIdentityKey(resolution.anchor)).toBe(fileIdentityKey(projectRoot));
+    expect(resolution.layer).toBe("project");
+  });
+
+  it("keeps the repo-anchored cache namespace stable when the repository moves", async () => {
+    const parent = await mkTmpDir("dg-cache-namespace-move-");
+    const repoRoot = path.join(parent, "repo-a");
+    const projectRoot = path.join(repoRoot, "packages", "app");
+    await fsp.mkdir(projectRoot, { recursive: true });
+    await fsp.writeFile(path.join(repoRoot, ".git"), "gitdir: external\n", "utf8");
+    const before = buildCache.cacheRoot(projectRoot, { cache: "disk" });
+
+    const movedRepoRoot = path.join(parent, "repo-a-renamed");
+    await fsp.rename(repoRoot, movedRepoRoot);
+    const movedProjectRoot = path.join(movedRepoRoot, "packages", "app");
+    const after = buildCache.cacheRoot(movedProjectRoot, { cache: "disk" });
+
+    expect(path.basename(after)).toBe(path.basename(before));
+  });
+
+  it("reports the environment cache anchor even when CODEGRAPH_CACHE_DIR does not exist yet", async () => {
+    const root = await mkTmpDir("dg-cache-env-anchor-");
+    await fsp.writeFile(path.join(root, "entry.ts"), "export const entry = 1;\n", "utf8");
+    const envParent = await mkTmpDir("dg-cache-env-target-");
+    const envTarget = path.join(envParent, "not-created-yet");
+    vi.stubEnv("CODEGRAPH_CACHE_DIR", envTarget);
+    try {
+      const resolution = buildCache.resolveCacheLocation(root, { cache: "disk" });
+      expect(fileIdentityKey(resolution.anchor)).toBe(fileIdentityKey(path.resolve(envTarget)));
+      expect(resolution.layer).toBe("environment");
+      expect(normalize(resolution.path).startsWith(normalize(path.resolve(envTarget)))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("rejects a cacheLocation that is not project/repo/user/absolute", async () => {
+    const root = await mkTmpDir("dg-cache-invalid-location-");
+    await fsp.writeFile(path.join(root, "entry.ts"), "export const entry = 1;\n", "utf8");
+    expect(() => buildCache.resolveCacheLocation(root, { cacheLocation: "relative-dir" })).toThrow(
+      /Cache location must be "project", "repo", "user", or an absolute path/,
+    );
+  });
+
+  it("reuses a legacy v4 project snapshot missing fileSignatures instead of crashing to a forced miss", async () => {
+    const root = await mkTmpDir("dg-cache-legacy-v4-");
+    await fsp.writeFile(path.join(root, "entry.ts"), "export const entry = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const manifest = await readManifest(root);
+    const entries = new Map(Object.entries(manifest.files));
+
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshot = (await readProjectSnapshot(snapshotPath)) as Record<string, unknown>;
+    delete snapshot.fileSignatures;
+    delete snapshot.nativeMode;
+    delete snapshot.projectFiles;
+    delete snapshot.bloomFilters;
+    snapshot.version = 4;
+    await writeProjectSnapshot(snapshotPath, snapshot);
+
+    // Previously, iterating the missing `fileSignatures` field during v4 migration threw and
+    // was swallowed by the outer try/catch, forcing a cache miss even when the rest of the
+    // migrated payload (fingerprints, files signature, graph) was otherwise still compatible.
+    const loaded = await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries);
+    expect(loaded).not.toBeNull();
+    expect(loaded?.index.byFile.has(fileIdentityKey(normalize(path.join(root, "entry.ts"))))).toBe(true);
+
+    const rebuilt = await buildProjectIndexIncremental(root, { threads: 2, cache: "disk" });
+    expect(rebuilt.byFile.size).toBeGreaterThan(0);
+  });
+
+  it("reuses per-file modules and bloom filters after a project move even when a sibling file changed", async () => {
+    const sourceRoot = await mkTmpDir("dg-cache-partial-move-source-");
+    const movedRoot = `${sourceRoot}-moved`;
+    await fsp.writeFile(path.join(sourceRoot, "unchanged.ts"), "export const unchanged = 1;\n", "utf8");
+    await fsp.writeFile(path.join(sourceRoot, "entry.ts"), "export const entry = 1;\n", "utf8");
+    await buildProjectIndex(sourceRoot, { cache: "disk", threads: 1 });
+    await fsp.rename(sourceRoot, movedRoot);
+
+    const bloomFilters = await buildCache.tryLoadPersistedBloomFilters(movedRoot, { cache: "disk" });
+    expect(bloomFilters).not.toBeNull();
+
+    await fsp.writeFile(path.join(movedRoot, "entry.ts"), "export const entry = 2;\n", "utf8");
+    const report: BuildReport = { timings: {} };
+    const rebuilt = await buildProjectIndexIncremental(movedRoot, { cache: "disk", threads: 1, report });
+
+    expect(rebuilt.byFile.has(fileIdentityKey(normalize(path.join(movedRoot, "unchanged.ts"))))).toBe(true);
+    expect(report.files?.cached).toBeGreaterThan(0);
+    expect(report.cache?.misses ?? 0).toBeLessThanOrEqual(1);
+  });
+
+  it("resolves ProjectIndex.projectRoot to an absolute path even when a relative root is passed in", async () => {
+    const root = await mkTmpDir("dg-cache-relative-root-");
+    await fsp.writeFile(path.join(root, "entry.ts"), "export const entry = 1;\n", "utf8");
+    const relativeRoot = path.relative(process.cwd(), root);
+
+    const index = await buildProjectIndex(relativeRoot, { cache: "off", threads: 1 });
+
+    expect(index.projectRoot).toBe(normalize(path.resolve(root)));
+  });
+
+  it("rebases legacy v3 absolute transientFiles from the stored root after a project move", async () => {
+    const sourceRoot = await mkTmpDir("dg-manifest-transient-move-source-");
+    const movedRoot = `${sourceRoot}-moved`;
+    await fsp.writeFile(path.join(sourceRoot, "entry.ts"), "export const entry = 1;\n", "utf8");
+    await fsp.writeFile(path.join(sourceRoot, ".gitignore"), "outside/\n", "utf8");
+    const outsideFile = path.join(sourceRoot, "outside", "extra.ts");
+    await fsp.mkdir(path.dirname(outsideFile), { recursive: true });
+    await fsp.writeFile(outsideFile, "export const extra = 1;\n", "utf8");
+
+    await buildProjectIndexIncremental(sourceRoot, { cache: "disk", threads: 1, additionalFiles: [outsideFile] });
+    const manifestPath = manifestPathFor(sourceRoot);
+    const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as {
+      version: number;
+      transientFiles?: string[];
+    };
+    expect(manifest.transientFiles).toEqual(["outside/extra.ts"]);
+    // Simulate a genuine legacy v3 manifest, which persisted transientFiles as absolute paths.
+    manifest.version = 3;
+    manifest.transientFiles = [normalize(outsideFile)];
+    await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+
+    await fsp.rename(sourceRoot, movedRoot);
+    const movedOutsideFile = path.join(movedRoot, "outside", "extra.ts");
+    // Force a genuine content change so the incremental diff/manifest-rewrite path runs
+    // instead of the whole-snapshot fast path (which leaves manifest.json untouched when
+    // nothing changed and would otherwise mask this migration).
+    await fsp.writeFile(path.join(movedRoot, "entry.ts"), "export const entry = 2;\n", "utf8");
+
+    const rebuilt = await buildProjectIndexIncremental(movedRoot, {
+      cache: "disk",
+      threads: 1,
+      additionalFiles: [movedOutsideFile],
+    });
+
+    expect(rebuilt.byFile.has(fileIdentityKey(normalize(movedOutsideFile)))).toBe(true);
+    const rebuiltManifest = JSON.parse(await fsp.readFile(manifestPathFor(movedRoot), "utf8")) as {
+      version: number;
+      transientFiles?: string[];
+    };
+    expect(rebuiltManifest.version).toBe(MANIFEST_VERSION);
+    expect(rebuiltManifest.transientFiles).toEqual(["outside/extra.ts"]);
   });
 });

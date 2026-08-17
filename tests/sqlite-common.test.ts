@@ -68,6 +68,39 @@ describe("SQLite common helpers", () => {
     }
   });
 
+  it("skips migrateTable when the schema is already at the current version", async () => {
+    const root = await mkTmpDir("dg-sqlite-versioned-current-");
+    const db = new SqliteDatabase(path.join(root, "cache.sqlite"));
+    try {
+      let migrateCalls = 0;
+      const args = {
+        db,
+        tableName: "cache_entries",
+        schemaVersionKey: "cache_entries.schema_version",
+        schemaVersion: 1,
+        createTable: (target: SqliteDatabase) => {
+          target.exec(
+            "CREATE TABLE IF NOT EXISTS cache_entries (id TEXT PRIMARY KEY, payload TEXT NOT NULL DEFAULT '');",
+          );
+        },
+        migrateTable: () => {
+          migrateCalls += 1;
+        },
+      };
+
+      ensureSqliteVersionedTableSchema(args);
+      expect(migrateCalls).toBe(1);
+
+      ensureSqliteVersionedTableSchema(args);
+      ensureSqliteVersionedTableSchema(args);
+
+      expect(migrateCalls).toBe(1);
+      expect(readSqliteSchemaVersion(db, "cache_entries.schema_version")).toEqual({ status: "ok", version: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
   it("rebuilds versioned SQLite tables created by a newer schema", async () => {
     const root = await mkTmpDir("dg-sqlite-versioned-newer-");
     const db = new SqliteDatabase(path.join(root, "cache.sqlite"));

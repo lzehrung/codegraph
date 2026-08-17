@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import { AGENT_FRESHNESS_CHECK_INTERVAL_MS, createAgentSession, listAgentSessionFiles } from "../src/agent/session.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
@@ -206,7 +207,7 @@ describe("agent session", () => {
     };
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
-    expect(sidecar.version).toBe(2);
+    expect(sidecar.version).toBe(3);
     expect(sidecar.projectRoot).toBe(normalizePath(root));
     expect(sidecar.implementationFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(sidecar.projectSnapshotIdentity).toBe(cold.index.projectSnapshotIdentity);
@@ -300,7 +301,7 @@ describe("agent session", () => {
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
     expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
-    expect(refreshed.version).toBe(2);
+    expect(refreshed.version).toBe(3);
   });
 
   it("does not publish an identity or sidecar when the project snapshot write fails", async () => {
@@ -325,7 +326,7 @@ describe("agent session", () => {
     }
   });
 
-  it("rejects a detailed symbol graph sidecar stored for another root", async () => {
+  it("loads a detailed symbol graph sidecar with provenance from another root", async () => {
     const root = await mkGitRepo();
     await createAgentSession({ root }).loadProject();
     const sidecarPath = detailedSymbolGraphSnapshotPath(root);
@@ -336,7 +337,7 @@ describe("agent session", () => {
 
     const rebuilt = await createAgentSession({ root }).loadProject();
 
-    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+    expect(symbolGraphSpy).toHaveBeenCalledTimes(0);
     expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
   });
 
@@ -455,7 +456,39 @@ describe("agent session", () => {
     const refreshed = (await readDetailedSidecar(sidecarPath)) as { version: number };
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
-    expect(refreshed.version).toBe(2);
+    expect(refreshed.version).toBe(3);
+  });
+
+  it("invalidates module, project snapshot, and detailed sidecar on core epoch drift", async () => {
+    const root = await mkGitRepo();
+    const initial = await createAgentSession({ root }).loadProject();
+    const cacheDir = path.join(root, ".codegraph-cache", "index-v1");
+    const manifestPath = path.join(cacheDir, "manifest.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
+      buildOptions?: { coreAlgorithmEpoch?: number; implementationFingerprint?: string };
+    };
+    manifest.buildOptions = {
+      ...(manifest.buildOptions ?? {}),
+      coreAlgorithmEpoch: 0,
+      implementationFingerprint: "0".repeat(64),
+    };
+    await fs.writeFile(manifestPath, JSON.stringify(manifest), "utf8");
+    const snapshotPath = projectSnapshotPath(root);
+    const snapshot = JSON.parse(brotliDecompressSync(await fs.readFile(snapshotPath)).toString("utf8")) as {
+      implementationFingerprint?: string;
+    };
+    snapshot.implementationFingerprint = "0".repeat(64);
+    await fs.writeFile(snapshotPath, brotliCompressSync(JSON.stringify(snapshot)));
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+    const sidecar = (await readDetailedSidecar(sidecarPath)) as MutableDetailedSymbolGraphSidecar;
+    sidecar.implementationFingerprint = "0".repeat(64);
+    await writeDetailedSidecar(sidecarPath, sidecar);
+    const report: BuildReport = { timings: {} };
+    await buildProjectIndexIncremental(root, { cache: "disk", threads: 1, report });
+    expect(report.files?.parsed ?? 0).toBeGreaterThan(0);
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    await createAgentSession({ root }).loadProject();
+    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
   });
 
   it("invalidates the detailed sidecar after a tracked edit", async () => {
@@ -599,6 +632,37 @@ describe("agent session", () => {
         ?.locals.map((local) => local.localName),
     ).toContain("customFeature");
     expect(buildSpy.mock.calls[0]?.[1]?.languageExtensions).toEqual({ ".custom": "ts" });
+  });
+
+  it("merges codegraph.config.json cache.location into incremental agent build options", async () => {
+    const root = await mkRepo();
+    const cacheLocation = path.join(root, "custom-cache");
+    await fs.writeFile(
+      path.join(root, "codegraph.config.json"),
+      JSON.stringify({ cache: { location: cacheLocation } }),
+    );
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+
+    await createAgentSession({ root }).loadProject({ symbolGraph: "skip" });
+
+    expect(buildSpy.mock.calls[0]?.[1]?.cacheLocation).toBe(cacheLocation);
+  });
+
+  it("prefers an explicit buildOptions.cacheLocation over codegraph.config.json", async () => {
+    const root = await mkRepo();
+    const configCacheLocation = path.join(root, "config-cache");
+    const explicitCacheLocation = path.join(root, "explicit-cache");
+    await fs.writeFile(
+      path.join(root, "codegraph.config.json"),
+      JSON.stringify({ cache: { location: configCacheLocation } }),
+    );
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+
+    await createAgentSession({ root, buildOptions: { cacheLocation: explicitCacheLocation } }).loadProject({
+      symbolGraph: "skip",
+    });
+
+    expect(buildSpy.mock.calls[0]?.[1]?.cacheLocation).toBe(explicitCacheLocation);
   });
 
   it("uses programmatic language extensions when listing agent session files", async () => {

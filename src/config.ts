@@ -1,4 +1,5 @@
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import {
@@ -18,6 +19,16 @@ export const CODEGRAPH_CONFIG_FILE = "codegraph.config.json";
 const stringArraySchema = z.array(z.string().trim().min(1));
 
 const languageExtensionsSchema = z.record(z.string().trim().min(1), z.string().trim().min(1));
+
+const cacheLocationSchema = z
+  .string()
+  .trim()
+  .refine(
+    (location) => location === "project" || location === "repo" || location === "user" || path.isAbsolute(location),
+    {
+      message: 'Cache location must be "project", "repo", "user", or an absolute path.',
+    },
+  );
 
 const codegraphConfigSchema = z
   .object({
@@ -41,12 +52,20 @@ const codegraphConfigSchema = z
       })
       .strict()
       .optional(),
+    cache: z
+      .object({
+        location: cacheLocationSchema,
+      })
+      .optional(),
   })
   .strict();
 
 type ParsedCodegraphConfig = z.infer<typeof codegraphConfigSchema>;
 
 export type CodegraphConfig = {
+  cache?: {
+    location: string;
+  };
   discovery?: ProjectFileDiscoveryOptions;
   languages?: {
     extensions?: LanguageExtensionMap;
@@ -147,27 +166,41 @@ function normalizeConfigLanguageExtensions(
   }
   return normalizeLanguageExtensions(extensions);
 }
+async function loadUserCacheLocation(): Promise<string | undefined> {
+  const configRoot =
+    process.platform === "win32"
+      ? process.env.APPDATA?.trim() || path.join(os.homedir(), "AppData", "Roaming")
+      : process.env.XDG_CONFIG_HOME?.trim() || path.join(os.homedir(), ".config");
+  const configPath = path.join(configRoot, "codegraph", "config.json");
+  try {
+    const parsedJson = JSON.parse(await fsp.readFile(configPath, "utf8")) as unknown;
+    const parsed = codegraphConfigSchema.safeParse(parsedJson);
+    if (!parsed.success) throw new Error(z.prettifyError(parsed.error));
+    return parsed.data.cache?.location;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+    throw new Error(`Invalid user codegraph config: ${errorMessage(error)}`);
+  }
+}
 
 export async function loadCodegraphConfig(projectRoot: string): Promise<CodegraphConfig> {
+  const userCacheLocation = await loadUserCacheLocation();
   const configPath = path.join(projectRoot, CODEGRAPH_CONFIG_FILE);
   let raw: string;
   try {
     raw = await fsp.readFile(configPath, "utf8");
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      return {};
+      return userCacheLocation ? { cache: { location: userCacheLocation } } : {};
     }
     throw error;
   }
-
   let parsedJson: unknown;
   try {
     parsedJson = JSON.parse(raw);
   } catch (error) {
-    const message = errorMessage(error);
-    throw new Error(`Invalid ${CODEGRAPH_CONFIG_FILE}: ${message}`);
+    throw new Error(`Invalid ${CODEGRAPH_CONFIG_FILE}: ${errorMessage(error)}`);
   }
-
   const parsed = codegraphConfigSchema.safeParse(parsedJson);
   if (!parsed.success) {
     throw new Error(`Invalid ${CODEGRAPH_CONFIG_FILE}: ${z.prettifyError(parsed.error)}`);
@@ -176,7 +209,9 @@ export async function loadCodegraphConfig(projectRoot: string): Promise<Codegrap
   const discovery = normalizeDiscoveryConfig(parsed.data.discovery);
   const resolutionHints = normalizeResolutionHints(parsed.data.graph?.resolutionHints);
   const graph = resolutionHints.length ? { resolutionHints } : undefined;
+  const cacheLocation = parsed.data.cache?.location ?? userCacheLocation;
   return {
+    ...(cacheLocation ? { cache: { location: cacheLocation } } : {}),
     ...(discovery ? { discovery } : {}),
     ...(graph ? { graph } : {}),
     ...(languageExtensions ? { languages: { extensions: languageExtensions } } : {}),

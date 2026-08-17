@@ -15,6 +15,7 @@ import { getDuplicateAstContext } from "../src/duplicates/units.js";
 import {
   DUPLICATE_UNIT_CACHE_VERSION,
   closeDuplicateUnitCacheForIndex,
+  duplicateUnitCacheSignature,
   duplicateUnitCacheVariant,
   duplicateUnitDiskCache,
   tryLoadDuplicateUnitsFromCache,
@@ -2533,6 +2534,29 @@ export function processInvoiceItems(items: Array<{ price: number; qty: number }>
     // tryLoadDuplicateUnitsFromCache must return null because version does not match
     const loaded = tryLoadDuplicateUnitsFromCache(index, file, variant);
     expect(loaded).toBeNull();
+  } finally {
+    if (index) {
+      closeDuplicateUnitCacheForIndex(index);
+    }
+  }
+});
+
+test("C5: duplicate unit cache signature prefers the content-hash cacheSig over the weak sig", async () => {
+  const root = await makeTempProject();
+  let index;
+  try {
+    const source = "export function unitCacheSigProbe(value: number): number {\n  return value + 1;\n}\n";
+    const file = await writeProjectFile(root, "src/probe.ts", source);
+    index = await buildProjectIndex(root, { cache: "disk" });
+    const entry = index.manifestEntries?.get(file);
+    if (!entry) throw new Error("expected a manifest entry for probe.ts");
+
+    // Non-Git project: `cacheSig` is content-hash-derived while `sig` is the cheap
+    // `mtime:size` form, so they are never equal here. Preferring `cacheSig` is what
+    // prevents a same-size edit whose mtime got restored from reusing stale duplicate units.
+    expect(entry.cacheSig).toBeDefined();
+    expect(entry.cacheSig).not.toBe(entry.sig);
+    expect(duplicateUnitCacheSignature(index, file)).toBe(entry.cacheSig);
   } finally {
     if (index) {
       closeDuplicateUnitCacheForIndex(index);

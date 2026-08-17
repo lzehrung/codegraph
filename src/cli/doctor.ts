@@ -1,5 +1,7 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { resolveCacheLocation } from "../indexer/build-cache/location.js";
 import {
   isNativeTreeSitterAvailable,
   getNativeBindingOrigin,
@@ -34,7 +36,6 @@ export type DoctorNativeUpdateReport = {
   installedVersion?: string;
   reason?: string;
 };
-
 export type DoctorReport = {
   package: CodegraphPackageIdentity;
   native: {
@@ -43,6 +44,11 @@ export type DoctorReport = {
     supportedLanguageIds: string[];
     origin?: DoctorNativeOriginReport;
     update?: DoctorNativeUpdateReport;
+  };
+  cache: {
+    path: string;
+    anchor: string;
+    layer: string;
   };
   indexArtifact?: IndexedArtifactReport;
 };
@@ -205,7 +211,7 @@ function pushNestedSection(body: string[], title: string, nestedBody: readonly s
   }
 }
 
-/** Pretty formatter for `codegraph doctor`. Stable Package/Native(+Origin/Update) nesting matches JSON. */
+/** Pretty formatter for `codegraph doctor`. Stable Package/Cache/Native(+Origin/Update) nesting matches JSON. */
 export function formatDoctorSummary(report: DoctorReport): string {
   const lines: string[] = [];
   const pkg = asRecord(report.package);
@@ -216,6 +222,17 @@ export function formatDoctorSummary(report: DoctorReport): string {
       ["Name", readField(pkg, "name")],
       ["Version", readField(pkg, "version")],
       ["Package root", readField(pkg, "packageRoot")],
+    ]),
+  );
+
+  const cache = asRecord(report.cache);
+  pushSection(
+    lines,
+    "Cache",
+    formatLabeledFields([
+      ["Path", readField(cache, "path")],
+      ["Anchor", readField(cache, "anchor")],
+      ["Layer", readField(cache, "layer")],
     ]),
   );
 
@@ -303,6 +320,41 @@ export function findStaleNpmRetirementPaths(packageRoot: string, limit = 20): st
     return [];
   }
 }
+/**
+ * Best-effort, dependency-light read of `cache.location`, mirroring `loadCodegraphConfig`'s
+ * project-over-user precedence without importing `../config.js` (which pulls in zod and the
+ * full config schema): doctor is a fast, low-dependency health check, and the eager
+ * dist-module-loading budget in `cli-startup-eager-modules.test.ts` enforces that. Malformed or
+ * missing config is silently ignored; the fuller schema validation still applies to real builds.
+ */
+function isValidCacheLocationValue(location: string): boolean {
+  return location === "project" || location === "repo" || location === "user" || path.isAbsolute(location);
+}
+
+function readCacheLocationField(configPath: string): string | undefined {
+  try {
+    const raw = fs.readFileSync(configPath, "utf8");
+    const parsed = JSON.parse(raw) as { cache?: { location?: unknown } };
+    const location = parsed.cache?.location;
+    if (typeof location !== "string") return undefined;
+    const trimmed = location.trim();
+    return trimmed && isValidCacheLocationValue(trimmed) ? trimmed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readUserCacheLocation(): string | undefined {
+  const configRoot =
+    process.platform === "win32"
+      ? process.env.APPDATA?.trim() || path.join(os.homedir(), "AppData", "Roaming")
+      : process.env.XDG_CONFIG_HOME?.trim() || path.join(os.homedir(), ".config");
+  return readCacheLocationField(path.join(configRoot, "codegraph", "config.json"));
+}
+
+function readEffectiveCacheLocation(root: string): string | undefined {
+  return readCacheLocationField(path.join(root, "codegraph.config.json")) ?? readUserCacheLocation();
+}
 
 export function buildDoctorReport(indexPath?: string): DoctorReport {
   const packageIdentity = getCodegraphPackageIdentity();
@@ -310,8 +362,15 @@ export function buildDoctorReport(indexPath?: string): DoctorReport {
   const origin = getNativeBindingOrigin();
   const runtimeIdentity = captureCodegraphRuntimeIdentity(origin);
   const update = createInstalledVersionChecker(runtimeIdentity, { warn: () => undefined }).check(true);
+  const cacheLocation = readEffectiveCacheLocation(process.cwd());
+  const cacheResolution = resolveCacheLocation(process.cwd(), cacheLocation ? { cacheLocation } : undefined);
   return {
     package: packageIdentity,
+    cache: {
+      path: normalizePathForDisplay(cacheResolution.path),
+      anchor: normalizePathForDisplay(cacheResolution.anchor),
+      layer: cacheResolution.layer,
+    },
     native: {
       available: isNativeTreeSitterAvailable(),
       ...(loadError ? { loadError: String(loadError) } : {}),

@@ -2,11 +2,18 @@ import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
-import { brotliDecompressSync } from "node:zlib";
+import { brotliCompressSync, brotliDecompressSync } from "node:zlib";
 
 import { buildProjectIndex, findDuplicates, type BuildReport } from "../src/index.js";
 import { closeDuplicateUnitCacheDatabase } from "../src/duplicates.js";
-import { SqliteDatabase } from "../src/sqlite-driver.js";
+import {
+  tryLoadDuplicateUnitsFromCache,
+  writeDuplicateUnitsBatchToCache,
+  writeDuplicateUnitsToCache,
+} from "../src/duplicates/unitCache.js";
+import { buildInternalUnit, formatDuplicateSqlHandle, formatDuplicateSymbolHandle } from "../src/duplicates/units.js";
+import * as buildCache from "../src/indexer/build-cache.js";
+import { SqliteDatabase, SqliteStatement } from "../src/sqlite-driver.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
 function cacheDir(root: string): string {
@@ -21,8 +28,8 @@ function duplicateCacheDbPath(root: string): string {
   return path.join(cacheDir(root), "duplicate-unit-cache.sqlite");
 }
 
-function normalizePathForSql(file: string): string {
-  return path.resolve(file).replace(/\\/g, "/");
+function normalizePathForSql(file: string, root?: string): string {
+  return (root ? path.relative(root, file) : path.resolve(file)).replace(/\\/g, "/");
 }
 
 function readSqliteMetadata(dbPath: string, key: string): string | undefined {
@@ -81,6 +88,22 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
   await fsp.writeFile(path.join(root, "src", "b.ts"), duplicateSource, "utf8");
 }
 
+async function writeDuplicateSqlProject(root: string): Promise<void> {
+  const duplicateSource = `
+CREATE TABLE invoice_entries (
+  id INTEGER PRIMARY KEY,
+  customer_id INTEGER NOT NULL,
+  subtotal_cents INTEGER NOT NULL,
+  tax_cents INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`;
+  await fsp.mkdir(path.join(root, "schema"), { recursive: true });
+  await fsp.writeFile(path.join(root, "schema", "a.sql"), duplicateSource, "utf8");
+  await fsp.writeFile(path.join(root, "schema", "b.sql"), duplicateSource, "utf8");
+}
+
 describe("disk cache uses sqlite backend", () => {
   it("persists module cache in sqlite and reuses entries", async () => {
     const root = await mkTmpDir("dg-disk-cache-");
@@ -126,6 +149,49 @@ describe("disk cache uses sqlite backend", () => {
     ).toHaveLength(1);
     expect(sql.filter((statement) => statement.startsWith("INSERT INTO module_cache"))).toHaveLength(1);
   });
+  it("rolls back a failed module cache batch without a partial row", async () => {
+    const root = await mkTmpDir("dg-disk-cache-batch-rollback-");
+    const firstPath = path.join(root, "first.ts");
+    const secondPath = path.join(root, "second.ts");
+    await fsp.writeFile(firstPath, "export const first = 1;\n", "utf8");
+    await fsp.writeFile(secondPath, "export const second = 2;\n", "utf8");
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const first = Array.from(index.byFile.values()).find((mod) => mod.file.endsWith("/first.ts"));
+    const second = Array.from(index.byFile.values()).find((mod) => mod.file.endsWith("/second.ts"));
+    if (!first || !second) throw new Error("missing seeded modules");
+
+    const db = new DatabaseSync(moduleCacheDbPath(root));
+    db.exec("DELETE FROM module_cache;");
+    db.close();
+
+    const originalRun = SqliteStatement.prototype.run;
+    let cacheWrites = 0;
+    const runSpy = vi.spyOn(SqliteStatement.prototype, "run").mockImplementation(function (
+      this: SqliteStatement,
+      ...params
+    ) {
+      if (params.length === 5 && (params[0] === "first.ts" || params[0] === "second.ts")) {
+        cacheWrites++;
+        if (cacheWrites === 2) throw new Error("simulated aborted cache batch");
+      }
+      return originalRun.call(this, ...params);
+    });
+    try {
+      buildCache.writeModulesToCache(
+        root,
+        [
+          { file: firstPath, sig: "first-signature", mod: first },
+          { file: secondPath, sig: "second-signature", mod: second },
+        ],
+        { cache: "disk" },
+      );
+    } finally {
+      runSpy.mockRestore();
+    }
+
+    expect(cacheWrites).toBe(2);
+    expect(readRowCount(moduleCacheDbPath(root), "SELECT COUNT(*) AS count FROM module_cache")).toBe(0);
+  });
 
   it("prunes module cache rows for files outside the successful manifest", async () => {
     const root = await mkTmpDir("dg-disk-cache-prune-");
@@ -142,14 +208,14 @@ describe("disk cache uses sqlite backend", () => {
       readRowCount(
         moduleCacheDbPath(root),
         "SELECT COUNT(*) AS count FROM module_cache WHERE file = ?",
-        normalizePathForSql(retainedPath),
+        normalizePathForSql(retainedPath, root),
       ),
     ).toBe(1);
     expect(
       readRowCount(
         moduleCacheDbPath(root),
         "SELECT COUNT(*) AS count FROM module_cache WHERE file = ?",
-        normalizePathForSql(deletedPath),
+        normalizePathForSql(deletedPath, root),
       ),
     ).toBe(0);
   });
@@ -172,7 +238,7 @@ describe("disk cache uses sqlite backend", () => {
       readRowCount(
         moduleCacheDbPath(root),
         "SELECT COUNT(*) AS count FROM module_cache WHERE file = ?",
-        normalizePathForSql(deletedPath),
+        normalizePathForSql(deletedPath, root),
       ),
     ).toBe(1);
   });
@@ -198,7 +264,7 @@ describe("disk cache uses sqlite backend", () => {
 
     expect(Array.from(index.modules.keys()).some((file) => file.endsWith("a.ts"))).toBe(true);
     expect(columns).toContain("updated_at");
-    expect(readSqliteMetadata(moduleCacheDbPath(root), "module_cache.schema_version")).toBe("1");
+    expect(readSqliteMetadata(moduleCacheDbPath(root), "module_cache.schema_version")).toBe("2");
   });
 
   it("rebuilds the module cache table when schema metadata is corrupt", async () => {
@@ -222,7 +288,7 @@ describe("disk cache uses sqlite backend", () => {
 
     await buildProjectIndex(root, { cache: "disk", threads: 1 });
 
-    expect(readSqliteMetadata(moduleCacheDbPath(root), "module_cache.schema_version")).toBe("1");
+    expect(readSqliteMetadata(moduleCacheDbPath(root), "module_cache.schema_version")).toBe("2");
     expect(
       readRowCount(moduleCacheDbPath(root), "SELECT COUNT(*) AS count FROM module_cache WHERE file = ?", "stale.ts"),
     ).toBe(0);
@@ -253,7 +319,7 @@ describe("disk cache uses sqlite backend", () => {
 
     expect(result.groups.length).toBeGreaterThan(0);
     expect(columns).toContain("updated_at");
-    expect(readSqliteMetadata(duplicateCacheDbPath(root), "duplicate_unit_cache.schema_version")).toBe("1");
+    expect(readSqliteMetadata(duplicateCacheDbPath(root), "duplicate_unit_cache.schema_version")).toBe("2");
   });
 
   it("rebuilds the duplicate unit cache table when schema metadata is corrupt", async () => {
@@ -281,7 +347,7 @@ describe("disk cache uses sqlite backend", () => {
     const result = await findDuplicates(index, { minConfidence: "high", limit: 5 });
 
     expect(result.groups.length).toBeGreaterThan(0);
-    expect(readSqliteMetadata(duplicateCacheDbPath(root), "duplicate_unit_cache.schema_version")).toBe("1");
+    expect(readSqliteMetadata(duplicateCacheDbPath(root), "duplicate_unit_cache.schema_version")).toBe("2");
     expect(
       readRowCount(
         duplicateCacheDbPath(root),
@@ -318,7 +384,7 @@ describe("disk cache uses sqlite backend", () => {
     db.prepare(
       `INSERT INTO duplicate_unit_cache(file, variant, sig, version, payload, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(normalizePathForSql(path.join(root, "src", "a.ts")), "expired", "old", 2, "[]", 0);
+    ).run(normalizePathForSql(path.join(root, "src", "a.ts"), root), "expired", "old", 2, "[]", 0);
     db.close();
 
     const reopenedIndex = await buildProjectIndex(root, { cache: "disk", threads: 1 });
@@ -347,7 +413,7 @@ describe("disk cache uses sqlite backend", () => {
     db.exec("BEGIN");
     for (let row = 0; row < 5_001; row++) {
       insert.run(
-        normalizePathForSql(path.join(root, "src", "a.ts")),
+        normalizePathForSql(path.join(root, "src", "a.ts"), root),
         `seed-${row}`,
         "current",
         2,
@@ -380,17 +446,264 @@ describe("disk cache uses sqlite backend", () => {
     const db = new DatabaseSync(duplicateCacheDbPath(root));
     const row = db
       .prepare("SELECT version, payload FROM duplicate_unit_cache WHERE file = ?")
-      .get(normalizePathForSql(path.join(root, "src", "a.ts"))) as { version: number; payload: Uint8Array } | undefined;
+      .get(normalizePathForSql(path.join(root, "src", "a.ts"), root)) as
+      | { version: number; payload: Uint8Array }
+      | undefined;
     db.close();
 
     expect(row).toBeDefined();
-    expect(row!.version).toBe(3);
+    expect(row!.version).toBe(4);
     const decompressed = brotliDecompressSync(row!.payload).toString("utf8");
     const units = JSON.parse(decompressed) as Array<Record<string, unknown>>;
     expect(units.length).toBeGreaterThan(0);
     expect(units[0]).not.toHaveProperty("text");
     expect(units[0]).not.toHaveProperty("normalizedTokens");
     expect(() => JSON.parse(Buffer.from(row!.payload).toString("utf8"))).toThrow();
+  });
+
+  it("persists SQL duplicate identities relative to the project root", async () => {
+    const root = await mkTmpDir("dg-disk-cache-portable-sql-duplicates-");
+    await writeDuplicateSqlProject(root);
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const file = normalizePathForSql(path.join(root, "schema", "a.sql"));
+    const source = await fsp.readFile(file, "utf8");
+    const unit = buildInternalUnit(
+      {
+        file: "schema/a.sql",
+        startLine: 1,
+        endLine: 8,
+        languageId: "sql",
+        kind: "symbol",
+        name: "invoice_entries",
+      },
+      file,
+      source,
+      3,
+      2,
+      index.nativeMode,
+      { sqlHandle: formatDuplicateSqlHandle("schema/a.sql", "invoice_entries", 1) },
+    );
+    writeDuplicateUnitsToCache(index, file, "portable-sql", [unit], root);
+
+    const db = new DatabaseSync(duplicateCacheDbPath(root));
+    const row = db.prepare("SELECT payload FROM duplicate_unit_cache WHERE file = ?").get("schema/a.sql") as
+      | { payload: Uint8Array }
+      | undefined;
+    db.close();
+
+    expect(row).toBeDefined();
+    const units = JSON.parse(brotliDecompressSync(row!.payload).toString("utf8")) as Array<Record<string, unknown>>;
+    expect(units[0]?.sqlHandle).toBe(formatDuplicateSqlHandle("schema/a.sql", "invoice_entries", 1));
+    expect(JSON.stringify(units[0])).not.toContain(normalizePathForSql(root));
+
+    const loaded = tryLoadDuplicateUnitsFromCache(index, file, "portable-sql", root);
+    expect(loaded?.[0]?.absoluteFile).toBe(normalizePathForSql(file));
+    expect(loaded?.[0]?.id?.startsWith(`${normalizePathForSql(file)}:`)).toBe(true);
+    expect(loaded?.[0]?.sqlHandle).toBe(formatDuplicateSqlHandle("schema/a.sql", "invoice_entries", 1));
+  });
+
+  it("persists symbol duplicate identities relative to the project root, canonicalizing the file component distinct from SQL handles", async () => {
+    const root = await mkTmpDir("dg-disk-cache-portable-symbol-duplicates-");
+    await writeDuplicateProject(root);
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const file = normalizePathForSql(path.join(root, "src", "a.ts"));
+    const source = await fsp.readFile(file, "utf8");
+    const namedHandle = formatDuplicateSymbolHandle(file, "normalizeInvoiceRows", 1, 0);
+    const persistedNamedHandle = formatDuplicateSymbolHandle("src/a.ts", "normalizeInvoiceRows", 1, 0);
+    // A symbol handle is `symbol:<file>:<name>:<line>:<column>` (file at index 1), while a SQL
+    // handle is `sql:<name>:<file>:<line>` (file at index 2). Reusing the SQL index for symbol
+    // handles would rewrite the encoded *name* as if it were the file.
+    const emptyNameHandle = formatDuplicateSymbolHandle(file, "", 1, 0);
+    const persistedEmptyNameHandle = formatDuplicateSymbolHandle("src/a.ts", "", 1, 0);
+
+    const namedUnit = buildInternalUnit(
+      {
+        file: "src/a.ts",
+        startLine: 1,
+        endLine: 8,
+        languageId: "typescript",
+        kind: "symbol",
+        name: "normalizeInvoiceRows",
+      },
+      file,
+      source,
+      3,
+      2,
+      index.nativeMode,
+      { symbolHandle: namedHandle },
+    );
+    const emptyNameUnit = buildInternalUnit(
+      {
+        file: "src/a.ts",
+        startLine: 1,
+        endLine: 8,
+        languageId: "typescript",
+        kind: "symbol",
+        name: "",
+      },
+      file,
+      source,
+      3,
+      2,
+      index.nativeMode,
+      { symbolHandle: emptyNameHandle },
+    );
+    writeDuplicateUnitsToCache(index, file, "portable-symbol", [namedUnit, emptyNameUnit], root);
+
+    const db = new DatabaseSync(duplicateCacheDbPath(root));
+    const row = db.prepare("SELECT payload FROM duplicate_unit_cache WHERE file = ?").get("src/a.ts") as
+      | { payload: Uint8Array }
+      | undefined;
+    db.close();
+
+    expect(row).toBeDefined();
+    const units = JSON.parse(brotliDecompressSync(row!.payload).toString("utf8")) as Array<Record<string, unknown>>;
+    expect(units[0]?.symbolHandle).toBe(persistedNamedHandle);
+    expect(units[1]?.symbolHandle).toBe(persistedEmptyNameHandle);
+    expect(JSON.stringify(units)).not.toContain(normalizePathForSql(root));
+
+    const loaded = tryLoadDuplicateUnitsFromCache(index, file, "portable-symbol", root);
+    expect(loaded?.[0]?.absoluteFile).toBe(normalizePathForSql(file));
+    expect(loaded?.[0]?.symbolHandle).toBe(persistedNamedHandle);
+    expect(loaded?.[1]?.symbolHandle).toBe(persistedEmptyNameHandle);
+  });
+
+  it("honors a projectRoot override in the batched duplicate-unit cache writer", async () => {
+    const root = await mkTmpDir("dg-disk-cache-batch-scoped-root-");
+    await writeDuplicateProject(root);
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const file = normalizePathForSql(path.join(root, "src", "a.ts"));
+    const source = await fsp.readFile(file, "utf8");
+    const scopedRoot = path.join(root, "src");
+    const unit = buildInternalUnit(
+      {
+        file: "src/a.ts",
+        startLine: 1,
+        endLine: 8,
+        languageId: "typescript",
+        kind: "symbol",
+        name: "normalizeInvoiceRows",
+      },
+      file,
+      source,
+      3,
+      2,
+      index.nativeMode,
+      { symbolHandle: formatDuplicateSymbolHandle(file, "normalizeInvoiceRows", 1, 0) },
+    );
+
+    writeDuplicateUnitsBatchToCache(index, [{ file, variant: "batch-scoped", units: [unit] }], scopedRoot);
+
+    const loadedWithScopedRoot = tryLoadDuplicateUnitsFromCache(index, file, "batch-scoped", scopedRoot);
+    expect(loadedWithScopedRoot?.[0]?.id).toBe(unit.id);
+
+    const loadedWithIndexRoot = tryLoadDuplicateUnitsFromCache(index, file, "batch-scoped", index.projectRoot);
+    expect(loadedWithIndexRoot).toBeNull();
+  });
+
+  it("rejects duplicate units whose persisted absolute file escapes the project", async () => {
+    const root = await mkTmpDir("dg-disk-cache-duplicate-unit-confinement-");
+    await writeDuplicateProject(root);
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const file = normalizePathForSql(path.join(root, "src", "a.ts"));
+    const source = await fsp.readFile(file, "utf8");
+    const unit = buildInternalUnit(
+      {
+        file: "src/a.ts",
+        startLine: 1,
+        endLine: 8,
+        languageId: "typescript",
+        kind: "symbol",
+        name: "normalizeInvoiceRows",
+      },
+      file,
+      source,
+      3,
+      2,
+      index.nativeMode,
+    );
+    writeDuplicateUnitsToCache(index, file, "confinement", [unit], root);
+    closeDuplicateUnitCacheDatabase(root);
+
+    const db = new DatabaseSync(duplicateCacheDbPath(root));
+    const row = db
+      .prepare("SELECT payload FROM duplicate_unit_cache WHERE file = ? AND variant = ?")
+      .get("src/a.ts", "confinement") as { payload: Uint8Array } | undefined;
+    if (!row) throw new Error("expected duplicate cache row");
+    const units = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as Array<Record<string, unknown>>;
+    units[0] = { ...units[0], absoluteFile: "../outside.ts" };
+    db.prepare("UPDATE duplicate_unit_cache SET payload = ? WHERE file = ? AND variant = ?").run(
+      brotliCompressSync(JSON.stringify(units)),
+      "src/a.ts",
+      "confinement",
+    );
+    db.close();
+
+    const reopenedIndex = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    expect(tryLoadDuplicateUnitsFromCache(reopenedIndex, file, "confinement", root)).toBeNull();
+  });
+
+  it("rejects duplicate units with malformed or out-of-root encoded handle paths", async () => {
+    const root = await mkTmpDir("dg-disk-cache-duplicate-handle-confinement-");
+    await writeDuplicateProject(root);
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const file = normalizePathForSql(path.join(root, "src", "a.ts"));
+    const source = await fsp.readFile(file, "utf8");
+    const unit = buildInternalUnit(
+      {
+        file: "src/a.ts",
+        startLine: 1,
+        endLine: 8,
+        languageId: "typescript",
+        kind: "symbol",
+        name: "normalizeInvoiceRows",
+      },
+      file,
+      source,
+      3,
+      2,
+      index.nativeMode,
+      {
+        sqlHandle: formatDuplicateSqlHandle("src/a.ts", "normalizeInvoiceRows", 1),
+        symbolHandle: formatDuplicateSymbolHandle("src/a.ts", "normalizeInvoiceRows", 1, 0),
+      },
+    );
+    writeDuplicateUnitsToCache(index, file, "handle-confinement", [unit], root);
+    closeDuplicateUnitCacheDatabase(root);
+
+    const fieldValues: Array<[string, string]> = [
+      ["file", "../outside.ts"],
+      ["handle", "sql:normalizeInvoiceRows:..%2Foutside.ts:1"],
+      ["fileHandle", "file:%E0%A4%A"],
+      ["chunkHandle", "chunk:..%2Foutside.ts:1"],
+      ["symbolHandle", "symbol:..%2Foutside.ts:normalizeInvoiceRows:1:0"],
+      ["sqlHandle", "sql:normalizeInvoiceRows:..%2Foutside.ts:1"],
+    ];
+    const reopenedIndex = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+
+    for (const [field, value] of fieldValues) {
+      const db = new DatabaseSync(duplicateCacheDbPath(root));
+      const row = db
+        .prepare("SELECT payload FROM duplicate_unit_cache WHERE file = ? AND variant = ?")
+        .get("src/a.ts", "handle-confinement") as { payload: Uint8Array } | undefined;
+      if (!row) throw new Error("expected duplicate cache row");
+      const units = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as Array<Record<string, unknown>>;
+      units[0] = { ...units[0], [field]: value };
+      db.prepare("UPDATE duplicate_unit_cache SET payload = ? WHERE file = ? AND variant = ?").run(
+        brotliCompressSync(JSON.stringify(units)),
+        "src/a.ts",
+        "handle-confinement",
+      );
+      db.close();
+
+      expect(tryLoadDuplicateUnitsFromCache(reopenedIndex, file, "handle-confinement", root)).toBeNull();
+
+      const reset = new DatabaseSync(duplicateCacheDbPath(root));
+      reset
+        .prepare("UPDATE duplicate_unit_cache SET payload = ? WHERE file = ? AND variant = ?")
+        .run(row.payload, "src/a.ts", "handle-confinement");
+      reset.close();
+    }
   });
 
   it("ignores duplicate cache rows written by an older payload version", async () => {
@@ -400,7 +713,7 @@ describe("disk cache uses sqlite backend", () => {
     await findDuplicates(index, { minConfidence: "high", limit: 5 });
     closeDuplicateUnitCacheDatabase(root);
 
-    const aFile = normalizePathForSql(path.join(root, "src", "a.ts"));
+    const aFile = normalizePathForSql(path.join(root, "src", "a.ts"), root);
     const staleDb = new DatabaseSync(duplicateCacheDbPath(root));
     staleDb
       .prepare("UPDATE duplicate_unit_cache SET version = 2, payload = ? WHERE file = ?")
@@ -416,6 +729,6 @@ describe("disk cache uses sqlite backend", () => {
       | { version: number }
       | undefined;
     after.close();
-    expect(row?.version).toBe(3);
+    expect(row?.version).toBe(4);
   });
 });

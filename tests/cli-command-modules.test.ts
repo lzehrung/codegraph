@@ -11,7 +11,13 @@ import { buildDoctorReport, findStaleNpmRetirementPaths } from "../src/cli/docto
 import { handleGraphCommand, type GraphCommandContext } from "../src/cli/graph.js";
 import { handleGraphDeltaCommand } from "../src/cli/graphDelta.js";
 import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/cli/graphQueries.js";
-import { CLI_HELP_TEXT, FILE_HELP_TEXT, MCP_SERVE_HELP_TEXT, PACKET_HELP_TEXT } from "../src/cli/help.js";
+import {
+  CLI_HELP_TEXT,
+  FILE_HELP_TEXT,
+  MCP_SERVE_HELP_TEXT,
+  PACKET_HELP_TEXT,
+  SQL_HELP_TEXT,
+} from "../src/cli/help.js";
 import { handleImpactCommand, type ImpactCommandContext } from "../src/cli/impact.js";
 import { handleIndexCommand, type IndexCommandContext } from "../src/cli/index.js";
 import { handleHotspotsCommand, handleInspectCommand, type InspectCommandContext } from "../src/cli/inspect.js";
@@ -330,6 +336,10 @@ describe("CLI command modules", () => {
 
     expect(commands).toContain("  mcp");
     expect(commands).toContain("Serve MCP tools for agent graph navigation");
+  });
+
+  test("documents --pretty for both SQL command forms", () => {
+    expect(SQL_HELP_TEXT).toContain('codegraph sql --db <sqlite-path> --query "SELECT ..." [--json | --pretty]');
   });
 
   test("lists all public top-level commands in CLI help", () => {
@@ -1227,6 +1237,10 @@ describe("CLI command modules", () => {
     expect(pretty).toMatchObject({ stderr: "", exitCode: undefined });
     expect(pretty.stdout).toContain("Package:\n  Name: @lzehrung/codegraph");
     expect(pretty.stdout).toMatch(/^Package:/m);
+    expect(pretty.stdout).toMatch(/^Cache:/m);
+    expect(pretty.stdout).toMatch(/^ {2}Path: /m);
+    expect(pretty.stdout).toMatch(/^ {2}Anchor: /m);
+    expect(pretty.stdout).toMatch(/^ {2}Layer: /m);
     expect(pretty.stdout).toMatch(/^Native:/m);
     expect(pretty.stdout).toMatch(/^ {2}Origin:/m);
     expect(pretty.stdout).toMatch(/^ {2}Update:/m);
@@ -1367,6 +1381,72 @@ describe("CLI command modules", () => {
         fsp.rm(firstRoot, { recursive: true, force: true }),
         fsp.rm(secondRoot, { recursive: true, force: true }),
       ]);
+    }
+  });
+
+  test("doctor reports the effective cache.location from codegraph.config.json", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-doctor-cache-config-"));
+    const cacheLocation = path.join(tempDir, "custom-cache");
+    await fsp.mkdir(cacheLocation, { recursive: true });
+    await fsp.writeFile(
+      path.join(tempDir, "codegraph.config.json"),
+      JSON.stringify({ cache: { location: cacheLocation } }),
+      "utf8",
+    );
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const report = buildDoctorReport();
+      expect(report.cache.layer).toBe("explicit");
+      expect(report.cache.anchor).toBe(cacheLocation.replace(/\\/g, "/"));
+    } finally {
+      process.chdir(previousCwd);
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("doctor ignores a relative cache.location that would fail real schema validation", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-doctor-invalid-cache-config-"));
+    await fsp.writeFile(
+      path.join(tempDir, "codegraph.config.json"),
+      JSON.stringify({ cache: { location: "relative-cache-dir" } }),
+      "utf8",
+    );
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const report = buildDoctorReport();
+      expect(report.cache.layer).not.toBe("explicit");
+      expect(report.cache.anchor).not.toContain("relative-cache-dir");
+    } finally {
+      process.chdir(previousCwd);
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("doctor falls back to the platform user config when project config has no cache.location", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-doctor-user-cache-config-"));
+    const userConfigRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-doctor-user-config-root-"));
+    const cacheLocation = path.join(tempDir, "user-custom-cache");
+    await fsp.mkdir(path.join(userConfigRoot, "codegraph"), { recursive: true });
+    await fsp.writeFile(
+      path.join(userConfigRoot, "codegraph", "config.json"),
+      JSON.stringify({ cache: { location: cacheLocation } }),
+      "utf8",
+    );
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    vi.stubEnv("APPDATA", userConfigRoot);
+    vi.stubEnv("XDG_CONFIG_HOME", userConfigRoot);
+    try {
+      const report = buildDoctorReport();
+      expect(report.cache.layer).toBe("explicit");
+      expect(report.cache.anchor).toBe(cacheLocation.replace(/\\/g, "/"));
+    } finally {
+      process.chdir(previousCwd);
+      vi.unstubAllEnvs();
+      await fsp.rm(tempDir, { recursive: true, force: true });
+      await fsp.rm(userConfigRoot, { recursive: true, force: true });
     }
   });
 

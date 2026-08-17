@@ -81,6 +81,13 @@ export type ResolvedExport = { kind: "resolved"; def: SymbolDef } | { kind: "nam
 export type ProjectIndexManifestEntry = {
   sig: string;
   gitSig?: string;
+  /**
+   * Content-identity signature (`FileSignature.cacheSig`), when it was available at signature
+   * computation time. Stronger than `sig` alone: unlike the cheap `mtime:size` fast path used
+   * when `cacheStrict` is off, this is git- or content-hash-derived and does not falsely match
+   * a changed file whose mtime and size happen to be restored to their prior values.
+   */
+  cacheSig?: string;
 };
 
 export type SqlNavigationCache = {
@@ -107,6 +114,7 @@ export type ProjectIndex = {
   modules: Map<FileId, ModuleIndex>;
   byFile: Map<FileId, ModuleIndex>;
   projectRoot?: string;
+  languageExtensions?: LanguageExtensionMap;
   nativeMode?: NativeRuntimeMode;
   exportCache: Map<string, ResolvedExport | null>;
   scopeCache: Map<string, ScopeIndex>;
@@ -135,11 +143,26 @@ export type ProjectIndex = {
  */
 export type LanguageExtensionMap = import("../languages.js").LanguageExtensionMap;
 
+export type CacheLocation = string;
+
 export type BuildOptions = {
   onProgress?: ((progress: ProgressUpdate) => void) | undefined;
   threads?: number;
   cache?: "off" | "memory" | "disk";
+  /**
+   * Highest-precedence disk-cache anchor; also settable via `CODEGRAPH_CACHE_DIR`. Like an
+   * absolute `cacheLocation`, this is an anchor, not the final cache directory: the resolved
+   * cache lives in a namespaced subdirectory underneath it.
+   */
   cacheDir?: string;
+  /**
+   * Disk-cache anchor when `cacheDir`/`CODEGRAPH_CACHE_DIR` are unset: `"project"` anchors at
+   * `projectRoot`, `"user"` anchors at the platform user cache directory, `"repo"` (or omitted)
+   * searches ancestor directories for repository metadata and falls back to `projectRoot`. Any
+   * other value is treated as an absolute anchor directory (like `cacheDir`), not a final cache
+   * path: the resolved cache lives in a namespaced subdirectory under the anchor.
+   */
+  cacheLocation?: CacheLocation;
   cacheStrict?: boolean;
   useBloomFilters?: boolean;
   graph?: GraphBuildOptions;

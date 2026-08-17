@@ -28,6 +28,10 @@ Default workflow:
 - first-turn map: `codegraph orient --root . --budget small`
 - targeted follow-up: `codegraph search "<query>" --json` then `codegraph explain <handle|file|symbol>`
 
+## Cache location
+
+Index caches store project-relative paths, so a cache can be moved with its project. Cache selection precedence is `--cache-dir`, `CODEGRAPH_CACHE_DIR`, `cache.location` in project config (then user config), repository metadata, then the project root. `cache.location` accepts `project`, `repo`, `user`, or an absolute path; `--root` remains the project scope boundary.
+
 ## Runtime selection
 
 The CLI defaults to `--native auto`, which uses the native Tree-sitter path when a compatible native artifact is available and falls back automatically otherwise.

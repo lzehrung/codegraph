@@ -7,12 +7,13 @@ import { findDetailedCycles, getUnresolvedImports } from "../graphs/queries.js";
 import { getHotspots } from "../graphs/hotspots.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import { loadCurrentProjectIndex } from "../indexer/load-current-index.js";
-import { type BuildOptions, type BuildReport } from "../indexer/types.js";
+import { type BuildOptions, type BuildReport, type CacheLocation } from "../indexer/types.js";
 import {
   getNativeTreeSitterLoadError,
   getNativeTreeSitterSupportedLanguageIds,
   isNativeTreeSitterAvailable,
 } from "../native/treeSitterNative.js";
+import { cacheRoot } from "../indexer/build-cache/location.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { Graph } from "../types.js";
 import { restrictGraphToIncludeRoots } from "../util/includeRoots.js";
@@ -106,6 +107,7 @@ export type InspectCommandContext = {
   nativeMode: NativeRuntimeMode;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
   progressHandler: BuildOptions["onProgress"];
+  cacheLocation: CacheLocation | undefined;
   getOpt: (name: string) => string | undefined;
   hasFlag: (name: string) => boolean;
   resolveFilesFromRoots: () => Promise<string[]>;
@@ -117,16 +119,32 @@ export type InspectCommandContext = {
   writeCommandReport?: (report: CommandReport, reportFile: string | undefined) => Promise<void>;
 };
 
-function defaultCacheIndexPath(projectRoot: string): string {
-  return path.join(projectRoot, ".codegraph-cache", "index-v1");
+function defaultCacheIndexPath(
+  projectRoot: string,
+  cacheDir: string | undefined,
+  cacheLocation: CacheLocation | undefined,
+): string {
+  return cacheRoot(projectRoot, {
+    cache: "disk",
+    ...(cacheDir ? { cacheDir } : {}),
+    ...(cacheLocation ? { cacheLocation } : {}),
+  });
 }
 
-function defaultCacheManifestPath(projectRoot: string): string {
-  return path.join(defaultCacheIndexPath(projectRoot), "manifest.json");
+function defaultCacheManifestPath(
+  projectRoot: string,
+  cacheDir: string | undefined,
+  cacheLocation: CacheLocation | undefined,
+): string {
+  return path.join(defaultCacheIndexPath(projectRoot, cacheDir, cacheLocation), "manifest.json");
 }
 
-function readIndexCacheMetadata(projectRoot: string): IndexCacheMetadata | null {
-  const manifestPath = defaultCacheManifestPath(projectRoot);
+function readIndexCacheMetadata(
+  projectRoot: string,
+  cacheDir: string | undefined,
+  cacheLocation: CacheLocation | undefined,
+): IndexCacheMetadata | null {
+  const manifestPath = defaultCacheManifestPath(projectRoot, cacheDir, cacheLocation);
   try {
     const raw = fs.readFileSync(manifestPath, "utf8");
     const parsed = JSON.parse(raw) as {
@@ -155,6 +173,8 @@ async function buildScopedReportGraph(
   files: string[],
   opts: {
     cache?: CacheMode;
+    cacheDir?: string;
+    cacheLocation?: CacheLocation;
     discovery?: ProjectFileDiscoveryOptions;
     languageExtensions?: LanguageExtensionMap;
     graphOptions?: GraphBuildOptions;
@@ -168,7 +188,7 @@ async function buildScopedReportGraph(
   // Cache metadata is reporting only: the shared loader owns freshness, so a cold run
   // builds reusable state here instead of collecting a throwaway graph.
   const useDiskCache = opts.cache === "disk" || opts.cache === undefined;
-  const indexCache = useDiskCache ? readIndexCacheMetadata(projectRoot) : null;
+  const indexCache = useDiskCache ? readIndexCacheMetadata(projectRoot, opts.cacheDir, opts.cacheLocation) : null;
   if (indexCache) {
     opts.writeStderrLine(formatIndexCacheMetadata(indexCache));
   }
@@ -177,6 +197,8 @@ async function buildScopedReportGraph(
     scope: { kind: "resolved-files", files },
     options: {
       ...(opts.cache ? { cache: opts.cache } : {}),
+      ...(opts.cacheDir ? { cacheDir: opts.cacheDir } : {}),
+      ...(opts.cacheLocation ? { cacheLocation: opts.cacheLocation } : {}),
       ...(opts.discovery ? { discovery: opts.discovery } : {}),
       ...(opts.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
       ...(opts.progressHandler ? { onProgress: opts.progressHandler } : {}),
@@ -231,6 +253,8 @@ function buildRecommendedInspectCommands(
   includeRoots: string[],
   hasCycles: boolean,
   hasUnresolvedImports: boolean,
+  cacheDir: string | undefined,
+  cacheLocation: CacheLocation | undefined,
 ): string[] {
   const rootFlag = `--root "${normalizePath(projectRoot)}"`;
   const targetSuffix = includeRoots.length
@@ -247,7 +271,7 @@ function buildRecommendedInspectCommands(
   if (hasCycles) {
     commands.push(`codegraph cycles ${rootFlag}${targetSuffix} --sort priority --json`);
   }
-  commands.push(`codegraph doctor "${normalizePath(defaultCacheIndexPath(projectRoot))}"`);
+  commands.push(`codegraph doctor "${normalizePath(defaultCacheIndexPath(projectRoot, cacheDir, cacheLocation))}"`);
   return commands;
 }
 function formatInspectLanguageCounts(byLanguage: Record<string, number>): string {
@@ -348,6 +372,8 @@ async function buildInspectReport(
   graphOptions: GraphBuildOptions | undefined,
   languageExtensions: LanguageExtensionMap | undefined,
   cache: CacheMode | undefined,
+  cacheDir: string | undefined,
+  cacheLocation: CacheLocation | undefined,
   nativeMode: NativeRuntimeMode,
   workerOpts: { useNativeWorkers: true } | Record<string, never>,
   progressHandler: BuildOptions["onProgress"],
@@ -357,7 +383,7 @@ async function buildInspectReport(
   writeStderrLine: (message: string) => void,
 ): Promise<InspectReport> {
   const useDiskCache = cache === "disk" || cache === undefined;
-  const indexCache = useDiskCache ? readIndexCacheMetadata(projectRoot) : null;
+  const indexCache = useDiskCache ? readIndexCacheMetadata(projectRoot, cacheDir, cacheLocation) : null;
   if (indexCache) {
     writeStderrLine(formatIndexCacheMetadata(indexCache));
   }
@@ -367,6 +393,8 @@ async function buildInspectReport(
     scope: { kind: "resolved-files", files },
     options: {
       ...(cache ? { cache } : {}),
+      ...(cacheDir ? { cacheDir } : {}),
+      ...(cacheLocation ? { cacheLocation } : {}),
       discovery,
       ...(languageExtensions ? { languageExtensions } : {}),
       ...(progressHandler ? { onProgress: progressHandler } : {}),
@@ -441,6 +469,8 @@ async function buildInspectReport(
       includeRoots,
       !!cycles.length,
       !!unresolved.length,
+      cacheDir,
+      cacheLocation,
     ),
   };
 }
@@ -462,6 +492,8 @@ export async function handleInspectCommand(context: InspectCommandContext): Prom
     context.graphOptions,
     context.languageExtensions,
     cache,
+    context.getOpt("--cache-dir"),
+    context.cacheLocation,
     context.nativeMode,
     context.workerOpts,
     context.progressHandler,
@@ -483,8 +515,11 @@ export async function handleHotspotsCommand(context: InspectCommandContext): Pro
   const cache = parseCacheModeOption(context.getOpt("--cache"));
   const limit = parsePositiveIntegerOption(context.getOpt("--limit"), "--limit", 20);
   const files = await context.resolveFilesFromRoots();
+  const cacheDir = context.getOpt("--cache-dir");
   const { graph } = await buildScopedReportGraph(context.projectRootFs, context.includeRootsAbs, files, {
     ...(cache ? { cache } : {}),
+    ...(cacheDir ? { cacheDir } : {}),
+    ...(context.cacheLocation ? { cacheLocation: context.cacheLocation } : {}),
     discovery: context.discoveryOptions,
     ...(context.languageExtensions ? { languageExtensions: context.languageExtensions } : {}),
     ...(context.graphOptions ? { graphOptions: context.graphOptions } : {}),

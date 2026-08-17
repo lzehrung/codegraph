@@ -1,6 +1,6 @@
 import fsp from "node:fs/promises";
 import { buildGraphDelta } from "../indexer/build-index.js";
-import { type IncrementalBuildOptions } from "../indexer/types.js";
+import { type CacheLocation, type IncrementalBuildOptions } from "../indexer/types.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
@@ -18,6 +18,7 @@ export type GraphDeltaCommandContext = {
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
   graphOptions: GraphBuildOptions | undefined;
   languageExtensions: IncrementalBuildOptions["languageExtensions"];
+  cacheLocation: CacheLocation | undefined;
   gitBase: string | undefined;
   gitHead: string | undefined;
   changedSince: string | undefined;
@@ -72,6 +73,9 @@ export async function handleGraphDeltaCommand(context: GraphDeltaCommandContext)
   if (context.languageExtensions) deltaOptions.languageExtensions = context.languageExtensions;
   if (context.nativeMode !== "auto") deltaOptions.native = context.nativeMode;
   if (cache !== undefined) deltaOptions.cache = cache;
+  const cacheDir = context.getOpt("--cache-dir");
+  if (cacheDir) deltaOptions.cacheDir = cacheDir;
+  if (context.cacheLocation) deltaOptions.cacheLocation = context.cacheLocation;
   if (context.gitBase) deltaOptions.gitBase = context.gitBase;
   if (context.gitHead) deltaOptions.gitHead = context.gitHead;
   if (context.changedSince) deltaOptions.changedSince = context.changedSince;

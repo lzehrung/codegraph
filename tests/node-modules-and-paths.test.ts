@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
 import fsp from "node:fs/promises";
-import { collectGraph } from "../src/index.js";
+import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import { resolveFromNodeModules } from "../src/util/resolution/node.js";
+import { collectGraph } from "../src/index.js";
 import { mkTmpDir, normalizeTestPath } from "./helpers/filesystem.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 describe("Node modules resolution (opt-in) and path normalization", () => {
   it("treats packages as external by default; resolves to file with flag", async () => {
@@ -69,6 +71,90 @@ describe("Node modules resolution (opt-in) and path normalization", () => {
     );
   });
 
+  it("refreshes cached node-module edges when package targets change", async () => {
+    const root = await mkTmpDir("dg-nm-incremental-");
+    const nm = path.join(root, "node_modules", "my-pkg");
+    const main = path.join(root, "main.js");
+    await fsp.mkdir(nm, { recursive: true });
+    await fsp.writeFile(main, 'import "my-pkg";\n', "utf8");
+    await fsp.writeFile(path.join(nm, "first.js"), "module.exports = 1;\n", "utf8");
+    await fsp.writeFile(path.join(nm, "second.js"), "module.exports = 2;\n", "utf8");
+    const packagePath = path.join(nm, "package.json");
+    await fsp.writeFile(packagePath, JSON.stringify({ name: "my-pkg", main: "first.js" }), "utf8");
+
+    const first = await buildProjectIndex(root, {
+      cache: "disk",
+      graph: { resolveNodeModules: true },
+      threads: 1,
+    });
+    expect(first.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path.endsWith("/first.js"))).toBe(true);
+
+    await fsp.writeFile(packagePath, JSON.stringify({ name: "my-pkg", main: "second.js" }), "utf8");
+    const report: BuildReport = { timings: {} };
+    const second = await buildProjectIndexIncremental(root, {
+      cache: "disk",
+      graph: { resolveNodeModules: true },
+      threads: 1,
+      report,
+    });
+    expect(second.graph.edges.map((edge) => (edge.to.type === "file" ? edge.to.path : edge.to.name))).toEqual([
+      expect.stringContaining("second.js"),
+    ]);
+    expect(second.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path.endsWith("/first.js"))).toBe(
+      false,
+    );
+  });
+
+  it("does not reuse a stale per-file module cache entry when resolveNodeModules turns on for a warm non-incremental build", async () => {
+    const root = await mkTmpDir("dg-nm-warm-toggle-");
+    const nm = path.join(root, "node_modules", "my-pkg");
+    const main = path.join(root, "main.js");
+    await fsp.mkdir(nm, { recursive: true });
+    await fsp.writeFile(main, 'import { thing } from "my-pkg";\nexport const used = thing;\n', "utf8");
+    await fsp.writeFile(path.join(nm, "index.js"), "module.exports = 1;\n", "utf8");
+    await fsp.writeFile(path.join(nm, "package.json"), JSON.stringify({ name: "my-pkg", main: "index.js" }), "utf8");
+
+    const cold = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const coldModule = cold.byFile.get(fileIdentityKey(main));
+    const coldResolved = coldModule?.imports[0]?.resolved;
+    expect(typeof coldResolved === "string" && coldResolved.includes("node_modules")).toBe(false);
+
+    const warm = await buildProjectIndex(root, {
+      cache: "disk",
+      graph: { resolveNodeModules: true },
+      threads: 1,
+    });
+    const warmModule = warm.byFile.get(fileIdentityKey(main));
+    const warmResolved = warmModule?.imports[0]?.resolved;
+    expect(
+      typeof warmResolved === "string" && warmResolved.replace(/\\/g, "/").includes("node_modules/my-pkg/index.js"),
+    ).toBe(true);
+  });
+  it("does not reuse a stale per-file module cache entry when resolveNodeModules turns off for a warm non-incremental build", async () => {
+    const root = await mkTmpDir("dg-nm-warm-toggle-off-");
+    const nm = path.join(root, "node_modules", "my-pkg");
+    const main = path.join(root, "main.js");
+    await fsp.mkdir(nm, { recursive: true });
+    await fsp.writeFile(main, 'import { thing } from "my-pkg";\nexport const used = thing;\n', "utf8");
+    await fsp.writeFile(path.join(nm, "index.js"), "module.exports = 1;\n", "utf8");
+    await fsp.writeFile(path.join(nm, "package.json"), JSON.stringify({ name: "my-pkg", main: "index.js" }), "utf8");
+
+    const warm = await buildProjectIndex(root, {
+      cache: "disk",
+      graph: { resolveNodeModules: true },
+      threads: 1,
+    });
+    const warmModule = warm.byFile.get(fileIdentityKey(main));
+    const warmResolved = warmModule?.imports[0]?.resolved;
+    expect(
+      typeof warmResolved === "string" && warmResolved.replace(/\\/g, "/").includes("node_modules/my-pkg/index.js"),
+    ).toBe(true);
+
+    const cold = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const coldModule = cold.byFile.get(fileIdentityKey(main));
+    const coldResolved = coldModule?.imports[0]?.resolved;
+    expect(typeof coldResolved === "string" && coldResolved.includes("node_modules")).toBe(false);
+  });
   it("normalizes paths to forward slashes in nodes and edges", async () => {
     const root = await mkTmpDir("dg-paths-");
     const a = path.join(root, "a.ts");

@@ -326,6 +326,7 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
         projectRootFs: ctx.projectRootFs,
         files,
         languageExtensions: ctx.config.languages?.extensions,
+        cacheLocation: ctx.config.cache?.location,
         getOpt: ctx.getOpt,
         hasFlag: ctx.hasFlag,
         cwd: getCwd,
@@ -357,6 +358,7 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
       await handleGraphCommand({
         projectRootFs: ctx.projectRootFs,
         discoveryOptions: ctx.discoveryOptions,
+        cacheLocation: ctx.config.cache?.location,
         nativeMode: ctx.nativeMode,
         workerOpts: ctx.workerOpts,
         progressHandler: ctx.progressHandler,
@@ -392,6 +394,7 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
         nativeMode: ctx.nativeMode,
         workerOpts: ctx.workerOpts,
         languageExtensions: ctx.config.languages?.extensions,
+        cacheLocation: ctx.config.cache?.location,
         progressHandler: ctx.progressHandler,
         graphOptions: ctx.hasGraphOverrides || ctx.nativeMode !== "auto" ? ctx.buildGraphOptions() : undefined,
         reportEnabled: ctx.reportEnabled,
@@ -413,6 +416,7 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
     run: async (ctx) => {
       const driftGraphOptions =
         ctx.hasGraphOverrides || ctx.nativeMode !== "auto" ? ctx.buildGraphOptions() : undefined;
+      const driftCacheDir = ctx.getOpt("--cache-dir");
       const { handleDriftCommand } = await import("./drift.js");
       await handleDriftCommand({
         projectRootFs: ctx.projectRootFs,
@@ -427,6 +431,8 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
           ...(ctx.nativeMode !== "auto" ? { native: ctx.nativeMode } : {}),
           ...(ctx.config.languages?.extensions ? { languageExtensions: ctx.config.languages.extensions } : {}),
           ...ctx.workerOpts,
+          ...(driftCacheDir ? { cacheDir: driftCacheDir } : {}),
+          ...(ctx.config.cache?.location ? { cacheLocation: ctx.config.cache.location } : {}),
         },
         writeJSONLine,
         writeStdoutLine,
@@ -503,6 +509,7 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
       await handleImpactCommand({
         projectRootFs: ctx.projectRootFs,
         discoveryOptions: ctx.discoveryOptions,
+        cacheLocation: ctx.config.cache?.location,
         getOpt: ctx.getOpt,
         hasFlag: ctx.hasFlag,
         parsedOptions: ctx.parsed.options,
@@ -555,6 +562,7 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
       await handleReviewCommand({
         projectRootFs: ctx.projectRootFs,
         discoveryOptions: ctx.discoveryOptions,
+        cacheLocation: ctx.config.cache?.location,
         reportFile: ctx.reportFile,
         commandReport,
         getOpt: ctx.getOpt,
@@ -654,6 +662,7 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
         includeRootsAbs: ctx.includeRootsAbs,
         discoveryOptions: ctx.discoveryOptions,
         languageExtensions: ctx.config.languages?.extensions,
+        cacheLocation: ctx.config.cache?.location,
         graphOptions: ctx.hasGraphOverrides || ctx.nativeMode !== "auto" ? ctx.buildGraphOptions() : undefined,
         nativeMode: ctx.nativeMode,
         workerOpts: ctx.workerOpts,
@@ -679,6 +688,7 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
         includeRootsAbs: ctx.includeRootsAbs,
         discoveryOptions: ctx.discoveryOptions,
         languageExtensions: ctx.config.languages?.extensions,
+        cacheLocation: ctx.config.cache?.location,
         graphOptions: ctx.hasGraphOverrides || ctx.nativeMode !== "auto" ? ctx.buildGraphOptions() : undefined,
         nativeMode: ctx.nativeMode,
         workerOpts: ctx.workerOpts,
@@ -724,6 +734,7 @@ function navigationArgs(ctx: CliProjectContext) {
     nativeMode: ctx.nativeMode,
     workerOpts: ctx.workerOpts,
     progressHandler: ctx.progressHandler,
+    cacheLocation: ctx.config.cache?.location,
     writeJSONLine,
     writeStdoutLine,
     writeStderrLine,

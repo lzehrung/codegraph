@@ -4,7 +4,7 @@ import { formatMarkdownLinkCheckResult } from "./links.js";
 import { buildReviewReport, type ReviewBuildReport, type ReviewDepth, type ReviewReport } from "../review.js";
 import type { CandidateTestFile } from "../impact/context.js";
 import { formatRequiredArgumentCount } from "../impact/reportShared.js";
-import type { BuildOptions, BuildReport, ProjectIndex } from "../indexer/types.js";
+import type { BuildOptions, BuildReport, CacheLocation, ProjectIndex } from "../indexer/types.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import {
   appendDuplicateLeadSummary,
@@ -49,6 +49,7 @@ export type ReviewCommandContext = {
   useNativeWorkers: boolean;
   graphOptions: GraphBuildOptions | undefined;
   progressHandler: BuildOptions["onProgress"];
+  cacheLocation: CacheLocation | undefined;
   writeJSONLine: (value: unknown) => void;
   writeStdoutLine: (message: string) => void;
   writeStderrLine: (message: string) => void;
@@ -315,6 +316,9 @@ export async function handleReviewCommand(context: ReviewCommandContext): Promis
   if (context.useNativeWorkers) reviewOpts.useNativeWorkers = true;
   if (cacheStrict) reviewOpts.cacheStrict = true;
   if (cacheVerify) reviewOpts.cacheVerify = true;
+  const cacheDir = context.getOpt("--cache-dir");
+  if (cacheDir) reviewOpts.cacheDir = cacheDir;
+  if (context.cacheLocation) reviewOpts.cacheLocation = context.cacheLocation;
   if (incrementalStrict) reviewOpts.incrementalStrict = true;
   if (context.graphOptions) reviewOpts.graph = context.graphOptions;
   if (context.progressHandler) reviewOpts.onProgress = context.progressHandler;

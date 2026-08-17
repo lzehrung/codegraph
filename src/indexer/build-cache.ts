@@ -6,6 +6,7 @@ export {
   normalizeIndexedFileInputs,
   sanitizeManifestEntriesForRoot,
   sanitizeManifestTransientFilesForRoot,
+  transformManifestEntries,
   verifyManifestEntries,
   writeManifest,
   type IndexManifest,
@@ -13,21 +14,26 @@ export {
 } from "./build-cache/manifest.js";
 export {
   buildBloomFilterForFile,
-  cacheRoot,
   cacheSignatureForFile,
   clearMemoryCache,
   closeDiskCacheDatabase,
   fileSignature,
   pruneDiskModuleCache,
   tryLoadFromCache,
+  writeModulesToCache,
   writeToCache,
   type FileSignature,
+  type PendingModuleCacheWrite,
 } from "./build-cache/module-cache.js";
+export { cacheRoot, resolveCacheLocation } from "./build-cache/location.js";
 export {
+  BLOOM_FILTER_SNAPSHOT_FILENAME,
+  BLOOM_FILTER_SNAPSHOT_VERSION,
   createProjectSnapshotIdentity,
   projectSnapshotFilesSignature,
   tryLoadDetailedSymbolGraphSnapshot,
   tryLoadPersistedBloomFilters,
+  tryLoadProjectSnapshotModules,
   tryLoadProjectIndexSnapshot,
   writeDetailedSymbolGraphSnapshot,
   writeProjectIndexSnapshot,

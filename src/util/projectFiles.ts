@@ -155,6 +155,7 @@ type SafeSymlinkDirectoryCrawlOptions = {
   onlyFiles?: boolean;
   markDirectories?: boolean;
   knownSymlinkDirectories?: readonly string[];
+  resolvedSafeSymlinkDirectories?: readonly string[];
   onSymlinkDirectoriesDiscovered?: (directories: readonly string[]) => void;
 };
 
@@ -169,6 +170,20 @@ function isPresent(value: string | undefined): value is string {
 
 function normalizeGlobPattern(globPattern: string): string {
   return globPattern.trim().replace(/\\/g, "/");
+}
+
+/**
+ * Whether an include glob explicitly re-opens a default-ignored root, so a default ignore
+ * should stay active for every OTHER root the includes never mention. Compares literal
+ * (non-wildcard) path segments rather than attempting general glob-vs-glob intersection.
+ */
+function isIgnoreGlobReopenedByIncludes(ignoreGlob: string, includeGlobs: readonly string[]): boolean {
+  const literalSegments = ignoreGlob.split("/").filter((segment) => segment && !segment.includes("*"));
+  if (!literalSegments.length) return false;
+  return includeGlobs.some((includeGlob) => {
+    const includeSegments = includeGlob.split("/");
+    return literalSegments.every((segment) => includeSegments.includes(segment));
+  });
 }
 
 function isLocationIndependentGlob(globPattern: string): boolean {
@@ -337,6 +352,19 @@ export async function listProjectFiles(
   const patternMatchers = patterns.map((pattern) => picomatch(normalizeGlobPattern(pattern), { dot: true }));
   const translatedUserIgnoreGlobs = translateGlobRootIgnoreGlobsForScanRoot(root, globRoot, userIgnoreGlobs);
   const fastGlobIgnoreGlobs = [...DEFAULT_PROJECT_FILE_IGNORES, ...translatedUserIgnoreGlobs];
+  // Include globs are an explicit request to re-open otherwise ignored roots. Probe
+  // those roots for safe directory links before the later filter reapplies the default
+  // ignores, so an included link is not lost before it can be traversed. Default ignores
+  // an include never mentions (e.g. node_modules when only src/** is included) stay
+  // active, so the probe does not walk unrelated large ignored trees.
+  const symlinkProbeIgnoreGlobs = includeGlobs.length
+    ? [
+        ...translatedUserIgnoreGlobs,
+        ...DEFAULT_PROJECT_FILE_IGNORES.filter(
+          (ignoreGlob) => !isIgnoreGlobReopenedByIncludes(ignoreGlob, includeGlobs),
+        ),
+      ]
+    : fastGlobIgnoreGlobs;
 
   try {
     const useGitignore = options?.useGitignore ?? true;
@@ -365,15 +393,25 @@ export async function listProjectFiles(
           ignore: translatedUserIgnoreGlobs,
         })
       : [];
-    const linkedFiles = await listEntriesFromSafeSymlinkDirectories(root, realRoot, patterns, fastGlobIgnoreGlobs, {
+    const symlinkOptions = {
       globRoot,
-      filterIgnoreGlobs: [...DEFAULT_PROJECT_FILE_IGNORES, ...userIgnoreGlobs],
       ...(options?.knownSymlinkDirectories !== undefined
         ? { knownSymlinkDirectories: options.knownSymlinkDirectories }
         : {}),
       ...(options?.onSymlinkDirectoriesDiscovered
         ? { onSymlinkDirectoriesDiscovered: options.onSymlinkDirectoriesDiscovered }
         : {}),
+    };
+    const safeSymlinkDirectories = await resolveSafeSymlinkDirectories(
+      root,
+      realRoot,
+      symlinkProbeIgnoreGlobs,
+      symlinkOptions,
+    );
+    const linkedFiles = await listEntriesFromSafeSymlinkDirectories(root, realRoot, patterns, fastGlobIgnoreGlobs, {
+      ...symlinkOptions,
+      filterIgnoreGlobs: [...DEFAULT_PROJECT_FILE_IGNORES, ...userIgnoreGlobs],
+      resolvedSafeSymlinkDirectories: safeSymlinkDirectories,
     });
     const linkedOverrideFiles =
       includeGlobs.length === 0
@@ -381,9 +419,7 @@ export async function listProjectFiles(
         : await listEntriesFromSafeSymlinkDirectories(root, realRoot, patterns, translatedUserIgnoreGlobs, {
             globRoot,
             filterIgnoreGlobs: userIgnoreGlobs,
-            ...(options?.knownSymlinkDirectories !== undefined
-              ? { knownSymlinkDirectories: options.knownSymlinkDirectories }
-              : {}),
+            resolvedSafeSymlinkDirectories: safeSymlinkDirectories,
           });
     const rootSafeFiles = await filterRealPathsWithinRootEntries(
       [...files, ...includedOverrideFiles, ...linkedFiles, ...linkedOverrideFiles],
@@ -537,15 +573,16 @@ async function listEntriesFromSafeSymlinkDirectories(
     .filter(Boolean)
     .map((globPattern) => picomatch(globPattern, { dot: true }));
   const locationIndependentIgnores = ignore.map(normalizeGlobPattern).filter(isLocationIndependentGlob);
-  const safeSymlinkDirectories = await resolveSafeSymlinkDirectories(root, realRoot, ignore, options);
+  const safeSymlinkDirectories =
+    options.resolvedSafeSymlinkDirectories ?? (await resolveSafeSymlinkDirectories(root, realRoot, ignore, options));
   if (!safeSymlinkDirectories.length) return [];
   const filesByPath = new Map<string, string>();
-  const filesByDirectory = await mapLimitSemaphore(
-    safeSymlinkDirectories,
+  const filesByDirectory = await mapLimitSemaphore<string, string[]>(
+    Array.from(safeSymlinkDirectories),
     REALPATH_FILTER_CONCURRENCY,
     async (directory) =>
       (
-        await fg(patterns, {
+        (await fg(patterns, {
           cwd: directory,
           absolute: true,
           dot: true,
@@ -553,7 +590,7 @@ async function listEntriesFromSafeSymlinkDirectories(
           ignore: locationIndependentIgnores,
           ...(options.onlyFiles !== undefined ? { onlyFiles: options.onlyFiles } : {}),
           ...(options.markDirectories !== undefined ? { markDirectories: options.markDirectories } : {}),
-        })
+        })) as string[]
       ).filter((filePath) => {
         const cleanPath = filePath.endsWith("/") ? filePath.slice(0, -1) : filePath;
         return !rootRelativeIgnoreMatchers.some((matcher) => matchesDiscoveryGlob(cleanPath, globRoot, matcher));
@@ -659,22 +696,27 @@ export async function discoverProjectFiles(
       realRoot,
     );
 
+    const projectFileDefinitionMatchers = PROJECT_FILE_DEFINITIONS.map((definition) =>
+      definition.patterns.map((pattern) =>
+        pattern.includes("*") || pattern.includes("?")
+          ? new RegExp("^" + pattern.replace(/\./g, "\\.").replace(/\*/g, ".*") + "$")
+          : undefined,
+      ),
+    );
     const entries: ProjectFileInfo[] = [];
     const matchTasks = rootSafeMatches.map(async (cleanMatch) => {
       const stats = await fsp.stat(cleanMatch);
       const isDir = stats.isDirectory();
       const fileName = path.basename(cleanMatch);
 
-      for (const def of PROJECT_FILE_DEFINITIONS) {
+      for (let definitionIndex = 0; definitionIndex < PROJECT_FILE_DEFINITIONS.length; definitionIndex++) {
+        const def = PROJECT_FILE_DEFINITIONS[definitionIndex]!;
         if (isDir && def.kind !== "dir") continue;
         if (!isDir && def.kind !== "file") continue;
 
-        const matchesPattern = def.patterns.some((p) => {
-          if (p.includes("*") || p.includes("?")) {
-            const re = new RegExp("^" + p.replace(/\./g, "\\.").replace(/\*/g, ".*") + "$");
-            return re.test(fileName);
-          }
-          return p === fileName;
+        const matchesPattern = def.patterns.some((pattern, patternIndex) => {
+          const matcher = projectFileDefinitionMatchers[definitionIndex]![patternIndex];
+          return matcher ? matcher.test(fileName) : pattern === fileName;
         });
 
         if (matchesPattern) {

@@ -70,7 +70,11 @@ export async function collectImpactSuggestions(
       pushUniqueSuggestion(output, seen, suggestion);
     }
 
-    const parsedEntry = await ensureParsedContext(absoluteFile, index.parsed?.get(fileIdentityKey(absoluteFile)));
+    const parsedEntry = await ensureParsedContext(
+      absoluteFile,
+      index.parsed?.get(fileIdentityKey(absoluteFile)),
+      index.languageExtensions,
+    );
     if (!parsedEntry) continue;
 
     const changedLines = collectChangedLines(fileChange.hunks);

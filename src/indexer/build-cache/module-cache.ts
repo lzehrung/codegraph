@@ -2,6 +2,7 @@ import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } 
 import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+
 import path from "node:path";
 import { supportForFile } from "../../languages.js";
 import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
@@ -15,15 +16,23 @@ import {
   sqliteTableColumns,
   type SqliteTableColumn,
 } from "../../util/sqliteSchema.js";
-import type { BuildOptions, BuildReport, ModuleIndex } from "../types.js";
-import { fileIdentityKey, normalizePath } from "../../util/paths.js";
+import type { BuildOptions, BuildReport, ExportEntry, ModuleIndex } from "../types.js";
+import {
+  assertFilePathWithinRoot,
+  fileIdentityKey,
+  isAbsoluteFilePath,
+  isFilePathWithinRoot,
+  normalizePath,
+} from "../../util/paths.js";
 import { lruMapGet, lruMapSet } from "../../util/lruMap.js";
 import { initCacheReport } from "./reports.js";
+import { cacheRoot } from "./location.js";
+
 import { getImplementationFingerprint } from "./options.js";
 
-// v3: implementation fingerprint and root-namespaced custom cache directories.
-const PARSED_CACHE_VERSION = 3;
-const MODULE_CACHE_SCHEMA_VERSION = 1;
+// v6: only reexports resolved inside the project are persisted as cache-relative paths.
+const PARSED_CACHE_VERSION = 6;
+const MODULE_CACHE_SCHEMA_VERSION = 2;
 const MODULE_CACHE_TABLE = "module_cache";
 const MODULE_CACHE_SCHEMA_VERSION_KEY = "module_cache.schema_version";
 const MODULE_CACHE_COLUMNS: readonly SqliteTableColumn[] = [
@@ -84,20 +93,16 @@ function reportMissingNodeSqlite(logLevel: import("../../logging.js").LogLevel |
   );
 }
 
-function projectCacheNamespace(projectRoot: string): string {
-  const rootIdentity = fileIdentityKey(path.resolve(projectRoot));
-  const hash = crypto.createHash("sha256").update(rootIdentity).digest("hex");
-  return `project-${hash}`;
+export function cacheRelativePath(projectRoot: string, file: string): string {
+  const root = path.resolve(projectRoot);
+  const absolute = path.isAbsolute(file) ? file : path.resolve(root, file);
+  const relative = path.relative(root, absolute).replace(/\\/g, "/");
+  return relative || ".";
 }
 
-export function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
-  if (!opts?.cacheDir) return path.join(projectRoot, ".codegraph-cache", "index-v1");
-  const namespace = projectCacheNamespace(projectRoot);
-  const configuredCacheDir = path.resolve(opts.cacheDir);
-  if (path.basename(configuredCacheDir) === namespace) return configuredCacheDir;
-  return path.join(configuredCacheDir, namespace);
+export function cacheAbsolutePath(projectRoot: string, file: string): string {
+  return path.isAbsolute(file) ? normalizePath(file) : normalizePath(path.resolve(projectRoot, file));
 }
-
 export function cacheDatabasePath(projectRoot: string, opts: BuildOptions | undefined, filename: string): string {
   return path.join(cacheRoot(projectRoot, opts), filename).replace(/\\/g, "/");
 }
@@ -114,7 +119,7 @@ function recreateModuleCacheTable(db: SqliteDatabase): void {
   recreateSqliteTable(db, MODULE_CACHE_TABLE, createModuleCacheTable);
 }
 
-function migrateModuleCacheTable(db: SqliteDatabase): void {
+function migrateModuleCacheTable(db: SqliteDatabase, projectRoot: string): void {
   const columns = sqliteTableColumns(db, MODULE_CACHE_TABLE);
   if (!columns.size) {
     createModuleCacheTable(db);
@@ -128,21 +133,27 @@ function migrateModuleCacheTable(db: SqliteDatabase): void {
   if (!columns.has("version")) db.exec("ALTER TABLE module_cache ADD COLUMN version INTEGER NOT NULL DEFAULT 0;");
   if (!columns.has("payload")) db.exec("ALTER TABLE module_cache ADD COLUMN payload TEXT NOT NULL DEFAULT '{}';");
   if (!columns.has("updated_at")) db.exec("ALTER TABLE module_cache ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;");
+  const rows = db.prepare("SELECT file FROM module_cache").all() as Array<{ file: string }>;
+  const update = db.prepare("UPDATE module_cache SET file = ? WHERE file = ?");
+  for (const row of rows) {
+    const relative = cacheRelativePath(projectRoot, row.file);
+    if (relative !== row.file) update.run(relative, row.file);
+  }
 }
 
-function ensureModuleCacheSchema(db: SqliteDatabase): void {
+function ensureModuleCacheSchema(db: SqliteDatabase, projectRoot: string): void {
   ensureSqliteVersionedTableSchema({
     db,
     tableName: MODULE_CACHE_TABLE,
     schemaVersionKey: MODULE_CACHE_SCHEMA_VERSION_KEY,
     schemaVersion: MODULE_CACHE_SCHEMA_VERSION,
     createTable: createModuleCacheTable,
-    migrateTable: migrateModuleCacheTable,
+    migrateTable: (database) => migrateModuleCacheTable(database, projectRoot),
   });
   db.exec("CREATE INDEX IF NOT EXISTS idx_module_cache_sig ON module_cache(sig);");
 }
 
-function getDiskModuleCache(projectRoot: string, opts?: BuildOptions): DiskModuleCache {
+export function getDiskModuleCache(projectRoot: string, opts?: BuildOptions): DiskModuleCache {
   const dbPath = diskCacheDatabasePath(projectRoot, opts);
   const existing = diskModuleCaches.get(dbPath);
   if (existing) return existing;
@@ -158,7 +169,7 @@ function getDiskModuleCache(projectRoot: string, opts?: BuildOptions): DiskModul
   }
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
-  ensureModuleCacheSchema(db);
+  ensureModuleCacheSchema(db, projectRoot);
   db.exec("CREATE TEMP TABLE IF NOT EXISTS live_module_cache_files(file TEXT PRIMARY KEY) WITHOUT ROWID;");
   const cache: DiskModuleCache = {
     db,
@@ -206,7 +217,7 @@ export function pruneDiskModuleCache(projectRoot: string, liveFiles: Iterable<st
     const cache = getDiskModuleCache(projectRoot, opts);
     const deleted = cache.db.transaction(() => {
       cache.clearLiveFiles.run();
-      for (const file of liveFiles) cache.insertLiveFile.run(file);
+      for (const file of liveFiles) cache.insertLiveFile.run(cacheRelativePath(projectRoot, file));
       const result = cache.pruneStaleFiles.run();
       cache.clearLiveFiles.run();
       return Number(result.changes);
@@ -335,6 +346,52 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   );
 }
 
+export function transformPersistedExportFromModule(
+  projectRoot: string,
+  entry: Exclude<ExportEntry, { type: "local" }>,
+  toRelative: boolean,
+): void {
+  if (toRelative) {
+    const isResolvedProjectFile =
+      isAbsoluteFilePath(entry.fromModule) && isFilePathWithinRoot(projectRoot, entry.fromModule);
+    if (!isResolvedProjectFile) {
+      entry.moduleSpecifier ??= entry.fromModule;
+      entry.fromModule = entry.moduleSpecifier;
+      return;
+    }
+    entry.fromModule = cacheRelativePath(projectRoot, entry.fromModule);
+    return;
+  }
+
+  if (entry.moduleSpecifier === entry.fromModule) return;
+  entry.fromModule = assertFilePathWithinRoot(
+    projectRoot,
+    cacheAbsolutePath(projectRoot, entry.fromModule),
+    "Persisted cache path",
+  );
+}
+
+function transformModulePaths(projectRoot: string, module: ModuleIndex, toRelative: boolean): ModuleIndex {
+  const copy = structuredClone(module);
+  const transform = (file: string): string =>
+    toRelative
+      ? cacheRelativePath(projectRoot, file)
+      : assertFilePathWithinRoot(projectRoot, cacheAbsolutePath(projectRoot, file), "Persisted cache path");
+  copy.file = transform(copy.file);
+  for (const local of copy.locals) local.file = transform(local.file);
+  for (const entry of copy.exports) {
+    if (entry.type === "local") {
+      entry.target.file = transform(entry.target.file);
+    } else {
+      transformPersistedExportFromModule(projectRoot, entry, toRelative);
+    }
+  }
+  for (const binding of copy.imports) {
+    if (typeof binding.resolved === "string") binding.resolved = transform(binding.resolved);
+  }
+  return copy;
+}
+
 export function tryLoadFromCache(
   projectRoot: string,
   file: string,
@@ -362,12 +419,15 @@ export function tryLoadFromCache(
   if (mode === "disk") {
     try {
       const cache = getDiskModuleCache(projectRoot, opts);
-      const row = cache.load.get(file) as { sig: string; version: number; payload: Uint8Array } | undefined;
+      const row = cache.load.get(cacheRelativePath(projectRoot, file)) as
+        | { sig: string; version: number; payload: Uint8Array }
+        | undefined;
       if (row && row.sig === sig && row.version === PARSED_CACHE_VERSION) {
         const parsed: unknown = JSON.parse(brotliDecompressSync(row.payload).toString("utf8"));
         if (isModuleIndex(parsed)) {
+          const rehydrated = transformModulePaths(projectRoot, parsed, false);
           if (cacheEnabled && cacheReport) cacheReport.hits += 1;
-          return parsed;
+          return rehydrated;
         }
       }
     } catch (error) {
@@ -375,11 +435,62 @@ export function tryLoadFromCache(
         reportMissingNodeSqlite(opts?.logLevel, error);
         return null;
       }
-      // cache read failed
     }
     if (cacheEnabled && cacheReport) cacheReport.misses += 1;
   }
   return null;
+}
+
+export type PendingModuleCacheWrite = {
+  file: string;
+  sig: string;
+  mod: ModuleIndex;
+};
+
+export function writeModulesToCache(
+  projectRoot: string,
+  writes: readonly PendingModuleCacheWrite[],
+  opts?: BuildOptions,
+): void {
+  if (!writes.length) return;
+  const mode = opts?.cache ?? "off";
+  if (mode === "memory") {
+    for (const write of writes) {
+      lruMapSet(
+        memoryCache,
+        memoryCacheKey(projectRoot, write.file),
+        { version: PARSED_CACHE_VERSION, sig: write.sig, mod: write.mod },
+        MAX_MEMORY_CACHE_ENTRIES,
+      );
+    }
+  } else if (mode === "disk") {
+    try {
+      const cache = getDiskModuleCache(projectRoot, opts);
+      const now = Date.now();
+      const preparedWrites: Array<{ file: string; sig: string; payload: Buffer }> = [];
+      for (const write of writes) {
+        const payload = brotliCompressSync(JSON.stringify(transformModulePaths(projectRoot, write.mod, true)), {
+          params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
+        });
+        preparedWrites.push({
+          file: cacheRelativePath(projectRoot, write.file),
+          sig: write.sig,
+          payload,
+        });
+      }
+      cache.db.transaction(() => {
+        for (const item of preparedWrites) {
+          cache.write.run(item.file, item.sig, PARSED_CACHE_VERSION, item.payload, now);
+        }
+      })();
+    } catch (error) {
+      if (isNodeSqliteUnavailableError(error)) {
+        reportMissingNodeSqlite(opts?.logLevel, error);
+        return;
+      }
+      logWithLevel(opts?.logLevel, "warn", "Warning: Failed to write to cache:", error);
+    }
+  }
 }
 
 export function writeToCache(
@@ -389,27 +500,5 @@ export function writeToCache(
   mod: ModuleIndex,
   opts?: BuildOptions,
 ): void {
-  const mode = opts?.cache ?? "off";
-  if (mode === "memory") {
-    lruMapSet(
-      memoryCache,
-      memoryCacheKey(projectRoot, file),
-      { version: PARSED_CACHE_VERSION, sig, mod },
-      MAX_MEMORY_CACHE_ENTRIES,
-    );
-  } else if (mode === "disk") {
-    try {
-      const cache = getDiskModuleCache(projectRoot, opts);
-      const payload = brotliCompressSync(JSON.stringify(mod), {
-        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
-      });
-      cache.write.run(file, sig, PARSED_CACHE_VERSION, payload, Date.now());
-    } catch (error) {
-      if (isNodeSqliteUnavailableError(error)) {
-        reportMissingNodeSqlite(opts?.logLevel, error);
-        return;
-      }
-      logWithLevel(opts?.logLevel, "warn", "Warning: Failed to write to cache:", error);
-    }
-  }
+  writeModulesToCache(projectRoot, [{ file, sig, mod }], opts);
 }

@@ -450,11 +450,14 @@ export async function loadCliProjectContext(base: CliBaseContext): Promise<CliPr
   const buildAgentOptions = (): BuildOptions => {
     const cache = parseCacheModeOption(getOpt("--cache"));
     const threads = parseOptionalNonNegativeIntegerOption(getOpt("--threads"), "--threads");
+    const cacheDir = getOpt("--cache-dir");
     return {
       ...(base.progressHandler ? { onProgress: base.progressHandler } : {}),
       discovery: discoveryOptions,
       ...(config.languages?.extensions ? { languageExtensions: config.languages.extensions } : {}),
       ...(cache !== undefined ? { cache } : {}),
+      ...(cacheDir ? { cacheDir } : {}),
+      ...(config.cache?.location ? { cacheLocation: config.cache.location } : {}),
       ...(hasFlag("--cache-strict") ? { cacheStrict: true } : {}),
       ...(hasFlag("--cache-verify") ? { cacheVerify: true } : {}),
       ...(hasGraphOverrides || base.nativeMode !== "auto" ? { graph: base.buildGraphOptions() } : {}),

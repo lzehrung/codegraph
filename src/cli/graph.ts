@@ -13,7 +13,7 @@ import {
   graphToMermaidSymbolsWithFiles,
 } from "../graphs/symbol-render.js";
 import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../indexer/build-index.js";
-import { type BuildOptions, type BuildReport } from "../indexer/types.js";
+import { type BuildOptions, type BuildReport, type CacheLocation } from "../indexer/types.js";
 import { summarizeAnalysis } from "../analysisSummary.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { updateGraphSqlite, writeGraphSqlite } from "../sqlite.js";
@@ -65,6 +65,7 @@ export type GraphCommandContext = {
   nativeMode: NativeRuntimeMode;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
   progressHandler: BuildOptions["onProgress"];
+  cacheLocation: CacheLocation | undefined;
   graphFlags: {
     fast: boolean;
     resolveNodeModules: boolean;
@@ -247,6 +248,11 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
   const threads = parseNonNegativeIntegerOption(context.getOpt("--threads"), "--threads", 0);
   const cache = parseCacheModeOption(context.getOpt("--cache"));
   const cacheStrict = context.hasFlag("--cache-strict");
+  const cacheDir = context.getOpt("--cache-dir");
+  const cacheDirOptions: Pick<BuildOptions, "cacheDir" | "cacheLocation"> = {
+    ...(cacheDir ? { cacheDir } : {}),
+    ...(context.cacheLocation ? { cacheLocation: context.cacheLocation } : {}),
+  };
   const stable = context.hasFlag("--stable");
   let format: "mermaid" | "dot" | "json" = "mermaid";
   if (context.hasFlag("--json")) {
@@ -305,6 +311,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
           discovery: context.discoveryOptions,
           ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
           ...context.workerOpts,
+          ...cacheDirOptions,
           ...(sqliteCacheMode !== undefined ? { cache: sqliteCacheMode } : {}),
           cacheStrict,
           files: changedSet.existingFiles,
@@ -320,6 +327,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
           discovery: context.discoveryOptions,
           ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
           ...context.workerOpts,
+          ...cacheDirOptions,
           ...(sqliteCacheMode !== undefined ? { cache: sqliteCacheMode } : {}),
           cacheStrict,
           graph: graphOptions,
@@ -367,6 +375,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       discovery: context.discoveryOptions,
       ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
       ...context.workerOpts,
+      ...cacheDirOptions,
       cache: cache ?? "disk",
       cacheStrict,
       graph: {

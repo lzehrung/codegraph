@@ -1,5 +1,5 @@
 import { loadCurrentProjectIndex, type LoadCurrentProjectIndexOptions } from "../indexer/load-current-index.js";
-import type { BuildOptions, BuildReport, ProjectIndex } from "../indexer/types.js";
+import type { BuildOptions, BuildReport, CacheLocation, ProjectIndex } from "../indexer/types.js";
 import {
   analyzeImpactFromDiff,
   type ChangedSymbol,
@@ -45,6 +45,7 @@ type ImpactOptionsBuilder = Partial<ImpactOptions> & {
   diffText?: string;
   threads?: number;
   cache?: BuildOptions["cache"];
+  cacheDir?: string;
   cacheStrict?: boolean;
   cacheVerify?: boolean;
 };
@@ -59,6 +60,7 @@ export type ImpactCommandContext = {
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
   graphOptions: GraphBuildOptions | undefined;
   progressHandler: BuildOptions["onProgress"];
+  cacheLocation: CacheLocation | undefined;
   readStdin: () => Promise<string>;
   writeJSONLine: (value: unknown) => void;
   writeStdoutLine: (message: string) => void;
@@ -333,6 +335,9 @@ function applyAnalysisOptions(context: ImpactCommandContext, options: ImpactOpti
   const cache = parseCacheModeOption(context.getOpt("--cache"));
   if (cache !== undefined) options.cache = cache;
 
+  const cacheDir = context.getOpt("--cache-dir");
+  if (cacheDir) options.cacheDir = cacheDir;
+
   if (context.hasFlag("--cache-strict")) options.cacheStrict = true;
   if (context.hasFlag("--cache-verify")) options.cacheVerify = true;
   if (context.hasFlag("--compact")) options.compact = true;
@@ -438,6 +443,8 @@ function buildIndexOptions(
     ...(keepParsed ? { keepParsed } : {}),
     ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
     ...context.workerOpts,
+    ...(options.cacheDir ? { cacheDir: options.cacheDir } : {}),
+    ...(context.cacheLocation ? { cacheLocation: context.cacheLocation } : {}),
     ...(options.cacheStrict ? { cacheStrict: true } : {}),
     ...(options.cacheVerify ? { cacheVerify: true } : {}),
   };

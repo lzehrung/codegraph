@@ -119,6 +119,7 @@ export class QueryIndexStore {
     try {
       ensureQueryIndexSchema(db);
       db.pragma("journal_mode = WAL");
+      db.pragma("synchronous = NORMAL");
       db.pragma("foreign_keys = ON");
     } catch (error) {
       db.close();
@@ -319,6 +320,69 @@ export class QueryIndexStore {
       }
       throw error;
     }
+  }
+
+  candidateChunksForTerms(
+    terms: readonly string[],
+    paths: readonly string[],
+    limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT,
+  ): StoredQueryIndexChunk[] {
+    if (!terms.length || !paths.length) return [];
+    const normalizedLimit = normalizedCandidateLimit(limit);
+    // Bound each term independently instead of sharing one global, path-ordered budget:
+    // a common term matching thousands of early-path chunks would otherwise exhaust the
+    // budget before a rarer term's (or a multi-term) match later in path order is read.
+    const perTermLimit = Math.max(1, Math.ceil(normalizedLimit / terms.length));
+    const candidates = new Map<string, StoredQueryIndexChunk>();
+    const batchSize = 500;
+    for (const term of terms) {
+      const isFtsEligible = codePointLength(term) >= 3;
+      const conditions: string[] = [];
+      const parameters: string[] = [];
+      if (isFtsEligible) {
+        conditions.push("chunks.chunk_id IN (SELECT rowid FROM fts_matches)");
+      } else {
+        conditions.push("instr(chunks.normalized_text, ?) > 0");
+        parameters.push(term);
+      }
+      conditions.push("instr(replace(chunks.normalized_text, ' ', ''), ?) > 0");
+      parameters.push(term);
+      const prefix = isFtsEligible
+        ? "WITH fts_matches AS (SELECT rowid FROM chunk_search WHERE chunk_search MATCH ?)"
+        : "";
+      let termMatches = 0;
+      for (let offset = 0; offset < paths.length && termMatches < perTermLimit; offset += batchSize) {
+        const batch = paths.slice(offset, offset + batchSize);
+        const placeholders = batch.map(() => "?").join(", ");
+        const remaining = perTermLimit - termMatches;
+        const rows = this.db
+          .prepare(
+            `
+            ${prefix}
+            SELECT files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
+                   chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
+            FROM chunks
+            JOIN files ON files.file_id = chunks.file_id
+            WHERE files.path IN (${placeholders})
+              AND (${conditions.join(" OR ")})
+            ORDER BY files.path, chunks.ordinal
+            LIMIT ?
+          `,
+          )
+          .all(
+            ...(isFtsEligible ? [escapeFtsTrigramTerm(term), ...batch, ...parameters] : [...batch, ...parameters]),
+            remaining,
+          ) as Array<Record<string, unknown>>;
+        for (const row of rows) {
+          const chunk = storedCandidateChunkFromRow(row);
+          if (!chunk) continue;
+          const key = `${chunk.path}\0${chunk.ordinal}`;
+          if (!candidates.has(key)) termMatches += 1;
+          candidates.set(key, chunk);
+        }
+      }
+    }
+    return [...candidates.values()];
   }
 
   ftsChunkCandidates(query: string, limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT): StoredQueryIndexChunk[] {

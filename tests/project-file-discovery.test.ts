@@ -690,6 +690,27 @@ describe("project file discovery", () => {
     expect(overriddenSet.has(normalize(kept))).toBe(false);
   });
 
+  it("traverses a safe symlink rooted in an explicitly included ignored directory", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-include-override-"));
+    const packageDir = path.join(tempDir, "packages", "core");
+    const linkedPackage = path.join(tempDir, "node_modules");
+    const linkedFile = path.join(linkedPackage, "src", "index.ts");
+    await createFile(path.join(packageDir, "src", "index.ts"), "export const core = 1;\n");
+    try {
+      await fs.symlink(packageDir, linkedPackage, "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const discovered = await listProjectFiles(tempDir, ["**/*.ts"], {
+      includeGlobs: ["node_modules/**"],
+      useGitignore: false,
+    });
+
+    expect(discovered.map(normalize)).toEqual([normalize(linkedFile)]);
+  });
+
   it("supports disabling .gitignore filtering and applying additive include/ignore globs", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-discovery-"));
     const appFile = path.join(tempDir, "src", "app.ts");

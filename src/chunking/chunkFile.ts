@@ -39,7 +39,12 @@ export interface ChunkFileOptions {
  * @param opts Chunking options
  * @returns Array of semantic chunks
  */
-export function chunkFile(opts: ChunkFileOptions): Chunk[] {
+export type ChunkFileWithSymbolsResult = {
+  chunks: Chunk[];
+  symbolChunks: Chunk[];
+};
+
+export function chunkFileWithSymbols(opts: ChunkFileOptions): ChunkFileWithSymbolsResult {
   const { language, source, filePath, minTokens = 150, maxTokens = 400, tokenizer = countWhitespaceTokens } = opts;
   const matches = getChunkMatches(language, source, filePath);
   const newlineOffsets = collectNewlineOffsets(source);
@@ -79,7 +84,43 @@ export function chunkFile(opts: ChunkFileOptions): Chunk[] {
   }
 
   preliminaryChunks.sort((left, right) => left.sourceStart - right.sourceStart || right.sourceEnd - left.sourceEnd);
-  const mergedChunks = mergeSmallChunks(preliminaryChunks, minTokens, maxTokens, tokenizer);
+
+  if (minTokens <= 1) {
+    const completeChunks = fillGapsWithMiscChunks(
+      preliminaryChunks,
+      source,
+      language.id,
+      filePath,
+      tokenizer,
+      1,
+      maxTokens,
+      newlineOffsets,
+    );
+    const chunks = withStableChunkIds(
+      completeChunks.map(({ sourceStart: _sourceStart, sourceEnd: _sourceEnd, ...chunk }) => chunk),
+      language.id,
+      filePath,
+    );
+    return { chunks, symbolChunks: chunks };
+  }
+
+  const completeSymbolChunks = fillGapsWithMiscChunks(
+    preliminaryChunks,
+    source,
+    language.id,
+    filePath,
+    tokenizer,
+    1,
+    maxTokens,
+    newlineOffsets,
+  );
+  const symbolChunks = withStableChunkIds(
+    completeSymbolChunks.map(({ sourceStart: _sourceStart, sourceEnd: _sourceEnd, ...chunk }) => chunk),
+    language.id,
+    filePath,
+  );
+
+  const mergedChunks = mergeSmallChunks([...preliminaryChunks], minTokens, maxTokens, tokenizer);
   const completeChunks = fillGapsWithMiscChunks(
     mergedChunks,
     source,
@@ -90,12 +131,17 @@ export function chunkFile(opts: ChunkFileOptions): Chunk[] {
     maxTokens,
     newlineOffsets,
   );
-
-  return withStableChunkIds(
+  const chunks = withStableChunkIds(
     completeChunks.map(({ sourceStart: _sourceStart, sourceEnd: _sourceEnd, ...chunk }) => chunk),
     language.id,
     filePath,
   );
+
+  return { chunks, symbolChunks };
+}
+
+export function chunkFile(opts: ChunkFileOptions): Chunk[] {
+  return chunkFileWithSymbols(opts).chunks;
 }
 
 function appendBlockChunks(
