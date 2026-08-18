@@ -111,7 +111,7 @@ A bounded worker pool updates added, changed, deleted, and retired files. One SQ
 
 Readers use the sidecar only when its project snapshot identity matches the loaded snapshot. On a mismatch, codegraph updates and revalidates the sidecar; it falls back to in-memory source scanning only if that update cannot be used. Writer contention, unavailable storage, future schemas, or corruption also use in-memory source scanning. codegraph never returns mixed-snapshot results.
 
-The sidecar stores normalized source and chunk text. [Installation](./installation.md#local-caches) covers sensitive-data handling, cache-off behavior, and safe deletion.
+The sidecar stores normalized source and chunk text; treat it as sensitive derived source data. Use `--cache off` to avoid it, and stop codegraph before deleting `.codegraph-cache`.
 
 Long-lived agent and review sessions reuse only compatible index state. They refresh it when relevant file, configuration, or project signals drift.
 

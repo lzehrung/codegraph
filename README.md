@@ -93,7 +93,7 @@ codegraph install --all --dry-run
 codegraph install --all --yes
 ```
 
-Published package installs resolve the optional native runtime automatically when a compatible artifact exists. On Windows, installed releases load the native addon from a verified per-user cache so long-running MCP servers do not keep npm's package copy mapped. See [Installation](./docs/installation.md) for updates and runtime details.
+Published package installs resolve the optional native runtime automatically when a compatible artifact exists. See [Installation](./docs/installation.md) for alternatives and update instructions.
 
 ### Standalone archive (no Node.js or npm)
 
@@ -107,7 +107,7 @@ irm https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 |
 curl -fsSL https://github.com/lzehrung/codegraph/releases/latest/download/install.sh | sh
 ```
 
-Both commands preview the target and install path before writing. See [Installation](./docs/installation.md#option-2-standalone-release-preview) for supported targets, version pinning, rollback, and the full verification flow.
+Both commands preview the target and install path before writing. See [Installation](./docs/installation.md#install-the-standalone-preview) for requirements and unattended installs.
 
 ### From a source checkout (development)
 
