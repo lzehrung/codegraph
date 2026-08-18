@@ -1,6 +1,6 @@
 import fsp from "node:fs/promises";
-import { boundList } from "../presentation/bounds.js";
 import path from "node:path";
+import { boundList } from "../presentation/bounds.js";
 import { buildProjectIndexIncremental } from "../indexer/build-index.js";
 import { resolveIncrementalFilePlan, type IncrementalFilePlan } from "../indexer/incremental-plan.js";
 import type { BuildOptions, BuildReport, IncrementalBuildOptions, ProjectIndex } from "../indexer/types.js";
