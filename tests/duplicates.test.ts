@@ -8,7 +8,11 @@ import { captureCli, runCliOrThrow } from "./helpers/cli.js";
 import { runCli } from "../src/cli.js";
 import { appendDuplicateLeadSummary, collectDuplicateLeadSummary } from "../src/duplicatesLeads.js";
 import { buildProjectIndex, findDuplicateContext, findDuplicateContexts, findDuplicates } from "../src/index.js";
-import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
+import {
+  getNativeDuplicateTokens,
+  isNativeDuplicateTokenizationAvailable,
+  isNativeTreeSitterAvailable,
+} from "../src/native/treeSitterNative.js";
 import { DUPLICATE_IDENTIFIER_KEYWORDS } from "../src/duplicate-keywords.js";
 import { normalizeDuplicateSourceTokens } from "../src/duplicate-token-normalization.js";
 import { getDuplicateAstContext } from "../src/duplicates/units.js";
@@ -58,6 +62,59 @@ async function runDuplicatesCliForValidation(args: string[], cwd: string): Promi
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map(async (root) => await fsp.rm(root, { recursive: true, force: true })));
 });
+
+const duplicateTokenizerNativeAvailable = isNativeDuplicateTokenizationAvailable("auto");
+const duplicateTokenizerParityTest = duplicateTokenizerNativeAvailable ? test : test.skip;
+const BMP_SCALAR_CODE_POINT_COUNT = 0x10000 - (0xe000 - 0xd800);
+const ASTRAL_IDENTIFIER_PARITY_SAMPLES = [
+  0x10000, 0x10400, 0x16f50, 0x1d400, 0x20000, 0x2a6d6, 0x2b740, 0x2b81d, 0x2ceb0, 0x2ebef, 0x30000, 0x3134a, 0xe0100,
+  0xf0000, 0x100000, 0x10ffff,
+] as const;
+
+function formatCodePoint(codePoint: number): string {
+  return `U+${codePoint.toString(16).toUpperCase().padStart(4, "0")}`;
+}
+
+function assertDuplicateTokenizerParity(source: string, codePoint: number, position: "standalone" | "continue"): void {
+  const native = getNativeDuplicateTokens(source, "auto");
+  if (!native) {
+    throw new Error("Native duplicate tokenizer became unavailable during parity test.");
+  }
+
+  const fallback = normalizeDuplicateSourceTokens(source);
+  if (native.normalizedTokens.join("\u0000") !== fallback.join("\u0000")) {
+    throw new Error(
+      `Duplicate tokenizer disagreement at ${formatCodePoint(codePoint)} (${position}): native ${JSON.stringify(native.normalizedTokens)}, fallback ${JSON.stringify(fallback)}`,
+    );
+  }
+}
+
+function assertDuplicateTokenizerClassificationParity(codePoint: number, position: "start" | "continue"): void {
+  const character = String.fromCodePoint(codePoint);
+  let source = character;
+  if (position === "continue") source = `if${character}else`;
+
+  const native = getNativeDuplicateTokens(source, "auto");
+  if (!native) {
+    throw new Error("Native duplicate tokenizer became unavailable during parity test.");
+  }
+
+  const fallback = normalizeDuplicateSourceTokens(source);
+  let nativeClassifiesIdentifier: boolean;
+  let fallbackClassifiesIdentifier: boolean;
+  if (position === "start") {
+    nativeClassifiesIdentifier = native.normalizedTokens.length === 1 && native.normalizedTokens[0] === "<identifier>";
+    fallbackClassifiesIdentifier = fallback.length === 1 && fallback[0] === "<identifier>";
+  } else {
+    nativeClassifiesIdentifier = native.normalizedTokens[0] !== "if";
+    fallbackClassifiesIdentifier = fallback[0] !== "if";
+  }
+  if (nativeClassifiesIdentifier !== fallbackClassifiesIdentifier) {
+    throw new Error(
+      `Duplicate tokenizer classification disagreement at ${formatCodePoint(codePoint)} (${position}): native ${JSON.stringify(native.normalizedTokens)}, fallback ${JSON.stringify(fallback)}`,
+    );
+  }
+}
 
 describe("duplicate detection", () => {
   test("duplicate lead summaries retain omitted counts when no lead survives filters", () => {
@@ -504,13 +561,85 @@ export function normalizeSecondRows(rows: Array<{ count: number; price: number }
   });
 
   test("TypeScript duplicate normalization still collapses non-keyword identifiers", () => {
-    expect(normalizeDuplicateSourceTokens("userName _private $value Widget42")).toEqual([
+    expect(normalizeDuplicateSourceTokens("userName _private $value Widget42 café cafe\u0301 αβγ")).toEqual([
+      "<identifier>",
+      "<identifier>",
+      "<identifier>",
       "<identifier>",
       "<identifier>",
       "<identifier>",
       "<identifier>",
     ]);
   });
+
+  test("TypeScript duplicate normalization collapses Unicode identifiers without leaking text", () => {
+    const ascii = normalizeDuplicateSourceTokens("function foo(x) { return foo; }");
+    const unicodeNfc = normalizeDuplicateSourceTokens("function café(x) { return café; }");
+    const unicodeGreek = normalizeDuplicateSourceTokens("function αβγ(x) { return αβγ; }");
+    const unicodeNfd = normalizeDuplicateSourceTokens("cafe\u0301");
+    const otherIdStart = normalizeDuplicateSourceTokens("function \u2118(x) { return \u2118; }");
+    const zwnj = normalizeDuplicateSourceTokens("a\u200Cb");
+
+    expect(unicodeNfc).toEqual([
+      "function",
+      "<identifier>",
+      "(",
+      "<identifier>",
+      ")",
+      "{",
+      "return",
+      "<identifier>",
+      ";",
+      "}",
+    ]);
+    expect(unicodeNfd).toEqual(["<identifier>"]);
+    expect(otherIdStart).toEqual(ascii);
+    expect(zwnj).toEqual(["<identifier>"]);
+    expect(ascii).toEqual(unicodeNfc);
+    expect(ascii).toEqual(unicodeGreek);
+    expect(unicodeNfc.join(" ")).not.toMatch(/café|cafe|αβγ/i);
+    expect(otherIdStart.join(" ")).not.toMatch(/\u2118/);
+  });
+
+  duplicateTokenizerParityTest(
+    duplicateTokenizerNativeAvailable
+      ? "native and TypeScript duplicate tokenizers agree for reported Unicode regressions"
+      : "native and TypeScript duplicate tokenizers agree for reported Unicode regressions (skipped: native addon unavailable)",
+    () => {
+      const reportedDivergences = [0x037a, 0x0e33, 0x0eb3, 0xfc5e, 0xfe70, 0xff9e];
+
+      for (const codePoint of reportedDivergences) {
+        const character = String.fromCodePoint(codePoint);
+        assertDuplicateTokenizerParity(character, codePoint, "standalone");
+        assertDuplicateTokenizerParity(`a${character}b`, codePoint, "continue");
+      }
+    },
+  );
+
+  duplicateTokenizerParityTest(
+    duplicateTokenizerNativeAvailable
+      ? "native and TypeScript duplicate tokenizers agree across BMP scalars and sampled astral code points"
+      : "native and TypeScript duplicate tokenizers agree across BMP scalars and sampled astral code points (skipped: native addon unavailable)",
+    () => {
+      let comparedCodePoints = 0;
+
+      for (let codePoint = 0; codePoint <= 0xffff; codePoint++) {
+        if (codePoint >= 0xd800 && codePoint <= 0xdfff) continue;
+
+        assertDuplicateTokenizerClassificationParity(codePoint, "start");
+        assertDuplicateTokenizerClassificationParity(codePoint, "continue");
+        comparedCodePoints += 1;
+      }
+      for (const codePoint of ASTRAL_IDENTIFIER_PARITY_SAMPLES) {
+        assertDuplicateTokenizerClassificationParity(codePoint, "start");
+        assertDuplicateTokenizerClassificationParity(codePoint, "continue");
+        comparedCodePoints += 1;
+      }
+
+      expect(comparedCodePoints).toBe(BMP_SCALAR_CODE_POINT_COUNT + ASTRAL_IDENTIFIER_PARITY_SAMPLES.length);
+    },
+    120_000,
+  );
 
   test("adds stable handles to duplicate units", async () => {
     const root = await makeTempProject();

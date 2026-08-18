@@ -32,6 +32,7 @@ tree-sitter-zig = "1.1.2"
 arborium-c-sharp = "2.16.0"
 arborium-scss = "2.16.0"
 arborium-vue = "2.16.0"
+unicode-ident = "=1.0.14"
 
 [dev-dependencies]
 napi = { version = "3.4.0", default-features = false, features = ["napi8", "noop"] }

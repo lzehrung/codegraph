@@ -78,12 +78,33 @@ fn byte_end(source: &str, chars: &[(usize, char)], cursor: usize) -> usize {
     }
 }
 
+// Duplicate tokenization intentionally mirrors the JavaScript XID-based grammar rather than
+// ECMAScript IdentifierName: XID properties plus `$`/`_`, Other_ID_* and ZWNJ/ZWJ continuation
+// characters. XID_* removes NFKC-closure-breaking characters from ID_*, so the start and
+// continuation predicates both differ from ECMAScript's ID_* grammar.
+fn is_other_id_start(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{1885}' | '\u{1886}' | '\u{2118}' | '\u{212E}' | '\u{309B}' | '\u{309C}'
+    )
+}
+
+fn is_other_id_continue(ch: char) -> bool {
+    matches!(ch, '\u{00B7}' | '\u{0387}' | '\u{19DA}') || ('\u{1369}'..='\u{1371}').contains(&ch)
+}
+
 fn is_identifier_start(ch: char) -> bool {
-    ch == '_' || ch == '$' || ch.is_ascii_alphabetic()
+    ch == '_' || ch == '$' || unicode_ident::is_xid_start(ch) || is_other_id_start(ch)
 }
 
 fn is_identifier_continue(ch: char) -> bool {
-    is_identifier_start(ch) || ch.is_ascii_digit()
+    ch == '_'
+        || ch == '$'
+        || ch == '\u{200C}'
+        || ch == '\u{200D}'
+        || unicode_ident::is_xid_continue(ch)
+        || is_other_id_start(ch)
+        || is_other_id_continue(ch)
 }
 
 fn normalize_token(token: &str) -> String {
@@ -154,6 +175,62 @@ mod tests {
                 "}",
             ]
         );
+    }
+
+    #[test]
+    fn collapses_unicode_identifiers_like_js_fallback() {
+        let nfc = tokenize_duplicate_source("function café(x) { return café; }");
+        assert_eq!(
+            nfc.normalized_tokens,
+            vec![
+                "function",
+                "<identifier>",
+                "(",
+                "<identifier>",
+                ")",
+                "{",
+                "return",
+                "<identifier>",
+                ";",
+                "}",
+            ]
+        );
+
+        // NFD: ASCII letters plus combining acute must stay one identifier token.
+        let nfd = tokenize_duplicate_source("cafe\u{0301}");
+        assert_eq!(nfd.normalized_tokens, vec!["<identifier>".to_string()]);
+
+        let ascii = tokenize_duplicate_source("function foo(x) { return foo; }");
+        let unicode = tokenize_duplicate_source("function αβγ(x) { return αβγ; }");
+        assert_eq!(ascii.normalized_tokens, unicode.normalized_tokens);
+    }
+
+    #[test]
+    fn collapses_ecmascript_other_id_and_zwnj_like_js_fallback() {
+        // U+2118 is Other_ID_Start (in ID_Start, not XID_Start).
+        let other_id = tokenize_duplicate_source("function \u{2118}(x) { return \u{2118}; }");
+        assert_eq!(
+            other_id.normalized_tokens,
+            vec![
+                "function",
+                "<identifier>",
+                "(",
+                "<identifier>",
+                ")",
+                "{",
+                "return",
+                "<identifier>",
+                ";",
+                "}",
+            ]
+        );
+
+        // ZWNJ (U+200C) is an ECMAScript IdentifierPart continuation.
+        let zwnj = tokenize_duplicate_source("a\u{200C}b");
+        assert_eq!(zwnj.normalized_tokens, vec!["<identifier>".to_string()]);
+
+        let ascii = tokenize_duplicate_source("function foo(x) { return foo; }");
+        assert_eq!(ascii.normalized_tokens, other_id.normalized_tokens);
     }
 
     #[test]
