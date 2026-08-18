@@ -1145,6 +1145,19 @@ describe("codegraph MCP handlers", () => {
     },
   );
 
+  it("rejects a null HTTP body timeout during server startup", async () => {
+    const options = {
+      root: process.cwd(),
+      host: "127.0.0.1",
+      port: 0,
+    };
+    Object.defineProperty(options, "httpBodyTimeoutMs", { value: null });
+
+    await expect(startCodegraphMcpHttpServer(options)).rejects.toThrow(
+      "httpBodyTimeoutMs must be a positive integer no greater than 2147483647.",
+    );
+  });
+
   it("accepts Node's maximum HTTP body timeout", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-timeout-maximum-"));
     const httpServer = await startCodegraphMcpHttpServer({

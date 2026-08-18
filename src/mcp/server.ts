@@ -1317,7 +1317,9 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
 export async function startCodegraphMcpHttpServer(
   options: CodegraphMcpServerOptions & { port: number },
 ): Promise<CodegraphMcpHttpServer> {
-  const httpBodyTimeoutMs = assertMcpHttpBodyTimeout(options.httpBodyTimeoutMs ?? DEFAULT_MCP_HTTP_BODY_TIMEOUT_MS);
+  const httpBodyTimeoutMs = assertMcpHttpBodyTimeout(
+    options.httpBodyTimeoutMs === undefined ? DEFAULT_MCP_HTTP_BODY_TIMEOUT_MS : options.httpBodyTimeoutMs,
+  );
   const host = options.host ?? "127.0.0.1";
   const { handlers, session } = await createWarmedCodegraphMcpResources(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());

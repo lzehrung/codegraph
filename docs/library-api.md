@@ -755,7 +755,9 @@ console.log(result.columns, result.rows);
 
 `deadlineMs` must be a non-negative integer no greater than `2_147_483_647`; invalid values throw `RangeError` before the worker or fallback execution path is selected.
 
-The 10-second default deadline rejects the caller promptly. When the worker asset is available, it also requests worker termination; a native SQLite step already in progress can continue in a bounded cleanup slot until it returns. Degraded installs without the worker asset use a weaker in-process check after each iterator step. Callers can catch the exported `SqliteQueryDeadlineExceededError`, `SqliteQueryCancelledError`, and `SqliteQueryWorkerCleanupCapacityExceededError`; cancellation is a stable generic message so it exposes no MCP client details.
+With the worker asset, the 10-second default deadline rejects the caller promptly and requests worker termination. A native SQLite step already in progress can continue in a bounded cleanup slot until it returns. Degraded installs without the worker asset use a weaker in-process check after each iterator step, so a blocking native step is detected only after it returns.
+
+Callers can catch the exported `SqliteQueryDeadlineExceededError`, `SqliteQueryCancelledError`, and `SqliteQueryWorkerCleanupCapacityExceededError`; cancellation is a stable generic message so it exposes no MCP client details.
 
 ## SQL artifact facts
 
