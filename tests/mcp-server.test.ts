@@ -1167,7 +1167,7 @@ describe("codegraph MCP handlers", () => {
           port: 0,
           mcpToolTimeoutMs,
         }),
-      ).rejects.toThrow("mcpToolTimeoutMs must be a whole number no greater than 2147483647.");
+      ).rejects.toThrow("mcpToolTimeoutMs must be a whole number from 0 through 2147483647; 0 disables the deadline.");
     },
   );
 
@@ -1180,7 +1180,7 @@ describe("codegraph MCP handlers", () => {
     Object.defineProperty(options, "mcpToolTimeoutMs", { value: null });
 
     await expect(startCodegraphMcpHttpServer(options)).rejects.toThrow(
-      "mcpToolTimeoutMs must be a whole number no greater than 2147483647.",
+      "mcpToolTimeoutMs must be a whole number from 0 through 2147483647; 0 disables the deadline.",
     );
   });
 

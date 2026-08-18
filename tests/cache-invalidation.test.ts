@@ -44,6 +44,7 @@ import {
   languageDefinitionFingerprintCoverage,
 } from "../src/indexer/build-cache/options.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import { computeResolverEnvironmentFingerprint } from "../src/indexer/build-cache/resolver-environment.js";
 import { runGit } from "./helpers/git.js";
 import { createTempProjectRoot, mkTmpDir } from "./helpers/filesystem.js";
 
@@ -2922,6 +2923,15 @@ describe("Cache invalidation and strict hashing", () => {
     expect(rebuiltManifest.version).toBe(MANIFEST_VERSION);
     expect(rebuiltManifest.transientFiles).toEqual(["outside/extra.ts"]);
   });
+  it("declines an unbounded node-module resolver environment", async () => {
+    const root = await mkTmpDir("dg-node-modules-limit-");
+    const files = Array.from({ length: 2_048 }, (_, index) =>
+      path.join(root, "packages", `package-${index}`, "src", "entry.ts"),
+    );
+
+    await expect(computeResolverEnvironmentFingerprint(root, files)).resolves.toBeNull();
+  });
+
   it("reuses nested node-module caches after manifest paths are rebased", async () => {
     const root = await mkTmpDir("dg-node-modules-reuse-");
     const entryFile = path.join(root, "packages", "app", "src", "entry.ts");

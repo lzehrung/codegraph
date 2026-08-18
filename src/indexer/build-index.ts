@@ -230,7 +230,7 @@ async function buildIndexedModuleForFile(args: {
   onFallbackImportExtraction: ((event: FallbackImportExtractionEvent) => void) | undefined;
   fileSignatures: Map<string, FileSignature>;
   cacheEnabled: boolean;
-  resolverEnvironmentFingerprint?: string;
+  resolverEnvironmentFingerprint?: string | null;
 }): Promise<IndexedFileModuleResult> {
   const prepared = await prepareFileContextForBuild(args.file, args.support, args.opts, args.workerSetup, args.report);
   const { source, sup, nativeQueries, embeddedBlocks } = prepared;
@@ -842,7 +842,7 @@ async function buildIndexFromFileListShared(
             graphOptions,
             workspaceConfig,
             workerSetup,
-            ...(resolverEnvironmentFingerprint ? { resolverEnvironmentFingerprint } : {}),
+            ...(resolverEnvironmentFingerprint !== undefined ? { resolverEnvironmentFingerprint } : {}),
             parsedMap,
             parsedCacheMaxEntries: parsedCacheMaxEntries(opts),
             jsonDependencies,
@@ -1631,7 +1631,7 @@ export async function buildProjectIndexIncremental(
               onFallbackImportExtraction,
               fileSignatures,
               cacheEnabled,
-              ...(resolverEnvironmentFingerprint ? { resolverEnvironmentFingerprint } : {}),
+              ...(resolverEnvironmentFingerprint !== undefined ? { resolverEnvironmentFingerprint } : {}),
             });
             return [file, built.module, built.cacheWrite] as const;
           } catch (error) {

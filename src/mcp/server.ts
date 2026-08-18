@@ -184,7 +184,9 @@ function assertMcpHttpBodyTimeout(value: number): number {
 
 function assertMcpToolTimeout(value: number): number {
   if (!Number.isSafeInteger(value) || value < 0 || value > MAX_MCP_TOOL_TIMEOUT_MS) {
-    throw new RangeError(`mcpToolTimeoutMs must be a whole number no greater than ${MAX_MCP_TOOL_TIMEOUT_MS}.`);
+    throw new RangeError(
+      `mcpToolTimeoutMs must be a whole number from 0 through ${MAX_MCP_TOOL_TIMEOUT_MS}; 0 disables the deadline.`,
+    );
   }
   return value;
 }
