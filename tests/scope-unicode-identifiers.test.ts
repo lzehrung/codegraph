@@ -23,6 +23,8 @@ describe("Unicode scope bindings", () => {
       imports,
     );
 
+    // The binding under test is the `use ... as widget` alias, which carries no `$` sigil,
+    // so its exact source spelling and its canonical key are the same string here.
     const bindings = scope.bindings.get("widget");
     expect(bindings).toHaveLength(1);
     expect(bindings![0]!.name).toBe("widget");

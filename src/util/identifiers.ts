@@ -1,5 +1,4 @@
 /**
-/**
  * Returns whether identifier equality needs Unicode processing. Java also sends C0
  * controls through its normalization path because some are identifier-ignorable.
  */
