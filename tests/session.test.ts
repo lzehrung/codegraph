@@ -1273,6 +1273,37 @@ describe("SessionManager", () => {
     }
   });
 
+  test("reclaims expired warmup replacements before reserving capacity", async () => {
+    const limitedManager = new SessionManager({ maxSessions: 1, evictionIntervalMs: 0 });
+    const options = { root: sampleRoot, buildOptions: sampleBuildOptions() };
+    const existing = await limitedManager.getOrCreateSession("existing", options);
+    existing.dispose();
+    const originalBuild = indexerBuild.buildProjectIndexIncremental;
+    const buildStarted = Promise.withResolvers<void>();
+    const releaseBuild = Promise.withResolvers<void>();
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      buildStarted.resolve();
+      await releaseBuild.promise;
+      return await originalBuild(...args);
+    });
+
+    try {
+      const warmup = limitedManager.warmup([{ id: "existing", options }]);
+      await buildStarted.promise;
+
+      const sessionCount = Reflect.get(limitedManager, "sessions").size;
+      const pendingCount = Reflect.get(limitedManager, "pendingSessions").size;
+      expect(sessionCount + pendingCount).toBe(1);
+
+      releaseBuild.resolve();
+      await warmup;
+      expect(limitedManager.getSession("existing")).not.toBe(existing);
+    } finally {
+      releaseBuild.resolve();
+      buildSpy.mockRestore();
+      limitedManager.disposeAll();
+    }
+  });
   test("retains failed warmup capacity until initialization settles", async () => {
     const limitedManager = new SessionManager({ maxSessions: 1, evictionIntervalMs: 0 });
     const originalBuild = indexerBuild.buildProjectIndexIncremental;
