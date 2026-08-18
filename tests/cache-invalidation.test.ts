@@ -2922,10 +2922,12 @@ describe("Cache invalidation and strict hashing", () => {
     expect(rebuiltManifest.version).toBe(MANIFEST_VERSION);
     expect(rebuiltManifest.transientFiles).toEqual(["outside/extra.ts"]);
   });
-  it("reuses node-module module and edge caches when resolver inputs are unchanged", async () => {
+  it("reuses nested node-module caches after manifest paths are rebased", async () => {
     const root = await mkTmpDir("dg-node-modules-reuse-");
     const entryFile = path.join(root, "packages", "app", "src", "entry.ts");
-    const packageDir = path.join(root, "node_modules", "example-package");
+    // The full build derives this nested node_modules root from absolute discovered paths.
+    // Incremental reuse receives rebased manifest paths and must derive the same root.
+    const packageDir = path.join(root, "packages", "app", "node_modules", "example-package");
     const packageJson = path.join(packageDir, "package.json");
     const firstEntry = path.join(packageDir, "first.js");
     try {
