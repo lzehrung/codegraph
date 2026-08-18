@@ -161,11 +161,21 @@ export const DEFAULT_MCP_HTTP_SESSION_IDLE_MS = 30 * 60 * 1000;
 export const DEFAULT_MCP_HTTP_SESSION_MAX_COUNT = 32;
 export const DEFAULT_MCP_HTTP_SESSION_EVICTION_INTERVAL_MS = 60_000;
 export const DEFAULT_MCP_HTTP_BODY_TIMEOUT_MS = 30_000;
+const MAX_MCP_HTTP_BODY_TIMEOUT_MS = 2_147_483_647;
 export const DEFAULT_MCP_TOOL_CONCURRENCY = 4;
 
 function normalizeMcpToolConcurrency(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_MCP_TOOL_CONCURRENCY;
   return Math.max(1, Math.floor(value));
+}
+
+function assertMcpHttpBodyTimeout(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_MCP_HTTP_BODY_TIMEOUT_MS) {
+    throw new RangeError(
+      `httpBodyTimeoutMs must be a positive integer no greater than ${MAX_MCP_HTTP_BODY_TIMEOUT_MS}.`,
+    );
+  }
+  return value;
 }
 
 type LegacyMcpSession = {
@@ -1307,6 +1317,9 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
 export async function startCodegraphMcpHttpServer(
   options: CodegraphMcpServerOptions & { port: number },
 ): Promise<CodegraphMcpHttpServer> {
+  const httpBodyTimeoutMs = assertMcpHttpBodyTimeout(
+    options.httpBodyTimeoutMs === undefined ? DEFAULT_MCP_HTTP_BODY_TIMEOUT_MS : options.httpBodyTimeoutMs,
+  );
   const host = options.host ?? "127.0.0.1";
   const { handlers, session } = await createWarmedCodegraphMcpResources(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
@@ -1357,7 +1370,7 @@ export async function startCodegraphMcpHttpServer(
       validateOrigin,
       modernNodeHandler,
       protocolFactory.create,
-      options.httpBodyTimeoutMs ?? DEFAULT_MCP_HTTP_BODY_TIMEOUT_MS,
+      httpBodyTimeoutMs,
     );
   });
 

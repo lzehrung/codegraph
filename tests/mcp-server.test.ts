@@ -1131,6 +1131,49 @@ describe("codegraph MCP handlers", () => {
     }
   });
 
+  it.each([Number.NaN, -1, 1.5, 2_147_483_648])(
+    "rejects an invalid HTTP body timeout during server startup",
+    async (httpBodyTimeoutMs) => {
+      await expect(
+        startCodegraphMcpHttpServer({
+          root: process.cwd(),
+          host: "127.0.0.1",
+          port: 0,
+          httpBodyTimeoutMs,
+        }),
+      ).rejects.toThrow("httpBodyTimeoutMs must be a positive integer no greater than 2147483647.");
+    },
+  );
+
+  it("rejects a null HTTP body timeout during server startup", async () => {
+    const options = {
+      root: process.cwd(),
+      host: "127.0.0.1",
+      port: 0,
+    };
+    Object.defineProperty(options, "httpBodyTimeoutMs", { value: null });
+
+    await expect(startCodegraphMcpHttpServer(options)).rejects.toThrow(
+      "httpBodyTimeoutMs must be a positive integer no greater than 2147483647.",
+    );
+  });
+
+  it("accepts Node's maximum HTTP body timeout", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-timeout-maximum-"));
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+      httpBodyTimeoutMs: 2_147_483_647,
+    });
+
+    try {
+      expect(httpServer.port).toBeGreaterThan(0);
+    } finally {
+      await httpServer.close();
+      await fs.rm(root, { force: true, recursive: true });
+    }
+  });
   it("rejects declared oversized HTTP MCP request bodies without buffering their payload", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-large-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");

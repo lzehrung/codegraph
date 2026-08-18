@@ -144,7 +144,7 @@ describe("SQLite raw query in-process deadline fallback", () => {
     const deadline = new PublicSqliteQueryDeadlineExceededError(250);
     expect(deadline).toBeInstanceOf(Error);
     expect(deadline.name).toBe("SqliteQueryDeadlineExceededError");
-    expect(deadline.message).toBe("SQLite query exceeded its 250ms execution budget; termination was requested.");
+    expect(deadline.message).toBe("SQLite query exceeded its 250ms execution budget.");
     expect(new SqliteQueryCancelledError().message).toBe("SQLite query was cancelled.");
     expect(new PublicSqliteQueryWorkerCleanupCapacityExceededError(2).message).toContain(
       "SQLite query worker capacity is exhausted",

@@ -22,7 +22,7 @@ export type RawSqlQueryWorkerLifecycleState = {
 
 export class SqliteQueryDeadlineExceededError extends Error {
   constructor(deadlineMs: number) {
-    super(`SQLite query exceeded its ${deadlineMs}ms execution budget; termination was requested.`);
+    super(`SQLite query exceeded its ${deadlineMs}ms execution budget.`);
     this.name = "SqliteQueryDeadlineExceededError";
   }
 }
