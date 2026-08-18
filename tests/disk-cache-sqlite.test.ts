@@ -2,9 +2,15 @@ import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
-import { brotliCompressSync, brotliDecompressSync } from "node:zlib";
+import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 
-import { buildProjectIndex, findDuplicates, type BuildReport } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexIncremental,
+  buildSymbolGraphDetailed,
+  findDuplicates,
+  type BuildReport,
+} from "../src/index.js";
 import { closeDuplicateUnitCacheDatabase } from "../src/duplicates.js";
 import {
   tryLoadDuplicateUnitsFromCache,
@@ -13,8 +19,11 @@ import {
 } from "../src/duplicates/unitCache.js";
 import { buildInternalUnit, formatDuplicateSqlHandle, formatDuplicateSymbolHandle } from "../src/duplicates/units.js";
 import * as buildCache from "../src/indexer/build-cache.js";
+import { MANIFEST_VERSION, type IndexManifest } from "../src/indexer/build-cache/manifest.js";
 import { SqliteDatabase, SqliteStatement } from "../src/sqlite-driver.js";
+import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
+import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 
 function cacheDir(root: string): string {
   return path.join(root, ".codegraph-cache", "index-v1");
@@ -102,6 +111,235 @@ CREATE TABLE invoice_entries (
   await fsp.mkdir(path.join(root, "schema"), { recursive: true });
   await fsp.writeFile(path.join(root, "schema", "a.sql"), duplicateSource, "utf8");
   await fsp.writeFile(path.join(root, "schema", "b.sql"), duplicateSource, "utf8");
+}
+
+function absoluteProjectPath(root: string, relativeOrAbsolute: string): string {
+  return normalizePath(
+    path.isAbsolute(relativeOrAbsolute) ? relativeOrAbsolute : path.resolve(root, relativeOrAbsolute),
+  );
+}
+
+function projectSnapshotPath(root: string): string {
+  return path.join(cacheDir(root), "project-index-snapshot.json");
+}
+
+function detailedSymbolGraphPath(root: string): string {
+  return path.join(cacheDir(root), "detailed-symbol-graph.json");
+}
+
+function manifestPath(root: string): string {
+  return path.join(cacheDir(root), "manifest.json");
+}
+
+async function readBrotliJson(filePath: string): Promise<Record<string, unknown>> {
+  const raw = await fsp.readFile(filePath);
+  return JSON.parse(brotliDecompressSync(raw).toString("utf8")) as Record<string, unknown>;
+}
+
+async function writeBrotliJson(filePath: string, value: unknown): Promise<void> {
+  await fsp.writeFile(
+    filePath,
+    brotliCompressSync(JSON.stringify(value), { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } }),
+  );
+}
+
+function absolutizeHandle(root: string, value: string): string {
+  const separator = value.indexOf("::");
+  if (separator < 0) return absoluteProjectPath(root, value);
+  return `${absoluteProjectPath(root, value.slice(0, separator))}${value.slice(separator)}`;
+}
+
+function absolutizeModulePayload(root: string, mod: Record<string, unknown>): Record<string, unknown> {
+  const copy = structuredClone(mod) as {
+    file: string;
+    locals: Array<{ file: string }>;
+    exports: Array<Record<string, unknown>>;
+    imports: Array<{ resolved?: string }>;
+  };
+  copy.file = absoluteProjectPath(root, copy.file);
+  for (const local of copy.locals) local.file = absoluteProjectPath(root, local.file);
+  for (const entry of copy.exports) {
+    if (entry.type === "local" && entry.target && typeof entry.target === "object") {
+      const target = entry.target as { file: string };
+      target.file = absoluteProjectPath(root, target.file);
+    } else if (typeof entry.fromModule === "string" && !entry.moduleSpecifier) {
+      entry.fromModule = absoluteProjectPath(root, entry.fromModule as string);
+    }
+  }
+  for (const binding of copy.imports) {
+    if (typeof binding.resolved === "string") binding.resolved = absoluteProjectPath(root, binding.resolved);
+  }
+  return copy;
+}
+
+function seedAbsoluteModuleCacheRows(root: string): { relativeFile: string; updatedAt: number } {
+  const db = new DatabaseSync(moduleCacheDbPath(root));
+  try {
+    const row = db.prepare("SELECT file, sig, version, payload, updated_at FROM module_cache LIMIT 1").get() as
+      | { file: string; sig: string; version: number; payload: Uint8Array; updated_at: number }
+      | undefined;
+    if (!row) throw new Error("expected module cache row");
+    const absoluteFile = absoluteProjectPath(root, row.file);
+    const parsed = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as Record<string, unknown>;
+    const absolutePayload = brotliCompressSync(JSON.stringify(absolutizeModulePayload(root, parsed)));
+    db.prepare("DELETE FROM module_cache").run();
+    db.prepare(
+      `INSERT INTO module_cache (file, sig, version, payload, updated_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(absoluteFile, row.sig, row.version, absolutePayload, row.updated_at);
+    db.prepare(
+      `INSERT INTO cache_schema_metadata (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    ).run("module_cache.schema_version", "1");
+    return { relativeFile: row.file, updatedAt: row.updated_at };
+  } finally {
+    db.close();
+  }
+}
+
+function seedAbsoluteDuplicateCacheRows(root: string): { relativeFile: string; updatedAt: number } {
+  const db = new DatabaseSync(duplicateCacheDbPath(root));
+  try {
+    const row = db
+      .prepare("SELECT file, variant, sig, version, payload, updated_at FROM duplicate_unit_cache LIMIT 1")
+      .get() as
+      | {
+          file: string;
+          variant: string;
+          sig: string;
+          version: number;
+          payload: Uint8Array;
+          updated_at: number;
+        }
+      | undefined;
+    if (!row) throw new Error("expected duplicate cache row");
+    const absoluteFile = absoluteProjectPath(root, row.file);
+    const units = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as Array<Record<string, unknown>>;
+    for (const unit of units) {
+      if (typeof unit.file === "string") unit.file = absoluteProjectPath(root, unit.file);
+      if (typeof unit.absoluteFile === "string") unit.absoluteFile = absoluteProjectPath(root, unit.absoluteFile);
+    }
+    const absolutePayload = brotliCompressSync(JSON.stringify(units));
+    db.prepare("DELETE FROM duplicate_unit_cache").run();
+    db.prepare(
+      `INSERT INTO duplicate_unit_cache (file, variant, sig, version, payload, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(absoluteFile, row.variant, row.sig, row.version, absolutePayload, row.updated_at);
+    db.prepare(
+      `INSERT INTO cache_schema_metadata (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    ).run("duplicate_unit_cache.schema_version", "1");
+    return { relativeFile: row.file, updatedAt: row.updated_at };
+  } finally {
+    db.close();
+  }
+}
+
+async function seedAbsoluteManifestV3(root: string): Promise<void> {
+  const raw = await fsp.readFile(manifestPath(root), "utf8");
+  const manifest = JSON.parse(raw) as IndexManifest;
+  const files: IndexManifest["files"] = {};
+  for (const [file, entry] of Object.entries(manifest.files)) {
+    const absoluteFile = absoluteProjectPath(root, file);
+    files[absoluteFile] = {
+      ...entry,
+      edges: entry.edges.map((edge) => ({
+        ...edge,
+        from: absoluteProjectPath(root, edge.from),
+        to: edge.to.type === "file" ? { ...edge.to, path: absoluteProjectPath(root, edge.to.path) } : edge.to,
+      })),
+    };
+  }
+  const seeded: IndexManifest = {
+    ...manifest,
+    version: 3,
+    projectRoot: absoluteProjectPath(root, "."),
+    files,
+    ...(manifest.transientFiles
+      ? { transientFiles: manifest.transientFiles.map((file) => absoluteProjectPath(root, file)) }
+      : {}),
+    ...(manifest.symlinkDirectories
+      ? { symlinkDirectories: manifest.symlinkDirectories.map((file) => absoluteProjectPath(root, file)) }
+      : {}),
+  };
+  await fsp.writeFile(manifestPath(root), JSON.stringify(seeded, null, 2), "utf8");
+}
+
+async function seedAbsoluteProjectSnapshotVersion(root: string, version: 4 | 5): Promise<void> {
+  const snapshot = await readBrotliJson(projectSnapshotPath(root));
+  const abs = (value: string) => absoluteProjectPath(root, value);
+  const modules = (snapshot.modules as Array<Record<string, unknown>>).map((mod) => absolutizeModulePayload(root, mod));
+  const graph = snapshot.graph as { nodes: string[]; edges: Array<Record<string, unknown>> };
+  const fileSignatures: Record<string, unknown> = {};
+  for (const [file, signature] of Object.entries((snapshot.fileSignatures as Record<string, unknown>) ?? {})) {
+    fileSignatures[abs(file)] = signature;
+  }
+  const bloomFilters: Record<string, unknown> = {};
+  for (const [file, filter] of Object.entries((snapshot.bloomFilters as Record<string, unknown>) ?? {})) {
+    bloomFilters[abs(file)] = filter;
+  }
+  const projectFiles = Array.isArray(snapshot.projectFiles)
+    ? (snapshot.projectFiles as Array<Record<string, unknown>>).map((file) => ({
+        ...file,
+        path: abs(String(file.path)),
+        projectRoot: abs(String(file.projectRoot)),
+      }))
+    : undefined;
+  await writeBrotliJson(projectSnapshotPath(root), {
+    ...snapshot,
+    version,
+    projectRoot: abs("."),
+    modules,
+    graph: {
+      nodes: graph.nodes.map(abs),
+      edges: graph.edges.map((edge) => ({
+        ...edge,
+        from: abs(String(edge.from)),
+        to:
+          edge.to && typeof edge.to === "object" && (edge.to as { type?: string }).type === "file"
+            ? { ...(edge.to as object), path: abs(String((edge.to as { path: string }).path)) }
+            : edge.to,
+      })),
+    },
+    fileSignatures,
+    ...(Object.keys(bloomFilters).length ? { bloomFilters } : {}),
+    ...(projectFiles ? { projectFiles } : {}),
+  });
+}
+
+async function seedAbsoluteDetailedSymbolGraphV2(root: string): Promise<string> {
+  const sidecar = await readBrotliJson(detailedSymbolGraphPath(root));
+  const graph = sidecar.graph as {
+    nodes: Array<{ id: string; file: string; name: string }>;
+    edges: Array<Record<string, unknown>>;
+  };
+  const migratedGraph = {
+    nodes: graph.nodes.map((node) => ({
+      ...node,
+      id: absolutizeHandle(root, node.id),
+      file: absoluteProjectPath(root, node.file),
+    })),
+    edges: graph.edges.map((edge) => ({
+      ...edge,
+      from: absolutizeHandle(root, String(edge.from)),
+      to: absolutizeHandle(root, String(edge.to)),
+      ...(edge.site && typeof edge.site === "object"
+        ? {
+            site: {
+              ...(edge.site as object),
+              file: absoluteProjectPath(root, String((edge.site as { file: string }).file)),
+            },
+          }
+        : {}),
+    })),
+  };
+  await writeBrotliJson(detailedSymbolGraphPath(root), {
+    ...sidecar,
+    version: 2,
+    projectRoot: absoluteProjectPath(root, "."),
+    graph: migratedGraph,
+  });
+  return String(sidecar.projectSnapshotIdentity);
 }
 
 describe("disk cache uses sqlite backend", () => {
@@ -730,5 +968,159 @@ describe("disk cache uses sqlite backend", () => {
       | undefined;
     after.close();
     expect(row?.version).toBe(4);
+  });
+
+  it("migrates absolute-path module cache rows and reuses their payloads", async () => {
+    const root = await mkTmpDir("dg-disk-cache-module-abs-migrate-");
+    await fsp.writeFile(path.join(root, "a.ts"), "export const migratedModule = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const seeded = seedAbsoluteModuleCacheRows(root);
+
+    expect(
+      readRowCount(
+        moduleCacheDbPath(root),
+        "SELECT COUNT(*) AS count FROM module_cache WHERE file = ?",
+        absoluteProjectPath(root, seeded.relativeFile),
+      ),
+    ).toBe(1);
+
+    const report: BuildReport = {};
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1, report });
+    const after = new DatabaseSync(moduleCacheDbPath(root));
+    const row = after.prepare("SELECT file, updated_at FROM module_cache WHERE file = ?").get(seeded.relativeFile) as
+      | { file: string; updated_at: number }
+      | undefined;
+    const absoluteCount = after
+      .prepare("SELECT COUNT(*) AS count FROM module_cache WHERE file = ?")
+      .get(absoluteProjectPath(root, seeded.relativeFile)) as { count: number };
+    after.close();
+
+    expect(Array.from(index.modules.keys()).some((file) => file.endsWith("a.ts"))).toBe(true);
+    expect(row?.file).toBe(seeded.relativeFile);
+    expect(absoluteCount.count).toBe(0);
+    expect(row?.updated_at).toBe(seeded.updatedAt);
+    expect((report.cache?.hits ?? 0) > 0).toBe(true);
+    expect(readSqliteMetadata(moduleCacheDbPath(root), "module_cache.schema_version")).toBe("2");
+  });
+
+  it("migrates absolute-path duplicate cache rows and reuses their payloads", async () => {
+    const root = await mkTmpDir("dg-disk-cache-dup-abs-migrate-");
+    await writeDuplicateProject(root);
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    await findDuplicates(index, { minConfidence: "high", limit: 5 });
+    closeDuplicateUnitCacheDatabase(root);
+    const seeded = seedAbsoluteDuplicateCacheRows(root);
+
+    expect(
+      readRowCount(
+        duplicateCacheDbPath(root),
+        "SELECT COUNT(*) AS count FROM duplicate_unit_cache WHERE file = ?",
+        absoluteProjectPath(root, seeded.relativeFile),
+      ),
+    ).toBe(1);
+
+    const reopened = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const result = await findDuplicates(reopened, { minConfidence: "high", limit: 5 });
+    closeDuplicateUnitCacheDatabase(root);
+
+    const after = new DatabaseSync(duplicateCacheDbPath(root));
+    const row = after
+      .prepare("SELECT file, updated_at FROM duplicate_unit_cache WHERE file = ? LIMIT 1")
+      .get(seeded.relativeFile) as { file: string; updated_at: number } | undefined;
+    const absoluteCount = after
+      .prepare("SELECT COUNT(*) AS count FROM duplicate_unit_cache WHERE file = ?")
+      .get(absoluteProjectPath(root, seeded.relativeFile)) as { count: number };
+    after.close();
+
+    expect(result.groups.length).toBeGreaterThan(0);
+    expect(row?.file).toBe(seeded.relativeFile);
+    expect(absoluteCount.count).toBe(0);
+    expect(row?.updated_at).toBe(seeded.updatedAt);
+    expect(readSqliteMetadata(duplicateCacheDbPath(root), "duplicate_unit_cache.schema_version")).toBe("2");
+  });
+
+  it("migrates a legacy v3 absolute-path manifest and reuses cached edges", async () => {
+    const root = await mkTmpDir("dg-disk-cache-manifest-v3-migrate-");
+    await fsp.writeFile(path.join(root, "a.ts"), 'import { b } from "./b";\nexport const a = b;\n', "utf8");
+    await fsp.writeFile(path.join(root, "b.ts"), "export const b = 2;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    await seedAbsoluteManifestV3(root);
+
+    const seeded = JSON.parse(await fsp.readFile(manifestPath(root), "utf8")) as IndexManifest;
+    expect(seeded.version).toBe(3);
+    expect(Object.keys(seeded.files).every((file) => path.isAbsolute(file))).toBe(true);
+
+    const report: BuildReport = {};
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1, report });
+    const rewritten = JSON.parse(await fsp.readFile(manifestPath(root), "utf8")) as IndexManifest;
+
+    expect(index.byFile.has(fileIdentityKey(absoluteProjectPath(root, "a.ts")))).toBe(true);
+    expect(rewritten.version).toBe(MANIFEST_VERSION);
+    expect(Object.keys(rewritten.files).every((file) => !path.isAbsolute(file))).toBe(true);
+    expect(rewritten.files["a.ts"]).toBeDefined();
+    expect(report.manifest?.reused).toBe(true);
+    expect((report.cache?.hits ?? 0) > 0).toBe(true);
+  });
+
+  it.each([4, 5] as const)("migrates a legacy v%s absolute-path project snapshot and reuses it", async (version) => {
+    const root = await mkTmpDir(`dg-disk-cache-snapshot-v${version}-migrate-`);
+    await fsp.writeFile(path.join(root, "entry.ts"), "export const snapshotMigrated = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    await seedAbsoluteProjectSnapshotVersion(root, version);
+
+    const seeded = await readBrotliJson(projectSnapshotPath(root));
+    expect(seeded.version).toBe(version);
+    expect(((seeded.graph as { nodes: string[] }).nodes ?? []).every((node) => path.isAbsolute(node))).toBe(true);
+
+    const manifest = JSON.parse(await fsp.readFile(manifestPath(root), "utf8")) as IndexManifest;
+    const loaded = await buildCache.tryLoadProjectIndexSnapshot(
+      root,
+      { cache: "disk" },
+      new Map(Object.entries(manifest.files).map(([file, entry]) => [absoluteProjectPath(root, file), entry])),
+    );
+    expect(loaded).not.toBeNull();
+    expect(
+      loaded?.index.byFile
+        .get(fileIdentityKey(absoluteProjectPath(root, "entry.ts")))
+        ?.locals.some((local) => local.localName === "snapshotMigrated"),
+    ).toBe(true);
+
+    const report: BuildReport = {};
+    const index = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1, report });
+    expect(index.byFile.has(fileIdentityKey(absoluteProjectPath(root, "entry.ts")))).toBe(true);
+    expect(report.files?.parsed ?? 0).toBe(0);
+    expect((report.files?.cached ?? 0) > 0).toBe(true);
+
+    // Force a snapshot rewrite so the migrated relative schema is what remains on disk.
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const rewritten = await readBrotliJson(projectSnapshotPath(root));
+    expect(rewritten.version).toBe(9);
+    expect(((rewritten.graph as { nodes: string[] }).nodes ?? []).every((node) => !path.isAbsolute(node))).toBe(true);
+  });
+
+  it("migrates a legacy v2 absolute-path detailed symbol sidecar and reuses it", async () => {
+    const root = await mkTmpDir("dg-disk-cache-detailed-v2-migrate-");
+    await fsp.writeFile(
+      path.join(root, "util.ts"),
+      "export function add(a: number, b: number) { return a + b; }\n",
+      "utf8",
+    );
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const graph = await buildSymbolGraphDetailed(index);
+    await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, graph);
+    await seedAbsoluteDetailedSymbolGraphV2(root);
+
+    const seeded = await readBrotliJson(detailedSymbolGraphPath(root));
+    expect(seeded.version).toBe(2);
+    expect(
+      ((seeded.graph as { nodes: Array<{ file: string }> }).nodes ?? []).every((node) => path.isAbsolute(node.file)),
+    ).toBe(true);
+
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const loaded = await buildCache.tryLoadDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index);
+    expect(loaded).not.toBeNull();
+    expect([...loaded!.nodes.values()].some((node) => node.name === "add")).toBe(true);
+    expect(symbolGraphSpy).not.toHaveBeenCalled();
+    symbolGraphSpy.mockRestore();
   });
 });
