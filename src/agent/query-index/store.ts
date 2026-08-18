@@ -131,6 +131,20 @@ export class QueryIndexStore {
     return readQueryIndexMetadata(this.db);
   }
 
+  /** Connection-level pragmas applied when this store opens its handle. */
+  runtimePragmas(): { journalMode: string; synchronous: number; foreignKeys: number } {
+    const journalMode = (this.db.prepare("PRAGMA journal_mode").get() as { journal_mode?: unknown } | undefined)
+      ?.journal_mode;
+    const synchronous = (this.db.prepare("PRAGMA synchronous").get() as { synchronous?: unknown } | undefined)
+      ?.synchronous;
+    const foreignKeys = (this.db.prepare("PRAGMA foreign_keys").get() as { foreign_keys?: unknown } | undefined)
+      ?.foreign_keys;
+    if (typeof journalMode !== "string" || typeof synchronous !== "number" || typeof foreignKeys !== "number") {
+      throw new Error("Query index connection pragmas are unavailable.");
+    }
+    return { journalMode, synchronous, foreignKeys };
+  }
+
   assertReadable(): void {
     this.db.prepare("SELECT count(*) AS count FROM chunk_search").get();
   }
