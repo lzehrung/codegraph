@@ -24,6 +24,17 @@ export const ECMASCRIPT_IDENTIFIER_SOURCE = String.raw`[$_\p{ID_Start}](?:[$_\p{
  */
 export const DUPLICATE_TOKENIZER_IDENTIFIER_SOURCE = String.raw`[$_\p{XID_Start}\u1885\u1886\u2118\u212E\u309B\u309C](?:[$_\p{XID_Continue}\u00B7\u0387\u1369-\u1371\u19DA\u200C\u200D\u1885\u1886\u2118\u212E\u309B\u309C])*`;
 
+/**
+ * Bloom-filter tokenization deliberately accepts a superset of every supported identifier
+ * grammar: false positives only add verification work, while false negatives can hide a
+ * reference. It includes all non-ASCII code points for PHP's unrestricted high bytes; Java's
+ * Sc/Pc starts and Mn/Mc/Cf plus identifier-ignorable controls; C# Cf parts; ECMAScript's
+ * $/ZWNJ/ZWJ; Python and Rust XID characters; and Go/Kotlin letters, digits, and underscores.
+ * Plain ID_Start/ID_Continue drops PHP's non-ID characters, Java Sc/Pc starts and Mn/Mc/Cf/C0
+ * parts, and C# Cf parts, so it is not safe here.
+ */
+export const BLOOM_FILTER_IDENTIFIER_SOURCE = String.raw`[A-Za-z0-9_$\u0000-\u0008\u000E-\u001B\u007F-\u009F\u200C\u200D\u0080-\u{10FFFF}]+`;
+
 /** Unicode XID identifiers, with underscores permitted at every position. */
 export const XID_IDENTIFIER_SOURCE = String.raw`[_\p{XID_Start}][_\p{XID_Continue}]*`;
 

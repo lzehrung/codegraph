@@ -1,6 +1,6 @@
 # Unicode identifier support (2026-08-17)
 
-Status: Planned. Supersedes the separate normalization and end-to-end fixture plans; no code in this plan has landed.
+Status: In progress. Supersedes the separate normalization and end-to-end fixture plans. Phases 1 through 5 have landed except where the checklist below says otherwise; duplicate tokenization shipped separately.
 
 ## Problem
 
@@ -163,7 +163,7 @@ Checked items are implemented and covered by their named regression. Update this
 ### Phase 4 - Unicode-aware scanners
 
 - [x] `src/util/bloomFilter.ts` identifier tokenization
-- [x] Duplicate tokenizers (JS and Rust) plus `DUPLICATE_TOKENIZER_REVISION` bump - shipped separately on `fix/unicode-duplicate-tokens`, since duplicate fingerprints are independent of name resolution
+- [x] Duplicate tokenizers (JS and Rust) plus `DUPLICATE_TOKENIZER_REVISION` bump - shipped separately and merged in #267, since duplicate fingerprints are independent of name resolution
 - [x] Fallback export and resolution scanners
 - [x] Report and review text scanners
 

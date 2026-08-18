@@ -5,6 +5,7 @@
  * allowing us to skip files that definitely don't contain the symbol.
  */
 
+import { BLOOM_FILTER_IDENTIFIER_SOURCE } from "./identifiers.js";
 import type { LanguageSupport } from "../languages.js";
 import { fileIdentityKey } from "./paths.js";
 import crypto from "node:crypto";
@@ -175,7 +176,7 @@ export function buildBloomFilterFromSource(
   support: Pick<LanguageSupport, "normalizeIdentifier">,
   falsePositiveRate = 0.01,
 ): BloomFilter {
-  const identifierPattern = /(?<![\p{ID_Continue}$\u200C\u200D])[\p{ID_Start}_$][\p{ID_Continue}$\u200C\u200D]*/gu;
+  const identifierPattern = new RegExp(BLOOM_FILTER_IDENTIFIER_SOURCE, "gu");
   const matches = source.match(identifierPattern);
 
   const unique = new Set<string>();

@@ -2021,7 +2021,7 @@ describe("Cache invalidation and strict hashing", () => {
     bloomSpy.mockRestore();
   });
 
-  it("rejects version 2 bloom sidecars instead of reusing their filters", async () => {
+  it("rejects version 3 bloom sidecars instead of reusing their filters", async () => {
     const root = await mkTmpDir("dg-stale-bloom-version-");
     const alphaPath = path.join(root, "alpha.ts");
     const triggerPath = path.join(root, "trigger.ts");
@@ -2031,7 +2031,7 @@ describe("Cache invalidation and strict hashing", () => {
 
     const sidecarPath = path.join(root, ".codegraph-cache", "index-v1", "bloom-filters.json");
     const staleSidecar = await readProjectSnapshot(sidecarPath);
-    staleSidecar.version = 2;
+    staleSidecar.version = 3;
     await writeProjectSnapshot(sidecarPath, staleSidecar);
 
     const snapshotPath = projectSnapshotPathFor(root);
@@ -2212,7 +2212,7 @@ describe("Cache invalidation and strict hashing", () => {
       nativeRuntimeFingerprint?: string;
       implementationFingerprint?: string;
     };
-    expect(rewrittenSnapshot.version).toBe(8);
+    expect(rewrittenSnapshot.version).toBe(9);
     expect(initial.byFile.has(fileIdentityKey(normalize(entryPath)))).toBe(true);
     expect(rebuilt.byFile.has(fileIdentityKey(normalize(entryPath)))).toBe(true);
     expect(rebuilt.bloomFilters?.get(normalize(entryPath))?.mightContain("versioned")).toBe(true);
