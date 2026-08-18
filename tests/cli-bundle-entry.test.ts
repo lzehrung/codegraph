@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bundledCli = path.join(rootDir, "dist", "bin", "cli.js");
+const bundledRawQueryWorker = path.join(rootDir, "dist", "bin", "rawQueryWorker.js");
 const unbundledCli = path.join(rootDir, "dist", "cli.js");
 
 function run(entry: string, args: string[], cwd: string = rootDir, env: NodeJS.ProcessEnv = process.env) {
@@ -21,6 +22,7 @@ function run(entry: string, args: string[], cwd: string = rootDir, env: NodeJS.P
 describe("bundled CLI entry", () => {
   it("ships a split ESM bin entry that matches unbundled --version", () => {
     expect(fs.existsSync(bundledCli)).toBe(true);
+    expect(fs.existsSync(bundledRawQueryWorker)).toBe(true);
     expect(fs.existsSync(unbundledCli)).toBe(true);
 
     const bundled = run(bundledCli, ["--version"]);
@@ -77,11 +79,12 @@ describe("bundled CLI entry", () => {
       .readdirSync(binDir)
       .filter((name) => name.endsWith(".js"))
       .sort();
-    // Bundle emits exactly two self-contained entrypoints (cli + queryIndexWorker).
-    expect(outputs).toEqual(["cli.js", "queryIndexWorker.js"]);
+    // Bundle emits exactly three self-contained entrypoints (cli + queryIndexWorker + rawQueryWorker).
+    expect(outputs).toEqual(["cli.js", "queryIndexWorker.js", "rawQueryWorker.js"]);
     const entry = fs.readFileSync(bundledCli, "utf8");
     expect(entry).toContain("queryIndexWorker.js");
     expect(fs.existsSync(path.join(binDir, "queryIndexWorker.js"))).toBe(true);
+    expect(fs.existsSync(path.join(binDir, "rawQueryWorker.js"))).toBe(true);
   });
 
   it("keeps a leading shebang so package managers can exec the bin directly", () => {

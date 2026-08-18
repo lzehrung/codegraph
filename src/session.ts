@@ -47,6 +47,16 @@ export type SessionOptions = {
   incremental?: boolean;
 };
 
+export type SessionManagerOptions = {
+  /** Maximum sessions, including sessions currently initializing. Defaults to 32. */
+  maxSessions?: number;
+  /** Idle-session scan interval in milliseconds. Defaults to 60 seconds. Use 0 to disable. */
+  evictionIntervalMs?: number;
+};
+
+export const DEFAULT_SESSION_MANAGER_MAX_SESSIONS = 32;
+export const DEFAULT_SESSION_MANAGER_EVICTION_INTERVAL_MS = 60_000;
+
 export type SessionStatus = "initializing" | "ready" | "expired" | "error";
 
 export type SessionStaleReason = "tracked_files_changed" | "config_changed";
@@ -787,21 +797,63 @@ export class CodeReviewSession implements ICodeReviewSession {
   }
 }
 
+function normalizeSessionManagerCapacity(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return DEFAULT_SESSION_MANAGER_MAX_SESSIONS;
+  return Math.max(1, Math.floor(value));
+}
+
+function normalizeSessionManagerEvictionInterval(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return DEFAULT_SESSION_MANAGER_EVICTION_INTERVAL_MS;
+  return Math.max(0, Math.floor(value));
+}
+
 /**
  * Session manager for multiple concurrent sessions
  * Useful for agents handling multiple repositories or PRs
  */
+
+type PendingSession = {
+  cancelled: boolean;
+  fingerprint: string;
+  retainPending: boolean;
+  promise: Promise<CodeReviewSession>;
+};
 export class SessionManager {
   private sessions = new Map<string, CodeReviewSession>();
-  private pendingSessions = new Map<
-    string,
-    {
-      cancelled: boolean;
-      fingerprint: string;
-      retainPending: boolean;
-      promise: Promise<CodeReviewSession>;
+  private pendingSessions = new Map<string, PendingSession>();
+  private readonly maxSessions: number;
+  private readonly evictionTimer: ReturnType<typeof setInterval> | undefined;
+  private disposed = false;
+
+  constructor(options: SessionManagerOptions = {}) {
+    this.maxSessions = normalizeSessionManagerCapacity(options.maxSessions);
+    const evictionIntervalMs = normalizeSessionManagerEvictionInterval(options.evictionIntervalMs);
+    if (evictionIntervalMs) {
+      this.evictionTimer = setInterval(() => this.cleanupExpired(), evictionIntervalMs);
+      this.evictionTimer.unref?.();
     }
-  >();
+  }
+
+  private cancelPendingSession(sessionId: string, pending: PendingSession): void {
+    pending.cancelled = true;
+    pending.retainPending = false;
+    void pending.promise
+      .finally(() => {
+        if (this.pendingSessions.get(sessionId) === pending && !pending.retainPending) {
+          this.pendingSessions.delete(sessionId);
+        }
+      })
+      .catch(() => {});
+  }
+
+  private assertCapacityForNewSession(): void {
+    this.cleanupExpired();
+    if (this.sessions.size + this.pendingSessions.size >= this.maxSessions) {
+      throw new Error(
+        `Session capacity reached (${this.maxSessions}). Dispose an existing session before creating another.`,
+      );
+    }
+  }
 
   private createSessionConfigurationError(
     sessionId: string,
@@ -828,6 +880,9 @@ export class SessionManager {
   ): Promise<CodeReviewSession> | undefined {
     const pending = this.pendingSessions.get(sessionId);
     if (!pending) return undefined;
+    if (pending.cancelled) {
+      throw new Error(`Session "${sessionId}" is still cancelling initialization. Retry after it settles.`);
+    }
     const requestedFingerprint = sessionIdentityFingerprint(resolveSessionIdentity(options));
     if (pending.fingerprint !== requestedFingerprint) {
       const existing = this.sessions.get(sessionId);
@@ -880,10 +935,15 @@ export class SessionManager {
     return promise;
   }
 
+  private assertNotDisposed(): void {
+    if (this.disposed) throw new Error("Session manager is disposed.");
+  }
+
   /**
    * Create or get a session for a repository
    */
   async getOrCreateSession(sessionId: string, options: SessionOptions): Promise<CodeReviewSession> {
+    this.assertNotDisposed();
     const pending = this.getPendingCompatibleSession(sessionId, options);
     if (pending) {
       return await pending;
@@ -892,6 +952,7 @@ export class SessionManager {
     let session = this.ensureSessionIdCompatible(sessionId, options);
 
     if (!session) {
+      this.assertCapacityForNewSession();
       session = new CodeReviewSession(options);
       return await this.trackSession(sessionId, options, session, false, (readySession) => {
         this.sessions.set(sessionId, readySession);
@@ -921,10 +982,7 @@ export class SessionManager {
    */
   disposeSession(sessionId: string): void {
     const pending = this.pendingSessions.get(sessionId);
-    if (pending) {
-      pending.cancelled = true;
-      this.pendingSessions.delete(sessionId);
-    }
+    if (pending) this.cancelPendingSession(sessionId, pending);
     const session = this.sessions.get(sessionId);
     if (session) {
       session.dispose();
@@ -936,14 +994,24 @@ export class SessionManager {
    * Dispose of all sessions
    */
   disposeAll(): void {
-    for (const pending of this.pendingSessions.values()) {
-      pending.cancelled = true;
+    for (const [sessionId, pending] of this.pendingSessions) {
+      this.cancelPendingSession(sessionId, pending);
     }
-    this.pendingSessions.clear();
     for (const session of this.sessions.values()) {
       session.dispose();
     }
     this.sessions.clear();
+  }
+
+  /**
+   * Dispose all sessions and stop periodic expiration cleanup.
+   * This manager cannot be reused afterward.
+   */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    clearInterval(this.evictionTimer);
+    this.disposeAll();
   }
 
   /**
@@ -985,6 +1053,7 @@ export class SessionManager {
    * @param sessions - Array of session configs to pre-warm
    */
   async warmup(sessions: Array<{ id: string; options: SessionOptions }>): Promise<void> {
+    this.assertNotDisposed();
     const requestedFingerprints = new Map<string, string>();
     const replacementSessions: Array<{
       id: string;
@@ -1014,6 +1083,7 @@ export class SessionManager {
         if (existing?.isReady()) {
           continue;
         }
+        this.assertCapacityForNewSession();
         const session = new CodeReviewSession(options);
         replacementSessions.push(existing ? { id, existing, session } : { id, session });
         warmupPromises.push(this.trackSession(id, options, session, true, () => {}));
@@ -1022,10 +1092,7 @@ export class SessionManager {
     } catch (error) {
       for (const replacement of replacementSessions) {
         const pending = this.pendingSessions.get(replacement.id);
-        if (pending) {
-          pending.cancelled = true;
-          this.pendingSessions.delete(replacement.id);
-        }
+        if (pending) this.cancelPendingSession(replacement.id, pending);
         replacement.session.dispose();
       }
       throw error;

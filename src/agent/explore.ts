@@ -2,6 +2,7 @@ import path from "node:path";
 import type { AnalysisSummary } from "../analysisSummary.js";
 import { getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/traversal.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
+import { boundList } from "../presentation/bounds.js";
 import type { BuildOptions } from "../indexer/types.js";
 import { listCandidateTestFiles } from "../impact/context.js";
 import { fileIdentityKey, normalizePath, toProjectDisplayPath } from "../util/paths.js";
@@ -483,11 +484,12 @@ function collectBlastRadius(
   const summaries: AgentExploreBlastRadiusSummary[] = [];
   for (const file of anchorFiles.slice(0, entryLimit)) {
     const dependencies = getReverseDependencies(snapshot.fileGraph, file, { limit: dependencyLimit + 1, depth: 2 });
-    const visible = dependencies.slice(0, dependencyLimit).map((dependency) => formatDependency(snapshot, dependency));
+    const boundedDependencies = boundList(dependencies, dependencyLimit);
+    const visible = boundedDependencies.items.map((dependency) => formatDependency(snapshot, dependency));
     summaries.push({
       file: toProjectDisplayPath(snapshot.root, file),
       reverseDependencies: visible,
-      omittedLowerBound: Math.max(0, dependencies.length - dependencyLimit),
+      omittedLowerBound: boundedDependencies.omitted,
     });
   }
   return summaries;
@@ -511,9 +513,10 @@ function collectCandidateTests(
     maxCandidates: snapshot.index.byFile.size,
     projectRoot: snapshot.root,
   });
+  const boundedCandidates = boundList(candidates, limit);
   return {
-    items: candidates.slice(0, limit).map((candidate) => toProjectDisplayPath(snapshot.root, candidate.file)),
-    omittedCount: Math.max(0, candidates.length - limit),
+    items: boundedCandidates.items.map((candidate) => toProjectDisplayPath(snapshot.root, candidate.file)),
+    omittedCount: boundedCandidates.omitted,
   };
 }
 function collectFollowUps(

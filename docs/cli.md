@@ -810,7 +810,7 @@ Raw SQL access is intentionally read-only:
 codegraph sql ./codegraph.sqlite "SELECT name, file FROM symbols WHERE kind = 'function' LIMIT 5;"
 ```
 
-It accepts result-producing statements such as `SELECT` and `PRAGMA` and rejects mutating SQL.
+It accepts result-producing statements such as `SELECT` and `PRAGMA` and rejects mutating SQL. Each command has a 10-second deadline, so a long-running query can fail when that budget expires. While a native SQLite step finishes after an expired deadline, concurrent SQL commands can also fail temporarily when the bounded worker capacity is full; retry after the earlier query completes.
 
 ## Review bundle shape
 

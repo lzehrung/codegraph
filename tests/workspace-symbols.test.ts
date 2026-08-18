@@ -412,4 +412,18 @@ describe("workspace symbol lookup", () => {
       tool_workspaceSymbols(root, { query: "Service" }, { session, buildOptions: { cache: "off" } }),
     ).rejects.toThrow("cannot combine a prebuilt session with buildOptions");
   });
+  it("pins omission counts at and just past the limit for workspace symbols", async () => {
+    const all = await workspaceSymbols(index, { query: "Service", limit: 50 });
+    const total = all.symbols.length;
+    expect(total).toBeGreaterThanOrEqual(2);
+    expect(all.omitted).toBe(0);
+
+    const atLimit = await workspaceSymbols(index, { query: "Service", limit: total });
+    expect(atLimit.symbols).toHaveLength(total);
+    expect(atLimit.omitted).toBe(0);
+
+    const pastLimit = await workspaceSymbols(index, { query: "Service", limit: total - 1 });
+    expect(pastLimit.symbols).toHaveLength(total - 1);
+    expect(pastLimit.omitted).toBe(1);
+  });
 });

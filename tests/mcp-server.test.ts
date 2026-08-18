@@ -1,11 +1,16 @@
+import { registerSessionInvalidationHook } from "../src/agent/sessionLifecycle.js";
+import { ensureSessionQueryIndex } from "../src/agent/query-index/sessionStore.js";
 import fs from "node:fs/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import {
+  awaitMcpToolOperation,
+  callMcpTool,
   createCodegraphMcpHandlers,
   createCodegraphMcpProtocolServer,
   listCodegraphMcpTools,
@@ -14,6 +19,7 @@ import {
   type CodegraphMcpHandlers,
 } from "../src/mcp/server.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex } from "../src/indexer/types.js";
+import { MCP_TOOL_REGISTRY } from "../src/mcp/tools.js";
 import { DEFAULT_REVIEW_TRANSPORT_LIMITS } from "../src/review/types.js";
 import type { Graph } from "../src/types.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
@@ -1125,7 +1131,7 @@ describe("codegraph MCP handlers", () => {
     }
   });
 
-  it("rejects oversized HTTP MCP request bodies before parsing", async () => {
+  it("rejects declared oversized HTTP MCP request bodies without buffering their payload", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-large-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
     const httpServer = await startCodegraphMcpHttpServer({
@@ -1143,13 +1149,104 @@ describe("codegraph MCP handlers", () => {
         },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", padding: "x".repeat(1_000_000) }),
       });
-      const payload = readObject((await response.json()) as unknown);
-      const error = readObject(payload.error);
 
       expect(response.status).toBe(413);
-      expect(error.message).toBe("MCP request body is too large");
     } finally {
       await httpServer.close();
+    }
+  });
+
+  it("returns a timeout response while draining an incomplete HTTP MCP body", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-timeout-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+      httpBodyTimeoutMs: 25,
+    });
+
+    try {
+      const endpoint = new URL(httpServer.url);
+      const partialBody = '{"jsonrpc":"2.0","id":1,"method":"initialize"';
+      const response = await new Promise<{ status: number; payload: JsonRpcObject; connection: string | undefined }>(
+        (resolve, reject) => {
+          let responseReceived = false;
+          const request = httpRequest(
+            {
+              hostname: endpoint.hostname,
+              port: endpoint.port,
+              path: endpoint.pathname,
+              method: "POST",
+              headers: {
+                accept: "application/json",
+                "content-type": "application/json",
+                "content-length": String(Buffer.byteLength(partialBody) + 1),
+              },
+            },
+            (incoming) => {
+              let responseBody = "";
+              incoming.setEncoding("utf8");
+              incoming.on("data", (chunk: string) => {
+                responseBody += chunk;
+              });
+              incoming.on("end", () => {
+                responseReceived = true;
+                try {
+                  resolve({
+                    status: incoming.statusCode ?? 0,
+                    payload: readJsonRpcObject(JSON.parse(responseBody)),
+                    connection: incoming.headers.connection,
+                  });
+                } catch (error) {
+                  reject(error instanceof Error ? error : new Error(String(error)));
+                } finally {
+                  request.destroy();
+                }
+              });
+            },
+          );
+          request.on("error", (error) => {
+            if (!responseReceived) reject(error);
+          });
+          request.write(partialBody);
+        },
+      );
+
+      expect([response.status, response.connection]).toEqual([408, "close"]);
+      expect(readObject(response.payload.error).message).toBe("MCP request body timed out");
+    } finally {
+      await httpServer.close();
+    }
+  });
+
+  it("invalidates prebuilt resources when HTTP server binding fails", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-listen-failure-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const occupiedServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+    });
+    const session = createAgentSession({ root });
+    let invalidated = false;
+    registerSessionInvalidationHook(session, () => {
+      invalidated = true;
+    });
+
+    try {
+      await expect(
+        startCodegraphMcpHttpServer({
+          root,
+          host: "127.0.0.1",
+          port: occupiedServer.port,
+          session,
+        }),
+      ).rejects.toThrow();
+      expect(invalidated).toBe(true);
+    } finally {
+      await occupiedServer.close();
+      await fs.rm(root, { force: true, recursive: true });
     }
   });
 
@@ -2754,3 +2851,555 @@ describe("codegraph MCP handlers", () => {
 function normalizeSqlitePath(value: unknown): string {
   return typeof value === "string" ? value.replace(/\\/g, "/") : "";
 }
+
+describe("MCP tool registry dispatch", () => {
+  it("routes every registered tool without advertising legacy aliases", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-registry-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export function ok(): number { return 1; }\n", "utf8");
+    runGit(root, ["init"]);
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "base"]);
+    const handlers = createCodegraphMcpHandlers({ root });
+    const handlerSpies = {
+      search: vi.spyOn(handlers, "search"),
+      workspace_symbols: vi.spyOn(handlers, "workspace_symbols"),
+      rename_preview: vi.spyOn(handlers, "rename_preview"),
+      refactor_plan: vi.spyOn(handlers, "refactor_plan"),
+      calls: vi.spyOn(handlers, "calls"),
+      type_hierarchy: vi.spyOn(handlers, "type_hierarchy"),
+      implementations: vi.spyOn(handlers, "implementations"),
+      explore: vi.spyOn(handlers, "explore"),
+      orient: vi.spyOn(handlers, "orient"),
+      packet_get: vi.spyOn(handlers, "packet_get"),
+      get_file: vi.spyOn(handlers, "get_file"),
+      get_symbol: vi.spyOn(handlers, "get_symbol"),
+      goto: vi.spyOn(handlers, "goto"),
+      refs: vi.spyOn(handlers, "refs"),
+      file_deps: vi.spyOn(handlers, "file_deps"),
+      path: vi.spyOn(handlers, "path"),
+      impact: vi.spyOn(handlers, "impact"),
+      review: vi.spyOn(handlers, "review"),
+      query_sqlite: vi.spyOn(handlers, "query_sqlite"),
+      refresh_index: vi.spyOn(handlers, "refresh_index"),
+      artifact_build: vi.spyOn(handlers, "artifact_build"),
+    };
+    const advertisedTools = listCodegraphMcpTools();
+    expect(advertisedTools.map((tool) => tool.name)).toEqual(
+      MCP_TOOL_REGISTRY.filter((tool) => tool.advertised !== false).map((tool) => tool.name),
+    );
+    expect(advertisedTools.some((tool) => "dispatch" in tool)).toBe(false);
+    const handle = "auth.ts::ok";
+    const toolInputs: Record<string, Record<string, unknown>> = {
+      search: { query: "ok" },
+      workspace_symbols: { query: "ok" },
+      rename_preview: { handle, newName: "renamed" },
+      refactor_plan: { handle },
+      calls: { handle, direction: "callers" },
+      type_hierarchy: { handle, direction: "supertypes" },
+      implementations: { handle },
+      explore: { query: "ok" },
+      orient: {},
+      packet_get: { target: "auth.ts" },
+      get_file: { file: "auth.ts" },
+      get_symbol: { handle },
+      goto: { handle },
+      refs: { handle },
+      file_deps: { file: "auth.ts", direction: "deps" },
+      path: { from: "auth.ts", to: "auth.ts" },
+      impact: { base: "HEAD", head: "HEAD" },
+      review: { base: "HEAD", head: "HEAD" },
+      query_sqlite: { query: "SELECT 1" },
+      refresh_index: {},
+      artifact_build: {},
+      callers: { handle },
+      callees: { handle },
+      supertypes: { handle },
+      subtypes: { handle },
+      deps: { file: "auth.ts" },
+      rdeps: { file: "auth.ts" },
+    };
+
+    for (const tool of MCP_TOOL_REGISTRY) {
+      const input = toolInputs[tool.name];
+      expect(input, "missing valid input for " + tool.name).toBeDefined();
+      try {
+        await callMcpTool(handlers, tool.name, input);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        expect(message, tool.name).not.toMatch(/Unknown MCP tool|Invalid parameters for/i);
+      }
+    }
+
+    for (const [name, spy] of Object.entries(handlerSpies)) {
+      expect(spy, name).toHaveBeenCalled();
+    }
+    expect(handlerSpies.calls).toHaveBeenCalledWith(expect.objectContaining({ direction: "callers" }), undefined);
+    expect(handlerSpies.calls).toHaveBeenCalledWith(expect.objectContaining({ direction: "callees" }), undefined);
+    expect(handlerSpies.type_hierarchy).toHaveBeenCalledWith(
+      expect.objectContaining({ direction: "supertypes" }),
+      undefined,
+    );
+    expect(handlerSpies.type_hierarchy).toHaveBeenCalledWith(
+      expect.objectContaining({ direction: "subtypes" }),
+      undefined,
+    );
+    expect(handlerSpies.file_deps).toHaveBeenCalledWith(expect.objectContaining({ direction: "deps" }), undefined);
+    expect(handlerSpies.file_deps).toHaveBeenCalledWith(expect.objectContaining({ direction: "rdeps" }), undefined);
+  });
+});
+
+describe("MCP refresh coalescing", () => {
+  it("serializes every queued request's requested warmup", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-refresh-coalesce-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const backingSession = createAgentSession({ root });
+    const firstWarmupReached = Promise.withResolvers<void>();
+    const releaseFirstWarmup = Promise.withResolvers<void>();
+    const secondWarmupReached = Promise.withResolvers<void>();
+    const releaseSecondWarmup = Promise.withResolvers<void>();
+    const loadModes: Array<"skip" | "full"> = [];
+    let activeLoads = 0;
+    let maxActiveLoads = 0;
+    let fullWarmups = 0;
+    const session: AgentSession = {
+      ...backingSession,
+      loadProject: async (options) => {
+        const mode = options?.symbolGraph === "skip" ? "skip" : "full";
+        loadModes.push(mode);
+        activeLoads += 1;
+        maxActiveLoads = Math.max(maxActiveLoads, activeLoads);
+        try {
+          if (mode === "skip") {
+            firstWarmupReached.resolve();
+            await releaseFirstWarmup.promise;
+          } else {
+            fullWarmups += 1;
+            if (fullWarmups === 1) {
+              secondWarmupReached.resolve();
+              await releaseSecondWarmup.promise;
+            }
+          }
+          return await backingSession.loadProject(options);
+        } finally {
+          activeLoads -= 1;
+        }
+      },
+    };
+    const handlers = createCodegraphMcpHandlers({ root, session });
+
+    const first = handlers.refresh_index({ warmup: "base" });
+    await firstWarmupReached.promise;
+    const second = handlers.refresh_index({ warmup: "symbols" });
+    const third = handlers.refresh_index({ warmup: "symbols" });
+    releaseFirstWarmup.resolve();
+
+    try {
+      await secondWarmupReached.promise;
+      for (let turn = 0; turn < 4; turn += 1) await Promise.resolve();
+      expect(loadModes).toEqual(["skip", "full"]);
+      expect(maxActiveLoads).toBe(1);
+
+      releaseSecondWarmup.resolve();
+      await expect(first).resolves.toEqual({ refreshed: true, warmup: "base" });
+      await expect(second).resolves.toEqual({ refreshed: true, warmup: "symbols" });
+      await expect(third).resolves.toEqual({ refreshed: true, warmup: "symbols" });
+      expect(loadModes).toEqual(["skip", "full", "full"]);
+      expect(maxActiveLoads).toBe(1);
+    } finally {
+      releaseFirstWarmup.resolve();
+      releaseSecondWarmup.resolve();
+    }
+  });
+
+  it("bounds a request invalidated by repeated refreshes", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-refresh-retry-bound-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const token = 1;\n", "utf8");
+    const backingSession = createAgentSession({ root });
+    let refreshes = 0;
+    const session: AgentSession = {
+      ...backingSession,
+      loadProject: async (options) => {
+        refreshes += 1;
+        await handlers.refresh_index({ warmup: "off" });
+        return await backingSession.loadProject(options);
+      },
+    };
+    const handlers = createCodegraphMcpHandlers({ root, session });
+
+    await expect(handlers.goto({ file: "auth.ts", line: 1, column: 14 })).rejects.toThrow(
+      /Workspace refresh changed repeatedly while serving the request/i,
+    );
+    expect(refreshes).toBe(3);
+  });
+});
+
+describe("MCP session teardown regressions (S2)", () => {
+  it("closes sidecar query index handle and runs session invalidation hooks on server close", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-s2-teardown-"));
+    await fs.writeFile(
+      path.join(root, "auth.ts"),
+      "export function validateUser(token: string) { return !!token; }\n",
+      "utf8",
+    );
+    const session = createAgentSession({ root });
+    let invalidationHookRan = false;
+    registerSessionInvalidationHook(session, () => {
+      invalidationHookRan = true;
+    });
+
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+      session,
+    });
+
+    try {
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-s2-test", version: "1.0.0" },
+        },
+      });
+      const sessionId = initialize.response.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+
+      const searchCall = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "search", arguments: { query: "validateUser", mode: "hybrid" } },
+        },
+        sessionId ?? undefined,
+      );
+      expect(searchCall.response.status).toBe(200);
+
+      const snapshot = await session.loadProject();
+      const handle = await ensureSessionQueryIndex(session, snapshot);
+      expect(handle.store?.closed).toBe(false);
+      expect(invalidationHookRan).toBe(false);
+
+      await httpServer.close();
+
+      expect(invalidationHookRan).toBe(true);
+      expect(handle.store?.closed).toBe(true);
+    } finally {
+      await httpServer.close();
+    }
+  });
+
+  it("drains active tool calls before invalidating the shared session during shutdown", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-shutdown-drain-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const backingSession = createAgentSession({ root });
+    const loadStarted = Promise.withResolvers<void>();
+    const releaseLoad = Promise.withResolvers<void>();
+    const session: AgentSession = {
+      ...backingSession,
+      loadProject: async (options) => {
+        loadStarted.resolve();
+        await releaseLoad.promise;
+        return await backingSession.loadProject(options);
+      },
+    };
+    const invalidationSpy = vi.spyOn(session, "invalidate");
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+      session,
+    });
+
+    try {
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-shutdown-drain-test", version: "1.0.0" },
+        },
+      });
+      const sessionId = initialize.response.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+
+      if (!sessionId) throw new Error("MCP session did not initialize.");
+      const endpoint = new URL(httpServer.url);
+      const body = JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "search", arguments: { query: "ok", mode: "symbol" } },
+      });
+      const request = httpRequest({
+        hostname: endpoint.hostname,
+        port: endpoint.port,
+        path: endpoint.pathname,
+        method: "POST",
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+          "mcp-session-id": sessionId,
+        },
+      });
+      request.on("error", () => {});
+      request.end(body);
+      await loadStarted.promise;
+
+      const requestClosed = new Promise<void>((resolve) => request.once("close", resolve));
+      request.destroy();
+      await requestClosed;
+
+      const closing = httpServer.close();
+      await Promise.resolve();
+      expect(invalidationSpy).not.toHaveBeenCalled();
+
+      releaseLoad.resolve();
+      await expect(closing).resolves.toBeUndefined();
+      expect(invalidationSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseLoad.resolve();
+      invalidationSpy.mockRestore();
+      await httpServer.close();
+    }
+  });
+  it("closes legacy protocol transports when session invalidation fails during server shutdown", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-invalidation-close-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const session = createAgentSession({ root });
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+      session,
+    });
+    const transportCloseSpy = vi.spyOn(NodeStreamableHTTPServerTransport.prototype, "close");
+    const invalidationSpy = vi.spyOn(session, "invalidate").mockImplementation(() => {
+      throw new Error("session invalidation failed");
+    });
+
+    try {
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-invalidation-close-test", version: "1.0.0" },
+        },
+      });
+      expect(initialize.response.status).toBe(200);
+      transportCloseSpy.mockClear();
+
+      await expect(httpServer.close()).rejects.toThrow("session invalidation failed");
+      expect(transportCloseSpy).toHaveBeenCalled();
+    } finally {
+      invalidationSpy.mockRestore();
+      transportCloseSpy.mockRestore();
+      await httpServer.close().catch(() => {});
+    }
+  });
+});
+
+describe("MCP cancellation accounting", () => {
+  it("keeps a tool-call slot reserved until a cancelled operation settles", async () => {
+    const controller = new AbortController();
+    const operation = Promise.withResolvers<string>();
+    let released = 0;
+    const pending = awaitMcpToolOperation(controller.signal, operation.promise, () => {
+      released += 1;
+    });
+
+    controller.abort();
+    await expect(pending).rejects.toThrow("MCP tool call was cancelled.");
+    expect(released).toBe(0);
+
+    operation.resolve("finished");
+    await vi.waitFor(() => {
+      expect(released).toBe(1);
+    });
+  });
+});
+
+describe("MCP transport isolation regressions (S8)", () => {
+  it("preserves session and completes concurrent calls when one response connection is forcefully closed", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-s8-transport-"));
+    await fs.writeFile(
+      path.join(root, "auth.ts"),
+      "export function validateUser(token: string) { return !!token; }\nexport function secondarySymbol() { return true; }\n",
+      "utf8",
+    );
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+    });
+
+    try {
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-s8-test", version: "1.0.0" },
+        },
+      });
+      const sessionId = initialize.response.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+      if (!sessionId) throw new Error("Missing sessionId");
+
+      const endpoint = new URL(httpServer.url);
+      const call1Payload = JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "workspace_symbols", arguments: { query: "validateUser" } },
+      });
+
+      const call1Closed = Promise.withResolvers();
+      const req1 = httpRequest({
+        hostname: endpoint.hostname,
+        port: endpoint.port,
+        path: endpoint.pathname,
+        method: "POST",
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+          "content-length": String(Buffer.byteLength(call1Payload)),
+          "mcp-session-id": sessionId,
+        },
+      });
+      req1.on("error", () => {
+        call1Closed.resolve();
+      });
+      req1.on("close", () => {
+        call1Closed.resolve();
+      });
+      req1.write(call1Payload);
+      req1.destroy(new Error("Forced client disconnect"));
+
+      const call2Promise = postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: { name: "workspace_symbols", arguments: { query: "secondarySymbol" } },
+        },
+        sessionId,
+      );
+
+      await call1Closed.promise;
+      const call2 = await call2Promise;
+      expect(call2.response.status).toBe(200);
+      expect(readToolJsonResult(call2.payload).symbols).toEqual([expect.objectContaining({ name: "secondarySymbol" })]);
+
+      const call3 = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 4,
+          method: "tools/call",
+          params: { name: "workspace_symbols", arguments: { query: "validateUser" } },
+        },
+        sessionId,
+      );
+      expect(call3.response.status).toBe(200);
+      expect(readToolJsonResult(call3.payload).symbols).toEqual([expect.objectContaining({ name: "validateUser" })]);
+    } finally {
+      await httpServer.close();
+    }
+  });
+});
+
+describe("MCP legacy session capacity and error-handling regressions", () => {
+  it("releases the initialization capacity reservation when legacy Accept header validation rejects the request", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-capacity-accept-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      port: 0,
+      httpSessionIdleMs: 0,
+      httpSessionMaxCount: 1,
+    });
+
+    const initializeRequest = {
+      jsonrpc: "2.0",
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "codegraph-capacity-test", version: "1.0.0" },
+      },
+    };
+
+    try {
+      // No override supplies an Accept header, so postRawHttpJson's default
+      // ("application/json" without "text/event-stream") trips the legacy transport's
+      // own 406 validation before any session is created.
+      const rejected = await postRawHttpJson(httpServer.url, { ...initializeRequest, id: 1 }, {});
+      expect(rejected.status).toBe(406);
+
+      // With httpSessionMaxCount 1, a leaked capacity reservation from the rejected
+      // attempt would make this second initialize 503 instead of succeeding.
+      const accepted = await postMcpJson(httpServer.url, { ...initializeRequest, id: 2 });
+      expect(accepted.response.status).toBe(200);
+      expect(accepted.response.headers.get("mcp-session-id")).toBeTruthy();
+    } finally {
+      await httpServer.close();
+    }
+  });
+
+  it("keeps a healthy session usable after a request-scoped SDK validation error on a follow-up request", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-request-error-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export function ok(): number { return 1; }\n", "utf8");
+    const httpServer = await startCodegraphMcpHttpServer({ root, port: 0 });
+
+    try {
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-session-error-test", version: "1.0.0" },
+        },
+      });
+      const sessionId = initialize.response.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+      if (!sessionId) throw new Error("Missing sessionId");
+
+      // A follow-up request against the same session with a bad Accept header trips
+      // the transport's own request-scoped validation (406) through onerror, without
+      // throwing and without the transport ever closing.
+      const badAccept = await postRawHttpJson(
+        httpServer.url,
+        { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+        { "mcp-session-id": sessionId },
+      );
+      expect(badAccept.status).toBe(406);
+
+      // The session must still be usable: a prior bug deleted it from the store on
+      // every onerror, which would turn this into a 400 "Invalid or missing session ID".
+      const followUp = await postMcpJson(
+        httpServer.url,
+        { jsonrpc: "2.0", id: 3, method: "tools/list", params: {} },
+        sessionId,
+      );
+      expect(followUp.response.status).toBe(200);
+    } finally {
+      await httpServer.close();
+    }
+  });
+});

@@ -2,7 +2,11 @@ import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 
-export type ParsedJsonBody = { status: "ok"; body: unknown } | { status: "too_large" } | { status: "invalid_json" };
+export type ParsedJsonBody =
+  | { status: "ok"; body: unknown }
+  | { status: "too_large" }
+  | { status: "timeout" }
+  | { status: "invalid_json" };
 
 export type AllowedHostHeaderRules = {
   exact: Set<string>;
@@ -13,31 +17,86 @@ export function getRequestPath(request: IncomingMessage): string {
   return new URL(request.url ?? "/", "http://127.0.0.1").pathname;
 }
 
-export async function readJsonRequestBody(request: IncomingMessage, maxBytes: number): Promise<ParsedJsonBody> {
+export async function readJsonRequestBody(
+  request: IncomingMessage,
+  maxBytes: number,
+  timeoutMs: number,
+): Promise<ParsedJsonBody> {
   const contentLength = getContentLength(request);
   if (contentLength !== undefined && contentLength > maxBytes) {
-    request.resume();
+    drainRequestBody(request, timeoutMs);
     return { status: "too_large" };
   }
 
-  const chunks: Buffer[] = [];
-  let bytes = 0;
-  for await (const chunk of request) {
-    const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-    bytes += buffer.byteLength;
-    if (bytes > maxBytes) {
-      return { status: "too_large" };
-    }
-    chunks.push(buffer);
-  }
+  return await new Promise<ParsedJsonBody>((resolve) => {
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let settled = false;
+    const deadline = setTimeout(() => settle({ status: "timeout" }, true), timeoutMs);
+    deadline.unref?.();
 
-  const rawBody = Buffer.concat(chunks).toString("utf8");
-  try {
-    const body: unknown = rawBody.length ? JSON.parse(rawBody) : null;
-    return { status: "ok", body };
-  } catch {
-    return { status: "invalid_json" };
-  }
+    const cleanup = (): void => {
+      clearTimeout(deadline);
+      request.off("data", onData);
+      request.off("end", onEnd);
+      request.off("error", onFailure);
+      request.off("aborted", onFailure);
+    };
+    const settle = (result: ParsedJsonBody, drain: boolean): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (drain) request.resume();
+      resolve(result);
+    };
+    const onData = (chunk: string | Buffer): void => {
+      const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+      bytes += buffer.byteLength;
+      if (bytes > maxBytes) {
+        drainRequestBody(request, timeoutMs);
+        settle({ status: "too_large" }, false);
+        return;
+      }
+      chunks.push(buffer);
+    };
+    const onEnd = (): void => {
+      const rawBody = Buffer.concat(chunks).toString("utf8");
+      try {
+        const body: unknown = rawBody.length ? JSON.parse(rawBody) : null;
+        settle({ status: "ok", body }, false);
+      } catch {
+        settle({ status: "invalid_json" }, false);
+      }
+    };
+    const onFailure = (): void => settle({ status: "invalid_json" }, true);
+
+    request.on("data", onData);
+    request.once("end", onEnd);
+    request.once("error", onFailure);
+    request.once("aborted", onFailure);
+  });
+}
+
+function drainRequestBody(request: IncomingMessage, timeoutMs: number): void {
+  const onDrained = (): void => cleanup();
+  const onTimedOut = (): void => {
+    cleanup();
+    request.destroy();
+  };
+  const deadline = setTimeout(onTimedOut, timeoutMs);
+  deadline.unref?.();
+
+  const cleanup = (): void => {
+    clearTimeout(deadline);
+    request.off("end", onDrained);
+    request.off("error", onDrained);
+    request.off("aborted", onDrained);
+  };
+
+  request.once("end", onDrained);
+  request.once("error", onDrained);
+  request.once("aborted", onDrained);
+  request.resume();
 }
 
 export function emptyAllowedHostHeaderRules(): AllowedHostHeaderRules {

@@ -127,7 +127,32 @@ function navigationInputSchema(includeLimit: boolean): Tool["inputSchema"] {
   };
 }
 
-export const MCP_TOOLS: Tool[] = [
+export type McpToolDispatch =
+  | { handler: "search" }
+  | { handler: "workspace_symbols" }
+  | { handler: "rename_preview" }
+  | { handler: "refactor_plan" }
+  | { handler: "calls"; direction?: "callers" | "callees" }
+  | { handler: "type_hierarchy"; direction?: "supertypes" | "subtypes" }
+  | { handler: "implementations" }
+  | { handler: "explore" }
+  | { handler: "orient" }
+  | { handler: "packet_get" }
+  | { handler: "get_file" }
+  | { handler: "get_symbol" }
+  | { handler: "goto" }
+  | { handler: "refs" }
+  | { handler: "file_deps"; direction?: "deps" | "rdeps" }
+  | { handler: "path" }
+  | { handler: "impact" }
+  | { handler: "review" }
+  | { handler: "query_sqlite" }
+  | { handler: "refresh_index" }
+  | { handler: "artifact_build" };
+
+export type McpToolDefinition = Tool & { dispatch: McpToolDispatch; advertised?: boolean };
+
+export const MCP_TOOL_REGISTRY: McpToolDefinition[] = [
   {
     name: "search",
     description: "Deterministic ranked search across files, symbols, chunks, SQL objects, and graph context.",
@@ -141,6 +166,7 @@ export const MCP_TOOLS: Tool[] = [
       },
       ["query"],
     ),
+    dispatch: { handler: "search" },
   },
   {
     name: "workspace_symbols",
@@ -162,6 +188,7 @@ export const MCP_TOOLS: Tool[] = [
       },
       ["query"],
     ),
+    dispatch: { handler: "workspace_symbols" },
   },
   {
     name: "rename_preview",
@@ -183,6 +210,7 @@ export const MCP_TOOLS: Tool[] = [
       },
       ["handle", "newName"],
     ),
+    dispatch: { handler: "rename_preview" },
   },
   {
     name: "refactor_plan",
@@ -199,18 +227,21 @@ export const MCP_TOOLS: Tool[] = [
       },
       ["handle"],
     ),
+    dispatch: { handler: "refactor_plan" },
   },
   {
     name: "calls",
     description:
       "Find proven semantic callers or callees and exact grouped callsites for a portable symbol handle. Use refs for every symbol reference and file_deps for file-level dependencies.",
     inputSchema: callHierarchyInputSchema(),
+    dispatch: { handler: "calls" },
   },
   {
     name: "type_hierarchy",
     description:
       "Find proven direct or transitive supertypes or subtypes for a portable symbol handle. Returns currently extracted extends and implements relationships only.",
     inputSchema: typeHierarchyInputSchema(),
+    dispatch: { handler: "type_hierarchy" },
   },
   {
     name: "implementations",
@@ -228,6 +259,7 @@ export const MCP_TOOLS: Tool[] = [
       },
       ["handle"],
     ),
+    dispatch: { handler: "implementations" },
   },
   {
     name: "explore",
@@ -243,6 +275,7 @@ export const MCP_TOOLS: Tool[] = [
       },
       ["query"],
     ),
+    dispatch: { handler: "explore" },
   },
   {
     name: "orient",
@@ -251,6 +284,7 @@ export const MCP_TOOLS: Tool[] = [
       includeRoots: { type: "array", items: stringProperty },
       budget: orientBudgetProperty,
     }),
+    dispatch: { handler: "orient" },
   },
   {
     name: "packet_get",
@@ -264,6 +298,7 @@ export const MCP_TOOLS: Tool[] = [
       },
       ["target"],
     ),
+    dispatch: { handler: "packet_get" },
   },
   {
     name: "get_file",
@@ -279,37 +314,44 @@ export const MCP_TOOLS: Tool[] = [
       },
       ["file"],
     ),
+    dispatch: { handler: "get_file" },
   },
   {
     name: "get_symbol",
     description: "Resolve a stable search or explain handle.",
     inputSchema: objectSchema({ handle: stringProperty }, ["handle"]),
+    dispatch: { handler: "get_symbol" },
   },
   {
     name: "goto",
     description: "Resolve a definition by portable handle, qualified file::symbol path, or file position.",
     inputSchema: navigationInputSchema(false),
+    dispatch: { handler: "goto" },
   },
   {
     name: "refs",
     description: "Find references by portable handle, qualified file::symbol path, or file position.",
     inputSchema: navigationInputSchema(true),
+    dispatch: { handler: "refs" },
   },
   {
     name: "file_deps",
     description:
       "List file dependencies or reverse file dependencies by file path, qualified file::symbol path, or portable handle.",
     inputSchema: dependencyInputSchema(),
+    dispatch: { handler: "file_deps" },
   },
   {
     name: "path",
     description: "Find the shortest dependency path between two files.",
     inputSchema: objectSchema({ from: stringProperty, to: stringProperty }, ["from", "to"]),
+    dispatch: { handler: "path" },
   },
   {
     name: "impact",
     description: "Build compact impact context for a git range.",
     inputSchema: objectSchema({ base: stringProperty, head: stringProperty }, ["base", "head"]),
+    dispatch: { handler: "impact" },
   },
   {
     name: "review",
@@ -322,6 +364,7 @@ export const MCP_TOOLS: Tool[] = [
       },
       ["base", "head"],
     ),
+    dispatch: { handler: "review" },
   },
   {
     name: "query_sqlite",
@@ -337,6 +380,7 @@ export const MCP_TOOLS: Tool[] = [
       },
       ["query"],
     ),
+    dispatch: { handler: "query_sqlite" },
   },
   {
     name: "refresh_index",
@@ -344,6 +388,7 @@ export const MCP_TOOLS: Tool[] = [
     inputSchema: objectSchema({
       warmup: { type: "string", enum: ["off", "base", "symbols"] },
     }),
+    dispatch: { handler: "refresh_index" },
   },
   {
     name: "artifact_build",
@@ -356,9 +401,128 @@ export const MCP_TOOLS: Tool[] = [
       questions: booleanProperty,
       force: booleanProperty,
     }),
+    dispatch: { handler: "artifact_build" },
+  },
+  {
+    name: "callers",
+    description: "Legacy alias for calls with direction callers.",
+    advertised: false,
+    inputSchema: objectSchema(
+      {
+        handle: stringProperty,
+        depth: { type: "integer", minimum: 1, maximum: MAX_CALL_HIERARCHY_DEPTH, default: 1 },
+        limit: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_CALL_HIERARCHY_LIMIT,
+          default: DEFAULT_CALL_HIERARCHY_LIMIT,
+        },
+        includeHeuristic: booleanProperty,
+      },
+      ["handle"],
+    ),
+    dispatch: { handler: "calls", direction: "callers" },
+  },
+  {
+    name: "callees",
+    description: "Legacy alias for calls with direction callees.",
+    advertised: false,
+    inputSchema: objectSchema(
+      {
+        handle: stringProperty,
+        depth: { type: "integer", minimum: 1, maximum: MAX_CALL_HIERARCHY_DEPTH, default: 1 },
+        limit: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_CALL_HIERARCHY_LIMIT,
+          default: DEFAULT_CALL_HIERARCHY_LIMIT,
+        },
+        includeHeuristic: booleanProperty,
+      },
+      ["handle"],
+    ),
+    dispatch: { handler: "calls", direction: "callees" },
+  },
+  {
+    name: "supertypes",
+    description: "Legacy alias for type_hierarchy with direction supertypes.",
+    advertised: false,
+    inputSchema: objectSchema(
+      {
+        handle: stringProperty,
+        depth: { type: "integer", minimum: 1, maximum: MAX_TYPE_HIERARCHY_DEPTH, default: 1 },
+        limit: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_TYPE_HIERARCHY_LIMIT,
+          default: DEFAULT_TYPE_HIERARCHY_LIMIT,
+        },
+      },
+      ["handle"],
+    ),
+    dispatch: { handler: "type_hierarchy", direction: "supertypes" },
+  },
+  {
+    name: "subtypes",
+    description: "Legacy alias for type_hierarchy with direction subtypes.",
+    advertised: false,
+    inputSchema: objectSchema(
+      {
+        handle: stringProperty,
+        depth: { type: "integer", minimum: 1, maximum: MAX_TYPE_HIERARCHY_DEPTH, default: 1 },
+        limit: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_TYPE_HIERARCHY_LIMIT,
+          default: DEFAULT_TYPE_HIERARCHY_LIMIT,
+        },
+      },
+      ["handle"],
+    ),
+    dispatch: { handler: "type_hierarchy", direction: "subtypes" },
+  },
+  {
+    name: "deps",
+    description: "Legacy alias for file_deps with direction deps.",
+    advertised: false,
+    inputSchema: objectSchema(
+      {
+        file: dependencyFileProperty,
+        depth: { type: "integer", minimum: 0, default: 1 },
+        limit: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_MCP_COLLECTION_LIMIT,
+          default: DEFAULT_MCP_COLLECTION_LIMIT,
+        },
+      },
+      ["file"],
+    ),
+    dispatch: { handler: "file_deps", direction: "deps" },
+  },
+  {
+    name: "rdeps",
+    description: "Legacy alias for file_deps with direction rdeps.",
+    advertised: false,
+    inputSchema: objectSchema(
+      {
+        file: dependencyFileProperty,
+        depth: { type: "integer", minimum: 0, default: 1 },
+        limit: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_MCP_COLLECTION_LIMIT,
+          default: DEFAULT_MCP_COLLECTION_LIMIT,
+        },
+      },
+      ["file"],
+    ),
+    dispatch: { handler: "file_deps", direction: "rdeps" },
   },
 ];
 
 export function listCodegraphMcpTools(): Tool[] {
-  return MCP_TOOLS.map((tool) => ({ ...tool }));
+  return MCP_TOOL_REGISTRY.filter((tool) => tool.advertised !== false).map(
+    ({ dispatch: _dispatch, advertised: _advertised, ...tool }) => tool,
+  );
 }

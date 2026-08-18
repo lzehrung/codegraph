@@ -31,7 +31,11 @@ The shared HTTP endpoint is `http://127.0.0.1:7331/mcp`. HTTP binds to `127.0.0.
 
 Stdio servers exit when the client closes stdin, when an IPC parent disconnects, or after `--idle-timeout-ms` of inactivity (default 30 minutes; `0` disables the idle timer). That keeps orphaned `mcp serve --stdio` processes from lingering after an IDE or agent exits.
 
-HTTP protocol sessions track last activity, cap concurrent legacy sessions (default 32), and evict idle sessions on a timer (default 30 minutes). Capacity and idle eviction skip sessions with in-flight requests or open SSE streams; when every slot is active, a new `initialize` receives an actionable JSON-RPC capacity error instead of evicting a working client. Transport errors and protocol session closes also remove the session.
+HTTP protocol sessions track last activity, cap concurrent legacy sessions (default 32), and evict idle sessions on a timer (default 30 minutes). Capacity and idle eviction skip sessions with in-flight requests or open SSE streams; when every slot is active, a new `initialize` receives an actionable JSON-RPC capacity error instead of evicting a working client. Request validation errors return a 4xx response while leaving the session usable; explicit `DELETE`, idle eviction, and an actual transport close remove the session.
+
+Each MCP protocol session permits four concurrent tool calls by default; a saturated session returns a retryable busy error rather than queueing unbounded work. The programmatic server options `mcpToolConcurrency` and `httpBodyTimeoutMs` tune that cap and the 30-second HTTP request-body deadline; an HTTP body that misses its deadline receives `408 Request Timeout`.
+
+Client cancellation returns promptly, but does not discard shared index or artifact work. A cancelled call continues to occupy its concurrency slot until its underlying operation settles, preventing a burst of abandoned requests from exceeding the configured resource bound. Shutdown rejects new calls and waits for active work before invalidating shared session resources.
 
 Use stdio for a client-owned subprocess. Use HTTP for one long-running codegraph process per repository, then point every MCP-capable IDE, terminal, or agent client at the same local URL. Exact config keys vary by client, but the MCP settings should use HTTP/Streamable HTTP transport plus the `/mcp` URL instead of a `command`/`args` stdio launch.
 
@@ -100,7 +104,7 @@ Text and hybrid searches reuse a prepared handle for `.codegraph-cache/index-v1/
 
 If the sidecar is busy or unavailable, MCP uses the same exact in-memory matcher. [How it works](./how-it-works.md#cache-and-session-behavior) explains the search cache.
 
-Use `refresh_index` to rebuild the snapshot, reset SQLite artifact state, or recover after a change burst exceeds automatic limits. With write access, `query_sqlite` refreshes codegraph SQLite artifacts after small edits; otherwise it refuses stale rows. `artifact_build` refuses stale indexes, so run `refresh_index` after large change bursts.
+Use `refresh_index` to rebuild the snapshot, reset SQLite artifact state, or recover after a change burst exceeds automatic limits. Concurrent refresh requests serialize; each request runs its own requested `warmup` (`off`, `base`, or `symbols`) after an active refresh completes. With write access, `query_sqlite` refreshes codegraph SQLite artifacts after small edits; otherwise it refuses stale rows. `artifact_build` refuses stale indexes, so run `refresh_index` after large change bursts.
 `get_file` reads live bytes from disk after path confinement. It does not require a fresh index; only an explicit `includeGraphContext: true` checks indexed freshness and adds direct graph context, so returned file bytes and `totalLines` remain live even when `freshness` reports stale context.
 Tool schemas are flat JSON objects for broad client compatibility; argument combinations such as `refs` handle-vs-position mode are validated by the server. Legacy paired names (`callers`, `callees`, `supertypes`, `subtypes`, `deps`, and `rdeps`) remain accepted by `tools/call` as aliases, but only the unified tools appear in `tools/list`.
 
@@ -215,7 +219,7 @@ An MCP `explore` request whose entire query resolves to an indexed project-relat
 - Tool calls do not accept per-request root overrides.
 - Tools are read-only by default.
 - `artifact_build` requires `--allow-build` and a fresh or auto-refreshed MCP index.
-- `query_sqlite` rejects mutating SQL, recursive queries, synthetic payload functions, and stale artifact queries it cannot refresh safely.
+- `query_sqlite` rejects mutating SQL, recursive queries, synthetic payload functions, and stale artifact queries it cannot refresh safely. Each query has a 10-second execution deadline.
 - `get_file` rejects raw reads and structural text-config summaries over the 16 MiB input limit. Accepted reads use separate output-page bounds from `maxBytes`, `offset`, and `limit`; binary input is rejected, and sensitive formats require `allowSensitive: true` for raw values.
 - SQLite responses are row- and byte-bounded.
 

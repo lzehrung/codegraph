@@ -23,7 +23,7 @@ import { errorMessage } from "./util/errors.js";
 import { listProjectFiles } from "./util/projectFiles.js";
 import { boundAgentList, defaultAgentLimit, normalizeAgentLimit } from "./agent/bounds.js";
 import { normalizeAgentOutputPath } from "./agent/normalize.js";
-import type { AgentSession } from "./agent/session.js";
+import { assertNoPrebuiltSessionWithBuildOptions, type AgentSession } from "./agent/session.js";
 import {
   workspaceSymbols,
   workspaceSymbolsWithSession,
@@ -303,9 +303,7 @@ export async function tool_workspaceSymbols(
   request: WorkspaceSymbolsRequest,
   runtimeOptions: ToolWorkspaceSymbolsRuntimeOptions = {},
 ): Promise<WorkspaceSymbolsResponse> {
-  if (runtimeOptions.session && runtimeOptions.buildOptions) {
-    throw new Error("Workspace symbol tool options cannot combine a prebuilt session with buildOptions.");
-  }
+  assertNoPrebuiltSessionWithBuildOptions(runtimeOptions, "Workspace symbol tool options");
   const agentRequest = {
     root,
     ...request,
@@ -360,9 +358,7 @@ export async function tool_findImplementations(
 }
 
 function assertTypeHierarchyToolOptions(runtimeOptions: ToolTypeHierarchyRuntimeOptions): void {
-  if (runtimeOptions.session && runtimeOptions.buildOptions) {
-    throw new Error("Type hierarchy tool options cannot combine a prebuilt session with buildOptions.");
-  }
+  assertNoPrebuiltSessionWithBuildOptions(runtimeOptions, "Type hierarchy tool options");
 }
 
 function typeHierarchyAgentRequest(
@@ -408,9 +404,7 @@ export async function tool_findCallees(
 }
 
 function assertCallHierarchyToolOptions(runtimeOptions: ToolCallHierarchyRuntimeOptions): void {
-  if (runtimeOptions.session && runtimeOptions.buildOptions) {
-    throw new Error("Call hierarchy tool options cannot combine a prebuilt session with buildOptions.");
-  }
+  assertNoPrebuiltSessionWithBuildOptions(runtimeOptions, "Call hierarchy tool options");
 }
 
 function callHierarchyAgentRequest(
@@ -441,9 +435,7 @@ export async function tool_previewRename(
   request: Omit<RenamePreviewRequest, "root" | "buildOptions">,
   runtimeOptions: ToolRenamePreviewRuntimeOptions = {},
 ): Promise<RenamePreviewResponse> {
-  if (runtimeOptions.session && runtimeOptions.buildOptions) {
-    throw new Error("Rename preview tool options cannot combine a prebuilt session with buildOptions.");
-  }
+  assertNoPrebuiltSessionWithBuildOptions(runtimeOptions, "Rename preview tool options");
   const agentRequest: RenamePreviewRequest = {
     root,
     ...request,
@@ -469,9 +461,7 @@ export async function tool_buildRefactorPlan(
   request: Omit<RefactorPlanRequest, "root" | "buildOptions">,
   runtimeOptions: ToolRefactorPlanRuntimeOptions = {},
 ): Promise<RefactorPlanResponse> {
-  if (runtimeOptions.session && runtimeOptions.buildOptions) {
-    throw new Error("Refactor plan tool options cannot combine a prebuilt session with buildOptions.");
-  }
+  assertNoPrebuiltSessionWithBuildOptions(runtimeOptions, "Refactor plan tool options");
   const agentRequest: RefactorPlanRequest = {
     root,
     ...request,

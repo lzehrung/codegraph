@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 
 import {
@@ -10,7 +10,15 @@ import {
   MAX_SQLITE_ROW_LIMIT,
   SQLITE_TRUNCATED_MARKER,
 } from "../src/mcp/sqliteGuard.js";
-import { queryGraphSqliteRaw } from "../src/sqlite/query.js";
+import { queryGraphSqliteRaw, SqliteQueryDeadlineExceededError } from "../src/sqlite/query.js";
+
+// A deadline-exceeded query requests worker termination but, if it was blocked
+// inside a single synchronous native SQLite call, keeps running that call in the
+// background until it returns naturally (see rawQueryWorkerPool.ts). On Windows this can
+// hold the temp db file open for a short window after the deadline test's assertions
+// already ran. This is a real platform race (an actual lingering OS file lock, not
+// simulated timing logic), so it is retried against the real clock instead of being
+// modeled with fake timers.
 
 async function withTempDb(run: (dbPath: string) => Promise<void>): Promise<void> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sqlite-bounds-"));
@@ -18,11 +26,35 @@ async function withTempDb(run: (dbPath: string) => Promise<void>): Promise<void>
   try {
     await run(dbPath);
   } finally {
-    await fsp.rm(root, { recursive: true, force: true });
+    await removeWithRetry(root);
+  }
+}
+
+async function removeWithRetry(root: string): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    try {
+      await fsp.rm(root, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error)) throw error;
+      if (error.code !== "EBUSY" && error.code !== "ENOTEMPTY" && error.code !== "EPERM") throw error;
+      if (Date.now() > deadline) throw error;
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    }
   }
 }
 
 describe("SQLite query byte/cell bounds during iterate", () => {
+  it("retries Windows-style EPERM cleanup races", async () => {
+    const removeSpy = vi.spyOn(fsp, "rm").mockRejectedValueOnce(Object.assign(new Error("locked"), { code: "EPERM" }));
+    try {
+      await withTempDb(async () => {});
+      expect(removeSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      removeSpy.mockRestore();
+    }
+  });
   it("applies per-cell and cumulative caps before appending huge existing TEXT cells", async () => {
     await withTempDb(async (dbPath) => {
       const db = new DatabaseSync(dbPath);
@@ -100,5 +132,66 @@ describe("SQLite query byte/cell bounds during iterate", () => {
     for (const row of result.rows) {
       expect(String(row[0]).endsWith(SQLITE_TRUNCATED_MARKER)).toBe(true);
     }
+  });
+});
+
+describe("SQLite raw query execution deadline", () => {
+  it("rejects invalid deadlineMs values before selecting the worker execution path", async () => {
+    for (const deadlineMs of [NaN, -1, 1.5, 2_147_483_648, Infinity]) {
+      await expect(queryGraphSqliteRaw("missing.sqlite", "SELECT 1;", [], { deadlineMs })).rejects.toMatchObject({
+        name: "RangeError",
+        message: "SQLite query deadlineMs must be a non-negative integer no greater than 2147483647.",
+      });
+    }
+  });
+
+  it("terminates an over-budget query with a bounded error while a subsequent query on the same file still succeeds", async () => {
+    await withTempDb(async (dbPath) => {
+      const db = new DatabaseSync(dbPath);
+      db.exec("CREATE TABLE t (n INTEGER);");
+      db.prepare("INSERT INTO t (n) VALUES (?)").run(42);
+      db.close();
+
+      // The whole cost of this query is inside one synchronous native step (see
+      // rawQueryWorkerPool.ts): SQLite must finish counting before it can return the
+      // single aggregate row, so this reliably runs well past a short deadline without
+      // depending on machine speed for a *count* of loop iterations.
+      const slowSql =
+        "WITH RECURSIVE spin(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM spin WHERE x < 8000000) " +
+        "SELECT count(*) FROM spin;";
+
+      const start = Date.now();
+      await expect(queryGraphSqliteRaw(dbPath, slowSql, [], { deadlineMs: 100 })).rejects.toMatchObject({
+        name: "SqliteQueryDeadlineExceededError",
+        message: expect.stringMatching(/exceeded its 100ms execution budget/),
+      });
+      const elapsed = Date.now() - start;
+      // The caller is bounded by the deadline, not by how long the runaway query
+      // actually takes to finish in the background (calibrated well above 100ms).
+      expect(elapsed).toBeLessThan(2_000);
+
+      const result = await queryGraphSqliteRaw(dbPath, "SELECT n FROM t;", [], { deadlineMs: 5_000 });
+      expect(result.rows).toEqual([[42]]);
+      expect(result.truncated).toBeFalsy();
+    });
+  });
+
+  it("does not reject an ordinary query that finishes comfortably inside its deadline", async () => {
+    await withTempDb(async (dbPath) => {
+      const db = new DatabaseSync(dbPath);
+      db.exec("CREATE TABLE t (n INTEGER);");
+      db.prepare("INSERT INTO t (n) VALUES (?)").run(7);
+      db.close();
+
+      const result = await queryGraphSqliteRaw(dbPath, "SELECT n FROM t;", [], { deadlineMs: 5_000 });
+      expect(result.rows).toEqual([[7]]);
+    });
+  });
+
+  it("exposes SqliteQueryDeadlineExceededError as a named export for callers to distinguish deadline failures", () => {
+    const error = new SqliteQueryDeadlineExceededError(250);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.name).toBe("SqliteQueryDeadlineExceededError");
+    expect(error.message).toBe("SQLite query exceeded its 250ms execution budget; termination was requested.");
   });
 });

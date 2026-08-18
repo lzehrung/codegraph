@@ -290,9 +290,10 @@ Available presets:
 ### Managing multiple sessions
 
 ```ts
-import { SessionManager } from "@lzehrung/codegraph";
+import { SessionManager, type SessionManagerOptions } from "@lzehrung/codegraph";
 
-const manager = new SessionManager();
+const options: SessionManagerOptions = { maxSessions: 32 };
+const manager = new SessionManager(options);
 const pr1Session = await manager.getOrCreateSession("pr-123", {
   root: "/path/to/repo",
 });
@@ -306,7 +307,15 @@ const sameSession = await manager.getOrCreateSession("pr-123", {
 manager.cleanupExpired();
 const allStats = manager.getAllStats();
 console.log(Boolean(pr1Session), Boolean(pr2Session), Boolean(sameSession), allStats);
+
+manager.dispose();
 ```
+
+`SessionManager` defaults to 32 live or initializing sessions and scans for expired sessions every 60 seconds. Set `{ maxSessions, evictionIntervalMs }` to tune those bounds; `maxSessions` also applies to net-new `warmup()` sessions.
+
+- Capacity frees immediately after a ready session is disposed or expires, or after a canceled or failed initialization settles.
+- Set `evictionIntervalMs: 0` to disable periodic cleanup.
+- Call `manager.dispose()` when the manager is no longer needed; it disposes all sessions, stops the interval, and is terminal. `disposeAll()` remains reusable.
 
 ## Streaming impact analysis
 
@@ -336,6 +345,8 @@ for await (const chunk of analyzeImpactStreaming(root, index, {
   }
 }
 ```
+
+Handle `error` as terminal: an overfull bounded queue does not emit `complete`. Breaking iteration or calling `.return()` cancels background work at its next analysis boundary; a synchronous lookup already in progress cannot be interrupted.
 
 Use the same pattern through a warm session when repeated review passes matter:
 

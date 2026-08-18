@@ -1,8 +1,14 @@
 import { describe, test, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from "vitest";
-import type { ICodeReviewSession } from "../src/index.js";
+import type { ICodeReviewSession, SessionManagerOptions as PublicSessionManagerOptions } from "../src/index.js";
 import type { BuildOptions, BuildReport, LanguageExtensionMap } from "../src/indexer/types.js";
-import { CodeReviewSession, SessionManager, createCodeReviewSession } from "../src/session.js";
+import {
+  CodeReviewSession,
+  DEFAULT_SESSION_MANAGER_MAX_SESSIONS,
+  SessionManager,
+  createCodeReviewSession,
+} from "../src/session.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
+import * as navigation from "../src/indexer/navigation.js";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
@@ -1188,6 +1194,18 @@ describe("SessionManager", () => {
     manager = new SessionManager();
   });
 
+  afterEach(() => {
+    manager.dispose();
+  });
+
+  test("exports SessionManagerOptions from the package root", () => {
+    const options: PublicSessionManagerOptions = { evictionIntervalMs: 0, maxSessions: 1 };
+    const typedManager = new SessionManager(options);
+
+    expect(typedManager).toBeInstanceOf(SessionManager);
+    typedManager.dispose();
+  });
+
   test("should create and retrieve sessions", async () => {
     const session = await manager.getOrCreateSession("test-session", {
       root: sampleRoot,
@@ -1213,6 +1231,164 @@ describe("SessionManager", () => {
     });
 
     expect(session1).toBe(session2);
+  });
+
+  test("rejects a new session when configured capacity is exhausted", async () => {
+    const limitedManager = new SessionManager({ maxSessions: 1, evictionIntervalMs: 0 });
+    try {
+      await limitedManager.getOrCreateSession("first", {
+        root: sampleRoot,
+        buildOptions: sampleBuildOptions(),
+      });
+
+      await expect(
+        limitedManager.getOrCreateSession("second", {
+          root: sampleRoot,
+          buildOptions: sampleBuildOptions(),
+        }),
+      ).rejects.toThrow("Session capacity reached (1)");
+    } finally {
+      limitedManager.disposeAll();
+    }
+  });
+
+  test("enforces capacity when warming net-new sessions", async () => {
+    const limitedManager = new SessionManager({ maxSessions: 1, evictionIntervalMs: 0 });
+    try {
+      await limitedManager.getOrCreateSession("existing", {
+        root: sampleRoot,
+        buildOptions: sampleBuildOptions(),
+      });
+
+      await expect(
+        limitedManager.warmup([
+          {
+            id: "warm",
+            options: { root: sampleRoot, buildOptions: sampleBuildOptions() },
+          },
+        ]),
+      ).rejects.toThrow("Session capacity reached (1)");
+    } finally {
+      limitedManager.disposeAll();
+    }
+  });
+
+  test("reclaims expired warmup replacements before reserving capacity", async () => {
+    const limitedManager = new SessionManager({ maxSessions: 1, evictionIntervalMs: 0 });
+    const options = { root: sampleRoot, buildOptions: sampleBuildOptions() };
+    const existing = await limitedManager.getOrCreateSession("existing", options);
+    existing.dispose();
+    const originalBuild = indexerBuild.buildProjectIndexIncremental;
+    const buildStarted = Promise.withResolvers<void>();
+    const releaseBuild = Promise.withResolvers<void>();
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      buildStarted.resolve();
+      await releaseBuild.promise;
+      return await originalBuild(...args);
+    });
+
+    try {
+      const warmup = limitedManager.warmup([{ id: "existing", options }]);
+      await buildStarted.promise;
+
+      const sessionCount = Reflect.get(limitedManager, "sessions").size;
+      const pendingCount = Reflect.get(limitedManager, "pendingSessions").size;
+      expect(sessionCount + pendingCount).toBe(1);
+
+      releaseBuild.resolve();
+      await warmup;
+      expect(limitedManager.getSession("existing")).not.toBe(existing);
+    } finally {
+      releaseBuild.resolve();
+      buildSpy.mockRestore();
+      limitedManager.disposeAll();
+    }
+  });
+  test("retains failed warmup capacity until initialization settles", async () => {
+    const limitedManager = new SessionManager({ maxSessions: 1, evictionIntervalMs: 0 });
+    const originalBuild = indexerBuild.buildProjectIndexIncremental;
+    const buildStarted = Promise.withResolvers<void>();
+    const releaseBuild = Promise.withResolvers<void>();
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      buildStarted.resolve();
+      await releaseBuild.promise;
+      return await originalBuild(...args);
+    });
+
+    try {
+      const warmup = expect(
+        limitedManager.warmup([
+          {
+            id: "warm-a",
+            options: { root: sampleRoot, buildOptions: sampleBuildOptions() },
+          },
+          {
+            id: "warm-b",
+            options: { root: sampleRoot, buildOptions: sampleBuildOptions() },
+          },
+        ]),
+      ).rejects.toThrow("Session capacity reached (1)");
+      await buildStarted.promise;
+      await warmup;
+
+      await expect(
+        limitedManager.getOrCreateSession("after-failed-warmup", {
+          root: sampleRoot,
+          buildOptions: sampleBuildOptions(),
+        }),
+      ).rejects.toThrow("Session capacity reached (1)");
+
+      releaseBuild.resolve();
+      await vi.waitFor(() => {
+        expect(Reflect.get(limitedManager, "pendingSessions").size).toBe(0);
+      });
+      await expect(
+        limitedManager.getOrCreateSession("after-failed-warmup", {
+          root: sampleRoot,
+          buildOptions: sampleBuildOptions(),
+        }),
+      ).resolves.toBeInstanceOf(CodeReviewSession);
+    } finally {
+      releaseBuild.resolve();
+      buildSpy.mockRestore();
+      limitedManager.disposeAll();
+    }
+  });
+
+  test("releases failed warmup capacity after initialization rejects", async () => {
+    const limitedManager = new SessionManager({ maxSessions: 1, evictionIntervalMs: 0 });
+    const missingRoot = path.join(os.tmpdir(), `cg-session-warmup-missing-${Date.now()}`);
+    try {
+      await expect(
+        limitedManager.warmup([
+          {
+            id: "broken",
+            options: { root: missingRoot, buildOptions: sampleBuildOptions() },
+          },
+        ]),
+      ).rejects.toThrow();
+
+      await vi.waitFor(() => {
+        expect(Reflect.get(limitedManager, "pendingSessions").size).toBe(0);
+      });
+      await expect(
+        limitedManager.getOrCreateSession("after-failed-init", {
+          root: sampleRoot,
+          buildOptions: sampleBuildOptions(),
+        }),
+      ).resolves.toBeInstanceOf(CodeReviewSession);
+    } finally {
+      limitedManager.disposeAll();
+    }
+  });
+
+  test("falls back to default capacity when maxSessions is NaN", async () => {
+    const nanManager = new SessionManager({ maxSessions: Number.NaN, evictionIntervalMs: 0 });
+    try {
+      expect(Reflect.get(nanManager, "maxSessions")).toBe(DEFAULT_SESSION_MANAGER_MAX_SESSIONS);
+    } finally {
+      nanManager.disposeAll();
+    }
   });
 
   test("should share one initialization across concurrent same-id creation", async () => {
@@ -1268,7 +1444,8 @@ describe("SessionManager", () => {
     }
   });
 
-  test("should allow immediate recreation after disposing a pending session", async () => {
+  test("retains pending initialization capacity after disposal until it settles", async () => {
+    const limitedManager = new SessionManager({ maxSessions: 1, evictionIntervalMs: 0 });
     const originalBuild = indexerBuild.buildProjectIndexIncremental;
     let releaseBuild: (() => void) | null = null;
     const buildGate = new Promise<void>((resolve) => {
@@ -1280,31 +1457,42 @@ describe("SessionManager", () => {
     });
 
     try {
-      const firstSession = manager.getOrCreateSession("pending", {
+      const firstSession = limitedManager.getOrCreateSession("pending", {
         root: sampleRoot,
         buildOptions: sampleBuildOptions(),
       });
 
       await Promise.resolve();
-      manager.disposeSession("pending");
-      const secondSession = manager.getOrCreateSession("pending", {
+      limitedManager.disposeSession("pending");
+      await expect(
+        limitedManager.getOrCreateSession("pending", {
+          root: sampleRoot,
+          buildOptions: sampleBuildOptions(),
+        }),
+      ).rejects.toThrow(/still cancelling initialization/);
+      await expect(
+        limitedManager.getOrCreateSession("replacement", {
+          root: sampleRoot,
+          buildOptions: sampleBuildOptions(),
+        }),
+      ).rejects.toThrow("Session capacity reached (1)");
+
+      releaseBuild?.();
+      await expect(firstSession).rejects.toThrow(/disposed during initialization/);
+
+      const replacement = await limitedManager.getOrCreateSession("replacement", {
         root: sampleRoot,
         buildOptions: sampleBuildOptions(),
       });
-      releaseBuild?.();
-
-      await expect(firstSession).rejects.toThrow(/disposed during initialization/);
-      await expect(secondSession).resolves.toMatchObject({
-        getStatus: expect.any(Function),
-      });
-      expect((await secondSession).getStatus()).toBe("ready");
-      expect(manager.getSession("pending")).toBe(await secondSession);
+      expect(replacement.getStatus()).toBe("ready");
     } finally {
       buildSpy.mockRestore();
+      limitedManager.disposeAll();
     }
   });
 
-  test("should allow immediate recreation after disposeAll cancels a pending session", async () => {
+  test("retains pending initialization capacity after disposeAll until it settles", async () => {
+    const limitedManager = new SessionManager({ maxSessions: 1, evictionIntervalMs: 0 });
     const originalBuild = indexerBuild.buildProjectIndexIncremental;
     let releaseBuild: (() => void) | null = null;
     const buildGate = new Promise<void>((resolve) => {
@@ -1316,27 +1504,31 @@ describe("SessionManager", () => {
     });
 
     try {
-      const firstSession = manager.getOrCreateSession("pending", {
+      const firstSession = limitedManager.getOrCreateSession("pending", {
         root: sampleRoot,
         buildOptions: sampleBuildOptions(),
       });
 
       await Promise.resolve();
-      manager.disposeAll();
-      const secondSession = manager.getOrCreateSession("pending", {
+      limitedManager.disposeAll();
+      await expect(
+        limitedManager.getOrCreateSession("replacement", {
+          root: sampleRoot,
+          buildOptions: sampleBuildOptions(),
+        }),
+      ).rejects.toThrow("Session capacity reached (1)");
+
+      releaseBuild?.();
+      await expect(firstSession).rejects.toThrow(/disposed during initialization/);
+
+      const replacement = await limitedManager.getOrCreateSession("replacement", {
         root: sampleRoot,
         buildOptions: sampleBuildOptions(),
       });
-      releaseBuild?.();
-
-      await expect(firstSession).rejects.toThrow(/disposed during initialization/);
-      await expect(secondSession).resolves.toMatchObject({
-        getStatus: expect.any(Function),
-      });
-      expect((await secondSession).getStatus()).toBe("ready");
-      expect(manager.getSession("pending")).toBe(await secondSession);
+      expect(replacement.getStatus()).toBe("ready");
     } finally {
       buildSpy.mockRestore();
+      limitedManager.disposeAll();
     }
   });
 
@@ -1558,6 +1750,41 @@ describe("SessionManager", () => {
     manager.disposeAll();
 
     expect(manager.getSessionIds()).toHaveLength(0);
+  });
+
+  test("keeps periodic expiration cleanup after disposeAll", () => {
+    vi.useFakeTimers();
+    const reusableManager = new SessionManager({ evictionIntervalMs: 10 });
+    const cleanupSpy = vi.spyOn(reusableManager, "cleanupExpired");
+
+    try {
+      reusableManager.disposeAll();
+      vi.advanceTimersByTime(10);
+      expect(cleanupSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.clearAllTimers();
+    }
+  });
+
+  test("stops periodic cleanup and prevents reuse after terminal disposal", async () => {
+    vi.useFakeTimers();
+    const disposableManager = new SessionManager({ evictionIntervalMs: 10 });
+    const cleanupSpy = vi.spyOn(disposableManager, "cleanupExpired");
+
+    try {
+      disposableManager.dispose();
+      vi.advanceTimersByTime(10);
+      expect(cleanupSpy).not.toHaveBeenCalled();
+      await expect(
+        disposableManager.getOrCreateSession("replacement", {
+          root: sampleRoot,
+          buildOptions: sampleBuildOptions(),
+        }),
+      ).rejects.toThrow("Session manager is disposed.");
+      await expect(disposableManager.warmup([])).rejects.toThrow("Session manager is disposed.");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("should cleanup expired sessions", async () => {
@@ -1809,5 +2036,72 @@ describe("SessionManager", () => {
     ]);
 
     expect(manager.getSession("shared")).toBe(existing);
+  });
+});
+
+describe("CodeReviewSession impact stream cancellation", () => {
+  test("stops the background analyzer once a session.analyzeImpactStream consumer abandons the stream", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-impact-stream-cancel-"));
+    try {
+      const symbolCount = 40;
+      const lines = Array.from({ length: symbolCount }, (_, i) => `export function fn${i}() { return ${i}; }`);
+      await fsp.writeFile(path.join(root, "feature.ts"), `${lines.join("\n")}\n`, "utf8");
+      const hunks = lines
+        .map((line, i) => {
+          const updated = line.replace(`return ${i};`, `return ${i + 1000};`);
+          return `@@ -${i + 1} +${i + 1} @@\n-${line}\n+${updated}\n`;
+        })
+        .join("");
+      const diffText = `diff --git a/feature.ts b/feature.ts
+index 1234567..abcdef0 100644
+--- a/feature.ts
++++ b/feature.ts
+${hunks}`;
+
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      const findReferencesSpy = vi.spyOn(navigation, "findReferences");
+      try {
+        let sawImpactItem = false;
+        for await (const chunk of session.analyzeImpactStream({ provider: "raw", diffText })) {
+          if (chunk.type === "impactItem") {
+            sawImpactItem = true;
+            break;
+          }
+        }
+        expect(sawImpactItem).toBe(true);
+
+        // session.analyzeImpactStream is `yield* analyzeImpactStreaming(...)`: this proves
+        // that delegation forwards the consumer's early `break` (an async-generator
+        // `.return()` call) through to the inner generator without any extra plumbing.
+        // Poll instead of a fixed sleep: the abandoned background chain settles
+        // asynchronously and this test holds no promise handle for it.
+        const deadline = Date.now() + 5_000;
+        let lastCount = findReferencesSpy.mock.calls.length;
+        let lastChangeAt = Date.now();
+        while (Date.now() < deadline && Date.now() - lastChangeAt < 150) {
+          const { promise, resolve } = Promise.withResolvers<void>();
+          setTimeout(resolve, 20);
+          await promise;
+          const count = findReferencesSpy.mock.calls.length;
+          if (count !== lastCount) {
+            lastCount = count;
+            lastChangeAt = Date.now();
+          }
+        }
+
+        expect(lastCount).toBeGreaterThan(0);
+        // Changed symbols are analyzed in fixed batches of 8 (IMPACT_SYMBOL_BATCH_SIZE);
+        // cancelling mid-first-batch must prevent every later batch from ever starting.
+        expect(lastCount).toBeLessThan(symbolCount / 2);
+      } finally {
+        findReferencesSpy.mockRestore();
+        session.dispose();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });

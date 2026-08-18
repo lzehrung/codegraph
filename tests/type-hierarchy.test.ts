@@ -205,4 +205,36 @@ describe("type hierarchy", () => {
       reason: expect.stringContaining("abstract"),
     });
   });
+  it("pins omission counts at and just past the limit for type hierarchy and implementations", async () => {
+    const { index, graph, byName } = await hierarchyFixture();
+    const specialized = byName.get("SpecializedWorker");
+    expect(specialized).toBeDefined();
+
+    const atSuperLimit = findTypeHierarchy(graph, specialized!.id, "super", { depth: 3, limit: 3 });
+    expect(atSuperLimit).toMatchObject({ status: "ok", omitted: 0 });
+    if (atSuperLimit.status === "ok") {
+      expect(atSuperLimit.relations).toHaveLength(3);
+    }
+
+    const pastSuperLimit = findTypeHierarchy(graph, specialized!.id, "super", { depth: 3, limit: 2 });
+    expect(pastSuperLimit).toMatchObject({ status: "ok", omitted: 1 });
+    if (pastSuperLimit.status === "ok") {
+      expect(pastSuperLimit.relations).toHaveLength(2);
+    }
+
+    const service = byName.get("Service");
+    expect(service).toBeDefined();
+
+    const atImplLimit = findImplementations(index, graph, service!.id, { limit: 2 });
+    expect(atImplLimit).toMatchObject({ status: "ok", omitted: 0 });
+    if (atImplLimit.status === "ok") {
+      expect(atImplLimit.implementations).toHaveLength(2);
+    }
+
+    const pastImplLimit = findImplementations(index, graph, service!.id, { limit: 1 });
+    expect(pastImplLimit).toMatchObject({ status: "ok", omitted: 1 });
+    if (pastImplLimit.status === "ok") {
+      expect(pastImplLimit.implementations).toHaveLength(1);
+    }
+  });
 });

@@ -207,6 +207,8 @@ const NATURAL_LANGUAGE_SYNTAX_TERMS = new Set([
   "or",
 ]);
 const SEARCH_CACHES = new WeakMap<AgentProjectSnapshot, SearchCache>();
+// A fixed ceiling prevents client-supplied query keys retaining an unbounded session heap.
+const SESSION_SEARCH_CACHE_MAX_ENTRIES = 100;
 const SEARCH_RESULT_CACHES = new WeakMap<AgentSession, Map<string, Promise<AgentSearchResponse>>>();
 const SEARCH_RANKING_VERSION = 2;
 
@@ -239,6 +241,7 @@ export async function searchCodegraphWithSession(
   const cacheKey = searchResultCacheKey(snapshot, request);
   const existing = resultCache.get(cacheKey);
   if (existing) {
+    promoteSessionSearchResult(resultCache, cacheKey, existing);
     const response = await existing;
     if (response.query === request.query) return response;
     return { ...response, query: request.query };
@@ -250,7 +253,7 @@ export async function searchCodegraphWithSession(
     queryIndex = await ensureSessionQueryIndex(session, snapshot);
   }
   const search = searchSnapshot(snapshot, request, queryIndex);
-  resultCache.set(cacheKey, search);
+  promoteSessionSearchResult(resultCache, cacheKey, search);
   search.catch(() => {
     if (resultCache.get(cacheKey) === search) resultCache.delete(cacheKey);
   });
@@ -355,6 +358,20 @@ function getSessionSearchResultCache(session: AgentSession): Map<string, Promise
   SEARCH_RESULT_CACHES.set(session, created);
   registerSessionInvalidationHook(session, () => SEARCH_RESULT_CACHES.delete(session));
   return created;
+}
+
+function promoteSessionSearchResult(
+  cache: Map<string, Promise<AgentSearchResponse>>,
+  key: string,
+  result: Promise<AgentSearchResponse>,
+): void {
+  cache.delete(key);
+  cache.set(key, result);
+  while (cache.size > SESSION_SEARCH_CACHE_MAX_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) return;
+    cache.delete(oldest);
+  }
 }
 
 function searchResultCacheKey(snapshot: AgentProjectSnapshot, request: AgentSearchRequest): string {

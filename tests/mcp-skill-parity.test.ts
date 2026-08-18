@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { MCP_TOOLS } from "../src/mcp/tools.js";
+import { listCodegraphMcpTools } from "../src/mcp/tools.js";
 
 const LEGACY_ALIAS_NAMES = new Set(["callers", "callees", "supertypes", "subtypes", "deps", "rdeps"]);
 
@@ -18,7 +18,7 @@ describe("MCP / SKILL inventory parity", () => {
       [...(inventoryLine?.matchAll(/`([a-z][a-z0-9_]*)`/g) ?? [])].map((match) => match[1]!).filter(Boolean),
     );
 
-    for (const tool of MCP_TOOLS) {
+    for (const tool of listCodegraphMcpTools()) {
       expect(LEGACY_ALIAS_NAMES.has(tool.name)).toBe(false);
       expect(listed.has(tool.name), `${tool.name} missing from SKILL MCP inventory`).toBe(true);
     }

@@ -201,64 +201,74 @@ async function writeGeneratedGraphResponse(
   }
 }
 
+function writeViewerRequestError(response: http.ServerResponse): void {
+  if (response.writableEnded) return;
+  if (!response.headersSent) response.writeHead(500);
+  response.end();
+}
+
 function viewerRequestHandler(
   options: ResolvedViewerOptions,
   getAllowedHostHeaders: () => AllowedHostHeaderRules,
 ): http.RequestListener {
   return (request, response) => {
-    if (!isAllowedHostHeader(request, getAllowedHostHeaders())) {
-      response.writeHead(403);
-      response.end();
-      return;
-    }
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      response.writeHead(405, { Allow: "GET, HEAD" });
-      response.end();
-      return;
-    }
-
-    const rawPathname = (request.url ?? "/").split(/[?#]/, 1)[0] ?? "/";
     try {
-      if (
-        decodeURIComponent(rawPathname)
-          .split("/")
-          .some((segment) => segment === "..")
-      ) {
+      if (!isAllowedHostHeader(request, getAllowedHostHeaders())) {
+        response.writeHead(403);
+        response.end();
+        return;
+      }
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        response.writeHead(405, { Allow: "GET, HEAD" });
+        response.end();
+        return;
+      }
+
+      const rawPathname = (request.url ?? "/").split(/[?#]/, 1)[0] ?? "/";
+      try {
+        if (
+          decodeURIComponent(rawPathname)
+            .split("/")
+            .some((segment) => segment === "..")
+        ) {
+          response.writeHead(404);
+          response.end();
+          return;
+        }
+      } catch {
         response.writeHead(404);
         response.end();
         return;
       }
+
+      const pathname = new URL(request.url ?? "/", "http://viewer.local").pathname;
+      if (pathname === "/graph.json") {
+        if (options.graphFile) {
+          writeFileResponse(
+            request,
+            response,
+            options.graphFile.path,
+            "application/json; charset=utf-8",
+            options.graphFile.fileDescriptor,
+          );
+          return;
+        }
+        if (options.graphProvider) {
+          void writeGeneratedGraphResponse(request, response, options.graphProvider);
+          return;
+        }
+      }
+
+      const asset = VIEWER_ASSETS[pathname];
+      if (!asset) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      writeFileResponse(request, response, path.join(options.assetRoot, asset.file), asset.contentType);
     } catch {
-      response.writeHead(404);
-      response.end();
-      return;
+      writeViewerRequestError(response);
     }
-
-    const pathname = new URL(request.url ?? "/", "http://viewer.local").pathname;
-    if (pathname === "/graph.json") {
-      if (options.graphFile) {
-        writeFileResponse(
-          request,
-          response,
-          options.graphFile.path,
-          "application/json; charset=utf-8",
-          options.graphFile.fileDescriptor,
-        );
-        return;
-      }
-      if (options.graphProvider) {
-        void writeGeneratedGraphResponse(request, response, options.graphProvider);
-        return;
-      }
-    }
-
-    const asset = VIEWER_ASSETS[pathname];
-    if (!asset) {
-      response.writeHead(404);
-      response.end();
-      return;
-    }
-    writeFileResponse(request, response, path.join(options.assetRoot, asset.file), asset.contentType);
   };
 }
 

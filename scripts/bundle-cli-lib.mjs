@@ -12,10 +12,12 @@ export function getBundlePaths(rootDir = defaultRootDir) {
     rootDir,
     entryPoint: path.join(rootDir, "dist", "cliBootstrap.js"),
     workerEntryPoint: path.join(rootDir, "dist", "agent", "query-index", "queryIndexWorker.js"),
+    rawQueryWorkerEntryPoint: path.join(rootDir, "dist", "sqlite", "rawQueryWorker.js"),
     unbundledCli: path.join(rootDir, "dist", "cli.js"),
     outdir: path.join(rootDir, "dist", "bin"),
     bundledEntry: path.join(rootDir, "dist", "bin", "cli.js"),
     bundledWorker: path.join(rootDir, "dist", "bin", "queryIndexWorker.js"),
+    bundledRawQueryWorker: path.join(rootDir, "dist", "bin", "rawQueryWorker.js"),
   };
 }
 
@@ -37,12 +39,21 @@ export async function bundleCli({ rootDir = defaultRootDir, logLevel = "warning"
   if (!fs.existsSync(paths.workerEntryPoint)) {
     throw new Error(`Missing query worker build input: ${paths.workerEntryPoint}. Run tsc before bundling.`);
   }
+  if (!fs.existsSync(paths.rawQueryWorkerEntryPoint)) {
+    throw new Error(
+      `Missing raw SQLite worker build input: ${paths.rawQueryWorkerEntryPoint}. Run tsc before bundling.`,
+    );
+  }
 
   fs.rmSync(paths.outdir, { recursive: true, force: true });
   fs.mkdirSync(paths.outdir, { recursive: true });
 
   const result = await esbuild.build({
-    entryPoints: { cli: paths.entryPoint, queryIndexWorker: paths.workerEntryPoint },
+    entryPoints: {
+      cli: paths.entryPoint,
+      queryIndexWorker: paths.workerEntryPoint,
+      rawQueryWorker: paths.rawQueryWorkerEntryPoint,
+    },
     bundle: true,
     platform: "node",
     format: "esm",
@@ -59,7 +70,7 @@ export async function bundleCli({ rootDir = defaultRootDir, logLevel = "warning"
   });
 
   const outputFiles = Object.keys(result.metafile.outputs).sort();
-  const selfContainedEntries = new Set([paths.bundledEntry, paths.bundledWorker]);
+  const selfContainedEntries = new Set([paths.bundledEntry, paths.bundledWorker, paths.bundledRawQueryWorker]);
   const unexpectedOutputs = outputFiles.filter((file) => !selfContainedEntries.has(path.resolve(file)));
   if (unexpectedOutputs.length) {
     throw new Error(
@@ -72,6 +83,9 @@ export async function bundleCli({ rootDir = defaultRootDir, logLevel = "warning"
   }
   if (!fs.existsSync(paths.bundledWorker)) {
     throw new Error(`Bundled query worker was not written to ${paths.bundledWorker}`);
+  }
+  if (!fs.existsSync(paths.bundledRawQueryWorker)) {
+    throw new Error(`Bundled raw SQLite worker was not written to ${paths.bundledRawQueryWorker}`);
   }
 
   return {
