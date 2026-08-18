@@ -1,8 +1,18 @@
 import { duplicateIdentifierKeywords } from "./duplicate-keywords.js";
+import { ECMASCRIPT_IDENTIFIER_SOURCE } from "./util/identifiers.js";
 
-const duplicateTokenPattern =
-  /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[A-Za-z_$][\w$]*|\d+(?:\.\d+)?|[^\s]/g;
-const identifierTokenPattern = /^[A-Za-z_$][\w$]*$/;
+const duplicateTokenPattern = new RegExp(
+  [
+    String.raw`"(?:\\.|[^"\\])*"`,
+    String.raw`'(?:\\.|[^'\\])*'`,
+    "`(?:\\\\.|[^`\\\\])*`",
+    ECMASCRIPT_IDENTIFIER_SOURCE,
+    String.raw`\d+(?:\.\d+)?`,
+    String.raw`[^\s]`,
+  ].join("|"),
+  "gu",
+);
+const identifierTokenPattern = new RegExp(String.raw`^${ECMASCRIPT_IDENTIFIER_SOURCE}$`, "u");
 
 export function tokenizeDuplicateSource(text: string): string[] {
   return text.match(duplicateTokenPattern) ?? [];

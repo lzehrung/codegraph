@@ -8,7 +8,11 @@ import { captureCli, runCliOrThrow } from "./helpers/cli.js";
 import { runCli } from "../src/cli.js";
 import { appendDuplicateLeadSummary, collectDuplicateLeadSummary } from "../src/duplicatesLeads.js";
 import { buildProjectIndex, findDuplicateContext, findDuplicateContexts, findDuplicates } from "../src/index.js";
-import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
+import {
+  getNativeDuplicateTokens,
+  isNativeDuplicateTokenizationAvailable,
+  isNativeTreeSitterAvailable,
+} from "../src/native/treeSitterNative.js";
 import { DUPLICATE_IDENTIFIER_KEYWORDS } from "../src/duplicate-keywords.js";
 import { normalizeDuplicateSourceTokens } from "../src/duplicate-token-normalization.js";
 import { getDuplicateAstContext } from "../src/duplicates/units.js";
@@ -504,12 +508,62 @@ export function normalizeSecondRows(rows: Array<{ count: number; price: number }
   });
 
   test("TypeScript duplicate normalization still collapses non-keyword identifiers", () => {
-    expect(normalizeDuplicateSourceTokens("userName _private $value Widget42")).toEqual([
+    expect(normalizeDuplicateSourceTokens("userName _private $value Widget42 café cafe\u0301 αβγ")).toEqual([
+      "<identifier>",
+      "<identifier>",
+      "<identifier>",
       "<identifier>",
       "<identifier>",
       "<identifier>",
       "<identifier>",
     ]);
+  });
+
+  test("TypeScript duplicate normalization collapses Unicode identifiers without leaking text", () => {
+    const ascii = normalizeDuplicateSourceTokens("function foo(x) { return foo; }");
+    const unicodeNfc = normalizeDuplicateSourceTokens("function café(x) { return café; }");
+    const unicodeGreek = normalizeDuplicateSourceTokens("function αβγ(x) { return αβγ; }");
+    const unicodeNfd = normalizeDuplicateSourceTokens("cafe\u0301");
+    const otherIdStart = normalizeDuplicateSourceTokens("function \u2118(x) { return \u2118; }");
+    const zwnj = normalizeDuplicateSourceTokens("a\u200Cb");
+
+    expect(unicodeNfc).toEqual([
+      "function",
+      "<identifier>",
+      "(",
+      "<identifier>",
+      ")",
+      "{",
+      "return",
+      "<identifier>",
+      ";",
+      "}",
+    ]);
+    expect(unicodeNfd).toEqual(["<identifier>"]);
+    expect(otherIdStart).toEqual(ascii);
+    expect(zwnj).toEqual(["<identifier>"]);
+    expect(ascii).toEqual(unicodeNfc);
+    expect(ascii).toEqual(unicodeGreek);
+    expect(unicodeNfc.join(" ")).not.toMatch(/café|cafe|αβγ/i);
+    expect(otherIdStart.join(" ")).not.toMatch(/\u2118/);
+  });
+
+  test("native and TypeScript Unicode duplicate tokenization stay in sync", () => {
+    if (!isNativeDuplicateTokenizationAvailable("auto")) return;
+    const samples = [
+      "function café(x) { return café; }",
+      "cafe\u0301",
+      "userName _private $value Widget42 café cafe\u0301 αβγ",
+      "if left and right { delete cache; }",
+      "function \u2118(x) { return \u2118; }",
+      "a\u200Cb",
+      "\u2118\u200C\u00B7",
+    ];
+    for (const sample of samples) {
+      const native = getNativeDuplicateTokens(sample, "auto");
+      expect(native).not.toBeNull();
+      expect(native?.normalizedTokens).toEqual(normalizeDuplicateSourceTokens(sample));
+    }
   });
 
   test("adds stable handles to duplicate units", async () => {
