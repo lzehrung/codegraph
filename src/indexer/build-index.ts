@@ -650,11 +650,13 @@ async function buildIndexFromFileListShared(
   const implementationChanged = manifestOptionDiffs.includes("implementation");
   let resolverEnvironmentFingerprint: string | null | undefined;
   let resolverEnvironmentMatchesManifest = true;
-  if (useManifest && graphOptions.resolveNodeModules) {
+  if (cacheEnabled && graphOptions.resolveNodeModules) {
     resolverEnvironmentFingerprint = await computeResolverEnvironmentFingerprint(projectRoot, normalizedFiles);
-    resolverEnvironmentMatchesManifest =
-      resolverEnvironmentFingerprint !== null &&
-      manifest?.resolverEnvironmentFingerprint === resolverEnvironmentFingerprint;
+    if (useManifest) {
+      resolverEnvironmentMatchesManifest =
+        resolverEnvironmentFingerprint !== null &&
+        manifest?.resolverEnvironmentFingerprint === resolverEnvironmentFingerprint;
+    }
   }
   if (timings && useManifest) {
     timings.manifestMs = Math.round(performance.now() - manifestStart);

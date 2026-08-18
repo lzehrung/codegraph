@@ -3009,6 +3009,52 @@ describe("Cache invalidation and strict hashing", () => {
     }
   });
 
+  it("refreshes memory-cached node-module edges when an installed package manifest changes", async () => {
+    const root = await mkTmpDir("dg-node-modules-memory-refresh-");
+    const entryFile = path.join(root, "entry.ts");
+    const packageDir = path.join(root, "node_modules", "example-package");
+    const packageJson = path.join(packageDir, "package.json");
+    const firstEntry = path.join(packageDir, "first.js");
+    const replacementEntry = path.join(packageDir, "replacement.js");
+    try {
+      await fsp.mkdir(packageDir, { recursive: true });
+      await fsp.writeFile(entryFile, 'import { value } from "example-package";\nexport { value };\n', "utf8");
+      await fsp.writeFile(packageJson, JSON.stringify({ main: "./first.js" }), "utf8");
+      await fsp.writeFile(firstEntry, "export const value = 1;\n", "utf8");
+      await fsp.writeFile(replacementEntry, "export const value = 2;\n", "utf8");
+
+      await buildProjectIndex(root, { cache: "memory", threads: 1, graph: { resolveNodeModules: true } });
+      await fsp.writeFile(packageJson, JSON.stringify({ main: "./replacement.js" }), "utf8");
+
+      const report: BuildReport = { timings: {} };
+      const refreshed = await buildProjectIndex(root, {
+        cache: "memory",
+        threads: 1,
+        graph: { resolveNodeModules: true },
+        report,
+      });
+
+      expect(report.files?.parsed).toBe(1);
+      expect(
+        refreshed.graph.edges.some(
+          (edge) =>
+            edge.from === normalize(entryFile) &&
+            edge.to.type === "file" &&
+            edge.to.path === normalize(replacementEntry),
+        ),
+      ).toBe(true);
+      expect(
+        refreshed.graph.edges.some(
+          (edge) =>
+            edge.from === normalize(entryFile) && edge.to.type === "file" && edge.to.path === normalize(firstEntry),
+        ),
+      ).toBe(false);
+    } finally {
+      buildCache.clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("refreshes resolved node-module edges when an installed package manifest changes", async () => {
     const root = await mkTmpDir("dg-node-modules-refresh-");
     const entryFile = path.join(root, "entry.ts");
