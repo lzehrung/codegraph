@@ -10,7 +10,7 @@ import {
   memberAccessTraversalTypes,
 } from "../util/memberAccess.js";
 import { CSHARP_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE } from "../util/identifiers.js";
-import { ensureParsedContext } from "./parse-context.js";
+import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
 import type { GoToResult, ModuleIndex, ProjectIndex, ResolvedExport, SymbolDef } from "./types.js";
@@ -187,10 +187,18 @@ export async function resolveMemberAccessDefinition(params: {
       if (container) {
         const targetModule = index.byFile.get(fileIdentityKey(objDef.file));
         if (targetModule) {
+          const normalizeIdentifier = targetContext.sup.normalizeIdentifier;
           const memberDef =
             targetContext.sup.id === "java"
-              ? findDirectLocalWithinNode(targetModule.locals, member, container, targetContext)
-              : findReceiverMemberDefinition(targetModule.locals, member, objDef, container, targetContext);
+              ? findDirectLocalWithinNode(targetModule.locals, member, container, targetContext, normalizeIdentifier)
+              : findReceiverMemberDefinition(
+                  targetModule.locals,
+                  member,
+                  objDef,
+                  container,
+                  targetContext,
+                  normalizeIdentifier,
+                );
 
           if (memberDef) {
             return okGoToResult(index, memberDef, {
@@ -567,10 +575,24 @@ async function resolveMemberDefinitionForBase(
   if (!container) return undefined;
   const targetModule = index.byFile.get(fileIdentityKey(baseDef.file));
   if (!targetModule) return undefined;
-  const directHit = findDirectLocalWithinNode(targetModule.locals, member, container, targetContext);
+  const normalizeIdentifier = targetContext.sup.normalizeIdentifier;
+  const directHit = findDirectLocalWithinNode(
+    targetModule.locals,
+    member,
+    container,
+    targetContext,
+    normalizeIdentifier,
+  );
   if (directHit) return directHit;
   if (targetContext.sup.id === "java") return undefined;
-  return findReceiverMemberDefinition(targetModule.locals, member, baseDef, container, targetContext);
+  return findReceiverMemberDefinition(
+    targetModule.locals,
+    member,
+    baseDef,
+    container,
+    targetContext,
+    normalizeIdentifier,
+  );
 }
 
 function findReceiverMemberDefinition(
@@ -578,14 +600,15 @@ function findReceiverMemberDefinition(
   member: string,
   receiverDef: SymbolDef,
   container: SyntaxNodeLike,
-  targetContext: Awaited<ReturnType<typeof ensureParsedContext>>,
+  targetContext: ParsedFileContext,
+  normalizeIdentifier: (name: string) => string,
 ): SymbolDef | undefined {
-  const containerHit = findLocalWithinNode(locals, member, container);
+  const containerHit = findLocalWithinNode(locals, member, container, normalizeIdentifier);
   if (containerHit) return containerHit;
   if (targetContext.sup.id !== "rust") return undefined;
 
   const implNode = findRustImplForType(targetContext.tree.rootNode, receiverDef.localName, targetContext.source);
-  return implNode ? findLocalWithinNode(locals, member, implNode) : undefined;
+  return implNode ? findLocalWithinNode(locals, member, implNode, normalizeIdentifier) : undefined;
 }
 
 function findLocalWithinNode(
@@ -634,15 +657,17 @@ function findDirectLocalWithinNode(
   locals: readonly SymbolDef[],
   member: string,
   container: SyntaxNodeLike,
-  targetContext: Awaited<ReturnType<typeof ensureParsedContext>>,
+  targetContext: ParsedFileContext,
+  normalizeIdentifier: (name: string) => string,
 ): SymbolDef | undefined {
   const containerStart = container.startIndex;
   const containerEnd = container.endIndex;
+  const normalizedMember = normalizeIdentifier(member);
   for (const local of locals) {
     const startIndex = local.range.start.index;
     const endIndex = local.range.end.index;
     if (
-      local.localName !== member ||
+      normalizeIdentifier(local.localName) !== normalizedMember ||
       startIndex === undefined ||
       endIndex === undefined ||
       startIndex < containerStart ||

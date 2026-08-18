@@ -12,6 +12,8 @@ import {
 } from "../src/util.js";
 import { loadPhpComposerConfig } from "../src/util/resolution/phpComposer.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import { resolveExport } from "../src/indexer/navigation-resolve.js";
+import { createTestIndexFromFiles } from "./test-utils.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -1887,5 +1889,19 @@ describe("Import Resolution", () => {
     await expect(
       resolveSpecifier(sourceFile, "@scope/library/private", root, undefined, workspaceConfig),
     ).resolves.toEqual({ external: "@scope/library/private" });
+  });
+  it("reports ambiguity for C# exports that differ only by a verbatim prefix", async () => {
+    const samplePath = path.resolve(process.cwd(), "tests", "samples", "csharp", ".regressions");
+    const file = path.join(samplePath, "unicode_ambiguous_exports.cs").replace(/\\/g, "/");
+    const index = await createTestIndexFromFiles(samplePath, [file]);
+    const module = index.byFile.get(fileIdentityKey(file));
+
+    expect(
+      module?.exports
+        .filter((entry) => entry.type === "local")
+        .map((entry) => entry.exportedAs)
+        .sort(),
+    ).toEqual(["@Widget", "Widget"]);
+    expect(resolveExport(index, file, "Widget")).toBeNull();
   });
 });

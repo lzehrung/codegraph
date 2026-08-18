@@ -282,6 +282,60 @@ describe("Identifier equality rules", () => {
     expect(csharp("Wid\u200cget")).toBe(csharp("Widget"));
   });
 
+  it("uses Python NFKC rather than Rust NFC for compatibility characters", () => {
+    const python = supportById("python")!.normalizeIdentifier;
+    const rust = supportById("rust")!.normalizeIdentifier;
+
+    expect(python("\uff21")).toBe(python("A"));
+    expect(python("\ufb01")).toBe(python("fi"));
+    expect(python("\u2160")).toBe(python("I"));
+    expect(rust("\uff21")).not.toBe(rust("A"));
+    expect(rust("\ufb01")).not.toBe(rust("fi"));
+    expect(rust("\u2160")).not.toBe(rust("I"));
+  });
+
+  it("removes Java and C# bidi and formatting controls deliberately", () => {
+    const java = supportById("java")!.normalizeIdentifier;
+    const csharp = supportById("csharp")!.normalizeIdentifier;
+    const rust = supportById("rust")!.normalizeIdentifier;
+
+    // Bidi and formatting controls are the Trojan Source character class; pin their
+    // spec-defined treatment deliberately rather than allowing it to be incidental.
+    expect(java("Foo\u202e")).toBe(java("Foo"));
+    expect(java("Foo\u200f")).toBe(java("Foo"));
+    expect(csharp("Foo\u200e")).toBe(csharp("Foo"));
+    expect(csharp("Foo\u202a")).toBe(csharp("Foo"));
+    expect(rust("Foo\u202e")).not.toBe(rust("Foo"));
+    expect(rust("Foo\u200f")).not.toBe(rust("Foo"));
+    expect(rust("Foo\u200e")).not.toBe(rust("Foo"));
+    expect(rust("Foo\u202a")).not.toBe(rust("Foo"));
+  });
+
+  it("normalizes astral Python identifiers without losing surrogate pairs", () => {
+    const python = supportById("python")!.normalizeIdentifier;
+    const astralPythonIdentifier = "\u{1d400}";
+
+    expect(python(`${astralPythonIdentifier}cafe\u0301`)).toBe(python(`${astralPythonIdentifier}caf\u00e9`));
+    const astralIdentifierThatSurvivesNfkc = "\u{10400}Widget";
+    expect(python(astralIdentifierThatSurvivesNfkc)).toBe(astralIdentifierThatSurvivesNfkc);
+  });
+
+  it("combines C# verbatim and formatting identifier normalization", () => {
+    const csharp = supportById("csharp")!.normalizeIdentifier;
+
+    expect(csharp("@Wid\u200cget")).toBe(csharp("Widget"));
+    expect(csharp("@Widget\u200e")).toBe(csharp("Widget"));
+  });
+
+  it("preserves Java currency and letter-number identifier characters", () => {
+    const java = supportById("java")!.normalizeIdentifier;
+    const javaCurrencyIdentifier = "Fo\u00a5o";
+    const javaLetterNumberIdentifier = "Fo\u2160o";
+
+    expect(java(javaCurrencyIdentifier)).toBe(javaCurrencyIdentifier);
+    expect(java(javaLetterNumberIdentifier)).toBe(javaLetterNumberIdentifier);
+  });
+
   it("keeps code-point-distinct spellings separate for languages without an equality rule", () => {
     const decomposed = "cafe\u0301";
     const composed = "caf\u00e9";

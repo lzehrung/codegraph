@@ -175,7 +175,7 @@ export function buildBloomFilterFromSource(
   support: Pick<LanguageSupport, "normalizeIdentifier">,
   falsePositiveRate = 0.01,
 ): BloomFilter {
-  const identifierPattern = /(?<![\p{ID_Continue}$\u200C\u200D])@?[\p{ID_Start}_$][\p{ID_Continue}$\u200C\u200D]*/gu;
+  const identifierPattern = /(?<![\p{ID_Continue}$\u200C\u200D])[\p{ID_Start}_$][\p{ID_Continue}$\u200C\u200D]*/gu;
   const matches = source.match(identifierPattern);
 
   const unique = new Set<string>();

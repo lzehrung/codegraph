@@ -121,9 +121,15 @@ export function resolveNamedDefinition(
   support: LanguageSupport,
   name: string,
 ): GoToResult | null {
+  const normalizedName = support.normalizeIdentifier(name);
   const requiresExplicitReceiver = !support.membersAreImplicitlyInScope;
   const directExport = requiresExplicitReceiver
-    ? mod.exports.find((entry) => entry.type === "local" && entry.exportedAs === name && !entry.target.isMember)
+    ? mod.exports.find(
+        (entry) =>
+          entry.type === "local" &&
+          support.normalizeIdentifier(entry.exportedAs) === normalizedName &&
+          !entry.target.isMember,
+      )
     : undefined;
   const hit =
     directExport && directExport.type === "local"
@@ -149,7 +155,7 @@ export function resolveNamedDefinition(
   }
 
   for (const imp of mod.imports) {
-    if (imp.kind === "default" && imp.local === name) {
+    if (imp.kind === "default" && support.normalizeIdentifier(imp.local) === normalizedName) {
       const result = resolveImported(index, imp, "default");
       if (result && !("namespace" in result)) {
         return okGoToResult(index, result, {
@@ -161,7 +167,7 @@ export function resolveNamedDefinition(
           confidence: "high",
         });
       }
-    } else if (imp.kind === "named" && imp.local === name) {
+    } else if (imp.kind === "named" && support.normalizeIdentifier(imp.local) === normalizedName) {
       const result = resolveImported(index, imp, imp.imported);
       if (result && !("namespace" in result)) {
         return okGoToResult(index, result, {
@@ -185,7 +191,7 @@ export function resolveNamedDefinition(
           confidence: "medium",
         });
       }
-    } else if (imp.kind === "namespace" && imp.localNS === name) {
+    } else if (imp.kind === "namespace" && support.normalizeIdentifier(imp.localNS) === normalizedName) {
       const targetFile = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
       const targetMod = targetFile ? index.byFile.get(fileIdentityKey(targetFile)) : undefined;
       const firstExport = targetMod?.exports.find((entry) => entry.type === "local");

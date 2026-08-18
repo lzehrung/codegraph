@@ -297,6 +297,7 @@ export async function findReferences(
       const filter = index.bloomFilters?.get(fileIdentityKey(candidateFile));
       if (!filter) return true;
 
+      // Bloom filters contain names normalized by the candidate file's language, so probes must use that rule.
       const normalizeIdentifier =
         supportForFile(candidateFile, index.languageExtensions)?.normalizeIdentifier ?? ((name) => name);
       const aliases = getCandidateReferenceNames(module, definitionFile, exportedNameSet);
@@ -434,6 +435,7 @@ export async function findReferences(
     )) {
       if (hasReachedMaxReferences()) break;
       const filter = index.bloomFilters?.get(fileIdentityKey(fileId));
+      // Bloom filters contain names normalized by the candidate file's language, so probes must use that rule.
       const canonicalName =
         supportForFile(fileId, index.languageExtensions)?.normalizeIdentifier(def.localName) ?? def.localName;
       if (filter && !filter.mightContain(canonicalName)) continue;

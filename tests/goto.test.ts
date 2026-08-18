@@ -3,6 +3,8 @@ import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import { goToDefinition } from "../src/index.js";
+import { JAVA_SUPPORT } from "../src/languages.js";
+import { resolveNamedDefinition } from "../src/indexer/navigation-local.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { createTestIndex, createTestIndexFromFiles, testGoToDefinition } from "./test-utils.js";
 
@@ -1409,6 +1411,49 @@ describe("Go to Definition", () => {
       }
     });
 
+    it("resolves a static import alias that differs only by an ignorable character", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-java-unicode-import-goto-"));
+      try {
+        const utilFile = path.join(root, "demo", "Util.java").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "demo", "Consumer.java").replace(/\\/g, "/");
+        await fsp.mkdir(path.dirname(utilFile), { recursive: true });
+        await fsp.writeFile(
+          utilFile,
+          ["package demo;", "class Util {", "  static void helper() {}", "}", ""].join("\n"),
+          "utf8",
+        );
+        await fsp.writeFile(
+          consumerFile,
+          [
+            "package demo;",
+            "import static demo.Util.helper;",
+            "class Consumer {",
+            "  void run() {",
+            "    helper();",
+            "  }",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [utilFile, consumerFile]);
+        const module = index.byFile.get(fileIdentityKey(consumerFile));
+        const imported = module?.imports.find((imp) => imp.kind === "named");
+
+        expect(imported).toBeDefined();
+        if (!module || !imported || imported.kind !== "named") return;
+        imported.local = "help\u200cer";
+        const result = resolveNamedDefinition(index, module, consumerFile, JAVA_SUPPORT, "helper");
+
+        expect(result?.status).toBe("ok");
+        if (result?.status === "ok") {
+          expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(utilFile));
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("resolves an unqualified call to the same-file method, not a same-named method in another class", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-java-method-goto-unqualified-"));
       try {
@@ -1654,6 +1699,39 @@ describe("Go to Definition", () => {
           callLine.indexOf("Other.run") + "Other.".length + 1,
           serviceFile,
           7,
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves a receiver member with an NFC declaration and NFD call", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-unicode-member-goto-"));
+      try {
+        const serviceFile = path.join(root, "service.rs").replace(/\\/g, "/");
+        const methodName = "caf\u00e9";
+        const calledMethodName = "cafe\u0301";
+        const source = [
+          "struct Service;",
+          "impl Service {",
+          `  fn ${methodName}(&self) {}`,
+          "}",
+          "fn test() {",
+          "  let service = Service;",
+          `  service.${calledMethodName}();`,
+          "}",
+          "",
+        ].join("\n");
+        await fsp.writeFile(serviceFile, source, "utf8");
+        const index = await createTestIndexFromFiles(root, [serviceFile]);
+
+        await testGoToDefinition(
+          index,
+          serviceFile,
+          7,
+          source.split("\n")[6]!.indexOf(calledMethodName) + 1,
+          serviceFile,
+          3,
         );
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
