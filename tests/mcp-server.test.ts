@@ -3094,6 +3094,82 @@ describe("MCP session teardown regressions (S2)", () => {
     }
   });
 
+  it("drains active tool calls before invalidating the shared session during shutdown", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-shutdown-drain-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const backingSession = createAgentSession({ root });
+    const loadStarted = Promise.withResolvers<void>();
+    const releaseLoad = Promise.withResolvers<void>();
+    const session: AgentSession = {
+      ...backingSession,
+      loadProject: async (options) => {
+        loadStarted.resolve();
+        await releaseLoad.promise;
+        return await backingSession.loadProject(options);
+      },
+    };
+    const invalidationSpy = vi.spyOn(session, "invalidate");
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+      session,
+    });
+
+    try {
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-shutdown-drain-test", version: "1.0.0" },
+        },
+      });
+      const sessionId = initialize.response.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+
+      if (!sessionId) throw new Error("MCP session did not initialize.");
+      const endpoint = new URL(httpServer.url);
+      const body = JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "search", arguments: { query: "ok", mode: "symbol" } },
+      });
+      const request = httpRequest({
+        hostname: endpoint.hostname,
+        port: endpoint.port,
+        path: endpoint.pathname,
+        method: "POST",
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+          "mcp-session-id": sessionId,
+        },
+      });
+      request.on("error", () => {});
+      request.end(body);
+      await loadStarted.promise;
+
+      const requestClosed = new Promise<void>((resolve) => request.once("close", resolve));
+      request.destroy();
+      await requestClosed;
+
+      const closing = httpServer.close();
+      await Promise.resolve();
+      expect(invalidationSpy).not.toHaveBeenCalled();
+
+      releaseLoad.resolve();
+      await expect(closing).resolves.toBeUndefined();
+      expect(invalidationSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseLoad.resolve();
+      invalidationSpy.mockRestore();
+      await httpServer.close();
+    }
+  });
   it("closes legacy protocol transports when session invalidation fails during server shutdown", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-invalidation-close-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");

@@ -1092,12 +1092,62 @@ function createCodegraphMcpHandlersForSession(
   };
 }
 
+type McpToolOperationTracker = {
+  isAccepting: () => boolean;
+  track: <T>(operation: () => Promise<T>) => Promise<T> | undefined;
+  stop: () => void;
+  drain: () => Promise<void>;
+};
+
+function createMcpToolOperationTracker(): McpToolOperationTracker {
+  let accepting = true;
+  const operations = new Set<Promise<unknown>>();
+  return {
+    isAccepting: () => accepting,
+    track: <T>(operation: () => Promise<T>): Promise<T> | undefined => {
+      if (!accepting) return undefined;
+      const tracked = operation();
+      operations.add(tracked);
+      void tracked.then(
+        () => operations.delete(tracked),
+        () => operations.delete(tracked),
+      );
+      return tracked;
+    },
+    stop: () => {
+      accepting = false;
+    },
+    drain: async () => {
+      accepting = false;
+      await Promise.allSettled([...operations]);
+    },
+  };
+}
+
 export function createCodegraphMcpProtocolServer(
   handlers: CodegraphMcpHandlers,
   runtimeIdentity: CodegraphRuntimeIdentity = captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin()),
   installedVersion: InstalledVersionChecker = createInstalledVersionChecker(runtimeIdentity),
   toolCallState: { firstToolCallPending: boolean } = { firstToolCallPending: true },
   maxConcurrentToolCalls = DEFAULT_MCP_TOOL_CONCURRENCY,
+): Server {
+  return createCodegraphMcpProtocolServerWithTracker(
+    handlers,
+    runtimeIdentity,
+    installedVersion,
+    toolCallState,
+    maxConcurrentToolCalls,
+    createMcpToolOperationTracker(),
+  );
+}
+
+function createCodegraphMcpProtocolServerWithTracker(
+  handlers: CodegraphMcpHandlers,
+  runtimeIdentity: CodegraphRuntimeIdentity,
+  installedVersion: InstalledVersionChecker,
+  toolCallState: { firstToolCallPending: boolean },
+  maxConcurrentToolCalls: number,
+  toolOperations: McpToolOperationTracker,
 ): Server {
   const server = new Server(
     {
@@ -1113,6 +1163,9 @@ export function createCodegraphMcpProtocolServer(
 
   server.setRequestHandler("tools/list", () => ({ tools: listCodegraphMcpTools() }));
   server.setRequestHandler("tools/call", async (request, ctx): Promise<CallToolResult> => {
+    if (!toolOperations.isAccepting()) {
+      throw new Error("MCP server is shutting down.");
+    }
     if (inFlightToolCalls >= toolConcurrency) {
       throw new Error("MCP tool execution is busy; retry shortly.");
     }
@@ -1149,7 +1202,13 @@ export function createCodegraphMcpProtocolServer(
       console.error(`[codegraph] installed-version check failed: ${errorMessage(error)}`);
     }
     try {
-      const operation = callMcpTool(handlers, request.params.name, request.params.arguments ?? {}, ctx.mcpReq.signal);
+      const operation = toolOperations.track(() =>
+        callMcpTool(handlers, request.params.name, request.params.arguments ?? {}, ctx.mcpReq.signal),
+      );
+      if (operation === undefined) {
+        inFlightToolCalls -= 1;
+        throw new Error("MCP server is shutting down.");
+      }
       const releaseToolCall = (): void => {
         inFlightToolCalls -= 1;
       };
@@ -1173,21 +1232,33 @@ export function createCodegraphMcpProtocolServer(
   return server;
 }
 
+type McpProtocolFactory = {
+  create: () => Server;
+  stop: () => void;
+  drain: () => Promise<void>;
+};
+
 function createCodegraphMcpProtocolFactory(
   handlers: CodegraphMcpHandlers,
   runtimeIdentity: CodegraphRuntimeIdentity,
   maxConcurrentToolCalls = DEFAULT_MCP_TOOL_CONCURRENCY,
-): () => Server {
+): McpProtocolFactory {
   const installedVersion = createInstalledVersionChecker(runtimeIdentity);
   const toolCallState = { firstToolCallPending: true };
-  return () =>
-    createCodegraphMcpProtocolServer(
-      handlers,
-      runtimeIdentity,
-      installedVersion,
-      toolCallState,
-      maxConcurrentToolCalls,
-    );
+  const toolOperations = createMcpToolOperationTracker();
+  return {
+    create: () =>
+      createCodegraphMcpProtocolServerWithTracker(
+        handlers,
+        runtimeIdentity,
+        installedVersion,
+        toolCallState,
+        maxConcurrentToolCalls,
+        toolOperations,
+      ),
+    stop: () => toolOperations.stop(),
+    drain: () => toolOperations.drain(),
+  };
 }
 
 export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Promise<void> {
@@ -1205,25 +1276,30 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
 
   const { handlers, session } = await createWarmedCodegraphMcpResources(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
-  const createProtocolServer = createCodegraphMcpProtocolFactory(
+  const protocolFactory = createCodegraphMcpProtocolFactory(
     handlers,
     runtimeIdentity,
     options.mcpToolConcurrency ?? DEFAULT_MCP_TOOL_CONCURRENCY,
   );
-  const handle = serveStdio(createProtocolServer, {
+  const handle = serveStdio(protocolFactory.create, {
     legacy: "serve",
     onerror: (error) => {
       console.error(`[codegraph] MCP stdio error: ${error.message}`);
     },
   });
   const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_MCP_STDIO_IDLE_TIMEOUT_MS;
-  await awaitStdioMcpLifecycle(handle, {
-    idleTimeoutMs,
-    onShutdown: (shutdownReason) => {
-      console.error(`[codegraph] MCP stdio shutting down (${shutdownReason})`);
-    },
-  });
-  session.invalidate();
+  try {
+    await awaitStdioMcpLifecycle(handle, {
+      idleTimeoutMs,
+      onShutdown: (shutdownReason) => {
+        console.error(`[codegraph] MCP stdio shutting down (${shutdownReason})`);
+      },
+    });
+  } finally {
+    protocolFactory.stop();
+    await protocolFactory.drain();
+    session.invalidate();
+  }
   // Ensure orphaned stdio servers do not linger after the client is gone.
   process.exitCode = 0;
 }
@@ -1234,7 +1310,7 @@ export async function startCodegraphMcpHttpServer(
   const host = options.host ?? "127.0.0.1";
   const { handlers, session } = await createWarmedCodegraphMcpResources(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
-  const createProtocolServer = createCodegraphMcpProtocolFactory(
+  const protocolFactory = createCodegraphMcpProtocolFactory(
     handlers,
     runtimeIdentity,
     options.mcpToolConcurrency ?? DEFAULT_MCP_TOOL_CONCURRENCY,
@@ -1244,7 +1320,7 @@ export async function startCodegraphMcpHttpServer(
     maxCount: options.httpSessionMaxCount ?? DEFAULT_MCP_HTTP_SESSION_MAX_COUNT,
     evictionIntervalMs: options.httpSessionEvictionIntervalMs ?? DEFAULT_MCP_HTTP_SESSION_EVICTION_INTERVAL_MS,
   });
-  const modernHandler = createMcpHandler(createProtocolServer, {
+  const modernHandler = createMcpHandler(protocolFactory.create, {
     legacy: "reject",
     onerror: (error) => {
       console.error(`[codegraph] MCP HTTP error: ${error.message}`);
@@ -1260,11 +1336,13 @@ export async function startCodegraphMcpHttpServer(
   let closeResourcesPromise: Promise<void> | undefined;
   const closeResources = (): Promise<void> => {
     closeResourcesPromise ??= (async () => {
+      protocolFactory.stop();
+      sessionStore.stop();
       try {
-        session.invalidate();
-      } finally {
-        sessionStore.stop();
         await closeMcpResources(sessionStore.sessions, modernHandler.close);
+      } finally {
+        await protocolFactory.drain();
+        session.invalidate();
       }
     })();
     return closeResourcesPromise;
@@ -1278,7 +1356,7 @@ export async function startCodegraphMcpHttpServer(
       () => allowedHostHeaders,
       validateOrigin,
       modernNodeHandler,
-      createProtocolServer,
+      protocolFactory.create,
       options.httpBodyTimeoutMs ?? DEFAULT_MCP_HTTP_BODY_TIMEOUT_MS,
     );
   });
