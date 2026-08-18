@@ -166,8 +166,9 @@ describe("MCP query_sqlite cancellation", () => {
     };
     const modernHandler = createMcpHandler(() => createCodegraphMcpProtocolServer(handlers), { legacy: "stateless" });
     const nodeHandler = toNodeHandler(modernHandler);
+    const handlerFailures: unknown[] = [];
     const httpServer = createServer((request, response) => {
-      void nodeHandler(request, response);
+      void nodeHandler(request, response).catch((error: unknown) => handlerFailures.push(error));
     });
     await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
     const address = httpServer.address();
@@ -196,6 +197,8 @@ describe("MCP query_sqlite cancellation", () => {
       await started.promise;
       request.destroy();
       await aborted.promise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(handlerFailures).toEqual([]);
 
       const followup = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
         method: "POST",
@@ -207,6 +210,8 @@ describe("MCP query_sqlite cancellation", () => {
         body,
       });
       expect(followup.status).toBe(200);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(handlerFailures).toEqual([]);
     } finally {
       await modernHandler.close();
       await new Promise<void>((resolve, reject) => httpServer.close((error) => (error ? reject(error) : resolve())));
@@ -242,6 +247,7 @@ describe("MCP query_sqlite cancellation", () => {
       sessionIdGenerator: () => "legacy-socket-close-test",
     });
     await protocolServer.connect(transport);
+    const handlerFailures: unknown[] = [];
     const httpServer = createServer((request, response) => {
       void (async () => {
         const chunks: Buffer[] = [];
@@ -251,7 +257,7 @@ describe("MCP query_sqlite cancellation", () => {
         await runWithLegacyRequestAbortSignal(request, response, async () => {
           await transport.handleRequest(request, response, body);
         });
-      })();
+      })().catch((error: unknown) => handlerFailures.push(error));
     });
     await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
     const address = httpServer.address();
@@ -298,6 +304,8 @@ describe("MCP query_sqlite cancellation", () => {
       await started.promise;
       socket.destroy();
       await aborted.promise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(handlerFailures).toEqual([]);
 
       const followup = await fetch(url, {
         method: "POST",
@@ -309,6 +317,8 @@ describe("MCP query_sqlite cancellation", () => {
         body,
       });
       expect(followup.status).toBe(200);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(handlerFailures).toEqual([]);
     } finally {
       await transport.close();
       await protocolServer.close();
