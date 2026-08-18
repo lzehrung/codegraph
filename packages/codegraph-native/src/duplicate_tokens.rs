@@ -78,11 +78,10 @@ fn byte_end(source: &str, chars: &[(usize, char)], cursor: usize) -> usize {
     }
 }
 
-// Mirror ECMAScript IdentifierName: Unicode ID_Start/ID_Continue plus `$`/`_`,
-// and explicit ZWNJ/ZWJ IdentifierPart characters from the ECMAScript grammar.
-// ID_Start = XID_Start ∪ Other_ID_Start; ID_Continue = XID_Continue ∪ Other_ID_Continue
-// (and ID_Start ⊆ ID_Continue). ZWNJ/ZWJ are IdentifierPart in ECMAScript even though
-// they are outside Other_ID_Continue.
+// Duplicate tokenization intentionally mirrors the JavaScript XID-based grammar rather than
+// ECMAScript IdentifierName: XID properties plus `$`/`_`, Other_ID_* and ZWNJ/ZWJ continuation
+// characters. XID_* removes NFKC-closure-breaking characters from ID_*, so the start and
+// continuation predicates both differ from ECMAScript's ID_* grammar.
 fn is_other_id_start(ch: char) -> bool {
     matches!(
         ch,
