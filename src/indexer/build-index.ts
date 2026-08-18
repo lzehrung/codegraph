@@ -648,13 +648,14 @@ async function buildIndexFromFileListShared(
   const manifestOptionDiffs = manifest ? diffBuildOptions(manifest.buildOptions, opts) : [];
   const languageExtensionsChanged = manifestOptionDiffs.includes("languageExtensions");
   const implementationChanged = manifestOptionDiffs.includes("implementation");
-  const resolverEnvironmentFingerprint = graphOptions.resolveNodeModules
-    ? await computeResolverEnvironmentFingerprint(projectRoot, normalizedFiles)
-    : undefined;
-  const resolverEnvironmentMatchesManifest =
-    !graphOptions.resolveNodeModules ||
-    (resolverEnvironmentFingerprint !== null &&
-      manifest?.resolverEnvironmentFingerprint === resolverEnvironmentFingerprint);
+  let resolverEnvironmentFingerprint: string | null | undefined;
+  let resolverEnvironmentMatchesManifest = true;
+  if (useManifest && graphOptions.resolveNodeModules) {
+    resolverEnvironmentFingerprint = await computeResolverEnvironmentFingerprint(projectRoot, normalizedFiles);
+    resolverEnvironmentMatchesManifest =
+      resolverEnvironmentFingerprint !== null &&
+      manifest?.resolverEnvironmentFingerprint === resolverEnvironmentFingerprint;
+  }
   if (timings && useManifest) {
     timings.manifestMs = Math.round(performance.now() - manifestStart);
   }
