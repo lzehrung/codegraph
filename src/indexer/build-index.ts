@@ -74,6 +74,7 @@ import {
   type ManifestFileEntry,
   type PendingModuleCacheWrite,
 } from "./build-cache.js";
+import { computeResolverEnvironmentFingerprint } from "./build-cache/resolver-environment.js";
 import { cacheRoot } from "./build-cache/location.js";
 import {
   type BuildOptions,
@@ -229,6 +230,7 @@ async function buildIndexedModuleForFile(args: {
   onFallbackImportExtraction: ((event: FallbackImportExtractionEvent) => void) | undefined;
   fileSignatures: Map<string, FileSignature>;
   cacheEnabled: boolean;
+  resolverEnvironmentFingerprint?: string;
 }): Promise<IndexedFileModuleResult> {
   const prepared = await prepareFileContextForBuild(args.file, args.support, args.opts, args.workerSetup, args.report);
   const { source, sup, nativeQueries, embeddedBlocks } = prepared;
@@ -345,7 +347,7 @@ async function buildIndexedModuleForFile(args: {
   let cacheWrite: PendingModuleCacheWrite | undefined;
   if (sigInfo && cacheable) {
     const cacheSig = args.cacheEnabled
-      ? await moduleCacheSignatureForFile(args.file, sigInfo, args.opts)
+      ? await moduleCacheSignatureForFile(args.file, sigInfo, args.opts, args.resolverEnvironmentFingerprint)
       : sigInfo.cacheSig;
     cacheWrite = { file: args.file, sig: cacheSig, mod };
   }
@@ -402,7 +404,12 @@ function graphEdgeKey(edge: Edge): string {
   return `${from}::${target}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`;
 }
 
-async function moduleCacheSignatureForFile(file: string, sigInfo: FileSignature, opts?: BuildOptions): Promise<string> {
+async function moduleCacheSignatureForFile(
+  file: string,
+  sigInfo: FileSignature,
+  opts?: BuildOptions,
+  resolverEnvironmentFingerprint?: string | null,
+): Promise<string> {
   const baseSignature = await cacheSignatureForFile(file, sigInfo, opts);
   const normalizedExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
   const resolveNodeModules = normalizeGraphOptions(opts?.graph).resolveNodeModules;
@@ -413,12 +420,14 @@ async function moduleCacheSignatureForFile(file: string, sigInfo: FileSignature,
   // signatures never matching (permanent cache miss) if either baseSignature or the serialized
   // extensions ever contained one. A cached ModuleIndex's ImportBinding.resolved values differ
   // depending on whether resolveNodeModules was on at write time (resolved node_modules targets
-  // vs. external), so that state must be part of the key too, not just gate reuse for one
-  // direction of the toggle.
+  // vs. external), so that state and the environment that produced it must be part of the key.
   const hash = crypto.createHash("sha1");
   hash.update(baseSignature);
   hash.update(JSON.stringify(Object.entries(normalizedExtensions ?? {})));
   hash.update(resolveNodeModules ? "\0resolveNodeModules" : "");
+  hash.update(
+    resolverEnvironmentFingerprint === null ? "\0resolverEnvironmentTooLarge" : (resolverEnvironmentFingerprint ?? ""),
+  );
   return hash.digest("hex");
 }
 
@@ -639,6 +648,13 @@ async function buildIndexFromFileListShared(
   const manifestOptionDiffs = manifest ? diffBuildOptions(manifest.buildOptions, opts) : [];
   const languageExtensionsChanged = manifestOptionDiffs.includes("languageExtensions");
   const implementationChanged = manifestOptionDiffs.includes("implementation");
+  const resolverEnvironmentFingerprint = graphOptions.resolveNodeModules
+    ? await computeResolverEnvironmentFingerprint(projectRoot, normalizedFiles)
+    : undefined;
+  const resolverEnvironmentMatchesManifest =
+    !graphOptions.resolveNodeModules ||
+    (resolverEnvironmentFingerprint !== null &&
+      manifest?.resolverEnvironmentFingerprint === resolverEnvironmentFingerprint);
   if (timings && useManifest) {
     timings.manifestMs = Math.round(performance.now() - manifestStart);
   }
@@ -658,13 +674,11 @@ async function buildIndexFromFileListShared(
       }
     }
   }
-  // Installed package exports are mutable outside source/lockfile signatures; never reuse
-  // persisted edges when node-module resolution is enabled without an environment fingerprint.
   const cachedGraphEntries =
     manifest &&
     !languageExtensionsChanged &&
     !implementationChanged &&
-    !graphOptions.resolveNodeModules &&
+    resolverEnvironmentMatchesManifest &&
     graphOptionsEqual(manifest.graphOptions, graphOptions)
       ? new Map<string, ManifestFileEntry>(
           Object.entries(manifestFiles).filter(([file]) => !staleCachedEdgeFiles.has(file)),
@@ -760,12 +774,11 @@ async function buildIndexFromFileListShared(
           const initialManifestEntry = toManifestFileEntry({ ...sigInfo, edges: [] });
           if (initialManifestEntry) manifestEntries.set(file, initialManifestEntry);
         }
-        const cacheSig = cacheEnabled ? await moduleCacheSignatureForFile(file, sigInfo, opts) : sigInfo.cacheSig;
-        // A cached ModuleIndex's ImportBinding.resolved values were computed under the
-        // resolveNodeModules state active at write time; reusing them when that state
-        // just turned on would return stale (unresolved) node-module import targets even
-        // though graph-edge reuse is already disabled for this mode above.
-        const canReuseModuleCache = cacheEnabled && !graphOptions.resolveNodeModules;
+        const cacheSig = cacheEnabled
+          ? await moduleCacheSignatureForFile(file, sigInfo, opts, resolverEnvironmentFingerprint)
+          : sigInfo.cacheSig;
+        const canReuseModuleCache =
+          cacheEnabled && (!graphOptions.resolveNodeModules || resolverEnvironmentFingerprint !== null);
         let mod: ModuleIndex | null = canReuseModuleCache
           ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report)
           : null;
@@ -829,6 +842,7 @@ async function buildIndexFromFileListShared(
             graphOptions,
             workspaceConfig,
             workerSetup,
+            ...(resolverEnvironmentFingerprint ? { resolverEnvironmentFingerprint } : {}),
             parsedMap,
             parsedCacheMaxEntries: parsedCacheMaxEntries(opts),
             jsonDependencies,
@@ -911,8 +925,8 @@ async function buildIndexFromFileListShared(
     }
     const workspaceManifestEdges = await collectWorkspaceManifestDependencyEdges(
       projectRoot,
+      normalizedFiles.filter((file) => path.basename(file) === "package.json"),
       opts?.discovery,
-      new Set(normalizedFiles),
       opts?.logLevel,
     );
     appendUniqueGraphEdges(workspaceManifestEdges);
@@ -926,6 +940,7 @@ async function buildIndexFromFileListShared(
         projectRoot,
         opts,
         graphOptions,
+        ...(resolverEnvironmentFingerprint ? { resolverEnvironmentFingerprint } : {}),
         files: manifestEntries,
         timings,
         manifestReport: report?.manifest,
@@ -1181,10 +1196,24 @@ export async function buildProjectIndexIncremental(
     const currentConfigHash = recordConfigHashResult(manifestReport, currentConfigHashResult, opts?.logLevel);
     const configChanged =
       !!currentConfigHashResult.error || !manifest?.configHash || currentConfigHash !== manifest.configHash;
+    const resolverEnvironmentFingerprint = graphOptions.resolveNodeModules
+      ? await computeResolverEnvironmentFingerprint(projectRoot, Object.keys(manifest?.files ?? {}))
+      : undefined;
+    const resolverEnvironmentMatchesManifest =
+      !graphOptions.resolveNodeModules ||
+      (resolverEnvironmentFingerprint !== null &&
+        manifest?.resolverEnvironmentFingerprint === resolverEnvironmentFingerprint);
     const requiresFullRebuild = optionDiffs.some(
       (diff) => diff === "discovery" || diff === "native" || diff === "implementation" || diff === "languageExtensions",
     );
-    if (!manifest || !graphOptionsEqual(manifest.graphOptions, graphOptions) || configChanged || requiresFullRebuild) {
+    const graphOptionsChanged = !graphOptionsEqual(manifest?.graphOptions, graphOptions);
+    if (
+      !manifest ||
+      graphOptionsChanged ||
+      configChanged ||
+      requiresFullRebuild ||
+      !resolverEnvironmentMatchesManifest
+    ) {
       if (manifest && configChanged) {
         logWithLevel(opts?.logLevel, "warn", "Configuration changed, rebuilding index...");
       }
@@ -1194,6 +1223,8 @@ export async function buildProjectIndexIncremental(
           reason = "buildOptionsMismatch";
         } else if (configChanged) {
           reason = "configChanged";
+        } else if (!graphOptionsChanged && !resolverEnvironmentMatchesManifest) {
+          reason = "resolverEnvironmentChanged";
         }
         manifestReport.reason = reason;
         manifestReport.reused = false;
@@ -1354,6 +1385,7 @@ export async function buildProjectIndexIncremental(
         projectRoot,
         opts,
         graphOptions,
+        ...(resolverEnvironmentFingerprint ? { resolverEnvironmentFingerprint } : {}),
         files: {},
         timings,
         manifestReport,
@@ -1374,8 +1406,7 @@ export async function buildProjectIndexIncremental(
       };
     }
     const changedFiles = new Set<string>();
-    const forceNodeModuleReResolution = normalizeGraphOptions(opts?.graph).resolveNodeModules;
-    if (forceNodeModuleReResolution) {
+    if (!resolverEnvironmentMatchesManifest) {
       for (const file of allFiles) changedFiles.add(file);
     }
     const markAsChanged = (file: string): void => {
@@ -1547,7 +1578,7 @@ export async function buildProjectIndexIncremental(
         if (snapshotMod) {
           cached = snapshotMod;
         } else if (cacheEnabled) {
-          const cacheSig = await moduleCacheSignatureForFile(file, sigInfo, opts);
+          const cacheSig = await moduleCacheSignatureForFile(file, sigInfo, opts, resolverEnvironmentFingerprint);
           cached = tryLoadFromCache(projectRoot, file, cacheSig, opts, report);
         }
         if (cached) {
@@ -1600,6 +1631,7 @@ export async function buildProjectIndexIncremental(
               onFallbackImportExtraction,
               fileSignatures,
               cacheEnabled,
+              ...(resolverEnvironmentFingerprint ? { resolverEnvironmentFingerprint } : {}),
             });
             return [file, built.module, built.cacheWrite] as const;
           } catch (error) {
@@ -1638,9 +1670,9 @@ export async function buildProjectIndexIncremental(
       }
       expandStarImports(modules, opts);
       const retainedTrackedEntries = Object.entries(trackedEntries).filter(([file]) => !deletedTrackedFiles.has(file));
-      const cachedGraphEntries = normalizeGraphOptions(opts?.graph).resolveNodeModules
-        ? new Map<string, ManifestFileEntry>()
-        : new Map<string, ManifestFileEntry>(retainedTrackedEntries);
+      const cachedGraphEntries = resolverEnvironmentMatchesManifest
+        ? new Map<string, ManifestFileEntry>(retainedTrackedEntries)
+        : new Map<string, ManifestFileEntry>();
       const manifestEntries = new Map<string, ManifestFileEntry>(cachedGraphEntries);
       const baseGraph: Graph | undefined =
         cachedGraphEntries.size > 0 ? { nodes: new Set<string>(), edges: [] } : undefined;
@@ -1696,6 +1728,7 @@ export async function buildProjectIndexIncremental(
         projectRoot,
         opts,
         graphOptions,
+        ...(resolverEnvironmentFingerprint ? { resolverEnvironmentFingerprint } : {}),
         files: manifestEntries,
         timings,
         manifestReport,

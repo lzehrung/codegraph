@@ -31,17 +31,16 @@ type PackageJsonDependencyInfo = {
 
 export async function collectWorkspaceManifestDependencyEdges(
   projectRoot: string,
+  manifestFiles?: readonly string[],
   discovery?: ProjectFileDiscoveryOptions,
-  allowedManifestFiles?: ReadonlySet<string>,
   logLevel?: LogLevel,
 ): Promise<Edge[]> {
-  const discoveredManifestPaths = await listProjectFiles(projectRoot, ["**/package.json"], {
-    ...discovery,
-    ...(logLevel ? { logLevel } : {}),
-  });
-  const manifestPaths = allowedManifestFiles
-    ? discoveredManifestPaths.filter((manifestPath) => allowedManifestFiles.has(manifestPath))
-    : discoveredManifestPaths;
+  const manifestPaths =
+    manifestFiles ??
+    (await listProjectFiles(projectRoot, ["**/package.json"], {
+      ...discovery,
+      ...(logLevel ? { logLevel } : {}),
+    }));
   if (!manifestPaths.length) return [];
   const manifestByPackageName = new Map<string, string>();
   const parsedByPath = new Map<string, PackageJsonDependencyInfo>();
@@ -84,7 +83,7 @@ export async function collectWorkspaceManifestDependencyEdges(
   return edges;
 }
 
-export const MANIFEST_VERSION = 4;
+export const MANIFEST_VERSION = 5;
 export type ManifestFileEntry = GraphCacheEntry;
 
 export type IndexManifest = {
@@ -96,6 +95,11 @@ export type IndexManifest = {
   graphOptions?: GraphBuildOptions;
   buildOptions?: ManifestBuildOptions;
   files: Record<string, ManifestFileEntry>;
+  /**
+   * Node-module resolver inputs from the build that produced cached file edges.
+   * Missing on older manifests; resolution-enabled builds treat that as stale.
+   */
+  resolverEnvironmentFingerprint?: string;
   /**
    * Files added only for a caller-scoped build. Missing on older manifests and treated
    * as empty; incremental builds prune entries once callers stop supplying them.
@@ -297,7 +301,7 @@ export async function loadManifest(projectRoot: string, opts?: BuildOptions): Pr
     const raw = await fsp.readFile(manifestPath, "utf8");
     const parsed = JSON.parse(raw) as IndexManifest;
     if (
-      (parsed.version !== MANIFEST_VERSION && parsed.version !== 3) ||
+      (parsed.version !== MANIFEST_VERSION && parsed.version !== 4 && parsed.version !== 3) ||
       typeof parsed.projectRoot !== "string" ||
       !/^[a-f0-9]{64}$/.test(parsed.buildOptions?.implementationFingerprint ?? "")
     ) {

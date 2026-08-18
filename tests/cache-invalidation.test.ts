@@ -2922,4 +2922,179 @@ describe("Cache invalidation and strict hashing", () => {
     expect(rebuiltManifest.version).toBe(MANIFEST_VERSION);
     expect(rebuiltManifest.transientFiles).toEqual(["outside/extra.ts"]);
   });
+  it("reuses node-module module and edge caches when resolver inputs are unchanged", async () => {
+    const root = await mkTmpDir("dg-node-modules-reuse-");
+    const entryFile = path.join(root, "packages", "app", "src", "entry.ts");
+    const packageDir = path.join(root, "node_modules", "example-package");
+    const packageJson = path.join(packageDir, "package.json");
+    const firstEntry = path.join(packageDir, "first.js");
+    try {
+      await fsp.mkdir(packageDir, { recursive: true });
+      await fsp.mkdir(path.dirname(entryFile), { recursive: true });
+      await fsp.writeFile(entryFile, 'import { value } from "example-package";\nexport { value };\n', "utf8");
+      await fsp.writeFile(packageJson, JSON.stringify({ main: "./first.js" }), "utf8");
+      await fsp.writeFile(firstEntry, "export const value = 1;\n", "utf8");
+
+      await buildProjectIndex(root, { cache: "disk", threads: 1, graph: { resolveNodeModules: true } });
+      const report: BuildReport = { timings: {} };
+      const reused = await buildProjectIndexIncremental(root, {
+        cache: "disk",
+        threads: 1,
+        graph: { resolveNodeModules: true },
+        report,
+      });
+
+      expect(report.manifest?.reused).toBe(true);
+      expect(report.manifest?.reason).not.toBe("resolverEnvironmentChanged");
+      expect(report.files?.cached).toBe(1);
+      expect(report.files?.parsed).toBe(0);
+      expect(
+        reused.graph.edges.some(
+          (edge) =>
+            edge.from === normalize(entryFile) && edge.to.type === "file" && edge.to.path === normalize(firstEntry),
+        ),
+      ).toBe(true);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes resolved node-module edges when an installed package manifest changes", async () => {
+    const root = await mkTmpDir("dg-node-modules-refresh-");
+    const entryFile = path.join(root, "entry.ts");
+    const packageDir = path.join(root, "node_modules", "example-package");
+    const packageJson = path.join(packageDir, "package.json");
+    const firstEntry = path.join(packageDir, "first.js");
+    const replacementEntry = path.join(packageDir, "replacement.js");
+    try {
+      await fsp.mkdir(packageDir, { recursive: true });
+      await fsp.writeFile(entryFile, 'import { value } from "example-package";\nexport { value };\n', "utf8");
+      await fsp.writeFile(packageJson, JSON.stringify({ main: "./first.js" }), "utf8");
+      await fsp.writeFile(firstEntry, "export const value = 1;\n", "utf8");
+      await fsp.writeFile(replacementEntry, "export const value = 2;\n", "utf8");
+
+      await buildProjectIndex(root, { cache: "disk", threads: 1, graph: { resolveNodeModules: true } });
+      const manifestBefore = JSON.parse(await fsp.readFile(manifestPathFor(root), "utf8")) as {
+        resolverEnvironmentFingerprint?: string;
+      };
+      await fsp.writeFile(packageJson, JSON.stringify({ main: "./replacement.js" }), "utf8");
+
+      const report: BuildReport = { timings: {} };
+      const refreshed = await buildProjectIndexIncremental(root, {
+        cache: "disk",
+        threads: 1,
+        graph: { resolveNodeModules: true },
+        report,
+      });
+      const manifestAfter = JSON.parse(await fsp.readFile(manifestPathFor(root), "utf8")) as {
+        resolverEnvironmentFingerprint?: string;
+      };
+
+      expect(report.files?.parsed).toBe(1);
+      expect(manifestAfter.resolverEnvironmentFingerprint).not.toBe(manifestBefore.resolverEnvironmentFingerprint);
+      expect(
+        refreshed.graph.edges.some(
+          (edge) =>
+            edge.from === normalize(entryFile) &&
+            edge.to.type === "file" &&
+            edge.to.path === normalize(replacementEntry),
+        ),
+      ).toBe(true);
+      expect(
+        refreshed.graph.edges.some(
+          (edge) =>
+            edge.from === normalize(entryFile) && edge.to.type === "file" && edge.to.path === normalize(firstEntry),
+        ),
+      ).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rebuilds a resolver-enabled manifest written before the environment fingerprint existed", async () => {
+    const root = await mkTmpDir("dg-node-modules-manifest-migration-");
+    const entryFile = path.join(root, "entry.ts");
+    const packageDir = path.join(root, "node_modules", "example-package");
+    try {
+      await fsp.mkdir(packageDir, { recursive: true });
+      await fsp.writeFile(entryFile, 'import { value } from "example-package";\nexport { value };\n', "utf8");
+      await fsp.writeFile(path.join(packageDir, "package.json"), JSON.stringify({ main: "./index.js" }), "utf8");
+      await fsp.writeFile(path.join(packageDir, "index.js"), "export const value = 1;\n", "utf8");
+      await buildProjectIndex(root, { cache: "disk", threads: 1, graph: { resolveNodeModules: true } });
+
+      const manifestPath = manifestPathFor(root);
+      const olderManifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as Record<string, unknown>;
+      delete olderManifest.resolverEnvironmentFingerprint;
+      await fsp.writeFile(manifestPath, JSON.stringify(olderManifest), "utf8");
+
+      const report: BuildReport = { timings: {} };
+      await buildProjectIndexIncremental(root, {
+        cache: "disk",
+        threads: 1,
+        graph: { resolveNodeModules: true },
+        report,
+      });
+      const migratedManifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as {
+        resolverEnvironmentFingerprint?: string;
+      };
+
+      expect(report.files?.parsed).toBe(1);
+      expect(migratedManifest.resolverEnvironmentFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses discovered workspace manifests without rediscovering excluded package manifests", async () => {
+    const root = await mkTmpDir("dg-workspace-manifest-inputs-");
+    const packageA = path.join(root, "packages", "a", "package.json");
+    const packageB = path.join(root, "packages", "b", "package.json");
+    const excludedPackage = path.join(root, "packages", "excluded", "package.json");
+    try {
+      await fsp.mkdir(path.dirname(packageA), { recursive: true });
+      await fsp.mkdir(path.dirname(packageB), { recursive: true });
+      await fsp.mkdir(path.dirname(excludedPackage), { recursive: true });
+      await fsp.writeFile(
+        packageA,
+        JSON.stringify({ name: "@example/a", dependencies: { "@example/b": "1.0.0" } }),
+        "utf8",
+      );
+      await fsp.writeFile(packageB, JSON.stringify({ name: "@example/b" }), "utf8");
+      await fsp.writeFile(
+        excludedPackage,
+        JSON.stringify({ name: "@example/excluded", dependencies: { "@example/b": "1.0.0" } }),
+        "utf8",
+      );
+      const fromDiscoveredFiles = await buildCache.collectWorkspaceManifestDependencyEdges(
+        root,
+        [normalize(packageA), normalize(packageB)],
+        { ignoreGlobs: ["packages/excluded/**"] },
+      );
+      const fromFallbackDiscovery = await buildCache.collectWorkspaceManifestDependencyEdges(root, undefined, {
+        ignoreGlobs: ["packages/excluded/**"],
+      });
+
+      expect(fromDiscoveredFiles).toEqual(fromFallbackDiscovery);
+      expect(fromDiscoveredFiles).toEqual([
+        { from: normalize(packageA), to: { type: "file", path: normalize(packageB) }, raw: "@example/b" },
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("omits the content hash from a non-strict signature when no cache consumer requires one", async () => {
+    const root = await mkTmpDir("dg-no-content-hash-");
+    const file = path.join(root, "entry.ts");
+    try {
+      await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+      const stat = await fsp.stat(file);
+      const signature = await buildCache.fileSignature(file, false);
+
+      expect(signature.contentHash).toBeUndefined();
+      expect(signature.cacheSig).toBe(`${stat.mtimeMs}:${stat.size}`);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
