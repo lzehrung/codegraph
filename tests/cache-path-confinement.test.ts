@@ -379,8 +379,11 @@ describe("cache anchor configuration rejects the home directory and filesystem r
   it("throws when --cache-dir/cacheDir points at the home directory", async () => {
     const root = await mkTmpDir("dg-anchor-cachedir-home-");
     const home = os.homedir();
-
-    expect(() => resolveCacheLocation(root, { cacheDir: home })).toThrow(home);
+    try {
+      expect(() => resolveCacheLocation(root, { cacheDir: home })).toThrow(home);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("throws when CODEGRAPH_CACHE_DIR points at the home directory", async () => {
@@ -393,47 +396,61 @@ describe("cache anchor configuration rejects the home directory and filesystem r
     } finally {
       if (previous === undefined) delete process.env.CODEGRAPH_CACHE_DIR;
       else process.env.CODEGRAPH_CACHE_DIR = previous;
+      await fsp.rm(root, { recursive: true, force: true });
     }
   });
 
   it("throws when an absolute cache.location points at the home directory", async () => {
     const root = await mkTmpDir("dg-anchor-location-home-");
     const home = os.homedir();
-
-    expect(() => resolveCacheLocation(root, { cacheLocation: home })).toThrow(home);
+    try {
+      expect(() => resolveCacheLocation(root, { cacheLocation: home })).toThrow(home);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("throws when the configured anchor is the filesystem root of the project's drive", async () => {
     const root = await mkTmpDir("dg-anchor-fsroot-");
     const fsRoot = path.parse(root).root;
-
-    expect(() => resolveCacheLocation(root, { cacheDir: fsRoot })).toThrow(fsRoot);
+    try {
+      expect(() => resolveCacheLocation(root, { cacheDir: fsRoot })).toThrow(fsRoot);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("accepts a legitimate subdirectory under the home directory as an explicit anchor", async () => {
     const root = await mkTmpDir("dg-anchor-home-subdir-");
     const anchor = path.join(os.homedir(), `.codegraph-cache-confinement-test-${path.basename(root)}`);
+    try {
+      const resolved = resolveCacheLocation(root, { cacheDir: anchor });
 
-    const resolved = resolveCacheLocation(root, { cacheDir: anchor });
-
-    expect(resolved.anchor).toBe(path.resolve(anchor));
-    expect(resolved.layer).toBe("explicit");
+      expect(resolved.anchor).toBe(path.resolve(anchor));
+      expect(resolved.layer).toBe("explicit");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });
 
 describe("cache anchor discovery walks ancestor .codegraph manifests", () => {
   it("anchors at an ancestor directory containing .codegraph/manifest.json", async () => {
     const ancestor = await mkTmpDir("dg-anchor-manifest-ancestor-");
-    await fsp.mkdir(path.join(ancestor, ".codegraph"), { recursive: true });
-    await fsp.writeFile(path.join(ancestor, ".codegraph", "manifest.json"), "{}", "utf8");
-    const projectRoot = path.join(ancestor, "packages", "app");
-    await fsp.mkdir(projectRoot, { recursive: true });
+    try {
+      await fsp.mkdir(path.join(ancestor, ".codegraph"), { recursive: true });
+      await fsp.writeFile(path.join(ancestor, ".codegraph", "manifest.json"), "{}", "utf8");
+      const projectRoot = path.join(ancestor, "packages", "app");
+      await fsp.mkdir(projectRoot, { recursive: true });
 
-    const resolved = resolveCacheLocation(projectRoot);
+      const resolved = resolveCacheLocation(projectRoot);
 
-    expect(resolved.layer).toBe("manifest");
-    expect(resolved.anchor).toBe(path.resolve(ancestor));
-    expect(resolved.path.startsWith(path.resolve(ancestor))).toBe(true);
-    expect(path.basename(resolved.path)).toMatch(/^project-[0-9a-f]{64}$/);
+      expect(resolved.layer).toBe("manifest");
+      expect(resolved.anchor).toBe(path.resolve(ancestor));
+      expect(resolved.path.startsWith(path.resolve(ancestor))).toBe(true);
+      expect(path.basename(resolved.path)).toMatch(/^project-[0-9a-f]{64}$/);
+    } finally {
+      await fsp.rm(ancestor, { recursive: true, force: true });
+    }
   });
 });
