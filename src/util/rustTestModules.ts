@@ -1,3 +1,9 @@
+import { XID_IDENTIFIER_SOURCE } from "./identifiers.js";
+
+const RUST_TEST_MODULE_PATTERN = new RegExp(
+  String.raw`#\s*\[cfg\s*\(\s*test\s*\)\]\s*mod\s+${XID_IDENTIFIER_SOURCE}\s*\{`,
+  "gu",
+);
 export function isRustCfgTestStatement(source: string, statementText: string, statementStartIndex?: number): boolean {
   const normalizedStatement = statementText.trim();
   if (!normalizedStatement) return false;
@@ -40,8 +46,8 @@ function hasImmediateRustCfgTestAttribute(source: string, statementIndex: number
 }
 
 function isInsideRustCfgTestModule(source: string, statementIndex: number): boolean {
-  const testModulePattern = /#\s*\[cfg\s*\(\s*test\s*\)\]\s*mod\s+[A-Za-z_][\w]*\s*\{/g;
-  for (const match of source.matchAll(testModulePattern)) {
+  RUST_TEST_MODULE_PATTERN.lastIndex = 0;
+  for (const match of source.matchAll(RUST_TEST_MODULE_PATTERN)) {
     const moduleStart = match.index;
     const openBraceIndex = source.indexOf("{", moduleStart);
     if (openBraceIndex === -1 || statementIndex <= openBraceIndex) continue;

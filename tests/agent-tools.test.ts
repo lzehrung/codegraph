@@ -45,6 +45,10 @@ describe("Agent Tools", () => {
   });
 
   const expectedTypescriptEdges = [
+    {
+      from: ".regressions/unicode_nfd_consumer.ts",
+      to: { type: "file" as const, path: ".regressions/unicode_nfc_def.ts" },
+    },
     { from: "dynamic-import.ts", to: { type: "file" as const, path: "helpers.ts" } },
     { from: "main.ts", to: { type: "file" as const, path: "utils.ts" } },
     {

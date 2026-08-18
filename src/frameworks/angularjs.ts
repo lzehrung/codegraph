@@ -1,3 +1,10 @@
+import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../util/identifiers.js";
+
+const ANGULAR_JS_IDENTIFIER_PATTERN = new RegExp(ECMASCRIPT_IDENTIFIER_SOURCE, "uy");
+const ANGULAR_JS_IDENTIFIER_PART_PATTERN = new RegExp(
+  String.raw`(?:${ECMASCRIPT_IDENTIFIER_SOURCE})|[$_\p{ID_Continue}\u200c\u200d]`,
+  "u",
+);
 export type AngularJsRegistrationKind =
   | "component"
   | "constant"
@@ -42,13 +49,12 @@ type AngularJsChain = {
 };
 
 function isAngularJsIdentifierStart(value: string): boolean {
-  const code = value.charCodeAt(0);
-  return code === 36 || code === 95 || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+  ANGULAR_JS_IDENTIFIER_PATTERN.lastIndex = 0;
+  return ANGULAR_JS_IDENTIFIER_PATTERN.exec(value)?.[0] === value;
 }
 
 function isAngularJsIdentifierPart(value: string): boolean {
-  const code = value.charCodeAt(0);
-  return isAngularJsIdentifierStart(value) || (code >= 48 && code <= 57);
+  return ANGULAR_JS_IDENTIFIER_PART_PATTERN.test(value);
 }
 
 function canStartAngularJsRegex(tokens: AngularJsToken[]): boolean {
@@ -159,9 +165,13 @@ function tokenizeAngularJsSource(source: string): AngularJsToken[] {
       }
       continue;
     }
-    if (isAngularJsIdentifierStart(value)) {
-      let end = index + 1;
-      while (end < source.length && isAngularJsIdentifierPart(source[end] ?? "")) end += 1;
+    const codePoint = source.codePointAt(index);
+    const identifierStart = codePoint === undefined ? "" : String.fromCodePoint(codePoint);
+    if (isAngularJsIdentifierStart(identifierStart)) {
+      ANGULAR_JS_IDENTIFIER_PATTERN.lastIndex = index;
+      const identifierMatch = ANGULAR_JS_IDENTIFIER_PATTERN.exec(source);
+      if (!identifierMatch) continue;
+      const end = ANGULAR_JS_IDENTIFIER_PATTERN.lastIndex;
       tokens.push({ kind: "identifier", value: source.slice(index, end) });
       index = end;
       continue;
@@ -335,16 +345,25 @@ function collectAngularJsRegistrationMatches(source: string): AngularJsRegistrat
   return matches;
 }
 
-const ANGULAR_JS_ARRAY_INJECTION_PATTERN =
-  /\.\s*(controller|service|factory|directive|component|provider|filter)\s*\(\s*(['"])([^'"`]+)\2\s*,\s*\[([\s\S]*?)function(?:\s+[A-Za-z_$][\w$]*)?\s*\(/gs;
+const ANGULAR_JS_ARRAY_INJECTION_PATTERN = new RegExp(
+  String.raw`\.\s*(controller|service|factory|directive|component|provider|filter)\s*\(\s*(['"])([^'"\x60]+)\2\s*,\s*\[([\s\S]*?)function(?:\s+${ECMASCRIPT_IDENTIFIER_SOURCE})?\s*\(`,
+  "gsu",
+);
 
-const ANGULAR_JS_FUNCTION_INJECTION_PATTERN =
-  /\.\s*(controller|service|factory|directive|component|provider|filter)\s*\(\s*(['"])([^'"`]+)\2\s*,\s*function(?:\s+[A-Za-z_$][\w$]*)?\s*\(([^)]*)\)/gs;
+const ANGULAR_JS_FUNCTION_INJECTION_PATTERN = new RegExp(
+  String.raw`\.\s*(controller|service|factory|directive|component|provider|filter)\s*\(\s*(['"])([^'"\x60]+)\2\s*,\s*function(?:\s+${ECMASCRIPT_IDENTIFIER_SOURCE})?\s*\(([^)]*)\)`,
+  "gsu",
+);
 
-const ANGULAR_JS_COMPONENT_CONTROLLER_PATTERN =
-  /\.\s*component\s*\(\s*(['"])([^'"`]+)\1\s*,\s*\{[\s\S]*?controller\s*:\s*function(?:\s+[A-Za-z_$][\w$]*)?\s*\(([^)]*)\)/gs;
+const ANGULAR_JS_COMPONENT_CONTROLLER_PATTERN = new RegExp(
+  String.raw`\.\s*component\s*\(\s*(['"])([^'"\x60]+)\1\s*,\s*\{[\s\S]*?controller\s*:\s*function(?:\s+${ECMASCRIPT_IDENTIFIER_SOURCE})?\s*\(([^)]*)\)`,
+  "gsu",
+);
 
-const ANGULAR_JS_INJECT_ASSIGNMENT_PATTERN = /([A-Za-z_$][\w$]*)\s*\.\s*\$inject\s*=\s*\[([\s\S]*?)\]/gs;
+const ANGULAR_JS_INJECT_ASSIGNMENT_PATTERN = new RegExp(
+  String.raw`(${ECMASCRIPT_IDENTIFIER_SOURCE})\s*\.\s*\$inject\s*=\s*\[([\s\S]*?)\]`,
+  "gsu",
+);
 
 const ANGULAR_JS_TEMPLATE_URL_PATTERN = /templateUrl\s*:\s*(['"`])([^'"`]+)\1/gs;
 

@@ -8,11 +8,13 @@ import {
   parsePhpImportStatement,
   parseRustImportStatement,
 } from "../../languages/importStatementParsers.js";
-import { GO_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
+import { GO_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rustTestModules.js";
 import { getPhpComposerImplicitFiles } from "../../util/resolution.js";
 import type { ImportBinding } from "../types.js";
 import type { ImportBindingSink, ImportResolver, ResolvedImportTarget } from "./context.js";
+
+const JAVA_UPPERCASE_IDENTIFIER_PATTERN = new RegExp(String.raw`^(?=\p{Lu})${JAVA_IDENTIFIER_SOURCE}$`, "u");
 
 export type LanguageSpecificImportContext = ImportBindingSink & {
   file: string;
@@ -464,7 +466,7 @@ export function appendImplicitImportBinding(
     const last = parts[parts.length - 1];
     if (last === "*") {
       context.pushBinding({ kind: "star", from, resolved, typeOnly });
-    } else if (last && /^[A-Z]/.test(last)) {
+    } else if (last && JAVA_UPPERCASE_IDENTIFIER_PATTERN.test(last)) {
       context.pushBinding({ kind: "named", local: last, imported: last, from, resolved, typeOnly });
     }
   } else if (context.languageId === "csharp") {

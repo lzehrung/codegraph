@@ -15,7 +15,10 @@ export type BindingKind =
 export type ScopeImportBinding = ImportBinding;
 
 export type Binding = {
+  /** Exact identifier spelling from source, for display and persisted identities. */
   name: string;
+  /** Per-language canonical identifier spelling, for lexical scope lookup only. */
+  canonicalName: string;
   kind: BindingKind;
   def?: Range;
   node?: SyntaxNodeLike;

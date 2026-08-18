@@ -41,8 +41,8 @@ import { cacheRoot } from "./location.js";
 import type { ManifestFileEntry } from "./manifest.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
-const PROJECT_SNAPSHOT_VERSION = 8;
-export const BLOOM_FILTER_SNAPSHOT_VERSION = 2;
+const PROJECT_SNAPSHOT_VERSION = 9;
+export const BLOOM_FILTER_SNAPSHOT_VERSION = 4;
 export const BLOOM_FILTER_SNAPSHOT_FILENAME = "bloom-filters.json";
 
 export type BloomFilterSnapshotPayload = {

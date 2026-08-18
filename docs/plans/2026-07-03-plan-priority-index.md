@@ -16,6 +16,7 @@ This is the live index for plans that still need a decision or implementation. C
 - `2026-07-03-semantic-graph-synthesizers.md`
 - `2026-07-03-14-privacy-preserving-diagnostics.md`
 - `2026-08-03-performance-measurement-backlog.md`
+- `2026-08-17-unicode-identifier-support.md`
 
 ## Deferred or rejected
 

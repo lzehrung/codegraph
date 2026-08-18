@@ -3,6 +3,8 @@ import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import { goToDefinition } from "../src/index.js";
+import { JAVA_SUPPORT } from "../src/languages.js";
+import { resolveNamedDefinition } from "../src/indexer/navigation-local.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { createTestIndex, createTestIndexFromFiles, testGoToDefinition } from "./test-utils.js";
 
@@ -1409,6 +1411,49 @@ describe("Go to Definition", () => {
       }
     });
 
+    it("resolves a static import alias that differs only by an ignorable character", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-java-unicode-import-goto-"));
+      try {
+        const utilFile = path.join(root, "demo", "Util.java").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "demo", "Consumer.java").replace(/\\/g, "/");
+        await fsp.mkdir(path.dirname(utilFile), { recursive: true });
+        await fsp.writeFile(
+          utilFile,
+          ["package demo;", "class Util {", "  static void helper() {}", "}", ""].join("\n"),
+          "utf8",
+        );
+        await fsp.writeFile(
+          consumerFile,
+          [
+            "package demo;",
+            "import static demo.Util.helper;",
+            "class Consumer {",
+            "  void run() {",
+            "    helper();",
+            "  }",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [utilFile, consumerFile]);
+        const module = index.byFile.get(fileIdentityKey(consumerFile));
+        const imported = module?.imports.find((imp) => imp.kind === "named");
+
+        expect(imported).toBeDefined();
+        if (!module || !imported || imported.kind !== "named") return;
+        imported.local = "help\u200cer";
+        const result = resolveNamedDefinition(index, module, consumerFile, JAVA_SUPPORT, "helper");
+
+        expect(result?.status).toBe("ok");
+        if (result?.status === "ok") {
+          expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(utilFile));
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("resolves an unqualified call to the same-file method, not a same-named method in another class", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-java-method-goto-unqualified-"));
       try {
@@ -1660,6 +1705,39 @@ describe("Go to Definition", () => {
       }
     });
 
+    it("resolves a receiver member with an NFC declaration and NFD call", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-unicode-member-goto-"));
+      try {
+        const serviceFile = path.join(root, "service.rs").replace(/\\/g, "/");
+        const methodName = "caf\u00e9";
+        const calledMethodName = "cafe\u0301";
+        const source = [
+          "struct Service;",
+          "impl Service {",
+          `  fn ${methodName}(&self) {}`,
+          "}",
+          "fn test() {",
+          "  let service = Service;",
+          `  service.${calledMethodName}();`,
+          "}",
+          "",
+        ].join("\n");
+        await fsp.writeFile(serviceFile, source, "utf8");
+        const index = await createTestIndexFromFiles(root, [serviceFile]);
+
+        await testGoToDefinition(
+          index,
+          serviceFile,
+          7,
+          source.split("\n")[6]!.indexOf(calledMethodName) + 1,
+          serviceFile,
+          3,
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("resolves macro invocations to macro_rules definitions", async () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "rust");
       const macroFile = path.join(samplePath, ".regressions", "macros.rs").replace(/\\/g, "/");
@@ -1694,5 +1772,156 @@ describe("Go to Definition: Unicode identifiers (C11)", () => {
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Go to Definition: Unicode cross-file fixtures", () => {
+  it("resolves a Java combining-mark class imported across files", async () => {
+    const samplePath = path.resolve(process.cwd(), "tests", "samples", "java");
+    const consumerFile = path.join(samplePath, ".regressions", "unicode_consumer.java").replace(/\\/g, "/");
+    const definitionFile = path.join(samplePath, ".regressions", "unicode_def.java").replace(/\\/g, "/");
+    const index = await createTestIndexFromFiles(samplePath, [consumerFile, definitionFile]);
+
+    await testGoToDefinition(index, consumerFile, 7, 12, definitionFile, 3);
+  });
+
+  it("resolves a Kotlin Unicode import alias across files", async () => {
+    const samplePath = path.resolve(process.cwd(), "tests", "samples", "kotlin");
+    const consumerFile = path.join(samplePath, ".regressions", "unicode_consumer.kt").replace(/\\/g, "/");
+    const definitionFile = path.join(samplePath, ".regressions", "unicode_def.kt").replace(/\\/g, "/");
+    const index = await createTestIndexFromFiles(samplePath, [consumerFile, definitionFile]);
+
+    await testGoToDefinition(index, consumerFile, 6, 10, definitionFile, 3);
+  });
+
+  it("resolves a Go Unicode-letter import alias across files", async () => {
+    const samplePath = path.resolve(process.cwd(), "tests", "samples", "go");
+    const consumerFile = path.join(samplePath, ".regressions", "unicode_consumer.go").replace(/\\/g, "/");
+    const definitionFile = path.join(samplePath, ".regressions", "unicodepkg.go").replace(/\\/g, "/");
+    const index = await createTestIndexFromFiles(samplePath, [consumerFile, definitionFile]);
+
+    await testGoToDefinition(index, consumerFile, 6, 5, definitionFile, 3);
+  });
+
+  it("resolves a PHP non-letter use alias across files", async () => {
+    const samplePath = path.resolve(process.cwd(), "tests", "samples", "php");
+    const consumerFile = path.join(samplePath, "src", "Collision", "unicode_consumer.php").replace(/\\/g, "/");
+    const definitionFile = path.join(samplePath, "src", "Collision", "unicode_def.php").replace(/\\/g, "/");
+    const index = await createTestIndexFromFiles(samplePath, [consumerFile, definitionFile]);
+
+    await testGoToDefinition(index, consumerFile, 7, 1, definitionFile, 5);
+  });
+  it("resolves a Rust XID-continuation alias across files", async () => {
+    const samplePath = path.resolve(process.cwd(), "tests", "samples", "rust");
+    const consumerFile = path.join(samplePath, ".regressions", "unicode_consumer.rs").replace(/\\/g, "/");
+    const definitionFile = path.join(samplePath, ".regressions", "unicode_def.rs").replace(/\\/g, "/");
+    const index = await createTestIndexFromFiles(samplePath, [consumerFile, definitionFile]);
+
+    await testGoToDefinition(index, consumerFile, 6, 5, definitionFile, 1);
+  });
+});
+
+describe("Go to Definition: canonical Unicode identifier equality", () => {
+  for (const testCase of [
+    {
+      label: "Python NFC declaration and NFD consumer",
+      language: "python",
+      definition: "unicode_nfc_def.py",
+      consumer: "unicode_nfc_consumer.py",
+      consumerLine: 3,
+      consumerColumn: 1,
+    },
+    {
+      label: "Python NFD declaration and NFC consumer",
+      language: "python",
+      definition: "unicode_nfd_def.py",
+      consumer: "unicode_nfd_consumer.py",
+      consumerLine: 3,
+      consumerColumn: 1,
+    },
+    {
+      label: "Rust NFC declaration and NFD consumer",
+      language: "rust",
+      definition: "unicode_nfc_def.rs",
+      consumer: "unicode_nfc_consumer.rs",
+      consumerLine: 6,
+      consumerColumn: 5,
+    },
+    {
+      label: "Rust NFD declaration and NFC consumer",
+      language: "rust",
+      definition: "unicode_nfd_def.rs",
+      consumer: "unicode_nfd_consumer.rs",
+      consumerLine: 6,
+      consumerColumn: 5,
+    },
+  ]) {
+    it(`resolves ${testCase.label}`, async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", testCase.language, ".regressions");
+      const definitionFile = path.join(samplePath, testCase.definition).replace(/\\/g, "/");
+      const consumerFile = path.join(samplePath, testCase.consumer).replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [definitionFile, consumerFile]);
+
+      await testGoToDefinition(index, consumerFile, testCase.consumerLine, testCase.consumerColumn, definitionFile, 1);
+    });
+  }
+
+  it("resolves a Java identifier that differs only by an ignorable character", async () => {
+    const samplePath = path.resolve(process.cwd(), "tests", "samples", "java", ".regressions");
+    const definitionFile = path.join(samplePath, "Foo.java").replace(/\\/g, "/");
+    const consumerFile = path.join(samplePath, "unicode_ignorable_consumer.java").replace(/\\/g, "/");
+    const index = await createTestIndexFromFiles(samplePath, [definitionFile, consumerFile]);
+
+    await testGoToDefinition(index, consumerFile, 7, 12, definitionFile, 3);
+  });
+
+  it("resolves a C# verbatim identifier in the declaring file", async () => {
+    const samplePath = path.resolve(process.cwd(), "tests", "samples", "csharp", ".regressions");
+    const file = path.join(samplePath, "unicode_verbatim.cs").replace(/\\/g, "/");
+    const index = await createTestIndexFromFiles(samplePath, [file]);
+
+    await testGoToDefinition(index, file, 9, 9, file, 3);
+  });
+
+  for (const testCase of [
+    { language: "kotlin", definition: "unicode_nfc_def.kt", consumer: "unicode_nfd_consumer.kt", line: 6, column: 17 },
+    {
+      language: "go",
+      definition: "unicode_negative_pkg/def.go",
+      consumer: "unicode_nfd_consumer.go",
+      line: 6,
+      column: 16,
+    },
+    {
+      language: "typescript",
+      definition: "unicode_nfc_def.ts",
+      consumer: "unicode_nfd_consumer.ts",
+      line: 3,
+      column: 1,
+    },
+  ]) {
+    it(`does not normalize distinct ${testCase.language} identifiers`, async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", testCase.language, ".regressions");
+      const definitionFile = path.join(samplePath, testCase.definition).replace(/\\/g, "/");
+      const consumerFile = path.join(samplePath, testCase.consumer).replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [definitionFile, consumerFile]);
+
+      const result = await goToDefinition(index, {
+        file: consumerFile,
+        line: testCase.line,
+        column: testCase.column,
+      });
+      expect(result.status).not.toBe("ok");
+    });
+  }
+
+  it("does not normalize distinct PHP identifiers", async () => {
+    const samplePath = path.resolve(process.cwd(), "tests", "samples", "php");
+    const definitionFile = path.join(samplePath, "src", "Collision", "unicode_nfc_def.php").replace(/\\/g, "/");
+    const consumerFile = path.join(samplePath, "src", "Collision", "unicode_nfd_consumer.php").replace(/\\/g, "/");
+    const index = await createTestIndexFromFiles(samplePath, [definitionFile, consumerFile]);
+
+    const result = await goToDefinition(index, { file: consumerFile, line: 7, column: 1 });
+    expect(result.status).not.toBe("ok");
   });
 });

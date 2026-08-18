@@ -1,4 +1,4 @@
-import type { LanguageSupport } from "../languages.js";
+import { supportForFile, type LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import type { ParserLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
@@ -12,6 +12,14 @@ import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
 import type { ExportEntry, ModuleIndex, ProjectIndex, ResolutionProvenance, SymbolDef } from "./types.js";
 import type { ImportBinding } from "./import-types.js";
+import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../util/identifiers.js";
+
+const EXPORT_FROM_PATTERN = new RegExp(String.raw`\bexport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*(["'])([^"']+)\2`, "gu");
+const NAMESPACE_EXPORT_PATTERN = new RegExp(
+  String.raw`\bexport\s*\*\s*as\s*(${ECMASCRIPT_IDENTIFIER_SOURCE})\s*from\s*(["'])([^"']+)\2`,
+  "gu",
+);
+const EXPORT_FROM_SPECIFIER_PATTERN = new RegExp(String.raw`^(${ECMASCRIPT_IDENTIFIER_SOURCE})`, "u");
 
 type ReexportEntry = Extract<ExportEntry, { type: "reexport" }>;
 
@@ -33,9 +41,9 @@ function exportFromIdentifier(
   const moduleIndex = index.byFile.get(fileIdentityKey(fileId));
   if (!moduleIndex) return null;
 
-  const exportFromPattern = /\bexport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*(["'])([^"']+)\2/g;
+  EXPORT_FROM_PATTERN.lastIndex = 0;
   let match: RegExpExecArray | null;
-  while ((match = exportFromPattern.exec(parsed.source))) {
+  while ((match = EXPORT_FROM_PATTERN.exec(parsed.source))) {
     const listText = match[1]!;
     const listOffset = match[0].indexOf(listText);
     if (listOffset < 0) continue;
@@ -55,7 +63,7 @@ function exportFromIdentifier(
         continue;
       }
 
-      const sourceMatch = /^([A-Za-z_$][\w$]*)/.exec(itemText);
+      const sourceMatch = EXPORT_FROM_SPECIFIER_PATTERN.exec(itemText);
       if (!sourceMatch) return { isExportFrom: true };
       const sourceSpecifier = sourceMatch[1]!;
       const sourceEnd = itemStart + sourceSpecifier.length;
@@ -73,8 +81,8 @@ function exportFromIdentifier(
     }
     itemOffset += listText.length + 1;
   }
-  const namespaceExportPattern = /\bexport\s*\*\s*as\s*([A-Za-z_$][\w$]*)\s*from\s*(["'])([^"']+)\2/g;
-  while ((match = namespaceExportPattern.exec(parsed.source))) {
+  NAMESPACE_EXPORT_PATTERN.lastIndex = 0;
+  while ((match = NAMESPACE_EXPORT_PATTERN.exec(parsed.source))) {
     const namespace = match[1]!;
     const namespaceStart = match.index + match[0].indexOf(namespace);
     if (startIndex >= namespaceStart && startIndex < namespaceStart + namespace.length) {
@@ -161,9 +169,13 @@ async function collectNamedNodeReferences(
       "type_identifier",
       "field_identifier",
     ]);
+    const canonicalSymbolName = parsed.sup.normalizeIdentifier(symbolName);
     const ranges: Range[] = [];
     const walk = (node: SyntaxNodeLike): void => {
-      if (identifierTypes.has(node.type) && sliceText(node, parsed.source) === symbolName) {
+      if (
+        identifierTypes.has(node.type) &&
+        parsed.sup.normalizeIdentifier(sliceText(node, parsed.source)) === canonicalSymbolName
+      ) {
         ranges.push(toRange(node));
       }
       for (const child of node.namedChildren) {
@@ -212,7 +224,7 @@ export async function collectVerifiedNamedNodeReferences(
       parsed,
     );
     if (resolved.status !== "ok" || !resolved.definition) continue;
-    if (sameDef(resolved.definition, expectedDef)) {
+    if (sameDef(resolved.definition, expectedDef, index.languageExtensions)) {
       verified.push({ range, ...(resolved.provenance ? { provenance: resolved.provenance } : {}) });
     }
   }
@@ -261,9 +273,11 @@ export function hasExpandedNamedImport(moduleIndex: ModuleIndex, targetFile: str
 
 const referenceCandidateCache = new WeakMap<ProjectIndex, Map<string, string[]>>();
 
-function referenceCandidateCacheKey(def: SymbolDef, exportedNames: readonly string[]): string {
-  const sortedNames = [...exportedNames].sort();
-  return `${fileIdentityKey(def.file)}::${def.range.start.index ?? 0}::${sortedNames.join("\0")}`;
+function referenceCandidateCacheKey(index: ProjectIndex, def: SymbolDef, exportedNames: readonly string[]): string {
+  const normalizeIdentifier =
+    supportForFile(def.file, index.languageExtensions)?.normalizeIdentifier ?? ((name) => name);
+  const sortedNames = exportedNames.map(normalizeIdentifier).sort();
+  return `${fileIdentityKey(def.file)}::${def.range.start.index ?? 0}::canonical::${sortedNames.join("\0")}`;
 }
 
 function importCanReferenceDefinition(
@@ -277,7 +291,10 @@ function importCanReferenceDefinition(
 
   const resolvesToDefinition = (exportedName: string): boolean => {
     const hit = resolveExport(index, targetFile, exportedName);
-    return hit?.kind === "resolved" ? sameDef(hit.def, def) : fileIdentityKey(targetFile) === fileIdentityKey(def.file);
+    if (hit?.kind === "resolved") {
+      return sameDef(hit.def, def, index.languageExtensions);
+    }
+    return imp.kind === "namespace" && fileIdentityKey(targetFile) === fileIdentityKey(def.file);
   };
 
   if (imp.kind === "named") {
@@ -289,7 +306,7 @@ function importCanReferenceDefinition(
   if (imp.kind === "star") {
     return exportedNames.some((exportedName) => {
       const result = resolveImported(index, imp, exportedName);
-      return !!result && !("namespace" in result) && sameDef(result, def);
+      return !!result && !("namespace" in result) && sameDef(result, def, index.languageExtensions);
     });
   }
   return exportedNames.some((exportedName) => resolvesToDefinition(exportedName));
@@ -326,7 +343,7 @@ function filesExportingDefinition(index: ProjectIndex, def: SymbolDef, exportedN
     if (fileIdentityKey(fileId) === fileIdentityKey(def.file) || !moduleIndex.exports.length) continue;
     for (const exportedName of moduleExportProbeNames(index, moduleIndex, exportedNames)) {
       const resolved = resolveExport(index, fileId, exportedName);
-      if (resolved?.kind === "resolved" && sameDef(resolved.def, def)) {
+      if (resolved?.kind === "resolved" && sameDef(resolved.def, def, index.languageExtensions)) {
         files.set(fileIdentityKey(fileId), fileId);
         break;
       }
@@ -380,7 +397,7 @@ export function getCachedReferenceCandidateFiles(
     referenceCandidateCache.set(index, cache);
   }
 
-  const key = referenceCandidateCacheKey(def, exportedNames);
+  const key = referenceCandidateCacheKey(index, def, exportedNames);
   const cached = cache.get(key);
   if (cached) return cached;
 

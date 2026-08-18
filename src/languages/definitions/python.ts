@@ -1,6 +1,7 @@
 import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
+import { hasNonAsciiCodePoint } from "../../util/identifiers.js";
 
 export const PYTHON_DEF: LanguageDefinition = {
   id: "python",
@@ -137,5 +138,6 @@ export const PYTHON_DEF: LanguageDefinition = {
   createsFunctionScope: (n) => n.type === "function_definition" || n.type === "lambda",
   membersAreImplicitlyInScope: false,
   supportsCrossModuleSymbols: true,
+  normalizeIdentifier: (name) => (hasNonAsciiCodePoint(name) ? name.normalize("NFKC") : name),
 };
 registerLanguage(PYTHON_DEF);

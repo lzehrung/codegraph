@@ -141,7 +141,7 @@ describe("Project Indexing", () => {
     it("should index all TypeScript files", async () => {
       const index = await createTestIndex("typescript");
 
-      expectModuleCount(index, 8);
+      expectModuleCount(index, 10);
 
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
       expectFileInIndex(index, path.join(samplePath, "main.ts").replace(/\\/g, "/"));
@@ -180,7 +180,7 @@ describe("Project Indexing", () => {
   describe("Python Project", () => {
     it("should index all Python files", async () => {
       const index = await createTestIndex("python");
-      expectModuleCount(index, 8);
+      expectModuleCount(index, 12);
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "python");
       for (const file of [
         "main.py",
@@ -191,6 +191,10 @@ describe("Project Indexing", () => {
         "match_patterns.py",
         ".regressions/unicode_consumer.py",
         ".regressions/unicode_def.py",
+        ".regressions/unicode_nfc_def.py",
+        ".regressions/unicode_nfc_consumer.py",
+        ".regressions/unicode_nfd_def.py",
+        ".regressions/unicode_nfd_consumer.py",
       ]) {
         expectFileInIndex(index, path.join(samplePath, file).replace(/\\/g, "/"));
       }

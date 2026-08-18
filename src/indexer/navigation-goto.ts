@@ -9,10 +9,17 @@ import {
   isMemberAccessNode,
   memberAccessTraversalTypes,
 } from "../util/memberAccess.js";
-import { ensureParsedContext } from "./parse-context.js";
+import { CSHARP_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE } from "../util/identifiers.js";
+import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
 import type { GoToResult, ModuleIndex, ProjectIndex, ResolvedExport, SymbolDef } from "./types.js";
+
+const RUBY_CONSTANT_SOURCE = String.raw`(?=\p{Lu})${XID_IDENTIFIER_SOURCE}`;
+const CSHARP_CONSTANT_SOURCE = String.raw`(?=@?\p{Lu})${CSHARP_IDENTIFIER_SOURCE}`;
+const JAVA_CONSTANT_SOURCE = String.raw`(?=\p{Lu})${JAVA_IDENTIFIER_SOURCE}`;
+const RUST_CONSTANT_SOURCE = String.raw`(?=\p{Lu})${XID_IDENTIFIER_SOURCE}`;
+const IDENTIFIER_BOUNDARY_SOURCE = String.raw`[$_\p{ID_Continue}\u200c\u200d]`;
 
 export async function resolveMemberAccessDefinition(params: {
   index: ProjectIndex;
@@ -180,10 +187,18 @@ export async function resolveMemberAccessDefinition(params: {
       if (container) {
         const targetModule = index.byFile.get(fileIdentityKey(objDef.file));
         if (targetModule) {
+          const normalizeIdentifier = targetContext.sup.normalizeIdentifier;
           const memberDef =
             targetContext.sup.id === "java"
-              ? findDirectLocalWithinNode(targetModule.locals, member, container, targetContext)
-              : findReceiverMemberDefinition(targetModule.locals, member, objDef, container, targetContext);
+              ? findDirectLocalWithinNode(targetModule.locals, member, container, targetContext, normalizeIdentifier)
+              : findReceiverMemberDefinition(
+                  targetModule.locals,
+                  member,
+                  objDef,
+                  container,
+                  targetContext,
+                  normalizeIdentifier,
+                );
 
           if (memberDef) {
             return okGoToResult(index, memberDef, {
@@ -295,7 +310,7 @@ function constructorNameNode(node: SyntaxNodeLike, sup: LanguageSupport): Syntax
 }
 
 function rubyNewReceiverNameNode(node: SyntaxNodeLike, source: string, sup: LanguageSupport): SyntaxNodeLike | null {
-  if (!/^[A-Z]\w*\.new$/.test(sliceText(node, source))) return null;
+  if (!new RegExp(String.raw`^(?:${RUBY_CONSTANT_SOURCE})\.new$`, "u").test(sliceText(node, source))) return null;
   return (
     node.namedChildren.find((child) => sup.nodeTypes.identifier.includes(child.type) || child.type === "constant") ??
     null
@@ -436,8 +451,12 @@ function constructorFromTypedLocalDeclaration(
 ): SyntaxNodeLike | null {
   if (sup.id !== "csharp" && sup.id !== "java") return null;
   const text = sliceText(node, source);
+  const typeNameSource = sup.id === "java" ? JAVA_CONSTANT_SOURCE : CSHARP_CONSTANT_SOURCE;
   const match = text.match(
-    new RegExp(`^\\s*([A-Z]\\w*)\\s+${escapeRegExp(receiverName)}\\s*=\\s*new\\s+([A-Z]\\w*)\\b`),
+    new RegExp(
+      String.raw`^\s*(${typeNameSource})\s+${escapeRegExp(receiverName)}\s*=\s*new\s+(${typeNameSource})(?![\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mn}\p{Mc}\p{Cf}])`,
+      "u",
+    ),
   );
   const typeName = match?.[2] ?? match?.[1];
   return typeName ? findNamedChildText(node, typeName, source, sup) : null;
@@ -488,14 +507,30 @@ function constructorFromAssignmentLike(
   sup: LanguageSupport,
 ): SyntaxNodeLike | null {
   const text = sliceText(node, source);
-  if (!new RegExp(`\\b${escapeRegExp(receiverName)}\\b`).test(text)) return null;
+  if (
+    !new RegExp(
+      String.raw`(?<!${IDENTIFIER_BOUNDARY_SOURCE})${escapeRegExp(receiverName)}(?!${IDENTIFIER_BOUNDARY_SOURCE})`,
+      "u",
+    ).test(text)
+  )
+    return null;
   if (sup.id === "ruby") {
-    const match = text.match(new RegExp(`^\\s*${escapeRegExp(receiverName)}\\s*=\\s*([A-Z]\\w*)\\.new\\b`));
+    const match = text.match(
+      new RegExp(
+        String.raw`^\s*${escapeRegExp(receiverName)}\s*=\s*(${RUBY_CONSTANT_SOURCE})\.new(?!${IDENTIFIER_BOUNDARY_SOURCE})`,
+        "u",
+      ),
+    );
     if (!match?.[1]) return null;
     return findNamedChildText(node, match[1], source, sup);
   }
   if (sup.id === "rust") {
-    const match = text.match(new RegExp(`^\\s*(?:let\\s+)?${escapeRegExp(receiverName)}\\s*=\\s*([A-Z]\\w*)\\b`));
+    const match = text.match(
+      new RegExp(
+        String.raw`^\s*(?:let\s+)?${escapeRegExp(receiverName)}\s*=\s*(${RUST_CONSTANT_SOURCE})(?!${IDENTIFIER_BOUNDARY_SOURCE})`,
+        "u",
+      ),
+    );
     if (!match?.[1]) return null;
     return findNamedChildText(node, match[1], source, sup);
   }
@@ -540,10 +575,24 @@ async function resolveMemberDefinitionForBase(
   if (!container) return undefined;
   const targetModule = index.byFile.get(fileIdentityKey(baseDef.file));
   if (!targetModule) return undefined;
-  const directHit = findDirectLocalWithinNode(targetModule.locals, member, container, targetContext);
+  const normalizeIdentifier = targetContext.sup.normalizeIdentifier;
+  const directHit = findDirectLocalWithinNode(
+    targetModule.locals,
+    member,
+    container,
+    targetContext,
+    normalizeIdentifier,
+  );
   if (directHit) return directHit;
   if (targetContext.sup.id === "java") return undefined;
-  return findReceiverMemberDefinition(targetModule.locals, member, baseDef, container, targetContext);
+  return findReceiverMemberDefinition(
+    targetModule.locals,
+    member,
+    baseDef,
+    container,
+    targetContext,
+    normalizeIdentifier,
+  );
 }
 
 function findReceiverMemberDefinition(
@@ -551,14 +600,15 @@ function findReceiverMemberDefinition(
   member: string,
   receiverDef: SymbolDef,
   container: SyntaxNodeLike,
-  targetContext: Awaited<ReturnType<typeof ensureParsedContext>>,
+  targetContext: ParsedFileContext,
+  normalizeIdentifier: (name: string) => string,
 ): SymbolDef | undefined {
-  const containerHit = findLocalWithinNode(locals, member, container);
+  const containerHit = findLocalWithinNode(locals, member, container, normalizeIdentifier);
   if (containerHit) return containerHit;
   if (targetContext.sup.id !== "rust") return undefined;
 
   const implNode = findRustImplForType(targetContext.tree.rootNode, receiverDef.localName, targetContext.source);
-  return implNode ? findLocalWithinNode(locals, member, implNode) : undefined;
+  return implNode ? findLocalWithinNode(locals, member, implNode, normalizeIdentifier) : undefined;
 }
 
 function findLocalWithinNode(
@@ -607,15 +657,17 @@ function findDirectLocalWithinNode(
   locals: readonly SymbolDef[],
   member: string,
   container: SyntaxNodeLike,
-  targetContext: Awaited<ReturnType<typeof ensureParsedContext>>,
+  targetContext: ParsedFileContext,
+  normalizeIdentifier: (name: string) => string,
 ): SymbolDef | undefined {
   const containerStart = container.startIndex;
   const containerEnd = container.endIndex;
+  const normalizedMember = normalizeIdentifier(member);
   for (const local of locals) {
     const startIndex = local.range.start.index;
     const endIndex = local.range.end.index;
     if (
-      local.localName !== member ||
+      normalizeIdentifier(local.localName) !== normalizedMember ||
       startIndex === undefined ||
       endIndex === undefined ||
       startIndex < containerStart ||

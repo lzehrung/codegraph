@@ -125,6 +125,10 @@ const definition: LanguageTestDefinition = {
           from: "bracketed-qualified-consumer.php",
           to: { type: "file", path: "multi-namespace/Library.php" },
         },
+        {
+          from: "src/Collision/unicode_consumer.php",
+          to: { type: "file", path: "src/Collision/unicode_def.php" },
+        },
       ],
       references: [
         {

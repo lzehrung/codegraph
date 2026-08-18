@@ -5,6 +5,24 @@ import {
   getOrCreateProjectSymbolIndex,
   type LanguageProjectSymbolIndex,
 } from "./projectSymbols.js";
+import { JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../identifiers.js";
+
+const KOTLIN_PACKAGE_PATTERN = new RegExp(
+  String.raw`^\s*package\s+(${KOTLIN_IDENTIFIER_SOURCE}(?:\.${KOTLIN_IDENTIFIER_SOURCE})*)`,
+  "mu",
+);
+const KOTLIN_DECLARATION_PATTERN = new RegExp(
+  String.raw`\b(?:class|object|fun|typealias|interface)\s+(${KOTLIN_IDENTIFIER_SOURCE})(?![\p{L}\p{Nd}_])`,
+  "gu",
+);
+const JAVA_PACKAGE_PATTERN = new RegExp(
+  String.raw`^\s*package\s+(${JAVA_IDENTIFIER_SOURCE}(?:\.${JAVA_IDENTIFIER_SOURCE})*)\s*;`,
+  "mu",
+);
+const JAVA_DECLARATION_PATTERN = new RegExp(
+  String.raw`\b(?:class|interface|enum)\s+(${JAVA_IDENTIFIER_SOURCE})(?![\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mn}\p{Mc}\p{Cf}\u0000-\u0008\u000E-\u001B\u007F-\u009F])`,
+  "gu",
+);
 
 type JvmSymbolIndexEntry = {
   packageName: string | null;
@@ -46,15 +64,15 @@ async function readJvmSymbolIndex(
 
 async function readKotlinSymbolIndex(filePath: string): Promise<JvmSymbolIndexEntry> {
   return await readJvmSymbolIndex(filePath, kotlinSymbolIndexCache, {
-    packagePattern: /^\s*package\s+([A-Za-z_][\w.]*)/m,
-    declarationPattern: /\b(?:class|object|fun|typealias|interface)\s+([A-Za-z_][\w]*)\b/g,
+    packagePattern: KOTLIN_PACKAGE_PATTERN,
+    declarationPattern: KOTLIN_DECLARATION_PATTERN,
   });
 }
 
 async function readJavaSymbolIndex(filePath: string): Promise<JvmSymbolIndexEntry> {
   return await readJvmSymbolIndex(filePath, javaSymbolIndexCache, {
-    packagePattern: /^\s*package\s+([A-Za-z_][\w.]*)\s*;/m,
-    declarationPattern: /\b(?:class|interface|enum)\s+([A-Za-z_][\w]*)\b/g,
+    packagePattern: JAVA_PACKAGE_PATTERN,
+    declarationPattern: JAVA_DECLARATION_PATTERN,
   });
 }
 

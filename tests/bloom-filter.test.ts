@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import { BloomFilter, buildBloomFilterFromSource, BloomFilterCache } from "../src/util/bloomFilter.js";
-
+import { CSHARP_SUPPORT, JAVA_SUPPORT, JS_SUPPORT, PHP_SUPPORT, PY_SUPPORT, TS_SUPPORT } from "../src/languages.js";
 describe("BloomFilter", () => {
   test("should detect items that were added", () => {
     const filter = new BloomFilter();
@@ -74,7 +74,7 @@ describe("buildBloomFilterFromSource", () => {
       }
     `;
 
-    const filter = buildBloomFilterFromSource(source, "javascript");
+    const filter = buildBloomFilterFromSource(source, JS_SUPPORT);
 
     expect(filter.mightContain("hello")).toBe(true);
     expect(filter.mightContain("name")).toBe(true);
@@ -95,7 +95,7 @@ describe("buildBloomFilterFromSource", () => {
       }
     `;
 
-    const filter = buildBloomFilterFromSource(source, "typescript");
+    const filter = buildBloomFilterFromSource(source, TS_SUPPORT);
 
     expect(filter.mightContain("User")).toBe(true);
     expect(filter.mightContain("getUser")).toBe(true);
@@ -116,13 +116,59 @@ describe("buildBloomFilterFromSource", () => {
               self.result = 0
     `;
 
-    const filter = buildBloomFilterFromSource(source, "python");
+    const filter = buildBloomFilterFromSource(source, PY_SUPPORT);
 
     expect(filter.mightContain("calculate_sum")).toBe(true);
     expect(filter.mightContain("numbers")).toBe(true);
     expect(filter.mightContain("total")).toBe(true);
     expect(filter.mightContain("Calculator")).toBe(true);
     expect(filter.mightContain("result")).toBe(true);
+  });
+
+  test("matches Java annotations", () => {
+    const filter = buildBloomFilterFromSource("@Override\nclass Child {}", JAVA_SUPPORT);
+
+    expect(filter.mightContain("Override")).toBe(true);
+  });
+
+  test("matches C# verbatim identifiers", () => {
+    const filter = buildBloomFilterFromSource("class @Widget {}", CSHARP_SUPPORT);
+
+    expect(filter.mightContain(CSHARP_SUPPORT.normalizeIdentifier("@Widget"))).toBe(true);
+  });
+
+  test("canonicalizes Unicode identifiers before adding them", () => {
+    const filter = buildBloomFilterFromSource("def caf\u00e9(): pass", PY_SUPPORT);
+
+    expect(filter.mightContain("cafe\u0301".normalize("NFKC"))).toBe(true);
+  });
+
+  test("matches PHP identifiers beginning with non-ID_Start code points", () => {
+    const identifier = "\u00b2php";
+    const filter = buildBloomFilterFromSource(`<?php function ${identifier}() {}`, PHP_SUPPORT);
+
+    expect(filter.mightContain(PHP_SUPPORT.normalizeIdentifier(identifier))).toBe(true);
+  });
+
+  test("matches Java identifiers beginning with currency symbols", () => {
+    const identifier = "\u00a5currency";
+    const filter = buildBloomFilterFromSource(`class ${identifier} {}`, JAVA_SUPPORT);
+
+    expect(filter.mightContain(JAVA_SUPPORT.normalizeIdentifier(identifier))).toBe(true);
+  });
+
+  test("matches Java identifiers beginning with connecting punctuation", () => {
+    const identifier = "\u203fjava";
+    const filter = buildBloomFilterFromSource(`class ${identifier} {}`, JAVA_SUPPORT);
+
+    expect(filter.mightContain(JAVA_SUPPORT.normalizeIdentifier(identifier))).toBe(true);
+  });
+
+  test("matches C# identifiers containing formatting characters", () => {
+    const identifier = "part\u200ename";
+    const filter = buildBloomFilterFromSource(`class Entry { void ${identifier}() {} }`, CSHARP_SUPPORT);
+
+    expect(filter.mightContain(CSHARP_SUPPORT.normalizeIdentifier(identifier))).toBe(true);
   });
 });
 

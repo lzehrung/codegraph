@@ -1,16 +1,17 @@
+import { supportForFile, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { sliceText } from "../util/ast.js";
-import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import type { SymbolDef } from "./types.js";
 
-export function sameDef(left: SymbolDef, right: SymbolDef): boolean {
+export function sameDef(left: SymbolDef, right: SymbolDef, languageExtensions?: LanguageExtensionMap): boolean {
   const leftIndex = left.range.start.index ?? 0;
   const rightIndex = right.range.start.index ?? 0;
+  const normalizeIdentifier = supportForFile(left.file, languageExtensions)?.normalizeIdentifier ?? ((name) => name);
   return (
     fileIdentityKey(left.file) === fileIdentityKey(right.file) &&
-    left.localName === right.localName &&
+    normalizeIdentifier(left.localName) === normalizeIdentifier(right.localName) &&
     leftIndex === rightIndex
   );
 }

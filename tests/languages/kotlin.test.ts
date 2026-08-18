@@ -47,6 +47,10 @@ const definition: LanguageTestDefinition = {
           from: "TypeConsumers.kt",
           to: { type: "file", path: "utils/MoreTypes.kt" },
         },
+        {
+          from: ".regressions/unicode_consumer.kt",
+          to: { type: "file", path: ".regressions/unicode_def.kt" },
+        },
       ],
       symbols: [
         {

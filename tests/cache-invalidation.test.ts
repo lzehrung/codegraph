@@ -994,7 +994,10 @@ describe("Cache invalidation and strict hashing", () => {
       expect(typeof hash).toBe("string");
       expect(hash?.length).toBe(40);
     }
-  });
+    // Writing 700 files then running add/commit/hash-object is filesystem-bound, and a
+    // Windows CI runner can exceed the 30s default. The assertions are deterministic; only
+    // the wall clock is host-dependent, so give it headroom instead of letting it flake.
+  }, 120_000);
 
   it("resolves git signatures when the project root is a repository subdirectory (C1)", async () => {
     const root = await mkTmpDir("dg-git-sig-subdir-root-");
@@ -2021,6 +2024,36 @@ describe("Cache invalidation and strict hashing", () => {
     bloomSpy.mockRestore();
   });
 
+  it("rejects version 3 bloom sidecars instead of reusing their filters", async () => {
+    const root = await mkTmpDir("dg-stale-bloom-version-");
+    const alphaPath = path.join(root, "alpha.ts");
+    const triggerPath = path.join(root, "trigger.ts");
+    await fsp.writeFile(alphaPath, "export const alphaValue = 1;\n", "utf8");
+    await fsp.writeFile(triggerPath, "export const triggerValue = 1;\n", "utf8");
+    await buildProjectIndex(root, { threads: 1, cache: "disk", useBloomFilters: true });
+
+    const sidecarPath = path.join(root, ".codegraph-cache", "index-v1", "bloom-filters.json");
+    const staleSidecar = await readProjectSnapshot(sidecarPath);
+    staleSidecar.version = 3;
+    await writeProjectSnapshot(sidecarPath, staleSidecar);
+
+    const snapshotPath = projectSnapshotPathFor(root);
+    const projectSnapshot = await readProjectSnapshot(snapshotPath);
+    delete projectSnapshot.bloomFilters;
+    await writeProjectSnapshot(snapshotPath, projectSnapshot);
+
+    await fsp.writeFile(triggerPath, "export const triggerValue = 2;\n", "utf8");
+    const bloomSpy = vi.spyOn(buildCache, "buildBloomFilterForFile");
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 1,
+      cache: "disk",
+      useBloomFilters: true,
+    });
+
+    expect(bloomSpy).toHaveBeenCalled();
+    expect(incremental.bloomFilters?.get(normalize(alphaPath))?.mightContain("alphaValue")).toBe(true);
+    bloomSpy.mockRestore();
+  });
   it("rejects stale snapshot modules after the manifest has advanced", async () => {
     const root = await mkTmpDir("dg-stale-snapshot-modules-");
     const entryPath = path.join(root, "entry.ts");
@@ -2182,7 +2215,7 @@ describe("Cache invalidation and strict hashing", () => {
       nativeRuntimeFingerprint?: string;
       implementationFingerprint?: string;
     };
-    expect(rewrittenSnapshot.version).toBe(8);
+    expect(rewrittenSnapshot.version).toBe(9);
     expect(initial.byFile.has(fileIdentityKey(normalize(entryPath)))).toBe(true);
     expect(rebuilt.byFile.has(fileIdentityKey(normalize(entryPath)))).toBe(true);
     expect(rebuilt.bloomFilters?.get(normalize(entryPath))?.mightContain("versioned")).toBe(true);
