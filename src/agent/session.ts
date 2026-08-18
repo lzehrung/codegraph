@@ -1,5 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { boundList } from "../presentation/bounds.js";
 import { buildProjectIndexIncremental } from "../indexer/build-index.js";
 import { resolveIncrementalFilePlan, type IncrementalFilePlan } from "../indexer/incremental-plan.js";
 import type { BuildOptions, BuildReport, IncrementalBuildOptions, ProjectIndex } from "../indexer/types.js";
@@ -194,11 +195,11 @@ function summarizeChangedFiles(files: readonly string[]): {
   changedFileCount: number;
   omittedChangedFileCount: number;
 } {
-  const changedFiles = files.slice(0, DEFAULT_MAX_FRESHNESS_CHANGED_FILES);
+  const bounded = boundList(files, DEFAULT_MAX_FRESHNESS_CHANGED_FILES);
   return {
-    changedFiles,
+    changedFiles: bounded.items,
     changedFileCount: files.length,
-    omittedChangedFileCount: Math.max(0, files.length - changedFiles.length),
+    omittedChangedFileCount: bounded.omitted,
   };
 }
 

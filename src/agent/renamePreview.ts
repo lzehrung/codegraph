@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { boundList } from "../presentation/bounds.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import { shapeCandidateTests, type RenameCandidateTest } from "./candidateTests.js";
 export type { RenameCandidateTest };
@@ -301,8 +302,9 @@ export async function previewRenameInSnapshot(
       kind: "definition",
     }),
   );
-  const referenceLimitExceeded = semanticReferences.length > maxEdits;
-  const selectedReferences = semanticReferences.slice(0, maxEdits);
+  const boundedSemanticReferences = boundList(semanticReferences, maxEdits);
+  const referenceLimitExceeded = boundedSemanticReferences.omitted > 0;
+  const selectedReferences = boundedSemanticReferences.items;
   const importDeclarations = await collectImportDeclarationCandidates(
     selectedReferences,
     resolved.def.localName,
@@ -322,8 +324,9 @@ export async function previewRenameInSnapshot(
       }),
     ),
   ];
-  const candidateLimitExceeded = allCandidates.length > maxEdits;
-  const candidates = allCandidates.slice(0, maxEdits);
+  const boundedCandidates = boundList(allCandidates, maxEdits);
+  const candidateLimitExceeded = boundedCandidates.omitted > 0;
+  const candidates = boundedCandidates.items;
   await addScopeConflicts(snapshot, resolved.def, request.newName, selectedReferences, conflicts);
 
   for (const reference of importDeclarations.missing) {
@@ -466,10 +469,7 @@ export async function previewRenameInSnapshot(
     limits: { edits: maxEdits, candidateTests: 100 },
     omittedCounts: {
       edits:
-        Math.max(
-          Math.max(0, semanticReferences.length - selectedReferences.length),
-          Math.max(0, allCandidates.length - candidates.length),
-        ) +
+        Math.max(boundedSemanticReferences.omitted, boundedCandidates.omitted) +
         textualOmitted +
         omittedImplementations,
       candidateTests: omittedCandidateTests,
