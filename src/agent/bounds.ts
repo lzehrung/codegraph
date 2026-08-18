@@ -32,4 +32,4 @@ export function emptyAgentBoundedList<T>(): BoundedAgentList<T> {
   return emptyBoundedList();
 }
 
-export { countOmitted };
+export { boundList, countOmitted, emptyBoundedList, type BoundedList };

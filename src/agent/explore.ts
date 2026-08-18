@@ -2,7 +2,7 @@ import path from "node:path";
 import type { AnalysisSummary } from "../analysisSummary.js";
 import { getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/traversal.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
-import { boundList } from "../presentation/bounds.js";
+import { boundList, countOmitted } from "../presentation/bounds.js";
 import type { BuildOptions } from "../indexer/types.js";
 import { listCandidateTestFiles } from "../impact/context.js";
 import { fileIdentityKey, normalizePath, toProjectDisplayPath } from "../util/paths.js";
@@ -177,11 +177,11 @@ export async function exploreCodegraphWithSession(
     omittedCounts: {
       anchors: search.omittedCounts.results,
       packets: includeSource
-        ? Math.max(0, collectPacketTargets(anchors, Number.POSITIVE_INFINITY).length - packetTargets.length)
+        ? countOmitted(collectPacketTargets(anchors, Number.POSITIVE_INFINITY).length, packetTargets.length)
         : 0,
       paths: pathResult.omittedCount,
       blastRadius: blastRadius.reduce((sum, entry) => sum + entry.omittedLowerBound, 0),
-      blastRadiusEntries: Math.max(0, anchorFiles.length - blastRadius.length),
+      blastRadiusEntries: countOmitted(anchorFiles.length, blastRadius.length),
       candidateTests: candidateTestResult.omittedCount,
     },
   };

@@ -1,3 +1,4 @@
+import { boundList } from "../presentation/bounds.js";
 import { listCandidateTestFiles } from "../impact/index.js";
 import type { ProjectIndex, SymbolHandle } from "../indexer/types.js";
 import { normalizeAgentFilePath } from "./normalize.js";
@@ -24,13 +25,13 @@ export function shapeCandidateTests(
     maxCandidates: limit + 1,
     projectRoot,
   });
-  const omittedCandidateTests = Math.max(0, allCandidateTests.length - limit);
-  const candidateTests = allCandidateTests.slice(0, limit).map(
+  const bounded = boundList(allCandidateTests, limit);
+  const candidateTests = bounded.items.map(
     (candidate): RenameCandidateTest => ({
       file: normalizeAgentFilePath(projectRoot, candidate.file),
       confidence: candidate.confidence,
       reason: candidate.reason,
     }),
   );
-  return { candidateTests, omittedCandidateTests };
+  return { candidateTests, omittedCandidateTests: bounded.omitted };
 }
