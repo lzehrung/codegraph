@@ -21,6 +21,52 @@ import type { ParserLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../language
 import type { ExportEntry, ImportBinding, ModuleIndex, SymbolDef } from "./types.js";
 import type { Range } from "../types.js";
 
+import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../util/identifiers.js";
+
+const JS_FALLBACK_DECLARATION_PATTERN = new RegExp(
+  String.raw`\bexport\s+(?:const|let|var|function|class)\s+(${ECMASCRIPT_IDENTIFIER_SOURCE})`,
+  "gu",
+);
+const JS_FALLBACK_DEFAULT_PATTERN = new RegExp(
+  String.raw`\bexport\s+default\s+(${ECMASCRIPT_IDENTIFIER_SOURCE})`,
+  "gu",
+);
+const JS_FALLBACK_EXPORT_ASSIGN_PATTERN = new RegExp(
+  String.raw`\bexport\s*=\s*(${ECMASCRIPT_IDENTIFIER_SOURCE})`,
+  "gu",
+);
+const JS_FALLBACK_REEXPORT_SPECIFIER_PATTERN = new RegExp(
+  String.raw`^(${ECMASCRIPT_IDENTIFIER_SOURCE})(?:\s+as\s+(${ECMASCRIPT_IDENTIFIER_SOURCE}))?$`,
+  "u",
+);
+const JS_FALLBACK_REEXPORT_NAMESPACE_PATTERN = new RegExp(
+  String.raw`\bexport\s*\*\s+as\s+(${ECMASCRIPT_IDENTIFIER_SOURCE})\s+from\s*("|')([^"']*)\2`,
+  "gu",
+);
+const JS_FALLBACK_CJS_FUNCTION_PATTERN = new RegExp(
+  String.raw`(?:^|[;\n\r])\s*(?:exports|module\.exports)\.(${ECMASCRIPT_IDENTIFIER_SOURCE})\s*=\s*(function\b|\([^)]*\)\s*=>)`,
+  "gu",
+);
+const JS_FALLBACK_CJS_OBJECT_FUNCTION_PATTERN = new RegExp(
+  String.raw`(${ECMASCRIPT_IDENTIFIER_SOURCE})\s*:\s*(function\b|\([^)]*\)\s*=>)`,
+  "gu",
+);
+const JS_FALLBACK_TS_EXPORT_ASSIGN_PATTERN = new RegExp(
+  String.raw`^\s*export\s*=\s*(${ECMASCRIPT_IDENTIFIER_SOURCE})\s*;?\s*$`,
+  "u",
+);
+const JS_DEFAULT_FUNCTION_PATTERN = new RegExp(
+  String.raw`\bexport\s+default\s+(?:async\s+)?function\b\s*\*?\s*(${ECMASCRIPT_IDENTIFIER_SOURCE})`,
+  "u",
+);
+const JS_DEFAULT_CLASS_PATTERN = new RegExp(
+  String.raw`\bexport\s+default\s+(?:abstract\s+)?class\s+(${ECMASCRIPT_IDENTIFIER_SOURCE})`,
+  "u",
+);
+const JS_DEFAULT_IDENTIFIER_PATTERN = new RegExp(
+  String.raw`\bexport\s+default\s+(${ECMASCRIPT_IDENTIFIER_SOURCE})(?![$_\p{ID_Continue}\u200c\u200d])`,
+  "u",
+);
 const METHOD_LIKE_BINDING_NODE_TYPES = new Set([
   "method_definition",
   "method_signature",
@@ -82,15 +128,21 @@ function appendJsLikeRegexFallbackExports(
   exports: ExportEntry[],
 ): void {
   const maskedSource = maskJsLikeCommentsAndStrings(source);
-  const reDecl = /\bexport\s+(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g;
-  const reDefault = /\bexport\s+default\s+([A-Za-z_$][\w$]*)/g;
-  const reExportAssign = /\bexport\s*=\s*([A-Za-z_$][\w$]*)/g;
-  const reReexport = /\bexport\s*\{\s*([^}]+)\}\s*from\s*("|')([^"']*)\2/g;
-  const reReexportNs = /\bexport\s*\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*("|')([^"']*)\2/g;
-  const reStar = /\bexport\s*\*\s*from\s*("|')([^"']*)\1/g;
-  const reCjsFn = /(?:^|[;\n\r])\s*(?:exports|module\.exports)\.([A-Za-z_$][\w$]*)\s*=\s*(function\b|\([^)]*\)\s*=>)/g;
-  const reCjsObjFn = /([A-Za-z_$][\w$]*)\s*:\s*(function\b|\([^)]*\)\s*=>)/g;
-  const moduleExportsObject = /module\.exports\s*=\s*\{([^}]*)\}/s;
+  JS_FALLBACK_DECLARATION_PATTERN.lastIndex = 0;
+  JS_FALLBACK_DEFAULT_PATTERN.lastIndex = 0;
+  JS_FALLBACK_EXPORT_ASSIGN_PATTERN.lastIndex = 0;
+  JS_FALLBACK_REEXPORT_NAMESPACE_PATTERN.lastIndex = 0;
+  JS_FALLBACK_CJS_FUNCTION_PATTERN.lastIndex = 0;
+  JS_FALLBACK_CJS_OBJECT_FUNCTION_PATTERN.lastIndex = 0;
+  const reDecl = JS_FALLBACK_DECLARATION_PATTERN;
+  const reDefault = JS_FALLBACK_DEFAULT_PATTERN;
+  const reExportAssign = JS_FALLBACK_EXPORT_ASSIGN_PATTERN;
+  const reReexport = new RegExp(String.raw`\bexport\s*\{\s*([^}]+)\}\s*from\s*("|')([^"']*)\2`, "gu");
+  const reReexportNs = JS_FALLBACK_REEXPORT_NAMESPACE_PATTERN;
+  const reStar = /\bexport\s*\*\s*from\s*("|')([^"']*)\1/gu;
+  const reCjsFn = JS_FALLBACK_CJS_FUNCTION_PATTERN;
+  const reCjsObjFn = JS_FALLBACK_CJS_OBJECT_FUNCTION_PATTERN;
+  const moduleExportsObject = /module\.exports\s*=\s*\{([^}]*)\}/su;
   let match: RegExpExecArray | null;
 
   while ((match = reDecl.exec(maskedSource))) {
@@ -137,7 +189,7 @@ function appendJsLikeRegexFallbackExports(
     const from = source.slice(match.index, reReexport.lastIndex).match(/from\s*("|')([^"']+)\1/)?.[2];
     if (!from) continue;
     for (const spec of list) {
-      const entryMatch = spec.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+      const entryMatch = JS_FALLBACK_REEXPORT_SPECIFIER_PATTERN.exec(spec);
       if (!entryMatch) continue;
       const srcName = entryMatch[1]!;
       const alias = entryMatch[2] ?? srcName;
@@ -820,9 +872,7 @@ export function collectLocalsAndExportsFromSource(
         continue;
       }
       const tsExportAssignMatch =
-        support.id === "ts" || support.id === "tsx"
-          ? stmtText.match(/^\s*export\s*=\s*([A-Za-z_$][\w$]*)\s*;?\s*$/)
-          : null;
+        support.id === "ts" || support.id === "tsx" ? JS_FALLBACK_TS_EXPORT_ASSIGN_PATTERN.exec(stmtText) : null;
       if (tsExportAssignMatch) {
         const ident = tsExportAssignMatch[1]!;
         const local = locals.find((def) => def.localName === ident);
@@ -889,8 +939,8 @@ export function collectLocalsAndExportsFromSource(
     try {
       appendExportsFromMatches(nativeQueries.exports, ensureTree() ?? undefined);
       if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === "default")) {
-        const mDefFn = source.match(/\bexport\s+default\s+(?:async\s+)?function\b\s*\*?\s*([A-Za-z_$][\w$]*)/);
-        const mDefCls = source.match(/\bexport\s+default\s+(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/);
+        const mDefFn = JS_DEFAULT_FUNCTION_PATTERN.exec(source);
+        const mDefCls = JS_DEFAULT_CLASS_PATTERN.exec(source);
         const name = mDefFn?.[1] ?? mDefCls?.[1];
         if (name) {
           const local = locals.find((def) => def.localName === name);
@@ -934,9 +984,9 @@ export function collectLocalsAndExportsFromSource(
     !exports.some((e) => e.type === "local" && e.exportedAs === "default")
   ) {
     const maskedSource = maskJsLikeCommentsAndStrings(source);
-    const defFn = maskedSource.match(/\bexport\s+default\s+(?:async\s+)?function\b\s*\*?\s*([A-Za-z_$][\w$]*)/);
-    const defCls = maskedSource.match(/\bexport\s+default\s+(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/);
-    const defIdent = maskedSource.match(/\bexport\s+default\s+([A-Za-z_$][\w$]*)\b/);
+    const defFn = JS_DEFAULT_FUNCTION_PATTERN.exec(maskedSource);
+    const defCls = JS_DEFAULT_CLASS_PATTERN.exec(maskedSource);
+    const defIdent = JS_DEFAULT_IDENTIFIER_PATTERN.exec(maskedSource);
     const ignoredDefaultIdentifiers = new Set(["abstract", "async", "class", "function"]);
     const identName = defIdent && defIdent[1] && !ignoredDefaultIdentifiers.has(defIdent[1]) ? defIdent[1] : undefined;
     const name = defFn?.[1] ?? defCls?.[1] ?? identName;

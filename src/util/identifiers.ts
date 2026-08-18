@@ -1,4 +1,17 @@
 /**
+/**
+ * Returns whether identifier equality needs Unicode processing. Java also sends C0
+ * controls through its normalization path because some are identifier-ignorable.
+ */
+export function hasNonAsciiCodePoint(value: string, includeC0Controls = false): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)!;
+    if (codePoint > 0x7f || (includeC0Controls && codePoint <= 0x1f)) return true;
+  }
+  return false;
+}
+
+/**
  * ECMAScript identifier syntax, including ZWNJ and ZWJ continuation characters. Import
  * extraction requires this exact language-conforming grammar.
  */
@@ -25,24 +38,32 @@ export const PYTHON_IDENTIFIER_SOURCE = XID_IDENTIFIER_SOURCE;
 export const PHP_IDENTIFIER_SOURCE = String.raw`[A-Za-z_\u{80}-\u{10FFFF}][A-Za-z0-9_\u{80}-\u{10FFFF}]*`;
 
 /**
+ * Java identifier-ignorable characters: formatting characters plus the ISO control
+ * ranges accepted by Character.isIdentifierIgnorable.
+ */
+export const JAVA_IDENTIFIER_IGNORABLE_SOURCE = String.raw`\p{Cf}\u0000-\u0008\u000E-\u001B\u007F-\u009F`;
+
+/** C# formatting characters permitted in identifier-part-character. */
+export const CSHARP_IDENTIFIER_FORMAT_SOURCE = String.raw`\p{Cf}`;
+
+/**
  * Java identifiers (`Character.isJavaIdentifierStart`/`isJavaIdentifierPart`) permit a
  * Unicode letter (Lu/Ll/Lt/Lm/Lo), a letter-number (Nl, e.g. Roman numerals), a currency
  * symbol (Sc, e.g. `$`), or a connecting-punctuation character (Pc, e.g. `_`) at every
  * position; continuation additionally allows decimal digits (Nd), combining marks (Mn/Mc),
- * and `Character.isIdentifierIgnorable` characters: formatting characters (Cf, e.g.
- * ZWNJ/ZWJ) plus the ISO control ranges U+0000-U+0008, U+000E-U+001B, and U+007F-U+009F.
- * Non-decimal number categories (No) are not part of the Java grammar.
+ * and identifier-ignorable characters. Non-decimal number categories (No) are not part of
+ * the Java grammar.
  */
-export const JAVA_IDENTIFIER_SOURCE = String.raw`[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mn}\p{Mc}\p{Cf}\u0000-\u0008\u000E-\u001B\u007F-\u009F]*`;
+export const JAVA_IDENTIFIER_SOURCE = String.raw`[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mn}\p{Mc}${JAVA_IDENTIFIER_IGNORABLE_SOURCE}]*`;
 
 /**
  * C# identifiers (ECMA-334 `identifier-start-character`/`identifier-part-character`) permit a
  * Unicode letter (Lu/Ll/Lt/Lm/Lo), a letter-number (Nl), or a literal underscore at the first
  * position, plus an optional leading `@` for a verbatim identifier (escaping a keyword, e.g.
  * `@class`); continuation additionally allows decimal digits (Nd), connecting-punctuation
- * (Pc), combining marks (Mn/Mc), and formatting characters (Cf).
+ * (Pc), combining marks (Mn/Mc), and formatting characters.
  */
-export const CSHARP_IDENTIFIER_SOURCE = String.raw`@?[\p{L}\p{Nl}_][\p{L}\p{Nl}_\p{Nd}\p{Pc}\p{Mn}\p{Mc}\p{Cf}]*`;
+export const CSHARP_IDENTIFIER_SOURCE = String.raw`@?[\p{L}\p{Nl}_][\p{L}\p{Nl}_\p{Nd}\p{Pc}\p{Mn}\p{Mc}${CSHARP_IDENTIFIER_FORMAT_SOURCE}]*`;
 
 /**
  * Go identifiers (`unicode_letter`/`unicode_digit` in the Go spec's `identifier` production)

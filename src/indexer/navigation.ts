@@ -1,4 +1,4 @@
-import { type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
+import { supportForFile, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { resolveMemberAccessDefinition, supportsReceiverMemberResolution } from "./navigation-goto.js";
@@ -278,12 +278,12 @@ export async function findReferences(
 
   const exportedNames: string[] = [];
   for (const entry of mod.exports) {
-    if (entry.type === "local" && sameDef(entry.target, def)) {
+    if (entry.type === "local" && sameDef(entry.target, def, index.languageExtensions)) {
       exportedNames.push(entry.exportedAs);
     }
   }
   if (!exportedNames.length && shouldUseLocalNameAsExportFallback(def, parsedContext)) {
-    exportedNames.push(normalizedLocalName);
+    exportedNames.push(def.localName);
   }
 
   const exportedNameSet = new Set(exportedNames);
@@ -297,11 +297,15 @@ export async function findReferences(
       const filter = index.bloomFilters?.get(fileIdentityKey(candidateFile));
       if (!filter) return true;
 
+      const normalizeIdentifier =
+        supportForFile(candidateFile, index.languageExtensions)?.normalizeIdentifier ?? ((name) => name);
       const aliases = getCandidateReferenceNames(module, definitionFile, exportedNameSet);
       if (!aliases.length) {
-        return [...exportedNames, ...phpQualifiedNames].some((candidateName) => filter.mightContain(candidateName));
+        return [...exportedNames, ...phpQualifiedNames].some((candidateName) =>
+          filter.mightContain(normalizeIdentifier(candidateName)),
+        );
       }
-      return aliases.some((alias) => filter.mightContain(alias));
+      return aliases.some((alias) => filter.mightContain(normalizeIdentifier(alias)));
     });
   }
 
@@ -338,8 +342,8 @@ export async function findReferences(
           const hit = resolveExport(index, targetFile, exportedName);
           const matchesDef =
             hit?.kind === "resolved"
-              ? sameDef(hit.def, def)
-              : fileIdentityKey(targetFile) === fileIdentityKey(definitionFile);
+              ? sameDef(hit.def, def, index.languageExtensions)
+              : imp.kind === "namespace" && fileIdentityKey(targetFile) === fileIdentityKey(definitionFile);
           if (!matchesDef) continue;
           const parsed = await ensureCandidateParsed();
           const ranges = await collectNamespaceMemberRefs(
@@ -359,7 +363,7 @@ export async function findReferences(
           }
         } else if (imp.kind === "star") {
           const result = resolveImported(index, imp, exportedName);
-          const matchesDef = !!result && !("namespace" in result) && sameDef(result, def);
+          const matchesDef = !!result && !("namespace" in result) && sameDef(result, def, index.languageExtensions);
           if (!matchesDef) continue;
           if (hasExpandedNamedImport(module, targetFile, exportedName)) {
             continue;
@@ -386,13 +390,11 @@ export async function findReferences(
             exported = "default";
           }
           const hit = resolveExport(index, targetFile, exported);
-          const matchesDef =
-            hit?.kind === "resolved"
-              ? sameDef(hit.def, def)
-              : fileIdentityKey(targetFile) === fileIdentityKey(definitionFile);
+          const matchesDef = hit?.kind === "resolved" && sameDef(hit.def, def, index.languageExtensions);
           if (!matchesDef) continue;
+          const parsed = await ensureCandidateParsed();
           const resolvedScope = await ensureScope();
-          const localName = imp.local;
+          const localName = parsed.sup.normalizeIdentifier(imp.local);
           const bindings = resolvedScope.bindings.get(localName) ?? [];
           for (const binding of bindings) {
             if (binding.import === imp) {
@@ -432,7 +434,9 @@ export async function findReferences(
     )) {
       if (hasReachedMaxReferences()) break;
       const filter = index.bloomFilters?.get(fileIdentityKey(fileId));
-      if (filter && !filter.mightContain(def.localName)) continue;
+      const canonicalName =
+        supportForFile(fileId, index.languageExtensions)?.normalizeIdentifier(def.localName) ?? def.localName;
+      if (filter && !filter.mightContain(canonicalName)) continue;
       const remainingReferences = maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
       const ranges = await collectVerifiedNamedNodeReferences(
         index,

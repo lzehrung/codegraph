@@ -17,6 +17,13 @@ import { normalizeImpactFilePath } from "./path.js";
 import { collectImpactSuggestions } from "./suggestions.js";
 import { compileTestPatterns, createIndexTestFileMatcher } from "./testPatterns.js";
 import type { ChangedSymbol, FileChange, ImpactOptions, ImpactSuggestion } from "./types.js";
+import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../util/identifiers.js";
+
+const JAVASCRIPT_IDENTIFIER_PATTERN = new RegExp(ECMASCRIPT_IDENTIFIER_SOURCE, "uy");
+const JAVASCRIPT_IDENTIFIER_PART_PATTERN = new RegExp(
+  String.raw`(?:${ECMASCRIPT_IDENTIFIER_SOURCE})|[$_\p{ID_Continue}\u200c\u200d]`,
+  "u",
+);
 const CONFIG_FILE_RE =
   /(^|\/)(?:tsconfig(?:\.[^./]+)?\.json|jsconfig\.json|vite\.config\.[cm]?[jt]s|webpack\.config\.[cm]?[jt]s|rollup\.config\.[cm]?[jt]s|esbuild\.config\.[cm]?[jt]s|babel\.config\.[cm]?[jt]s|\.eslintrc(?:\.[^./]+)?|prettier\.config\.[cm]?[jt]s|package\.json|pnpm-workspace\.ya?ml|lerna\.json|turbo\.json|nx\.json|\.env(?:\.[^/]*)?)$/i;
 const UNTESTED_CHANGE_REFERENCE_SCAN_LIMIT = 500;
@@ -631,12 +638,13 @@ function skipWhitespaceAndComments(text: string, index: number): number {
   }
   return cursor;
 }
-
 function readIdentifier(text: string, index: number): { name: string; end: number } | null {
   const ch = text[index];
-  if (!ch || !/[A-Za-z_$]/.test(ch)) return null;
-  let end = index + 1;
-  while (end < text.length && /[\w$]/.test(text[end]!)) end += 1;
+  if (!ch) return null;
+  JAVASCRIPT_IDENTIFIER_PATTERN.lastIndex = index;
+  const identifierMatch = JAVASCRIPT_IDENTIFIER_PATTERN.exec(text);
+  if (!identifierMatch) return null;
+  const end = JAVASCRIPT_IDENTIFIER_PATTERN.lastIndex;
   return { name: text.slice(index, end), end };
 }
 
@@ -802,7 +810,10 @@ function findConstructorParamCount(classBodyInner: string): number | null {
       continue;
     }
     if (depth !== 0) continue;
-    if (classBodyInner.startsWith("constructor", index) && !/[A-Za-z0-9_$]/.test(classBodyInner[index - 1] ?? "")) {
+    if (
+      classBodyInner.startsWith("constructor", index) &&
+      !JAVASCRIPT_IDENTIFIER_PART_PATTERN.test(classBodyInner[index - 1] ?? "")
+    ) {
       const cursor = skipWhitespaceAndComments(classBodyInner, index + "constructor".length);
       if (classBodyInner[cursor] !== "(") continue;
       const params = findBalancedParentheses(classBodyInner, cursor);
@@ -956,7 +967,10 @@ function collectExportSignaturesFromText(
     if (exportAt < 0) break;
     const before = exportAt === 0 ? "" : (scanText[exportAt - 1] ?? "");
     const after = scanText[exportAt + "export".length] ?? "";
-    if ((before && /[A-Za-z0-9_$]/.test(before)) || (after && /[A-Za-z0-9_$]/.test(after))) {
+    if (
+      (before && JAVASCRIPT_IDENTIFIER_PART_PATTERN.test(before)) ||
+      (after && JAVASCRIPT_IDENTIFIER_PART_PATTERN.test(after))
+    ) {
       index = exportAt + "export".length;
       continue;
     }

@@ -61,6 +61,10 @@ const definition: LanguageTestDefinition = {
           from: "utils.go",
           to: { type: "file", path: "helpers.go" },
         },
+        {
+          from: ".regressions/unicode_consumer.go",
+          to: { type: "file", path: ".regressions/unicodepkg.go" },
+        },
       ],
       symbols: [
         {

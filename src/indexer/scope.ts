@@ -41,38 +41,38 @@ export function buildScopeIndexFromSource(
   const extraBindings: Binding[] = [];
 
   const normalizeIdentifier = support.normalizeIdentifier;
-  const buildBinding = (nameNode: SyntaxNodeLike, kind: BindingKind): Binding => ({
-    name: normalizeIdentifier(sliceText(nameNode, source)),
-    kind,
-    def: toRange(nameNode),
-    node: nameNode,
-    occurrences: [],
-  });
+  const buildBinding = (nameNode: SyntaxNodeLike, kind: BindingKind): Binding => {
+    const name = sliceText(nameNode, source);
+    return {
+      name,
+      canonicalName: normalizeIdentifier(name),
+      kind,
+      def: toRange(nameNode),
+      node: nameNode,
+      occurrences: [],
+    };
+  };
+
+  const addImportBinding = (name: string, kind: BindingKind, importBinding: ImportBinding): void => {
+    const binding: Binding = {
+      name,
+      canonicalName: normalizeIdentifier(name),
+      kind,
+      occurrences: [],
+      import: importBinding,
+    };
+    rootScope.map.set(binding.canonicalName, binding);
+  };
 
   for (const imp of imports) {
     if (imp.kind === "default") {
-      rootScope.map.set(imp.local, {
-        name: imp.local,
-        kind: "importDefault",
-        occurrences: [],
-        import: imp,
-      });
+      addImportBinding(imp.local, "importDefault", imp);
     }
     if (imp.kind === "named") {
-      rootScope.map.set(imp.local, {
-        name: imp.local,
-        kind: "importNamed",
-        occurrences: [],
-        import: imp,
-      });
+      addImportBinding(imp.local, "importNamed", imp);
     }
     if (imp.kind === "namespace") {
-      rootScope.map.set(imp.localNS, {
-        name: imp.localNS,
-        kind: "namespace",
-        occurrences: [],
-        import: imp,
-      });
+      addImportBinding(imp.localNS, "namespace", imp);
     }
   }
 
@@ -97,7 +97,7 @@ export function buildScopeIndexFromSource(
 
   const addBinding = (target: Scope, nameNode: SyntaxNodeLike, kind: BindingKind): void => {
     const binding = buildBinding(nameNode, kind);
-    target.map.set(binding.name, binding);
+    target.map.set(binding.canonicalName, binding);
   };
 
   const addDecl = (nameNode: SyntaxNodeLike, kind: BindingKind): void => {
@@ -107,16 +107,17 @@ export function buildScopeIndexFromSource(
 
   const addHoistedDecl = (nameNode: SyntaxNodeLike, kind: BindingKind): void => {
     const target = [...stack].reverse().find((scope) => scope.kind === "function") ?? rootScope;
-    const name = normalizeIdentifier(sliceText(nameNode, source));
-    if (!target.map.has(name)) addBinding(target, nameNode, kind);
+    const canonicalName = normalizeIdentifier(sliceText(nameNode, source));
+    if (!target.map.has(canonicalName)) addBinding(target, nameNode, kind);
   };
 
   const lookup = (name: string): Binding | undefined => {
+    const canonicalName = normalizeIdentifier(name);
     for (let index = stack.length - 1; index >= 0; index--) {
-      const hit = stack[index]!.map.get(name);
+      const hit = stack[index]!.map.get(canonicalName);
       if (hit) return hit;
     }
-    return rootScope.map.get(name);
+    return rootScope.map.get(canonicalName);
   };
 
   const addPatternDecls = (
@@ -409,8 +410,7 @@ export function buildScopeIndexFromSource(
     }
 
     if (idSet.has(node.type) && !support.isDeclarationName(node)) {
-      const name = normalizeIdentifier(sliceText(node, source));
-      const binding = lookup(name);
+      const binding = lookup(sliceText(node, source));
       if (binding) {
         binding.occurrences.push(toRange(node));
       }
@@ -456,15 +456,15 @@ export function buildScopeIndexFromSource(
   const all: Binding[] = [];
   const flush = (scope: Scope) => {
     for (const binding of scope.map.values()) {
-      if (!bindings.has(binding.name)) bindings.set(binding.name, []);
-      bindings.get(binding.name)!.push(binding);
+      if (!bindings.has(binding.canonicalName)) bindings.set(binding.canonicalName, []);
+      bindings.get(binding.canonicalName)!.push(binding);
       all.push(binding);
     }
   };
   for (const scope of allScopes) flush(scope);
   for (const binding of extraBindings) {
-    if (!bindings.has(binding.name)) bindings.set(binding.name, []);
-    bindings.get(binding.name)!.push(binding);
+    if (!bindings.has(binding.canonicalName)) bindings.set(binding.canonicalName, []);
+    bindings.get(binding.canonicalName)!.push(binding);
     all.push(binding);
   }
   return { bindings, all, allScopes };

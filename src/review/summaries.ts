@@ -15,6 +15,7 @@ import { mapLimit } from "../util/concurrency.js";
 import { collectLineStartOffsets } from "../util/lines.js";
 import { fileIdentityKey, toProjectDisplayPath } from "../util/paths.js";
 import type { DeletedFileSnapshot } from "./deleted.js";
+import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { isRiskRelevantSymbolMappingFile } from "./risk.js";
 import { createReferenceLookupCache } from "../impact/referenceCache.js";
 import type {
@@ -26,6 +27,20 @@ import type {
   ReviewSymbolSummary,
   ReviewTimingReport,
 } from "./types.js";
+
+const REVIEW_EXPORT_NAMESPACE_PATTERN = new RegExp(
+  String.raw`^export\s*\*\s+as\s+(${ECMASCRIPT_IDENTIFIER_SOURCE})\s+from\b`,
+  "u",
+);
+const REVIEW_EXPORT_SPECIFIER_PATTERN = new RegExp(
+  String.raw`^(${ECMASCRIPT_IDENTIFIER_SOURCE})(?:\s+as\s+(${ECMASCRIPT_IDENTIFIER_SOURCE}))?$`,
+  "u",
+);
+const REVIEW_EXPORT_STATEMENT_PATTERNS = [
+  new RegExp(String.raw`\bexport\s*(?:type\s+)?\{[^}]*\}\s*from\s*("|')[^"']*\1`, "gu"),
+  new RegExp(String.raw`\bexport\s*\*\s+as\s+${ECMASCRIPT_IDENTIFIER_SOURCE}\s*from\s*("|')[^"']*\1`, "gu"),
+  /\bexport\s*\*\s*from\s*("|')[^"']*\1/gu,
+];
 
 type ReviewableExportEntry = Exclude<ExportEntry, { type: "local" }>;
 
@@ -78,7 +93,7 @@ function parseExportSpecifiers(source: string): ExportSpecifier[] {
   if (/^export\s*\*\s+from\b/.test(source)) {
     return [{ kind: "exportStar", name: "*", fromModule }];
   }
-  const namespaceMatch = source.match(/^export\s*\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\b/);
+  const namespaceMatch = REVIEW_EXPORT_NAMESPACE_PATTERN.exec(source);
   if (namespaceMatch?.[1]) {
     return [{ kind: "namespaceReexport", name: namespaceMatch[1], fromModule }];
   }
@@ -86,10 +101,7 @@ function parseExportSpecifiers(source: string): ExportSpecifier[] {
   const namedMatch = source.match(/^export\s+(?:type\s+)?\{([^}]*)\}\s+from\b/);
   if (!namedMatch?.[1]) return [];
   return namedMatch[1].split(",").flatMap((specifier) => {
-    const specifierMatch = specifier
-      .trim()
-      .replace(/^type\s+/, "")
-      .match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+    const specifierMatch = REVIEW_EXPORT_SPECIFIER_PATTERN.exec(specifier.trim().replace(/^type\s+/, ""));
     const sourceSpecifier = specifierMatch?.[1];
     if (!sourceSpecifier) return [];
     const exportedAs = specifierMatch[2] ?? sourceSpecifier;
@@ -138,11 +150,8 @@ function lineForOffset(lineStarts: readonly number[], offset: number): number {
 // package stager scans this file's compiled output for import specifiers and is
 // not comment-aware.)
 function listExportStatements(source: string): ExportStatement[] {
-  const patterns = [
-    /\bexport\s*(?:type\s+)?\{[^}]*\}\s*from\s*("|')[^"']*\1/g,
-    /\bexport\s*\*\s+as\s+[A-Za-z_$][\w$]*\s*from\s*("|')[^"']*\1/g,
-    /\bexport\s*\*\s*from\s*("|')[^"']*\1/g,
-  ];
+  const patterns = REVIEW_EXPORT_STATEMENT_PATTERNS;
+  for (const pattern of patterns) pattern.lastIndex = 0;
   const masked = maskJsLikeCommentsAndStrings(source);
   const lineStarts = collectLineStartOffsets(source);
   const statements: ExportStatement[] = [];

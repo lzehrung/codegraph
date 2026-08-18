@@ -138,46 +138,46 @@ Checked items are implemented and covered by their named regression. Update this
 
 ### Phase 1 - existing seam consistency
 
-- [ ] Route import-alias scope inserts and queries through `normalizeIdentifier`
-- [ ] Split raw display name from canonical scope key in `Binding`
-- [ ] Regression: PHP alias and same-named declaration resolve to one binding
+- [x] Route import-alias scope inserts and queries through `normalizeIdentifier`
+- [x] Split raw display name from canonical scope key in `Binding`
+- [x] Regression: PHP alias and same-named declaration resolve to one binding
 
 ### Phase 2 - per-language equality rules
 
-- [ ] Export shared Java identifier-ignorable and C# `Cf` sets from `src/util/identifiers.ts`
-- [ ] Python `normalizeIdentifier` (NFKC) with ASCII fast path
-- [ ] Rust `normalizeIdentifier` (NFC) with ASCII fast path
-- [ ] Java `normalizeIdentifier` (drop identifier-ignorable) with ASCII fast path
-- [ ] C# `normalizeIdentifier` (drop leading `@`, then `Cf`) with ASCII fast path
-- [ ] Regression: each rule collapses its pair; Kotlin, Go, PHP, JS/TS stay distinct
+- [x] Export shared Java identifier-ignorable and C# `Cf` sets from `src/util/identifiers.ts`
+- [x] Python `normalizeIdentifier` (NFKC) with ASCII fast path
+- [x] Rust `normalizeIdentifier` (NFC) with ASCII fast path
+- [x] Java `normalizeIdentifier` (drop identifier-ignorable) with ASCII fast path
+- [x] C# `normalizeIdentifier` (drop leading `@`, then `Cf`) with ASCII fast path
+- [x] Regression: each rule collapses its pair; Kotlin, Go, PHP, JS/TS stay distinct
 
 ### Phase 3 - cross-file resolution keys
 
-- [ ] Canonical keys in `moduleNameLookup` build and query paths
-- [ ] Canonical name component in export cache, cycle, and reference-candidate cache keys
-- [ ] Canonical `sameSymbolDef` and `sameDef` comparators
-- [ ] Canonical exact reference scan
-- [ ] Canonical bloom filter build and probe
-- [ ] Ambiguity preserved where canonical keys newly collide
+- [x] Canonical keys in `moduleNameLookup` build and query paths
+- [x] Canonical name component in export cache, cycle, and reference-candidate cache keys
+- [x] Canonical `sameSymbolDef` and `sameDef` comparators
+- [x] Canonical exact reference scan
+- [x] Canonical bloom filter build and probe
+- [x] Ambiguity preserved where canonical keys newly collide
 
 ### Phase 4 - Unicode-aware scanners
 
-- [ ] `src/util/bloomFilter.ts` identifier tokenization
-- [ ] Duplicate tokenizers (JS and Rust) plus `DUPLICATE_TOKENIZER_REVISION` bump
-- [ ] Fallback export and resolution scanners
-- [ ] Report and review text scanners
+- [x] `src/util/bloomFilter.ts` identifier tokenization
+- [x] Duplicate tokenizers (JS and Rust) plus `DUPLICATE_TOKENIZER_REVISION` bump - shipped separately on `fix/unicode-duplicate-tokens`, since duplicate fingerprints are independent of name resolution
+- [x] Fallback export and resolution scanners
+- [x] Report and review text scanners
 
 ### Phase 5 - fixtures and documentation
 
-- [ ] Java cross-file fixture and suites
-- [ ] Kotlin cross-file fixture and suites
-- [ ] C# cross-file fixture and suites
-- [ ] Go cross-file fixture and suites
-- [ ] PHP cross-file fixture and suites
-- [ ] Rust cross-file fixture and suites
-- [ ] Equality fixtures for Python, Rust, Java, C#
-- [ ] Negative fixtures for Kotlin, Go, PHP, JS/TS
-- [ ] `docs/language-parity.md` and `docs/scenario-catalog.md` updates
+- [x] Java cross-file fixture and suites
+- [x] Kotlin cross-file fixture and suites
+- [ ] C# cross-file fixture and suites - blocked: `using alias = Namespace;` resolves to `external` for ASCII names too, so the gap is C# namespace-to-file resolution, not Unicode. C# equality is covered same-file instead.
+- [x] Go cross-file fixture and suites
+- [x] PHP cross-file fixture and suites
+- [x] Rust cross-file fixture and suites
+- [x] Equality fixtures for Python, Rust, Java, C#
+- [x] Negative fixtures for Kotlin, Go, PHP, JS/TS
+- [x] `docs/language-parity.md` and `docs/scenario-catalog.md` updates
 
 ## Verification
 

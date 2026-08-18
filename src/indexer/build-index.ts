@@ -281,7 +281,7 @@ async function buildIndexedModuleForFile(args: {
   const lacksParserContext = !nativeQueries && !tree;
 
   if (args.bloomFilterCache) {
-    const filter = buildBloomFilterFromSource(source, sup.id);
+    const filter = buildBloomFilterFromSource(source, sup);
     args.bloomFilterCache.set(args.file, filter);
   }
 

@@ -81,6 +81,10 @@ const definition: LanguageTestDefinition = {
           from: "extern-crate.rs",
           to: { type: "external", name: "serde" },
         },
+        {
+          from: ".regressions/unicode_consumer.rs",
+          to: { type: "file", path: ".regressions/unicode_def.rs" },
+        },
       ],
       symbols: [
         {

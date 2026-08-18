@@ -58,6 +58,10 @@ const definition: LanguageTestDefinition = {
           from: "EnumMemberAccess.java",
           to: { type: "file", path: "pkg/ScopedEnums.java" },
         },
+        {
+          from: ".regressions/unicode_consumer.java",
+          to: { type: "file", path: ".regressions/unicode_def.java" },
+        },
       ],
       symbols: [
         {

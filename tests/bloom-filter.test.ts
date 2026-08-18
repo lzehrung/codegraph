@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import { BloomFilter, buildBloomFilterFromSource, BloomFilterCache } from "../src/util/bloomFilter.js";
-
+import { JS_SUPPORT, PY_SUPPORT, TS_SUPPORT } from "../src/languages.js";
 describe("BloomFilter", () => {
   test("should detect items that were added", () => {
     const filter = new BloomFilter();
@@ -74,7 +74,7 @@ describe("buildBloomFilterFromSource", () => {
       }
     `;
 
-    const filter = buildBloomFilterFromSource(source, "javascript");
+    const filter = buildBloomFilterFromSource(source, JS_SUPPORT);
 
     expect(filter.mightContain("hello")).toBe(true);
     expect(filter.mightContain("name")).toBe(true);
@@ -95,7 +95,7 @@ describe("buildBloomFilterFromSource", () => {
       }
     `;
 
-    const filter = buildBloomFilterFromSource(source, "typescript");
+    const filter = buildBloomFilterFromSource(source, TS_SUPPORT);
 
     expect(filter.mightContain("User")).toBe(true);
     expect(filter.mightContain("getUser")).toBe(true);
@@ -116,13 +116,19 @@ describe("buildBloomFilterFromSource", () => {
               self.result = 0
     `;
 
-    const filter = buildBloomFilterFromSource(source, "python");
+    const filter = buildBloomFilterFromSource(source, PY_SUPPORT);
 
     expect(filter.mightContain("calculate_sum")).toBe(true);
     expect(filter.mightContain("numbers")).toBe(true);
     expect(filter.mightContain("total")).toBe(true);
     expect(filter.mightContain("Calculator")).toBe(true);
     expect(filter.mightContain("result")).toBe(true);
+  });
+
+  test("canonicalizes Unicode identifiers before adding them", () => {
+    const filter = buildBloomFilterFromSource("def caf\u00e9(): pass", PY_SUPPORT);
+
+    expect(filter.mightContain("cafe\u0301".normalize("NFKC"))).toBe(true);
   });
 });
 

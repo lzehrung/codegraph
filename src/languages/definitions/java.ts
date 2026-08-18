@@ -1,6 +1,9 @@
 import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
+import { hasNonAsciiCodePoint, JAVA_IDENTIFIER_IGNORABLE_SOURCE } from "../../util/identifiers.js";
+
+const JAVA_IDENTIFIER_IGNORABLE_PATTERN = new RegExp(`[${JAVA_IDENTIFIER_IGNORABLE_SOURCE}]`, "gu");
 
 export const JAVA_DEF: LanguageDefinition = {
   id: "java",
@@ -106,5 +109,7 @@ export const JAVA_DEF: LanguageDefinition = {
     if (p.type === "formal_parameter" && p.childForFieldName("name")?.id === node.id) return true;
     return false;
   },
+  normalizeIdentifier: (name) =>
+    hasNonAsciiCodePoint(name, true) ? name.replace(JAVA_IDENTIFIER_IGNORABLE_PATTERN, "") : name,
 };
 registerLanguage(JAVA_DEF);

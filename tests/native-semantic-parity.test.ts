@@ -813,6 +813,41 @@ nativeDescribe("native semantic coverage", () => {
         { file: ".regressions/unicode_consumer.py", line: 3, column: 1, expectedStatus: "ok" },
         { file: ".regressions/unicode_def.py", line: 2, column: 5, expectedStatus: "ok" },
       ),
+      sampleExpectation(
+        "java",
+        [".regressions/unicode_def.java", ".regressions/unicode_consumer.java"],
+        [{ file: ".regressions/unicode_def.java", names: ["Café"] }],
+        { file: ".regressions/unicode_consumer.java", line: 7, column: 12, expectedStatus: "ok" },
+        { file: ".regressions/unicode_def.java", line: 3, column: 7, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
+        "kotlin",
+        [".regressions/unicode_def.kt", ".regressions/unicode_consumer.kt"],
+        [{ file: ".regressions/unicode_def.kt", names: ["créer"] }],
+        { file: ".regressions/unicode_consumer.kt", line: 6, column: 10, expectedStatus: "ok" },
+        { file: ".regressions/unicode_def.kt", line: 3, column: 5, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
+        "go",
+        [".regressions/unicodepkg.go", ".regressions/unicode_consumer.go"],
+        [{ file: ".regressions/unicodepkg.go", names: ["Créer"] }],
+        { file: ".regressions/unicode_consumer.go", line: 6, column: 5, expectedStatus: "ok" },
+        { file: ".regressions/unicodepkg.go", line: 3, column: 6, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
+        "php",
+        ["src/Collision/unicode_def.php", "src/Collision/unicode_consumer.php"],
+        [{ file: "src/Collision/unicode_def.php", names: ["Créer"] }],
+        { file: "src/Collision/unicode_consumer.php", line: 7, column: 1, expectedStatus: "ok" },
+        { file: "src/Collision/unicode_def.php", line: 5, column: 10, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
+        "rust",
+        [".regressions/unicode_def.rs", ".regressions/unicode_consumer.rs"],
+        [{ file: ".regressions/unicode_def.rs", names: ["créer"] }],
+        { file: ".regressions/unicode_consumer.rs", line: 6, column: 5, expectedStatus: "ok" },
+        { file: ".regressions/unicode_def.rs", line: 1, column: 8, expectedStatus: "ok" },
+      ),
     ];
 
     for (const testCase of cases) {

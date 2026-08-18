@@ -1,6 +1,7 @@
 import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
+import { hasNonAsciiCodePoint } from "../../util/identifiers.js";
 
 export const RUST_DEF: LanguageDefinition = {
   id: "rust",
@@ -128,5 +129,6 @@ export const RUST_DEF: LanguageDefinition = {
     if (p.type === "parameter" && p.childForFieldName("pattern")?.id === node.id) return true;
     return false;
   },
+  normalizeIdentifier: (name) => (hasNonAsciiCodePoint(name) ? name.normalize("NFC") : name),
 };
 registerLanguage(RUST_DEF);

@@ -267,6 +267,31 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
   });
 });
 
+describe("Identifier equality rules", () => {
+  it("normalizes only languages whose specifications define equivalent spellings", () => {
+    const python = supportById("python")!.normalizeIdentifier;
+    const rust = supportById("rust")!.normalizeIdentifier;
+    const java = supportById("java")!.normalizeIdentifier;
+    const csharp = supportById("csharp")!.normalizeIdentifier;
+
+    expect(python("cafe\u0301")).toBe(python("caf\u00e9"));
+    expect(rust("cafe\u0301")).toBe(rust("caf\u00e9"));
+    expect(java("Foo\u200c")).toBe(java("Foo"));
+    expect(java("Foo\u0000")).toBe(java("Foo"));
+    expect(csharp("@Widget")).toBe(csharp("Widget"));
+    expect(csharp("Wid\u200cget")).toBe(csharp("Widget"));
+  });
+
+  it("keeps code-point-distinct spellings separate for languages without an equality rule", () => {
+    const decomposed = "cafe\u0301";
+    const composed = "caf\u00e9";
+    for (const languageId of ["kotlin", "go", "php", "js", "ts"]) {
+      const normalizeIdentifier = supportById(languageId)!.normalizeIdentifier;
+      expect(normalizeIdentifier(decomposed)).not.toBe(normalizeIdentifier(composed));
+    }
+  });
+});
+
 describe("Unicode import parser seams", () => {
   it("parses native object-pattern captures with ECMAScript-only identifier characters", async () => {
     const bindings: ImportBinding[] = [];

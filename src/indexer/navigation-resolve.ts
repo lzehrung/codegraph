@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { supportForFile } from "../languages.js";
 import type { FileId } from "../types.js";
+import { GO_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import {
   type ExportEntry,
@@ -13,10 +14,21 @@ import {
   SymbolKind,
 } from "./types.js";
 
-function cacheKey(file: FileId, name: string): string {
-  return `${fileIdentityKey(file)}::${name}`;
+const GO_PACKAGE_PATTERN = new RegExp(String.raw`^\s*package\s+(${GO_IDENTIFIER_SOURCE})`, "mu");
+const JAVA_PACKAGE_NAME_PATTERN = new RegExp(
+  String.raw`^\s*package\s+(${JAVA_IDENTIFIER_SOURCE}(?:\.${JAVA_IDENTIFIER_SOURCE})*)\s*;`,
+  "mu",
+);
+const KOTLIN_PACKAGE_NAME_PATTERN = new RegExp(
+  String.raw`^\s*package\s+(${KOTLIN_IDENTIFIER_SOURCE}(?:\.${KOTLIN_IDENTIFIER_SOURCE})*)`,
+  "mu",
+);
+
+function cacheKey(file: FileId, canonicalName: string): string {
+  return `${fileIdentityKey(file)}::canonical::${canonicalName}`;
 }
 type ModuleNameLookup = {
+  normalizeIdentifier: (name: string) => string;
   localExports: Map<string, SymbolDef[]>;
   namespaceReexports: Map<string, Extract<ExportEntry, { type: "namespaceReexport" }>[]>;
   reexports: Map<string, Extract<ExportEntry, { type: "reexport" }>[]>;
@@ -50,43 +62,56 @@ function moduleNameLookup(index: ProjectIndex, file: FileId): ModuleNameLookup |
   if (!lookups) {
     lookups = new Map<string, ModuleNameLookup>();
     for (const moduleEntry of index.byFile.values()) {
+      const normalizeIdentifier =
+        supportForFile(moduleEntry.file, index.languageExtensions)?.normalizeIdentifier ?? ((name) => name);
       const localExports = new Map<string, SymbolDef[]>();
       const namespaceReexports = new Map<string, Extract<ExportEntry, { type: "namespaceReexport" }>[]>();
       const reexports = new Map<string, Extract<ExportEntry, { type: "reexport" }>[]>();
       const locals = new Map<string, SymbolDef[]>();
       for (const entry of moduleEntry.exports) {
         if (entry.type === "local") {
-          const entries = localExports.get(entry.exportedAs) ?? [];
+          const canonicalName = normalizeIdentifier(entry.exportedAs);
+          const entries = localExports.get(canonicalName) ?? [];
           entries.push(entry.target);
-          localExports.set(entry.exportedAs, entries);
+          localExports.set(canonicalName, entries);
         } else if (entry.type === "namespaceReexport") {
-          const entries = namespaceReexports.get(entry.exportedAs) ?? [];
+          const canonicalName = normalizeIdentifier(entry.exportedAs);
+          const entries = namespaceReexports.get(canonicalName) ?? [];
           entries.push(entry);
-          namespaceReexports.set(entry.exportedAs, entries);
+          namespaceReexports.set(canonicalName, entries);
         } else if (entry.type === "reexport") {
-          const entries = reexports.get(entry.exportedAs) ?? [];
+          const canonicalName = normalizeIdentifier(entry.exportedAs);
+          const entries = reexports.get(canonicalName) ?? [];
           entries.push(entry);
-          reexports.set(entry.exportedAs, entries);
+          reexports.set(canonicalName, entries);
         }
       }
       for (const local of moduleEntry.locals) {
-        const entries = locals.get(local.localName) ?? [];
+        const canonicalName = normalizeIdentifier(local.localName);
+        const entries = locals.get(canonicalName) ?? [];
         entries.push(local);
-        locals.set(local.localName, entries);
+        locals.set(canonicalName, entries);
       }
-      lookups.set(fileIdentityKey(moduleEntry.file), { localExports, namespaceReexports, reexports, locals });
+      lookups.set(fileIdentityKey(moduleEntry.file), {
+        normalizeIdentifier,
+        localExports,
+        namespaceReexports,
+        reexports,
+        locals,
+      });
     }
     moduleNameLookups.set(index, lookups);
   }
   return lookups.get(fileIdentityKey(file));
 }
 
-function sameSymbolDef(left: SymbolDef, right: SymbolDef): boolean {
-  if (
-    fileIdentityKey(left.file) !== fileIdentityKey(right.file) ||
-    left.localName !== right.localName ||
-    left.kind !== right.kind
-  ) {
+function sameSymbolDef(index: ProjectIndex, left: SymbolDef, right: SymbolDef): boolean {
+  if (fileIdentityKey(left.file) !== fileIdentityKey(right.file) || left.kind !== right.kind) {
+    return false;
+  }
+  const normalizeIdentifier =
+    supportForFile(left.file, index.languageExtensions)?.normalizeIdentifier ?? ((name) => name);
+  if (normalizeIdentifier(left.localName) !== normalizeIdentifier(right.localName)) {
     return false;
   }
 
@@ -99,10 +124,10 @@ function sameSymbolDef(left: SymbolDef, right: SymbolDef): boolean {
   return left.range.start.line === right.range.start.line && left.range.start.column === right.range.start.column;
 }
 
-function sameResolvedExport(left: ResolvedExport, right: ResolvedExport): boolean {
+function sameResolvedExport(index: ProjectIndex, left: ResolvedExport, right: ResolvedExport): boolean {
   if (left.kind !== right.kind) return false;
   if (left.kind === "resolved" && right.kind === "resolved") {
-    return sameSymbolDef(left.def, right.def);
+    return sameSymbolDef(index, left.def, right.def);
   }
   if (left.kind === "namespace" && right.kind === "namespace") {
     return fileIdentityKey(left.file) === fileIdentityKey(right.file);
@@ -126,7 +151,7 @@ function readGoPackageName(index: ProjectIndex, filePath: string): string | null
   if (cached !== undefined) return cached;
   try {
     const source = fs.readFileSync(filePath, "utf8");
-    const match = source.match(/^\s*package\s+([A-Za-z_][A-Za-z0-9_]*)/m);
+    const match = GO_PACKAGE_PATTERN.exec(source);
     const packageName = match?.[1] ?? null;
     cache.set(key, packageName);
     return packageName;
@@ -138,16 +163,23 @@ function readGoPackageName(index: ProjectIndex, filePath: string): string | null
 
 function resolveGoPackageExport(index: ProjectIndex, file: FileId, exportedName: string): SymbolDef | null {
   try {
-    const support = supportForFile(file);
+    const support = supportForFile(file, index.languageExtensions);
     if (!support || support.id !== "go") return null;
     const directory = packageDirectoryLookup(index, "go").get(fileIdentityKey(path.dirname(file)));
     if (!directory) return null;
     const sourcePackage = readGoPackageName(index, file);
     const candidates = sourcePackage ? (directory.byName.get(sourcePackage) ?? []) : directory.all;
+    const matches: SymbolDef[] = [];
     for (const moduleEntry of candidates) {
-      const exportEntry = moduleNameLookup(index, moduleEntry.file)?.localExports.get(exportedName)?.[0];
-      if (exportEntry) return exportEntry;
+      const names = moduleNameLookup(index, moduleEntry.file);
+      if (!names) continue;
+      for (const target of names.localExports.get(names.normalizeIdentifier(exportedName)) ?? []) {
+        if (!matches.some((candidate) => sameSymbolDef(index, candidate, target))) {
+          matches.push(target);
+        }
+      }
     }
+    return matches.length === 1 ? (matches[0] ?? null) : null;
   } catch {
     // supportForFile throws on unsupported files (for example .json)
   }
@@ -167,8 +199,8 @@ function readPackageNameForLanguage(
     const source = fs.readFileSync(filePath, "utf8");
     const packageName =
       languageId === "kotlin"
-        ? (source.match(/^\s*package\s+([A-Za-z_][\w.]*)/m)?.[1] ?? null)
-        : (source.match(/^\s*package\s+([A-Za-z_][\w.]*)\s*;/m)?.[1] ?? null);
+        ? (KOTLIN_PACKAGE_NAME_PATTERN.exec(source)?.[1] ?? null)
+        : (JAVA_PACKAGE_NAME_PATTERN.exec(source)?.[1] ?? null);
     cache.set(key, packageName);
     return packageName;
   } catch {
@@ -221,12 +253,15 @@ function resolveSiblingPackageExport(
   const directory = packageDirectoryLookup(index, languageId).get(fileIdentityKey(path.dirname(targetFile)));
   if (!directory) return null;
   const targetFileKey = fileIdentityKey(targetFile);
+  const matches: ResolvedExport[] = [];
   for (const moduleEntry of directory.byName.get(packageName) ?? []) {
     if (fileIdentityKey(moduleEntry.file) === targetFileKey) continue;
     const hit = resolveExport(index, moduleEntry.file, exportedName);
-    if (hit) return hit;
+    if (hit && !matches.some((candidate) => sameResolvedExport(index, candidate, hit))) {
+      matches.push(hit);
+    }
   }
-  return null;
+  return matches.length === 1 ? (matches[0] ?? null) : null;
 }
 
 function resolvePythonSubmodule(targetFile: string, exportedName: string): FileId | null {
@@ -279,53 +314,82 @@ export function resolveExport(
     const names = moduleNameLookup(index, moduleEntry.file);
     if (!names) return null;
     const normalizedFile = normalizePath(moduleEntry.file);
+    const canonicalName = names.normalizeIdentifier(name);
     const key = opts?.preferredKind
-      ? `${cacheKey(normalizedFile, name)}::${opts.preferredKind}::${allowLocalFallback ? "local" : "export"}`
-      : `${cacheKey(normalizedFile, name)}::${allowLocalFallback ? "local" : "export"}`;
+      ? `${cacheKey(normalizedFile, canonicalName)}::${opts.preferredKind}::${allowLocalFallback ? "local" : "export"}`
+      : `${cacheKey(normalizedFile, canonicalName)}::${allowLocalFallback ? "local" : "export"}`;
     if (index.exportCache.has(key)) return index.exportCache.get(key)!;
 
-    const cycleKey = cacheKey(normalizedFile, name);
+    const cycleKey = cacheKey(normalizedFile, canonicalName);
     if (visited.has(cycleKey)) return null;
     visited.add(cycleKey);
 
-    const goPackageExport = resolveGoPackageExport(index, normalizedFile, name);
+    const goPackageExport = resolveGoPackageExport(index, normalizedFile, canonicalName);
     if (goPackageExport && matchesPreferredKind(goPackageExport)) {
       const result: ResolvedExport = { kind: "resolved", def: goPackageExport };
       index.exportCache.set(key, result);
       return result;
     }
 
-    for (const target of names.localExports.get(name) ?? []) {
-      if (matchesPreferredKind(target)) {
-        const result: ResolvedExport = { kind: "resolved", def: target };
-        index.exportCache.set(key, result);
-        return result;
+    const localCandidates: SymbolDef[] = [];
+    for (const target of names.localExports.get(canonicalName) ?? []) {
+      if (
+        matchesPreferredKind(target) &&
+        !localCandidates.some((candidate) => sameSymbolDef(index, candidate, target))
+      ) {
+        localCandidates.push(target);
       }
     }
-
-    for (const entry of names.namespaceReexports.get(name) ?? []) {
-      const result: ResolvedExport = {
-        kind: "namespace",
-        file: normalizePath(entry.fromModule),
-      };
+    if (localCandidates.length === 1) {
+      const target = localCandidates[0]!;
+      const result: ResolvedExport = { kind: "resolved", def: target };
       index.exportCache.set(key, result);
       return result;
     }
+    if (localCandidates.length) {
+      index.exportCache.set(key, null);
+      return null;
+    }
 
-    for (const entry of names.reexports.get(name) ?? []) {
+    const namespaceCandidates = new Map<string, ResolvedExport>();
+    for (const entry of names.namespaceReexports.get(canonicalName) ?? []) {
+      const result: ResolvedExport = { kind: "namespace", file: normalizePath(entry.fromModule) };
+      namespaceCandidates.set(fileIdentityKey(result.file), result);
+    }
+    if (namespaceCandidates.size === 1) {
+      const result = namespaceCandidates.values().next().value!;
+      index.exportCache.set(key, result);
+      return result;
+    }
+    if (namespaceCandidates.size) {
+      index.exportCache.set(key, null);
+      return null;
+    }
+
+    const reexportCandidates: ResolvedExport[] = [];
+    for (const entry of names.reexports.get(canonicalName) ?? []) {
       const downstream =
-        resolveFromFile(entry.fromModule, entry.sourceSpecifier || name) ?? resolveFromFile(entry.fromModule, name);
-      if (downstream) {
-        index.exportCache.set(key, downstream);
-        return downstream;
+        resolveFromFile(entry.fromModule, entry.sourceSpecifier || canonicalName) ??
+        resolveFromFile(entry.fromModule, canonicalName);
+      if (downstream && !reexportCandidates.some((candidate) => sameResolvedExport(index, candidate, downstream))) {
+        reexportCandidates.push(downstream);
       }
+    }
+    if (reexportCandidates.length === 1) {
+      const result = reexportCandidates[0]!;
+      index.exportCache.set(key, result);
+      return result;
+    }
+    if (reexportCandidates.length) {
+      index.exportCache.set(key, null);
+      return null;
     }
 
     const starCandidates: ResolvedExport[] = [];
     for (const entry of moduleEntry.exports) {
       if (entry.type !== "exportStar") continue;
-      const downstream = resolveFromFile(entry.fromModule, name);
-      if (downstream && !starCandidates.some((candidate) => sameResolvedExport(candidate, downstream))) {
+      const downstream = resolveFromFile(entry.fromModule, canonicalName);
+      if (downstream && !starCandidates.some((candidate) => sameResolvedExport(index, candidate, downstream))) {
         starCandidates.push(downstream);
       }
     }
@@ -339,14 +403,26 @@ export function resolveExport(
       return null;
     }
 
+    const localFallbackCandidates: SymbolDef[] = [];
     if (allowLocalFallback) {
-      for (const local of names.locals.get(name) ?? []) {
-        if (matchesPreferredKind(local)) {
-          const result: ResolvedExport = { kind: "resolved", def: local };
-          index.exportCache.set(key, result);
-          return result;
+      for (const local of names.locals.get(canonicalName) ?? []) {
+        if (
+          matchesPreferredKind(local) &&
+          !localFallbackCandidates.some((candidate) => sameSymbolDef(index, candidate, local))
+        ) {
+          localFallbackCandidates.push(local);
         }
       }
+    }
+    if (localFallbackCandidates.length === 1) {
+      const local = localFallbackCandidates[0]!;
+      const result: ResolvedExport = { kind: "resolved", def: local };
+      index.exportCache.set(key, result);
+      return result;
+    }
+    if (localFallbackCandidates.length) {
+      index.exportCache.set(key, null);
+      return null;
     }
 
     index.exportCache.set(key, null);

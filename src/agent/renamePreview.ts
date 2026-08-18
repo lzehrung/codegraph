@@ -489,7 +489,7 @@ function validateNewName(snapshot: AgentProjectSnapshot, def: SymbolDef, newName
   const file = normalizeAgentFilePath(snapshot.root, def.file);
   const conflicts: RenameConflict[] = [];
   const invalidPathCharacters = newName.includes("/") || newName.includes("\\") || newName.includes("\0");
-  const support = supportForFile(def.file);
+  const support = supportForFile(def.file, snapshot.index.languageExtensions);
   const allowsDollar = support?.id === "js" || support?.id === "ts" || support?.id === "tsx";
   const identifierPattern = allowsDollar
     ? /^[$_\p{ID_Start}](?:[$_\p{ID_Continue}]|\u200c|\u200d)*$/u
@@ -537,10 +537,11 @@ async function addScopeConflicts(
         binding.def?.start.index === target.range.start.index &&
         binding.def?.end.index === target.range.end.index,
     );
+    const canonicalTargetName = parsed.sup.normalizeIdentifier(target.localName);
     const targetScope = targetBinding
-      ? scopeIndex.allScopes.find((scope) => scope.map.get(target.localName) === targetBinding)
+      ? scopeIndex.allScopes.find((scope) => scope.map.get(canonicalTargetName) === targetBinding)
       : undefined;
-    const collisionBinding = targetScope?.map.get(newName);
+    const collisionBinding = targetScope?.map.get(parsed.sup.normalizeIdentifier(newName));
     if (collisionBinding?.def) {
       localCollision = moduleIndex.locals.find(
         (candidate) =>
@@ -612,10 +613,11 @@ async function addScopeConflicts(
       );
       const scopeIndex = getCachedScope(snapshot.index, reference.file, consumer, parsed);
       const activeBinding = scopeIndex.all.find((binding) => binding.import === activeImport);
+      const canonicalImportName = parsed.sup.normalizeIdentifier(activeImport.local);
       const activeScope = activeBinding
-        ? scopeIndex.allScopes.find((scope) => scope.map.get(activeImport.local) === activeBinding)
+        ? scopeIndex.allScopes.find((scope) => scope.map.get(canonicalImportName) === activeBinding)
         : undefined;
-      const collisionBinding = activeScope?.map.get(newName);
+      const collisionBinding = activeScope?.map.get(parsed.sup.normalizeIdentifier(newName));
       collides = !!collisionBinding && collisionBinding !== activeBinding;
     } catch {
       collides =

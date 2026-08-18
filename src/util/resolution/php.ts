@@ -19,6 +19,9 @@ import {
   sortProjectSymbolIndex,
   type LanguageProjectSymbolIndex,
 } from "./projectSymbols.js";
+import { PHP_IDENTIFIER_SOURCE } from "../identifiers.js";
+
+const PHP_IDENTIFIER_PATTERN = new RegExp(PHP_IDENTIFIER_SOURCE, "uy");
 
 type FileId = string;
 
@@ -406,11 +409,10 @@ function tokenizePhpSource(source: string): PhpScannerToken[] {
       continue;
     }
 
-    if (/[A-Za-z_]/.test(ch)) {
-      let end = index + 1;
-      while (end < source.length && /[A-Za-z0-9_]/.test(source[end] ?? "")) {
-        end += 1;
-      }
+    PHP_IDENTIFIER_PATTERN.lastIndex = index;
+    const identifierMatch = PHP_IDENTIFIER_PATTERN.exec(source);
+    if (identifierMatch) {
+      const end = PHP_IDENTIFIER_PATTERN.lastIndex;
       tokens.push({ type: "word", value: source.slice(index, end) });
       index = end - 1;
       continue;

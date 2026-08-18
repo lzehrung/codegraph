@@ -324,7 +324,7 @@ export async function buildBloomFilterForFile(
     const source = await fsp.readFile(file, "utf8");
     const support = supportForFile(file, opts?.languageExtensions);
     if (!support) return null;
-    return buildBloomFilterFromSource(source, support.id);
+    return buildBloomFilterFromSource(source, support);
   } catch {
     return null;
   }

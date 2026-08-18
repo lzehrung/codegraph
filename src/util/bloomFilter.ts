@@ -5,6 +5,7 @@
  * allowing us to skip files that definitely don't contain the symbol.
  */
 
+import type { LanguageSupport } from "../languages.js";
 import { fileIdentityKey } from "./paths.js";
 import crypto from "node:crypto";
 
@@ -166,21 +167,23 @@ export class BloomFilter {
  * Build a bloom filter from source code with auto-sizing.
  * Extracts all identifiers and adds them to an optimally-sized filter.
  * @param source - The source code to analyze
- * @param languageId - The language identifier (unused, for future extension)
+ * @param support - The language support for the source file
  * @param falsePositiveRate - Target false positive rate (default: 0.01 = 1%)
  */
-export function buildBloomFilterFromSource(source: string, languageId: string, falsePositiveRate = 0.01): BloomFilter {
-  // Extract all identifiers using a simple regex
-  // This is a fast heuristic - doesn't need to be perfect
-  const identifierPattern = /\b[a-zA-Z_$][a-zA-Z0-9_$]*\b/g;
+export function buildBloomFilterFromSource(
+  source: string,
+  support: Pick<LanguageSupport, "normalizeIdentifier">,
+  falsePositiveRate = 0.01,
+): BloomFilter {
+  const identifierPattern = /(?<![\p{ID_Continue}$\u200C\u200D])@?[\p{ID_Start}_$][\p{ID_Continue}$\u200C\u200D]*/gu;
   const matches = source.match(identifierPattern);
 
-  // Use a Set to deduplicate before sizing and adding
-  const unique = matches ? new Set(matches) : new Set<string>();
+  const unique = new Set<string>();
+  for (const identifier of matches ?? []) {
+    unique.add(support.normalizeIdentifier(identifier));
+  }
 
-  // Create optimally-sized filter based on unique identifier count
   const filter = BloomFilter.createOptimal(unique.size || 100, falsePositiveRate);
-
   for (const identifier of unique) {
     filter.add(identifier);
   }

@@ -810,3 +810,94 @@ exports[`native semantic coverage > keeps native semantics stable for representa
   },
 }
 `;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 49`] = `
+{
+  "goto": {
+    "file": ".regressions/unicode_def.java",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      ".regressions/unicode_consumer.java:3",
+      ".regressions/unicode_consumer.java:7",
+      ".regressions/unicode_def.java:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 50`] = `
+{
+  "goto": {
+    "file": ".regressions/unicode_def.kt",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      ".regressions/unicode_consumer.kt:3",
+      ".regressions/unicode_consumer.kt:6",
+      ".regressions/unicode_def.kt:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 51`] = `
+{
+  "goto": {
+    "file": ".regressions/unicodepkg.go",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      ".regressions/unicode_consumer.go:6",
+      ".regressions/unicodepkg.go:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 52`] = `
+{
+  "goto": {
+    "file": "src/Collision/unicode_def.php",
+    "line": 5,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "src/Collision/unicode_consumer.php:5",
+      "src/Collision/unicode_consumer.php:5",
+      "src/Collision/unicode_consumer.php:7",
+      "src/Collision/unicode_def.php:5",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 53`] = `
+{
+  "goto": {
+    "file": ".regressions/unicode_def.rs",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      ".regressions/unicode_consumer.rs:3",
+      ".regressions/unicode_consumer.rs:3",
+      ".regressions/unicode_consumer.rs:6",
+      ".regressions/unicode_def.rs:1",
+    ],
+    "status": "ok",
+  },
+}
+`;

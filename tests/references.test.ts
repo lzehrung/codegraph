@@ -2054,3 +2054,179 @@ describe("Find References: Unicode identifiers (C11)", () => {
     }
   });
 });
+
+describe("Find References: Unicode cross-file fixtures", () => {
+  it("finds references to a Java combining-mark class imported across files", async () => {
+    const samplePath = path.resolve(process.cwd(), "tests", "samples", "java");
+    const consumerFile = path.join(samplePath, ".regressions", "unicode_consumer.java").replace(/\\/g, "/");
+    const definitionFile = path.join(samplePath, ".regressions", "unicode_def.java").replace(/\\/g, "/");
+    const index = await createTestIndexFromFiles(samplePath, [consumerFile, definitionFile]);
+    const result = await testFindReferences(index, definitionFile, 3, 7, 2);
+
+    expect(result.status).toBe("ok");
+    expectReferenceAt(result, definitionFile, 3);
+    expectReferenceAt(result, consumerFile, 7);
+  });
+
+  it("finds references to a Kotlin Unicode import alias across files", async () => {
+    const samplePath = path.resolve(process.cwd(), "tests", "samples", "kotlin");
+    const consumerFile = path.join(samplePath, ".regressions", "unicode_consumer.kt").replace(/\\/g, "/");
+    const definitionFile = path.join(samplePath, ".regressions", "unicode_def.kt").replace(/\\/g, "/");
+    const index = await createTestIndexFromFiles(samplePath, [consumerFile, definitionFile]);
+    const result = await testFindReferences(index, definitionFile, 3, 5, 2);
+
+    expect(result.status).toBe("ok");
+    expectReferenceAt(result, definitionFile, 3);
+    expectReferenceAt(result, consumerFile, 6);
+  });
+
+  it("finds references to a Go Unicode-named function through a Unicode-letter alias", async () => {
+    const samplePath = path.resolve(process.cwd(), "tests", "samples", "go");
+    const consumerFile = path.join(samplePath, ".regressions", "unicode_consumer.go").replace(/\\/g, "/");
+    const definitionFile = path.join(samplePath, ".regressions", "unicodepkg.go").replace(/\\/g, "/");
+    const index = await createTestIndexFromFiles(samplePath, [consumerFile, definitionFile]);
+    const result = await testFindReferences(index, definitionFile, 3, 6, 2);
+
+    expect(result.status).toBe("ok");
+    expectReferenceAt(result, definitionFile, 3);
+    expectReferenceAt(result, consumerFile, 6);
+  });
+
+  it("finds references to a PHP non-letter use alias across files", async () => {
+    const samplePath = path.resolve(process.cwd(), "tests", "samples", "php");
+    const consumerFile = path.join(samplePath, "src", "Collision", "unicode_consumer.php").replace(/\\/g, "/");
+    const definitionFile = path.join(samplePath, "src", "Collision", "unicode_def.php").replace(/\\/g, "/");
+    const index = await createTestIndexFromFiles(samplePath, [consumerFile, definitionFile]);
+    const result = await testFindReferences(index, definitionFile, 5, 10, 2);
+
+    expect(result.status).toBe("ok");
+    expectReferenceAt(result, definitionFile, 5);
+    expectReferenceAt(result, consumerFile, 7);
+  });
+  it("finds references to a Rust Unicode-named function through an XID-continuation alias", async () => {
+    const samplePath = path.resolve(process.cwd(), "tests", "samples", "rust");
+    const consumerFile = path.join(samplePath, ".regressions", "unicode_consumer.rs").replace(/\\/g, "/");
+    const definitionFile = path.join(samplePath, ".regressions", "unicode_def.rs").replace(/\\/g, "/");
+    const index = await createTestIndexFromFiles(samplePath, [consumerFile, definitionFile]);
+    const result = await testFindReferences(index, definitionFile, 1, 8, 2);
+
+    expect(result.status).toBe("ok");
+    expectReferenceAt(result, definitionFile, 1);
+    expectReferenceAt(result, consumerFile, 6);
+  });
+});
+
+describe("Find References: canonical Unicode identifier equality", () => {
+  for (const testCase of [
+    {
+      language: "python",
+      definition: "unicode_nfc_def.py",
+      consumer: "unicode_nfc_consumer.py",
+      definitionColumn: 5,
+      consumerLine: 3,
+    },
+    {
+      language: "python",
+      definition: "unicode_nfd_def.py",
+      consumer: "unicode_nfd_consumer.py",
+      definitionColumn: 5,
+      consumerLine: 3,
+    },
+    {
+      language: "rust",
+      definition: "unicode_nfc_def.rs",
+      consumer: "unicode_nfc_consumer.rs",
+      definitionColumn: 8,
+      consumerLine: 6,
+    },
+    {
+      language: "rust",
+      definition: "unicode_nfd_def.rs",
+      consumer: "unicode_nfd_consumer.rs",
+      definitionColumn: 8,
+      consumerLine: 6,
+    },
+  ]) {
+    it(`includes the consumer for ${testCase.language} canonical equality`, async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", testCase.language, ".regressions");
+      const definitionFile = path.join(samplePath, testCase.definition).replace(/\\/g, "/");
+      const consumerFile = path.join(samplePath, testCase.consumer).replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [definitionFile, consumerFile]);
+      const result = await testFindReferences(index, definitionFile, 1, testCase.definitionColumn, 2);
+
+      expectReferenceAt(result, consumerFile, testCase.consumerLine);
+    });
+  }
+
+  for (const testCase of [
+    {
+      language: "java",
+      definition: "Foo.java",
+      consumer: "unicode_ignorable_consumer.java",
+      definitionLine: 3,
+      definitionColumn: 7,
+      consumerLine: 7,
+    },
+    {
+      language: "csharp",
+      definition: "unicode_verbatim.cs",
+      consumer: "unicode_verbatim.cs",
+      definitionLine: 3,
+      definitionColumn: 11,
+      consumerLine: 9,
+    },
+  ]) {
+    it(`includes the consumer for ${testCase.language} canonical equality`, async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", testCase.language, ".regressions");
+      const definitionFile = path.join(samplePath, testCase.definition).replace(/\\/g, "/");
+      const consumerFile = path.join(samplePath, testCase.consumer).replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [definitionFile, consumerFile]);
+      const result = await testFindReferences(
+        index,
+        definitionFile,
+        testCase.definitionLine,
+        testCase.definitionColumn,
+        2,
+      );
+
+      expectReferenceAt(result, consumerFile, testCase.consumerLine);
+    });
+  }
+
+  for (const testCase of [
+    { language: "kotlin", definition: "unicode_nfc_def.kt", consumer: "unicode_nfd_consumer.kt", column: 7 },
+    { language: "go", definition: "unicode_negative_pkg/def.go", consumer: "unicode_nfd_consumer.go", column: 6 },
+    { language: "typescript", definition: "unicode_nfc_def.ts", consumer: "unicode_nfd_consumer.ts", column: 17 },
+  ]) {
+    it(`excludes distinct ${testCase.language} spellings`, async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", testCase.language, ".regressions");
+      const definitionFile = path.join(samplePath, testCase.definition).replace(/\\/g, "/");
+      const consumerFile = path.join(samplePath, testCase.consumer).replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [definitionFile, consumerFile]);
+      const module = index.byFile.get(fileIdentityKey(definitionFile));
+      const def = module?.locals[0];
+      if (!def) throw new Error("Expected Unicode definition");
+
+      const result = await indexer.findReferences(index, { def });
+      expect(result.status).toBe("ok");
+      if (result.status === "ok") {
+        expect(result.references.some((reference) => reference.file === consumerFile)).toBe(false);
+      }
+    });
+  }
+
+  it("excludes distinct PHP spellings", async () => {
+    const samplePath = path.resolve(process.cwd(), "tests", "samples", "php");
+    const definitionFile = path.join(samplePath, "src", "Collision", "unicode_nfc_def.php").replace(/\\/g, "/");
+    const consumerFile = path.join(samplePath, "src", "Collision", "unicode_nfd_consumer.php").replace(/\\/g, "/");
+    const index = await createTestIndexFromFiles(samplePath, [definitionFile, consumerFile]);
+    const def = index.byFile.get(fileIdentityKey(definitionFile))?.locals[0];
+    if (!def) throw new Error("Expected Unicode PHP definition");
+
+    const result = await indexer.findReferences(index, { def });
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.references.some((reference) => reference.file === consumerFile)).toBe(false);
+    }
+  });
+});
