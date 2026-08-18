@@ -994,7 +994,10 @@ describe("Cache invalidation and strict hashing", () => {
       expect(typeof hash).toBe("string");
       expect(hash?.length).toBe(40);
     }
-  });
+    // Writing 700 files then running add/commit/hash-object is filesystem-bound, and a
+    // Windows CI runner can exceed the 30s default. The assertions are deterministic; only
+    // the wall clock is host-dependent, so give it headroom instead of letting it flake.
+  }, 120_000);
 
   it("resolves git signatures when the project root is a repository subdirectory (C1)", async () => {
     const root = await mkTmpDir("dg-git-sig-subdir-root-");
