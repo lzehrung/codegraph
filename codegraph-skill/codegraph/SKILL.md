@@ -34,7 +34,7 @@ Prefer `review` before `impact`: review is the compact reviewer handoff; impact 
 
 ## Keep the Project Boundary Explicit
 
-Use `--root` to define the boundary for config lookup, path confinement, and output normalization. Cache contents use project-relative paths and may live at the resolved repository anchor; override location with `--cache-dir` or `CODEGRAPH_CACHE_DIR`.
+Use `--root` to define the boundary for config lookup, path confinement, and output normalization. Cache contents use project-relative paths and may live at the resolved repository anchor; override location with `--cache-dir` or `CODEGRAPH_CACHE_DIR`. An overridden anchor pointing at the home directory or a filesystem root is rejected with an error.
 
 - Positional paths are include roots inside the project boundary for `orient`, `drift`, and positional graph commands.
 - `codegraph.config.json` discovery globs are project-root-relative.

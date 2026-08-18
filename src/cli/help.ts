@@ -43,7 +43,7 @@ Build Options:
   --native <mode>           Native runtime mode: auto, on, off
   --workers                 Force Piscina native-extraction workers (auto above 250 files)
   --cache <mode>            Cache mode: disk, memory, off
-  --cache-dir <path>        Cache location override (also CODEGRAPH_CACHE_DIR)
+  --cache-dir <path>        Cache location override (also CODEGRAPH_CACHE_DIR); rejects the home directory or a filesystem root
   --limit N                 Result limit for hotspots/inspect summaries
   --cache-strict            Force strict content-hash cache validation
   --cache-verify            Re-stat cached files before trusting disk cache entries
@@ -181,7 +181,7 @@ Safety:
 `;
 const SHARED_INDEX_OPTIONS_HELP = `Index options:
   Supports shared --cache, --cache-dir, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
-  Cache precedence is --cache-dir, then CODEGRAPH_CACHE_DIR, then cache.location from project/user config, then repository metadata, then the project root. Use cache.location "project", "repo", "user", or an absolute path.
+  Cache precedence is --cache-dir, then CODEGRAPH_CACHE_DIR, then cache.location from project/user config, then repository metadata, then the project root. Use cache.location "project", "repo", "user", or an absolute path. A configured anchor that resolves to the home directory or a filesystem root is rejected with an error.
   Index builds report progress automatically on an interactive stderr terminal. Use --progress to force redirected progress logs or --no-progress to suppress feedback.`;
 
 export const EXPLORE_HELP_TEXT = `codegraph explore - Answer a broad repo question with bounded repo context

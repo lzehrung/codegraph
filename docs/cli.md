@@ -30,7 +30,7 @@ Default workflow:
 
 ## Cache location
 
-Index caches store project-relative paths, so a cache can be moved with its project. Cache selection precedence is `--cache-dir`, `CODEGRAPH_CACHE_DIR`, `cache.location` in project config (then user config), repository metadata, then the project root. `cache.location` accepts `project`, `repo`, `user`, or an absolute path; `--root` remains the project scope boundary.
+Index caches store project-relative paths, so a cache can be moved with its project. Cache selection precedence is `--cache-dir`, `CODEGRAPH_CACHE_DIR`, `cache.location` in project config (then user config), repository metadata, then the project root. `cache.location` accepts `project`, `repo`, `user`, or an absolute path; `--root` remains the project scope boundary. A configured anchor (`--cache-dir`, `CODEGRAPH_CACHE_DIR`, or an absolute `cache.location`) that resolves to the home directory or a filesystem root is rejected with an error instead of being used.
 
 ## Runtime selection
 

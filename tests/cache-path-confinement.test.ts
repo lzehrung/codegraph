@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { brotliCompressSync, brotliDecompressSync } from "node:zlib";
 import { DatabaseSync } from "node:sqlite";
@@ -20,7 +21,7 @@ import {
   tryLoadPersistedBloomFilters,
   tryLoadProjectIndexSnapshot,
 } from "../src/indexer/build-cache/project-snapshot.js";
-import { cacheRoot } from "../src/indexer/build-cache/location.js";
+import { cacheRoot, resolveCacheLocation } from "../src/indexer/build-cache/location.js";
 import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 import { isNonNativeParserAvailable } from "../src/parserBackend.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
@@ -371,5 +372,68 @@ describe("persisted cache rehydration is confined to the project root", () => {
 
     const bloomFilters = await tryLoadPersistedBloomFilters(root, { cache: "disk" });
     expect(bloomFilters).toBeNull();
+  });
+});
+
+describe("cache anchor configuration rejects the home directory and filesystem roots", () => {
+  it("throws when --cache-dir/cacheDir points at the home directory", async () => {
+    const root = await mkTmpDir("dg-anchor-cachedir-home-");
+    const home = os.homedir();
+
+    expect(() => resolveCacheLocation(root, { cacheDir: home })).toThrow(home);
+  });
+
+  it("throws when CODEGRAPH_CACHE_DIR points at the home directory", async () => {
+    const root = await mkTmpDir("dg-anchor-envvar-home-");
+    const home = os.homedir();
+    const previous = process.env.CODEGRAPH_CACHE_DIR;
+    process.env.CODEGRAPH_CACHE_DIR = home;
+    try {
+      expect(() => resolveCacheLocation(root, {})).toThrow(home);
+    } finally {
+      if (previous === undefined) delete process.env.CODEGRAPH_CACHE_DIR;
+      else process.env.CODEGRAPH_CACHE_DIR = previous;
+    }
+  });
+
+  it("throws when an absolute cache.location points at the home directory", async () => {
+    const root = await mkTmpDir("dg-anchor-location-home-");
+    const home = os.homedir();
+
+    expect(() => resolveCacheLocation(root, { cacheLocation: home })).toThrow(home);
+  });
+
+  it("throws when the configured anchor is the filesystem root of the project's drive", async () => {
+    const root = await mkTmpDir("dg-anchor-fsroot-");
+    const fsRoot = path.parse(root).root;
+
+    expect(() => resolveCacheLocation(root, { cacheDir: fsRoot })).toThrow(fsRoot);
+  });
+
+  it("accepts a legitimate subdirectory under the home directory as an explicit anchor", async () => {
+    const root = await mkTmpDir("dg-anchor-home-subdir-");
+    const anchor = path.join(os.homedir(), `.codegraph-cache-confinement-test-${path.basename(root)}`);
+
+    const resolved = resolveCacheLocation(root, { cacheDir: anchor });
+
+    expect(resolved.anchor).toBe(path.resolve(anchor));
+    expect(resolved.layer).toBe("explicit");
+  });
+});
+
+describe("cache anchor discovery walks ancestor .codegraph manifests", () => {
+  it("anchors at an ancestor directory containing .codegraph/manifest.json", async () => {
+    const ancestor = await mkTmpDir("dg-anchor-manifest-ancestor-");
+    await fsp.mkdir(path.join(ancestor, ".codegraph"), { recursive: true });
+    await fsp.writeFile(path.join(ancestor, ".codegraph", "manifest.json"), "{}", "utf8");
+    const projectRoot = path.join(ancestor, "packages", "app");
+    await fsp.mkdir(projectRoot, { recursive: true });
+
+    const resolved = resolveCacheLocation(projectRoot);
+
+    expect(resolved.layer).toBe("manifest");
+    expect(resolved.anchor).toBe(path.resolve(ancestor));
+    expect(resolved.path.startsWith(path.resolve(ancestor))).toBe(true);
+    expect(path.basename(resolved.path)).toMatch(/^project-[0-9a-f]{64}$/);
   });
 });
