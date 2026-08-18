@@ -75,7 +75,8 @@ function isReadOnlyAllowedAction(actionCode: number, constants: SqliteConstants)
     actionCode === constants.SQLITE_PRAGMA ||
     actionCode === constants.SQLITE_READ ||
     actionCode === constants.SQLITE_SELECT ||
-    actionCode === constants.SQLITE_TRANSACTION
+    actionCode === constants.SQLITE_TRANSACTION ||
+    ("SQLITE_RECURSIVE" in constants && actionCode === constants.SQLITE_RECURSIVE)
   );
 }
 

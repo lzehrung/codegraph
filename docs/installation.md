@@ -8,14 +8,14 @@ Install `@lzehrung/codegraph` for the CLI, MCP server, viewer, and agent-client 
 - The matching native runtime installs automatically when an artifact is available. Other hosts use reduced graph-only and regex recovery mode; see [CLI runtime selection](./cli.md#runtime-selection).
 - Standalone archives bundle Node.js and support Windows, macOS, and glibc Linux on x64 and ARM64. Use npm or a source checkout on musl Linux. Windows ARM64 is structurally checked but not runtime-tested on matching hardware.
 
-## Install from npm (recommended)
+## Install from public npm (recommended)
 
 ```bash
 npm install -g @lzehrung/codegraph
 codegraph doctor
 ```
 
-Public npm installs need no GitHub token or registry mapping. If a user or project `.npmrc` still maps `@lzehrung` to GitHub Packages, remove that legacy mapping first so npm uses the public release.
+Public npm installs need no GitHub authentication, token, or registry mapping. If a user or project `.npmrc` still contains `@lzehrung:registry=https://npm.pkg.github.com`, remove or replace that legacy mapping first so npm uses the public release.
 
 To update, run `npm install -g @lzehrung/codegraph@latest`, then restart any MCP clients and run `codegraph doctor`.
 
