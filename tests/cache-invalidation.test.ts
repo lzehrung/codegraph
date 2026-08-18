@@ -2942,6 +2942,25 @@ describe("Cache invalidation and strict hashing", () => {
     }
   });
 
+  it("skips the incremental resolver scan before a missing-manifest fallback", async () => {
+    const root = await mkTmpDir("dg-node-modules-missing-manifest-");
+    const entryFile = path.join(root, "entry.ts");
+    const fingerprint = vi.spyOn(resolverEnvironment, "computeResolverEnvironmentFingerprint");
+    try {
+      await fsp.writeFile(entryFile, 'import { value } from "example-package";\nexport { value };\n', "utf8");
+      await buildProjectIndex(root, { cache: "disk", threads: 1, graph: { resolveNodeModules: true } });
+      await fsp.rm(path.join(root, ".codegraph"), { recursive: true, force: true });
+      fingerprint.mockClear();
+
+      await buildProjectIndexIncremental(root, { cache: "disk", threads: 1, graph: { resolveNodeModules: true } });
+
+      expect(fingerprint).toHaveBeenCalledTimes(1);
+    } finally {
+      fingerprint.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("declines an unbounded node-module resolver environment", async () => {
     const root = await mkTmpDir("dg-node-modules-limit-");
     const files = Array.from({ length: 2_048 }, (_, index) =>

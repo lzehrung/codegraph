@@ -1197,13 +1197,17 @@ export async function buildProjectIndexIncremental(
     const currentConfigHash = recordConfigHashResult(manifestReport, currentConfigHashResult, opts?.logLevel);
     const configChanged =
       !!currentConfigHashResult.error || !manifest?.configHash || currentConfigHash !== manifest.configHash;
-    const resolverEnvironmentFingerprint = graphOptions.resolveNodeModules
-      ? await computeResolverEnvironmentFingerprint(projectRoot, Object.keys(manifest?.files ?? {}))
-      : undefined;
-    const resolverEnvironmentMatchesManifest =
-      !graphOptions.resolveNodeModules ||
-      (resolverEnvironmentFingerprint !== null &&
-        manifest?.resolverEnvironmentFingerprint === resolverEnvironmentFingerprint);
+    let resolverEnvironmentFingerprint: string | null | undefined;
+    let resolverEnvironmentMatchesManifest = true;
+    if (manifest && graphOptions.resolveNodeModules) {
+      resolverEnvironmentFingerprint = await computeResolverEnvironmentFingerprint(
+        projectRoot,
+        Object.keys(manifest.files),
+      );
+      resolverEnvironmentMatchesManifest =
+        resolverEnvironmentFingerprint !== null &&
+        manifest.resolverEnvironmentFingerprint === resolverEnvironmentFingerprint;
+    }
     const requiresFullRebuild = optionDiffs.some(
       (diff) => diff === "discovery" || diff === "native" || diff === "implementation" || diff === "languageExtensions",
     );
