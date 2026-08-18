@@ -1,4 +1,5 @@
 import path from "node:path";
+import { boundList, countOmitted } from "../presentation/bounds.js";
 import { findDuplicates } from "../duplicates.js";
 import { findDetailedCycles } from "../graphs/cycles.js";
 import { getHotspots } from "../graphs/hotspots.js";
@@ -120,7 +121,7 @@ export async function orientCodegraphWithSession(
   const scopedAbsoluteFiles = snapshot.files.filter((file) => scopedFileSet.has(normalizeRelativePath(root, file)));
   const scopedFileGraph = buildScopedGraph(snapshot.fileGraph, root, scopedFileSet);
   const tree = buildTree(scopedFiles, limits.treeDepth);
-  const boundedTree = tree.slice(0, limits.maxTreeEntries);
+  const boundedTree = boundList(tree, limits.maxTreeEntries);
   const hotspots = getHotspots(scopedFileGraph);
   const scopedHotspots = hotspots
     .map((hotspot) => ({ ...hotspot, file: normalizeRelativePath(root, hotspot.file) }))
@@ -158,7 +159,7 @@ export async function orientCodegraphWithSession(
       healthSummary,
     ],
     focus,
-    tree: boundedTree,
+    tree: boundedTree.items,
     health: {
       cycles: health.cycles,
       unresolved: health.unresolved,
@@ -166,8 +167,8 @@ export async function orientCodegraphWithSession(
     },
     recommendedNext,
     omittedCounts: {
-      treeEntries: Math.max(0, tree.length - boundedTree.length),
-      focusTargets: Math.max(0, scopedFiles.length - packets.length),
+      treeEntries: boundedTree.omitted,
+      focusTargets: countOmitted(scopedFiles.length, packets.length),
       healthAnalyses: health.omittedAnalyses,
     },
   };

@@ -192,6 +192,25 @@ describe("persistent query index", () => {
     expect(autoVacuum?.auto_vacuum).toBe(2);
   });
 
+  it("applies WAL, NORMAL synchronous, and foreign_keys on the store connection", async () => {
+    const root = await createRepo();
+    const session = createSession(root);
+    const snapshot = await session.loadProject();
+    const sidecar = resolveQueryIndexPaths(snapshot.index.cacheRootDir!).sidecar;
+    disposeSessionQueryIndex(session);
+
+    const store = new QueryIndexStore(sidecar);
+    try {
+      expect(store.runtimePragmas()).toEqual({
+        journalMode: "wal",
+        synchronous: 1,
+        foreignKeys: 1,
+      });
+    } finally {
+      store.close();
+    }
+  });
+
   it("upgrades an older sidecar without incremental auto-vacuum and reclaims free space", async () => {
     const root = await createRepo();
     const source = Array.from(

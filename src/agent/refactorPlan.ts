@@ -1,4 +1,5 @@
 import { findCallHierarchy, type CallHierarchyDirection, type CallHierarchyResult } from "../indexer/call-hierarchy.js";
+import { boundList } from "../presentation/bounds.js";
 import { findReferences } from "../indexer/navigation.js";
 import {
   findImplementations as queryImplementations,
@@ -98,8 +99,8 @@ export async function buildRefactorPlanInSnapshot(
     },
   );
   if (referenceResult.status !== "ok") throw new Error(referenceResult.reason);
-  const referenceOmitted = Math.max(0, referenceResult.references.length - referenceLimit);
-  const references = referenceResult.references.slice(0, referenceLimit).map((reference): SemanticLocation => {
+  const boundedReferences = boundList(referenceResult.references, referenceLimit);
+  const references = boundedReferences.items.map((reference): SemanticLocation => {
     const file = normalizeAgentFilePath(snapshot.root, reference.file);
     const includeContext =
       request.includeSource && !classifySensitiveFile(file) && !classifySensitiveFile(reference.file);
@@ -206,7 +207,7 @@ export async function buildRefactorPlanInSnapshot(
       candidateTests: 100,
     },
     omittedCounts: {
-      references: referenceOmitted,
+      references: boundedReferences.omitted,
       callers: callOmitted(callersResult),
       callees: callOmitted(calleesResult),
       supertypes: hierarchyOmitted(supertypesResult),

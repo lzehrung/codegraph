@@ -81,6 +81,28 @@ export function resolveCacheAnchor(projectRoot: string, opts?: BuildOptions): Ca
 
 export type CacheLocationResolution = CacheAnchorResolution & { path: string };
 
+const CONFIGURED_ANCHOR_LAYER_LABELS: Record<"explicit" | "environment" | "user", string> = {
+  explicit: "--cache-dir (or an absolute cache.location)",
+  environment: "CODEGRAPH_CACHE_DIR",
+  user: 'cache.location "user"',
+};
+
+/**
+ * Explicitly configured anchors (`--cache-dir`, `CODEGRAPH_CACHE_DIR`, an absolute
+ * `cache.location`, or `cache.location: "user"`) must never resolve to the user's home
+ * directory or a filesystem root: writing a full cache tree there is destructive and,
+ * unlike auto-detected anchors, there is no safe fallback to silently relocate to.
+ */
+function assertAnchorNotForbidden(resolution: CacheAnchorResolution): void {
+  if (resolution.layer !== "explicit" && resolution.layer !== "environment" && resolution.layer !== "user") return;
+  if (!isForbiddenAnchor(resolution.anchor)) return;
+  throw new Error(
+    `Cache anchor "${resolution.anchor}" (from ${CONFIGURED_ANCHOR_LAYER_LABELS[resolution.layer]}) is the ` +
+      `home directory or a filesystem root. codegraph refuses to use it as a cache root. Use a subdirectory ` +
+      `instead, e.g. "${path.join(resolution.anchor, ".codegraph-cache")}".`,
+  );
+}
+
 /**
  * Resolves the effective on-disk cache path along with the anchor/layer that actually
  * produced it. This can differ from `resolveCacheAnchor`'s intended anchor when that
@@ -90,6 +112,7 @@ export type CacheLocationResolution = CacheAnchorResolution & { path: string };
 export function resolveCacheLocation(projectRoot: string, opts?: BuildOptions): CacheLocationResolution {
   const root = path.resolve(projectRoot);
   const resolution = resolveCacheAnchor(root, opts);
+  assertAnchorNotForbidden(resolution);
   const anchorCreatable =
     resolution.layer === "explicit" || resolution.layer === "environment" || resolution.layer === "user";
   const anchorWritable = anchorCreatable || isWritableDirectory(resolution.anchor);

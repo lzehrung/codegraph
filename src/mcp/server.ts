@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -142,6 +143,8 @@ export type CodegraphMcpServerOptions = CodegraphMcpHandlerOptions & {
   mcpToolConcurrency?: number;
   /** Maximum time to receive an HTTP MCP request body in ms. Defaults to 30 seconds. */
   httpBodyTimeoutMs?: number;
+  /** Maximum time to execute one MCP tool call in ms. Use 0 to disable. Defaults to 30 minutes. */
+  mcpToolTimeoutMs?: number;
   onHttpListen?: ((info: CodegraphMcpHttpServerInfo) => void) | undefined;
   runtimeIdentity?: CodegraphRuntimeIdentity;
 };
@@ -161,9 +164,10 @@ export const DEFAULT_MCP_HTTP_SESSION_IDLE_MS = 30 * 60 * 1000;
 export const DEFAULT_MCP_HTTP_SESSION_MAX_COUNT = 32;
 export const DEFAULT_MCP_HTTP_SESSION_EVICTION_INTERVAL_MS = 60_000;
 export const DEFAULT_MCP_HTTP_BODY_TIMEOUT_MS = 30_000;
+export const DEFAULT_MCP_TOOL_TIMEOUT_MS = 30 * 60 * 1000;
 const MAX_MCP_HTTP_BODY_TIMEOUT_MS = 2_147_483_647;
+const MAX_MCP_TOOL_TIMEOUT_MS = 2_147_483_647;
 export const DEFAULT_MCP_TOOL_CONCURRENCY = 4;
-
 function normalizeMcpToolConcurrency(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_MCP_TOOL_CONCURRENCY;
   return Math.max(1, Math.floor(value));
@@ -178,6 +182,15 @@ function assertMcpHttpBodyTimeout(value: number): number {
   return value;
 }
 
+function assertMcpToolTimeout(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0 || value > MAX_MCP_TOOL_TIMEOUT_MS) {
+    throw new RangeError(
+      `mcpToolTimeoutMs must be a whole number from 0 through ${MAX_MCP_TOOL_TIMEOUT_MS}; 0 disables the deadline.`,
+    );
+  }
+  return value;
+}
+
 type LegacyMcpSession = {
   server: Server;
   transport: NodeStreamableHTTPServerTransport;
@@ -187,6 +200,7 @@ type LegacyMcpSession = {
 };
 
 type OriginValidator = (request: IncomingMessage, response: ServerResponse) => boolean;
+const legacyRequestAbortStorage = new AsyncLocalStorage<AbortSignal>();
 
 export type CodegraphMcpFreshResult<T extends object> = T & { freshness: AgentFreshnessResult };
 
@@ -1140,6 +1154,7 @@ export function createCodegraphMcpProtocolServer(
   installedVersion: InstalledVersionChecker = createInstalledVersionChecker(runtimeIdentity),
   toolCallState: { firstToolCallPending: boolean } = { firstToolCallPending: true },
   maxConcurrentToolCalls = DEFAULT_MCP_TOOL_CONCURRENCY,
+  mcpToolTimeoutMs = DEFAULT_MCP_TOOL_TIMEOUT_MS,
 ): Server {
   return createCodegraphMcpProtocolServerWithTracker(
     handlers,
@@ -1147,6 +1162,7 @@ export function createCodegraphMcpProtocolServer(
     installedVersion,
     toolCallState,
     maxConcurrentToolCalls,
+    assertMcpToolTimeout(mcpToolTimeoutMs),
     createMcpToolOperationTracker(),
   );
 }
@@ -1157,6 +1173,7 @@ function createCodegraphMcpProtocolServerWithTracker(
   installedVersion: InstalledVersionChecker,
   toolCallState: { firstToolCallPending: boolean },
   maxConcurrentToolCalls: number,
+  mcpToolTimeoutMs: number,
   toolOperations: McpToolOperationTracker,
 ): Server {
   const server = new Server(
@@ -1170,7 +1187,6 @@ function createCodegraphMcpProtocolServerWithTracker(
   );
   let inFlightToolCalls = 0;
   const toolConcurrency = normalizeMcpToolConcurrency(maxConcurrentToolCalls);
-
   server.setRequestHandler("tools/list", () => ({ tools: listCodegraphMcpTools() }));
   server.setRequestHandler("tools/call", async (request, ctx): Promise<CallToolResult> => {
     if (!toolOperations.isAccepting()) {
@@ -1212,23 +1228,33 @@ function createCodegraphMcpProtocolServerWithTracker(
       console.error(`[codegraph] installed-version check failed: ${errorMessage(error)}`);
     }
     try {
+      const toolCallAbort = createMcpToolAbortSignal(
+        [ctx.mcpReq.signal, legacyRequestAbortStorage.getStore()],
+        request.params.name,
+        mcpToolTimeoutMs,
+      );
       const operation = toolOperations.track(() =>
-        callMcpTool(handlers, request.params.name, request.params.arguments ?? {}, ctx.mcpReq.signal),
+        callMcpTool(handlers, request.params.name, request.params.arguments ?? {}, toolCallAbort.signal),
       );
       if (operation === undefined) {
         inFlightToolCalls -= 1;
+        toolCallAbort.dispose();
         throw new Error("MCP server is shutting down.");
       }
       const releaseToolCall = (): void => {
         inFlightToolCalls -= 1;
       };
-      const result = await awaitMcpToolOperation(ctx.mcpReq.signal, operation, releaseToolCall);
-      await emitFirstToolCallVisibility(
-        "info",
-        1,
-        `Codegraph finished warming the first tool call for '${request.params.name}'.`,
-      );
-      return toToolResult(result);
+      try {
+        const result = await awaitMcpToolOperation(toolCallAbort.signal, operation, releaseToolCall);
+        await emitFirstToolCallVisibility(
+          "info",
+          1,
+          `Codegraph finished warming the first tool call for '${request.params.name}'.`,
+        );
+        return toToolResult(result);
+      } finally {
+        toolCallAbort.dispose();
+      }
     } catch (error) {
       await emitFirstToolCallVisibility(
         "error",
@@ -1252,10 +1278,12 @@ function createCodegraphMcpProtocolFactory(
   handlers: CodegraphMcpHandlers,
   runtimeIdentity: CodegraphRuntimeIdentity,
   maxConcurrentToolCalls = DEFAULT_MCP_TOOL_CONCURRENCY,
+  mcpToolTimeoutMs = DEFAULT_MCP_TOOL_TIMEOUT_MS,
 ): McpProtocolFactory {
   const installedVersion = createInstalledVersionChecker(runtimeIdentity);
   const toolCallState = { firstToolCallPending: true };
   const toolOperations = createMcpToolOperationTracker();
+  const timeout = assertMcpToolTimeout(mcpToolTimeoutMs);
   return {
     create: () =>
       createCodegraphMcpProtocolServerWithTracker(
@@ -1264,6 +1292,7 @@ function createCodegraphMcpProtocolFactory(
         installedVersion,
         toolCallState,
         maxConcurrentToolCalls,
+        timeout,
         toolOperations,
       ),
     stop: () => toolOperations.stop(),
@@ -1272,6 +1301,9 @@ function createCodegraphMcpProtocolFactory(
 }
 
 export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Promise<void> {
+  const configuredMcpToolTimeout =
+    options.mcpToolTimeoutMs === undefined ? DEFAULT_MCP_TOOL_TIMEOUT_MS : options.mcpToolTimeoutMs;
+  const mcpToolTimeoutMs = assertMcpToolTimeout(configuredMcpToolTimeout);
   const port = options.port;
   if (port !== undefined) {
     const started = await startCodegraphMcpHttpServer({ ...options, port });
@@ -1290,6 +1322,7 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
     handlers,
     runtimeIdentity,
     options.mcpToolConcurrency ?? DEFAULT_MCP_TOOL_CONCURRENCY,
+    mcpToolTimeoutMs,
   );
   const handle = serveStdio(protocolFactory.create, {
     legacy: "serve",
@@ -1320,6 +1353,9 @@ export async function startCodegraphMcpHttpServer(
   const httpBodyTimeoutMs = assertMcpHttpBodyTimeout(
     options.httpBodyTimeoutMs === undefined ? DEFAULT_MCP_HTTP_BODY_TIMEOUT_MS : options.httpBodyTimeoutMs,
   );
+  const configuredMcpToolTimeout =
+    options.mcpToolTimeoutMs === undefined ? DEFAULT_MCP_TOOL_TIMEOUT_MS : options.mcpToolTimeoutMs;
+  const mcpToolTimeoutMs = assertMcpToolTimeout(configuredMcpToolTimeout);
   const host = options.host ?? "127.0.0.1";
   const { handlers, session } = await createWarmedCodegraphMcpResources(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
@@ -1327,6 +1363,7 @@ export async function startCodegraphMcpHttpServer(
     handlers,
     runtimeIdentity,
     options.mcpToolConcurrency ?? DEFAULT_MCP_TOOL_CONCURRENCY,
+    mcpToolTimeoutMs,
   );
   const sessionStore = createLegacyMcpSessionStore({
     idleMs: options.httpSessionIdleMs ?? DEFAULT_MCP_HTTP_SESSION_IDLE_MS,
@@ -1600,6 +1637,36 @@ async function handleExistingMcpSessionRequest(
   await handleLegacyMcpSessionRequest(session, request, response);
 }
 
+/**
+ * Runs one legacy HTTP request with a signal that aborts when its connection closes.
+ * The signal is scoped to this request and is available to nested MCP tool dispatch.
+ */
+export async function runWithLegacyRequestAbortSignal<T>(
+  request: IncomingMessage,
+  response: ServerResponse,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const abortController = new AbortController();
+  let completed = false;
+  const abortDisconnectedRequest = (): void => {
+    if (completed) return;
+    if (request.aborted || (!response.writableFinished && response.destroyed)) {
+      abortController.abort(new Error("MCP HTTP request connection closed."));
+    }
+  };
+  request.on("aborted", abortDisconnectedRequest);
+  request.on("close", abortDisconnectedRequest);
+  response.on("close", abortDisconnectedRequest);
+  try {
+    return await legacyRequestAbortStorage.run(abortController.signal, operation);
+  } finally {
+    completed = true;
+    request.off("aborted", abortDisconnectedRequest);
+    request.off("close", abortDisconnectedRequest);
+    response.off("close", abortDisconnectedRequest);
+  }
+}
+
 async function handleLegacyMcpSessionRequest(
   session: LegacyMcpSession,
   request: IncomingMessage,
@@ -1610,7 +1677,9 @@ async function handleLegacyMcpSessionRequest(
   session.inFlightRequests += 1;
   if (tracksSseStream) session.openSseStreams += 1;
   try {
-    await session.transport.handleRequest(request, response, body);
+    await runWithLegacyRequestAbortSignal(request, response, async () => {
+      await session.transport.handleRequest(request, response, body);
+    });
   } finally {
     session.inFlightRequests -= 1;
     if (tracksSseStream) session.openSseStreams -= 1;
@@ -1739,6 +1808,43 @@ function isMcpNodeRequest(request: IncomingMessage): request is IncomingMessage 
   return request.method !== undefined && request.url !== undefined;
 }
 
+type McpToolAbort = {
+  signal: AbortSignal;
+  dispose: () => void;
+};
+
+function createMcpToolAbortSignal(
+  requestSignals: readonly (AbortSignal | undefined)[],
+  toolName: string,
+  timeoutMs: number,
+): McpToolAbort {
+  const controller = new AbortController();
+  const listeners: Array<{ signal: AbortSignal; onAbort: () => void }> = [];
+  for (const requestSignal of requestSignals) {
+    if (requestSignal === undefined) continue;
+    const onAbort = (): void => {
+      controller.abort(requestSignal.reason);
+    };
+    listeners.push({ signal: requestSignal, onAbort });
+    if (requestSignal.aborted) onAbort();
+    else requestSignal.addEventListener("abort", onAbort, { once: true });
+  }
+  const timeout =
+    timeoutMs > 0
+      ? setTimeout(() => {
+          controller.abort(new Error(`MCP tool '${toolName}' exceeded the configured deadline of ${timeoutMs} ms.`));
+        }, timeoutMs)
+      : undefined;
+  timeout?.unref?.();
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timeout);
+      for (const listener of listeners) listener.signal.removeEventListener("abort", listener.onAbort);
+    },
+  };
+}
+
 export function awaitMcpToolOperation<T>(
   signal: AbortSignal | undefined,
   operation: Promise<T>,
@@ -1750,9 +1856,14 @@ export function awaitMcpToolOperation<T>(
 
 function withAbortSignal<T>(signal: AbortSignal | undefined, operation: Promise<T>): Promise<T> {
   if (!signal) return operation;
-  if (signal.aborted) return Promise.reject(new Error("MCP tool call was cancelled."));
+  const cancellationError = (): Error => {
+    const reason = signal.reason;
+    if (reason instanceof Error && reason.name !== "AbortError") return reason;
+    return new Error("MCP tool call was cancelled.");
+  };
+  if (signal.aborted) return Promise.reject(cancellationError());
   const cancellation = Promise.withResolvers<never>();
-  const onAbort = (): void => cancellation.reject(new Error("MCP tool call was cancelled."));
+  const onAbort = (): void => cancellation.reject(cancellationError());
   signal.addEventListener("abort", onAbort, { once: true });
   return Promise.race([operation, cancellation.promise]).finally(() => signal.removeEventListener("abort", onAbort));
 }

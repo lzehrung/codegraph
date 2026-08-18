@@ -35,6 +35,7 @@ export async function writeIndexManifestSnapshot(args: {
   allowEmpty?: boolean;
   transientFiles?: string[];
   symlinkDirectories?: string[];
+  resolverEnvironmentFingerprint?: string;
 }): Promise<void> {
   const files = args.files instanceof Map ? Object.fromEntries(args.files) : args.files;
   if (!Object.keys(files).length && !args.allowEmpty) return;
@@ -50,6 +51,9 @@ export async function writeIndexManifestSnapshot(args: {
     ...(configHash ? { configHash } : {}),
     graphOptions: args.graphOptions,
     buildOptions: summarizeBuildOptions(args.opts),
+    ...(args.resolverEnvironmentFingerprint
+      ? { resolverEnvironmentFingerprint: args.resolverEnvironmentFingerprint }
+      : {}),
     files: transformManifestEntries(args.projectRoot, files, true),
     transientFiles: (args.transientFiles ?? []).map((file) =>
       path.relative(args.projectRoot, file).replace(/\\/g, "/"),
