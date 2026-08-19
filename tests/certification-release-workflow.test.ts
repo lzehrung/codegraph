@@ -1,6 +1,11 @@
 import fs from "node:fs";
-import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+
+type PackageManifest = {
+  scripts?: Record<string, string>;
+};
+
+const packageManifest = JSON.parse(fs.readFileSync("package.json", "utf8")) as PackageManifest;
 
 const releaseWorkflow = fs.readFileSync(".github/workflows/release.yml", "utf8");
 const standaloneWorkflow = fs.readFileSync(".github/workflows/standalone-release.yml", "utf8");
@@ -86,20 +91,28 @@ describe("certified release workflows", () => {
     expect(buildIndex).toBeGreaterThan(-1);
     expect(fixturesIndex).toBeGreaterThan(buildIndex);
     expect(benchmarkIndex).toBeGreaterThan(buildIndex);
-    expect(source).toContain("npm run test:contracts");
   });
-  it("executes benchmark and native contract tests through the package lane", () => {
-    const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-    const result = spawnSync(npmCommand, ["run", "test:contracts"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      shell: true,
-      timeout: 180_000,
-    });
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toMatch(/Test Files.*passed/s);
-  }, 180_000);
+  it("keeps contract suites in a dedicated source lane", () => {
+    const source = jobBlock(onDemandWorkflow, "build-and-test-source");
+    const scripts = packageManifest.scripts ?? {};
+    const contractIndex = source.indexOf("run: npm run test:contracts");
+
+    expect(scripts["test:contracts"]).toBe(
+      "node ./scripts/ensure-dist-for-tests.mjs && vitest run tests/bench-harness.test.ts tests/detailed-symbol-native-only.test.ts",
+    );
+    expect(scripts["test:ci"]).not.toContain("npm run test:contracts");
+    expect(contractIndex).toBeGreaterThan(-1);
+    for (const prerequisite of [
+      "run: npm run build",
+      "run: npm run test:integration",
+      "run: npm run fixtures:check-clean",
+      "run: npm run bench:native:smoke -- --json",
+    ]) {
+      const prerequisiteIndex = source.indexOf(prerequisite);
+      expect(prerequisiteIndex).toBeGreaterThan(-1);
+      expect(prerequisiteIndex).toBeLessThan(contractIndex);
+    }
+  });
 
   it("chains the reusable standalone workflow after certified publication", () => {
     const standalone = jobBlock(releaseWorkflow, "standalone-release");
