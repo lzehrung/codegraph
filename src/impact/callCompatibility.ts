@@ -843,14 +843,14 @@ function rangeContainsIndex(range: Range, index: number): boolean {
   return index >= startIndex && index <= endIndex;
 }
 
-type CallerRangeEntry = {
+export type CallerRangeEntry = {
   local: SymbolDef;
   maxEndIndex: number;
 };
 
-type CallerRangeIndex = ReadonlyMap<string, CallerRangeEntry[]>;
+export type CallerRangeIndex = ReadonlyMap<string, CallerRangeEntry[]>;
 
-function buildCallerRangeIndex(index: ProjectIndex): CallerRangeIndex {
+export function buildCallerRangeIndex(index: ProjectIndex): CallerRangeIndex {
   const byFile = new Map<string, CallerRangeEntry[]>();
   for (const module of index.byFile.values()) {
     const entries = module.locals
@@ -875,7 +875,7 @@ function buildCallerRangeIndex(index: ProjectIndex): CallerRangeIndex {
   return byFile;
 }
 
-function findCallerSymbolId(callerRangeIndex: CallerRangeIndex, ref: Reference): string | undefined {
+export function findCallerSymbolId(callerRangeIndex: CallerRangeIndex, ref: Reference): string | undefined {
   const startIndex = ref.range.start.index;
   if (startIndex === undefined) return undefined;
 

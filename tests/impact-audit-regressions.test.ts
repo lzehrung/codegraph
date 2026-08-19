@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Edge, FileId } from "../src/types.js";
 import { buildSymbolGraphDetailed } from "../src/graphs/symbol-graph-detailed.js";
 import { calculateSeverity, calculateTransitiveSeverity, normalizeSeverityWeights } from "../src/impact/severity.js";
+import { buildCallerRangeIndex, findCallerSymbolId } from "../src/impact/callCompatibility.js";
 import { analyzeTransitiveImpact } from "../src/impact/transitive.js";
 import type { ChangedSymbol, ImpactItem } from "../src/impact/types.js";
 import { SymbolKind, buildProjectIndexFromFiles } from "../src/index.js";
@@ -114,4 +115,24 @@ describe("PR4 impact audit regressions", () => {
     }
   });
 
+  it("P11 preserves caller attribution selected by the legacy range rule", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-impact-caller-range-"));
+    try {
+      const source = path.join(root, "callers.ts");
+      await writeFile(source, "export function outer() { function inner() { return 1; } return inner(); }\n", "utf8");
+      const index = await buildProjectIndexFromFiles(root, [source], { cache: "off" });
+      const locals = index.byFile.get(fileIdentityKey(source))?.locals ?? [];
+      const inner = locals.find((local) => local.localName === "inner");
+      expect(inner).toBeDefined();
+      const expected = `${inner!.file}::${inner!.localName}::${inner!.range.start.index}`;
+      const caller = findCallerSymbolId(buildCallerRangeIndex(index), {
+        file: source,
+        range: inner!.range,
+      });
+
+      expect(caller).toBe(expected);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
