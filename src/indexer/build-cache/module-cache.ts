@@ -296,6 +296,13 @@ export async function fileSignature(
   return { sig, cacheSig, ...(contentHash ? { contentHash } : {}) };
 }
 
+export function fileSignatureFromSource(source: string, gitSig?: string): FileSignature {
+  const contentHash = crypto.createHash("sha256").update(source, "utf8").digest("hex");
+  const sig = `${Buffer.byteLength(source, "utf8")}:${contentHash}`;
+  const cacheSig = gitSig ?? contentHash;
+  return { sig, cacheSig, contentHash, ...(gitSig ? { gitSig } : {}) };
+}
+
 export async function cacheSignatureForFile(
   file: string,
   sigInfo: FileSignature,

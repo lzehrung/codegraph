@@ -401,7 +401,12 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         cache: options.buildOptions?.cache ?? "disk",
         ...(cacheLocation ? { cacheLocation } : {}),
       };
-      const persisted = await tryLoadDetailedSymbolGraphSnapshot(options.root, cacheOptions, base.index);
+      const persisted = await tryLoadDetailedSymbolGraphSnapshot(
+        options.root,
+        cacheOptions,
+        base.index,
+        base.buildReport,
+      );
       if (persisted) return persisted;
       const built = await buildSymbolGraphDetailed(base.index);
       await writeDetailedSymbolGraphSnapshot(options.root, cacheOptions, base.index, built);

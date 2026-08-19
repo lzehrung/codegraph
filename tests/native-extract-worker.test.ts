@@ -68,6 +68,38 @@ describe("native extraction worker", () => {
     expect(parseSyntaxTree).not.toHaveBeenCalled();
     expect(outputs.map((output) => output.syntaxTree)).toEqual([syntaxTree, syntaxTree]);
   });
+  it("omits source only when the caller supplies the exact source", async () => {
+    const extractLanguage = vi.fn(() => ({ results, syntaxTree }));
+    const binding: NativeBinding = {
+      extractLanguage,
+      runLanguageQueries: vi.fn(() => results),
+      parseSyntaxTree: vi.fn(() => syntaxTree),
+      supportedLanguageIds: () => ["ts"],
+    };
+    const extract = createNativeExtractor({
+      loadBinding: () => ({
+        binding,
+        origin: { mode: "workspace", packageName: "@lzehrung/codegraph-native" },
+      }),
+      readFile: async () => {
+        throw new Error("caller-owned source should avoid worker reads");
+      },
+    });
+
+    const output = await extract({
+      filePath: "owned.ts",
+      languageId: "ts",
+      source: "export const owned = 1;\n",
+      includeSourceInResult: false,
+      importsQuery: "",
+      exportsQuery: "",
+      localsQuery: "",
+      importBindingsQuery: "",
+    });
+
+    expect(output.source).toBeUndefined();
+    expect(extractLanguage).toHaveBeenCalledWith("export const owned = 1;\n", "ts", "", "", "", "");
+  });
   it("reports an actionable version error for a native binary without extractLanguage", async () => {
     const binding: NativeBinding = {
       extractLanguage: () => ({ results, syntaxTree }),

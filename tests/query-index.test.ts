@@ -14,9 +14,13 @@ import { QueryIndexStore, QUERY_INDEX_CANDIDATE_ROW_LIMIT } from "../src/agent/q
 import * as queryIndexWorkerPool from "../src/agent/query-index/workerPool.js";
 import { buildProjectIndexIncremental } from "../src/indexer/build-index.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
+import { resetFileIdentityCaseSensitivityForTests } from "../src/util/paths.js";
 import { createCodegraphMcpHandlers } from "../src/mcp/server.js";
 import { captureCli } from "./helpers/cli.js";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
+import * as zlib from "node:zlib";
+
+vi.mock("node:zlib", { spy: true });
 import type { PreparedQueryIndexFile } from "../src/agent/query-index/content.js";
 import { findQueryIndexChunkCandidates } from "../src/agent/query-index/candidates.js";
 
@@ -377,6 +381,53 @@ describe("persistent query index", () => {
     const updated = await ensureQueryIndex(await loadSnapshot());
     expect(updated.diagnostics).toMatchObject({ sidecarState: "updated", filesRead: 1, filesUpdated: 1 });
     updated.store?.close();
+  });
+
+  it("matches equivalent manifest entries with case-insensitive file identity", async () => {
+    const root = await createRepo();
+    const session = createSession(root);
+    resetFileIdentityCaseSensitivityForTests(true);
+    try {
+      const snapshot = await session.loadProject();
+      const sourceFile = snapshot.files.find((file) => file.endsWith("src/auth.ts"));
+      if (!sourceFile) throw new Error("Expected auth source file in session snapshot.");
+      const entry = snapshot.index.manifestEntries?.get(sourceFile);
+      if (!entry) throw new Error("Expected auth manifest entry in session snapshot.");
+      const manifestEntries = new Map(snapshot.index.manifestEntries);
+      manifestEntries.delete(sourceFile);
+      manifestEntries.set(sourceFile.toUpperCase(), entry);
+
+      const handle = await ensureQueryIndex({
+        ...snapshot,
+        index: { ...snapshot.index, manifestEntries },
+      });
+
+      expect(handle.diagnostics).toMatchObject({
+        sidecarState: "created",
+        filesAdded: snapshot.files.length,
+      });
+      handle.store?.close();
+    } finally {
+      resetFileIdentityCaseSensitivityForTests();
+    }
+  });
+
+  it("refuses to create a query index from incomplete manifest entries", async () => {
+    const root = await createRepo();
+    const session = createSession(root);
+    const snapshot = await session.loadProject();
+    const omittedFile = snapshot.files[0];
+    if (!omittedFile) throw new Error("Expected a file in the session snapshot.");
+    const manifestEntries = new Map(snapshot.index.manifestEntries);
+    manifestEntries.delete(omittedFile);
+
+    const handle = await ensureQueryIndex({
+      ...snapshot,
+      index: { ...snapshot.index, manifestEntries },
+    });
+
+    expect(handle.store).toBeNull();
+    expect(handle.diagnostics.sidecarState).toBe("unavailable");
   });
 
   it("removes only expired abandoned rebuild files", async () => {
@@ -755,6 +806,63 @@ describe("persistent query index", () => {
     const scoped = store.substringChunkCandidates("id", ["src/alpha.ts"]);
     expect(scoped.map((chunk) => chunk.path)).toEqual(["src/alpha.ts"]);
     store.close();
+  });
+
+  it("reloads short-term normalized rows after another store advances the sidecar generation", async () => {
+    const root = await createRepo();
+    const databasePath = path.join(root, "query-generation.sqlite");
+    const metadata = (projectSnapshotIdentity: string) => ({
+      ...expectedQueryIndexVersionMetadata(),
+      projectSnapshotIdentity,
+      projectRootIdentity: "root-generation",
+      createdByCodegraphVersion: "test",
+      updatedAt: new Date().toISOString(),
+    });
+    const storeA = new QueryIndexStore(databasePath);
+    const storeB = new QueryIndexStore(databasePath);
+    try {
+      storeA.replaceFiles(
+        [preparedFile("src/retained.ts", ["const id = 1;"]), preparedFile("src/removed.ts", ["const id = 2;"])],
+        [],
+        metadata("generation-1"),
+      );
+      expect(storeA.eligibleFilePaths(["id"])).toEqual(["src/removed.ts", "src/retained.ts"]);
+
+      storeB.replaceFiles(
+        [preparedFile("src/current.ts", ["const id = 3;"])],
+        ["src/retained.ts", "src/removed.ts"],
+        metadata("generation-2"),
+      );
+
+      expect(storeA.eligibleFilePaths(["id"])).toEqual(["src/current.ts"]);
+    } finally {
+      storeA.close();
+      storeB.close();
+    }
+  });
+
+  it("hydrates a duplicate multi-term chunk once without changing candidate ranking", async () => {
+    const root = await createRepo();
+    const databasePath = path.join(root, "query-decompression.sqlite");
+    const store = new QueryIndexStore(databasePath);
+    const decompressSpy = vi.mocked(zlib.brotliDecompressSync);
+    try {
+      store.replaceFiles([preparedFile("src/match.ts", ["const alphaValue = betaValue;"])], [], {
+        ...expectedQueryIndexVersionMetadata(),
+        projectSnapshotIdentity: "snap-decompression",
+        projectRootIdentity: "root-decompression",
+        createdByCodegraphVersion: "test",
+        updatedAt: new Date().toISOString(),
+      });
+      decompressSpy.mockClear();
+      const candidates = findQueryIndexChunkCandidates(store, ["alpha", "beta"]);
+      expect(candidates.map((candidate) => `${candidate.path}:${candidate.ordinal}`)).toEqual(["src/match.ts:0"]);
+      expect(decompressSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      store.close();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      decompressSpy.mockClear();
+    }
   });
 
   it("keeps later higher-quality chunk matches when candidate hydration is capped", async () => {

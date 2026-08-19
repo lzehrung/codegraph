@@ -517,7 +517,7 @@ describe("rename preview", () => {
     }
   });
 
-  it("refuses source symlinks that resolve outside the project root", async (context) => {
+  it("rejects source symlinks that resolve outside the project root during indexing", async (context) => {
     const root = await mkTmpDir("cg-rename-root-");
     const outsideRoot = await mkTmpDir("cg-rename-outside-");
     const outsideFile = path.join(outsideRoot, "service.ts");
@@ -527,19 +527,8 @@ describe("rename preview", () => {
       context.skip();
       return;
     }
-    const snapshot = await renameSnapshotForFiles(root, [aliasFile]);
-    const symbols = await workspaceSymbolsInSnapshot(snapshot, { query: "service" });
-    expect(symbols.symbols[0]).toBeDefined();
 
-    const result = await previewRenameInSnapshot(snapshot, {
-      root,
-      handle: symbols.symbols[0]!.handle,
-      newName: "renamedService",
-    });
-
-    expect(result.safe).toBe(false);
-    expect(result.edits).toEqual([]);
-    expect(result.unsafeSites).toContainEqual(expect.objectContaining({ reason: "outside_root" }));
+    await expect(renameSnapshotForFiles(root, [aliasFile])).rejects.toThrow("Index file is outside project root");
   });
 
   it("refuses source aliases whose real path is sensitive key material", async (context) => {

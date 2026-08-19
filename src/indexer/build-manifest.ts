@@ -1,3 +1,4 @@
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { getGitHead } from "../util/git.js";
@@ -42,6 +43,8 @@ export async function writeIndexManifestSnapshot(args: {
   const writeManifestStart = performance.now();
   const lastCommit = await getGitHead(args.projectRoot);
   const configHashResult = await computeConfigHash(args.projectRoot, args.opts?.logLevel);
+  const projectRootMtimeMs =
+    args.symlinkDirectories !== undefined ? (await fsp.stat(args.projectRoot)).mtimeMs : undefined;
   const configHash = recordConfigHashResult(args.manifestReport, configHashResult, args.opts?.logLevel);
   const manifestData: IndexManifest = {
     version: MANIFEST_VERSION,
@@ -63,6 +66,7 @@ export async function writeIndexManifestSnapshot(args: {
           symlinkDirectories: args.symlinkDirectories.map((directory) =>
             cacheRelativePath(args.projectRoot, directory),
           ),
+          ...(projectRootMtimeMs !== undefined ? { symlinkDirectoriesRootMtimeMs: projectRootMtimeMs } : {}),
         }
       : {}),
   };

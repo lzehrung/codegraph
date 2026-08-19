@@ -12,6 +12,7 @@ import {
   resetFileIdentityCaseSensitivityForTests,
   setFileIdentityCaseInsensitive,
 } from "../src/util/paths.js";
+import { setAfterConfinedPathVerifiedForTests } from "../src/util/confinedFile.js";
 import { createTestIndex, expectFileInIndex, expectModuleCount } from "./test-utils.js";
 
 describe("Project Indexing", () => {
@@ -135,6 +136,27 @@ describe("Project Indexing", () => {
     await expect(buildProjectIndexFromFiles(root, [outsideFile], { cache: "memory" })).rejects.toThrow(
       /outside project root/,
     );
+  });
+  it("rejects an explicit in-root file when its target swaps outside during the read", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-explicit-file-toctou-"));
+    const victim = path.join(root, "victim.ts");
+    const outside = path.join(path.dirname(root), "outside.ts");
+    await fsp.writeFile(victim, "export const safe = 1;\n", "utf8");
+    await fsp.writeFile(outside, "export const secret = 2;\n", "utf8");
+    try {
+      setAfterConfinedPathVerifiedForTests(async (realPath) => {
+        if (path.resolve(realPath) !== path.resolve(victim)) return;
+        await fsp.unlink(victim);
+        await fsp.symlink(outside, victim, "file");
+      });
+      await expect(buildProjectIndexFromFiles(root, [victim], { cache: "disk" })).rejects.toThrow(
+        /changed between verification and open|outside project root/,
+      );
+    } finally {
+      setAfterConfinedPathVerifiedForTests(undefined);
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(outside, { force: true });
+    }
   });
 
   describe("TypeScript Project", () => {

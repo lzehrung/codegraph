@@ -97,6 +97,11 @@ function chunkFromRow(row: Record<string, unknown>): QueryTextChunk | null {
   };
 }
 
+function storedCandidateRowKey(row: Record<string, unknown>): string | null {
+  if (typeof row.path !== "string" || typeof row.ordinal !== "number") return null;
+  return `${row.path}\0${row.ordinal}`;
+}
+
 function storedCandidateChunkFromRow(row: Record<string, unknown>): StoredQueryIndexChunk | null {
   if (typeof row.path !== "string" || !(row.text instanceof Uint8Array)) return null;
   try {
@@ -108,11 +113,14 @@ function storedCandidateChunkFromRow(row: Record<string, unknown>): StoredQueryI
   }
 }
 
+const MAX_NORMALIZED_FILES_CACHE_ENTRIES = 2_048;
+const MAX_NORMALIZED_FILES_CACHE_BYTES = 16 * 1024 * 1024;
+
 export class QueryIndexStore {
   private readonly db: SqliteDatabase;
   private closed = false;
   private normalizedFiles: Map<string, string> | undefined;
-
+  private normalizedFilesMetadataKey: string | undefined;
   constructor(readonly filePath: string) {
     const db = new SqliteDatabase(filePath, { timeout: QUERY_INDEX_BUSY_TIMEOUT_MS });
     this.db = db;
@@ -194,21 +202,42 @@ export class QueryIndexStore {
       }
     }
     if (shortTerms.length) {
-      if (!this.normalizedFiles) {
+      const metadata = readQueryIndexMetadata(this.db);
+      const metadataKey = [
+        metadata.projectSnapshotIdentity ?? "",
+        metadata.projectRootIdentity ?? "",
+        metadata.schemaVersion ?? "",
+        metadata.normalizerVersion ?? "",
+        metadata.chunkerVersion ?? "",
+      ].join("\0");
+      if (this.normalizedFilesMetadataKey !== metadataKey) {
+        this.normalizedFiles = undefined;
+        this.normalizedFilesMetadataKey = metadataKey;
+      }
+      let normalizedFiles = this.normalizedFiles;
+      if (!normalizedFiles) {
         const rows = this.db.prepare("SELECT path, normalized_text FROM files ORDER BY path").all() as Array<{
           path?: unknown;
           normalized_text?: unknown;
         }>;
-        const normalizedFiles = new Map<string, string>();
+        normalizedFiles = new Map<string, string>();
+        let cachedBytes = 0;
         for (const row of rows) {
           if (typeof row.path !== "string" || !(row.normalized_text instanceof Uint8Array)) {
             throw new Error("Invalid query index file normalization.");
           }
-          normalizedFiles.set(row.path, brotliDecompressSync(row.normalized_text).toString("utf8"));
+          const normalizedText = brotliDecompressSync(row.normalized_text).toString("utf8");
+          normalizedFiles.set(row.path, normalizedText);
+          cachedBytes += Buffer.byteLength(normalizedText, "utf8");
         }
-        this.normalizedFiles = normalizedFiles;
+        if (
+          normalizedFiles.size <= MAX_NORMALIZED_FILES_CACHE_ENTRIES &&
+          cachedBytes <= MAX_NORMALIZED_FILES_CACHE_BYTES
+        ) {
+          this.normalizedFiles = normalizedFiles;
+        }
       }
-      for (const [file, normalizedText] of this.normalizedFiles) {
+      for (const [file, normalizedText] of normalizedFiles) {
         if (shortTerms.some((term) => normalizedText.includes(term))) paths.add(file);
       }
     }
@@ -279,6 +308,7 @@ export class QueryIndexStore {
       for (const [key, value] of Object.entries(metadata)) upsertMetadata.run(key, value);
       this.db.exec("COMMIT;");
       this.normalizedFiles = undefined;
+      this.normalizedFilesMetadataKey = undefined;
       this.reclaimFreeSpace();
       return "committed";
     } catch (error) {
@@ -347,7 +377,7 @@ export class QueryIndexStore {
     // a common term matching thousands of early-path chunks would otherwise exhaust the
     // budget before a rarer term's (or a multi-term) match later in path order is read.
     const perTermLimit = Math.max(1, Math.ceil(normalizedLimit / terms.length));
-    const candidates = new Map<string, StoredQueryIndexChunk>();
+    const candidates = new Map<string, Record<string, unknown>>();
     const batchSize = 500;
     for (const term of terms) {
       const isFtsEligible = codePointLength(term) >= 3;
@@ -388,15 +418,17 @@ export class QueryIndexStore {
             remaining,
           ) as Array<Record<string, unknown>>;
         for (const row of rows) {
-          const chunk = storedCandidateChunkFromRow(row);
-          if (!chunk) continue;
-          const key = `${chunk.path}\0${chunk.ordinal}`;
-          if (!candidates.has(key)) termMatches += 1;
-          candidates.set(key, chunk);
+          const key = storedCandidateRowKey(row);
+          if (!key || candidates.has(key)) continue;
+          candidates.set(key, row);
+          termMatches += 1;
         }
       }
     }
-    return [...candidates.values()];
+    return [...candidates.values()].flatMap((row) => {
+      const chunk = storedCandidateChunkFromRow(row);
+      return chunk ? [chunk] : [];
+    });
   }
 
   ftsChunkCandidates(query: string, limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT): StoredQueryIndexChunk[] {

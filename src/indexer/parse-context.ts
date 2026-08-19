@@ -139,8 +139,9 @@ export async function prepareFileForIndexing(
   file: string,
   native?: NativeRuntimeMode,
   languageExtensions?: LanguageExtensionMap,
+  source?: string,
 ): Promise<PreparedFileContext> {
-  const prep = await prepareSourceInput(file, { languageExtensions });
+  const prep = await prepareSourceInput(file, { languageExtensions, ...(source !== undefined ? { source } : {}) });
   if (isGraphOnlyLanguage(prep.sup.id)) {
     return {
       file,

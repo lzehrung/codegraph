@@ -4,7 +4,7 @@ import type { SqliteDatabase } from "../sqlite-driver.js";
 import type { SqliteGraphOptions, SqliteGraphUpdateOptions } from "./types.js";
 import { execRowsParams } from "./common.js";
 import { withSqliteDatabase } from "./database.js";
-
+import { GRAPH_SNAPSHOT_RETENTION } from "./schema.js";
 export const SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY = "artifact_file_signatures_v1";
 
 type SqliteArtifactFileSignature = {
@@ -229,6 +229,18 @@ const recordGraphSnapshot = (
     fileStmt.run([snapshotId, row.file, row.kind]);
   }
 };
+const pruneGraphSnapshots = (db: SqliteDatabase): void => {
+  db.exec(`
+    DELETE FROM graph_snapshot_files
+    WHERE snapshot_id NOT IN (
+      SELECT id FROM graph_snapshots ORDER BY created_at DESC, id DESC LIMIT ${GRAPH_SNAPSHOT_RETENTION}
+    );
+    DELETE FROM graph_snapshots
+    WHERE id NOT IN (
+      SELECT id FROM graph_snapshots ORDER BY created_at DESC, id DESC LIMIT ${GRAPH_SNAPSHOT_RETENTION}
+    );
+  `);
+};
 
 const deleteUnreferencedExternalFiles = (db: SqliteDatabase) => {
   db.exec(`
@@ -273,6 +285,7 @@ export async function writeGraphSqlite(options: SqliteGraphOptions): Promise<voi
         symbolNodes: options.symbolGraph.nodes.size,
         symbolEdges: options.symbolGraph.edges.length,
       });
+      pruneGraphSnapshots(db);
       if (fileSignatures) {
         writeArtifactFileSignatures(db, fileSignatures);
       } else {
@@ -348,6 +361,7 @@ export async function updateGraphSqlite(options: SqliteGraphUpdateOptions): Prom
         symbolNodes: changedSymbolNodes.length,
         symbolEdges: symbolEdges.length,
       });
+      pruneGraphSnapshots(db);
     });
     runUpdate();
     db.exec("ANALYZE;");

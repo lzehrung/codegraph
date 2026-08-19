@@ -238,11 +238,11 @@ export function run() { helper(); new Widget(); }
     const tables = dbQuery(db, "SELECT name FROM sqlite_master WHERE type='table';");
     expect(tables).toContain("graph_snapshots");
     const schemaVersion = dbQuery(db, "SELECT value FROM graph_metadata WHERE key = 'schema_version';");
-    expect(schemaVersion[0]).toBe("2");
+    expect(schemaVersion[0]).toBe("3");
     db.close();
   });
 
-  it("migrates v1 schema_version databases to v2", async () => {
+  it("migrates v1 schema_version databases and bounds old snapshot rows", async () => {
     const root = await mkTmpDir("dg-sqlite-v1-version-");
     const dbPath = path.join(root, "graph.sqlite");
     {
@@ -284,6 +284,35 @@ export function run() { helper(); new Widget(); }
         );
         INSERT INTO graph_metadata (key, value) VALUES ('schema_version', '1');
       `);
+      db.exec(`
+        CREATE TABLE graph_snapshots (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          created_at INTEGER NOT NULL,
+          mode TEXT NOT NULL,
+          changed_files INTEGER NOT NULL,
+          deleted_files INTEGER NOT NULL,
+          file_nodes INTEGER NOT NULL,
+          file_edges INTEGER NOT NULL,
+          symbol_nodes INTEGER NOT NULL,
+          symbol_edges INTEGER NOT NULL
+        );
+        CREATE TABLE graph_snapshot_files (
+          snapshot_id INTEGER NOT NULL,
+          file_path TEXT NOT NULL,
+          change_kind TEXT NOT NULL,
+          FOREIGN KEY(snapshot_id) REFERENCES graph_snapshots(id)
+        );
+      `);
+      const insertSnapshot = db.prepare(
+        "INSERT INTO graph_snapshots (created_at, mode, changed_files, deleted_files, file_nodes, file_edges, symbol_nodes, symbol_edges) VALUES (?, 'full', 0, 0, 0, 0, 0, 0)",
+      );
+      const insertSnapshotFile = db.prepare(
+        "INSERT INTO graph_snapshot_files (snapshot_id, file_path, change_kind) VALUES (?, ?, 'changed')",
+      );
+      for (let index = 0; index < 105; index += 1) {
+        const result = insertSnapshot.run(index);
+        insertSnapshotFile.run(Number(result.lastInsertRowid), `file-${index}.ts`);
+      }
       db.close();
     }
 
@@ -303,6 +332,13 @@ export function run() { helper(); new Widget(); }
       .all()
       .map((row) => String((row as { name?: unknown }).name));
     expect(tables).toContain("graph_snapshots");
+    const snapshotRow = db.prepare("SELECT count(*) AS count FROM graph_snapshots;").get();
+    const childRow = db.prepare("SELECT count(*) AS count FROM graph_snapshot_files;").get();
+    const snapshotCount =
+      snapshotRow && typeof snapshotRow === "object" && "count" in snapshotRow ? Number(snapshotRow.count) : -1;
+    const childCount = childRow && typeof childRow === "object" && "count" in childRow ? Number(childRow.count) : -1;
+    expect(snapshotCount).toBe(100);
+    expect(childCount).toBe(100);
     db.close();
   });
 
