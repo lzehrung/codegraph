@@ -332,6 +332,7 @@ export async function previewRenameInSnapshot(
     if (defNodeId(definition) === resolved.id) continue;
     await addScopeConflicts(snapshot, definition, request.newName, [], conflicts);
   }
+  addExportDeclarationConflicts(snapshot, semanticDefinitions, request.newName, conflicts);
 
   for (const reference of importDeclarations.missing) {
     unsafeSites.push({
@@ -487,6 +488,37 @@ export async function previewRenameInSnapshot(
     filenameSuggestions,
     candidateTests,
   };
+}
+function addExportDeclarationConflicts(
+  snapshot: AgentProjectSnapshot,
+  definitions: ReadonlyMap<string, SymbolDef>,
+  newName: string,
+  conflicts: RenameConflict[],
+): void {
+  for (const moduleIndex of snapshot.index.byFile.values()) {
+    const editedExport = moduleIndex.exports.some((entry) => {
+      if (entry.type === "local") return definitions.has(defNodeId(entry.target));
+      if (entry.type !== "reexport") return false;
+      const resolved = resolveExport(snapshot.index, moduleIndex.file, entry.exportedAs, { allowLocalFallback: false });
+      return resolved?.kind === "resolved" && definitions.has(defNodeId(resolved.def));
+    });
+    if (!editedExport) continue;
+    const duplicate = moduleIndex.exports.find((entry) => {
+      if (!("exportedAs" in entry) || entry.exportedAs !== newName) return false;
+      if (entry.type === "local") return !definitions.has(defNodeId(entry.target));
+      if (entry.type !== "reexport") return true;
+      const resolved = resolveExport(snapshot.index, moduleIndex.file, entry.exportedAs, { allowLocalFallback: false });
+      return resolved?.kind !== "resolved" || !definitions.has(defNodeId(resolved.def));
+    });
+    if (!duplicate) continue;
+    const file = normalizeAgentFilePath(snapshot.root, moduleIndex.file);
+    if (conflicts.some((conflict) => conflict.file === file && conflict.reason === "duplicate_export")) continue;
+    conflicts.push({
+      file,
+      reason: "duplicate_export",
+      message: `The edited export module already exports "${newName}".`,
+    });
+  }
 }
 
 function validateNewName(snapshot: AgentProjectSnapshot, def: SymbolDef, newName: string): RenameConflict[] {
