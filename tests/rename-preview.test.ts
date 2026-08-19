@@ -416,7 +416,15 @@ describe("rename preview", () => {
   it("preserves explicit re-export aliases while renaming the proven source name", async () => {
     const root = await mkTmpDir("cg-rename-reexport-alias-");
     await fsp.writeFile(path.join(root, "service.ts"), "export function service(): number { return 1; }\n");
-    await fsp.writeFile(path.join(root, "index.ts"), 'export { service as publicService } from "./service.js";\n');
+    await fsp.writeFile(path.join(root, "other.ts"), "export function other(): number { return 2; }\n");
+    await fsp.writeFile(
+      path.join(root, "index.ts"),
+      [
+        'export { service as publicService } from "./service.js";',
+        'export { other as renamedService } from "./other.js";',
+        "",
+      ].join("\n"),
+    );
     await fsp.writeFile(
       path.join(root, "consumer.ts"),
       'import { publicService } from "./index.js";\nexport const value = publicService();\n',

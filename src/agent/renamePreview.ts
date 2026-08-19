@@ -497,8 +497,10 @@ function addExportDeclarationConflicts(
 ): void {
   for (const moduleIndex of snapshot.index.byFile.values()) {
     const editedExport = moduleIndex.exports.some((entry) => {
-      if (entry.type === "local") return definitions.has(defNodeId(entry.target));
-      if (entry.type !== "reexport") return false;
+      if (entry.type === "local") {
+        return definitions.has(defNodeId(entry.target)) && entry.exportedAs === entry.target.localName;
+      }
+      if (entry.type !== "reexport" || entry.exportedAs !== entry.sourceSpecifier) return false;
       const resolved = resolveExport(snapshot.index, moduleIndex.file, entry.exportedAs, { allowLocalFallback: false });
       return resolved?.kind === "resolved" && definitions.has(defNodeId(resolved.def));
     });
