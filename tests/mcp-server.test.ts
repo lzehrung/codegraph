@@ -2,9 +2,11 @@ import { registerSessionInvalidationHook } from "../src/agent/sessionLifecycle.j
 import { ensureSessionQueryIndex } from "../src/agent/query-index/sessionStore.js";
 import fs from "node:fs/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
@@ -13,10 +15,14 @@ import {
   callMcpTool,
   createCodegraphMcpHandlers,
   createCodegraphMcpProtocolServer,
+  createCodegraphMcpProtocolServerWithTracker,
+  createParseErrorReportingStdin,
   listCodegraphMcpTools,
   startCodegraphMcpHttpServer,
   DEFAULT_MCP_HTTP_SESSION_MAX_COUNT,
   type CodegraphMcpHandlers,
+  type McpToolConcurrencyTracker,
+  type McpToolOperationTracker,
 } from "../src/mcp/server.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex } from "../src/indexer/types.js";
 import { MCP_TOOL_REGISTRY } from "../src/mcp/tools.js";
@@ -26,6 +32,7 @@ import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY } from "../src/sqlite.js";
 import { countingSession } from "./helpers/agent.js";
 import { createArtifactOutputWithStaleFile, createLinkedTempRoot, isSymlinkUnavailable } from "./helpers/filesystem.js";
+import type { CodegraphRuntimeIdentity, InstalledVersionChecker } from "../src/runtimeIdentity.js";
 import { getCodegraphVersion } from "../src/util/packageInfo.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { runGit } from "./helpers/git.js";
@@ -54,12 +61,12 @@ function readToolJsonResult(payload: JsonRpcObject): Record<string, unknown> {
   if (typeof text !== "string") throw new Error("MCP tool result content was not text.");
   return readObject(JSON.parse(text));
 }
-function readToolError(payload: JsonRpcObject): string {
-  if (payload.error !== undefined) {
-    const message = readObject(payload.error).message;
-    if (typeof message !== "string") throw new Error("MCP protocol error did not contain a message.");
-    return message;
-  }
+function readProtocolError(payload: JsonRpcObject): Record<string, unknown> {
+  return readObject(payload.error);
+}
+
+function readToolExecutionError(payload: JsonRpcObject): string {
+  expect(payload.error).toBeUndefined();
   const result = readObject(payload.result);
   expect(result.isError).toBe(true);
   if (!Array.isArray(result.content) || !result.content.length) {
@@ -78,10 +85,12 @@ async function postMcpJson(
   url: string,
   body: Record<string, unknown>,
   sessionId?: string,
+  extraHeaders: Record<string, string> = {},
 ): Promise<{ response: Response; payload: JsonRpcObject }> {
   const headers: Record<string, string> = {
     accept: "application/json, text/event-stream",
     "content-type": "application/json",
+    ...extraHeaders,
   };
   if (sessionId !== undefined) {
     headers["mcp-session-id"] = sessionId;
@@ -158,6 +167,226 @@ async function postRawHttpJson(
 }
 
 describe("codegraph MCP handlers", () => {
+  describe("MCP stdio parse framing", () => {
+    it("ignores blank lines, accepts CRLF frames, and recovers from malformed JSON", async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-stdio-parse-"));
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const handlers = createCodegraphMcpHandlers({ root });
+      const server = createCodegraphMcpProtocolServer(handlers);
+      const transport = new StdioServerTransport(createParseErrorReportingStdin(input, output), output, {
+        maxBufferSize: 10 * 1024 * 1024,
+      });
+      let frames = "";
+      output.setEncoding("utf8");
+      output.on("data", (chunk: string) => {
+        frames += chunk;
+      });
+
+      try {
+        await server.connect(transport);
+        input.end(
+          [
+            "",
+            "\r",
+            "{bad}\r",
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}\r',
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}',
+          ].join("\n"),
+        );
+        await vi.waitFor(() => {
+          const responses = frames
+            .trim()
+            .split("\n")
+            .map((frame) => readJsonRpcObject(JSON.parse(frame)));
+          const parseErrors = responses.filter(
+            (response) => response.id === null && readProtocolError(response).code === -32700,
+          );
+          expect(parseErrors).toHaveLength(1);
+          expect(responses).toEqual(
+            expect.arrayContaining([expect.objectContaining({ id: 2, result: expect.anything() })]),
+          );
+        });
+      } finally {
+        await server.close();
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("reports a malformed final frame without a newline before ending the input", async () => {
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const filtered = createParseErrorReportingStdin(input, output);
+      let response = "";
+      output.setEncoding("utf8");
+      output.on("data", (chunk: string) => {
+        response += chunk;
+      });
+      const ended = new Promise<void>((resolve, reject) => {
+        filtered.once("end", resolve);
+        filtered.once("error", reject);
+      });
+      filtered.resume();
+
+      input.end("{bad}");
+
+      await ended;
+      expect(response.trim()).toEqual(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: -32700, message: "Parse error" },
+        }),
+      );
+    });
+
+    it("enforces the 10 MiB frame bound before passing data to the stdio transport", async () => {
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const filtered = createParseErrorReportingStdin(input, output);
+      const failure = new Promise<Error>((resolve) => filtered.once("error", resolve));
+
+      input.end(Buffer.alloc(10 * 1024 * 1024 + 1));
+
+      await expect(failure).resolves.toMatchObject({ message: "MCP stdio frame exceeded 10 MiB." });
+    });
+  });
+
+  it("honors cancellation notifications for request id zero", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-zero-cancel-"));
+    const handlers = createCodegraphMcpHandlers({ root });
+    const started = Promise.withResolvers<void>();
+    const aborted = Promise.withResolvers<void>();
+    handlers.query_sqlite = async (_request, options) => {
+      started.resolve();
+      await new Promise<never>((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => {
+          aborted.resolve();
+          reject(new Error("cancelled"));
+        });
+      });
+    };
+    const server = createCodegraphMcpProtocolServer(handlers);
+    const sent: JsonRpcObject[] = [];
+    const transport = {
+      onclose: undefined,
+      onerror: undefined,
+      onmessage: undefined,
+      async start() {},
+      async send(message: unknown) {
+        sent.push(readJsonRpcObject(message));
+      },
+      async close() {},
+    } as Parameters<typeof server.connect>[0];
+    try {
+      await server.connect(transport);
+      if (transport.onmessage === undefined) throw new Error("MCP transport did not start.");
+      transport.onmessage({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1" } },
+      });
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+      transport.onmessage({
+        jsonrpc: "2.0",
+        id: 0,
+        method: "tools/call",
+        params: { name: "query_sqlite", arguments: { query: "SELECT 1;" } },
+      });
+      await started.promise;
+      transport.onmessage({
+        jsonrpc: "2.0",
+        method: "notifications/cancelled",
+        params: { requestId: 0 },
+      });
+      await aborted.promise;
+    } finally {
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans up a rejected tracked call during shutdown", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-shutdown-track-"));
+    const handlers = createCodegraphMcpHandlers({ root });
+    const toolOperations: McpToolOperationTracker = {
+      isAccepting: () => true,
+      track: <T>(_operation: () => Promise<T>): Promise<T> | undefined => undefined,
+      stop() {},
+      drain: async () => {},
+    };
+    const toolConcurrency: McpToolConcurrencyTracker = { inFlight: 0, maximum: 1 };
+    const runtimeIdentity: CodegraphRuntimeIdentity = {
+      startedAt: "2026-08-19T00:00:00.000Z",
+      runningVersion: "test",
+      packageRoot: root,
+      packageJsonPath: path.join(root, "package.json"),
+    };
+    const installedVersion: InstalledVersionChecker = {
+      check: () => ({ restartRequired: false, runningVersion: runtimeIdentity.runningVersion }),
+    };
+    const server = createCodegraphMcpProtocolServerWithTracker(
+      handlers,
+      runtimeIdentity,
+      installedVersion,
+      { firstToolCallPending: true },
+      25,
+      toolOperations,
+      toolConcurrency,
+    );
+    const sent: JsonRpcObject[] = [];
+    const transport = {
+      onclose: undefined,
+      onerror: undefined,
+      onmessage: undefined,
+      async start() {},
+      async send(message: unknown) {
+        sent.push(readJsonRpcObject(message));
+      },
+      async close() {},
+    } as Parameters<typeof server.connect>[0];
+    const abort = vi.spyOn(AbortController.prototype, "abort");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    try {
+      await server.connect(transport);
+      if (transport.onmessage === undefined) throw new Error("MCP transport did not start.");
+      transport.onmessage({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1" } },
+      });
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+      transport.onmessage({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "query_sqlite", arguments: { query: "SELECT 1;" } },
+      });
+      await vi.waitFor(() => expect(sent.some((message) => message.id === 2)).toBe(true));
+      const response = sent.find((message) => message.id === 2);
+      if (response === undefined) throw new Error("MCP server did not return a shutdown response.");
+      expect(readProtocolError(response).message).toBe("MCP server is shutting down.");
+      expect(toolConcurrency.inFlight).toBe(0);
+      expect(clearTimeoutSpy).toHaveBeenCalled();
+
+      abort.mockClear();
+      transport.onmessage({
+        jsonrpc: "2.0",
+        method: "notifications/cancelled",
+        params: { requestId: 2 },
+      });
+      expect(abort).not.toHaveBeenCalled();
+      expect(toolConcurrency.inFlight).toBe(0);
+    } finally {
+      abort.mockRestore();
+      clearTimeoutSpy.mockRestore();
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("serves real MCP tool listing over a specified local HTTP port", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function ok(): number { return 1; }\n", "utf8");
@@ -291,7 +520,7 @@ describe("codegraph MCP handlers", () => {
         },
         sessionId ?? undefined,
       );
-      expect(readToolError(missingCall.payload)).toContain('Symbol path "auth.ts::missing" was not found');
+      expect(readToolExecutionError(missingCall.payload)).toContain('Symbol path "auth.ts::missing" was not found');
 
       const ambiguousCall = await postMcpJson(
         httpServer.url,
@@ -303,7 +532,45 @@ describe("codegraph MCP handlers", () => {
         },
         sessionId ?? undefined,
       );
-      expect(readToolError(ambiguousCall.payload)).toContain('Ambiguous symbol target "duplicates.ts::duplicate"');
+      expect(readToolExecutionError(ambiguousCall.payload)).toContain(
+        'Ambiguous symbol target "duplicates.ts::duplicate"',
+      );
+      const invalidParams = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 9,
+          method: "tools/call",
+          params: { name: "search", arguments: { query: 42 } },
+        },
+        sessionId ?? undefined,
+      );
+      expect(readProtocolError(invalidParams.payload).code).toBe(-32602);
+
+      const unknownTool = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 10,
+          method: "tools/call",
+          params: { name: "no_such_tool", arguments: {} },
+        },
+        sessionId ?? undefined,
+      );
+      expect(readProtocolError(unknownTool.payload).code).toBe(-32601);
+      const missingFile = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 11,
+          method: "tools/call",
+          params: { name: "get_file", arguments: { file: "nope-missing.ts" } },
+        },
+        sessionId ?? undefined,
+      );
+      const missingFileError = readToolExecutionError(missingFile.payload);
+      expect(missingFileError).not.toContain(root);
+      expect(missingFileError).not.toMatch(/[A-Za-z]:[\\/]/);
     } finally {
       await httpServer.close();
     }
@@ -582,6 +849,108 @@ describe("codegraph MCP handlers", () => {
     }
   });
 
+  it("shares the tool concurrency cap across modern Streamable HTTP requests", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-modern-concurrency-"));
+    const backingSession = createAgentSession({ root });
+    const release = Promise.withResolvers<void>();
+    let entered = 0;
+    const session: AgentSession = {
+      ...backingSession,
+      loadProject: async (options) => {
+        entered += 1;
+        await release.promise;
+        return await backingSession.loadProject(options);
+      },
+    };
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      port: 0,
+      session,
+      mcpToolConcurrency: 2,
+    });
+    const meta = {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {},
+    };
+
+    try {
+      const calls = Array.from({ length: 5 }, (_, index) =>
+        postMcpJson(
+          httpServer.url,
+          {
+            jsonrpc: "2.0",
+            id: index + 1,
+            method: "tools/call",
+            params: { name: "search", arguments: { query: "missing", mode: "symbol" }, _meta: meta },
+          },
+          undefined,
+          {
+            "mcp-protocol-version": "2026-07-28",
+            "mcp-method": "tools/call",
+            "mcp-name": "search",
+          },
+        ),
+      );
+      await vi.waitFor(() => expect(entered).toBe(2));
+
+      release.resolve();
+      const responses = await Promise.all(calls);
+      expect(entered).toBe(2);
+      expect(responses).toHaveLength(5);
+      expect(responses.filter(({ payload }) => payload.error === undefined)).toHaveLength(2);
+    } finally {
+      release.resolve();
+      await httpServer.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("advertises and enforces the search depth maximum over MCP HTTP", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-search-depth-"));
+    const httpServer = await startCodegraphMcpHttpServer({ root, port: 0 });
+
+    try {
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-search-depth-test", version: "1.0.0" },
+        },
+      });
+      const sessionId = initialize.response.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+
+      const tools = await postMcpJson(
+        httpServer.url,
+        { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+        sessionId ?? undefined,
+      );
+      const listedTools = readObject(tools.payload.result).tools;
+      expect(Array.isArray(listedTools)).toBe(true);
+      const search = (listedTools as Array<Record<string, unknown>>).find((tool) => tool.name === "search");
+      const depth = readObject(readObject(readObject(search).inputSchema).properties).depth;
+      expect(readObject(depth)).toMatchObject({ minimum: 0, maximum: 5, default: 1 });
+
+      const overLimit = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: { name: "search", arguments: { query: "missing", depth: 6 } },
+        },
+        sessionId ?? undefined,
+      );
+      expect(readProtocolError(overLimit.payload).code).toBe(-32602);
+    } finally {
+      await httpServer.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("evicts idle HTTP sessions and bounds the concurrent session count", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-evict-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
@@ -647,6 +1016,79 @@ describe("codegraph MCP handlers", () => {
       expect(DEFAULT_MCP_HTTP_SESSION_MAX_COUNT).toBeGreaterThan(0);
     } finally {
       await httpServer.close();
+    }
+  });
+
+  it("refreshes legacy HTTP session activity after a request outlives its idle window", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-completion-touch-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const backingSession = createAgentSession({ root });
+    const toolStarted = Promise.withResolvers<void>();
+    const releaseTool = Promise.withResolvers<void>();
+    let gateTool = false;
+    const session: AgentSession = {
+      ...backingSession,
+      loadProject: async (options) => {
+        if (gateTool) {
+          toolStarted.resolve();
+          await releaseTool.promise;
+        }
+        return await backingSession.loadProject(options);
+      },
+    };
+    const idleMs = 50;
+    const evictionIntervalMs = 10;
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      port: 0,
+      session,
+      httpSessionIdleMs: idleMs,
+      httpSessionEvictionIntervalMs: evictionIntervalMs,
+    });
+
+    try {
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-completion-touch-test", version: "1.0.0" },
+        },
+      });
+      const sessionId = initialize.response.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+
+      gateTool = true;
+      const longCall = postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "search", arguments: { query: "ok", mode: "symbol" } },
+        },
+        sessionId ?? undefined,
+      );
+      await toolStarted.promise;
+      await vi.advanceTimersByTimeAsync(idleMs + evictionIntervalMs);
+      releaseTool.resolve();
+      expect((await longCall).response.status).toBe(200);
+
+      await vi.advanceTimersByTimeAsync(evictionIntervalMs);
+      const followup = await postMcpJson(
+        httpServer.url,
+        { jsonrpc: "2.0", id: 3, method: "tools/list", params: {} },
+        sessionId ?? undefined,
+      );
+      expect(followup.response.status).toBe(200);
+    } finally {
+      releaseTool.resolve();
+      await httpServer.close();
+      await fs.rm(root, { recursive: true, force: true });
+      vi.useRealTimers();
     }
   });
 
@@ -1705,6 +2147,7 @@ describe("codegraph MCP handlers", () => {
 
     expect(refsSchema.type).toBe("object");
     expect(refsSchema.additionalProperties).toBe(false);
+
     expect(refsSchema.required).toBeUndefined();
     expect(refsSchema.oneOf).toEqual(alternatives);
     expect(Object.keys(refsProperties).sort()).toEqual(["column", "file", "handle", "limit", "line"]);
@@ -1750,6 +2193,47 @@ describe("codegraph MCP handlers", () => {
     expect(result.rows).toHaveLength(1);
     expect(result.truncated).toBeTruthy();
     expect(result.rowLimit).toBe(1);
+  });
+  it("serializes concurrent forced artifact builds into one consistent SQLite bundle", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-artifact-write-lock-"));
+    const outDir = path.join(root, "out");
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const backingSession = createAgentSession({ root });
+    const firstBuildStarted = Promise.withResolvers<void>();
+    const releaseFirstBuild = Promise.withResolvers<void>();
+    let projectLoads = 0;
+    const session: AgentSession = {
+      ...backingSession,
+      loadProject: async (options) => {
+        projectLoads += 1;
+        if (projectLoads === 1) {
+          firstBuildStarted.resolve();
+          await releaseFirstBuild.promise;
+        }
+        return await backingSession.loadProject(options);
+      },
+    };
+    const handlers = createCodegraphMcpHandlers({ root, readOnly: false, session });
+
+    try {
+      const first = handlers.artifact_build({ outDir, sqlite: true, force: true });
+      await firstBuildStarted.promise;
+      const second = handlers.artifact_build({ outDir, sqlite: true, force: true });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(projectLoads).toBe(1);
+
+      releaseFirstBuild.resolve();
+      await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+      const manifest = JSON.parse(await fs.readFile(path.join(outDir, "manifest.json"), "utf8")) as {
+        artifacts: { sqlite?: string };
+      };
+      expect(manifest.artifacts.sqlite).toBe("codegraph.sqlite");
+      const sqliteResult = await handlers.query_sqlite({ query: "SELECT path FROM files;" });
+      expect(sqliteResult.rows.some((row) => String(row[0]).endsWith("auth.ts"))).toBe(true);
+    } finally {
+      releaseFirstBuild.resolve();
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("refreshes the SQLite artifact before query_sqlite after small workspace edits", async () => {

@@ -1,11 +1,18 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync, rmSync } from "node:fs";
 import path from "node:path";
+import { nativeTargetSuffixForPlatform } from "../packages/codegraph-native/platform.js";
 
 const SKIP_MESSAGE =
   "[codegraph] Skipping native workspace build because Cargo is unavailable. Install Rust or run a published package install if you need the native addon in this checkout.";
 const LOCKED_ARTIFACT_SKIP_MESSAGE =
   "[codegraph] Skipping native rebuild because a packaged Windows addon is locked; reusing the existing artifact. Close Node processes or editor integrations using the addon if you need a fresh native build.";
+const LOCKED_ARTIFACT_STRICT_FAILURE_MESSAGE =
+  "[codegraph] A packaged Windows addon is locked and its bytes cannot be verified against the current source. Failing the strict release build instead of certifying a possibly stale artifact. Close Node processes or editor integrations using the addon and retry.";
+
+function unsupportedWindowsArchMessage(arch) {
+  return `[codegraph] Unsupported Windows architecture for native staging: ${arch}.`;
+}
 
 function buildFailureMessage(detail) {
   return "[codegraph] Native workspace build failed. " + detail;
@@ -42,11 +49,11 @@ function stderrText(result) {
   return "";
 }
 
-function isWindowsArtifactFile(entryName) {
-  return entryName.startsWith("index.win32-") && entryName.endsWith(".node");
+function isWindowsArtifactFileForSuffix(entryName, suffix) {
+  return entryName === `index.${suffix}.node`;
 }
 
-function findWindowsNativeArtifacts(packageDir, readdirSyncImpl, pathImpl) {
+function findWindowsNativeArtifacts(packageDir, suffix, readdirSyncImpl, pathImpl) {
   const artifacts = [];
   const packageEntries = readdirSyncImpl(packageDir, {
     withFileTypes: true,
@@ -55,39 +62,37 @@ function findWindowsNativeArtifacts(packageDir, readdirSyncImpl, pathImpl) {
     if (entry.isDirectory()) {
       continue;
     }
-    if (isWindowsArtifactFile(entry.name)) {
+    if (isWindowsArtifactFileForSuffix(entry.name, suffix)) {
       artifacts.push(pathImpl.join(packageDir, entry.name));
     }
   }
 
-  const npmDir = pathImpl.join(packageDir, "npm");
-  let npmEntries = [];
+  const targetDir = pathImpl.join(packageDir, "npm", suffix);
+  let targetEntries = [];
   try {
-    npmEntries = readdirSyncImpl(npmDir, { withFileTypes: true });
+    targetEntries = readdirSyncImpl(targetDir, { withFileTypes: true });
   } catch {
     return artifacts;
   }
 
-  for (const platformDir of npmEntries) {
-    if (!platformDir.isDirectory() || !platformDir.name.startsWith("win32-")) {
-      continue;
-    }
-    const nestedDir = pathImpl.join(npmDir, platformDir.name);
-    const nestedEntries = readdirSyncImpl(nestedDir, { withFileTypes: true });
-    for (const nestedEntry of nestedEntries) {
-      if (!nestedEntry.isDirectory() && isWindowsArtifactFile(nestedEntry.name)) {
-        artifacts.push(pathImpl.join(nestedDir, nestedEntry.name));
-      }
+  for (const entry of targetEntries) {
+    if (!entry.isDirectory() && isWindowsArtifactFileForSuffix(entry.name, suffix)) {
+      artifacts.push(pathImpl.join(targetDir, entry.name));
     }
   }
 
   return artifacts;
 }
 
-/** @returns {boolean} true when every artifact was removed (or none existed). */
-function cleanWindowsNativeArtifacts({ logger, cwd, readdirSyncImpl, rmSyncImpl, pathImpl }) {
+/**
+ * Cleans only the artifact for the current host's native target suffix, so pre-collected
+ * staged artifacts for other Windows architectures (e.g. arm64 staged while building on an
+ * x64 host) survive a rebuild.
+ * @returns {boolean} true when the host artifact was removed (or none existed).
+ */
+function cleanWindowsNativeArtifacts({ logger, cwd, suffix, readdirSyncImpl, rmSyncImpl, pathImpl }) {
   const packageDir = pathImpl.join(cwd, "packages", "codegraph-native");
-  const artifactPaths = findWindowsNativeArtifacts(packageDir, readdirSyncImpl, pathImpl);
+  const artifactPaths = findWindowsNativeArtifacts(packageDir, suffix, readdirSyncImpl, pathImpl);
   for (const artifactPath of artifactPaths) {
     try {
       rmSyncImpl(artifactPath, { force: true });
@@ -111,6 +116,7 @@ export function hasCargo({ spawnSyncImpl = spawnSync, platform = process.platfor
 export function runBuildNativeIfAvailable({
   spawnSyncImpl = spawnSync,
   platform = process.platform,
+  arch = process.arch,
   logger = console,
   strict = false,
   cwd = process.cwd(),
@@ -127,15 +133,25 @@ export function runBuildNativeIfAvailable({
   }
 
   if (platform === "win32") {
+    const suffix = nativeTargetSuffixForPlatform(platform, arch);
+    if (!suffix) {
+      logger.warn(unsupportedWindowsArchMessage(arch));
+      return strict ? 1 : 0;
+    }
     const windowsPath = path.win32;
     const cleaned = cleanWindowsNativeArtifacts({
       logger,
       cwd,
+      suffix,
       readdirSyncImpl,
       rmSyncImpl,
       pathImpl: windowsPath,
     });
     if (!cleaned) {
+      if (strict) {
+        logger.warn(LOCKED_ARTIFACT_STRICT_FAILURE_MESSAGE);
+        return 1;
+      }
       logger.warn(LOCKED_ARTIFACT_SKIP_MESSAGE);
       return 0;
     }

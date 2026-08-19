@@ -106,6 +106,24 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 5`] = `
 {
   "goto": {
+    "file": "reexport-source.tsx",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "reexport-consumer.tsx:1",
+      "reexport-consumer.tsx:3",
+      "reexport-source.tsx:1",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 6`] = `
+{
+  "goto": {
     "file": "utils.py",
     "line": 1,
     "status": "ok",
@@ -125,7 +143,25 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 6`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 7`] = `
+{
+  "goto": {
+    "file": "package_exports/values.py",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "package_consumer.py:1",
+      "package_consumer.py:3",
+      "package_exports/values.py:1",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 8`] = `
 {
   "goto": {
     "file": "src/Support/Toolbox.php",
@@ -143,7 +179,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 7`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 9`] = `
 {
   "goto": {
     "file": "multi-namespace/Library.php",
@@ -163,7 +199,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 8`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 10`] = `
 {
   "goto": {
     "file": "src/Domain/Service.php",
@@ -181,7 +217,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 9`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 11`] = `
 {
   "goto": {
     "file": "utils.go",
@@ -202,7 +238,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 10`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 12`] = `
 {
   "goto": {
     "file": "aliased-types.go",
@@ -224,7 +260,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 11`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 13`] = `
 {
   "goto": {
     "file": "utils/Utils.java",
@@ -241,7 +277,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 12`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 14`] = `
 {
   "goto": {
     "file": "pkg/PackageService.java",
@@ -258,7 +294,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 13`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 15`] = `
 {
   "goto": {
     "file": "utils/Utils.java",
@@ -275,7 +311,26 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 14`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 16`] = `
+{
+  "goto": {
+    "file": "demo/Point.java",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "ResolutionImports.java:2",
+      "ResolutionImports.java:5",
+      "ResolutionImports.java:5",
+      "demo/Point.java:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 17`] = `
 {
   "goto": {
     "file": "Utils.cs",
@@ -293,7 +348,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 15`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 18`] = `
 {
   "goto": {
     "file": "NamespaceAlias.cs",
@@ -309,7 +364,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 16`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 19`] = `
 {
   "goto": {
     "file": "utils.rs",
@@ -327,7 +382,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 17`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 20`] = `
 {
   "goto": {
     "file": "utils.rs",
@@ -346,7 +401,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 18`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 21`] = `
 {
   "goto": {
     "file": "nested_service.rs",
@@ -365,7 +420,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 19`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 22`] = `
 {
   "goto": {
     "file": "extern-crate.rs",
@@ -384,7 +439,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 20`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 23`] = `
 {
   "goto": {
     "file": "utils/helperFunction.kt",
@@ -402,7 +457,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 21`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 24`] = `
 {
   "goto": {
     "file": "utils/MoreTypes.kt",
@@ -419,7 +474,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 22`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 25`] = `
 {
   "goto": {
     "file": "Utils.swift",
@@ -436,7 +491,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 23`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 26`] = `
 {
   "goto": {
     "file": "StaticMembers.swift",
@@ -453,7 +508,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 24`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 27`] = `
 {
   "goto": {
     "file": "helpers.zig",
@@ -470,7 +525,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 25`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 28`] = `
 {
   "goto": {
     "file": "utils.h",
@@ -487,7 +542,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 26`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 29`] = `
 {
   "goto": {
     "file": "function-pointers.h",
@@ -504,7 +559,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 27`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 30`] = `
 {
   "goto": {
     "file": "utils.hpp",
@@ -521,7 +576,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 28`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 31`] = `
 {
   "goto": {
     "file": "namespaces.hpp",
@@ -538,7 +593,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 29`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 32`] = `
 {
   "goto": {
     "file": "utils.rb",
@@ -555,7 +610,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 30`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 33`] = `
 {
   "goto": {
     "file": "namespaced.rb",
@@ -568,39 +623,6 @@ exports[`native semantic coverage > keeps native semantics stable for representa
       "namespaced.rb:5",
     ],
     "status": "ok",
-  },
-}
-`;
-
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 31`] = `
-{
-  "goto": {
-    "status": "not_found",
-  },
-  "references": {
-    "status": "not_found",
-  },
-}
-`;
-
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 32`] = `
-{
-  "goto": {
-    "status": "not_found",
-  },
-  "references": {
-    "status": "not_found",
-  },
-}
-`;
-
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 33`] = `
-{
-  "goto": {
-    "status": "not_found",
-  },
-  "references": {
-    "status": "not_found",
   },
 }
 `;
@@ -696,6 +718,39 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 42`] = `
 {
   "goto": {
+    "status": "not_found",
+  },
+  "references": {
+    "status": "not_found",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 43`] = `
+{
+  "goto": {
+    "status": "not_found",
+  },
+  "references": {
+    "status": "not_found",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 44`] = `
+{
+  "goto": {
+    "status": "not_found",
+  },
+  "references": {
+    "status": "not_found",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 45`] = `
+{
+  "goto": {
     "file": "stubs.pyi",
     "line": 5,
     "status": "ok",
@@ -711,7 +766,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 43`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 46`] = `
 {
   "goto": {
     "file": "001_create_users.sql",
@@ -729,7 +784,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 44`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 47`] = `
 {
   "goto": {
     "file": "qualified_schema.sql",
@@ -746,7 +801,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 45`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 48`] = `
 {
   "goto": {
     "file": "schema.sql",
@@ -765,7 +820,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 46`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 49`] = `
 {
   "goto": {
     "status": "not_found",
@@ -776,7 +831,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 47`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 50`] = `
 {
   "goto": {
     "file": ".regressions/macros.rs",
@@ -793,7 +848,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 48`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 51`] = `
 {
   "goto": {
     "file": ".regressions/unicode_def.py",
@@ -811,7 +866,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 49`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 52`] = `
 {
   "goto": {
     "file": ".regressions/unicode_def.java",
@@ -829,7 +884,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 50`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 53`] = `
 {
   "goto": {
     "file": ".regressions/unicode_def.kt",
@@ -847,7 +902,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 51`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 54`] = `
 {
   "goto": {
     "file": ".regressions/unicodepkg.go",
@@ -864,7 +919,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 52`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 55`] = `
 {
   "goto": {
     "file": "src/Collision/unicode_def.php",
@@ -883,7 +938,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 53`] = `
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 56`] = `
 {
   "goto": {
     "file": ".regressions/unicode_def.rs",
@@ -896,6 +951,24 @@ exports[`native semantic coverage > keeps native semantics stable for representa
       ".regressions/unicode_consumer.rs:3",
       ".regressions/unicode_consumer.rs:6",
       ".regressions/unicode_def.rs:1",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 57`] = `
+{
+  "goto": {
+    "file": "AnnotationTypes.java",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "AnnotationConsumer.java:3",
+      "AnnotationConsumer.java:5",
+      "AnnotationTypes.java:3",
     ],
     "status": "ok",
   },

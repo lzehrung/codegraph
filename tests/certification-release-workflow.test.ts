@@ -1,8 +1,15 @@
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
+type PackageManifest = {
+  scripts?: Record<string, string>;
+};
+
+const packageManifest = JSON.parse(fs.readFileSync("package.json", "utf8")) as PackageManifest;
+
 const releaseWorkflow = fs.readFileSync(".github/workflows/release.yml", "utf8");
 const standaloneWorkflow = fs.readFileSync(".github/workflows/standalone-release.yml", "utf8");
+const onDemandWorkflow = fs.readFileSync(".github/workflows/on-demand-ci.yml", "utf8");
 
 function jobBlock(workflow: string, jobName: string): string {
   const marker = `  ${jobName}:\n`;
@@ -54,6 +61,57 @@ describe("certified release workflows", () => {
     expect(releaseWorkflow).not.toContain("build-standalone-archives");
     expect(releaseWorkflow).not.toContain("standalone-funnel");
     expect(releaseWorkflow).not.toContain("standalone-release-assets");
+  });
+  it("runs release checks, candidate identity gates, and source CI coverage", () => {
+    const assemble = jobBlock(releaseWorkflow, "assemble-release-candidates");
+    const download = jobBlock(standaloneWorkflow, "download-release-candidates");
+    const source = jobBlock(onDemandWorkflow, "build-and-test-source");
+    const windows = jobBlock(onDemandWorkflow, "build-and-test-windows");
+
+    expect(assemble).toContain("Run release pre-pack checks");
+    expect(assemble).toContain("npm run check");
+    expect(download).toContain("EXPECTED_ROOT_VERSION");
+    expect(download).toContain("EXPECTED_NATIVE_VERSION");
+    expect(download).toContain("manifest.rootVersion");
+    expect(download).toContain("manifest.nativeVersion");
+    expect(source).toContain("node: 22.16.0");
+    expect(source).toContain("node: 24.10.0");
+    expect(source).toContain("os: macos-latest");
+    for (const step of [
+      "npm run security:production",
+      "npm run lint",
+      "npm run format:check",
+      "npm run fixtures:check-clean",
+    ]) {
+      expect(windows).toContain(step);
+    }
+    const buildIndex = windows.indexOf("run: npm run build");
+    const fixturesIndex = windows.indexOf("run: npm run fixtures:check-clean");
+    const benchmarkIndex = windows.indexOf("run: npm run bench:native:smoke -- --json");
+    expect(buildIndex).toBeGreaterThan(-1);
+    expect(fixturesIndex).toBeGreaterThan(buildIndex);
+    expect(benchmarkIndex).toBeGreaterThan(buildIndex);
+  });
+  it("keeps contract suites in a dedicated source lane", () => {
+    const source = jobBlock(onDemandWorkflow, "build-and-test-source");
+    const scripts = packageManifest.scripts ?? {};
+    const contractIndex = source.indexOf("run: npm run test:contracts");
+
+    expect(scripts["test:contracts"]).toBe(
+      "node ./scripts/ensure-dist-for-tests.mjs && vitest run tests/bench-harness.test.ts tests/detailed-symbol-native-only.test.ts",
+    );
+    expect(scripts["test:ci"]).not.toContain("npm run test:contracts");
+    expect(contractIndex).toBeGreaterThan(-1);
+    for (const prerequisite of [
+      "run: npm run build",
+      "run: npm run test:integration",
+      "run: npm run fixtures:check-clean",
+      "run: npm run bench:native:smoke -- --json",
+    ]) {
+      const prerequisiteIndex = source.indexOf(prerequisite);
+      expect(prerequisiteIndex).toBeGreaterThan(-1);
+      expect(prerequisiteIndex).toBeLessThan(contractIndex);
+    }
   });
 
   it("chains the reusable standalone workflow after certified publication", () => {

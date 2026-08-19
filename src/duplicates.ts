@@ -18,6 +18,7 @@ import type {
   DuplicateTargetedResult,
   DuplicateUnitCollectionOptions,
   DuplicateUnitRef,
+  PairEvidence,
   PairFilter,
   PreparedDuplicateBuckets,
   UnitFilter,
@@ -102,6 +103,26 @@ async function findDuplicatesWithOpenDuplicateUnitCache(
     ? buildCandidatePairsFromPreparedBuckets(candidateBuckets, maxBucketSize, options.similarityHints, projectRoot)
     : buildCandidatePairs(units, maxBucketSize, options.similarityHints, projectRoot);
   const { pairs, oversizedBuckets } = candidateResult;
+  if (options.countOnly) {
+    const groupCount = countCandidateDuplicateGroups(pairs, crossFileOnly);
+    return {
+      schemaVersion: 3,
+      units: units.length,
+      groups: [],
+      omittedCounts: {
+        groups: groupCount,
+        rawSuggestions: 0,
+        oversizedBuckets,
+        belowThresholdUnits,
+        overlappingPairs: 0,
+        candidatePairs: countComparableCandidatePairs(pairs, crossFileOnly),
+      },
+      stats: {
+        comparedPairs: 0,
+        candidatePairs: pairs.size,
+      },
+    };
+  }
   const suggestions: DuplicateSuggestion[] = [];
   let overlappingPairs = 0;
   let comparedPairs = 0;
@@ -155,6 +176,41 @@ async function findDuplicatesWithOpenDuplicateUnitCache(
     result.suggestions = limitedRawSuggestions;
   }
   return result;
+}
+function countComparableCandidatePairs(pairs: Map<string, PairEvidence>, crossFileOnly: boolean): number {
+  let count = 0;
+  for (const evidence of pairs.values()) {
+    if (crossFileOnly && evidence.left.absoluteFile === evidence.right.absoluteFile) continue;
+    if (hasLineOverlap(evidence.left, evidence.right)) continue;
+    count += 1;
+  }
+  return count;
+}
+
+function countCandidateDuplicateGroups(pairs: Map<string, PairEvidence>, crossFileOnly: boolean): number {
+  const parents = new Map<string, string>();
+  const find = (id: string): string => {
+    const parent = parents.get(id);
+    if (!parent || parent === id) return id;
+    const root = find(parent);
+    parents.set(id, root);
+    return root;
+  };
+  const join = (left: string, right: string): void => {
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+    if (leftRoot === rightRoot) return;
+    parents.set(leftRoot, rightRoot);
+  };
+
+  for (const evidence of pairs.values()) {
+    if (crossFileOnly && evidence.left.absoluteFile === evidence.right.absoluteFile) continue;
+    if (hasLineOverlap(evidence.left, evidence.right)) continue;
+    parents.set(evidence.left.id, parents.get(evidence.left.id) ?? evidence.left.id);
+    parents.set(evidence.right.id, parents.get(evidence.right.id) ?? evidence.right.id);
+    join(evidence.left.id, evidence.right.id);
+  }
+  return new Set(Array.from(parents, ([id]) => find(id))).size;
 }
 
 function normalizeDuplicateTarget(target: DuplicateTarget, projectRoot: string | undefined): DuplicateTarget {

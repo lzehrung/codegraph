@@ -6,6 +6,7 @@ import {
   MAX_FILE_VIEW_BYTES,
   MAX_FILE_VIEW_LINES,
 } from "../agent/fileView.js";
+import { MAX_GRAPH_DEPTH } from "../agent/search.js";
 import { DEFAULT_WORKSPACE_SYMBOL_LIMIT, MAX_WORKSPACE_SYMBOL_LIMIT } from "../indexer/workspace-symbols.js";
 import { SymbolKind } from "../indexer/types.js";
 
@@ -161,7 +162,13 @@ export const MCP_TOOL_REGISTRY: McpToolDefinition[] = [
         query: stringProperty,
         mode: { type: "string", enum: ["hybrid", "symbol", "path", "text", "graph", "sql"] },
         from: stringProperty,
-        depth: { type: "integer", minimum: 0, default: 1, description: "Graph neighborhood depth." },
+        depth: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_GRAPH_DEPTH,
+          default: 1,
+          description: `Graph neighborhood depth (maximum ${MAX_GRAPH_DEPTH}).`,
+        },
         limit: { type: "integer", minimum: 0, maximum: 100, default: 20 },
       },
       ["query"],

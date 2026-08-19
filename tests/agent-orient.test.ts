@@ -1,15 +1,19 @@
 import fs from "node:fs/promises";
-import { afterEach } from "vitest";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { orientCodegraph, orientCodegraphWithSession } from "../src/agent/orient.js";
 import { createAgentSession } from "../src/agent/session.js";
-import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
 import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
 import * as duplicates from "../src/duplicates.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import { countingSession } from "./helpers/agent.js";
 import { runGit } from "./helpers/git.js";
-import { mkTmpDir } from "./helpers/filesystem.js";
+import { createTempRootRegistry } from "./helpers/filesystem.js";
+
+const tempRoots = createTempRootRegistry();
+async function mkTmpDir(prefix: string): Promise<string> {
+  return await tempRoots.create(prefix);
+}
 
 async function writeFile(root: string, relativePath: string, content: string): Promise<void> {
   const filePath = path.join(root, relativePath);
@@ -18,8 +22,9 @@ async function writeFile(root: string, relativePath: string, content: string): P
 }
 
 describe("agent orient", () => {
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await tempRoots.cleanup();
   });
 
   it("returns compact orientation with file focus targets", async () => {
@@ -34,6 +39,16 @@ describe("agent orient", () => {
     expect(response.tree.some((entry) => entry.path === "src/index.ts")).toBe(true);
     expect(response.focus.some((focus) => focus.file === "src/index.ts")).toBe(true);
     expect(response.recommendedNext.length).toBeGreaterThan(0);
+  });
+  it("emits byte-identical JSON for repeated orientations", async () => {
+    const root = await mkTmpDir("cg-agent-orient-repeat-");
+    await writeFile(root, "src/index.ts", "export { run } from './run';\n");
+    await writeFile(root, "src/run.ts", "export function run() { return 1; }\n");
+
+    const first = await orientCodegraph({ root, includeRoots: ["src"], budget: "small" });
+    const second = await orientCodegraph({ root, includeRoots: ["src"], budget: "small" });
+
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
   });
 
   it("quotes dash-prefixed file targets in follow-up commands", async () => {
@@ -188,18 +203,36 @@ describe("agent orient", () => {
     expect(duplicateSpy).not.toHaveBeenCalled();
   });
 
-  it("runs full duplicate health only when requested", async () => {
+  it("uses bounded count-only duplicate health for large-budget orient", async () => {
     const root = await mkTmpDir("cg-agent-orient-full-health-");
-    await writeFile(root, "src/first.ts", "export function first() { return 1; }\n");
-    await writeFile(root, "src/second.ts", "export function second() { return 2; }\n");
+    const duplicateSource = [
+      "export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {",
+      "  const totals: number[] = [];",
+      "  const labels: string[] = [];",
+      "  for (const row of rows) {",
+      "    const subtotal = row.amount + row.tax;",
+      "    const rounded = Math.round(subtotal * 100) / 100;",
+      '    const label = rounded > 100 ? "large" : "small";',
+      "    labels.push(label);",
+      "    totals.push(rounded);",
+      "  }",
+      '  return totals.map((value, index) => labels[index] + ":" + value.toFixed(2)).join(",");',
+      "}",
+      "",
+    ].join("\n");
+    await writeFile(root, "src/first.ts", duplicateSource);
+    await writeFile(root, "src/second.ts", duplicateSource);
     const duplicateSpy = vi.spyOn(duplicates, "findDuplicates");
 
-    const response = await orientCodegraph({ root, includeRoots: ["src"], budget: "medium", health: "full" });
+    const response = await orientCodegraph({ root, includeRoots: ["src"], budget: "large", health: "full" });
 
     expect(response.health.cycles).toBe(0);
     expect(response.health.unresolved).toBe(0);
-    expect(response.health.duplicateGroups).not.toBeNull();
+    expect(response.health.duplicateGroups).toBe(1);
     expect(response.omittedCounts.healthAnalyses).toBe(0);
-    expect(duplicateSpy).toHaveBeenCalledTimes(1);
+    expect(duplicateSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ countOnly: true, maxBucketSize: 64 }),
+    );
   });
 });

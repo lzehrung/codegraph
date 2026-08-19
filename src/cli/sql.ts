@@ -41,7 +41,7 @@ export async function handleSqlCommand(context: SqlCommandContext): Promise<void
   const queryText = context.getOpt("--query") ?? context.positionals[1];
   if (!dbOpt || !queryText) {
     context.writeStderrLine('Usage: sql <sqlite-path> "SELECT ..." OR sql --db <sqlite-path> --query "SELECT ..."');
-    context.exit(1);
+    context.exit(2);
   }
   const dbPath = path.isAbsolute(dbOpt)
     ? normalizePath(dbOpt)

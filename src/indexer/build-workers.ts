@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
 import type { LanguageSupport } from "../languages.js";
 import { stringifyUnknown } from "../util/ast.js";
+import { readConfinedUtf8File } from "../util/confinedFile.js";
 import { recordNativeExecutionOutcome } from "../native/nativeBackendReport.js";
 import {
   getCachedNormalizedQuery,
@@ -13,7 +14,7 @@ import type {
   NativeExtractResult,
   NativeExtractTask,
 } from "../worker/nativeExtractWorker.js";
-import { NATIVE_WORKER_BATCH_SIZE } from "../worker/nativeExtractWorker.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES, NATIVE_WORKER_BATCH_SIZE } from "../worker/nativeExtractWorker.js";
 import { prepareFileForIndexing, type PreparedFileContext } from "./parse-context.js";
 import type { BuildOptions, BuildReport, WorkerPoolReport } from "./types.js";
 
@@ -43,10 +44,11 @@ function isSFCFile(filePath: string): boolean {
   return filePath.endsWith(".vue") || filePath.endsWith(".svelte") || filePath.endsWith(".astro");
 }
 
-function buildWorkerTask(filePath: string, sup: LanguageSupport): NativeExtractTask {
+function buildWorkerTask(filePath: string, sup: LanguageSupport, source?: string): NativeExtractTask {
   return {
     filePath,
     languageId: sup.id,
+    ...(source !== undefined ? { source, includeSourceInResult: false } : {}),
     importsQuery: getCachedNormalizedQuery(sup, "imports"),
     exportsQuery: getCachedNormalizedQuery(sup, "exports"),
     localsQuery: getCachedNormalizedQuery(sup, "locals"),
@@ -58,10 +60,15 @@ function workerResultToPrepared(
   result: NativeExtractResult,
   sup: LanguageSupport,
   filePath: string,
+  ownedSource?: string,
 ): PreparedFileContext {
+  const source = result.source ?? ownedSource;
+  if (source === undefined) {
+    throw new Error(`Native worker omitted source for ${filePath} without caller-owned content.`);
+  }
   return {
     file: filePath,
-    source: result.source,
+    source,
     sup,
     nativeQueries: result.nativeResults,
     syntaxTree: result.syntaxTree,
@@ -143,35 +150,59 @@ function recordPreparedNativeExecutionOutcome(report: BuildReport | undefined, p
   });
 }
 
+function createOversizedNativeSourceFallback(
+  file: string,
+  support: LanguageSupport,
+  source: string,
+): PreparedFileContext {
+  const bytes = Buffer.byteLength(source, "utf8");
+  return {
+    file,
+    source,
+    sup: support,
+    nativeQueries: null,
+    nativeFallbackReason: "queryFailure",
+    nativeError: `source exceeds native byte limit (${bytes} > ${DEFAULT_NATIVE_SOURCE_MAX_BYTES})`,
+  };
+}
+
 export async function prepareFileContextForBuild(
   file: string,
   support: LanguageSupport,
   opts: BuildOptions | undefined,
   workerSetup: WorkerPoolSetupResult,
   report: BuildReport | undefined,
+  confinedRoot?: string,
+  lexicalRoot?: string,
+  trustedSource?: string,
 ): Promise<PreparedFileContext> {
+  const source =
+    trustedSource ??
+    (confinedRoot ? await readConfinedUtf8File(confinedRoot, lexicalRoot ?? confinedRoot, file) : undefined);
+  if (source && Buffer.byteLength(source, "utf8") > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
+    const prepared = createOversizedNativeSourceFallback(file, support, source);
+    recordPreparedNativeExecutionOutcome(report, prepared);
+    return prepared;
+  }
   let prepared: PreparedFileContext;
   if (workerSetup.pool && !isSFCFile(file) && !isGraphOnlyLanguage(support.id)) {
     if (workerSetup.report) workerSetup.report.tasksSubmitted++;
     try {
-      const workerResult = (await workerSetup.pool.run(buildWorkerTask(file, support))) as NativeExtractResult;
-      prepared = workerResultToPrepared(workerResult, support, file);
+      const workerResult = (await workerSetup.pool.run(buildWorkerTask(file, support, source))) as NativeExtractResult;
+      prepared = workerResultToPrepared(workerResult, support, file, source);
     } catch (error) {
-      if (isNativeRequiredUnavailableError(error)) throw error;
+      if (isNativeRequiredUnavailableError(error) && error instanceof Error) throw error;
       if (workerSetup.report) workerSetup.report.tasksFailed++;
       if (workerSetup.report) {
         workerSetup.report.errors ??= [];
         if (workerSetup.report.errors.length < 20) {
-          workerSetup.report.errors.push({
-            file,
-            message: stringifyUnknown(error),
-          });
+          workerSetup.report.errors.push({ file, message: stringifyUnknown(error) });
         }
       }
-      prepared = await prepareFileForIndexing(file, opts?.native, opts?.languageExtensions);
+      prepared = await prepareFileForIndexing(file, opts?.native, opts?.languageExtensions, source);
     }
   } else {
-    prepared = await prepareFileForIndexing(file, opts?.native, opts?.languageExtensions);
+    prepared = await prepareFileForIndexing(file, opts?.native, opts?.languageExtensions, source);
   }
   recordPreparedNativeExecutionOutcome(report, prepared);
   return prepared;
@@ -209,40 +240,35 @@ export async function prepareFileContextsForBuildBatch(
   for (let offset = 0; offset < batchable.length; offset += workerSetup.batchSize) {
     const slice = batchable.slice(offset, offset + workerSetup.batchSize);
     if (workerSetup.report) workerSetup.report.tasksSubmitted += slice.length;
+    let batchResult: NativeExtractBatchResult | undefined;
+    let batchError: unknown;
     try {
-      const batchResult = (await workerSetup.pool.run({
+      batchResult = (await workerSetup.pool.run({
         tasks: slice.map((entry) => entry.task),
       })) as NativeExtractBatchResult;
-      for (const [i, entry] of slice.entries()) {
-        const workerResult = batchResult.results[i];
-        if (!workerResult) {
-          if (workerSetup.report) {
-            workerSetup.report.tasksFailed++;
-            workerSetup.report.errors ??= [];
-            if (workerSetup.report.errors.length < 20) {
-              workerSetup.report.errors.push({
-                file: entry.file,
-                message: "Native worker returned no result for batch task.",
-              });
-            }
-          }
-          const prepared = await prepareFileForIndexing(entry.file, opts?.native, opts?.languageExtensions);
-          recordPreparedNativeExecutionOutcome(report, prepared);
-          results[entry.index] = prepared;
-          continue;
-        }
-        const prepared = workerResultToPrepared(workerResult, entry.support, entry.file);
-        recordPreparedNativeExecutionOutcome(report, prepared);
-        results[entry.index] = prepared;
-      }
     } catch (error) {
-      if (isNativeRequiredUnavailableError(error)) throw error;
-      if (workerSetup.report) workerSetup.report.tasksFailed += slice.length;
-      for (const entry of slice) {
+      batchError = error;
+    }
+    for (const [index, entry] of slice.entries()) {
+      const result = batchResult?.results[index];
+      if (batchError !== undefined || result === undefined) {
+        const error = batchError ?? new Error("Native worker returned no result for batch task.");
+        if (isNativeRequiredUnavailableError(error) && error instanceof Error) throw error;
+        if (workerSetup.report) {
+          workerSetup.report.tasksFailed++;
+          workerSetup.report.errors ??= [];
+          if (workerSetup.report.errors.length < 20) {
+            workerSetup.report.errors.push({ file: entry.file, message: stringifyUnknown(error) });
+          }
+        }
         const prepared = await prepareFileForIndexing(entry.file, opts?.native, opts?.languageExtensions);
         recordPreparedNativeExecutionOutcome(report, prepared);
         results[entry.index] = prepared;
+        continue;
       }
+      const prepared = workerResultToPrepared(result, entry.support, entry.file);
+      recordPreparedNativeExecutionOutcome(report, prepared);
+      results[entry.index] = prepared;
     }
   }
 

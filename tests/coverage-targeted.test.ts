@@ -102,6 +102,21 @@ describe("targeted coverage for small utilities", () => {
     ).rejects.toThrow("boom");
     expect(semaphore.available()).toBe(1);
   });
+  it("preserves FIFO order through a large semaphore queue and compaction", async () => {
+    const semaphore = new Semaphore(1);
+    await semaphore.acquire();
+    const order: number[] = [];
+    const waiters = Array.from({ length: 2048 }, (_, index) =>
+      semaphore.acquire().then(() => {
+        order.push(index);
+        semaphore.release();
+      }),
+    );
+    semaphore.release();
+    await Promise.all(waiters);
+    expect(order).toEqual(Array.from({ length: 2048 }, (_, index) => index));
+    expect(semaphore.waiting()).toBe(0);
+  });
 
   it("maps with bounded concurrency and caches the global I/O semaphore", async () => {
     await expect(() => new Semaphore(0)).toThrow("positive number");

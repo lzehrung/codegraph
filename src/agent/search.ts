@@ -36,7 +36,12 @@ import {
   normalizeAgentFilePath,
   resolveAgentSnapshotFile,
 } from "./normalize.js";
-import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
+import {
+  createAgentSession,
+  type AgentFreshnessResult,
+  type AgentProjectSnapshot,
+  type AgentSession,
+} from "./session.js";
 import { formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./followUps.js";
 import {
   buildQueryTextChunks,
@@ -108,6 +113,7 @@ export type AgentSearchResponse = {
   mode: AgentSearchMode;
   root: string;
   analysis: AnalysisSummary;
+  freshness: AgentFreshnessResult;
   limits: {
     results: number;
     rankReasonsPerResult: number;
@@ -180,11 +186,12 @@ type SearchCache = {
   fileText: Map<string, Promise<string | null>>;
   normalizedText: Map<string, Promise<string | null>>;
   textChunks: Map<string, Promise<SearchTextChunk[]>>;
+  filesBySymbolName?: Map<string, Set<string>>;
 };
 
 const DEFAULT_LIMIT = 20;
 const MAX_TEXT_BYTES = 300_000;
-const MAX_GRAPH_DEPTH = 5;
+export const MAX_GRAPH_DEPTH = 5;
 const DOCS_EXACT_PHRASE_BOOST = 18;
 const DOCS_PROXIMITY_BOOST = 6;
 const NATURAL_LANGUAGE_SYNTAX_TERMS = new Set([
@@ -212,6 +219,29 @@ const SESSION_SEARCH_CACHE_MAX_ENTRIES = 100;
 const SEARCH_RESULT_CACHES = new WeakMap<AgentSession, Map<string, Promise<AgentSearchResponse>>>();
 const SEARCH_RANKING_VERSION = 2;
 
+function sameStringList(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+function hasSameFreshness(left: AgentFreshnessResult, right: AgentFreshnessResult): boolean {
+  if (left.state !== right.state) return false;
+  if (left.state === "fresh") return true;
+  if (left.state === "refreshed") {
+    return right.state === "refreshed" && sameStringList(left.changedFiles, right.changedFiles);
+  }
+  return (
+    right.state === "stale" &&
+    left.changedFileCount === right.changedFileCount &&
+    left.omittedChangedFileCount === right.omittedChangedFileCount &&
+    left.reason === right.reason &&
+    sameStringList(left.changedFiles, right.changedFiles)
+  );
+}
+
 export async function searchCodegraph(request: AgentSearchRequest): Promise<AgentSearchResponse> {
   const session = createAgentSession({
     root: request.root,
@@ -228,9 +258,10 @@ export async function searchCodegraphWithSession(
   session: AgentSession,
   request: AgentSearchRequest,
 ): Promise<AgentSearchResponse> {
+  const freshness = session.checkFreshness ? await session.checkFreshness() : { state: "fresh" as const };
   if (canUsePathFastPath(request) && session.listFiles && session.root) {
     const files = await session.listFiles();
-    return searchPathOnly(session.root, files, request);
+    return searchPathOnly(session.root, files, request, freshness);
   }
 
   const snapshot = await session.loadProject({
@@ -243,8 +274,10 @@ export async function searchCodegraphWithSession(
   if (existing) {
     promoteSessionSearchResult(resultCache, cacheKey, existing);
     const response = await existing;
-    if (response.query === request.query) return response;
-    return { ...response, query: request.query };
+    let freshResponse = response;
+    if (!hasSameFreshness(response.freshness, freshness)) freshResponse = { ...response, freshness };
+    if (freshResponse.query === request.query) return freshResponse;
+    return { ...freshResponse, query: request.query };
   }
   const mode = request.mode ?? "hybrid";
   let queryIndex: QueryIndexHandle | undefined;
@@ -252,7 +285,7 @@ export async function searchCodegraphWithSession(
     const { ensureSessionQueryIndex } = await import("./query-index/sessionStore.js");
     queryIndex = await ensureSessionQueryIndex(session, snapshot);
   }
-  const search = searchSnapshot(snapshot, request, queryIndex);
+  const search = searchSnapshot(snapshot, request, freshness, queryIndex);
   promoteSessionSearchResult(resultCache, cacheKey, search);
   search.catch(() => {
     if (resultCache.get(cacheKey) === search) resultCache.delete(cacheKey);
@@ -284,6 +317,7 @@ export function formatAgentSearchResponse(response: AgentSearchResponse): string
 async function searchSnapshot(
   snapshot: AgentProjectSnapshot,
   request: AgentSearchRequest,
+  freshness: AgentFreshnessResult,
   queryIndex?: QueryIndexHandle,
 ): Promise<AgentSearchResponse> {
   const mode = request.mode ?? "hybrid";
@@ -310,12 +344,12 @@ async function searchSnapshot(
       await addTextResults(snapshot, resultMap, query, request.includeSnippets ?? true, mode, queryIndex);
     }
   }
-
   if (request.from !== undefined && (mode === "hybrid" || mode === "graph")) {
     applyGraphNeighborhood(
       snapshot,
       resultMap,
       getFileNeighborIndex(),
+      getFilesBySymbolName(snapshot),
       query,
       request.from,
       normalizeDepth(request.depth),
@@ -331,6 +365,7 @@ async function searchSnapshot(
     mode,
     root: snapshot.root,
     analysis: snapshot.analysis,
+    freshness,
     limits: {
       results: limit,
       rankReasonsPerResult: AGENT_SEARCH_RANK_REASONS_PER_RESULT_LIMIT,
@@ -389,7 +424,12 @@ function searchResultCacheKey(snapshot: AgentProjectSnapshot, request: AgentSear
     candidateVersion: QUERY_INDEX_CANDIDATE_VERSION,
   });
 }
-function searchPathOnly(root: string, files: readonly string[], request: AgentSearchRequest): AgentSearchResponse {
+function searchPathOnly(
+  root: string,
+  files: readonly string[],
+  request: AgentSearchRequest,
+  freshness: AgentFreshnessResult,
+): AgentSearchResponse {
   const query = buildQueryTerms(request.query, { root, files });
   const resultMap = new Map<string, MutableSearchResult>();
   const limit = defaultAgentLimit(request.limit, DEFAULT_LIMIT, AGENT_SEARCH_RESULT_LIMIT);
@@ -435,6 +475,7 @@ function searchPathOnly(root: string, files: readonly string[], request: AgentSe
       nativeFilesFellBack: 0,
       label: "path-only",
     },
+    freshness,
     limits: {
       results: limit,
       rankReasonsPerResult: AGENT_SEARCH_RANK_REASONS_PER_RESULT_LIMIT,
@@ -879,6 +920,19 @@ function getSearchCache(snapshot: AgentProjectSnapshot): SearchCache {
   SEARCH_CACHES.set(snapshot, created);
   return created;
 }
+function getFilesBySymbolName(snapshot: AgentProjectSnapshot): Map<string, Set<string>> {
+  const cache = getSearchCache(snapshot);
+  if (cache.filesBySymbolName) return cache.filesBySymbolName;
+
+  const filesBySymbolName = new Map<string, Set<string>>();
+  for (const node of snapshot.symbolGraph.nodes.values()) {
+    const files = filesBySymbolName.get(node.name) ?? new Set<string>();
+    files.add(normalizePath(node.file));
+    filesBySymbolName.set(node.name, files);
+  }
+  cache.filesBySymbolName = filesBySymbolName;
+  return filesBySymbolName;
+}
 
 async function getCachedFileText(cache: SearchCache, file: string): Promise<string | null> {
   const cached = cache.fileText.get(file);
@@ -917,17 +971,24 @@ function applyGraphNeighborhood(
   snapshot: AgentProjectSnapshot,
   resultMap: Map<string, MutableSearchResult>,
   fileNeighborIndex: Map<string, FileNeighbor[]>,
+  filesBySymbolName: Map<string, Set<string>>,
   query: SearchQueryTerms,
   from: string,
   depth: number,
 ): void {
-  const anchorFiles = resolveAnchorFiles(snapshot, from);
+  const anchorFiles = resolveAnchorFiles(snapshot, filesBySymbolName, from);
   if (anchorFiles.size === 0) return;
 
   const reachable = collectReachableFiles(fileNeighborIndex, anchorFiles, depth);
+  const resultsByFile = new Map<string, MutableSearchResult[]>();
+  for (const result of resultMap.values()) {
+    const results = resultsByFile.get(result.file) ?? [];
+    results.push(result);
+    resultsByFile.set(result.file, results);
+  }
   for (const entry of reachable.values()) {
     const relFile = normalizeAgentFilePath(snapshot.root, entry.file);
-    const existingResults = [...resultMap.values()].filter((result) => result.file === relFile);
+    const existingResults = resultsByFile.get(relFile) ?? [];
     const fileMatch = matchTokenScore(relFile, query);
     if (fileMatch.score > 0) {
       const graphResult = upsertResult(resultMap, {
@@ -962,8 +1023,11 @@ function addGraphEvidence(result: MutableSearchResult, relFile: string, entry: R
 function graphBoost(distance: number): number {
   return Math.max(2, 14 - distance * 3);
 }
-
-function resolveAnchorFiles(snapshot: AgentProjectSnapshot, from: string): Set<string> {
+function resolveAnchorFiles(
+  snapshot: AgentProjectSnapshot,
+  filesBySymbolName: Map<string, Set<string>>,
+  from: string,
+): Set<string> {
   const anchor = new Set<string>();
   const directFile = resolveAgentSnapshotFile(snapshot, from);
   if (directFile) anchor.add(directFile);
@@ -993,10 +1057,8 @@ function resolveAnchorFiles(snapshot: AgentProjectSnapshot, from: string): Set<s
     }
   }
 
-  for (const node of snapshot.symbolGraph.nodes.values()) {
-    if (node.name === from) {
-      anchor.add(normalizePath(node.file));
-    }
+  for (const file of filesBySymbolName.get(from) ?? []) {
+    anchor.add(file);
   }
 
   return anchor;

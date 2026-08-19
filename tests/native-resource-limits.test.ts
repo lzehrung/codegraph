@@ -10,6 +10,7 @@ import {
   DEFAULT_NATIVE_MAX_PROJECTED_DEPTH,
   DEFAULT_NATIVE_MAX_PROJECTED_NODES,
   DEFAULT_NATIVE_SOURCE_MAX_BYTES,
+  runExtractionBatch,
 } from "../src/worker/nativeExtractWorker.js";
 import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { cacheSignatureForFile, fileSignature, writeToCache } from "../src/indexer/build-cache/module-cache.js";
@@ -32,6 +33,36 @@ describe("native extraction resource limits", () => {
     // 250k nodes / depth 512: far above normal ASTs; fail closed on generated trees.
     expect(DEFAULT_NATIVE_MAX_PROJECTED_NODES).toBe(250_000);
     expect(DEFAULT_NATIVE_MAX_PROJECTED_DEPTH).toBe(512);
+  });
+
+  it("serializes batch extraction to bound source residency", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const task = {
+      filePath: "sample.ts",
+      languageId: "ts",
+      importsQuery: "",
+      exportsQuery: "",
+      localsQuery: "",
+      importBindingsQuery: "",
+    };
+
+    const result = await runExtractionBatch({ tasks: [task, task] }, async (currentTask) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await Promise.resolve();
+      active -= 1;
+      return {
+        filePath: currentTask.filePath,
+        languageId: currentTask.languageId,
+        nativeResults: null,
+        compactResults: null,
+        syntaxTree: null,
+      };
+    });
+
+    expect(result.results).toHaveLength(2);
+    expect(maximumActive).toBe(1);
   });
 
   it("returns a structured fallback when provided source exceeds the byte cap", async () => {
@@ -67,6 +98,7 @@ describe("native extraction resource limits", () => {
     expect(result.error).toMatch(/source exceeds native byte limit/i);
     expect(result.error).toContain(String(DEFAULT_NATIVE_SOURCE_MAX_BYTES));
     expect(extractLanguage).not.toHaveBeenCalled();
+    expect(result.source).toBe(oversized);
   });
 
   it("stats the file before reading when the on-disk size exceeds the configurable cap", async () => {
@@ -198,7 +230,7 @@ describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache beh
         report: secondReport,
       });
       expect(secondReport.cache?.hits).toBe(0);
-      expect(secondReport.workerPool?.tasksSubmitted).toBe(1);
+      expect(secondReport.workerPool?.tasksSubmitted).toBe(0);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

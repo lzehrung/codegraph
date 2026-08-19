@@ -4,7 +4,6 @@ import * as sessionLifecycleModule from "../src/agent/sessionLifecycle.js";
 import fs from "node:fs/promises";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import { createHash } from "node:crypto";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
@@ -18,9 +17,15 @@ import * as projectFilesModule from "../src/util/projectFiles.js";
 import * as gitModule from "../src/util/git.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { runGit as git } from "./helpers/git.js";
+import { createTempRootRegistry } from "./helpers/filesystem.js";
+
+const tempRoots = createTempRootRegistry();
+async function mkTmpDir(prefix: string): Promise<string> {
+  return await tempRoots.create(prefix);
+}
 
 async function mkRepo(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-session-"));
+  const root = await mkTmpDir("cg-agent-session-");
   await fs.writeFile(path.join(root, "util.ts"), "export function add(a: number, b: number) { return a + b; }\n");
   await fs.writeFile(path.join(root, "main.ts"), "import { add } from './util';\nexport const total = add(1, 2);\n");
   await fs.writeFile(path.join(root, "schema.sql"), "CREATE TABLE public.users (id int primary key);\n");
@@ -90,8 +95,9 @@ function refreshDetailedSidecarHash(sidecar: MutableDetailedSymbolGraphSidecar):
 }
 
 describe("agent session", () => {
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await tempRoots.cleanup();
   });
 
   it("loads index, graph, symbol graph, and SQL files once for repeated agent operations", async () => {
@@ -688,7 +694,7 @@ describe("agent session", () => {
   });
 
   it("auto-enables native workers for large agent builds unless explicitly disabled", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-session-large-"));
+    const root = await mkTmpDir("cg-agent-session-large-");
     for (let index = 0; index < 260; index += 1) {
       await fs.writeFile(path.join(root, `file-${index}.ts`), `export const value${index} = ${index};\n`);
     }
@@ -710,7 +716,8 @@ describe("agent session", () => {
   });
 
   it("does not cache failed project loads", async () => {
-    const root = path.join(os.tmpdir(), `cg-agent-session-retry-${Date.now()}`);
+    const root = await mkTmpDir("cg-agent-session-retry-");
+    await fs.rm(root, { recursive: true, force: true });
     const session = createAgentSession({ root });
 
     await expect(session.loadProject()).rejects.toThrow(/Project root does not exist or is not readable:/);
@@ -724,7 +731,7 @@ describe("agent session", () => {
   });
 
   it("preserves explicit discovery globRoot when loading a child root", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-session-child-root-"));
+    const root = await mkTmpDir("cg-agent-session-child-root-");
     const testsRoot = path.join(root, "tests");
     const keptFile = path.join(testsRoot, "unit", "app.test.ts");
     const ignoredFile = path.join(testsRoot, "samples", "fixture.ts");
@@ -753,7 +760,7 @@ describe("agent session", () => {
   });
 
   it("reports stale file edits as normalized project display paths without invalidating cached project state", async () => {
-    const absoluteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-session-check-fresh-"));
+    const absoluteRoot = await mkTmpDir("cg-agent-session-check-fresh-");
     const relativeRoot = path.relative(process.cwd(), absoluteRoot);
     const filePath = path.join(absoluteRoot, "src", "auth.ts");
     await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -781,7 +788,7 @@ describe("agent session", () => {
   });
 
   it("counts deleted file bytes against auto-refresh limits", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-session-delete-bytes-"));
+    const root = await mkTmpDir("cg-agent-session-delete-bytes-");
     const removedFile = path.join(root, "large.ts");
     await fs.writeFile(removedFile, `export const payload = "${"x".repeat(64)}";\n`, "utf8");
     const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
@@ -896,7 +903,7 @@ describe("agent session", () => {
   });
 
   it("throttles repeated freshness checks within the stale-check interval", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-session-fresh-throttle-"));
+    const root = await mkTmpDir("cg-agent-session-fresh-throttle-");
     const filePath = path.join(root, "main.ts");
     await fs.writeFile(filePath, "export const value = 1;\n", "utf8");
     const session = createAgentSession({ root, freshness: { policy: "check" } });

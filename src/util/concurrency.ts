@@ -3,7 +3,8 @@
  */
 export class Semaphore {
   private permits: number;
-  private waitQueue: Array<() => void> = [];
+  private waitQueue: Array<(() => void) | undefined> = [];
+  private waitQueueHead = 0;
 
   constructor(permits: number) {
     if (!Number.isFinite(permits) || permits < 1) {
@@ -23,9 +24,15 @@ export class Semaphore {
   }
 
   release(): void {
-    const next = this.waitQueue.shift();
+    const next = this.waitQueue[this.waitQueueHead];
     if (next) {
+      this.waitQueue[this.waitQueueHead] = undefined;
+      this.waitQueueHead += 1;
       next();
+      if (this.waitQueueHead > 1024 && this.waitQueueHead * 2 > this.waitQueue.length) {
+        this.waitQueue = this.waitQueue.slice(this.waitQueueHead);
+        this.waitQueueHead = 0;
+      }
     } else {
       this.permits++;
     }
@@ -45,7 +52,7 @@ export class Semaphore {
   }
 
   waiting(): number {
-    return this.waitQueue.length;
+    return this.waitQueue.length - this.waitQueueHead;
   }
 }
 

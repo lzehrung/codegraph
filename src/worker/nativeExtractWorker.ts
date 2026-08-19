@@ -22,6 +22,8 @@ export type NativeExtractTask = {
   filePath: string;
   languageId: string;
   source?: string | undefined;
+  /** Omit the source from the result only when the caller supplied the exact source above. */
+  includeSourceInResult?: boolean | undefined;
   importsQuery: string;
   exportsQuery: string;
   localsQuery: string;
@@ -33,7 +35,7 @@ export type NativeExtractTask = {
 export type NativeExtractResult = {
   filePath: string;
   languageId: string;
-  source: string;
+  source?: string | undefined;
   nativeResults: NativeQueryResults | null;
   compactResults: CompactQueryResults | null;
   syntaxTree: NativeSyntaxTree | null;
@@ -98,10 +100,11 @@ function resolveSourceMaxBytes(task: NativeExtractTask): number {
 }
 
 function resourceLimitFallback(task: NativeExtractTask, source: string, error: string): NativeExtractResult {
+  const includeSource = task.includeSourceInResult ?? true;
   return {
     filePath: task.filePath,
     languageId: task.languageId,
-    source,
+    ...(includeSource ? { source } : {}),
     nativeResults: null,
     compactResults: null,
     syntaxTree: null,
@@ -143,7 +146,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
       if (bytes > maxSourceBytes) {
         return {
           ok: false,
-          source: "",
+          source: task.source,
           error: `source exceeds native byte limit (${bytes} > ${maxSourceBytes})`,
         };
       }
@@ -180,13 +183,14 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
     if (!loaded.ok) {
       return resourceLimitFallback(task, loaded.source, loaded.error);
     }
+    const includeSource = task.includeSourceInResult ?? true;
     const source = loaded.source;
 
     if (!binding || !supportedIds) {
       return {
         filePath: task.filePath,
         languageId: task.languageId,
-        source,
+        ...(includeSource ? { source } : {}),
         nativeResults: null,
         compactResults: null,
         syntaxTree: null,
@@ -199,7 +203,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
       return {
         filePath: task.filePath,
         languageId: task.languageId,
-        source,
+        ...(includeSource ? { source } : {}),
         nativeResults: null,
         compactResults: null,
         syntaxTree: null,
@@ -213,7 +217,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
         return {
           filePath: task.filePath,
           languageId: task.languageId,
-          source,
+          ...(includeSource ? { source } : {}),
           nativeResults: null,
           compactResults,
           syntaxTree: null,
@@ -231,7 +235,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
       return {
         filePath: task.filePath,
         languageId: task.languageId,
-        source,
+        ...(includeSource ? { source } : {}),
         nativeResults: extraction.results,
         compactResults: null,
         syntaxTree: extraction.syntaxTree,
@@ -244,7 +248,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
       return {
         filePath: task.filePath,
         languageId: task.languageId,
-        source,
+        ...(includeSource ? { source } : {}),
         nativeResults: null,
         compactResults: null,
         syntaxTree: null,
@@ -264,11 +268,12 @@ const runExtraction = createNativeExtractor({
   },
 });
 
-export async function runExtractionBatch(batch: NativeExtractBatchTask): Promise<NativeExtractBatchResult> {
+export async function runExtractionBatch(
+  batch: NativeExtractBatchTask,
+  extract: NativeExtractor = runExtraction,
+): Promise<NativeExtractBatchResult> {
   const results: NativeExtractResult[] = [];
-  for (const task of batch.tasks) {
-    results.push(await runExtraction(task));
-  }
+  for (const task of batch.tasks) results.push(await extract(task));
   return { results };
 }
 

@@ -138,4 +138,37 @@ describe("Kotlin import resolution regression", () => {
     expect(fileEdges).toContain(betaFile.replace(/\\/g, "/"));
     expect(fileEdges).not.toContain(ignoredFile.replace(/\\/g, "/"));
   });
+
+  it("does not resolve imports to member or local Kotlin properties", async () => {
+    const root = await mkTmpDir("cg-kotlin-local-property-");
+    const sourceDir = path.join(root, "src", "sample");
+    const sourceFile = path.join(sourceDir, "Properties.kt");
+    const consumerFile = path.join(root, "src", "Consumer.kt");
+    await fsp.mkdir(sourceDir, { recursive: true });
+    await fsp.writeFile(
+      sourceFile,
+      [
+        "package sample",
+        "class Holder { val name = 1 }",
+        "fun localValue(): Int {",
+        "  val name = 2",
+        "  return name",
+        "}",
+      ].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(consumerFile, ["import sample.name", "fun consume(): Int = name"].join("\n"), "utf8");
+
+    clearResolutionCaches();
+    const parsed = await parseFile(consumerFile);
+    const imports = await collectImportsForFile(consumerFile, root, {
+      source: parsed.source,
+      sup: parsed.sup,
+      lang: parsed.lang,
+      nativeQueries: parsed.nativeQueries,
+    });
+
+    expect(imports).toHaveLength(1);
+    expect(imports[0]?.resolved).not.toBe(sourceFile.replace(/\\/g, "/"));
+  });
 });

@@ -3,6 +3,7 @@ import fsp, { type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { normalizePathForDisplay } from "../util/packageInfo.js";
+import { isFileSystemErrorCode } from "../util/errors.js";
 
 type InstallerLockSettings = {
   homeDir: string;
@@ -38,10 +39,6 @@ const INSTALLER_LOCK_ABANDONED_MS = INSTALLER_LOCK_LEASE_MS * 2;
 function opencodeConfigHome(settings: InstallerLockSettings): string {
   const configHome = settings.env.XDG_CONFIG_HOME?.trim();
   return configHome || path.join(settings.homeDir, ".config");
-}
-
-function isFileSystemErrorCode(error: unknown, code: string): boolean {
-  return error instanceof Error && "code" in error && String(error.code) === code;
 }
 
 function isJsonRecord(value: unknown): value is Record<string, unknown> {

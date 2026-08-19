@@ -566,7 +566,7 @@ export async function tool_listProjectFiles(
       files: files.map((file) => normalizeToolFileOutput(root, file)),
     };
   } catch (error) {
-    return { status: "error", error: String(error) };
+    return { status: "error", error: errorMessage(error) };
   }
 }
 
@@ -593,7 +593,7 @@ export async function tool_getGraph(
       }),
     };
   } catch (error) {
-    return { status: "error", error: String(error) };
+    return { status: "error", error: errorMessage(error) };
   }
 }
 
@@ -687,7 +687,7 @@ async function collectToolDependencyEntries(
       truncated: entries.length !== limited.length,
     };
   } catch (error) {
-    return { status: "error", error: String(error) };
+    return { status: "error", error: errorMessage(error) };
   }
 }
 
@@ -723,7 +723,7 @@ export async function tool_getHotspots(
       hotspots,
     };
   } catch (error) {
-    return { status: "error", error: String(error) };
+    return { status: "error", error: errorMessage(error) };
   }
 }
 
@@ -1045,7 +1045,7 @@ export async function tool_goToDefinition(
       ...(result.provenance ? { provenance: result.provenance } : {}),
     };
   } catch (error) {
-    return { status: "error", error: String(error) };
+    return { status: "error", error: errorMessage(error) };
   }
 }
 
@@ -1090,7 +1090,7 @@ export async function tool_findReferences(
       ...(result.provenance ? { provenance: result.provenance } : {}),
     };
   } catch (error) {
-    return { status: "error", error: String(error) };
+    return { status: "error", error: errorMessage(error) };
   }
 }
 

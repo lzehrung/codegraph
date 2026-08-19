@@ -252,6 +252,7 @@ export type ManifestReport = {
   missing?: number;
   optionsMismatch?: string[];
   configHashError?: string;
+  corruptions?: Array<{ artifact: string; reason: string }>;
 };
 
 export type NativeBackendFallbackReason = NativeFallbackReason;
@@ -311,7 +312,7 @@ export type WorkerPoolReport = {
 };
 
 export type QueryIndexDiagnostics = {
-  sidecarState: "hit" | "created" | "updated" | "unavailable" | "writer-busy" | "rebuilt-corrupt";
+  sidecarState: "hit" | "created" | "updated" | "rebuilt" | "unavailable" | "writer-busy" | "rebuilt-corrupt";
   filesRead: number;
   filesAdded: number;
   filesUpdated: number;

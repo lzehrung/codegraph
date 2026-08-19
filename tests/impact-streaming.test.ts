@@ -609,33 +609,6 @@ ${hunks}`;
   return { diffText };
 }
 
-/** Polls a spy's call count until it stops changing, instead of awaiting a fixed real
- * delay: the background analysis chain abandoned by the stream consumer settles
- * asynchronously and this test holds no promise handle for it, so there is no signal to
- * await other than the observable side effect (spy calls) itself. */
-async function waitForStableCallCount(
-  spy: { mock: { calls: unknown[] } },
-  quietMs = 150,
-  timeoutMs = 5_000,
-): Promise<number> {
-  const deadline = Date.now() + timeoutMs;
-  let lastCount = spy.mock.calls.length;
-  let lastChangeAt = Date.now();
-  while (Date.now() < deadline) {
-    const { promise, resolve } = Promise.withResolvers<void>();
-    setTimeout(resolve, 20);
-    await promise;
-    const count = spy.mock.calls.length;
-    if (count !== lastCount) {
-      lastCount = count;
-      lastChangeAt = Date.now();
-    } else if (Date.now() - lastChangeAt >= quietMs) {
-      return lastCount;
-    }
-  }
-  return lastCount;
-}
-
 describe("Impact streaming resource bounds", () => {
   it("surfaces a bounded overflow error instead of silently truncating when a producer burst outruns the queue cap", async () => {
     const root = await mkTmpDir("dg-stream-overflow-");
@@ -750,11 +723,9 @@ index 1234567..abcdef0 100644
       }
       expect(sawImpactItem).toBe(true);
 
-      const settledCalls = await waitForStableCallCount(findReferencesSpy);
-      // Changed symbols are analyzed in fixed batches of 8 (IMPACT_SYMBOL_BATCH_SIZE);
-      // each batch is awaited fully before the next starts. Cancelling mid-first-batch
-      // must prevent every later batch from ever starting: comfortably fewer than half
-      // of the 40 symbols should ever reach a reference lookup.
+      const settledCalls = findReferencesSpy.mock.calls.length;
+      // The iterator return waits for the producer's cancellation acknowledgement, so no
+      // wall-clock polling or threshold is needed to observe the stopped batch.
       expect(settledCalls).toBeGreaterThan(0);
       expect(settledCalls).toBeLessThan(symbolCount / 2);
     } finally {

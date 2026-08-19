@@ -10,13 +10,14 @@ export type SqliteRunResult = StatementResultingChanges;
 export type SqliteColumn = StatementColumnMetadata;
 
 type SqliteConstants = {
-  SQLITE_DENY: number;
-  SQLITE_FUNCTION: number;
-  SQLITE_OK: number;
-  SQLITE_PRAGMA: number;
-  SQLITE_READ: number;
-  SQLITE_SELECT: number;
-  SQLITE_TRANSACTION: number;
+  SQLITE_DENY?: number;
+  SQLITE_FUNCTION?: number;
+  SQLITE_OK?: number;
+  SQLITE_PRAGMA?: number;
+  SQLITE_READ?: number;
+  SQLITE_RECURSIVE?: number;
+  SQLITE_SELECT?: number;
+  SQLITE_TRANSACTION?: number;
 };
 type SqliteDatabaseConstructor = new (
   filePath: PathLike,
@@ -37,6 +38,15 @@ type NodeSqliteStatement = StatementSync & {
 
 const requireNodeModule = createRequire(import.meta.url);
 let sqliteModule: NodeSqliteModule | undefined;
+let reportedReadonlyAuthorizerDegradation = false;
+
+function reportReadonlyAuthorizerDegraded(): void {
+  if (reportedReadonlyAuthorizerDegradation) return;
+  reportedReadonlyAuthorizerDegradation = true;
+  console.error(
+    "[codegraph] node:sqlite read-only authorizer is unavailable or incomplete; relying on connection readOnly enforcement.",
+  );
+}
 let sqliteLoadError: Error | undefined;
 
 function loadNodeSqlite(): NodeSqliteModule {
@@ -69,14 +79,29 @@ export function isNodeSqliteUnavailableError(error: unknown): boolean {
   );
 }
 
-function isReadOnlyAllowedAction(actionCode: number, constants: SqliteConstants): boolean {
+const READONLY_AUTHORIZER_CONSTANTS = [
+  "SQLITE_DENY",
+  "SQLITE_FUNCTION",
+  "SQLITE_OK",
+  "SQLITE_PRAGMA",
+  "SQLITE_READ",
+  "SQLITE_RECURSIVE",
+  "SQLITE_SELECT",
+  "SQLITE_TRANSACTION",
+] as const;
+
+export function canInstallReadonlyAuthorizer(constants: SqliteConstants): constants is Required<SqliteConstants> {
+  return READONLY_AUTHORIZER_CONSTANTS.every((name) => typeof constants[name] === "number");
+}
+
+function isReadOnlyAllowedAction(actionCode: number, constants: Required<SqliteConstants>): boolean {
   return (
     actionCode === constants.SQLITE_FUNCTION ||
     actionCode === constants.SQLITE_PRAGMA ||
     actionCode === constants.SQLITE_READ ||
     actionCode === constants.SQLITE_SELECT ||
     actionCode === constants.SQLITE_TRANSACTION ||
-    ("SQLITE_RECURSIVE" in constants && actionCode === constants.SQLITE_RECURSIVE)
+    actionCode === constants.SQLITE_RECURSIVE
   );
 }
 
@@ -142,9 +167,13 @@ export class SqliteDatabase {
     });
     if (options?.readonly) {
       const { constants } = sqlite;
-      this.db.setAuthorizer?.((actionCode) =>
-        isReadOnlyAllowedAction(actionCode, constants) ? constants.SQLITE_OK : constants.SQLITE_DENY,
-      );
+      if (this.db.setAuthorizer && canInstallReadonlyAuthorizer(constants)) {
+        this.db.setAuthorizer((actionCode) =>
+          isReadOnlyAllowedAction(actionCode, constants) ? constants.SQLITE_OK : constants.SQLITE_DENY,
+        );
+      } else {
+        reportReadonlyAuthorizerDegraded();
+      }
     }
   }
 

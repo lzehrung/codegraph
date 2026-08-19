@@ -23,7 +23,13 @@ import {
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { collectLineStartOffsets } from "../util/lines.js";
-import { assertFilePathWithinRoot, fileIdentityKey, normalizePath, toProjectDisplayPath } from "../util/paths.js";
+import {
+  assertFilePathWithinRoot,
+  fileIdentityKey,
+  normalizePath,
+  toProjectDisplayPath,
+  toProjectRelativePath,
+} from "../util/paths.js";
 import { logWithLevel } from "../logging.js";
 import {
   duplicateUnitCacheVariant,
@@ -146,7 +152,10 @@ export function formatDuplicateSymbolHandle(file: string, name: string, line: nu
 
 export function normalizeDetectionFile(filePath: string, projectRoot: string | undefined): string {
   if (!projectRoot) return normalizePath(filePath);
-  return assertFilePathWithinRoot(projectRoot, filePath, "Duplicate input file");
+  const file = assertFilePathWithinRoot(projectRoot, filePath, "Duplicate input file");
+  const relativeFile = toProjectRelativePath(projectRoot, file);
+  if (relativeFile === null) return file;
+  return normalizePath(path.resolve(projectRoot, relativeFile));
 }
 
 function internalUnitId(unit: DuplicateUnitDraft, absoluteFile: string): string {

@@ -393,6 +393,23 @@ export async function findReferences(
           const hit = resolveExport(index, targetFile, exported);
           const matchesDef = hit?.kind === "resolved" && sameDef(hit.def, def, index.languageExtensions);
           if (!matchesDef) continue;
+          if (fileIdentityKey(targetFile) !== fileIdentityKey(definitionFile)) {
+            const remainingReferences =
+              maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
+            const ranges = await collectVerifiedNamedNodeReferences(
+              index,
+              fileId,
+              imp.local,
+              def,
+              (params, parsed) => goToDefinition(index, params, parsed),
+              remainingReferences,
+            );
+            for (const { range, provenance } of ranges) {
+              if (hasReachedMaxReferences()) break;
+              pushRef({ file: fileId, range, via: { import: imp }, ...(provenance ? { provenance } : {}) });
+            }
+            continue;
+          }
           const parsed = await ensureCandidateParsed();
           const resolvedScope = await ensureScope();
           const localName = parsed.sup.normalizeIdentifier(imp.local);

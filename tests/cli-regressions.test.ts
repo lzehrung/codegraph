@@ -798,7 +798,7 @@ describe("CLI regressions", () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-sql-"));
     await fsp.writeFile(path.join(tmpDir, "main.ts"), "export function helper() { return 1; }\n", "utf8");
     const dbPath = path.join(tmpDir, "graph.sqlite");
-    await runCliCommand(["graph", "--json", "--root", tmpDir, "--sqlite", dbPath]);
+    await runCliCommand(["graph", "--root", tmpDir, "--sqlite", dbPath]);
     const pretty = await runCliCommand([
       "sql",
       "--db",
@@ -830,7 +830,7 @@ describe("CLI regressions", () => {
     await fsp.writeFile(path.join(projectDir, "main.ts"), "export function helper() { return 1; }\n", "utf8");
     await fsp.writeFile(path.join(cwdDir, "codegraph.config.json"), "{ not valid json", "utf8");
     const dbPath = path.join(projectDir, "graph.sqlite");
-    await runCliCommand(["graph", "--json", "--root", projectDir, "--sqlite", dbPath]);
+    await runCliCommand(["graph", "--root", projectDir, "--sqlite", dbPath]);
 
     const stdout = await runCliCommandDetailed(
       ["sql", "--json", "--db", dbPath, "--query", "SELECT COUNT(*) AS count FROM symbols;"],
@@ -850,7 +850,7 @@ describe("CLI regressions", () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-sql-readonly-"));
     await fsp.writeFile(path.join(tmpDir, "main.ts"), "export function helper() { return 1; }\n", "utf8");
     const dbPath = path.join(tmpDir, "graph.sqlite");
-    await runCliCommand(["graph", "--json", "--root", tmpDir, "--sqlite", dbPath]);
+    await runCliCommand(["graph", "--root", tmpDir, "--sqlite", dbPath]);
 
     await expect(
       runCliCommandDetailed(["sql", "--json", "--db", dbPath, "--query", "DELETE FROM symbols RETURNING name;"]),
@@ -874,7 +874,7 @@ describe("CLI regressions", () => {
 
   it("skill print-path returns the bundled raw skill directory", async () => {
     const stdout = await runCliCommand(["skill", "--json", "print-path"]);
-    const skillPath = stdout.trim();
+    const skillPath = JSON.parse(stdout) as string;
     expect(normalize(skillPath)).toMatch(/codegraph-skill\/codegraph$/);
   });
 
@@ -1583,6 +1583,29 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     ).rejects.toThrow(/Invalid --max-hits value "0"/i);
   });
 
+  it("grep --max-hits exits 2 above the documented 200000 cap and succeeds at the boundary (C8)", async () => {
+    const aboveCap = await runCliWithExit(
+      ["grep", "--json", "--root", tsRoot, "--pattern", "helperFunction", "--max-hits", "200001"],
+      process.cwd(),
+    );
+    expect(aboveCap.exitCode).toBe(2);
+    expect(aboveCap.stderr).toContain('Invalid --max-hits value "200001". Expected an integer from 1 to 200000.');
+
+    const atCap = await runCliWithExit(
+      ["grep", "--json", "--root", tsRoot, "--pattern", "helperFunction", "--max-hits", "200000"],
+      process.cwd(),
+    );
+    expect(atCap.exitCode).toBeUndefined();
+    expect(() => JSON.parse(atCap.stdout)).not.toThrow();
+
+    const defaultBound = await runCliWithExit(
+      ["grep", "--json", "--root", tsRoot, "--pattern", "helperFunction"],
+      process.cwd(),
+    );
+    expect(defaultBound.exitCode).toBeUndefined();
+    expect(() => JSON.parse(defaultBound.stdout)).not.toThrow();
+  });
+
   it("grep honors .gitignore and additive scan globs", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-grep-scan-"));
     const appFile = path.join(tmpDir, "src", "app.ts");
@@ -1688,6 +1711,46 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     expect(response.focus.some((focus) => focus.file === "docs/guide.md")).toBeFalsy();
     expect(response.summary).toContain("1 file(s) in scope.");
   });
+
+  it("rejects a lone non-directory positional instead of silently scanning cwd (C4)", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-root-policy-"));
+    await fsp.mkdir(path.join(root, "src"), { recursive: true });
+    await fsp.writeFile(path.join(root, "src", "file.ts"), "export const marker = 1;\n");
+
+    const missing = await runCliWithExit(["graph", "does-not-exist-xyz", "--json"], root);
+    expect(missing.exitCode).toBe(2);
+    expect(missing.stderr).toContain('Invalid graph path "does-not-exist-xyz"');
+    expect(missing.stdout).toBe("");
+
+    const notADirectory = await runCliWithExit(["graph", "src/file.ts", "--json"], root);
+    expect(notADirectory.exitCode).toBe(2);
+    expect(notADirectory.stderr).toContain('Invalid graph path "src/file.ts"');
+    expect(notADirectory.stdout).toBe("");
+
+    const inspectMissing = await runCliWithExit(["inspect", "missing", "--json"], root);
+    expect(inspectMissing.exitCode).toBe(2);
+    expect(inspectMissing.stderr).toContain('Invalid inspect path "missing"');
+    expect(inspectMissing.stdout).toBe("");
+  });
+
+  it.runIf(process.platform === "win32")(
+    "normalizes slash- and backslash-prefixed --root paths before path confinement (C5, probe V10)",
+    async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-root-normalize-"));
+      await fsp.writeFile(path.join(root, "a.ts"), "export const marker = 1;\n");
+      // Strip the drive letter to build a path Node resolves against the current drive.
+      // Invoke with cwd on the same drive as `root` so the injected drive is correct
+      // regardless of which drive the OS temp directory happens to live on.
+      const driveRelativeRoot = normalize(root).replace(/^[A-Za-z]:/, "");
+      const backslashDriveRelativeRoot = driveRelativeRoot.replaceAll("/", "\\");
+
+      for (const candidate of [driveRelativeRoot, backslashDriveRelativeRoot]) {
+        const result = await runCliCommandDetailed(["index", "--root", candidate, "--json"], undefined, root);
+        const parsed = JSON.parse(result.stdout) as { files: number };
+        expect(parsed.files).toBe(1);
+      }
+    },
+  );
 
   it("orient prints compact pretty output", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-orient-pretty-"));
@@ -2094,6 +2157,22 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     expect(await fsp.stat(path.join(outDir, "graph.json"))).toBeTruthy();
     await expect(fsp.stat(path.join(outDir, "CODEGRAPH_REPORT.md"))).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fsp.stat(path.join(outDir, "questions.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("runs the documented bare 'artifact --sqlite' invocation without an explicit 'build' subcommand (C1)", async () => {
+    // Matches docs/cli.md's documented form: `codegraph artifact --sqlite --root . --out ... --json`.
+    // At base commit a9c6b220, isCliValueOption only treated --sqlite as a boolean flag when
+    // positionals[0] === "build", so this exact bare invocation died with
+    // "Missing value for --sqlite option" instead of building an artifact.
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-artifact-bare-sqlite-"));
+    const outDir = path.join(root, "out");
+    await fsp.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
+
+    const stdout = await runCliCommand(["artifact", "--sqlite", "--root", root, "--out", outDir, "--json"]);
+    const result = JSON.parse(stdout) as { artifacts: Record<string, string | undefined> };
+
+    expect(result.artifacts).toEqual({ sqlite: "codegraph.sqlite" });
+    expect(await fsp.stat(path.join(outDir, "codegraph.sqlite"))).toBeTruthy();
   });
 
   it("grep CLI pretty output renders compact line-oriented hits", async () => {

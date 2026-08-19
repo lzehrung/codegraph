@@ -11,6 +11,7 @@ import { summarizeAnalysis } from "../../analysisSummary.js";
 import type { AnalysisSummary } from "../../analysisSummary.js";
 import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot, normalizePath } from "../../util/paths.js";
 import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
+import { logWithLevel } from "../../logging.js";
 import { SymbolKind } from "../types.js";
 import type {
   BackendReport,
@@ -21,6 +22,7 @@ import type {
   ModuleIndex,
   ProjectIndex,
   SymbolDef,
+  BuildReport,
 } from "../types.js";
 import {
   buildSymbolGraph,
@@ -72,8 +74,19 @@ type SnapshotFileIdentity = {
 type ParsedSnapshotCacheEntry = {
   identity: SnapshotFileIdentity;
   compressed: Buffer;
+  payload: unknown;
 };
 
+type TransformedSnapshotCacheEntry = {
+  identity: SnapshotFileIdentity;
+  root: string;
+  payload: unknown;
+};
+type TransformedSnapshotModulesCacheEntry = {
+  identity: SnapshotFileIdentity;
+  root: string;
+  payload: unknown;
+};
 type DetailedSymbolGraphCacheEntry = {
   identity: SnapshotFileIdentity;
   projectSnapshotIdentity: string;
@@ -81,6 +94,8 @@ type DetailedSymbolGraphCacheEntry = {
 };
 
 const parsedSnapshotCache = new Map<string, ParsedSnapshotCacheEntry>();
+const transformedSnapshotCache = new Map<string, TransformedSnapshotCacheEntry>();
+const transformedSnapshotModulesCache = new Map<string, TransformedSnapshotModulesCacheEntry>();
 const detailedSymbolGraphCache = new Map<string, DetailedSymbolGraphCacheEntry>();
 
 type DetailedSymbolGraphSnapshotPayload = {
@@ -100,6 +115,18 @@ type SerializedBloomFilter = {
   hashCount: number;
   bitsBase64: string;
 };
+
+type ProjectSnapshotModulesPayload = Pick<
+  ProjectIndexSnapshotPayload,
+  | "version"
+  | "filesSignature"
+  | "projectRoot"
+  | "nativeMode"
+  | "nativeRuntimeFingerprint"
+  | "implementationFingerprint"
+  | "modules"
+  | "fileSignatures"
+>;
 
 type SnapshotFileSignature = {
   sig: string;
@@ -386,23 +413,102 @@ function decodeSnapshotPayload(compressed: Buffer): unknown {
   return JSON.parse(brotliDecompressSync(compressed).toString("utf8")) as unknown;
 }
 
+function recordSnapshotCorruption(
+  report: BuildReport | undefined,
+  artifact: string,
+  reason: string,
+  logLevel: BuildOptions["logLevel"],
+): void {
+  if (report) {
+    report.manifest ??= { used: true, reused: false };
+    report.manifest.corruptions ??= [];
+    if (!report.manifest.corruptions.some((entry) => entry.artifact === artifact)) {
+      report.manifest.corruptions.push({ artifact, reason });
+    }
+  }
+  logWithLevel(logLevel, "warn", `Warning: Corrupt cache artifact ${artifact}: ${reason}`);
+}
+function isMissingArtifactError(error: unknown): boolean {
+  return !!error && typeof error === "object" && "code" in error && error.code === "ENOENT";
+}
+
 async function readParsedSnapshot(snapshotPath: string): Promise<{ identity: SnapshotFileIdentity; payload: unknown }> {
   const before = await snapshotFileIdentity(snapshotPath);
   const cached = parsedSnapshotCache.get(snapshotPath);
   if (cached && sameSnapshotFileIdentity(cached.identity, before)) {
     setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, cached);
-    return { identity: cached.identity, payload: decodeSnapshotPayload(cached.compressed) };
+    return { identity: cached.identity, payload: cached.payload };
   }
   const compressed = Buffer.from(await fsp.readFile(snapshotPath));
   const payload = decodeSnapshotPayload(compressed);
   const after = await snapshotFileIdentity(snapshotPath);
-  const entry = { identity: before, compressed };
+  const entry = { identity: before, compressed, payload };
   if (sameSnapshotFileIdentity(before, after)) {
     setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, entry);
   } else {
     parsedSnapshotCache.delete(snapshotPath);
   }
   return { identity: before, payload };
+}
+function transformCachedProjectSnapshot(
+  snapshotPath: string,
+  identity: SnapshotFileIdentity,
+  rawPayload: unknown,
+  projectRoot: string,
+): unknown {
+  const cached = transformedSnapshotCache.get(snapshotPath);
+  if (cached && cached.root === projectRoot && sameSnapshotFileIdentity(cached.identity, identity)) {
+    setBoundedSnapshotCache(transformedSnapshotCache, snapshotPath, cached);
+    return structuredClone(cached.payload);
+  }
+  const migratedPayload = migrateProjectSnapshotPayload(rawPayload, projectRoot);
+  const payload =
+    migratedPayload && typeof migratedPayload === "object" && !Array.isArray(migratedPayload)
+      ? transformSnapshotPaths(migratedPayload as ProjectIndexSnapshotPayload, projectRoot, false)
+      : migratedPayload;
+  setBoundedSnapshotCache(transformedSnapshotCache, snapshotPath, { identity, root: projectRoot, payload });
+  return structuredClone(payload);
+}
+function transformCachedProjectSnapshotModules(
+  snapshotPath: string,
+  identity: SnapshotFileIdentity,
+  rawPayload: unknown,
+  projectRoot: string,
+): unknown {
+  const cached = transformedSnapshotModulesCache.get(snapshotPath);
+  if (cached && cached.root === projectRoot && sameSnapshotFileIdentity(cached.identity, identity)) {
+    setBoundedSnapshotCache(transformedSnapshotModulesCache, snapshotPath, cached);
+    return structuredClone(cached.payload);
+  }
+  const migratedPayload = migrateProjectSnapshotPayload(rawPayload, projectRoot);
+  if (!migratedPayload || typeof migratedPayload !== "object" || Array.isArray(migratedPayload)) {
+    return migratedPayload;
+  }
+  const payload = migratedPayload as Partial<ProjectIndexSnapshotPayload>;
+  if (!Array.isArray(payload.modules) || !payload.fileSignatures || typeof payload.fileSignatures !== "object") {
+    return migratedPayload;
+  }
+  const modules = structuredClone(payload.modules).map((module) => transformModule(projectRoot, module, false));
+  const fileSignatures: Record<string, SnapshotFileSignature> = {};
+  for (const [file, signature] of Object.entries(payload.fileSignatures)) {
+    fileSignatures[transformPath(projectRoot, file, false)] = signature;
+  }
+  const transformed: ProjectSnapshotModulesPayload = {
+    version: payload.version ?? PROJECT_SNAPSHOT_VERSION,
+    filesSignature: payload.filesSignature ?? "",
+    projectRoot: serializedProjectRoot(projectRoot),
+    ...(payload.nativeMode !== undefined ? { nativeMode: payload.nativeMode } : {}),
+    nativeRuntimeFingerprint: payload.nativeRuntimeFingerprint ?? "",
+    implementationFingerprint: payload.implementationFingerprint ?? "",
+    modules,
+    fileSignatures,
+  };
+  setBoundedSnapshotCache(transformedSnapshotModulesCache, snapshotPath, {
+    identity,
+    root: projectRoot,
+    payload: transformed,
+  });
+  return structuredClone(transformed);
 }
 
 function projectIndexManifestEntries(
@@ -423,16 +529,18 @@ export async function tryLoadProjectIndexSnapshot(
   projectRoot: string,
   opts: BuildOptions | undefined,
   manifestEntries: ReadonlyMap<string, ManifestFileEntry>,
+  report?: BuildReport,
 ): Promise<LoadedProjectIndexSnapshot | null> {
   const filesSignature = projectSnapshotFilesSignature(manifestEntries, projectRoot);
   if ((opts?.cache ?? "off") !== "disk") return null;
   try {
-    const rawPayload = (await readParsedSnapshot(projectSnapshotPath(projectRoot, opts))).payload;
-    const migratedPayload = migrateProjectSnapshotPayload(rawPayload, projectRoot);
-    const payload =
-      migratedPayload && typeof migratedPayload === "object" && !Array.isArray(migratedPayload)
-        ? transformSnapshotPaths(migratedPayload as ProjectIndexSnapshotPayload, projectRoot, false)
-        : migratedPayload;
+    const parsedSnapshot = await readParsedSnapshot(projectSnapshotPath(projectRoot, opts));
+    const payload = transformCachedProjectSnapshot(
+      projectSnapshotPath(projectRoot, opts),
+      parsedSnapshot.identity,
+      parsedSnapshot.payload,
+      projectRoot,
+    );
     const nativeRuntimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
     const implementationFingerprint = getImplementationFingerprint();
     if (
@@ -476,36 +584,36 @@ export async function tryLoadProjectIndexSnapshot(
       },
       ...(payload.analysisReport ? { analysisReport: payload.analysisReport } : {}),
     };
-  } catch {
+  } catch (error) {
+    if (!isMissingArtifactError(error)) {
+      recordSnapshotCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
+    }
     return null;
   }
 }
-
 /**
- * Load only the bloom-filter section of the last-written project snapshot. Hydration checks
- * each requested file against its persisted signature before returning a filter, so a stale
- * snapshot can still accelerate unchanged files without suppressing newly added references.
- * Only the bloom section is then read, so a corrupt payload is rejected without walking
- * `graph.edges` / `modules`. Returns `null` when disk caching is off, `useBloomFilters` is
- * disabled, or no valid snapshot with bloom data exists.
+ * Load only modules and signatures from the last-written project snapshot. Path transforms avoid
+ * cloning the graph and project metadata, while each returned module remains caller-owned.
  */
 export async function tryLoadProjectSnapshotModules(
   projectRoot: string,
   opts: BuildOptions | undefined,
   fileSignatures: ReadonlyMap<string, Pick<FileSignature, "sig" | "gitSig" | "cacheSig">>,
+  report?: BuildReport,
 ): Promise<Map<string, ModuleIndex> | null> {
   if ((opts?.cache ?? "off") !== "disk") return null;
   try {
-    const rawPayload = (await readParsedSnapshot(projectSnapshotPath(projectRoot, opts))).payload;
-    const migratedPayload = migrateProjectSnapshotPayload(rawPayload, projectRoot);
-    const payload =
-      migratedPayload && typeof migratedPayload === "object" && !Array.isArray(migratedPayload)
-        ? transformSnapshotPaths(migratedPayload as ProjectIndexSnapshotPayload, projectRoot, false)
-        : migratedPayload;
+    const parsedSnapshot = await readParsedSnapshot(projectSnapshotPath(projectRoot, opts));
+    const payload = transformCachedProjectSnapshotModules(
+      projectSnapshotPath(projectRoot, opts),
+      parsedSnapshot.identity,
+      parsedSnapshot.payload,
+      projectRoot,
+    );
     const nativeRuntimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
     const implementationFingerprint = getImplementationFingerprint();
     if (
-      !isProjectIndexSnapshotPayload(payload) ||
+      !isProjectSnapshotModulesPayload(payload) ||
       payload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
       payload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint ||
       payload.implementationFingerprint !== implementationFingerprint
@@ -515,9 +623,6 @@ export async function tryLoadProjectSnapshotModules(
     const normalizedFileSignatures = new Map(
       Object.entries(payload.fileSignatures).map(([file, signature]) => [fileIdentityKey(file), signature]),
     );
-    // `fileSignatures` (caller-supplied) is keyed by whatever discovered display path each file
-    // was found under, not necessarily `fileIdentityKey`-normalized; on a case-insensitive
-    // filesystem an uppercase path segment would otherwise miss this lookup.
     const normalizedCurrentSignatures = new Map(
       Array.from(fileSignatures, ([file, signature]) => [fileIdentityKey(file), signature]),
     );
@@ -530,7 +635,10 @@ export async function tryLoadProjectSnapshotModules(
       modules.set(moduleKey, mod);
     }
     return modules;
-  } catch {
+  } catch (error) {
+    if (!isMissingArtifactError(error)) {
+      recordSnapshotCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
+    }
     return null;
   }
 }
@@ -538,6 +646,7 @@ export async function tryLoadProjectSnapshotModules(
 export async function tryLoadPersistedBloomFilters(
   projectRoot: string,
   opts: BuildOptions | undefined,
+  report?: BuildReport,
 ): Promise<PersistedBloomFilters | null> {
   if ((opts?.cache ?? "off") !== "disk" || (opts?.useBloomFilters ?? true) === false) return null;
   try {
@@ -547,15 +656,23 @@ export async function tryLoadPersistedBloomFilters(
     if (sidecarBloom) {
       return createPersistedBloomFilters(sidecarBloom.bloomFilters, sidecarBloom.fileSignatures, projectRoot);
     }
-  } catch {
-    // Fall back to legacy project snapshot payload if sidecar is unavailable or corrupt
+    recordSnapshotCorruption(report, sidecarPath, "invalid bloom filter payload", opts?.logLevel);
+  } catch (error) {
+    const isMissing = error && typeof error === "object" && "code" in error && error.code === "ENOENT";
+    if (!isMissing) {
+      recordSnapshotCorruption(report, bloomFilterSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
+    }
   }
   try {
     const payload = (await readParsedSnapshot(projectSnapshotPath(projectRoot, opts))).payload;
     const bloomFilters = persistedBloomFiltersFromSnapshot(payload, projectRoot);
     if (!bloomFilters) return null;
     return createPersistedBloomFilters(bloomFilters.bloomFilters, bloomFilters.fileSignatures, projectRoot);
-  } catch {
+  } catch (error) {
+    const isMissing = error && typeof error === "object" && "code" in error && error.code === "ENOENT";
+    if (!isMissing) {
+      recordSnapshotCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
+    }
     return null;
   }
 }
@@ -696,7 +813,9 @@ export async function writeProjectIndexSnapshot(
     });
     await writeSnapshotAtomically(snapshotPath, compressed);
     const identity = await snapshotFileIdentity(snapshotPath);
-    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, compressed });
+    transformedSnapshotCache.delete(snapshotPath);
+    transformedSnapshotModulesCache.delete(snapshotPath);
+    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, compressed, payload });
     index.projectSnapshotIdentity = projectSnapshotIdentity;
     if (serializedBloomFilters) {
       try {
@@ -717,6 +836,7 @@ export async function writeProjectIndexSnapshot(
         setBoundedSnapshotCache(parsedSnapshotCache, bloomPath, {
           identity: bloomIdentity,
           compressed: bloomCompressed,
+          payload: bloomPayload,
         });
       } catch {
         // Bloom sidecar write failure must not fail indexing
@@ -741,14 +861,70 @@ function bloomFilterSnapshotPath(projectRoot: string, opts: BuildOptions | undef
   return snapshotPath;
 }
 
+export async function writeDetailedSymbolGraphSnapshot(
+  projectRoot: string,
+  opts: BuildOptions | undefined,
+  index: ProjectIndex,
+  graph: SymbolGraph,
+): Promise<void> {
+  if ((opts?.cache ?? "off") !== "disk" || !index.projectSnapshotIdentity) return;
+  const payload = {
+    version: DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION,
+    projectRoot: serializedProjectRoot(projectRoot),
+    implementationFingerprint: getImplementationFingerprint(),
+    graphHash: detailedSymbolGraphContentHash(index.projectSnapshotIdentity, graph),
+    projectSnapshotIdentity: index.projectSnapshotIdentity,
+    graph: transformDetailedGraph(
+      {
+        nodes: [...graph.nodes.values()],
+        edges: graph.edges,
+      },
+      projectRoot,
+      true,
+    ),
+  } satisfies DetailedSymbolGraphSnapshotPayload;
+  try {
+    const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
+    parsedSnapshotCache.delete(snapshotPath);
+    transformedSnapshotModulesCache.delete(snapshotPath);
+    detailedSymbolGraphCache.delete(snapshotPath);
+    const compressed = brotliCompressSync(JSON.stringify(payload), {
+      params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
+    });
+    await writeSnapshotAtomically(snapshotPath, compressed);
+    const identity = await snapshotFileIdentity(snapshotPath);
+    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, compressed, payload });
+    setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, {
+      identity,
+      projectSnapshotIdentity: index.projectSnapshotIdentity,
+      graph: {
+        nodes: [...graph.nodes.values()],
+        edges: graph.edges,
+      },
+    });
+  } catch {
+    // Detailed graph persistence is an optimization; source parsing remains authoritative.
+  }
+}
+
+function detailedSymbolGraphSnapshotPath(projectRoot: string, opts: BuildOptions | undefined): string {
+  const root = path.resolve(cacheRoot(projectRoot, opts));
+  const snapshotPath = path.resolve(root, DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME);
+  if (!isFilePathWithinRoot(root, snapshotPath)) {
+    throw new Error(`Detailed symbol graph snapshot escaped cache root: ${snapshotPath}`);
+  }
+  return snapshotPath;
+}
+
 export async function tryLoadDetailedSymbolGraphSnapshot(
   projectRoot: string,
   opts: BuildOptions | undefined,
   index: ProjectIndex,
+  report?: BuildReport,
 ): Promise<SymbolGraph | null> {
   if ((opts?.cache ?? "off") !== "disk" || !index.projectSnapshotIdentity) return null;
+  const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
   try {
-    const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
     const observedIdentity = await snapshotFileIdentity(snapshotPath);
     const cached = detailedSymbolGraphCache.get(snapshotPath);
     if (
@@ -777,77 +953,31 @@ export async function tryLoadDetailedSymbolGraphSnapshot(
       payload.implementationFingerprint !== getImplementationFingerprint() ||
       payload.projectSnapshotIdentity !== index.projectSnapshotIdentity
     ) {
+      recordSnapshotCorruption(report, snapshotPath, "invalid detailed symbol graph payload", opts?.logLevel);
       return null;
     }
     const graph = materializeDetailedSymbolGraph(payload.graph);
     if (!(await isDetailedSymbolGraphCompatibleWithProject(projectRoot, index, graph))) {
+      recordSnapshotCorruption(report, snapshotPath, "detailed symbol graph does not match project", opts?.logLevel);
       return null;
     }
     const identity = await snapshotFileIdentity(snapshotPath);
-    if (!sameSnapshotFileIdentity(parsed.identity, identity)) return null;
+    if (!sameSnapshotFileIdentity(parsed.identity, identity)) {
+      recordSnapshotCorruption(report, snapshotPath, "detailed symbol graph changed while reading", opts?.logLevel);
+      return null;
+    }
     setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, {
       identity,
       projectSnapshotIdentity: index.projectSnapshotIdentity,
       graph: payload.graph,
     });
     return graph;
-  } catch {
+  } catch (error) {
+    if (!isMissingArtifactError(error)) {
+      recordSnapshotCorruption(report, snapshotPath, String(error), opts?.logLevel);
+    }
     return null;
   }
-}
-
-export async function writeDetailedSymbolGraphSnapshot(
-  projectRoot: string,
-  opts: BuildOptions | undefined,
-  index: ProjectIndex,
-  graph: SymbolGraph,
-): Promise<void> {
-  if ((opts?.cache ?? "off") !== "disk" || !index.projectSnapshotIdentity) return;
-  const payload = {
-    version: DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION,
-    projectRoot: serializedProjectRoot(projectRoot),
-    implementationFingerprint: getImplementationFingerprint(),
-    graphHash: detailedSymbolGraphContentHash(index.projectSnapshotIdentity, graph),
-    projectSnapshotIdentity: index.projectSnapshotIdentity,
-    graph: transformDetailedGraph(
-      {
-        nodes: [...graph.nodes.values()],
-        edges: graph.edges,
-      },
-      projectRoot,
-      true,
-    ),
-  } satisfies DetailedSymbolGraphSnapshotPayload;
-  try {
-    const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
-    parsedSnapshotCache.delete(snapshotPath);
-    detailedSymbolGraphCache.delete(snapshotPath);
-    const compressed = brotliCompressSync(JSON.stringify(payload), {
-      params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
-    });
-    await writeSnapshotAtomically(snapshotPath, compressed);
-    const identity = await snapshotFileIdentity(snapshotPath);
-    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, compressed });
-    setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, {
-      identity,
-      projectSnapshotIdentity: index.projectSnapshotIdentity,
-      graph: {
-        nodes: [...graph.nodes.values()],
-        edges: graph.edges,
-      },
-    });
-  } catch {
-    // Detailed graph persistence is an optimization; source parsing remains authoritative.
-  }
-}
-
-function detailedSymbolGraphSnapshotPath(projectRoot: string, opts: BuildOptions | undefined): string {
-  const root = path.resolve(cacheRoot(projectRoot, opts));
-  const snapshotPath = path.resolve(root, DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME);
-  if (!isFilePathWithinRoot(root, snapshotPath)) {
-    throw new Error(`Detailed symbol graph snapshot escaped cache root: ${snapshotPath}`);
-  }
-  return snapshotPath;
 }
 
 function detailedSymbolGraphContentHash(projectSnapshotIdentity: string, graph: SymbolGraph): string {
@@ -1122,6 +1252,23 @@ function isProjectFileType(value: unknown): boolean {
 
 function isProjectFileRole(value: unknown): boolean {
   return value === "manifest" || value === "lockfile" || value === "config" || value === "solution" || value === "ide";
+}
+
+function isProjectSnapshotModulesPayload(value: unknown): value is ProjectSnapshotModulesPayload {
+  if (!value || typeof value !== "object") return false;
+  const payload = value as Partial<ProjectSnapshotModulesPayload>;
+  return (
+    payload.version === PROJECT_SNAPSHOT_VERSION &&
+    typeof payload.filesSignature === "string" &&
+    typeof payload.projectRoot === "string" &&
+    typeof payload.nativeRuntimeFingerprint === "string" &&
+    typeof payload.implementationFingerprint === "string" &&
+    /^[a-f0-9]{64}$/.test(payload.implementationFingerprint) &&
+    Array.isArray(payload.modules) &&
+    payload.modules.every(isModuleIndex) &&
+    isSnapshotFileSignatureRecord(payload.fileSignatures) &&
+    (payload.nativeMode === undefined || isSnapshotNativeMode(payload.nativeMode))
+  );
 }
 
 function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSnapshotPayload {

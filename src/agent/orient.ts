@@ -208,6 +208,8 @@ async function buildHealth(
     projectRoot: root,
     files,
     limit: 0,
+    maxBucketSize: 64,
+    countOnly: true,
     minConfidence: "high",
   });
   return {

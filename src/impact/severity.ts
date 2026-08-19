@@ -4,6 +4,8 @@ import { fileIdentityKey } from "../util/paths.js";
 import type { ChangedSymbol, ImpactReason, SeverityWeights } from "./types.js";
 import { DEFAULT_SEVERITY_WEIGHTS } from "./types.js";
 
+const normalizedWeightsCache = new WeakMap<object, SeverityWeights>();
+
 const REASON_PRIORITY: Readonly<Record<ImpactReason, number>> = {
   directRef: 4,
   namespaceMember: 3,
@@ -63,12 +65,21 @@ export function selectStrongerImpactReason(
   return existingReason;
 }
 
-function normalizeSeverityWeights(weights: SeverityWeights): SeverityWeights {
+export function normalizeSeverityWeights(
+  weights: Partial<SeverityWeights> = DEFAULT_SEVERITY_WEIGHTS,
+): SeverityWeights {
+  if (weights === null || typeof weights !== "object") {
+    throw new RangeError("Invalid severity weights: expected an object");
+  }
+  const cached = normalizedWeightsCache.get(weights);
+  if (cached) return cached;
+
   const normalized: SeverityWeights = { ...DEFAULT_SEVERITY_WEIGHTS };
   const invalidEntries: string[] = [];
 
   for (const key of severityWeightKeys) {
     const value = weights[key];
+    if (value === undefined) continue;
     if (!Number.isFinite(value) || value <= 0) {
       invalidEntries.push(`${key}=${String(value)}`);
       continue;
@@ -84,6 +95,7 @@ function normalizeSeverityWeights(weights: SeverityWeights): SeverityWeights {
     throw new RangeError(`Invalid severity weights: ${invalidEntries.join(", ")}`);
   }
 
+  normalizedWeightsCache.set(weights, normalized);
   return normalized;
 }
 
@@ -135,7 +147,7 @@ export function calculateSeverity(
   depth: number,
   index: ProjectIndex,
   fanInByFile?: Map<FileId, number>,
-  weights: SeverityWeights = DEFAULT_SEVERITY_WEIGHTS,
+  weights: Partial<SeverityWeights> = DEFAULT_SEVERITY_WEIGHTS,
 ): SeverityResult {
   const validatedWeights = normalizeSeverityWeights(weights);
 
@@ -223,11 +235,16 @@ export function calculateSeverity(
   };
 }
 
-export function calculateTransitiveSeverity(edge: Edge, depth: number): number {
-  let score = 0.3;
+export function calculateTransitiveSeverity(
+  edge: Edge,
+  depth: number,
+  weights: Partial<SeverityWeights> = DEFAULT_SEVERITY_WEIGHTS,
+): number {
+  const validatedWeights = normalizeSeverityWeights(weights);
+  let score = 0.3 * (validatedWeights.transitive / DEFAULT_SEVERITY_WEIGHTS.transitive);
   if (edge.typeOnly) {
-    score *= 0.6;
+    score *= 0.6 * (validatedWeights.typeOnly / DEFAULT_SEVERITY_WEIGHTS.typeOnly);
   }
-  score *= Math.pow(0.7, depth);
+  score *= Math.pow(0.7 * (validatedWeights.depthDecay / DEFAULT_SEVERITY_WEIGHTS.depthDecay), depth);
   return score;
 }

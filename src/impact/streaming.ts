@@ -250,6 +250,7 @@ export async function* analyzeImpactStreaming(
   context: ImpactStreamingContext = {},
 ): AsyncGenerator<ImpactStreamChunk> {
   const abortController = new AbortController();
+  let analysisPromise: Promise<void> | undefined;
   try {
     const streamSummary = validateImpactStreamingOptions(options);
     const impactOptions = toImpactOptions(options);
@@ -328,8 +329,7 @@ export async function* analyzeImpactStreaming(
         ...(partial ? { partial: true } : {}),
       });
     };
-
-    void analyzeImpact(index, changedSymbols, normalizedChanges, {
+    analysisPromise = analyzeImpact(index, changedSymbols, normalizedChanges, {
       ...impactOptions,
       projectRoot,
       fileLevelFallback,
@@ -418,11 +418,10 @@ export async function* analyzeImpactStreaming(
       error: errorMessage(error),
     };
   } finally {
-    // Runs on normal completion, on a caught error, and - via the async-generator return
-    // protocol - when the consumer stops iterating early. In the early-abandonment case
-    // this is what actually stops the background analysis: it flips the shared abort
-    // signal that the `onImpactItem` producer callback above checks and throws from.
+    // Abort abandoned work and wait for the producer to acknowledge cancellation before the
+    // iterator's return promise resolves.
     abortController.abort();
+    await analysisPromise;
   }
 }
 

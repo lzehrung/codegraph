@@ -963,6 +963,29 @@ export function collectLocalsAndExportsFromSource(
     appendJsLikeRegexFallbackExports(file, source, locals, exports);
   }
 
+  if (support.id === "python") {
+    for (const binding of imports) {
+      if (binding.mechanism !== "python" || !binding.moduleLevel || typeof binding.resolved !== "string") continue;
+      if (binding.kind === "named") {
+        if (binding.local.startsWith("_")) continue;
+        exports.push({
+          type: "reexport",
+          exportedAs: binding.local,
+          fromModule: binding.resolved,
+          moduleSpecifier: binding.from,
+          sourceSpecifier: binding.imported,
+        });
+      } else if (binding.kind === "namespace" && !binding.localNS.startsWith("_")) {
+        exports.push({
+          type: "namespaceReexport",
+          exportedAs: binding.localNS,
+          fromModule: binding.resolved,
+          moduleSpecifier: binding.from,
+        });
+      }
+    }
+  }
+
   if (support.id === "python" && hasPythonAll) {
     const seen = new Set<string>();
     const filtered = exports.filter((e) => {

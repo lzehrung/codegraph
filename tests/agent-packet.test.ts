@@ -1,10 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { getCodegraphPacket, orientCodegraph } from "../src/agent.js";
+import { DEFAULT_REVIEW_TRANSPORT_LIMITS } from "../src/review/types.js";
 import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
-import { mkTmpDir } from "./helpers/filesystem.js";
+import { createTempRootRegistry } from "./helpers/filesystem.js";
 import { runGit } from "./helpers/git.js";
+
+const tempRoots = createTempRootRegistry();
+async function mkTmpDir(prefix: string): Promise<string> {
+  return await tempRoots.create(prefix);
+}
 
 async function writeFile(root: string, relativePath: string, content: string): Promise<void> {
   const filePath = path.join(root, relativePath);
@@ -13,6 +19,9 @@ async function writeFile(root: string, relativePath: string, content: string): P
 }
 
 describe("agent packet", () => {
+  afterEach(async () => {
+    await tempRoots.cleanup();
+  });
   it("retrieves a file packet from an orientation file target", async () => {
     const root = await mkTmpDir("cg-agent-packet-");
     await writeFile(root, "src/run.ts", "export function run() { return 1; }\n");
@@ -107,6 +116,44 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     }
     expect(packet.packet.summary.symbolsChanged).toBeGreaterThan(0);
     expect(Array.isArray(packet.packet.candidateTests)).toBeTruthy();
+  });
+
+  it("bounds an oversized review packet with transport limits and exact omissions", async () => {
+    const root = await mkTmpDir("cg-agent-packet-review-bounds-");
+    runGit(root, ["init"]);
+    runGit(root, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+    const files = Array.from({ length: DEFAULT_REVIEW_TRANSPORT_LIMITS.changedFiles + 1 }, (_, index) => {
+      return `src/change-${index}.ts`;
+    });
+    for (const file of files) {
+      await writeFile(root, file, "export const revision = 1;\n");
+    }
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+    for (const file of files) {
+      await writeFile(root, file, "export const revision = 2;\n");
+    }
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "change all files"]);
+
+    const packet = await getCodegraphPacket({ root, target: "review:base=HEAD~1;head=HEAD" });
+
+    expect(packet.kind).toBe("review");
+    expect(packet.limits).toEqual(DEFAULT_REVIEW_TRANSPORT_LIMITS);
+    expect(packet.omittedCounts).toMatchObject({
+      changedFiles: 1,
+      projectFiles: 0,
+      symbols: 1,
+      graphDelta: 0,
+      candidateTests: 0,
+    });
+    if (packet.packet.schemaVersion !== 2) {
+      throw new Error("expected review report");
+    }
+    expect(packet.packet.changedFiles).toHaveLength(DEFAULT_REVIEW_TRANSPORT_LIMITS.changedFiles);
+    expect(
+      packet.packet.changedFiles.every((file) => file.symbols.length <= DEFAULT_REVIEW_TRANSPORT_LIMITS.symbolsPerFile),
+    ).toBe(true);
   });
 
   it("rejects malformed percent encoding in review handles cleanly", async () => {

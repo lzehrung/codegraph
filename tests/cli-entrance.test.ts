@@ -45,9 +45,9 @@ describe("lightweight CLI entrance", () => {
     const close = await captureCli(["serach"]);
     const distant = await captureCli(["completely-unrelated"]);
 
-    expect(close).toMatchObject({ stdout: "", exitCode: 1 });
+    expect(close).toMatchObject({ stdout: "", exitCode: 2 });
     expect(close.stderr).toBe('Unknown command "serach".\nDid you mean: search?\n');
-    expect(distant).toMatchObject({ stdout: "", exitCode: 1 });
+    expect(distant).toMatchObject({ stdout: "", exitCode: 2 });
     expect(distant.stderr).toBe('Unknown command "completely-unrelated".\n');
     expect(suggestCliCommands("calers")).toEqual(["callers", "callees"]);
   });
@@ -55,7 +55,7 @@ describe("lightweight CLI entrance", () => {
   it("offers one task route for intent-like unknown commands", async () => {
     const result = await captureCli(["configure"]);
 
-    expect(result).toMatchObject({ stdout: "", exitCode: 1 });
+    expect(result).toMatchObject({ stdout: "", exitCode: 2 });
     expect(result.stderr).toContain("Try: codegraph install");
   });
 

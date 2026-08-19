@@ -60,7 +60,11 @@ describe("Find References", () => {
       const reportFile = path.join(samplePath, "report.sql").replace(/\\/g, "/");
       const index = await createTestIndexFromFiles(samplePath, [schemaFile, alterFile, reportFile]);
 
-      const result = await testFindReferences(index, schemaFile, 1, 16, 3);
+      const result = await testFindReferences(index, schemaFile, 1, 16, [
+        { file: schemaFile, line: 1, column: 14 },
+        { file: alterFile, line: 1, column: 13 },
+        { file: reportFile, line: 1, column: 23 },
+      ]);
 
       expect(result.status).toBe("ok");
       expectReferenceAt(result, schemaFile, 1);
@@ -98,7 +102,10 @@ describe("Find References", () => {
       const reportFile = path.join(samplePath, "qualified_report.sql").replace(/\\/g, "/");
       const index = await createTestIndexFromFiles(samplePath, [schemaFile, reportFile]);
 
-      const result = await testFindReferences(index, schemaFile, 1, 22, 2);
+      const result = await testFindReferences(index, schemaFile, 1, 22, [
+        { file: schemaFile, line: 1, column: 14 },
+        { file: reportFile, line: 1, column: 16 },
+      ]);
 
       expect(result.status).toBe("ok");
       expectReferenceAt(result, schemaFile, 1);
@@ -114,7 +121,10 @@ describe("Find References", () => {
         await fsp.writeFile(reportFile, "SELECT id FROM public.users;\n", "utf8");
         const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
 
-        const result = await testFindReferences(index, schemaFile, 1, 16, 2);
+        const result = await testFindReferences(index, schemaFile, 1, 16, [
+          { file: schemaFile, line: 1, column: 14 },
+          { file: reportFile, line: 1, column: 16 },
+        ]);
 
         expect(result.status).toBe("ok");
         expectReferenceAt(result, schemaFile, 1);
@@ -407,7 +417,10 @@ describe("Find References", () => {
         );
         const index = await createTestIndexFromFiles(root, [typesFile, consumerFile]);
 
-        const result = await testFindReferences(index, typesFile, 1, 13, 2);
+        const result = await testFindReferences(index, typesFile, 1, 13, [
+          { file: typesFile, line: 1, column: 13 },
+          { file: consumerFile, line: 2, column: 18 },
+        ]);
 
         expect(result.status).toBe("ok");
         expectReferenceAt(result, typesFile, 1);
@@ -455,7 +468,11 @@ describe("Find References", () => {
         );
         const index = await createTestIndexFromFiles(root, [serviceFile, consumerFile]);
 
-        const result = await testFindReferences(index, serviceFile, 2, 3, 3);
+        const result = await testFindReferences(index, serviceFile, 2, 3, [
+          { file: serviceFile, line: 2, column: 3 },
+          { file: consumerFile, line: 2, column: 15 },
+          { file: consumerFile, line: 4, column: 9 },
+        ]);
 
         expect(result.status).toBe("ok");
         expectReferenceAt(result, serviceFile, 2);
@@ -593,12 +610,25 @@ describe("Find References", () => {
           await fsp.writeFile(file, testCase.source, "utf8");
           const index = await createTestIndexFromFiles(root, [file]);
 
+          const sourceLines = testCase.source.split("\n");
+          const definitionLine = sourceLines[testCase.definition.line - 1] ?? "";
+          const methodName = definitionLine.match(/\b([A-Za-z_]\w*)\s*\(/)?.[1];
+          if (!methodName) {
+            throw new Error(`Expected a method name in ${testCase.label} definition`);
+          }
+          const expectedReferences = testCase.expectedLines.map((line) => {
+            const column = (sourceLines[line - 1] ?? "").indexOf(methodName) + 1;
+            if (column < 1) {
+              throw new Error(`Expected ${methodName} on line ${line} for ${testCase.label}`);
+            }
+            return { file, line, column };
+          });
           const result = await testFindReferences(
             index,
             file,
             testCase.definition.line,
             testCase.definition.column,
-            testCase.expectedLines.length,
+            expectedReferences,
           );
 
           expect(result.status).toBe("ok");
@@ -1750,6 +1780,18 @@ describe("Find References", () => {
   });
 
   describe("Java", () => {
+    it("should find references to imported annotation types", async () => {
+      const index = await createTestIndex("java");
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "java");
+      const annotationFile = path.join(samplePath, "AnnotationTypes.java").replace(/\\/g, "/");
+      const consumerFile = path.join(samplePath, "AnnotationConsumer.java").replace(/\\/g, "/");
+
+      const result = await testFindReferences(index, annotationFile, 3, 19, 3);
+      expectReferenceAt(result, annotationFile, 3);
+      expectReferenceAt(result, consumerFile, 3);
+      expectReferenceAt(result, consumerFile, 5);
+    });
+
     it("should find references to wildcard-imported interfaces", async () => {
       const index = await createTestIndex("java");
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "java");

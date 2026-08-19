@@ -20,7 +20,7 @@ type ImpactEmitter = (item: ImpactItem, phase: "partial" | "final") => void;
 
 export type DirectImpactOptions = Pick<
   ImpactOptions,
-  "refContext" | "refContextLines" | "refBlockMaxLines" | "diagnostics"
+  "refContext" | "refContextLines" | "refBlockMaxLines" | "diagnostics" | "severityWeights"
 > & {
   maxRefs: number;
   includeTests: boolean;

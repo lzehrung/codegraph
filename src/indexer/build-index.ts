@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { languageExtensionPatterns, supportForFile, type LanguageSupport } from "../languages.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import { loadWorkspaceConfig, resolveWorkspacePackage } from "../util/workspace.js";
 import {
   DEFAULT_PROJECT_PATTERNS,
@@ -12,7 +13,7 @@ import {
   type ProjectFileInfo,
 } from "../util/projectFiles.js";
 import { getGitHead, isGitRepo, getGitBlobHashes, listChangedFiles } from "../util/git.js";
-import { clearImportResolutionCaches, resolveSpecifier } from "../util/resolution.js";
+import { clearResolutionCaches, resolveSpecifier } from "../util/resolution.js";
 import {
   assertFilePathWithinRoot,
   fileIdentityKey,
@@ -21,6 +22,7 @@ import {
   normalizePath,
 } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
+import { readConfinedUtf8File } from "../util/confinedFile.js";
 import { resolveWorkerThreadCount } from "../util/workerThreads.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { collectGraph } from "../graph-builder.js";
@@ -50,12 +52,14 @@ import {
   createFallbackImportExtractionHandler,
   diffBuildOptions,
   fileSignature,
+  fileSignatureFromSource,
   graphOptionsEqual,
   initFileReport,
   initManifestReport,
   loadManifest,
   normalizeGraphOptions,
   normalizeIndexedFileInputs,
+  normalizeIndexedFileInputsWithinRoot,
   normalizeLanguageExtensions,
   projectSnapshotFilesSignature,
   recordConfigHashResult,
@@ -92,6 +96,7 @@ import {
 } from "./types.js";
 import { isNonNativeParserUnavailableError, isParserSyntaxTree } from "../parserBackend.js";
 import { isUnsupportedParserInputError, type PreparedSFCEmbeddedBlock } from "../languages/filePrep.js";
+
 import { buildSqlFactCache, buildSqlModuleIndex, sqlCorpusSignature, type SqlFactCache } from "../sql/sourceGraph.js";
 import { finalizeProjectIndex } from "./finalize.js";
 import { toManifestFileEntry, writeIndexManifestSnapshot } from "./build-manifest.js";
@@ -104,6 +109,7 @@ import {
 import {
   buildIncrementalGitDiffOptions,
   canUseIncrementalDiscoveryFastPath,
+  buildTrackedFileReverseDependencies,
   collectDeletedTrackedFileDependents,
   collectTrackedFileDependents,
   isMissingGitRevisionError,
@@ -175,6 +181,14 @@ function recordParserBackendDegradation(
   parserReport.files.push(entry);
 }
 
+function isConfinedFileReadError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /outside project root|possible path confinement race|changed between verification and open|confined file target/u.test(
+      error.message,
+    )
+  );
+}
 function createEmptyModuleIndex(file: string): ModuleIndex {
   return { file, exports: [], imports: [], locals: [] };
 }
@@ -189,7 +203,7 @@ async function resolveCrossModuleSymbolExports(
   logLevel: LogLevel | undefined,
 ): Promise<void> {
   if (!support.supportsCrossModuleSymbols) return;
-  if (support.id !== "ts" && support.id !== "js") return;
+  if (!isJsTsLanguage(support.id)) return;
   const { matchPath } = await import("../util/resolution.js").then((mod) =>
     mod.loadNearestTsconfigFor(file, projectRoot, logLevel),
   );
@@ -231,12 +245,26 @@ async function buildIndexedModuleForFile(args: {
   fileSignatures: Map<string, FileSignature>;
   cacheEnabled: boolean;
   resolverEnvironmentFingerprint?: string | null;
+  confinedRoot?: string;
+  trustedSource?: string | undefined;
 }): Promise<IndexedFileModuleResult> {
-  const prepared = await prepareFileContextForBuild(args.file, args.support, args.opts, args.workerSetup, args.report);
+  const prepared = await prepareFileContextForBuild(
+    args.file,
+    args.support,
+    args.opts,
+    args.workerSetup,
+    args.report,
+    args.confinedRoot,
+    args.projectRoot,
+    args.trustedSource,
+  );
   const { source, sup, nativeQueries, embeddedBlocks } = prepared;
   let resolvedLang = prepared.lang;
   let tree: SyntaxTreeLike | undefined;
-  const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
+  const graphOnlyLanguage = isGraphOnlyLanguage(sup.id),
+    nativeSourceLimitFallback =
+      prepared.nativeFallbackReason === "queryFailure" &&
+      !!prepared.nativeError?.startsWith("source exceeds native byte limit");
 
   if (prepared.syntaxTree) {
     const parsedTree = new ProjectedSyntaxTree(source, prepared.syntaxTree);
@@ -254,7 +282,7 @@ async function buildIndexedModuleForFile(args: {
       },
       args.parsedCacheMaxEntries,
     );
-  } else if (!nativeQueries && !graphOnlyLanguage && sup.id !== "sql") {
+  } else if (!nativeQueries && !graphOnlyLanguage && sup.id !== "sql" && !nativeSourceLimitFallback) {
     const parseAttempt = attemptParsePreparedFileContext(prepared);
     const parsed = parseAttempt.parsed;
     if (parsed) {
@@ -282,7 +310,7 @@ async function buildIndexedModuleForFile(args: {
   }
   const lacksParserContext = !nativeQueries && !tree;
 
-  if (args.bloomFilterCache) {
+  if (args.bloomFilterCache && !nativeSourceLimitFallback) {
     const filter = buildBloomFilterFromSource(source, sup);
     args.bloomFilterCache.set(args.file, filter);
   }
@@ -298,7 +326,7 @@ async function buildIndexedModuleForFile(args: {
   };
 
   const imports =
-    sup.id === "sql"
+    nativeSourceLimitFallback || sup.id === "sql"
       ? []
       : await collectImportsForFile(args.file, args.projectRoot, {
           source,
@@ -524,6 +552,7 @@ type BuildIndexHelperOptions = {
   projectFiles?: ProjectFileInfo[] | Promise<ProjectFileInfo[]>;
   transientFiles?: string[];
   symlinkDirectories?: string[];
+  confineReads?: boolean;
 };
 
 type IndexBuildRunState = {
@@ -542,8 +571,8 @@ function createIndexBuildRunState(
   opts: BuildOptions | undefined,
   graphOptions = normalizeGraphOptions(opts?.graph),
 ): IndexBuildRunState {
-  const report = opts?.report;
-  if (report) initNativeBackendReport(report);
+  const report = opts?.report ?? { timings: {} };
+  initNativeBackendReport(report);
   const cacheMode = opts?.cache ?? "off";
   return {
     normalizedProjectRoot: normalizePath(path.resolve(projectRoot)),
@@ -586,15 +615,25 @@ function buildConcurrency(opts: BuildOptions | undefined): number {
 }
 
 async function prepareFileSignatures(args: {
+  projectRoot: string;
   files: string[];
   opts: BuildOptions | undefined;
   gitSigMap: Map<string, string>;
   cacheEnabled: boolean;
   needsContentHash: boolean;
   concurrency: number;
+  confinedRoot?: string;
+  trustedSources?: Map<string, string> | undefined;
 }): Promise<Map<string, FileSignature>> {
   const entries = await mapLimit(args.files, args.concurrency, async (file) => {
     const gitSig = args.gitSigMap.get(file);
+    const source = args.confinedRoot
+      ? await readConfinedUtf8File(args.confinedRoot, args.projectRoot, file)
+      : undefined;
+    if (source !== undefined) {
+      args.trustedSources?.set(file, source);
+      return [file, fileSignatureFromSource(source, gitSig)] as const;
+    }
     const sigInfo = await fileSignature(file, args.needsContentHash ? args.opts?.cacheStrict : false, gitSig, {
       forceContentHash: args.cacheEnabled && !gitSig,
     });
@@ -619,7 +658,7 @@ async function buildIndexFromFileListShared(
   opts?: BuildOptions,
   helperOpts?: BuildIndexHelperOptions,
 ): Promise<ProjectIndex> {
-  clearImportResolutionCaches();
+  clearResolutionCaches();
   await initializeFileIdentityCaseSensitivity(projectRoot);
   const {
     normalizedProjectRoot,
@@ -636,14 +675,19 @@ async function buildIndexFromFileListShared(
   const shouldWriteManifest = manifestMode === "read-write";
   const projectFiles = helperOpts?.projectFiles;
   initManifestReport(report, useManifest, false);
-  const normalizedFiles = Array.from(new Set(normalizeIndexedFileInputs(projectRoot, rawFiles ?? [], "Index file")));
+  const confinedRoot = helperOpts?.confineReads ? await fsp.realpath(projectRoot) : undefined;
+  const [trustedSources, normalizedFiles] = [
+    confinedRoot ? new Map<string, string>() : undefined,
+    Array.from(new Set(normalizeIndexedFileInputs(projectRoot, rawFiles ?? [], "Index file"))),
+  ] as const;
   if (!normalizedFiles.length && helperOpts?.warnNoFilesMessage) {
     logWithLevel(opts?.logLevel, "warn", helperOpts.warnNoFilesMessage);
   }
   const fileReport = initFileReport(report);
   if (fileReport) fileReport.total = normalizedFiles.length;
   const manifestStart = performance.now();
-  const manifest = useManifest && !helperOpts?.ignoreExistingManifest ? await loadManifest(projectRoot, opts) : null;
+  const manifest =
+    useManifest && !helperOpts?.ignoreExistingManifest ? await loadManifest(projectRoot, opts, report) : null;
   const manifestFiles = sanitizeManifestEntriesForRoot(projectRoot, manifest?.files);
   const manifestOptionDiffs = manifest ? diffBuildOptions(manifest.buildOptions, opts) : [];
   const languageExtensionsChanged = manifestOptionDiffs.includes("languageExtensions");
@@ -687,10 +731,10 @@ async function buildIndexFromFileListShared(
           Object.entries(manifestFiles).filter(([file]) => !staleCachedEdgeFiles.has(file)),
         )
       : undefined;
+  const manifestEntries = shouldWriteManifest ? new Map<string, ManifestFileEntry>() : undefined;
   if (report?.manifest) {
     report.manifest.reused = !!cachedGraphEntries;
   }
-  const manifestEntries = shouldWriteManifest ? new Map<string, ManifestFileEntry>() : undefined;
   const manifestEntriesForIndex = useManifest
     ? projectIndexManifestEntries(cachedGraphEntries ?? [])
     : new Map<string, ProjectIndexManifestEntry>();
@@ -712,12 +756,14 @@ async function buildIndexFromFileListShared(
     })
     .sort((left, right) => left.localeCompare(right));
   const fileSignatures = await prepareFileSignatures({
+    projectRoot,
     files: sqlFiles,
     opts,
     gitSigMap,
     cacheEnabled,
     needsContentHash: true,
     concurrency: conc,
+    ...(confinedRoot ? { confinedRoot, trustedSources } : {}),
   });
   const sqlCorpusSig = sqlCorpusSignature(sqlFiles, fileSignatures);
   let sqlFactCachePromise: Promise<SqlFactCache> | undefined;
@@ -742,7 +788,9 @@ async function buildIndexFromFileListShared(
     const bloomFilterCache = useBloomFilters
       ? new (await import("../util/bloomFilter.js")).BloomFilterCache()
       : undefined;
-    const persistedBloomFilters = bloomFilterCache ? await tryLoadPersistedBloomFilters(projectRoot, opts) : null;
+    const persistedBloomFilters = bloomFilterCache
+      ? await tryLoadPersistedBloomFilters(projectRoot, opts, report)
+      : null;
     const parsedMap = new Map<string, ParsedFileContext>();
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
     const parseStart = performance.now();
@@ -767,9 +815,15 @@ async function buildIndexFromFileListShared(
         let sigInfo = fileSignatures.get(file);
         if (!sigInfo) {
           const gitSig = gitSigMap.get(file);
-          sigInfo = await fileSignature(file, opts?.cacheStrict, gitSig, {
-            forceContentHash: cacheEnabled && !gitSig,
-          });
+          const source = confinedRoot ? await readConfinedUtf8File(confinedRoot, projectRoot, file) : undefined;
+          if (source !== undefined) {
+            trustedSources?.set(file, source);
+            sigInfo = fileSignatureFromSource(source, gitSig);
+          } else {
+            sigInfo = await fileSignature(file, opts?.cacheStrict, gitSig, {
+              forceContentHash: cacheEnabled && !gitSig,
+            });
+          }
           fileSignatures.set(file, sigInfo);
         }
         manifestEntriesForIndex.set(file, toProjectIndexManifestEntry(sigInfo));
@@ -853,6 +907,7 @@ async function buildIndexFromFileListShared(
             onFallbackImportExtraction,
             fileSignatures,
             cacheEnabled,
+            ...(confinedRoot ? { confinedRoot, trustedSource: trustedSources?.get(file) } : {}),
           });
           mod = built.module;
           graphContext = built.graphContext;
@@ -884,6 +939,7 @@ async function buildIndexFromFileListShared(
         return [file, mod ?? createEmptyModuleIndex(file), edges, cacheWrite] as const;
       } catch (error) {
         if (isNativeRequiredUnavailableError(error) || isNodeSqliteUnavailableError(error)) throw error;
+        if (isConfinedFileReadError(error)) throw error;
         if (isUnsupportedParserInputError(error) || isNonNativeParserUnavailableError(error)) {
           return [file, createEmptyModuleIndex(file), [], undefined] as const;
         }
@@ -939,6 +995,16 @@ async function buildIndexFromFileListShared(
     }
     expandStarImports(modules, opts);
     if (manifestEntries) {
+      for (const [file, signature] of fileSignatures) {
+        if (manifestEntries.has(file)) continue;
+        manifestEntries.set(file, {
+          sig: signature.sig,
+          ...(signature.gitSig ? { gitSig: signature.gitSig } : {}),
+          edges: [],
+        });
+      }
+    }
+    if (manifestEntries) {
       await writeIndexManifestSnapshot({
         projectRoot,
         opts,
@@ -951,6 +1017,14 @@ async function buildIndexFromFileListShared(
         ...(helperOpts?.symlinkDirectories !== undefined ? { symlinkDirectories: helperOpts.symlinkDirectories } : {}),
       });
     }
+    const indexManifestEntries = manifestEntries
+      ? projectIndexManifestEntries(
+          Array.from(manifestEntries, ([file, entry]) => {
+            const cacheSig = fileSignatures.get(file)?.cacheSig;
+            return [file, { ...entry, ...(cacheSig ? { cacheSig } : {}) }] as const;
+          }),
+        )
+      : manifestEntriesForIndex;
     const index = await finalizeProjectIndex({
       projectRoot,
       normalizedProjectRoot,
@@ -963,7 +1037,7 @@ async function buildIndexFromFileListShared(
       bloomFilterCache,
       ...(projectFiles !== undefined ? { projectFiles } : {}),
       buildReport: report,
-      manifestEntries: manifestEntriesForIndex,
+      manifestEntries: indexManifestEntries,
     });
     if (manifestEntries) {
       await writeProjectIndexSnapshot(
@@ -995,35 +1069,31 @@ async function buildProjectIndexWithManifestOptions(
     // full-tree symlink probe. Off and memory modes never read or write this disk
     // manifest, keeping read-only builds from mutating the project root. A missing or
     // unusable manifest falls back to probing once.
-    // A symlink hint never expires on its own: `knownSymlinkDirectories` disables probing entirely, so
-    // a directory symlinked in after the hint was recorded (e.g. `npm link`) would
-    // otherwise never be discovered. `--cache-strict`/`--cache-verify` are explicit asks
-    // for maximum correctness over speed, so both force a fresh probe here too.
+    // The manifest records the project-root directory mtime alongside symlink hints. A changed
+    // root mtime triggers the cheap full-tree probe, while strict modes always probe.
     const wantsMaxSymlinkCorrectness = !!opts?.cacheStrict || !!opts?.cacheVerify;
     const symlinkHintManifest =
       helperOpts?.ignoreExistingManifest || wantsMaxSymlinkCorrectness || !useDiskCache
         ? null
         : await loadManifest(projectRoot, opts);
-    const knownSymlinkDirectories = symlinkHintManifest?.symlinkDirectories;
+    const rootMtime = symlinkHintManifest ? (await fsp.stat(projectRoot)).mtimeMs : undefined;
+    const symlinkHintIsFresh =
+      symlinkHintManifest?.symlinkDirectoriesRootMtimeMs !== undefined &&
+      rootMtime === symlinkHintManifest.symlinkDirectoriesRootMtimeMs;
+    const knownSymlinkDirectories = symlinkHintIsFresh ? symlinkHintManifest?.symlinkDirectories : undefined;
     let discoveredSymlinkDirectories = knownSymlinkDirectories;
     const onSymlinkDirectoriesDiscovered = (directories: readonly string[]) => {
       discoveredSymlinkDirectories = Array.from(directories);
     };
     // When the hint is unknown, listProjectFiles() and discoverProjectFiles() must run
-    // sequentially rather than in Promise.all: both would otherwise start their own
-    // full-tree symlink probe concurrently, since the callback only reports back after
-    // listProjectFiles() resolves, too late to inform a probe discoverProjectFiles()
-    // already started on its own. Sequencing costs a little parallelism on that one
-    // cold-start case, but avoids paying for two full-tree walks instead of one. Once a
-    // hint is known (the common warm case), both calls skip probing entirely, so running
-    // them sequentially here costs no meaningful time either way.
+    // sequentially rather than in Promise.all to avoid duplicate full-tree probes.
     const discoveredFiles = await listProjectFiles(projectRoot, projectPatternsForLanguageExtensions(opts), {
       ...opts?.discovery,
       ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
       ...(knownSymlinkDirectories !== undefined ? { knownSymlinkDirectories } : {}),
       onSymlinkDirectoriesDiscovered,
     });
-    const additionalFileCandidates = normalizeIndexedFileInputs(
+    const additionalFileCandidates = await normalizeIndexedFileInputsWithinRoot(
       projectRoot,
       opts?.additionalFiles ?? [],
       "Additional index file",
@@ -1079,9 +1149,12 @@ export async function buildProjectIndexFromFiles(
 ): Promise<ProjectIndex> {
   try {
     const useDiskCache = (opts?.cache ?? "off") === "disk";
-    return await buildIndexFromFileListShared(projectRoot, inputFiles, opts, {
+    const normalizedInputFiles = await normalizeIndexedFileInputsWithinRoot(projectRoot, inputFiles, "Index file");
+
+    return await buildIndexFromFileListShared(projectRoot, normalizedInputFiles, opts, {
       manifestMode: useDiskCache ? "read-only" : "off",
       warnNoFilesMessage: `Warning: No files provided for indexing in ${projectRoot}. Check the explicit file list and include/ignore filters. Diagnostic: codegraph doctor`,
+      confineReads: true,
     });
   } finally {
     if ((opts?.cache ?? "off") === "disk") {
@@ -1129,7 +1202,7 @@ export async function buildProjectIndexIncremental(
   opts?: IncrementalBuildOptions,
 ): Promise<ProjectIndex> {
   await initializeFileIdentityCaseSensitivity(projectRoot);
-  clearImportResolutionCaches();
+  clearResolutionCaches();
   const graphOptions = normalizeGraphOptions(opts?.graph);
   const strictIncremental = opts?.incrementalStrict ?? false;
   if (strictIncremental && graphOptions.fast) graphOptions.fast = false;
@@ -1178,7 +1251,7 @@ export async function buildProjectIndexIncremental(
     }
     startCheckProgress();
     const manifestStart = performance.now();
-    const manifest = await loadManifest(projectRoot, opts);
+    const manifest = await loadManifest(projectRoot, opts, report);
     if (timings) timings.manifestMs = Math.round(performance.now() - manifestStart);
     const manifestUsed = !!manifest;
     const manifestReport = initManifestReport(report, manifestUsed, false);
@@ -1294,8 +1367,12 @@ export async function buildProjectIndexIncremental(
     let manifestRequiresSanitization =
       manifestFileKeys.length !== trackedEntryKeys.length ||
       manifestFileKeys.some((file) => !Object.hasOwn(trackedEntries, file));
-    const explicitFiles = normalizeIndexedFileInputs(projectRoot, opts?.files ?? [], "Incremental file");
-    const additionalFiles = normalizeIndexedFileInputs(
+    const explicitFiles = await normalizeIndexedFileInputsWithinRoot(
+      projectRoot,
+      opts?.files ?? [],
+      "Incremental file",
+    );
+    const additionalFiles = await normalizeIndexedFileInputsWithinRoot(
       projectRoot,
       opts?.additionalFiles ?? [],
       "Additional index file",
@@ -1436,7 +1513,7 @@ export async function buildProjectIndexIncremental(
     const explicitFilesCoverAllFiles =
       explicitFileSet.size === allFiles.size && [...allFiles].every((file) => explicitFileSet.has(file));
     const explicitFilesAreChangeInputs = !opts?.filesAreProjectScope;
-    if (explicitFileSet.size && explicitFilesAreChangeInputs && (!explicitFilesCoverAllFiles || report)) {
+    if (explicitFileSet.size && explicitFilesAreChangeInputs && (!explicitFilesCoverAllFiles || opts?.report)) {
       explicitFileSet.forEach(markAsChanged);
     }
     dependentFilesOfDeletedTracked.forEach(markAsChanged);
@@ -1445,7 +1522,7 @@ export async function buildProjectIndexIncremental(
     const reuseUnchangedSnapshot = async (): Promise<ProjectIndex | null> => {
       if (changedFiles.size || deletedTrackedFiles.size || manifestRequiresSanitization) return null;
       const manifestEntryMap = new Map(Object.entries(trackedEntries));
-      const snapshotLoad = await tryLoadProjectIndexSnapshot(projectRoot, opts, manifestEntryMap);
+      const snapshotLoad = await tryLoadProjectIndexSnapshot(projectRoot, opts, manifestEntryMap, report);
       if (!snapshotLoad) return null;
 
       const snapshot = snapshotLoad.index;
@@ -1524,6 +1601,7 @@ export async function buildProjectIndexIncremental(
           })
         : new Map<string, string>();
       const fileSignatures = await prepareFileSignatures({
+        projectRoot,
         files: Array.from(allFiles),
         opts,
         gitSigMap,
@@ -1548,8 +1626,9 @@ export async function buildProjectIndexIncremental(
           changedFiles.add(file);
         }
       }
+      const reverseDeps = buildTrackedFileReverseDependencies(trackedEntries);
       const invalidateCachedDependents = () => {
-        const dependentFilesOfChanged = collectTrackedFileDependents(trackedEntries, changedFiles);
+        const dependentFilesOfChanged = collectTrackedFileDependents(trackedEntries, changedFiles, reverseDeps);
         for (const file of dependentFilesOfChanged) {
           const key = fileIdentityKey(file);
           if (modules.has(key)) {
@@ -1574,9 +1653,11 @@ export async function buildProjectIndexIncremental(
         return unchangedSnapshot;
       }
       const snapshotModules = cacheEnabled
-        ? await tryLoadProjectSnapshotModules(projectRoot, opts, fileSignatures)
+        ? await tryLoadProjectSnapshotModules(projectRoot, opts, fileSignatures, report)
         : null;
-      const persistedBloomFilters = bloomFilterCache ? await tryLoadPersistedBloomFilters(projectRoot, opts) : null;
+      const persistedBloomFilters = bloomFilterCache
+        ? await tryLoadPersistedBloomFilters(projectRoot, opts, report)
+        : null;
       for (const file of allFiles) {
         if (changedFiles.has(file)) continue;
         const sigInfo = fileSignatures.get(file)!;
@@ -1716,6 +1797,7 @@ export async function buildProjectIndexIncremental(
               dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
               ...(opts?.native ? { native: opts.native } : {}),
               ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
+              threads: conc,
               ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
               ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
               allFiles: Array.from(allFiles),
@@ -1731,6 +1813,15 @@ export async function buildProjectIndexIncremental(
               },
             });
       if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
+      for (const file of new Set([...changedFiles, ...transientFiles])) {
+        const signature = fileSignatures.get(file);
+        if (!signature || manifestEntries.has(file)) continue;
+        manifestEntries.set(file, {
+          sig: signature.sig,
+          ...(signature.gitSig ? { gitSig: signature.gitSig } : {}),
+          edges: [],
+        });
+      }
       await writeIndexManifestSnapshot({
         projectRoot,
         opts,
@@ -1802,8 +1893,8 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
     supportForFile(file, previousLanguageExtensions)?.id !== supportForFile(file, currentLanguageExtensions)?.id;
   const strictIncremental = opts?.incrementalStrict ?? false;
   if (strictIncremental && graphOptions.fast) graphOptions.fast = false;
-  const explicitFiles = normalizeIndexedFileInputs(projectRoot, opts?.files ?? [], "Graph delta file");
-  const additionalFiles = normalizeIndexedFileInputs(
+  const explicitFiles = await normalizeIndexedFileInputsWithinRoot(projectRoot, opts?.files ?? [], "Graph delta file");
+  const additionalFiles = await normalizeIndexedFileInputsWithinRoot(
     projectRoot,
     opts?.additionalFiles ?? [],
     "Additional graph delta file",
@@ -1838,15 +1929,23 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
     buildConcurrency(opts),
   );
   const existsInCandidateSnapshot = (file: string): boolean => candidateExistence.get(file) ?? false;
-  const existingExplicitFiles = explicitFiles.filter(existsInCandidateSnapshot);
+  const normalizeChangedFiles = (files: readonly string[]): string[] =>
+      files.map((file) => {
+        if (!existsInCandidateSnapshot(file)) return file;
+        const [normalizedFile] = normalizeIndexedFileInputs(projectRoot, [file], "Graph delta file");
+        return normalizedFile ?? file;
+      }),
+    normalizedManifestDiffFiles = normalizeChangedFiles(manifestDiffFiles),
+    normalizedGitFiles = normalizeChangedFiles(gitFiles),
+    existingExplicitFiles = explicitFiles.filter(existsInCandidateSnapshot);
   const existingAdditionalFiles = additionalFiles.filter(existsInCandidateSnapshot);
 
   const allFiles = new Set<string>([
     ...trackedFiles,
     ...existingExplicitFiles,
     ...existingAdditionalFiles,
-    ...manifestDiffFiles.filter(existsInCandidateSnapshot),
-    ...gitFiles.filter(existsInCandidateSnapshot),
+    ...normalizedManifestDiffFiles.filter((_, index) => existsInCandidateSnapshot(manifestDiffFiles[index]!)),
+    ...normalizedGitFiles.filter((_, index) => existsInCandidateSnapshot(gitFiles[index]!)),
   ]);
   const changedFiles = new Set<string>();
   const changedFileKeys = new Set<string>();
@@ -1857,8 +1956,8 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
     changedFiles.add(file);
   };
   existingExplicitFiles.forEach(addChangedFile);
-  manifestDiffFiles.forEach(addChangedFile);
-  gitFiles.forEach(addChangedFile);
+  normalizedManifestDiffFiles.forEach(addChangedFile);
+  normalizedGitFiles.forEach(addChangedFile);
   if (languageExtensionsChanged) {
     for (const file of trackedFiles) {
       if (languageSupportChangedForFile(file)) addChangedFile(file);

@@ -114,13 +114,9 @@ export function collectDeletedTrackedFileDependents(
   return dependents;
 }
 
-export function collectTrackedFileDependents(
+export function buildTrackedFileReverseDependencies(
   trackedEntries: Record<string, ManifestFileEntry>,
-  changedFiles: ReadonlySet<string>,
-): Set<string> {
-  const dependents = new Set<string>();
-  if (!changedFiles.size) return dependents;
-
+): Map<string, Set<string>> {
   const reverseDeps = new Map<string, Set<string>>();
   for (const [file, entry] of Object.entries(trackedEntries)) {
     for (const edge of entry.edges) {
@@ -134,6 +130,16 @@ export function collectTrackedFileDependents(
       bucket.add(file);
     }
   }
+  return reverseDeps;
+}
+
+export function collectTrackedFileDependents(
+  trackedEntries: Record<string, ManifestFileEntry>,
+  changedFiles: ReadonlySet<string>,
+  reverseDeps = buildTrackedFileReverseDependencies(trackedEntries),
+): Set<string> {
+  const dependents = new Set<string>();
+  if (!changedFiles.size) return dependents;
 
   const enqueued = new Set(Array.from(changedFiles, fileIdentityKey));
   const queue = [...enqueued];

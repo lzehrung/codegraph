@@ -140,7 +140,7 @@ describe("rename preview CLI", () => {
     expect(aboveMaximum).toEqual({
       stdout: "",
       stderr: 'Invalid --max-edits value "10001". Expected an integer from 1 to 10000.\n',
-      exitCode: 1,
+      exitCode: 2,
     });
 
     const extra = await captureCli(["rename-preview", "--json", handle, "RenamedService", "extra"]);

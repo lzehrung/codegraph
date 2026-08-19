@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { listChangedFiles, listUntrackedFiles, getUnifiedDiff } from "../src/util.js";
+import { gitDiffArgs, getUnifiedDiff, listChangedFiles, listUntrackedFiles } from "../src/util.js";
 import { decodeGitPath, runGit, setGitExecutableForTests } from "../src/util/git.js";
 import { parseUnifiedDiff } from "../src/impact/parse.js";
 import { runGit as git } from "./helpers/git.js";
@@ -152,6 +152,14 @@ describe("git diff semantics", () => {
     } finally {
       await removeGitTempDir(root);
     }
+  });
+  it("I10 reports metadata-only mode changes and combined diff diagnostics", () => {
+    const modeChange = parseUnifiedDiff("diff --git a/a.ts b/a.ts\nold mode 100644\nnew mode 100755\n");
+    expect(modeChange.files).toEqual([expect.objectContaining({ path: "a.ts", modeChanged: true, hunks: [] })]);
+
+    const combined = parseUnifiedDiff("diff --cc a.ts\nindex 1111111,2222222..3333333\n@@@ -1 -1 +1 @@@\n");
+    expect(combined.files).toEqual([]);
+    expect(combined.warning).toMatch(/Combined\/merge diffs are not supported/);
   });
 });
 
@@ -303,6 +311,74 @@ describe("git subprocess stdout decoding across chunk boundaries", () => {
     } finally {
       await removeGitTempDir(root);
     }
+  });
+});
+
+describe("bounded and safe git diff execution (I7 and I8)", () => {
+  afterEach(() => {
+    setGitExecutableForTests(null);
+  });
+
+  it("I7 rejects oversized stderr while retaining only a bounded diagnostic tail", async () => {
+    const root = await makeGitTempDir("codegraph-git-stderr-bound-");
+    try {
+      setGitExecutableForTests(process.execPath);
+      const script = "process.stderr.write('x'.repeat(4096));";
+
+      await expect(runGit(root, ["-e", script], { maxBuffer: 64 })).rejects.toThrow(
+        /stderr exceeded maxBuffer \(64 bytes\)/,
+      );
+    } finally {
+      await removeGitTempDir(root);
+    }
+  });
+
+  it("bounds diagnostics from one large stderr write", async () => {
+    const root = await makeGitTempDir("codegraph-git-large-stderr-chunk-");
+    try {
+      setGitExecutableForTests(process.execPath);
+      const maxBuffer = 64;
+      const script = "process.stderr.write('x'.repeat(1048576) + 'NEWEST');";
+      const errorMessage = await runGit(root, ["-e", script], { maxBuffer }).then(
+        () => "runGit unexpectedly resolved",
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      );
+      const tailStart = errorMessage.indexOf("): ");
+      const diagnosticTail = tailStart >= 0 ? errorMessage.slice(tailStart + 3) : "";
+      expect(errorMessage).toContain(`stderr exceeded maxBuffer (${maxBuffer} bytes)`);
+      expect(diagnosticTail).toMatch(/^x+$/);
+      expect(Buffer.byteLength(diagnosticTail, "utf8")).toBeLessThanOrEqual(maxBuffer);
+    } finally {
+      await removeGitTempDir(root);
+    }
+  });
+  it("trims stderr at a UTF-8 boundary while retaining the newest tail", async () => {
+    const root = await makeGitTempDir("codegraph-git-stderr-utf8-bound-");
+    try {
+      setGitExecutableForTests(process.execPath);
+      const maxBuffer = 7;
+      // "prefix" + U+00E9 + "NEWEST" is 14 UTF-8 bytes. A seven-byte tail
+      // starts at the continuation byte of U+00E9, so trimming must skip that
+      // partial codepoint.
+      const script = "process.stderr.write('prefix\\u00e9NEWEST');";
+      const errorMessage = await runGit(root, ["-e", script], { maxBuffer }).then(
+        () => "runGit unexpectedly resolved",
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      );
+
+      const tailStart = errorMessage.indexOf("): ");
+      const diagnosticTail = tailStart >= 0 ? errorMessage.slice(tailStart + 3) : "";
+      expect(errorMessage).toContain(`stderr exceeded maxBuffer (${maxBuffer} bytes)`);
+      expect(errorMessage).not.toContain("\uFFFD");
+      expect(Buffer.byteLength(diagnosticTail, "utf8")).toBeLessThanOrEqual(maxBuffer);
+      expect(diagnosticTail).toBe("NEWEST");
+    } finally {
+      await removeGitTempDir(root);
+    }
+  });
+
+  it("I8 never permits configured external diff or text conversion helpers", () => {
+    expect(gitDiffArgs("HEAD", "WORKTREE")).toEqual(expect.arrayContaining(["--no-ext-diff", "--no-textconv"]));
   });
 });
 

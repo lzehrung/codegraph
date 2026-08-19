@@ -5,7 +5,7 @@ import { chunkFile } from "../../chunking/chunkFile.js";
 import { supportForFile } from "../../languages.js";
 
 export const MAX_QUERY_INDEX_TEXT_BYTES = 300_000;
-export const QUERY_INDEX_NORMALIZER_VERSION = 1;
+export const QUERY_INDEX_NORMALIZER_VERSION = 2;
 export const QUERY_INDEX_CHUNKER_VERSION = 2;
 
 const CHUNK_LANGUAGE_ALIASES: Record<string, string> = {
@@ -52,10 +52,10 @@ export type PreparedQueryIndexFile = {
 
 export function normalizeQuerySearchText(input: string): string {
   return input
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/([\p{Ll}\p{Nd}])(\p{Lu})/gu, "$1 $2")
+    .replace(/(\p{Lu}+)(\p{Lu}\p{Ll})/gu, "$1 $2")
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^\p{L}\p{N}\p{M}_]+/gu, " ")
     .trim();
 }
 

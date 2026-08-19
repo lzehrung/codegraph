@@ -164,7 +164,7 @@ export function analyzeTransitiveImpact(
         reasons.push(reason);
       }
 
-      const severity = calculateTransitiveSeverity(edge, nextDepth);
+      const severity = calculateTransitiveSeverity(edge, nextDepth, options.severityWeights);
       const upstreamConfidence = impacted.get(file)?.confidence ?? 0.6;
       const nextConfidence = Math.max(
         0.2,
@@ -196,10 +196,17 @@ export function analyzeTransitiveImpact(
         confidence: Math.max(existingConfidence, nextConfidence),
       };
 
-      if (edge.typeOnly !== undefined) {
-        transitiveItem.typeOnly = edge.typeOnly;
+      const edgeIsTypeOnly = edge.typeOnly ?? false;
+      let evidenceIsTypeOnly: boolean | undefined;
+      if (existing?.typeOnly !== undefined) {
+        evidenceIsTypeOnly = existing.typeOnly && edgeIsTypeOnly;
+      } else if (edge.typeOnly !== undefined) {
+        evidenceIsTypeOnly = edgeIsTypeOnly;
+      }
+      if (evidenceIsTypeOnly !== undefined) {
+        transitiveItem.typeOnly = evidenceIsTypeOnly;
         if (transitiveItem.explain) {
-          transitiveItem.explain.typeOnly = edge.typeOnly;
+          transitiveItem.explain.typeOnly = evidenceIsTypeOnly;
         }
       }
 
@@ -213,7 +220,7 @@ export function analyzeTransitiveImpact(
         queue.push({
           file: dependentFile,
           depth: nextDepth,
-          reason: "exportChain",
+          reason: "transitive",
         });
       }
     }

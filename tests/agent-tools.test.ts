@@ -17,6 +17,9 @@ import {
   tool_impactFromDiffText,
 } from "../src/agent-tools.js";
 import { copyFixtureSubset, readOnlySamplePath } from "./helpers/filesystem.js";
+import * as projectFilesModule from "../src/util/projectFiles.js";
+import * as loadCurrentIndexModule from "../src/indexer/load-current-index.js";
+import * as navigationModule from "../src/indexer/navigation.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -42,6 +45,51 @@ describe("Agent Tools", () => {
     expect(result.files).toBeDefined();
     expect(result.files?.every((file) => !path.isAbsolute(file))).toBe(true);
     expect(result.files!.some((f) => f.replace(/\\/g, "/").endsWith("main.ts"))).toBe(true);
+  });
+
+  it("formats non-Error wrapper failures with useful messages", async () => {
+    const thrown = { code: "synthetic", detail: "failure" };
+    const listSpy = vi.spyOn(projectFilesModule, "listProjectFiles").mockRejectedValue(thrown);
+    try {
+      for (const result of [await tool_listProjectFiles(samplePath), await tool_getGraph(samplePath)]) {
+        expect(result).toEqual({ status: "error", error: JSON.stringify(thrown) });
+      }
+    } finally {
+      listSpy.mockRestore();
+    }
+
+    const loadSpy = vi.spyOn(loadCurrentIndexModule, "loadCurrentProjectIndex").mockRejectedValue(thrown);
+    try {
+      for (const result of [
+        await tool_getDependencies(samplePath, "main.ts"),
+        await tool_getReverseDependencies(samplePath, "main.ts"),
+        await tool_getHotspots(samplePath),
+        await tool_findSymbol(samplePath, "helperFunction"),
+        await tool_getFileOverview(samplePath, "main.ts"),
+        await tool_impactJSON(samplePath, { provider: "raw", diffText: "" }),
+      ]) {
+        expect(result).toEqual({ status: "error", error: JSON.stringify(thrown) });
+      }
+    } finally {
+      loadSpy.mockRestore();
+    }
+
+    const index = await codegraph.buildProjectIndex(samplePath, { threads: 1 });
+    const goToSpy = vi.spyOn(navigationModule, "goToDefinition").mockRejectedValue(thrown);
+    const referencesSpy = vi.spyOn(navigationModule, "findReferences").mockRejectedValue(thrown);
+    try {
+      await expect(tool_goToDefinition(samplePath, "main.ts", 7, 25, index)).resolves.toEqual({
+        status: "error",
+        error: JSON.stringify(thrown),
+      });
+      await expect(tool_findReferences(samplePath, "utils.ts", 1, 17, index)).resolves.toEqual({
+        status: "error",
+        error: JSON.stringify(thrown),
+      });
+    } finally {
+      goToSpy.mockRestore();
+      referencesSpy.mockRestore();
+    }
   });
 
   const expectedTypescriptEdges = [

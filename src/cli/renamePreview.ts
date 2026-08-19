@@ -22,13 +22,14 @@ export async function handleRenamePreviewCommand(context: RenamePreviewCommandCo
     context.exit(2);
   }
 
+  let maxEdits: number | undefined;
   try {
-    const maxEdits = parseOptionalBoundedIntegerOption(
-      context.getOpt("--max-edits"),
-      "--max-edits",
-      1,
-      MAX_RENAME_EDITS,
-    );
+    maxEdits = parseOptionalBoundedIntegerOption(context.getOpt("--max-edits"), "--max-edits", 1, MAX_RENAME_EDITS);
+  } catch (error: unknown) {
+    exitWithError(context, error, 2);
+  }
+
+  try {
     const response = await previewRename({
       root: context.root,
       handle,

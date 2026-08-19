@@ -59,6 +59,10 @@ type GraphCommandReport = {
   index?: BuildReport;
 };
 
+function resolveGraphCacheMode(cache: BuildOptions["cache"]): Exclude<BuildOptions["cache"], undefined> {
+  return cache ?? "disk";
+}
+
 export type GraphCommandContext = {
   projectRootFs: string;
   discoveryOptions: ProjectFileDiscoveryOptions;
@@ -240,14 +244,15 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
   }
   const hasExplicitSymbolFlag =
     context.hasFlag("--symbols") || context.hasFlag("--symbols-only") || context.hasFlag("--symbols-detailed");
-  const outputArg = context.getOpt("--output");
-  const sqliteArg = context.getOpt("--sqlite");
+  const outputArg = context.getOpt("--output") ?? context.getOpt("--out");
+  const sqliteArg = context.getOpt("--sqlite") ?? context.getOpt("--db");
   const stderrArg = context.getOpt("--stderr-file");
   const wantSymbols = hasExplicitSymbolFlag;
   const detailedSymbols = context.hasFlag("--symbols-detailed");
   const threads = parseNonNegativeIntegerOption(context.getOpt("--threads"), "--threads", 0);
   const cache = parseCacheModeOption(context.getOpt("--cache"));
   const cacheStrict = context.hasFlag("--cache-strict");
+  const cacheVerify = context.hasFlag("--cache-verify");
   const cacheDir = context.getOpt("--cache-dir");
   const cacheDirOptions: Pick<BuildOptions, "cacheDir" | "cacheLocation"> = {
     ...(cacheDir ? { cacheDir } : {}),
@@ -259,14 +264,20 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     format = "json";
   } else if (context.hasFlag("--dot")) {
     format = "dot";
+  } else if (context.hasFlag("--pretty") || context.hasFlag("--mermaid")) {
+    format = "mermaid";
   }
   const fast = context.graphFlags.fast;
   const resolveNodeModules = context.graphFlags.resolveNodeModules;
   const dynamicImportHeuristics = context.graphFlags.dynamicImportHeuristics;
   const resolutionHints = context.graphFlags.resolutionHints;
   const includeSqlArtifacts = context.hasFlag("--sql-artifacts");
-  const outputFile = outputArg ? normalizePath(resolveFilePathFromRoot(context.cwd(), outputArg)) : undefined;
+  const outputFile =
+    outputArg && !context.hasFlag("--stdout")
+      ? normalizePath(resolveFilePathFromRoot(context.cwd(), outputArg))
+      : undefined;
   const sqliteFile = sqliteArg ? normalizePath(resolveFilePathFromRoot(context.cwd(), sqliteArg)) : undefined;
+  const effectiveCache = resolveGraphCacheMode(cache);
   if (stderrArg) {
     context.setStderrFilePath(normalizePath(resolveFilePathFromRoot(context.cwd(), stderrArg)));
   } else {
@@ -303,7 +314,6 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       dynamicImportHeuristics,
       ...(resolutionHints.length ? { resolutionHints } : {}),
     };
-    const sqliteCacheMode = cache ?? "disk";
     const index = changedSet
       ? await buildProjectIndexIncremental(context.projectRootFs, {
           onProgress: context.progressHandler,
@@ -312,8 +322,9 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
           ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
           ...context.workerOpts,
           ...cacheDirOptions,
-          ...(sqliteCacheMode !== undefined ? { cache: sqliteCacheMode } : {}),
+          cache: effectiveCache,
           cacheStrict,
+          cacheVerify,
           files: changedSet.existingFiles,
           ...(context.gitBase ? { gitBase: context.gitBase } : {}),
           ...(context.gitHead ? { gitHead: context.gitHead } : {}),
@@ -328,8 +339,9 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
           ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
           ...context.workerOpts,
           ...cacheDirOptions,
-          ...(sqliteCacheMode !== undefined ? { cache: sqliteCacheMode } : {}),
+          cache: effectiveCache,
           cacheStrict,
+          cacheVerify,
           graph: graphOptions,
           report: indexReport,
         });
@@ -376,8 +388,9 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
       ...context.workerOpts,
       ...cacheDirOptions,
-      cache: cache ?? "disk",
+      cache: effectiveCache,
       cacheStrict,
+      cacheVerify,
       graph: {
         fast,
         resolveNodeModules,
@@ -427,15 +440,38 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     await finalizeReport();
     return;
   }
-  const graph = await collectGraph(context.projectRootFs, files, {
-    fast,
-    threads,
-    resolveNodeModules,
-    dynamicImportHeuristics,
-    ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
-    ...(resolutionHints.length ? { resolutionHints } : {}),
-    report: indexReport,
-  });
+  let graph: Graph;
+  if (cacheVerify) {
+    const index = await buildProjectIndexFromFiles(context.projectRootFs, files, {
+      onProgress: context.progressHandler,
+      threads,
+      discovery: context.discoveryOptions,
+      ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
+      ...context.workerOpts,
+      ...cacheDirOptions,
+      cache: effectiveCache,
+      cacheStrict,
+      cacheVerify,
+      graph: {
+        fast,
+        resolveNodeModules,
+        dynamicImportHeuristics,
+        ...(resolutionHints.length ? { resolutionHints } : {}),
+      },
+      report: indexReport,
+    });
+    graph = index.graph;
+  } else {
+    graph = await collectGraph(context.projectRootFs, files, {
+      fast,
+      threads,
+      resolveNodeModules,
+      dynamicImportHeuristics,
+      ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
+      ...(resolutionHints.length ? { resolutionHints } : {}),
+      report: indexReport,
+    });
+  }
   context.maybeWriteNativeBackendStatus(indexReport, context.showProgress);
   const analysis = summarizeAnalysis({ nativeMode: context.nativeMode, report: indexReport });
   const graphOut = stable ? stabilizeGraph(graph) : graph;

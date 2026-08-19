@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getHotspots } from "../graphs/hotspots.js";
-import { type SymbolNode } from "../graphs/symbol-graph.js";
+import { type SymbolNode, type SymbolEdge } from "../graphs/symbol-graph.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import type { BuildOptions } from "../indexer/types.js";
 import { queryGraphSqliteRaw, writeGraphSqlite } from "../sqlite.js";
@@ -42,6 +42,10 @@ type ArtifactManifest = CodegraphArtifactBuildResult & {
   sql: {
     supported: boolean;
     limitation: string;
+    fileSignatures: {
+      signed: number;
+      skipped: number;
+    };
   };
   graphJsonSchema: string;
 };
@@ -107,6 +111,23 @@ export async function buildCodegraphArtifactWithSession(
   const selected = normalizeArtifactSelection(request);
   const filterOutDir = path.resolve(root, request.filterOutDir ?? request.outDir ?? DEFAULT_OUT_DIR);
   const snapshot = await filterSnapshotForOutputDirectory(await session.loadProject(), filterOutDir);
+  const sqliteSignatures: Array<{ path: string; size: number; mtimeMs: number }> = [];
+  let sqliteFileSignatures = { signed: 0, skipped: 0 };
+  if (selected.sqlite) {
+    const snapshotFileSignatures = snapshot.fileSignatures;
+    if (!snapshotFileSignatures) {
+      throw new Error("SQLite artifact freshness signatures are unavailable.");
+    }
+    for (const file of snapshot.fileGraph.nodes) {
+      const signature = snapshotFileSignatures.get(file);
+      if (!signature) {
+        sqliteFileSignatures = { ...sqliteFileSignatures, skipped: sqliteFileSignatures.skipped + 1 };
+        continue;
+      }
+      sqliteSignatures.push({ path: signature.file, size: signature.size, mtimeMs: signature.mtimeMs });
+    }
+    sqliteFileSignatures = { signed: sqliteSignatures.length, skipped: sqliteFileSignatures.skipped };
+  }
   await fs.mkdir(outDir, { recursive: true });
   if (request.force) {
     await prepareForcedOutputDirectory(outDir, selected);
@@ -114,23 +135,12 @@ export async function buildCodegraphArtifactWithSession(
   const artifacts: CodegraphArtifactBuildResult["artifacts"] = {};
 
   if (selected.sqlite) {
-    if (!snapshot.fileSignatures) {
-      throw new Error("SQLite artifact freshness signatures are unavailable.");
-    }
-    const fileSignatures: Array<{ path: string; size: number; mtimeMs: number }> = [];
-    for (const file of snapshot.fileGraph.nodes) {
-      const signature = snapshot.fileSignatures.get(file);
-      if (!signature) {
-        throw new Error(`SQLite artifact freshness signature is missing for ${file}.`);
-      }
-      fileSignatures.push({ path: signature.file, size: signature.size, mtimeMs: signature.mtimeMs });
-    }
     const outputPath = path.join(outDir, SQLITE_FILE);
     await writeGraphSqlite({
       fileGraph: snapshot.fileGraph,
       symbolGraph: snapshot.symbolGraph,
       outputPath,
-      fileSignatures,
+      fileSignatures: sqliteSignatures,
     });
     artifacts.sqlite = SQLITE_FILE;
   }
@@ -171,6 +181,7 @@ export async function buildCodegraphArtifactWithSession(
     sql: {
       supported: true,
       limitation: "SQL support does not perform current-schema reconstruction.",
+      fileSignatures: sqliteFileSignatures,
     },
     graphJsonSchema: "codegraph.graph-json",
   };
@@ -283,7 +294,6 @@ async function fileExists(filePath: string): Promise<boolean> {
     throw error;
   }
 }
-
 async function readCodegraphManifest(outDir: string): Promise<ArtifactManifest | undefined> {
   const value = await readJsonIfPresent(path.join(outDir, MANIFEST_FILE));
   if (!isPlainRecord(value)) return undefined;
@@ -297,6 +307,8 @@ async function readCodegraphManifest(outDir: string): Promise<ArtifactManifest |
     if (key === "report") artifacts.report = artifactFile;
     if (key === "questions") artifacts.questions = artifactFile;
   }
+  const sql = isPlainRecord(value.sql) ? value.sql : undefined;
+  const fileSignatures = sql && isPlainRecord(sql.fileSignatures) ? sql.fileSignatures : undefined;
   return {
     schemaVersion: 1,
     root: typeof value.root === "string" ? value.root : "",
@@ -306,6 +318,10 @@ async function readCodegraphManifest(outDir: string): Promise<ArtifactManifest |
     sql: {
       supported: true,
       limitation: "",
+      fileSignatures: {
+        signed: typeof fileSignatures?.signed === "number" ? fileSignatures.signed : 0,
+        skipped: typeof fileSignatures?.skipped === "number" ? fileSignatures.skipped : 0,
+      },
     },
     graphJsonSchema: "codegraph.graph-json",
   };
@@ -419,6 +435,7 @@ export function buildCodegraphGraphJson(snapshot: AgentProjectSnapshot): {
   graph: PortableGraphJson["graph"];
 } {
   const symbolIds = buildPortableSymbolIdMap(snapshot);
+  const symbolPositions = buildPortableSymbolPositions(snapshot, symbolIds);
   const portableSymbolId = (id: string): string => symbolIds.get(id) ?? id;
   const graph: PortableGraphBody = {
     files: [...snapshot.fileGraph.nodes].map((file) => normalizeAgentFilePath(snapshot.root, file)).sort(),
@@ -434,9 +451,21 @@ export function buildCodegraphGraphJson(snapshot: AgentProjectSnapshot): {
       .sort((left, right) => {
         const fromDelta = left.from.localeCompare(right.from);
         if (fromDelta !== 0) return fromDelta;
+        const leftToType = left.to.type;
+        const rightToType = right.to.type;
+        const toTypeDelta = leftToType.localeCompare(rightToType);
+        if (toTypeDelta !== 0) return toTypeDelta;
         const leftTo = left.to.type === "file" ? left.to.path : left.to.name;
         const rightTo = right.to.type === "file" ? right.to.path : right.to.name;
-        return leftTo.localeCompare(rightTo);
+        const toDelta = leftTo.localeCompare(rightTo);
+        if (toDelta !== 0) return toDelta;
+        const rawDelta = left.raw.localeCompare(right.raw);
+        if (rawDelta !== 0) return rawDelta;
+        const typeOnlyDelta = Number(left.typeOnly ?? false) - Number(right.typeOnly ?? false);
+        if (typeOnlyDelta !== 0) return typeOnlyDelta;
+        const resolvedDelta = (left.resolved ?? "").localeCompare(right.resolved ?? "");
+        if (resolvedDelta !== 0) return resolvedDelta;
+        return (left.confidence ?? -1) - (right.confidence ?? -1);
       }),
     symbols: [...snapshot.symbolGraph.nodes.values()]
       .map((node) => ({
@@ -447,7 +476,17 @@ export function buildCodegraphGraphJson(snapshot: AgentProjectSnapshot): {
       .sort((left, right) => {
         const fileDelta = left.file.localeCompare(right.file);
         if (fileDelta !== 0) return fileDelta;
-        return left.name.localeCompare(right.name);
+        const nameDelta = left.name.localeCompare(right.name);
+        if (nameDelta !== 0) return nameDelta;
+        const kindDelta = left.kind.localeCompare(right.kind);
+        if (kindDelta !== 0) return kindDelta;
+        const leftPosition = symbolPositions.get(left.id) ?? ZERO_SYMBOL_POSITION;
+        const rightPosition = symbolPositions.get(right.id) ?? ZERO_SYMBOL_POSITION;
+        const lineDelta = leftPosition.line - rightPosition.line;
+        if (lineDelta !== 0) return lineDelta;
+        const columnDelta = leftPosition.column - rightPosition.column;
+        if (columnDelta !== 0) return columnDelta;
+        return left.id.localeCompare(right.id);
       }),
     symbolEdges: [...snapshot.symbolGraph.edges]
       .map((edge) => ({
@@ -460,7 +499,9 @@ export function buildCodegraphGraphJson(snapshot: AgentProjectSnapshot): {
         if (fromDelta !== 0) return fromDelta;
         const toDelta = left.to.localeCompare(right.to);
         if (toDelta !== 0) return toDelta;
-        return (left.label ?? "").localeCompare(right.label ?? "");
+        const labelDelta = (left.label ?? "").localeCompare(right.label ?? "");
+        if (labelDelta !== 0) return labelDelta;
+        return compareSymbolEdgeSites(snapshot.root, left.site, right.site);
       }),
   };
   return {
@@ -472,6 +513,46 @@ export function buildCodegraphGraphJson(snapshot: AgentProjectSnapshot): {
     symbolEdges: graph.symbolEdges,
     graph,
   };
+}
+
+type SymbolPosition = { line: number; column: number };
+const ZERO_SYMBOL_POSITION: SymbolPosition = { line: 0, column: 0 };
+
+function buildPortableSymbolPositions(
+  snapshot: AgentProjectSnapshot,
+  symbolIds: ReadonlyMap<string, string>,
+): Map<string, SymbolPosition> {
+  const positions = new Map<string, SymbolPosition>();
+  for (const moduleIndex of snapshot.index.byFile.values()) {
+    for (const local of moduleIndex.locals) {
+      const portableId = symbolIds.get(defNodeId(local));
+      if (!portableId) continue;
+      positions.set(portableId, {
+        line: local.range.start.line,
+        column: local.range.start.column,
+      });
+    }
+  }
+  return positions;
+}
+
+function compareSymbolEdgeSites(root: string, left: SymbolEdge["site"], right: SymbolEdge["site"]): number {
+  if (!left && !right) return 0;
+  if (!left) return -1;
+  if (!right) return 1;
+  const fileDelta = normalizeAgentFilePath(root, left.file).localeCompare(normalizeAgentFilePath(root, right.file));
+  if (fileDelta !== 0) return fileDelta;
+  const startLineDelta = left.range.start.line - right.range.start.line;
+  if (startLineDelta !== 0) return startLineDelta;
+  const startColumnDelta = left.range.start.column - right.range.start.column;
+  if (startColumnDelta !== 0) return startColumnDelta;
+  const startIndexDelta = (left.range.start.index ?? -1) - (right.range.start.index ?? -1);
+  if (startIndexDelta !== 0) return startIndexDelta;
+  const endLineDelta = left.range.end.line - right.range.end.line;
+  if (endLineDelta !== 0) return endLineDelta;
+  const endColumnDelta = left.range.end.column - right.range.end.column;
+  if (endColumnDelta !== 0) return endColumnDelta;
+  return (left.range.end.index ?? -1) - (right.range.end.index ?? -1);
 }
 
 function buildPortableSymbolIdMap(snapshot: AgentProjectSnapshot): Map<string, string> {

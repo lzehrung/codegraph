@@ -1,0 +1,2 @@
+# Keep Prettier input stable when Git checks out on Windows.
+* text=auto eol=lf

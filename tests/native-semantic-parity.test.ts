@@ -413,11 +413,25 @@ nativeDescribe("native semantic coverage", () => {
         { file: "components/Button.tsx", line: 5, column: 17, expectedStatus: "ok" },
       ),
       sampleExpectation(
+        "tsx",
+        ["reexport-source.tsx", "reexport-barrel.tsx", "reexport-consumer.tsx"],
+        [{ file: "reexport-source.tsx", names: ["aliasedValue", "starValue", "namespacedValue"] }],
+        { file: "reexport-consumer.tsx", line: 5, column: 45, expectedStatus: "ok" },
+        { file: "reexport-source.tsx", line: 1, column: 14, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
         "python",
         ["main.py", "utils.py", "helpers.py"],
         [{ file: "utils.py", names: ["helper_function", "UtilityClass"] }],
         { file: "main.py", line: 11, column: 18, expectedStatus: "ok" },
         { file: "utils.py", line: 1, column: 16, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
+        "python",
+        ["package_exports/__init__.py", "package_exports/values.py", "package_consumer.py"],
+        [{ file: "package_exports/values.py", names: ["source_value"] }],
+        { file: "package_consumer.py", line: 3, column: 10, expectedStatus: "ok" },
+        { file: "package_exports/values.py", line: 1, column: 5, expectedStatus: "ok" },
       ),
       sampleExpectation(
         "php",
@@ -520,6 +534,13 @@ nativeDescribe("native semantic coverage", () => {
         [{ file: "utils/Utils.java", names: ["Utils", "helperFunction"] }],
         { file: "StaticWildcardImports.java", line: 7, column: 5, expectedStatus: "ok" },
         { file: "utils/Utils.java", line: 4, column: 22, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
+        "java",
+        ["ResolutionImports.java", "demo/Point.java", "demo/A.java"],
+        [{ file: "demo/Point.java", names: ["Point"] }],
+        { file: "ResolutionImports.java", line: 5, column: 3, expectedStatus: "ok" },
+        { file: "demo/Point.java", line: 3, column: 15, expectedStatus: "ok" },
       ),
       sampleExpectation(
         "csharp",
@@ -847,6 +868,13 @@ nativeDescribe("native semantic coverage", () => {
         [{ file: ".regressions/unicode_def.rs", names: ["créer"] }],
         { file: ".regressions/unicode_consumer.rs", line: 6, column: 5, expectedStatus: "ok" },
         { file: ".regressions/unicode_def.rs", line: 1, column: 8, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
+        "java",
+        ["AnnotationConsumer.java", "AnnotationTypes.java"],
+        [{ file: "AnnotationTypes.java", names: ["AnnotatedMarker"] }],
+        { file: "AnnotationConsumer.java", line: 5, column: 2, expectedStatus: "ok" },
+        { file: "AnnotationTypes.java", line: 3, column: 19, expectedStatus: "ok" },
       ),
     ];
 

@@ -13,6 +13,8 @@ export type ReviewFileSummary = {
   status: "updated" | "deleted" | "missing";
   oldFile?: string;
   similarityIndex?: number;
+  /** True when Git reported a file mode change such as chmod. */
+  modeChanged?: boolean;
   /** True when Git reported a binary diff and symbol analysis was skipped. */
   isBinary?: true;
   /** Unchanged re-exports included only as API context for a changed export. */
@@ -123,7 +125,7 @@ export type ReviewBuildReport = {
   duplicateAnalysis?: DuplicatePreparedAnalysis;
 };
 
-export type ReviewDiffMetadata = Pick<ReviewFileSummary, "oldFile" | "similarityIndex">;
+export type ReviewDiffMetadata = Pick<ReviewFileSummary, "oldFile" | "similarityIndex" | "modeChanged">;
 
 export type ReviewDiffChange = FileChange;
 
@@ -179,9 +181,15 @@ export function boundReviewReportForTransport(
   const candidateTestsOmitted = Math.max(0, report.candidateTests.length - limits.candidateTests);
 
   let symbolsOmitted = 0;
+  for (const [index, file] of report.changedFiles.entries()) {
+    if (index < limits.changedFiles) {
+      symbolsOmitted += Math.max(0, file.symbols.length - limits.symbolsPerFile);
+    } else {
+      symbolsOmitted += file.symbols.length;
+    }
+  }
   const changedFiles = report.changedFiles.slice(0, limits.changedFiles).map((file) => {
     const omitted = Math.max(0, file.symbols.length - limits.symbolsPerFile);
-    symbolsOmitted += omitted;
     return omitted ? { ...file, symbols: file.symbols.slice(0, limits.symbolsPerFile) } : file;
   });
 

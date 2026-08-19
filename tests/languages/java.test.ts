@@ -27,6 +27,10 @@ const definition: LanguageTestDefinition = {
     exact: {
       dependencyGraph: [
         {
+          from: "AnnotationConsumer.java",
+          to: { type: "file", path: "AnnotationTypes.java" },
+        },
+        {
           from: "static-imports.java",
           to: { type: "file", path: "utils/Utils.java" },
         },
@@ -61,6 +65,20 @@ const definition: LanguageTestDefinition = {
         {
           from: ".regressions/unicode_consumer.java",
           to: { type: "file", path: ".regressions/unicode_def.java" },
+        },
+        {
+          from: "ResolutionImports.java",
+          to: { type: "file", path: "demo/Point.java" },
+        },
+        {
+          from: "ResolutionImports.java",
+          to: { type: "external", name: "demo.Missing" },
+        },
+      ],
+      absentDependencyGraph: [
+        {
+          from: "ResolutionImports.java",
+          to: { type: "file", path: "demo/A.java" },
         },
       ],
       symbols: [
@@ -139,6 +157,17 @@ const definition: LanguageTestDefinition = {
       ],
       references: [
         {
+          name: "find references for imported annotation types",
+          file: "AnnotationTypes.java",
+          line: 3,
+          column: 19,
+          references: [
+            { file: "AnnotationTypes.java", line: 3 },
+            { file: "AnnotationConsumer.java", line: 3 },
+            { file: "AnnotationConsumer.java", line: 5 },
+          ],
+        },
+        {
           name: "find references for wildcard-imported interface",
           file: "pkg/PackageTypes.java",
           line: 7,
@@ -170,9 +199,27 @@ const definition: LanguageTestDefinition = {
             { file: "StaticWildcardImports.java", line: 7 },
           ],
         },
+        {
+          name: "finds Java record references without binding missing imports",
+          file: "demo/Point.java",
+          line: 3,
+          column: 15,
+          references: [
+            { file: "demo/Point.java", line: 3 },
+            { file: "ResolutionImports.java", line: 2 },
+            { file: "ResolutionImports.java", line: 5 },
+          ],
+        },
       ],
     },
     goToDefinition: [
+      {
+        name: "go to definition resolves imported annotation types",
+        file: "AnnotationConsumer.java",
+        line: 5,
+        column: 2,
+        expectedDefinition: { file: "AnnotationTypes.java", line: 3 },
+      },
       {
         name: "go to definition resolves wildcard-imported nested type",
         file: "WildcardImports.java",
@@ -221,6 +268,13 @@ const definition: LanguageTestDefinition = {
         line: 7,
         column: 5,
         expectedDefinition: { file: "utils/Utils.java", line: 4 },
+      },
+      {
+        name: "go to definition resolves imported Java records exactly",
+        file: "ResolutionImports.java",
+        line: 5,
+        column: 3,
+        expectedDefinition: { file: "demo/Point.java", line: 3 },
       },
     ],
   },

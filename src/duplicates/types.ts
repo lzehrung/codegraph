@@ -96,6 +96,8 @@ export type DuplicateDetectionOptions = {
   maxTokens?: number;
   maxBucketSize?: number;
   maxPairs?: number;
+  /** Count candidate duplicate groups without scoring every pair. */
+  countOnly?: boolean;
   shingleSize?: number;
   windowSize?: number;
   includeRawPairs?: boolean;

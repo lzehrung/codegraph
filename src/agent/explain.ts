@@ -178,12 +178,16 @@ export type AgentExplanation = {
     duplicates: number;
     snippets: number;
   };
+  omittedCountsLowerBounds: {
+    references: boolean;
+  };
   changedContext?: AgentExplanationChangedContext;
 };
 
 type ReferenceContext = {
   references: BoundedAgentList<AgentExplanationReference>;
   snippets: BoundedAgentList<AgentExplanationSnippet>;
+  referencesOmittedLowerBound: boolean;
 };
 
 type ResolvedExplainTarget =
@@ -505,6 +509,9 @@ async function buildExplanation(
       duplicates: duplicates.omitted,
       snippets: snippets.omitted,
     },
+    omittedCountsLowerBounds: {
+      references: referenceContext.referencesOmittedLowerBound,
+    },
     ...(changedContext ? { changedContext } : {}),
   };
 }
@@ -541,6 +548,9 @@ function emptyExplanation(snapshot: AgentProjectSnapshot, target: AgentExplanati
       relatedSqlObjects: 0,
       duplicates: 0,
       snippets: 0,
+    },
+    omittedCountsLowerBounds: {
+      references: false,
     },
   };
 }
@@ -772,6 +782,7 @@ async function collectReferenceContext(
   return {
     references: boundedReferences,
     snippets: boundedSnippets,
+    referencesOmittedLowerBound: result.references.length === collectionLimit && boundedReferences.omitted > 0,
   };
 }
 
@@ -976,6 +987,7 @@ function emptyReferenceContext(): ReferenceContext {
   return {
     references: emptyAgentBoundedList(),
     snippets: emptyAgentBoundedList(),
+    referencesOmittedLowerBound: false,
   };
 }
 

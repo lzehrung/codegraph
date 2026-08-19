@@ -16,10 +16,15 @@ import {
   type ProjectIndex,
 } from "../src/index.js";
 import { prepareParserInput } from "../src/languages/filePrep.js";
-import { parsePreparedFileContext } from "../src/indexer/parse-context.js";
+import {
+  attemptParsePreparedFileContext,
+  parsePreparedFileContext,
+  prepareFileForIndexing,
+} from "../src/indexer/parse-context.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
 import { supportForFile } from "../src/languages.js";
 import type { NativeCapture, NativeQueryResults } from "../src/native/treeSitterNative.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../src/worker/nativeExtractWorker.js";
 import { simplifyNativeTestModuleIndex } from "./helpers/native.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 
@@ -180,6 +185,25 @@ describe("native required fallback boundaries", () => {
     expect(parsed.sup.id).toBe("ts");
     expect(parsed.tree.rootNode.type).toBe("document");
     expect(parsed.tree.rootNode.namedChildren).toEqual([]);
+  });
+
+  it("does not report the native source limit when native extraction is disabled", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-disabled-large-"));
+    const file = path.join(root, "large.ts");
+    const source = `export const value = 1;\n${" ".repeat(DEFAULT_NATIVE_SOURCE_MAX_BYTES)}`;
+    await fsp.writeFile(file, source, "utf8");
+
+    try {
+      const prepared = await prepareFileForIndexing(file, "off");
+      expect(prepared.nativeFallbackReason).toBe("unavailable");
+      expect(prepared.nativeError).toBe("native tree-sitter disabled by explicit option");
+
+      const attempt = attemptParsePreparedFileContext(prepared);
+      expect(attempt.nativeFallbackReason).toBe("unavailable");
+      expect(attempt.nativeError).toBe("native tree-sitter disabled by explicit option");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("preserves required-native parse failures", () => {

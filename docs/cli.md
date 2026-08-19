@@ -10,7 +10,7 @@ If the CLI is not installed yet, use the install paths in [docs/installation.md]
 
 Bare `codegraph` prints concise task-oriented help and exits without reading project config or building an index. Use `codegraph --help` or `codegraph help` for the full command catalog, and `codegraph help <command>` or `codegraph <command> --help` for command help.
 
-Unknown commands exit with status 1, print up to three deterministic suggestions, and may print one task route; they never guess and execute a command. Invalid command arguments and noninteractive installer writes without `--yes` exit with status 2.
+Unknown commands, invalid command arguments (including unknown flags/options and unresolvable positional roots), and noninteractive installer writes without `--yes` all exit with status 2; unknown commands also print up to three deterministic suggestions and may print one task route. They never guess and execute a command. Runtime/analysis failures (a validly-formed command that fails while it runs) exit with status 1.
 
 CLI commands default to human-readable stdout; `--pretty` remains an explicit equivalent. Use `--json` for structured automation output, or a format-specific option such as `--compact`, `--mermaid`, `--dot`, or `--sqlite` where supported. If `--json` and `--pretty` are both present, `--json` wins. Commands that ignore structured output, including `viewer` and `mcp`, reject `--json`/`--pretty`. Global `--version --json` and `version --json` remain supported.
 
@@ -254,6 +254,8 @@ codegraph search --help
 
 Use `--kind <kind,...>`, `--exported`, `--include-imports`, `--file-glob <project-relative-glob>`, and `--limit <0-500>` to compose filters. Imports are excluded by default, the default limit is 50, and an empty query requires `--kind` or `--file-glob`; concise pretty output is the default and `--json` returns the structured envelope.
 
+`search --no-snippets` keeps ranked matches and metadata while omitting source snippets from each result. This is useful when a caller needs handles and paths but will fetch bounded live source separately with `file`.
+
 Structured results include `schemaVersion`, root and analysis metadata, freshness, effective limits, omission counts, the normalized query, total candidates, and deterministic project-relative symbols. Resolvable named/default import aliases keep their binding location but carry a handle for the declaration; namespace/star aliases, unresolved aliases, and failed import scans are reported under `omittedCounts`.
 
 Line-and-column navigation remains primary: use `<file>:<line>:<column>` with `goto` or `refs` when the source location is known. An exact qualified path, `<project-relative-file>::<local-symbol>`, is the coordinate-free alternative for one declaration. `deps` and `rdeps` accept either file form, then traverse the defining file's dependency edges; use `callers` or `callees` for symbol-level call relationships. If one file defines multiple declarations with the same local name, codegraph returns candidates and requires the portable handle from `symbols` to avoid guessing.
@@ -281,20 +283,22 @@ codegraph explain public.users --json
 codegraph explain src/large-file.ts --max-symbols 25 --json
 codegraph explain --help
 
+Use `explain --changed-context` when the target comes from a changed-file or review workflow and you need bounded source context around changed ranges in the structured response.
+
 # Build an agent-ready artifact bundle
 codegraph artifact --root . --out codegraph-out --json
+codegraph artifact --sqlite --root . --out codegraph-out --json
 codegraph artifact --root . --out codegraph-out --sqlite --graph-json --report --questions --force --json
-codegraph artifact --help
 
 
 # Serve MCP tools over the same search, navigation, artifact, and review layer
 codegraph mcp --root . --stdio
 codegraph mcp --root . --artifact codegraph-out --stdio
 codegraph mcp --root . --stdio --allow-build
+codegraph mcp --root . --stdio --idle-timeout-ms 1800000
 codegraph mcp --root . --port 7331
 codegraph mcp --root . --stdio --warmup
 codegraph mcp --root . --port 7331 --warmup-symbols
-codegraph mcp --help
 
 # Install or preview agent client integration
 codegraph install --target codex,claude --dry-run
@@ -780,7 +784,7 @@ The SQLite export is a first-class query interface for agent workflows.
 - `symbol_edges(from_id TEXT, to_id TEXT, label TEXT)`
 - `graph_metadata(key TEXT PRIMARY KEY, value TEXT)`
 - `graph_snapshots(id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER, mode TEXT, changed_files INTEGER, deleted_files INTEGER, file_nodes INTEGER, file_edges INTEGER, symbol_nodes INTEGER, symbol_edges INTEGER)`
-- `graph_snapshot_files(snapshot_id INTEGER, file_path TEXT, change_kind TEXT)`
+- `graph_snapshot_files(snapshot_id INTEGER, file_path TEXT, change_kind TEXT)`. Graph snapshot history retains the newest 100 snapshots; child rows are deleted before expired parent rows.
 
 ### Indexes
 

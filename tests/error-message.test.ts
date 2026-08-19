@@ -10,6 +10,6 @@ describe("errorMessage", () => {
     expect(errorMessage("plain")).toBe("plain");
     expect(errorMessage(42)).toBe("42");
     expect(errorMessage(null)).toBe("null");
-    expect(errorMessage({ code: "EFAIL" })).toBe("[object Object]");
+    expect(errorMessage({ code: "EFAIL" })).toBe(`{"code":"EFAIL"}`);
   });
 });

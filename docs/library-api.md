@@ -537,7 +537,7 @@ The integration examples demonstrate semantic chunking with type-based filtering
 
 - It uses indexed symbols, semantic chunks, and text chunks.
 - It uses AST shape hashes when parser context is available, while keeping normal token and hash fallback behavior.
-- Grouped duplicate output uses `schemaVersion: 2`.
+- Grouped duplicate output uses `schemaVersion: 3`.
 - Results include grouped findings, confidence, score, clone type, metrics, omission counts, and pair stats.
 - Group `variants` are bounded by default and expose hidden evidence through `rawPairCount` and `omittedVariantCount`.
 - Raw unit-pair suggestions and full group variants are available when `includeRawPairs` is enabled.
@@ -964,6 +964,8 @@ Use the exported TypeScript APIs when another program is composing deterministic
 
 - `buildReviewReport()` returns a review bundle with `schemaVersion`, changed files, changed symbols, `graphDelta`, candidate tests, `riskSummary`, `reviewTasks`, an offline `markdownLinks` result for Markdown sources in the analysis scope when there are changes, optional duplicate sibling-check tasks, optional `sqlContext`, compatibility hints when available, and diagnostics. Accepts an optional third argument, `{ index?, loadIndex?, duplicateAnalysis?, loadDuplicateAnalysis? }`, so a caller that already holds a warm `ProjectIndex` (or wants to defer loading it until review work actually needs it) and, for repeated review calls, a `DuplicatePreparedAnalysis` from `prepareDuplicateAnalysis()` can skip redundant rebuilds. The MCP `review` tool uses the lazy forms to avoid paying index or duplicate-analysis cost on no-change reviews.
 - `analyzeImpactFromDiff()` returns the full or compact impact report shape for batch consumers, including an offline `markdownLinks` result for Markdown sources in the analysis scope when diffs are non-empty and changed-symbol `callCompatibility` hints when available.
+- Review file summaries include `modeChanged: true` for metadata-only Git mode changes, and bounded review transports expose `limits` plus accurate `omittedCounts` (including symbols in files omitted by the file cap).
+- Impact graph payloads expose detailed-edge bounds as `graph.truncated`, `graph.limits.edges`, and `graph.omittedCounts.edges`; custom `severityWeights` apply to direct and transitive scoring.
 - `analyzeImpactStreaming()` emits progress and incremental chunks, then a final `complete.report` summary on success. Streaming always returns `format: "stream-summary"`. By default this includes the same key structured fields needed by pack builders: changed files, changed symbols, impacted items, Markdown link findings, suggestions, export summaries, re-export chains, ranked top impacts, surface area, clusters, cycles, graph edges, diagnostics, and warning text. Set `streamSummary: "light"` to drop suggestions, export summaries, re-export chains, ranked top impacts, graph metadata, cycles, clusters, and surface area from the final report. A bounded queue overflow instead emits terminal `error` without `complete`; ending iteration early cancels later analysis batches, but cannot interrupt a synchronous lookup already in progress.
 
 Review-pack builders should preserve symbol handles, diff snippets, callsites, `callCompatibility`, diagnostics, candidate-test confidence, impact reasons, and graph edge metadata. Render prose only at the final UI or prompt boundary.

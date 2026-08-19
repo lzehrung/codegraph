@@ -33,13 +33,23 @@ async function findNearestTsconfig(startFromFile: string, projectRoot: string): 
 }
 
 interface TsconfigCompilerOptions {
-  baseUrl?: string;
-  paths?: Record<string, string[]>;
+  baseUrl?: unknown;
+  paths?: unknown;
 }
 
 interface TsconfigJson {
   compilerOptions?: TsconfigCompilerOptions;
-  extends?: string;
+  extends?: unknown;
+}
+
+function sanitizeTsconfigPaths(value: unknown): Record<string, string[]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const paths: Record<string, string[]> = {};
+  for (const [key, patterns] of Object.entries(value)) {
+    if (!Array.isArray(patterns) || !patterns.every((pattern) => typeof pattern === "string")) continue;
+    paths[key] = patterns;
+  }
+  return paths;
 }
 
 function isPathLikeExtendsSpecifier(spec: string): boolean {
@@ -93,31 +103,36 @@ async function loadTsconfigConfig(
   const raw = await fsp.readFile(cfgPath, "utf8");
   const json = parseJsonc<TsconfigJson>(raw);
   const cfgDir = path.dirname(cfgPath);
-  const co = json.compilerOptions;
-  const baseUrlRaw = co?.baseUrl ?? ".";
-  const baseUrl = path.isAbsolute(baseUrlRaw) ? baseUrlRaw : path.resolve(cfgDir, baseUrlRaw);
-  const paths: Record<string, string[]> = co?.paths ?? {};
+  const compilerOptions = json.compilerOptions;
+  const baseUrlRaw = compilerOptions?.baseUrl;
+  let ownBaseUrl: string | null = null;
+  if (typeof baseUrlRaw === "string") {
+    ownBaseUrl = path.isAbsolute(baseUrlRaw) ? baseUrlRaw : path.resolve(cfgDir, baseUrlRaw);
+  }
+  const paths = sanitizeTsconfigPaths(compilerOptions?.paths);
 
-  if (json.extends) {
+  if (typeof json.extends === "string") {
     const extendsPath = await resolveTsconfigExtendsPath(cfgDir, json.extends, projectRoot);
     if (extendsPath) {
       const parent = await loadTsconfigConfig(extendsPath, projectRoot, seen);
+      const baseUrl = ownBaseUrl ?? parent.baseUrl;
       const mergedPaths: Record<string, string[]> = { ...parent.paths };
 
-      for (const [key, patterns] of Object.entries(parent.paths)) {
-        mergedPaths[key] = patterns.map((p) => {
-          const abs = path.resolve(parent.baseUrl, p);
-          const rel = path.relative(baseUrl, abs).replace(/\\/g, "/");
-          return rel;
-        });
+      if (ownBaseUrl) {
+        for (const [key, patterns] of Object.entries(parent.paths)) {
+          mergedPaths[key] = patterns.map((pattern) =>
+            path.relative(baseUrl, path.resolve(parent.baseUrl, pattern)).replace(/\\/g, "/"),
+          );
+        }
       }
-
       for (const [key, patterns] of Object.entries(paths)) {
-        mergedPaths[key] = patterns.map((p) => p.replace(/\\/g, "/"));
+        mergedPaths[key] = patterns.map((pattern) => pattern.replace(/\\/g, "/"));
       }
       return { baseUrl: baseUrl.replace(/\\/g, "/"), paths: mergedPaths };
     }
   }
+
+  const baseUrl = ownBaseUrl ?? cfgDir;
 
   const normalizedPaths: Record<string, string[]> = {};
   for (const [key, patterns] of Object.entries(paths)) {

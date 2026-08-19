@@ -5,6 +5,7 @@ import fsp from "node:fs/promises";
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
+import * as zlib from "node:zlib";
 import {
   buildProjectIndex,
   buildProjectIndexFromFiles,
@@ -22,6 +23,7 @@ import {
   writeManifest,
   type IndexManifest,
 } from "../src/indexer/build-cache.js";
+import * as graphBuilder from "../src/graph-builder.js";
 import { collectGraph } from "../src/graphs.js";
 import {
   getGitBlobHashes,
@@ -45,11 +47,45 @@ import {
 } from "../src/indexer/build-cache/options.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import * as resolverEnvironment from "../src/indexer/build-cache/resolver-environment.js";
+
+vi.mock("node:zlib", { spy: true });
 import { runGit } from "./helpers/git.js";
 import { createTempProjectRoot, mkTmpDir } from "./helpers/filesystem.js";
 
 function normalize(p: string): string {
   return p.replace(/\\/g, "/");
+}
+async function renameProjectTree(sourceRoot: string, movedRoot: string): Promise<void> {
+  if (process.platform !== "win32") {
+    await fsp.rename(sourceRoot, movedRoot);
+    return;
+  }
+  try {
+    await fsp.rename(sourceRoot, movedRoot);
+    return;
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "EPERM") throw error;
+  }
+  const cachePath = path.join(sourceRoot, ".codegraph-cache", "index-v1");
+  const detachedCachePath = `${sourceRoot}-index-v1-detached`;
+  await fsp.rename(cachePath, detachedCachePath);
+  try {
+    await fsp.rename(sourceRoot, movedRoot);
+    await fsp.mkdir(path.join(movedRoot, ".codegraph-cache"), { recursive: true });
+    await fsp.rename(detachedCachePath, path.join(movedRoot, ".codegraph-cache", "index-v1"));
+  } catch (error) {
+    let detachedCacheExists = true;
+    try {
+      await fsp.access(detachedCachePath);
+    } catch {
+      detachedCacheExists = false;
+    }
+    if (detachedCacheExists) {
+      await fsp.mkdir(path.dirname(cachePath), { recursive: true });
+      await fsp.rename(detachedCachePath, cachePath);
+    }
+    throw error;
+  }
 }
 
 function diskCacheDbPathFor(root: string): string {
@@ -116,6 +152,36 @@ describe("navigation package cache invalidation", () => {
       const rebuilt = resolveExport(rebuiltIndex, consumerFile, "Symbol");
       expect(rebuilt?.kind).toBe("resolved");
       if (rebuilt?.kind === "resolved") expect(rebuilt.def.file).toBe(newPackageFile);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("refreshes workspace package exports after a same-size, same-mtime package edit", async () => {
+    const root = await mkTmpDir("dg-package-exports-cache-");
+    const packageRoot = path.join(root, "packages", "pkg");
+    const packageJson = path.join(packageRoot, "package.json");
+    const oldFile = path.join(packageRoot, "src", "old.ts");
+    const newFile = path.join(packageRoot, "src", "new.ts");
+    const consumer = path.join(root, "consumer.ts");
+    await fsp.mkdir(path.dirname(oldFile), { recursive: true });
+    await fsp.writeFile(path.join(root, "package.json"), '{"private":true,"workspaces":["packages/*"]}', "utf8");
+    await fsp.writeFile(oldFile, "export const value = 1;\n", "utf8");
+    await fsp.writeFile(newFile, "export const value = 2;\n", "utf8");
+    const firstExports = '{"name":"pkg","exports":{".":"./src/old.ts"}}';
+    const secondExports = '{"name":"pkg","exports":{".":"./src/new.ts"}}';
+    expect(secondExports.length).toBe(firstExports.length);
+    await fsp.writeFile(packageJson, firstExports, "utf8");
+    await fsp.writeFile(consumer, 'import { value } from "pkg";\nexport const use = value;\n', "utf8");
+    try {
+      const first = await buildProjectIndex(root, { cache: "off" });
+      expect(moduleForPath(first, consumer)?.imports.some((entry) => entry.resolved === normalize(oldFile))).toBe(true);
+      const packageStat = await fsp.stat(packageJson);
+      await fsp.writeFile(packageJson, secondExports, "utf8");
+      await fsp.utimes(packageJson, packageStat.atime, packageStat.mtime);
+      const second = await buildProjectIndex(root, { cache: "off" });
+      expect(moduleForPath(second, consumer)?.imports.some((entry) => entry.resolved === normalize(newFile))).toBe(
+        true,
+      );
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -230,6 +296,36 @@ describe("Cache invalidation and strict hashing", () => {
     } finally {
       writeSpy.mockRestore();
       warnSpy.mockRestore();
+    }
+  });
+
+  it("closes manifest directory handles after a best-effort fsync failure", async () => {
+    const root = await mkTmpDir("dg-manifest-directory-sync-");
+    const directoryPath = path.dirname(manifestPathFor(root));
+    const originalOpen = fsp.open.bind(fsp);
+    const directorySync = vi.fn(async () => {
+      throw new Error("directory fsync unavailable");
+    });
+    const directoryClose = vi.fn();
+    const openSpy = vi.spyOn(fsp, "open").mockImplementation(async (target, flags, mode) => {
+      const handle = await originalOpen(target, flags, mode);
+      if (path.resolve(String(target)) !== directoryPath) return handle;
+      const close = handle.close.bind(handle);
+      handle.sync = directorySync;
+      handle.close = async () => {
+        directoryClose();
+        await close();
+      };
+      return handle;
+    });
+
+    try {
+      await writeManifest(root, undefined, createManifest(root));
+      expect(directorySync).toHaveBeenCalledOnce();
+      expect(directoryClose).toHaveBeenCalledOnce();
+    } finally {
+      openSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
     }
   });
 
@@ -1378,6 +1474,12 @@ describe("Cache invalidation and strict hashing", () => {
 
     const initial = await buildProjectIndex(root, { threads: 2, cache: "disk" });
     await expect(fsp.stat(projectSnapshotPathFor(root))).resolves.toBeTruthy();
+    const persistedSnapshot = await readProjectSnapshot(projectSnapshotPathFor(root));
+    expect(persistedSnapshot.fileSignatures).toMatchObject({
+      "foo.ts": expect.objectContaining({
+        sig: expect.any(String),
+      }),
+    });
 
     const db = new DatabaseSync(diskCacheDbPathFor(root));
     try {
@@ -1513,10 +1615,15 @@ describe("Cache invalidation and strict hashing", () => {
     snapshot.modules = [{}];
     await writeProjectSnapshot(snapshotPath, snapshot);
 
+    const report: BuildReport = { timings: {} };
     const incremental = await buildProjectIndexIncremental(root, {
       threads: 2,
       cache: "disk",
+      report,
     });
+    expect(report.manifest?.corruptions?.some((entry) => entry.artifact.endsWith("project-index-snapshot.json"))).toBe(
+      true,
+    );
 
     const moduleIndex = incremental.byFile.get(fileIdentityKey(normalize(filePath)));
     expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
@@ -1849,6 +1956,98 @@ describe("Cache invalidation and strict hashing", () => {
     expect(third?.index.byFile.size).toBe(1);
     expect(snapshotReads).toBe(2);
   });
+
+  it("memoizes module-only snapshot transforms without cloning the graph", async () => {
+    const root = await mkTmpDir("dg-snapshot-module-transform-memo-");
+    const filePath = path.join(root, "main.ts");
+    await fsp.writeFile(filePath, "export const moduleMemo = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const manifest = await readManifest(root);
+    const signatures = new Map(Object.entries(manifest.files));
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshotBytes = await fsp.readFile(snapshotPath);
+    await fsp.writeFile(snapshotPath, snapshotBytes);
+
+    const decompressSpy = vi.mocked(zlib.brotliDecompressSync);
+    decompressSpy.mockClear();
+    const cloneSpy = vi.spyOn(globalThis, "structuredClone");
+    try {
+      const first = await buildCache.tryLoadProjectSnapshotModules(root, { cache: "disk" }, signatures);
+      first?.get(fileIdentityKey(filePath))?.locals.splice(0);
+      const second = await buildCache.tryLoadProjectSnapshotModules(root, { cache: "disk" }, signatures);
+
+      expect(second?.get(fileIdentityKey(filePath))?.locals.some((local) => local.localName === "moduleMemo")).toBe(
+        true,
+      );
+      expect(decompressSpy).toHaveBeenCalledTimes(1);
+      expect(
+        cloneSpy.mock.calls.some(
+          ([value]) => !!value && typeof value === "object" && !Array.isArray(value) && "graph" in value,
+        ),
+      ).toBe(false);
+    } finally {
+      cloneSpy.mockRestore();
+      decompressSpy.mockClear();
+    }
+  });
+
+  it("passes the incremental thread gate into graph collection", async () => {
+    const root = await mkTmpDir("dg-incremental-graph-threads-");
+    await fsp.writeFile(path.join(root, "dependency.ts"), "export const dependency = 1;\n", "utf8");
+    await fsp.writeFile(
+      path.join(root, "entry.ts"),
+      "import { dependency } from './dependency';\nexport { dependency };\n",
+      "utf8",
+    );
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    await fsp.writeFile(path.join(root, "dependency.ts"), "export const dependency = 2;\n", "utf8");
+
+    let activeCollections = 0;
+    let maxActiveCollections = 0;
+    const originalCollectGraph = graphBuilder.collectGraph;
+    const graphSpy = vi.spyOn(graphBuilder, "collectGraph").mockImplementation(async (projectRoot, files, options) => {
+      activeCollections += 1;
+      maxActiveCollections = Math.max(maxActiveCollections, activeCollections);
+      try {
+        return await originalCollectGraph(projectRoot, files, options);
+      } finally {
+        activeCollections -= 1;
+      }
+    });
+    try {
+      const index = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1 });
+      expect(index.graph.nodes.has(normalize(path.join(root, "entry.ts")))).toBe(true);
+      expect(graphSpy.mock.calls.map(([, , options]) => options?.threads)).toEqual([1]);
+      expect(maxActiveCollections).toBe(1);
+    } finally {
+      graphSpy.mockRestore();
+    }
+  });
+
+  it("builds reverse dependencies once while invalidating changed dependents", async () => {
+    const root = await mkTmpDir("dg-incremental-reverse-dependency-once-");
+    const dependencyPath = path.join(root, "dependency.ts");
+    const entryPath = path.join(root, "entry.ts");
+    await fsp.writeFile(dependencyPath, "export const dependency = 1;\n", "utf8");
+    await fsp.writeFile(
+      entryPath,
+      "import { dependency } from './dependency';\nexport const entry = dependency;\n",
+      "utf8",
+    );
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    await fsp.writeFile(dependencyPath, "export const dependency = 2;\n", "utf8");
+
+    const reverseDependencySpy = vi.spyOn(incrementalPlan, "buildTrackedFileReverseDependencies");
+    try {
+      const index = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1 });
+      expect(reverseDependencySpy).toHaveBeenCalledTimes(1);
+      expect(
+        moduleForPath(index, entryPath)?.imports.some((entry) => entry.resolved === normalize(dependencyPath)),
+      ).toBe(true);
+    } finally {
+      reverseDependencySpy.mockRestore();
+    }
+  });
   it("writes project snapshots atomically and cleans only stale temporary files", async () => {
     const root = await mkTmpDir("dg-snapshot-atomic-");
     const sourcePath = path.join(root, "main.ts");
@@ -1857,71 +2056,90 @@ describe("Cache invalidation and strict hashing", () => {
     const snapshotPath = projectSnapshotPathFor(root);
     const initialSnapshot = await readProjectSnapshot(snapshotPath);
     expect(await projectSnapshotTempNames(root)).toEqual([]);
-
-    index.graph.nodes.add(normalize(path.join(root, "rename-failure.ts")));
-    const originalRename = fsp.rename.bind(fsp);
-    const renameSpy = vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
-      if (path.resolve(String(to)) === path.resolve(snapshotPath)) {
-        throw new Error("simulated interrupted snapshot rename");
-      }
-      return await originalRename(from, to);
-    });
-    try {
-      await rewriteProjectSnapshot(root, index);
-    } finally {
-      renameSpy.mockRestore();
-    }
-    expect(await readProjectSnapshot(snapshotPath)).toEqual(initialSnapshot);
-    expect(await projectSnapshotTempNames(root)).toEqual([]);
-
-    index.graph.nodes.add(normalize(path.join(root, "partial-write.ts")));
-    let readableDuringPartialWrite = false;
-    const originalWriteFile = fsp.writeFile.bind(fsp);
-    const partialWriteSpy = vi.spyOn(fsp, "writeFile").mockImplementation(async (...args) => {
+    let snapshotTempSyncs = 0;
+    const originalOpen = fsp.open.bind(fsp);
+    const openSpy = vi.spyOn(fsp, "open").mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
       const candidate = typeof args[0] === "string" ? args[0] : undefined;
-      const snapshotPrefix = `.${path.basename(snapshotPath)}.`;
-      if (!candidate || !path.basename(candidate).startsWith(snapshotPrefix)) {
-        return await originalWriteFile(...args);
+      if (candidate && path.basename(candidate).startsWith(`.${path.basename(snapshotPath)}.`) && args[1] === "r+") {
+        const sync = handle.sync.bind(handle);
+        handle.sync = async () => {
+          snapshotTempSyncs += 1;
+          await sync();
+        };
       }
-      await originalWriteFile(candidate, Buffer.from("truncated snapshot"), { flag: "wx" });
-      try {
-        await readProjectSnapshot(snapshotPath);
-        readableDuringPartialWrite = true;
-      } catch {
-        readableDuringPartialWrite = false;
-      }
-      throw new Error("simulated interrupted snapshot write");
+      return handle;
     });
+
     try {
+      index.graph.nodes.add(normalize(path.join(root, "rename-failure.ts")));
+      const originalRename = fsp.rename.bind(fsp);
+      const renameSpy = vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
+        if (path.resolve(String(to)) === path.resolve(snapshotPath)) {
+          throw new Error("simulated interrupted snapshot rename");
+        }
+        return await originalRename(from, to);
+      });
+      try {
+        await rewriteProjectSnapshot(root, index);
+      } finally {
+        renameSpy.mockRestore();
+      }
+      expect(await readProjectSnapshot(snapshotPath)).toEqual(initialSnapshot);
+      expect(await projectSnapshotTempNames(root)).toEqual([]);
+
+      index.graph.nodes.add(normalize(path.join(root, "partial-write.ts")));
+      let readableDuringPartialWrite = false;
+      const originalWriteFile = fsp.writeFile.bind(fsp);
+      const partialWriteSpy = vi.spyOn(fsp, "writeFile").mockImplementation(async (...args) => {
+        const candidate = typeof args[0] === "string" ? args[0] : undefined;
+        const snapshotPrefix = `.${path.basename(snapshotPath)}.`;
+        if (!candidate || !path.basename(candidate).startsWith(snapshotPrefix)) {
+          return await originalWriteFile(...args);
+        }
+        await originalWriteFile(candidate, Buffer.from("truncated snapshot"), { flag: "wx" });
+        try {
+          await readProjectSnapshot(snapshotPath);
+          readableDuringPartialWrite = true;
+        } catch {
+          readableDuringPartialWrite = false;
+        }
+        throw new Error("simulated interrupted snapshot write");
+      });
+      try {
+        await rewriteProjectSnapshot(root, index);
+      } finally {
+        partialWriteSpy.mockRestore();
+      }
+      expect(readableDuringPartialWrite).toBe(true);
+      expect(await readProjectSnapshot(snapshotPath)).toEqual(initialSnapshot);
+      expect(await projectSnapshotTempNames(root)).toEqual([]);
+
+      const staleTempPath = path.join(
+        path.dirname(snapshotPath),
+        `.${path.basename(snapshotPath)}.123.00000000-0000-0000-0000-000000000001.tmp`,
+      );
+      const freshTempPath = path.join(
+        path.dirname(snapshotPath),
+        `.${path.basename(snapshotPath)}.456.00000000-0000-0000-0000-000000000002.tmp`,
+      );
+      await fsp.writeFile(staleTempPath, "stale", "utf8");
+      const staleTime = new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000);
+      await fsp.utimes(staleTempPath, staleTime, staleTime);
+      await fsp.writeFile(freshTempPath, "active", "utf8");
+
+      index.graph.nodes.add(normalize(path.join(root, "successful-write.ts")));
       await rewriteProjectSnapshot(root, index);
+
+      await expect(fsp.stat(staleTempPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fsp.readFile(freshTempPath, "utf8")).resolves.toBe("active");
+      expect(await projectSnapshotTempNames(root)).toEqual([path.basename(freshTempPath)]);
+      const finalSnapshot = await readProjectSnapshot(snapshotPath);
+      expect(finalSnapshot.graph).not.toEqual(initialSnapshot.graph);
+      expect(snapshotTempSyncs).toBeGreaterThan(0);
     } finally {
-      partialWriteSpy.mockRestore();
+      openSpy.mockRestore();
     }
-    expect(readableDuringPartialWrite).toBe(true);
-    expect(await readProjectSnapshot(snapshotPath)).toEqual(initialSnapshot);
-    expect(await projectSnapshotTempNames(root)).toEqual([]);
-
-    const staleTempPath = path.join(
-      path.dirname(snapshotPath),
-      `.${path.basename(snapshotPath)}.123.00000000-0000-0000-0000-000000000001.tmp`,
-    );
-    const freshTempPath = path.join(
-      path.dirname(snapshotPath),
-      `.${path.basename(snapshotPath)}.456.00000000-0000-0000-0000-000000000002.tmp`,
-    );
-    await fsp.writeFile(staleTempPath, "stale", "utf8");
-    const staleTime = new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000);
-    await fsp.utimes(staleTempPath, staleTime, staleTime);
-    await fsp.writeFile(freshTempPath, "active", "utf8");
-
-    index.graph.nodes.add(normalize(path.join(root, "successful-write.ts")));
-    await rewriteProjectSnapshot(root, index);
-
-    await expect(fsp.stat(staleTempPath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fsp.readFile(freshTempPath, "utf8")).resolves.toBe("active");
-    expect(await projectSnapshotTempNames(root)).toEqual([path.basename(freshTempPath)]);
-    const finalSnapshot = await readProjectSnapshot(snapshotPath);
-    expect(finalSnapshot.graph).not.toEqual(initialSnapshot.graph);
   });
 
   it("does not read unchanged tracked source files for partial cache validation", async () => {
@@ -2245,6 +2463,102 @@ describe("Cache invalidation and strict hashing", () => {
     expect(typeof fresh).toBe("string");
     if (typeof fresh === "string") {
       expect(normalize(fresh)).toBe(normalize(depPath));
+    }
+  });
+
+  it("resolves an explicit empty tsconfig baseUrl from the child config", async () => {
+    const root = await mkTmpDir("dg-tsconfig-empty-base-url-");
+    const appRoot = path.join(root, "packages", "app");
+    const sourceFile = path.join(appRoot, "src", "main.ts");
+    const targetFile = path.join(appRoot, "src", "value.ts");
+    await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "tsconfig.base.json"),
+      JSON.stringify({ compilerOptions: { baseUrl: "." } }),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(appRoot, "tsconfig.json"),
+      JSON.stringify({
+        extends: "../../tsconfig.base.json",
+        compilerOptions: { baseUrl: "", paths: { "@app/*": ["src/*"] } },
+      }),
+      "utf8",
+    );
+    await fsp.writeFile(sourceFile, "import { value } from '@app/value';\nexport { value };\n", "utf8");
+    await fsp.writeFile(targetFile, "export const value = 1;\n", "utf8");
+
+    try {
+      const { matchPath } = await loadNearestTsconfigFor(sourceFile, root);
+      const resolved = await resolveSpecifier(sourceFile, "@app/value", root, matchPath);
+      expect(typeof resolved).toBe("string");
+      if (typeof resolved === "string") {
+        expect(normalize(resolved)).toBe(normalize(targetFile));
+      }
+    } finally {
+      clearResolutionCaches();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores a non-string tsconfig baseUrl", async () => {
+    const root = await mkTmpDir("dg-tsconfig-null-base-url-");
+    const sourceFile = path.join(root, "src", "main.ts");
+    const targetFile = path.join(root, "src", "value.ts");
+    await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { baseUrl: null, paths: { "@broken/*": "src/*", "@/*": ["src/*"] } } }),
+      "utf8",
+    );
+    await fsp.writeFile(sourceFile, "import { value } from '@/value';\nexport { value };\n", "utf8");
+    await fsp.writeFile(targetFile, "export const value = 1;\n", "utf8");
+
+    try {
+      const { matchPath } = await loadNearestTsconfigFor(sourceFile, root);
+      const resolved = await resolveSpecifier(sourceFile, "@/value", root, matchPath);
+      expect(typeof resolved).toBe("string");
+      if (typeof resolved === "string") {
+        expect(normalize(resolved)).toBe(normalize(targetFile));
+      }
+    } finally {
+      clearResolutionCaches();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves inherited tsconfig baseUrl and paths from the declaring config", async () => {
+    const root = await mkTmpDir("dg-tsconfig-inherited-base-url-");
+    const appRoot = path.join(root, "packages", "app");
+    const sourceFile = path.join(appRoot, "src", "main.ts");
+    const sharedFile = path.join(root, "shared", "value.ts");
+    await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
+    await fsp.mkdir(path.dirname(sharedFile), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "tsconfig.base.json"),
+      JSON.stringify({ compilerOptions: { baseUrl: "." } }),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(appRoot, "tsconfig.json"),
+      JSON.stringify({
+        extends: "../../tsconfig.base.json",
+        compilerOptions: { paths: { "@shared/*": ["shared/*"] } },
+      }),
+      "utf8",
+    );
+    await fsp.writeFile(sourceFile, "import { value } from '@shared/value';\nexport { value };\n", "utf8");
+    await fsp.writeFile(sharedFile, "export const value = 1;\n", "utf8");
+
+    try {
+      const { matchPath } = await loadNearestTsconfigFor(sourceFile, root);
+      const resolved = await resolveSpecifier(sourceFile, "@shared/value", root, matchPath);
+      expect(typeof resolved).toBe("string");
+      if (typeof resolved === "string") {
+        expect(normalize(resolved)).toBe(normalize(sharedFile));
+      }
+    } finally {
+      clearResolutionCaches();
     }
   });
 
@@ -2642,6 +2956,30 @@ describe("Cache invalidation and strict hashing", () => {
     const refreshedManifest = await readManifest(root);
     expect(refreshedManifest.symlinkDirectories).toContain("linked-core");
   });
+  it("discovers a new in-root symlink directory on a default warm build", async () => {
+    const root = await mkTmpDir("dg-manifest-symlink-warm-discovery-");
+    await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk" });
+    const packageDir = path.join(root, "packages", "core");
+    const linkedPackage = path.join(root, "linked-core");
+    await fsp.mkdir(path.join(packageDir, "src"), { recursive: true });
+    await fsp.writeFile(path.join(packageDir, "src", "index.ts"), "export const core = 1;\n", "utf8");
+    try {
+      await fsp.symlink(packageDir, linkedPackage, "junction");
+    } catch (error) {
+      if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+
+    // Old manifests do not have a root-mtime freshness hint. They must trigger one
+    // full discovery instead of treating their possibly empty list as authoritative.
+    const legacyManifest = await readManifest(root);
+    delete legacyManifest.symlinkDirectoriesRootMtimeMs;
+    await fsp.writeFile(manifestPathFor(root), JSON.stringify(legacyManifest, null, 2), "utf8");
+
+    const rebuilt = await buildProjectIndex(root, { cache: "disk" });
+    expect(rebuilt.byFile.has(fileIdentityKey(normalize(path.join(linkedPackage, "src", "index.ts"))))).toBe(true);
+  });
 
   it("persists an empty symlinkDirectories list for projects without symlinks", async () => {
     const root = await mkTmpDir("dg-manifest-symlink-empty-");
@@ -2671,6 +3009,7 @@ describe("Cache invalidation and strict hashing", () => {
     expect(backfilledManifest.symlinkDirectories).toEqual([]);
     expect(backfilledManifest.transientFiles).toEqual([]);
   });
+
   it("reuses relative caches after moving a project tree", async () => {
     const sourceRoot = await mkTmpDir("dg-cache-move-source-");
     const movedRoot = `${sourceRoot}-moved`;
@@ -2687,7 +3026,7 @@ describe("Cache invalidation and strict hashing", () => {
     snapshot.version = 5;
     reexport.fromModule = normalize(path.join(sourceRoot, "dependency.ts"));
     await writeProjectSnapshot(projectSnapshotPathFor(sourceRoot), snapshot);
-    await fsp.rename(sourceRoot, movedRoot);
+    await renameProjectTree(sourceRoot, movedRoot);
 
     const report: BuildReport = { timings: {} };
     const moved = await buildProjectIndexIncremental(movedRoot, { cache: "disk", threads: 1, report });
@@ -2707,7 +3046,7 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.writeFile(path.join(sourceRoot, "dependency.ts"), "export const dependency = 1;\n", "utf8");
     await fsp.writeFile(path.join(sourceRoot, "entry.ts"), "export { dependency } from './dependency';\n", "utf8");
     await buildProjectIndex(sourceRoot, { cache: "disk", threads: 1 });
-    await fsp.rename(sourceRoot, movedRoot);
+    await renameProjectTree(sourceRoot, movedRoot);
 
     // A stale `manifest.projectRoot` (left pointing at the pre-move root after rebasing entries)
     // makes `collectEdgesForFile`'s `cachedFileEdgesProjectRoot` check reject every cached edge,
@@ -2741,7 +3080,7 @@ describe("Cache invalidation and strict hashing", () => {
     const persisted = await readManifest(sourceRoot);
     expect(persisted.symlinkDirectories).toEqual(["linked-core"]);
 
-    await fsp.rename(sourceRoot, movedRoot);
+    await renameProjectTree(sourceRoot, movedRoot);
     const movedPackage = path.join(movedRoot, "packages", "core");
     const movedLink = path.join(movedRoot, "linked-core");
     await fsp.rm(movedLink, { recursive: true, force: true });
@@ -2857,7 +3196,7 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.writeFile(path.join(sourceRoot, "unchanged.ts"), "export const unchanged = 1;\n", "utf8");
     await fsp.writeFile(path.join(sourceRoot, "entry.ts"), "export const entry = 1;\n", "utf8");
     await buildProjectIndex(sourceRoot, { cache: "disk", threads: 1 });
-    await fsp.rename(sourceRoot, movedRoot);
+    await renameProjectTree(sourceRoot, movedRoot);
 
     const bloomFilters = await buildCache.tryLoadPersistedBloomFilters(movedRoot, { cache: "disk" });
     expect(bloomFilters).not.toBeNull();
@@ -2902,7 +3241,7 @@ describe("Cache invalidation and strict hashing", () => {
     manifest.transientFiles = [normalize(outsideFile)];
     await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
 
-    await fsp.rename(sourceRoot, movedRoot);
+    await renameProjectTree(sourceRoot, movedRoot);
     const movedOutsideFile = path.join(movedRoot, "outside", "extra.ts");
     // Force a genuine content change so the incremental diff/manifest-rewrite path runs
     // instead of the whole-snapshot fast path (which leaves manifest.json untouched when
@@ -2968,6 +3307,76 @@ describe("Cache invalidation and strict hashing", () => {
     );
 
     await expect(resolverEnvironment.computeResolverEnvironmentFingerprint(root, files)).resolves.toBeNull();
+  });
+
+  it("bounds resolver fingerprint reads for oversized lockfiles", async () => {
+    const root = await mkTmpDir("dg-node-modules-hash-cap-");
+    const lockPath = path.join(root, "package-lock.json");
+    const sampleBytes = 4 * 1024;
+    const oversizedLock = Buffer.concat([
+      Buffer.alloc(sampleBytes, 0x61),
+      Buffer.alloc(1_048_576, 0x62),
+      Buffer.alloc(sampleBytes, 0x63),
+    ]);
+    const readLengths: number[] = [];
+    const open = fsp.open.bind(fsp);
+    const openSpy = vi.spyOn(fsp, "open").mockImplementation(async (target, flags, mode) => {
+      const handle = await open(target, flags, mode);
+      if (path.resolve(String(target)) === lockPath) {
+        const originalRead = handle.read.bind(handle);
+        handle.read = async (buffer, offset, length, position) => {
+          if (typeof length === "number") readLengths.push(length);
+          return originalRead(buffer, offset, length, position);
+        };
+      }
+      return handle;
+    });
+    try {
+      await fsp.mkdir(path.join(root, "node_modules"), { recursive: true });
+      await fsp.writeFile(lockPath, oversizedLock);
+
+      const first = await resolverEnvironment.computeResolverEnvironmentFingerprint(root, []);
+      const second = await resolverEnvironment.computeResolverEnvironmentFingerprint(root, []);
+
+      expect(first).toBeTruthy();
+      expect(second).toBe(first);
+      expect(readLengths).toEqual([sampleBytes, sampleBytes, sampleBytes, sampleBytes]);
+      expect(readLengths.every((length) => length <= 1_048_576)).toBe(true);
+    } finally {
+      openSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads small resolver fingerprint inputs once", async () => {
+    const root = await mkTmpDir("dg-node-modules-small-read-");
+    const lockPath = path.join(root, "package-lock.json");
+    const bytes = 512;
+    const readLengths: number[] = [];
+    const open = fsp.open.bind(fsp);
+    const openSpy = vi.spyOn(fsp, "open").mockImplementation(async (target, flags, mode) => {
+      const handle = await open(target, flags, mode);
+      if (path.resolve(String(target)) === lockPath) {
+        const read = handle.read.bind(handle);
+        handle.read = async (buffer, offset, length, position) => {
+          if (typeof length === "number") readLengths.push(length);
+          return await read(buffer, offset, length, position);
+        };
+      }
+      return handle;
+    });
+    try {
+      await fsp.mkdir(path.join(root, "node_modules"), { recursive: true });
+      await fsp.writeFile(lockPath, Buffer.alloc(bytes, 0x61));
+
+      await resolverEnvironment.computeResolverEnvironmentFingerprint(root, []);
+      await resolverEnvironment.computeResolverEnvironmentFingerprint(root, []);
+
+      expect(readLengths).toEqual([bytes, bytes]);
+    } finally {
+      openSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("reuses nested node-module caches after manifest paths are rebased", async () => {

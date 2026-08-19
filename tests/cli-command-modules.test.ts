@@ -45,6 +45,7 @@ import type { Graph } from "../src/types.js";
 import { runGit } from "./helpers/git.js";
 import { createTwoCommitCycleProject, mkTmpDir } from "./helpers/filesystem.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import * as mcpServer from "../src/mcp/server.js";
 import * as projectFilesModule from "../src/util/projectFiles.js";
 
 function readJsonRecord(value: unknown): Record<string, unknown> {
@@ -737,38 +738,33 @@ describe("CLI command modules", () => {
     }
   });
 
-  test("grep --json reports the 200000 max-hits clamp for a small result set", async () => {
+  test("grep rejects max-hits values above the 200000 cap with exit 2 (usage error)", async () => {
     const root = await mkTmpDir("codegraph-grep-clamped-limit-");
     await fsp.writeFile(path.join(root, "main.ts"), "needle\n", "utf8");
-    const jsonLines: unknown[] = [];
+    const stderrLines: string[] = [];
     try {
-      await handleGrepCommand({
-        positionals: ["needle"],
-        projectRootFs: root,
-        discoveryOptions: {},
-        parsedOptions: new Map(),
-        getOpt: (name) => (name === "--max-hits" ? String(TEXT_GREP_MAX_HITS + 1) : undefined),
-        hasFlag: (name) => name === "--json",
-        writeJSONLine: (value) => jsonLines.push(value),
-        writeStdoutLine: () => {
-          throw new Error("unexpected stdout");
-        },
-        writeStderrLine: (message) => {
-          throw new Error(`unexpected stderr: ${message}`);
-        },
-        exit: (code) => {
-          throw new Error(`unexpected exit ${code}`);
-        },
-      });
+      await expect(
+        handleGrepCommand({
+          positionals: ["needle"],
+          projectRootFs: root,
+          discoveryOptions: {},
+          parsedOptions: new Map(),
+          getOpt: (name) => (name === "--max-hits" ? String(TEXT_GREP_MAX_HITS + 1) : undefined),
+          hasFlag: (name) => name === "--json",
+          writeJSONLine: () => {
+            throw new Error("unexpected json output");
+          },
+          writeStdoutLine: () => {
+            throw new Error("unexpected stdout");
+          },
+          writeStderrLine: (message) => stderrLines.push(message),
+          exit: (code) => {
+            throw new Error(`grep exit ${code}`);
+          },
+        }),
+      ).rejects.toThrow("grep exit 2");
 
-      expect(jsonLines).toHaveLength(1);
-      expect(readJsonRecord(jsonLines[0])).toEqual({
-        items: [{ file: "main.ts", line: 1, column: 1, match: "needle", snippet: "needle" }],
-        limit: TEXT_GREP_MAX_HITS,
-        totalSeen: 1,
-        truncated: false,
-        omitted: 0,
-      });
+      expect(stderrLines).toEqual(['Invalid --max-hits value "200001". Expected an integer from 1 to 200000.']);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -1126,6 +1122,196 @@ describe("CLI command modules", () => {
     expect(stderrFiles).toEqual([undefined]);
   });
 
+  test("graph --sqlite forwards cache directory options to full index builds", async () => {
+    const root = await mkTmpDir("codegraph-graph-sqlite-cache-");
+    const entryFile = path.join(root, "entry.ts");
+    const sqliteFile = path.join(root, "graph.sqlite");
+    const cacheDir = path.join(root, "cache");
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexFromFiles");
+
+    try {
+      await handleGraphCommand(
+        createGraphContext({
+          projectRootFs: root,
+          cwd: () => root,
+          nativeMode: "off",
+          resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
+          getOpt: (name) => {
+            if (name === "--cache") return "memory";
+            if (name === "--cache-dir") return cacheDir;
+            if (name === "--sqlite") return sqliteFile;
+            return undefined;
+          },
+          hasFlag: (name) => name === "--cache-verify",
+        }),
+      );
+
+      expect(buildSpy).toHaveBeenCalledOnce();
+      expect(buildSpy).toHaveBeenCalledWith(
+        root,
+        [entryFile.replace(/\\/g, "/")],
+        expect.objectContaining({ cache: "memory", cacheDir, cacheVerify: true }),
+      );
+      expect(fs.existsSync(sqliteFile)).toBe(true);
+    } finally {
+      buildSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("graph --sqlite uses disk cache for verification without an explicit cache mode", async () => {
+    const root = await mkTmpDir("codegraph-graph-sqlite-cache-verify-");
+    const entryFile = path.join(root, "entry.ts");
+    const sqliteFile = path.join(root, "graph.sqlite");
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexFromFiles");
+
+    try {
+      await handleGraphCommand(
+        createGraphContext({
+          projectRootFs: root,
+          cwd: () => root,
+          nativeMode: "off",
+          resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
+          getOpt: (name) => (name === "--sqlite" ? sqliteFile : undefined),
+          hasFlag: (name) => name === "--cache-verify",
+        }),
+      );
+
+      expect(buildSpy).toHaveBeenCalledOnce();
+      expect(buildSpy).toHaveBeenCalledWith(
+        root,
+        [entryFile.replace(/\\/g, "/")],
+        expect.objectContaining({ cache: "disk", cacheVerify: true }),
+      );
+    } finally {
+      buildSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("graph --symbols forwards the requested cache mode to its full index build", async () => {
+    const root = await mkTmpDir("codegraph-graph-symbols-cache-");
+    const entryFile = path.join(root, "entry.ts");
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexFromFiles");
+
+    try {
+      await handleGraphCommand(
+        createGraphContext({
+          projectRootFs: root,
+          cwd: () => root,
+          nativeMode: "off",
+          resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
+          getOpt: (name) => (name === "--cache" ? "memory" : undefined),
+          hasFlag: (name) => name === "--symbols" || name === "--json",
+          writeStdoutLine: () => undefined,
+        }),
+      );
+
+      expect(buildSpy).toHaveBeenCalledOnce();
+      expect(buildSpy).toHaveBeenCalledWith(
+        root,
+        [entryFile.replace(/\\/g, "/")],
+        expect.objectContaining({ cache: "memory" }),
+      );
+    } finally {
+      buildSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("graph --symbols uses disk cache by default", async () => {
+    const root = await mkTmpDir("codegraph-graph-symbols-default-cache-");
+    const entryFile = path.join(root, "entry.ts");
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexFromFiles");
+
+    try {
+      await handleGraphCommand(
+        createGraphContext({
+          projectRootFs: root,
+          cwd: () => root,
+          nativeMode: "off",
+          resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
+          hasFlag: (name) => name === "--symbols" || name === "--json",
+          writeStdoutLine: () => undefined,
+        }),
+      );
+
+      expect(buildSpy).toHaveBeenCalledOnce();
+      expect(buildSpy).toHaveBeenCalledWith(
+        root,
+        [entryFile.replace(/\\/g, "/")],
+        expect.objectContaining({ cache: "disk", cacheVerify: false }),
+      );
+    } finally {
+      buildSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("graph uses disk cache for verification without an explicit cache mode", async () => {
+    const root = await mkTmpDir("codegraph-graph-default-cache-verify-");
+    const entryFile = path.join(root, "entry.ts");
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexFromFiles");
+
+    try {
+      await handleGraphCommand(
+        createGraphContext({
+          projectRootFs: root,
+          cwd: () => root,
+          nativeMode: "off",
+          resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
+          hasFlag: (name) => name === "--cache-verify",
+          writeStdoutLine: () => undefined,
+        }),
+      );
+
+      expect(buildSpy).toHaveBeenCalledOnce();
+      expect(buildSpy).toHaveBeenCalledWith(
+        root,
+        [entryFile.replace(/\\/g, "/")],
+        expect.objectContaining({ cache: "disk", cacheVerify: true }),
+      );
+    } finally {
+      buildSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("graph --symbols uses disk cache for verification without an explicit cache mode", async () => {
+    const root = await mkTmpDir("codegraph-graph-symbols-cache-verify-");
+    const entryFile = path.join(root, "entry.ts");
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexFromFiles");
+
+    try {
+      await handleGraphCommand(
+        createGraphContext({
+          projectRootFs: root,
+          cwd: () => root,
+          nativeMode: "off",
+          resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
+          hasFlag: (name) => name === "--symbols" || name === "--json" || name === "--cache-verify",
+          writeStdoutLine: () => undefined,
+        }),
+      );
+
+      expect(buildSpy).toHaveBeenCalledOnce();
+      expect(buildSpy).toHaveBeenCalledWith(
+        root,
+        [entryFile.replace(/\\/g, "/")],
+        expect.objectContaining({ cache: "disk", cacheVerify: true }),
+      );
+    } finally {
+      buildSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("routes agent command help to command-specific usage text", async () => {
     const cases = [
       { args: ["search", "--help"], heading: "codegraph search", usage: 'Usage: codegraph search "<query>"' },
@@ -1255,11 +1441,10 @@ describe("CLI command modules", () => {
   test("captures CLI usage exits in process", async () => {
     const result = await captureCli(["missing-command"]);
 
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain('Unknown command "missing-command".');
   });
-
   test("rejects unknown command options before execution", async () => {
     const cases = [
       ["graph", "--root", ".", "./src", "--json", "--nonesuch"],
@@ -1545,7 +1730,7 @@ describe("CLI command modules", () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-sql-module-"));
     const dbPath = path.join(tempDir, "graph.sqlite");
     await fsp.writeFile(path.join(tempDir, "main.ts"), "export function helper() { return 1; }\n", "utf8");
-    await captureCli(["graph", "--json", "--root", tempDir, "--sqlite", dbPath]);
+    await captureCli(["graph", "--root", tempDir, "--sqlite", dbPath]);
     const jsonLines: unknown[] = [];
 
     try {
@@ -1598,7 +1783,7 @@ describe("CLI command modules", () => {
           throw new Error(`sql exit ${code}`);
         },
       }),
-    ).rejects.toThrow("sql exit 1");
+    ).rejects.toThrow("sql exit 2");
 
     expect(stderrLines).toEqual([
       'Usage: sql <sqlite-path> "SELECT ..." OR sql --db <sqlite-path> --query "SELECT ..."',
@@ -1609,7 +1794,7 @@ describe("CLI command modules", () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-sql-relative-"));
     const dbPath = path.join(tempDir, "graph.sqlite");
     await fsp.writeFile(path.join(tempDir, "main.ts"), "export const answer = 42;\n", "utf8");
-    await captureCli(["graph", "--json", "--root", tempDir, "--sqlite", dbPath]);
+    await captureCli(["graph", "--root", tempDir, "--sqlite", dbPath]);
     const jsonLines: unknown[] = [];
 
     try {
@@ -2794,6 +2979,24 @@ describe("CLI command modules", () => {
       ).rejects.toThrow("Use either --target or --agent for skill install, not both.");
     } finally {
       await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("mcp --stdio --idle-timeout-ms reaches serveCodegraphMcp as a number, and rejects non-numeric values", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-mcp-idle-timeout-"));
+    const serveSpy = vi.spyOn(mcpServer, "serveCodegraphMcp").mockResolvedValue();
+
+    try {
+      const result = await captureCli(["mcp", "--root", root, "--stdio", "--idle-timeout-ms", "1000"]);
+      expect(result.exitCode).toBeUndefined();
+      expect(serveSpy).toHaveBeenCalledWith(expect.objectContaining({ idleTimeoutMs: 1000 }));
+
+      const invalid = await captureCli(["mcp", "--root", root, "--stdio", "--idle-timeout-ms", "not-a-number"]);
+      expect(invalid.exitCode).toBe(2);
+      expect(invalid.stderr).toContain('Invalid --idle-timeout-ms value "not-a-number"');
+    } finally {
+      serveSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
     }
   });
 });

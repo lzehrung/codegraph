@@ -5,6 +5,33 @@ import path from "node:path";
 export async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
 }
+export type TempRootRegistry = {
+  create(prefix: string): Promise<string>;
+  cleanup(): Promise<void>;
+};
+
+export function createTempRootRegistry(): TempRootRegistry {
+  const roots = new Set<string>();
+  return {
+    async create(prefix: string): Promise<string> {
+      const root = await mkTmpDir(prefix);
+      roots.add(root);
+      return root;
+    },
+    async cleanup(): Promise<void> {
+      const pending = [...roots];
+      roots.clear();
+      await Promise.all(
+        pending.map(
+          async (root) =>
+            await fsp
+              .rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+              .catch(() => undefined),
+        ),
+      );
+    },
+  };
+}
 
 const defaultFixtureCopyExcludes: Record<string, true> = {
   ".codegraph": true,
