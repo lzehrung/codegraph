@@ -4,7 +4,11 @@ import path from "node:path";
 
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { supportForFile } from "../src/languages.js";
-import { prepareFileContextsForBuildBatch, type WorkerPoolSetupResult } from "../src/indexer/build-workers.js";
+import {
+  prepareFileContextForBuild,
+  prepareFileContextsForBuildBatch,
+  type WorkerPoolSetupResult,
+} from "../src/indexer/build-workers.js";
 import type { BuildReport } from "../src/indexer/types.js";
 import type { NativeExtractTask } from "../src/worker/nativeExtractWorker.js";
 
@@ -153,5 +157,40 @@ describe("native build worker batches", () => {
     expect(prepared.map((entry) => entry.file)).toEqual(files);
     expect(workerSetup.report?.tasksSubmitted).toBe(2);
     expect(workerSetup.report?.tasksFailed).toBe(0);
+  });
+
+  it("reads a linked-root file through its lexical project root", async () => {
+    const realRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-worker-real-root-"));
+    const lexicalRoot = `${realRoot}-link`;
+    const realFile = path.join(realRoot, "sample.ts");
+    const lexicalFile = path.join(lexicalRoot, "sample.ts");
+    await fs.writeFile(realFile, "export const answer = 42;\n", "utf8");
+    await fs.symlink(realRoot, lexicalRoot, process.platform === "win32" ? "junction" : "dir");
+    const support = supportForFile(lexicalFile);
+    expect(support).toBeDefined();
+    if (!support) throw new Error("TypeScript support was not registered");
+    const workerSetup: WorkerPoolSetupResult = {
+      pool: null,
+      report: undefined,
+      startTime: 0,
+      batchSize: 1,
+    };
+
+    try {
+      const prepared = await prepareFileContextForBuild(
+        lexicalFile,
+        support,
+        { native: "off" },
+        workerSetup,
+        undefined,
+        await fs.realpath(realRoot),
+        lexicalRoot,
+      );
+
+      expect(prepared.source).toBe("export const answer = 42;\n");
+    } finally {
+      await fs.rm(lexicalRoot, { recursive: true, force: true });
+      await fs.rm(realRoot, { recursive: true, force: true });
+    }
   });
 });

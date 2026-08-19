@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { mapLimit } from "../../util/concurrency.js";
 import { isFilePathWithinRoot } from "../../util/paths.js";
 
 const PROJECT_RESOLUTION_INPUTS = [
@@ -16,7 +17,9 @@ const PROJECT_RESOLUTION_INPUTS = [
 const NODE_MODULES_STATE_INPUTS = [".package-lock.json", ".yarn-state.yml", ".modules.yaml"] as const;
 const MAX_NODE_MODULE_ROOTS = 4_096;
 const MAX_PACKAGE_MANIFESTS = 10_000;
-const MAX_RESOLUTION_INPUT_HASH_BYTES = 1_048_576;
+
+const RESOLUTION_INPUT_SAMPLE_BYTES = 4 * 1024;
+const RESOLUTION_INPUT_CONCURRENCY = 16;
 
 type ResolutionInput = {
   path: string;
@@ -33,36 +36,27 @@ async function statInput(projectRoot: string, target: string): Promise<Resolutio
   try {
     const stat = await fsp.stat(target);
     if (!stat.isFile()) return null;
-    if (stat.size <= MAX_RESOLUTION_INPUT_HASH_BYTES) {
-      const content = await fsp.readFile(target);
-      return {
-        path: normalizedRelativePath(projectRoot, target),
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-        contentHash: crypto.createHash("sha256").update(content).digest("hex"),
-      };
+    const sampleBytes = Math.min(stat.size, RESOLUTION_INPUT_SAMPLE_BYTES);
+    const hash = crypto.createHash("sha256");
+    if (sampleBytes) {
+      const first = Buffer.allocUnsafe(sampleBytes);
+      const last = Buffer.allocUnsafe(sampleBytes);
+      const handle = await fsp.open(target, "r");
+      try {
+        const firstRead = await handle.read(first, 0, sampleBytes, 0);
+        const lastRead = await handle.read(last, 0, sampleBytes, Math.max(0, stat.size - sampleBytes));
+        hash.update(first.subarray(0, firstRead.bytesRead));
+        hash.update(last.subarray(0, lastRead.bytesRead));
+      } finally {
+        await handle.close();
+      }
     }
-
-    // Match the historical first-half/last-half fingerprint without reading the whole file.
-    const edgeBytes = MAX_RESOLUTION_INPUT_HASH_BYTES / 2;
-    const first = Buffer.allocUnsafe(edgeBytes);
-    const last = Buffer.allocUnsafe(edgeBytes);
-    const handle = await fsp.open(target, "r");
-    try {
-      const firstRead = await handle.read(first, 0, edgeBytes, 0);
-      const lastRead = await handle.read(last, 0, edgeBytes, Math.max(0, stat.size - edgeBytes));
-      const hash = crypto.createHash("sha256");
-      hash.update(first.subarray(0, firstRead.bytesRead));
-      hash.update(last.subarray(0, lastRead.bytesRead));
-      return {
-        path: normalizedRelativePath(projectRoot, target),
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-        contentHash: hash.digest("hex"),
-      };
-    } finally {
-      await handle.close();
-    }
+    return {
+      path: normalizedRelativePath(projectRoot, target),
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      contentHash: hash.digest("hex"),
+    };
   } catch {
     return null;
   }
@@ -125,8 +119,10 @@ async function installedPackageManifests(projectRoot: string, root: string): Pro
     }
     if (packageDirectories.length > MAX_PACKAGE_MANIFESTS) return null;
   }
-  const manifests = await Promise.all(
-    packageDirectories.map((directory) => statInput(projectRoot, path.join(directory, "package.json"))),
+  const manifests = await mapLimit(
+    packageDirectories,
+    RESOLUTION_INPUT_CONCURRENCY,
+    async (directory) => await statInput(projectRoot, path.join(directory, "package.json")),
   );
   const inputs = manifests.filter((input): input is ResolutionInput => input !== null);
   return inputs.length > MAX_PACKAGE_MANIFESTS ? null : inputs;
@@ -136,8 +132,8 @@ async function installedPackageManifests(projectRoot: string, root: string): Pro
  * Fingerprints resolver inputs once per build. A package tree beyond either bound returns null,
  * making callers re-resolve rather than spending unbounded time scanning installations.
  *
- * This metadata cannot detect an in-place edit to a package manifest that preserves both its
- * size and mtime; installers normally update their state file, but that mutation remains stale.
+ * Fixed leading and trailing samples detect common in-place edits without retaining whole files;
+ * a same-metadata edit outside both samples can still remain stale.
  */
 export async function computeResolverEnvironmentFingerprint(
   projectRoot: string,

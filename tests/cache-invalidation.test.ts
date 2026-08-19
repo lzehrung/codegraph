@@ -3177,11 +3177,11 @@ describe("Cache invalidation and strict hashing", () => {
   it("bounds resolver fingerprint reads for oversized lockfiles", async () => {
     const root = await mkTmpDir("dg-node-modules-hash-cap-");
     const lockPath = path.join(root, "package-lock.json");
-    const edgeBytes = 1_048_576 / 2;
+    const sampleBytes = 4 * 1024;
     const oversizedLock = Buffer.concat([
-      Buffer.alloc(edgeBytes, 0x61),
-      Buffer.alloc(1_024, 0x62),
-      Buffer.alloc(edgeBytes, 0x63),
+      Buffer.alloc(sampleBytes, 0x61),
+      Buffer.alloc(1_048_576, 0x62),
+      Buffer.alloc(sampleBytes, 0x63),
     ]);
     const readLengths: number[] = [];
     const open = fsp.open.bind(fsp);
@@ -3205,7 +3205,7 @@ describe("Cache invalidation and strict hashing", () => {
 
       expect(first).toBeTruthy();
       expect(second).toBe(first);
-      expect(readLengths).toEqual([edgeBytes, edgeBytes, edgeBytes, edgeBytes]);
+      expect(readLengths).toEqual([sampleBytes, sampleBytes, sampleBytes, sampleBytes]);
       expect(readLengths.every((length) => length <= 1_048_576)).toBe(true);
     } finally {
       openSpy.mockRestore();

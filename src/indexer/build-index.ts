@@ -254,6 +254,7 @@ async function buildIndexedModuleForFile(args: {
     args.workerSetup,
     args.report,
     args.confinedRoot,
+    args.projectRoot,
     args.trustedSource,
   );
   const { source, sup, nativeQueries, embeddedBlocks } = prepared;

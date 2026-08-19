@@ -173,10 +173,12 @@ export async function prepareFileContextForBuild(
   workerSetup: WorkerPoolSetupResult,
   report: BuildReport | undefined,
   confinedRoot?: string,
+  lexicalRoot?: string,
   trustedSource?: string,
 ): Promise<PreparedFileContext> {
   const source =
-    trustedSource ?? (confinedRoot ? await readConfinedUtf8File(confinedRoot, confinedRoot, file) : undefined);
+    trustedSource ??
+    (confinedRoot ? await readConfinedUtf8File(confinedRoot, lexicalRoot ?? confinedRoot, file) : undefined);
   if (source && Buffer.byteLength(source, "utf8") > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
     const prepared = createOversizedNativeSourceFallback(file, support, source);
     recordPreparedNativeExecutionOutcome(report, prepared);
