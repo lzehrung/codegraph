@@ -21,6 +21,13 @@ export function codePointLength(value: string): number {
   return Array.from(value).length;
 }
 
+function isAscii(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) > 0x7f) return false;
+  }
+  return true;
+}
+
 export function escapeFtsTrigramTerm(term: string): string {
   return `"${term.replaceAll('"', '""')}"`;
 }
@@ -180,7 +187,7 @@ export class QueryIndexStore {
     const paths = new Set<string>();
     const shortTerms: string[] = [];
     for (const term of normalizedTerms) {
-      if (codePointLength(term) < 3 || /[^\p{ASCII}]/u.test(term)) {
+      if (codePointLength(term) < 3 || !isAscii(term)) {
         shortTerms.push(term);
         continue;
       }
@@ -378,7 +385,7 @@ export class QueryIndexStore {
     const candidates = new Map<string, Record<string, unknown>>();
     const batchSize = 500;
     for (const term of terms) {
-      const isFtsEligible = codePointLength(term) >= 3 && !/[^\p{ASCII}]/u.test(term);
+      const isFtsEligible = codePointLength(term) >= 3 && !!isAscii(term);
       const conditions: string[] = [];
       const parameters: string[] = [];
       if (isFtsEligible) {
