@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectDistForTests } from "./ensure-dist-for-tests-lib.mjs";
+import { shouldReusePreparedDist } from "./prepare-package-lib.mjs";
 function envValue(name) {
   const exact = process.env[name];
   if (exact !== undefined) {
@@ -29,13 +30,14 @@ const distState =
   (isGlobalInstall || isDryRunPack) && distReady
     ? inspectDistForTests(packageRoot)
     : { needsBuild: false, reason: "not-install-or-pack" };
+const reusePreparedDist = shouldReusePreparedDist(isGlobalInstall, isDryRunPack, distReady, distState.needsBuild);
 
-if (isGlobalInstall && distReady && !distState.needsBuild) {
+if (isGlobalInstall && reusePreparedDist) {
   console.log("[codegraph] Skipping prepare build during global install; using existing fresh dist/ output.");
   process.exit(0);
 }
 
-if (isDryRunPack && distReady && !distState.needsBuild) {
+if (isDryRunPack && reusePreparedDist) {
   console.log("[codegraph] Skipping prepare build during npm pack --dry-run; using existing fresh dist/ output.");
   process.exit(0);
 }
