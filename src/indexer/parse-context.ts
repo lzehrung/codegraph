@@ -97,7 +97,7 @@ export function attemptParsePreparedFileContext(context: PreparedFileContext): P
       },
     };
   }
-  if (Buffer.byteLength(source, "utf8") > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
+  if (nativeMode !== "off" && Buffer.byteLength(source, "utf8") > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
     return {
       parsed: null,
       nativeFallbackReason: "queryFailure",
@@ -162,7 +162,7 @@ export async function prepareFileForIndexing(
   }
 
   const sourceBytes = Buffer.byteLength(prep.source, "utf8");
-  if (sourceBytes > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
+  if (native !== "off" && sourceBytes > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
     return {
       file,
       source: prep.source,
