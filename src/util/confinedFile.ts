@@ -82,6 +82,14 @@ export async function openConfinedReadableFile(
   const { handle, size } = await openVerifiedRegularFile(realPath, expectedStats);
   return { handle, realPath, displayPath, size };
 }
+export async function readConfinedUtf8File(realRoot: string, root: string, filePath: string): Promise<string> {
+  const confined = await openConfinedReadableFile(realRoot, root, filePath);
+  try {
+    return await confined.handle.readFile({ encoding: "utf8" });
+  } finally {
+    await confined.handle.close();
+  }
+}
 
 export async function resolveProjectFile(realRoot: string, root: string, filePath: string): Promise<string> {
   const candidatePath = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(root, filePath);

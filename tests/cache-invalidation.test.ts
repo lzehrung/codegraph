@@ -153,6 +153,34 @@ describe("navigation package cache invalidation", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+  it("refreshes workspace package exports after a same-size, same-mtime package edit", async () => {
+    const root = await mkTmpDir("dg-package-exports-cache-");
+    const packageRoot = path.join(root, "packages", "pkg");
+    const packageJson = path.join(packageRoot, "package.json");
+    const oldFile = path.join(packageRoot, "src", "old.ts");
+    const newFile = path.join(packageRoot, "src", "new.ts");
+    const consumer = path.join(root, "consumer.ts");
+    await fsp.mkdir(path.dirname(oldFile), { recursive: true });
+    await fsp.writeFile(path.join(root, "package.json"), '{"private":true,"workspaces":["packages/*"]}', "utf8");
+    await fsp.writeFile(oldFile, "export const value = 1;\n", "utf8");
+    await fsp.writeFile(newFile, "export const value = 2;\n", "utf8");
+    const firstExports = '{"name":"pkg","exports":{".":"./src/old.ts"}}';
+    const secondExports = '{"name":"pkg","exports":{".":"./src/new.ts"}}';
+    expect(secondExports.length).toBe(firstExports.length);
+    await fsp.writeFile(packageJson, firstExports, "utf8");
+    await fsp.writeFile(consumer, 'import { value } from "pkg";\nexport const use = value;\n', "utf8");
+    try {
+      const first = await buildProjectIndex(root, { cache: "off" });
+      expect(moduleForPath(first, consumer)?.imports.some((entry) => entry.resolved === normalize(oldFile))).toBe(true);
+      const packageStat = await fsp.stat(packageJson);
+      await fsp.writeFile(packageJson, secondExports, "utf8");
+      await fsp.utimes(packageJson, packageStat.atime, packageStat.mtime);
+      const second = await buildProjectIndex(root, { cache: "off" });
+      expect(moduleForPath(second, consumer)?.imports.some((entry) => entry.resolved === normalize(newFile))).toBe(true);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 
   it("rebuilds cache-off indexes after a same-metadata source mutation", async () => {
     const root = await mkTmpDir("codegraph-cache-off-signature-");
@@ -1411,6 +1439,12 @@ describe("Cache invalidation and strict hashing", () => {
 
     const initial = await buildProjectIndex(root, { threads: 2, cache: "disk" });
     await expect(fsp.stat(projectSnapshotPathFor(root))).resolves.toBeTruthy();
+    const persistedSnapshot = await readProjectSnapshot(projectSnapshotPathFor(root));
+    expect(persistedSnapshot.fileSignatures).toMatchObject({
+      "foo.ts": expect.objectContaining({
+        sig: expect.any(String),
+      }),
+    });
 
     const db = new DatabaseSync(diskCacheDbPathFor(root));
     try {
@@ -1546,10 +1580,13 @@ describe("Cache invalidation and strict hashing", () => {
     snapshot.modules = [{}];
     await writeProjectSnapshot(snapshotPath, snapshot);
 
+    const report: BuildReport = { timings: {} };
     const incremental = await buildProjectIndexIncremental(root, {
       threads: 2,
       cache: "disk",
+      report,
     });
+    expect(report.manifest?.corruptions?.some((entry) => entry.artifact.endsWith("project-index-snapshot.json"))).toBe(true);
 
     const moduleIndex = incremental.byFile.get(fileIdentityKey(normalize(filePath)));
     expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
@@ -2674,6 +2711,24 @@ describe("Cache invalidation and strict hashing", () => {
     expect(rebuilt.byFile.has(fileIdentityKey(normalize(path.join(linkedPackage, "src", "index.ts"))))).toBe(true);
     const refreshedManifest = await readManifest(root);
     expect(refreshedManifest.symlinkDirectories).toContain("linked-core");
+  });
+  it("discovers a new in-root symlink directory on a default warm build", async () => {
+    const root = await mkTmpDir("dg-manifest-symlink-warm-discovery-");
+    await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk" });
+    const packageDir = path.join(root, "packages", "core");
+    const linkedPackage = path.join(root, "linked-core");
+    await fsp.mkdir(path.join(packageDir, "src"), { recursive: true });
+    await fsp.writeFile(path.join(packageDir, "src", "index.ts"), "export const core = 1;\n", "utf8");
+    try {
+      await fsp.symlink(packageDir, linkedPackage, "junction");
+    } catch (error) {
+      if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+
+    const rebuilt = await buildProjectIndex(root, { cache: "disk" });
+    expect(rebuilt.byFile.has(fileIdentityKey(normalize(path.join(linkedPackage, "src", "index.ts"))))).toBe(true);
   });
 
   it("persists an empty symlinkDirectories list for projects without symlinks", async () => {

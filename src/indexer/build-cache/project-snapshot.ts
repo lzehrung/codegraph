@@ -410,6 +410,9 @@ function recordSnapshotCorruption(
   }
   logWithLevel(logLevel, "warn", `Warning: Corrupt cache artifact ${artifact}: ${reason}`);
 }
+function isMissingArtifactError(error: unknown): boolean {
+  return !!error && typeof error === "object" && "code" in error && error.code === "ENOENT";
+}
 
 async function readParsedSnapshot(snapshotPath: string): Promise<{ identity: SnapshotFileIdentity; payload: unknown }> {
   const before = await snapshotFileIdentity(snapshotPath);
@@ -447,6 +450,30 @@ function transformCachedProjectSnapshot(
       : migratedPayload;
   setBoundedSnapshotCache(transformedSnapshotCache, snapshotPath, { identity, root: projectRoot, payload });
   return structuredClone(payload);
+}
+function transformCachedProjectSnapshotModules(
+  rawPayload: unknown,
+  projectRoot: string,
+): unknown {
+  const migratedPayload = migrateProjectSnapshotPayload(rawPayload, projectRoot);
+  if (!migratedPayload || typeof migratedPayload !== "object" || Array.isArray(migratedPayload)) {
+    return migratedPayload;
+  }
+  const payload = migratedPayload as Partial<ProjectIndexSnapshotPayload>;
+  if (!Array.isArray(payload.modules) || !payload.fileSignatures || typeof payload.fileSignatures !== "object") {
+    return migratedPayload;
+  }
+  const modules = structuredClone(payload.modules).map((module) => transformModule(projectRoot, module, false));
+  const fileSignatures: Record<string, SnapshotFileSignature> = {};
+  for (const [file, signature] of Object.entries(payload.fileSignatures)) {
+    fileSignatures[transformPath(projectRoot, file, false)] = signature;
+  }
+  return {
+    ...payload,
+    modules,
+    fileSignatures,
+    projectRoot: serializedProjectRoot(projectRoot),
+  };
 }
 
 function projectIndexManifestEntries(
@@ -523,18 +550,15 @@ export async function tryLoadProjectIndexSnapshot(
       ...(payload.analysisReport ? { analysisReport: payload.analysisReport } : {}),
     };
   } catch (error) {
-    recordSnapshotCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
+    if (!isMissingArtifactError(error)) {
+      recordSnapshotCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
+    }
     return null;
   }
 }
-
 /**
- * Load only the bloom-filter section of the last-written project snapshot. Hydration checks
- * each requested file against its persisted signature before returning a filter, so a stale
- * snapshot can still accelerate unchanged files without suppressing newly added references.
- * Only the bloom section is then read, so a corrupt payload is rejected without walking
- * `graph.edges` / `modules`. Returns `null` when disk caching is off, `useBloomFilters` is
- * disabled, or no valid snapshot with bloom data exists.
+ * Load only modules and signatures from the last-written project snapshot. Path transforms avoid
+ * cloning the graph and project metadata, while each returned module remains caller-owned.
  */
 export async function tryLoadProjectSnapshotModules(
   projectRoot: string,
@@ -545,12 +569,7 @@ export async function tryLoadProjectSnapshotModules(
   if ((opts?.cache ?? "off") !== "disk") return null;
   try {
     const parsedSnapshot = await readParsedSnapshot(projectSnapshotPath(projectRoot, opts));
-    const payload = transformCachedProjectSnapshot(
-      projectSnapshotPath(projectRoot, opts),
-      parsedSnapshot.identity,
-      parsedSnapshot.payload,
-      projectRoot,
-    );
+    const payload = transformCachedProjectSnapshotModules(parsedSnapshot.payload, projectRoot);
     const nativeRuntimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
     const implementationFingerprint = getImplementationFingerprint();
     if (
@@ -564,9 +583,6 @@ export async function tryLoadProjectSnapshotModules(
     const normalizedFileSignatures = new Map(
       Object.entries(payload.fileSignatures).map(([file, signature]) => [fileIdentityKey(file), signature]),
     );
-    // `fileSignatures` (caller-supplied) is keyed by whatever discovered display path each file
-    // was found under, not necessarily `fileIdentityKey`-normalized; on a case-insensitive
-    // filesystem an uppercase path segment would otherwise miss this lookup.
     const normalizedCurrentSignatures = new Map(
       Array.from(fileSignatures, ([file, signature]) => [fileIdentityKey(file), signature]),
     );
@@ -580,9 +596,11 @@ export async function tryLoadProjectSnapshotModules(
     }
     return modules;
   } catch (error) {
-    recordSnapshotCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
+    if (!isMissingArtifactError(error)) {
+      recordSnapshotCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
+    }
     return null;
-}
+  }
 }
 
 export async function tryLoadPersistedBloomFilters(
@@ -598,6 +616,7 @@ export async function tryLoadPersistedBloomFilters(
     if (sidecarBloom) {
       return createPersistedBloomFilters(sidecarBloom.bloomFilters, sidecarBloom.fileSignatures, projectRoot);
     }
+    recordSnapshotCorruption(report, sidecarPath, "invalid bloom filter payload", opts?.logLevel);
   } catch (error) {
     const isMissing = error && typeof error === "object" && "code" in error && error.code === "ENOENT";
     if (!isMissing) {
@@ -800,60 +819,6 @@ function bloomFilterSnapshotPath(projectRoot: string, opts: BuildOptions | undef
   return snapshotPath;
 }
 
-export async function tryLoadDetailedSymbolGraphSnapshot(
-  projectRoot: string,
-  opts: BuildOptions | undefined,
-  index: ProjectIndex,
-): Promise<SymbolGraph | null> {
-  if ((opts?.cache ?? "off") !== "disk" || !index.projectSnapshotIdentity) return null;
-  try {
-    const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
-    const observedIdentity = await snapshotFileIdentity(snapshotPath);
-    const cached = detailedSymbolGraphCache.get(snapshotPath);
-    if (
-      cached &&
-      cached.projectSnapshotIdentity === index.projectSnapshotIdentity &&
-      sameSnapshotFileIdentity(cached.identity, observedIdentity)
-    ) {
-      setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, cached);
-      return materializeDetailedSymbolGraph(cached.graph);
-    }
-    const parsed = await readParsedSnapshot(snapshotPath);
-    const migratedPayload = migrateDetailedSymbolGraphPayload(parsed.payload, projectRoot);
-    const payload =
-      migratedPayload && typeof migratedPayload === "object" && !Array.isArray(migratedPayload)
-        ? {
-            ...(migratedPayload as DetailedSymbolGraphSnapshotPayload),
-            graph: transformDetailedGraph(
-              (migratedPayload as DetailedSymbolGraphSnapshotPayload).graph,
-              projectRoot,
-              false,
-            ),
-          }
-        : migratedPayload;
-    if (
-      !isDetailedSymbolGraphSnapshotPayload(payload) ||
-      payload.implementationFingerprint !== getImplementationFingerprint() ||
-      payload.projectSnapshotIdentity !== index.projectSnapshotIdentity
-    ) {
-      return null;
-    }
-    const graph = materializeDetailedSymbolGraph(payload.graph);
-    if (!(await isDetailedSymbolGraphCompatibleWithProject(projectRoot, index, graph))) {
-      return null;
-    }
-    const identity = await snapshotFileIdentity(snapshotPath);
-    if (!sameSnapshotFileIdentity(parsed.identity, identity)) return null;
-    setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, {
-      identity,
-      projectSnapshotIdentity: index.projectSnapshotIdentity,
-      graph: payload.graph,
-    });
-    return graph;
-  } catch {
-    return null;
-  }
-}
 
 export async function writeDetailedSymbolGraphSnapshot(
   projectRoot: string,
@@ -907,6 +872,70 @@ function detailedSymbolGraphSnapshotPath(projectRoot: string, opts: BuildOptions
     throw new Error(`Detailed symbol graph snapshot escaped cache root: ${snapshotPath}`);
   }
   return snapshotPath;
+}
+
+export async function tryLoadDetailedSymbolGraphSnapshot(
+  projectRoot: string,
+  opts: BuildOptions | undefined,
+  index: ProjectIndex,
+  report?: BuildReport,
+): Promise<SymbolGraph | null> {
+  if ((opts?.cache ?? "off") !== "disk" || !index.projectSnapshotIdentity) return null;
+  const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
+  try {
+    const observedIdentity = await snapshotFileIdentity(snapshotPath);
+    const cached = detailedSymbolGraphCache.get(snapshotPath);
+    if (
+      cached &&
+      cached.projectSnapshotIdentity === index.projectSnapshotIdentity &&
+      sameSnapshotFileIdentity(cached.identity, observedIdentity)
+    ) {
+      setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, cached);
+      return materializeDetailedSymbolGraph(cached.graph);
+    }
+    const parsed = await readParsedSnapshot(snapshotPath);
+    const migratedPayload = migrateDetailedSymbolGraphPayload(parsed.payload, projectRoot);
+    const payload =
+      migratedPayload && typeof migratedPayload === "object" && !Array.isArray(migratedPayload)
+        ? {
+            ...(migratedPayload as DetailedSymbolGraphSnapshotPayload),
+            graph: transformDetailedGraph(
+              (migratedPayload as DetailedSymbolGraphSnapshotPayload).graph,
+              projectRoot,
+              false,
+            ),
+          }
+        : migratedPayload;
+    if (
+      !isDetailedSymbolGraphSnapshotPayload(payload) ||
+      payload.implementationFingerprint !== getImplementationFingerprint() ||
+      payload.projectSnapshotIdentity !== index.projectSnapshotIdentity
+    ) {
+      recordSnapshotCorruption(report, snapshotPath, "invalid detailed symbol graph payload", opts?.logLevel);
+      return null;
+    }
+    const graph = materializeDetailedSymbolGraph(payload.graph);
+    if (!(await isDetailedSymbolGraphCompatibleWithProject(projectRoot, index, graph))) {
+      recordSnapshotCorruption(report, snapshotPath, "detailed symbol graph does not match project", opts?.logLevel);
+      return null;
+    }
+    const identity = await snapshotFileIdentity(snapshotPath);
+    if (!sameSnapshotFileIdentity(parsed.identity, identity)) {
+      recordSnapshotCorruption(report, snapshotPath, "detailed symbol graph changed while reading", opts?.logLevel);
+      return null;
+    }
+    setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, {
+      identity,
+      projectSnapshotIdentity: index.projectSnapshotIdentity,
+      graph: payload.graph,
+    });
+    return graph;
+  } catch (error) {
+    if (!isMissingArtifactError(error)) {
+      recordSnapshotCorruption(report, snapshotPath, String(error), opts?.logLevel);
+    }
+    return null;
+  }
 }
 
 function detailedSymbolGraphContentHash(projectSnapshotIdentity: string, graph: SymbolGraph): string {

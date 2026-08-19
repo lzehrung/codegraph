@@ -12,7 +12,7 @@ import {
   type ProjectFileInfo,
 } from "../util/projectFiles.js";
 import { getGitHead, isGitRepo, getGitBlobHashes, listChangedFiles } from "../util/git.js";
-import { clearImportResolutionCaches, resolveSpecifier } from "../util/resolution.js";
+import { clearResolutionCaches, resolveSpecifier } from "../util/resolution.js";
 import {
   assertFilePathWithinRoot,
   fileIdentityKey,
@@ -93,6 +93,7 @@ import {
 } from "./types.js";
 import { isNonNativeParserUnavailableError, isParserSyntaxTree } from "../parserBackend.js";
 import { isUnsupportedParserInputError, type PreparedSFCEmbeddedBlock } from "../languages/filePrep.js";
+import { assertRealPathCandidateWithinRoot } from "../util/confinedFile.js";
 import { buildSqlFactCache, buildSqlModuleIndex, sqlCorpusSignature, type SqlFactCache } from "../sql/sourceGraph.js";
 import { finalizeProjectIndex } from "./finalize.js";
 import { toManifestFileEntry, writeIndexManifestSnapshot } from "./build-manifest.js";
@@ -177,6 +178,14 @@ function recordParserBackendDegradation(
   parserReport.files.push(entry);
 }
 
+function isConfinedFileReadError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /outside project root|possible path confinement race|changed between verification and open|confined file target/u.test(
+      error.message,
+    )
+  );
+}
 function createEmptyModuleIndex(file: string): ModuleIndex {
   return { file, exports: [], imports: [], locals: [] };
 }
@@ -233,8 +242,16 @@ async function buildIndexedModuleForFile(args: {
   fileSignatures: Map<string, FileSignature>;
   cacheEnabled: boolean;
   resolverEnvironmentFingerprint?: string | null;
+  confinedRoot?: string;
 }): Promise<IndexedFileModuleResult> {
-  const prepared = await prepareFileContextForBuild(args.file, args.support, args.opts, args.workerSetup, args.report);
+  const prepared = await prepareFileContextForBuild(
+    args.file,
+    args.support,
+    args.opts,
+    args.workerSetup,
+    args.report,
+    args.confinedRoot,
+  );
   const { source, sup, nativeQueries, embeddedBlocks } = prepared;
   let resolvedLang = prepared.lang;
   let tree: SyntaxTreeLike | undefined;
@@ -526,6 +543,7 @@ type BuildIndexHelperOptions = {
   projectFiles?: ProjectFileInfo[] | Promise<ProjectFileInfo[]>;
   transientFiles?: string[];
   symlinkDirectories?: string[];
+  confineReads?: boolean;
 };
 
 type IndexBuildRunState = {
@@ -621,7 +639,7 @@ async function buildIndexFromFileListShared(
   opts?: BuildOptions,
   helperOpts?: BuildIndexHelperOptions,
 ): Promise<ProjectIndex> {
-  clearImportResolutionCaches();
+  clearResolutionCaches();
   await initializeFileIdentityCaseSensitivity(projectRoot);
   const {
     normalizedProjectRoot,
@@ -638,6 +656,7 @@ async function buildIndexFromFileListShared(
   const shouldWriteManifest = manifestMode === "read-write";
   const projectFiles = helperOpts?.projectFiles;
   initManifestReport(report, useManifest, false);
+  const confinedRoot = helperOpts?.confineReads ? await fsp.realpath(projectRoot) : undefined;
   const normalizedFiles = Array.from(new Set(normalizeIndexedFileInputs(projectRoot, rawFiles ?? [], "Index file")));
   if (!normalizedFiles.length && helperOpts?.warnNoFilesMessage) {
     logWithLevel(opts?.logLevel, "warn", helperOpts.warnNoFilesMessage);
@@ -858,6 +877,7 @@ async function buildIndexFromFileListShared(
             onFallbackImportExtraction,
             fileSignatures,
             cacheEnabled,
+            ...(confinedRoot ? { confinedRoot } : {}),
           });
           mod = built.module;
           graphContext = built.graphContext;
@@ -889,6 +909,7 @@ async function buildIndexFromFileListShared(
         return [file, mod ?? createEmptyModuleIndex(file), edges, cacheWrite] as const;
       } catch (error) {
         if (isNativeRequiredUnavailableError(error) || isNodeSqliteUnavailableError(error)) throw error;
+        if (isConfinedFileReadError(error)) throw error;
         if (isUnsupportedParserInputError(error) || isNonNativeParserUnavailableError(error)) {
           return [file, createEmptyModuleIndex(file), [], undefined] as const;
         }
@@ -1098,9 +1119,15 @@ export async function buildProjectIndexFromFiles(
 ): Promise<ProjectIndex> {
   try {
     const useDiskCache = (opts?.cache ?? "off") === "disk";
-    return await buildIndexFromFileListShared(projectRoot, inputFiles, opts, {
+    const normalizedInputFiles = normalizeIndexedFileInputs(projectRoot, inputFiles, "Index file");
+    const realRoot = await fsp.realpath(projectRoot);
+    await Promise.all(
+      normalizedInputFiles.map((file) => assertRealPathCandidateWithinRoot(realRoot, file, "Index file")),
+    );
+    return await buildIndexFromFileListShared(projectRoot, normalizedInputFiles, opts, {
       manifestMode: useDiskCache ? "read-only" : "off",
       warnNoFilesMessage: `Warning: No files provided for indexing in ${projectRoot}. Check the explicit file list and include/ignore filters. Diagnostic: codegraph doctor`,
+      confineReads: true,
     });
   } finally {
     if ((opts?.cache ?? "off") === "disk") {
@@ -1148,7 +1175,7 @@ export async function buildProjectIndexIncremental(
   opts?: IncrementalBuildOptions,
 ): Promise<ProjectIndex> {
   await initializeFileIdentityCaseSensitivity(projectRoot);
-  clearImportResolutionCaches();
+  clearResolutionCaches();
   const graphOptions = normalizeGraphOptions(opts?.graph);
   const strictIncremental = opts?.incrementalStrict ?? false;
   if (strictIncremental && graphOptions.fast) graphOptions.fast = false;

@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
 import type { LanguageSupport } from "../languages.js";
 import { stringifyUnknown } from "../util/ast.js";
+import { readConfinedUtf8File } from "../util/confinedFile.js";
 import { recordNativeExecutionOutcome } from "../native/nativeBackendReport.js";
 import {
   getCachedNormalizedQuery,
@@ -39,10 +40,11 @@ function isSFCFile(filePath: string): boolean {
   return filePath.endsWith(".vue") || filePath.endsWith(".svelte") || filePath.endsWith(".astro");
 }
 
-function buildWorkerTask(filePath: string, sup: LanguageSupport): NativeExtractTask {
+function buildWorkerTask(filePath: string, sup: LanguageSupport, source?: string): NativeExtractTask {
   return {
     filePath,
     languageId: sup.id,
+    ...(source !== undefined ? { source, includeSourceInResult: false } : {}),
     importsQuery: getCachedNormalizedQuery(sup, "imports"),
     exportsQuery: getCachedNormalizedQuery(sup, "exports"),
     localsQuery: getCachedNormalizedQuery(sup, "locals"),
@@ -54,10 +56,15 @@ function workerResultToPrepared(
   result: NativeExtractResult,
   sup: LanguageSupport,
   filePath: string,
+  ownedSource?: string,
 ): PreparedFileContext {
+  const source = result.source ?? ownedSource;
+  if (source === undefined) {
+    throw new Error(`Native worker omitted source for ${filePath} without caller-owned content.`);
+  }
   return {
     file: filePath,
-    source: result.source,
+    source,
     sup,
     nativeQueries: result.nativeResults,
     syntaxTree: result.syntaxTree,
@@ -145,13 +152,15 @@ export async function prepareFileContextForBuild(
   opts: BuildOptions | undefined,
   workerSetup: WorkerPoolSetupResult,
   report: BuildReport | undefined,
+  confinedRoot?: string,
 ): Promise<PreparedFileContext> {
+  const source = confinedRoot ? await readConfinedUtf8File(confinedRoot, confinedRoot, file) : undefined;
   let prepared: PreparedFileContext;
   if (workerSetup.pool && !isSFCFile(file) && !isGraphOnlyLanguage(support.id)) {
     if (workerSetup.report) workerSetup.report.tasksSubmitted++;
     try {
-      const workerResult = (await workerSetup.pool.run(buildWorkerTask(file, support))) as NativeExtractResult;
-      prepared = workerResultToPrepared(workerResult, support, file);
+      const workerResult = (await workerSetup.pool.run(buildWorkerTask(file, support, source))) as NativeExtractResult;
+      prepared = workerResultToPrepared(workerResult, support, file, source);
     } catch (error) {
       if (isNativeRequiredUnavailableError(error)) throw error;
       if (workerSetup.report) workerSetup.report.tasksFailed++;
@@ -164,10 +173,10 @@ export async function prepareFileContextForBuild(
           });
         }
       }
-      prepared = await prepareFileForIndexing(file, opts?.native, opts?.languageExtensions);
+      prepared = await prepareFileForIndexing(file, opts?.native, opts?.languageExtensions, source);
     }
   } else {
-    prepared = await prepareFileForIndexing(file, opts?.native, opts?.languageExtensions);
+    prepared = await prepareFileForIndexing(file, opts?.native, opts?.languageExtensions, source);
   }
   recordPreparedNativeExecutionOutcome(report, prepared);
   return prepared;

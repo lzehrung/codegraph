@@ -1,7 +1,7 @@
 import type { SqliteDatabase } from "../sqlite-driver.js";
 import { toSqliteText } from "./common.js";
 
-export const SQLITE_SCHEMA_VERSION = 2;
+export const SQLITE_SCHEMA_VERSION = 3;
 export const GRAPH_SNAPSHOT_RETENTION = 100;
 const GRAPH_SCHEMA_VERSION_KEY = "schema_version";
 
@@ -60,7 +60,7 @@ function migrateGraphSchema(db: SqliteDatabase, fromVersion: number): void {
         SELECT id FROM graph_snapshots ORDER BY created_at DESC, id DESC LIMIT ${GRAPH_SNAPSHOT_RETENTION}
       );
     `);
-    version = SQLITE_SCHEMA_VERSION;
+    version = 3;
   }
   if (version !== fromVersion) {
     writeGraphSchemaVersion(db, version);
