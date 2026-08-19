@@ -533,6 +533,7 @@ async function collectReviewDuplicateTasks(input: {
       endLine: def.range.end.line,
     }));
   for (const summary of input.summaries) {
+    if (summary.status !== "updated") continue;
     const hunks = diffHunksByDisplayFile.get(summary.file);
     if (!hunks?.length) {
       const metadataOnly = summary.modeChanged || summary.oldFile !== undefined || summary.isBinary;

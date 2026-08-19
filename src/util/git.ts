@@ -486,12 +486,7 @@ export async function listChangedFiles(
     const head = opts.head ?? "HEAD";
     args = gitDiffArgs(opts.base, head, ["--name-only", "-z", "--diff-filter=ACDMRTUXB"]);
   } else if (opts.changedSince) {
-    args.push(
-      "--no-ext-diff",
-      "--no-textconv",
-      "--end-of-options",
-      assertSafeRevision(opts.changedSince, "changedSince"),
-    );
+    args.push("--end-of-options", assertSafeRevision(opts.changedSince, "changedSince"));
   } else {
     return [];
   }
@@ -577,12 +572,7 @@ export async function getUnifiedDiff(
     const head = opts.head ?? "HEAD";
     args = gitDiffArgs(opts.base, head, ["--unified=0", "--no-color", "--diff-filter=ACDMRTUXB"]);
   } else if (opts.changedSince) {
-    args.push(
-      "--no-ext-diff",
-      "--no-textconv",
-      "--end-of-options",
-      assertSafeRevision(opts.changedSince, "changedSince"),
-    );
+    args.push("--end-of-options", assertSafeRevision(opts.changedSince, "changedSince"));
   } else {
     return "";
   }
