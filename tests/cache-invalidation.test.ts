@@ -88,7 +88,6 @@ async function renameProjectTree(sourceRoot: string, movedRoot: string): Promise
   }
 }
 
-
 function diskCacheDbPathFor(root: string): string {
   return path.join(root, ".codegraph-cache", "index-v1", "index-cache.sqlite");
 }
@@ -180,7 +179,9 @@ describe("navigation package cache invalidation", () => {
       await fsp.writeFile(packageJson, secondExports, "utf8");
       await fsp.utimes(packageJson, packageStat.atime, packageStat.mtime);
       const second = await buildProjectIndex(root, { cache: "off" });
-      expect(moduleForPath(second, consumer)?.imports.some((entry) => entry.resolved === normalize(newFile))).toBe(true);
+      expect(moduleForPath(second, consumer)?.imports.some((entry) => entry.resolved === normalize(newFile))).toBe(
+        true,
+      );
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -1590,7 +1591,9 @@ describe("Cache invalidation and strict hashing", () => {
       cache: "disk",
       report,
     });
-    expect(report.manifest?.corruptions?.some((entry) => entry.artifact.endsWith("project-index-snapshot.json"))).toBe(true);
+    expect(report.manifest?.corruptions?.some((entry) => entry.artifact.endsWith("project-index-snapshot.json"))).toBe(
+      true,
+    );
 
     const moduleIndex = incremental.byFile.get(fileIdentityKey(normalize(filePath)));
     expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
@@ -1961,7 +1964,11 @@ describe("Cache invalidation and strict hashing", () => {
   it("passes the incremental thread gate into graph collection", async () => {
     const root = await mkTmpDir("dg-incremental-graph-threads-");
     await fsp.writeFile(path.join(root, "dependency.ts"), "export const dependency = 1;\n", "utf8");
-    await fsp.writeFile(path.join(root, "entry.ts"), "import { dependency } from './dependency';\nexport { dependency };\n", "utf8");
+    await fsp.writeFile(
+      path.join(root, "entry.ts"),
+      "import { dependency } from './dependency';\nexport { dependency };\n",
+      "utf8",
+    );
     await buildProjectIndex(root, { cache: "disk", threads: 1 });
     await fsp.writeFile(path.join(root, "dependency.ts"), "export const dependency = 2;\n", "utf8");
 
@@ -1992,7 +1999,11 @@ describe("Cache invalidation and strict hashing", () => {
     const dependencyPath = path.join(root, "dependency.ts");
     const entryPath = path.join(root, "entry.ts");
     await fsp.writeFile(dependencyPath, "export const dependency = 1;\n", "utf8");
-    await fsp.writeFile(entryPath, "import { dependency } from './dependency';\nexport const entry = dependency;\n", "utf8");
+    await fsp.writeFile(
+      entryPath,
+      "import { dependency } from './dependency';\nexport const entry = dependency;\n",
+      "utf8",
+    );
     await buildProjectIndex(root, { cache: "disk", threads: 1 });
     await fsp.writeFile(dependencyPath, "export const dependency = 2;\n", "utf8");
 
@@ -2000,9 +2011,9 @@ describe("Cache invalidation and strict hashing", () => {
     try {
       const index = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1 });
       expect(reverseDependencySpy).toHaveBeenCalledTimes(1);
-      expect(moduleForPath(index, entryPath)?.imports.some((entry) => entry.resolved === normalize(dependencyPath))).toBe(
-        true,
-      );
+      expect(
+        moduleForPath(index, entryPath)?.imports.some((entry) => entry.resolved === normalize(dependencyPath)),
+      ).toBe(true);
     } finally {
       reverseDependencySpy.mockRestore();
     }
@@ -2020,11 +2031,7 @@ describe("Cache invalidation and strict hashing", () => {
     const openSpy = vi.spyOn(fsp, "open").mockImplementation(async (...args) => {
       const handle = await originalOpen(...args);
       const candidate = typeof args[0] === "string" ? args[0] : undefined;
-      if (
-        candidate &&
-        path.basename(candidate).startsWith(`.${path.basename(snapshotPath)}.`) &&
-        args[1] === "r+"
-      ) {
+      if (candidate && path.basename(candidate).startsWith(`.${path.basename(snapshotPath)}.`) && args[1] === "r+") {
         const sync = handle.sync.bind(handle);
         handle.sync = async () => {
           snapshotTempSyncs += 1;

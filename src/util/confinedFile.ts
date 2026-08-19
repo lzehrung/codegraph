@@ -34,11 +34,6 @@ export async function resolveReadableFile(
   filePath: string,
 ): Promise<PreparedReadableFile> {
   const candidatePath = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(root, filePath);
-  const lexicalRelativePath =
-    toProjectRelativePath(root, candidatePath) ?? toProjectRelativePath(realRoot, candidatePath);
-  if (lexicalRelativePath === null) {
-    throw new Error(`File is outside project root: ${normalizePath(candidatePath)} (root: ${normalizePath(realRoot)})`);
-  }
   const candidateStat = await fs.stat(candidatePath, { bigint: true });
   assertRegularFileStat(candidateStat, candidatePath);
   const realPath = await assertRealPathCandidateWithinRoot(realRoot, candidatePath, "File");

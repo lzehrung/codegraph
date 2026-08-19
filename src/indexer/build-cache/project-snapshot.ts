@@ -674,7 +674,7 @@ export async function tryLoadPersistedBloomFilters(
       recordSnapshotCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
     }
     return null;
-}
+  }
 }
 
 function persistedBloomFiltersFromSidecar(
@@ -860,7 +860,6 @@ function bloomFilterSnapshotPath(projectRoot: string, opts: BuildOptions | undef
   }
   return snapshotPath;
 }
-
 
 export async function writeDetailedSymbolGraphSnapshot(
   projectRoot: string,

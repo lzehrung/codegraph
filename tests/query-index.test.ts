@@ -799,17 +799,13 @@ describe("persistent query index", () => {
     const store = new QueryIndexStore(databasePath);
     const decompressSpy = vi.mocked(zlib.brotliDecompressSync);
     try {
-      store.replaceFiles(
-        [preparedFile("src/match.ts", ["const alphaValue = betaValue;"])],
-        [],
-        {
-          ...expectedQueryIndexVersionMetadata(),
-          projectSnapshotIdentity: "snap-decompression",
-          projectRootIdentity: "root-decompression",
-          createdByCodegraphVersion: "test",
-          updatedAt: new Date().toISOString(),
-        },
-      );
+      store.replaceFiles([preparedFile("src/match.ts", ["const alphaValue = betaValue;"])], [], {
+        ...expectedQueryIndexVersionMetadata(),
+        projectSnapshotIdentity: "snap-decompression",
+        projectRootIdentity: "root-decompression",
+        createdByCodegraphVersion: "test",
+        updatedAt: new Date().toISOString(),
+      });
       decompressSpy.mockClear();
       const candidates = findQueryIndexChunkCandidates(store, ["alpha", "beta"]);
       expect(candidates.map((candidate) => `${candidate.path}:${candidate.ordinal}`)).toEqual(["src/match.ts:0"]);
