@@ -176,15 +176,18 @@ export function selectChangedSymbolsForBudget(
   if (diagnostics) {
     diagnostics.changedSymbolsTotal = ranked.length;
   }
-  const limit = options.maxChangedSymbols;
-  if (typeof limit !== "number" || limit < 0 || ranked.length <= limit) {
+  const requestedLimit =
+    typeof options.maxChangedSymbols === "number" && Number.isFinite(options.maxChangedSymbols)
+      ? Math.max(0, Math.floor(options.maxChangedSymbols))
+      : undefined;
+  if (requestedLimit === undefined || ranked.length <= requestedLimit) {
     if (diagnostics) {
       diagnostics.changedSymbolsAnalyzed = ranked.length;
       diagnostics.changedSymbolsOmitted = 0;
     }
     return ranked;
   }
-  const selected = ranked.slice(0, limit);
+  const selected = ranked.slice(0, requestedLimit);
   if (diagnostics) {
     diagnostics.changedSymbolsAnalyzed = selected.length;
     diagnostics.changedSymbolsOmitted = ranked.length - selected.length;

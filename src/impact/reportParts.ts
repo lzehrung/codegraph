@@ -39,6 +39,11 @@ export type ImpactReportPartsBase = {
     typeOnly?: boolean | undefined;
   }>;
   symbolEdges: Array<{ from: number; to: number; label: string }>;
+  detailedGraphBounds: {
+    truncated: boolean;
+    limits: { edges: number };
+    omittedCounts: { edges: number };
+  };
   projectFiles: ProjectIndex["projectFiles"];
   markdownLinks?: MarkdownLinkCheckResult;
   displayFile: (file: FileId) => FileId;

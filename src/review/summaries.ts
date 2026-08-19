@@ -325,6 +325,7 @@ function reviewFileDiffMetadata(projectRoot: string, diffChange: FileChange | un
   return {
     ...(diffChange.oldPath ? { oldFile: relativePath(projectRoot, diffChange.oldPath) } : {}),
     ...(diffChange.similarityIndex !== undefined ? { similarityIndex: diffChange.similarityIndex } : {}),
+    ...(diffChange.modeChanged ? { modeChanged: true } : {}),
   };
 }
 
@@ -438,8 +439,10 @@ export async function summarizeChangedFiles(input: {
     hunks: diffHunksByFile.get(fileIdentityKey(file)) ?? diffHunksByFile.get(file),
   }));
 
-  const fileEntries = await Promise.all(
-    filesWithModules.map(async ({ file, mod, hunks }) => {
+  const fileEntries = await mapLimit(
+    filesWithModules,
+    Math.max(1, referenceConcurrency),
+    async ({ file, mod, hunks }) => {
       const isBinary = diffChangesByFile.get(file)?.isBinary ?? false;
       if (isBinary) {
         return {
@@ -503,7 +506,7 @@ export async function summarizeChangedFiles(input: {
         diffLinesByHandle: await mapChangedLinesToSymbols(index, file, hunks, changedLines),
         parseFailed,
       };
-    }),
+    },
   );
 
   const changedSymbolsForCompatibility = fileEntries.flatMap((entry) => entry.changedSymbols);
@@ -593,9 +596,10 @@ export async function summarizeChangedFiles(input: {
       ...(callsites ? { callsites } : {}),
     };
   };
-
-  const summariesWithHandles = await Promise.all(
-    fileEntries.map(async ({ file, mod, hunks, locals, handles, diffLinesByHandle }) => {
+  const summariesWithHandles = await mapLimit(
+    fileEntries,
+    Math.max(1, referenceConcurrency),
+    async ({ file, mod, hunks, locals, handles, diffLinesByHandle }) => {
       const diffChange = diffChangesByFile.get(file);
       const diffMetadata = reviewFileDiffMetadata(projectRoot, diffChange);
       const deletedSnapshot = deletedSnapshots.get(file);
@@ -676,8 +680,10 @@ export async function summarizeChangedFiles(input: {
           handles: [] as string[],
         };
       }
-      const localSymbols: ReviewSymbolSummary[] = await Promise.all(
-        locals.map((local) => buildSymbolSummary(local, mod, diffLinesByHandle)),
+      const localSymbols: ReviewSymbolSummary[] = await mapLimit(
+        locals,
+        Math.max(1, referenceConcurrency),
+        async (local) => await buildSymbolSummary(local, mod, diffLinesByHandle),
       );
       const exportSummaryGroups = buildExportSummaryGroups(file, mod, await loadSource(file), hunks);
       const symbols = [...localSymbols, ...exportSummaryGroups.changed];
@@ -691,7 +697,7 @@ export async function summarizeChangedFiles(input: {
         } satisfies ReviewFileSummary,
         handles: [...handles, ...exportSummaryGroups.changed.map((symbol) => symbol.handle)],
       };
-    }),
+    },
   );
 
   const summaries = summariesWithHandles.map((entry) => entry.summary);

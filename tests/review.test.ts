@@ -2737,7 +2737,7 @@ describe("boundReviewReportForTransport", () => {
     expect(bounded.omittedCounts).toEqual({
       projectFiles: 3,
       changedFiles: 3,
-      symbols: 4,
+      symbols: 10,
       graphDelta: 5,
       candidateTests: 3,
     });

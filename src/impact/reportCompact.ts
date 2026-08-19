@@ -57,6 +57,7 @@ export function buildCompactImpactReport(parts: CompactImpactReportParts): Compa
     graph: {
       fileEdges: mapFileEdges(parts.fileEdges, context.fileId),
       symbolEdges: parts.symbolEdges,
+      ...parts.detailedGraphBounds,
     },
   };
 }

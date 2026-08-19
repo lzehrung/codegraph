@@ -439,9 +439,9 @@ async function collectUntestedChangeSuggestions(
     );
     if (refs.status !== "ok") return undefined;
 
+    const scanMayBeTruncated = refs.references.length >= UNTESTED_CHANGE_REFERENCE_SCAN_LIMIT;
     const hasTestRef = refs.references.some((entry) => testFiles.has(fileIdentityKey(entry.file)));
-    if (hasTestRef) return undefined;
-
+    if (hasTestRef && !scanMayBeTruncated) return undefined;
     const coverage = coverageByFile.get(symbol.file);
     const coveredLines = countCoveredLinesForRange(coverage, symbol.range);
     const totalLines = countTotalLinesForRange(coverage, symbol.range);
@@ -456,19 +456,24 @@ async function collectUntestedChangeSuggestions(
       : "No LCOV or Istanbul coverage data matched this symbol range.";
 
     const fanIn = fanInByFile.get(fileIdentityKey(symbol.file)) ?? 0;
-    const confidence = confidenceFromSignals({
-      hasCoverageData,
-      coveredLines,
-      totalLines,
-      exported: symbol.exported,
-      fanIn,
-      kind: symbol.kind,
-    });
+    const confidence = scanMayBeTruncated
+      ? "low"
+      : confidenceFromSignals({
+          hasCoverageData,
+          coveredLines,
+          totalLines,
+          exported: symbol.exported,
+          fanIn,
+          kind: symbol.kind,
+        });
     const suggestedCommand = inferTestCommand(candidateNames);
+    const referenceScanNote = scanMayBeTruncated
+      ? `Reference scan reached the ${UNTESTED_CHANGE_REFERENCE_SCAN_LIMIT}-reference cap; test coverage may be under-counted. `
+      : "";
 
     const details = candidateNames.length
-      ? `Changed symbol has no discovered references in test files. ${coverageSummary} Candidate tests: ${candidateNames.join(", ")}. Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`
-      : `Changed symbol has no discovered references in test files. ${coverageSummary} Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`;
+      ? `${referenceScanNote}Changed symbol has no discovered references in test files. ${coverageSummary} Candidate tests: ${candidateNames.join(", ")}. Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`
+      : `${referenceScanNote}Changed symbol has no discovered references in test files. ${coverageSummary} Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`;
 
     return {
       file: symbol.file,

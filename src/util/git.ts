@@ -94,6 +94,13 @@ function resolveGitTimeoutMs(timeoutMs: number | undefined): number {
   return DEFAULT_GIT_TIMEOUT_MS;
 }
 
+function appendBoundedTail(current: string, chunk: string, maxBytes: number): string {
+  const combined = current + chunk;
+  const bytes = Buffer.from(combined, "utf8");
+  if (bytes.length <= maxBytes) return combined;
+  return bytes.subarray(bytes.length - maxBytes).toString("utf8");
+}
+
 function killGitChild(child: ChildProcess): void {
   if (child.killed || child.exitCode !== null) return;
   try {
@@ -145,6 +152,8 @@ export async function runGit(
     let timedOut = false;
     let aborted = false;
     let totalBytes = 0;
+    let stderrBytes = 0;
+    let stderrOverflowed = false;
 
     const settle = (fn: () => void) => {
       if (settled) return;
@@ -194,14 +203,31 @@ export async function runGit(
       stdout += typeof chunk === "string" ? chunk : stdoutDecoder.write(chunk);
     });
     stderrStream.on("data", (chunk: Buffer | string) => {
-      stderr += typeof chunk === "string" ? chunk : stderrDecoder.write(chunk);
+      if (stderrOverflowed) return;
+      const chunkBytes = typeof chunk === "string" ? Buffer.byteLength(chunk, "utf8") : chunk.length;
+      stderrBytes += chunkBytes;
+      const decoded = typeof chunk === "string" ? chunk : stderrDecoder.write(chunk);
+      stderr = appendBoundedTail(stderr, decoded, maxBuffer);
+      if (stderrBytes > maxBuffer) {
+        stderrOverflowed = true;
+        killGitChild(child);
+        settle(() =>
+          reject(
+            createGitError(
+              projectRoot,
+              args,
+              new Error(`stderr exceeded maxBuffer (${maxBuffer} bytes): ${stderr.trim()}`),
+            ),
+          ),
+        );
+      }
     });
     child.on("error", (error) => {
       settle(() => reject(createGitError(projectRoot, args, error)));
     });
     child.on("close", (code, signalName) => {
       stdout += stdoutDecoder.end();
-      stderr += stderrDecoder.end();
+      stderr = appendBoundedTail(stderr, stderrDecoder.end(), maxBuffer);
       settle(() => {
         if (timedOut) {
           reject(
@@ -256,7 +282,6 @@ export function isGitIndexSentinel(value: string): boolean {
 }
 
 const UNSAFE_REVISION_CHARACTERS = /[\0\r\n]/;
-
 export function assertSafeRevision(value: string, label: string): string {
   if (UNSAFE_REVISION_CHARACTERS.test(value)) {
     throw new Error(`Invalid ${label}: revisions must not contain NUL or newline characters.`);
@@ -273,17 +298,20 @@ export function assertSafeRevision(value: string, label: string): string {
 
 export function gitDiffArgs(base: string, head: string, extraArgs: string[] = []): string[] {
   const safeBase = assertSafeRevision(base, "base");
+  // Disable repository-configured helpers: review and impact consume Git's unified
+  // text directly and must not execute external diff or text conversion commands.
+  const diffSafetyArgs = ["--no-ext-diff", "--no-textconv"];
   // Explicit so rename detection stops depending on the user's `diff.renames` config
   // (git defaults it to true since 2.9, but a disabled config would silently change output).
   const renameArgs = ["--find-renames"];
   if (isGitWorktreeSentinel(head)) {
-    return ["diff", ...renameArgs, ...extraArgs, "--end-of-options", safeBase];
+    return ["diff", ...diffSafetyArgs, ...renameArgs, ...extraArgs, "--end-of-options", safeBase];
   }
   if (isGitIndexSentinel(head)) {
-    return ["diff", "--cached", ...renameArgs, ...extraArgs, "--end-of-options", safeBase];
+    return ["diff", "--cached", ...diffSafetyArgs, ...renameArgs, ...extraArgs, "--end-of-options", safeBase];
   }
   const safeHead = assertSafeRevision(head, "head");
-  return ["diff", ...renameArgs, ...extraArgs, "--end-of-options", `${safeBase}..${safeHead}`];
+  return ["diff", ...diffSafetyArgs, ...renameArgs, ...extraArgs, "--end-of-options", `${safeBase}..${safeHead}`];
 }
 
 export async function getGitHead(projectRoot: string): Promise<string | null> {
@@ -445,12 +473,25 @@ export async function listChangedFiles(
     head?: string | undefined;
   },
 ): Promise<string[]> {
-  let args = ["diff", "--find-renames", "--name-only", "-z", "--diff-filter=ACDMRTUXB"];
+  let args = [
+    "diff",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--find-renames",
+    "--name-only",
+    "-z",
+    "--diff-filter=ACDMRTUXB",
+  ];
   if (opts.base) {
     const head = opts.head ?? "HEAD";
     args = gitDiffArgs(opts.base, head, ["--name-only", "-z", "--diff-filter=ACDMRTUXB"]);
   } else if (opts.changedSince) {
-    args.push("--end-of-options", assertSafeRevision(opts.changedSince, "changedSince"));
+    args.push(
+      "--no-ext-diff",
+      "--no-textconv",
+      "--end-of-options",
+      assertSafeRevision(opts.changedSince, "changedSince"),
+    );
   } else {
     return [];
   }
@@ -523,12 +564,25 @@ export async function getUnifiedDiff(
     head?: string | undefined;
   },
 ): Promise<string> {
-  let args = ["diff", "--find-renames", "--unified=0", "--no-color", "--diff-filter=ACDMRTUXB"];
+  let args = [
+    "diff",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--find-renames",
+    "--unified=0",
+    "--no-color",
+    "--diff-filter=ACDMRTUXB",
+  ];
   if (opts.base) {
     const head = opts.head ?? "HEAD";
     args = gitDiffArgs(opts.base, head, ["--unified=0", "--no-color", "--diff-filter=ACDMRTUXB"]);
   } else if (opts.changedSince) {
-    args.push("--end-of-options", assertSafeRevision(opts.changedSince, "changedSince"));
+    args.push(
+      "--no-ext-diff",
+      "--no-textconv",
+      "--end-of-options",
+      assertSafeRevision(opts.changedSince, "changedSince"),
+    );
   } else {
     return "";
   }

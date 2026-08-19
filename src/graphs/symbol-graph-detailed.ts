@@ -35,18 +35,27 @@ type BuildDetailedSymbolGraphOptions = {
 
 type ResolvedDetailedExport = ResolvedExport;
 
+export type DetailedSymbolGraph = SymbolGraph & {
+  truncated?: boolean;
+  limits?: { edges: number };
+  omittedCounts?: { edges: number };
+};
+
 export async function buildSymbolGraphDetailed(
   index: ProjectIndex,
   opts?: BuildDetailedSymbolGraphOptions,
-): Promise<SymbolGraph> {
+): Promise<DetailedSymbolGraph> {
   assertNativeRequiredAvailable(index.nativeMode);
   const base = await buildSymbolGraph(index, opts?.files ? { files: opts.files } : undefined);
+  const configuredMaxEdges =
+    typeof opts?.maxEdges === "number" && opts.maxEdges > 0 ? Math.floor(opts.maxEdges) : undefined;
+  const maxEdges = configuredMaxEdges ?? Number.POSITIVE_INFINITY;
   const nodes = new Map(base.nodes);
-  const edges = base.edges.slice();
+  const edges = base.edges.slice(0, maxEdges);
+  let omittedEdges = Math.max(0, base.edges.length - edges.length);
   let skippedSyntaxTreeFiles = 0;
 
   const added = new Set<string>();
-  const maxEdges = typeof opts?.maxEdges === "number" && opts.maxEdges > 0 ? opts.maxEdges : Number.POSITIVE_INFINITY;
   const membersOnly = !!opts?.membersOnly;
   const scopeMode = opts?.scope ?? "all";
 
@@ -62,7 +71,10 @@ export async function buildSymbolGraphDetailed(
 
   let edgeCount = edges.length;
   const maybePushEdge = (fromId: string, toId: string, label?: string, site?: SymbolGraph["edges"][number]["site"]) => {
-    if (edgeCount >= maxEdges) return false;
+    if (edgeCount >= maxEdges) {
+      omittedEdges += 1;
+      return false;
+    }
     edges.push({
       from: fromId,
       to: toId,
@@ -231,5 +243,15 @@ export async function buildSymbolGraphDetailed(
     );
   }
 
-  return { nodes, edges };
+  return {
+    nodes,
+    edges,
+    ...(configuredMaxEdges !== undefined
+      ? {
+          truncated: omittedEdges > 0,
+          limits: { edges: configuredMaxEdges },
+          omittedCounts: { edges: omittedEdges },
+        }
+      : {}),
+  };
 }

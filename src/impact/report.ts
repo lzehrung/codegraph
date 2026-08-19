@@ -87,15 +87,23 @@ export async function buildImpactReport(
     }
   }
 
-  // Add real symbol-to-symbol edges using detailed symbol graph
+  let detailedGraphBounds = {
+    truncated: false,
+    limits: { edges: 10_000 },
+    omittedCounts: { edges: 0 },
+  };
   if (changedSymbols?.length) {
     const detailedGraph = await buildSymbolGraphDetailed(index, {
       scope: "all",
       files: relevantFiles,
-      maxEdges: 10000, // Reasonable limit for impact analysis
+      maxEdges: 10_000,
       membersOnly: false,
     });
-
+    detailedGraphBounds = {
+      truncated: detailedGraph.truncated ?? false,
+      limits: detailedGraph.limits ?? { edges: 10_000 },
+      omittedCounts: detailedGraph.omittedCounts ?? { edges: 0 },
+    };
     // Create a map from symbol ID to index in changedSymbols array
     const symbolIdToIndex = new Map<string, number>();
     for (let i = 0; i < changedSymbols.length; i++) {
@@ -148,6 +156,7 @@ export async function buildImpactReport(
       fileEdges,
       symbolEdges,
       projectFiles,
+      detailedGraphBounds,
       ...(markdownLinks ? { markdownLinks } : {}),
       displayFile,
     });
@@ -170,6 +179,7 @@ export async function buildImpactReport(
     clusters,
     cycles,
     fileEdges,
+    detailedGraphBounds,
     symbolEdges,
     displayFile,
     ...(markdownLinks ? { markdownLinks } : {}),

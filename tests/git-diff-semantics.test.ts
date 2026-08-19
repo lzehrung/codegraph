@@ -153,6 +153,14 @@ describe("git diff semantics", () => {
       await removeGitTempDir(root);
     }
   });
+  it("reports metadata-only mode changes and combined diff diagnostics", () => {
+    const modeChange = parseUnifiedDiff("diff --git a/a.ts b/a.ts\nold mode 100644\nnew mode 100755\n");
+    expect(modeChange.files).toEqual([expect.objectContaining({ path: "a.ts", modeChanged: true, hunks: [] })]);
+
+    const combined = parseUnifiedDiff("diff --cc a.ts\nindex 1111111,2222222..3333333\n@@@ -1 -1 +1 @@@\n");
+    expect(combined.files).toEqual([]);
+    expect(combined.warning).toMatch(/Combined\/merge diffs are not supported/);
+  });
 });
 
 describe("git diff semantics: non-ASCII, space, and rename path handling (C12)", () => {

@@ -54,6 +54,7 @@ export function buildFullImpactReport(parts: FullImpactReportParts): ImpactRepor
     graph: {
       fileEdges: mapFileEdges(parts.fileEdges, parts.displayFile),
       symbolEdges: parts.symbolEdges,
+      ...parts.detailedGraphBounds,
     },
   };
   if (parts.diagnostics) report.diagnostics = parts.diagnostics;

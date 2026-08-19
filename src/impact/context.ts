@@ -270,7 +270,11 @@ export function listCandidateTestFiles(
     projectRoot?: string;
   } = {},
 ): CandidateTestFile[] {
-  const { testPatterns = [], maxCandidates = 100, projectRoot } = options;
+  const { testPatterns = [], projectRoot } = options;
+  const maxCandidates =
+    typeof options.maxCandidates === "number" && Number.isFinite(options.maxCandidates)
+      ? Math.max(0, Math.floor(options.maxCandidates))
+      : 100;
   const candidates = new Map<FileId, CandidateTestFile>();
   const resolveGraphFile = createGraphFileResolver(index.graph.nodes);
   const resolvedChangedFiles = changedFiles.map((file) => resolveGraphFile(file));
