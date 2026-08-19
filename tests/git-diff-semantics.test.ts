@@ -332,6 +332,30 @@ describe("bounded and safe git diff execution (I7 and I8)", () => {
       await removeGitTempDir(root);
     }
   });
+  it("trims stderr at a UTF-8 boundary while retaining the newest tail", async () => {
+    const root = await makeGitTempDir("codegraph-git-stderr-utf8-bound-");
+    try {
+      setGitExecutableForTests(process.execPath);
+      const maxBuffer = 7;
+      // "prefix" + U+00E9 + "NEWEST" is 14 UTF-8 bytes. A seven-byte tail
+      // starts at the continuation byte of U+00E9, so trimming must skip that
+      // partial codepoint.
+      const script = "process.stderr.write('prefix\\u00e9NEWEST');";
+      const errorMessage = await runGit(root, ["-e", script], { maxBuffer }).then(
+        () => "runGit unexpectedly resolved",
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      );
+
+      const tailStart = errorMessage.indexOf("): ");
+      const diagnosticTail = tailStart >= 0 ? errorMessage.slice(tailStart + 3) : "";
+      expect(errorMessage).toContain(`stderr exceeded maxBuffer (${maxBuffer} bytes)`);
+      expect(errorMessage).not.toContain("\uFFFD");
+      expect(Buffer.byteLength(diagnosticTail, "utf8")).toBeLessThanOrEqual(maxBuffer);
+      expect(diagnosticTail).toBe("NEWEST");
+    } finally {
+      await removeGitTempDir(root);
+    }
+  });
 
   it("I8 never permits configured external diff or text conversion helpers", () => {
     expect(gitDiffArgs("HEAD", "WORKTREE")).toEqual(expect.arrayContaining(["--no-ext-diff", "--no-textconv"]));

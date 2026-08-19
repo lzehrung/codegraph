@@ -98,7 +98,13 @@ function appendBoundedTail(current: string, chunk: string, maxBytes: number): st
   const combined = current + chunk;
   const bytes = Buffer.from(combined, "utf8");
   if (bytes.length <= maxBytes) return combined;
-  return bytes.subarray(bytes.length - maxBytes).toString("utf8");
+  if (maxBytes <= 0) return "";
+
+  let start = bytes.length - maxBytes;
+  while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) {
+    start++;
+  }
+  return bytes.subarray(start).toString("utf8");
 }
 
 function killGitChild(child: ChildProcess): void {
