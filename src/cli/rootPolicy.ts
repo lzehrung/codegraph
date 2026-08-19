@@ -1,7 +1,27 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { resolveFilePathFromRoot } from "../util/paths.js";
+
+// Node's path.posix.isAbsolute treats a leading "/" as absolute even on Windows, where such a
+// path is actually drive-relative: the OS resolves it against the *current* drive, not a real
+// filesystem root. resolveFilePathFromRoot returns already-absolute paths unchanged, so a
+// driveless `--root /tmp/x` never gains a drive letter and every later confinement check
+// (which compares against drive-qualified discovered file paths) fails with "outside project
+// root" (probe V10). Detect exactly that shape and route it through path.win32.resolve, which
+// injects the same drive Node itself would use.
+const WINDOWS_DRIVE_QUALIFIED_PATTERN = /^[A-Za-z]:[\\/]/;
+function resolveAbsoluteProjectRoot(cwd: () => string, candidate: string): string {
+  if (
+    process.platform === "win32" &&
+    path.posix.isAbsolute(candidate) &&
+    !WINDOWS_DRIVE_QUALIFIED_PATTERN.test(candidate)
+  ) {
+    return path.win32.resolve(cwd(), candidate);
+  }
+  return resolveFilePathFromRoot(cwd(), candidate);
+}
 
 export function looksLikeGlobPattern(baseRoot: string, value: string): boolean {
   const hasGlobSyntax =
@@ -95,7 +115,7 @@ export function resolveCliRootPolicy(input: {
   cwd: () => string;
 }): CliRootPolicyResult {
   const { command, positionals, rootOpt, cwd } = input;
-  const resolveAbs = (p: string) => resolveFilePathFromRoot(cwd(), p);
+  const resolveAbs = (p: string) => resolveAbsoluteProjectRoot(cwd, p);
   if (command === "impact" && positionals.length) {
     const impactRootArg = positionals[0]!;
     const resolvedImpactRoot = resolveAbs(impactRootArg);

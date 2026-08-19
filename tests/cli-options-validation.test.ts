@@ -217,6 +217,117 @@ describe("JSON output flag command allow-list", () => {
   });
 });
 
+describe("graph/index schema split (C3)", () => {
+  // Every option the `graph` handler actually reads (src/cli/graph.ts). Index intentionally
+  // rejects all of these: it has no dot/mermaid/symbols/sqlite/output rendering path.
+  const graphOnlyFlags = [
+    "--dot",
+    "--mermaid",
+    "--sql-artifacts",
+    "--stable",
+    "--stdout",
+    "--symbols",
+    "--symbols-detailed",
+    "--symbols-detailed-members-only",
+    "--symbols-only",
+  ];
+  const graphOnlyOptions = [
+    "--out",
+    "--output",
+    "--sqlite",
+    "--db",
+    "--stderr-file",
+    "--symbols-detailed-scope",
+    "--symbols-detailed-max-edges",
+  ];
+  // Every option `index` actually reads (src/cli/index.ts) that `graph` does not implement.
+  const indexOnlyFlags = ["--full", "--verbose"];
+
+  it.each(graphOnlyFlags)("accepts %s for graph but rejects it for index", (flag) => {
+    expect(() => validateCliArgs("graph", parseCliArgs("graph", [flag]))).not.toThrow();
+    expect(() => validateCliArgs("index", parseCliArgs("index", [flag]))).toThrow(`Unknown option for index: ${flag}`);
+  });
+
+  it.each(graphOnlyOptions)("accepts %s <value> for graph but rejects it for index", (option) => {
+    expect(() => validateCliArgs("graph", parseCliArgs("graph", [option, "x"]))).not.toThrow();
+    expect(() => validateCliArgs("index", parseCliArgs("index", [option, "x"]))).toThrow(
+      `Unknown option for index: ${option}`,
+    );
+  });
+
+  it.each(indexOnlyFlags)("accepts %s for index but rejects it for graph", (flag) => {
+    expect(() => validateCliArgs("index", parseCliArgs("index", [flag]))).not.toThrow();
+    expect(() => validateCliArgs("graph", parseCliArgs("graph", [flag]))).toThrow(`Unknown option for graph: ${flag}`);
+  });
+
+  it("both graph and index still accept every shared build flag/option", () => {
+    const shared = ["--cache-strict", "--cache-verify", "--no-gitignore", "--fast-graph"];
+    for (const flag of shared) {
+      expect(() => validateCliArgs("graph", parseCliArgs("graph", [flag]))).not.toThrow();
+      expect(() => validateCliArgs("index", parseCliArgs("index", [flag]))).not.toThrow();
+    }
+    for (const option of ["--cache", "--threads", "--cache-dir"]) {
+      expect(() => validateCliArgs("graph", parseCliArgs("graph", [option, "1"]))).not.toThrow();
+      expect(() => validateCliArgs("index", parseCliArgs("index", [option, "1"]))).not.toThrow();
+    }
+  });
+});
+
+describe("graph/impact output-selector exclusivity (C9)", () => {
+  it("accepts graph --json and --pretty together so JSON keeps precedence, matching every other command", () => {
+    expect(() => validateCliArgs("graph", parseCliArgs("graph", ["--json", "--pretty"]))).not.toThrow();
+  });
+
+  it.each([
+    { label: "--dot + --mermaid", args: ["--dot", "--mermaid"] },
+    { label: "--json + --dot", args: ["--json", "--dot"] },
+    { label: "--json + --mermaid", args: ["--json", "--mermaid"] },
+    { label: "--json + --sqlite", args: ["--json", "--sqlite", "out.db"] },
+    { label: "--dot + --sqlite", args: ["--dot", "--sqlite", "out.db"] },
+    { label: "--mermaid + --sqlite", args: ["--mermaid", "--sqlite", "out.db"] },
+  ])("rejects combining graph $label", ({ args }) => {
+    expect(() => validateCliArgs("graph", parseCliArgs("graph", args))).toThrow(
+      "graph output selectors are mutually exclusive",
+    );
+  });
+
+  it("accepts exactly one graph output selector at a time", () => {
+    for (const args of [["--json"], ["--dot"], ["--mermaid"], ["--sqlite", "out.db"], []]) {
+      expect(() => validateCliArgs("graph", parseCliArgs("graph", args))).not.toThrow();
+    }
+  });
+
+  it("rejects combining impact --mermaid with --json but allows either alone", () => {
+    expect(() => validateCliArgs("impact", parseCliArgs("impact", ["--mermaid", "--json"]))).toThrow(
+      "impact output selectors are mutually exclusive: choose one of --json or --mermaid.",
+    );
+    expect(() => validateCliArgs("impact", parseCliArgs("impact", ["--mermaid"]))).not.toThrow();
+    expect(() => validateCliArgs("impact", parseCliArgs("impact", ["--json"]))).not.toThrow();
+  });
+});
+
+describe("mcp --idle-timeout-ms option classification (C2)", () => {
+  it("classifies --idle-timeout-ms as a value option, not a boolean flag", () => {
+    const parsed = parseCliArgs("mcp", ["--stdio", "--idle-timeout-ms", "1000"]);
+    expect(parsed.options.get("--idle-timeout-ms")).toEqual(["1000"]);
+    expect(parsed.flags.has("--idle-timeout-ms")).toBe(false);
+    expect(() => validateCliArgs("mcp", parsed)).not.toThrow();
+  });
+});
+
+describe("bare artifact --sqlite (C1)", () => {
+  it("treats --sqlite as a boolean artifact selector whether or not 'build' is spelled out", () => {
+    const bare = parseCliArgs("artifact", ["--root", ".", "--sqlite", "--json"]);
+    expect(bare.flags.has("--sqlite")).toBe(true);
+    expect(bare.options.has("--sqlite")).toBe(false);
+    expect(() => validateCliArgs("artifact", bare)).not.toThrow();
+
+    const explicit = parseCliArgs("artifact", ["build", "--root", ".", "--sqlite", "--json"]);
+    expect(explicit.flags.has("--sqlite")).toBe(true);
+    expect(explicit.options.has("--sqlite")).toBe(false);
+  });
+});
+
 describe("writeError stack policy", () => {
   const previousDebug = process.env.CODEGRAPH_DEBUG;
 

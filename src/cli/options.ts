@@ -431,7 +431,6 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       usage: "Usage: codegraph implementations <symbol-target> [--root <path>] [--limit <0-500>] [--json | --pretty]",
     }),
   ],
-  ["index", graphCommandSchema({ kind: "any" })],
   [
     "init",
     commandSchema(
@@ -764,18 +763,24 @@ export function validateCliArgs(command: string, parsed: ParsedCliArgs): void {
   }
 
   if (command === "graph") {
+    // --pretty is the documented explicit synonym for the default (non-JSON) output and never
+    // conflicts with --json (docs/cli.md: "If --json and --pretty are both present, --json
+    // wins"), so it is intentionally excluded from this exclusivity count.
     const outputSelectors = [
       parsed.flags.has("--json"),
-      parsed.flags.has("--pretty"),
       parsed.flags.has("--dot"),
       parsed.flags.has("--mermaid"),
       parsed.options.has("--sqlite") || parsed.options.has("--db"),
     ].filter(Boolean).length;
     if (outputSelectors > 1) {
       throw new Error(
-        "graph output selectors are mutually exclusive: choose one of --json, --pretty, --dot, --mermaid, or --sqlite.",
+        "graph output selectors are mutually exclusive: choose one of --json, --dot, --mermaid, or --sqlite.",
       );
     }
+  }
+
+  if (command === "impact" && parsed.flags.has("--json") && parsed.flags.has("--mermaid")) {
+    throw new Error("impact output selectors are mutually exclusive: choose one of --json or --mermaid.");
   }
 
   if (command === "sync" && parsed.flags.has("--no-update-gitignore") && !parsed.flags.has("--init")) {

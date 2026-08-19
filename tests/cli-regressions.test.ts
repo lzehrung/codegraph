@@ -1583,6 +1583,29 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     ).rejects.toThrow(/Invalid --max-hits value "0"/i);
   });
 
+  it("grep --max-hits exits 2 above the documented 200000 cap and succeeds at the boundary (C8)", async () => {
+    const aboveCap = await runCliWithExit(
+      ["grep", "--json", "--root", tsRoot, "--pattern", "helperFunction", "--max-hits", "200001"],
+      process.cwd(),
+    );
+    expect(aboveCap.exitCode).toBe(2);
+    expect(aboveCap.stderr).toContain('Invalid --max-hits value "200001". Expected an integer from 1 to 200000.');
+
+    const atCap = await runCliWithExit(
+      ["grep", "--json", "--root", tsRoot, "--pattern", "helperFunction", "--max-hits", "200000"],
+      process.cwd(),
+    );
+    expect(atCap.exitCode).toBeUndefined();
+    expect(() => JSON.parse(atCap.stdout)).not.toThrow();
+
+    const defaultBound = await runCliWithExit(
+      ["grep", "--json", "--root", tsRoot, "--pattern", "helperFunction"],
+      process.cwd(),
+    );
+    expect(defaultBound.exitCode).toBeUndefined();
+    expect(() => JSON.parse(defaultBound.stdout)).not.toThrow();
+  });
+
   it("grep honors .gitignore and additive scan globs", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-grep-scan-"));
     const appFile = path.join(tmpDir, "src", "app.ts");
@@ -1688,6 +1711,44 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     expect(response.focus.some((focus) => focus.file === "docs/guide.md")).toBeFalsy();
     expect(response.summary).toContain("1 file(s) in scope.");
   });
+
+  it("rejects a lone non-directory positional instead of silently scanning cwd (C4)", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-root-policy-"));
+    await fsp.mkdir(path.join(root, "src"), { recursive: true });
+    await fsp.writeFile(path.join(root, "src", "file.ts"), "export const marker = 1;\n");
+
+    const missing = await runCliWithExit(["graph", "does-not-exist-xyz", "--json"], root);
+    expect(missing.exitCode).toBe(2);
+    expect(missing.stderr).toContain('Invalid graph path "does-not-exist-xyz"');
+    expect(missing.stdout).toBe("");
+
+    const notADirectory = await runCliWithExit(["graph", "src/file.ts", "--json"], root);
+    expect(notADirectory.exitCode).toBe(2);
+    expect(notADirectory.stderr).toContain('Invalid graph path "src/file.ts"');
+    expect(notADirectory.stdout).toBe("");
+
+    const inspectMissing = await runCliWithExit(["inspect", "missing", "--json"], root);
+    expect(inspectMissing.exitCode).toBe(2);
+    expect(inspectMissing.stderr).toContain('Invalid inspect path "missing"');
+    expect(inspectMissing.stdout).toBe("");
+  });
+
+  it.runIf(process.platform === "win32")(
+    "normalizes a drive-relative absolute --root before path confinement (C5, probe V10)",
+    async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-root-normalize-"));
+      await fsp.writeFile(path.join(root, "a.ts"), "export const marker = 1;\n");
+      // Strip the drive letter to build a POSIX-style absolute path Node resolves
+      // against the *current* drive (matching probe V10's `--root /tmp/cggd` repro).
+      // Invoke with cwd on the same drive as `root` so the injected drive is correct
+      // regardless of which drive the OS temp directory happens to live on.
+      const driveRelativeRoot = normalize(root).replace(/^[A-Za-z]:/, "");
+
+      const result = await runCliCommandDetailed(["index", "--root", driveRelativeRoot, "--json"], undefined, root);
+      const parsed = JSON.parse(result.stdout) as { files: number };
+      expect(parsed.files).toBe(1);
+    },
+  );
 
   it("orient prints compact pretty output", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-orient-pretty-"));
@@ -2094,6 +2155,22 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     expect(await fsp.stat(path.join(outDir, "graph.json"))).toBeTruthy();
     await expect(fsp.stat(path.join(outDir, "CODEGRAPH_REPORT.md"))).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fsp.stat(path.join(outDir, "questions.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("runs the documented bare 'artifact --sqlite' invocation without an explicit 'build' subcommand (C1)", async () => {
+    // Matches docs/cli.md's documented form: `codegraph artifact --sqlite --root . --out ... --json`.
+    // At base commit a9c6b220, isCliValueOption only treated --sqlite as a boolean flag when
+    // positionals[0] === "build", so this exact bare invocation died with
+    // "Missing value for --sqlite option" instead of building an artifact.
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-artifact-bare-sqlite-"));
+    const outDir = path.join(root, "out");
+    await fsp.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
+
+    const stdout = await runCliCommand(["artifact", "--sqlite", "--root", root, "--out", outDir, "--json"]);
+    const result = JSON.parse(stdout) as { artifacts: Record<string, string | undefined> };
+
+    expect(result.artifacts).toEqual({ sqlite: "codegraph.sqlite" });
+    expect(await fsp.stat(path.join(outDir, "codegraph.sqlite"))).toBeTruthy();
   });
 
   it("grep CLI pretty output renders compact line-oriented hits", async () => {

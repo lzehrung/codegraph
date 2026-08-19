@@ -45,6 +45,7 @@ import type { Graph } from "../src/types.js";
 import { runGit } from "./helpers/git.js";
 import { createTwoCommitCycleProject, mkTmpDir } from "./helpers/filesystem.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import * as mcpServer from "../src/mcp/server.js";
 import * as projectFilesModule from "../src/util/projectFiles.js";
 
 function readJsonRecord(value: unknown): Record<string, unknown> {
@@ -737,9 +738,10 @@ describe("CLI command modules", () => {
     }
   });
 
-  test("grep rejects max-hits values above the 200000 cap", async () => {
+  test("grep rejects max-hits values above the 200000 cap with exit 2 (usage error)", async () => {
     const root = await mkTmpDir("codegraph-grep-clamped-limit-");
     await fsp.writeFile(path.join(root, "main.ts"), "needle\n", "utf8");
+    const stderrLines: string[] = [];
     try {
       await expect(
         handleGrepCommand({
@@ -755,12 +757,14 @@ describe("CLI command modules", () => {
           writeStdoutLine: () => {
             throw new Error("unexpected stdout");
           },
-          writeStderrLine: () => {},
-          exit: () => {
-            throw new Error("unexpected exit");
+          writeStderrLine: (message) => stderrLines.push(message),
+          exit: (code) => {
+            throw new Error(`grep exit ${code}`);
           },
         }),
-      ).rejects.toThrow('Invalid --max-hits value "200001". Expected an integer from 1 to 200000.');
+      ).rejects.toThrow("grep exit 2");
+
+      expect(stderrLines).toEqual(['Invalid --max-hits value "200001". Expected an integer from 1 to 200000.']);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -2785,6 +2789,24 @@ describe("CLI command modules", () => {
       ).rejects.toThrow("Use either --target or --agent for skill install, not both.");
     } finally {
       await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("mcp --stdio --idle-timeout-ms reaches serveCodegraphMcp as a number, and rejects non-numeric values", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-mcp-idle-timeout-"));
+    const serveSpy = vi.spyOn(mcpServer, "serveCodegraphMcp").mockResolvedValue();
+
+    try {
+      const result = await captureCli(["mcp", "--root", root, "--stdio", "--idle-timeout-ms", "1000"]);
+      expect(result.exitCode).toBeUndefined();
+      expect(serveSpy).toHaveBeenCalledWith(expect.objectContaining({ idleTimeoutMs: 1000 }));
+
+      const invalid = await captureCli(["mcp", "--root", root, "--stdio", "--idle-timeout-ms", "not-a-number"]);
+      expect(invalid.exitCode).toBe(2);
+      expect(invalid.stderr).toContain('Invalid --idle-timeout-ms value "not-a-number"');
+    } finally {
+      serveSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
     }
   });
 });

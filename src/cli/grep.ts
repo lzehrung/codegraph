@@ -9,11 +9,12 @@ import {
   type TextGrepHit,
 } from "../graphs/grep.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
-import type {
-  CliJsonWriterContext,
-  CliOptionContext,
-  CliStderrExitContext,
-  CliStdoutWriterContext,
+import {
+  exitWithError,
+  type CliJsonWriterContext,
+  type CliOptionContext,
+  type CliStderrExitContext,
+  type CliStdoutWriterContext,
 } from "./context.js";
 import { parseOptionalBoundedIntegerOption } from "./options.js";
 
@@ -50,7 +51,12 @@ export async function handleGrepCommand(context: GrepCommandContext): Promise<vo
   const patternSource = context.getOpt("--pattern") ?? context.getOpt("--regex") ?? (positionalPattern || undefined);
   const globs = context.parsedOptions.get("--glob") ?? [];
   const patterns = globs.length ? [...globs] : undefined;
-  const maxHits = parseOptionalBoundedIntegerOption(context.getOpt("--max-hits"), "--max-hits", 1, TEXT_GREP_MAX_HITS);
+  let maxHits: number | undefined;
+  try {
+    maxHits = parseOptionalBoundedIntegerOption(context.getOpt("--max-hits"), "--max-hits", 1, TEXT_GREP_MAX_HITS);
+  } catch (error: unknown) {
+    exitWithError(context, error, 2);
+  }
 
   if ((querySource ? 1 : 0) + (patternSource ? 1 : 0) !== 1) {
     context.writeStderrLine("Usage: grep <regex> [--root <dir>] OR grep --query '<tree-sitter query>' [--root <dir>]");

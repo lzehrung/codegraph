@@ -10,7 +10,7 @@ If the CLI is not installed yet, use the install paths in [docs/installation.md]
 
 Bare `codegraph` prints concise task-oriented help and exits without reading project config or building an index. Use `codegraph --help` or `codegraph help` for the full command catalog, and `codegraph help <command>` or `codegraph <command> --help` for command help.
 
-Unknown commands exit with status 1, print up to three deterministic suggestions, and may print one task route; they never guess and execute a command. Invalid command arguments and noninteractive installer writes without `--yes` exit with status 2.
+Unknown commands, invalid command arguments (including unknown flags/options and unresolvable positional roots), and noninteractive installer writes without `--yes` all exit with status 2; unknown commands also print up to three deterministic suggestions and may print one task route. They never guess and execute a command. Runtime/analysis failures (a validly-formed command that fails while it runs) exit with status 1.
 
 CLI commands default to human-readable stdout; `--pretty` remains an explicit equivalent. Use `--json` for structured automation output, or a format-specific option such as `--compact`, `--mermaid`, `--dot`, or `--sqlite` where supported. If `--json` and `--pretty` are both present, `--json` wins. Commands that ignore structured output, including `viewer` and `mcp`, reject `--json`/`--pretty`. Global `--version --json` and `version --json` remain supported.
 

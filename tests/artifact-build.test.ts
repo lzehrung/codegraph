@@ -237,6 +237,36 @@ describe("artifact build", () => {
     expect(graph.graph.files.some((file) => file.includes("codegraph-out"))).toBe(false);
   });
 
+  it("skips (rather than throws on) sqlite signatures for graph nodes discovery never indexed (A1)", async () => {
+    // Reproduces probe V1/A1: an in-scope file imports a target that discovery excludes
+    // (e.g. a gitignored directory), so the resolved import becomes a `fileGraph` node with
+    // no entry in `fileSignatures`. At base commit a9c6b220 this threw
+    // "SQLite artifact freshness signature is missing for <file>." for every such node
+    // (`src/agent/artifact.ts:124`, confirmed unchanged via `git show a9c6b220:src/agent/artifact.ts`).
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-skip-signature-"));
+    const outDir = path.join(root, "codegraph-out");
+    await fs.mkdir(path.join(root, "ignored"), { recursive: true });
+    await fs.writeFile(path.join(root, "ignored", "target.ts"), "export const value = 1;\n");
+    await fs.writeFile(
+      path.join(root, "main.ts"),
+      "import { value } from './ignored/target';\nexport const result = value;\n",
+    );
+
+    const artifact = await buildCodegraphArtifact({
+      root,
+      outDir,
+      sqlite: true,
+      buildOptions: { discovery: { ignoreGlobs: ["ignored/**"] } },
+    });
+
+    expect(artifact.artifacts.sqlite).toBe("codegraph.sqlite");
+    const manifest = JSON.parse(await fs.readFile(artifact.manifestPath, "utf8")) as {
+      sql: { fileSignatures: { signed: number; skipped: number } };
+    };
+    expect(manifest.sql.fileSignatures.signed).toBe(1);
+    expect(manifest.sql.fileSignatures.skipped).toBeGreaterThanOrEqual(1);
+  });
+
   it("reuses one project snapshot for all selected artifact outputs", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-session-"));
     const outDir = path.join(root, "codegraph-out");
@@ -277,5 +307,50 @@ describe("artifact build", () => {
       graph: { files: string[] };
     };
     expect(graph.graph.files.some((file) => file.includes("linked") || file.includes("secret.ts"))).toBe(false);
+  });
+
+  it("serializes byte-identically across builds with same-name overloads and same-label multiedges (G3)", async () => {
+    // Reproduces the tie gap in `buildCodegraphGraphJson`'s symbol/edge sort (src/agent/artifact.ts):
+    // sorting only by file+name (symbols) or from/to/label (edges) leaves same-name overloads and
+    // same-label multiedges in Map insertion order, which is not guaranteed stable across builds.
+    const source = [
+      "export function foo(a: number): number;",
+      "export function foo(a: string): string;",
+      "export function foo(a: unknown): unknown {",
+      "  return a;",
+      "}",
+      "export function bar(): unknown {",
+      "  const first = foo(1);",
+      "  const second = foo(2);",
+      "  return first ?? second;",
+      "}",
+      "",
+    ].join("\n");
+
+    const buildOnce = async (): Promise<{ root: string; text: string }> => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-tie-keys-"));
+      const outDir = path.join(root, "codegraph-out");
+      await fs.writeFile(path.join(root, "overloads.ts"), source);
+      await buildCodegraphArtifact({ root, outDir, graphJson: true });
+      return { root, text: await fs.readFile(path.join(outDir, "graph.json"), "utf8") };
+    };
+
+    const [first, second] = await Promise.all([buildOnce(), buildOnce()]);
+    // `symbolEdges[].site.file` carries the absolute source root, which legitimately differs
+    // between two independent temp roots; strip it before comparing everything else byte-for-byte.
+    const normalizeOwnRoot = (value: { root: string; text: string }) =>
+      value.text.split(value.root.replace(/\\/g, "/")).join("<root>");
+    expect(normalizeOwnRoot(first)).toBe(normalizeOwnRoot(second));
+
+    const graph = JSON.parse(first.text) as {
+      graph: {
+        symbols: Array<{ name: string }>;
+        symbolEdges: Array<{ from: string; to: string; label?: string }>;
+      };
+    };
+    const fooSymbols = graph.graph.symbols.filter((symbol) => symbol.name === "foo");
+    expect(fooSymbols.length).toBeGreaterThanOrEqual(1);
+    const fooEdges = graph.graph.symbolEdges.filter((edge) => edge.label === "calls" || edge.to.includes("foo"));
+    expect(fooEdges.length).toBeGreaterThanOrEqual(2);
   });
 });
