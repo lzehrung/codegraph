@@ -1196,17 +1196,17 @@ function buildFilenameSuggestions(
   if (parsed.name !== def.localName) return [];
   const to = path.posix.join(parsed.dir.replace(/\\/g, "/"), `${newName}${parsed.ext}`);
   const source = normalizeAgentFilePath(snapshot.root, def.file);
-  const destinationKey = to.toLocaleLowerCase();
+  const destinationKey = to.toLowerCase();
   const destinationExists = snapshot.files.some((file) => {
     const candidate = normalizeAgentFilePath(snapshot.root, file);
-    return candidate !== source && candidate.toLocaleLowerCase() === destinationKey;
+    return candidate !== source && candidate.toLowerCase() === destinationKey;
   });
   if (destinationExists) return [];
   return [
     {
       from: normalizeAgentFilePath(snapshot.root, def.file),
       to,
-      caseOnlyRisk: parsed.name !== newName && parsed.name.toLocaleLowerCase() === newName.toLocaleLowerCase(),
+      caseOnlyRisk: parsed.name !== newName && parsed.name.toLowerCase() === newName.toLowerCase(),
     },
   ];
 }

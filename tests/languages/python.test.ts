@@ -153,6 +153,33 @@ describe("Python local imports", () => {
   });
 });
 
+describe("Python namespace reexports", () => {
+  it("exposes a module-level package namespace import", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-namespace-reexport-"));
+    const packageDir = path.join(root, "sample");
+    const barrelFile = path.join(packageDir, "__init__.py");
+    const valuesFile = path.join(packageDir, "values.py");
+    await fsp.mkdir(packageDir, { recursive: true });
+    await Promise.all([
+      fsp.writeFile(barrelFile, "import sample.values as values\n", "utf8"),
+      fsp.writeFile(valuesFile, "value = 1\n", "utf8"),
+    ]);
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const barrel = index.byFile.get(fileIdentityKey(barrelFile));
+
+      expect(barrel?.exports).toContainEqual({
+        type: "namespaceReexport",
+        exportedAs: "values",
+        fromModule: valuesFile.replace(/\\/g, "/"),
+        moduleSpecifier: "sample.values",
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Python __all__ exports", () => {
   async function collectModule(source: string) {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-all-"));

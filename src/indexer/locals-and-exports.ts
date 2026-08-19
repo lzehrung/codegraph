@@ -975,10 +975,10 @@ export function collectLocalsAndExportsFromSource(
           moduleSpecifier: binding.from,
           sourceSpecifier: binding.imported,
         });
-      } else if (binding.kind === "default" && !binding.local.startsWith("_")) {
+      } else if (binding.kind === "namespace" && !binding.localNS.startsWith("_")) {
         exports.push({
           type: "namespaceReexport",
-          exportedAs: binding.local,
+          exportedAs: binding.localNS,
           fromModule: binding.resolved,
           moduleSpecifier: binding.from,
         });
