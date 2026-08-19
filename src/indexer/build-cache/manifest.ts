@@ -23,6 +23,7 @@ import {
 import { assertRealPathCandidateWithinRoot } from "../../util/confinedFile.js";
 import { getGitBlobHashes } from "../../util/git.js";
 import { stringifyUnknown } from "../../util/ast.js";
+
 import { cacheAbsolutePath, cacheRelativePath, fileSignature } from "./module-cache.js";
 import { cacheRoot } from "./location.js";
 import type { BuildOptions, BuildReport } from "../types.js";
@@ -188,7 +189,15 @@ export async function normalizeIndexedFileInputsWithinRoot(
 ): Promise<string[]> {
   const realRoot = await fsp.realpath(projectRoot);
   const normalized = normalizeIndexedFileInputs(projectRoot, files, label);
-  await Promise.all(normalized.map(async (file) => await assertRealPathCandidateWithinRoot(realRoot, file, label)));
+  await Promise.all(
+    normalized.map(async (file) => {
+      try {
+        await assertRealPathCandidateWithinRoot(realRoot, file, label);
+      } catch (error) {
+        if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+      }
+    }),
+  );
   return normalized;
 }
 
