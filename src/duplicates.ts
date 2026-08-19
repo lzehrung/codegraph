@@ -115,7 +115,7 @@ async function findDuplicatesWithOpenDuplicateUnitCache(
         oversizedBuckets,
         belowThresholdUnits,
         overlappingPairs: 0,
-        candidatePairs: 0,
+        candidatePairs: countComparableCandidatePairs(pairs, crossFileOnly),
       },
       stats: {
         comparedPairs: 0,
@@ -177,6 +177,16 @@ async function findDuplicatesWithOpenDuplicateUnitCache(
   }
   return result;
 }
+function countComparableCandidatePairs(pairs: Map<string, PairEvidence>, crossFileOnly: boolean): number {
+  let count = 0;
+  for (const evidence of pairs.values()) {
+    if (crossFileOnly && evidence.left.absoluteFile === evidence.right.absoluteFile) continue;
+    if (hasLineOverlap(evidence.left, evidence.right)) continue;
+    count += 1;
+  }
+  return count;
+}
+
 function countCandidateDuplicateGroups(pairs: Map<string, PairEvidence>, crossFileOnly: boolean): number {
   const parents = new Map<string, string>();
   const find = (id: string): string => {
