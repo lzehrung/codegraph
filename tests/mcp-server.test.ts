@@ -792,6 +792,52 @@ describe("codegraph MCP handlers", () => {
     }
   });
 
+  it("advertises and enforces the search depth maximum over MCP HTTP", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-search-depth-"));
+    const httpServer = await startCodegraphMcpHttpServer({ root, port: 0 });
+
+    try {
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-search-depth-test", version: "1.0.0" },
+        },
+      });
+      const sessionId = initialize.response.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+
+      const tools = await postMcpJson(
+        httpServer.url,
+        { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+        sessionId ?? undefined,
+      );
+      const listedTools = readObject(tools.payload.result).tools;
+      expect(Array.isArray(listedTools)).toBe(true);
+      const search = (listedTools as Array<Record<string, unknown>>).find((tool) => tool.name === "search");
+      const depth = readObject(readObject(readObject(search).inputSchema).properties).depth;
+      expect(readObject(depth)).toMatchObject({ minimum: 0, maximum: 5, default: 1 });
+
+      const overLimit = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: { name: "search", arguments: { query: "missing", depth: 6 } },
+        },
+        sessionId ?? undefined,
+      );
+      expect(readProtocolError(overLimit.payload).code).toBe(-32602);
+    } finally {
+      await httpServer.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("evicts idle HTTP sessions and bounds the concurrent session count", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-evict-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
@@ -1988,6 +2034,7 @@ describe("codegraph MCP handlers", () => {
 
     expect(refsSchema.type).toBe("object");
     expect(refsSchema.additionalProperties).toBe(false);
+
     expect(refsSchema.required).toBeUndefined();
     expect(refsSchema.oneOf).toEqual(alternatives);
     expect(Object.keys(refsProperties).sort()).toEqual(["column", "file", "handle", "limit", "line"]);
@@ -2033,6 +2080,47 @@ describe("codegraph MCP handlers", () => {
     expect(result.rows).toHaveLength(1);
     expect(result.truncated).toBeTruthy();
     expect(result.rowLimit).toBe(1);
+  });
+  it("serializes concurrent forced artifact builds into one consistent SQLite bundle", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-artifact-write-lock-"));
+    const outDir = path.join(root, "out");
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const backingSession = createAgentSession({ root });
+    const firstBuildStarted = Promise.withResolvers<void>();
+    const releaseFirstBuild = Promise.withResolvers<void>();
+    let projectLoads = 0;
+    const session: AgentSession = {
+      ...backingSession,
+      loadProject: async (options) => {
+        projectLoads += 1;
+        if (projectLoads === 1) {
+          firstBuildStarted.resolve();
+          await releaseFirstBuild.promise;
+        }
+        return await backingSession.loadProject(options);
+      },
+    };
+    const handlers = createCodegraphMcpHandlers({ root, readOnly: false, session });
+
+    try {
+      const first = handlers.artifact_build({ outDir, sqlite: true, force: true });
+      await firstBuildStarted.promise;
+      const second = handlers.artifact_build({ outDir, sqlite: true, force: true });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(projectLoads).toBe(1);
+
+      releaseFirstBuild.resolve();
+      await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+      const manifest = JSON.parse(await fs.readFile(path.join(outDir, "manifest.json"), "utf8")) as {
+        artifacts: { sqlite?: string };
+      };
+      expect(manifest.artifacts.sqlite).toBe("codegraph.sqlite");
+      const sqliteResult = await handlers.query_sqlite({ query: "SELECT path FROM files;" });
+      expect(sqliteResult.rows.some((row) => String(row[0]).endsWith("auth.ts"))).toBe(true);
+    } finally {
+      releaseFirstBuild.resolve();
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("refreshes the SQLite artifact before query_sqlite after small workspace edits", async () => {
