@@ -5,14 +5,14 @@ import {
   getOrCreateProjectSymbolIndex,
   type LanguageProjectSymbolIndex,
 } from "./projectSymbols.js";
-import { JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../identifiers.js";
+import { JAVA_IDENTIFIER_IGNORABLE_SOURCE, JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../identifiers.js";
 
 const KOTLIN_PACKAGE_PATTERN = new RegExp(
   String.raw`^\s*package\s+(${KOTLIN_IDENTIFIER_SOURCE}(?:\.${KOTLIN_IDENTIFIER_SOURCE})*)`,
   "mu",
 );
 const KOTLIN_DECLARATION_PATTERN = new RegExp(
-  String.raw`\b(?:class|object|fun|typealias|interface|val|var)\s+(${KOTLIN_IDENTIFIER_SOURCE})(?![\p{L}\p{Nd}_])`,
+  String.raw`\b(?:class|object|fun|typealias|interface|val|var)\s+(${KOTLIN_IDENTIFIER_SOURCE})`,
   "gu",
 );
 const JAVA_PACKAGE_PATTERN = new RegExp(
@@ -20,7 +20,7 @@ const JAVA_PACKAGE_PATTERN = new RegExp(
   "mu",
 );
 const JAVA_DECLARATION_PATTERN = new RegExp(
-  String.raw`\b(?:class|interface|enum|record|@interface)\s+(${JAVA_IDENTIFIER_SOURCE})(?![\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mn}\p{Mc}\p{Cf}\u0000-\u0008\u000E-\u001B\u007F-\u009F])`,
+  String.raw`\b(?:class|interface|enum|record|@interface)\s+(${JAVA_IDENTIFIER_SOURCE})`,
   "gu",
 );
 
@@ -32,6 +32,7 @@ type JvmSymbolIndexEntry = {
 type JvmSymbolIndexReaderOptions = {
   packagePattern: RegExp;
   declarationPattern: RegExp;
+  normalizeSymbol?: (symbol: string) => string;
 };
 
 const kotlinImportResolutionCache = new Map<string, string | null>();
@@ -54,7 +55,11 @@ async function readJvmSymbolIndex(
   const symbols = new Set<string>();
   for (const match of source.matchAll(options.declarationPattern)) {
     const symbolName = match[1];
-    if (symbolName) symbols.add(symbolName);
+    if (symbolName) {
+      symbols.add(symbolName);
+      const normalizedSymbol = options.normalizeSymbol?.(symbolName);
+      if (normalizedSymbol) symbols.add(normalizedSymbol);
+    }
   }
 
   const entry = { packageName, symbols };
@@ -73,6 +78,7 @@ async function readJavaSymbolIndex(filePath: string): Promise<JvmSymbolIndexEntr
   return await readJvmSymbolIndex(filePath, javaSymbolIndexCache, {
     packagePattern: JAVA_PACKAGE_PATTERN,
     declarationPattern: JAVA_DECLARATION_PATTERN,
+    normalizeSymbol: (symbol) => symbol.replace(new RegExp(JAVA_IDENTIFIER_IGNORABLE_SOURCE, "gu"), ""),
   });
 }
 
@@ -187,7 +193,9 @@ export async function resolveJavaImportPath(projectRoot: string, spec: string): 
   }
 
   const symbolFiles = projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
-  const resolved = symbolFiles.length === 1 ? path.resolve(symbolFiles[0]!) : null;
+  const filenameMatched = packageCandidates.filter((candidate) => path.basename(candidate, ".java") === importedName);
+  const candidates = symbolFiles.length ? symbolFiles : filenameMatched;
+  const resolved = candidates.length === 1 ? path.resolve(candidates[0]!) : null;
   javaImportResolutionCache.set(cacheKey, resolved);
   return resolved;
 }
