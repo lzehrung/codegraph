@@ -631,6 +631,34 @@ describe("agent search", () => {
     expect(counted.loads()).toBe(1);
   });
 
+  it("refreshes a reused session search after an on-disk edit and reports that refresh", async () => {
+    const root = await mkRepo();
+    const file = path.join(root, "src", "auth.ts");
+    const session = createAgentSession({ root, useConfig: false, freshness: { policy: "auto" } });
+
+    const beforeEdit = await searchCodegraphWithSession(session, {
+      root,
+      query: "validateUser",
+      mode: "symbol",
+      limit: 20,
+    });
+    await fs.writeFile(file, "export function authorizeUser() { return true; }\n", "utf8");
+    const afterEdit = await searchCodegraphWithSession(session, {
+      root,
+      query: "authorizeUser",
+      mode: "symbol",
+      limit: 20,
+    });
+    const afterEditContract = afterEdit as {
+      freshness?: { state: string; changedFiles?: string[] };
+    };
+
+    expect(beforeEdit.results.some((result) => result.label === "validateUser")).toBe(true);
+    expect(afterEdit.results.some((result) => result.label === "authorizeUser")).toBe(true);
+    expect(afterEdit.results.some((result) => result.label === "validateUser")).toBe(false);
+    expect(afterEditContract.freshness).toEqual({ state: "refreshed", changedFiles: ["src/auth.ts"] });
+  });
+
   it("reuses searchable file text and chunks across repeated session searches", async () => {
     const root = await mkRepo();
     const docsFile = path.join(root, "docs", "agent-search.md");
