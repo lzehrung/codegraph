@@ -36,7 +36,12 @@ import {
   normalizeAgentFilePath,
   resolveAgentSnapshotFile,
 } from "./normalize.js";
-import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
+import {
+  createAgentSession,
+  type AgentFreshnessResult,
+  type AgentProjectSnapshot,
+  type AgentSession,
+} from "./session.js";
 import { formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./followUps.js";
 import {
   buildQueryTextChunks,
@@ -108,6 +113,7 @@ export type AgentSearchResponse = {
   mode: AgentSearchMode;
   root: string;
   analysis: AnalysisSummary;
+  freshness: AgentFreshnessResult;
   limits: {
     results: number;
     rankReasonsPerResult: number;
@@ -228,9 +234,10 @@ export async function searchCodegraphWithSession(
   session: AgentSession,
   request: AgentSearchRequest,
 ): Promise<AgentSearchResponse> {
+  const freshness = session.checkFreshness ? await session.checkFreshness() : { state: "fresh" as const };
   if (canUsePathFastPath(request) && session.listFiles && session.root) {
     const files = await session.listFiles();
-    return searchPathOnly(session.root, files, request);
+    return searchPathOnly(session.root, files, request, freshness);
   }
 
   const snapshot = await session.loadProject({
@@ -252,7 +259,7 @@ export async function searchCodegraphWithSession(
     const { ensureSessionQueryIndex } = await import("./query-index/sessionStore.js");
     queryIndex = await ensureSessionQueryIndex(session, snapshot);
   }
-  const search = searchSnapshot(snapshot, request, queryIndex);
+  const search = searchSnapshot(snapshot, request, freshness, queryIndex);
   promoteSessionSearchResult(resultCache, cacheKey, search);
   search.catch(() => {
     if (resultCache.get(cacheKey) === search) resultCache.delete(cacheKey);
@@ -284,6 +291,7 @@ export function formatAgentSearchResponse(response: AgentSearchResponse): string
 async function searchSnapshot(
   snapshot: AgentProjectSnapshot,
   request: AgentSearchRequest,
+  freshness: AgentFreshnessResult,
   queryIndex?: QueryIndexHandle,
 ): Promise<AgentSearchResponse> {
   const mode = request.mode ?? "hybrid";
@@ -331,6 +339,7 @@ async function searchSnapshot(
     mode,
     root: snapshot.root,
     analysis: snapshot.analysis,
+    freshness,
     limits: {
       results: limit,
       rankReasonsPerResult: AGENT_SEARCH_RANK_REASONS_PER_RESULT_LIMIT,
@@ -389,7 +398,12 @@ function searchResultCacheKey(snapshot: AgentProjectSnapshot, request: AgentSear
     candidateVersion: QUERY_INDEX_CANDIDATE_VERSION,
   });
 }
-function searchPathOnly(root: string, files: readonly string[], request: AgentSearchRequest): AgentSearchResponse {
+function searchPathOnly(
+  root: string,
+  files: readonly string[],
+  request: AgentSearchRequest,
+  freshness: AgentFreshnessResult,
+): AgentSearchResponse {
   const query = buildQueryTerms(request.query, { root, files });
   const resultMap = new Map<string, MutableSearchResult>();
   const limit = defaultAgentLimit(request.limit, DEFAULT_LIMIT, AGENT_SEARCH_RESULT_LIMIT);
@@ -435,6 +449,7 @@ function searchPathOnly(root: string, files: readonly string[], request: AgentSe
       nativeFilesFellBack: 0,
       label: "path-only",
     },
+    freshness,
     limits: {
       results: limit,
       rankReasonsPerResult: AGENT_SEARCH_RANK_REASONS_PER_RESULT_LIMIT,
@@ -725,7 +740,8 @@ async function addTextResults(
   const projectSnapshotIdentity = snapshot.index.projectSnapshotIdentity;
   const store = queryIndex?.store;
   const diagnostics = queryIndex?.diagnostics;
-  if (store && diagnostics && projectSnapshotIdentity) {
+  const hasNonAsciiRankTerm = query.rankTokens.some((term) => /[^\p{ASCII}]/u.test(term));
+  if (store && diagnostics && projectSnapshotIdentity && !hasNonAsciiRankTerm) {
     const candidateResultMap = new Map<string, MutableSearchResult>();
     try {
       store.withReadSnapshot(projectSnapshotIdentity, () => {

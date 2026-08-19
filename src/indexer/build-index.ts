@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { languageExtensionPatterns, supportForFile, type LanguageSupport } from "../languages.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import { loadWorkspaceConfig, resolveWorkspacePackage } from "../util/workspace.js";
 import {
   DEFAULT_PROJECT_PATTERNS,
@@ -202,7 +203,7 @@ async function resolveCrossModuleSymbolExports(
   logLevel: LogLevel | undefined,
 ): Promise<void> {
   if (!support.supportsCrossModuleSymbols) return;
-  if (support.id !== "ts" && support.id !== "js") return;
+  if (!isJsTsLanguage(support.id)) return;
   const { matchPath } = await import("../util/resolution.js").then((mod) =>
     mod.loadNearestTsconfigFor(file, projectRoot, logLevel),
   );

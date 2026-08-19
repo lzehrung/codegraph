@@ -62,6 +62,10 @@ async function mkRepo(): Promise<string> {
     ].join("\n"),
   );
   await fs.writeFile(
+    path.join(root, "src", "café-日本.ts"),
+    ["export const 日本 = 2;", "export function créer() { return 日本; }", ""].join("\n"),
+  );
+  await fs.writeFile(
     path.join(root, "schema.sql"),
     "CREATE TABLE public.users (id int primary key, email text);\nCREATE VIEW active_users AS SELECT id FROM public.users;\n",
   );
@@ -134,9 +138,21 @@ describe("agent search", () => {
     expect(response.results[0]?.evidence.some((entry) => entry.source === "symbol")).toBeTruthy();
     expect(response.results[0]?.neighbors.some((entry) => entry.file?.endsWith("src/api.ts"))).toBeTruthy();
     expect(response.results[0]?.followUps.some((followUp) => followUp.tool === "refs")).toBeTruthy();
+
     expect(response.results[0]?.provenance.surface).toBe("code");
     expect(response.results[0]?.provenance.capability).toBe("semantic");
     expect(response.results.some((result) => result.file.endsWith("src/auth.ts"))).toBeTruthy();
+  });
+  it("finds Unicode symbols, accented identifiers, and filenames through indexed and text search", async () => {
+    const root = await mkRepo();
+
+    const indexed = await searchCodegraph({ root, query: "日本", mode: "symbol" });
+    const accentedText = await searchCodegraph({ root, query: "créer", mode: "text" });
+    const unicodePath = await searchCodegraph({ root, query: "café 日本", mode: "path" });
+
+    expect(indexed.results.some((result) => result.label === "日本")).toBeTruthy();
+    expect(accentedText.results.some((result) => result.file.includes("café-日本.ts"))).toBeTruthy();
+    expect(unicodePath.results.some((result) => result.file.includes("café-日本.ts"))).toBeTruthy();
   });
 
   it("shell-quotes generated follow-up commands for path metacharacters", async () => {

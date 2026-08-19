@@ -20,7 +20,7 @@ Here, "semantic" means syntax- and symbol-aware analysis from the repository. It
 
 Search follows a compact pipeline:
 
-1. Normalize the query by splitting camel case, lowercasing, and removing punctuation.
+1. Normalize the query by splitting camel case, case-folding, and removing punctuation while preserving Unicode letters, numbers, combining marks, and `_`. Diacritics are preserved, so `cafe` and `café` remain distinct terms.
 2. For natural-language queries, exclude a small syntax-term set from ranking. A query that is itself an identifier or path retains every term; a prose query that mentions a path is still filtered. A query containing whitespace counts as a path only when it resolves to a discovered file. Queries that would otherwise lose every term also retain the original terms.
 3. Gather candidates from the selected surfaces: symbols, paths, text chunks, SQL objects, or graph nodes.
 4. Score lexical evidence. Exact words and phrases beat ordered-token and substring matches.

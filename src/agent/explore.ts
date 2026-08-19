@@ -292,6 +292,7 @@ function collectPackets(
 }
 
 function collectPacketTargets(anchors: readonly AgentSearchResult[], limit: number): string[] {
+  if (!limit) return [];
   const targets: string[] = [];
   const seenTargets = new Set<string>();
   const seenFiles = new Set<string>();

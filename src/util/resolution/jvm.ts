@@ -12,7 +12,7 @@ const KOTLIN_PACKAGE_PATTERN = new RegExp(
   "mu",
 );
 const KOTLIN_DECLARATION_PATTERN = new RegExp(
-  String.raw`\b(?:class|object|fun|typealias|interface)\s+(${KOTLIN_IDENTIFIER_SOURCE})(?![\p{L}\p{Nd}_])`,
+  String.raw`\b(?:class|object|fun|typealias|interface|val|var)\s+(${KOTLIN_IDENTIFIER_SOURCE})(?![\p{L}\p{Nd}_])`,
   "gu",
 );
 const JAVA_PACKAGE_PATTERN = new RegExp(
@@ -20,7 +20,7 @@ const JAVA_PACKAGE_PATTERN = new RegExp(
   "mu",
 );
 const JAVA_DECLARATION_PATTERN = new RegExp(
-  String.raw`\b(?:class|interface|enum)\s+(${JAVA_IDENTIFIER_SOURCE})(?![\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mn}\p{Mc}\p{Cf}\u0000-\u0008\u000E-\u001B\u007F-\u009F])`,
+  String.raw`\b(?:class|interface|enum|record|@interface)\s+(${JAVA_IDENTIFIER_SOURCE})(?![\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mn}\p{Mc}\p{Cf}\u0000-\u0008\u000E-\u001B\u007F-\u009F])`,
   "gu",
 );
 
@@ -152,8 +152,7 @@ export async function resolveKotlinImportPath(projectRoot: string, spec: string)
   }
 
   const symbolFiles = projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
-  const resolvedCandidate = symbolFiles[0] ?? packageCandidates[0] ?? null;
-  const resolved = resolvedCandidate ? path.resolve(resolvedCandidate) : null;
+  const resolved = symbolFiles.length === 1 ? path.resolve(symbolFiles[0]!) : null;
   kotlinImportResolutionCache.set(cacheKey, resolved);
   return resolved;
 }
@@ -188,8 +187,7 @@ export async function resolveJavaImportPath(projectRoot: string, spec: string): 
   }
 
   const symbolFiles = projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
-  const resolvedCandidate = symbolFiles[0] ?? packageCandidates[0] ?? null;
-  const resolved = resolvedCandidate ? path.resolve(resolvedCandidate) : null;
+  const resolved = symbolFiles.length === 1 ? path.resolve(symbolFiles[0]!) : null;
   javaImportResolutionCache.set(cacheKey, resolved);
   return resolved;
 }

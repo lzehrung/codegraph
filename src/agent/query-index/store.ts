@@ -172,17 +172,15 @@ export class QueryIndexStore {
   }
   /**
    * Files whose normalized text plausibly contains at least one of the given terms.
-   * Terms of 3+ codepoints are resolved through the trigram FTS index (same substring
-   * semantics as `ftsChunkCandidates`, but indexed instead of scanning every file); only
-   * terms too short for the trigram tokenizer fall back to decompressing and scanning
-   * file text directly, and only for those short terms.
+   * ASCII terms of 3+ codepoints use the trigram FTS index; short and non-ASCII
+   * terms scan normalized text because SQLite's trigram tokenizer is ASCII-only.
    */
   eligibleFilePaths(normalizedTerms: readonly string[]): string[] {
     if (!normalizedTerms.length) return [];
     const paths = new Set<string>();
     const shortTerms: string[] = [];
     for (const term of normalizedTerms) {
-      if (codePointLength(term) < 3) {
+      if (codePointLength(term) < 3 || /[^\p{ASCII}]/u.test(term)) {
         shortTerms.push(term);
         continue;
       }
@@ -380,7 +378,7 @@ export class QueryIndexStore {
     const candidates = new Map<string, Record<string, unknown>>();
     const batchSize = 500;
     for (const term of terms) {
-      const isFtsEligible = codePointLength(term) >= 3;
+      const isFtsEligible = codePointLength(term) >= 3 && !/[^\p{ASCII}]/u.test(term);
       const conditions: string[] = [];
       const parameters: string[] = [];
       if (isFtsEligible) {

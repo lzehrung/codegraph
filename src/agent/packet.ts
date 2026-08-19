@@ -1,4 +1,5 @@
 import { buildReviewReport, type ReviewReport } from "../review.js";
+import { boundReviewReportForTransport } from "../review/types.js";
 import type { BuildOptions } from "../indexer/types.js";
 import { explainCodegraphTargetWithSession, type AgentExplainTarget, type AgentExplanation } from "./explain.js";
 import { type AgentFollowUp, toolFollowUp } from "./followUps.js";
@@ -104,27 +105,21 @@ async function buildReviewPacket(request: AgentPacketRequest): Promise<AgentPack
   if (!range) {
     throw new Error("Invalid review packet target. Expected review:base=<encoded-ref>;head=<encoded-ref>.");
   }
-  const report = await buildReviewReport(request.root, {
-    gitBase: range.base,
-    gitHead: range.head,
-    reviewDepth: "minimal",
-  });
+  const report = boundReviewReportForTransport(
+    await buildReviewReport(request.root, {
+      gitBase: range.base,
+      gitHead: range.head,
+      reviewDepth: "minimal",
+    }),
+  );
   return {
     schemaVersion: 2,
     root: request.root,
     target: request.target,
     kind: "review",
     packet: report,
-    limits: {
-      changedFiles: report.changedFiles.length,
-      candidateTests: report.candidateTests.length,
-      reviewTasks: report.reviewTasks.length,
-    },
-    omittedCounts: {
-      changedFiles: 0,
-      candidateTests: 0,
-      reviewTasks: 0,
-    },
+    limits: report.limits,
+    omittedCounts: report.omittedCounts,
     followUps: [
       toolFollowUp("impact", { provider: "git", base: range.base, head: range.head }),
       toolFollowUp("review", { base: range.base, head: range.head }),

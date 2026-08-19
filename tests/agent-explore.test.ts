@@ -260,6 +260,17 @@ describe("agent explore", () => {
     expect(textOf(blastRadius)).toContain("src/routes.ts");
   });
 
+  it("returns no packets when maxPackets is zero", async () => {
+    const root = await mkExploreRepo();
+    const query = "Auth";
+
+    const response = expectExploreEnvelope(await exploreCodegraph({ root, query, maxPackets: 0 }), query);
+
+    expect(response.packets).toEqual([]);
+    expect(response.limits.packets).toBe(0);
+    expect(response.omittedCounts.packets).toBeGreaterThan(0);
+  });
+
   it("matches basename-only file mentions with trailing question or exclamation punctuation", async () => {
     const root = await mkExploreRepo();
     const queries = ["auth.ts?", "auth.ts!"];
