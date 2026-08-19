@@ -182,6 +182,60 @@ describe("codegraph MCP handlers", () => {
       expect(forwarded).toContain('"id":0');
     });
   });
+  it("honors cancellation notifications for request id zero", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-zero-cancel-"));
+    const handlers = createCodegraphMcpHandlers({ root });
+    const started = Promise.withResolvers<void>();
+    const aborted = Promise.withResolvers<void>();
+    handlers.query_sqlite = async (_request, options) => {
+      started.resolve();
+      await new Promise<never>((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => {
+          aborted.resolve();
+          reject(new Error("cancelled"));
+        });
+      });
+    };
+    const server = createCodegraphMcpProtocolServer(handlers);
+    const sent: JsonRpcObject[] = [];
+    const transport = {
+      onclose: undefined,
+      onerror: undefined,
+      onmessage: undefined,
+      async start() {},
+      async send(message: unknown) {
+        sent.push(readJsonRpcObject(message));
+      },
+      async close() {},
+    } as Parameters<typeof server.connect>[0];
+    try {
+      await server.connect(transport);
+      if (transport.onmessage === undefined) throw new Error("MCP transport did not start.");
+      transport.onmessage({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1" } },
+      });
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+      transport.onmessage({
+        jsonrpc: "2.0",
+        id: 0,
+        method: "tools/call",
+        params: { name: "query_sqlite", arguments: { query: "SELECT 1;" } },
+      });
+      await started.promise;
+      transport.onmessage({
+        jsonrpc: "2.0",
+        method: "notifications/cancelled",
+        params: { requestId: 0 },
+      });
+      await aborted.promise;
+    } finally {
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 
   it("serves real MCP tool listing over a specified local HTTP port", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-"));
