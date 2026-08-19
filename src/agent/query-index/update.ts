@@ -351,6 +351,7 @@ export async function ensureQueryIndex(snapshot: AgentProjectSnapshot): Promise<
   const updateStarted = performance.now();
   try {
     store.replaceFiles(prepared, deleted, buildMetadata(current));
+    diagnostics.updateMs = elapsedMs(updateStarted);
     if (requiresContentRebuild) {
       diagnostics.sidecarState = "rebuilt";
     } else if (existedBefore) {

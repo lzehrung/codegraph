@@ -154,9 +154,12 @@ describe("persistent query index", () => {
     const rebuiltSnapshot = await rebuiltSession.loadProject();
 
     expect(response.results.some((result) => result.file === "src/日本.ts")).toBe(true);
-    expect(rebuiltSnapshot.buildReport?.queryIndex?.sidecarState).toBe("rebuilt");
+    expect(rebuiltSnapshot.buildReport?.queryIndex).toMatchObject({
+      sidecarState: "rebuilt",
+      updateMs: expect.any(Number),
+    });
+    expect(rebuiltSnapshot.buildReport?.queryIndex?.updateMs).toBeGreaterThan(0);
   });
-
 
   it("reports both candidate files and candidate chunks for sidecar searches", async () => {
     const root = await createRepo();
@@ -399,8 +402,11 @@ describe("persistent query index", () => {
     created.store?.close();
 
     await fs.writeFile(transient, "export const transientValue = 'transient changed phrase with a new size';\n");
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => ++clock);
     const updated = await ensureQueryIndex(await loadSnapshot());
     expect(updated.diagnostics).toMatchObject({ sidecarState: "updated", filesRead: 1, filesUpdated: 1 });
+    expect(updated.diagnostics.updateMs).toBeGreaterThan(0);
     updated.store?.close();
   });
 
