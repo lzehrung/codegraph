@@ -40,13 +40,15 @@ async function statInput(projectRoot: string, target: string): Promise<Resolutio
     const hash = crypto.createHash("sha256");
     if (sampleBytes) {
       const first = Buffer.allocUnsafe(sampleBytes);
-      const last = Buffer.allocUnsafe(sampleBytes);
       const handle = await fsp.open(target, "r");
       try {
         const firstRead = await handle.read(first, 0, sampleBytes, 0);
-        const lastRead = await handle.read(last, 0, sampleBytes, Math.max(0, stat.size - sampleBytes));
         hash.update(first.subarray(0, firstRead.bytesRead));
-        hash.update(last.subarray(0, lastRead.bytesRead));
+        if (stat.size > sampleBytes) {
+          const last = Buffer.allocUnsafe(sampleBytes);
+          const lastRead = await handle.read(last, 0, sampleBytes, stat.size - sampleBytes);
+          hash.update(last.subarray(0, lastRead.bytesRead));
+        }
       } finally {
         await handle.close();
       }

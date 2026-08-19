@@ -299,6 +299,36 @@ describe("Cache invalidation and strict hashing", () => {
     }
   });
 
+  it("closes manifest directory handles after a best-effort fsync failure", async () => {
+    const root = await mkTmpDir("dg-manifest-directory-sync-");
+    const directoryPath = path.dirname(manifestPathFor(root));
+    const originalOpen = fsp.open.bind(fsp);
+    const directorySync = vi.fn(async () => {
+      throw new Error("directory fsync unavailable");
+    });
+    const directoryClose = vi.fn();
+    const openSpy = vi.spyOn(fsp, "open").mockImplementation(async (target, flags, mode) => {
+      const handle = await originalOpen(target, flags, mode);
+      if (path.resolve(String(target)) !== directoryPath) return handle;
+      const close = handle.close.bind(handle);
+      handle.sync = directorySync;
+      handle.close = async () => {
+        directoryClose();
+        await close();
+      };
+      return handle;
+    });
+
+    try {
+      await writeManifest(root, undefined, createManifest(root));
+      expect(directorySync).toHaveBeenCalledOnce();
+      expect(directoryClose).toHaveBeenCalledOnce();
+    } finally {
+      openSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("disk cache invalidates when content hash changes even if mtime is restored", async () => {
     const root = await mkTmpDir("dg-cache-inv-");
     const utilPath = path.join(root, "util.ts");
@@ -3213,6 +3243,37 @@ describe("Cache invalidation and strict hashing", () => {
       expect(second).toBe(first);
       expect(readLengths).toEqual([sampleBytes, sampleBytes, sampleBytes, sampleBytes]);
       expect(readLengths.every((length) => length <= 1_048_576)).toBe(true);
+    } finally {
+      openSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads small resolver fingerprint inputs once", async () => {
+    const root = await mkTmpDir("dg-node-modules-small-read-");
+    const lockPath = path.join(root, "package-lock.json");
+    const bytes = 512;
+    const readLengths: number[] = [];
+    const open = fsp.open.bind(fsp);
+    const openSpy = vi.spyOn(fsp, "open").mockImplementation(async (target, flags, mode) => {
+      const handle = await open(target, flags, mode);
+      if (path.resolve(String(target)) === lockPath) {
+        const read = handle.read.bind(handle);
+        handle.read = async (buffer, offset, length, position) => {
+          if (typeof length === "number") readLengths.push(length);
+          return await read(buffer, offset, length, position);
+        };
+      }
+      return handle;
+    });
+    try {
+      await fsp.mkdir(path.join(root, "node_modules"), { recursive: true });
+      await fsp.writeFile(lockPath, Buffer.alloc(bytes, 0x61));
+
+      await resolverEnvironment.computeResolverEnvironmentFingerprint(root, []);
+      await resolverEnvironment.computeResolverEnvironmentFingerprint(root, []);
+
+      expect(readLengths).toEqual([bytes, bytes]);
     } finally {
       openSpy.mockRestore();
       await fsp.rm(root, { recursive: true, force: true });

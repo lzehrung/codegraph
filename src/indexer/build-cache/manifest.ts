@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import fsp from "node:fs/promises";
+import fsp, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import type { GraphCacheEntry, GraphBuildOptions } from "../../graphs/types.js";
@@ -349,6 +349,24 @@ async function fsyncManifestFile(filePath: string): Promise<void> {
   }
 }
 
+async function syncManifestDirectory(directoryPath: string): Promise<void> {
+  let directory: FileHandle | undefined;
+  try {
+    directory = await fsp.open(directoryPath, "r");
+    await directory.sync();
+  } catch {
+    // Directory fsync is not supported on every platform.
+  } finally {
+    if (directory) {
+      try {
+        await directory.close();
+      } catch {
+        // Directory fsync is best effort.
+      }
+    }
+  }
+}
+
 async function wait(ms: number): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
@@ -364,13 +382,7 @@ async function writeManifestAtomically(manifestPath: string, payload: string): P
       await fsp.writeFile(tempPath, payload, "utf8");
       await fsyncManifestFile(tempPath);
       await fsp.rename(tempPath, manifestPath);
-      try {
-        const directory = await fsp.open(path.dirname(manifestPath), "r");
-        await directory.sync();
-        await directory.close();
-      } catch {
-        // Directory fsync is not supported on every platform.
-      }
+      await syncManifestDirectory(path.dirname(manifestPath));
       return;
     } catch (error) {
       try {
