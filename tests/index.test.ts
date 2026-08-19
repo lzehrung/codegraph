@@ -149,7 +149,7 @@ describe("Project Indexing", () => {
         await fsp.unlink(victim);
         await fsp.symlink(outside, victim, "file");
       });
-      await expect(buildProjectIndexFromFiles(root, [victim], { cache: "off" })).rejects.toThrow(
+      await expect(buildProjectIndexFromFiles(root, [victim], { cache: "disk" })).rejects.toThrow(
         /changed between verification and open|outside project root/,
       );
     } finally {

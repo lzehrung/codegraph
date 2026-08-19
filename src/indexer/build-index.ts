@@ -21,6 +21,7 @@ import {
   normalizePath,
 } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
+import { readConfinedUtf8File } from "../util/confinedFile.js";
 import { resolveWorkerThreadCount } from "../util/workerThreads.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { collectGraph } from "../graph-builder.js";
@@ -50,6 +51,7 @@ import {
   createFallbackImportExtractionHandler,
   diffBuildOptions,
   fileSignature,
+  fileSignatureFromSource,
   graphOptionsEqual,
   initFileReport,
   initManifestReport,
@@ -243,6 +245,7 @@ async function buildIndexedModuleForFile(args: {
   cacheEnabled: boolean;
   resolverEnvironmentFingerprint?: string | null;
   confinedRoot?: string;
+  trustedSource?: string | undefined;
 }): Promise<IndexedFileModuleResult> {
   const prepared = await prepareFileContextForBuild(
     args.file,
@@ -251,6 +254,7 @@ async function buildIndexedModuleForFile(args: {
     args.workerSetup,
     args.report,
     args.confinedRoot,
+    args.trustedSource,
   );
   const { source, sup, nativeQueries, embeddedBlocks } = prepared;
   let resolvedLang = prepared.lang;
@@ -606,15 +610,25 @@ function buildConcurrency(opts: BuildOptions | undefined): number {
 }
 
 async function prepareFileSignatures(args: {
+  projectRoot: string;
   files: string[];
   opts: BuildOptions | undefined;
   gitSigMap: Map<string, string>;
   cacheEnabled: boolean;
   needsContentHash: boolean;
   concurrency: number;
+  confinedRoot?: string;
+  trustedSources?: Map<string, string> | undefined;
 }): Promise<Map<string, FileSignature>> {
   const entries = await mapLimit(args.files, args.concurrency, async (file) => {
     const gitSig = args.gitSigMap.get(file);
+    const source = args.confinedRoot
+      ? await readConfinedUtf8File(args.confinedRoot, args.projectRoot, file)
+      : undefined;
+    if (source !== undefined) {
+      args.trustedSources?.set(file, source);
+      return [file, fileSignatureFromSource(source, gitSig)] as const;
+    }
     const sigInfo = await fileSignature(file, args.needsContentHash ? args.opts?.cacheStrict : false, gitSig, {
       forceContentHash: args.cacheEnabled && !gitSig,
     });
@@ -657,7 +671,10 @@ async function buildIndexFromFileListShared(
   const projectFiles = helperOpts?.projectFiles;
   initManifestReport(report, useManifest, false);
   const confinedRoot = helperOpts?.confineReads ? await fsp.realpath(projectRoot) : undefined;
-  const normalizedFiles = Array.from(new Set(normalizeIndexedFileInputs(projectRoot, rawFiles ?? [], "Index file")));
+  const [trustedSources, normalizedFiles] = [
+    confinedRoot ? new Map<string, string>() : undefined,
+    Array.from(new Set(normalizeIndexedFileInputs(projectRoot, rawFiles ?? [], "Index file"))),
+  ] as const;
   if (!normalizedFiles.length && helperOpts?.warnNoFilesMessage) {
     logWithLevel(opts?.logLevel, "warn", helperOpts.warnNoFilesMessage);
   }
@@ -734,12 +751,14 @@ async function buildIndexFromFileListShared(
     })
     .sort((left, right) => left.localeCompare(right));
   const fileSignatures = await prepareFileSignatures({
+    projectRoot,
     files: sqlFiles,
     opts,
     gitSigMap,
     cacheEnabled,
     needsContentHash: true,
     concurrency: conc,
+    ...(confinedRoot ? { confinedRoot, trustedSources } : {}),
   });
   const sqlCorpusSig = sqlCorpusSignature(sqlFiles, fileSignatures);
   let sqlFactCachePromise: Promise<SqlFactCache> | undefined;
@@ -791,9 +810,15 @@ async function buildIndexFromFileListShared(
         let sigInfo = fileSignatures.get(file);
         if (!sigInfo) {
           const gitSig = gitSigMap.get(file);
-          sigInfo = await fileSignature(file, opts?.cacheStrict, gitSig, {
-            forceContentHash: cacheEnabled && !gitSig,
-          });
+          const source = confinedRoot ? await readConfinedUtf8File(confinedRoot, projectRoot, file) : undefined;
+          if (source !== undefined) {
+            trustedSources?.set(file, source);
+            sigInfo = fileSignatureFromSource(source, gitSig);
+          } else {
+            sigInfo = await fileSignature(file, opts?.cacheStrict, gitSig, {
+              forceContentHash: cacheEnabled && !gitSig,
+            });
+          }
           fileSignatures.set(file, sigInfo);
         }
         manifestEntriesForIndex.set(file, toProjectIndexManifestEntry(sigInfo));
@@ -877,7 +902,7 @@ async function buildIndexFromFileListShared(
             onFallbackImportExtraction,
             fileSignatures,
             cacheEnabled,
-            ...(confinedRoot ? { confinedRoot } : {}),
+            ...(confinedRoot ? { confinedRoot, trustedSource: trustedSources?.get(file) } : {}),
           });
           mod = built.module;
           graphContext = built.graphContext;
@@ -1571,6 +1596,7 @@ export async function buildProjectIndexIncremental(
           })
         : new Map<string, string>();
       const fileSignatures = await prepareFileSignatures({
+        projectRoot,
         files: Array.from(allFiles),
         opts,
         gitSigMap,

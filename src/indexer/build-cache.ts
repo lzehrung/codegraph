@@ -19,6 +19,7 @@ export {
   clearMemoryCache,
   closeDiskCacheDatabase,
   fileSignature,
+  fileSignatureFromSource,
   pruneDiskModuleCache,
   tryLoadFromCache,
   writeModulesToCache,
