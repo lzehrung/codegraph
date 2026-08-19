@@ -329,6 +329,19 @@ describe("codegraph MCP handlers", () => {
         sessionId ?? undefined,
       );
       expect(readProtocolError(unknownTool.payload).code).toBe(-32601);
+      const missingFile = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 11,
+          method: "tools/call",
+          params: { name: "get_file", arguments: { file: "nope-missing.ts" } },
+        },
+        sessionId ?? undefined,
+      );
+      const missingFileError = readToolExecutionError(missingFile.payload);
+      expect(missingFileError).not.toContain(root);
+      expect(missingFileError).not.toMatch(/[A-Za-z]:[\\/]/);
     } finally {
       await httpServer.close();
     }
