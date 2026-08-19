@@ -236,7 +236,7 @@ export async function handleSkillCommand(context: SkillCommandContext): Promise<
     if (!bundledSkillDir) {
       throw new Error("Bundled codegraph skill assets were not found.");
     }
-    context.writeStdoutLine(normalizePathForDisplay(bundledSkillDir));
+    writeCliOutput(context, normalizePathForDisplay(bundledSkillDir));
     return;
   }
 

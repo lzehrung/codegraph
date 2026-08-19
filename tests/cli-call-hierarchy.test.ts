@@ -101,19 +101,19 @@ describe("call hierarchy CLI", () => {
     const missing = await captureCli(["callees", "--json"]);
     expect(missing.exitCode).toBe(2);
     expect(missing.stderr).toContain("Usage: codegraph callees <symbol-target>");
-
     const highDepth = await captureCli(["callers", "--json", "cg:symbol:unused", "--depth", "6"]);
+
     expect(highDepth).toEqual({
       stdout: "",
       stderr: 'Invalid --depth value "6". Expected an integer from 1 to 5.\n',
-      exitCode: 1,
+      exitCode: 2,
     });
 
     const highLimit = await captureCli(["callees", "--json", "cg:symbol:unused", "--limit", "501"]);
     expect(highLimit).toEqual({
       stdout: "",
       stderr: 'Invalid --limit value "501". Expected an integer from 0 to 500.\n',
-      exitCode: 1,
+      exitCode: 2,
     });
 
     const invalidHandle = await symbolHandle("NotCallable");

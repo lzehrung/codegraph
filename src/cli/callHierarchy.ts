@@ -23,21 +23,28 @@ export async function handleCallHierarchyCommand(
     context.exit(2);
   }
 
+  let depth: number;
+  let limit: number;
   try {
-    const depth = parseBoundedIntegerOption(
+    depth = parseBoundedIntegerOption(
       context.getOpt("--depth"),
       "--depth",
       DEFAULT_CALL_HIERARCHY_DEPTH,
       1,
       MAX_CALL_HIERARCHY_DEPTH,
     );
-    const limit = parseBoundedIntegerOption(
+    limit = parseBoundedIntegerOption(
       context.getOpt("--limit"),
       "--limit",
       DEFAULT_CALL_HIERARCHY_LIMIT,
       0,
       MAX_CALL_HIERARCHY_LIMIT,
     );
+  } catch (error: unknown) {
+    exitWithError(context, error, 2);
+  }
+
+  try {
     const request = {
       root: context.root,
       handle,

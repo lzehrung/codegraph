@@ -1,13 +1,35 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { resolveFilePathFromRoot } from "../util/paths.js";
+
+// A slash- or backslash-prefixed path is drive-relative on Windows. Node resolves it
+// against the current drive, but resolveFilePathFromRoot leaves it unchanged because
+// path.posix considers it absolute. Route those non-UNC paths through path.win32.resolve
+// so later confinement checks receive a drive-qualified root.
+const WINDOWS_DRIVE_QUALIFIED_PATTERN = /^[A-Za-z]:[\\/]/;
+const WINDOWS_DRIVE_RELATIVE_ROOT_PATTERN = /^[\\/](?![\\/])/;
+function resolveAbsoluteProjectRoot(cwd: () => string, candidate: string): string {
+  if (
+    process.platform === "win32" &&
+    WINDOWS_DRIVE_RELATIVE_ROOT_PATTERN.test(candidate) &&
+    !WINDOWS_DRIVE_QUALIFIED_PATTERN.test(candidate)
+  ) {
+    return path.win32.resolve(cwd(), candidate);
+  }
+  return resolveFilePathFromRoot(cwd(), candidate);
+}
 
 export function looksLikeGlobPattern(baseRoot: string, value: string): boolean {
   const hasGlobSyntax =
     /[*?]/.test(value) || (value.includes("{") && value.includes("}")) || (value.includes("[") && value.includes("]"));
   if (!hasGlobSyntax) return false;
   return !fs.existsSync(resolveFilePathFromRoot(baseRoot, value));
+}
+
+function invalidGlobRootMessage(command: string, value: string): string {
+  return `Invalid ${command} path "${value}". Positional paths are scan roots, not glob patterns. Repeat --ignore-glob or --include-glob for each glob filter.`;
 }
 
 export function isExistingDirectory(filePath: string): boolean {
@@ -66,9 +88,7 @@ export function supportsIncludeRoots(command: string): boolean {
 export function assertValidIncludeRoots(command: string, baseRoot: string, includeRoots: readonly string[]): void {
   const globLikeRoot = includeRoots.find((includeRoot) => looksLikeGlobPattern(baseRoot, includeRoot));
   if (!globLikeRoot) return;
-  throw new Error(
-    `Invalid ${command} path "${globLikeRoot}". Positional paths are scan roots, not glob patterns. Repeat --ignore-glob or --include-glob for each glob filter.`,
-  );
+  throw new Error(invalidGlobRootMessage(command, globLikeRoot));
 }
 
 export function parseNativeRuntimeMode(value: string | undefined): NativeRuntimeMode {
@@ -93,8 +113,7 @@ export function resolveCliRootPolicy(input: {
   cwd: () => string;
 }): CliRootPolicyResult {
   const { command, positionals, rootOpt, cwd } = input;
-  const resolveAbs = (p: string) => resolveFilePathFromRoot(cwd(), p);
-
+  const resolveAbs = (p: string) => resolveAbsoluteProjectRoot(cwd, p);
   if (command === "impact" && positionals.length) {
     const impactRootArg = positionals[0]!;
     const resolvedImpactRoot = resolveAbs(impactRootArg);
@@ -142,6 +161,23 @@ export function resolveCliRootPolicy(input: {
     return {
       status: "error",
       messages: [`Invalid ${command} project root "${positionals[0]!}". Expected an existing directory.`],
+    };
+  }
+  if (
+    usesLegacyRootPositional(command) &&
+    !isLifecycleCommand(command) &&
+    !acceptsOptionalProjectRoot(command) &&
+    !rootOpt &&
+    firstPositionalRoot !== undefined &&
+    !isExistingDirectory(firstPositionalRoot)
+  ) {
+    const positional = positionals[0]!;
+    if (looksLikeGlobPattern(cwd(), positional)) {
+      return { status: "error", messages: [invalidGlobRootMessage(command, positional)] };
+    }
+    return {
+      status: "error",
+      messages: [`Invalid ${command} path "${positional}". Expected an existing directory or use --root <path>.`],
     };
   }
 
@@ -232,9 +268,7 @@ export function resolveCliIncludeRoots(input: {
     return [...positionals];
   }
   if (positionals.length === 1 && looksLikeGlobPattern(cwd(), positionals[0]!)) {
-    throw new Error(
-      `Invalid ${command} path "${positionals[0]!}". Positional paths are scan roots, not glob patterns. Repeat --ignore-glob or --include-glob for each glob filter.`,
-    );
+    throw new Error(invalidGlobRootMessage(command, positionals[0]!));
   }
   return [];
 }

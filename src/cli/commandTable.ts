@@ -303,7 +303,7 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
       const { handleMcpServeCommand } = await import("./mcp.js");
       await handleMcpServeCommand({
         positionals: ctx.parsed.positionals,
-        root: ctx.projectRootFs,
+        root: ctx.projectRootAbs,
         buildOptions: ctx.buildAgentOptions(),
         getOpt: ctx.getOpt,
         hasFlag: ctx.hasFlag,

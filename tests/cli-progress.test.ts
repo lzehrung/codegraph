@@ -7,6 +7,7 @@ import { createCliProgressDisplay, resolveCliProgressPresentation } from "../src
 import { buildProjectIndex } from "../src/index.js";
 import * as configModule from "../src/config.js";
 import * as mcpServer from "../src/mcp/server.js";
+import { normalizePath } from "../src/util/paths.js";
 import { captureCli } from "./helpers/cli.js";
 import { runGit } from "./helpers/git.js";
 
@@ -320,26 +321,34 @@ describe("CLI index progress", () => {
       const lazy = await captureCli(["mcp", "serve", "--root", root], captureOptions);
       const baseWarmup = await captureCli(["mcp", "serve", "--root", root, "--warmup"], captureOptions);
       const symbolWarmup = await captureCli(["mcp", "serve", "--root", root, "--warmup-symbols"], captureOptions);
+      const normalizedRoot = normalizePath(root);
+      const expectedBuildOptions = expect.objectContaining({
+        discovery: {},
+        onProgress: expect.any(Function),
+      });
 
       expect(lazy.stderr).not.toContain("project index");
       expect(baseWarmup.stderr).not.toContain("Preparing project index");
       expect(symbolWarmup.stderr).not.toContain("Preparing project index");
-      expect(serveSpy).toHaveBeenNthCalledWith(1, expect.objectContaining({ root }));
+      expect(serveSpy).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ root: normalizedRoot, buildOptions: expectedBuildOptions }),
+      );
       expect(serveSpy.mock.calls[0]?.[0].warmup).toBeUndefined();
       expect(serveSpy).toHaveBeenNthCalledWith(
         2,
         expect.objectContaining({
-          root,
+          root: normalizedRoot,
           warmup: "base",
-          buildOptions: expect.objectContaining({ onProgress: expect.any(Function) }),
+          buildOptions: expectedBuildOptions,
         }),
       );
       expect(serveSpy).toHaveBeenNthCalledWith(
         3,
         expect.objectContaining({
-          root,
+          root: normalizedRoot,
           warmup: "symbols",
-          buildOptions: expect.objectContaining({ onProgress: expect.any(Function) }),
+          buildOptions: expectedBuildOptions,
         }),
       );
     } finally {

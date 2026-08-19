@@ -59,7 +59,7 @@ export async function handleInstallerCommand(context: InstallerCommandContext): 
   if (printConfigTarget !== undefined) {
     assertPrintConfigIsExclusive(context);
     const targetId = parseInstallerTargetOrExit(context, printConfigTarget);
-    context.writeStdoutLine(printInstallConfig({ targetId }).trimEnd());
+    writeCliOutput(context, printInstallConfig({ targetId }).trimEnd());
     return;
   }
 
