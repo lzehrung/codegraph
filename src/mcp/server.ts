@@ -1350,8 +1350,13 @@ export function createParseErrorReportingStdin(input: Readable, output: Writable
       pending = Buffer.concat([pending, chunk]);
       let newline = pending.indexOf(10);
       while (newline >= 0) {
-        const frame = pending.subarray(0, newline);
+        const rawFrame = pending.subarray(0, newline);
+        const frame = rawFrame.at(-1) === 13 ? rawFrame.subarray(0, -1) : rawFrame;
         pending = pending.subarray(newline + 1);
+        if (!frame.length) {
+          newline = pending.indexOf(10);
+          continue;
+        }
         if (frame.length > MAX_MCP_STDIO_FRAME_BYTES) {
           callback(new Error("MCP stdio frame exceeded 10 MiB."));
           return;

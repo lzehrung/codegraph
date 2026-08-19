@@ -164,7 +164,7 @@ async function postRawHttpJson(
 
 describe("codegraph MCP handlers", () => {
   describe("MCP stdio parse framing", () => {
-    it("reports malformed frames to the real stdio transport and keeps subsequent frames usable", async () => {
+    it("ignores blank lines, accepts CRLF frames, and recovers from malformed JSON", async () => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-stdio-parse-"));
       const input = new PassThrough();
       const output = new PassThrough();
@@ -183,9 +183,11 @@ describe("codegraph MCP handlers", () => {
         await server.connect(transport);
         input.end(
           [
-            "{bad}",
-            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}',
-            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}',
+            "",
+            "\r",
+            "{bad}\r",
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}\r',
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\r',
             "",
           ].join("\n"),
         );
@@ -194,11 +196,12 @@ describe("codegraph MCP handlers", () => {
             .trim()
             .split("\n")
             .map((frame) => readJsonRpcObject(JSON.parse(frame)));
+          const parseErrors = responses.filter(
+            (response) => response.id === null && readProtocolError(response).code === -32700,
+          );
+          expect(parseErrors).toHaveLength(1);
           expect(responses).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ id: null, error: expect.objectContaining({ code: -32700 }) }),
-              expect.objectContaining({ id: 2, result: expect.anything() }),
-            ]),
+            expect.arrayContaining([expect.objectContaining({ id: 2, result: expect.anything() })]),
           );
         });
       } finally {
