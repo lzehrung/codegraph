@@ -20,7 +20,7 @@ const JAVA_PACKAGE_PATTERN = new RegExp(
   "mu",
 );
 const JAVA_DECLARATION_PATTERN = new RegExp(
-  String.raw`\b(?:class|interface|enum|record|@interface)\s+(${JAVA_IDENTIFIER_SOURCE})`,
+  String.raw`(?:\b(?:class|interface|enum|record)|@interface)\s+(${JAVA_IDENTIFIER_SOURCE})`,
   "gu",
 );
 

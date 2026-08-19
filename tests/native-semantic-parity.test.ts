@@ -869,6 +869,13 @@ nativeDescribe("native semantic coverage", () => {
         { file: ".regressions/unicode_consumer.rs", line: 6, column: 5, expectedStatus: "ok" },
         { file: ".regressions/unicode_def.rs", line: 1, column: 8, expectedStatus: "ok" },
       ),
+      sampleExpectation(
+        "java",
+        ["AnnotationConsumer.java", "AnnotationTypes.java"],
+        [{ file: "AnnotationTypes.java", names: ["AnnotatedMarker"] }],
+        { file: "AnnotationConsumer.java", line: 5, column: 2, expectedStatus: "ok" },
+        { file: "AnnotationTypes.java", line: 3, column: 19, expectedStatus: "ok" },
+      ),
     ];
 
     for (const testCase of cases) {

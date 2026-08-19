@@ -1319,6 +1319,15 @@ describe("Go to Definition", () => {
   });
 
   describe("Java", () => {
+    it("should find definition of imported annotation types", async () => {
+      const index = await createTestIndex("java");
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "java");
+      const consumerFile = path.join(samplePath, "AnnotationConsumer.java").replace(/\\/g, "/");
+      const annotationFile = path.join(samplePath, "AnnotationTypes.java").replace(/\\/g, "/");
+
+      await testGoToDefinition(index, consumerFile, 5, 2, annotationFile, 3);
+    });
+
     it("should find definition of imported static method", async () => {
       const index = await createTestIndex("java");
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "java");

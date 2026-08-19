@@ -27,6 +27,10 @@ const definition: LanguageTestDefinition = {
     exact: {
       dependencyGraph: [
         {
+          from: "AnnotationConsumer.java",
+          to: { type: "file", path: "AnnotationTypes.java" },
+        },
+        {
           from: "static-imports.java",
           to: { type: "file", path: "utils/Utils.java" },
         },
@@ -153,6 +157,17 @@ const definition: LanguageTestDefinition = {
       ],
       references: [
         {
+          name: "find references for imported annotation types",
+          file: "AnnotationTypes.java",
+          line: 3,
+          column: 19,
+          references: [
+            { file: "AnnotationTypes.java", line: 3 },
+            { file: "AnnotationConsumer.java", line: 3 },
+            { file: "AnnotationConsumer.java", line: 5 },
+          ],
+        },
+        {
           name: "find references for wildcard-imported interface",
           file: "pkg/PackageTypes.java",
           line: 7,
@@ -198,6 +213,13 @@ const definition: LanguageTestDefinition = {
       ],
     },
     goToDefinition: [
+      {
+        name: "go to definition resolves imported annotation types",
+        file: "AnnotationConsumer.java",
+        line: 5,
+        column: 2,
+        expectedDefinition: { file: "AnnotationTypes.java", line: 3 },
+      },
       {
         name: "go to definition resolves wildcard-imported nested type",
         file: "WildcardImports.java",

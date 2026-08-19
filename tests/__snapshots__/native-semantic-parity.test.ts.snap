@@ -956,3 +956,21 @@ exports[`native semantic coverage > keeps native semantics stable for representa
   },
 }
 `;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 57`] = `
+{
+  "goto": {
+    "file": "AnnotationTypes.java",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "AnnotationConsumer.java:3",
+      "AnnotationConsumer.java:5",
+      "AnnotationTypes.java:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
