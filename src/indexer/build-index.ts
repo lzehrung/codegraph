@@ -1077,7 +1077,7 @@ async function buildProjectIndexWithManifestOptions(
         : await loadManifest(projectRoot, opts);
     const rootMtime = symlinkHintManifest ? (await fsp.stat(projectRoot)).mtimeMs : undefined;
     const symlinkHintIsFresh =
-      symlinkHintManifest?.symlinkDirectoriesRootMtimeMs === undefined ||
+      symlinkHintManifest?.symlinkDirectoriesRootMtimeMs !== undefined &&
       rootMtime === symlinkHintManifest.symlinkDirectoriesRootMtimeMs;
     const knownSymlinkDirectories = symlinkHintIsFresh ? symlinkHintManifest?.symlinkDirectories : undefined;
     let discoveredSymlinkDirectories = knownSymlinkDirectories;

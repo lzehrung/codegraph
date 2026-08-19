@@ -2842,6 +2842,12 @@ describe("Cache invalidation and strict hashing", () => {
       throw error;
     }
 
+    // Old manifests do not have a root-mtime freshness hint. They must trigger one
+    // full discovery instead of treating their possibly empty list as authoritative.
+    const legacyManifest = await readManifest(root);
+    delete legacyManifest.symlinkDirectoriesRootMtimeMs;
+    await fsp.writeFile(manifestPathFor(root), JSON.stringify(legacyManifest, null, 2), "utf8");
+
     const rebuilt = await buildProjectIndex(root, { cache: "disk" });
     expect(rebuilt.byFile.has(fileIdentityKey(normalize(path.join(linkedPackage, "src", "index.ts"))))).toBe(true);
   });

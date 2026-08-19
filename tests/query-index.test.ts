@@ -382,6 +382,30 @@ describe("persistent query index", () => {
     updated.store?.close();
   });
 
+  it("matches canonicalized manifest entries during query-index updates", async () => {
+    const root = await createRepo();
+    const session = createSession(root);
+    const snapshot = await session.loadProject();
+    const sourceFile = snapshot.files.find((file) => file.endsWith("src/auth.ts"));
+    if (!sourceFile) throw new Error("Expected auth source file in session snapshot.");
+    const entry = snapshot.index.manifestEntries?.get(sourceFile);
+    if (!entry) throw new Error("Expected auth manifest entry in session snapshot.");
+    const manifestEntries = new Map(snapshot.index.manifestEntries);
+    manifestEntries.delete(sourceFile);
+    manifestEntries.set(sourceFile.toUpperCase(), entry);
+
+    const handle = await ensureQueryIndex({
+      ...snapshot,
+      index: { ...snapshot.index, manifestEntries },
+    });
+
+    expect(handle.diagnostics).toMatchObject({
+      sidecarState: "created",
+      filesAdded: snapshot.files.length,
+    });
+    handle.store?.close();
+  });
+
   it("removes only expired abandoned rebuild files", async () => {
     const root = await createRepo();
     const initialSession = createSession(root);

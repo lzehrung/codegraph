@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { AgentProjectSnapshot } from "../session.js";
-import type { QueryIndexDiagnostics } from "../../indexer/types.js";
+import type { ProjectIndexManifestEntry, QueryIndexDiagnostics } from "../../indexer/types.js";
 import { getCodegraphVersion } from "../../util/packageInfo.js";
 import { normalizePath } from "../../util/paths.js";
 import { errorMessage } from "../../util/errors.js";
@@ -64,25 +64,25 @@ function elapsedMs(startedAt: number): number {
   return performance.now() - startedAt;
 }
 
-function lookupManifestEntry(snapshot: AgentProjectSnapshot, file: string) {
-  const entries = snapshot.index.manifestEntries;
-  const direct = entries?.get(file) ?? entries?.get(normalizePath(file));
-  if (direct || !entries) return direct;
-  const normalized = normalizePath(file).toLowerCase();
-  for (const [candidate, entry] of entries) {
-    if (normalizePath(candidate).toLowerCase() === normalized) return entry;
-  }
-  return undefined;
-}
-
 function currentQueryState(snapshot: AgentProjectSnapshot): QueryIndexCurrentState | null {
   const projectSnapshotIdentity = snapshot.index.projectSnapshotIdentity;
   const files: CurrentQueryFile[] = [];
-  if (!projectSnapshotIdentity || !snapshot.index.manifestEntries?.size) return null;
+  const manifestEntries = snapshot.index.manifestEntries;
+  if (!projectSnapshotIdentity || !manifestEntries?.size) return null;
+  const normalizedManifestEntries = new Map<string, ProjectIndexManifestEntry>();
+  for (const [candidate, entry] of manifestEntries) {
+    const normalizedCandidate = normalizePath(candidate).toLowerCase();
+    if (!normalizedManifestEntries.has(normalizedCandidate)) {
+      normalizedManifestEntries.set(normalizedCandidate, entry);
+    }
+  }
   const identities = new Map<string, string>();
   for (const file of snapshot.files) {
     const relativePath = normalizeQueryIndexRelativePath(snapshot.root, file);
-    const entry = lookupManifestEntry(snapshot, file);
+    const entry =
+      manifestEntries.get(file) ??
+      manifestEntries.get(normalizePath(file)) ??
+      normalizedManifestEntries.get(normalizePath(file).toLowerCase());
     if (!entry) continue;
     const sourceIdentity = createQuerySourceIdentity(relativePath, entry);
     files.push({ path: relativePath, sourceIdentity });
