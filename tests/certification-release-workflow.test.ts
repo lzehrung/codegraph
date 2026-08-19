@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const releaseWorkflow = fs.readFileSync(".github/workflows/release.yml", "utf8");
 const standaloneWorkflow = fs.readFileSync(".github/workflows/standalone-release.yml", "utf8");
+const onDemandWorkflow = fs.readFileSync(".github/workflows/on-demand-ci.yml", "utf8");
 
 function jobBlock(workflow: string, jobName: string): string {
   const marker = `  ${jobName}:\n`;
@@ -54,6 +55,25 @@ describe("certified release workflows", () => {
     expect(releaseWorkflow).not.toContain("build-standalone-archives");
     expect(releaseWorkflow).not.toContain("standalone-funnel");
     expect(releaseWorkflow).not.toContain("standalone-release-assets");
+  });
+  it("runs release checks, candidate identity gates, and source CI coverage", () => {
+    const assemble = jobBlock(releaseWorkflow, "assemble-release-candidates");
+    const download = jobBlock(standaloneWorkflow, "download-release-candidates");
+    const source = jobBlock(onDemandWorkflow, "build-and-test-source");
+    const windows = jobBlock(onDemandWorkflow, "build-and-test-windows");
+
+    expect(assemble).toContain("Run release pre-pack checks");
+    expect(assemble).toContain("npm run check");
+    expect(download).toContain("EXPECTED_ROOT_VERSION");
+    expect(download).toContain("EXPECTED_NATIVE_VERSION");
+    expect(download).toContain("manifest.rootVersion");
+    expect(download).toContain("manifest.nativeVersion");
+    expect(source).toContain("node: 22.16.0");
+    expect(source).toContain("node: 24.10.0");
+    expect(source).toContain("os: macos-latest");
+    for (const step of ["npm run security:production", "npm run lint", "npm run format:check", "npm run fixtures:check-clean"]) {
+      expect(windows).toContain(step);
+    }
   });
 
   it("chains the reusable standalone workflow after certified publication", () => {

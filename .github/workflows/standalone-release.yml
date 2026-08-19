@@ -66,6 +66,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           EXPECTED_SOURCE_REVISION: ${{ needs.plan-standalone.outputs.source_revision }}
+          EXPECTED_ROOT_VERSION: ${{ needs.plan-standalone.outputs.root_version }}
+          EXPECTED_NATIVE_VERSION: ${{ needs.plan-standalone.outputs.native_version }}
         shell: bash
         run: |
           mkdir -p temp/release-candidates/packages
@@ -80,8 +82,13 @@ jobs:
             path.resolve("temp/release-candidates/release-candidate-manifest.json"),
             { verifyFiles: true },
           );
-          if (manifest.sourceRevision !== process.env.EXPECTED_SOURCE_REVISION) {
-            throw new Error("Release candidate manifest does not match the selected release tag.");
+          const mismatches = [
+            ["sourceRevision", manifest.sourceRevision, process.env.EXPECTED_SOURCE_REVISION],
+            ["rootVersion", manifest.rootVersion, process.env.EXPECTED_ROOT_VERSION],
+            ["nativeVersion", manifest.nativeVersion, process.env.EXPECTED_NATIVE_VERSION],
+          ].filter(([, actual, expected]) => actual !== expected);
+          if (mismatches.length) {
+            throw new Error(`Release candidate manifest identity mismatch: ${JSON.stringify(mismatches)}`);
           }
           const checksums = manifest.files
             .map((entry) => `${entry.sha256}  ${entry.file}`)

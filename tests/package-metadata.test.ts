@@ -543,18 +543,26 @@ describe("package metadata", () => {
     expect(gitignore).toContain("/coverage/");
   });
 
-  it("lets global installs reuse an existing dist build without invoking workspace builds", () => {
-    const result = spawnSync(process.execPath, ["./scripts/prepare-package.mjs"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        npm_config_global: "true",
-      },
-    });
+  it("rejects a global install when source inputs are newer than dist", () => {
+    const sourcePath = path.resolve(process.cwd(), "src/index.ts");
+    const sourceStat = fs.statSync(sourcePath);
+    const future = new Date(Math.max(Date.now() + 60_000, sourceStat.mtimeMs + 60_000));
+    fs.utimesSync(sourcePath, future, future);
+    try {
+      const result = spawnSync(process.execPath, ["./scripts/prepare-package.mjs"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          npm_config_global: "true",
+        },
+      });
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Skipping prepare build during global install");
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Global source installs require a fresh dist");
+    } finally {
+      fs.utimesSync(sourcePath, sourceStat.atime, sourceStat.mtime);
+    }
   });
 
   it("lets npm pack dry-run reuse an existing dist build without wiping dist", () => {

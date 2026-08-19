@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { inspectDistForTests } from "./ensure-dist-for-tests-lib.mjs";
 function envValue(name) {
   const exact = process.env[name];
   if (exact !== undefined) {
@@ -19,25 +21,27 @@ const isGlobalInstall = envFlag("npm_config_global");
 // npm pack still runs the prepare lifecycle even with --ignore-scripts (npm 10); dry-run
 // pack must not wipe a warm dist/ out from under parallel test workers.
 const isDryRunPack = envValue("npm_command") === "pack" && envFlag("npm_config_dry_run");
-// The published bin points at dist/bin/cli.js, so an unbundled tsc-only dist/ is not enough
-// to skip prepare during `npm install -g .`.
+const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const distCliExists = existsSync(new URL("../dist/cli.js", import.meta.url));
 const distBinExists = existsSync(new URL("../dist/bin/cli.js", import.meta.url));
 const distReady = distCliExists && distBinExists;
+const distState =
+  isGlobalInstall && distReady ? inspectDistForTests(packageRoot) : { needsBuild: false, reason: "not-global-install" };
 
-if (isGlobalInstall && distReady) {
-  console.log("[codegraph] Skipping prepare build during global install; using existing dist/ output.");
+if (isGlobalInstall && !distState.needsBuild) {
+  console.log("[codegraph] Skipping prepare build during global install; using existing fresh dist/ output.");
   process.exit(0);
 }
 
-if (isDryRunPack && distReady) {
-  console.log("[codegraph] Skipping prepare build during npm pack --dry-run; using existing dist/ output.");
+if (isDryRunPack && !distState.needsBuild) {
+  console.log("[codegraph] Skipping prepare build during npm pack --dry-run; using existing fresh dist/ output.");
   process.exit(0);
 }
+
 
 if (isGlobalInstall) {
   console.error(
-    "[codegraph] Global source installs require an existing dist/ build including dist/bin/cli.js. Run npm run build first.",
+    "[codegraph] Global source installs require a fresh dist/ build including dist/bin/cli.js. Run npm run build first.",
   );
   process.exit(1);
 }
