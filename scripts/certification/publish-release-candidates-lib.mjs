@@ -55,6 +55,7 @@ export function publishReleaseCandidates({
   rootDirectory,
   commandRunner = runPackageCommand,
   log = () => {},
+  logError = () => {},
 }) {
   const published = [];
   const skipped = [];
@@ -67,7 +68,7 @@ export function publishReleaseCandidates({
     }
     const result = publishReleaseCandidateEntry({ entry, registry, rootDirectory, commandRunner });
     if (result.stdout) log(result.stdout);
-    if (result.stderr) log(result.stderr);
+    if (result.stderr) logError(result.stderr);
     published.push({ package: entry.package, version });
   }
   return { published, skipped };

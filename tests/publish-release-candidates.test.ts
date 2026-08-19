@@ -72,6 +72,30 @@ describe("publishReleaseCandidates resumability", () => {
     expect(publishCalls).toHaveLength(3);
   });
 
+  it("routes publish stderr to the error logger", () => {
+    const commandRunner = fakeRegistryRunner(new Map(), () => ({
+      exitCode: 0,
+      rawStdout: "published\n",
+      stdout: "published\n",
+      stderr: "npm notice: published with a warning\n",
+    }));
+    const output: string[] = [];
+    const errors: string[] = [];
+
+    publishReleaseCandidates({
+      manifest: manifest(),
+      publicationOrder: publicationOrder().slice(0, 1),
+      registry: REGISTRY,
+      rootDirectory: "/rc",
+      commandRunner,
+      log: (line: string) => output.push(line),
+      logError: (line: string) => errors.push(line),
+    });
+
+    expect(output).toEqual(["published\n"]);
+    expect(errors).toEqual(["npm notice: published with a warning\n"]);
+  });
+
   it("stops and throws after an injected publish failure, leaving later packages unattempted", () => {
     const commandRunner = fakeRegistryRunner(new Map(), (packageAbsolutePath: string) => {
       if (packageAbsolutePath === "/rc/native.tgz") {

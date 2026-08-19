@@ -155,7 +155,7 @@ describe("release candidate publication resume evidence", () => {
         } catch {
           // The original script leaves already-published immutable versions in the registry.
         }
-        expect(() => publishWithOriginalLoop(entries, baselineRunner)).not.toThrow();
+        expect(() => publishWithOriginalLoop(entries, baselineRunner)).toThrow(/publication failed/);
       }
     } finally {
       fs.rmSync(temporaryRoot, { recursive: true, force: true });

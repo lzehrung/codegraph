@@ -51,6 +51,9 @@ try {
     log: (line) => {
       if (line) process.stdout.write(line.endsWith("\n") ? line : `${line}\n`);
     },
+    logError: (line) => {
+      if (line) process.stderr.write(line.endsWith("\n") ? line : `${line}\n`);
+    },
   });
   process.stdout.write(`${JSON.stringify({ status: "pass", published: published.length, skipped: skipped.length })}\n`);
 } catch (error) {
