@@ -143,7 +143,7 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     expect(packet.omittedCounts).toMatchObject({
       changedFiles: 1,
       projectFiles: 0,
-      symbols: 0,
+      symbols: 1,
       graphDelta: 0,
       candidateTests: 0,
     });
