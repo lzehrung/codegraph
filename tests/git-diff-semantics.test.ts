@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { listChangedFiles, listUntrackedFiles, getUnifiedDiff } from "../src/util.js";
+import { gitDiffArgs, getUnifiedDiff, listChangedFiles, listUntrackedFiles } from "../src/util.js";
 import { decodeGitPath, runGit, setGitExecutableForTests } from "../src/util/git.js";
 import { parseUnifiedDiff } from "../src/impact/parse.js";
 import { runGit as git } from "./helpers/git.js";
@@ -153,7 +153,7 @@ describe("git diff semantics", () => {
       await removeGitTempDir(root);
     }
   });
-  it("reports metadata-only mode changes and combined diff diagnostics", () => {
+  it("I10 reports metadata-only mode changes and combined diff diagnostics", () => {
     const modeChange = parseUnifiedDiff("diff --git a/a.ts b/a.ts\nold mode 100644\nnew mode 100755\n");
     expect(modeChange.files).toEqual([expect.objectContaining({ path: "a.ts", modeChanged: true, hunks: [] })]);
 
@@ -311,6 +311,30 @@ describe("git subprocess stdout decoding across chunk boundaries", () => {
     } finally {
       await removeGitTempDir(root);
     }
+  });
+});
+
+describe("bounded and safe git diff execution (I7 and I8)", () => {
+  afterEach(() => {
+    setGitExecutableForTests(null);
+  });
+
+  it("I7 rejects oversized stderr while retaining only a bounded diagnostic tail", async () => {
+    const root = await makeGitTempDir("codegraph-git-stderr-bound-");
+    try {
+      setGitExecutableForTests(process.execPath);
+      const script = "process.stderr.write('x'.repeat(4096));";
+
+      await expect(runGit(root, ["-e", script], { maxBuffer: 64 })).rejects.toThrow(
+        /stderr exceeded maxBuffer \(64 bytes\)/,
+      );
+    } finally {
+      await removeGitTempDir(root);
+    }
+  });
+
+  it("I8 never permits configured external diff or text conversion helpers", () => {
+    expect(gitDiffArgs("HEAD", "WORKTREE")).toEqual(expect.arrayContaining(["--no-ext-diff", "--no-textconv"]));
   });
 });
 

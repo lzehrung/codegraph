@@ -52,6 +52,20 @@ describe("Review report", () => {
     expect(report.diagnostics?.missingFiles ?? []).toEqual([]);
   });
 
+  it("I5 transports mode-only changes through ReviewFileSummary", async () => {
+    const root = await mkTmpDir("dg-review-mode-summary-");
+    try {
+      await fsp.writeFile(path.join(root, "script.ts"), "export const script = true;\n", "utf8");
+      const diffText = ["diff --git a/script.ts b/script.ts", "old mode 100644", "new mode 100755", ""].join("\n");
+
+      const report = await buildReviewReport(root, { diffText });
+
+      expect(report.changedFiles).toContainEqual(expect.objectContaining({ file: "script.ts", modeChanged: true }));
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   it("includes Markdown link validation in the report", async () => {
     const root = await mkTmpDir("dg-review-markdown-links-");
     try {
@@ -2737,10 +2751,45 @@ describe("boundReviewReportForTransport", () => {
     expect(bounded.omittedCounts).toEqual({
       projectFiles: 3,
       changedFiles: 3,
-      symbols: 10,
+      symbols: 16,
       graphDelta: 5,
       candidateTests: 3,
     });
+  });
+  it("I4 counts symbols in changed files omitted by the transport file cap", () => {
+    const report = makeBaseReport({
+      changedFiles: [
+        { file: "kept.ts", status: "updated", symbols: [{ name: "kept", kind: "function", handle: "kept" }] },
+        {
+          file: "omitted-a.ts",
+          status: "updated",
+          symbols: Array.from({ length: 3 }, (_, index) => ({
+            name: `a${index}`,
+            kind: "function",
+            handle: `a${index}`,
+          })),
+        },
+        {
+          file: "omitted-b.ts",
+          status: "updated",
+          symbols: Array.from({ length: 5 }, (_, index) => ({
+            name: `b${index}`,
+            kind: "function",
+            handle: `b${index}`,
+          })),
+        },
+      ],
+    });
+
+    const bounded = boundReviewReportForTransport(report, {
+      projectFiles: 10,
+      changedFiles: 1,
+      symbolsPerFile: 2,
+      graphDelta: 10,
+      candidateTests: 10,
+    });
+
+    expect(bounded.omittedCounts).toMatchObject({ changedFiles: 2, symbols: 8 });
   });
 
   it("keeps the library path (buildReviewReport called directly) fully unbounded", async () => {

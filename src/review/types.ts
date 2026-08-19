@@ -181,8 +181,12 @@ export function boundReviewReportForTransport(
   const candidateTestsOmitted = Math.max(0, report.candidateTests.length - limits.candidateTests);
 
   let symbolsOmitted = 0;
-  for (const file of report.changedFiles) {
-    symbolsOmitted += Math.max(0, file.symbols.length - limits.symbolsPerFile);
+  for (const [index, file] of report.changedFiles.entries()) {
+    if (index < limits.changedFiles) {
+      symbolsOmitted += Math.max(0, file.symbols.length - limits.symbolsPerFile);
+    } else {
+      symbolsOmitted += file.symbols.length;
+    }
   }
   const changedFiles = report.changedFiles.slice(0, limits.changedFiles).map((file) => {
     const omitted = Math.max(0, file.symbols.length - limits.symbolsPerFile);
