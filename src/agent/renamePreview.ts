@@ -859,7 +859,7 @@ function classifyTextualOccurrence(node: {
   while (current) {
     const type = current.type.toLocaleLowerCase();
     if (type.includes("comment")) return "comment";
-    if (type.includes("import") || type === "use_declaration") {
+    if (type.includes("import") || type === "use_declaration" || type === "template_substitution") {
       return null;
     }
     if (type.includes("string") || type.includes("template") || type.includes("quoted") || type === "char_literal") {
@@ -1159,6 +1159,13 @@ function buildFilenameSuggestions(
   const parsed = path.parse(normalizeAgentFilePath(snapshot.root, def.file));
   if (parsed.name !== def.localName) return [];
   const to = path.posix.join(parsed.dir.replace(/\\/g, "/"), `${newName}${parsed.ext}`);
+  const source = normalizeAgentFilePath(snapshot.root, def.file);
+  const destinationKey = to.toLocaleLowerCase();
+  const destinationExists = snapshot.files.some((file) => {
+    const candidate = normalizeAgentFilePath(snapshot.root, file);
+    return candidate !== source && candidate.toLocaleLowerCase() === destinationKey;
+  });
+  if (destinationExists) return [];
   return [
     {
       from: normalizeAgentFilePath(snapshot.root, def.file),

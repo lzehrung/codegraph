@@ -25,6 +25,7 @@ async function renameFixture() {
       "}",
       "// service documentation",
       'export const serviceLabel = "service";',
+      "export const serviceTemplate = `${service}`;",
     ].join("\n"),
   );
   const session = createAgentSession({ root, freshness: { policy: "check" } });
@@ -80,6 +81,7 @@ describe("rename preview", () => {
     expect(result.unsafeSites).toEqual([]);
     expect(result.edits.map((edit) => [edit.file, edit.oldText, edit.kind])).toEqual([
       ["consumer.ts", "service", "import"],
+      ["consumer.ts", "service", "reference"],
       ["consumer.ts", "service", "reference"],
       ["service.ts", "service", "definition"],
     ]);
@@ -228,6 +230,11 @@ describe("rename preview", () => {
     expect(optInResult.safe).toBe(true);
     expect(optInResult.edits.filter((edit) => edit.kind === "comment")).toHaveLength(1);
     expect(optInResult.edits.filter((edit) => edit.kind === "string")).toHaveLength(1);
+    expect(
+      optInResult.edits.some(
+        (edit) => edit.kind === "string" && edit.file === "consumer.ts" && edit.range.start.line === 9,
+      ),
+    ).toBe(false);
     expect(
       optInResult.edits
         .filter((edit) => edit.kind === "comment" || edit.kind === "string")
@@ -427,10 +434,11 @@ describe("rename preview", () => {
     expect(result.conflicts).toContainEqual(expect.objectContaining({ file: "consumer.ts", reason: "shadowing" }));
   });
 
-  it("returns filename suggestions only for exported type names matching their file", async () => {
+  it("suppresses filename suggestions that collide with an existing destination", async () => {
     const root = await mkTmpDir("cg-rename-filename-");
     await fsp.writeFile(path.join(root, "Service.ts"), "export class Service {}\n");
     await fsp.writeFile(path.join(root, "helper.ts"), "export function helper(): void {}\n");
+    await fsp.writeFile(path.join(root, "worker.ts"), "export class ExistingWorker {}\n");
     const session = createAgentSession({ root, freshness: { policy: "check" } });
     const typeSymbols = await workspaceSymbolsWithSession(session, { root, query: "Service" });
     const functionSymbols = await workspaceSymbolsWithSession(session, { root, query: "helper" });
@@ -448,7 +456,7 @@ describe("rename preview", () => {
       includeFilenames: true,
     });
 
-    expect(typeResult.filenameSuggestions).toEqual([{ from: "Service.ts", to: "Worker.ts", caseOnlyRisk: false }]);
+    expect(typeResult.filenameSuggestions).toEqual([]);
     expect(functionResult.filenameSuggestions).toEqual([]);
   });
 
