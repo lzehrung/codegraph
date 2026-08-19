@@ -1214,6 +1214,13 @@ function createCodegraphMcpProtocolServerWithTracker(
       capabilities: { tools: {}, logging: {} },
     },
   );
+  const activeToolCalls = new Map<string | number, McpToolAbort>();
+  server.setNotificationHandler("notifications/cancelled", (notification) => {
+    const requestId = notification.params.requestId;
+    if (requestId !== undefined) {
+      activeToolCalls.get(requestId)?.abort(new Error("MCP tool call was cancelled."));
+    }
+  });
 
   server.setRequestHandler("tools/list", () => ({ tools: listCodegraphMcpTools() }));
   server.setRequestHandler("tools/call", async (request, ctx): Promise<CallToolResult> => {
@@ -1261,6 +1268,7 @@ function createCodegraphMcpProtocolServerWithTracker(
         request.params.name,
         mcpToolTimeoutMs,
       );
+      activeToolCalls.set(ctx.mcpReq.id, toolCallAbort);
       const operation = toolOperations.track(() =>
         callMcpTool(handlers, request.params.name, request.params.arguments ?? {}, toolCallAbort.signal),
       );
@@ -1283,6 +1291,9 @@ function createCodegraphMcpProtocolServerWithTracker(
       } catch (error) {
         if (error instanceof ProtocolError || toolCallAbort.signal.aborted) throw error;
         return toToolErrorResult(error);
+      } finally {
+        activeToolCalls.delete(ctx.mcpReq.id);
+        toolCallAbort.dispose();
       }
     } catch (error) {
       await emitFirstToolCallVisibility(
@@ -1841,6 +1852,7 @@ function isMcpNodeRequest(request: IncomingMessage): request is IncomingMessage 
 
 type McpToolAbort = {
   signal: AbortSignal;
+  abort: (reason: unknown) => void;
   dispose: () => void;
 };
 
@@ -1869,6 +1881,7 @@ function createMcpToolAbortSignal(
   timeout?.unref?.();
   return {
     signal: controller.signal,
+    abort: (reason: unknown) => controller.abort(reason),
     dispose: () => {
       clearTimeout(timeout);
       for (const listener of listeners) listener.signal.removeEventListener("abort", listener.onAbort);
