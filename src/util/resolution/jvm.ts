@@ -78,7 +78,7 @@ async function readJavaSymbolIndex(filePath: string): Promise<JvmSymbolIndexEntr
   return await readJvmSymbolIndex(filePath, javaSymbolIndexCache, {
     packagePattern: JAVA_PACKAGE_PATTERN,
     declarationPattern: JAVA_DECLARATION_PATTERN,
-    normalizeSymbol: (symbol) => symbol.replace(new RegExp(JAVA_IDENTIFIER_IGNORABLE_SOURCE, "gu"), ""),
+    normalizeSymbol: (symbol) => symbol.replace(new RegExp(`[${JAVA_IDENTIFIER_IGNORABLE_SOURCE}]`, "gu"), ""),
   });
 }
 
