@@ -2,6 +2,7 @@ import { registerSessionInvalidationHook } from "../src/agent/sessionLifecycle.j
 import { ensureSessionQueryIndex } from "../src/agent/query-index/sessionStore.js";
 import fs from "node:fs/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import os from "node:os";
 import path from "node:path";
@@ -80,10 +81,12 @@ async function postMcpJson(
   url: string,
   body: Record<string, unknown>,
   sessionId?: string,
+  extraHeaders: Record<string, string> = {},
 ): Promise<{ response: Response; payload: JsonRpcObject }> {
   const headers: Record<string, string> = {
     accept: "application/json, text/event-stream",
     "content-type": "application/json",
+    ...extraHeaders,
   };
   if (sessionId !== undefined) {
     headers["mcp-session-id"] = sessionId;
@@ -161,27 +164,61 @@ async function postRawHttpJson(
 
 describe("codegraph MCP handlers", () => {
   describe("MCP stdio parse framing", () => {
-    it("reports a malformed frame and forwards the next valid frame", async () => {
+    it("reports malformed frames to the real stdio transport and keeps subsequent frames usable", async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-stdio-parse-"));
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const handlers = createCodegraphMcpHandlers({ root });
+      const server = createCodegraphMcpProtocolServer(handlers);
+      const transport = new StdioServerTransport(createParseErrorReportingStdin(input, output), output, {
+        maxBufferSize: 10 * 1024 * 1024,
+      });
+      let frames = "";
+      output.setEncoding("utf8");
+      output.on("data", (chunk: string) => {
+        frames += chunk;
+      });
+
+      try {
+        await server.connect(transport);
+        input.end(
+          [
+            "{bad}",
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}',
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}',
+            "",
+          ].join("\n"),
+        );
+        await vi.waitFor(() => {
+          const responses = frames
+            .trim()
+            .split("\n")
+            .map((frame) => readJsonRpcObject(JSON.parse(frame)));
+          expect(responses).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ id: null, error: expect.objectContaining({ code: -32700 }) }),
+              expect.objectContaining({ id: 2, result: expect.anything() }),
+            ]),
+          );
+        });
+      } finally {
+        await server.close();
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("enforces the 10 MiB frame bound before passing data to the stdio transport", async () => {
       const input = new PassThrough();
       const output = new PassThrough();
       const filtered = createParseErrorReportingStdin(input, output);
-      let forwarded = "";
-      let reported = "";
-      filtered.setEncoding("utf8");
-      output.setEncoding("utf8");
-      filtered.on("data", (chunk: string) => {
-        forwarded += chunk;
-      });
-      output.on("data", (chunk: string) => {
-        reported += chunk;
-      });
-      const ended = new Promise<void>((resolve) => filtered.on("end", resolve));
-      input.end('{bad}\n{"jsonrpc":"2.0","id":0,"method":"tools/list","params":{}}\n');
-      await ended;
-      expect(JSON.parse(reported)).toMatchObject({ id: null, error: { code: -32700 } });
-      expect(forwarded).toContain('"id":0');
+      const failure = new Promise<Error>((resolve) => filtered.once("error", resolve));
+
+      input.end(Buffer.alloc(10 * 1024 * 1024 + 1));
+
+      await expect(failure).resolves.toMatchObject({ message: "MCP stdio frame exceeded 10 MiB." });
     });
   });
+
   it("honors cancellation notifications for request id zero", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-zero-cancel-"));
     const handlers = createCodegraphMcpHandlers({ root });
@@ -699,6 +736,62 @@ describe("codegraph MCP handlers", () => {
     }
   });
 
+  it("shares the tool concurrency cap across modern Streamable HTTP requests", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-modern-concurrency-"));
+    const backingSession = createAgentSession({ root });
+    const release = Promise.withResolvers<void>();
+    let entered = 0;
+    const session: AgentSession = {
+      ...backingSession,
+      loadProject: async (options) => {
+        entered += 1;
+        await release.promise;
+        return await backingSession.loadProject(options);
+      },
+    };
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      port: 0,
+      session,
+      mcpToolConcurrency: 2,
+    });
+    const meta = {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {},
+    };
+
+    try {
+      const calls = Array.from({ length: 5 }, (_, index) =>
+        postMcpJson(
+          httpServer.url,
+          {
+            jsonrpc: "2.0",
+            id: index + 1,
+            method: "tools/call",
+            params: { name: "search", arguments: { query: "missing", mode: "symbol" }, _meta: meta },
+          },
+          undefined,
+          {
+            "mcp-protocol-version": "2026-07-28",
+            "mcp-method": "tools/call",
+            "mcp-name": "search",
+          },
+        ),
+      );
+      await vi.waitFor(() => expect(entered).toBe(2));
+
+      release.resolve();
+      const responses = await Promise.all(calls);
+      expect(entered).toBe(2);
+      expect(responses).toHaveLength(5);
+      expect(responses.filter(({ payload }) => payload.error === undefined)).toHaveLength(2);
+    } finally {
+      release.resolve();
+      await httpServer.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("evicts idle HTTP sessions and bounds the concurrent session count", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-evict-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
@@ -764,6 +857,79 @@ describe("codegraph MCP handlers", () => {
       expect(DEFAULT_MCP_HTTP_SESSION_MAX_COUNT).toBeGreaterThan(0);
     } finally {
       await httpServer.close();
+    }
+  });
+
+  it("refreshes legacy HTTP session activity after a request outlives its idle window", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-completion-touch-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const backingSession = createAgentSession({ root });
+    const toolStarted = Promise.withResolvers<void>();
+    const releaseTool = Promise.withResolvers<void>();
+    let gateTool = false;
+    const session: AgentSession = {
+      ...backingSession,
+      loadProject: async (options) => {
+        if (gateTool) {
+          toolStarted.resolve();
+          await releaseTool.promise;
+        }
+        return await backingSession.loadProject(options);
+      },
+    };
+    const idleMs = 50;
+    const evictionIntervalMs = 10;
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      port: 0,
+      session,
+      httpSessionIdleMs: idleMs,
+      httpSessionEvictionIntervalMs: evictionIntervalMs,
+    });
+
+    try {
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-completion-touch-test", version: "1.0.0" },
+        },
+      });
+      const sessionId = initialize.response.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+
+      gateTool = true;
+      const longCall = postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "search", arguments: { query: "ok", mode: "symbol" } },
+        },
+        sessionId ?? undefined,
+      );
+      await toolStarted.promise;
+      await vi.advanceTimersByTimeAsync(idleMs + evictionIntervalMs);
+      releaseTool.resolve();
+      expect((await longCall).response.status).toBe(200);
+
+      await vi.advanceTimersByTimeAsync(evictionIntervalMs);
+      const followup = await postMcpJson(
+        httpServer.url,
+        { jsonrpc: "2.0", id: 3, method: "tools/list", params: {} },
+        sessionId ?? undefined,
+      );
+      expect(followup.response.status).toBe(200);
+    } finally {
+      releaseTool.resolve();
+      await httpServer.close();
+      await fs.rm(root, { recursive: true, force: true });
+      vi.useRealTimers();
     }
   });
 
