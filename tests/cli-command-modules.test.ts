@@ -1122,6 +1122,42 @@ describe("CLI command modules", () => {
     expect(stderrFiles).toEqual([undefined]);
   });
 
+  test("graph --sqlite forwards an explicit cache mode to full index builds", async () => {
+    const root = await mkTmpDir("codegraph-graph-sqlite-cache-");
+    const entryFile = path.join(root, "entry.ts");
+    const sqliteFile = path.join(root, "graph.sqlite");
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexFromFiles");
+
+    try {
+      await handleGraphCommand(
+        createGraphContext({
+          projectRootFs: root,
+          cwd: () => root,
+          nativeMode: "off",
+          resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
+          getOpt: (name) => {
+            if (name === "--cache") return "memory";
+            if (name === "--sqlite") return sqliteFile;
+            return undefined;
+          },
+          hasFlag: (name) => name === "--cache-verify",
+        }),
+      );
+
+      expect(buildSpy).toHaveBeenCalledOnce();
+      expect(buildSpy).toHaveBeenCalledWith(
+        root,
+        [entryFile.replace(/\\/g, "/")],
+        expect.objectContaining({ cache: "memory", cacheVerify: true }),
+      );
+      expect(fs.existsSync(sqliteFile)).toBe(true);
+    } finally {
+      buildSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("routes agent command help to command-specific usage text", async () => {
     const cases = [
       { args: ["search", "--help"], heading: "codegraph search", usage: 'Usage: codegraph search "<query>"' },
