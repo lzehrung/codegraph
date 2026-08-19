@@ -1,13 +1,17 @@
 import fs from "node:fs";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
-import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
+import { resolveFilePathFromRoot } from "../util/paths.js";
 
 export function looksLikeGlobPattern(baseRoot: string, value: string): boolean {
   const hasGlobSyntax =
     /[*?]/.test(value) || (value.includes("{") && value.includes("}")) || (value.includes("[") && value.includes("]"));
   if (!hasGlobSyntax) return false;
   return !fs.existsSync(resolveFilePathFromRoot(baseRoot, value));
+}
+
+function invalidGlobRootMessage(command: string, value: string): string {
+  return `Invalid ${command} path "${value}". Positional paths are scan roots, not glob patterns. Repeat --ignore-glob or --include-glob for each glob filter.`;
 }
 
 export function isExistingDirectory(filePath: string): boolean {
@@ -66,9 +70,7 @@ export function supportsIncludeRoots(command: string): boolean {
 export function assertValidIncludeRoots(command: string, baseRoot: string, includeRoots: readonly string[]): void {
   const globLikeRoot = includeRoots.find((includeRoot) => looksLikeGlobPattern(baseRoot, includeRoot));
   if (!globLikeRoot) return;
-  throw new Error(
-    `Invalid ${command} path "${globLikeRoot}". Positional paths are scan roots, not glob patterns. Repeat --ignore-glob or --include-glob for each glob filter.`,
-  );
+  throw new Error(invalidGlobRootMessage(command, globLikeRoot));
 }
 
 export function parseNativeRuntimeMode(value: string | undefined): NativeRuntimeMode {
@@ -93,8 +95,7 @@ export function resolveCliRootPolicy(input: {
   cwd: () => string;
 }): CliRootPolicyResult {
   const { command, positionals, rootOpt, cwd } = input;
-  const resolveAbs = (p: string) => normalizePath(resolveFilePathFromRoot(cwd(), normalizePath(p)));
-
+  const resolveAbs = (p: string) => resolveFilePathFromRoot(cwd(), p);
   if (command === "impact" && positionals.length) {
     const impactRootArg = positionals[0]!;
     const resolvedImpactRoot = resolveAbs(impactRootArg);
@@ -152,9 +153,13 @@ export function resolveCliRootPolicy(input: {
     firstPositionalRoot !== undefined &&
     !isExistingDirectory(firstPositionalRoot)
   ) {
+    const positional = positionals[0]!;
+    if (looksLikeGlobPattern(cwd(), positional)) {
+      return { status: "error", messages: [invalidGlobRootMessage(command, positional)] };
+    }
     return {
       status: "error",
-      messages: [`Invalid ${command} path "${positionals[0]!}". Expected an existing directory or use --root <path>.`],
+      messages: [`Invalid ${command} path "${positional}". Expected an existing directory or use --root <path>.`],
     };
   }
 
@@ -245,9 +250,7 @@ export function resolveCliIncludeRoots(input: {
     return [...positionals];
   }
   if (positionals.length === 1 && looksLikeGlobPattern(cwd(), positionals[0]!)) {
-    throw new Error(
-      `Invalid ${command} path "${positionals[0]!}". Positional paths are scan roots, not glob patterns. Repeat --ignore-glob or --include-glob for each glob filter.`,
-    );
+    throw new Error(invalidGlobRootMessage(command, positionals[0]!));
   }
   return [];
 }
