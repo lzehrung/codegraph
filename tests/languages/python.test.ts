@@ -7,6 +7,7 @@ import type { LanguageTestDefinition } from "./types.js";
 import { buildProjectIndex, collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
 import { expectFileInIndex, findSymbolsByName } from "../test-utils.js";
 import { findReferences, goToDefinition } from "../../src/index.js";
+import { fileIdentityKey } from "../../src/util/paths.js";
 
 const definition: LanguageTestDefinition = {
   id: "python",
@@ -122,6 +123,33 @@ describe("Python match bindings", () => {
     const aliasReferences = await findReferences(index, { file, line: 5, column: 19 });
     expect(aliasReferences.status).toBe("ok");
     if (aliasReferences.status === "ok") expect(aliasReferences.references).toHaveLength(2);
+  });
+});
+
+describe("Python local imports", () => {
+  it("does not expose a function-local import to consumers", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-local-import-"));
+    const packageDir = path.join(root, "sample");
+    const sourceFile = path.join(packageDir, "source.py");
+    const barrelFile = path.join(packageDir, "barrel.py");
+    const consumerFile = path.join(root, "consumer.py");
+    await fsp.mkdir(packageDir, { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(packageDir, "__init__.py"), "", "utf8"),
+      fsp.writeFile(sourceFile, "def hidden():\n    return 1\n", "utf8"),
+      fsp.writeFile(barrelFile, "def use_hidden():\n    from .source import hidden\n    return hidden()\n", "utf8"),
+      fsp.writeFile(consumerFile, "from sample.barrel import hidden\nhidden()\n", "utf8"),
+    ]);
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const barrel = index.byFile.get(fileIdentityKey(barrelFile));
+      const result = await goToDefinition(index, { file: consumerFile, line: 2, column: 1 });
+
+      expect(barrel?.exports.some((entry) => entry.exportedAs === "hidden")).toBe(false);
+      expect(result.status).not.toBe("ok");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });
 

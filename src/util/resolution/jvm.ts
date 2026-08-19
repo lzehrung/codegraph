@@ -12,7 +12,7 @@ const KOTLIN_PACKAGE_PATTERN = new RegExp(
   "mu",
 );
 const KOTLIN_DECLARATION_PATTERN = new RegExp(
-  String.raw`\b(?:class|object|fun|typealias|interface|val|var)\s+(${KOTLIN_IDENTIFIER_SOURCE})`,
+  String.raw`\b(?:class|object|fun|typealias|interface)\s+(${KOTLIN_IDENTIFIER_SOURCE})`,
   "gu",
 );
 const JAVA_PACKAGE_PATTERN = new RegExp(

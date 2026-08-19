@@ -965,7 +965,7 @@ export function collectLocalsAndExportsFromSource(
 
   if (support.id === "python") {
     for (const binding of imports) {
-      if (binding.mechanism !== "python" || typeof binding.resolved !== "string") continue;
+      if (binding.mechanism !== "python" || !binding.moduleLevel || typeof binding.resolved !== "string") continue;
       if (binding.kind === "named") {
         if (binding.local.startsWith("_")) continue;
         exports.push({

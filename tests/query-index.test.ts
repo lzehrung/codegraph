@@ -136,13 +136,17 @@ describe("persistent query index", () => {
       ?.evidence.find((evidence) => evidence.file === "src/auth.ts");
     expect(authEvidence?.line).toBe(1);
   });
-  it("rebuilds sidecars with an obsolete text normalizer before serving Unicode queries", async () => {
+  it("uses fresh Unicode sidecars and rebuilds obsolete normalizers", async () => {
     const root = await createRepo();
     await fs.writeFile(path.join(root, "src", "日本.ts"), "export const 日本 = 'café';\n", "utf8");
+    const readSnapshot = vi.spyOn(QueryIndexStore.prototype, "withReadSnapshot");
     const initialSession = createSession(root);
-    await search(initialSession, root, "日本");
+    const initial = await search(initialSession, root, "日本");
     const initialSnapshot = await initialSession.loadProject();
     const sidecar = resolveQueryIndexPaths(initialSnapshot.index.cacheRootDir!).sidecar;
+
+    expect(initial.results.some((result) => result.file === "src/日本.ts")).toBe(true);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
     disposeSessionQueryIndex(initialSession);
 
     const database = new SqliteDatabase(sidecar);

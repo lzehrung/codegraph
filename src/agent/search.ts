@@ -741,8 +741,7 @@ async function addTextResults(
   const projectSnapshotIdentity = snapshot.index.projectSnapshotIdentity;
   const store = queryIndex?.store;
   const diagnostics = queryIndex?.diagnostics;
-  const hasNonAsciiRankTerm = query.rankTokens.some((term) => /[^\p{ASCII}]/u.test(term));
-  if (store && diagnostics && projectSnapshotIdentity && !hasNonAsciiRankTerm) {
+  if (store && diagnostics && projectSnapshotIdentity) {
     const candidateResultMap = new Map<string, MutableSearchResult>();
     try {
       store.withReadSnapshot(projectSnapshotIdentity, () => {

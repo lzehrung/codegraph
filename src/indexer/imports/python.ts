@@ -54,7 +54,11 @@ function resolvePythonNamespaceMember(resolved: ResolvedImportTarget, imported: 
   return undefined;
 }
 
-async function pushStarImport(context: PythonImportExtractionContext, moduleSpec: string): Promise<void> {
+async function pushStarImport(
+  context: PythonImportExtractionContext,
+  moduleSpec: string,
+  moduleLevel: boolean,
+): Promise<void> {
   const { relDots, mod } = splitRelativeModuleSpec(moduleSpec);
   const resolved = await resolvePythonModule(context.projectRoot, context.file, mod, relDots);
   context.pushBinding({
@@ -62,6 +66,7 @@ async function pushStarImport(context: PythonImportExtractionContext, moduleSpec
     from: moduleSpec,
     resolved,
     mechanism: "python",
+    moduleLevel,
   });
 }
 
@@ -70,6 +75,7 @@ async function pushNamedImport(
   moduleSpec: string,
   imported: string,
   local: string,
+  moduleLevel: boolean,
 ): Promise<void> {
   const { relDots, mod } = splitRelativeModuleSpec(moduleSpec);
   const resolved = await resolvePythonModule(context.projectRoot, context.file, mod, relDots);
@@ -81,6 +87,7 @@ async function pushNamedImport(
       from: moduleSpec,
       resolved: namespaceResolved,
       mechanism: "python",
+      moduleLevel,
     });
     return;
   }
@@ -92,10 +99,16 @@ async function pushNamedImport(
     from: moduleSpec,
     resolved,
     mechanism: "python",
+    moduleLevel,
   });
 }
 
-async function pushDefaultImport(context: PythonImportExtractionContext, dotted: string, local: string): Promise<void> {
+async function pushDefaultImport(
+  context: PythonImportExtractionContext,
+  dotted: string,
+  local: string,
+  moduleLevel: boolean,
+): Promise<void> {
   const resolved = await resolvePythonModule(context.projectRoot, context.file, dotted, 0);
   context.pushBinding({
     kind: "namespace",
@@ -103,6 +116,7 @@ async function pushDefaultImport(context: PythonImportExtractionContext, dotted:
     from: dotted,
     resolved,
     mechanism: "python",
+    moduleLevel,
   });
 }
 
@@ -111,19 +125,20 @@ const PYTHON_NAMED_IMPORT_PATTERN = new RegExp(
   "u",
 );
 const PYTHON_MODULE_IMPORT_PATTERN = new RegExp(
-  String.raw`^(?:\s*)import\s+(${PYTHON_IDENTIFIER_SOURCE}(?:\.${PYTHON_IDENTIFIER_SOURCE})*)\s*(?:as\s+(${PYTHON_IDENTIFIER_SOURCE}))?`,
+  String.raw`^[\t ]*import\s+(${PYTHON_IDENTIFIER_SOURCE}(?:\.${PYTHON_IDENTIFIER_SOURCE})*)\s*(?:as\s+(${PYTHON_IDENTIFIER_SOURCE}))?`,
   "gmu",
 );
 
 export async function collectPythonImportsFromSource(context: PythonImportExtractionContext): Promise<void> {
   const pySrc = stripPythonCommentsAndStrings(context.source);
-  const fromLinePattern = /^\s*from\s+([^\s]+)\s+import\s+([^\n#]+)/gm;
+  const fromLinePattern = /^[\t ]*from\s+([^\s]+)\s+import\s+([^\n#]+)/gm;
   for (const match of pySrc.matchAll(fromLinePattern)) {
     const mod = match[1]!.trim();
+    const moduleLevel = !/^[\t ]/.test(pySrc.slice(match.index ?? 0));
     const items = match[2]!.split(",").map((item) => item.trim());
     for (const item of items) {
       if (item === "*") {
-        await pushStarImport(context, mod);
+        await pushStarImport(context, mod, moduleLevel);
         continue;
       }
       // PEP 3131 permits Unicode identifiers (XID_Start/XID_Continue); an ASCII-only
@@ -132,7 +147,7 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
       if (!aliasMatch) continue;
       const imported = aliasMatch[1]!;
       const local = aliasMatch[2] ?? imported;
-      await pushNamedImport(context, mod, imported, local);
+      await pushNamedImport(context, mod, imported, local, moduleLevel);
     }
   }
 
@@ -140,6 +155,6 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
   for (const match of pySrc.matchAll(importPattern)) {
     const dotted = match[1]!;
     const local = match[2] ?? dotted.split(".")[0]!;
-    await pushDefaultImport(context, dotted, local);
+    await pushDefaultImport(context, dotted, local, !/^[\t ]/.test(pySrc.slice(match.index ?? 0)));
   }
 }
