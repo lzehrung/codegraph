@@ -132,7 +132,7 @@ describe("release script helpers", () => {
   it("uses public npm and public access for every local publishing path", () => {
     const publicRegistry = "https://registry.npmjs.org";
     const publisherPaths = [
-      "scripts/certification/publish-release-candidates.mjs",
+      "scripts/certification/publish-release-candidates-lib.mjs",
       "scripts/release.mjs",
       "scripts/publish-native-targets.mjs",
     ];
