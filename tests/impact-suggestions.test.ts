@@ -1294,4 +1294,39 @@ index 1111111..2222222 100644
       await fsp.rm(jsonPath, { force: true });
     }
   });
+
+  it("I12 marks untested-change suggestions uncertain when a test reference falls beyond the scan cap", async () => {
+    const root = await mkTmpDir("dg-impact-suggestion-reference-cap-");
+    try {
+      await fsp.writeFile(path.join(root, "source.ts"), "export function helper() { return 1; }\n", "utf8");
+      const runtimeReferences = Array.from({ length: 500 }, () => "helper();").join("\n");
+      await fsp.writeFile(
+        path.join(root, "consumer.ts"),
+        `import { helper } from "./source.js";\n${runtimeReferences}\n`,
+        "utf8",
+      );
+      await fsp.writeFile(path.join(root, "zzz.test.ts"), 'import { helper } from "./source.js";\nhelper();\n', "utf8");
+      const report = await buildReportForRoot(
+        root,
+        [
+          "diff --git a/source.ts b/source.ts",
+          "--- a/source.ts",
+          "+++ b/source.ts",
+          "@@ -1 +1 @@",
+          "-export function helper() { return 0; }",
+          "+export function helper() { return 1; }",
+          "",
+        ].join("\n"),
+        { testCoverageSuggestions: true },
+      );
+      const suggestion = report.suggestions?.find(
+        (entry) => entry.kind === "untestedChange" && entry.symbol === "helper",
+      );
+
+      expect(suggestion).toMatchObject({ confidence: "low" });
+      expect(suggestion?.details).toContain("Reference scan reached the 500-reference cap");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
