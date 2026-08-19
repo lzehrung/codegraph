@@ -48,19 +48,20 @@ describe("Agent Tools", () => {
   });
 
   it("formats non-Error wrapper failures with useful messages", async () => {
-    const listSpy = vi.spyOn(projectFilesModule, "listProjectFiles").mockRejectedValue(7);
+    const thrown = { code: "synthetic", detail: "failure" };
+    const listSpy = vi.spyOn(projectFilesModule, "listProjectFiles").mockRejectedValue(thrown);
     try {
       for (const result of [
         await tool_listProjectFiles(samplePath),
         await tool_getGraph(samplePath),
       ]) {
-        expect(result).toEqual({ status: "error", error: "7" });
+        expect(result).toEqual({ status: "error", error: JSON.stringify(thrown) });
       }
     } finally {
       listSpy.mockRestore();
     }
 
-    const loadSpy = vi.spyOn(loadCurrentIndexModule, "loadCurrentProjectIndex").mockRejectedValue(7);
+    const loadSpy = vi.spyOn(loadCurrentIndexModule, "loadCurrentProjectIndex").mockRejectedValue(thrown);
     try {
       for (const result of [
         await tool_getDependencies(samplePath, "main.ts"),
@@ -70,23 +71,23 @@ describe("Agent Tools", () => {
         await tool_getFileOverview(samplePath, "main.ts"),
         await tool_impactJSON(samplePath, { provider: "raw", diffText: "" }),
       ]) {
-        expect(result).toEqual({ status: "error", error: "7" });
+        expect(result).toEqual({ status: "error", error: JSON.stringify(thrown) });
       }
     } finally {
       loadSpy.mockRestore();
     }
 
     const index = await codegraph.buildProjectIndex(samplePath, { threads: 1 });
-    const goToSpy = vi.spyOn(navigationModule, "goToDefinition").mockRejectedValue(7);
-    const referencesSpy = vi.spyOn(navigationModule, "findReferences").mockRejectedValue(7);
+    const goToSpy = vi.spyOn(navigationModule, "goToDefinition").mockRejectedValue(thrown);
+    const referencesSpy = vi.spyOn(navigationModule, "findReferences").mockRejectedValue(thrown);
     try {
       await expect(tool_goToDefinition(samplePath, "main.ts", 7, 25, index)).resolves.toEqual({
         status: "error",
-        error: "7",
+        error: JSON.stringify(thrown),
       });
       await expect(tool_findReferences(samplePath, "utils.ts", 1, 17, index)).resolves.toEqual({
         status: "error",
-        error: "7",
+        error: JSON.stringify(thrown),
       });
     } finally {
       goToSpy.mockRestore();
