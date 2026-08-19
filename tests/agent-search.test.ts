@@ -631,6 +631,26 @@ describe("agent search", () => {
     expect(counted.loads()).toBe(1);
   });
 
+  it("refreshes freshness on a cached session search response", async () => {
+    const root = await mkRepo();
+    const session = createAgentSession({ root, useConfig: false, freshness: { policy: "manual" } });
+    const request = { root, query: "validateUser", mode: "symbol" as const, limit: 20 };
+    const initial = await searchCodegraphWithSession(session, request);
+    const freshness = {
+      state: "stale" as const,
+      changedFiles: ["src/auth.ts"],
+      changedFileCount: 1,
+      omittedChangedFileCount: 0,
+      reason: "test freshness result",
+    };
+    session.checkFreshness = async () => freshness;
+
+    const cached = await searchCodegraphWithSession(session, request);
+
+    expect(initial.freshness).toEqual({ state: "fresh" });
+    expect(cached.freshness).toEqual(freshness);
+  });
+
   it("refreshes a reused session search after an on-disk edit and reports that refresh", async () => {
     const root = await mkRepo();
     const file = path.join(root, "src", "auth.ts");

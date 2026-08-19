@@ -219,6 +219,29 @@ const SESSION_SEARCH_CACHE_MAX_ENTRIES = 100;
 const SEARCH_RESULT_CACHES = new WeakMap<AgentSession, Map<string, Promise<AgentSearchResponse>>>();
 const SEARCH_RANKING_VERSION = 2;
 
+function sameStringList(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+function hasSameFreshness(left: AgentFreshnessResult, right: AgentFreshnessResult): boolean {
+  if (left.state !== right.state) return false;
+  if (left.state === "fresh") return true;
+  if (left.state === "refreshed") {
+    return right.state === "refreshed" && sameStringList(left.changedFiles, right.changedFiles);
+  }
+  return (
+    right.state === "stale" &&
+    left.changedFileCount === right.changedFileCount &&
+    left.omittedChangedFileCount === right.omittedChangedFileCount &&
+    left.reason === right.reason &&
+    sameStringList(left.changedFiles, right.changedFiles)
+  );
+}
+
 export async function searchCodegraph(request: AgentSearchRequest): Promise<AgentSearchResponse> {
   const session = createAgentSession({
     root: request.root,
@@ -251,8 +274,10 @@ export async function searchCodegraphWithSession(
   if (existing) {
     promoteSessionSearchResult(resultCache, cacheKey, existing);
     const response = await existing;
-    if (response.query === request.query) return response;
-    return { ...response, query: request.query };
+    let freshResponse = response;
+    if (!hasSameFreshness(response.freshness, freshness)) freshResponse = { ...response, freshness };
+    if (freshResponse.query === request.query) return freshResponse;
+    return { ...freshResponse, query: request.query };
   }
   const mode = request.mode ?? "hybrid";
   let queryIndex: QueryIndexHandle | undefined;

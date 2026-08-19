@@ -33,13 +33,23 @@ async function findNearestTsconfig(startFromFile: string, projectRoot: string): 
 }
 
 interface TsconfigCompilerOptions {
-  baseUrl?: string;
-  paths?: Record<string, string[]>;
+  baseUrl?: unknown;
+  paths?: unknown;
 }
 
 interface TsconfigJson {
   compilerOptions?: TsconfigCompilerOptions;
-  extends?: string;
+  extends?: unknown;
+}
+
+function sanitizeTsconfigPaths(value: unknown): Record<string, string[]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const paths: Record<string, string[]> = {};
+  for (const [key, patterns] of Object.entries(value)) {
+    if (!Array.isArray(patterns) || !patterns.every((pattern) => typeof pattern === "string")) continue;
+    paths[key] = patterns;
+  }
+  return paths;
 }
 
 function isPathLikeExtendsSpecifier(spec: string): boolean {
@@ -99,9 +109,9 @@ async function loadTsconfigConfig(
   if (typeof baseUrlRaw === "string") {
     ownBaseUrl = path.isAbsolute(baseUrlRaw) ? baseUrlRaw : path.resolve(cfgDir, baseUrlRaw);
   }
-  const paths: Record<string, string[]> = compilerOptions?.paths ?? {};
+  const paths = sanitizeTsconfigPaths(compilerOptions?.paths);
 
-  if (json.extends) {
+  if (typeof json.extends === "string") {
     const extendsPath = await resolveTsconfigExtendsPath(cfgDir, json.extends, projectRoot);
     if (extendsPath) {
       const parent = await loadTsconfigConfig(extendsPath, projectRoot, seen);

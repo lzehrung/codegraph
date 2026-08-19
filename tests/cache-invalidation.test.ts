@@ -2508,7 +2508,7 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
     await fsp.writeFile(
       path.join(root, "tsconfig.json"),
-      JSON.stringify({ compilerOptions: { baseUrl: null, paths: { "@/*": ["src/*"] } } }),
+      JSON.stringify({ compilerOptions: { baseUrl: null, paths: { "@broken/*": "src/*", "@/*": ["src/*"] } } }),
       "utf8",
     );
     await fsp.writeFile(sourceFile, "import { value } from '@/value';\nexport { value };\n", "utf8");
