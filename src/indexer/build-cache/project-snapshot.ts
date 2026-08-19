@@ -82,6 +82,11 @@ type TransformedSnapshotCacheEntry = {
   root: string;
   payload: unknown;
 };
+type TransformedSnapshotModulesCacheEntry = {
+  identity: SnapshotFileIdentity;
+  root: string;
+  payload: unknown;
+};
 type DetailedSymbolGraphCacheEntry = {
   identity: SnapshotFileIdentity;
   projectSnapshotIdentity: string;
@@ -90,6 +95,7 @@ type DetailedSymbolGraphCacheEntry = {
 
 const parsedSnapshotCache = new Map<string, ParsedSnapshotCacheEntry>();
 const transformedSnapshotCache = new Map<string, TransformedSnapshotCacheEntry>();
+const transformedSnapshotModulesCache = new Map<string, TransformedSnapshotModulesCacheEntry>();
 const detailedSymbolGraphCache = new Map<string, DetailedSymbolGraphCacheEntry>();
 
 type DetailedSymbolGraphSnapshotPayload = {
@@ -109,6 +115,18 @@ type SerializedBloomFilter = {
   hashCount: number;
   bitsBase64: string;
 };
+
+type ProjectSnapshotModulesPayload = Pick<
+  ProjectIndexSnapshotPayload,
+  | "version"
+  | "filesSignature"
+  | "projectRoot"
+  | "nativeMode"
+  | "nativeRuntimeFingerprint"
+  | "implementationFingerprint"
+  | "modules"
+  | "fileSignatures"
+>;
 
 type SnapshotFileSignature = {
   sig: string;
@@ -452,9 +470,16 @@ function transformCachedProjectSnapshot(
   return structuredClone(payload);
 }
 function transformCachedProjectSnapshotModules(
+  snapshotPath: string,
+  identity: SnapshotFileIdentity,
   rawPayload: unknown,
   projectRoot: string,
 ): unknown {
+  const cached = transformedSnapshotModulesCache.get(snapshotPath);
+  if (cached && cached.root === projectRoot && sameSnapshotFileIdentity(cached.identity, identity)) {
+    setBoundedSnapshotCache(transformedSnapshotModulesCache, snapshotPath, cached);
+    return structuredClone(cached.payload);
+  }
   const migratedPayload = migrateProjectSnapshotPayload(rawPayload, projectRoot);
   if (!migratedPayload || typeof migratedPayload !== "object" || Array.isArray(migratedPayload)) {
     return migratedPayload;
@@ -468,12 +493,22 @@ function transformCachedProjectSnapshotModules(
   for (const [file, signature] of Object.entries(payload.fileSignatures)) {
     fileSignatures[transformPath(projectRoot, file, false)] = signature;
   }
-  return {
-    ...payload,
+  const transformed: ProjectSnapshotModulesPayload = {
+    version: payload.version ?? PROJECT_SNAPSHOT_VERSION,
+    filesSignature: payload.filesSignature ?? "",
+    projectRoot: serializedProjectRoot(projectRoot),
+    ...(payload.nativeMode !== undefined ? { nativeMode: payload.nativeMode } : {}),
+    nativeRuntimeFingerprint: payload.nativeRuntimeFingerprint ?? "",
+    implementationFingerprint: payload.implementationFingerprint ?? "",
     modules,
     fileSignatures,
-    projectRoot: serializedProjectRoot(projectRoot),
   };
+  setBoundedSnapshotCache(transformedSnapshotModulesCache, snapshotPath, {
+    identity,
+    root: projectRoot,
+    payload: transformed,
+  });
+  return structuredClone(transformed);
 }
 
 function projectIndexManifestEntries(
@@ -569,11 +604,16 @@ export async function tryLoadProjectSnapshotModules(
   if ((opts?.cache ?? "off") !== "disk") return null;
   try {
     const parsedSnapshot = await readParsedSnapshot(projectSnapshotPath(projectRoot, opts));
-    const payload = transformCachedProjectSnapshotModules(parsedSnapshot.payload, projectRoot);
+    const payload = transformCachedProjectSnapshotModules(
+      projectSnapshotPath(projectRoot, opts),
+      parsedSnapshot.identity,
+      parsedSnapshot.payload,
+      projectRoot,
+    );
     const nativeRuntimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
     const implementationFingerprint = getImplementationFingerprint();
     if (
-      !isProjectIndexSnapshotPayload(payload) ||
+      !isProjectSnapshotModulesPayload(payload) ||
       payload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
       payload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint ||
       payload.implementationFingerprint !== implementationFingerprint
@@ -773,6 +813,8 @@ export async function writeProjectIndexSnapshot(
     });
     await writeSnapshotAtomically(snapshotPath, compressed);
     const identity = await snapshotFileIdentity(snapshotPath);
+    transformedSnapshotCache.delete(snapshotPath);
+    transformedSnapshotModulesCache.delete(snapshotPath);
     setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, compressed, payload });
     index.projectSnapshotIdentity = projectSnapshotIdentity;
     if (serializedBloomFilters) {
@@ -845,6 +887,7 @@ export async function writeDetailedSymbolGraphSnapshot(
   try {
     const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
     parsedSnapshotCache.delete(snapshotPath);
+    transformedSnapshotModulesCache.delete(snapshotPath);
     detailedSymbolGraphCache.delete(snapshotPath);
     const compressed = brotliCompressSync(JSON.stringify(payload), {
       params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
@@ -1210,6 +1253,23 @@ function isProjectFileType(value: unknown): boolean {
 
 function isProjectFileRole(value: unknown): boolean {
   return value === "manifest" || value === "lockfile" || value === "config" || value === "solution" || value === "ide";
+}
+
+function isProjectSnapshotModulesPayload(value: unknown): value is ProjectSnapshotModulesPayload {
+  if (!value || typeof value !== "object") return false;
+  const payload = value as Partial<ProjectSnapshotModulesPayload>;
+  return (
+    payload.version === PROJECT_SNAPSHOT_VERSION &&
+    typeof payload.filesSignature === "string" &&
+    typeof payload.projectRoot === "string" &&
+    typeof payload.nativeRuntimeFingerprint === "string" &&
+    typeof payload.implementationFingerprint === "string" &&
+    /^[a-f0-9]{64}$/.test(payload.implementationFingerprint) &&
+    Array.isArray(payload.modules) &&
+    payload.modules.every(isModuleIndex) &&
+    isSnapshotFileSignatureRecord(payload.fileSignatures) &&
+    (payload.nativeMode === undefined || isSnapshotNativeMode(payload.nativeMode))
+  );
 }
 
 function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSnapshotPayload {

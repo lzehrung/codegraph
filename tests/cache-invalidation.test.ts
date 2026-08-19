@@ -5,6 +5,7 @@ import fsp from "node:fs/promises";
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
+import * as zlib from "node:zlib";
 import {
   buildProjectIndex,
   buildProjectIndexFromFiles,
@@ -22,6 +23,7 @@ import {
   writeManifest,
   type IndexManifest,
 } from "../src/indexer/build-cache.js";
+import * as graphBuilder from "../src/graph-builder.js";
 import { collectGraph } from "../src/graphs.js";
 import {
   getGitBlobHashes,
@@ -45,6 +47,8 @@ import {
 } from "../src/indexer/build-cache/options.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import * as resolverEnvironment from "../src/indexer/build-cache/resolver-environment.js";
+
+vi.mock("node:zlib", { spy: true });
 import { runGit } from "./helpers/git.js";
 import { createTempProjectRoot, mkTmpDir } from "./helpers/filesystem.js";
 
@@ -1919,6 +1923,90 @@ describe("Cache invalidation and strict hashing", () => {
     expect(third?.index.byFile.size).toBe(1);
     expect(snapshotReads).toBe(2);
   });
+
+  it("memoizes module-only snapshot transforms without cloning the graph", async () => {
+    const root = await mkTmpDir("dg-snapshot-module-transform-memo-");
+    const filePath = path.join(root, "main.ts");
+    await fsp.writeFile(filePath, "export const moduleMemo = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const manifest = await readManifest(root);
+    const signatures = new Map(Object.entries(manifest.files));
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshotBytes = await fsp.readFile(snapshotPath);
+    await fsp.writeFile(snapshotPath, snapshotBytes);
+
+    const decompressSpy = vi.mocked(zlib.brotliDecompressSync);
+    decompressSpy.mockClear();
+    const cloneSpy = vi.spyOn(globalThis, "structuredClone");
+    try {
+      const first = await buildCache.tryLoadProjectSnapshotModules(root, { cache: "disk" }, signatures);
+      first?.get(fileIdentityKey(filePath))?.locals.splice(0);
+      const second = await buildCache.tryLoadProjectSnapshotModules(root, { cache: "disk" }, signatures);
+
+      expect(second?.get(fileIdentityKey(filePath))?.locals.some((local) => local.localName === "moduleMemo")).toBe(
+        true,
+      );
+      expect(decompressSpy).toHaveBeenCalledTimes(1);
+      expect(
+        cloneSpy.mock.calls.some(
+          ([value]) => !!value && typeof value === "object" && !Array.isArray(value) && "graph" in value,
+        ),
+      ).toBe(false);
+    } finally {
+      cloneSpy.mockRestore();
+      decompressSpy.mockClear();
+    }
+  });
+
+  it("passes the incremental thread gate into graph collection", async () => {
+    const root = await mkTmpDir("dg-incremental-graph-threads-");
+    await fsp.writeFile(path.join(root, "dependency.ts"), "export const dependency = 1;\n", "utf8");
+    await fsp.writeFile(path.join(root, "entry.ts"), "import { dependency } from './dependency';\nexport { dependency };\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    await fsp.writeFile(path.join(root, "dependency.ts"), "export const dependency = 2;\n", "utf8");
+
+    let activeCollections = 0;
+    let maxActiveCollections = 0;
+    const originalCollectGraph = graphBuilder.collectGraph;
+    const graphSpy = vi.spyOn(graphBuilder, "collectGraph").mockImplementation(async (projectRoot, files, options) => {
+      activeCollections += 1;
+      maxActiveCollections = Math.max(maxActiveCollections, activeCollections);
+      try {
+        return await originalCollectGraph(projectRoot, files, options);
+      } finally {
+        activeCollections -= 1;
+      }
+    });
+    try {
+      const index = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1 });
+      expect(index.graph.nodes.has(normalize(path.join(root, "entry.ts")))).toBe(true);
+      expect(graphSpy.mock.calls.map(([, , options]) => options?.threads)).toEqual([1]);
+      expect(maxActiveCollections).toBe(1);
+    } finally {
+      graphSpy.mockRestore();
+    }
+  });
+
+  it("builds reverse dependencies once while invalidating changed dependents", async () => {
+    const root = await mkTmpDir("dg-incremental-reverse-dependency-once-");
+    const dependencyPath = path.join(root, "dependency.ts");
+    const entryPath = path.join(root, "entry.ts");
+    await fsp.writeFile(dependencyPath, "export const dependency = 1;\n", "utf8");
+    await fsp.writeFile(entryPath, "import { dependency } from './dependency';\nexport const entry = dependency;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    await fsp.writeFile(dependencyPath, "export const dependency = 2;\n", "utf8");
+
+    const reverseDependencySpy = vi.spyOn(incrementalPlan, "buildTrackedFileReverseDependencies");
+    try {
+      const index = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1 });
+      expect(reverseDependencySpy).toHaveBeenCalledTimes(1);
+      expect(moduleForPath(index, entryPath)?.imports.some((entry) => entry.resolved === normalize(dependencyPath))).toBe(
+        true,
+      );
+    } finally {
+      reverseDependencySpy.mockRestore();
+    }
+  });
   it("writes project snapshots atomically and cleans only stale temporary files", async () => {
     const root = await mkTmpDir("dg-snapshot-atomic-");
     const sourcePath = path.join(root, "main.ts");
@@ -1927,6 +2015,24 @@ describe("Cache invalidation and strict hashing", () => {
     const snapshotPath = projectSnapshotPathFor(root);
     const initialSnapshot = await readProjectSnapshot(snapshotPath);
     expect(await projectSnapshotTempNames(root)).toEqual([]);
+    let snapshotTempSyncs = 0;
+    const originalOpen = fsp.open.bind(fsp);
+    const openSpy = vi.spyOn(fsp, "open").mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      const candidate = typeof args[0] === "string" ? args[0] : undefined;
+      if (
+        candidate &&
+        path.basename(candidate).startsWith(`.${path.basename(snapshotPath)}.`) &&
+        args[1] === "r+"
+      ) {
+        const sync = handle.sync.bind(handle);
+        handle.sync = async () => {
+          snapshotTempSyncs += 1;
+          await sync();
+        };
+      }
+      return handle;
+    });
 
     index.graph.nodes.add(normalize(path.join(root, "rename-failure.ts")));
     const originalRename = fsp.rename.bind(fsp);
@@ -1992,6 +2098,8 @@ describe("Cache invalidation and strict hashing", () => {
     expect(await projectSnapshotTempNames(root)).toEqual([path.basename(freshTempPath)]);
     const finalSnapshot = await readProjectSnapshot(snapshotPath);
     expect(finalSnapshot.graph).not.toEqual(initialSnapshot.graph);
+    openSpy.mockRestore();
+    expect(snapshotTempSyncs).toBeGreaterThan(0);
   });
 
   it("does not read unchanged tracked source files for partial cache validation", async () => {
