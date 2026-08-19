@@ -133,7 +133,7 @@ export async function installStandaloneBundle(options) {
           const installedManifest = await verifyStandaloneBundle(versionRoot);
           assertMatchingStandaloneProvenance(manifest, installedManifest);
         } else {
-          await fsp.rename(stagingRoot, versionRoot);
+          await moveStagedVersionRoot(stagingRoot, versionRoot);
           createdVersionRoot = true;
         }
         await fsp.mkdir(binDir, { recursive: true });
@@ -397,6 +397,19 @@ async function isRealDirectory(directory, label) {
   } catch (error) {
     if (isCode(error, "ENOENT")) return false;
     throw error;
+  }
+}
+
+async function moveStagedVersionRoot(stagingRoot, versionRoot) {
+  for (let attempt = 0; attempt <= 4; attempt += 1) {
+    try {
+      await fsp.rename(stagingRoot, versionRoot);
+      return;
+    } catch (error) {
+      const retryable = isCode(error, "EACCES") || isCode(error, "EBUSY") || isCode(error, "EPERM");
+      if (!retryable || attempt === 4) throw error;
+      await waitForInstallLock(Math.min(INSTALL_LOCK_MAX_RETRY_MS, INSTALL_LOCK_INITIAL_RETRY_MS * 2 ** attempt));
+    }
   }
 }
 

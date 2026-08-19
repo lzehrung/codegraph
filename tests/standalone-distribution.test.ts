@@ -4,7 +4,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   assembleStandaloneArchive,
   assertStandaloneTarget,
@@ -353,6 +353,46 @@ describe("standalone distribution", () => {
     expect(await fsp.readFile(unrelated, "utf8")).toBe("keep");
     expect(fs.existsSync(path.join(installBase, "1.0.0"))).toBe(true);
     expect(fs.existsSync(path.join(installBase, "1.1.0"))).toBe(false);
+  });
+
+  it("retries a transient staged version-root rename", async () => {
+    const root = await mkTmpDir("cg-standalone-version-move-retry-");
+    const installBase = path.join(root, "install");
+    const binDir = path.join(root, "bin");
+    const version = "1.0.0";
+    const bundle = await createFakeBundle(root, version);
+    const versionRoot = path.join(installBase, version);
+    const originalRename = fsp.rename.bind(fsp);
+    let versionMoveAttempts = 0;
+    const rename = vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
+      const from = path.resolve(String(source));
+      const to = path.resolve(String(target));
+      const isVersionMove =
+        to === versionRoot &&
+        path.dirname(from) === installBase &&
+        path.basename(from).startsWith(".installing-" + version + "-");
+      if (isVersionMove) {
+        versionMoveAttempts += 1;
+        if (versionMoveAttempts === 1) {
+          throw Object.assign(new Error("transient version-root lock"), { code: "EPERM" });
+        }
+      }
+      await originalRename(source, target);
+    });
+
+    try {
+      const installed = await installStandaloneBundle({
+        bundleRoot: bundle,
+        installBase,
+        binDir,
+        smoke: async () => {},
+      });
+      expect(installed.versionRoot).toBe(versionRoot);
+      expect(versionMoveAttempts).toBe(2);
+      await expectNoInstallTransientPaths(installBase);
+    } finally {
+      rename.mockRestore();
+    }
   });
 
   it("reuses only identical same-version provenance and preserves installer state on mismatch", async () => {
