@@ -289,6 +289,30 @@ describe("rename preview", () => {
     expect(result.edits.some((edit) => edit.range.start.line === 3)).toBe(false);
   });
 
+  it("rejects an interface member rename that collides in an implementation", async () => {
+    const root = await mkTmpDir("cg-rename-interface-collision-");
+    await fsp.writeFile(
+      path.join(root, "service.ts"),
+      [
+        "export interface Service { run(): void }",
+        "export class Worker implements Service { run(): void {}; execute(): void {} }",
+      ].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const symbols = await workspaceSymbolsWithSession(session, { root, query: "run" });
+    const interfaceMethod = symbols.symbols.find((symbol) => symbol.location.range.start.line === 1);
+    expect(interfaceMethod).toBeDefined();
+
+    const result = await previewRenameWithSession(session, {
+      root,
+      handle: interfaceMethod!.handle,
+      newName: "execute",
+    });
+
+    expect(result.safe).toBe(false);
+    expect(result.conflicts).toContainEqual(expect.objectContaining({ reason: "name_collision" }));
+  });
+
   it("rejects invalid identifiers before claiming safety", async () => {
     const { root, session, target } = await renameFixture();
     const result = await previewRenameWithSession(session, {

@@ -328,6 +328,10 @@ export async function previewRenameInSnapshot(
   const candidateLimitExceeded = boundedCandidates.omitted > 0;
   const candidates = boundedCandidates.items;
   await addScopeConflicts(snapshot, resolved.def, request.newName, selectedReferences, conflicts);
+  for (const definition of semanticDefinitions.values()) {
+    if (defNodeId(definition) === resolved.id) continue;
+    await addScopeConflicts(snapshot, definition, request.newName, [], conflicts);
+  }
 
   for (const reference of importDeclarations.missing) {
     unsafeSites.push({
