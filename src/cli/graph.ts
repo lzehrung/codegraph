@@ -384,6 +384,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
       ...context.workerOpts,
       ...cacheDirOptions,
+      cache,
       cacheStrict,
       cacheVerify,
       graph: {

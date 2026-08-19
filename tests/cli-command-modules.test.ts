@@ -1160,6 +1160,37 @@ describe("CLI command modules", () => {
     }
   });
 
+  test("graph --symbols forwards the requested cache mode to its full index build", async () => {
+    const root = await mkTmpDir("codegraph-graph-symbols-cache-");
+    const entryFile = path.join(root, "entry.ts");
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexFromFiles");
+
+    try {
+      await handleGraphCommand(
+        createGraphContext({
+          projectRootFs: root,
+          cwd: () => root,
+          nativeMode: "off",
+          resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
+          getOpt: (name) => (name === "--cache" ? "memory" : undefined),
+          hasFlag: (name) => name === "--symbols" || name === "--json",
+          writeStdoutLine: () => undefined,
+        }),
+      );
+
+      expect(buildSpy).toHaveBeenCalledOnce();
+      expect(buildSpy).toHaveBeenCalledWith(
+        root,
+        [entryFile.replace(/\\/g, "/")],
+        expect.objectContaining({ cache: "memory" }),
+      );
+    } finally {
+      buildSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("routes agent command help to command-specific usage text", async () => {
     const cases = [
       { args: ["search", "--help"], heading: "codegraph search", usage: 'Usage: codegraph search "<query>"' },
