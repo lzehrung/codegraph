@@ -5,6 +5,7 @@ import { calculateSeverity, calculateTransitiveSeverity, normalizeSeverityWeight
 import { buildCallerRangeIndex, findCallerSymbolId } from "../src/impact/callCompatibility.js";
 import { analyzeTransitiveImpact } from "../src/impact/transitive.js";
 import type { ChangedSymbol, ImpactItem } from "../src/impact/types.js";
+import type { Reference } from "../src/indexer/types.js";
 import { SymbolKind, buildProjectIndexFromFiles } from "../src/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -62,6 +63,12 @@ describe("PR4 impact audit regressions", () => {
   it("normalizes the same severity options object once", () => {
     const weights = { directRef: 2 };
     expect(normalizeSeverityWeights(weights)).toBe(normalizeSeverityWeights(weights));
+  });
+
+  it.each([null, 0, "invalid"])("rejects non-object severity weights at runtime: %s", (value) => {
+    expect(() => Reflect.apply(normalizeSeverityWeights, undefined, [value])).toThrow(
+      new RangeError("Invalid severity weights: expected an object"),
+    );
   });
 
   it("keeps runtime evidence dominant over a type-only edge", () => {

@@ -2467,6 +2467,58 @@ describe("Review report", () => {
     }
   });
 
+  it("shares in-flight source loads across concurrent duplicate summaries", async () => {
+    const root = await mkTmpDir("dg-review-summary-duplicate-");
+    const file = path.join(root, "src", "feature.ts");
+    await fsp.mkdir(path.dirname(file), { recursive: true });
+    const source = "export function feature() { return 1; }\n";
+    await fsp.writeFile(file, source, "utf8");
+
+    try {
+      const index = await buildProjectIndex(root);
+      index.parsed = undefined;
+      let readCount = 0;
+      const gate = Promise.withResolvers<void>();
+      const firstRead = Promise.withResolvers<void>();
+      const loadSource = async (): Promise<string> => {
+        readCount += 1;
+        firstRead.resolve();
+        await gate.promise;
+        return source;
+      };
+      const changedFiles = [file, file.replace(/\\/g, "/")];
+
+      const summaryPromise = summarizeChangedFiles({
+        projectRoot: root,
+        index,
+        changedFileList: changedFiles,
+        diffHunksByFile: new Map(),
+        diffKindsByFile: new Map([[file, "modified"]]),
+        diffChangesByFile: new Map(),
+        explicitFiles: new Set(),
+        existenceByFile: new Map([[file, true]]),
+        deletedSnapshots: new Map(),
+        loadSource,
+        includeSymbolDetails: true,
+        includeDiffContext: false,
+        diffContextLines: 0,
+        maxCallsites: 0,
+        referenceConcurrency: 2,
+        diagnostics: { missingFiles: [], symbolMappingParseFailures: [] },
+      });
+
+      await firstRead.promise;
+      await Promise.resolve();
+      expect(readCount).toBe(1);
+      gate.resolve();
+      const summary = await summaryPromise;
+      expect(summary.summaries).toHaveLength(2);
+      expect(readCount).toBe(1);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps parsed trees and bounds reference work for review callsites", async () => {
     const root = await mkTmpDir("dg-review-reference-bounds-");
     const srcDir = path.join(root, "src");

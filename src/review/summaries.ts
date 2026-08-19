@@ -429,15 +429,21 @@ export async function summarizeChangedFiles(input: {
     reviewTimings,
   } = input;
   const readSource = suppliedLoadSource ?? (async (file: string) => await fsp.readFile(file, "utf8"));
-  const sourceCache = new Map<string, string>();
-  const loadSource = async (file: string): Promise<string> => {
+  const sourceCache = new Map<string, Promise<string>>();
+  const loadSource = (file: string): Promise<string> => {
     const key = fileIdentityKey(file);
     const cached = sourceCache.get(key);
-    if (cached !== undefined) return cached;
+    if (cached) return cached;
     const parsed = index.parsed?.get(key);
-    const source = parsed?.source ?? (await readSource(file));
-    sourceCache.set(key, source);
-    return source;
+    const pending =
+      parsed?.source !== undefined
+        ? Promise.resolve(parsed.source)
+        : Promise.resolve().then(async () => await readSource(file));
+    sourceCache.set(key, pending);
+    void pending.catch(() => {
+      if (sourceCache.get(key) === pending) sourceCache.delete(key);
+    });
+    return pending;
   };
 
   const filesWithModules = changedFileList.map((file) => ({

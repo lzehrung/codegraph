@@ -68,6 +68,9 @@ export function selectStrongerImpactReason(
 export function normalizeSeverityWeights(
   weights: Partial<SeverityWeights> = DEFAULT_SEVERITY_WEIGHTS,
 ): SeverityWeights {
+  if (weights === null || typeof weights !== "object") {
+    throw new RangeError("Invalid severity weights: expected an object");
+  }
   const cached = normalizedWeightsCache.get(weights);
   if (cached) return cached;
 
