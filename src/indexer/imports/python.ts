@@ -134,7 +134,7 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
   const fromLinePattern = /^[\t ]*from\s+([^\s]+)\s+import\s+([^\n#]+)/gm;
   for (const match of pySrc.matchAll(fromLinePattern)) {
     const mod = match[1]!.trim();
-    const moduleLevel = !/^[\t ]/.test(pySrc.slice(match.index ?? 0));
+    const moduleLevel = !/^[\t ]/.test(match[0]);
     const items = match[2]!.split(",").map((item) => item.trim());
     for (const item of items) {
       if (item === "*") {
@@ -155,6 +155,6 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
   for (const match of pySrc.matchAll(importPattern)) {
     const dotted = match[1]!;
     const local = match[2] ?? dotted.split(".")[0]!;
-    await pushDefaultImport(context, dotted, local, !/^[\t ]/.test(pySrc.slice(match.index ?? 0)));
+    await pushDefaultImport(context, dotted, local, !/^[\t ]/.test(match[0]));
   }
 }

@@ -2501,6 +2501,32 @@ describe("Cache invalidation and strict hashing", () => {
     }
   });
 
+  it("ignores a non-string tsconfig baseUrl", async () => {
+    const root = await mkTmpDir("dg-tsconfig-null-base-url-");
+    const sourceFile = path.join(root, "src", "main.ts");
+    const targetFile = path.join(root, "src", "value.ts");
+    await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { baseUrl: null, paths: { "@/*": ["src/*"] } } }),
+      "utf8",
+    );
+    await fsp.writeFile(sourceFile, "import { value } from '@/value';\nexport { value };\n", "utf8");
+    await fsp.writeFile(targetFile, "export const value = 1;\n", "utf8");
+
+    try {
+      const { matchPath } = await loadNearestTsconfigFor(sourceFile, root);
+      const resolved = await resolveSpecifier(sourceFile, "@/value", root, matchPath);
+      expect(typeof resolved).toBe("string");
+      if (typeof resolved === "string") {
+        expect(normalize(resolved)).toBe(normalize(targetFile));
+      }
+    } finally {
+      clearResolutionCaches();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves inherited tsconfig baseUrl and paths from the declaring config", async () => {
     const root = await mkTmpDir("dg-tsconfig-inherited-base-url-");
     const appRoot = path.join(root, "packages", "app");
