@@ -571,8 +571,8 @@ function createIndexBuildRunState(
   opts: BuildOptions | undefined,
   graphOptions = normalizeGraphOptions(opts?.graph),
 ): IndexBuildRunState {
-  const report = opts?.report;
-  if (report) initNativeBackendReport(report);
+  const report = opts?.report ?? { timings: {} };
+  initNativeBackendReport(report);
   const cacheMode = opts?.cache ?? "off";
   return {
     normalizedProjectRoot: normalizePath(path.resolve(projectRoot)),

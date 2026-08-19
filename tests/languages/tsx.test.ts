@@ -41,6 +41,50 @@ const definition: LanguageTestDefinition = {
           from: "utils.ts",
           to: { type: "external", name: "lodash" },
         },
+        {
+          from: "reexport-barrel.tsx",
+          to: { type: "file", path: "reexport-source.tsx" },
+        },
+        {
+          from: "reexport-consumer.tsx",
+          to: { type: "file", path: "reexport-barrel.tsx" },
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "resolves aliased TSX re-export",
+          file: "reexport-consumer.tsx",
+          line: 3,
+          column: 25,
+          expectedDefinition: { file: "reexport-source.tsx", line: 1 },
+        },
+        {
+          name: "resolves star TSX re-export",
+          file: "reexport-consumer.tsx",
+          line: 4,
+          column: 24,
+          expectedDefinition: { file: "reexport-source.tsx", line: 2 },
+        },
+        {
+          name: "resolves namespace TSX re-export",
+          file: "reexport-consumer.tsx",
+          line: 5,
+          column: 45,
+          expectedDefinition: { file: "reexport-source.tsx", line: 3 },
+        },
+      ],
+      references: [
+        {
+          name: "finds aliased TSX re-export references",
+          file: "reexport-source.tsx",
+          line: 1,
+          column: 14,
+          references: [
+            { file: "reexport-source.tsx", line: 1 },
+            { file: "reexport-consumer.tsx", line: 1 },
+            { file: "reexport-consumer.tsx", line: 3 },
+          ],
+        },
       ],
     },
   },

@@ -62,6 +62,20 @@ const definition: LanguageTestDefinition = {
           from: ".regressions/unicode_consumer.java",
           to: { type: "file", path: ".regressions/unicode_def.java" },
         },
+        {
+          from: "ResolutionImports.java",
+          to: { type: "file", path: "demo/Point.java" },
+        },
+        {
+          from: "ResolutionImports.java",
+          to: { type: "external", name: "demo.Missing" },
+        },
+      ],
+      absentDependencyGraph: [
+        {
+          from: "ResolutionImports.java",
+          to: { type: "file", path: "demo/A.java" },
+        },
       ],
       symbols: [
         {
@@ -170,6 +184,17 @@ const definition: LanguageTestDefinition = {
             { file: "StaticWildcardImports.java", line: 7 },
           ],
         },
+        {
+          name: "finds Java record references without binding missing imports",
+          file: "demo/Point.java",
+          line: 3,
+          column: 15,
+          references: [
+            { file: "demo/Point.java", line: 3 },
+            { file: "ResolutionImports.java", line: 2 },
+            { file: "ResolutionImports.java", line: 5 },
+          ],
+        },
       ],
     },
     goToDefinition: [
@@ -221,6 +246,13 @@ const definition: LanguageTestDefinition = {
         line: 7,
         column: 5,
         expectedDefinition: { file: "utils/Utils.java", line: 4 },
+      },
+      {
+        name: "go to definition resolves imported Java records exactly",
+        file: "ResolutionImports.java",
+        line: 5,
+        column: 3,
+        expectedDefinition: { file: "demo/Point.java", line: 3 },
       },
     ],
   },

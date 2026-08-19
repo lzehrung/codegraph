@@ -41,6 +41,27 @@ const definition: LanguageTestDefinition = {
           from: "utils.py",
           to: { type: "file", path: "helpers.py" },
         },
+        {
+          from: "package_exports/__init__.py",
+          to: { type: "file", path: "package_exports/values.py" },
+        },
+        {
+          from: "package_consumer.py",
+          to: { type: "file", path: "package_exports/__init__.py" },
+        },
+      ],
+      references: [
+        {
+          name: "finds package __all__ alias references",
+          file: "package_exports/values.py",
+          line: 1,
+          column: 5,
+          references: [
+            { file: "package_exports/values.py", line: 1 },
+            { file: "package_consumer.py", line: 1 },
+            { file: "package_consumer.py", line: 3 },
+          ],
+        },
       ],
     },
     goToDefinition: [
@@ -50,6 +71,13 @@ const definition: LanguageTestDefinition = {
         line: 10,
         column: 20,
         expectedDefinition: { file: "match_patterns.py", line: 9 },
+      },
+      {
+        name: "go to definition resolves an __all__ package alias from a consumer",
+        file: "package_consumer.py",
+        line: 3,
+        column: 10,
+        expectedDefinition: { file: "package_exports/values.py", line: 1 },
       },
     ],
   },

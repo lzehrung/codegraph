@@ -405,11 +405,22 @@ export function getCachedReferenceCandidateFiles(
   const candidateFileEntries =
     getIndexedReferenceCandidateFiles(index, def, exportedNames) ??
     Array.from(index.byFile.values(), (module) => module.file);
+  const exportingFiles = new Set(
+    filesExportingDefinition(index, def, exportedNames).map((file) => fileIdentityKey(file)),
+  );
   for (const fileId of candidateFileEntries) {
     if (fileIdentityKey(fileId) === fileIdentityKey(def.file)) continue;
     const moduleIndex = index.byFile.get(fileIdentityKey(fileId));
     if (!moduleIndex) continue;
-    if (moduleIndex.imports.some((imp) => importCanReferenceDefinition(index, imp, def, exportedNames))) {
+    if (
+      moduleIndex.imports.some((imp) => {
+        if (typeof imp.resolved !== "string") return false;
+        return (
+          exportingFiles.has(fileIdentityKey(imp.resolved)) ||
+          importCanReferenceDefinition(index, imp, def, exportedNames)
+        );
+      })
+    ) {
       candidates.set(fileIdentityKey(fileId), fileId);
     }
   }
