@@ -103,6 +103,10 @@ function withMissingDistArtifact<T>(packageRoot: string, relativePath: string, c
   }
 }
 
+function hasNonAscii(text: string): boolean {
+  return [...text].some((character) => character.charCodeAt(0) > 0x7f);
+}
+
 function parsePackedPaths(stdout: string): Set<string> {
   let jsonStart = stdout.lastIndexOf("[");
   while (jsonStart >= 0) {
@@ -1073,8 +1077,8 @@ void onImpactItemStreaming;
     }
   });
 
-  it("keeps public-facing docs ASCII-clean", () => {
-    const docs = [
+  it("keeps ordinary public-facing docs ASCII-clean while documenting Unicode search", () => {
+    const asciiDocs = [
       "README.md",
       "AGENTS.md",
       "PUBLISHING.md",
@@ -1083,13 +1087,16 @@ void onImpactItemStreaming;
       "docs/library-api.md",
       "docs/agent-workflows.md",
       "docs/how-it-works.md",
-      "docs/search.md",
       "codegraph-skill/codegraph/SKILL.md",
     ];
 
-    for (const relativePath of docs) {
-      const hasNonAscii = [...readText(relativePath)].some((character) => character.charCodeAt(0) > 0x7f);
-      expect(hasNonAscii).toBe(false);
+    for (const relativePath of asciiDocs) {
+      expect(hasNonAscii(readText(relativePath)), relativePath).toBe(false);
     }
+
+    const searchDoc = readText("docs/search.md");
+    expect(searchDoc).toContain("caf\u00e9");
+    expect(hasNonAscii("ASCII fixture")).toBe(false);
+    expect(hasNonAscii("caf\u00e9 fixture")).toBe(true);
   });
 });

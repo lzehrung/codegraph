@@ -25,6 +25,7 @@ async function renameFixture() {
       "}",
       "// service documentation",
       'export const serviceLabel = "service";',
+      "export const serviceTemplate = `${service}`;",
     ].join("\n"),
   );
   const session = createAgentSession({ root, freshness: { policy: "check" } });
@@ -80,6 +81,7 @@ describe("rename preview", () => {
     expect(result.unsafeSites).toEqual([]);
     expect(result.edits.map((edit) => [edit.file, edit.oldText, edit.kind])).toEqual([
       ["consumer.ts", "service", "import"],
+      ["consumer.ts", "service", "reference"],
       ["consumer.ts", "service", "reference"],
       ["service.ts", "service", "definition"],
     ]);
@@ -229,6 +231,11 @@ describe("rename preview", () => {
     expect(optInResult.edits.filter((edit) => edit.kind === "comment")).toHaveLength(1);
     expect(optInResult.edits.filter((edit) => edit.kind === "string")).toHaveLength(1);
     expect(
+      optInResult.edits.some(
+        (edit) => edit.kind === "string" && edit.file === "consumer.ts" && edit.range.start.line === 9,
+      ),
+    ).toBe(false);
+    expect(
       optInResult.edits
         .filter((edit) => edit.kind === "comment" || edit.kind === "string")
         .every((edit) => edit.provenance.capability === "heuristic" && edit.provenance.confidence === "low"),
@@ -280,6 +287,53 @@ describe("rename preview", () => {
       1, 2,
     ]);
     expect(result.edits.some((edit) => edit.range.start.line === 3)).toBe(false);
+  });
+
+  it("rejects an interface member rename that collides in an implementation", async () => {
+    const root = await mkTmpDir("cg-rename-interface-collision-");
+    await fsp.writeFile(
+      path.join(root, "service.ts"),
+      [
+        "export interface Service { run(): void }",
+        "export class Worker implements Service { run(): void {}; execute(): void {} }",
+      ].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const symbols = await workspaceSymbolsWithSession(session, { root, query: "run" });
+    const interfaceMethod = symbols.symbols.find((symbol) => symbol.location.range.start.line === 1);
+    expect(interfaceMethod).toBeDefined();
+
+    const result = await previewRenameWithSession(session, {
+      root,
+      handle: interfaceMethod!.handle,
+      newName: "execute",
+    });
+
+    expect(result.safe).toBe(false);
+    expect(result.conflicts).toContainEqual(expect.objectContaining({ reason: "name_collision" }));
+  });
+
+  it("rejects a barrel re-export rename that duplicates another exported name", async () => {
+    const root = await mkTmpDir("cg-rename-barrel-collision-");
+    await fsp.writeFile(path.join(root, "service.ts"), "export function service(): void {}\n");
+    await fsp.writeFile(path.join(root, "other.ts"), "export function other(): void {}\n");
+    await fsp.writeFile(
+      path.join(root, "index.ts"),
+      ['export { service } from "./service.js";', 'export { other as execute } from "./other.js";', ""].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const symbols = await workspaceSymbolsWithSession(session, { root, query: "service" });
+    const target = symbols.symbols.find((symbol) => symbol.name === "service");
+    expect(target).toBeDefined();
+
+    const result = await previewRenameWithSession(session, {
+      root,
+      handle: target!.handle,
+      newName: "execute",
+    });
+
+    expect(result.safe).toBe(false);
+    expect(result.conflicts).toContainEqual(expect.objectContaining({ file: "index.ts", reason: "duplicate_export" }));
   });
 
   it("rejects invalid identifiers before claiming safety", async () => {
@@ -362,7 +416,15 @@ describe("rename preview", () => {
   it("preserves explicit re-export aliases while renaming the proven source name", async () => {
     const root = await mkTmpDir("cg-rename-reexport-alias-");
     await fsp.writeFile(path.join(root, "service.ts"), "export function service(): number { return 1; }\n");
-    await fsp.writeFile(path.join(root, "index.ts"), 'export { service as publicService } from "./service.js";\n');
+    await fsp.writeFile(path.join(root, "other.ts"), "export function other(): number { return 2; }\n");
+    await fsp.writeFile(
+      path.join(root, "index.ts"),
+      [
+        'export { service as publicService } from "./service.js";',
+        'export { other as renamedService } from "./other.js";',
+        "",
+      ].join("\n"),
+    );
     await fsp.writeFile(
       path.join(root, "consumer.ts"),
       'import { publicService } from "./index.js";\nexport const value = publicService();\n',
@@ -427,10 +489,11 @@ describe("rename preview", () => {
     expect(result.conflicts).toContainEqual(expect.objectContaining({ file: "consumer.ts", reason: "shadowing" }));
   });
 
-  it("returns filename suggestions only for exported type names matching their file", async () => {
+  it("suppresses filename suggestions that collide with an existing destination", async () => {
     const root = await mkTmpDir("cg-rename-filename-");
     await fsp.writeFile(path.join(root, "Service.ts"), "export class Service {}\n");
     await fsp.writeFile(path.join(root, "helper.ts"), "export function helper(): void {}\n");
+    await fsp.writeFile(path.join(root, "worker.ts"), "export class ExistingWorker {}\n");
     const session = createAgentSession({ root, freshness: { policy: "check" } });
     const typeSymbols = await workspaceSymbolsWithSession(session, { root, query: "Service" });
     const functionSymbols = await workspaceSymbolsWithSession(session, { root, query: "helper" });
@@ -448,7 +511,7 @@ describe("rename preview", () => {
       includeFilenames: true,
     });
 
-    expect(typeResult.filenameSuggestions).toEqual([{ from: "Service.ts", to: "Worker.ts", caseOnlyRisk: false }]);
+    expect(typeResult.filenameSuggestions).toEqual([]);
     expect(functionResult.filenameSuggestions).toEqual([]);
   });
 

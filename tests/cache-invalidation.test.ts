@@ -2466,6 +2466,102 @@ describe("Cache invalidation and strict hashing", () => {
     }
   });
 
+  it("resolves an explicit empty tsconfig baseUrl from the child config", async () => {
+    const root = await mkTmpDir("dg-tsconfig-empty-base-url-");
+    const appRoot = path.join(root, "packages", "app");
+    const sourceFile = path.join(appRoot, "src", "main.ts");
+    const targetFile = path.join(appRoot, "src", "value.ts");
+    await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "tsconfig.base.json"),
+      JSON.stringify({ compilerOptions: { baseUrl: "." } }),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(appRoot, "tsconfig.json"),
+      JSON.stringify({
+        extends: "../../tsconfig.base.json",
+        compilerOptions: { baseUrl: "", paths: { "@app/*": ["src/*"] } },
+      }),
+      "utf8",
+    );
+    await fsp.writeFile(sourceFile, "import { value } from '@app/value';\nexport { value };\n", "utf8");
+    await fsp.writeFile(targetFile, "export const value = 1;\n", "utf8");
+
+    try {
+      const { matchPath } = await loadNearestTsconfigFor(sourceFile, root);
+      const resolved = await resolveSpecifier(sourceFile, "@app/value", root, matchPath);
+      expect(typeof resolved).toBe("string");
+      if (typeof resolved === "string") {
+        expect(normalize(resolved)).toBe(normalize(targetFile));
+      }
+    } finally {
+      clearResolutionCaches();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores a non-string tsconfig baseUrl", async () => {
+    const root = await mkTmpDir("dg-tsconfig-null-base-url-");
+    const sourceFile = path.join(root, "src", "main.ts");
+    const targetFile = path.join(root, "src", "value.ts");
+    await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { baseUrl: null, paths: { "@broken/*": "src/*", "@/*": ["src/*"] } } }),
+      "utf8",
+    );
+    await fsp.writeFile(sourceFile, "import { value } from '@/value';\nexport { value };\n", "utf8");
+    await fsp.writeFile(targetFile, "export const value = 1;\n", "utf8");
+
+    try {
+      const { matchPath } = await loadNearestTsconfigFor(sourceFile, root);
+      const resolved = await resolveSpecifier(sourceFile, "@/value", root, matchPath);
+      expect(typeof resolved).toBe("string");
+      if (typeof resolved === "string") {
+        expect(normalize(resolved)).toBe(normalize(targetFile));
+      }
+    } finally {
+      clearResolutionCaches();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves inherited tsconfig baseUrl and paths from the declaring config", async () => {
+    const root = await mkTmpDir("dg-tsconfig-inherited-base-url-");
+    const appRoot = path.join(root, "packages", "app");
+    const sourceFile = path.join(appRoot, "src", "main.ts");
+    const sharedFile = path.join(root, "shared", "value.ts");
+    await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
+    await fsp.mkdir(path.dirname(sharedFile), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "tsconfig.base.json"),
+      JSON.stringify({ compilerOptions: { baseUrl: "." } }),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(appRoot, "tsconfig.json"),
+      JSON.stringify({
+        extends: "../../tsconfig.base.json",
+        compilerOptions: { paths: { "@shared/*": ["shared/*"] } },
+      }),
+      "utf8",
+    );
+    await fsp.writeFile(sourceFile, "import { value } from '@shared/value';\nexport { value };\n", "utf8");
+    await fsp.writeFile(sharedFile, "export const value = 1;\n", "utf8");
+
+    try {
+      const { matchPath } = await loadNearestTsconfigFor(sourceFile, root);
+      const resolved = await resolveSpecifier(sourceFile, "@shared/value", root, matchPath);
+      expect(typeof resolved).toBe("string");
+      if (typeof resolved === "string") {
+        expect(normalize(resolved)).toBe(normalize(sharedFile));
+      }
+    } finally {
+      clearResolutionCaches();
+    }
+  });
+
   it("clears stale positive resolve caches across index builds", async () => {
     const root = await mkTmpDir("dg-resolve-cache-positive-");
     const main = path.join(root, "main.ts");

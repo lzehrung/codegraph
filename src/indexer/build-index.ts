@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { languageExtensionPatterns, supportForFile, type LanguageSupport } from "../languages.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import { loadWorkspaceConfig, resolveWorkspacePackage } from "../util/workspace.js";
 import {
   DEFAULT_PROJECT_PATTERNS,
@@ -202,7 +203,7 @@ async function resolveCrossModuleSymbolExports(
   logLevel: LogLevel | undefined,
 ): Promise<void> {
   if (!support.supportsCrossModuleSymbols) return;
-  if (support.id !== "ts" && support.id !== "js") return;
+  if (!isJsTsLanguage(support.id)) return;
   const { matchPath } = await import("../util/resolution.js").then((mod) =>
     mod.loadNearestTsconfigFor(file, projectRoot, logLevel),
   );
@@ -570,8 +571,8 @@ function createIndexBuildRunState(
   opts: BuildOptions | undefined,
   graphOptions = normalizeGraphOptions(opts?.graph),
 ): IndexBuildRunState {
-  const report = opts?.report;
-  if (report) initNativeBackendReport(report);
+  const report = opts?.report ?? { timings: {} };
+  initNativeBackendReport(report);
   const cacheMode = opts?.cache ?? "off";
   return {
     normalizedProjectRoot: normalizePath(path.resolve(projectRoot)),
@@ -1512,7 +1513,7 @@ export async function buildProjectIndexIncremental(
     const explicitFilesCoverAllFiles =
       explicitFileSet.size === allFiles.size && [...allFiles].every((file) => explicitFileSet.has(file));
     const explicitFilesAreChangeInputs = !opts?.filesAreProjectScope;
-    if (explicitFileSet.size && explicitFilesAreChangeInputs && (!explicitFilesCoverAllFiles || report)) {
+    if (explicitFileSet.size && explicitFilesAreChangeInputs && (!explicitFilesCoverAllFiles || opts?.report)) {
       explicitFileSet.forEach(markAsChanged);
     }
     dependentFilesOfDeletedTracked.forEach(markAsChanged);

@@ -200,11 +200,10 @@ describe("Project Indexing", () => {
   });
 
   describe("Python Project", () => {
-    it("should index all Python files", async () => {
+    it("indexes the complete Python fixture inventory", async () => {
       const index = await createTestIndex("python");
-      expectModuleCount(index, 12);
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "python");
-      for (const file of [
+      const expectedFiles = [
         "main.py",
         "utils.py",
         "helpers.py",
@@ -217,9 +216,12 @@ describe("Project Indexing", () => {
         ".regressions/unicode_nfc_consumer.py",
         ".regressions/unicode_nfd_def.py",
         ".regressions/unicode_nfd_consumer.py",
-      ]) {
-        expectFileInIndex(index, path.join(samplePath, file).replace(/\\/g, "/"));
-      }
+        "package_consumer.py",
+        "package_exports/__init__.py",
+        "package_exports/values.py",
+      ].map((file) => path.join(samplePath, file).replace(/\\/g, "/"));
+
+      expect([...index.byFile.keys()].sort()).toEqual(expectedFiles.map(fileIdentityKey).sort());
     });
 
     it("should detect Python imports and exports", async () => {

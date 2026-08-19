@@ -12,6 +12,7 @@ import type { NativeFallbackReason } from "../native/contracts.js";
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
 import type { LanguageSupport } from "../languages.js";
 import type { ParserLanguage, SyntaxTreeLike } from "../languages/types.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../worker/nativeExtractWorker.js";
 
 export type ParsedFileContext = {
   source: string;
@@ -96,6 +97,13 @@ export function attemptParsePreparedFileContext(context: PreparedFileContext): P
       },
     };
   }
+  if (nativeMode !== "off" && Buffer.byteLength(source, "utf8") > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
+    return {
+      parsed: null,
+      nativeFallbackReason: "queryFailure",
+      ...(context.nativeError ? { nativeError: context.nativeError } : {}),
+    };
+  }
   const nativeTreeExecution = getNativeSyntaxTreeExecution(source, sup, nativeMode);
   if (nativeTreeExecution.tree) {
     return {
@@ -153,6 +161,19 @@ export async function prepareFileForIndexing(
     };
   }
 
+  const sourceBytes = Buffer.byteLength(prep.source, "utf8");
+  if (native !== "off" && sourceBytes > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
+    return {
+      file,
+      source: prep.source,
+      sup: prep.sup,
+      ...(prep.embeddedBlocks ? { embeddedBlocks: prep.embeddedBlocks } : {}),
+      ...(native ? { nativeMode: native } : {}),
+      nativeQueries: null,
+      nativeFallbackReason: "queryFailure",
+      nativeError: `source exceeds native byte limit (${sourceBytes} > ${DEFAULT_NATIVE_SOURCE_MAX_BYTES})`,
+    };
+  }
   const nativeExecution = getNativeQueryExecution(prep.source, prep.sup, native);
 
   return {

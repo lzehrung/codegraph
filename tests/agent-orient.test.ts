@@ -203,18 +203,36 @@ describe("agent orient", () => {
     expect(duplicateSpy).not.toHaveBeenCalled();
   });
 
-  it("runs full duplicate health only when requested", async () => {
+  it("uses bounded count-only duplicate health for large-budget orient", async () => {
     const root = await mkTmpDir("cg-agent-orient-full-health-");
-    await writeFile(root, "src/first.ts", "export function first() { return 1; }\n");
-    await writeFile(root, "src/second.ts", "export function second() { return 2; }\n");
+    const duplicateSource = [
+      "export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {",
+      "  const totals: number[] = [];",
+      "  const labels: string[] = [];",
+      "  for (const row of rows) {",
+      "    const subtotal = row.amount + row.tax;",
+      "    const rounded = Math.round(subtotal * 100) / 100;",
+      '    const label = rounded > 100 ? "large" : "small";',
+      "    labels.push(label);",
+      "    totals.push(rounded);",
+      "  }",
+      '  return totals.map((value, index) => labels[index] + ":" + value.toFixed(2)).join(",");',
+      "}",
+      "",
+    ].join("\n");
+    await writeFile(root, "src/first.ts", duplicateSource);
+    await writeFile(root, "src/second.ts", duplicateSource);
     const duplicateSpy = vi.spyOn(duplicates, "findDuplicates");
 
-    const response = await orientCodegraph({ root, includeRoots: ["src"], budget: "medium", health: "full" });
+    const response = await orientCodegraph({ root, includeRoots: ["src"], budget: "large", health: "full" });
 
     expect(response.health.cycles).toBe(0);
     expect(response.health.unresolved).toBe(0);
-    expect(response.health.duplicateGroups).not.toBeNull();
+    expect(response.health.duplicateGroups).toBe(1);
     expect(response.omittedCounts.healthAnalyses).toBe(0);
-    expect(duplicateSpy).toHaveBeenCalledTimes(1);
+    expect(duplicateSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ countOnly: true, maxBucketSize: 64 }),
+    );
   });
 });

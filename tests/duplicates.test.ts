@@ -2460,6 +2460,7 @@ export function sameRows(rows: number[]) {
 
     await writeProjectFile(root, "src/a.ts", source);
     await writeProjectFile(root, "src/b.ts", source);
+    const countOnly = await findDuplicates(await buildProjectIndex(root), { countOnly: true, minConfidence: "high" });
 
     const result = await captureCli(["duplicates", "--root", ".", "src", "--json", "--limit", "0", "--include-small"], {
       cwd: root,
@@ -2476,6 +2477,10 @@ export function sameRows(rows: number[]) {
     expect(parsed.omittedCounts?.groups).toBeGreaterThan(0);
     expect(parsed.omittedCounts?.candidatePairs).toBe(0);
     expect(parsed.stats?.candidatePairs).toBeGreaterThan(0);
+    expect(countOnly.groups).toHaveLength(0);
+    expect(countOnly.omittedCounts.groups).toBeGreaterThan(0);
+    expect(countOnly.omittedCounts.candidatePairs).toBeGreaterThan(0);
+    expect(countOnly.omittedCounts.candidatePairs).toBeLessThan(countOnly.stats.candidatePairs);
   });
 
   test("counts only considered fingerprints when oversized buckets are skipped", async () => {

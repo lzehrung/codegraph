@@ -312,7 +312,7 @@ export type WorkerPoolReport = {
 };
 
 export type QueryIndexDiagnostics = {
-  sidecarState: "hit" | "created" | "updated" | "unavailable" | "writer-busy" | "rebuilt-corrupt";
+  sidecarState: "hit" | "created" | "updated" | "rebuilt" | "unavailable" | "writer-busy" | "rebuilt-corrupt";
   filesRead: number;
   filesAdded: number;
   filesUpdated: number;

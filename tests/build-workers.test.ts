@@ -9,8 +9,13 @@ import {
   prepareFileContextsForBuildBatch,
   type WorkerPoolSetupResult,
 } from "../src/indexer/build-workers.js";
+import { attemptParsePreparedFileContext, prepareFileForIndexing } from "../src/indexer/parse-context.js";
 import type { BuildReport } from "../src/indexer/types.js";
-import type { NativeExtractTask } from "../src/worker/nativeExtractWorker.js";
+import {
+  createNativeExtractor,
+  DEFAULT_NATIVE_SOURCE_MAX_BYTES,
+  type NativeExtractTask,
+} from "../src/worker/nativeExtractWorker.js";
 
 const tempDirs: string[] = [];
 
@@ -192,5 +197,43 @@ describe("native build worker batches", () => {
       await fs.rm(lexicalRoot, { recursive: true, force: true });
       await fs.rm(realRoot, { recursive: true, force: true });
     }
+  });
+
+  it("uses the same capped-source diagnostic in main and worker extraction paths", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-worker-source-cap-"));
+    tempDirs.push(root);
+    const file = path.join(root, "generated.ts");
+    const source = `export const payload = "${"x".repeat(DEFAULT_NATIVE_SOURCE_MAX_BYTES)}";\n`;
+    await fs.writeFile(file, source, "utf8");
+    const expectedDiagnostic = `source exceeds native byte limit (${Buffer.byteLength(source, "utf8")} > ${DEFAULT_NATIVE_SOURCE_MAX_BYTES})`;
+
+    const mainPrepared = await prepareFileForIndexing(file, "on");
+    const mainAttempt = attemptParsePreparedFileContext(mainPrepared);
+    const workerExtractor = createNativeExtractor({
+      loadBinding: () => ({ binding: null }),
+      readFile: async () => source,
+    });
+    const task: NativeExtractTask = {
+      filePath: file,
+      languageId: "ts",
+      source,
+      importsQuery: "",
+      exportsQuery: "",
+      localsQuery: "",
+      importBindingsQuery: "",
+    };
+    const workerResult = await workerExtractor(task);
+
+    expect(mainPrepared.nativeFallbackReason).toBe("queryFailure");
+    expect(mainPrepared.nativeError).toBe(expectedDiagnostic);
+    expect(mainAttempt.parsed).toBeNull();
+    expect(mainAttempt.nativeFallbackReason).toBe("queryFailure");
+    expect(mainAttempt.nativeError).toBe(expectedDiagnostic);
+    const unlabeledAttempt = attemptParsePreparedFileContext({ ...mainPrepared, nativeError: undefined });
+    expect(unlabeledAttempt.parsed).toBeNull();
+    expect(unlabeledAttempt.nativeFallbackReason).toBe("queryFailure");
+    expect(unlabeledAttempt.nativeError).toBeUndefined();
+    expect(workerResult.fallbackReason).toBe("queryFailure");
+    expect(workerResult.error).toBe(expectedDiagnostic);
   });
 });

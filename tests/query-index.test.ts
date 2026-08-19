@@ -136,6 +136,34 @@ describe("persistent query index", () => {
       ?.evidence.find((evidence) => evidence.file === "src/auth.ts");
     expect(authEvidence?.line).toBe(1);
   });
+  it("uses fresh Unicode sidecars and rebuilds obsolete normalizers", async () => {
+    const root = await createRepo();
+    await fs.writeFile(path.join(root, "src", "日本.ts"), "export const 日本 = 'café';\n", "utf8");
+    const readSnapshot = vi.spyOn(QueryIndexStore.prototype, "withReadSnapshot");
+    const initialSession = createSession(root);
+    const initial = await search(initialSession, root, "日本");
+    const initialSnapshot = await initialSession.loadProject();
+    const sidecar = resolveQueryIndexPaths(initialSnapshot.index.cacheRootDir!).sidecar;
+
+    expect(initial.results.some((result) => result.file === "src/日本.ts")).toBe(true);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    disposeSessionQueryIndex(initialSession);
+
+    const database = new SqliteDatabase(sidecar);
+    database.prepare("UPDATE metadata SET value = ? WHERE key = ?").run("query-normalizer-v0", "normalizerVersion");
+    database.close();
+
+    const rebuiltSession = createSession(root);
+    const response = await search(rebuiltSession, root, "日本");
+    const rebuiltSnapshot = await rebuiltSession.loadProject();
+
+    expect(response.results.some((result) => result.file === "src/日本.ts")).toBe(true);
+    expect(rebuiltSnapshot.buildReport?.queryIndex).toMatchObject({
+      sidecarState: "rebuilt",
+      updateMs: expect.any(Number),
+    });
+    expect(rebuiltSnapshot.buildReport?.queryIndex?.updateMs).toBeGreaterThan(0);
+  });
 
   it("reports both candidate files and candidate chunks for sidecar searches", async () => {
     const root = await createRepo();
@@ -378,8 +406,11 @@ describe("persistent query index", () => {
     created.store?.close();
 
     await fs.writeFile(transient, "export const transientValue = 'transient changed phrase with a new size';\n");
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => ++clock);
     const updated = await ensureQueryIndex(await loadSnapshot());
     expect(updated.diagnostics).toMatchObject({ sidecarState: "updated", filesRead: 1, filesUpdated: 1 });
+    expect(updated.diagnostics.updateMs).toBeGreaterThan(0);
     updated.store?.close();
   });
 

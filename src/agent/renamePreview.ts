@@ -328,6 +328,11 @@ export async function previewRenameInSnapshot(
   const candidateLimitExceeded = boundedCandidates.omitted > 0;
   const candidates = boundedCandidates.items;
   await addScopeConflicts(snapshot, resolved.def, request.newName, selectedReferences, conflicts);
+  for (const definition of semanticDefinitions.values()) {
+    if (defNodeId(definition) === resolved.id) continue;
+    await addScopeConflicts(snapshot, definition, request.newName, [], conflicts);
+  }
+  addExportDeclarationConflicts(snapshot, semanticDefinitions, request.newName, conflicts);
 
   for (const reference of importDeclarations.missing) {
     unsafeSites.push({
@@ -483,6 +488,39 @@ export async function previewRenameInSnapshot(
     filenameSuggestions,
     candidateTests,
   };
+}
+function addExportDeclarationConflicts(
+  snapshot: AgentProjectSnapshot,
+  definitions: ReadonlyMap<string, SymbolDef>,
+  newName: string,
+  conflicts: RenameConflict[],
+): void {
+  for (const moduleIndex of snapshot.index.byFile.values()) {
+    const editedExport = moduleIndex.exports.some((entry) => {
+      if (entry.type === "local") {
+        return definitions.has(defNodeId(entry.target)) && entry.exportedAs === entry.target.localName;
+      }
+      if (entry.type !== "reexport" || entry.exportedAs !== entry.sourceSpecifier) return false;
+      const resolved = resolveExport(snapshot.index, moduleIndex.file, entry.exportedAs, { allowLocalFallback: false });
+      return resolved?.kind === "resolved" && definitions.has(defNodeId(resolved.def));
+    });
+    if (!editedExport) continue;
+    const duplicate = moduleIndex.exports.find((entry) => {
+      if (!("exportedAs" in entry) || entry.exportedAs !== newName) return false;
+      if (entry.type === "local") return !definitions.has(defNodeId(entry.target));
+      if (entry.type !== "reexport") return true;
+      const resolved = resolveExport(snapshot.index, moduleIndex.file, entry.exportedAs, { allowLocalFallback: false });
+      return resolved?.kind !== "resolved" || !definitions.has(defNodeId(resolved.def));
+    });
+    if (!duplicate) continue;
+    const file = normalizeAgentFilePath(snapshot.root, moduleIndex.file);
+    if (conflicts.some((conflict) => conflict.file === file && conflict.reason === "duplicate_export")) continue;
+    conflicts.push({
+      file,
+      reason: "duplicate_export",
+      message: `The edited export module already exports "${newName}".`,
+    });
+  }
 }
 
 function validateNewName(snapshot: AgentProjectSnapshot, def: SymbolDef, newName: string): RenameConflict[] {
@@ -859,7 +897,7 @@ function classifyTextualOccurrence(node: {
   while (current) {
     const type = current.type.toLocaleLowerCase();
     if (type.includes("comment")) return "comment";
-    if (type.includes("import") || type === "use_declaration") {
+    if (type.includes("import") || type === "use_declaration" || type === "template_substitution") {
       return null;
     }
     if (type.includes("string") || type.includes("template") || type.includes("quoted") || type === "char_literal") {
@@ -1159,11 +1197,18 @@ function buildFilenameSuggestions(
   const parsed = path.parse(normalizeAgentFilePath(snapshot.root, def.file));
   if (parsed.name !== def.localName) return [];
   const to = path.posix.join(parsed.dir.replace(/\\/g, "/"), `${newName}${parsed.ext}`);
+  const source = normalizeAgentFilePath(snapshot.root, def.file);
+  const destinationKey = to.toLowerCase();
+  const destinationExists = snapshot.files.some((file) => {
+    const candidate = normalizeAgentFilePath(snapshot.root, file);
+    return candidate !== source && candidate.toLowerCase() === destinationKey;
+  });
+  if (destinationExists) return [];
   return [
     {
       from: normalizeAgentFilePath(snapshot.root, def.file),
       to,
-      caseOnlyRisk: parsed.name !== newName && parsed.name.toLocaleLowerCase() === newName.toLocaleLowerCase(),
+      caseOnlyRisk: parsed.name !== newName && parsed.name.toLowerCase() === newName.toLowerCase(),
     },
   ];
 }

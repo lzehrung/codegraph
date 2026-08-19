@@ -331,6 +331,7 @@ export async function ensureQueryIndex(snapshot: AgentProjectSnapshot): Promise<
     metadata.normalizerVersion === versions.normalizerVersion &&
     metadata.chunkerVersion === versions.chunkerVersion &&
     metadata.projectRootIdentity === current.projectRootIdentity;
+  const requiresContentRebuild = !contentVersionsMatch && storedIdentities.size > 0;
   const changed = contentVersionsMatch
     ? current.files.filter((file) => storedIdentities.get(file.path) !== file.sourceIdentity)
     : current.files;
@@ -351,7 +352,13 @@ export async function ensureQueryIndex(snapshot: AgentProjectSnapshot): Promise<
   try {
     store.replaceFiles(prepared, deleted, buildMetadata(current));
     diagnostics.updateMs = elapsedMs(updateStarted);
-    diagnostics.sidecarState = existedBefore ? "updated" : "created";
+    if (requiresContentRebuild) {
+      diagnostics.sidecarState = "rebuilt";
+    } else if (existedBefore) {
+      diagnostics.sidecarState = "updated";
+    } else {
+      diagnostics.sidecarState = "created";
+    }
     return { store, diagnostics };
   } catch (error) {
     diagnostics.updateMs = elapsedMs(updateStarted);

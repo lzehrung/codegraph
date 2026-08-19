@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
@@ -60,6 +61,10 @@ async function mkRepo(): Promise<string> {
       "The docs phrase should be easy to find from natural-language search.",
       "",
     ].join("\n"),
+  );
+  await fs.writeFile(
+    path.join(root, "src", "café-日本.ts"),
+    ["export const 日本 = 2;", "export function créer() { return 日本; }", ""].join("\n"),
   );
   await fs.writeFile(
     path.join(root, "schema.sql"),
@@ -134,9 +139,21 @@ describe("agent search", () => {
     expect(response.results[0]?.evidence.some((entry) => entry.source === "symbol")).toBeTruthy();
     expect(response.results[0]?.neighbors.some((entry) => entry.file?.endsWith("src/api.ts"))).toBeTruthy();
     expect(response.results[0]?.followUps.some((followUp) => followUp.tool === "refs")).toBeTruthy();
+
     expect(response.results[0]?.provenance.surface).toBe("code");
     expect(response.results[0]?.provenance.capability).toBe("semantic");
     expect(response.results.some((result) => result.file.endsWith("src/auth.ts"))).toBeTruthy();
+  });
+  it("finds Unicode symbols, accented identifiers, and filenames through indexed and text search", async () => {
+    const root = await mkRepo();
+
+    const indexed = await searchCodegraph({ root, query: "日本", mode: "symbol" });
+    const accentedText = await searchCodegraph({ root, query: "créer", mode: "text" });
+    const unicodePath = await searchCodegraph({ root, query: "café 日本", mode: "path" });
+
+    expect(indexed.results.some((result) => result.label === "日本")).toBeTruthy();
+    expect(accentedText.results.some((result) => result.file.includes("café-日本.ts"))).toBeTruthy();
+    expect(unicodePath.results.some((result) => result.file.includes("café-日本.ts"))).toBeTruthy();
   });
 
   it("shell-quotes generated follow-up commands for path metacharacters", async () => {
@@ -615,6 +632,54 @@ describe("agent search", () => {
     expect(counted.loads()).toBe(1);
   });
 
+  it("refreshes freshness on a cached session search response", async () => {
+    const root = await mkRepo();
+    const session = createAgentSession({ root, useConfig: false, freshness: { policy: "manual" } });
+    const request = { root, query: "validateUser", mode: "symbol" as const, limit: 20 };
+    const initial = await searchCodegraphWithSession(session, request);
+    const freshness = {
+      state: "stale" as const,
+      changedFiles: ["src/auth.ts"],
+      changedFileCount: 1,
+      omittedChangedFileCount: 0,
+      reason: "test freshness result",
+    };
+    session.checkFreshness = async () => freshness;
+
+    const cached = await searchCodegraphWithSession(session, request);
+
+    expect(initial.freshness).toEqual({ state: "fresh" });
+    expect(cached.freshness).toEqual(freshness);
+  });
+
+  it("refreshes a reused session search after an on-disk edit and reports that refresh", async () => {
+    const root = await mkRepo();
+    const file = path.join(root, "src", "auth.ts");
+    const session = createAgentSession({ root, useConfig: false, freshness: { policy: "auto" } });
+
+    const beforeEdit = await searchCodegraphWithSession(session, {
+      root,
+      query: "validateUser",
+      mode: "symbol",
+      limit: 20,
+    });
+    await fs.writeFile(file, "export function authorizeUser() { return true; }\n", "utf8");
+    const afterEdit = await searchCodegraphWithSession(session, {
+      root,
+      query: "authorizeUser",
+      mode: "symbol",
+      limit: 20,
+    });
+    const afterEditContract = afterEdit as {
+      freshness?: { state: string; changedFiles?: string[] };
+    };
+
+    expect(beforeEdit.results.some((result) => result.label === "validateUser")).toBe(true);
+    expect(afterEdit.results.some((result) => result.label === "authorizeUser")).toBe(true);
+    expect(afterEdit.results.some((result) => result.label === "validateUser")).toBe(false);
+    expect(afterEditContract.freshness).toEqual({ state: "refreshed", changedFiles: ["src/auth.ts"] });
+  });
+
   it("reuses searchable file text and chunks across repeated session searches", async () => {
     const root = await mkRepo();
     const docsFile = path.join(root, "docs", "agent-search.md");
@@ -765,6 +830,51 @@ describe("agent search", () => {
     expect(response.results.some((result) => result.file === "consumer.ts" && result.handle.endsWith(":0:0"))).toBe(
       false,
     );
+  });
+
+  it("caches symbol-name anchors without rescanning graph nodes", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-symbol-anchors-"));
+    const anchorFile = path.join(root, "anchor.ts");
+    const neighborFile = path.join(root, "neighbor.ts");
+    const anchorDef = symbolDef(anchorFile, "anchorName", 0);
+    const neighborDef = symbolDef(neighborFile, "neighborName", 0);
+    const anchorNode = symbolNode(anchorDef);
+    const neighborNode = symbolNode(neighborDef);
+    const nodes = new Map([
+      [anchorNode.id, anchorNode],
+      [neighborNode.id, neighborNode],
+    ]);
+    const valuesSpy = vi.spyOn(nodes, "values");
+    const fileGraph: Graph = {
+      nodes: new Set([anchorFile, neighborFile]),
+      edges: [{ from: anchorFile, to: { type: "file", path: neighborFile }, raw: "./neighbor" }],
+    };
+    const byFile = new Map([
+      [anchorFile, moduleIndex(anchorFile, [anchorDef])],
+      [neighborFile, moduleIndex(neighborFile, [neighborDef])],
+    ]);
+    const index: ProjectIndex = {
+      graph: fileGraph,
+      modules: byFile,
+      byFile,
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    const session = snapshotSession({
+      root,
+      files: [anchorFile, neighborFile],
+      index,
+      fileGraph,
+      symbolGraph: { nodes, edges: [] },
+    });
+
+    await searchCodegraphWithSession(session, { root, query: "", mode: "graph", from: "anchorName" });
+    const initialValuesCalls = valuesSpy.mock.calls.length;
+    const response = await searchCodegraphWithSession(session, { root, query: "", mode: "graph", from: "anchorName" });
+
+    expect(response.results).toEqual([]);
+    expect(initialValuesCalls).toBeGreaterThan(0);
+    expect(valuesSpy).toHaveBeenCalledTimes(initialValuesCalls);
   });
 
   it("indexes file neighbors once per graph search instead of scanning edges per match", async () => {

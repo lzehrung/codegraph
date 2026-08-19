@@ -8,6 +8,8 @@ export type ImportBinding =
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
       mechanism?: "es" | "cjs" | "python" | "php";
+      /** Whether this Python import is declared at the module's top level. */
+      moduleLevel?: boolean;
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
     }
@@ -20,6 +22,8 @@ export type ImportBinding =
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
       mechanism?: "es" | "cjs" | "python" | "php";
+      /** Whether this Python import is declared at the module's top level. */
+      moduleLevel?: boolean;
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
     }
@@ -30,6 +34,8 @@ export type ImportBinding =
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
       mechanism?: "es" | "cjs" | "python" | "php";
+      /** Whether this Python import is declared at the module's top level. */
+      moduleLevel?: boolean;
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
     }
@@ -39,6 +45,8 @@ export type ImportBinding =
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
       mechanism?: "es" | "cjs" | "python" | "php";
+      /** Whether this Python import is declared at the module's top level. */
+      moduleLevel?: boolean;
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
     };
