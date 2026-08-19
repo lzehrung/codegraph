@@ -95,16 +95,35 @@ function resolveGitTimeoutMs(timeoutMs: number | undefined): number {
 }
 
 function appendBoundedTail(current: string, chunk: string, maxBytes: number): string {
-  const combined = current + chunk;
-  const bytes = Buffer.from(combined, "utf8");
-  if (bytes.length <= maxBytes) return combined;
-  if (maxBytes <= 0) return "";
-
-  let start = bytes.length - maxBytes;
-  while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) {
-    start++;
+  function utf8Tail(value: string, byteLimit: number): string {
+    let start = value.length;
+    let bytes = 0;
+    while (start) {
+      const last = value.charCodeAt(start - 1);
+      const preceding = start > 1 ? value.charCodeAt(start - 2) : undefined;
+      const isSurrogatePair =
+        last >= 0xdc00 && last <= 0xdfff && preceding !== undefined && preceding >= 0xd800 && preceding <= 0xdbff;
+      const codeUnits = isSurrogatePair ? 2 : 1;
+      let codePointBytes = 3;
+      if (isSurrogatePair) {
+        codePointBytes = 4;
+      } else if (last <= 0x7f) {
+        codePointBytes = 1;
+      } else if (last <= 0x7ff) {
+        codePointBytes = 2;
+      }
+      if (bytes + codePointBytes > byteLimit) break;
+      bytes += codePointBytes;
+      start -= codeUnits;
+    }
+    return value.slice(start);
   }
-  return bytes.subarray(start).toString("utf8");
+
+  if (maxBytes <= 0) return "";
+  const retainedChunk = utf8Tail(chunk, maxBytes);
+  const retainedChunkBytes = Buffer.byteLength(retainedChunk, "utf8");
+  if (retainedChunkBytes >= maxBytes) return retainedChunk;
+  return utf8Tail(current, maxBytes - retainedChunkBytes) + retainedChunk;
 }
 
 function killGitChild(child: ChildProcess): void {
