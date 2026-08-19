@@ -9,7 +9,11 @@ import {
   isNativeRequiredUnavailableError,
   isNativeTreeSitterAvailable,
 } from "../native/treeSitterNative.js";
-import type { NativeExtractResult, NativeExtractTask } from "../worker/nativeExtractWorker.js";
+import type {
+  NativeExtractBatchResult,
+  NativeExtractResult,
+  NativeExtractTask,
+} from "../worker/nativeExtractWorker.js";
 import { DEFAULT_NATIVE_SOURCE_MAX_BYTES, NATIVE_WORKER_BATCH_SIZE } from "../worker/nativeExtractWorker.js";
 import { prepareFileForIndexing, type PreparedFileContext } from "./parse-context.js";
 import type { BuildOptions, BuildReport, WorkerPoolReport } from "./types.js";
@@ -154,7 +158,7 @@ function createOversizedNativeSourceFallback(
   const bytes = Buffer.byteLength(source, "utf8");
   return {
     file,
-    source: "",
+    source,
     sup: support,
     nativeQueries: null,
     nativeFallbackReason: "queryFailure",
@@ -185,7 +189,7 @@ export async function prepareFileContextForBuild(
       const workerResult = (await workerSetup.pool.run(buildWorkerTask(file, support, source))) as NativeExtractResult;
       prepared = workerResultToPrepared(workerResult, support, file, source);
     } catch (error) {
-      if (isNativeRequiredUnavailableError(error)) throw error;
+      if (isNativeRequiredUnavailableError(error) && error instanceof Error) throw error;
       if (workerSetup.report) workerSetup.report.tasksFailed++;
       if (workerSetup.report) {
         workerSetup.report.errors ??= [];
@@ -234,26 +238,20 @@ export async function prepareFileContextsForBuildBatch(
   for (let offset = 0; offset < batchable.length; offset += workerSetup.batchSize) {
     const slice = batchable.slice(offset, offset + workerSetup.batchSize);
     if (workerSetup.report) workerSetup.report.tasksSubmitted += slice.length;
-    const workerResults = await Promise.all(
-      slice.map(async (entry) => {
-        try {
-          return {
-            entry,
-            result: (await workerSetup.pool!.run(entry.task)) as NativeExtractResult,
-          };
-        } catch (error) {
-          return { entry, error };
-        }
-      }),
-    );
-    for (const outcome of workerResults) {
-      const entry = outcome.entry;
-      const result = "result" in outcome ? outcome.result : null;
-      const missingResult = result === null || typeof result !== "object" || "results" in result;
-      if ("error" in outcome || missingResult) {
-        const error =
-          "error" in outcome ? outcome.error : new Error("Native worker returned no result for batch task.");
-        if (isNativeRequiredUnavailableError(error)) throw error;
+    let batchResult: NativeExtractBatchResult | undefined;
+    let batchError: unknown;
+    try {
+      batchResult = (await workerSetup.pool.run({
+        tasks: slice.map((entry) => entry.task),
+      })) as NativeExtractBatchResult;
+    } catch (error) {
+      batchError = error;
+    }
+    for (const [index, entry] of slice.entries()) {
+      const result = batchResult?.results[index];
+      if (batchError !== undefined || result === undefined) {
+        const error = batchError ?? new Error("Native worker returned no result for batch task.");
+        if (isNativeRequiredUnavailableError(error) && error instanceof Error) throw error;
         if (workerSetup.report) {
           workerSetup.report.tasksFailed++;
           workerSetup.report.errors ??= [];

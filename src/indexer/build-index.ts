@@ -259,7 +259,10 @@ async function buildIndexedModuleForFile(args: {
   const { source, sup, nativeQueries, embeddedBlocks } = prepared;
   let resolvedLang = prepared.lang;
   let tree: SyntaxTreeLike | undefined;
-  const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
+  const graphOnlyLanguage = isGraphOnlyLanguage(sup.id),
+    nativeSourceLimitFallback =
+      prepared.nativeFallbackReason === "queryFailure" &&
+      !!prepared.nativeError?.startsWith("source exceeds native byte limit");
 
   if (prepared.syntaxTree) {
     const parsedTree = new ProjectedSyntaxTree(source, prepared.syntaxTree);
@@ -277,7 +280,7 @@ async function buildIndexedModuleForFile(args: {
       },
       args.parsedCacheMaxEntries,
     );
-  } else if (!nativeQueries && !graphOnlyLanguage && sup.id !== "sql") {
+  } else if (!nativeQueries && !graphOnlyLanguage && sup.id !== "sql" && !nativeSourceLimitFallback) {
     const parseAttempt = attemptParsePreparedFileContext(prepared);
     const parsed = parseAttempt.parsed;
     if (parsed) {
@@ -305,7 +308,7 @@ async function buildIndexedModuleForFile(args: {
   }
   const lacksParserContext = !nativeQueries && !tree;
 
-  if (args.bloomFilterCache) {
+  if (args.bloomFilterCache && !nativeSourceLimitFallback) {
     const filter = buildBloomFilterFromSource(source, sup);
     args.bloomFilterCache.set(args.file, filter);
   }
@@ -321,7 +324,7 @@ async function buildIndexedModuleForFile(args: {
   };
 
   const imports =
-    sup.id === "sql"
+    nativeSourceLimitFallback || sup.id === "sql"
       ? []
       : await collectImportsForFile(args.file, args.projectRoot, {
           source,

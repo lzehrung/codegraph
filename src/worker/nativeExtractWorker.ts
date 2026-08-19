@@ -146,7 +146,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
       if (bytes > maxSourceBytes) {
         return {
           ok: false,
-          source: "",
+          source: task.source,
           error: `source exceeds native byte limit (${bytes} > ${maxSourceBytes})`,
         };
       }
@@ -268,8 +268,13 @@ const runExtraction = createNativeExtractor({
   },
 });
 
-export async function runExtractionBatch(batch: NativeExtractBatchTask): Promise<NativeExtractBatchResult> {
-  return { results: await Promise.all(batch.tasks.map((task) => runExtraction(task))) };
+export async function runExtractionBatch(
+  batch: NativeExtractBatchTask,
+  extract: NativeExtractor = runExtraction,
+): Promise<NativeExtractBatchResult> {
+  const results: NativeExtractResult[] = [];
+  for (const task of batch.tasks) results.push(await extract(task));
+  return { results };
 }
 
 export default async function runWorkerTask(
