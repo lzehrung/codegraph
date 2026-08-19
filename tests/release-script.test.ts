@@ -227,6 +227,62 @@ describe("release script helpers", () => {
     }
   });
 
+  it("replaces a stale staged native artifact with freshly built bytes even when staging only missing targets", () => {
+    const suffix = currentNativeTargetSuffix();
+    expect(suffix).toBeTruthy();
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-native-stage-stale-"));
+    const nativeRoot = path.join(tempDir, "packages", "codegraph-native");
+    const targetDir = path.join(nativeRoot, "npm", String(suffix));
+    const targetFile = path.join(targetDir, `index.${suffix}.node`);
+    const sourceFile = path.join(nativeRoot, `index.${suffix}.node`);
+    const scriptPath = path.resolve(process.cwd(), "scripts/stage-native-package.mjs");
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.writeFileSync(targetFile, "stale downloaded artifact");
+    fs.writeFileSync(sourceFile, "freshly built artifact bytes");
+
+    try {
+      const result = spawnSync(process.execPath, [scriptPath, "--if-missing"], {
+        cwd: tempDir,
+        encoding: "utf8",
+      });
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("Replacing stale staged native artifact with freshly built bytes");
+      expect(fs.readFileSync(targetFile, "utf8")).toBe("freshly built artifact bytes");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the staged native artifact without rewriting when it already matches the fresh build", () => {
+    const suffix = currentNativeTargetSuffix();
+    expect(suffix).toBeTruthy();
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-native-stage-match-"));
+    const nativeRoot = path.join(tempDir, "packages", "codegraph-native");
+    const targetDir = path.join(nativeRoot, "npm", String(suffix));
+    const targetFile = path.join(targetDir, `index.${suffix}.node`);
+    const sourceFile = path.join(nativeRoot, `index.${suffix}.node`);
+    const scriptPath = path.resolve(process.cwd(), "scripts/stage-native-package.mjs");
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.writeFileSync(targetFile, "identical artifact bytes");
+    fs.writeFileSync(sourceFile, "identical artifact bytes");
+
+    try {
+      const result = spawnSync(process.execPath, [scriptPath, "--if-missing"], {
+        cwd: tempDir,
+        encoding: "utf8",
+      });
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("matches freshly built bytes");
+      expect(fs.readFileSync(targetFile, "utf8")).toBe("identical artifact bytes");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("allows resume only for managed release files", () => {
     expect(isAllowedResumePath("package.json")).toBe(true);
     expect(isAllowedResumePath("scripts/check-native-artifacts.mjs")).toBe(true);
