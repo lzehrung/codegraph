@@ -44,4 +44,25 @@ describe("confined readable files", () => {
       }
     },
   );
+
+  it.runIf(process.platform === "win32")(
+    "accepts a long in-root file when the canonical root uses its Windows short path",
+    async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-confined-file-short-root-"));
+      const insideFile = path.join(root, "source.ts");
+      await fsp.writeFile(insideFile, "export const inside = true;\n", "utf8");
+
+      try {
+        const shortRoot = await windowsShortPath(root);
+        if (!shortRoot) return;
+
+        const resolved = await resolveReadableFile(shortRoot, root, insideFile);
+
+        expect(resolved.realPath).toBe(await fsp.realpath(insideFile));
+        expect(resolved.displayPath).toBe("source.ts");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 });
