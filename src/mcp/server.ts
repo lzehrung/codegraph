@@ -389,9 +389,7 @@ type WithAbortSignal<T extends { query_sqlite: unknown }> = {
     : never;
 } & Pick<T, "query_sqlite">;
 
-export type CodegraphMcpHandlers = WithAbortSignal<CodegraphMcpHandlerDefinitions> & {
-  formatToolError?: (error: unknown) => CallToolResult;
-};
+export type CodegraphMcpHandlers = WithAbortSignal<CodegraphMcpHandlerDefinitions>;
 
 type McpDependencyRequest = {
   file: string;
@@ -1346,34 +1344,36 @@ function createCodegraphMcpProtocolFactory(
 
 export function createParseErrorReportingStdin(input: Readable, output: Writable): Readable {
   let pending = Buffer.alloc(0);
+  const processFrame = (rawFrame: Buffer, stream: Transform): Error | undefined => {
+    const frame = rawFrame.at(-1) === 13 ? rawFrame.subarray(0, -1) : rawFrame;
+    if (!frame.length) return;
+    if (frame.length > MAX_MCP_STDIO_FRAME_BYTES) {
+      return new Error("MCP stdio frame exceeded 10 MiB.");
+    }
+    try {
+      JSON.parse(frame.toString("utf8"));
+      stream.push(frame);
+      stream.push("\n");
+    } catch {
+      output.write(
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: ProtocolErrorCode.ParseError, message: "Parse error" },
+        })}\n`,
+      );
+    }
+  };
   const filter = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
       pending = Buffer.concat([pending, chunk]);
       let newline = pending.indexOf(10);
       while (newline >= 0) {
-        const rawFrame = pending.subarray(0, newline);
-        const frame = rawFrame.at(-1) === 13 ? rawFrame.subarray(0, -1) : rawFrame;
+        const error = processFrame(pending.subarray(0, newline), this);
         pending = pending.subarray(newline + 1);
-        if (!frame.length) {
-          newline = pending.indexOf(10);
-          continue;
-        }
-        if (frame.length > MAX_MCP_STDIO_FRAME_BYTES) {
-          callback(new Error("MCP stdio frame exceeded 10 MiB."));
+        if (error !== undefined) {
+          callback(error);
           return;
-        }
-        try {
-          JSON.parse(frame.toString("utf8"));
-          this.push(frame);
-          this.push("\n");
-        } catch {
-          output.write(
-            `${JSON.stringify({
-              jsonrpc: "2.0",
-              id: null,
-              error: { code: ProtocolErrorCode.ParseError, message: "Parse error" },
-            })}\n`,
-          );
         }
         newline = pending.indexOf(10);
       }
@@ -1382,6 +1382,11 @@ export function createParseErrorReportingStdin(input: Readable, output: Writable
         return;
       }
       callback();
+    },
+    flush(callback) {
+      const error = processFrame(pending, this);
+      pending = Buffer.alloc(0);
+      callback(error);
     },
   });
   input.pipe(filter);

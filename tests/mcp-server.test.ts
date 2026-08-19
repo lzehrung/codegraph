@@ -191,8 +191,7 @@ describe("codegraph MCP handlers", () => {
             "\r",
             "{bad}\r",
             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}\r',
-            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\r',
-            "",
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}',
           ].join("\n"),
         );
         await vi.waitFor(() => {
@@ -212,6 +211,33 @@ describe("codegraph MCP handlers", () => {
         await server.close();
         await fs.rm(root, { recursive: true, force: true });
       }
+    });
+
+    it("reports a malformed final frame without a newline before ending the input", async () => {
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const filtered = createParseErrorReportingStdin(input, output);
+      let response = "";
+      output.setEncoding("utf8");
+      output.on("data", (chunk: string) => {
+        response += chunk;
+      });
+      const ended = new Promise<void>((resolve, reject) => {
+        filtered.once("end", resolve);
+        filtered.once("error", reject);
+      });
+      filtered.resume();
+
+      input.end("{bad}");
+
+      await ended;
+      expect(response.trim()).toEqual(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: -32700, message: "Parse error" },
+        }),
+      );
     });
 
     it("enforces the 10 MiB frame bound before passing data to the stdio transport", async () => {

@@ -41,7 +41,7 @@ Use stdio for a client-owned subprocess. Use HTTP for one long-running codegraph
 
 codegraph uses the official MCP SDK v2 to serve current 2026-07-28 clients while retaining compatibility with 2025-era clients. MCP protocol connections and HTTP protocol sessions keep separate transport state, but all share the server's one warm codegraph analysis session for the configured root. Tool request schemas set `additionalProperties: false` and reject unknown fields with an actionable invalid-parameter error instead of silently ignoring typos.
 
-Malformed tool arguments return JSON-RPC `-32602`; unknown tool names return typed JSON-RPC method errors. Expected execution failures, including missing files, out-of-root paths, and read-only build refusal, return a `tools/call` result with `isError: true` and sanitized project-relative text rather than a protocol internal error.
+Malformed tool arguments return JSON-RPC `-32602`; unknown tool names return typed JSON-RPC method errors. Expected execution failures, including missing files, out-of-root paths, and read-only build refusal, return a `tools/call` result with `isError: true` and sanitized/redacted path text rather than a protocol internal error.
 
 HTTP enforces Host and Origin policies. A missing `Origin` is accepted for non-browser clients; unapproved, malformed, and opaque origins are rejected. This is not authentication: binding `--host` to a non-loopback address exposes an unauthenticated endpoint intended only for trusted networks or containers.
 
