@@ -101,7 +101,7 @@ export function attemptParsePreparedFileContext(context: PreparedFileContext): P
     return {
       parsed: null,
       nativeFallbackReason: "queryFailure",
-      nativeError: context.nativeError,
+      ...(context.nativeError ? { nativeError: context.nativeError } : {}),
     };
   }
   const nativeTreeExecution = getNativeSyntaxTreeExecution(source, sup, nativeMode);
