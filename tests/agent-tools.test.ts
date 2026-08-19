@@ -66,6 +66,9 @@ describe("Agent Tools", () => {
         await tool_getDependencies(samplePath, "main.ts"),
         await tool_getReverseDependencies(samplePath, "main.ts"),
         await tool_getHotspots(samplePath),
+        await tool_findSymbol(samplePath, "helperFunction"),
+        await tool_getFileOverview(samplePath, "main.ts"),
+        await tool_impactJSON(samplePath, { provider: "raw", diffText: "" }),
       ]) {
         expect(result).toEqual({ status: "error", error: "7" });
       }
