@@ -1513,7 +1513,7 @@ export async function buildProjectIndexIncremental(
     const explicitFilesCoverAllFiles =
       explicitFileSet.size === allFiles.size && [...allFiles].every((file) => explicitFileSet.has(file));
     const explicitFilesAreChangeInputs = !opts?.filesAreProjectScope;
-    if (explicitFileSet.size && explicitFilesAreChangeInputs && (!explicitFilesCoverAllFiles || report)) {
+    if (explicitFileSet.size && explicitFilesAreChangeInputs && (!explicitFilesCoverAllFiles || opts?.report)) {
       explicitFileSet.forEach(markAsChanged);
     }
     dependentFilesOfDeletedTracked.forEach(markAsChanged);

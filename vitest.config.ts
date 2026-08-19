@@ -12,6 +12,9 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
     includeSource: ["src/**/*.{ts,tsx,js,jsx}"],
     exclude: ["node_modules", "dist"],
+    // Several integration cases create native worker subprocesses; keep the parent fork pool
+    // bounded so parallel suites do not exhaust the CI process limit.
+    maxWorkers: 2,
     coverage: {
       provider: "v8",
       include: ["src/**/*.{ts,tsx}"],
