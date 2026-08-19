@@ -1160,6 +1160,37 @@ describe("CLI command modules", () => {
     }
   });
 
+  test("graph --sqlite uses disk cache for verification without an explicit cache mode", async () => {
+    const root = await mkTmpDir("codegraph-graph-sqlite-cache-verify-");
+    const entryFile = path.join(root, "entry.ts");
+    const sqliteFile = path.join(root, "graph.sqlite");
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexFromFiles");
+
+    try {
+      await handleGraphCommand(
+        createGraphContext({
+          projectRootFs: root,
+          cwd: () => root,
+          nativeMode: "off",
+          resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
+          getOpt: (name) => (name === "--sqlite" ? sqliteFile : undefined),
+          hasFlag: (name) => name === "--cache-verify",
+        }),
+      );
+
+      expect(buildSpy).toHaveBeenCalledOnce();
+      expect(buildSpy).toHaveBeenCalledWith(
+        root,
+        [entryFile.replace(/\\/g, "/")],
+        expect.objectContaining({ cache: "disk", cacheVerify: true }),
+      );
+    } finally {
+      buildSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("graph --symbols forwards the requested cache mode to its full index build", async () => {
     const root = await mkTmpDir("codegraph-graph-symbols-cache-");
     const entryFile = path.join(root, "entry.ts");
@@ -1184,6 +1215,36 @@ describe("CLI command modules", () => {
         root,
         [entryFile.replace(/\\/g, "/")],
         expect.objectContaining({ cache: "memory" }),
+      );
+    } finally {
+      buildSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("graph --symbols uses disk cache for verification without an explicit cache mode", async () => {
+    const root = await mkTmpDir("codegraph-graph-symbols-cache-verify-");
+    const entryFile = path.join(root, "entry.ts");
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexFromFiles");
+
+    try {
+      await handleGraphCommand(
+        createGraphContext({
+          projectRootFs: root,
+          cwd: () => root,
+          nativeMode: "off",
+          resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
+          hasFlag: (name) => name === "--symbols" || name === "--json" || name === "--cache-verify",
+          writeStdoutLine: () => undefined,
+        }),
+      );
+
+      expect(buildSpy).toHaveBeenCalledOnce();
+      expect(buildSpy).toHaveBeenCalledWith(
+        root,
+        [entryFile.replace(/\\/g, "/")],
+        expect.objectContaining({ cache: "disk", cacheVerify: true }),
       );
     } finally {
       buildSpy.mockRestore();

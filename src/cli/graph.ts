@@ -59,6 +59,16 @@ type GraphCommandReport = {
   index?: BuildReport;
 };
 
+function resolveGraphCacheMode(
+  cache: BuildOptions["cache"],
+  cacheVerify: boolean,
+  writesSqlite: boolean,
+): BuildOptions["cache"] {
+  if (cache) return cache;
+  if (cacheVerify || writesSqlite) return "disk";
+  return undefined;
+}
+
 export type GraphCommandContext = {
   projectRootFs: string;
   discoveryOptions: ProjectFileDiscoveryOptions;
@@ -273,6 +283,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       ? normalizePath(resolveFilePathFromRoot(context.cwd(), outputArg))
       : undefined;
   const sqliteFile = sqliteArg ? normalizePath(resolveFilePathFromRoot(context.cwd(), sqliteArg)) : undefined;
+  const effectiveCache = resolveGraphCacheMode(cache, cacheVerify, Boolean(sqliteFile));
   if (stderrArg) {
     context.setStderrFilePath(normalizePath(resolveFilePathFromRoot(context.cwd(), stderrArg)));
   } else {
@@ -309,7 +320,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       dynamicImportHeuristics,
       ...(resolutionHints.length ? { resolutionHints } : {}),
     };
-    const sqliteCacheMode = cache ?? "disk";
+    const sqliteCacheMode = effectiveCache;
     const index = changedSet
       ? await buildProjectIndexIncremental(context.projectRootFs, {
           onProgress: context.progressHandler,
@@ -384,7 +395,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
       ...context.workerOpts,
       ...cacheDirOptions,
-      cache,
+      cache: effectiveCache,
       cacheStrict,
       cacheVerify,
       graph: {
@@ -445,7 +456,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
       ...context.workerOpts,
       ...cacheDirOptions,
-      cache: cache ?? "disk",
+      cache: effectiveCache,
       cacheStrict,
       cacheVerify,
       graph: {
