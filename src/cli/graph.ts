@@ -334,6 +334,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
           discovery: context.discoveryOptions,
           ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
           ...context.workerOpts,
+          ...cacheDirOptions,
           cache: sqliteCacheMode,
           cacheStrict,
           cacheVerify,

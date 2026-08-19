@@ -1122,10 +1122,11 @@ describe("CLI command modules", () => {
     expect(stderrFiles).toEqual([undefined]);
   });
 
-  test("graph --sqlite forwards an explicit cache mode to full index builds", async () => {
+  test("graph --sqlite forwards cache directory options to full index builds", async () => {
     const root = await mkTmpDir("codegraph-graph-sqlite-cache-");
     const entryFile = path.join(root, "entry.ts");
     const sqliteFile = path.join(root, "graph.sqlite");
+    const cacheDir = path.join(root, "cache");
     await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
     const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexFromFiles");
 
@@ -1138,6 +1139,7 @@ describe("CLI command modules", () => {
           resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
           getOpt: (name) => {
             if (name === "--cache") return "memory";
+            if (name === "--cache-dir") return cacheDir;
             if (name === "--sqlite") return sqliteFile;
             return undefined;
           },
@@ -1149,7 +1151,7 @@ describe("CLI command modules", () => {
       expect(buildSpy).toHaveBeenCalledWith(
         root,
         [entryFile.replace(/\\/g, "/")],
-        expect.objectContaining({ cache: "memory", cacheVerify: true }),
+        expect.objectContaining({ cache: "memory", cacheDir, cacheVerify: true }),
       );
       expect(fs.existsSync(sqliteFile)).toBe(true);
     } finally {

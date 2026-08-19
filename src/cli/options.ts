@@ -774,7 +774,7 @@ export function validateCliArgs(command: string, parsed: ParsedCliArgs): void {
     ].filter(Boolean).length;
     if (outputSelectors > 1) {
       throw new Error(
-        "graph output selectors are mutually exclusive: choose one of --json, --dot, --mermaid, or --sqlite.",
+        "graph output selectors are mutually exclusive: choose one of --json, --dot, --mermaid, or --sqlite (alias: --db).",
       );
     }
   }

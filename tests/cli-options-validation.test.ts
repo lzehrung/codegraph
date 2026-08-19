@@ -291,6 +291,12 @@ describe("graph/impact output-selector exclusivity (C9)", () => {
     );
   });
 
+  it("identifies --db as the SQLite output alias when it conflicts with another selector", () => {
+    expect(() => validateCliArgs("graph", parseCliArgs("graph", ["--db", "out.db", "--dot"]))).toThrow(
+      "graph output selectors are mutually exclusive: choose one of --json, --dot, --mermaid, or --sqlite (alias: --db).",
+    );
+  });
+
   it("accepts exactly one graph output selector at a time", () => {
     for (const args of [["--json"], ["--dot"], ["--mermaid"], ["--sqlite", "out.db"], []]) {
       expect(() => validateCliArgs("graph", parseCliArgs("graph", args))).not.toThrow();
