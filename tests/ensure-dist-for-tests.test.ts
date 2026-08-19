@@ -1,8 +1,8 @@
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { describe, expect, test } from "vitest";
-import { inspectDistForTests } from "../scripts/ensure-dist-for-tests-lib.mjs";
+import { describe, expect, test, vi } from "vitest";
+import { inspectDistForTests, runEnsureDistForTests } from "../scripts/ensure-dist-for-tests-lib.mjs";
 
 async function createTempRoot(): Promise<string> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-dist-check-"));
@@ -151,5 +151,43 @@ describe("inspectDistForTests", () => {
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
+  });
+});
+describe("ensure-dist-for-tests wrapper", () => {
+  test("does not spawn a build when dist is fresh", () => {
+    const spawn = vi.fn();
+    const result = runEnsureDistForTests("/repo", {
+      inspect: () => ({ needsBuild: false, reason: "fresh" }),
+      spawnSyncImpl: spawn,
+    });
+    expect(result).toBe(0);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  test("returns a nonzero build status and reports stale dist", () => {
+    const warn = vi.fn();
+    const spawn = vi.fn().mockReturnValue({ status: 7 });
+    const result = runEnsureDistForTests("/repo", {
+      inspect: () => ({ needsBuild: true, reason: "stale" }),
+      spawnSyncImpl: spawn,
+      logger: { warn },
+      platform: "linux",
+    });
+    expect(result).toBe(7);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("stale"));
+    expect(spawn).toHaveBeenCalledWith("npm", ["run", "build"], expect.objectContaining({ shell: false }));
+  });
+
+  test("surfaces spawn errors and enables the Windows shell", () => {
+    const failure = new Error("spawn failed");
+    const spawn = vi.fn().mockReturnValue({ status: null, error: failure });
+    expect(() =>
+      runEnsureDistForTests("C:/repo", {
+        inspect: () => ({ needsBuild: true, reason: "missing" }),
+        spawnSyncImpl: spawn,
+        platform: "win32",
+      }),
+    ).toThrow(failure);
+    expect(spawn).toHaveBeenCalledWith("npm", ["run", "build"], expect.objectContaining({ shell: true }));
   });
 });

@@ -844,6 +844,22 @@ describe("agent installer workflow", () => {
     await uninstallCodegraphTargets({ homeDir, targetIds: ["codex"], yes: true });
     await expect(readFile(configPath)).resolves.toBe(original);
   });
+  it.each([
+    ["double-quoted parent", '["mcp_servers".codegraph]'],
+    ["single-quoted keys", "['mcp_servers'.'codegraph']"],
+  ])("preserves equivalent Codex TOML ownership for %s", async (_label, tableHeader) => {
+    const homeDir = await mkTmpDir("cg-install-codex-quoted-");
+    const configPath = path.join(homeDir, ".codex", "config.toml");
+    const original = `${tableHeader}\ncommand = "codegraph"\nargs = ["mcp", "serve", "--root", ".", "--stdio"]\nstartup_timeout_ms = 20000\n`;
+    await fsp.mkdir(path.dirname(configPath), { recursive: true });
+    await fsp.writeFile(configPath, original, "utf8");
+
+    await installCodegraphTargets({ homeDir, targetIds: ["codex"], yes: true });
+    await expect(readFile(configPath)).resolves.toBe(original);
+
+    await uninstallCodegraphTargets({ homeDir, targetIds: ["codex"], yes: true });
+    await expect(readFile(configPath)).resolves.toBe(original);
+  });
 
   it("rejects an otherwise equivalent unmarked Codex table with extra settings", async () => {
     const homeDir = await mkTmpDir("cg-install-codex-compatible-extra-");

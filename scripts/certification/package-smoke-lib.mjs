@@ -128,7 +128,7 @@ function parseJsonOutput(result, code, description) {
   }
 }
 
-function expectedVersionForEntry(manifest, entry) {
+export function expectedVersionForEntry(manifest, entry) {
   if (entry.package === ROOT_PACKAGE_NAME || entry.package === CORE_PACKAGE_NAME) {
     return manifest.rootVersion;
   }

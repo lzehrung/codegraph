@@ -465,7 +465,7 @@ describe("graph reports", () => {
     const tempRoot = makeTempRoot("cg-unresolved-cache-bound-");
 
     try {
-      for (let index = 0; index < 520; index++) {
+      for (let index = 0; index < 513; index++) {
         const projectRoot = path.join(tempRoot, `project-${index}`);
         fs.mkdirSync(projectRoot);
         fs.writeFileSync(

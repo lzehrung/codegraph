@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -77,4 +78,22 @@ export function inspectDistForTests(rootDir) {
     reason: "fresh",
     missingEntries: [],
   };
+}
+export function runEnsureDistForTests(rootDir, options = {}) {
+  const inspect = options.inspect ?? inspectDistForTests;
+  const logger = options.logger ?? console;
+  const spawnSyncImpl = options.spawnSyncImpl ?? spawnSync;
+  const platform = options.platform ?? process.platform;
+  const distState = inspect(rootDir);
+  if (!distState.needsBuild) return 0;
+
+  const buildReason = distState.reason === "stale" ? "stale" : "missing";
+  logger.warn(`[codegraph] dist artifacts ${buildReason}; running npm run build before tests.`);
+  const result = spawnSyncImpl("npm", ["run", "build"], {
+    cwd: rootDir,
+    shell: platform === "win32",
+    stdio: "inherit",
+  });
+  if (result.error) throw result.error;
+  return result.status ?? 1;
 }

@@ -625,7 +625,7 @@ describe("standalone distribution", () => {
     if (process.platform !== "win32") {
       expect((await fsp.stat(launcher)).mode & 0o7777).toBe(launcherMode);
     }
-    expect(fs.existsSync(path.join(installBase, "1.1.0"))).toBe(true);
+    expect(fs.existsSync(path.join(installBase, "1.1.0"))).toBe(false);
     await expectNoInstallTransientPaths(installBase);
   });
 

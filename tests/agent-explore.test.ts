@@ -1,12 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
 import { exploreCodegraph, formatAgentExploreResponse } from "../src/agent.js";
 import * as impactContext from "../src/impact/context.js";
 import { createCodegraphMcpHandlers, listCodegraphMcpTools } from "../src/mcp/server.js";
 import { captureCli } from "./helpers/cli.js";
-import { mkTmpDir } from "./helpers/filesystem.js";
+import { createTempRootRegistry } from "./helpers/filesystem.js";
+const tempRoots = createTempRootRegistry();
+async function mkTmpDir(prefix: string): Promise<string> {
+  return await tempRoots.create(prefix);
+}
 
 type JsonRecord = Record<string, unknown>;
 
@@ -140,6 +144,10 @@ function expectExploreEnvelope(response: unknown, query: string): JsonRecord {
 }
 
 describe("agent explore", () => {
+  afterEach(async () => {
+    await tempRoots.cleanup();
+    vi.restoreAllMocks();
+  });
   it("returns a file packet and reverse dependency blast radius for a file-path query", async () => {
     const root = await mkExploreRepo();
     const query = "src/auth.ts";
@@ -167,6 +175,13 @@ describe("agent explore", () => {
       lineFormat: "number-tab-line",
     });
     expect(fileView.graphContext).toBeUndefined();
+  });
+  it("emits byte-identical JSON for repeated explorations", async () => {
+    const root = await mkExploreRepo();
+    const first = await exploreCodegraph({ root, query: "src/auth.ts" });
+    const second = await exploreCodegraph({ root, query: "src/auth.ts" });
+
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
   });
 
   it("attaches the live file view for exact indexed project paths containing spaces in library and CLI explore", async () => {

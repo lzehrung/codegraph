@@ -1,10 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { getCodegraphPacket, orientCodegraph } from "../src/agent.js";
 import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
-import { mkTmpDir } from "./helpers/filesystem.js";
+import { createTempRootRegistry } from "./helpers/filesystem.js";
 import { runGit } from "./helpers/git.js";
+
+const tempRoots = createTempRootRegistry();
+async function mkTmpDir(prefix: string): Promise<string> {
+  return await tempRoots.create(prefix);
+}
 
 async function writeFile(root: string, relativePath: string, content: string): Promise<void> {
   const filePath = path.join(root, relativePath);
@@ -13,6 +18,9 @@ async function writeFile(root: string, relativePath: string, content: string): P
 }
 
 describe("agent packet", () => {
+  afterEach(async () => {
+    await tempRoots.cleanup();
+  });
   it("retrieves a file packet from an orientation file target", async () => {
     const root = await mkTmpDir("cg-agent-packet-");
     await writeFile(root, "src/run.ts", "export function run() { return 1; }\n");

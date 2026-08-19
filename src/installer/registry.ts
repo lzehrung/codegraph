@@ -6,6 +6,7 @@ import { applyEdits, modify, parse as parseJsonc, type ParseError } from "jsonc-
 import { parse as parseToml } from "smol-toml";
 import { getSkillTargetDirForAgent, type SkillInstallAgent } from "../cli/skill.js";
 import { getCodegraphPackageRoot, normalizePathForDisplay, pathExists } from "../util/packageInfo.js";
+import { isFileSystemErrorCode } from "../util/errors.js";
 import { waitForInstallerLockRetry, withInstallerLeaseLock, withInstallerTransactionLocks } from "./locks.js";
 
 export type InstallTargetId = SkillInstallAgent;
@@ -839,11 +840,60 @@ function findTokenIndexes(content: string, token: string): number[] {
 
 function findCodegraphTomlTableIndexes(content: string): number[] {
   const indexes: number[] = [];
-  const tablePattern = /^\s*\[\s*mcp_servers\s*\.\s*(?:codegraph|"codegraph"|'codegraph')\s*\]\s*(?:#.*)?$/gim;
+  const tablePattern = /^\s*\[([^\[\]]+)\]\s*(?:#.*)?$/gim;
   for (const match of content.matchAll(tablePattern)) {
-    if (match.index !== undefined) indexes.push(match.index);
+    if (match.index === undefined) continue;
+    const keyPath = parseTomlTableKey(match[1] ?? "");
+    if (keyPath?.length === 2 && keyPath[0] === "mcp_servers" && keyPath[1] === "codegraph") {
+      indexes.push(match.index);
+    }
   }
   return indexes;
+}
+
+function parseTomlTableKey(raw: string): string[] | null {
+  const segments: string[] = [];
+  let index = 0;
+  while (index < raw.length) {
+    while (/\s/u.test(raw[index] ?? "")) index += 1;
+    if (index >= raw.length) return segments;
+    const quote = raw[index];
+    if (quote === "'" || quote === '"') {
+      const start = index;
+      index += 1;
+      let escaped = false;
+      while (index < raw.length) {
+        const character = raw[index];
+        if (quote === '"' && character === "\\" && !escaped) {
+          escaped = true;
+          index += 1;
+          continue;
+        }
+        if (character === quote && !escaped) break;
+        escaped = false;
+        index += 1;
+      }
+      if (raw[index] !== quote) return null;
+      const encoded = raw.slice(start, index + 1);
+      try {
+        segments.push(quote === '"' ? JSON.parse(encoded) : encoded.slice(1, -1));
+      } catch {
+        return null;
+      }
+      index += 1;
+    } else {
+      const start = index;
+      while (index < raw.length && !/[\s.]/u.test(raw[index] ?? "")) index += 1;
+      const bare = raw.slice(start, index);
+      if (!/^[A-Za-z0-9_-]+$/u.test(bare)) return null;
+      segments.push(bare);
+    }
+    while (/\s/u.test(raw[index] ?? "")) index += 1;
+    if (index >= raw.length) return segments;
+    if (raw[index] !== ".") return null;
+    index += 1;
+  }
+  return segments;
 }
 
 function isInstallCompatibleCodexTomlTable(config: string): boolean {
@@ -1200,10 +1250,6 @@ async function renameTemporaryFile(temporaryPath: string, filePath: string): Pro
       await waitForInstallerLockRetry();
     }
   }
-}
-
-function isFileSystemErrorCode(error: unknown, code: string): boolean {
-  return error instanceof Error && "code" in error && String(error.code) === code;
 }
 
 function escapeRegExp(value: string): string {

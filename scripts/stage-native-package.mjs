@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { nativeTargetSuffixForPlatform } from "../packages/codegraph-native/platform.js";
@@ -18,6 +19,10 @@ function currentTargetSuffix() {
   return nativeTargetSuffixForPlatform(process.platform, process.arch, linuxAbi);
 }
 
+function sha256Of(filePath) {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
 const suffix = currentTargetSuffix();
 if (!suffix) {
   console.error(`Unsupported platform for local native staging: ${process.platform}/${process.arch}`);
@@ -31,12 +36,20 @@ if (!fs.existsSync(targetDir)) {
 }
 
 const targetFile = path.join(targetDir, `index.${suffix}.node`);
+const sourceFile = path.join(nativeRoot, `index.${suffix}.node`);
+
 if (shouldSkipExistingTarget && fs.existsSync(targetFile)) {
-  console.log(`Keeping existing staged native artifact: ${targetFile}`);
-  process.exit(0);
+  if (!fs.existsSync(sourceFile)) {
+    console.log(`Keeping existing staged native artifact (no fresh build to compare against): ${targetFile}`);
+    process.exit(0);
+  }
+  if (sha256Of(targetFile) === sha256Of(sourceFile)) {
+    console.log(`Keeping existing staged native artifact (matches freshly built bytes): ${targetFile}`);
+    process.exit(0);
+  }
+  console.log(`Replacing stale staged native artifact with freshly built bytes: ${targetFile}`);
 }
 
-const sourceFile = path.join(nativeRoot, `index.${suffix}.node`);
 if (!fs.existsSync(sourceFile)) {
   console.error(`Built native binary not found: ${sourceFile}`);
   process.exit(1);
