@@ -1428,7 +1428,7 @@ describe("Go to Definition", () => {
         await fsp.mkdir(path.dirname(utilFile), { recursive: true });
         await fsp.writeFile(
           utilFile,
-          ["package demo;", "class Util\u0001 {", "  static void helper() {}", "}", ""].join("\n"),
+          ["package demo;", "class Util\u200c {", "  static void helper() {}", "}", ""].join("\n"),
           "utf8",
         );
         await fsp.writeFile(
