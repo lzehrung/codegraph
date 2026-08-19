@@ -92,6 +92,8 @@ jobs:
 
       - name: Native benchmark smoke
         run: npm run bench:native:smoke -- --json
+      - name: Benchmark and native contract tests
+        run: npm run test:contracts
 
 
   build-and-test-windows:

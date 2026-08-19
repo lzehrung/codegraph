@@ -126,17 +126,16 @@ export async function installStandaloneBundle(options) {
         binDir,
       );
       const previous = await readInstallManifest(installBase);
-      let mustRollback = false;
+      let createdVersionRoot = false;
       try {
         const versionRootExists = await isRealDirectory(versionRoot, "Standalone version root");
         if (versionRootExists) {
           const installedManifest = await verifyStandaloneBundle(versionRoot);
           assertMatchingStandaloneProvenance(manifest, installedManifest);
         } else {
-          mustRollback = true;
           await fsp.rename(stagingRoot, versionRoot);
+          createdVersionRoot = true;
         }
-        mustRollback = true;
         await fsp.mkdir(binDir, { recursive: true });
         const launchers = await writeInstalledLaunchers(binDir, versionRoot, manifest.target);
         const installManifest = {
@@ -155,13 +154,22 @@ export async function installStandaloneBundle(options) {
         await writeJsonAtomic(path.join(installBase, INSTALL_MANIFEST_NAME), installManifest);
         return installManifest;
       } catch (error) {
-        if (mustRollback) {
+        const failures = [];
+        if (createdVersionRoot) {
           try {
-            await restoreInstallerState(installerState);
+            await fsp.rm(versionRoot, { recursive: true, force: true });
           } catch (rollbackError) {
-            const detail = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
-            throw new Error(`Standalone installation failed and state rollback failed: ${detail}`, { cause: error });
+            failures.push(rollbackError);
           }
+        }
+        try {
+          await restoreInstallerState(installerState);
+        } catch (rollbackError) {
+          failures.push(rollbackError);
+        }
+        if (failures.length) {
+          const detail = failures.map((failure) => (failure instanceof Error ? failure.message : String(failure))).join("; ");
+          throw new Error(`Standalone installation failed and state rollback failed: ${detail}`, { cause: error });
         }
         throw error;
       }

@@ -126,21 +126,20 @@ describe("LazyArray", () => {
 
   test("should preload in background", async () => {
     let loadStarted = false;
+    const completion = Promise.withResolvers<void>();
     const lazy = new LazyArray(async () => {
       loadStarted = true;
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await completion.promise;
       return [1, 2, 3];
     });
 
     lazy.preload();
 
-    // Load should have started but not completed
     expect(loadStarted).toBe(true);
     expect(lazy.isLoaded).toBe(false);
 
-    // Wait for load to complete
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
+    completion.resolve();
+    await lazy.getAll();
     expect(lazy.isLoaded).toBe(true);
   });
 

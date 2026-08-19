@@ -12,8 +12,12 @@ import * as indexerBuild from "../src/indexer/build-index.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../src/indexer/types.js";
 import type { Edge, Graph, Range } from "../src/types.js";
 import { countingSession } from "./helpers/agent.js";
-import { isSymlinkUnavailable } from "./helpers/filesystem.js";
+import { createTempRootRegistry, isSymlinkUnavailable } from "./helpers/filesystem.js";
 
+const tempRoots = createTempRootRegistry();
+async function mkTmpDir(prefix: string): Promise<string> {
+  return await tempRoots.create(prefix);
+}
 const DEFAULT_ANALYSIS = {
   mode: "semantic" as const,
   backend: "unknown" as const,
@@ -25,7 +29,7 @@ const DEFAULT_ANALYSIS = {
 };
 
 async function mkRepo(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-"));
+  const root = await mkTmpDir("cg-agent-search-");
   await fs.mkdir(path.join(root, "src"));
   await fs.writeFile(
     path.join(root, "src", "auth.ts"),
@@ -116,8 +120,9 @@ function snapshotSession(
 }
 
 describe("agent search", () => {
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await tempRoots.cleanup();
   });
 
   it("ranks exact symbol, path, chunk, and graph evidence with follow-up commands", async () => {
@@ -242,6 +247,13 @@ describe("agent search", () => {
     const second = await searchCodegraph({ root, query: "account", mode: "path", limit: 10 });
 
     expect(second.results.map((result) => result.handle)).toEqual(first.results.map((result) => result.handle));
+  });
+  it("emits byte-identical JSON for repeated searches", async () => {
+    const root = await mkRepo();
+    const first = await searchCodegraph({ root, query: "account", mode: "path", limit: 10 });
+    const second = await searchCodegraph({ root, query: "account", mode: "path", limit: 10 });
+
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
   });
 
   it("uses ASCII lexical ordering after equal ranking signals", async () => {

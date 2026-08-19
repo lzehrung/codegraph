@@ -1,14 +1,18 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { explainCodegraphTarget } from "../src/agent/explain.js";
 import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
 import { searchCodegraph } from "../src/agent/search.js";
 import { runGit } from "./helpers/git.js";
+import { createTempRootRegistry } from "./helpers/filesystem.js";
 
+const tempRoots = createTempRootRegistry();
+async function mkTmpDir(prefix: string): Promise<string> {
+  return await tempRoots.create(prefix);
+}
 async function mkRepo(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-"));
+  const root = await mkTmpDir("cg-agent-explain-");
   await fs.writeFile(
     path.join(root, "users.sql"),
     "CREATE TABLE public.users (id int primary key);\nCREATE VIEW active_users AS SELECT id FROM public.users;\n",
@@ -38,7 +42,7 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
 `;
 
 async function mkDuplicateRepo(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-dups-"));
+  const root = await mkTmpDir("cg-agent-explain-dups-");
   await fs.mkdir(path.join(root, "src"), { recursive: true });
   await fs.writeFile(path.join(root, "src/a.ts"), duplicateSource);
   await fs.writeFile(path.join(root, "src/b.ts"), duplicateSource);
@@ -46,7 +50,7 @@ async function mkDuplicateRepo(): Promise<string> {
 }
 
 async function mkManyReferenceRepo(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-refs-"));
+  const root = await mkTmpDir("cg-agent-explain-refs-");
   await fs.writeFile(path.join(root, "target.ts"), "export function sharedTarget() { return 1; }\n");
   for (let index = 0; index < 8; index += 1) {
     const name = `ref-${String(index).padStart(2, "0")}.ts`;
@@ -59,7 +63,7 @@ async function mkManyReferenceRepo(): Promise<string> {
 }
 
 async function mkManyDuplicateRepo(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-many-dups-"));
+  const root = await mkTmpDir("cg-agent-explain-many-dups-");
   await fs.mkdir(path.join(root, "src"), { recursive: true });
   for (const name of ["a", "b", "c", "d", "e", "f", "g"]) {
     await fs.writeFile(path.join(root, "src", `${name}.ts`), duplicateSource);
@@ -68,6 +72,9 @@ async function mkManyDuplicateRepo(): Promise<string> {
 }
 
 describe("agent explain", () => {
+  afterEach(async () => {
+    await tempRoots.cleanup();
+  });
   it("explains a file with symbols, dependencies, reverse dependencies, and follow-ups", async () => {
     const root = await mkRepo();
     const explanation = await explainCodegraphTarget({ root, target: "auth.ts" });
@@ -158,7 +165,7 @@ describe("agent explain", () => {
   });
 
   it("does not infer SQL relations from ambiguous unqualified object names", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-sql-ambiguous-"));
+    const root = await mkTmpDir("cg-agent-explain-sql-ambiguous-");
     await fs.writeFile(path.join(root, "public.sql"), "CREATE TABLE public.users (id int primary key);\n");
     await fs.writeFile(path.join(root, "private.sql"), "CREATE TABLE private.users (id int primary key);\n");
     await fs.writeFile(path.join(root, "view.sql"), "CREATE VIEW active_users AS SELECT id FROM users;\n");
@@ -174,7 +181,7 @@ describe("agent explain", () => {
   });
 
   it("does not resolve ambiguous unqualified SQL object targets by basename", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-sql-target-ambiguous-"));
+    const root = await mkTmpDir("cg-agent-explain-sql-target-ambiguous-");
     await fs.writeFile(path.join(root, "public.sql"), "CREATE TABLE public.users (id int primary key);\n");
     await fs.writeFile(path.join(root, "private.sql"), "CREATE TABLE private.users (id int primary key);\n");
 
@@ -182,9 +189,8 @@ describe("agent explain", () => {
 
     expect(explanation.target.kind).toBe("not_found");
   });
-
   it("does not attribute unrelated same-file SQL outgoing relations to a target object", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-sql-target-"));
+    const root = await mkTmpDir("cg-agent-explain-sql-target-");
     await fs.writeFile(
       path.join(root, "schema.sql"),
       [
@@ -213,7 +219,7 @@ describe("agent explain", () => {
   });
 
   it("does not attribute unrelated same-file SQL incoming relations to a target object", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-sql-incoming-"));
+    const root = await mkTmpDir("cg-agent-explain-sql-incoming-");
     await fs.writeFile(path.join(root, "schema.sql"), "CREATE TABLE public.users (id int primary key);\n", "utf8");
     await fs.writeFile(path.join(root, "audit.sql"), "CREATE TABLE public.audit_log (user_id int);\n", "utf8");
     await fs.writeFile(

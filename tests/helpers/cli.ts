@@ -112,7 +112,7 @@ export async function captureTsxScript(
   child.stdin.end();
 
   child.on("error", reject);
-  child.on("exit", (exitCode) => {
+  child.on("close", (exitCode) => {
     resolve({ stdout, stderr, exitCode });
   });
 

@@ -33,6 +33,17 @@ describe("artifact build", () => {
     expect(await fs.stat(path.join(outDir, "graph.json"))).toBeTruthy();
     expect(await fs.stat(path.join(outDir, "CODEGRAPH_REPORT.md"))).toBeTruthy();
     expect(await fs.stat(path.join(outDir, "questions.json"))).toBeTruthy();
+    const firstGraphBytes = await fs.readFile(path.join(outDir, "graph.json"));
+    await buildCodegraphArtifact({
+      root,
+      outDir,
+      sqlite: true,
+      graphJson: true,
+      report: true,
+      questions: true,
+      force: true,
+    });
+    await expect(fs.readFile(path.join(outDir, "graph.json"))).resolves.toEqual(firstGraphBytes);
 
     const manifest = JSON.parse(await fs.readFile(artifact.manifestPath, "utf8")) as {
       schemaVersion: number;

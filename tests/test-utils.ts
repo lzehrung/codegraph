@@ -130,7 +130,7 @@ export async function testFindReferences(
 
   expect(result.status).toBe(expectedStatus);
   if (result.status === "ok") {
-    expect(result.references.length).toBeGreaterThanOrEqual(expectedCount);
+    expect(result.references).toHaveLength(expectedCount);
   }
 
   return result;

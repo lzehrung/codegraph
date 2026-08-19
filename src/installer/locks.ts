@@ -3,6 +3,7 @@ import fsp, { type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { normalizePathForDisplay } from "../util/packageInfo.js";
+import { isFileSystemErrorCode } from "../util/errors.js";
 
 type InstallerLockSettings = {
   homeDir: string;
@@ -40,9 +41,6 @@ function opencodeConfigHome(settings: InstallerLockSettings): string {
   return configHome || path.join(settings.homeDir, ".config");
 }
 
-function isFileSystemErrorCode(error: unknown, code: string): boolean {
-  return error instanceof Error && "code" in error && String(error.code) === code;
-}
 
 function isJsonRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

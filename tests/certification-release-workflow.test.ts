@@ -74,6 +74,7 @@ describe("certified release workflows", () => {
     for (const step of ["npm run security:production", "npm run lint", "npm run format:check", "npm run fixtures:check-clean"]) {
       expect(windows).toContain(step);
     }
+    expect(source).toContain("npm run test:contracts");
   });
 
   it("chains the reusable standalone workflow after certified publication", () => {

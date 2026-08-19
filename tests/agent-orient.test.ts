@@ -1,15 +1,19 @@
 import fs from "node:fs/promises";
-import { afterEach } from "vitest";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { orientCodegraph, orientCodegraphWithSession } from "../src/agent/orient.js";
 import { createAgentSession } from "../src/agent/session.js";
-import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
 import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
 import * as duplicates from "../src/duplicates.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import { countingSession } from "./helpers/agent.js";
 import { runGit } from "./helpers/git.js";
-import { mkTmpDir } from "./helpers/filesystem.js";
+import { createTempRootRegistry } from "./helpers/filesystem.js";
+
+const tempRoots = createTempRootRegistry();
+async function mkTmpDir(prefix: string): Promise<string> {
+  return await tempRoots.create(prefix);
+}
 
 async function writeFile(root: string, relativePath: string, content: string): Promise<void> {
   const filePath = path.join(root, relativePath);
@@ -18,8 +22,9 @@ async function writeFile(root: string, relativePath: string, content: string): P
 }
 
 describe("agent orient", () => {
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await tempRoots.cleanup();
   });
 
   it("returns compact orientation with file focus targets", async () => {
@@ -34,6 +39,16 @@ describe("agent orient", () => {
     expect(response.tree.some((entry) => entry.path === "src/index.ts")).toBe(true);
     expect(response.focus.some((focus) => focus.file === "src/index.ts")).toBe(true);
     expect(response.recommendedNext.length).toBeGreaterThan(0);
+  });
+  it("emits byte-identical JSON for repeated orientations", async () => {
+    const root = await mkTmpDir("cg-agent-orient-repeat-");
+    await writeFile(root, "src/index.ts", "export { run } from './run';\n");
+    await writeFile(root, "src/run.ts", "export function run() { return 1; }\n");
+
+    const first = await orientCodegraph({ root, includeRoots: ["src"], budget: "small" });
+    const second = await orientCodegraph({ root, includeRoots: ["src"], budget: "small" });
+
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
   });
 
   it("quotes dash-prefixed file targets in follow-up commands", async () => {

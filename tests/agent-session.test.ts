@@ -18,9 +18,15 @@ import * as projectFilesModule from "../src/util/projectFiles.js";
 import * as gitModule from "../src/util/git.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { runGit as git } from "./helpers/git.js";
+import { createTempRootRegistry } from "./helpers/filesystem.js";
+
+const tempRoots = createTempRootRegistry();
+async function mkTmpDir(prefix: string): Promise<string> {
+  return await tempRoots.create(prefix);
+}
 
 async function mkRepo(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-session-"));
+  const root = await mkTmpDir("cg-agent-session-");
   await fs.writeFile(path.join(root, "util.ts"), "export function add(a: number, b: number) { return a + b; }\n");
   await fs.writeFile(path.join(root, "main.ts"), "import { add } from './util';\nexport const total = add(1, 2);\n");
   await fs.writeFile(path.join(root, "schema.sql"), "CREATE TABLE public.users (id int primary key);\n");
@@ -90,8 +96,9 @@ function refreshDetailedSidecarHash(sidecar: MutableDetailedSymbolGraphSidecar):
 }
 
 describe("agent session", () => {
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await tempRoots.cleanup();
   });
 
   it("loads index, graph, symbol graph, and SQL files once for repeated agent operations", async () => {
