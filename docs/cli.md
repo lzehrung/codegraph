@@ -784,7 +784,7 @@ The SQLite export is a first-class query interface for agent workflows.
 - `symbol_edges(from_id TEXT, to_id TEXT, label TEXT)`
 - `graph_metadata(key TEXT PRIMARY KEY, value TEXT)`
 - `graph_snapshots(id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER, mode TEXT, changed_files INTEGER, deleted_files INTEGER, file_nodes INTEGER, file_edges INTEGER, symbol_nodes INTEGER, symbol_edges INTEGER)`
-- `graph_snapshot_files(snapshot_id INTEGER, file_path TEXT, change_kind TEXT)`
+- `graph_snapshot_files(snapshot_id INTEGER, file_path TEXT, change_kind TEXT)`. Graph snapshot history retains the newest 100 snapshots; child rows are deleted before expired parent rows.
 
 ### Indexes
 

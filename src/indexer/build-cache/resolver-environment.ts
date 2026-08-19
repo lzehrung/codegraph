@@ -16,11 +16,13 @@ const PROJECT_RESOLUTION_INPUTS = [
 const NODE_MODULES_STATE_INPUTS = [".package-lock.json", ".yarn-state.yml", ".modules.yaml"] as const;
 const MAX_NODE_MODULE_ROOTS = 4_096;
 const MAX_PACKAGE_MANIFESTS = 10_000;
+const MAX_RESOLUTION_INPUT_HASH_BYTES = 1_048_576;
 
 type ResolutionInput = {
   path: string;
   mtimeMs: number;
   size: number;
+  contentHash: string;
 };
 
 function normalizedRelativePath(projectRoot: string, target: string): string {
@@ -31,7 +33,20 @@ async function statInput(projectRoot: string, target: string): Promise<Resolutio
   try {
     const stat = await fsp.stat(target);
     if (!stat.isFile()) return null;
-    return { path: normalizedRelativePath(projectRoot, target), mtimeMs: stat.mtimeMs, size: stat.size };
+    const content = await fsp.readFile(target);
+    const boundedContent =
+      content.length <= MAX_RESOLUTION_INPUT_HASH_BYTES
+        ? content
+        : Buffer.concat([
+            content.subarray(0, MAX_RESOLUTION_INPUT_HASH_BYTES / 2),
+            content.subarray(-MAX_RESOLUTION_INPUT_HASH_BYTES / 2),
+          ]);
+    return {
+      path: normalizedRelativePath(projectRoot, target),
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      contentHash: crypto.createHash("sha256").update(boundedContent).digest("hex"),
+    };
   } catch {
     return null;
   }
@@ -130,6 +145,8 @@ export async function computeResolverEnvironmentFingerprint(
   }
   inputs.sort((left, right) => left.path.localeCompare(right.path));
   const hash = crypto.createHash("sha256");
-  for (const input of inputs) hash.update(`${input.path}\0${input.mtimeMs}\0${input.size}\n`);
+  for (const input of inputs) {
+    hash.update(`${input.path}\0${input.mtimeMs}\0${input.size}\0${input.contentHash}\n`);
+  }
   return hash.digest("hex");
 }

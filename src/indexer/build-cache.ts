@@ -4,6 +4,7 @@ export {
   computeConfigHash,
   loadManifest,
   normalizeIndexedFileInputs,
+  normalizeIndexedFileInputsWithinRoot,
   sanitizeManifestEntriesForRoot,
   sanitizeManifestTransientFilesForRoot,
   transformManifestEntries,

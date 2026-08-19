@@ -265,11 +265,7 @@ const runExtraction = createNativeExtractor({
 });
 
 export async function runExtractionBatch(batch: NativeExtractBatchTask): Promise<NativeExtractBatchResult> {
-  const results: NativeExtractResult[] = [];
-  for (const task of batch.tasks) {
-    results.push(await runExtraction(task));
-  }
-  return { results };
+  return { results: await Promise.all(batch.tasks.map((task) => runExtraction(task))) };
 }
 
 export default async function runWorkerTask(

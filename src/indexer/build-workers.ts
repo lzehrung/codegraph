@@ -8,11 +8,7 @@ import {
   isNativeRequiredUnavailableError,
   isNativeTreeSitterAvailable,
 } from "../native/treeSitterNative.js";
-import type {
-  NativeExtractBatchResult,
-  NativeExtractResult,
-  NativeExtractTask,
-} from "../worker/nativeExtractWorker.js";
+import type { NativeExtractResult, NativeExtractTask } from "../worker/nativeExtractWorker.js";
 import { NATIVE_WORKER_BATCH_SIZE } from "../worker/nativeExtractWorker.js";
 import { prepareFileForIndexing, type PreparedFileContext } from "./parse-context.js";
 import type { BuildOptions, BuildReport, WorkerPoolReport } from "./types.js";
@@ -209,40 +205,39 @@ export async function prepareFileContextsForBuildBatch(
   for (let offset = 0; offset < batchable.length; offset += workerSetup.batchSize) {
     const slice = batchable.slice(offset, offset + workerSetup.batchSize);
     if (workerSetup.report) workerSetup.report.tasksSubmitted += slice.length;
-    try {
-      const batchResult = (await workerSetup.pool.run({
-        tasks: slice.map((entry) => entry.task),
-      })) as NativeExtractBatchResult;
-      for (const [i, entry] of slice.entries()) {
-        const workerResult = batchResult.results[i];
-        if (!workerResult) {
-          if (workerSetup.report) {
-            workerSetup.report.tasksFailed++;
-            workerSetup.report.errors ??= [];
-            if (workerSetup.report.errors.length < 20) {
-              workerSetup.report.errors.push({
-                file: entry.file,
-                message: "Native worker returned no result for batch task.",
-              });
-            }
-          }
-          const prepared = await prepareFileForIndexing(entry.file, opts?.native, opts?.languageExtensions);
-          recordPreparedNativeExecutionOutcome(report, prepared);
-          results[entry.index] = prepared;
-          continue;
+    const workerResults = await Promise.all(
+      slice.map(async (entry) => {
+        try {
+          return {
+            entry,
+            result: (await workerSetup.pool!.run(entry.task)) as NativeExtractResult,
+          };
+        } catch (error) {
+          return { entry, error };
         }
-        const prepared = workerResultToPrepared(workerResult, entry.support, entry.file);
-        recordPreparedNativeExecutionOutcome(report, prepared);
-        results[entry.index] = prepared;
-      }
-    } catch (error) {
-      if (isNativeRequiredUnavailableError(error)) throw error;
-      if (workerSetup.report) workerSetup.report.tasksFailed += slice.length;
-      for (const entry of slice) {
+      }),
+    );
+    for (const outcome of workerResults) {
+      const entry = outcome.entry;
+      if ("error" in outcome || "results" in outcome.result) {
+        const error =
+          "error" in outcome ? outcome.error : new Error("Native worker returned no result for batch task.");
+        if (isNativeRequiredUnavailableError(error)) throw error;
+        if (workerSetup.report) {
+          workerSetup.report.tasksFailed++;
+          workerSetup.report.errors ??= [];
+          if (workerSetup.report.errors.length < 20) {
+            workerSetup.report.errors.push({ file: entry.file, message: stringifyUnknown(error) });
+          }
+        }
         const prepared = await prepareFileForIndexing(entry.file, opts?.native, opts?.languageExtensions);
         recordPreparedNativeExecutionOutcome(report, prepared);
         results[entry.index] = prepared;
+        continue;
       }
+      const prepared = workerResultToPrepared(outcome.result, entry.support, entry.file);
+      recordPreparedNativeExecutionOutcome(report, prepared);
+      results[entry.index] = prepared;
     }
   }
 

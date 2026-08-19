@@ -2,6 +2,7 @@ import type { SqliteDatabase } from "../sqlite-driver.js";
 import { toSqliteText } from "./common.js";
 
 export const SQLITE_SCHEMA_VERSION = 2;
+export const GRAPH_SNAPSHOT_RETENTION = 100;
 const GRAPH_SCHEMA_VERSION_KEY = "schema_version";
 
 const hasColumn = (db: SqliteDatabase, table: string, column: string): boolean => {
@@ -39,7 +40,6 @@ function writeGraphSchemaVersion(db: SqliteDatabase, version: number): void {
     String(version),
   ]);
 }
-
 function migrateGraphSchema(db: SqliteDatabase, fromVersion: number): void {
   let version = fromVersion;
   if (version < 1) {
@@ -48,6 +48,19 @@ function migrateGraphSchema(db: SqliteDatabase, fromVersion: number): void {
   if (version < 2) {
     ensureSymbolsVisibilityColumn(db);
     version = 2;
+  }
+  if (version < 3) {
+    db.exec(`
+      DELETE FROM graph_snapshot_files
+      WHERE snapshot_id NOT IN (
+        SELECT id FROM graph_snapshots ORDER BY created_at DESC, id DESC LIMIT ${GRAPH_SNAPSHOT_RETENTION}
+      );
+      DELETE FROM graph_snapshots
+      WHERE id NOT IN (
+        SELECT id FROM graph_snapshots ORDER BY created_at DESC, id DESC LIMIT ${GRAPH_SNAPSHOT_RETENTION}
+      );
+    `);
+    version = SQLITE_SCHEMA_VERSION;
   }
   if (version !== fromVersion) {
     writeGraphSchemaVersion(db, version);

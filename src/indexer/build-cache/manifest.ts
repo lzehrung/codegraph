@@ -14,11 +14,12 @@ import {
   type ProjectFileDiscoveryOptions,
 } from "../../util/projectFiles.js";
 import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot } from "../../util/paths.js";
+import { assertRealPathCandidateWithinRoot } from "../../util/confinedFile.js";
 import { getGitBlobHashes } from "../../util/git.js";
 import { stringifyUnknown } from "../../util/ast.js";
 import { cacheAbsolutePath, cacheRelativePath, fileSignature } from "./module-cache.js";
 import { cacheRoot } from "./location.js";
-import type { BuildOptions } from "../types.js";
+import type { BuildOptions, BuildReport } from "../types.js";
 import type { ManifestBuildOptions } from "./options.js";
 
 type PackageJsonDependencyInfo = {
@@ -113,6 +114,7 @@ export type IndexManifest = {
    * second full-tree walk entirely.
    */
   symlinkDirectories?: string[];
+  symlinkDirectoriesRootMtimeMs?: number;
 };
 
 export function transformManifestEntries(
@@ -167,6 +169,18 @@ export function normalizeIndexedFileInputs(projectRoot: string, files: readonly 
     filesByIdentity.set(fileIdentityKey(file), file);
   }
   return [...filesByIdentity.values()];
+}
+export async function normalizeIndexedFileInputsWithinRoot(
+  projectRoot: string,
+  files: readonly string[],
+  label: string,
+): Promise<string[]> {
+  const realRoot = await fsp.realpath(projectRoot);
+  const normalized = normalizeIndexedFileInputs(projectRoot, files, label);
+  const confined = await Promise.all(
+    normalized.map((file) => assertRealPathCandidateWithinRoot(realRoot, file, label)),
+  );
+  return [...new Set(confined)];
 }
 
 export function sanitizeManifestEntriesForRoot(
@@ -267,6 +281,44 @@ function manifestTempFilePath(manifestPath: string): string {
   const base = path.basename(manifestPath);
   return path.join(dir, `.${base}.${process.pid}.${crypto.randomUUID()}.tmp`);
 }
+const MANIFEST_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
+
+function isManifestTempName(name: string, manifestName: string): boolean {
+  const prefix = `.${manifestName}.`;
+  if (!name.startsWith(prefix) || !name.endsWith(".tmp")) return false;
+  const marker = name.slice(prefix.length, -4);
+  return /^\d+\.[0-9a-f-]{36}$/u.test(marker);
+}
+
+async function cleanupStaleManifestTemps(manifestPath: string): Promise<void> {
+  let entries: Array<{ name: string; isFile(): boolean }>;
+  try {
+    entries = await fsp.readdir(path.dirname(manifestPath), { withFileTypes: true });
+  } catch {
+    return;
+  }
+  const cutoff = Date.now() - MANIFEST_TEMP_RETENTION_MS;
+  const manifestName = path.basename(manifestPath);
+  for (const entry of entries) {
+    if (!entry.isFile() || !isManifestTempName(entry.name, manifestName)) continue;
+    const candidate = path.join(path.dirname(manifestPath), entry.name);
+    try {
+      const stat = await fsp.lstat(candidate);
+      if (stat.mtimeMs <= cutoff) await fsp.rm(candidate, { force: true });
+    } catch {
+      // Best-effort cleanup.
+    }
+  }
+}
+
+async function fsyncManifestFile(filePath: string): Promise<void> {
+  const handle = await fsp.open(filePath, "r+");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
 
 async function wait(ms: number): Promise<void> {
   await new Promise<void>((resolve) => {
@@ -276,11 +328,20 @@ async function wait(ms: number): Promise<void> {
 
 async function writeManifestAtomically(manifestPath: string, payload: string): Promise<void> {
   const retryDelays = [10, 25, 50, 100];
+  await cleanupStaleManifestTemps(manifestPath);
   for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
     const tempPath = manifestTempFilePath(manifestPath);
     try {
       await fsp.writeFile(tempPath, payload, "utf8");
+      await fsyncManifestFile(tempPath);
       await fsp.rename(tempPath, manifestPath);
+      try {
+        const directory = await fsp.open(path.dirname(manifestPath), "r");
+        await directory.sync();
+        await directory.close();
+      } catch {
+        // Directory fsync is not supported on every platform.
+      }
       return;
     } catch (error) {
       try {
@@ -294,17 +355,41 @@ async function writeManifestAtomically(manifestPath: string, payload: string): P
     }
   }
 }
+function recordManifestCorruption(
+  report: BuildReport | undefined,
+  artifact: string,
+  reason: string,
+  logLevel: LogLevel | undefined,
+): void {
+  if (report) {
+    report.manifest ??= { used: true, reused: false };
+    report.manifest.corruptions ??= [];
+    if (!report.manifest.corruptions.some((entry) => entry.artifact === artifact)) {
+      report.manifest.corruptions.push({ artifact, reason });
+    }
+  }
+  logWithLevel(logLevel, "warn", `Warning: Corrupt cache artifact ${artifact}: ${reason}`);
+}
 
-export async function loadManifest(projectRoot: string, opts?: BuildOptions): Promise<IndexManifest | null> {
+export async function loadManifest(
+  projectRoot: string,
+  opts?: BuildOptions,
+  report?: BuildReport,
+): Promise<IndexManifest | null> {
+  const manifestPath = manifestFilePath(projectRoot, opts);
   try {
-    const manifestPath = manifestFilePath(projectRoot, opts);
     const raw = await fsp.readFile(manifestPath, "utf8");
     const parsed = JSON.parse(raw) as IndexManifest;
-    if (
-      (parsed.version !== MANIFEST_VERSION && parsed.version !== 4 && parsed.version !== 3) ||
-      typeof parsed.projectRoot !== "string" ||
-      !/^[a-f0-9]{64}$/.test(parsed.buildOptions?.implementationFingerprint ?? "")
-    ) {
+    let invalidReason: string | undefined;
+    if (parsed.version !== MANIFEST_VERSION && parsed.version !== 4 && parsed.version !== 3) {
+      invalidReason = `unsupported manifest version ${String(parsed.version)}`;
+    } else if (typeof parsed.projectRoot !== "string") {
+      invalidReason = "missing project root";
+    } else if (!/^[a-f0-9]{64}$/.test(parsed.buildOptions?.implementationFingerprint ?? "")) {
+      invalidReason = "missing implementation fingerprint";
+    }
+    if (invalidReason) {
+      recordManifestCorruption(report, manifestPath, invalidReason, opts?.logLevel);
       return null;
     }
     const oldFiles = parsed.files ?? {};
@@ -318,17 +403,15 @@ export async function loadManifest(projectRoot: string, opts?: BuildOptions): Pr
     const migrated: IndexManifest = {
       ...parsed,
       version: MANIFEST_VERSION,
-      // Entries, edges, transientFiles, and symlinkDirectories above are already rebased to the
-      // active `projectRoot`. Update the stored provenance to match, or `cachedFileEdgesProjectRoot`
-      // (build-index.ts) keeps pointing at the pre-move root and `collectEdgesForFile`
-      // (graph-edge-collector.ts) rejects every cached edge, forcing a full reparse after a move.
       projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
       files: transformManifestEntries(projectRoot, relativeFiles, false),
       transientFiles: sanitizeManifestTransientFilesForRoot(projectRoot, parsed.projectRoot, parsed.transientFiles),
       ...(symlinkDirectories !== undefined ? { symlinkDirectories } : {}),
     };
     return migrated;
-  } catch {
+  } catch (error) {
+    const isMissing = error && typeof error === "object" && "code" in error && error.code === "ENOENT";
+    if (!isMissing) recordManifestCorruption(report, manifestPath, stringifyUnknown(error), opts?.logLevel);
     return null;
   }
 }

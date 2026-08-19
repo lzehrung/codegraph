@@ -66,18 +66,24 @@ function elapsedMs(startedAt: number): number {
 
 function lookupManifestEntry(snapshot: AgentProjectSnapshot, file: string) {
   const entries = snapshot.index.manifestEntries;
-  return entries?.get(file) ?? entries?.get(normalizePath(file));
+  const direct = entries?.get(file) ?? entries?.get(normalizePath(file));
+  if (direct || !entries) return direct;
+  const normalized = normalizePath(file).toLowerCase();
+  for (const [candidate, entry] of entries) {
+    if (normalizePath(candidate).toLowerCase() === normalized) return entry;
+  }
+  return undefined;
 }
 
 function currentQueryState(snapshot: AgentProjectSnapshot): QueryIndexCurrentState | null {
   const projectSnapshotIdentity = snapshot.index.projectSnapshotIdentity;
-  if (!projectSnapshotIdentity || !snapshot.index.manifestEntries?.size) return null;
   const files: CurrentQueryFile[] = [];
+  if (!projectSnapshotIdentity || !snapshot.index.manifestEntries?.size) return null;
   const identities = new Map<string, string>();
   for (const file of snapshot.files) {
     const relativePath = normalizeQueryIndexRelativePath(snapshot.root, file);
     const entry = lookupManifestEntry(snapshot, file);
-    if (!entry) return null;
+    if (!entry) continue;
     const sourceIdentity = createQuerySourceIdentity(relativePath, entry);
     files.push({ path: relativePath, sourceIdentity });
     identities.set(relativePath, sourceIdentity);

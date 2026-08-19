@@ -252,6 +252,7 @@ export type ManifestReport = {
   missing?: number;
   optionsMismatch?: string[];
   configHashError?: string;
+  corruptions?: Array<{ artifact: string; reason: string }>;
 };
 
 export type NativeBackendFallbackReason = NativeFallbackReason;

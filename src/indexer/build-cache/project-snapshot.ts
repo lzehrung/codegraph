@@ -11,6 +11,7 @@ import { summarizeAnalysis } from "../../analysisSummary.js";
 import type { AnalysisSummary } from "../../analysisSummary.js";
 import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot, normalizePath } from "../../util/paths.js";
 import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
+import { logWithLevel } from "../../logging.js";
 import { SymbolKind } from "../types.js";
 import type {
   BackendReport,
@@ -21,6 +22,7 @@ import type {
   ModuleIndex,
   ProjectIndex,
   SymbolDef,
+  BuildReport,
 } from "../types.js";
 import {
   buildSymbolGraph,
@@ -72,8 +74,14 @@ type SnapshotFileIdentity = {
 type ParsedSnapshotCacheEntry = {
   identity: SnapshotFileIdentity;
   compressed: Buffer;
+  payload: unknown;
 };
 
+type TransformedSnapshotCacheEntry = {
+  identity: SnapshotFileIdentity;
+  root: string;
+  payload: unknown;
+};
 type DetailedSymbolGraphCacheEntry = {
   identity: SnapshotFileIdentity;
   projectSnapshotIdentity: string;
@@ -81,6 +89,7 @@ type DetailedSymbolGraphCacheEntry = {
 };
 
 const parsedSnapshotCache = new Map<string, ParsedSnapshotCacheEntry>();
+const transformedSnapshotCache = new Map<string, TransformedSnapshotCacheEntry>();
 const detailedSymbolGraphCache = new Map<string, DetailedSymbolGraphCacheEntry>();
 
 type DetailedSymbolGraphSnapshotPayload = {
@@ -386,23 +395,58 @@ function decodeSnapshotPayload(compressed: Buffer): unknown {
   return JSON.parse(brotliDecompressSync(compressed).toString("utf8")) as unknown;
 }
 
+function recordSnapshotCorruption(
+  report: BuildReport | undefined,
+  artifact: string,
+  reason: string,
+  logLevel: BuildOptions["logLevel"],
+): void {
+  if (report) {
+    report.manifest ??= { used: true, reused: false };
+    report.manifest.corruptions ??= [];
+    if (!report.manifest.corruptions.some((entry) => entry.artifact === artifact)) {
+      report.manifest.corruptions.push({ artifact, reason });
+    }
+  }
+  logWithLevel(logLevel, "warn", `Warning: Corrupt cache artifact ${artifact}: ${reason}`);
+}
+
 async function readParsedSnapshot(snapshotPath: string): Promise<{ identity: SnapshotFileIdentity; payload: unknown }> {
   const before = await snapshotFileIdentity(snapshotPath);
   const cached = parsedSnapshotCache.get(snapshotPath);
   if (cached && sameSnapshotFileIdentity(cached.identity, before)) {
     setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, cached);
-    return { identity: cached.identity, payload: decodeSnapshotPayload(cached.compressed) };
+    return { identity: cached.identity, payload: cached.payload };
   }
   const compressed = Buffer.from(await fsp.readFile(snapshotPath));
   const payload = decodeSnapshotPayload(compressed);
   const after = await snapshotFileIdentity(snapshotPath);
-  const entry = { identity: before, compressed };
+  const entry = { identity: before, compressed, payload };
   if (sameSnapshotFileIdentity(before, after)) {
     setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, entry);
   } else {
     parsedSnapshotCache.delete(snapshotPath);
   }
   return { identity: before, payload };
+}
+function transformCachedProjectSnapshot(
+  snapshotPath: string,
+  identity: SnapshotFileIdentity,
+  rawPayload: unknown,
+  projectRoot: string,
+): unknown {
+  const cached = transformedSnapshotCache.get(snapshotPath);
+  if (cached && cached.root === projectRoot && sameSnapshotFileIdentity(cached.identity, identity)) {
+    setBoundedSnapshotCache(transformedSnapshotCache, snapshotPath, cached);
+    return cached.payload;
+  }
+  const migratedPayload = migrateProjectSnapshotPayload(rawPayload, projectRoot);
+  const payload =
+    migratedPayload && typeof migratedPayload === "object" && !Array.isArray(migratedPayload)
+      ? transformSnapshotPaths(migratedPayload as ProjectIndexSnapshotPayload, projectRoot, false)
+      : migratedPayload;
+  setBoundedSnapshotCache(transformedSnapshotCache, snapshotPath, { identity, root: projectRoot, payload });
+  return payload;
 }
 
 function projectIndexManifestEntries(
@@ -423,16 +467,18 @@ export async function tryLoadProjectIndexSnapshot(
   projectRoot: string,
   opts: BuildOptions | undefined,
   manifestEntries: ReadonlyMap<string, ManifestFileEntry>,
+  report?: BuildReport,
 ): Promise<LoadedProjectIndexSnapshot | null> {
   const filesSignature = projectSnapshotFilesSignature(manifestEntries, projectRoot);
   if ((opts?.cache ?? "off") !== "disk") return null;
   try {
-    const rawPayload = (await readParsedSnapshot(projectSnapshotPath(projectRoot, opts))).payload;
-    const migratedPayload = migrateProjectSnapshotPayload(rawPayload, projectRoot);
-    const payload =
-      migratedPayload && typeof migratedPayload === "object" && !Array.isArray(migratedPayload)
-        ? transformSnapshotPaths(migratedPayload as ProjectIndexSnapshotPayload, projectRoot, false)
-        : migratedPayload;
+    const parsedSnapshot = await readParsedSnapshot(projectSnapshotPath(projectRoot, opts));
+    const payload = transformCachedProjectSnapshot(
+      projectSnapshotPath(projectRoot, opts),
+      parsedSnapshot.identity,
+      parsedSnapshot.payload,
+      projectRoot,
+    );
     const nativeRuntimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
     const implementationFingerprint = getImplementationFingerprint();
     if (
@@ -476,7 +522,8 @@ export async function tryLoadProjectIndexSnapshot(
       },
       ...(payload.analysisReport ? { analysisReport: payload.analysisReport } : {}),
     };
-  } catch {
+  } catch (error) {
+    recordSnapshotCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
     return null;
   }
 }
@@ -493,15 +540,17 @@ export async function tryLoadProjectSnapshotModules(
   projectRoot: string,
   opts: BuildOptions | undefined,
   fileSignatures: ReadonlyMap<string, Pick<FileSignature, "sig" | "gitSig" | "cacheSig">>,
+  report?: BuildReport,
 ): Promise<Map<string, ModuleIndex> | null> {
   if ((opts?.cache ?? "off") !== "disk") return null;
   try {
-    const rawPayload = (await readParsedSnapshot(projectSnapshotPath(projectRoot, opts))).payload;
-    const migratedPayload = migrateProjectSnapshotPayload(rawPayload, projectRoot);
-    const payload =
-      migratedPayload && typeof migratedPayload === "object" && !Array.isArray(migratedPayload)
-        ? transformSnapshotPaths(migratedPayload as ProjectIndexSnapshotPayload, projectRoot, false)
-        : migratedPayload;
+    const parsedSnapshot = await readParsedSnapshot(projectSnapshotPath(projectRoot, opts));
+    const payload = transformCachedProjectSnapshot(
+      projectSnapshotPath(projectRoot, opts),
+      parsedSnapshot.identity,
+      parsedSnapshot.payload,
+      projectRoot,
+    );
     const nativeRuntimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
     const implementationFingerprint = getImplementationFingerprint();
     if (
@@ -530,14 +579,16 @@ export async function tryLoadProjectSnapshotModules(
       modules.set(moduleKey, mod);
     }
     return modules;
-  } catch {
+  } catch (error) {
+    recordSnapshotCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
     return null;
-  }
+}
 }
 
 export async function tryLoadPersistedBloomFilters(
   projectRoot: string,
   opts: BuildOptions | undefined,
+  report?: BuildReport,
 ): Promise<PersistedBloomFilters | null> {
   if ((opts?.cache ?? "off") !== "disk" || (opts?.useBloomFilters ?? true) === false) return null;
   try {
@@ -547,17 +598,24 @@ export async function tryLoadPersistedBloomFilters(
     if (sidecarBloom) {
       return createPersistedBloomFilters(sidecarBloom.bloomFilters, sidecarBloom.fileSignatures, projectRoot);
     }
-  } catch {
-    // Fall back to legacy project snapshot payload if sidecar is unavailable or corrupt
+  } catch (error) {
+    const isMissing = error && typeof error === "object" && "code" in error && error.code === "ENOENT";
+    if (!isMissing) {
+      recordSnapshotCorruption(report, bloomFilterSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
+    }
   }
   try {
     const payload = (await readParsedSnapshot(projectSnapshotPath(projectRoot, opts))).payload;
     const bloomFilters = persistedBloomFiltersFromSnapshot(payload, projectRoot);
     if (!bloomFilters) return null;
     return createPersistedBloomFilters(bloomFilters.bloomFilters, bloomFilters.fileSignatures, projectRoot);
-  } catch {
+  } catch (error) {
+    const isMissing = error && typeof error === "object" && "code" in error && error.code === "ENOENT";
+    if (!isMissing) {
+      recordSnapshotCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
+    }
     return null;
-  }
+}
 }
 
 function persistedBloomFiltersFromSidecar(
@@ -696,7 +754,7 @@ export async function writeProjectIndexSnapshot(
     });
     await writeSnapshotAtomically(snapshotPath, compressed);
     const identity = await snapshotFileIdentity(snapshotPath);
-    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, compressed });
+    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, compressed, payload });
     index.projectSnapshotIdentity = projectSnapshotIdentity;
     if (serializedBloomFilters) {
       try {
@@ -717,6 +775,7 @@ export async function writeProjectIndexSnapshot(
         setBoundedSnapshotCache(parsedSnapshotCache, bloomPath, {
           identity: bloomIdentity,
           compressed: bloomCompressed,
+          payload: bloomPayload,
         });
       } catch {
         // Bloom sidecar write failure must not fail indexing
@@ -827,7 +886,7 @@ export async function writeDetailedSymbolGraphSnapshot(
     });
     await writeSnapshotAtomically(snapshotPath, compressed);
     const identity = await snapshotFileIdentity(snapshotPath);
-    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, compressed });
+    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, compressed, payload });
     setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, {
       identity,
       projectSnapshotIdentity: index.projectSnapshotIdentity,
