@@ -352,6 +352,9 @@ export type ImpactReport = {
   graph: {
     fileEdges: Array<{ from: FileId; to: FileId; typeOnly?: boolean }>;
     symbolEdges: Array<{ from: number; to: number; label: string }>; // indices into changedSymbols
+    truncated?: boolean;
+    limits?: { edges: number };
+    omittedCounts?: { edges: number };
   };
   diagnostics?: ImpactDiagnostics;
   markdownLinks?: MarkdownLinkCheckResult;
@@ -458,6 +461,9 @@ export type CompactImpactReport = {
   graph: {
     fileEdges: Array<{ from: number; to: number; typeOnly?: boolean }>; // indices into files array
     symbolEdges: Array<{ from: number; to: number; label: string }>; // indices into changedSymbols
+    truncated?: boolean;
+    limits?: { edges: number };
+    omittedCounts?: { edges: number };
   };
   diagnostics?: ImpactDiagnostics;
   markdownLinks?: MarkdownLinkCheckResult;

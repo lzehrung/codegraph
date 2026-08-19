@@ -51,7 +51,11 @@ export async function collectReviewCandidateTests(input: {
   reviewTimings?: ReviewTimingReport;
 }): Promise<CandidateTestFile[]> {
   const candidateStart = performance.now();
-  const maxCandidates = input.appliedOptions.maxCandidates ?? REVIEW_DEFAULT_CANDIDATE_TEST_LIMIT;
+  const configuredMaxCandidates = input.appliedOptions.maxCandidates;
+  const maxCandidates =
+    typeof configuredMaxCandidates === "number" && Number.isFinite(configuredMaxCandidates)
+      ? Math.max(0, Math.floor(configuredMaxCandidates))
+      : REVIEW_DEFAULT_CANDIDATE_TEST_LIMIT;
   const candidateTests = mergeCandidateTestEntries(
     listCandidateTestFiles(input.index, input.changedFileList, input.changedSymbolIds, {
       maxCandidates,

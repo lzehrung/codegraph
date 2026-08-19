@@ -23,6 +23,7 @@ type DiffParserState = {
   files: FileChange[];
   currentFile: ParsedFileChange | null;
   currentHunk: Hunk | null;
+  warning?: string;
 };
 
 export function parseUnifiedDiff(diffText: string): Diff {
@@ -78,13 +79,18 @@ function parseBufferedLines(state: DiffParserState, buffered: string): string {
 }
 
 function parseDiffLine(state: DiffParserState, line: string): void {
+  if (line.startsWith("diff --cc ") || line.startsWith("diff --combined ")) {
+    finishCurrentFile(state);
+    state.warning ??=
+      "Combined/merge diffs are not supported; rerun Git diff with -m to produce per-parent unified files.";
+    return;
+  }
   if (line.startsWith("diff --git")) {
     finishCurrentFile(state);
     state.currentFile = initiateFile(line);
     state.currentHunk = null;
     return;
   }
-
   if (!state.currentFile) return;
 
   if (line.startsWith("@@")) {
@@ -110,7 +116,10 @@ function parseDiffLine(state: DiffParserState, line: string): void {
 
 function finishParserState(state: DiffParserState): Diff {
   finishCurrentFile(state);
-  return { files: state.files };
+  return {
+    files: state.files,
+    ...(state.warning ? { warning: state.warning } : {}),
+  };
 }
 
 function finishCurrentFile(state: DiffParserState): void {

@@ -17,6 +17,7 @@ import type { FileChange, Hunk } from "./impact/types.js";
 import { normalizePath, toProjectDisplayPath } from "./util/paths.js";
 import { fileExists } from "./util/workspace.js";
 import { discoverProjectFiles, type ProjectFileInfo } from "./util/projectFiles.js";
+import { mapLimit } from "./util/concurrency.js";
 import { collectReviewCandidateTests } from "./review/candidates.js";
 import { collectReviewChanges, deletedPathsForChange } from "./review/changes.js";
 import { buildDeletedFileSnapshots, type DeletedFileSnapshot } from "./review/deleted.js";
@@ -162,12 +163,10 @@ async function buildReviewIndex(input: {
   } = input;
   const fastGraphRequested = appliedOptions.graph?.fast ?? false;
   const graphOptions = appliedOptions.graph ? { ...appliedOptions.graph, fast: fastGraphRequested } : { fast: false };
-  const existenceChecks = await Promise.all(
-    changedFileList.map(async (file) => ({
-      file,
-      exists: await fileExists(file),
-    })),
-  );
+  const existenceChecks = await mapLimit(changedFileList, 8, async (file) => ({
+    file,
+    exists: await fileExists(file),
+  }));
   const existenceByFile = new Map(existenceChecks.map((entry) => [entry.file, entry.exists] as const));
   const deletedFiles = Array.from(
     new Set(
@@ -537,7 +536,10 @@ async function collectReviewDuplicateTasks(input: {
     if (summary.status !== "updated") continue;
     const hunks = diffHunksByDisplayFile.get(summary.file);
     if (!hunks?.length) {
-      targets.push({ file: summary.file });
+      const metadataOnly = summary.modeChanged || summary.oldFile !== undefined || summary.isBinary;
+      if (!metadataOnly) {
+        targets.push({ file: summary.file });
+      }
       continue;
     }
     const symbolTargets = targets.filter((target) => target.file === summary.file && target.startLine !== undefined);

@@ -843,37 +843,72 @@ function rangeContainsIndex(range: Range, index: number): boolean {
   return index >= startIndex && index <= endIndex;
 }
 
-function findCallerSymbolId(index: ProjectIndex, ref: Reference): string | undefined {
-  const startIndex = ref.range.start.index;
-  if (startIndex === undefined) {
-    return undefined;
-  }
+export type CallerRangeEntry = {
+  local: SymbolDef;
+  maxEndIndex: number;
+};
 
-  const module = index.byFile.get(fileIdentityKey(ref.file));
-  if (!module) {
-    return undefined;
+export type CallerRangeIndex = ReadonlyMap<string, CallerRangeEntry[]>;
+
+export function buildCallerRangeIndex(index: ProjectIndex): CallerRangeIndex {
+  const byFile = new Map<string, CallerRangeEntry[]>();
+  for (const module of index.byFile.values()) {
+    const entries = module.locals
+      .flatMap((local) => {
+        const startIndex = local.range.start.index;
+        const endIndex = local.range.end.index;
+        if (startIndex === undefined || endIndex === undefined) return [];
+        return [{ local, maxEndIndex: endIndex }];
+      })
+      .sort((left, right) => {
+        const startDifference = left.local.range.start.index! - right.local.range.start.index!;
+        if (startDifference !== 0) return startDifference;
+        return left.local.range.end.index! - right.local.range.end.index!;
+      });
+    let maxEndIndex = Number.NEGATIVE_INFINITY;
+    for (const entry of entries) {
+      maxEndIndex = Math.max(maxEndIndex, entry.local.range.end.index!);
+      entry.maxEndIndex = maxEndIndex;
+    }
+    byFile.set(fileIdentityKey(module.file), entries);
+  }
+  return byFile;
+}
+
+export function findCallerSymbolId(callerRangeIndex: CallerRangeIndex, ref: Reference): string | undefined {
+  const startIndex = ref.range.start.index;
+  if (startIndex === undefined) return undefined;
+
+  const entries = callerRangeIndex.get(fileIdentityKey(ref.file));
+  if (!entries?.length) return undefined;
+
+  let low = 0;
+  let high = entries.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const middleStart = entries[middle]!.local.range.start.index!;
+    if (middleStart <= startIndex) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
   }
 
   let best: SymbolDef | undefined;
-  for (const local of module.locals) {
-    if (!rangeContainsIndex(local.range, startIndex)) {
-      continue;
-    }
+  for (let index = low - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!;
+    if (entry.maxEndIndex < startIndex) break;
+    if (!rangeContainsIndex(entry.local.range, startIndex)) continue;
     if (!best) {
-      best = local;
+      best = entry.local;
       continue;
     }
-
-    const localSpan = (local.range.end.index ?? 0) - (local.range.start.index ?? 0);
+    const localSpan = (entry.local.range.end.index ?? 0) - (entry.local.range.start.index ?? 0);
     const bestSpan = (best.range.end.index ?? 0) - (best.range.start.index ?? 0);
-    if (localSpan < bestSpan) {
-      best = local;
-    }
+    if (localSpan < bestSpan) best = entry.local;
   }
 
-  if (!best) {
-    return undefined;
-  }
+  if (!best) return undefined;
   const bestStartIndex = best.range.start.index ?? 0;
   return `${best.file}::${best.localName}::${bestStartIndex}`;
 }
@@ -1020,10 +1055,11 @@ async function buildCallCompatibilityHintForReference(input: {
   changedSymbol: ChangedSymbol;
   signature: CallableSignature;
   ref: Reference;
+  callerRangeIndex: CallerRangeIndex;
   diagnostics?: ImpactDiagnostics["callCompatibility"] | undefined;
   projectRoot?: string | undefined;
 }): Promise<CallCompatibilityHint | null> {
-  const { index, changedSymbol, signature, ref, diagnostics, projectRoot } = input;
+  const { index, changedSymbol, signature, ref, callerRangeIndex, diagnostics, projectRoot } = input;
   if (
     fileIdentityKey(ref.file) === fileIdentityKey(changedSymbol.file) &&
     sameRangeStart(ref.range, changedSymbol.range)
@@ -1061,7 +1097,7 @@ async function buildCallCompatibilityHintForReference(input: {
   }
 
   const compatibility = classifyCompatibility(signature, actual);
-  const callerSymbolId = findCallerSymbolId(index, ref);
+  const callerSymbolId = findCallerSymbolId(callerRangeIndex, ref);
   const callsiteFile = projectRoot ? path.relative(projectRoot, ref.file).replace(/\\/g, "/") : ref.file;
   return {
     ...compatibility,
@@ -1073,13 +1109,11 @@ async function buildCallCompatibilityHintForReference(input: {
     actual,
   };
 }
-
 function resetCallCompatibilityHints(changedSymbols: ChangedSymbol[]): void {
   for (const changedSymbol of changedSymbols) {
     delete changedSymbol.callCompatibility;
   }
 }
-
 export async function attachCallCompatibilityHints(
   index: ProjectIndex,
   changedSymbols: ChangedSymbol[],
@@ -1097,6 +1131,7 @@ export async function attachCallCompatibilityHints(
   if (options.maxRefs <= 0) {
     return;
   }
+  const callerRangeIndex = buildCallerRangeIndex(index);
 
   const diagnostics = options.diagnostics?.callCompatibility;
   if (diagnostics) {
@@ -1186,6 +1221,7 @@ export async function attachCallCompatibilityHints(
         changedSymbol,
         signature,
         ref,
+        callerRangeIndex,
         diagnostics,
         ...(options.projectRoot ? { projectRoot: options.projectRoot } : {}),
       });

@@ -52,6 +52,20 @@ describe("Review report", () => {
     expect(report.diagnostics?.missingFiles ?? []).toEqual([]);
   });
 
+  it("I5 transports mode-only changes through ReviewFileSummary", async () => {
+    const root = await mkTmpDir("dg-review-mode-summary-");
+    try {
+      await fsp.writeFile(path.join(root, "script.ts"), "export const script = true;\n", "utf8");
+      const diffText = ["diff --git a/script.ts b/script.ts", "old mode 100644", "new mode 100755", ""].join("\n");
+
+      const report = await buildReviewReport(root, { diffText });
+
+      expect(report.changedFiles).toContainEqual(expect.objectContaining({ file: "script.ts", modeChanged: true }));
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   it("includes Markdown link validation in the report", async () => {
     const root = await mkTmpDir("dg-review-markdown-links-");
     try {
@@ -2368,6 +2382,143 @@ describe("Review report", () => {
     }
   });
 
+  it("I13 bounds changed-file summary source loads without changing ordered output", async () => {
+    const root = await mkTmpDir("dg-review-summary-fanout-");
+    const srcDir = path.join(root, "src");
+    const concurrencyCap = 2;
+    const sources = Array.from({ length: 6 }, (_, index) => {
+      const name = `feature${index}`;
+      const file = path.join(srcDir, `${name}.ts`);
+      return { file, name, source: `export function ${name}() { return ${index}; }\n` };
+    });
+    await fsp.mkdir(srcDir, { recursive: true });
+    await Promise.all(sources.map(async ({ file, source }) => await fsp.writeFile(file, source, "utf8")));
+
+    const index = await buildProjectIndex(root);
+    index.parsed = undefined;
+    const sourceByFile = new Map(sources.map(({ file, source }) => [fileIdentityKey(file), source] as const));
+    const pendingLoads: Array<{ resolve: () => void }> = [];
+    let nextLoadSignal = Promise.withResolvers<void>();
+    let activeLoads = 0;
+    let maxActiveLoads = 0;
+    const gateSourceLoad = async (file: string): Promise<string> => {
+      const source = sourceByFile.get(fileIdentityKey(file));
+      if (source === undefined) throw new Error(`Unexpected source load: ${file}`);
+      activeLoads += 1;
+      maxActiveLoads = Math.max(maxActiveLoads, activeLoads);
+      const pending = Promise.withResolvers<void>();
+      pendingLoads.push({ resolve: pending.resolve });
+      nextLoadSignal.resolve();
+      await pending.promise;
+      activeLoads -= 1;
+      return source;
+    };
+    const originalReadFile = fsp.readFile;
+    const readSpy = vi.spyOn(fsp, "readFile").mockImplementation((file, options) => {
+      if (typeof file === "string" && sourceByFile.has(fileIdentityKey(file))) return gateSourceLoad(file);
+      return originalReadFile(file, options);
+    });
+
+    const takePendingLoad = async () => {
+      while (!pendingLoads.length) {
+        const signal = nextLoadSignal;
+        await signal.promise;
+        if (signal === nextLoadSignal) nextLoadSignal = Promise.withResolvers<void>();
+      }
+      return pendingLoads.shift();
+    };
+
+    try {
+      const summaryPromise = summarizeChangedFiles({
+        projectRoot: root,
+        index,
+        changedFileList: sources.map(({ file }) => file),
+        diffHunksByFile: new Map(),
+        diffKindsByFile: new Map(),
+        diffChangesByFile: new Map(),
+        explicitFiles: new Set(),
+        existenceByFile: new Map(sources.map(({ file }) => [file, true] as const)),
+        deletedSnapshots: new Map(),
+        loadSource: gateSourceLoad,
+        includeSymbolDetails: true,
+        includeDiffContext: false,
+        diffContextLines: 0,
+        maxCallsites: 0,
+        referenceConcurrency: concurrencyCap,
+        diagnostics: { missingFiles: [], symbolMappingParseFailures: [] },
+      });
+
+      for (let completed = 0; completed < sources.length; completed += 1) {
+        const pendingLoad = await takePendingLoad();
+        pendingLoad?.resolve();
+      }
+
+      const summary = await summaryPromise;
+      expect(maxActiveLoads).toBe(concurrencyCap);
+      expect(summary.summaries.map((entry) => entry.file)).toEqual(
+        sources.map(({ file }) => normalize(path.relative(root, file))),
+      );
+      expect(summary.summaries.map((entry) => entry.symbols.map((symbol) => symbol.name))).toEqual(
+        sources.map(({ name }) => [name]),
+      );
+    } finally {
+      readSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("shares in-flight source loads across concurrent duplicate summaries", async () => {
+    const root = await mkTmpDir("dg-review-summary-duplicate-");
+    const file = path.join(root, "src", "feature.ts");
+    await fsp.mkdir(path.dirname(file), { recursive: true });
+    const source = "export function feature() { return 1; }\n";
+    await fsp.writeFile(file, source, "utf8");
+
+    try {
+      const index = await buildProjectIndex(root);
+      index.parsed = undefined;
+      let readCount = 0;
+      const gate = Promise.withResolvers<void>();
+      const firstRead = Promise.withResolvers<void>();
+      const loadSource = async (): Promise<string> => {
+        readCount += 1;
+        firstRead.resolve();
+        await gate.promise;
+        return source;
+      };
+      const changedFiles = [file, file.replace(/\\/g, "/")];
+
+      const summaryPromise = summarizeChangedFiles({
+        projectRoot: root,
+        index,
+        changedFileList: changedFiles,
+        diffHunksByFile: new Map(),
+        diffKindsByFile: new Map([[file, "modified"]]),
+        diffChangesByFile: new Map(),
+        explicitFiles: new Set(),
+        existenceByFile: new Map([[file, true]]),
+        deletedSnapshots: new Map(),
+        loadSource,
+        includeSymbolDetails: true,
+        includeDiffContext: false,
+        diffContextLines: 0,
+        maxCallsites: 0,
+        referenceConcurrency: 2,
+        diagnostics: { missingFiles: [], symbolMappingParseFailures: [] },
+      });
+
+      await firstRead.promise;
+      await Promise.resolve();
+      expect(readCount).toBe(1);
+      gate.resolve();
+      const summary = await summaryPromise;
+      expect(summary.summaries).toHaveLength(2);
+      expect(readCount).toBe(1);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps parsed trees and bounds reference work for review callsites", async () => {
     const root = await mkTmpDir("dg-review-reference-bounds-");
     const srcDir = path.join(root, "src");
@@ -2737,10 +2888,45 @@ describe("boundReviewReportForTransport", () => {
     expect(bounded.omittedCounts).toEqual({
       projectFiles: 3,
       changedFiles: 3,
-      symbols: 4,
+      symbols: 16,
       graphDelta: 5,
       candidateTests: 3,
     });
+  });
+  it("I4 counts symbols in changed files omitted by the transport file cap", () => {
+    const report = makeBaseReport({
+      changedFiles: [
+        { file: "kept.ts", status: "updated", symbols: [{ name: "kept", kind: "function", handle: "kept" }] },
+        {
+          file: "omitted-a.ts",
+          status: "updated",
+          symbols: Array.from({ length: 3 }, (_, index) => ({
+            name: `a${index}`,
+            kind: "function",
+            handle: `a${index}`,
+          })),
+        },
+        {
+          file: "omitted-b.ts",
+          status: "updated",
+          symbols: Array.from({ length: 5 }, (_, index) => ({
+            name: `b${index}`,
+            kind: "function",
+            handle: `b${index}`,
+          })),
+        },
+      ],
+    });
+
+    const bounded = boundReviewReportForTransport(report, {
+      projectFiles: 10,
+      changedFiles: 1,
+      symbolsPerFile: 2,
+      graphDelta: 10,
+      candidateTests: 10,
+    });
+
+    expect(bounded.omittedCounts).toMatchObject({ changedFiles: 2, symbols: 8 });
   });
 
   it("keeps the library path (buildReviewReport called directly) fully unbounded", async () => {

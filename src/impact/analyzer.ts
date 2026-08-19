@@ -5,7 +5,7 @@ import type { ChangedSymbol, ImpactItem, ImpactOptions, FileChange } from "./typ
 import { createImpactIgnoreMatcher } from "./path.js";
 import { analyzeDirectReferences } from "./direct.js";
 import { analyzeTransitiveImpact, seedTransitiveFromFiles } from "./transitive.js";
-import { buildDependencyStats } from "./severity.js";
+import { buildDependencyStats, normalizeSeverityWeights } from "./severity.js";
 import { attachCallCompatibilityHints } from "./callCompatibility.js";
 import { computeMemberResolutionCoverage } from "./memberResolutionCoverage.js";
 import { createReferenceLookupCache } from "./referenceCache.js";
@@ -74,11 +74,12 @@ export async function analyzeImpact(
   const diagnostics = options.diagnostics;
   const projectRoot =
     options.projectRoot ?? index.projectRoot ?? index.projectFiles?.find((entry) => entry.projectRoot)?.projectRoot;
+  const normalizedSeverityWeights = normalizeSeverityWeights(options.severityWeights);
   const normalizedOptions = {
     ...options,
+    severityWeights: normalizedSeverityWeights,
     ...(projectRoot ? { projectRoot } : {}),
   };
-
   const patternMatchers = compileTestPatterns(testPatterns);
   const isIndexTestFile = createIndexTestFileMatcher(index, patternMatchers, projectRoot);
   const isIgnored = projectRoot ? createImpactIgnoreMatcher(projectRoot, ignoreGlobs) : () => false;
@@ -138,6 +139,7 @@ export async function analyzeImpact(
   const directOptions = {
     maxRefs,
     includeTests,
+    severityWeights: normalizedSeverityWeights,
     ...(refContext !== undefined ? { refContext } : {}),
     ...(refContextLines !== undefined ? { refContextLines } : {}),
     ...(refBlockMaxLines !== undefined ? { refBlockMaxLines } : {}),
