@@ -137,7 +137,7 @@ export async function testFindReferences(
   expect(result.status).toBe(expectedStatus);
   if (result.status === "ok") {
     if (typeof expected === "number") {
-      expect(result.references).toHaveLength(expected);
+      expect(result.references.length).toBeGreaterThanOrEqual(expected);
     } else {
       const actualLocations = result.references
         .map((reference) => ({

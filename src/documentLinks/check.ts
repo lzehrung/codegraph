@@ -61,8 +61,16 @@ export async function checkMarkdownLinksInFiles(
 ): Promise<MarkdownLinkCheckResult> {
   const root = path.resolve(projectRoot);
   const realRoot = await fsp.realpath(root);
-  const markdownFiles = Array.from(new Set(Array.from(files, (file) => path.resolve(root, file))))
-    .filter((file) => isFilePathWithinRoot(root, file))
+  const markdownFiles = Array.from(
+    new Set(
+      Array.from(files, (file) => {
+        const absoluteFile = path.resolve(root, file);
+        if (!isFilePathWithinRoot(root, absoluteFile)) return absoluteFile;
+        return path.resolve(realRoot, path.relative(root, absoluteFile));
+      }),
+    ),
+  )
+    .filter((file) => isFilePathWithinRoot(realRoot, file))
     .filter((file) => supportForFile(file)?.id === "markdown");
   const targetStatusByPath = new Map<string, Promise<TargetStatus>>();
   const anchorsByPath = new Map<string, Promise<Set<string>>>();
@@ -77,7 +85,7 @@ export async function checkMarkdownLinksInFiles(
     for (const occurrence of occurrences) {
       if ("missingReference" in occurrence) {
         linksChecked += 1;
-        failures.push(toFailure(root, displayFile, occurrence, "missing_reference"));
+        failures.push(toFailure(realRoot, displayFile, occurrence, "missing_reference"));
         continue;
       }
 
@@ -91,26 +99,26 @@ export async function checkMarkdownLinksInFiles(
       }
 
       linksChecked += 1;
-      const resolvedTarget = resolveMarkdownTarget(root, file, target.path);
-      if (!isFilePathWithinRoot(root, resolvedTarget)) {
-        failures.push(toFailure(root, displayFile, occurrence, "outside_root", resolvedTarget));
+      const resolvedTarget = resolveMarkdownTarget(realRoot, file, target.path);
+      if (!isFilePathWithinRoot(realRoot, resolvedTarget)) {
+        failures.push(toFailure(realRoot, displayFile, occurrence, "outside_root", resolvedTarget));
         continue;
       }
 
       const targetStatus = await cachedTargetStatus(resolvedTarget, targetStatusByPath);
       if (targetStatus.status === "missing") {
-        failures.push(toFailure(root, displayFile, occurrence, "missing_file", resolvedTarget));
+        failures.push(toFailure(realRoot, displayFile, occurrence, "missing_file", resolvedTarget));
         continue;
       }
       if (!isFilePathWithinRoot(realRoot, targetStatus.realPath)) {
-        failures.push(toFailure(root, displayFile, occurrence, "outside_root", resolvedTarget));
+        failures.push(toFailure(realRoot, displayFile, occurrence, "outside_root", resolvedTarget));
         continue;
       }
       if (!target.fragment || targetStatus.isDirectory || supportForFile(resolvedTarget)?.id !== "markdown") continue;
 
       const anchors = await cachedMarkdownAnchors(targetStatus.realPath, anchorsByPath);
       if (!anchors.has(target.fragment)) {
-        failures.push(toFailure(root, displayFile, occurrence, "missing_fragment", resolvedTarget));
+        failures.push(toFailure(realRoot, displayFile, occurrence, "missing_fragment", resolvedTarget));
       }
     }
   }

@@ -80,6 +80,12 @@ describe("certified release workflows", () => {
     ]) {
       expect(windows).toContain(step);
     }
+    const buildIndex = windows.indexOf("run: npm run build");
+    const fixturesIndex = windows.indexOf("run: npm run fixtures:check-clean");
+    const benchmarkIndex = windows.indexOf("run: npm run bench:native:smoke -- --json");
+    expect(buildIndex).toBeGreaterThan(-1);
+    expect(fixturesIndex).toBeGreaterThan(buildIndex);
+    expect(benchmarkIndex).toBeGreaterThan(buildIndex);
     expect(source).toContain("npm run test:contracts");
   });
   it("executes benchmark and native contract tests through the package lane", () => {

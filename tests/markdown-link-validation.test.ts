@@ -136,6 +136,33 @@ describe("Markdown link validation", () => {
       ]);
     }
   });
+  it("accepts canonical file inputs when the project root uses a symlink alias", async (context) => {
+    const root = await makeRoot("symlink-alias-root");
+    const alias = `${root}-alias`;
+    try {
+      await writeFile(root, "README.md", "[Missing](./missing.md)\n");
+      if (!(await tryCreateDirectorySymlink(root, alias))) {
+        context.skip();
+        return;
+      }
+
+      const result = await checkMarkdownLinksInFiles(alias, [path.join(root, "README.md")]);
+
+      expect(result.summary).toMatchObject({ filesScanned: 1, linksChecked: 1, failures: 1 });
+      expect(result.failures).toEqual([
+        expect.objectContaining({
+          file: "README.md",
+          reason: "missing_file",
+          target: "missing.md",
+        }),
+      ]);
+    } finally {
+      await Promise.all([
+        fsp.rm(root, { recursive: true, force: true }),
+        fsp.rm(alias, { recursive: true, force: true }),
+      ]);
+    }
+  });
 
   it.runIf(process.platform === "win32")(
     "recovers real on-disk casing when given identity-normalized (lowercased) file inputs",

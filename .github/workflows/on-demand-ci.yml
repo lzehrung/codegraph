@@ -119,14 +119,14 @@ jobs:
           npm run lint
           npm run format:check
 
+      - name: Build
+        run: npm run build
+
       - name: Fixture cleanliness
         run: npm run fixtures:check-clean
 
       - name: Native benchmark smoke
         run: npm run bench:native:smoke -- --json
-
-      - name: Build
-        run: npm run build
 
       - name: Native tests
         run: npm run test:native
