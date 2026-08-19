@@ -18,7 +18,7 @@ function withMissingDistArtifact<T>(relativePath: string, callback: () => T): T 
   const backupDir = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-prepare-dist-"));
   const backupPath = path.join(backupDir, path.basename(artifactPath));
   fs.copyFileSync(artifactPath, backupPath);
-  fs.rmSync(artifactPath);
+  fs.rmSync(artifactPath, { force: true });
   try {
     return callback();
   } finally {
