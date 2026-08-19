@@ -824,9 +824,9 @@ const rootLight: RootImpactStreamingOptions = { provider: "raw", diffText: "", s
 const rootGit: RootImpactStreamingOptions = { provider: "git", base: "HEAD", head: "WORKTREE" };
 const commonImpactOption: RootImpactStreamingOptions = { provider: "raw", diffText: "", severityWeights: { directRef: 10 } };
 const sessionStreaming: Parameters<ICodeReviewSession["analyzeImpactStream"]>[0] = {
-  provider: "raw",
-  diffText: "",
-  streamSummary: "light",
+provider: "raw",
+diffText: "",
+streamSummary: "light",
 };
 
 // @ts-expect-error compact is only available for batch impact reports.
@@ -1007,6 +1007,33 @@ void onImpactItemStreaming;
     for (const relativePath of docs) {
       const hasNonAscii = [...readText(relativePath)].some((character) => character.charCodeAt(0) > 0x7f);
       expect(hasNonAscii).toBe(false);
+    }
+  });
+
+  it("builds for npm pack dry-run when source inputs are newer than dist", () => {
+    const sourcePath = path.resolve(process.cwd(), "src/index.ts");
+    const sourceStat = fs.statSync(sourcePath);
+    const future = new Date(Math.max(Date.now() + 60_000, sourceStat.mtimeMs + 60_000));
+    fs.utimesSync(sourcePath, future, future);
+    try {
+      const env = { ...process.env };
+      for (const key of Object.keys(env)) {
+        if (key.toLowerCase() === "npm_command") {
+          delete env[key];
+        }
+      }
+      env.npm_command = "pack";
+      env.npm_config_dry_run = "true";
+      const result = spawnSync(process.execPath, ["./scripts/prepare-package.mjs"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env,
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).not.toContain("Skipping prepare build during npm pack --dry-run");
+    } finally {
+      fs.utimesSync(sourcePath, sourceStat.atime, sourceStat.mtime);
     }
   });
 });

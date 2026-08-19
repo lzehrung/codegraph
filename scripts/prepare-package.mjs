@@ -26,7 +26,9 @@ const distCliExists = existsSync(new URL("../dist/cli.js", import.meta.url));
 const distBinExists = existsSync(new URL("../dist/bin/cli.js", import.meta.url));
 const distReady = distCliExists && distBinExists;
 const distState =
-  isGlobalInstall && distReady ? inspectDistForTests(packageRoot) : { needsBuild: false, reason: "not-global-install" };
+  (isGlobalInstall || isDryRunPack) && distReady
+    ? inspectDistForTests(packageRoot)
+    : { needsBuild: false, reason: "not-install-or-pack" };
 
 if (isGlobalInstall && distReady && !distState.needsBuild) {
   console.log("[codegraph] Skipping prepare build during global install; using existing fresh dist/ output.");
