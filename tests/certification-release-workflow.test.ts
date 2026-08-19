@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 const releaseWorkflow = fs.readFileSync(".github/workflows/release.yml", "utf8");
@@ -76,6 +77,19 @@ describe("certified release workflows", () => {
     }
     expect(source).toContain("npm run test:contracts");
   });
+  it("executes benchmark and native contract tests through the package lane", () => {
+    const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+    const result = spawnSync(npmCommand, ["run", "test:contracts"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      shell: true,
+      timeout: 180_000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toMatch(/Test Files.*passed/s);
+  }, 180_000);
+
 
   it("chains the reusable standalone workflow after certified publication", () => {
     const standalone = jobBlock(releaseWorkflow, "standalone-release");
