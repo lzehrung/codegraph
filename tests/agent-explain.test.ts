@@ -281,6 +281,22 @@ describe("agent explain", () => {
     expect(explanation.references.map((reference) => reference.file)).toEqual(["ref-00.ts", "ref-01.ts"]);
   });
 
+  it("marks reference omissions as a lower bound when collection truncates before display", async () => {
+    const root = await mkRepo();
+    for (let index = 0; index < 25; index += 1) {
+      await fs.writeFile(
+        path.join(root, `reference-${index.toString().padStart(2, "0")}.ts`),
+        `import { validateUser } from "./auth";\nvalidateUser(${index});\n`,
+      );
+    }
+
+    const explanation = await explainCodegraphTarget({ root, target: "validateUser", maxReferences: 2, maxSnippets: 2 });
+
+    expect(explanation.references).toHaveLength(2);
+    expect(explanation.omittedCounts.references).toBe(18);
+    expect(explanation.omittedCountsLowerBounds.references).toBe(true);
+  });
+
   it("skips reference collection when reference and snippet limits are zero", async () => {
     const root = await mkRepo();
     const explanation = await explainCodegraphTarget({

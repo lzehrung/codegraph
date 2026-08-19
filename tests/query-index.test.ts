@@ -136,6 +136,27 @@ describe("persistent query index", () => {
       ?.evidence.find((evidence) => evidence.file === "src/auth.ts");
     expect(authEvidence?.line).toBe(1);
   });
+  it("rebuilds sidecars with an obsolete text normalizer before serving Unicode queries", async () => {
+    const root = await createRepo();
+    await fs.writeFile(path.join(root, "src", "日本.ts"), "export const 日本 = 'café';\n", "utf8");
+    const initialSession = createSession(root);
+    await search(initialSession, root, "日本");
+    const initialSnapshot = await initialSession.loadProject();
+    const sidecar = resolveQueryIndexPaths(initialSnapshot.index.cacheRootDir!).sidecar;
+    disposeSessionQueryIndex(initialSession);
+
+    const database = new SqliteDatabase(sidecar);
+    database.prepare("UPDATE metadata SET value = ? WHERE key = ?").run("query-normalizer-v0", "normalizerVersion");
+    database.close();
+
+    const rebuiltSession = createSession(root);
+    const response = await search(rebuiltSession, root, "日本");
+    const rebuiltSnapshot = await rebuiltSession.loadProject();
+
+    expect(response.results.some((result) => result.file === "src/日本.ts")).toBe(true);
+    expect(rebuiltSnapshot.buildReport?.queryIndex?.sidecarState).toBe("rebuilt");
+  });
+
 
   it("reports both candidate files and candidate chunks for sidecar searches", async () => {
     const root = await createRepo();

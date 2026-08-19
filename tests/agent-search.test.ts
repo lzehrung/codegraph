@@ -783,6 +783,51 @@ describe("agent search", () => {
     );
   });
 
+  it("caches symbol-name anchors without rescanning graph nodes", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-symbol-anchors-"));
+    const anchorFile = path.join(root, "anchor.ts");
+    const neighborFile = path.join(root, "neighbor.ts");
+    const anchorDef = symbolDef(anchorFile, "anchorName", 0);
+    const neighborDef = symbolDef(neighborFile, "neighborName", 0);
+    const anchorNode = symbolNode(anchorDef);
+    const neighborNode = symbolNode(neighborDef);
+    const nodes = new Map([
+      [anchorNode.id, anchorNode],
+      [neighborNode.id, neighborNode],
+    ]);
+    const valuesSpy = vi.spyOn(nodes, "values");
+    const fileGraph: Graph = {
+      nodes: new Set([anchorFile, neighborFile]),
+      edges: [{ from: anchorFile, to: { type: "file", path: neighborFile }, raw: "./neighbor" }],
+    };
+    const byFile = new Map([
+      [anchorFile, moduleIndex(anchorFile, [anchorDef])],
+      [neighborFile, moduleIndex(neighborFile, [neighborDef])],
+    ]);
+    const index: ProjectIndex = {
+      graph: fileGraph,
+      modules: byFile,
+      byFile,
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    const session = snapshotSession({
+      root,
+      files: [anchorFile, neighborFile],
+      index,
+      fileGraph,
+      symbolGraph: { nodes, edges: [] },
+    });
+
+    await searchCodegraphWithSession(session, { root, query: "", mode: "graph", from: "anchorName" });
+    const initialValuesCalls = valuesSpy.mock.calls.length;
+    const response = await searchCodegraphWithSession(session, { root, query: "", mode: "graph", from: "anchorName" });
+
+    expect(response.results).toEqual([]);
+    expect(initialValuesCalls).toBeGreaterThan(0);
+    expect(valuesSpy).toHaveBeenCalledTimes(initialValuesCalls);
+  });
+
   it("indexes file neighbors once per graph search instead of scanning edges per match", async () => {
     const root = await mkTmpDir("cg-agent-search-file-neighbors-");
     const firstFile = path.join(root, "foo-a.ts");

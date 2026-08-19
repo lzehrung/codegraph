@@ -186,6 +186,7 @@ type SearchCache = {
   fileText: Map<string, Promise<string | null>>;
   normalizedText: Map<string, Promise<string | null>>;
   textChunks: Map<string, Promise<SearchTextChunk[]>>;
+  filesBySymbolName?: Map<string, Set<string>>;
 };
 
 const DEFAULT_LIMIT = 20;
@@ -318,12 +319,12 @@ async function searchSnapshot(
       await addTextResults(snapshot, resultMap, query, request.includeSnippets ?? true, mode, queryIndex);
     }
   }
-
   if (request.from !== undefined && (mode === "hybrid" || mode === "graph")) {
     applyGraphNeighborhood(
       snapshot,
       resultMap,
       getFileNeighborIndex(),
+      getFilesBySymbolName(snapshot),
       query,
       request.from,
       normalizeDepth(request.depth),
@@ -895,6 +896,19 @@ function getSearchCache(snapshot: AgentProjectSnapshot): SearchCache {
   SEARCH_CACHES.set(snapshot, created);
   return created;
 }
+function getFilesBySymbolName(snapshot: AgentProjectSnapshot): Map<string, Set<string>> {
+  const cache = getSearchCache(snapshot);
+  if (cache.filesBySymbolName) return cache.filesBySymbolName;
+
+  const filesBySymbolName = new Map<string, Set<string>>();
+  for (const node of snapshot.symbolGraph.nodes.values()) {
+    const files = filesBySymbolName.get(node.name) ?? new Set<string>();
+    files.add(normalizePath(node.file));
+    filesBySymbolName.set(node.name, files);
+  }
+  cache.filesBySymbolName = filesBySymbolName;
+  return filesBySymbolName;
+}
 
 async function getCachedFileText(cache: SearchCache, file: string): Promise<string | null> {
   const cached = cache.fileText.get(file);
@@ -933,11 +947,12 @@ function applyGraphNeighborhood(
   snapshot: AgentProjectSnapshot,
   resultMap: Map<string, MutableSearchResult>,
   fileNeighborIndex: Map<string, FileNeighbor[]>,
+  filesBySymbolName: Map<string, Set<string>>,
   query: SearchQueryTerms,
   from: string,
   depth: number,
 ): void {
-  const anchorFiles = resolveAnchorFiles(snapshot, from);
+  const anchorFiles = resolveAnchorFiles(snapshot, filesBySymbolName, from);
   if (anchorFiles.size === 0) return;
 
   const reachable = collectReachableFiles(fileNeighborIndex, anchorFiles, depth);
@@ -984,8 +999,11 @@ function addGraphEvidence(result: MutableSearchResult, relFile: string, entry: R
 function graphBoost(distance: number): number {
   return Math.max(2, 14 - distance * 3);
 }
-
-function resolveAnchorFiles(snapshot: AgentProjectSnapshot, from: string): Set<string> {
+function resolveAnchorFiles(
+  snapshot: AgentProjectSnapshot,
+  filesBySymbolName: Map<string, Set<string>>,
+  from: string,
+): Set<string> {
   const anchor = new Set<string>();
   const directFile = resolveAgentSnapshotFile(snapshot, from);
   if (directFile) anchor.add(directFile);
@@ -1015,12 +1033,6 @@ function resolveAnchorFiles(snapshot: AgentProjectSnapshot, from: string): Set<s
     }
   }
 
-  const filesBySymbolName = new Map<string, Set<string>>();
-  for (const node of snapshot.symbolGraph.nodes.values()) {
-    const files = filesBySymbolName.get(node.name) ?? new Set<string>();
-    files.add(normalizePath(node.file));
-    filesBySymbolName.set(node.name, files);
-  }
   for (const file of filesBySymbolName.get(from) ?? []) {
     anchor.add(file);
   }
