@@ -91,6 +91,7 @@
     "test:run": "node ./scripts/ensure-dist-for-tests.mjs && vitest run",
     "test:bench": "node ./scripts/ensure-dist-for-tests.mjs && vitest tests/bench-harness.test.ts tests/native-query-scope.test.ts",
     "test:contracts": "node ./scripts/ensure-dist-for-tests.mjs && vitest run tests/bench-harness.test.ts tests/detailed-symbol-native-only.test.ts",
+    "test:watch": "node ./scripts/ensure-dist-for-tests.mjs && vitest --watch",
     "preversion": "npm run test:ci && npm run build",
     "postversion": "git push && git push --tags",
     "release:patch": "node ./scripts/release.mjs patch",

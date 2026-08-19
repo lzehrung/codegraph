@@ -13,8 +13,78 @@ function readJson(relativePath: string): Record<string, unknown> {
 function readText(relativePath: string): string {
   return fs.readFileSync(path.resolve(process.cwd(), relativePath), "utf8");
 }
-function withMissingDistArtifact<T>(relativePath: string, callback: () => T): T {
-  const artifactPath = path.resolve(process.cwd(), relativePath);
+function withIsolatedPackageRoot<T>(callback: (root: string) => T, includeFreshnessInputs = false): T {
+  const sourceRoot = process.cwd();
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-prepare-package-root-"));
+  const sharedEntries = [
+    "dist",
+    "scripts/ensure-dist-for-tests-lib.mjs",
+    "scripts/prepare-package-lib.mjs",
+    "scripts/prepare-package.mjs",
+  ];
+  const freshnessEntries = [
+    "package.json",
+    "tsconfig.json",
+    "src",
+    "scripts/build-native-if-available-lib.mjs",
+    "scripts/build-native-if-available.mjs",
+    "scripts/bundle-cli-lib.mjs",
+    "scripts/bundle-cli.mjs",
+    "scripts/stage-core-package-lib.mjs",
+    "scripts/stage-core-package.mjs",
+    "packages/codegraph-native/build.rs",
+    "packages/codegraph-native/Cargo.lock",
+    "packages/codegraph-native/Cargo.toml",
+    "packages/codegraph-native/src",
+  ];
+  try {
+    const entries = includeFreshnessInputs ? [...sharedEntries, ...freshnessEntries] : sharedEntries;
+    for (const entry of entries) {
+      fs.cpSync(path.join(sourceRoot, entry), path.join(packageRoot, entry), { recursive: true });
+    }
+    return callback(packageRoot);
+  } finally {
+    fs.rmSync(packageRoot, { recursive: true, force: true });
+  }
+}
+
+function withBuildShim<T>(packageRoot: string, callback: (env: NodeJS.ProcessEnv) => T): T {
+  const shimRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-package-build-shim-"));
+  const shimScript = path.join(shimRoot, "build-shim.mjs");
+  const shimCommand = path.join(shimRoot, process.platform === "win32" ? "npm.cmd" : "npm");
+  const cliPath = path.join(packageRoot, "dist", "cli.js");
+  fs.writeFileSync(
+    shimScript,
+    [
+      'import fs from "node:fs";',
+      'import path from "node:path";',
+      "const cliPath = process.env.CODEGRAPH_TEST_CLI_PATH;",
+      'if (!cliPath) throw new Error("CODEGRAPH_TEST_CLI_PATH is required.");',
+      "fs.mkdirSync(path.dirname(cliPath), { recursive: true });",
+      'fs.writeFileSync(cliPath, "export {};\\n", "utf8");',
+      'console.log("[codegraph] package metadata test build shim");',
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  if (process.platform === "win32") {
+    fs.writeFileSync(shimCommand, `@echo off\r\n"${process.execPath}" "${shimScript}" %*\r\n`, "utf8");
+  } else {
+    fs.writeFileSync(shimCommand, `#!/usr/bin/env node\nimport "./${path.basename(shimScript)}";\n`, "utf8");
+    fs.chmodSync(shimCommand, 0o755);
+  }
+  try {
+    const pathValue = [shimRoot, process.env.PATH]
+      .filter((entry): entry is string => Boolean(entry))
+      .join(path.delimiter);
+    return callback({ ...process.env, CODEGRAPH_TEST_CLI_PATH: cliPath, PATH: pathValue });
+  } finally {
+    fs.rmSync(shimRoot, { recursive: true, force: true });
+  }
+}
+
+function withMissingDistArtifact<T>(packageRoot: string, relativePath: string, callback: () => T): T {
+  const artifactPath = path.resolve(packageRoot, relativePath);
   const backupDir = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-prepare-dist-"));
   const backupPath = path.join(backupDir, path.basename(artifactPath));
   fs.copyFileSync(artifactPath, backupPath);
@@ -500,6 +570,7 @@ describe("package metadata", () => {
     expect(scripts["test:fast"]).toContain("--exclude tests/bench-harness.test.ts");
     expect(scripts["test:fast"]).toContain("--exclude tests/native-semantic-parity.test.ts");
     expect(scripts["test:bench"]).toContain("tests/bench-harness.test.ts");
+    expect(scripts["test:watch"]).toBe("node ./scripts/ensure-dist-for-tests.mjs && vitest --watch");
   });
 
   it("keeps native-required and reduced-mode fallback test lanes explicit", () => {
@@ -564,14 +635,13 @@ describe("package metadata", () => {
   });
 
   it("rejects a global install when source inputs are newer than dist", () => {
-    const sourcePath = path.resolve(process.cwd(), "src/index.ts");
-
-    const sourceStat = fs.statSync(sourcePath);
-    const future = new Date(Math.max(Date.now() + 60_000, sourceStat.mtimeMs + 60_000));
-    fs.utimesSync(sourcePath, future, future);
-    try {
+    withIsolatedPackageRoot((packageRoot) => {
+      const sourcePath = path.join(packageRoot, "src", "index.ts");
+      const sourceStat = fs.statSync(sourcePath);
+      const future = new Date(Math.max(Date.now() + 60_000, sourceStat.mtimeMs + 60_000));
+      fs.utimesSync(sourcePath, future, future);
       const result = spawnSync(process.execPath, ["./scripts/prepare-package.mjs"], {
-        cwd: process.cwd(),
+        cwd: packageRoot,
         encoding: "utf8",
         env: {
           ...process.env,
@@ -581,45 +651,50 @@ describe("package metadata", () => {
 
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Global source installs require a fresh dist");
-    } finally {
-      fs.utimesSync(sourcePath, sourceStat.atime, sourceStat.mtime);
-    }
+    }, true);
   });
   it("rejects a global install when the published bin artifact is missing", () => {
-    withMissingDistArtifact("dist/bin/cli.js", () => {
-      const result = spawnSync(process.execPath, ["./scripts/prepare-package.mjs"], {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          npm_config_global: "true",
-        },
-      });
+    withIsolatedPackageRoot((packageRoot) => {
+      withMissingDistArtifact(packageRoot, "dist/bin/cli.js", () => {
+        const result = spawnSync(process.execPath, ["./scripts/prepare-package.mjs"], {
+          cwd: packageRoot,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            npm_config_global: "true",
+          },
+        });
 
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Global source installs require a fresh dist");
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("Global source installs require a fresh dist");
+      });
     });
   });
 
   it("builds for npm pack dry-run when the root CLI artifact is missing", () => {
-    withMissingDistArtifact("dist/cli.js", () => {
-      const env = { ...process.env };
-      for (const key of Object.keys(env)) {
-        if (key.toLowerCase() === "npm_command") {
-          delete env[key];
-        }
-      }
-      env.npm_command = "pack";
-      env.npm_config_dry_run = "true";
-      const result = spawnSync(process.execPath, ["./scripts/prepare-package.mjs"], {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env,
-      });
+    withIsolatedPackageRoot((packageRoot) => {
+      withMissingDistArtifact(packageRoot, "dist/cli.js", () => {
+        withBuildShim(packageRoot, (buildEnv) => {
+          const env = { ...buildEnv };
+          for (const key of Object.keys(env)) {
+            if (key.toLowerCase() === "npm_command") {
+              delete env[key];
+            }
+          }
+          env.npm_command = "pack";
+          env.npm_config_dry_run = "true";
+          const result = spawnSync(process.execPath, ["./scripts/prepare-package.mjs"], {
+            cwd: packageRoot,
+            encoding: "utf8",
+            env,
+          });
 
-      expect(result.status).toBe(0);
-      expect(result.stdout).not.toContain("Skipping prepare build during npm pack --dry-run");
-      expect(fs.existsSync(path.resolve(process.cwd(), "dist/cli.js"))).toBe(true);
+          expect(result.status).toBe(0);
+          expect(result.stdout).toContain("[codegraph] package metadata test build shim");
+          expect(result.stdout).not.toContain("Skipping prepare build during npm pack --dry-run");
+          expect(fs.existsSync(path.join(packageRoot, "dist", "cli.js"))).toBe(true);
+        });
+      });
     });
   });
 
@@ -629,22 +704,24 @@ describe("package metadata", () => {
   });
 
   it("lets npm pack dry-run reuse an existing dist build without wiping dist", () => {
-    const env = { ...process.env };
-    for (const key of Object.keys(env)) {
-      if (key.toLowerCase() === "npm_command") {
-        delete env[key];
+    withIsolatedPackageRoot((packageRoot) => {
+      const env = { ...process.env };
+      for (const key of Object.keys(env)) {
+        if (key.toLowerCase() === "npm_command") {
+          delete env[key];
+        }
       }
-    }
-    env.npm_command = "pack";
-    env.npm_config_dry_run = "true";
-    const result = spawnSync(process.execPath, ["./scripts/prepare-package.mjs"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env,
-    });
+      env.npm_command = "pack";
+      env.npm_config_dry_run = "true";
+      const result = spawnSync(process.execPath, ["./scripts/prepare-package.mjs"], {
+        cwd: packageRoot,
+        encoding: "utf8",
+        env,
+      });
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Skipping prepare build during npm pack --dry-run");
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("Skipping prepare build during npm pack --dry-run");
+    });
   });
 
   it("prints slow-test reporter help when help is the leading argument", () => {
