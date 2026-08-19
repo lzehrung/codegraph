@@ -138,7 +138,7 @@ describe("build-native-if-available", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("preserves a pre-collected staged artifact for a non-host Windows target", () => {
+  it("preserves populated x64 and arm64 staging while rebuilding the host target", () => {
     const warn = vi.fn();
     const spawnSyncImpl = vi.fn().mockReturnValueOnce({ status: 0 }).mockReturnValueOnce({ status: 0 });
     const readdirSyncImpl = vi.fn((target: string) => {
@@ -155,7 +155,10 @@ describe("build-native-if-available", () => {
         ];
       }
       if (target.endsWith("packages\\codegraph-native\\npm\\win32-arm64-msvc")) {
-        throw new Error("must not read the non-host target directory");
+        return [
+          { name: "index.win32-arm64-msvc.node", isDirectory: () => false },
+          { name: "package.json", isDirectory: () => false },
+        ];
       }
       return [];
     });
@@ -177,6 +180,10 @@ describe("build-native-if-available", () => {
       expect(String(call[0])).toContain("win32-x64-msvc");
       expect(String(call[0])).not.toContain("win32-arm64-msvc");
     }
+    expect(rmSyncImpl).not.toHaveBeenCalledWith(
+      expect.stringContaining("win32-arm64-msvc"),
+      expect.anything(),
+    );
     expect(warn).not.toHaveBeenCalled();
   });
 

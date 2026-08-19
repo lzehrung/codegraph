@@ -118,19 +118,51 @@ export async function testGoToDefinition(
   return result;
 }
 
+export type ReferenceLocation = {
+  file: string;
+  line: number;
+  column: number;
+};
+
 export async function testFindReferences(
   index: ProjectIndex,
   file: string,
   line: number,
   column: number,
-  expectedCount: number,
+  expected: number | readonly ReferenceLocation[],
   expectedStatus: "ok" | "not_found" = "ok",
 ) {
   const result = await findReferences(index, { file, line, column });
 
   expect(result.status).toBe(expectedStatus);
   if (result.status === "ok") {
-    expect(result.references).toHaveLength(expectedCount);
+    if (typeof expected === "number") {
+      expect(result.references).toHaveLength(expected);
+    } else {
+      const actualLocations = result.references
+        .map((reference) => ({
+          file: fileIdentityKey(reference.file),
+          line: reference.range.start.line,
+          column: reference.range.start.column,
+        }))
+        .sort((left, right) =>
+          `${left.file}:${left.line}:${left.column}`.localeCompare(
+            `${right.file}:${right.line}:${right.column}`,
+          ),
+        );
+      const expectedLocations = expected
+        .map((reference) => ({
+          file: fileIdentityKey(reference.file),
+          line: reference.line,
+          column: reference.column,
+        }))
+        .sort((left, right) =>
+          `${left.file}:${left.line}:${left.column}`.localeCompare(
+            `${right.file}:${right.line}:${right.column}`,
+          ),
+        );
+      expect(actualLocations).toEqual(expectedLocations);
+    }
   }
 
   return result;

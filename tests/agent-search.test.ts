@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
@@ -27,7 +26,6 @@ const DEFAULT_ANALYSIS = {
   nativeFilesFellBack: 0,
   label: "semantic",
 };
-
 async function mkRepo(): Promise<string> {
   const root = await mkTmpDir("cg-agent-search-");
   await fs.mkdir(path.join(root, "src"));
@@ -272,7 +270,7 @@ describe("agent search", () => {
   });
 
   it("uses stable handles after all visible ranking keys tie", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-handle-tie-"));
+    const root = await mkTmpDir("cg-agent-search-handle-tie-");
     const file = path.join(root, "handles.ts");
     const first = symbolDef(file, "same", 0);
     const second: SymbolDef = {
@@ -332,7 +330,7 @@ describe("agent search", () => {
   });
 
   it("does not grant exact-phrase boost for deduped rank-token join alone", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-phrase-"));
+    const root = await mkTmpDir("cg-agent-search-phrase-");
     await fs.mkdir(path.join(root, "src"));
     // Contains deduped join "alpha beta" but not full repeated phrase "alpha beta alpha".
     await fs.writeFile(path.join(root, "src", "repeat.ts"), "export const value = 'alpha beta gamma';\n");
@@ -645,7 +643,7 @@ describe("agent search", () => {
   });
 
   it("indexes symbol neighbors once per search instead of scanning edges per match", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-neighbors-"));
+    const root = await mkTmpDir("cg-agent-search-neighbors-");
     const firstFile = path.join(root, "first.ts");
     const secondFile = path.join(root, "second.ts");
     const first = symbolDef(firstFile, "fooFirst", 0);
@@ -712,7 +710,7 @@ describe("agent search", () => {
   });
 
   it("does not return symbol handles for graph-only import alias nodes", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-import-node-"));
+    const root = await mkTmpDir("cg-agent-search-import-node-");
     const sourceFile = path.join(root, "source.ts");
     const consumerFile = path.join(root, "consumer.ts");
     const sourceDef = symbolDef(sourceFile, "sharedValue", 0);
@@ -770,7 +768,7 @@ describe("agent search", () => {
   });
 
   it("indexes file neighbors once per graph search instead of scanning edges per match", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-file-neighbors-"));
+    const root = await mkTmpDir("cg-agent-search-file-neighbors-");
     const firstFile = path.join(root, "foo-a.ts");
     const secondFile = path.join(root, "foo-b.ts");
     const thirdFile = path.join(root, "foo-c.ts");
@@ -853,7 +851,7 @@ describe("agent search", () => {
 
   it("does not discover files that escape the root through a directory link", async () => {
     const root = await mkRepo();
-    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-outside-"));
+    const outside = await mkTmpDir("cg-agent-search-outside-");
     await fs.writeFile(path.join(outside, "secret.ts"), "export const outsideSecretNeedle = true;\n");
     try {
       await fs.symlink(outside, path.join(root, "linked"), "junction");

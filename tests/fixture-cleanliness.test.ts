@@ -144,6 +144,11 @@ describe("fixture cleanliness gate", () => {
       await writeFixtureFile(cacheRoot, path.join("index-v1", "manifest.json"), "{}\n");
       await writeFixtureFile(repoRoot, path.join("tests", "samples", "writer", ".codegraph", "state.json"), "{}\n");
       await writeFixtureFile(
+        path.join(repoRoot, "tests", "fixtures", "refactor-plan-performance", ".codegraph-cache"),
+        path.join("index-v1", "manifest.json"),
+        "{}\n",
+      );
+      await writeFixtureFile(
         repoRoot,
         path.join("tests", "languages", "samples", ".codegraph-cache", "index-v1", "manifest.json"),
         "{}\n",
@@ -154,6 +159,9 @@ describe("fixture cleanliness gate", () => {
       expect(cacheResult.stderr.replaceAll("\\", "/")).toContain("tests/samples/writer/.codegraph-cache");
       expect(cacheResult.stderr.replaceAll("\\", "/")).toMatch(/tests\/samples\/writer\/\.codegraph(?!-cache)/);
       expect(cacheResult.stderr.replaceAll("\\", "/")).toContain("tests/languages/samples/.codegraph-cache");
+      expect(cacheResult.stderr.replaceAll("\\", "/")).toContain(
+        "tests/fixtures/refactor-plan-performance/.codegraph-cache",
+      );
       const cacheJsonResult = runCleanlinessScript(repoRoot, ["--json"]);
       expect(cacheJsonResult.status, cacheJsonResult.stderr).toBe(1);
       const cacheReport = JSON.parse(cacheJsonResult.stdout) as {
@@ -161,9 +169,13 @@ describe("fixture cleanliness gate", () => {
         violations: Array<{ code: string }>;
       };
       expect(cacheReport.status).toBe("fail");
-      expect(cacheReport.violations.filter((violation) => violation.code === "cache-artifact")).toHaveLength(3);
+      expect(cacheReport.violations.filter((violation) => violation.code === "cache-artifact")).toHaveLength(4);
       await fsp.rm(path.join(repoRoot, "tests", "samples", "writer"), { recursive: true, force: true });
       await fsp.rm(path.join(repoRoot, "tests", "languages", "samples", ".codegraph-cache"), {
+        recursive: true,
+        force: true,
+      });
+      await fsp.rm(path.join(repoRoot, "tests", "fixtures", "refactor-plan-performance"), {
         recursive: true,
         force: true,
       });
