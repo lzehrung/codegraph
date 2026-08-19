@@ -313,6 +313,29 @@ describe("rename preview", () => {
     expect(result.conflicts).toContainEqual(expect.objectContaining({ reason: "name_collision" }));
   });
 
+  it("rejects a barrel re-export rename that duplicates another exported name", async () => {
+    const root = await mkTmpDir("cg-rename-barrel-collision-");
+    await fsp.writeFile(path.join(root, "service.ts"), "export function service(): void {}\n");
+    await fsp.writeFile(path.join(root, "other.ts"), "export function other(): void {}\n");
+    await fsp.writeFile(
+      path.join(root, "index.ts"),
+      ['export { service } from "./service.js";', 'export { other as execute } from "./other.js";', ""].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const symbols = await workspaceSymbolsWithSession(session, { root, query: "service" });
+    const target = symbols.symbols.find((symbol) => symbol.name === "service");
+    expect(target).toBeDefined();
+
+    const result = await previewRenameWithSession(session, {
+      root,
+      handle: target!.handle,
+      newName: "execute",
+    });
+
+    expect(result.safe).toBe(false);
+    expect(result.conflicts).toContainEqual(expect.objectContaining({ file: "index.ts", reason: "duplicate_export" }));
+  });
+
   it("rejects invalid identifiers before claiming safety", async () => {
     const { root, session, target } = await renameFixture();
     const result = await previewRenameWithSession(session, {
