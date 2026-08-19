@@ -13,7 +13,7 @@ import {
   listProjectFiles,
   type ProjectFileDiscoveryOptions,
 } from "../../util/projectFiles.js";
-import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot } from "../../util/paths.js";
+import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot, normalizePath } from "../../util/paths.js";
 import { assertRealPathCandidateWithinRoot } from "../../util/confinedFile.js";
 import { getGitBlobHashes } from "../../util/git.js";
 import { stringifyUnknown } from "../../util/ast.js";
@@ -178,7 +178,7 @@ export async function normalizeIndexedFileInputsWithinRoot(
   const realRoot = await fsp.realpath(projectRoot);
   const normalized = normalizeIndexedFileInputs(projectRoot, files, label);
   const confined = await Promise.all(
-    normalized.map((file) => assertRealPathCandidateWithinRoot(realRoot, file, label)),
+    normalized.map(async (file) => normalizePath(await assertRealPathCandidateWithinRoot(realRoot, file, label))),
   );
   return [...new Set(confined)];
 }

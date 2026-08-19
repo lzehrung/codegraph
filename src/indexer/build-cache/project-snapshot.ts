@@ -438,7 +438,7 @@ function transformCachedProjectSnapshot(
   const cached = transformedSnapshotCache.get(snapshotPath);
   if (cached && cached.root === projectRoot && sameSnapshotFileIdentity(cached.identity, identity)) {
     setBoundedSnapshotCache(transformedSnapshotCache, snapshotPath, cached);
-    return cached.payload;
+    return structuredClone(cached.payload);
   }
   const migratedPayload = migrateProjectSnapshotPayload(rawPayload, projectRoot);
   const payload =
@@ -446,7 +446,7 @@ function transformCachedProjectSnapshot(
       ? transformSnapshotPaths(migratedPayload as ProjectIndexSnapshotPayload, projectRoot, false)
       : migratedPayload;
   setBoundedSnapshotCache(transformedSnapshotCache, snapshotPath, { identity, root: projectRoot, payload });
-  return payload;
+  return structuredClone(payload);
 }
 
 function projectIndexManifestEntries(

@@ -944,6 +944,16 @@ async function buildIndexFromFileListShared(
     }
     expandStarImports(modules, opts);
     if (manifestEntries) {
+      for (const [file, signature] of fileSignatures) {
+        if (manifestEntries.has(file)) continue;
+        manifestEntries.set(file, {
+          sig: signature.sig,
+          ...(signature.gitSig ? { gitSig: signature.gitSig } : {}),
+          edges: [],
+        });
+      }
+    }
+    if (manifestEntries) {
       await writeIndexManifestSnapshot({
         projectRoot,
         opts,
@@ -956,6 +966,14 @@ async function buildIndexFromFileListShared(
         ...(helperOpts?.symlinkDirectories !== undefined ? { symlinkDirectories: helperOpts.symlinkDirectories } : {}),
       });
     }
+    const indexManifestEntries = manifestEntries
+      ? projectIndexManifestEntries(
+          Array.from(manifestEntries, ([file, entry]) => {
+            const cacheSig = fileSignatures.get(file)?.cacheSig;
+            return [file, { ...entry, ...(cacheSig ? { cacheSig } : {}) }] as const;
+          }),
+        )
+      : manifestEntriesForIndex;
     const index = await finalizeProjectIndex({
       projectRoot,
       normalizedProjectRoot,
@@ -968,18 +986,8 @@ async function buildIndexFromFileListShared(
       bloomFilterCache,
       ...(projectFiles !== undefined ? { projectFiles } : {}),
       buildReport: report,
-      manifestEntries: manifestEntries ? projectIndexManifestEntries(manifestEntries) : manifestEntriesForIndex,
+      manifestEntries: indexManifestEntries,
     });
-    if (manifestEntries) {
-      for (const [file, signature] of fileSignatures) {
-        if (manifestEntries.has(file)) continue;
-        manifestEntries.set(file, {
-          sig: signature.sig,
-          ...(signature.gitSig ? { gitSig: signature.gitSig } : {}),
-          edges: [],
-        });
-      }
-    }
     if (manifestEntries) {
       await writeProjectIndexSnapshot(
         projectRoot,

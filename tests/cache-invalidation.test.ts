@@ -51,6 +51,39 @@ import { createTempProjectRoot, mkTmpDir } from "./helpers/filesystem.js";
 function normalize(p: string): string {
   return p.replace(/\\/g, "/");
 }
+async function renameProjectTree(sourceRoot: string, movedRoot: string): Promise<void> {
+  if (process.platform !== "win32") {
+    await fsp.rename(sourceRoot, movedRoot);
+    return;
+  }
+  try {
+    await fsp.rename(sourceRoot, movedRoot);
+    return;
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "EPERM") throw error;
+  }
+  const cachePath = path.join(sourceRoot, ".codegraph-cache", "index-v1");
+  const detachedCachePath = `${sourceRoot}-index-v1-detached`;
+  await fsp.rename(cachePath, detachedCachePath);
+  try {
+    await fsp.rename(sourceRoot, movedRoot);
+    await fsp.mkdir(path.join(movedRoot, ".codegraph-cache"), { recursive: true });
+    await fsp.rename(detachedCachePath, path.join(movedRoot, ".codegraph-cache", "index-v1"));
+  } catch (error) {
+    let detachedCacheExists = true;
+    try {
+      await fsp.access(detachedCachePath);
+    } catch {
+      detachedCacheExists = false;
+    }
+    if (detachedCacheExists) {
+      await fsp.mkdir(path.dirname(cachePath), { recursive: true });
+      await fsp.rename(detachedCachePath, cachePath);
+    }
+    throw error;
+  }
+}
+
 
 function diskCacheDbPathFor(root: string): string {
   return path.join(root, ".codegraph-cache", "index-v1", "index-cache.sqlite");
@@ -2671,6 +2704,7 @@ describe("Cache invalidation and strict hashing", () => {
     expect(backfilledManifest.symlinkDirectories).toEqual([]);
     expect(backfilledManifest.transientFiles).toEqual([]);
   });
+
   it("reuses relative caches after moving a project tree", async () => {
     const sourceRoot = await mkTmpDir("dg-cache-move-source-");
     const movedRoot = `${sourceRoot}-moved`;
@@ -2687,7 +2721,7 @@ describe("Cache invalidation and strict hashing", () => {
     snapshot.version = 5;
     reexport.fromModule = normalize(path.join(sourceRoot, "dependency.ts"));
     await writeProjectSnapshot(projectSnapshotPathFor(sourceRoot), snapshot);
-    await fsp.rename(sourceRoot, movedRoot);
+    await renameProjectTree(sourceRoot, movedRoot);
 
     const report: BuildReport = { timings: {} };
     const moved = await buildProjectIndexIncremental(movedRoot, { cache: "disk", threads: 1, report });
@@ -2707,7 +2741,7 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.writeFile(path.join(sourceRoot, "dependency.ts"), "export const dependency = 1;\n", "utf8");
     await fsp.writeFile(path.join(sourceRoot, "entry.ts"), "export { dependency } from './dependency';\n", "utf8");
     await buildProjectIndex(sourceRoot, { cache: "disk", threads: 1 });
-    await fsp.rename(sourceRoot, movedRoot);
+    await renameProjectTree(sourceRoot, movedRoot);
 
     // A stale `manifest.projectRoot` (left pointing at the pre-move root after rebasing entries)
     // makes `collectEdgesForFile`'s `cachedFileEdgesProjectRoot` check reject every cached edge,
@@ -2741,7 +2775,7 @@ describe("Cache invalidation and strict hashing", () => {
     const persisted = await readManifest(sourceRoot);
     expect(persisted.symlinkDirectories).toEqual(["linked-core"]);
 
-    await fsp.rename(sourceRoot, movedRoot);
+    await renameProjectTree(sourceRoot, movedRoot);
     const movedPackage = path.join(movedRoot, "packages", "core");
     const movedLink = path.join(movedRoot, "linked-core");
     await fsp.rm(movedLink, { recursive: true, force: true });
@@ -2857,7 +2891,7 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.writeFile(path.join(sourceRoot, "unchanged.ts"), "export const unchanged = 1;\n", "utf8");
     await fsp.writeFile(path.join(sourceRoot, "entry.ts"), "export const entry = 1;\n", "utf8");
     await buildProjectIndex(sourceRoot, { cache: "disk", threads: 1 });
-    await fsp.rename(sourceRoot, movedRoot);
+    await renameProjectTree(sourceRoot, movedRoot);
 
     const bloomFilters = await buildCache.tryLoadPersistedBloomFilters(movedRoot, { cache: "disk" });
     expect(bloomFilters).not.toBeNull();
@@ -2902,7 +2936,7 @@ describe("Cache invalidation and strict hashing", () => {
     manifest.transientFiles = [normalize(outsideFile)];
     await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
 
-    await fsp.rename(sourceRoot, movedRoot);
+    await renameProjectTree(sourceRoot, movedRoot);
     const movedOutsideFile = path.join(movedRoot, "outside", "extra.ts");
     // Force a genuine content change so the incremental diff/manifest-rewrite path runs
     // instead of the whole-snapshot fast path (which leaves manifest.json untouched when
