@@ -197,6 +197,8 @@ describe("native build worker batches", () => {
       await fs.rm(lexicalRoot, { recursive: true, force: true });
       await fs.rm(realRoot, { recursive: true, force: true });
     }
+  });
+
   it("uses the same capped-source diagnostic in main and worker extraction paths", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-worker-source-cap-"));
     tempDirs.push(root);
