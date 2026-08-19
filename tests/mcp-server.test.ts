@@ -54,12 +54,12 @@ function readToolJsonResult(payload: JsonRpcObject): Record<string, unknown> {
   if (typeof text !== "string") throw new Error("MCP tool result content was not text.");
   return readObject(JSON.parse(text));
 }
-function readToolError(payload: JsonRpcObject): string {
-  if (payload.error !== undefined) {
-    const message = readObject(payload.error).message;
-    if (typeof message !== "string") throw new Error("MCP protocol error did not contain a message.");
-    return message;
-  }
+function readProtocolError(payload: JsonRpcObject): Record<string, unknown> {
+  return readObject(payload.error);
+}
+
+function readToolExecutionError(payload: JsonRpcObject): string {
+  expect(payload.error).toBeUndefined();
   const result = readObject(payload.result);
   expect(result.isError).toBe(true);
   if (!Array.isArray(result.content) || !result.content.length) {
@@ -291,7 +291,7 @@ describe("codegraph MCP handlers", () => {
         },
         sessionId ?? undefined,
       );
-      expect(readToolError(missingCall.payload)).toContain('Symbol path "auth.ts::missing" was not found');
+      expect(readToolExecutionError(missingCall.payload)).toContain('Symbol path "auth.ts::missing" was not found');
 
       const ambiguousCall = await postMcpJson(
         httpServer.url,
@@ -303,7 +303,32 @@ describe("codegraph MCP handlers", () => {
         },
         sessionId ?? undefined,
       );
-      expect(readToolError(ambiguousCall.payload)).toContain('Ambiguous symbol target "duplicates.ts::duplicate"');
+      expect(readToolExecutionError(ambiguousCall.payload)).toContain(
+        'Ambiguous symbol target "duplicates.ts::duplicate"',
+      );
+      const invalidParams = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 9,
+          method: "tools/call",
+          params: { name: "search", arguments: { query: 42 } },
+        },
+        sessionId ?? undefined,
+      );
+      expect(readProtocolError(invalidParams.payload).code).toBe(-32602);
+
+      const unknownTool = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 10,
+          method: "tools/call",
+          params: { name: "no_such_tool", arguments: {} },
+        },
+        sessionId ?? undefined,
+      );
+      expect(readProtocolError(unknownTool.payload).code).toBe(-32601);
     } finally {
       await httpServer.close();
     }

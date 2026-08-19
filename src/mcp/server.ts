@@ -7,6 +7,8 @@ import {
   createMcpHandler,
   isInitializeRequest,
   isLegacyRequest,
+  ProtocolError,
+  ProtocolErrorCode,
   Server,
   type CallToolResult,
 } from "@modelcontextprotocol/server";
@@ -33,7 +35,7 @@ import {
 import { exploreCodegraphWithSession, type AgentExploreResponse } from "../agent/explore.js";
 import { orientCodegraphWithSession, type AgentOrientBudget, type AgentOrientResponse } from "../agent/orient.js";
 import { getCodegraphPacketWithSession, type AgentPacketResponse } from "../agent/packet.js";
-import { searchCodegraphWithSession } from "../agent/search.js";
+import { MAX_GRAPH_DEPTH, searchCodegraphWithSession } from "../agent/search.js";
 import type { AgentSearchMode, AgentSearchResponse } from "../agent/search.js";
 import { workspaceSymbolsWithSession, type WorkspaceSymbolsResponse } from "../agent/workspaceSymbols.js";
 import {
@@ -385,7 +387,9 @@ type WithAbortSignal<T extends { query_sqlite: unknown }> = {
     : never;
 } & Pick<T, "query_sqlite">;
 
-export type CodegraphMcpHandlers = WithAbortSignal<CodegraphMcpHandlerDefinitions>;
+export type CodegraphMcpHandlers = WithAbortSignal<CodegraphMcpHandlerDefinitions> & {
+  formatToolError?: (error: unknown) => CallToolResult;
+};
 
 type McpDependencyRequest = {
   file: string;
@@ -490,6 +494,19 @@ function createCodegraphMcpHandlersForSession(
   let refreshPromise: Promise<void> | undefined;
   let refreshEpoch = 0;
 
+  let artifactWritePromise: Promise<void> | undefined;
+  const withArtifactWriteLock = async <T>(operation: () => Promise<T>): Promise<T> => {
+    const previous = artifactWritePromise;
+    const complete = Promise.withResolvers<void>();
+    artifactWritePromise = complete.promise;
+    try {
+      if (previous) await previous.catch(() => undefined);
+      return await operation();
+    } finally {
+      complete.resolve();
+      if (artifactWritePromise === complete.promise) artifactWritePromise = undefined;
+    }
+  };
   const relative = (file: string): string => toProjectDisplayPath(root, file);
   const boundedLimit = (limit: number | undefined, fallback: number, max: number): number => {
     if (typeof limit !== "number" || !Number.isFinite(limit)) return fallback;
@@ -543,26 +560,27 @@ function createCodegraphMcpHandlersForSession(
     if (!sqlitePath || !sqliteOutDir || readOnly || !sqliteCanRefresh) return false;
     return path.basename(sqlitePath) === "codegraph.sqlite";
   };
-  const rebuildSqliteArtifactForQuery = async (): Promise<void> => {
-    if (!sqliteOutDir) throw new Error("SQLite artifact output directory is unavailable.");
-    const outDir = await assertWritableDirectoryRealPathWithinRoot(
-      await realRoot,
-      root,
-      sqliteOutDir,
-      "Artifact output directory",
-    );
-    const result = await buildCodegraphArtifactWithSession(session, {
-      root,
-      outDir,
-      filterOutDir: outDir,
-      sqlite: true,
-      force: true,
+  const rebuildSqliteArtifactForQuery = async (): Promise<void> =>
+    await withArtifactWriteLock(async () => {
+      if (!sqliteOutDir) throw new Error("SQLite artifact output directory is unavailable.");
+      const outDir = await assertWritableDirectoryRealPathWithinRoot(
+        await realRoot,
+        root,
+        sqliteOutDir,
+        "Artifact output directory",
+      );
+      const result = await buildCodegraphArtifactWithSession(session, {
+        root,
+        outDir,
+        filterOutDir: outDir,
+        sqlite: true,
+        force: true,
+      });
+      const sqliteArtifact = result.artifacts.sqlite;
+      if (!sqliteArtifact) throw new Error("SQLite artifact refresh did not produce a SQLite file.");
+      sqlitePath = path.join(result.outDir, sqliteArtifact);
+      sqliteOutDir = result.outDir;
     });
-    const sqliteArtifact = result.artifacts.sqlite;
-    if (!sqliteArtifact) throw new Error("SQLite artifact refresh did not produce a SQLite file.");
-    sqlitePath = path.join(result.outDir, sqliteArtifact);
-    sqliteOutDir = result.outDir;
-  };
   const refreshSqliteArtifactForQuery = async (
     freshness: AgentFreshnessResult,
     refreshOptions?: { allowStaleRebuild?: boolean },
@@ -1051,68 +1069,70 @@ function createCodegraphMcpHandlersForSession(
       return { ...result, truncated: Boolean(result.truncated), freshness: artifactFreshness };
     },
 
-    refresh_index: async (request) => {
-      const warmup = request.warmup ?? "off";
-      const previousRefresh = refreshPromise;
-      const refresh = (async () => {
-        if (previousRefresh) await previousRefresh.catch(() => undefined);
-        ++refreshEpoch;
-        session.invalidate();
-        sqlitePath = configuredSqlitePath;
-        sqliteOutDir = configuredSqliteOutDir;
-        sqliteCanRefresh = configuredSqliteCanRefresh;
-        await startCodegraphMcpWarmup(session, warmup);
-      })();
-      refreshPromise = refresh;
-      try {
-        await refresh;
-      } finally {
-        if (refreshPromise === refresh) refreshPromise = undefined;
-      }
-      return { refreshed: true, warmup };
-    },
+    refresh_index: async (request) =>
+      await withArtifactWriteLock(async () => {
+        const warmup = request.warmup ?? "off";
+        const previousRefresh = refreshPromise;
+        const refresh = (async () => {
+          if (previousRefresh) await previousRefresh.catch(() => undefined);
+          ++refreshEpoch;
+          session.invalidate();
+          sqlitePath = configuredSqlitePath;
+          sqliteOutDir = configuredSqliteOutDir;
+          sqliteCanRefresh = configuredSqliteCanRefresh;
+          await startCodegraphMcpWarmup(session, warmup);
+        })();
+        refreshPromise = refresh;
+        try {
+          await refresh;
+        } finally {
+          if (refreshPromise === refresh) refreshPromise = undefined;
+        }
+        return { refreshed: true, warmup };
+      }),
 
-    artifact_build: async (request) => {
-      if (readOnly) {
-        throw new Error("artifact_build is disabled in read-only MCP mode.");
-      }
-      const freshness = await checkMcpFreshness();
-      if (freshness.state === "stale") {
-        const changed = freshness.changedFiles.length ? ` Changed files: ${freshness.changedFiles.join(", ")}.` : "";
-        const omitted = freshness.omittedChangedFileCount
-          ? ` Omitted changed files: ${freshness.omittedChangedFileCount}.`
-          : "";
-        throw new Error(
-          `Cannot build artifacts from a stale MCP index; run refresh_index first. ${freshness.reason}.${changed}${omitted}`,
-        );
-      }
-      const outDir =
-        request.outDir !== undefined
-          ? await assertWritableDirectoryRealPathWithinRoot(
-              await realRoot,
-              root,
-              request.outDir,
-              "Artifact output directory",
-            )
-          : undefined;
-      const result = await buildCodegraphArtifactWithSession(session, {
-        root,
-        ...(outDir !== undefined ? { outDir } : {}),
-        ...(request.outDir !== undefined ? { filterOutDir: request.outDir } : {}),
-        ...(request.sqlite !== undefined ? { sqlite: request.sqlite } : {}),
-        ...(request.graphJson !== undefined ? { graphJson: request.graphJson } : {}),
-        ...(request.report !== undefined ? { report: request.report } : {}),
-        ...(request.questions !== undefined ? { questions: request.questions } : {}),
-        ...(request.force !== undefined ? { force: request.force } : {}),
-      });
-      const sqliteArtifact = result.artifacts.sqlite;
-      if (sqliteArtifact) {
-        sqlitePath = path.join(result.outDir, sqliteArtifact);
-        sqliteOutDir = result.outDir;
-        sqliteCanRefresh = true;
-      }
-      return { ...result, freshness };
-    },
+    artifact_build: async (request) =>
+      await withArtifactWriteLock(async () => {
+        if (readOnly) {
+          throw new Error("artifact_build is disabled in read-only MCP mode.");
+        }
+        const freshness = await checkMcpFreshness();
+        if (freshness.state === "stale") {
+          const changed = freshness.changedFiles.length ? ` Changed files: ${freshness.changedFiles.join(", ")}.` : "";
+          const omitted = freshness.omittedChangedFileCount
+            ? ` Omitted changed files: ${freshness.omittedChangedFileCount}.`
+            : "";
+          throw new Error(
+            `Cannot build artifacts from a stale MCP index; run refresh_index first. ${freshness.reason}.${changed}${omitted}`,
+          );
+        }
+        const outDir =
+          request.outDir !== undefined
+            ? await assertWritableDirectoryRealPathWithinRoot(
+                await realRoot,
+                root,
+                request.outDir,
+                "Artifact output directory",
+              )
+            : undefined;
+        const result = await buildCodegraphArtifactWithSession(session, {
+          root,
+          ...(outDir !== undefined ? { outDir } : {}),
+          ...(request.outDir !== undefined ? { filterOutDir: request.outDir } : {}),
+          ...(request.sqlite !== undefined ? { sqlite: request.sqlite } : {}),
+          ...(request.graphJson !== undefined ? { graphJson: request.graphJson } : {}),
+          ...(request.report !== undefined ? { report: request.report } : {}),
+          ...(request.questions !== undefined ? { questions: request.questions } : {}),
+          ...(request.force !== undefined ? { force: request.force } : {}),
+        });
+        const sqliteArtifact = result.artifacts.sqlite;
+        if (sqliteArtifact) {
+          sqlitePath = path.join(result.outDir, sqliteArtifact);
+          sqliteOutDir = result.outDir;
+          sqliteCanRefresh = true;
+        }
+        return { ...result, freshness };
+      }),
   };
 }
 
@@ -1148,6 +1168,15 @@ function createMcpToolOperationTracker(): McpToolOperationTracker {
   };
 }
 
+type McpToolConcurrencyTracker = {
+  inFlight: number;
+  maximum: number;
+};
+
+function createMcpToolConcurrencyTracker(maximum: number): McpToolConcurrencyTracker {
+  return { inFlight: 0, maximum: normalizeMcpToolConcurrency(maximum) };
+}
+
 export function createCodegraphMcpProtocolServer(
   handlers: CodegraphMcpHandlers,
   runtimeIdentity: CodegraphRuntimeIdentity = captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin()),
@@ -1161,9 +1190,9 @@ export function createCodegraphMcpProtocolServer(
     runtimeIdentity,
     installedVersion,
     toolCallState,
-    maxConcurrentToolCalls,
     assertMcpToolTimeout(mcpToolTimeoutMs),
     createMcpToolOperationTracker(),
+    createMcpToolConcurrencyTracker(maxConcurrentToolCalls),
   );
 }
 
@@ -1172,9 +1201,9 @@ function createCodegraphMcpProtocolServerWithTracker(
   runtimeIdentity: CodegraphRuntimeIdentity,
   installedVersion: InstalledVersionChecker,
   toolCallState: { firstToolCallPending: boolean },
-  maxConcurrentToolCalls: number,
   mcpToolTimeoutMs: number,
   toolOperations: McpToolOperationTracker,
+  toolConcurrency: McpToolConcurrencyTracker,
 ): Server {
   const server = new Server(
     {
@@ -1185,17 +1214,16 @@ function createCodegraphMcpProtocolServerWithTracker(
       capabilities: { tools: {}, logging: {} },
     },
   );
-  let inFlightToolCalls = 0;
-  const toolConcurrency = normalizeMcpToolConcurrency(maxConcurrentToolCalls);
+
   server.setRequestHandler("tools/list", () => ({ tools: listCodegraphMcpTools() }));
   server.setRequestHandler("tools/call", async (request, ctx): Promise<CallToolResult> => {
     if (!toolOperations.isAccepting()) {
       throw new Error("MCP server is shutting down.");
     }
-    if (inFlightToolCalls >= toolConcurrency) {
+    if (toolConcurrency.inFlight >= toolConcurrency.maximum) {
       throw new Error("MCP tool execution is busy; retry shortly.");
     }
-    inFlightToolCalls += 1;
+    toolConcurrency.inFlight += 1;
     const isFirstToolCall = toolCallState.firstToolCallPending;
     toolCallState.firstToolCallPending = false;
     const progressToken = isFirstToolCall ? getToolCallProgressToken(request.params) : undefined;
@@ -1237,12 +1265,12 @@ function createCodegraphMcpProtocolServerWithTracker(
         callMcpTool(handlers, request.params.name, request.params.arguments ?? {}, toolCallAbort.signal),
       );
       if (operation === undefined) {
-        inFlightToolCalls -= 1;
+        toolConcurrency.inFlight -= 1;
         toolCallAbort.dispose();
         throw new Error("MCP server is shutting down.");
       }
       const releaseToolCall = (): void => {
-        inFlightToolCalls -= 1;
+        toolConcurrency.inFlight -= 1;
       };
       try {
         const result = await awaitMcpToolOperation(toolCallAbort.signal, operation, releaseToolCall);
@@ -1252,8 +1280,9 @@ function createCodegraphMcpProtocolServerWithTracker(
           `Codegraph finished warming the first tool call for '${request.params.name}'.`,
         );
         return toToolResult(result);
-      } finally {
-        toolCallAbort.dispose();
+      } catch (error) {
+        if (error instanceof ProtocolError || toolCallAbort.signal.aborted) throw error;
+        return toToolErrorResult(error);
       }
     } catch (error) {
       await emitFirstToolCallVisibility(
@@ -1280,6 +1309,7 @@ function createCodegraphMcpProtocolFactory(
   maxConcurrentToolCalls = DEFAULT_MCP_TOOL_CONCURRENCY,
   mcpToolTimeoutMs = DEFAULT_MCP_TOOL_TIMEOUT_MS,
 ): McpProtocolFactory {
+  const toolConcurrency = createMcpToolConcurrencyTracker(maxConcurrentToolCalls);
   const installedVersion = createInstalledVersionChecker(runtimeIdentity);
   const toolCallState = { firstToolCallPending: true };
   const toolOperations = createMcpToolOperationTracker();
@@ -1291,9 +1321,9 @@ function createCodegraphMcpProtocolFactory(
         runtimeIdentity,
         installedVersion,
         toolCallState,
-        maxConcurrentToolCalls,
         timeout,
         toolOperations,
+        toolConcurrency,
       ),
     stop: () => toolOperations.stop(),
     drain: () => toolOperations.drain(),
@@ -1683,6 +1713,7 @@ async function handleLegacyMcpSessionRequest(
   } finally {
     session.inFlightRequests -= 1;
     if (tracksSseStream) session.openSseStreams -= 1;
+    session.lastActivityAt = Date.now();
   }
 }
 
@@ -1875,7 +1906,7 @@ export async function callMcpTool(
   signal?: AbortSignal,
 ): Promise<unknown> {
   const tool = MCP_TOOL_REGISTRY.find((entry) => entry.name === name);
-  if (!tool) throw new Error(`Unknown MCP tool: ${name}`);
+  if (!tool) throw new ProtocolError(ProtocolErrorCode.MethodNotFound, `Unknown MCP tool: ${name}`);
 
   switch (tool.dispatch.handler) {
     case "search":
@@ -1947,7 +1978,7 @@ async function callGotoTool(handlers: CodegraphMcpHandlers, input: unknown, sign
   const request = parseMcpToolInput(navigationSchema, input, "goto");
   if (request.handle !== undefined) return await handlers.goto({ handle: request.handle }, signal);
   if (request.file === undefined || request.line === undefined || request.column === undefined) {
-    throw new Error("goto requires either handle or file, line, and column.");
+    throw new ProtocolError(ProtocolErrorCode.InvalidParams, "goto requires either handle or file, line, and column.");
   }
   return await handlers.goto({ file: request.file, line: request.line, column: request.column }, signal);
 }
@@ -1965,7 +1996,7 @@ async function callRefsTool(
     );
   }
   if (request.file === undefined || request.line === undefined || request.column === undefined) {
-    throw new Error("refs requires either handle or file, line, and column.");
+    throw new ProtocolError(ProtocolErrorCode.InvalidParams, "refs requires either handle or file, line, and column.");
   }
   return await handlers.refs(
     {
@@ -1987,6 +2018,11 @@ function toToolResult(value: unknown): CallToolResult {
       },
     ],
   };
+}
+
+function toToolErrorResult(error: unknown): CallToolResult {
+  const message = errorMessage(error).replace(/(?:[A-Za-z]:)?[/\\][^'"\n]*?(?=(?:[/\\][^'"\n]*)?['"]|$)/g, "<path>");
+  return { isError: true, content: [{ type: "text", text: message }] };
 }
 const mcpProgressTokenSchema = z.union([z.string(), z.number()]);
 const toolCallMetaSchema = z
@@ -2015,7 +2051,7 @@ function formatMcpInvalidParams(toolName: string, error: z.ZodError): string {
 function parseMcpToolInput<T>(schema: z.ZodType<T>, input: unknown, toolName: string): T {
   const parsed = schema.safeParse(input);
   if (parsed.success) return parsed.data;
-  throw new Error(formatMcpInvalidParams(toolName, parsed.error));
+  throw new ProtocolError(ProtocolErrorCode.InvalidParams, formatMcpInvalidParams(toolName, parsed.error));
 }
 
 const searchSchema = z
@@ -2023,7 +2059,7 @@ const searchSchema = z
     query: z.string(),
     mode: z.enum(["hybrid", "symbol", "path", "text", "graph", "sql"]).optional(),
     from: z.string().optional(),
-    depth: z.number().int().nonnegative().optional(),
+    depth: z.number().int().nonnegative().max(MAX_GRAPH_DEPTH).optional(),
     limit: z.number().int().nonnegative().optional(),
   })
   .strict();
