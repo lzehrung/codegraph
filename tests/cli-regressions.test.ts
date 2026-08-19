@@ -798,7 +798,7 @@ describe("CLI regressions", () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-sql-"));
     await fsp.writeFile(path.join(tmpDir, "main.ts"), "export function helper() { return 1; }\n", "utf8");
     const dbPath = path.join(tmpDir, "graph.sqlite");
-    await runCliCommand(["graph", "--json", "--root", tmpDir, "--sqlite", dbPath]);
+    await runCliCommand(["graph", "--root", tmpDir, "--sqlite", dbPath]);
     const pretty = await runCliCommand([
       "sql",
       "--db",
@@ -830,7 +830,7 @@ describe("CLI regressions", () => {
     await fsp.writeFile(path.join(projectDir, "main.ts"), "export function helper() { return 1; }\n", "utf8");
     await fsp.writeFile(path.join(cwdDir, "codegraph.config.json"), "{ not valid json", "utf8");
     const dbPath = path.join(projectDir, "graph.sqlite");
-    await runCliCommand(["graph", "--json", "--root", projectDir, "--sqlite", dbPath]);
+    await runCliCommand(["graph", "--root", projectDir, "--sqlite", dbPath]);
 
     const stdout = await runCliCommandDetailed(
       ["sql", "--json", "--db", dbPath, "--query", "SELECT COUNT(*) AS count FROM symbols;"],
@@ -850,7 +850,7 @@ describe("CLI regressions", () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-sql-readonly-"));
     await fsp.writeFile(path.join(tmpDir, "main.ts"), "export function helper() { return 1; }\n", "utf8");
     const dbPath = path.join(tmpDir, "graph.sqlite");
-    await runCliCommand(["graph", "--json", "--root", tmpDir, "--sqlite", dbPath]);
+    await runCliCommand(["graph", "--root", tmpDir, "--sqlite", dbPath]);
 
     await expect(
       runCliCommandDetailed(["sql", "--json", "--db", dbPath, "--query", "DELETE FROM symbols RETURNING name;"]),
@@ -874,7 +874,7 @@ describe("CLI regressions", () => {
 
   it("skill print-path returns the bundled raw skill directory", async () => {
     const stdout = await runCliCommand(["skill", "--json", "print-path"]);
-    const skillPath = stdout.trim();
+    const skillPath = JSON.parse(stdout) as string;
     expect(normalize(skillPath)).toMatch(/codegraph-skill\/codegraph$/);
   });
 

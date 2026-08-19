@@ -132,7 +132,7 @@ describe("symbols CLI", () => {
     expect(result).toEqual({
       stdout: "",
       stderr: 'Invalid --limit value "501". Expected an integer from 0 to 500.\n',
-      exitCode: 1,
+      exitCode: 2,
     });
   });
 });

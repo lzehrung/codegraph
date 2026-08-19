@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
-import { resolveFilePathFromRoot } from "../util/paths.js";
+import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 
 export function looksLikeGlobPattern(baseRoot: string, value: string): boolean {
   const hasGlobSyntax =
@@ -93,7 +93,7 @@ export function resolveCliRootPolicy(input: {
   cwd: () => string;
 }): CliRootPolicyResult {
   const { command, positionals, rootOpt, cwd } = input;
-  const resolveAbs = (p: string) => resolveFilePathFromRoot(cwd(), p);
+  const resolveAbs = (p: string) => normalizePath(resolveFilePathFromRoot(cwd(), normalizePath(p)));
 
   if (command === "impact" && positionals.length) {
     const impactRootArg = positionals[0]!;
@@ -142,6 +142,19 @@ export function resolveCliRootPolicy(input: {
     return {
       status: "error",
       messages: [`Invalid ${command} project root "${positionals[0]!}". Expected an existing directory.`],
+    };
+  }
+  if (
+    usesLegacyRootPositional(command) &&
+    !isLifecycleCommand(command) &&
+    !acceptsOptionalProjectRoot(command) &&
+    !rootOpt &&
+    firstPositionalRoot !== undefined &&
+    !isExistingDirectory(firstPositionalRoot)
+  ) {
+    return {
+      status: "error",
+      messages: [`Invalid ${command} path "${positionals[0]!}". Expected an existing directory or use --root <path>.`],
     };
   }
 

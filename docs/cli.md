@@ -254,6 +254,8 @@ codegraph search --help
 
 Use `--kind <kind,...>`, `--exported`, `--include-imports`, `--file-glob <project-relative-glob>`, and `--limit <0-500>` to compose filters. Imports are excluded by default, the default limit is 50, and an empty query requires `--kind` or `--file-glob`; concise pretty output is the default and `--json` returns the structured envelope.
 
+`search --no-snippets` keeps ranked matches and metadata while omitting source snippets from each result. This is useful when a caller needs handles and paths but will fetch bounded live source separately with `file`.
+
 Structured results include `schemaVersion`, root and analysis metadata, freshness, effective limits, omission counts, the normalized query, total candidates, and deterministic project-relative symbols. Resolvable named/default import aliases keep their binding location but carry a handle for the declaration; namespace/star aliases, unresolved aliases, and failed import scans are reported under `omittedCounts`.
 
 Line-and-column navigation remains primary: use `<file>:<line>:<column>` with `goto` or `refs` when the source location is known. An exact qualified path, `<project-relative-file>::<local-symbol>`, is the coordinate-free alternative for one declaration. `deps` and `rdeps` accept either file form, then traverse the defining file's dependency edges; use `callers` or `callees` for symbol-level call relationships. If one file defines multiple declarations with the same local name, codegraph returns candidates and requires the portable handle from `symbols` to avoid guessing.
@@ -281,20 +283,22 @@ codegraph explain public.users --json
 codegraph explain src/large-file.ts --max-symbols 25 --json
 codegraph explain --help
 
+Use `explain --changed-context` when the target comes from a changed-file or review workflow and you need bounded source context around changed ranges in the structured response.
+
 # Build an agent-ready artifact bundle
 codegraph artifact --root . --out codegraph-out --json
+codegraph artifact --sqlite --root . --out codegraph-out --json
 codegraph artifact --root . --out codegraph-out --sqlite --graph-json --report --questions --force --json
-codegraph artifact --help
 
 
 # Serve MCP tools over the same search, navigation, artifact, and review layer
 codegraph mcp --root . --stdio
 codegraph mcp --root . --artifact codegraph-out --stdio
 codegraph mcp --root . --stdio --allow-build
+codegraph mcp --root . --stdio --idle-timeout-ms 1800000
 codegraph mcp --root . --port 7331
 codegraph mcp --root . --stdio --warmup
 codegraph mcp --root . --port 7331 --warmup-symbols
-codegraph mcp --help
 
 # Install or preview agent client integration
 codegraph install --target codex,claude --dry-run

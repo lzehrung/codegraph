@@ -92,6 +92,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--host",
   "--graph",
   "--port",
+  "--idle-timeout-ms",
   "--offset",
   "--max-bytes",
   "--max-edits",
@@ -160,7 +161,6 @@ function graphCommandSchema(positionals: CliPositionalPolicy): CliCommandSchema 
       ...JSON_OUTPUT_FLAGS,
       ...REPORT_FLAGS,
       "--dot",
-      "--full",
       "--mermaid",
       "--sql-artifacts",
       "--stable",
@@ -169,7 +169,6 @@ function graphCommandSchema(positionals: CliPositionalPolicy): CliCommandSchema 
       "--symbols-detailed",
       "--symbols-detailed-members-only",
       "--symbols-only",
-      "--verbose",
     ],
     [
       ...SHARED_BUILD_OPTIONS,
@@ -349,6 +348,14 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     }),
   ],
   ["graph", graphCommandSchema({ kind: "any" })],
+  [
+    "index",
+    commandSchema(
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, ...REPORT_FLAGS, "--full", "--verbose"],
+      [...SHARED_BUILD_OPTIONS, ...REPORT_OPTIONS],
+      { kind: "any" },
+    ),
+  ],
   [
     "graph-delta",
     commandSchema(
@@ -756,6 +763,19 @@ export function validateCliArgs(command: string, parsed: ParsedCliArgs): void {
     throw new Error("--progress and --no-progress cannot be used together.");
   }
 
+  if (command === "graph") {
+    const outputSelectors = [
+      parsed.flags.has("--json"),
+      parsed.flags.has("--pretty"),
+      parsed.flags.has("--dot"),
+      parsed.flags.has("--mermaid"),
+      parsed.options.has("--sqlite") || parsed.options.has("--db"),
+    ].filter(Boolean).length;
+    if (outputSelectors > 1) {
+      throw new Error("graph output selectors are mutually exclusive: choose one of --json, --pretty, --dot, --mermaid, or --sqlite.");
+    }
+  }
+
   if (command === "sync" && parsed.flags.has("--no-update-gitignore") && !parsed.flags.has("--init")) {
     throw new Error("--no-update-gitignore for sync requires --init.");
   }
@@ -772,7 +792,7 @@ export function validateCliArgs(command: string, parsed: ParsedCliArgs): void {
 }
 
 export function isCliValueOption(command: string, key: string, positionals: readonly string[]): boolean {
-  if (command === "artifact" && key === "--sqlite" && positionals[0] === "build") return false;
+  if (command === "artifact" && key === "--sqlite") return false;
   if (command === "inspect" && key === "--duplicates") return false;
   return CLI_VALUE_OPTIONS.has(key);
 }

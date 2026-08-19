@@ -737,38 +737,30 @@ describe("CLI command modules", () => {
     }
   });
 
-  test("grep --json reports the 200000 max-hits clamp for a small result set", async () => {
+  test("grep rejects max-hits values above the 200000 cap", async () => {
     const root = await mkTmpDir("codegraph-grep-clamped-limit-");
     await fsp.writeFile(path.join(root, "main.ts"), "needle\n", "utf8");
-    const jsonLines: unknown[] = [];
     try {
-      await handleGrepCommand({
-        positionals: ["needle"],
-        projectRootFs: root,
-        discoveryOptions: {},
-        parsedOptions: new Map(),
-        getOpt: (name) => (name === "--max-hits" ? String(TEXT_GREP_MAX_HITS + 1) : undefined),
-        hasFlag: (name) => name === "--json",
-        writeJSONLine: (value) => jsonLines.push(value),
-        writeStdoutLine: () => {
-          throw new Error("unexpected stdout");
-        },
-        writeStderrLine: (message) => {
-          throw new Error(`unexpected stderr: ${message}`);
-        },
-        exit: (code) => {
-          throw new Error(`unexpected exit ${code}`);
-        },
-      });
-
-      expect(jsonLines).toHaveLength(1);
-      expect(readJsonRecord(jsonLines[0])).toEqual({
-        items: [{ file: "main.ts", line: 1, column: 1, match: "needle", snippet: "needle" }],
-        limit: TEXT_GREP_MAX_HITS,
-        totalSeen: 1,
-        truncated: false,
-        omitted: 0,
-      });
+      await expect(
+        handleGrepCommand({
+          positionals: ["needle"],
+          projectRootFs: root,
+          discoveryOptions: {},
+          parsedOptions: new Map(),
+          getOpt: (name) => (name === "--max-hits" ? String(TEXT_GREP_MAX_HITS + 1) : undefined),
+          hasFlag: (name) => name === "--json",
+          writeJSONLine: () => {
+            throw new Error("unexpected json output");
+          },
+          writeStdoutLine: () => {
+            throw new Error("unexpected stdout");
+          },
+          writeStderrLine: () => {},
+          exit: () => {
+            throw new Error("unexpected exit");
+          },
+        }),
+      ).rejects.toThrow('Invalid --max-hits value "200001". Expected an integer from 1 to 200000.');
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -1255,12 +1247,12 @@ describe("CLI command modules", () => {
   test("captures CLI usage exits in process", async () => {
     const result = await captureCli(["missing-command"]);
 
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain('Unknown command "missing-command".');
   });
-
   test("rejects unknown command options before execution", async () => {
+
     const cases = [
       ["graph", "--root", ".", "./src", "--json", "--nonesuch"],
       ["inspect", "--root", ".", "./src", "--json", "--nonesuch"],
@@ -1545,7 +1537,7 @@ describe("CLI command modules", () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-sql-module-"));
     const dbPath = path.join(tempDir, "graph.sqlite");
     await fsp.writeFile(path.join(tempDir, "main.ts"), "export function helper() { return 1; }\n", "utf8");
-    await captureCli(["graph", "--json", "--root", tempDir, "--sqlite", dbPath]);
+    await captureCli(["graph", "--root", tempDir, "--sqlite", dbPath]);
     const jsonLines: unknown[] = [];
 
     try {
@@ -1598,7 +1590,7 @@ describe("CLI command modules", () => {
           throw new Error(`sql exit ${code}`);
         },
       }),
-    ).rejects.toThrow("sql exit 1");
+    ).rejects.toThrow("sql exit 2");
 
     expect(stderrLines).toEqual([
       'Usage: sql <sqlite-path> "SELECT ..." OR sql --db <sqlite-path> --query "SELECT ..."',
@@ -1609,7 +1601,7 @@ describe("CLI command modules", () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-sql-relative-"));
     const dbPath = path.join(tempDir, "graph.sqlite");
     await fsp.writeFile(path.join(tempDir, "main.ts"), "export const answer = 42;\n", "utf8");
-    await captureCli(["graph", "--json", "--root", tempDir, "--sqlite", dbPath]);
+    await captureCli(["graph", "--root", tempDir, "--sqlite", dbPath]);
     const jsonLines: unknown[] = [];
 
     try {

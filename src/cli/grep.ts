@@ -3,6 +3,7 @@ import {
   streamAstGrep,
   streamTextGrep,
   textGrepBounded,
+  TEXT_GREP_MAX_HITS,
   type AstGrepHit,
   type GrepResultEnvelope,
   type TextGrepHit,
@@ -14,7 +15,7 @@ import type {
   CliStderrExitContext,
   CliStdoutWriterContext,
 } from "./context.js";
-import { parseOptionalPositiveIntegerOption } from "./options.js";
+import { parseOptionalBoundedIntegerOption } from "./options.js";
 
 export type GrepCommandContext = CliOptionContext &
   CliJsonWriterContext &
@@ -43,16 +44,26 @@ async function writeStreamedGrepHits(context: GrepCommandContext, hits: AsyncIte
     context.writeStdoutLine("No matches.");
   }
 }
-
 export async function handleGrepCommand(context: GrepCommandContext): Promise<void> {
   const querySource = context.getOpt("--query");
   const positionalPattern = context.positionals.join(" ").trim();
   const patternSource = context.getOpt("--pattern") ?? context.getOpt("--regex") ?? (positionalPattern || undefined);
   const globs = context.parsedOptions.get("--glob") ?? [];
   const patterns = globs.length ? [...globs] : undefined;
+  const maxHits = parseOptionalBoundedIntegerOption(
+    context.getOpt("--max-hits"),
+    "--max-hits",
+    1,
+    TEXT_GREP_MAX_HITS,
+  );
 
   if ((querySource ? 1 : 0) + (patternSource ? 1 : 0) !== 1) {
     context.writeStderrLine("Usage: grep <regex> [--root <dir>] OR grep --query '<tree-sitter query>' [--root <dir>]");
+    context.exit(2);
+  }
+
+  if (querySource && maxHits !== undefined) {
+    context.writeStderrLine("--max-hits applies only to text grep patterns, not --query.");
     context.exit(2);
   }
 
@@ -78,8 +89,6 @@ export async function handleGrepCommand(context: GrepCommandContext): Promise<vo
   }
 
   const ignoreCase = context.hasFlag("--ignore-case") || context.hasFlag("-i");
-  const maxHitsRaw = context.getOpt("--max-hits");
-  const maxHits = parseOptionalPositiveIntegerOption(maxHitsRaw, "--max-hits");
   const grepOptions = {
     ignoreCase,
     ...(maxHits !== undefined ? { maxHits } : {}),

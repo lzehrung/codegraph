@@ -105,9 +105,25 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 
   if (rawArgs[0] === "help") {
     const command = rawArgs[1];
-    writeStdoutLine(
-      (command ? helpTextForCommand(command, rawArgs.slice(2)) : CLI_HELP_TEXT)?.trimEnd() ?? CLI_HELP_TEXT,
-    );
+    if (!command) {
+      writeStdoutLine(CLI_HELP_TEXT.trimEnd());
+      return;
+    }
+    if (!isKnownCliCommand(command)) {
+      writeStderrLine(`Unknown command "${command}".`);
+      const suggestions = suggestCliCommands(command);
+      if (suggestions.length) writeStderrLine(`Did you mean: ${suggestions.join(", ")}?`);
+      exitCli(2);
+    }
+    let helpParsed: ParsedCliArgs;
+    try {
+      helpParsed = parseCliArgs(command, rawArgs.slice(2));
+      validateCliArgs(command, helpParsed);
+    } catch (error) {
+      writeStderrLine(errorMessage(error));
+      exitCli(2);
+    }
+    writeStdoutLine((helpTextForCommand(command, helpParsed.positionals) ?? CLI_HELP_TEXT).trimEnd());
     return;
   }
 
@@ -124,6 +140,22 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
   const { getOpt, hasFlag } = createCliOptionAccessors(parsed);
 
+  if (!isKnownCliCommand(cmd)) {
+    writeStderrLine(`Unknown command "${cmd}".`);
+    const suggestions = suggestCliCommands(cmd);
+    if (suggestions.length) writeStderrLine(`Did you mean: ${suggestions.join(", ")}?`);
+    const route = routeForCliIntent(cmd);
+    if (route) writeStderrLine(`Try: ${route}`);
+    exitCli(2);
+    return;
+  }
+  try {
+    validateCliArgs(cmd, parsed);
+  } catch (error) {
+    writeStderrLine(errorMessage(error));
+    exitCli(2);
+  }
+
   if (hasFlag("--help") || hasFlag("-h")) {
     const commandHelp = commandWasExplicit ? helpTextForCommand(cmd, parsed.positionals) : undefined;
     writeStdoutLine((commandHelp ?? CLI_HELP_TEXT).trimEnd());
@@ -137,22 +169,6 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       writeStdoutLine(getCodegraphVersion());
     }
     return;
-  }
-
-  if (!isKnownCliCommand(cmd)) {
-    writeStderrLine(`Unknown command "${cmd}".`);
-    const suggestions = suggestCliCommands(cmd);
-    if (suggestions.length) writeStderrLine(`Did you mean: ${suggestions.join(", ")}?`);
-    const route = routeForCliIntent(cmd);
-    if (route) writeStderrLine(`Try: ${route}`);
-    exitCli(1);
-    return;
-  }
-  try {
-    validateCliArgs(cmd, parsed);
-  } catch (error) {
-    writeStderrLine(errorMessage(error));
-    exitCli(2);
   }
   if (cmd === "viewer") {
     // Keep the human-only browser server out of normal agent command startup.

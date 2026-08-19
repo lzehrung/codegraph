@@ -19,7 +19,6 @@ describe("artifact build", () => {
       path.join(root, "api.ts"),
       "import { validateUser } from './auth';\nexport const ok = validateUser(1);\n",
     );
-
     const artifact = await buildCodegraphArtifact({
       root,
       outDir,
@@ -38,7 +37,7 @@ describe("artifact build", () => {
     const manifest = JSON.parse(await fs.readFile(artifact.manifestPath, "utf8")) as {
       schemaVersion: number;
       artifacts: Record<string, string>;
-      sql: { supported: boolean; limitation: string };
+      sql: { supported: boolean; limitation: string; fileSignatures: { signed: number; skipped: number } };
     };
     const questions = JSON.parse(await fs.readFile(path.join(outDir, "questions.json"), "utf8")) as {
       questions: Array<{ id: string; command: string; handle?: string }>;
@@ -52,6 +51,10 @@ describe("artifact build", () => {
       symbolEdges: Array<{ from: string; to: string }>;
       graph: { files: string[] };
     };
+    expect(manifest.sql.fileSignatures).toEqual({
+      signed: expect.any(Number),
+      skipped: expect.any(Number),
+    });
 
     expect(manifest.schemaVersion).toBe(1);
     expect(manifest.artifacts.sqlite).toBe("codegraph.sqlite");

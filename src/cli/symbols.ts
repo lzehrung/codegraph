@@ -32,10 +32,12 @@ function parseWorkspaceSymbolKinds(rawValue: string | undefined): SymbolKind[] |
 export async function handleSymbolsCommand(context: SymbolsCommandContext): Promise<void> {
   const query = context.positionals.join(" ").trim();
   let kinds: SymbolKind[] | undefined;
+  let limit: number;
   try {
     kinds = parseWorkspaceSymbolKinds(context.getOpt("--kind"));
+    limit = parseBoundedIntegerOption(context.getOpt("--limit"), "--limit", 50, 0, 500);
   } catch (error: unknown) {
-    exitWithError(context, error, 1);
+    exitWithError(context, error, 2);
   }
   const fileGlob = context.getOpt("--file-glob");
   if (!query && !kinds?.length && !fileGlob) {
@@ -52,7 +54,7 @@ export async function handleSymbolsCommand(context: SymbolsCommandContext): Prom
       ...(context.hasFlag("--exported") ? { exportedOnly: true } : {}),
       ...(context.hasFlag("--include-imports") ? { includeImports: true } : {}),
       ...(fileGlob !== undefined ? { fileGlob } : {}),
-      limit: parseBoundedIntegerOption(context.getOpt("--limit"), "--limit", 50, 0, 500),
+      limit,
     });
 
     if (context.hasFlag("--json")) {
