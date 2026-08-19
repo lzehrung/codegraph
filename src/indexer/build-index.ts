@@ -1901,15 +1901,23 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
     buildConcurrency(opts),
   );
   const existsInCandidateSnapshot = (file: string): boolean => candidateExistence.get(file) ?? false;
-  const existingExplicitFiles = explicitFiles.filter(existsInCandidateSnapshot);
+  const normalizeChangedFiles = (files: readonly string[]): string[] =>
+      files.map((file) => {
+        if (!existsInCandidateSnapshot(file)) return file;
+        const [normalizedFile] = normalizeIndexedFileInputs(projectRoot, [file], "Graph delta file");
+        return normalizedFile ?? file;
+      }),
+    normalizedManifestDiffFiles = normalizeChangedFiles(manifestDiffFiles),
+    normalizedGitFiles = normalizeChangedFiles(gitFiles),
+    existingExplicitFiles = explicitFiles.filter(existsInCandidateSnapshot);
   const existingAdditionalFiles = additionalFiles.filter(existsInCandidateSnapshot);
 
   const allFiles = new Set<string>([
     ...trackedFiles,
     ...existingExplicitFiles,
     ...existingAdditionalFiles,
-    ...manifestDiffFiles.filter(existsInCandidateSnapshot),
-    ...gitFiles.filter(existsInCandidateSnapshot),
+    ...normalizedManifestDiffFiles.filter((_, index) => existsInCandidateSnapshot(manifestDiffFiles[index]!)),
+    ...normalizedGitFiles.filter((_, index) => existsInCandidateSnapshot(gitFiles[index]!)),
   ]);
   const changedFiles = new Set<string>();
   const changedFileKeys = new Set<string>();
@@ -1920,8 +1928,8 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
     changedFiles.add(file);
   };
   existingExplicitFiles.forEach(addChangedFile);
-  manifestDiffFiles.forEach(addChangedFile);
-  gitFiles.forEach(addChangedFile);
+  normalizedManifestDiffFiles.forEach(addChangedFile);
+  normalizedGitFiles.forEach(addChangedFile);
   if (languageExtensionsChanged) {
     for (const file of trackedFiles) {
       if (languageSupportChangedForFile(file)) addChangedFile(file);

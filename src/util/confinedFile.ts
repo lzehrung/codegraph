@@ -105,32 +105,18 @@ export async function assertRealPathCandidateWithinRoot(
   const realExistingPath = await fs.realpath(existingPath);
   const relativeSuffix = path.relative(existingPath, filePath);
   const realTargetPath = path.resolve(realExistingPath, relativeSuffix);
-  if (!(await isRealPathWithinRoot(realRoot, realTargetPath))) {
+  if (!isFilePathWithinRoot(realRoot, realTargetPath)) {
     throw new Error(
       `${label} is outside project root: ${normalizePath(realTargetPath)} (root: ${normalizePath(realRoot)})`,
     );
   }
   const finalRealPath = await fs.realpath(filePath);
-  if (!(await isRealPathWithinRoot(realRoot, finalRealPath))) {
+  if (!isFilePathWithinRoot(realRoot, finalRealPath)) {
     throw new Error(
       `${label} is outside project root: ${normalizePath(finalRealPath)} (root: ${normalizePath(realRoot)})`,
     );
   }
   return finalRealPath;
-}
-
-async function isRealPathWithinRoot(realRoot: string, realPath: string): Promise<boolean> {
-  if (isFilePathWithinRoot(realRoot, realPath)) return true;
-  if (process.platform !== "win32") return false;
-  const rootStat = await fs.stat(realRoot, { bigint: true });
-  let ancestorPath = realPath;
-  while (true) {
-    const ancestorStat = await fs.stat(ancestorPath, { bigint: true });
-    if (sameFileIdentity(rootStat, ancestorStat)) return true;
-    const parentPath = path.dirname(ancestorPath);
-    if (parentPath === ancestorPath) return false;
-    ancestorPath = parentPath;
-  }
 }
 
 export async function findNearestExistingPath(filePath: string): Promise<string> {
