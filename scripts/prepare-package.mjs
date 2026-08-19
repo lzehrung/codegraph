@@ -28,16 +28,15 @@ const distReady = distCliExists && distBinExists;
 const distState =
   isGlobalInstall && distReady ? inspectDistForTests(packageRoot) : { needsBuild: false, reason: "not-global-install" };
 
-if (isGlobalInstall && !distState.needsBuild) {
+if (isGlobalInstall && distReady && !distState.needsBuild) {
   console.log("[codegraph] Skipping prepare build during global install; using existing fresh dist/ output.");
   process.exit(0);
 }
 
-if (isDryRunPack && !distState.needsBuild) {
+if (isDryRunPack && distReady && !distState.needsBuild) {
   console.log("[codegraph] Skipping prepare build during npm pack --dry-run; using existing fresh dist/ output.");
   process.exit(0);
 }
-
 
 if (isGlobalInstall) {
   console.error(

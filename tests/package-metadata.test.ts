@@ -12,6 +12,25 @@ function readJson(relativePath: string): Record<string, unknown> {
 function readText(relativePath: string): string {
   return fs.readFileSync(path.resolve(process.cwd(), relativePath), "utf8");
 }
+function withMissingDistArtifact<T>(relativePath: string, callback: () => T): T {
+  const artifactPath = path.resolve(process.cwd(), relativePath);
+  const backupDir = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-prepare-dist-"));
+  const backupPath = path.join(backupDir, path.basename(artifactPath));
+  fs.copyFileSync(artifactPath, backupPath);
+  fs.rmSync(artifactPath);
+  try {
+    return callback();
+  } finally {
+    if (fs.existsSync(artifactPath)) {
+      fs.rmSync(artifactPath, { force: true });
+    }
+    if (fs.existsSync(backupPath)) {
+      fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
+      fs.copyFileSync(backupPath, artifactPath);
+    }
+    fs.rmSync(backupDir, { recursive: true, force: true });
+  }
+}
 
 function parsePackedPaths(stdout: string): Set<string> {
   let jsonStart = stdout.lastIndexOf("[");
@@ -545,6 +564,7 @@ describe("package metadata", () => {
 
   it("rejects a global install when source inputs are newer than dist", () => {
     const sourcePath = path.resolve(process.cwd(), "src/index.ts");
+
     const sourceStat = fs.statSync(sourcePath);
     const future = new Date(Math.max(Date.now() + 60_000, sourceStat.mtimeMs + 60_000));
     fs.utimesSync(sourcePath, future, future);
@@ -563,6 +583,43 @@ describe("package metadata", () => {
     } finally {
       fs.utimesSync(sourcePath, sourceStat.atime, sourceStat.mtime);
     }
+  });
+  it("rejects a global install when the published bin artifact is missing", () => {
+    withMissingDistArtifact("dist/bin/cli.js", () => {
+      const result = spawnSync(process.execPath, ["./scripts/prepare-package.mjs"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          npm_config_global: "true",
+        },
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Global source installs require a fresh dist");
+    });
+  });
+
+  it("builds for npm pack dry-run when the root CLI artifact is missing", () => {
+    withMissingDistArtifact("dist/cli.js", () => {
+      const env = { ...process.env };
+      for (const key of Object.keys(env)) {
+        if (key.toLowerCase() === "npm_command") {
+          delete env[key];
+        }
+      }
+      env.npm_command = "pack";
+      env.npm_config_dry_run = "true";
+      const result = spawnSync(process.execPath, ["./scripts/prepare-package.mjs"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env,
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).not.toContain("Skipping prepare build during npm pack --dry-run");
+      expect(fs.existsSync(path.resolve(process.cwd(), "dist/cli.js"))).toBe(true);
+    });
   });
 
   it("lets npm pack dry-run reuse an existing dist build without wiping dist", () => {
