@@ -227,6 +227,10 @@ describe("native build worker batches", () => {
     expect(mainAttempt.parsed).toBeNull();
     expect(mainAttempt.nativeFallbackReason).toBe("queryFailure");
     expect(mainAttempt.nativeError).toBe(expectedDiagnostic);
+    const unlabeledAttempt = attemptParsePreparedFileContext({ ...mainPrepared, nativeError: undefined });
+    expect(unlabeledAttempt.parsed).toBeNull();
+    expect(unlabeledAttempt.nativeFallbackReason).toBe("queryFailure");
+    expect(unlabeledAttempt.nativeError).toBeUndefined();
     expect(workerResult.fallbackReason).toBe("queryFailure");
     expect(workerResult.error).toBe(expectedDiagnostic);
   });

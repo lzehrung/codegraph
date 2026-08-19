@@ -97,7 +97,7 @@ export function attemptParsePreparedFileContext(context: PreparedFileContext): P
       },
     };
   }
-  if (context.nativeError?.startsWith("source exceeds native byte limit")) {
+  if (Buffer.byteLength(source, "utf8") > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
     return {
       parsed: null,
       nativeFallbackReason: "queryFailure",

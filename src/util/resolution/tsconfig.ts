@@ -96,7 +96,7 @@ async function loadTsconfigConfig(
   const compilerOptions = json.compilerOptions;
   const baseUrlRaw = compilerOptions?.baseUrl;
   let ownBaseUrl: string | null = null;
-  if (baseUrlRaw) {
+  if (baseUrlRaw !== undefined) {
     ownBaseUrl = path.isAbsolute(baseUrlRaw) ? baseUrlRaw : path.resolve(cfgDir, baseUrlRaw);
   }
   const paths: Record<string, string[]> = compilerOptions?.paths ?? {};
