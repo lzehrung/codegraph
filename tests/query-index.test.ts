@@ -14,6 +14,7 @@ import { QueryIndexStore, QUERY_INDEX_CANDIDATE_ROW_LIMIT } from "../src/agent/q
 import * as queryIndexWorkerPool from "../src/agent/query-index/workerPool.js";
 import { buildProjectIndexIncremental } from "../src/indexer/build-index.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
+import { resetFileIdentityCaseSensitivityForTests } from "../src/util/paths.js";
 import { createCodegraphMcpHandlers } from "../src/mcp/server.js";
 import { captureCli } from "./helpers/cli.js";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
@@ -382,28 +383,51 @@ describe("persistent query index", () => {
     updated.store?.close();
   });
 
-  it("matches canonicalized manifest entries during query-index updates", async () => {
+  it("matches equivalent manifest entries with case-insensitive file identity", async () => {
+    const root = await createRepo();
+    const session = createSession(root);
+    resetFileIdentityCaseSensitivityForTests(true);
+    try {
+      const snapshot = await session.loadProject();
+      const sourceFile = snapshot.files.find((file) => file.endsWith("src/auth.ts"));
+      if (!sourceFile) throw new Error("Expected auth source file in session snapshot.");
+      const entry = snapshot.index.manifestEntries?.get(sourceFile);
+      if (!entry) throw new Error("Expected auth manifest entry in session snapshot.");
+      const manifestEntries = new Map(snapshot.index.manifestEntries);
+      manifestEntries.delete(sourceFile);
+      manifestEntries.set(sourceFile.toUpperCase(), entry);
+
+      const handle = await ensureQueryIndex({
+        ...snapshot,
+        index: { ...snapshot.index, manifestEntries },
+      });
+
+      expect(handle.diagnostics).toMatchObject({
+        sidecarState: "created",
+        filesAdded: snapshot.files.length,
+      });
+      handle.store?.close();
+    } finally {
+      resetFileIdentityCaseSensitivityForTests();
+    }
+  });
+
+  it("refuses to create a query index from incomplete manifest entries", async () => {
     const root = await createRepo();
     const session = createSession(root);
     const snapshot = await session.loadProject();
-    const sourceFile = snapshot.files.find((file) => file.endsWith("src/auth.ts"));
-    if (!sourceFile) throw new Error("Expected auth source file in session snapshot.");
-    const entry = snapshot.index.manifestEntries?.get(sourceFile);
-    if (!entry) throw new Error("Expected auth manifest entry in session snapshot.");
+    const omittedFile = snapshot.files[0];
+    if (!omittedFile) throw new Error("Expected a file in the session snapshot.");
     const manifestEntries = new Map(snapshot.index.manifestEntries);
-    manifestEntries.delete(sourceFile);
-    manifestEntries.set(sourceFile.toUpperCase(), entry);
+    manifestEntries.delete(omittedFile);
 
     const handle = await ensureQueryIndex({
       ...snapshot,
       index: { ...snapshot.index, manifestEntries },
     });
 
-    expect(handle.diagnostics).toMatchObject({
-      sidecarState: "created",
-      filesAdded: snapshot.files.length,
-    });
-    handle.store?.close();
+    expect(handle.store).toBeNull();
+    expect(handle.diagnostics.sidecarState).toBe("unavailable");
   });
 
   it("removes only expired abandoned rebuild files", async () => {

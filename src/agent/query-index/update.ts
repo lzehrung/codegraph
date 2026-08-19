@@ -4,7 +4,7 @@ import path from "node:path";
 import type { AgentProjectSnapshot } from "../session.js";
 import type { ProjectIndexManifestEntry, QueryIndexDiagnostics } from "../../indexer/types.js";
 import { getCodegraphVersion } from "../../util/packageInfo.js";
-import { normalizePath } from "../../util/paths.js";
+import { fileIdentityKey, normalizePath } from "../../util/paths.js";
 import { errorMessage } from "../../util/errors.js";
 import type { PreparedQueryIndexFile } from "./content.js";
 import {
@@ -71,7 +71,7 @@ function currentQueryState(snapshot: AgentProjectSnapshot): QueryIndexCurrentSta
   if (!projectSnapshotIdentity || !manifestEntries?.size) return null;
   const normalizedManifestEntries = new Map<string, ProjectIndexManifestEntry>();
   for (const [candidate, entry] of manifestEntries) {
-    const normalizedCandidate = normalizePath(candidate).toLowerCase();
+    const normalizedCandidate = fileIdentityKey(candidate);
     if (!normalizedManifestEntries.has(normalizedCandidate)) {
       normalizedManifestEntries.set(normalizedCandidate, entry);
     }
@@ -82,8 +82,8 @@ function currentQueryState(snapshot: AgentProjectSnapshot): QueryIndexCurrentSta
     const entry =
       manifestEntries.get(file) ??
       manifestEntries.get(normalizePath(file)) ??
-      normalizedManifestEntries.get(normalizePath(file).toLowerCase());
-    if (!entry) continue;
+      normalizedManifestEntries.get(fileIdentityKey(file));
+    if (!entry) return null;
     const sourceIdentity = createQuerySourceIdentity(relativePath, entry);
     files.push({ path: relativePath, sourceIdentity });
     identities.set(relativePath, sourceIdentity);
