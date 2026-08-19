@@ -396,6 +396,11 @@ export async function summarizeChangedFiles(input: {
   explicitFiles: ReadonlySet<string>;
   existenceByFile: ReadonlyMap<string, boolean>;
   deletedSnapshots: ReadonlyMap<FileId, DeletedFileSnapshot>;
+  /**
+   * Optional source loader for callers that already own source retrieval policy.
+   * The default reads from disk.
+   */
+  loadSource?: (file: string) => Promise<string>;
   includeSymbolDetails: boolean;
   includeDiffContext: boolean;
   diffContextLines: number;
@@ -414,6 +419,7 @@ export async function summarizeChangedFiles(input: {
     explicitFiles,
     existenceByFile,
     deletedSnapshots,
+    loadSource: suppliedLoadSource,
     includeSymbolDetails,
     includeDiffContext,
     diffContextLines,
@@ -422,13 +428,14 @@ export async function summarizeChangedFiles(input: {
     diagnostics,
     reviewTimings,
   } = input;
+  const readSource = suppliedLoadSource ?? (async (file: string) => await fsp.readFile(file, "utf8"));
   const sourceCache = new Map<string, string>();
   const loadSource = async (file: string): Promise<string> => {
     const key = fileIdentityKey(file);
     const cached = sourceCache.get(key);
     if (cached !== undefined) return cached;
     const parsed = index.parsed?.get(key);
-    const source = parsed?.source ?? (await fsp.readFile(file, "utf8"));
+    const source = parsed?.source ?? (await readSource(file));
     sourceCache.set(key, source);
     return source;
   };

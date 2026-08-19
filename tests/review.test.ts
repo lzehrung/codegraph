@@ -2382,6 +2382,91 @@ describe("Review report", () => {
     }
   });
 
+  it("I13 bounds changed-file summary source loads without changing ordered output", async () => {
+    const root = await mkTmpDir("dg-review-summary-fanout-");
+    const srcDir = path.join(root, "src");
+    const concurrencyCap = 2;
+    const sources = Array.from({ length: 6 }, (_, index) => {
+      const name = `feature${index}`;
+      const file = path.join(srcDir, `${name}.ts`);
+      return { file, name, source: `export function ${name}() { return ${index}; }\n` };
+    });
+    await fsp.mkdir(srcDir, { recursive: true });
+    await Promise.all(sources.map(async ({ file, source }) => await fsp.writeFile(file, source, "utf8")));
+
+    const index = await buildProjectIndex(root);
+    index.parsed = undefined;
+    const sourceByFile = new Map(sources.map(({ file, source }) => [fileIdentityKey(file), source] as const));
+    const pendingLoads: Array<{ resolve: () => void }> = [];
+    let nextLoadSignal = Promise.withResolvers<void>();
+    let activeLoads = 0;
+    let maxActiveLoads = 0;
+    const gateSourceLoad = async (file: string): Promise<string> => {
+      const source = sourceByFile.get(fileIdentityKey(file));
+      if (source === undefined) throw new Error(`Unexpected source load: ${file}`);
+      activeLoads += 1;
+      maxActiveLoads = Math.max(maxActiveLoads, activeLoads);
+      const pending = Promise.withResolvers<void>();
+      pendingLoads.push({ resolve: pending.resolve });
+      nextLoadSignal.resolve();
+      await pending.promise;
+      activeLoads -= 1;
+      return source;
+    };
+    const originalReadFile = fsp.readFile;
+    const readSpy = vi.spyOn(fsp, "readFile").mockImplementation((file, options) => {
+      if (typeof file === "string" && sourceByFile.has(fileIdentityKey(file))) return gateSourceLoad(file);
+      return originalReadFile(file, options);
+    });
+
+    const takePendingLoad = async () => {
+      while (!pendingLoads.length) {
+        const signal = nextLoadSignal;
+        await signal.promise;
+        if (signal === nextLoadSignal) nextLoadSignal = Promise.withResolvers<void>();
+      }
+      return pendingLoads.shift();
+    };
+
+    try {
+      const summaryPromise = summarizeChangedFiles({
+        projectRoot: root,
+        index,
+        changedFileList: sources.map(({ file }) => file),
+        diffHunksByFile: new Map(),
+        diffKindsByFile: new Map(),
+        diffChangesByFile: new Map(),
+        explicitFiles: new Set(),
+        existenceByFile: new Map(sources.map(({ file }) => [file, true] as const)),
+        deletedSnapshots: new Map(),
+        loadSource: gateSourceLoad,
+        includeSymbolDetails: true,
+        includeDiffContext: false,
+        diffContextLines: 0,
+        maxCallsites: 0,
+        referenceConcurrency: concurrencyCap,
+        diagnostics: { missingFiles: [], symbolMappingParseFailures: [] },
+      });
+
+      for (let completed = 0; completed < sources.length; completed += 1) {
+        const pendingLoad = await takePendingLoad();
+        pendingLoad?.resolve();
+      }
+
+      const summary = await summaryPromise;
+      expect(maxActiveLoads).toBe(concurrencyCap);
+      expect(summary.summaries.map((entry) => entry.file)).toEqual(
+        sources.map(({ file }) => normalize(path.relative(root, file))),
+      );
+      expect(summary.summaries.map((entry) => entry.symbols.map((symbol) => symbol.name))).toEqual(
+        sources.map(({ name }) => [name]),
+      );
+    } finally {
+      readSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps parsed trees and bounds reference work for review callsites", async () => {
     const root = await mkTmpDir("dg-review-reference-bounds-");
     const srcDir = path.join(root, "src");
