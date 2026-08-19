@@ -1222,6 +1222,66 @@ describe("CLI command modules", () => {
     }
   });
 
+  test("graph --symbols uses disk cache by default", async () => {
+    const root = await mkTmpDir("codegraph-graph-symbols-default-cache-");
+    const entryFile = path.join(root, "entry.ts");
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexFromFiles");
+
+    try {
+      await handleGraphCommand(
+        createGraphContext({
+          projectRootFs: root,
+          cwd: () => root,
+          nativeMode: "off",
+          resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
+          hasFlag: (name) => name === "--symbols" || name === "--json",
+          writeStdoutLine: () => undefined,
+        }),
+      );
+
+      expect(buildSpy).toHaveBeenCalledOnce();
+      expect(buildSpy).toHaveBeenCalledWith(
+        root,
+        [entryFile.replace(/\\/g, "/")],
+        expect.objectContaining({ cache: "disk", cacheVerify: false }),
+      );
+    } finally {
+      buildSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("graph uses disk cache for verification without an explicit cache mode", async () => {
+    const root = await mkTmpDir("codegraph-graph-default-cache-verify-");
+    const entryFile = path.join(root, "entry.ts");
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexFromFiles");
+
+    try {
+      await handleGraphCommand(
+        createGraphContext({
+          projectRootFs: root,
+          cwd: () => root,
+          nativeMode: "off",
+          resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
+          hasFlag: (name) => name === "--cache-verify",
+          writeStdoutLine: () => undefined,
+        }),
+      );
+
+      expect(buildSpy).toHaveBeenCalledOnce();
+      expect(buildSpy).toHaveBeenCalledWith(
+        root,
+        [entryFile.replace(/\\/g, "/")],
+        expect.objectContaining({ cache: "disk", cacheVerify: true }),
+      );
+    } finally {
+      buildSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("graph --symbols uses disk cache for verification without an explicit cache mode", async () => {
     const root = await mkTmpDir("codegraph-graph-symbols-cache-verify-");
     const entryFile = path.join(root, "entry.ts");

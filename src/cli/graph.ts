@@ -59,14 +59,8 @@ type GraphCommandReport = {
   index?: BuildReport;
 };
 
-function resolveGraphCacheMode(
-  cache: BuildOptions["cache"],
-  cacheVerify: boolean,
-  writesSqlite: boolean,
-): BuildOptions["cache"] {
-  if (cache) return cache;
-  if (cacheVerify || writesSqlite) return "disk";
-  return undefined;
+function resolveGraphCacheMode(cache: BuildOptions["cache"]): Exclude<BuildOptions["cache"], undefined> {
+  return cache ?? "disk";
 }
 
 export type GraphCommandContext = {
@@ -283,11 +277,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       ? normalizePath(resolveFilePathFromRoot(context.cwd(), outputArg))
       : undefined;
   const sqliteFile = sqliteArg ? normalizePath(resolveFilePathFromRoot(context.cwd(), sqliteArg)) : undefined;
-  const effectiveCache = resolveGraphCacheMode(cache, cacheVerify, Boolean(sqliteFile));
-  const cacheOptions: { cache?: Exclude<BuildOptions["cache"], undefined> } = {};
-  if (effectiveCache) {
-    cacheOptions.cache = effectiveCache;
-  }
+  const effectiveCache = resolveGraphCacheMode(cache);
   if (stderrArg) {
     context.setStderrFilePath(normalizePath(resolveFilePathFromRoot(context.cwd(), stderrArg)));
   } else {
@@ -332,7 +322,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
           ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
           ...context.workerOpts,
           ...cacheDirOptions,
-          ...cacheOptions,
+          cache: effectiveCache,
           cacheStrict,
           cacheVerify,
           files: changedSet.existingFiles,
@@ -349,7 +339,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
           ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
           ...context.workerOpts,
           ...cacheDirOptions,
-          ...cacheOptions,
+          cache: effectiveCache,
           cacheStrict,
           cacheVerify,
           graph: graphOptions,
@@ -398,7 +388,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
       ...context.workerOpts,
       ...cacheDirOptions,
-      ...cacheOptions,
+      cache: effectiveCache,
       cacheStrict,
       cacheVerify,
       graph: {
@@ -459,7 +449,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
       ...context.workerOpts,
       ...cacheDirOptions,
-      ...cacheOptions,
+      cache: effectiveCache,
       cacheStrict,
       cacheVerify,
       graph: {

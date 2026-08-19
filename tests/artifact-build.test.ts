@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildCodegraphArtifact, buildCodegraphArtifactWithSession } from "../src/agent/artifact.js";
-import { createAgentSession } from "../src/agent/session.js";
+import { createAgentSession, type AgentSession } from "../src/agent/session.js";
 import { quoteShellArg } from "../src/agent/shell.js";
 import { buildGraph } from "../docs/graph-visualization/graph-builder.js";
 import { countingSession } from "./helpers/agent.js";
@@ -265,6 +265,25 @@ describe("artifact build", () => {
     };
     expect(manifest.sql.fileSignatures.signed).toBe(1);
     expect(manifest.sql.fileSignatures.skipped).toBeGreaterThanOrEqual(1);
+  });
+
+  it("rejects SQLite artifacts when a manually fresh snapshot has no signature map", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-no-signature-map-"));
+    const outDir = path.join(root, "codegraph-out");
+    await fs.writeFile(path.join(root, "main.ts"), "export const value = 1;\n");
+    const baseSession = createAgentSession({ root, freshness: { policy: "manual" } });
+    const session: AgentSession = {
+      loadProject: async (options) => {
+        const snapshot = await baseSession.loadProject(options);
+        return { ...snapshot, fileSignatures: undefined };
+      },
+      invalidate: () => undefined,
+    };
+
+    await expect(buildCodegraphArtifactWithSession(session, { root, outDir, sqlite: true })).rejects.toThrow(
+      "SQLite artifact freshness signatures are unavailable.",
+    );
+    await expect(fs.stat(outDir)).rejects.toThrow();
   });
 
   it("reuses one project snapshot for all selected artifact outputs", async () => {

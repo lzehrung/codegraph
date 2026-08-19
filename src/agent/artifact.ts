@@ -111,30 +111,36 @@ export async function buildCodegraphArtifactWithSession(
   const selected = normalizeArtifactSelection(request);
   const filterOutDir = path.resolve(root, request.filterOutDir ?? request.outDir ?? DEFAULT_OUT_DIR);
   const snapshot = await filterSnapshotForOutputDirectory(await session.loadProject(), filterOutDir);
+  const sqliteSignatures: Array<{ path: string; size: number; mtimeMs: number }> = [];
+  let sqliteFileSignatures = { signed: 0, skipped: 0 };
+  if (selected.sqlite) {
+    const snapshotFileSignatures = snapshot.fileSignatures;
+    if (!snapshotFileSignatures) {
+      throw new Error("SQLite artifact freshness signatures are unavailable.");
+    }
+    for (const file of snapshot.fileGraph.nodes) {
+      const signature = snapshotFileSignatures.get(file);
+      if (!signature) {
+        sqliteFileSignatures = { ...sqliteFileSignatures, skipped: sqliteFileSignatures.skipped + 1 };
+        continue;
+      }
+      sqliteSignatures.push({ path: signature.file, size: signature.size, mtimeMs: signature.mtimeMs });
+    }
+    sqliteFileSignatures = { signed: sqliteSignatures.length, skipped: sqliteFileSignatures.skipped };
+  }
   await fs.mkdir(outDir, { recursive: true });
   if (request.force) {
     await prepareForcedOutputDirectory(outDir, selected);
   }
   const artifacts: CodegraphArtifactBuildResult["artifacts"] = {};
-  let sqliteFileSignatures = { signed: 0, skipped: 0 };
 
   if (selected.sqlite) {
-    const fileSignatures: Array<{ path: string; size: number; mtimeMs: number }> = [];
-    for (const file of snapshot.fileGraph.nodes) {
-      const signature = snapshot.fileSignatures?.get(file);
-      if (!signature) {
-        sqliteFileSignatures = { ...sqliteFileSignatures, skipped: sqliteFileSignatures.skipped + 1 };
-        continue;
-      }
-      fileSignatures.push({ path: signature.file, size: signature.size, mtimeMs: signature.mtimeMs });
-    }
-    sqliteFileSignatures = { signed: fileSignatures.length, skipped: sqliteFileSignatures.skipped };
     const outputPath = path.join(outDir, SQLITE_FILE);
     await writeGraphSqlite({
       fileGraph: snapshot.fileGraph,
       symbolGraph: snapshot.symbolGraph,
       outputPath,
-      fileSignatures,
+      fileSignatures: sqliteSignatures,
     });
     artifacts.sqlite = SQLITE_FILE;
   }

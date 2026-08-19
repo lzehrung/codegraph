@@ -1734,19 +1734,21 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
   });
 
   it.runIf(process.platform === "win32")(
-    "normalizes a drive-relative absolute --root before path confinement (C5, probe V10)",
+    "normalizes slash- and backslash-prefixed --root paths before path confinement (C5, probe V10)",
     async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-root-normalize-"));
       await fsp.writeFile(path.join(root, "a.ts"), "export const marker = 1;\n");
-      // Strip the drive letter to build a POSIX-style absolute path Node resolves
-      // against the *current* drive (matching probe V10's `--root /tmp/cggd` repro).
+      // Strip the drive letter to build a path Node resolves against the current drive.
       // Invoke with cwd on the same drive as `root` so the injected drive is correct
       // regardless of which drive the OS temp directory happens to live on.
       const driveRelativeRoot = normalize(root).replace(/^[A-Za-z]:/, "");
+      const backslashDriveRelativeRoot = driveRelativeRoot.replaceAll("/", "\\");
 
-      const result = await runCliCommandDetailed(["index", "--root", driveRelativeRoot, "--json"], undefined, root);
-      const parsed = JSON.parse(result.stdout) as { files: number };
-      expect(parsed.files).toBe(1);
+      for (const candidate of [driveRelativeRoot, backslashDriveRelativeRoot]) {
+        const result = await runCliCommandDetailed(["index", "--root", candidate, "--json"], undefined, root);
+        const parsed = JSON.parse(result.stdout) as { files: number };
+        expect(parsed.files).toBe(1);
+      }
     },
   );
 
