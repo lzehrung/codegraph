@@ -180,10 +180,7 @@ describe("build-native-if-available", () => {
       expect(String(call[0])).toContain("win32-x64-msvc");
       expect(String(call[0])).not.toContain("win32-arm64-msvc");
     }
-    expect(rmSyncImpl).not.toHaveBeenCalledWith(
-      expect.stringContaining("win32-arm64-msvc"),
-      expect.anything(),
-    );
+    expect(rmSyncImpl).not.toHaveBeenCalledWith(expect.stringContaining("win32-arm64-msvc"), expect.anything());
     expect(warn).not.toHaveBeenCalled();
   });
 

@@ -10,11 +10,7 @@ describe("CLI subprocess helpers", () => {
     try {
       const script = path.join(root, "delayed.ts");
       const payload = "payload-".repeat(32_768);
-      await fsp.writeFile(
-        script,
-        `setImmediate(() => process.stdout.write(${JSON.stringify(payload)}));\n`,
-        "utf8",
-      );
+      await fsp.writeFile(script, `setImmediate(() => process.stdout.write(${JSON.stringify(payload)}));\n`, "utf8");
 
       const result = await captureTsxScript(script);
 

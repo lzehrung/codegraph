@@ -62,7 +62,11 @@ describe("publishReleaseCandidates resumability", () => {
     });
 
     expect(skipped).toEqual([{ package: NATIVE_TARGET_PACKAGE, version: "2.2.0" }]);
-    expect(published.map((entry) => entry.package)).toEqual([NATIVE_META_PACKAGE_NAME, CORE_PACKAGE_NAME, ROOT_PACKAGE_NAME]);
+    expect(published.map((entry) => entry.package)).toEqual([
+      NATIVE_META_PACKAGE_NAME,
+      CORE_PACKAGE_NAME,
+      ROOT_PACKAGE_NAME,
+    ]);
     // Only the three not-yet-published packages should reach `npm publish`.
     const publishCalls = commandRunner.mock.calls.filter((call) => call[1][0] === "publish");
     expect(publishCalls).toHaveLength(3);
@@ -126,7 +130,11 @@ describe("publishReleaseCandidates resumability", () => {
     });
 
     expect(skipped).toEqual([{ package: NATIVE_TARGET_PACKAGE, version: "2.2.0" }]);
-    expect(published.map((entry) => entry.package)).toEqual([NATIVE_META_PACKAGE_NAME, CORE_PACKAGE_NAME, ROOT_PACKAGE_NAME]);
+    expect(published.map((entry) => entry.package)).toEqual([
+      NATIVE_META_PACKAGE_NAME,
+      CORE_PACKAGE_NAME,
+      ROOT_PACKAGE_NAME,
+    ]);
     const secondPublishCalls = secondRunner.mock.calls.filter((call) => call[1][0] === "publish");
     // The native-target package must never be republished on resume.
     expect(secondPublishCalls.map((call) => call[1][1])).not.toContain("/rc/a.tgz");
@@ -136,7 +144,12 @@ describe("publishReleaseCandidates resumability", () => {
   it("reports registry membership through isPackageVersionPublished", () => {
     const commandRunner = vi.fn().mockReturnValue({ exitCode: 0, rawStdout: "2.2.0\n" });
     expect(
-      isPackageVersionPublished({ packageName: ROOT_PACKAGE_NAME, version: "2.2.0", registry: REGISTRY, commandRunner }),
+      isPackageVersionPublished({
+        packageName: ROOT_PACKAGE_NAME,
+        version: "2.2.0",
+        registry: REGISTRY,
+        commandRunner,
+      }),
     ).toBe(true);
     expect(commandRunner).toHaveBeenCalledWith(
       "npm",

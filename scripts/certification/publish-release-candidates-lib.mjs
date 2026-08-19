@@ -32,16 +32,12 @@ export function publishReleaseCandidateEntry({ entry, registry, rootDirectory, c
     { cwd: rootDirectory, timeoutMs: 300_000 },
   );
   if (result.exitCode !== 0 || result.error) {
-    throw new PackageCertificationError(
-      "publish-failed",
-      `Publishing certified tarball failed for ${entry.package}.`,
-      {
-        package: entry.package,
-        file: entry.file,
-        exitCode: result.exitCode,
-        error: result.error,
-      },
-    );
+    throw new PackageCertificationError("publish-failed", `Publishing certified tarball failed for ${entry.package}.`, {
+      package: entry.package,
+      file: entry.file,
+      exitCode: result.exitCode,
+      error: result.error,
+    });
   }
   return result;
 }

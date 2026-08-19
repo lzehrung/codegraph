@@ -168,7 +168,9 @@ export async function installStandaloneBundle(options) {
           failures.push(rollbackError);
         }
         if (failures.length) {
-          const detail = failures.map((failure) => (failure instanceof Error ? failure.message : String(failure))).join("; ");
+          const detail = failures
+            .map((failure) => (failure instanceof Error ? failure.message : String(failure)))
+            .join("; ");
           throw new Error(`Standalone installation failed and state rollback failed: ${detail}`, { cause: error });
         }
         throw error;

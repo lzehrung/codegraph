@@ -24,7 +24,9 @@ export function createTempRootRegistry(): TempRootRegistry {
       await Promise.all(
         pending.map(
           async (root) =>
-            await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => undefined),
+            await fsp
+              .rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+              .catch(() => undefined),
         ),
       );
     },

@@ -51,10 +51,7 @@ describe("Agent Tools", () => {
     const thrown = { code: "synthetic", detail: "failure" };
     const listSpy = vi.spyOn(projectFilesModule, "listProjectFiles").mockRejectedValue(thrown);
     try {
-      for (const result of [
-        await tool_listProjectFiles(samplePath),
-        await tool_getGraph(samplePath),
-      ]) {
+      for (const result of [await tool_listProjectFiles(samplePath), await tool_getGraph(samplePath)]) {
         expect(result).toEqual({ status: "error", error: JSON.stringify(thrown) });
       }
     } finally {

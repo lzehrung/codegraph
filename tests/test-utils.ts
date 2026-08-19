@@ -146,9 +146,7 @@ export async function testFindReferences(
           column: reference.range.start.column,
         }))
         .sort((left, right) =>
-          `${left.file}:${left.line}:${left.column}`.localeCompare(
-            `${right.file}:${right.line}:${right.column}`,
-          ),
+          `${left.file}:${left.line}:${left.column}`.localeCompare(`${right.file}:${right.line}:${right.column}`),
         );
       const expectedLocations = expected
         .map((reference) => ({
@@ -157,9 +155,7 @@ export async function testFindReferences(
           column: reference.column,
         }))
         .sort((left, right) =>
-          `${left.file}:${left.line}:${left.column}`.localeCompare(
-            `${right.file}:${right.line}:${right.column}`,
-          ),
+          `${left.file}:${left.line}:${left.column}`.localeCompare(`${right.file}:${right.line}:${right.column}`),
         );
       expect(actualLocations).toEqual(expectedLocations);
     }

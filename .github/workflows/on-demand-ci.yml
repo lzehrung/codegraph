@@ -95,7 +95,6 @@ jobs:
       - name: Benchmark and native contract tests
         run: npm run test:contracts
 
-
   build-and-test-windows:
     runs-on: windows-latest
     steps:

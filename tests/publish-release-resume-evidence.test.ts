@@ -121,9 +121,8 @@ describe("release candidate publication resume evidence", () => {
       // The base branch has no publication library. That absence is intentional: this branch runs the
       // original sequential loop against the same mock transport, where the retry must fail on a duplicate.
       try {
-        const { publishReleaseCandidates } = await import(
-          "../scripts/certification/publish-release-candidates-lib.mjs"
-        );
+        const { publishReleaseCandidates } =
+          await import("../scripts/certification/publish-release-candidates-lib.mjs");
         const state: RegistryState = { failureInjected: false, published: [] };
         const commandRunner = createMockRegistryRunner(state, entries);
         expect(() =>
@@ -148,7 +147,7 @@ describe("release candidate publication resume evidence", () => {
         });
         expect(state.published).toHaveLength(entries.length);
       } catch (error) {
-        if (!(error instanceof Error) || !(("code" in error) && error.code === "ERR_MODULE_NOT_FOUND")) throw error;
+        if (!(error instanceof Error) || !("code" in error && error.code === "ERR_MODULE_NOT_FOUND")) throw error;
         const baselineState: RegistryState = { failureInjected: false, published: [] };
         const baselineRunner = createMockRegistryRunner(baselineState, entries);
         try {

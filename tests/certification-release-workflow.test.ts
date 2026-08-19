@@ -72,7 +72,12 @@ describe("certified release workflows", () => {
     expect(source).toContain("node: 22.16.0");
     expect(source).toContain("node: 24.10.0");
     expect(source).toContain("os: macos-latest");
-    for (const step of ["npm run security:production", "npm run lint", "npm run format:check", "npm run fixtures:check-clean"]) {
+    for (const step of [
+      "npm run security:production",
+      "npm run lint",
+      "npm run format:check",
+      "npm run fixtures:check-clean",
+    ]) {
       expect(windows).toContain(step);
     }
     expect(source).toContain("npm run test:contracts");
@@ -89,7 +94,6 @@ describe("certified release workflows", () => {
     expect(result.status).toBe(0);
     expect(`${result.stdout}${result.stderr}`).toMatch(/Test Files.*passed/s);
   }, 180_000);
-
 
   it("chains the reusable standalone workflow after certified publication", () => {
     const standalone = jobBlock(releaseWorkflow, "standalone-release");

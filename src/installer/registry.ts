@@ -1252,7 +1252,6 @@ async function renameTemporaryFile(temporaryPath: string, filePath: string): Pro
   }
 }
 
-
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

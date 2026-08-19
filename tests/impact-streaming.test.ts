@@ -609,7 +609,6 @@ ${hunks}`;
   return { diffText };
 }
 
-
 describe("Impact streaming resource bounds", () => {
   it("surfaces a bounded overflow error instead of silently truncating when a producer burst outruns the queue cap", async () => {
     const root = await mkTmpDir("dg-stream-overflow-");
