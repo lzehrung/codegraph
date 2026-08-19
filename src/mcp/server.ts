@@ -1138,7 +1138,7 @@ function createCodegraphMcpHandlersForSession(
   };
 }
 
-type McpToolOperationTracker = {
+export type McpToolOperationTracker = {
   isAccepting: () => boolean;
   track: <T>(operation: () => Promise<T>) => Promise<T> | undefined;
   stop: () => void;
@@ -1170,7 +1170,7 @@ function createMcpToolOperationTracker(): McpToolOperationTracker {
   };
 }
 
-type McpToolConcurrencyTracker = {
+export type McpToolConcurrencyTracker = {
   inFlight: number;
   maximum: number;
 };
@@ -1198,7 +1198,7 @@ export function createCodegraphMcpProtocolServer(
   );
 }
 
-function createCodegraphMcpProtocolServerWithTracker(
+export function createCodegraphMcpProtocolServerWithTracker(
   handlers: CodegraphMcpHandlers,
   runtimeIdentity: CodegraphRuntimeIdentity,
   installedVersion: InstalledVersionChecker,
@@ -1271,28 +1271,29 @@ function createCodegraphMcpProtocolServerWithTracker(
         mcpToolTimeoutMs,
       );
       activeToolCalls.set(ctx.mcpReq.id, toolCallAbort);
-      const operation = toolOperations.track(() =>
-        callMcpTool(handlers, request.params.name, request.params.arguments ?? {}, toolCallAbort.signal),
-      );
-      if (operation === undefined) {
-        toolConcurrency.inFlight -= 1;
-        toolCallAbort.dispose();
-        throw new Error("MCP server is shutting down.");
-      }
-      const releaseToolCall = (): void => {
-        toolConcurrency.inFlight -= 1;
-      };
       try {
-        const result = await awaitMcpToolOperation(toolCallAbort.signal, operation, releaseToolCall);
-        await emitFirstToolCallVisibility(
-          "info",
-          1,
-          `Codegraph finished warming the first tool call for '${request.params.name}'.`,
+        const operation = toolOperations.track(() =>
+          callMcpTool(handlers, request.params.name, request.params.arguments ?? {}, toolCallAbort.signal),
         );
-        return toToolResult(result);
-      } catch (error) {
-        if (error instanceof ProtocolError || toolCallAbort.signal.aborted) throw error;
-        return toToolErrorResult(error);
+        if (operation === undefined) {
+          toolConcurrency.inFlight -= 1;
+          throw new Error("MCP server is shutting down.");
+        }
+        const releaseToolCall = (): void => {
+          toolConcurrency.inFlight -= 1;
+        };
+        try {
+          const result = await awaitMcpToolOperation(toolCallAbort.signal, operation, releaseToolCall);
+          await emitFirstToolCallVisibility(
+            "info",
+            1,
+            `Codegraph finished warming the first tool call for '${request.params.name}'.`,
+          );
+          return toToolResult(result);
+        } catch (error) {
+          if (error instanceof ProtocolError || toolCallAbort.signal.aborted) throw error;
+          return toToolErrorResult(error);
+        }
       } finally {
         activeToolCalls.delete(ctx.mcpReq.id);
         toolCallAbort.dispose();

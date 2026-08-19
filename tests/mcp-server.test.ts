@@ -15,11 +15,14 @@ import {
   callMcpTool,
   createCodegraphMcpHandlers,
   createCodegraphMcpProtocolServer,
+  createCodegraphMcpProtocolServerWithTracker,
   createParseErrorReportingStdin,
   listCodegraphMcpTools,
   startCodegraphMcpHttpServer,
   DEFAULT_MCP_HTTP_SESSION_MAX_COUNT,
   type CodegraphMcpHandlers,
+  type McpToolConcurrencyTracker,
+  type McpToolOperationTracker,
 } from "../src/mcp/server.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex } from "../src/indexer/types.js";
 import { MCP_TOOL_REGISTRY } from "../src/mcp/tools.js";
@@ -29,6 +32,7 @@ import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY } from "../src/sqlite.js";
 import { countingSession } from "./helpers/agent.js";
 import { createArtifactOutputWithStaleFile, createLinkedTempRoot, isSymlinkUnavailable } from "./helpers/filesystem.js";
+import type { CodegraphRuntimeIdentity, InstalledVersionChecker } from "../src/runtimeIdentity.js";
 import { getCodegraphVersion } from "../src/util/packageInfo.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { runGit } from "./helpers/git.js";
@@ -272,6 +276,86 @@ describe("codegraph MCP handlers", () => {
       });
       await aborted.promise;
     } finally {
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans up a rejected tracked call during shutdown", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-shutdown-track-"));
+    const handlers = createCodegraphMcpHandlers({ root });
+    const toolOperations: McpToolOperationTracker = {
+      isAccepting: () => true,
+      track: <T>(_operation: () => Promise<T>): Promise<T> | undefined => undefined,
+      stop() {},
+      drain: async () => {},
+    };
+    const toolConcurrency: McpToolConcurrencyTracker = { inFlight: 0, maximum: 1 };
+    const runtimeIdentity: CodegraphRuntimeIdentity = {
+      startedAt: "2026-08-19T00:00:00.000Z",
+      runningVersion: "test",
+      packageRoot: root,
+      packageJsonPath: path.join(root, "package.json"),
+    };
+    const installedVersion: InstalledVersionChecker = {
+      check: () => ({ restartRequired: false, runningVersion: runtimeIdentity.runningVersion }),
+    };
+    const server = createCodegraphMcpProtocolServerWithTracker(
+      handlers,
+      runtimeIdentity,
+      installedVersion,
+      { firstToolCallPending: true },
+      25,
+      toolOperations,
+      toolConcurrency,
+    );
+    const sent: JsonRpcObject[] = [];
+    const transport = {
+      onclose: undefined,
+      onerror: undefined,
+      onmessage: undefined,
+      async start() {},
+      async send(message: unknown) {
+        sent.push(readJsonRpcObject(message));
+      },
+      async close() {},
+    } as Parameters<typeof server.connect>[0];
+    const abort = vi.spyOn(AbortController.prototype, "abort");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    try {
+      await server.connect(transport);
+      if (transport.onmessage === undefined) throw new Error("MCP transport did not start.");
+      transport.onmessage({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1" } },
+      });
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+      transport.onmessage({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "query_sqlite", arguments: { query: "SELECT 1;" } },
+      });
+      await vi.waitFor(() => expect(sent.some((message) => message.id === 2)).toBe(true));
+      const response = sent.find((message) => message.id === 2);
+      if (response === undefined) throw new Error("MCP server did not return a shutdown response.");
+      expect(readProtocolError(response).message).toBe("MCP server is shutting down.");
+      expect(toolConcurrency.inFlight).toBe(0);
+      expect(clearTimeoutSpy).toHaveBeenCalled();
+
+      abort.mockClear();
+      transport.onmessage({
+        jsonrpc: "2.0",
+        method: "notifications/cancelled",
+        params: { requestId: 2 },
+      });
+      expect(abort).not.toHaveBeenCalled();
+      expect(toolConcurrency.inFlight).toBe(0);
+    } finally {
+      abort.mockRestore();
+      clearTimeoutSpy.mockRestore();
       await server.close();
       await fs.rm(root, { recursive: true, force: true });
     }
