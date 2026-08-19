@@ -5,6 +5,7 @@ import { request as httpRequest, type IncomingMessage } from "node:http";
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
@@ -13,6 +14,7 @@ import {
   callMcpTool,
   createCodegraphMcpHandlers,
   createCodegraphMcpProtocolServer,
+  createParseErrorReportingStdin,
   listCodegraphMcpTools,
   startCodegraphMcpHttpServer,
   DEFAULT_MCP_HTTP_SESSION_MAX_COUNT,
@@ -158,6 +160,29 @@ async function postRawHttpJson(
 }
 
 describe("codegraph MCP handlers", () => {
+  describe("MCP stdio parse framing", () => {
+    it("reports a malformed frame and forwards the next valid frame", async () => {
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const filtered = createParseErrorReportingStdin(input, output);
+      let forwarded = "";
+      let reported = "";
+      filtered.setEncoding("utf8");
+      output.setEncoding("utf8");
+      filtered.on("data", (chunk: string) => {
+        forwarded += chunk;
+      });
+      output.on("data", (chunk: string) => {
+        reported += chunk;
+      });
+      const ended = new Promise<void>((resolve) => filtered.on("end", resolve));
+      input.end('{bad}\n{"jsonrpc":"2.0","id":0,"method":"tools/list","params":{}}\n');
+      await ended;
+      expect(JSON.parse(reported)).toMatchObject({ id: null, error: { code: -32700 } });
+      expect(forwarded).toContain('"id":0');
+    });
+  });
+
   it("serves real MCP tool listing over a specified local HTTP port", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function ok(): number { return 1; }\n", "utf8");

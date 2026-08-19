@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import path from "node:path";
+import { Transform, type Readable, type Writable } from "node:stream";
 import {
   createMcpHandler,
   isInitializeRequest,
@@ -12,7 +13,7 @@ import {
   Server,
   type CallToolResult,
 } from "@modelcontextprotocol/server";
-import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import { StdioServerTransport, serveStdio } from "@modelcontextprotocol/server/stdio";
 import {
   NodeStreamableHTTPServerTransport,
   originValidation,
@@ -168,6 +169,7 @@ export const DEFAULT_MCP_HTTP_SESSION_EVICTION_INTERVAL_MS = 60_000;
 export const DEFAULT_MCP_HTTP_BODY_TIMEOUT_MS = 30_000;
 export const DEFAULT_MCP_TOOL_TIMEOUT_MS = 30 * 60 * 1000;
 const MAX_MCP_HTTP_BODY_TIMEOUT_MS = 2_147_483_647;
+const MAX_MCP_STDIO_FRAME_BYTES = 10 * 1024 * 1024;
 const MAX_MCP_TOOL_TIMEOUT_MS = 2_147_483_647;
 export const DEFAULT_MCP_TOOL_CONCURRENCY = 4;
 function normalizeMcpToolConcurrency(value: number): number {
@@ -1341,6 +1343,45 @@ function createCodegraphMcpProtocolFactory(
   };
 }
 
+export function createParseErrorReportingStdin(input: Readable, output: Writable): Readable {
+  let pending = Buffer.alloc(0);
+  const filter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      pending = Buffer.concat([pending, chunk]);
+      let newline = pending.indexOf(10);
+      while (newline >= 0) {
+        const frame = pending.subarray(0, newline);
+        pending = pending.subarray(newline + 1);
+        if (frame.length > MAX_MCP_STDIO_FRAME_BYTES) {
+          callback(new Error("MCP stdio frame exceeded 10 MiB."));
+          return;
+        }
+        try {
+          JSON.parse(frame.toString("utf8"));
+          this.push(frame);
+          this.push("\n");
+        } catch {
+          output.write(
+            `${JSON.stringify({
+              jsonrpc: "2.0",
+              id: null,
+              error: { code: ProtocolErrorCode.ParseError, message: "Parse error" },
+            })}\n`,
+          );
+        }
+        newline = pending.indexOf(10);
+      }
+      if (pending.length > MAX_MCP_STDIO_FRAME_BYTES) {
+        callback(new Error("MCP stdio frame exceeded 10 MiB."));
+        return;
+      }
+      callback();
+    },
+  });
+  input.pipe(filter);
+  return filter;
+}
+
 export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Promise<void> {
   const configuredMcpToolTimeout =
     options.mcpToolTimeoutMs === undefined ? DEFAULT_MCP_TOOL_TIMEOUT_MS : options.mcpToolTimeoutMs;
@@ -1365,7 +1406,13 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
     options.mcpToolConcurrency ?? DEFAULT_MCP_TOOL_CONCURRENCY,
     mcpToolTimeoutMs,
   );
+  const transport = new StdioServerTransport(
+    createParseErrorReportingStdin(process.stdin, process.stdout),
+    process.stdout,
+    { maxBufferSize: MAX_MCP_STDIO_FRAME_BYTES },
+  );
   const handle = serveStdio(protocolFactory.create, {
+    transport,
     legacy: "serve",
     onerror: (error) => {
       console.error(`[codegraph] MCP stdio error: ${error.message}`);
@@ -1384,7 +1431,6 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
     await protocolFactory.drain();
     session.invalidate();
   }
-  // Ensure orphaned stdio servers do not linger after the client is gone.
   process.exitCode = 0;
 }
 
