@@ -2071,72 +2071,75 @@ describe("Cache invalidation and strict hashing", () => {
       return handle;
     });
 
-    index.graph.nodes.add(normalize(path.join(root, "rename-failure.ts")));
-    const originalRename = fsp.rename.bind(fsp);
-    const renameSpy = vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
-      if (path.resolve(String(to)) === path.resolve(snapshotPath)) {
-        throw new Error("simulated interrupted snapshot rename");
-      }
-      return await originalRename(from, to);
-    });
     try {
-      await rewriteProjectSnapshot(root, index);
-    } finally {
-      renameSpy.mockRestore();
-    }
-    expect(await readProjectSnapshot(snapshotPath)).toEqual(initialSnapshot);
-    expect(await projectSnapshotTempNames(root)).toEqual([]);
-
-    index.graph.nodes.add(normalize(path.join(root, "partial-write.ts")));
-    let readableDuringPartialWrite = false;
-    const originalWriteFile = fsp.writeFile.bind(fsp);
-    const partialWriteSpy = vi.spyOn(fsp, "writeFile").mockImplementation(async (...args) => {
-      const candidate = typeof args[0] === "string" ? args[0] : undefined;
-      const snapshotPrefix = `.${path.basename(snapshotPath)}.`;
-      if (!candidate || !path.basename(candidate).startsWith(snapshotPrefix)) {
-        return await originalWriteFile(...args);
-      }
-      await originalWriteFile(candidate, Buffer.from("truncated snapshot"), { flag: "wx" });
+      index.graph.nodes.add(normalize(path.join(root, "rename-failure.ts")));
+      const originalRename = fsp.rename.bind(fsp);
+      const renameSpy = vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
+        if (path.resolve(String(to)) === path.resolve(snapshotPath)) {
+          throw new Error("simulated interrupted snapshot rename");
+        }
+        return await originalRename(from, to);
+      });
       try {
-        await readProjectSnapshot(snapshotPath);
-        readableDuringPartialWrite = true;
-      } catch {
-        readableDuringPartialWrite = false;
+        await rewriteProjectSnapshot(root, index);
+      } finally {
+        renameSpy.mockRestore();
       }
-      throw new Error("simulated interrupted snapshot write");
-    });
-    try {
+      expect(await readProjectSnapshot(snapshotPath)).toEqual(initialSnapshot);
+      expect(await projectSnapshotTempNames(root)).toEqual([]);
+
+      index.graph.nodes.add(normalize(path.join(root, "partial-write.ts")));
+      let readableDuringPartialWrite = false;
+      const originalWriteFile = fsp.writeFile.bind(fsp);
+      const partialWriteSpy = vi.spyOn(fsp, "writeFile").mockImplementation(async (...args) => {
+        const candidate = typeof args[0] === "string" ? args[0] : undefined;
+        const snapshotPrefix = `.${path.basename(snapshotPath)}.`;
+        if (!candidate || !path.basename(candidate).startsWith(snapshotPrefix)) {
+          return await originalWriteFile(...args);
+        }
+        await originalWriteFile(candidate, Buffer.from("truncated snapshot"), { flag: "wx" });
+        try {
+          await readProjectSnapshot(snapshotPath);
+          readableDuringPartialWrite = true;
+        } catch {
+          readableDuringPartialWrite = false;
+        }
+        throw new Error("simulated interrupted snapshot write");
+      });
+      try {
+        await rewriteProjectSnapshot(root, index);
+      } finally {
+        partialWriteSpy.mockRestore();
+      }
+      expect(readableDuringPartialWrite).toBe(true);
+      expect(await readProjectSnapshot(snapshotPath)).toEqual(initialSnapshot);
+      expect(await projectSnapshotTempNames(root)).toEqual([]);
+
+      const staleTempPath = path.join(
+        path.dirname(snapshotPath),
+        `.${path.basename(snapshotPath)}.123.00000000-0000-0000-0000-000000000001.tmp`,
+      );
+      const freshTempPath = path.join(
+        path.dirname(snapshotPath),
+        `.${path.basename(snapshotPath)}.456.00000000-0000-0000-0000-000000000002.tmp`,
+      );
+      await fsp.writeFile(staleTempPath, "stale", "utf8");
+      const staleTime = new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000);
+      await fsp.utimes(staleTempPath, staleTime, staleTime);
+      await fsp.writeFile(freshTempPath, "active", "utf8");
+
+      index.graph.nodes.add(normalize(path.join(root, "successful-write.ts")));
       await rewriteProjectSnapshot(root, index);
+
+      await expect(fsp.stat(staleTempPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fsp.readFile(freshTempPath, "utf8")).resolves.toBe("active");
+      expect(await projectSnapshotTempNames(root)).toEqual([path.basename(freshTempPath)]);
+      const finalSnapshot = await readProjectSnapshot(snapshotPath);
+      expect(finalSnapshot.graph).not.toEqual(initialSnapshot.graph);
+      expect(snapshotTempSyncs).toBeGreaterThan(0);
     } finally {
-      partialWriteSpy.mockRestore();
+      openSpy.mockRestore();
     }
-    expect(readableDuringPartialWrite).toBe(true);
-    expect(await readProjectSnapshot(snapshotPath)).toEqual(initialSnapshot);
-    expect(await projectSnapshotTempNames(root)).toEqual([]);
-
-    const staleTempPath = path.join(
-      path.dirname(snapshotPath),
-      `.${path.basename(snapshotPath)}.123.00000000-0000-0000-0000-000000000001.tmp`,
-    );
-    const freshTempPath = path.join(
-      path.dirname(snapshotPath),
-      `.${path.basename(snapshotPath)}.456.00000000-0000-0000-0000-000000000002.tmp`,
-    );
-    await fsp.writeFile(staleTempPath, "stale", "utf8");
-    const staleTime = new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000);
-    await fsp.utimes(staleTempPath, staleTime, staleTime);
-    await fsp.writeFile(freshTempPath, "active", "utf8");
-
-    index.graph.nodes.add(normalize(path.join(root, "successful-write.ts")));
-    await rewriteProjectSnapshot(root, index);
-
-    await expect(fsp.stat(staleTempPath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fsp.readFile(freshTempPath, "utf8")).resolves.toBe("active");
-    expect(await projectSnapshotTempNames(root)).toEqual([path.basename(freshTempPath)]);
-    const finalSnapshot = await readProjectSnapshot(snapshotPath);
-    expect(finalSnapshot.graph).not.toEqual(initialSnapshot.graph);
-    openSpy.mockRestore();
-    expect(snapshotTempSyncs).toBeGreaterThan(0);
   });
 
   it("does not read unchanged tracked source files for partial cache validation", async () => {
