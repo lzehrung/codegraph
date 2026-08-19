@@ -24,12 +24,7 @@ export async function handleRenamePreviewCommand(context: RenamePreviewCommandCo
 
   let maxEdits: number | undefined;
   try {
-    maxEdits = parseOptionalBoundedIntegerOption(
-      context.getOpt("--max-edits"),
-      "--max-edits",
-      1,
-      MAX_RENAME_EDITS,
-    );
+    maxEdits = parseOptionalBoundedIntegerOption(context.getOpt("--max-edits"), "--max-edits", 1, MAX_RENAME_EDITS);
   } catch (error: unknown) {
     exitWithError(context, error, 2);
   }

@@ -772,7 +772,9 @@ export function validateCliArgs(command: string, parsed: ParsedCliArgs): void {
       parsed.options.has("--sqlite") || parsed.options.has("--db"),
     ].filter(Boolean).length;
     if (outputSelectors > 1) {
-      throw new Error("graph output selectors are mutually exclusive: choose one of --json, --pretty, --dot, --mermaid, or --sqlite.");
+      throw new Error(
+        "graph output selectors are mutually exclusive: choose one of --json, --pretty, --dot, --mermaid, or --sqlite.",
+      );
     }
   }
 

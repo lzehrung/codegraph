@@ -1252,7 +1252,6 @@ describe("CLI command modules", () => {
     expect(result.stderr).toContain('Unknown command "missing-command".');
   });
   test("rejects unknown command options before execution", async () => {
-
     const cases = [
       ["graph", "--root", ".", "./src", "--json", "--nonesuch"],
       ["inspect", "--root", ".", "./src", "--json", "--nonesuch"],

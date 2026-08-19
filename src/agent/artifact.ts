@@ -530,11 +530,7 @@ function buildPortableSymbolPositions(
   return positions;
 }
 
-function compareSymbolEdgeSites(
-  root: string,
-  left: SymbolEdge["site"],
-  right: SymbolEdge["site"],
-): number {
+function compareSymbolEdgeSites(root: string, left: SymbolEdge["site"], right: SymbolEdge["site"]): number {
   if (!left && !right) return 0;
   if (!left) return -1;
   if (!right) return 1;
