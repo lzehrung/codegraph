@@ -941,9 +941,15 @@ function applyGraphNeighborhood(
   if (anchorFiles.size === 0) return;
 
   const reachable = collectReachableFiles(fileNeighborIndex, anchorFiles, depth);
+  const resultsByFile = new Map<string, MutableSearchResult[]>();
+  for (const result of resultMap.values()) {
+    const results = resultsByFile.get(result.file) ?? [];
+    results.push(result);
+    resultsByFile.set(result.file, results);
+  }
   for (const entry of reachable.values()) {
     const relFile = normalizeAgentFilePath(snapshot.root, entry.file);
-    const existingResults = [...resultMap.values()].filter((result) => result.file === relFile);
+    const existingResults = resultsByFile.get(relFile) ?? [];
     const fileMatch = matchTokenScore(relFile, query);
     if (fileMatch.score > 0) {
       const graphResult = upsertResult(resultMap, {
@@ -1009,10 +1015,14 @@ function resolveAnchorFiles(snapshot: AgentProjectSnapshot, from: string): Set<s
     }
   }
 
+  const filesBySymbolName = new Map<string, Set<string>>();
   for (const node of snapshot.symbolGraph.nodes.values()) {
-    if (node.name === from) {
-      anchor.add(normalizePath(node.file));
-    }
+    const files = filesBySymbolName.get(node.name) ?? new Set<string>();
+    files.add(normalizePath(node.file));
+    filesBySymbolName.set(node.name, files);
+  }
+  for (const file of filesBySymbolName.get(from) ?? []) {
+    anchor.add(file);
   }
 
   return anchor;
