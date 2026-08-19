@@ -203,7 +203,6 @@ function countCandidateDuplicateGroups(pairs: Map<string, PairEvidence>, crossFi
   return new Set(Array.from(parents, ([id]) => find(id))).size;
 }
 
-
 function normalizeDuplicateTarget(target: DuplicateTarget, projectRoot: string | undefined): DuplicateTarget {
   const normalizedFile = projectRoot
     ? toProjectDisplayPath(projectRoot, target.file)

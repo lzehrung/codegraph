@@ -151,9 +151,9 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
       throw new Error("expected review report");
     }
     expect(packet.packet.changedFiles).toHaveLength(DEFAULT_REVIEW_TRANSPORT_LIMITS.changedFiles);
-    expect(packet.packet.changedFiles.every((file) => file.symbols.length <= DEFAULT_REVIEW_TRANSPORT_LIMITS.symbolsPerFile)).toBe(
-      true,
-    );
+    expect(
+      packet.packet.changedFiles.every((file) => file.symbols.length <= DEFAULT_REVIEW_TRANSPORT_LIMITS.symbolsPerFile),
+    ).toBe(true);
   });
 
   it("rejects malformed percent encoding in review handles cleanly", async () => {

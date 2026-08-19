@@ -2480,7 +2480,10 @@ describe("Cache invalidation and strict hashing", () => {
     );
     await fsp.writeFile(
       path.join(appRoot, "tsconfig.json"),
-      JSON.stringify({ extends: "../../tsconfig.base.json", compilerOptions: { paths: { "@shared/*": ["shared/*"] } } }),
+      JSON.stringify({
+        extends: "../../tsconfig.base.json",
+        compilerOptions: { paths: { "@shared/*": ["shared/*"] } },
+      }),
       "utf8",
     );
     await fsp.writeFile(sourceFile, "import { value } from '@shared/value';\nexport { value };\n", "utf8");

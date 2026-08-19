@@ -290,7 +290,12 @@ describe("agent explain", () => {
       );
     }
 
-    const explanation = await explainCodegraphTarget({ root, target: "validateUser", maxReferences: 2, maxSnippets: 2 });
+    const explanation = await explainCodegraphTarget({
+      root,
+      target: "validateUser",
+      maxReferences: 2,
+      maxSnippets: 2,
+    });
 
     expect(explanation.references).toHaveLength(2);
     expect(explanation.omittedCounts.references).toBe(18);
