@@ -34,6 +34,7 @@ export async function resolveReadableFile(
   filePath: string,
 ): Promise<PreparedReadableFile> {
   const candidatePath = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(root, filePath);
+  assertCandidatePathWithinRoot(realRoot, root, candidatePath, "File");
   const candidateStat = await fs.stat(candidatePath, { bigint: true });
   assertRegularFileStat(candidateStat, candidatePath);
   const realPath = await assertRealPathCandidateWithinRoot(realRoot, candidatePath, "File");
@@ -88,12 +89,18 @@ export async function readConfinedUtf8File(realRoot: string, root: string, fileP
 
 export async function resolveProjectFile(realRoot: string, root: string, filePath: string): Promise<string> {
   const candidatePath = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(root, filePath);
+  assertCandidatePathWithinRoot(realRoot, root, candidatePath, "File");
   const realPath = await assertRealPathCandidateWithinRoot(realRoot, candidatePath, "File");
   const lexicalRelativePath = toProjectRelativePath(root, candidatePath);
-  if (lexicalRelativePath) return normalizePath(candidatePath);
+  if (lexicalRelativePath) return normalizePath(path.resolve(root, lexicalRelativePath));
   const realRelativePath = toProjectRelativePath(realRoot, realPath);
   if (realRelativePath) return normalizePath(path.resolve(root, realRelativePath));
   throw new Error(`File is outside project root: ${normalizePath(realPath)} (root: ${normalizePath(realRoot)})`);
+}
+
+function assertCandidatePathWithinRoot(realRoot: string, root: string, candidatePath: string, label: string): void {
+  if (isFilePathWithinRoot(root, candidatePath) || isFilePathWithinRoot(realRoot, candidatePath)) return;
+  throw new Error(`${label} is outside project root: ${normalizePath(candidatePath)} (root: ${normalizePath(root)})`);
 }
 
 export async function assertRealPathCandidateWithinRoot(

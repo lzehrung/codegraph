@@ -168,12 +168,23 @@ type ConfigHashResult = {
   error?: string;
 };
 
-export function normalizeIndexedFileInputs(projectRoot: string, files: readonly string[], label: string): string[] {
+export function normalizeIndexedFileInputs(
+  projectRoot: string,
+  files: readonly string[],
+  label: string,
+  realProjectRoot?: string,
+): string[] {
   const filesByIdentity = new Map<string, string>();
   for (const input of files) {
     if (!input) continue;
-    const file = assertFilePathWithinRoot(projectRoot, input, label);
-    const relativeFile = toProjectRelativePath(projectRoot, file);
+    let inputRoot = projectRoot;
+    if (!isFilePathWithinRoot(projectRoot, input) && realProjectRoot && isFilePathWithinRoot(realProjectRoot, input)) {
+      inputRoot = realProjectRoot;
+    }
+    const file = assertFilePathWithinRoot(inputRoot, input, label);
+    const relativeFile =
+      toProjectRelativePath(projectRoot, file) ??
+      (realProjectRoot ? toProjectRelativePath(realProjectRoot, file) : null);
     let canonicalFile = file;
     if (relativeFile !== null) {
       canonicalFile = normalizePath(path.resolve(projectRoot, relativeFile));
@@ -188,7 +199,7 @@ export async function normalizeIndexedFileInputsWithinRoot(
   label: string,
 ): Promise<string[]> {
   const realRoot = await fsp.realpath(projectRoot);
-  const normalized = normalizeIndexedFileInputs(projectRoot, files, label);
+  const normalized = normalizeIndexedFileInputs(projectRoot, files, label, realRoot);
   await Promise.all(
     normalized.map(async (file) => {
       try {

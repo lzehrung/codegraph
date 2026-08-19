@@ -198,7 +198,7 @@ describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache beh
         report: secondReport,
       });
       expect(secondReport.cache?.hits).toBe(0);
-      expect(secondReport.workerPool?.tasksSubmitted).toBe(1);
+      expect(secondReport.workerPool?.tasksSubmitted).toBe(0);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

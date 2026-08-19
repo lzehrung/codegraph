@@ -93,7 +93,7 @@ import {
 } from "./types.js";
 import { isNonNativeParserUnavailableError, isParserSyntaxTree } from "../parserBackend.js";
 import { isUnsupportedParserInputError, type PreparedSFCEmbeddedBlock } from "../languages/filePrep.js";
-import { assertRealPathCandidateWithinRoot } from "../util/confinedFile.js";
+
 import { buildSqlFactCache, buildSqlModuleIndex, sqlCorpusSignature, type SqlFactCache } from "../sql/sourceGraph.js";
 import { finalizeProjectIndex } from "./finalize.js";
 import { toManifestFileEntry, writeIndexManifestSnapshot } from "./build-manifest.js";
@@ -1119,11 +1119,8 @@ export async function buildProjectIndexFromFiles(
 ): Promise<ProjectIndex> {
   try {
     const useDiskCache = (opts?.cache ?? "off") === "disk";
-    const normalizedInputFiles = normalizeIndexedFileInputs(projectRoot, inputFiles, "Index file");
-    const realRoot = await fsp.realpath(projectRoot);
-    await Promise.all(
-      normalizedInputFiles.map((file) => assertRealPathCandidateWithinRoot(realRoot, file, "Index file")),
-    );
+    const normalizedInputFiles = await normalizeIndexedFileInputsWithinRoot(projectRoot, inputFiles, "Index file");
+
     return await buildIndexFromFileListShared(projectRoot, normalizedInputFiles, opts, {
       manifestMode: useDiskCache ? "read-only" : "off",
       warnNoFilesMessage: `Warning: No files provided for indexing in ${projectRoot}. Check the explicit file list and include/ignore filters. Diagnostic: codegraph doctor`,

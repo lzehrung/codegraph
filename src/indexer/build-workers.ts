@@ -10,7 +10,7 @@ import {
   isNativeTreeSitterAvailable,
 } from "../native/treeSitterNative.js";
 import type { NativeExtractResult, NativeExtractTask } from "../worker/nativeExtractWorker.js";
-import { NATIVE_WORKER_BATCH_SIZE } from "../worker/nativeExtractWorker.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES, NATIVE_WORKER_BATCH_SIZE } from "../worker/nativeExtractWorker.js";
 import { prepareFileForIndexing, type PreparedFileContext } from "./parse-context.js";
 import type { BuildOptions, BuildReport, WorkerPoolReport } from "./types.js";
 
@@ -146,6 +146,22 @@ function recordPreparedNativeExecutionOutcome(report: BuildReport | undefined, p
   });
 }
 
+function createOversizedNativeSourceFallback(
+  file: string,
+  support: LanguageSupport,
+  source: string,
+): PreparedFileContext {
+  const bytes = Buffer.byteLength(source, "utf8");
+  return {
+    file,
+    source: "",
+    sup: support,
+    nativeQueries: null,
+    nativeFallbackReason: "queryFailure",
+    nativeError: `source exceeds native byte limit (${bytes} > ${DEFAULT_NATIVE_SOURCE_MAX_BYTES})`,
+  };
+}
+
 export async function prepareFileContextForBuild(
   file: string,
   support: LanguageSupport,
@@ -155,6 +171,11 @@ export async function prepareFileContextForBuild(
   confinedRoot?: string,
 ): Promise<PreparedFileContext> {
   const source = confinedRoot ? await readConfinedUtf8File(confinedRoot, confinedRoot, file) : undefined;
+  if (source && Buffer.byteLength(source, "utf8") > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
+    const prepared = createOversizedNativeSourceFallback(file, support, source);
+    recordPreparedNativeExecutionOutcome(report, prepared);
+    return prepared;
+  }
   let prepared: PreparedFileContext;
   if (workerSetup.pool && !isSFCFile(file) && !isGraphOnlyLanguage(support.id)) {
     if (workerSetup.report) workerSetup.report.tasksSubmitted++;
