@@ -228,7 +228,9 @@ export async function prepareFileContextsForBuildBatch(
     );
     for (const outcome of workerResults) {
       const entry = outcome.entry;
-      if ("error" in outcome || "results" in outcome.result) {
+      const result = "result" in outcome ? outcome.result : null;
+      const missingResult = result === null || typeof result !== "object" || "results" in result;
+      if ("error" in outcome || missingResult) {
         const error =
           "error" in outcome ? outcome.error : new Error("Native worker returned no result for batch task.");
         if (isNativeRequiredUnavailableError(error)) throw error;
@@ -244,7 +246,7 @@ export async function prepareFileContextsForBuildBatch(
         results[entry.index] = prepared;
         continue;
       }
-      const prepared = workerResultToPrepared(outcome.result, entry.support, entry.file);
+      const prepared = workerResultToPrepared(result, entry.support, entry.file);
       recordPreparedNativeExecutionOutcome(report, prepared);
       results[entry.index] = prepared;
     }

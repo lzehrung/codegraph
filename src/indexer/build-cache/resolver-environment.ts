@@ -33,20 +33,36 @@ async function statInput(projectRoot: string, target: string): Promise<Resolutio
   try {
     const stat = await fsp.stat(target);
     if (!stat.isFile()) return null;
-    const content = await fsp.readFile(target);
-    const boundedContent =
-      content.length <= MAX_RESOLUTION_INPUT_HASH_BYTES
-        ? content
-        : Buffer.concat([
-            content.subarray(0, MAX_RESOLUTION_INPUT_HASH_BYTES / 2),
-            content.subarray(-MAX_RESOLUTION_INPUT_HASH_BYTES / 2),
-          ]);
-    return {
-      path: normalizedRelativePath(projectRoot, target),
-      mtimeMs: stat.mtimeMs,
-      size: stat.size,
-      contentHash: crypto.createHash("sha256").update(boundedContent).digest("hex"),
-    };
+    if (stat.size <= MAX_RESOLUTION_INPUT_HASH_BYTES) {
+      const content = await fsp.readFile(target);
+      return {
+        path: normalizedRelativePath(projectRoot, target),
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+        contentHash: crypto.createHash("sha256").update(content).digest("hex"),
+      };
+    }
+
+    // Match the historical first-half/last-half fingerprint without reading the whole file.
+    const edgeBytes = MAX_RESOLUTION_INPUT_HASH_BYTES / 2;
+    const first = Buffer.allocUnsafe(edgeBytes);
+    const last = Buffer.allocUnsafe(edgeBytes);
+    const handle = await fsp.open(target, "r");
+    try {
+      const firstRead = await handle.read(first, 0, edgeBytes, 0);
+      const lastRead = await handle.read(last, 0, edgeBytes, Math.max(0, stat.size - edgeBytes));
+      const hash = crypto.createHash("sha256");
+      hash.update(first.subarray(0, firstRead.bytesRead));
+      hash.update(last.subarray(0, lastRead.bytesRead));
+      return {
+        path: normalizedRelativePath(projectRoot, target),
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+        contentHash: hash.digest("hex"),
+      };
+    } finally {
+      await handle.close();
+    }
   } catch {
     return null;
   }

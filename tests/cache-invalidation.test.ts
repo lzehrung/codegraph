@@ -3167,6 +3167,45 @@ describe("Cache invalidation and strict hashing", () => {
     await expect(resolverEnvironment.computeResolverEnvironmentFingerprint(root, files)).resolves.toBeNull();
   });
 
+  it("bounds resolver fingerprint reads for oversized lockfiles", async () => {
+    const root = await mkTmpDir("dg-node-modules-hash-cap-");
+    const lockPath = path.join(root, "package-lock.json");
+    const edgeBytes = 1_048_576 / 2;
+    const oversizedLock = Buffer.concat([
+      Buffer.alloc(edgeBytes, 0x61),
+      Buffer.alloc(1_024, 0x62),
+      Buffer.alloc(edgeBytes, 0x63),
+    ]);
+    const readLengths: number[] = [];
+    const open = fsp.open.bind(fsp);
+    const openSpy = vi.spyOn(fsp, "open").mockImplementation(async (target, flags, mode) => {
+      const handle = await open(target, flags, mode);
+      if (path.resolve(String(target)) === lockPath) {
+        const originalRead = handle.read.bind(handle);
+        handle.read = async (buffer, offset, length, position) => {
+          if (typeof length === "number") readLengths.push(length);
+          return originalRead(buffer, offset, length, position);
+        };
+      }
+      return handle;
+    });
+    try {
+      await fsp.mkdir(path.join(root, "node_modules"), { recursive: true });
+      await fsp.writeFile(lockPath, oversizedLock);
+
+      const first = await resolverEnvironment.computeResolverEnvironmentFingerprint(root, []);
+      const second = await resolverEnvironment.computeResolverEnvironmentFingerprint(root, []);
+
+      expect(first).toBeTruthy();
+      expect(second).toBe(first);
+      expect(readLengths).toEqual([edgeBytes, edgeBytes, edgeBytes, edgeBytes]);
+      expect(readLengths.every((length) => length <= 1_048_576)).toBe(true);
+    } finally {
+      openSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reuses nested node-module caches after manifest paths are rebased", async () => {
     const root = await mkTmpDir("dg-node-modules-reuse-");
     const entryFile = path.join(root, "packages", "app", "src", "entry.ts");
