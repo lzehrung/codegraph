@@ -61,15 +61,18 @@ export async function checkMarkdownLinksInFiles(
 ): Promise<MarkdownLinkCheckResult> {
   const root = path.resolve(projectRoot);
   const realRoot = await fsp.realpath(root);
-  const markdownFiles = Array.from(
-    new Set(
-      Array.from(files, (file) => {
-        const absoluteFile = path.resolve(root, file);
-        if (!isFilePathWithinRoot(root, absoluteFile)) return absoluteFile;
-        return path.resolve(realRoot, path.relative(root, absoluteFile));
-      }),
-    ),
-  )
+  const markdownFileCandidates = await Promise.all(
+    Array.from(files, async (file) => {
+      const absoluteFile = path.resolve(root, file);
+      if (isFilePathWithinRoot(root, absoluteFile)) return path.resolve(realRoot, path.relative(root, absoluteFile));
+      try {
+        return await fsp.realpath(absoluteFile);
+      } catch {
+        return absoluteFile;
+      }
+    }),
+  );
+  const markdownFiles = Array.from(new Set(markdownFileCandidates))
     .filter((file) => isFilePathWithinRoot(realRoot, file))
     .filter((file) => supportForFile(file)?.id === "markdown");
   const targetStatusByPath = new Map<string, Promise<TargetStatus>>();

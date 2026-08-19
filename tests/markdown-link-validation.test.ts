@@ -178,4 +178,32 @@ describe("Markdown link validation", () => {
       ]);
     },
   );
+
+  it("accepts aliased file inputs when the project root is canonical", async (context) => {
+    const root = await makeRoot("symlink-file-alias-root");
+    const alias = `${root}-alias`;
+    try {
+      await writeFile(root, "README.md", "[Missing](./missing.md)\n");
+      if (!(await tryCreateDirectorySymlink(root, alias))) {
+        context.skip();
+        return;
+      }
+
+      const result = await checkMarkdownLinksInFiles(root, [path.join(alias, "README.md")]);
+
+      expect(result.summary).toMatchObject({ filesScanned: 1, linksChecked: 1, failures: 1 });
+      expect(result.failures).toEqual([
+        expect.objectContaining({
+          file: "README.md",
+          reason: "missing_file",
+          target: "missing.md",
+        }),
+      ]);
+    } finally {
+      await Promise.all([
+        fsp.rm(root, { recursive: true, force: true }),
+        fsp.rm(alias, { recursive: true, force: true }),
+      ]);
+    }
+  });
 });
