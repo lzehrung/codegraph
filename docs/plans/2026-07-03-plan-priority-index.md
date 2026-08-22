@@ -4,9 +4,11 @@ This is the live index for plans that still need a decision or implementation. C
 
 ## Next
 
-1. `2026-07-25-performance-program-index.md`
+1. `2026-08-22-library-review-remediation.md`
+   - Sequence the five pull requests from the v2.1.2 library review; it owns PR 1 and schedules the native-startup work below as its PR 2.
+2. `2026-07-25-performance-program-index.md`
    - Keep the shared performance baseline and coordinate the remaining native-startup work.
-2. `2026-07-25-native-runtime-startup.md`
+3. `2026-07-25-native-runtime-startup.md`
    - Reduce native fingerprint and startup costs after validating installed-user impact.
 
 ## Planned
