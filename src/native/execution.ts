@@ -14,6 +14,7 @@ import type {
 } from "./contracts.js";
 import { getCachedNormalizedQuery, normalizeNativeQueryForSupport } from "./queries.js";
 import { loadBinding, resolveNativeBindingState, throwIfNativeRequiredUnavailable } from "./runtime.js";
+import { isColumnarSyntaxTree, nativeShapeMismatchMessage } from "./treeShape.js";
 
 export function isNativeDuplicateTokenizationAvailable(mode?: NativeRuntimeMode): boolean {
   const state = resolveNativeBindingState(mode);
@@ -183,9 +184,13 @@ export function getNativeSyntaxTreeExecution(
     };
   }
   try {
-    return {
-      tree: state.binding.parseSyntaxTree(source, support.id),
-    };
+    const tree = state.binding.parseSyntaxTree(source, support.id) ?? null;
+    // A missing tree is a tolerated state; a present-but-legacy tree means the installed
+    // native package predates the columnar projection and cannot be read here.
+    if (tree !== null && !isColumnarSyntaxTree(tree)) {
+      return { tree: null, fallbackReason: "unavailable", error: nativeShapeMismatchMessage() };
+    }
+    return { tree };
   } catch (error) {
     return {
       tree: null,

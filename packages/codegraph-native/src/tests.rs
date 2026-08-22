@@ -1,13 +1,42 @@
 use super::{
-    extract_language, parse_syntax_tree, run_imports_query_compact, run_language_queries, run_query,
-    supported_language_ids,
+    extract_language_parts, parse_syntax_tree_columns, run_imports_query_compact,
+    run_language_queries, run_query, supported_language_ids,
 };
+use crate::projection::ProjectedColumns;
 use crate::languages::language_for_id;
 use crate::parser_pool::{parse_invocations_for_tests, reset_parse_invocations_for_tests};
 use crate::query::execute_query;
 use crate::types::NativeMatch;
 use std::collections::HashSet;
 use tree_sitter::Parser;
+
+/// Column-by-column equality between two projections of the same source.
+fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, context: &str) {
+    assert_eq!(left.root_id, right.root_id, "{context}: root id");
+    assert_eq!(left.node_count(), right.node_count(), "{context}: node count");
+    assert_eq!(left.kinds, right.kinds, "{context}: kind table");
+    assert_eq!(left.field_names, right.field_names, "{context}: field name table");
+    assert_eq!(left.kind_ids, right.kind_ids, "{context}: kind ids");
+    assert_eq!(left.parent_ids, right.parent_ids, "{context}: parent ids");
+    assert_eq!(left.named, right.named, "{context}: named flags");
+    assert_eq!(left.start_row, right.start_row, "{context}: start rows");
+    assert_eq!(left.start_column, right.start_column, "{context}: start columns");
+    assert_eq!(left.start_index, right.start_index, "{context}: start indexes");
+    assert_eq!(left.end_row, right.end_row, "{context}: end rows");
+    assert_eq!(left.end_column, right.end_column, "{context}: end columns");
+    assert_eq!(left.end_index, right.end_index, "{context}: end indexes");
+    assert_eq!(left.child_offsets, right.child_offsets, "{context}: child offsets");
+    assert_eq!(left.child_ids, right.child_ids, "{context}: child ids");
+    assert_eq!(
+        left.child_field_name_ids, right.child_field_name_ids,
+        "{context}: child field name ids"
+    );
+    assert_eq!(
+        left.named_child_offsets, right.named_child_offsets,
+        "{context}: named child offsets"
+    );
+    assert_eq!(left.named_child_ids, right.named_child_ids, "{context}: named child ids");
+}
 
 
     fn parse_root(source: &str, language_id: &str) -> tree_sitter::Tree {
@@ -239,19 +268,13 @@ use tree_sitter::Parser;
                 "".to_string(),
             )
             .expect("separate native queries should succeed");
-            let separate_tree = parse_syntax_tree(source.to_string(), language_id.to_string())
+            let separate_tree = parse_syntax_tree_columns(source, language_id)
                 .expect("separate syntax tree projection should succeed");
 
             reset_parse_invocations_for_tests();
-            let combined = extract_language(
-                source.to_string(),
-                language_id.to_string(),
-                "".to_string(),
-                "".to_string(),
-                locals_query.to_string(),
-                "".to_string(),
-            )
-            .expect("combined native extraction should succeed");
+            let (combined_results, combined_tree) =
+                extract_language_parts(source, language_id, "", "", locals_query, "")
+                    .expect("combined native extraction should succeed");
 
             assert_eq!(
                 parse_invocations_for_tests(),
@@ -259,12 +282,13 @@ use tree_sitter::Parser;
                 "combined extraction should parse {language_id} exactly once"
             );
             assert_eq!(
-                combined.results, separate_results,
+                combined_results, separate_results,
                 "combined query results should match separate queries for {language_id}"
             );
-            assert_eq!(
-                combined.syntax_tree, separate_tree,
-                "combined projection should match separate projection for {language_id}"
+            assert_columns_match(
+                &combined_tree,
+                &separate_tree,
+                &format!("combined projection should match separate projection for {language_id}"),
             );
         }
     }
@@ -443,23 +467,28 @@ fn run_query_returns_full_capture_metadata() {
 
 #[test]
 fn parse_syntax_tree_projects_parent_and_child_links() {
-    let tree = parse_syntax_tree("const value = 1;".to_string(), "js".to_string())
+    let tree = parse_syntax_tree_columns("const value = 1;", "js")
         .expect("syntax tree projection should succeed");
 
     assert_eq!(tree.root_id, 0);
-    assert!(!tree.nodes.is_empty());
-    let root = &tree.nodes[tree.root_id as usize];
-    assert_eq!(root.parent_id, -1);
-    assert!(!root.child_ids.is_empty());
+    assert!(tree.node_count() > 0);
+    let root = tree.root_id as usize;
+    assert_eq!(tree.parent_ids[root], -1);
 
-    let first_child = &tree.nodes[root.child_ids[0] as usize];
-    assert_eq!(first_child.parent_id, tree.root_id as i32);
+    let root_children = tree.child_offsets[root + 1] - tree.child_offsets[root];
+    assert!(root_children > 0, "root should project its children");
+
+    let first_child = tree.child_ids[tree.child_offsets[root] as usize] as usize;
+    assert_eq!(tree.parent_ids[first_child], tree.root_id as i32);
+    assert_eq!(tree.kinds[tree.kind_ids[root] as usize], "program");
 }
 
 #[test]
 fn parse_syntax_tree_rejects_unsupported_languages() {
-    let error = parse_syntax_tree("value".to_string(), "unknown".to_string())
-        .expect_err("unsupported language should fail");
+    // `expect_err` would need `Debug` on the projected tree, which holds typed arrays.
+    let Err(error) = parse_syntax_tree_columns("value", "unknown") else {
+        panic!("unsupported language should fail");
+    };
 
     assert!(
         error.to_string().contains("Unsupported language"),

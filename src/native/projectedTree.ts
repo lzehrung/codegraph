@@ -1,4 +1,4 @@
-import type { NativePoint, NativeSyntaxNode, NativeSyntaxTree } from "./treeSitterNative.js";
+import type { NativePoint, NativeSyntaxTree } from "./treeSitterNative.js";
 import {
   buildByteToStringIndexMap,
   stringIndexForByte,
@@ -11,20 +11,30 @@ export type ProjectedPosition = {
   column: number;
 };
 
+/**
+ * Reads the native columnar projection (see `NativeSyntaxTree`) through the ordinary
+ * `SyntaxNodeLike` node API.
+ *
+ * Nodes are materialized lazily and memoized by id, so a walk that touches a handful
+ * of nodes allocates a handful of wrappers rather than one per node in the file, and
+ * repeated lookups of the same id return the same instance.
+ */
 export class ProjectedSyntaxTree {
   readonly source: string;
-  private readonly nodesById: Map<number, ProjectedSyntaxNode>;
   /** Shared byte-offset -> UTF-16 string-index map; reuse this instead of rebuilding one. */
   readonly byteIndexMap: ByteToStringIndexMap;
   readonly rootNode: ProjectedSyntaxNode;
+  /** @internal Column storage; read through `ProjectedSyntaxNode`. */
+  readonly columns: NativeSyntaxTree;
+
+  private readonly nodes: Array<ProjectedSyntaxNode | undefined>;
+  private fieldNameIds: Map<string, number> | undefined;
 
   constructor(source: string, tree: NativeSyntaxTree) {
     this.source = source;
     this.byteIndexMap = buildByteToStringIndexMap(source);
-    this.nodesById = new Map();
-    for (const node of tree.nodes) {
-      this.nodesById.set(node.id, new ProjectedSyntaxNode(this, node));
-    }
+    this.columns = tree;
+    this.nodes = new Array<ProjectedSyntaxNode | undefined>(tree.nodeCount);
     const rootNode = this.nodeById(tree.rootId);
     if (!rootNode) {
       throw new Error("Projected syntax tree is missing the root node");
@@ -33,7 +43,12 @@ export class ProjectedSyntaxTree {
   }
 
   nodeById(id: number): ProjectedSyntaxNode | undefined {
-    return this.nodesById.get(id);
+    if (id < 0 || id >= this.columns.nodeCount) return undefined;
+    const existing = this.nodes[id];
+    if (existing) return existing;
+    const created = new ProjectedSyntaxNode(this, id);
+    this.nodes[id] = created;
+    return created;
   }
 
   stringIndexForByte(byteIndex: number): number {
@@ -43,39 +58,54 @@ export class ProjectedSyntaxTree {
   positionForPoint(point: NativePoint): ProjectedPosition {
     return stringPositionForBytePoint(this.byteIndexMap, point);
   }
+
+  /** @internal Resolve an interned field name, or `undefined` when the grammar never emits it. */
+  fieldNameId(fieldName: string): number | undefined {
+    if (!this.fieldNameIds) {
+      this.fieldNameIds = new Map(this.columns.fieldNames.map((name, index) => [name, index]));
+    }
+    return this.fieldNameIds.get(fieldName);
+  }
 }
 
 export class ProjectedSyntaxNode {
   private readonly tree: ProjectedSyntaxTree;
-  private readonly raw: NativeSyntaxNode;
+  readonly id: number;
 
-  constructor(tree: ProjectedSyntaxTree, raw: NativeSyntaxNode) {
+  constructor(tree: ProjectedSyntaxTree, id: number) {
     this.tree = tree;
-    this.raw = raw;
-  }
-
-  get id(): number {
-    return this.raw.id;
+    this.id = id;
   }
 
   get type(): string {
-    return this.raw.nodeType;
+    const columns = this.tree.columns;
+    return columns.kinds[columns.kindIds[this.id]!]!;
   }
 
   get startIndex(): number {
-    return this.tree.stringIndexForByte(this.raw.start.index);
+    return this.tree.stringIndexForByte(this.tree.columns.startIndex[this.id]!);
   }
 
   get endIndex(): number {
-    return this.tree.stringIndexForByte(this.raw.end.index);
+    return this.tree.stringIndexForByte(this.tree.columns.endIndex[this.id]!);
   }
 
   get startPosition(): ProjectedPosition {
-    return this.tree.positionForPoint(this.raw.start);
+    const columns = this.tree.columns;
+    return this.tree.positionForPoint({
+      row: columns.startRow[this.id]!,
+      column: columns.startColumn[this.id]!,
+      index: columns.startIndex[this.id]!,
+    });
   }
 
   get endPosition(): ProjectedPosition {
-    return this.tree.positionForPoint(this.raw.end);
+    const columns = this.tree.columns;
+    return this.tree.positionForPoint({
+      row: columns.endRow[this.id]!,
+      column: columns.endColumn[this.id]!,
+      index: columns.endIndex[this.id]!,
+    });
   }
 
   get text(): string {
@@ -83,48 +113,46 @@ export class ProjectedSyntaxNode {
   }
 
   get parent(): ProjectedSyntaxNode | null {
-    if (this.raw.parentId < 0) return null;
-    return this.tree.nodeById(this.raw.parentId) ?? null;
+    const parentId = this.tree.columns.parentIds[this.id]!;
+    if (parentId < 0) return null;
+    return this.tree.nodeById(parentId) ?? null;
   }
 
   get namedChildren(): ProjectedSyntaxNode[] {
-    return this.raw.namedChildIds.flatMap((id) => {
-      const child = this.tree.nodeById(id);
-      return child ? [child] : [];
-    });
+    const columns = this.tree.columns;
+    return this.collect(columns.namedChildIds, columns.namedChildOffsets);
   }
 
   get previousNamedSibling(): ProjectedSyntaxNode | null {
-    const parent = this.parent;
-    if (!parent) return null;
-    const siblings = parent.namedChildren;
-    const currentIndex = siblings.findIndex((node) => node.id === this.id);
-    if (currentIndex <= 0) return null;
-    return siblings[currentIndex - 1] ?? null;
+    const columns = this.tree.columns;
+    return this.previousIn(columns.namedChildIds, columns.namedChildOffsets);
   }
 
   get previousSibling(): ProjectedSyntaxNode | null {
-    const parent = this.parent;
-    if (!parent) return null;
-    const siblings = parent.raw.childIds.flatMap((id) => {
-      const sibling = this.tree.nodeById(id);
-      return sibling ? [sibling] : [];
-    });
-    const currentIndex = siblings.findIndex((node) => node.id === this.id);
-    if (currentIndex <= 0) return null;
-    return siblings[currentIndex - 1] ?? null;
+    const columns = this.tree.columns;
+    return this.previousIn(columns.childIds, columns.childOffsets);
   }
 
   child(index: number): ProjectedSyntaxNode | null {
-    const childId = this.raw.childIds[index];
-    if (childId === undefined) return null;
-    return this.tree.nodeById(childId) ?? null;
+    const columns = this.tree.columns;
+    const start = columns.childOffsets[this.id]!;
+    const end = columns.childOffsets[this.id + 1]!;
+    if (index < 0 || index >= end - start) return null;
+    return this.tree.nodeById(columns.childIds[start + index]!) ?? null;
   }
 
   childForFieldName(fieldName: string): ProjectedSyntaxNode | null {
-    const childIndex = this.raw.childFieldNames.findIndex((name) => name === fieldName);
-    if (childIndex < 0) return null;
-    return this.child(childIndex);
+    const fieldNameId = this.tree.fieldNameId(fieldName);
+    if (fieldNameId === undefined) return null;
+    const columns = this.tree.columns;
+    const start = columns.childOffsets[this.id]!;
+    const end = columns.childOffsets[this.id + 1]!;
+    for (let slot = start; slot < end; slot += 1) {
+      if (columns.childFieldNameIds[slot] === fieldNameId) {
+        return this.tree.nodeById(columns.childIds[slot]!) ?? null;
+      }
+    }
+    return null;
   }
 
   descendantForIndex(startIndex: number, endIndex: number): ProjectedSyntaxNode {
@@ -143,6 +171,31 @@ export class ProjectedSyntaxNode {
       }
     }
     return this;
+  }
+
+  private collect(ids: Uint32Array, offsets: Uint32Array): ProjectedSyntaxNode[] {
+    const start = offsets[this.id]!;
+    const end = offsets[this.id + 1]!;
+    const out: ProjectedSyntaxNode[] = [];
+    for (let slot = start; slot < end; slot += 1) {
+      const node = this.tree.nodeById(ids[slot]!);
+      if (node) out.push(node);
+    }
+    return out;
+  }
+
+  /** Walk the parent's list backwards from this node without materializing the siblings. */
+  private previousIn(ids: Uint32Array, offsets: Uint32Array): ProjectedSyntaxNode | null {
+    const parentId = this.tree.columns.parentIds[this.id]!;
+    if (parentId < 0) return null;
+    const start = offsets[parentId]!;
+    const end = offsets[parentId + 1]!;
+    for (let slot = start; slot < end; slot += 1) {
+      if (ids[slot] !== this.id) continue;
+      if (slot === start) return null;
+      return this.tree.nodeById(ids[slot - 1]!) ?? null;
+    }
+    return null;
   }
 }
 

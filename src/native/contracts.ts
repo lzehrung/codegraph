@@ -24,21 +24,44 @@ export type NativeQueryResults = {
   importBindings: NativeMatch[];
 };
 
-export type NativeSyntaxNode = {
-  id: number;
-  parentId: number;
-  nodeType: string;
-  named: boolean;
-  start: NativePoint;
-  end: NativePoint;
-  childIds: number[];
-  namedChildIds: number[];
-  childFieldNames: string[];
-};
-
+/**
+ * Column-oriented projection of a Tree-sitter tree, mirroring the Rust
+ * `NativeSyntaxTree`. Every column is a typed array indexed by node id, and node
+ * kinds and child field names are interned into string tables.
+ *
+ * This shape exists so the napi boundary and the worker-to-main-thread transfer cost
+ * scale with bytes rather than with node count: a file crosses as ~15 typed arrays
+ * plus a few hundred strings instead of thousands of objects. `ProjectedSyntaxTree`
+ * is the only reader; every other consumer sees the unchanged `SyntaxNodeLike` API.
+ *
+ * Child lists use compressed sparse row layout: the children of node `i` are
+ * `childIds[childOffsets[i] .. childOffsets[i + 1]]`, with `childFieldNameIds`
+ * parallel to `childIds`.
+ */
 export type NativeSyntaxTree = {
   rootId: number;
-  nodes: NativeSyntaxNode[];
+  nodeCount: number;
+  /** Distinct node kinds; `kindIds[i]` indexes this table. */
+  kinds: string[];
+  /** Distinct child field names; index 0 is always the empty name. */
+  fieldNames: string[];
+  kindIds: Uint32Array;
+  /** -1 for the root node. */
+  parentIds: Int32Array;
+  named: Uint8Array;
+  startRow: Uint32Array;
+  startColumn: Uint32Array;
+  /** UTF-8 byte offset, matching Tree-sitter's `start_byte()`. */
+  startIndex: Uint32Array;
+  endRow: Uint32Array;
+  endColumn: Uint32Array;
+  /** UTF-8 byte offset, matching Tree-sitter's `end_byte()`. */
+  endIndex: Uint32Array;
+  childOffsets: Uint32Array;
+  childIds: Uint32Array;
+  childFieldNameIds: Uint32Array;
+  namedChildOffsets: Uint32Array;
+  namedChildIds: Uint32Array;
 };
 
 export type NativeLanguageExtraction = {

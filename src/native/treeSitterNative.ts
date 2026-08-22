@@ -14,7 +14,6 @@ export type {
   NativeQueryScope,
   NativeRuntimeMode,
   NativeSingleQueryExecution,
-  NativeSyntaxNode,
   NativeSyntaxTree,
   NativeSyntaxTreeExecution,
   UnifiedQueryExecution,
