@@ -120,6 +120,18 @@ export type NativeSyntaxTreeExecution = {
   error?: string;
 };
 
+/**
+ * Query results plus the projected syntax tree from one native parse. Prefer this over
+ * separately calling query execution and tree execution: each is backed by its own
+ * Tree-sitter parse, so calling both on the same source parses it twice.
+ */
+export type NativeExtractionExecution = {
+  results: NativeQueryResults | null;
+  tree: NativeSyntaxTree | null;
+  fallbackReason?: NativeFallbackReason;
+  error?: string;
+};
+
 export type NativeRuntimeMode = "auto" | "on" | "off";
 
 /**

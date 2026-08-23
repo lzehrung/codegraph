@@ -8,6 +8,7 @@ export type {
   NativeFallbackReason,
   NativeMatch,
   NativeDuplicateTokens,
+  NativeExtractionExecution,
   NativePoint,
   NativeQueryExecution,
   NativeQueryResults,
@@ -43,6 +44,7 @@ export {
 
 export {
   getCompactImportsExecution,
+  getNativeExtractionExecution,
   getNativeQueryExecution,
   getNativeQueryExecutionForState,
   getNativeSingleQueryExecution,

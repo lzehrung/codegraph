@@ -6,6 +6,7 @@ import type {
   NativeBindingState,
   NativeQueryExecution,
   NativeDuplicateTokens,
+  NativeExtractionExecution,
   NativeQueryResults,
   NativeQueryScope,
   NativeRuntimeMode,
@@ -157,6 +158,59 @@ export function getNativeSingleQueryExecution(
   } catch (error) {
     return {
       matches: null,
+      fallbackReason: "queryFailure",
+      error: errorMessage(error),
+    };
+  }
+}
+
+/**
+ * Runs the full query set and projects the syntax tree from one Tree-sitter parse.
+ * Prefer this over calling {@link getNativeQueryExecution} and
+ * {@link getNativeSyntaxTreeExecution} on the same source: each parses independently,
+ * so calling both parses the file twice for no benefit. This is what the native worker
+ * pool already uses (`extractLanguage`, one parse per file); this is the same call for
+ * callers that need both results outside a worker.
+ */
+export function getNativeExtractionExecution(
+  source: string,
+  support: LanguageSupport,
+  mode?: NativeRuntimeMode,
+): NativeExtractionExecution {
+  const state = resolveNativeBindingState(mode);
+  throwIfNativeRequiredUnavailable(mode, state);
+  if (!state.loaded) {
+    return { results: null, tree: null, ...unavailableNativeFailure(state) };
+  }
+  if (!state.supportedLanguageIds.has(support.id)) {
+    return { results: null, tree: null, fallbackReason: "unsupportedLanguage" };
+  }
+  try {
+    const extraction = state.binding.extractLanguage(
+      source,
+      support.id,
+      getCachedNormalizedQuery(support, "imports"),
+      getCachedNormalizedQuery(support, "exports"),
+      getCachedNormalizedQuery(support, "locals"),
+      getCachedNormalizedQuery(support, "importBindings"),
+    );
+    const tree = extraction.syntaxTree ?? null;
+    // A missing tree is a tolerated state; a present-but-legacy tree means the installed
+    // native package predates the columnar projection and cannot be read here. Query
+    // results are unaffected by that mismatch, so they still come back.
+    if (tree !== null && !isColumnarSyntaxTree(tree)) {
+      return {
+        results: extraction.results,
+        tree: null,
+        fallbackReason: "unavailable",
+        error: nativeShapeMismatchMessage(),
+      };
+    }
+    return { results: extraction.results, tree };
+  } catch (error) {
+    return {
+      results: null,
+      tree: null,
       fallbackReason: "queryFailure",
       error: errorMessage(error),
     };

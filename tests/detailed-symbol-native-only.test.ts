@@ -98,6 +98,14 @@ describe("detailed symbol graph in native-only installs", () => {
           results: null,
           fallbackReason: "unavailable",
         })),
+        // prepareFileForIndexing calls this combined function (one parse for queries and
+        // the tree) rather than getNativeQueryExecution directly; mock it to the same
+        // unavailable outcome so this still exercises the same degraded path.
+        getNativeExtractionExecution: vi.fn(() => ({
+          results: null,
+          tree: null,
+          fallbackReason: "unavailable",
+        })),
         getNativeSyntaxTreeExecution: vi.fn(() => ({
           tree: null,
           fallbackReason: "unavailable",

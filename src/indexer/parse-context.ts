@@ -2,7 +2,7 @@ import { isGraphOnlyLanguage } from "../documentLinks.js";
 import type { LanguageExtensionMap } from "../languages.js";
 import { prepareSourceInput, type PreparedSFCEmbeddedBlock } from "../languages/filePrep.js";
 import {
-  getNativeQueryExecution,
+  getNativeExtractionExecution,
   getNativeSyntaxTreeExecution,
   type NativeQueryResults,
   type NativeRuntimeMode,
@@ -174,7 +174,14 @@ export async function prepareFileForIndexing(
       nativeError: `source exceeds native byte limit (${sourceBytes} > ${DEFAULT_NATIVE_SOURCE_MAX_BYTES})`,
     };
   }
-  const nativeExecution = getNativeQueryExecution(prep.source, prep.sup, native);
+  // One combined native call for queries and the syntax tree: they're independent native
+  // functions, each backed by its own Tree-sitter parse, so calling them separately parses
+  // the file twice. The worker path already avoids this via `extractLanguage`; this is the
+  // same call for the non-worker path (small projects below the worker auto-threshold, and
+  // SFC files, which are never routed to workers). Populating `syntaxTree` here lets
+  // `attemptParsePreparedFileContext`'s existing `if (context.syntaxTree)` branch reuse it
+  // instead of triggering a second parse via `getNativeSyntaxTreeExecution`.
+  const nativeExecution = getNativeExtractionExecution(prep.source, prep.sup, native);
 
   return {
     file,
@@ -183,6 +190,7 @@ export async function prepareFileForIndexing(
     ...(prep.embeddedBlocks ? { embeddedBlocks: prep.embeddedBlocks } : {}),
     ...(native ? { nativeMode: native } : {}),
     nativeQueries: nativeExecution.results,
+    syntaxTree: nativeExecution.tree,
     ...(nativeExecution.fallbackReason ? { nativeFallbackReason: nativeExecution.fallbackReason } : {}),
     ...(nativeExecution.error ? { nativeError: nativeExecution.error } : {}),
   };
