@@ -146,7 +146,9 @@ describe("native extraction worker", () => {
 
     expect(output.fallbackReason).toBe("unavailable");
     expect(output.syntaxTree).toBeNull();
-    expect(output.nativeResults).toBeNull();
+    // The tree failed to project, but the query results came from the same extractLanguage
+    // call and are unaffected by the tree's shape, so they should still come back.
+    expect(output.nativeResults).toEqual(results);
     expect(output.error).toContain(`@lzehrung/codegraph-native >= ${REQUIRED_NATIVE_EXTRACTION_VERSION}`);
     expect(output.error).toContain("legacy syntax-tree shape");
   });

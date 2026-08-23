@@ -238,7 +238,10 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
         task.importBindingsQuery,
       );
       // A missing tree is a tolerated state downstream; a present-but-legacy tree is a
-      // version mismatch this build cannot read, so only the latter fails the task.
+      // version mismatch this build cannot read, so only the latter fails the task. The
+      // query results came from the same extractLanguage call and are unaffected by the
+      // tree's shape, so they still come back -- matching getNativeExtractionExecution's
+      // handling of the same mismatch on the non-worker path.
       const syntaxTree = extraction.syntaxTree ?? null;
       if (syntaxTree !== null && !isColumnarSyntaxTree(syntaxTree)) {
         loadError = nativeShapeMismatchMessage();
@@ -246,7 +249,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
           filePath: task.filePath,
           languageId: task.languageId,
           ...(includeSource ? { source } : {}),
-          nativeResults: null,
+          nativeResults: extraction.results,
           compactResults: null,
           syntaxTree: null,
           fallbackReason: "unavailable",
