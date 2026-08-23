@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn rejects_depth_limit_without_stack_overflow() {
-        // Nested arrays: [[[[...]]]] — depth grows with brackets.
+        // Nested arrays: [[[[...]]]] - depth grows with brackets.
         let depth = 40usize;
         let source = format!("{}{}{}", "[".repeat(depth), "1", "]".repeat(depth));
         let tree = parse_js(&source);
