@@ -120,14 +120,15 @@ describe("native extraction worker", () => {
   });
 
   it("rejects a native binary that returns the legacy syntax-tree shape", async () => {
-    const legacyTree = { rootId: 0, nodes: [] } as unknown as NativeSyntaxTree;
+    const legacyTree = { rootId: 0, nodes: [] };
+    const binding = {
+      extractLanguage: () => ({ results, syntaxTree: legacyTree }),
+      runLanguageQueries: () => results,
+      supportedLanguageIds: () => ["ts"],
+    } as NativeBinding;
     const extract = createNativeExtractor({
       loadBinding: () => ({
-        binding: {
-          extractLanguage: () => ({ results, syntaxTree: legacyTree }),
-          runLanguageQueries: () => results,
-          supportedLanguageIds: () => ["ts"],
-        } satisfies NativeBinding,
+        binding,
         origin: { mode: "workspace", packageName: "@lzehrung/codegraph-native" },
       }),
       readFile: async () => "export const value = 1;\n",

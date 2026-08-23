@@ -15,7 +15,7 @@ import type {
 } from "./contracts.js";
 import { getCachedNormalizedQuery, normalizeNativeQueryForSupport } from "./queries.js";
 import { loadBinding, resolveNativeBindingState, throwIfNativeRequiredUnavailable } from "./runtime.js";
-import { isColumnarSyntaxTree, nativeShapeMismatchMessage } from "./treeShape.js";
+import { isColumnarSyntaxTree, nativeShapeMismatchMessage, REQUIRED_NATIVE_EXTRACTION_VERSION } from "./treeShape.js";
 
 export function isNativeDuplicateTokenizationAvailable(mode?: NativeRuntimeMode): boolean {
   const state = resolveNativeBindingState(mode);
@@ -184,6 +184,16 @@ export function getNativeExtractionExecution(
   }
   if (!state.supportedLanguageIds.has(support.id)) {
     return { results: null, tree: null, fallbackReason: "unsupportedLanguage" };
+  }
+  if (typeof state.binding.extractLanguage !== "function") {
+    return {
+      results: null,
+      tree: null,
+      fallbackReason: "unavailable",
+      error:
+        `@lzehrung/codegraph-native >= ${REQUIRED_NATIVE_EXTRACTION_VERSION} is required; ` +
+        "the installed native binary does not provide extractLanguage. Reinstall the native package.",
+    };
   }
   try {
     const extraction = state.binding.extractLanguage(
