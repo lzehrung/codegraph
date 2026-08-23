@@ -76,61 +76,6 @@ All six defects in [2026-07-25 native runtime startup](2026-07-25-native-runtime
 
 Four of six program acceptance criteria in [the performance program index](2026-07-25-performance-program-index.md) remain unchecked (`--version` at or under 100 ms, warm `orient` at or under 450 ms, warm `search` at or under 700 ms, cold CLI import at or under 1500 ms). This is the largest remaining latency item and the priority index already ranks it next.
 
-### F9: syntax-tree projection dominated per-file indexing throughput
-
-Status: fixed by PR 2b below.
-
-That startup program covers fixed per-process cost. This was a separate per-file throughput cost: the projected syntax tree crossed the napi boundary as one JS object per AST node, then crossed the worker boundary again as a structured clone of those objects.
-
-Measured on this repository (386 TypeScript files under `src/`, 3.13 MB, 882,142 projected AST nodes; best of 5 runs, Linux, Node 22.22, 4 CPUs, both encodings measured in one session under the same load):
-
-| Step                                               |   Before |          After |
-| -------------------------------------------------- | -------: | -------------: |
-| `runLanguageQueries` (one parse plus four queries) |  4.30 ms | 4.25 - 4.42 ms |
-| Tree projection added by `extractLanguage`         | 11.06 ms | 1.15 - 1.60 ms |
-| `structuredClone` of those trees (worker-to-main)  | 12.16 ms | 0.13 - 0.14 ms |
-| Worker path total, per file                        | 27.52 ms | 5.58 - 6.00 ms |
-
-The query cost is identical either side, which is the control: the change touches only projection and transfer. Projection is about 7x cheaper, the transfer about 87x cheaper, and the extraction step as a whole about 4.7x cheaper.
-
-Mechanics of the original cost:
-
-- `extract_language` unconditionally projected the tree, and the worker always returned it.
-- Every node carried `node_type: node.kind().to_string()`, allocating a Rust `String` per node even though `kind()` returns `&'static str` from a small interned set. Across napi that became a fresh JS string per node, about 882k strings on this repository, plus a `child_field_names: Vec<String>` per node with one mostly-empty entry per child.
-- The tree is consumed **sparsely but was transported wholly**. Its only index-build uses are `descendantForIndex` lookups for local classification and docstrings (`src/indexer/locals-and-exports.ts:496-503`), `supplementMethodLocalsFromSyntaxTree` (`:531-534`), and scope construction when query-driven locals do not apply (`:520-528`).
-- Workers auto-enable at 250 files (`NATIVE_WORKER_AUTO_FILE_THRESHOLD`, `src/indexer/build-workers.ts:21`), so every real repository takes this path by default.
-
-Ruled out by measurement, recorded so they are not re-investigated:
-
-- JS-side `new ProjectedSyntaxTree(...)` was already cheap: 60 ms for all files. `ProjectedSyntaxNode` is a thin lazy wrapper.
-- `namedChildren` allocating a fresh array per access costs 147 ms for a full walk of every node. Real, but an order of magnitude below projection and clone.
-- Moving the tree work into the worker does **not** work. `collectLocalsAndExportsFromSource` consumes resolved `imports` (`locals-and-exports.ts:522`, `:708`, `:967`), and those come from `collectImportsForFile`, which does filesystem, tsconfig, and workspace-manifest resolution on the main thread. Relocating locals extraction would mean relocating module resolution.
-- `extract_language` was never a regression. It was introduced in `bce06bc` (#246, v2.0.6) and made this path faster: the worker previously called `runLanguageQueries` and then `parseSyntaxTree`, parsing each source twice. That change collapsed two parses into one.
-- `Piscina.move()` zero-copy transfer is not worth adding. With the columnar encoding the clone is already 0.13 ms/file; transferring buffers would save a fraction of that in exchange for detached-buffer failure modes.
-
-### F10: worker threads still do not beat single-threaded indexing
-
-PR 2b removed the tree transport as the reason, but the original symptom persists, so the cause was only partly what F9 assumed.
-
-Cold `index --root . --cache disk` on a 4-CPU box (pool size 3), 811 indexed files:
-
-| Encoding |               Workers on |              Workers off |
-| -------- | -----------------------: | -----------------------: |
-| Before   |         27962 / 23977 ms |         25608 / 23764 ms |
-| After    | 24096 / 21134 / 20511 ms | 22657 / 20199 / 20331 ms |
-
-End-to-end cold indexing is roughly 12-15% faster, but workers-on is still no faster than workers-off. Extraction is now about 6 ms per file, so roughly 2.3 s of a 20 s build; parallelising 10% of the work cannot pay for the coordination.
-
-A CPU profile of a cold build points at what replaced it, in main-thread self time: garbage collection 3943 ms, `receiveMessageOnPort` 2430 ms, idle 2151 ms, `structuredClone` about 822 ms combined. The remaining marshalled payload is the query captures, not the tree: cloning one repository's worth of results costs 0.52 ms/file against 0.12 ms/file for the columnar trees, despite 882k AST nodes versus 50,846 captures. `NativeCapture` carries three strings plus two point objects per capture and has the shape problem the tree used to have.
-
-Follow-up candidates, in order:
-
-1. Give `NativeCapture` the same treatment: interned name and node-type tables plus flat position columns, keeping only capture `text` as a string.
-2. Re-measure whether the worker pool earns its place at all once marshalling is cheap; if the main thread stays the bottleneck, the honest answer may be to raise `NATIVE_WORKER_AUTO_FILE_THRESHOLD` or drop the pool for mid-sized repositories.
-3. Only then look at the main-thread serial phases (resolution, graph construction, snapshot writes) that the profile shows dominating.
-
-Reproduce with `packages/codegraph-native` built and `dist/` current; the measurement harness is a short script over `binding.runLanguageQueries` versus `binding.extractLanguage` on the repository's own `src/**/*.ts`, plus `structuredClone` of the returned trees.
-
 ### F5: documentation contracts that nothing enforces
 
 - **The package split is documented inconsistently.** `README.md` and `docs/library-api.md` use `@lzehrung/codegraph-core` in every example; `docs/agent-workflows.md` uses `@lzehrung/codegraph` for the same core APIs (`createCodeReviewSession`, `SessionManager`, `analyzeImpactStreaming`, `buildProjectIndex`, `querySymbols`, `textGrep`, `withPartialResults`, `collectImpactContext`, `listCandidateTestFiles`). Both resolve, but the 2.0.0 split exists specifically to steer library consumers to core, and the largest workflow doc points the other way.
@@ -165,6 +110,75 @@ At 2,346 lines it is the largest module in the repository and mixes five concern
 ### F8: small correctness nit in portable handles
 
 `parseAgentSqlHandle` (`src/agent/handles.ts:106-112`) has a `parts.length > 4` branch that returns `name` and `file` undecoded, unlike the 4-part branch at `:98-104` which calls `decodeHandlePart`. `formatAgentSqlHandle` always encodes both fields and `encodeURIComponent` escapes `:`, so the longer branch is unreachable from any handle codegraph produces. It is untested lenient-parse code that returns a differently shaped result than the supported path. `src/agent/handles.ts` sits at 45% branch coverage, the lowest of any runtime file in the report.
+
+### F9: syntax-tree projection dominated per-file indexing throughput
+
+Status: fixed.
+
+That startup program covers fixed per-process cost. This was a separate per-file throughput cost: the projected syntax tree crossed the napi boundary as one JS object per AST node, then crossed the worker boundary again as a structured clone of those objects.
+
+Measured on this repository (386 TypeScript files under `src/`, 3.13 MB, 882,142 projected AST nodes; best of 5 runs, Linux, Node 22.22, 4 CPUs, both encodings measured in one session under the same load):
+
+| Step                                               |   Before |          After |
+| -------------------------------------------------- | -------: | -------------: |
+| `runLanguageQueries` (one parse plus four queries) |  4.30 ms | 4.25 - 4.42 ms |
+| Tree projection added by `extractLanguage`         | 11.06 ms | 1.15 - 1.60 ms |
+| `structuredClone` of those trees (worker-to-main)  | 12.16 ms | 0.13 - 0.14 ms |
+| Worker path total, per file                        | 27.52 ms | 5.58 - 6.00 ms |
+
+The query cost is identical either side, which is the control: the change touches only projection and transfer. Projection is about 7x cheaper, the transfer about 87x cheaper, and the extraction step as a whole about 4.7x cheaper.
+
+Mechanics of the original cost:
+
+- `extract_language` unconditionally projected the tree, and the worker always returned it.
+- Every node carried `node_type: node.kind().to_string()`, allocating a Rust `String` per node even though `kind()` returns `&'static str` from a small interned set. Across napi that became a fresh JS string per node, about 882k strings on this repository, plus a `child_field_names: Vec<String>` per node with one mostly-empty entry per child.
+- The tree is consumed **sparsely but was transported wholly**. Its only index-build uses are `descendantForIndex` lookups for local classification and docstrings (`src/indexer/locals-and-exports.ts:496-503`), `supplementMethodLocalsFromSyntaxTree` (`:531-534`), and scope construction when query-driven locals do not apply (`:520-528`).
+- Workers auto-enable at 250 files (`NATIVE_WORKER_AUTO_FILE_THRESHOLD`, `src/indexer/build-workers.ts:21`), so every real repository takes this path by default.
+
+Ruled out by measurement, recorded so they are not re-investigated:
+
+- JS-side `new ProjectedSyntaxTree(...)` was already cheap: 60 ms for all files. `ProjectedSyntaxNode` is a thin lazy wrapper.
+- `namedChildren` allocating a fresh array per access costs 147 ms for a full walk of every node. Real, but an order of magnitude below projection and clone.
+- Moving the tree work into the worker does **not** work. `collectLocalsAndExportsFromSource` consumes resolved `imports` (`locals-and-exports.ts:522`, `:708`, `:967`), and those come from `collectImportsForFile`, which does filesystem, tsconfig, and workspace-manifest resolution on the main thread. Relocating locals extraction would mean relocating module resolution.
+- `extract_language` was never a regression. It was introduced in `bce06bc` (#246, v2.0.6) and made this path faster: the worker previously called `runLanguageQueries` and then `parseSyntaxTree`, parsing each source twice. That change collapsed two parses into one.
+- `Piscina.move()` zero-copy transfer is not worth adding. With the columnar encoding the clone is already 0.13 ms/file; transferring buffers would save a fraction of that in exchange for detached-buffer failure modes.
+
+Fixed by the columnar `NativeSyntaxTree` encoding: `packages/codegraph-native/src/projection.rs`, `src/native/projectedTree.ts`. See CHANGELOG-equivalent history: commit `perf(native): encode projected syntax trees as columns`.
+
+### F10: an invalid CLI comparison hid a real double-parse bug
+
+Status: corrected and fixed. This finding originally read "worker threads still do not beat single-threaded indexing." That conclusion was wrong, and the investigation that reached it was flawed in a specific, instructive way: it never actually measured a single-threaded run.
+
+**The flawed premise.** `codegraph index` has no `--no-workers` flag: `src/cli/invocationContext.ts:149-150` shows `--workers` sets `useNativeWorkers: true`, and omitting it leaves `workerOpts = {}`, i.e. `useNativeWorkers` stays `undefined`. `shouldEnableNativeWorkers` (`src/indexer/build-workers.ts:34-40`) then auto-enables the pool once `fileCount >= NATIVE_WORKER_AUTO_FILE_THRESHOLD` (250). This repository indexes 811 files. So the original "workers on" vs "workers off" CLI comparison was "explicitly true" vs "auto-true" - the same configuration measured twice, not a real single-thread baseline. The "no speedup" finding was an artifact of comparing two identical configurations.
+
+**The real comparison**, forced through the library API (`buildProjectIndex(root, { cache: "disk", cacheDir, useNativeWorkers: false | true })`, fresh cache directory per run, cold every time), best-of-3, Linux, 4 CPUs, 811 files:
+
+| Configuration                    |      Cold runs (ms) |
+| -------------------------------- | ------------------: |
+| `useNativeWorkers: true`         | 21037, 21440, 21339 |
+| `useNativeWorkers: false` (real) | 27734, 26335, 26680 |
+
+Workers on is consistently about 21% faster than a genuine single-threaded run. Workers help; they always did.
+
+**What the flawed comparison's own profile pointed at instead.** A CPU profile of the genuine single-threaded run (`node --cpu-prof`) showed two adjacent hot functions: `getNativeQueryExecutionForState` (10,383 ms self time across the run) and `getNativeSyntaxTreeExecution` (2,711 ms). Reading the code that calls them (`src/indexer/parse-context.ts`) found the actual bug: `prepareFileForIndexing` called `getNativeQueryExecution` for queries, and - when no worker had already supplied a tree - `attemptParsePreparedFileContext` separately called `getNativeSyntaxTreeExecution` for the tree. Each is backed by its own Tree-sitter parse. **Every file on this path was parsed twice.**
+
+The worker path never had this problem: `src/worker/nativeExtractWorker.ts` already calls the combined `extractLanguage` (one parse, both results), and `PreparedFileContext.syntaxTree` already carries the comment "avoids a second parse on the main thread" for the tree a worker supplies. The non-worker path simply never got the same treatment. This affects every file in a project under the 250-file worker threshold, and every SFC file (`.vue`/`.svelte`/`.astro`) even when workers are enabled, since `prepareFileContextForBuild` (`src/indexer/build-workers.ts:188,228`) explicitly routes those around the pool.
+
+**Fix**: added `getNativeExtractionExecution` (`src/native/execution.ts`), the same combined-call wrapper around `extractLanguage` the worker uses, and pointed `prepareFileForIndexing` at it. Populating `PreparedFileContext.syntaxTree` here means the existing `if (context.syntaxTree)` fast path in `attemptParsePreparedFileContext` - already built for the worker's case - now also skips the second call on the main thread. No consumer code changed.
+
+Verified mechanistically, not just by wall-clock delta: profiled before and after. Before: two adjacent buckets (`getNativeQueryExecutionForState` 10,383 ms + `getNativeSyntaxTreeExecution` 2,711 ms). After: one bucket (`getNativeExtractionExecution`, 11,857 ms), the second gone. True single-threaded cold build: ~26.9s -> ~24.8s (~8%). Workers-on numbers unchanged, as expected - they never took the double-parse path.
+
+The lesson for future perf comparisons in this repo: **verify a comparison's two arms are actually different before trusting its conclusion.** A profile of the "slow" arm is what surfaced the real bug here; the wall-clock comparison alone would have kept pointing at the wrong cause indefinitely.
+
+### F11: further marshalling and cache-write costs, not yet fixed
+
+Two follow-ups surfaced while investigating F10, both real, both sized, neither fixed this pass.
+
+**`NativeCapture` has the same per-item shape problem the syntax tree used to have**, and is now the largest remaining marshalled payload: cloning one repository's worth of query-capture results across the worker boundary costs 0.52 ms/file against 0.12 ms/file for the now-columnar trees, despite 50,846 captures against 882,142 tree nodes - 17x fewer items, over 4x the cost, purely from one-JS-object-per-capture (name, text, node type, two point objects).
+
+Unlike the tree, this is **not** a same-sized fix. The tree had exactly one reader (`ProjectedSyntaxNode`), so PR 2b's columnar rewrite touched no consumer code. `NativeCapture`/`NativeMatch` are read directly, as plain objects, from six files: `src/indexer/locals-and-exports.ts`, `src/indexer/imports/nativeCaptures.ts`, `src/indexer/imports.ts`, `src/graphs/specifiers.ts`, `src/native/queryResults.ts`, `src/chunking/chunkMatches.ts` - the core symbol-extraction surface. A safe columnar rewrite needs a JS-side reconstruction step (columns -> plain `NativeMatch[]`/`NativeCapture[]` objects, once per file, immediately after the boundary crossing) so those six consumers stay unchanged, mirroring PR 2b's "no consumer code changes" result rather than rewriting six correctness-critical call sites directly. That reconstruction step should itself be cheap: PR 2b's equivalent JS-side tree reconstruction measured 60 ms total across 385 files. `query.rs`'s capture-collection logic (`capture_to_object`, `execute_query_cached`) is comparable in scope to `projection.rs`, so this is realistically its own PR, not a follow-up hour.
+
+**`transformModulePaths`** (`src/indexer/build-cache/module-cache.ts:380-389`) deep-clones an entire `ModuleIndex` - every local, every export, for the whole file - via `structuredClone(module)`, purely to rewrite the `file` path field on a handful of top-level locations (`copy.file`, each local's `file`, each export target's `file`) between absolute and cache-relative form. `structuredClone` appeared as a top-15 cost even in the genuinely single-threaded profile (three call sites, ~885 ms combined on this repository), where there is no worker boundary to cross, confirming this specific site is a real, separate cost rather than worker-transport noise. Not fixed here: the surrounding code is path-confinement-sensitive (`assertFilePathWithinRoot`), and a correct fix (shallow-copy only the nested arrays that actually get a `file` field rewritten, rather than deep-cloning the whole graph) needs its own careful review against that safety property before shipping, not a rushed edit alongside two unrelated fixes.
 
 ## Target use cases and feature selection
 
@@ -235,7 +249,7 @@ Plus the plan's own measurement protocol: a `process.dlopen` hook test asserting
 
 ## PR 2b: columnar syntax-tree encoding (implemented)
 
-Status: implemented. Fixes F9; F10 records what the same symptom now traces to.
+Status: implemented. Fixes F9. This PR's own follow-up read ("workers still do not beat single-threaded indexing") was itself wrong, for a reason worth recording precisely: see F10 for the invalid comparison it rested on and the real bug that comparison's profile actually surfaced, fixed separately.
 
 Separate from PR 2 because that change is about fixed per-process startup cost while this one is about per-file throughput, and because this one changes the native ABI.
 
@@ -259,12 +273,52 @@ See F9 for the full table. Per file, on this repository with both encodings meas
 
 - `cargo test` - 29 pass, including four new projection tests covering child ordering, the named-child subset, field-name resolution, interning, and every budget.
 - `npm run test:native` - all native-required and fallback suites pass.
-- `npm run test:fast` (3530 tests) and `npm run test:integration` (149) pass, except one pre-existing environment failure: `tests/duplicates.test.ts` disagrees at U+088F between Node's Unicode data and the pinned `unicode-ident = "=1.0.14"`. It fails identically on a clean tree.
+- `npm run test:fast` (3530 tests) and `npm run test:integration` (149) pass, except one environment failure at the time: `tests/duplicates.test.ts` disagreed at U+088F between Node's Unicode data and the pinned `unicode-ident = "=1.0.14"`. Root-caused and fixed in a separate change (`unicode-ident` bumped to `=1.0.24`, verified against 0 mismatches across the full BMP scalar range plus this suite's astral samples; `DUPLICATE_TOKENIZER_REVISION` bumped 5->6). Not this PR's bug - an environment/Unicode-version skew, unrelated to the columnar encoding.
 - `npm run lint` and `npm run format:check` clean.
 
 ### Follow-ups this opened
 
-F10. The tree is no longer the dominant marshalled payload; query captures are, and worker threads still do not beat single-threaded indexing.
+F10 (corrected and fixed separately: the real bug was a redundant second parse on the non-worker path, not a worker-coordination cost) and F11 (`NativeCapture` interning, `transformModulePaths`'s cache-write clone cost - both real, both sized, neither fixed yet).
+
+## PR 2c: stop double-parsing files on the non-worker path (implemented)
+
+Fixes F10, correcting the "workers don't help" conclusion PR 2b's own follow-up had reached from an invalid comparison.
+
+### What shipped
+
+`codegraph index` has no `--no-workers` flag (`src/cli/invocationContext.ts:149-150`); omitting `--workers` still auto-enables the pool once the project crosses `NATIVE_WORKER_AUTO_FILE_THRESHOLD` (250 files, `src/indexer/build-workers.ts:21`). This repository has 811 indexed files. So a prior CLI-based "on vs off" comparison was actually "on vs also-on" - no genuine single-threaded run was ever measured.
+
+Measuring for real, through the library API (`BuildOptions.useNativeWorkers` forced explicitly, `src/indexer/types.ts:177`), found workers-on already about 21% faster than a genuine single-threaded run. Profiling the genuine single-threaded run then found a real, separate bug: `prepareFileForIndexing` (`src/indexer/parse-context.ts`) called `getNativeQueryExecution` for queries, and - whenever no worker-supplied tree already existed - `attemptParsePreparedFileContext` separately called `getNativeSyntaxTreeExecution` for the tree. Each is backed by its own Tree-sitter parse, so every file on this path was parsed twice. The worker path never had this problem: it already calls the combined `extractLanguage` (one parse, both results), and `PreparedFileContext.syntaxTree` already carries a comment noting it "avoids a second parse on the main thread" for the tree a worker supplies - the non-worker path just never got the same treatment.
+
+This runs for every file in a project under the worker threshold, and for every SFC file (`.vue`/`.svelte`/`.astro`) even when workers are enabled, since `prepareFileContextForBuild` (`src/indexer/build-workers.ts:188,228`) explicitly routes those around the pool.
+
+- `src/native/execution.ts` - added `getNativeExtractionExecution`, the same combined-call wrapper around `extractLanguage` the worker uses.
+- `src/native/contracts.ts` - added `NativeExtractionExecution` (`{ results, tree, fallbackReason?, error? }`).
+- `src/indexer/parse-context.ts` - `prepareFileForIndexing` calls the combined function and populates `PreparedFileContext.syntaxTree`, so the existing `if (context.syntaxTree)` fast path in `attemptParsePreparedFileContext` - already built for the worker's case - now also skips the second call here. **No other consumer code changed.**
+
+### Measured result
+
+True single- vs multi-thread, forced through the library API, fresh cold cache per run, best-of-3, this repository (811 files):
+
+| Configuration             |                                                Cold runs (ms) |
+| ------------------------- | ------------------------------------------------------------: |
+| `useNativeWorkers: true`  | 21037, 21440, 21339 (before fix); 21677, 21196, 20360 (after) |
+| `useNativeWorkers: false` | 27734, 26335, 26680 (before fix); 25650, 24509, 24274 (after) |
+
+Workers-on is essentially unchanged by this fix, as expected - it never took the double-parse path. Genuine single-threaded cold indexing improved from roughly 26.9s to roughly 24.8s, about 8%. Workers-on remains about 15% faster than workers-off after this fix (down from about 21% before it, since the single-threaded floor itself moved).
+
+Verified mechanistically, not just by wall-clock delta: profiled the single-threaded run before and after. Before: two adjacent buckets, `getNativeQueryExecutionForState` (10,383 ms self time across the run) and `getNativeSyntaxTreeExecution` (2,711 ms). After: one bucket, `getNativeExtractionExecution` (11,857 ms) - the second bucket is gone.
+
+### Verification performed
+
+- `npm run test:native` - all native-required and fallback suites pass.
+- `npm run test:fast` (3530 tests, all passing - the F9/PR-2b duplicates.test.ts failure is fixed separately, see above) and `npm run test:integration` (149) pass.
+- `npm run lint` and `npm run format:check` clean.
+- Two tests mocked `getNativeQueryExecution` directly to simulate a per-file native failure (`tests/detailed-symbol-native-only.test.ts`, `tests/native-fallback-contract.test.ts`); that mock no longer intercepts the call the build actually makes. Both updated to also mock `getNativeExtractionExecution` with the same per-file predicate, confirming the fallback contract (degraded reporting, no crash, no mixing native and JS extraction for the same file) still holds through the new call path.
+
+### Follow-ups this opened
+
+F11: `NativeCapture` is now the largest remaining marshalled payload and has the same per-item-object shape problem the tree used to have, but fixing it safely needs a JS-side reconstruction layer across six correctness-critical consumer files rather than a same-sized rewrite - sized, not yet scheduled. `transformModulePaths`'s whole-`ModuleIndex` `structuredClone` for a handful of path-field rewrites is a separate, smaller, path-confinement-sensitive follow-up.
 
 ## PR 3: documentation accuracy contracts
 
@@ -353,6 +407,10 @@ New tests must cover a registry written only after the server is reachable, `sta
 
 ## Sequencing
 
-PR 1, then PR 2 and PR 2b, then PR 3 and PR 4 in either order, then PR 5.
+PR 1, then PR 2, PR 2b, and PR 2c, then PR 3 and PR 4 in either order, then PR 5.
 
-PR 1 goes first because it removes code the later changes would otherwise have to preserve. PR 2 and PR 2b are next because they are the highest-value user-facing changes and their measurements feed PR 3's docs; PR 2 covers fixed per-process startup cost and PR 2b covers per-file indexing throughput. Run PR 2 first, since its worker-startup fixes touch the same files PR 2b edits. PR 3 and PR 4 are independent of each other. PR 5 is last because it wants the lower startup cost from PR 2, PR 4's split MCP modules for its health endpoint, and PR 3's parity test to force its own docs to be written.
+PR 1 goes first because it removes code the later changes would otherwise have to preserve. PR 2, PR 2b, and PR 2c are next because they are the highest-value user-facing changes and their measurements feed PR 3's docs; PR 2 covers fixed per-process startup cost, PR 2b covers per-file syntax-tree marshalling, and PR 2c covers the non-worker path's redundant parse that PR 2b's own follow-up measurement had misread as a worker-coordination problem. Run PR 2 first, since its worker-startup fixes touch the same files PR 2b and PR 2c edit; PR 2c depends on PR 2b's columnar encoding existing, since its fix reuses the same `PreparedFileContext.syntaxTree` fast path PR 2b's worker case already relies on. PR 3 and PR 4 are independent of each other. PR 5 is last because it wants the lower startup cost from PR 2, PR 4's split MCP modules for its health endpoint, and PR 3's parity test to force its own docs to be written.
+
+## Correction log
+
+This plan's own investigation contained a real mistake, worth recording rather than quietly editing away: PR 2b's initial "Follow-ups this opened" section (and the original F10) concluded that native worker threads provide no speedup on this repository. That conclusion was reached from a CLI-based "workers on" vs "workers off" comparison that, on inspection, compared two identical configurations - `codegraph index` has no way to force workers off from the CLI, and this repository's file count always crosses the auto-enable threshold either way. The real comparison (forced through the library API) shows workers consistently about 15-21% faster. The profile from that flawed comparison was still useful - it pointed at a real, separate bug (F10, corrected) - but the conclusion drawn from the comparison itself was wrong until re-measured properly. See F10 for the full account.
