@@ -578,7 +578,6 @@ async function prepareUninstallPlan(
   settings: InstallerSettings,
   dryRun: boolean,
 ): Promise<InstallPlan> {
-  const _bundledSkill = await fsp.readFile(bundledSkillFilePath());
   const files: PlannedInstallFile[] = [];
   for (const definition of definitions) {
     const skillTargetDir = getSkillTargetDirForAgent(definition.id, settings.homeDir, settings.env);

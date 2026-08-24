@@ -303,8 +303,6 @@ export function collectLocalsAndExportsFromSource(
 
   const normalizeDocstringLine = (line: string) => line.replace(/^\s*(?:\/\/\/?\s?|#\s?)/, "").replace(/^\s*\*\s?/, "");
 
-  const _sourceLines = source.split(/\r?\n/);
-
   const extractLeadingDocstring = (node: SyntaxNodeLike | null): string | undefined => {
     if (!node) return undefined;
     // If we're looking at an identifier, look at its parent (the declaration)

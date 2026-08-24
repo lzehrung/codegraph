@@ -23,7 +23,7 @@ const JAVA_DECLARATION_PATTERN = new RegExp(
   String.raw`(?:\b(?:class|interface|enum|record)|@interface)\s+(${JAVA_IDENTIFIER_SOURCE})`,
   "gu",
 );
-const _JAVA_IDENTIFIER_IGNORABLE_PATTERN = new RegExp(`[${JAVA_IDENTIFIER_IGNORABLE_SOURCE}]`, "gu");
+const JAVA_IDENTIFIER_IGNORABLE_PATTERN = new RegExp(`[${JAVA_IDENTIFIER_IGNORABLE_SOURCE}]`, "gu");
 
 type JvmSymbolIndexEntry = {
   packageName: string | null;
@@ -79,7 +79,7 @@ async function readJavaSymbolIndex(filePath: string): Promise<JvmSymbolIndexEntr
   return await readJvmSymbolIndex(filePath, javaSymbolIndexCache, {
     packagePattern: JAVA_PACKAGE_PATTERN,
     declarationPattern: JAVA_DECLARATION_PATTERN,
-    normalizeSymbol: (symbol) => symbol.replace(new RegExp(`[${JAVA_IDENTIFIER_IGNORABLE_SOURCE}]`, "gu"), ""),
+    normalizeSymbol: (symbol) => symbol.replace(JAVA_IDENTIFIER_IGNORABLE_PATTERN, ""),
   });
 }
 
