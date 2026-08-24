@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { resolveCliCompileCacheDirectory, resolveCodegraphUserCacheRoot } from "../src/cli/compileCache.ts";
+import { resolveCliCompileCacheDirectory, resolveCodegraphUserCacheRoot } from "../src/cli/compileCache.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bundledCli = path.join(rootDir, "dist", "bin", "cli.js");

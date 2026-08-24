@@ -128,6 +128,11 @@ export class QueryIndexStore {
   private closed = false;
   private normalizedFiles: Map<string, string> | undefined;
   private normalizedFilesMetadataKey: string | undefined;
+
+  /** Whether `close()` has run. Lets callers check lifecycle without touching internals. */
+  get isClosed(): boolean {
+    return this.closed;
+  }
   constructor(readonly filePath: string) {
     const db = new SqliteDatabase(filePath, { timeout: QUERY_INDEX_BUSY_TIMEOUT_MS });
     this.db = db;

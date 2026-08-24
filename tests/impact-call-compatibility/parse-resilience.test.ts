@@ -7,6 +7,7 @@ import { findReferences } from "../../src/indexer/navigation.js";
 import { attachCallCompatibilityHints } from "../../src/impact/callCompatibility.js";
 import type { ChangedSymbol, ImpactDiagnostics } from "../../src/impact/types.js";
 import type { Range } from "../../src/types.js";
+import { SymbolKind } from "../../src/indexer/types.js";
 
 function rangeFor(source: string, needle: string): Range {
   const index = source.lastIndexOf(needle);
@@ -216,6 +217,12 @@ describe("call compatibility parse resilience", () => {
 
     vi.mocked(findReferences).mockResolvedValue({
       status: "ok",
+      definition: {
+        file: "definition.ts",
+        localName: "helper",
+        kind: SymbolKind.Function,
+        range: { start: { line: 1, column: 0 }, end: { line: 1, column: 6 } },
+      },
       references: [],
     });
 

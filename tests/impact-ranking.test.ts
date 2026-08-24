@@ -4,6 +4,7 @@ import { SymbolKind } from "../src/indexer.js";
 import type * as NavigationModule from "../src/indexer/navigation.js";
 import type { FindReferencesResult, ProjectIndex, SymbolDef } from "../src/indexer/types.js";
 import type { ChangedSymbol } from "../src/impact/types.js";
+import { makeTestProjectIndex } from "./helpers/narrow.js";
 
 const mockedNavigation = vi.hoisted(() => ({
   findReferences: vi.fn(),
@@ -34,7 +35,7 @@ type FindReferencesOptions = {
 };
 
 function createIndex(): ProjectIndex {
-  return { files: [], byFile: new Map(), graph: { nodes: [], edges: [] } };
+  return makeTestProjectIndex();
 }
 
 function createChangedSymbols(names: readonly string[], exportedSymbols: ReadonlySet<string>): ChangedSymbol[] {

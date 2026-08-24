@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import type { ModuleIndex, ProjectIndex } from "../src/indexer/types.js";
+import type { ProjectIndex } from "../src/indexer/types.js";
+import { makeTestProjectIndex } from "./helpers/narrow.js";
 
 type MockSymbolNode = {
   id: string;
@@ -138,12 +139,7 @@ describe("Impact context BFS adjacency optimization", () => {
     const hops = 3;
     const expected = computeExpectedNeighbors(cachedMockGraph, changedSymbolIds, hops);
 
-    const index: ProjectIndex = {
-      graph: { nodes: new Set<string>(), edges: [] },
-      modules: new Map<string, ModuleIndex>(),
-      byFile: new Map<string, ModuleIndex>(),
-      exportCache: new Map(),
-    };
+    const index: ProjectIndex = makeTestProjectIndex();
 
     const context = await collectImpactContext(index, [], changedSymbolIds, hops);
 

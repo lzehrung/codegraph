@@ -9,6 +9,7 @@ import {
 } from "../src/indexer/build-cache/module-cache.js";
 import { SqliteDatabase } from "../src/sqlite-driver.js";
 import type { ModuleIndex } from "../src/indexer/types.js";
+import { SymbolKind } from "../src/indexer/types.js";
 
 function moduleFor(file: string, label: string): ModuleIndex {
   return {
@@ -16,7 +17,12 @@ function moduleFor(file: string, label: string): ModuleIndex {
     exports: [],
     imports: [],
     locals: [
-      { file, localName: label, kind: 1, range: { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } } },
+      {
+        file,
+        localName: label,
+        kind: SymbolKind.Variable,
+        range: { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } },
+      },
     ],
   };
 }

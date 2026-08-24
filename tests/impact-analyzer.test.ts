@@ -2036,20 +2036,18 @@ describe("Impact Analyzer Edge Cases", () => {
 
     it("treats missing incoming-edge map entries as false for budget ranking", () => {
       const baseRange = { start: { line: 1, column: 0 }, end: { line: 1, column: 10 } };
-      const index = {
+      const index = makeTestProjectIndex({
         graph: {
-          nodes: [],
+          nodes: new Set(["src/dep.ts", "src/with-incoming.ts"]),
           edges: [
             {
-              from: { type: "file", path: "src/dep.ts" },
+              from: "src/dep.ts",
               to: { type: "file" as const, path: "src/with-incoming.ts" },
-              type: "imports",
+              raw: "./with-incoming",
             },
           ],
         },
-        modules: new Map(),
-        byFile: new Map(),
-      } as unknown as ProjectIndex;
+      });
       const symbols = [
         {
           id: "lonely",

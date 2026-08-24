@@ -14,11 +14,18 @@ import {
 } from "../src/index.js";
 import { mkTmpDir, normalizeTestPath } from "./helpers/filesystem.js";
 
+// node:sqlite exposes setReturnArrays at runtime ahead of the bundled type definitions.
+declare module "node:sqlite" {
+  interface StatementSync {
+    setReturnArrays(enabled: boolean): void;
+  }
+}
+
 const dbQuery = (db: DatabaseSync, sql: string): string[] => {
   const stmt = db.prepare(sql);
   stmt.setReturnArrays(true);
-  const rows = stmt.all() as Array<Array<unknown>>;
-  return rows.map((row) => String(row[0]));
+  const rows = stmt.all();
+  return rows.map((row) => String(Object.values(row)[0]));
 };
 
 const artifactFreshnessMetadataRows = async (dbPath: string): Promise<Array<Array<unknown>>> => {
@@ -232,7 +239,10 @@ export function run() { helper(); new Widget(); }
     const columns = db
       .prepare("PRAGMA table_info(symbols);")
       .all()
-      .map((row) => (typeof row.name === "string" ? row.name : ""))
+      .map((row) => {
+        const name = (row as Record<string, unknown>).name;
+        return typeof name === "string" ? name : "";
+      })
       .filter(Boolean);
     expect(columns).toContain("visibility");
     const tables = dbQuery(db, "SELECT name FROM sqlite_master WHERE type='table';");
@@ -324,7 +334,10 @@ export function run() { helper(); new Widget(); }
     const columns = db
       .prepare("PRAGMA table_info(symbols);")
       .all()
-      .map((row) => (typeof row.name === "string" ? row.name : ""))
+      .map((row) => {
+        const name = (row as Record<string, unknown>).name;
+        return typeof name === "string" ? name : "";
+      })
       .filter(Boolean);
     expect(columns).toContain("visibility");
     const tables = db
