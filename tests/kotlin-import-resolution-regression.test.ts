@@ -85,7 +85,7 @@ describe("Kotlin import resolution regression", () => {
 
     const startedAt = performance.now();
     const index = await buildProjectIndex(root, {
-      cache: "none",
+      cache: "off",
       logLevel: "silent",
     });
     const elapsedMs = performance.now() - startedAt;

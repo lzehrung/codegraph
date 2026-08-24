@@ -6,8 +6,8 @@ import {
   autoExpandSingleChildren,
   buildEdgeIndexes,
 } from "../../docs/graph-visualization/file-tree-model.js";
-import compactPayload from "./fixtures/compact-payload.json";
-import legacyPayload from "./fixtures/legacy-payload.json";
+import compactPayload from "./fixtures/compact-payload.json" with { type: "json" };
+import legacyPayload from "./fixtures/legacy-payload.json" with { type: "json" };
 
 describe("findCommonPrefix", () => {
   it("finds common directory prefix", () => {

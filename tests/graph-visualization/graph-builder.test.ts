@@ -8,8 +8,8 @@ import {
   EXTERNAL_NODE_COLOR,
   SYMBOL_NODE_COLOR,
 } from "../../docs/graph-visualization/graph-builder.js";
-import compactPayload from "./fixtures/compact-payload.json";
-import legacyPayload from "./fixtures/legacy-payload.json";
+import compactPayload from "./fixtures/compact-payload.json" with { type: "json" };
+import legacyPayload from "./fixtures/legacy-payload.json" with { type: "json" };
 
 describe("shortLabel", () => {
   it("extracts basename from forward-slash path", () => {

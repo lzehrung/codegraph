@@ -20,7 +20,7 @@ describe("Shared import-option builder (C10)", () => {
         "utf8",
       );
 
-      const report: BuildReport = {};
+      const report: BuildReport = { timings: {} };
       await buildProjectIndex(root, { cache: "off", logLevel: "silent", report });
 
       const fallback = report.graph?.fallbackImportExtraction;

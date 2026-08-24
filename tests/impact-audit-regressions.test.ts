@@ -78,7 +78,7 @@ describe("PR4 impact audit regressions", () => {
       [seed, transitiveItem(seed, false)],
       [consumer, transitiveItem(consumer, false)],
     ]);
-    const edge: Edge = { from: consumer, to: { type: "file", path: seed }, typeOnly: true };
+    const edge: Edge = { from: consumer, to: { type: "file", path: seed }, raw: seed, typeOnly: true };
     const reverseDeps = new Map([[fileIdentityKey(seed), [edge]]]);
     analyzeTransitiveImpact(impacted, 1, {}, () => false, reverseDeps);
     expect(impacted.get(consumer)?.typeOnly).toBe(false);
