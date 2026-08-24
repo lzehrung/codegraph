@@ -1,8 +1,37 @@
 import { expect, vi } from "vitest";
 
 import type { ModuleIndex } from "../../src/index.js";
+import type { NativeSyntaxTree } from "../../src/native/contracts.js";
 import { __resetNativeTreeSitterBindingForTests } from "../../src/native/treeSitterNative.js";
 import { normalizeTestPath } from "./filesystem.js";
+
+/**
+ * Minimal columnar projected tree: a single root node with no children. Fakes that
+ * only need "a tree the reader accepts" should use this rather than hand-rolling the
+ * column set, so a shape change updates one place.
+ */
+export function createStubNativeSyntaxTree(kind: string = "program"): NativeSyntaxTree {
+  return {
+    rootId: 0,
+    nodeCount: 1,
+    kinds: [kind],
+    fieldNames: [""],
+    kindIds: Uint32Array.of(0),
+    parentIds: Int32Array.of(-1),
+    named: Uint8Array.of(1),
+    startRow: Uint32Array.of(0),
+    startColumn: Uint32Array.of(0),
+    startIndex: Uint32Array.of(0),
+    endRow: Uint32Array.of(0),
+    endColumn: Uint32Array.of(0),
+    endIndex: Uint32Array.of(0),
+    childOffsets: Uint32Array.of(0, 0),
+    childIds: new Uint32Array(0),
+    childFieldNameIds: new Uint32Array(0),
+    namedChildOffsets: Uint32Array.of(0, 0),
+    namedChildIds: new Uint32Array(0),
+  };
+}
 
 export type NativeRuntimeMode = "native" | "reduced";
 

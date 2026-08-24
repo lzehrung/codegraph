@@ -195,6 +195,6 @@
     "@emnapi/runtime": "1.11.3"
   },
   "optionalDependencies": {
-    "@lzehrung/codegraph-native": "^1.9.2"
+    "@lzehrung/codegraph-native": "^1.10.0"
   }
 }

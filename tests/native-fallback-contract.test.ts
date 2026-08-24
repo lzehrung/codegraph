@@ -95,16 +95,35 @@ async function computeJsOnlyModule(file: string, projectRoot: string): Promise<u
 
 function mockNativeFailureForFile(file: string) {
   const normalizedFile = normalizeFile(file);
-  const original = nativeRuntime.getNativeQueryExecution;
-  return vi.spyOn(nativeRuntime, "getNativeQueryExecution").mockImplementation((source, support) => {
-    if (support.id === "ts" && source.includes("export function alphaValue") && normalizedFile.endsWith("/alpha.ts")) {
+  const matchesAlpha = (support: { id: string }, source: string) =>
+    support.id === "ts" && source.includes("export function alphaValue") && normalizedFile.endsWith("/alpha.ts");
+
+  const originalQueryExecution = nativeRuntime.getNativeQueryExecution;
+  vi.spyOn(nativeRuntime, "getNativeQueryExecution").mockImplementation((source, support) => {
+    if (matchesAlpha(support, source)) {
       return {
         results: null,
         fallbackReason: "queryFailure",
         error: "forced native query failure",
       };
     }
-    return original(source, support);
+    return originalQueryExecution(source, support);
+  });
+
+  // prepareFileForIndexing calls this combined function (one parse for queries and the
+  // tree) rather than getNativeQueryExecution directly, so the build's actual per-file
+  // fallback path is exercised through this spy, not the one above.
+  const originalExtractionExecution = nativeRuntime.getNativeExtractionExecution;
+  return vi.spyOn(nativeRuntime, "getNativeExtractionExecution").mockImplementation((source, support) => {
+    if (matchesAlpha(support, source)) {
+      return {
+        results: null,
+        tree: null,
+        fallbackReason: "queryFailure",
+        error: "forced native query failure",
+      };
+    }
+    return originalExtractionExecution(source, support);
   });
 }
 

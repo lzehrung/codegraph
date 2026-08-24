@@ -32,6 +32,10 @@ export interface NativeDuplicateTokens {
   normalizedTokens: Array<string>
 }
 
+/**
+ * Not built in unit tests: it carries a projected tree, whose typed arrays hold JS
+ * references. See `NativeSyntaxTree`.
+ */
 export interface NativeLanguageExtraction {
   results: NativeQueryResults
   syntaxTree: NativeSyntaxTree
@@ -59,21 +63,50 @@ export interface NativeQueryRunResult {
   matches: Array<NativeMatch>
 }
 
-export interface NativeSyntaxNode {
-  id: number
-  parentId: number
-  nodeType: string
-  named: boolean
-  start: NativePoint
-  end: NativePoint
-  childIds: Array<number>
-  namedChildIds: Array<number>
-  childFieldNames: Array<string>
-}
-
+/**
+ * Column-oriented projection of a Tree-sitter tree.
+ *
+ * Every attribute is one typed array indexed by node id, and node kinds and child
+ * field names are interned into string tables. A grammar has a few hundred distinct
+ * kinds, so a file with 2,000 nodes crosses the napi boundary as ~15 typed arrays
+ * plus ~200 strings instead of 2,000 objects holding ~4,000 strings. That keeps both
+ * the boundary crossing and the worker-to-main-thread transfer proportional to bytes
+ * rather than to node count, and lets the transfer move buffers instead of cloning.
+ *
+ * Child lists use compressed sparse row layout: the children of node `i` are
+ * `child_ids[child_offsets[i]..child_offsets[i + 1]]`, and `child_field_name_ids`
+ * is parallel to `child_ids`.
+ *
+ * Excluded from `cfg(test)` builds: typed arrays hold JS references whose `Drop`
+ * calls into the Node runtime, which the `noop` feature used by `cargo test` does
+ * not provide. Unit tests cover `projection::project_columns`, which is pure Rust;
+ * this type is only the marshalling shell around it, and the JS-side parity suites
+ * exercise it end to end.
+ */
 export interface NativeSyntaxTree {
   rootId: number
-  nodes: Array<NativeSyntaxNode>
+  nodeCount: number
+  /** Distinct node kinds; `kind_ids[i]` indexes this table. */
+  kinds: Array<string>
+  /** Distinct child field names; index 0 is always the empty name. */
+  fieldNames: Array<string>
+  kindIds: Uint32Array
+  /** -1 for the root node. */
+  parentIds: Int32Array
+  named: Uint8Array
+  startRow: Uint32Array
+  startColumn: Uint32Array
+  /** UTF-8 byte offset, matching Tree-sitter's `start_byte()`. */
+  startIndex: Uint32Array
+  endRow: Uint32Array
+  endColumn: Uint32Array
+  /** UTF-8 byte offset, matching Tree-sitter's `end_byte()`. */
+  endIndex: Uint32Array
+  childOffsets: Uint32Array
+  childIds: Uint32Array
+  childFieldNameIds: Uint32Array
+  namedChildOffsets: Uint32Array
+  namedChildIds: Uint32Array
 }
 
 export declare function parseSyntaxTree(source: string, languageId: string): NativeSyntaxTree

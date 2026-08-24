@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { NativeBinding, NativeQueryResults, NativeSyntaxTree } from "../src/native/contracts.js";
-import { createNativeExtractor } from "../src/worker/nativeExtractWorker.js";
+import { createNativeExtractor, REQUIRED_NATIVE_EXTRACTION_VERSION } from "../src/worker/nativeExtractWorker.js";
+import { createStubNativeSyntaxTree } from "./helpers/native.js";
 
 const results: NativeQueryResults = {
   imports: [],
@@ -10,22 +11,7 @@ const results: NativeQueryResults = {
   importBindings: [],
 };
 
-const syntaxTree: NativeSyntaxTree = {
-  rootId: 0,
-  nodes: [
-    {
-      id: 0,
-      parentId: -1,
-      nodeType: "program",
-      named: true,
-      start: { row: 0, column: 0, index: 0 },
-      end: { row: 0, column: 0, index: 0 },
-      childIds: [],
-      namedChildIds: [],
-      childFieldNames: [],
-    },
-  ],
-};
+const syntaxTree: NativeSyntaxTree = createStubNativeSyntaxTree();
 
 describe("native extraction worker", () => {
   it("uses one combined native extraction call per full-index task", async () => {
@@ -127,8 +113,44 @@ describe("native extraction worker", () => {
     });
 
     expect(output.fallbackReason).toBe("unavailable");
-    expect(output.error).toContain("@lzehrung/codegraph-native >= 1.8.99");
+    // Read the required version from the source of truth so a bump cannot silently
+    // leave this assertion pinned to a stale value.
+    expect(output.error).toContain(`@lzehrung/codegraph-native >= ${REQUIRED_NATIVE_EXTRACTION_VERSION}`);
     expect(output.error).toContain("extractLanguage");
+  });
+
+  it("rejects a native binary that returns the legacy syntax-tree shape", async () => {
+    const legacyTree = { rootId: 0, nodes: [] };
+    const binding = {
+      extractLanguage: () => ({ results, syntaxTree: legacyTree }),
+      runLanguageQueries: () => results,
+      supportedLanguageIds: () => ["ts"],
+    } as NativeBinding;
+    const extract = createNativeExtractor({
+      loadBinding: () => ({
+        binding,
+        origin: { mode: "workspace", packageName: "@lzehrung/codegraph-native" },
+      }),
+      readFile: async () => "export const value = 1;\n",
+    });
+
+    const output = await extract({
+      filePath: "legacy.ts",
+      languageId: "ts",
+      source: "export const value = 1;\n",
+      importsQuery: "",
+      exportsQuery: "",
+      localsQuery: "",
+      importBindingsQuery: "",
+    });
+
+    expect(output.fallbackReason).toBe("unavailable");
+    expect(output.syntaxTree).toBeNull();
+    // The tree failed to project, but the query results came from the same extractLanguage
+    // call and are unaffected by the tree's shape, so they should still come back.
+    expect(output.nativeResults).toEqual(results);
+    expect(output.error).toContain(`@lzehrung/codegraph-native >= ${REQUIRED_NATIVE_EXTRACTION_VERSION}`);
+    expect(output.error).toContain("legacy syntax-tree shape");
   });
 
   it("preserves the unavailable fallback when the optional native addon is absent", async () => {

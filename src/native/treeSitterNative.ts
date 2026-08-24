@@ -8,13 +8,13 @@ export type {
   NativeFallbackReason,
   NativeMatch,
   NativeDuplicateTokens,
+  NativeExtractionExecution,
   NativePoint,
   NativeQueryExecution,
   NativeQueryResults,
   NativeQueryScope,
   NativeRuntimeMode,
   NativeSingleQueryExecution,
-  NativeSyntaxNode,
   NativeSyntaxTree,
   NativeSyntaxTreeExecution,
   UnifiedQueryExecution,
@@ -44,6 +44,7 @@ export {
 
 export {
   getCompactImportsExecution,
+  getNativeExtractionExecution,
   getNativeQueryExecution,
   getNativeQueryExecutionForState,
   getNativeSingleQueryExecution,

@@ -6,6 +6,7 @@ import type {
   NativeBindingState,
   NativeQueryExecution,
   NativeDuplicateTokens,
+  NativeExtractionExecution,
   NativeQueryResults,
   NativeQueryScope,
   NativeRuntimeMode,
@@ -14,6 +15,7 @@ import type {
 } from "./contracts.js";
 import { getCachedNormalizedQuery, normalizeNativeQueryForSupport } from "./queries.js";
 import { loadBinding, resolveNativeBindingState, throwIfNativeRequiredUnavailable } from "./runtime.js";
+import { isColumnarSyntaxTree, nativeShapeMismatchMessage, REQUIRED_NATIVE_EXTRACTION_VERSION } from "./treeShape.js";
 
 export function isNativeDuplicateTokenizationAvailable(mode?: NativeRuntimeMode): boolean {
   const state = resolveNativeBindingState(mode);
@@ -162,6 +164,69 @@ export function getNativeSingleQueryExecution(
   }
 }
 
+/**
+ * Runs the full query set and projects the syntax tree from one Tree-sitter parse.
+ * Prefer this over calling {@link getNativeQueryExecution} and
+ * {@link getNativeSyntaxTreeExecution} on the same source: each parses independently,
+ * so calling both parses the file twice for no benefit. This is what the native worker
+ * pool already uses (`extractLanguage`, one parse per file); this is the same call for
+ * callers that need both results outside a worker.
+ */
+export function getNativeExtractionExecution(
+  source: string,
+  support: LanguageSupport,
+  mode?: NativeRuntimeMode,
+): NativeExtractionExecution {
+  const state = resolveNativeBindingState(mode);
+  throwIfNativeRequiredUnavailable(mode, state);
+  if (!state.loaded) {
+    return { results: null, tree: null, ...unavailableNativeFailure(state) };
+  }
+  if (!state.supportedLanguageIds.has(support.id)) {
+    return { results: null, tree: null, fallbackReason: "unsupportedLanguage" };
+  }
+  if (typeof state.binding.extractLanguage !== "function") {
+    return {
+      results: null,
+      tree: null,
+      fallbackReason: "unavailable",
+      error:
+        `@lzehrung/codegraph-native >= ${REQUIRED_NATIVE_EXTRACTION_VERSION} is required; ` +
+        "the installed native binary does not provide extractLanguage. Reinstall the native package.",
+    };
+  }
+  try {
+    const extraction = state.binding.extractLanguage(
+      source,
+      support.id,
+      getCachedNormalizedQuery(support, "imports"),
+      getCachedNormalizedQuery(support, "exports"),
+      getCachedNormalizedQuery(support, "locals"),
+      getCachedNormalizedQuery(support, "importBindings"),
+    );
+    const tree = extraction.syntaxTree ?? null;
+    // A missing tree is a tolerated state; a present-but-legacy tree means the installed
+    // native package predates the columnar projection and cannot be read here. Query
+    // results are unaffected by that mismatch, so they still come back.
+    if (tree !== null && !isColumnarSyntaxTree(tree)) {
+      return {
+        results: extraction.results,
+        tree: null,
+        fallbackReason: "unavailable",
+        error: nativeShapeMismatchMessage(),
+      };
+    }
+    return { results: extraction.results, tree };
+  } catch (error) {
+    return {
+      results: null,
+      tree: null,
+      fallbackReason: "queryFailure",
+      error: errorMessage(error),
+    };
+  }
+}
+
 export function getNativeSyntaxTreeExecution(
   source: string,
   support: LanguageSupport,
@@ -183,9 +248,13 @@ export function getNativeSyntaxTreeExecution(
     };
   }
   try {
-    return {
-      tree: state.binding.parseSyntaxTree(source, support.id),
-    };
+    const tree = state.binding.parseSyntaxTree(source, support.id) ?? null;
+    // A missing tree is a tolerated state; a present-but-legacy tree means the installed
+    // native package predates the columnar projection and cannot be read here.
+    if (tree !== null && !isColumnarSyntaxTree(tree)) {
+      return { tree: null, fallbackReason: "unavailable", error: nativeShapeMismatchMessage() };
+    }
+    return { tree };
   } catch (error) {
     return {
       tree: null,

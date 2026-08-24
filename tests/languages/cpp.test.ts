@@ -132,10 +132,9 @@ describe("C++ language boundaries", () => {
 
   it("documents the C++20 module grammar limitation", () => {
     const tree = parseSyntaxTree("export module foo;\nimport foo;\n", "cpp");
-    const nodeTypes = tree.nodes.map((node) => node.nodeType);
-
-    expect(nodeTypes).not.toContain("module_declaration");
-    expect(nodeTypes).not.toContain("import_declaration");
+    // The interned kind table is exactly the set of node kinds the projection produced.
+    expect(tree.kinds).not.toContain("module_declaration");
+    expect(tree.kinds).not.toContain("import_declaration");
   });
 });
 

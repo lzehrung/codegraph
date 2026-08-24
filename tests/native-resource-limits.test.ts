@@ -17,6 +17,7 @@ import { cacheSignatureForFile, fileSignature, writeToCache } from "../src/index
 import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import type { NativeBinding, NativeSyntaxTree } from "../src/native/contracts.js";
+import { createStubNativeSyntaxTree } from "./helpers/native.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -162,7 +163,7 @@ describe("native extraction resource limits", () => {
   });
 
   it("keeps ordinary in-budget extraction successful", async () => {
-    const tree: NativeSyntaxTree = { rootId: 0, nodes: [] };
+    const tree: NativeSyntaxTree = createStubNativeSyntaxTree();
     const extractor = createNativeExtractor({
       loadBinding: () => ({
         binding: {

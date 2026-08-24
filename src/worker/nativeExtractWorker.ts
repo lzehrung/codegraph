@@ -11,6 +11,11 @@ import type {
   NativeSyntaxTree,
 } from "../native/contracts.js";
 import { loadNativeBinding } from "../native/bindingLoader.js";
+import {
+  isColumnarSyntaxTree,
+  nativeShapeMismatchMessage,
+  REQUIRED_NATIVE_EXTRACTION_VERSION,
+} from "../native/treeShape.js";
 import type { NativeBindingLoadResult } from "../native/bindingLoader.js";
 
 export type NativeExtractLimits = {
@@ -52,7 +57,7 @@ export type NativeExtractBatchResult = {
 };
 
 export const NATIVE_WORKER_BATCH_SIZE = 32;
-export const REQUIRED_NATIVE_EXTRACTION_VERSION = "1.8.99";
+export { REQUIRED_NATIVE_EXTRACTION_VERSION } from "../native/treeShape.js";
 
 /**
  * Default source byte cap before native parse/projection.
@@ -232,13 +237,32 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
         task.localsQuery,
         task.importBindingsQuery,
       );
+      // A missing tree is a tolerated state downstream; a present-but-legacy tree is a
+      // version mismatch this build cannot read, so only the latter fails the task. The
+      // query results came from the same extractLanguage call and are unaffected by the
+      // tree's shape, so they still come back -- matching getNativeExtractionExecution's
+      // handling of the same mismatch on the non-worker path.
+      const syntaxTree = extraction.syntaxTree ?? null;
+      if (syntaxTree !== null && !isColumnarSyntaxTree(syntaxTree)) {
+        loadError = nativeShapeMismatchMessage();
+        return {
+          filePath: task.filePath,
+          languageId: task.languageId,
+          ...(includeSource ? { source } : {}),
+          nativeResults: extraction.results,
+          compactResults: null,
+          syntaxTree: null,
+          fallbackReason: "unavailable",
+          error: loadError,
+        };
+      }
       return {
         filePath: task.filePath,
         languageId: task.languageId,
         ...(includeSource ? { source } : {}),
         nativeResults: extraction.results,
         compactResults: null,
-        syntaxTree: extraction.syntaxTree,
+        syntaxTree,
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
