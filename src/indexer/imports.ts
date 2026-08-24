@@ -30,7 +30,6 @@ import {
 import { collectNativeCaptureImportBindings } from "./imports/nativeCaptures.js";
 import { collectPythonImportsFromSource } from "./imports/python.js";
 import type { LanguageSupport } from "../languages.js";
-import type { SyntaxTreeLike } from "../languages/types.js";
 import type { ImportBinding } from "./types.js";
 
 export async function collectImportsForFile(
@@ -38,7 +37,6 @@ export async function collectImportsForFile(
   projectRoot: string,
   opts?: {
     source?: string;
-    tree?: SyntaxTreeLike;
     sup?: LanguageSupport;
     nativeQueries?: NativeQueryResults | null;
     graphOptions?: GraphBuildOptions;

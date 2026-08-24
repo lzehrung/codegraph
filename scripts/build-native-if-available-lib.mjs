@@ -119,8 +119,10 @@ export function hasCargo({ spawnSyncImpl = spawnSync, platform = process.platfor
  * `warn` is ever called on the logger, for instance, so a full Console is not required.
  * @typedef {{ warn: (message: string) => void }} BuildLogger
  * @typedef {{ name: string, isDirectory: () => boolean }} BuildDirEntry
+ * `stderr` is optional but part of the seam: the failure path reads it through stderrText,
+ * which accepts either encoding spawnSync can produce.
  * @typedef {(command: string, args: string[], options?: unknown) =>
- *   { status?: number | null, error?: unknown }} SpawnSyncImpl
+ *   { status?: number | null, error?: unknown, stderr?: string | Buffer }} SpawnSyncImpl
  * @typedef {(dir: string, options?: unknown) => BuildDirEntry[]} ReaddirSyncImpl
  * @typedef {(target: string, options?: unknown) => void} RmSyncImpl
  */

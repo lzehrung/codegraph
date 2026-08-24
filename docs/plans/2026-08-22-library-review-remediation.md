@@ -195,7 +195,8 @@ No feature is proposed beyond this backlog. The gaps that matter are execution, 
 
 ## PR 1: retire the dead parser seam and re-arm the quality gates (implemented)
 
-Status: implemented, except the `typecheck` gate - see "What actually shipped" below. Fixes F1, F2, F3, F8, and part of F7. Largest diff, simplest review: almost all of it is deletion. The seam and the gates belong in one change because they share a root cause. Turning the gates on without deleting the code first would only produce a red tree.
+Status: implemented, including the `typecheck` gate - see "What actually shipped" below for how that
+gate differed from what this plan assumed. Fixes F1, F2, F3, F8, and part of F7. Largest diff, simplest review: almost all of it is deletion. The seam and the gates belong in one change because they share a root cause. Turning the gates on without deleting the code first would only produce a red tree.
 
 Removing `lang` from exported signatures is a breaking change to the library surface. It ships in a 2.x minor by explicit decision rather than waiting for a major, matching how 2.0.0 handled export narrowing with no compatibility aliases.
 
@@ -224,10 +225,11 @@ node ./dist/cli.js orient --root . --budget small --json
 
 Also confirm that `git grep -n "ParserLanguage\|isNonNativeParser\|loadTreeSitterLanguage"` returns nothing outside the deleted files, and that the coverage thresholds in `vitest.config.ts` still pass after roughly 30 dead `it()` blocks are removed. Those blocks never executed, so the numbers should not move; if they do, something in F2 was not actually dead and needs re-checking before merge.
 
-### What actually shipped, and one item that did not
+### What actually shipped
 
-Everything in the list above landed except the `typecheck` gate, which turned out to be far
-larger than this plan assumed and is deliberately deferred rather than half-done.
+Everything in the list above landed. One item, the `typecheck` gate, cost far more than this
+plan assumed and is worth recording in detail, because the plan mis-scoped it as a one-line
+change.
 
 **The `typecheck` gate was not a one-line addition, but it is now on.** The plan says to add
 `tsc -p tsconfig.eslint.json --noEmit` to `npm run check` and the CI lint step "so test files

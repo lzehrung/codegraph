@@ -679,11 +679,24 @@ describe("Cache invalidation and strict hashing", () => {
     expect(manifest.buildOptions?.implementationFingerprint).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  it("rebuilds cleanly from a manifest carrying a superseded implementation fingerprint", async () => {
-    // Dropping `behavior.grammar` from the language-definition fingerprint changes every
-    // stored fingerprint value. That is a one-time rebuild by design rather than a schema
-    // migration, so the guarantee under test is that a manifest written by the previous
-    // implementation is discarded and rebuilt, never partially trusted.
+  // The implementation fingerprint written by the release before `behavior.grammar` was
+  // dropped from the language-definition descriptor, captured at package version 2.1.2 from
+  // commit 6b706fa. Regenerate by checking out that commit and printing
+  // `getImplementationFingerprint()` from `src/indexer/build-cache/options.js`.
+  //
+  // Post-change, the same tree at the same version produces
+  // cd265cf53c5dc654bfb305b4191c3cb58219bdf52a8736ab42c4b0b9a72b54df, so dropping the field
+  // really did move every stored value rather than leaving the descriptor unchanged. Pinning
+  // the literal keeps that a fact the suite can check instead of an assumption: a synthetic
+  // value such as 64 zeroes would exercise the generic mismatch path just as well and would
+  // still pass had the removal been a no-op on the fingerprint.
+  const PRE_GRAMMAR_REMOVAL_FINGERPRINT = "d4e0bcab722e969fb2d91c8b1bccf283b138baf9fd99d7a155fed0b7bec14e9c";
+
+  it("rebuilds cleanly from a manifest written before behavior.grammar left the fingerprint", async () => {
+    // Removing `behavior.grammar` changes every stored fingerprint value. That is a one-time
+    // rebuild by design rather than a schema migration, so the guarantee under test is that a
+    // manifest written by the previous implementation is discarded and rebuilt, never
+    // partially trusted.
     const root = await mkTmpDir("dg-cache-superseded-fingerprint-");
     const entryPath = path.join(root, "entry.ts");
     const file = normalize(path.resolve(entryPath));
@@ -691,13 +704,15 @@ describe("Cache invalidation and strict hashing", () => {
 
     await buildProjectIndex(root, { threads: 2, cache: "disk" });
     const stored = await readManifest(root);
-    const supersededFingerprint = "0".repeat(64);
-    expect(stored.buildOptions?.implementationFingerprint).not.toBe(supersededFingerprint);
+    // The pinned pre-change value is a real fingerprint, not a placeholder, so this also
+    // asserts that today's descriptor cannot collide with the superseded one.
+    expect(PRE_GRAMMAR_REMOVAL_FINGERPRINT).toMatch(/^[a-f0-9]{64}$/);
+    expect(stored.buildOptions?.implementationFingerprint).not.toBe(PRE_GRAMMAR_REMOVAL_FINGERPRINT);
 
     // Rewrite the manifest as the previous implementation would have left it: a
-    // well-formed manifest whose fingerprint no longer matches, plus an edge that only
+    // well-formed manifest carrying that release's fingerprint, plus an edge that only
     // a stale read could resurrect.
-    stored.buildOptions = { ...stored.buildOptions, implementationFingerprint: supersededFingerprint };
+    stored.buildOptions = { ...stored.buildOptions, implementationFingerprint: PRE_GRAMMAR_REMOVAL_FINGERPRINT };
     stored.files = {
       [file]: {
         sig: "superseded-signature",
@@ -708,15 +723,18 @@ describe("Cache invalidation and strict hashing", () => {
     };
     await fsp.writeFile(manifestPathFor(root), JSON.stringify(stored), "utf8");
 
-    const rebuilt = await buildProjectIndexIncremental(root, { threads: 2, cache: "disk" });
+    const report: BuildReport = { timings: {} };
+    const rebuilt = await buildProjectIndexIncremental(root, { threads: 2, cache: "disk", report });
 
+    expect(report.manifest?.optionsMismatch).toContain("implementation");
+    expect(report.files?.parsed).toBe(1);
     expect(rebuilt.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path.endsWith("/stale.ts"))).toBe(
       false,
     );
     expect(moduleForPath(rebuilt, entryPath)?.locals.some((local) => local.localName === "current")).toBe(true);
     const refreshed = await readManifest(root);
     expect(refreshed.buildOptions?.implementationFingerprint).toMatch(/^[a-f0-9]{64}$/);
-    expect(refreshed.buildOptions?.implementationFingerprint).not.toBe(supersededFingerprint);
+    expect(refreshed.buildOptions?.implementationFingerprint).not.toBe(PRE_GRAMMAR_REMOVAL_FINGERPRINT);
   });
 
   it("rejects and rewrites a project snapshot stored for another root", async () => {

@@ -52,7 +52,10 @@ function usage() {
 
 /**
  * @typedef {(text: string) => void} TextWriter
- * @param {{ argv?: string[], runProductionAuditImpl?: () => unknown,
+ * The injected audit returns the real report shape rather than `unknown`: the result goes
+ * straight to formatProductionAuditSummary and its `status` decides the exit code, so a
+ * malformed test double should fail typecheck instead of failing at runtime.
+ * @param {{ argv?: string[], runProductionAuditImpl?: () => ReturnType<typeof runProductionAudit>,
  *   writeStdout?: TextWriter, writeStderr?: TextWriter }} [options]
  */
 export function runProductionAuditCli({

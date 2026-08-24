@@ -22,7 +22,10 @@ export const PUBLIC_NPM_REGISTRY = "https://registry.npmjs.org";
  * Injection seams for tests. Each is the minimal shape this module uses, so a test
  * double does not have to reproduce the full runPackageCommand result. The log
  * defaults are no-ops, which would otherwise infer a zero-argument signature.
- * @typedef {{ exitCode: number | null, rawStdout: string, stdout: string, stderr: string }} PackageCommandResult
+ * `error` is present only when the spawn itself failed; runPackageCommand carries the
+ * message through, and publishReleaseCandidateEntry both branches on it and reports it.
+ * @typedef {{ exitCode: number | null, rawStdout: string, stdout: string, stderr: string,
+ *   error?: string }} PackageCommandResult
  * @typedef {(command: string, args: string[], options?: unknown) => PackageCommandResult} CommandRunner
  * @typedef {(line: string) => void} LineLogger
  */
