@@ -28,7 +28,12 @@ function publicationOrder() {
 }
 
 /** Simulates a real npm registry that only knows about already-published package/version pairs. */
-function fakeRegistryRunner(publishedVersions: Map<string, string>, publishBehavior: (absolutePath: string) => object) {
+type FakeCommandResult = { exitCode: number | null; rawStdout: string; stdout: string; stderr: string };
+
+function fakeRegistryRunner(
+  publishedVersions: Map<string, string>,
+  publishBehavior: (absolutePath: string) => FakeCommandResult,
+) {
   return vi.fn((command: string, args: string[]) => {
     if (args[0] === "view") {
       const [, name, version] = /^(.+)@([^@]+)$/.exec(args[1]) ?? [];
@@ -49,6 +54,7 @@ describe("publishReleaseCandidates resumability", () => {
   it("skips a package already published at the exact planned version", () => {
     const commandRunner = fakeRegistryRunner(new Map([[NATIVE_TARGET_PACKAGE, "2.2.0"]]), () => ({
       exitCode: 0,
+      rawStdout: "",
       stdout: "+ published",
       stderr: "",
     }));
@@ -99,9 +105,9 @@ describe("publishReleaseCandidates resumability", () => {
   it("stops and throws after an injected publish failure, leaving later packages unattempted", () => {
     const commandRunner = fakeRegistryRunner(new Map(), (packageAbsolutePath: string) => {
       if (packageAbsolutePath === "/rc/native.tgz") {
-        return { exitCode: 1, stdout: "", stderr: "npm error 403 Forbidden", error: undefined };
+        return { exitCode: 1, rawStdout: "", stdout: "", stderr: "npm error 403 Forbidden" };
       }
-      return { exitCode: 0, stdout: "+ published", stderr: "" };
+      return { exitCode: 0, rawStdout: "+ published", stdout: "+ published", stderr: "" };
     });
 
     expect(() =>
@@ -124,8 +130,8 @@ describe("publishReleaseCandidates resumability", () => {
     // First attempt: native target publishes, then the native meta package fails.
     const firstRunner = fakeRegistryRunner(new Map(), (absolutePath: string) =>
       absolutePath === "/rc/native.tgz"
-        ? { exitCode: 1, stdout: "", stderr: "npm error 403 Forbidden" }
-        : { exitCode: 0, stdout: "+ published", stderr: "" },
+        ? { exitCode: 1, rawStdout: "", stdout: "", stderr: "npm error 403 Forbidden" }
+        : { exitCode: 0, rawStdout: "+ published", stdout: "+ published", stderr: "" },
     );
     expect(() =>
       publishReleaseCandidates({
@@ -142,6 +148,7 @@ describe("publishReleaseCandidates resumability", () => {
     // exactly as a re-run of the workflow job would do against the immutable release candidates.
     const secondRunner = fakeRegistryRunner(new Map([[NATIVE_TARGET_PACKAGE, "2.2.0"]]), () => ({
       exitCode: 0,
+      rawStdout: "",
       stdout: "+ published",
       stderr: "",
     }));

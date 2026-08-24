@@ -18,6 +18,16 @@ export const PUBLIC_NPM_REGISTRY = "https://registry.npmjs.org";
  * step after a partial failure safe, because npm rejects overwriting an already-published exact
  * version anyway.
  */
+/**
+ * Injection seams for tests. Each is the minimal shape this module uses, so a test
+ * double does not have to reproduce the full runPackageCommand result. The log
+ * defaults are no-ops, which would otherwise infer a zero-argument signature.
+ * @typedef {{ exitCode: number | null, rawStdout: string, stdout: string, stderr: string }} PackageCommandResult
+ * @typedef {(command: string, args: string[], options?: unknown) => PackageCommandResult} CommandRunner
+ * @typedef {(line: string) => void} LineLogger
+ */
+
+/** @param {{ packageName: string, version: string, registry: string, commandRunner?: CommandRunner }} options */
 export function isPackageVersionPublished({ packageName, version, registry, commandRunner = runPackageCommand }) {
   const result = commandRunner("npm", ["view", `${packageName}@${version}`, "version", `--registry=${registry}`], {
     timeoutMs: 60_000,
@@ -25,6 +35,7 @@ export function isPackageVersionPublished({ packageName, version, registry, comm
   return result.exitCode === 0 && result.rawStdout.trim() === version;
 }
 
+/** @param {{ entry: unknown, registry: string, rootDirectory: string, commandRunner?: CommandRunner }} options */
 export function publishReleaseCandidateEntry({ entry, registry, rootDirectory, commandRunner = runPackageCommand }) {
   const result = commandRunner(
     "npm",
@@ -47,6 +58,10 @@ export function publishReleaseCandidateEntry({ entry, registry, rootDirectory, c
  * exact planned version. Safe to call repeatedly against the same immutable manifest: a prior
  * partial failure leaves already-published packages in the registry, and this function skips
  * them on the next call instead of failing on a duplicate-version publish.
+ */
+/**
+ * @param {{ manifest: unknown, publicationOrder: unknown[], registry: string, rootDirectory: string,
+ *   commandRunner?: CommandRunner, log?: LineLogger, logError?: LineLogger }} options
  */
 export function publishReleaseCandidates({
   manifest,

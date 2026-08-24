@@ -51,7 +51,7 @@ describe("PR4 impact audit regressions", () => {
       const customDirect = calculateSeverity(changed, reference, ["directRef"], 0, index, undefined, { directRef: 10 });
       expect(customDirect.severity).toBeGreaterThan(defaultDirect.severity);
 
-      const edge: Edge = { from: consumer, to: { type: "file", path: source } };
+      const edge: Edge = { from: consumer, to: { type: "file", path: source }, raw: source };
       expect(calculateTransitiveSeverity(edge, 1, { transitive: 10 })).toBeGreaterThan(
         calculateTransitiveSeverity(edge, 1),
       );
@@ -89,8 +89,8 @@ describe("PR4 impact audit regressions", () => {
     const middle = file("middle.ts");
     const leaf = file("leaf.ts");
     const impacted = new Map<FileId, ImpactItem>([[seed, transitiveItem(seed, false)]]);
-    const first: Edge = { from: middle, to: { type: "file", path: seed } };
-    const second: Edge = { from: leaf, to: { type: "file", path: middle } };
+    const first: Edge = { from: middle, to: { type: "file", path: seed }, raw: seed };
+    const second: Edge = { from: leaf, to: { type: "file", path: middle }, raw: middle };
     const reverseDeps = new Map([
       [fileIdentityKey(seed), [first]],
       [fileIdentityKey(middle), [second]],

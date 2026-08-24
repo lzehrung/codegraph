@@ -1486,7 +1486,11 @@ describe("Cache invalidation and strict hashing", () => {
       expect(existsSpy).not.toHaveBeenCalledWith(outsideDependency);
       expect(accessSpy).not.toHaveBeenCalledWith(outsideDependency);
       expect(rebuilt.graph.edges).not.toContainEqual(
-        expect.objectContaining({ from: outsideSource, to: { type: "file", path: outsideDependency } }),
+        expect.objectContaining({
+          from: outsideSource,
+          to: { type: "file", path: outsideDependency },
+          raw: outsideDependency,
+        }),
       );
       expect(rebuilt.graph.edges).toContainEqual(
         expect.objectContaining({

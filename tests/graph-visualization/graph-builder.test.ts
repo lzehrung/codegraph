@@ -168,7 +168,7 @@ describe("buildGraph -- portable artifact format", () => {
 
   it("normalizes path and symbol identifiers into compact indexes", () => {
     expect(normalizeGraphPayload(payload)).toMatchObject({
-      fileEdges: [{ from: 0, to: { type: "file", path: 1 } }],
+      fileEdges: [{ from: 0, to: { type: "file", path: 1 }, raw: 1 }],
       symbols: [{ file: 0 }, { file: 1 }],
       symbolEdges: [{ from: 0, to: 1 }],
       symbolIdIndex: ["src/a.ts:foo", "src/b.ts:bar"],

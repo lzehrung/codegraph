@@ -1,7 +1,7 @@
 import { expect } from "vitest";
 
 import type { EdgeTo } from "../../src/types.js";
-import type { ExportEntry, ProjectIndex } from "../../src/indexer/types.js";
+import type { ExportEntry, ProjectIndex, ResolvedExport, SymbolDef } from "../../src/indexer/types.js";
 
 /**
  * Assert an edge target is the `file` variant and narrow it.
@@ -41,4 +41,19 @@ export function makeTestProjectIndex(partial: Partial<ProjectIndex> = {}): Proje
     scopeCache: new Map(),
     ...partial,
   };
+}
+
+/**
+ * Assert an export resolved to a concrete definition and narrow it.
+ *
+ * `ResolvedExport` is a union: only the `resolved` variant carries `def`, while a
+ * namespace re-export carries a file instead. Tests that read `.def` directly are
+ * assuming the former, so state that as an assertion.
+ */
+export function expectResolvedDef(resolved: ResolvedExport | null | undefined): SymbolDef {
+  expect(resolved?.kind).toBe("resolved");
+  if (resolved?.kind !== "resolved") {
+    throw new Error(`expected a resolved export, received ${resolved?.kind ?? "none"}`);
+  }
+  return resolved.def;
 }

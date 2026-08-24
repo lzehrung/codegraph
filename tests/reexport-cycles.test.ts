@@ -10,6 +10,7 @@ import {
   resolveExport,
 } from "../src/index.js";
 import { deduplicateEdges } from "../src/graph-edge-collector.js";
+import { expectResolvedDef } from "./helpers/narrow.js";
 
 describe("graph edge provenance", () => {
   it("retains the precise, higher-confidence edge when target identity collides", () => {
@@ -56,8 +57,8 @@ describe("Circular re-exports resolution", () => {
     expect(resolveExport(index, Cfile, "foo")).toBeNull();
     expect(hit).not.toBeNull();
     if (hit) {
-      expect(hit.def.file.replace(/\\/g, "/")).toBe(A.replace(/\\/g, "/"));
-      expect(hit.def.localName).toBe("foo");
+      expect(expectResolvedDef(hit).file.replace(/\\/g, "/")).toBe(A.replace(/\\/g, "/"));
+      expect(expectResolvedDef(hit).localName).toBe("foo");
     }
   });
 
@@ -97,8 +98,8 @@ describe("Circular re-exports resolution", () => {
 
       expect(hit?.kind).toBe("resolved");
       if (!hit || hit.kind !== "resolved") return;
-      expect(hit.def.file).toBe(source.replace(/\\/g, "/"));
-      expect(hit.def.localName).toBe("shared");
+      expect(expectResolvedDef(hit).file).toBe(source.replace(/\\/g, "/"));
+      expect(expectResolvedDef(hit).localName).toBe("shared");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

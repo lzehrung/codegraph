@@ -267,8 +267,8 @@ describe("agent explore", () => {
     const response = expectExploreEnvelope(await exploreCodegraph({ root, query, maxPackets: 0 }), query);
 
     expect(response.packets).toEqual([]);
-    expect(response.limits.packets).toBe(0);
-    expect(response.omittedCounts.packets).toBeGreaterThan(0);
+    expect(readRecord(response.limits, "limits").packets).toBe(0);
+    expect(readRecord(response.omittedCounts, "omittedCounts").packets).toBeGreaterThan(0);
   });
 
   it("matches basename-only file mentions with trailing question or exclamation punctuation", async () => {
@@ -881,9 +881,9 @@ describe("agent explore", () => {
     expect(exploreAll.omittedCounts.candidateTests).toBe(0);
 
     const spy = vi.spyOn(impactContext, "listCandidateTestFiles").mockReturnValue([
-      { file: path.join(root, "tests/routes.test.ts"), reasons: [] },
-      { file: path.join(root, "tests/auth.test.ts"), reasons: [] },
-      { file: path.join(root, "tests/auth-spec.test.ts"), reasons: [] },
+      { file: path.join(root, "tests/routes.test.ts"), confidence: "high", reason: "pattern" },
+      { file: path.join(root, "tests/auth.test.ts"), confidence: "high", reason: "pattern" },
+      { file: path.join(root, "tests/auth-spec.test.ts"), confidence: "high", reason: "pattern" },
     ]);
 
     try {
