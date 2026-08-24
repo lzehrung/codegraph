@@ -184,7 +184,7 @@ export class ProjectedSyntaxNode {
     return out;
   }
 
-  /** Walk the parent's list backwards from this node without materializing the siblings. */
+  /** Find the previous sibling in the parent's child list without materializing the siblings. */
   private previousIn(ids: Uint32Array, offsets: Uint32Array): ProjectedSyntaxNode | null {
     const parentId = this.tree.columns.parentIds[this.id]!;
     if (parentId < 0) return null;

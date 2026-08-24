@@ -46,8 +46,8 @@ impl ProjectionError {
 }
 
 /// Deduplicates the small set of distinct strings a grammar produces (node kinds,
-/// child field names) so each one is allocated and marshalled once per file rather
-/// than once per node.
+/// child field names) so each one is marshalled across the napi boundary once per
+/// file, via the exported kind/field-name tables, rather than once per node.
 struct Interner {
     values: Vec<String>,
     index: HashMap<String, u32>,
