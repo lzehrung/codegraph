@@ -25,7 +25,6 @@ describe("Python monorepo package navigation", () => {
       file: pyUtils.replace(/\\/g, "/"),
       line: 1,
       column: 5,
-      includeDeclaration: true,
     });
     expect(res.status).toBe("ok");
     if (res.status === "ok") {

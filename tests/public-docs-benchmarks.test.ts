@@ -112,7 +112,7 @@ interface BenchmarkRun {
     anchorsFound: number;
     missingAnchors: string[];
     completeness: number;
-    reviewedRelationships?: ReviewedRelationships;
+    reviewedRelationships?: ReviewedRelationships | undefined;
   };
 }
 
@@ -405,7 +405,9 @@ describe("public documentation benchmark scenarios", () => {
       {
         name: "unknown pair field",
         mutate: (scenario) => {
-          Object.assign(scenario.requiredAnchorOrder?.[0], { unexpected: true });
+          const pair = scenario.requiredAnchorOrder?.[0];
+          if (!pair) throw new Error("scenario is missing the anchor pair this mutation targets");
+          Object.assign(pair, { unexpected: true });
         },
       },
       {

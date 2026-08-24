@@ -22,5 +22,5 @@
     "checkJs": false
   },
   "include": ["tests/**/*.ts"],
-  "exclude": ["node_modules", "dist", "docs", "tests/.tmp/**", "tests/samples/**"]
+  "exclude": ["node_modules", "dist", "docs", "tests/.tmp/**", "tests/samples/**", "tests/languages/samples/**"]
 }

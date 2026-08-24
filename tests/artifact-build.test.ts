@@ -286,7 +286,8 @@ describe("artifact build", () => {
     const session: AgentSession = {
       loadProject: async (options) => {
         const snapshot = await baseSession.loadProject(options);
-        return { ...snapshot, fileSignatures: undefined };
+        const { fileSignatures: _fileSignatures, ...withoutSignatures } = snapshot;
+        return withoutSignatures;
       },
       invalidate: () => undefined,
     };

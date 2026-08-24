@@ -229,14 +229,20 @@ Also confirm that `git grep -n "ParserLanguage\|isNonNativeParser\|loadTreeSitte
 Everything in the list above landed except the `typecheck` gate, which turned out to be far
 larger than this plan assumed and is deliberately deferred rather than half-done.
 
-**The `typecheck` gate is not a one-line addition.** The plan says to add
+**The `typecheck` gate was not a one-line addition, but it is now on.** The plan says to add
 `tsc -p tsconfig.eslint.json --noEmit` to `npm run check` and the CI lint step "so test files
-are compiled". Measured on clean `main` before any of this PR's changes: that command reports
-**949 errors across 253 test files**. The gate has been off long enough that the test tree
-never type-checked, so switching it on is its own multi-day cleanup, not a gate flip. This PR
-leaves it off and records the real number here. PR 1's own changes moved that count to 918,
-i.e. 31 fewer errors, and were verified not to add any new ones by diffing the full error list
-before and after rather than by file name.
+are compiled". Measured on clean `main`: that command reports **949 errors across 253 test
+files**. `tsconfig.eslint.json` exists to give ESLint a type-aware program, not to compile, so
+it inherited src-tuned strictness and nothing ever ran it.
+
+The fix was a dedicated `tsconfig.tests.json` plus a real cleanup. `src/` keeps the stricter
+`tsconfig.json` untouched; the tests config relaxes only options whose value is specific to
+shipped code (`noUncheckedIndexedAccess`, which alone accounted for 529 errors; `dom` lib for
+the browser-viewer suites; `vitest/globals` because `globals: true` is set; `allowJs` for the
+untyped `scripts/*.mjs` helpers). `exactOptionalPropertyTypes` stays on, verified load-bearing:
+relaxing it surfaces a real error in `src/cli/invocationContext.ts`. Configuration took 918 to
+307; the remaining 307 were fixed individually. `npm run typecheck` now runs both projects and
+is wired into `npm run check` and all three CI lanes.
 
 **A method note worth keeping.** The first before/after comparison used to prove "no new type
 errors" compared the _set of files_ containing errors. That is not sound: a file already in the

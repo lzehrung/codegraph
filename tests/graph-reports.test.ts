@@ -7,6 +7,8 @@ import { getExternalClassifierCacheStats, resetExternalClassifierCaches } from "
 import { findDetailedCycles } from "../src/graphs/queries.js";
 import { resolveRustImportPath } from "../src/util/resolution.js";
 import { isRustCfgTestStatement } from "../src/util/rustTestModules.js";
+import { makeTestProjectIndex } from "./helpers/narrow.js";
+import type { ModuleIndex } from "../src/indexer/types.js";
 
 describe("graph reports", () => {
   const tempRoots: string[] = [];
@@ -767,7 +769,7 @@ describe("graph reports", () => {
   it("should get API surface", () => {
     const root = makeTempRoot("cg-graph-report-api-");
     const file = path.join(root, "a.ts");
-    const mockIndex = {
+    const mockIndex = makeTestProjectIndex({
       byFile: new Map([
         [
           file,
@@ -777,7 +779,12 @@ describe("graph reports", () => {
               {
                 type: "local" as const,
                 exportedAs: "foo",
-                target: { localName: "foo", kind: SymbolKind.Function, range: {}, file },
+                target: {
+                  localName: "foo",
+                  kind: SymbolKind.Function,
+                  range: { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } },
+                  file,
+                },
               },
             ],
             imports: [],
@@ -785,7 +792,7 @@ describe("graph reports", () => {
           },
         ],
       ]),
-    };
+    });
     const api = getApiSurface(mockIndex);
     expect(api.length).toBe(1);
     expect(api[0].file).toBe(file);
@@ -796,17 +803,22 @@ describe("graph reports", () => {
     const root = makeTempRoot("cg-graph-report-api-chain-");
     const libFile = path.join(root, "lib.ts");
     const barrelFile = path.join(root, "barrel.ts");
-    const mockIndex = {
-      byFile: new Map([
+    const mockIndex = makeTestProjectIndex({
+      byFile: new Map<string, ModuleIndex>([
         [
           libFile,
           {
             file: libFile,
             exports: [
               {
-                type: "local",
+                type: "local" as const,
                 exportedAs: "base",
-                target: { localName: "base", kind: SymbolKind.Variable, file: libFile, range: {} },
+                target: {
+                  localName: "base",
+                  kind: SymbolKind.Variable,
+                  file: libFile,
+                  range: { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } },
+                },
               },
             ],
             imports: [],
@@ -818,15 +830,15 @@ describe("graph reports", () => {
           {
             file: barrelFile,
             exports: [
-              { type: "reexport", exportedAs: "aliased", fromModule: libFile, sourceSpecifier: "base" },
-              { type: "exportStar", fromModule: libFile },
+              { type: "reexport" as const, exportedAs: "aliased", fromModule: libFile, sourceSpecifier: "base" },
+              { type: "exportStar" as const, fromModule: libFile, sourceSpecifier: "*" },
             ],
             imports: [],
             locals: [],
           },
         ],
       ]),
-    };
+    });
     const api = getApiSurface(mockIndex);
     const barrel = api.find((a) => a.file === barrelFile);
     expect(barrel).toBeDefined();

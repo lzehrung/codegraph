@@ -120,12 +120,16 @@ describe("native extraction worker", () => {
   });
 
   it("rejects a native binary that returns the legacy syntax-tree shape", async () => {
-    const legacyTree = { rootId: 0, nodes: [] };
-    const binding = {
+    // A pre-columnar binary returns a tree without the typed-array columns. Build a
+    // valid tree and drop a column at runtime, so the mock stays typed while the
+    // structural probe sees exactly the legacy shape it exists to reject.
+    const legacyTree = createStubNativeSyntaxTree();
+    Reflect.deleteProperty(legacyTree, "kindIds");
+    const binding: NativeBinding = {
       extractLanguage: () => ({ results, syntaxTree: legacyTree }),
       runLanguageQueries: () => results,
       supportedLanguageIds: () => ["ts"],
-    } as NativeBinding;
+    };
     const extract = createNativeExtractor({
       loadBinding: () => ({
         binding,

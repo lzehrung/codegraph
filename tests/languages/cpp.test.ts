@@ -201,10 +201,12 @@ describe("C++ configured include roots", () => {
         reason: "importsChanged",
       });
 
+      // Drop the cached adjacency along with the edges; keeping it would let the
+      // full-graph adjacency answer queries this sparse index is meant to lack.
+      const { graphAdjacency: _graphAdjacency, ...baseIndex } = snapshot.index;
       const sparseIndex = {
-        ...snapshot.index,
+        ...baseIndex,
         graph: { ...snapshot.index.graph, edges: [] },
-        graphAdjacency: undefined,
       };
       expect(
         listCandidateTestFiles(sparseIndex, [normalizedModel], [`${normalizedModel}::GunshipDamageModel::0`], {

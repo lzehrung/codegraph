@@ -2665,6 +2665,7 @@ export function processInvoiceItems(items: Array<{ price: number; qty: number }>
     expect(diskDb?.statements).toBeDefined();
     const sig = index.manifestEntries?.get(file)?.sig ?? "test-sig";
     const oldVersion = DUPLICATE_UNIT_CACHE_VERSION - 1;
+    if (!diskDb) throw new Error("expected an open duplicate-unit cache database");
     diskDb.statements!.write.run(file, variant, sig, oldVersion, Buffer.from("dummy-payload"), Date.now());
 
     // tryLoadDuplicateUnitsFromCache must return null because version does not match

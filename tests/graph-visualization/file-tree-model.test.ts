@@ -7,6 +7,9 @@ import {
   buildEdgeIndexes,
 } from "../../docs/graph-visualization/file-tree-model.js";
 import compactPayload from "./fixtures/compact-payload.json" with { type: "json" };
+
+/** The viewer module is plain JS, so name the shape its tree nodes actually have. */
+type TreeNode = { name: string; type: string; children: TreeNode[] };
 import legacyPayload from "./fixtures/legacy-payload.json" with { type: "json" };
 
 describe("findCommonPrefix", () => {
@@ -94,10 +97,10 @@ describe("buildFileTree -- compact format", () => {
   });
 
   it("nests files under correct directories", () => {
-    const { root } = buildFileTree(compactPayload);
-    const utils = root.children.find((c: { name: string }) => c.name === "utils");
+    const { root }: { root: TreeNode } = buildFileTree(compactPayload);
+    const utils = root.children.find((c) => c.name === "utils");
     expect(utils).toBeDefined();
-    const fileNames = utils!.children.map((c: { name: string }) => c.name);
+    const fileNames = utils!.children.map((c) => c.name);
     expect(fileNames).toContain("helper.ts");
     expect(fileNames).toContain("format.ts");
   });
