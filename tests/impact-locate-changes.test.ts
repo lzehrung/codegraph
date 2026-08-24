@@ -3,10 +3,6 @@ import { createTestIndex } from "./test-utils.js";
 import { locateChangedSymbols } from "../src/impact/map.js";
 import type { ChangedSymbol, Hunk } from "../src/impact/types.js";
 
-function norm(p: string) {
-  return p.replace(/\\/g, "/");
-}
-
 describe("Impact: changed-lines → symbol mapping", () => {
   it("maps body-only edits to the nearest declaration (ancestor-to-definition)", async () => {
     const index = await createTestIndex("typescript");

@@ -1,11 +1,10 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { expect } from "vitest";
 import path from "node:path";
 import {
   buildProjectIndex,
   buildProjectIndexFromFiles,
   goToDefinition,
   findReferences,
-  collectGraph,
   listSymbols,
   ProjectIndex,
   SymbolListItem,

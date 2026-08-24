@@ -31,7 +31,6 @@ describe("import binding regressions", () => {
     const imports = await collectImportsForFile(file, root, {
       source: parsed.source,
       sup: parsed.sup,
-      lang: parsed.lang,
       tree: parsed.tree,
       nativeQueries: parsed.nativeQueries,
     });
@@ -54,7 +53,6 @@ describe("import binding regressions", () => {
     const imports = await collectImportsForFile(file, root, {
       source: parsed.source,
       sup: parsed.sup,
-      lang: parsed.lang,
       tree: parsed.tree,
       nativeQueries: parsed.nativeQueries,
     });
@@ -77,7 +75,6 @@ describe("import binding regressions", () => {
     const imports = await collectImportsForFile(file, root, {
       source: parsed.source,
       sup: parsed.sup,
-      lang: parsed.lang,
       tree: parsed.tree,
       nativeQueries: parsed.nativeQueries,
     });

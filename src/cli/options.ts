@@ -798,7 +798,7 @@ export function validateCliArgs(command: string, parsed: ParsedCliArgs): void {
   }
 }
 
-export function isCliValueOption(command: string, key: string, positionals: readonly string[]): boolean {
+export function isCliValueOption(command: string, key: string, _positionals: readonly string[]): boolean {
   if (command === "artifact" && key === "--sqlite") return false;
   if (command === "inspect" && key === "--duplicates") return false;
   return CLI_VALUE_OPTIONS.has(key);

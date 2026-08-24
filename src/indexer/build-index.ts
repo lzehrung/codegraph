@@ -15,7 +15,6 @@ import {
 import { getGitHead, isGitRepo, getGitBlobHashes, listChangedFiles } from "../util/git.js";
 import { clearResolutionCaches, resolveSpecifier } from "../util/resolution.js";
 import {
-  assertFilePathWithinRoot,
   fileIdentityKey,
   initializeFileIdentityCaseSensitivity,
   isFilePathWithinRoot,
@@ -41,7 +40,7 @@ import { initNativeBackendReport } from "../native/nativeBackendReport.js";
 import { closeDuplicateUnitCacheDatabase } from "../duplicates.js";
 import { isNativeRequiredUnavailableError } from "../native/treeSitterNative.js";
 import { isNodeSqliteUnavailableError } from "../sqlite-driver.js";
-import type { ParserLanguage, SyntaxTreeLike } from "../languages/types.js";
+import type { SyntaxTreeLike } from "../languages/types.js";
 import type { Edge, FileId, Graph } from "../types.js";
 import {
   buildBloomFilterForFile,
@@ -73,7 +72,6 @@ import {
   verifyManifestEntries,
   writeModulesToCache,
   writeProjectIndexSnapshot,
-  writeToCache,
   type FileSignature,
   type ManifestFileEntry,
   type PendingModuleCacheWrite,
@@ -94,7 +92,6 @@ import {
   type SymbolDef,
   SymbolKind,
 } from "./types.js";
-import { isNonNativeParserUnavailableError, isParserSyntaxTree } from "../parserBackend.js";
 import { isUnsupportedParserInputError, type PreparedSFCEmbeddedBlock } from "../languages/filePrep.js";
 
 import { buildSqlFactCache, buildSqlModuleIndex, sqlCorpusSignature, type SqlFactCache } from "../sql/sourceGraph.js";
@@ -122,7 +119,6 @@ import { parsedCacheMaxEntries, setParsedCacheEntry } from "./parsed-cache.js";
 type IndexedFileGraphContext = {
   source: string;
   sup: LanguageSupport;
-  lang?: ParserLanguage;
   nativeQueries?: import("../native/treeSitterNative.js").NativeQueryResults | null;
   tree?: SyntaxTreeLike;
   embeddedBlocks?: PreparedSFCEmbeddedBlock[];
@@ -259,7 +255,6 @@ async function buildIndexedModuleForFile(args: {
     args.trustedSource,
   );
   const { source, sup, nativeQueries, embeddedBlocks } = prepared;
-  let resolvedLang = prepared.lang;
   let tree: SyntaxTreeLike | undefined;
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id),
     nativeSourceLimitFallback =
@@ -276,7 +271,6 @@ async function buildIndexedModuleForFile(args: {
         source,
         tree: parsedTree,
         sup,
-        ...(resolvedLang ? { lang: resolvedLang } : {}),
         ...(embeddedBlocks ? { embeddedBlocks } : {}),
         nativeQueries,
       },
@@ -287,7 +281,6 @@ async function buildIndexedModuleForFile(args: {
     const parsed = parseAttempt.parsed;
     if (parsed) {
       tree = parsed.tree;
-      resolvedLang = parsed.lang;
       setParsedCacheEntry(args.parsedMap, args.file, parsed, args.parsedCacheMaxEntries);
     } else {
       recordParserBackendDegradation(args.report, {
@@ -304,7 +297,6 @@ async function buildIndexedModuleForFile(args: {
     const parsed = parseAttempt.parsed;
     if (parsed) {
       tree = parsed.tree;
-      resolvedLang = parsed.lang ?? resolvedLang;
       setParsedCacheEntry(args.parsedMap, args.file, parsed, args.parsedCacheMaxEntries);
     }
   }
@@ -330,9 +322,7 @@ async function buildIndexedModuleForFile(args: {
       ? []
       : await collectImportsForFile(args.file, args.projectRoot, {
           source,
-          ...(tree && isParserSyntaxTree(tree) ? { tree } : {}),
           sup,
-          ...(resolvedLang ? { lang: resolvedLang } : {}),
           ...(nativeQueries !== undefined ? { nativeQueries } : {}),
           ...sharedImportOptions,
         });
@@ -352,7 +342,7 @@ async function buildIndexedModuleForFile(args: {
   } else if (lacksParserContext) {
     mod = { ...createEmptyModuleIndex(args.file), imports };
   } else {
-    mod = collectLocalsAndExportsFromSource(args.file, source, sup, resolvedLang, imports, {
+    mod = collectLocalsAndExportsFromSource(args.file, source, sup, imports, {
       ...(tree ? { tree } : {}),
       ...(nativeQueries !== undefined ? { nativeQueries } : {}),
       ...(args.opts?.native ? { nativeMode: args.opts.native } : {}),
@@ -386,7 +376,6 @@ async function buildIndexedModuleForFile(args: {
     graphContext: {
       source,
       sup,
-      ...(resolvedLang ? { lang: resolvedLang } : {}),
       ...(nativeQueries !== undefined ? { nativeQueries } : {}),
       ...(tree ? { tree } : {}),
       ...(embeddedBlocks ? { embeddedBlocks } : {}),
@@ -940,7 +929,7 @@ async function buildIndexFromFileListShared(
       } catch (error) {
         if (isNativeRequiredUnavailableError(error) || isNodeSqliteUnavailableError(error)) throw error;
         if (isConfinedFileReadError(error)) throw error;
-        if (isUnsupportedParserInputError(error) || isNonNativeParserUnavailableError(error)) {
+        if (isUnsupportedParserInputError(error)) {
           return [file, createEmptyModuleIndex(file), [], undefined] as const;
         }
         recordFileFailure(report, file, error);
@@ -1724,7 +1713,7 @@ export async function buildProjectIndexIncremental(
             return [file, built.module, built.cacheWrite] as const;
           } catch (error) {
             if (isNativeRequiredUnavailableError(error) || isNodeSqliteUnavailableError(error)) throw error;
-            if (isUnsupportedParserInputError(error) || isNonNativeParserUnavailableError(error)) {
+            if (isUnsupportedParserInputError(error)) {
               return [file, createEmptyModuleIndex(file)] as const;
             }
             recordFileFailure(report, file, error);

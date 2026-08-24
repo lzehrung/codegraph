@@ -61,15 +61,6 @@ function normalizeFile(file: string): string {
   return path.resolve(file).replace(/\\/g, "/");
 }
 
-function normalizeGraphEdges(index: ProjectIndex): string[] {
-  return index.graph.edges
-    .map((edge) => {
-      const target = edge.to.type === "file" ? `file:${normalizeFile(edge.to.path)}` : `external:${edge.to.name}`;
-      return `${normalizeFile(edge.from)}=>${target}`;
-    })
-    .sort();
-}
-
 function normalizeSymbols(
   index: ProjectIndex,
   expectations: SymbolExpectation[] | undefined,

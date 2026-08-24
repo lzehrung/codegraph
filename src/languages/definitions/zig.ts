@@ -1,5 +1,4 @@
 import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
 const ZIG_TYPE_INITIALIZER_TYPES = new Set([
@@ -14,7 +13,6 @@ const ZIG_TYPE_INITIALIZER_TYPES = new Set([
 export const ZIG_DEF: LanguageDefinition = {
   id: "zig",
   extensions: [".zig"],
-  grammar: () => loadTreeSitterLanguage("@tree-sitter-grammars/tree-sitter-zig"),
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

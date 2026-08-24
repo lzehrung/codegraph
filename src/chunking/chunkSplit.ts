@@ -263,17 +263,3 @@ function previousCodePointBoundary(text: string, index: number): number {
   }
   return index - 1;
 }
-
-function locateLineAndColFromByte(newlineOffsets: number[], byteOffset: number): [number, number] {
-  let low = 0;
-  let high = newlineOffsets.length;
-  while (low < high) {
-    const mid = (low + high) >>> 1;
-    if (newlineOffsets[mid]! < byteOffset) low = mid + 1;
-    else high = mid;
-  }
-  const line = low;
-  const prevNewline = low > 0 ? newlineOffsets[low - 1]! : -1;
-  const col = byteOffset - prevNewline - 1;
-  return [line, col];
-}

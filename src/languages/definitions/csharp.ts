@@ -1,5 +1,4 @@
 import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 import { CSHARP_IDENTIFIER_FORMAT_SOURCE, hasNonAsciiCodePoint } from "../../util/identifiers.js";
 
@@ -8,7 +7,6 @@ const CSHARP_IDENTIFIER_FORMAT_PATTERN = new RegExp(`[${CSHARP_IDENTIFIER_FORMAT
 export const CSHARP_DEF: LanguageDefinition = {
   id: "csharp",
   extensions: [".cs"],
-  grammar: () => loadTreeSitterLanguage("tree-sitter-c-sharp"),
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

@@ -1,12 +1,10 @@
 import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 import { hasNonAsciiCodePoint } from "../../util/identifiers.js";
 
 export const RUST_DEF: LanguageDefinition = {
   id: "rust",
   extensions: [".rs"],
-  grammar: () => loadTreeSitterLanguage("tree-sitter-rust"),
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

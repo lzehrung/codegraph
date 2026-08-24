@@ -1,5 +1,4 @@
 import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 import {
   ECMASCRIPT_CONTROL_SPLIT_POINTS,
@@ -26,7 +25,6 @@ const JS_OBJECT_METHOD_EXPORT_NATIVE_PATTERN = `
 export const JAVASCRIPT_DEF: LanguageDefinition = {
   id: "js",
   extensions: [".js", ".jsx", ".mjs", ".cjs"],
-  grammar: () => loadTreeSitterLanguage("tree-sitter-javascript"),
   structure: {
     blocks: [...ECMASCRIPT_CORE_FUNCTION_BLOCKS, ...ECMASCRIPT_MODULE_VAR_BLOCKS],
     splitPoints: [...ECMASCRIPT_CONTROL_SPLIT_POINTS],

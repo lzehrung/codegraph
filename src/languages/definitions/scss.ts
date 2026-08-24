@@ -1,5 +1,4 @@
 import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
 const SCSS_SYMBOL_QUERY_PATTERNS = [
@@ -13,7 +12,6 @@ const SCSS_SYMBOL_QUERY_PATTERNS = [
 export const SCSS_DEF: LanguageDefinition = {
   id: "scss",
   extensions: [".scss"],
-  grammar: () => loadTreeSitterLanguage("tree-sitter-scss"),
   structure: {
     blocks: [
       { type: "rule_set", captureId: "rule" },

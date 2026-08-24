@@ -6,7 +6,6 @@ import type {
   DuplicateCloneType,
   DuplicateClusterSummary,
   DuplicateConfidence,
-  DuplicateDetectionOptions,
   DuplicateGroup,
   DuplicateInternalUnit,
   DuplicateMetrics,

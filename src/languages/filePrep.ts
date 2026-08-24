@@ -1,5 +1,4 @@
 import fsp from "node:fs/promises";
-import type { ParserLanguage } from "../languages/types.js";
 
 import { JS_SUPPORT, TS_SUPPORT, TSX_SUPPORT, supportForFile, supportById } from "../languages.js";
 import type { LanguageExtensionMap, LanguageSupport } from "../languages.js";
@@ -17,7 +16,6 @@ import type { SFCBlock, SFCFramework } from "./sfc.js";
 interface ParserInput {
   source: string;
   sup: LanguageSupport;
-  lang: ParserLanguage;
 }
 
 export interface PreparedSFCEmbeddedBlock {
@@ -55,7 +53,6 @@ export async function prepareParserInput(
   const prepared = await prepareSourceInput(file, opts);
   return {
     ...prepared,
-    lang: prepared.sup.language(file),
   };
 }
 

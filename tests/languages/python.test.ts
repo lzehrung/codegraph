@@ -187,7 +187,7 @@ describe("Python __all__ exports", () => {
     await fsp.writeFile(file, source, "utf8");
     try {
       const parsed = await parseFile(file);
-      return collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, parsed.lang, [], {
+      return collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
         tree: parsed.tree,
         nativeQueries: parsed.nativeQueries,
       });

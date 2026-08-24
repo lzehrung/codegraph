@@ -23,7 +23,7 @@ const JAVA_DECLARATION_PATTERN = new RegExp(
   String.raw`(?:\b(?:class|interface|enum|record)|@interface)\s+(${JAVA_IDENTIFIER_SOURCE})`,
   "gu",
 );
-const JAVA_IDENTIFIER_IGNORABLE_PATTERN = new RegExp(`[${JAVA_IDENTIFIER_IGNORABLE_SOURCE}]`, "gu");
+const _JAVA_IDENTIFIER_IGNORABLE_PATTERN = new RegExp(`[${JAVA_IDENTIFIER_IGNORABLE_SOURCE}]`, "gu");
 
 type JvmSymbolIndexEntry = {
   packageName: string | null;

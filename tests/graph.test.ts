@@ -6,7 +6,7 @@ import {
   buildSymbolGraph,
   graphToMermaidSymbolsWithFiles,
 } from "../src/index.js";
-import { getSamplePath, expectEdgeCount } from "./test-utils.js";
+import { getSamplePath } from "./test-utils.js";
 
 type EdgeTo = { type: "file"; path: string } | { type: "external"; name: string };
 const toStr = (to: EdgeTo) => (to.type === "file" ? to.path : to.name);

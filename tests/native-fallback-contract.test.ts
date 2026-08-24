@@ -80,15 +80,8 @@ async function computeJsOnlyModule(file: string, projectRoot: string): Promise<u
   const imports = await collectImportsForFile(file, projectRoot, {
     source: prepared.source,
     sup: prepared.sup,
-    lang: prepared.lang,
   });
-  const moduleIndex = collectLocalsAndExportsFromSource(
-    normalizeFile(file),
-    prepared.source,
-    prepared.sup,
-    prepared.lang,
-    imports,
-  );
+  const moduleIndex = collectLocalsAndExportsFromSource(normalizeFile(file), prepared.source, prepared.sup, imports);
   moduleIndex.imports = imports;
   return simplifyNativeTestModuleIndex(moduleIndex);
 }
@@ -160,7 +153,7 @@ describe("native required fallback boundaries", () => {
       });
 
     expect(() =>
-      collectLocalsAndExportsFromSource(file, "export const alpha = 1;\n", support, undefined, [], {
+      collectLocalsAndExportsFromSource(file, "export const alpha = 1;\n", support, [], {
         nativeMode: "on",
         nativeQueries,
       }),
@@ -178,7 +171,7 @@ describe("native required fallback boundaries", () => {
       throw new Error(REQUIRED_NATIVE_UNAVAILABLE);
     });
 
-    const moduleIndex = collectLocalsAndExportsFromSource(file, "[Guide](./guide.md)\n", support, undefined, [], {
+    const moduleIndex = collectLocalsAndExportsFromSource(file, "[Guide](./guide.md)\n", support, [], {
       nativeMode: "on",
     });
 
@@ -266,7 +259,7 @@ describe("native required fallback boundaries", () => {
     });
 
     expect(() =>
-      collectLocalsAndExportsFromSource(file, "export const alpha = 1;\n", support, undefined, [], {
+      collectLocalsAndExportsFromSource(file, "export const alpha = 1;\n", support, [], {
         nativeMode: "on",
         nativeQueries,
       }),
@@ -430,17 +423,10 @@ nativeDescribe("native fallback contract", () => {
       importBindings: [],
     };
 
-    const moduleIndex = collectLocalsAndExportsFromSource(
-      file,
-      "def do_work():\n    return 42\n",
-      support,
-      undefined,
-      [],
-      {
-        nativeMode: "on",
-        nativeQueries,
-      },
-    );
+    const moduleIndex = collectLocalsAndExportsFromSource(file, "def do_work():\n    return 42\n", support, [], {
+      nativeMode: "on",
+      nativeQueries,
+    });
 
     expect(simplifyNativeTestModuleIndex(moduleIndex)).toEqual({
       imports: [],

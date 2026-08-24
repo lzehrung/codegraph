@@ -239,13 +239,6 @@ function suggestionTouchesDuplicateTarget(suggestion: DuplicateSuggestion, targe
   return unitTouchesDuplicateTarget(suggestion.left, target) || unitTouchesDuplicateTarget(suggestion.right, target);
 }
 
-function groupTouchesDuplicateTarget(group: DuplicateGroup, target: DuplicateTarget): boolean {
-  if (unitTouchesDuplicateTarget(group.primaryLeft, target) || unitTouchesDuplicateTarget(group.primaryRight, target)) {
-    return true;
-  }
-  return group.variants.some((variant) => suggestionTouchesDuplicateTarget(variant, target));
-}
-
 function boundDuplicateGroupVariants(
   group: DuplicateGroup,
   target: DuplicateTarget,

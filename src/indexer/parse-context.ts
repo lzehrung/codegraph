@@ -11,14 +11,13 @@ import {
 import type { NativeFallbackReason } from "../native/contracts.js";
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
 import type { LanguageSupport } from "../languages.js";
-import type { ParserLanguage, SyntaxTreeLike } from "../languages/types.js";
+import type { SyntaxTreeLike } from "../languages/types.js";
 import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../worker/nativeExtractWorker.js";
 
 export type ParsedFileContext = {
   source: string;
   tree: SyntaxTreeLike;
   sup: LanguageSupport;
-  lang?: ParserLanguage;
   nativeQueries?: NativeQueryResults | null;
   embeddedBlocks?: PreparedSFCEmbeddedBlock[];
 };
@@ -27,7 +26,6 @@ export type ParsedFileCacheEntry = {
   source: string;
   tree: SyntaxTreeLike;
   sup: LanguageSupport | undefined;
-  lang?: ParserLanguage;
   nativeQueries?: NativeQueryResults | null;
 };
 
@@ -35,7 +33,6 @@ export type PreparedFileContext = {
   file: string;
   source: string;
   sup: LanguageSupport;
-  lang?: ParserLanguage;
   nativeMode?: NativeRuntimeMode;
   embeddedBlocks?: PreparedSFCEmbeddedBlock[];
   nativeQueries: NativeQueryResults | null;
@@ -71,7 +68,7 @@ function createGraphOnlySyntaxTree(): SyntaxTreeLike {
   };
 }
 export function attemptParsePreparedFileContext(context: PreparedFileContext): PreparedFileParseAttempt {
-  const { file, source, sup, nativeMode, nativeQueries, embeddedBlocks } = context;
+  const { source, sup, nativeMode, nativeQueries, embeddedBlocks } = context;
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
   if (graphOnlyLanguage) {
     return {
@@ -90,7 +87,6 @@ export function attemptParsePreparedFileContext(context: PreparedFileContext): P
       parsed: {
         source,
         tree: new ProjectedSyntaxTree(source, context.syntaxTree),
-        ...(context.lang ? { lang: context.lang } : {}),
         sup,
         ...(embeddedBlocks ? { embeddedBlocks } : {}),
         nativeQueries,
@@ -110,7 +106,6 @@ export function attemptParsePreparedFileContext(context: PreparedFileContext): P
       parsed: {
         source,
         tree: new ProjectedSyntaxTree(source, nativeTreeExecution.tree),
-        ...(context.lang ? { lang: context.lang } : {}),
         sup,
         ...(embeddedBlocks ? { embeddedBlocks } : {}),
         nativeQueries,
@@ -210,7 +205,6 @@ export async function ensureParsedContext(
       source: parsedEntry.source,
       tree: parsedEntry.tree,
       sup: parsedEntry.sup,
-      ...(parsedEntry.lang ? { lang: parsedEntry.lang } : {}),
       nativeQueries: parsedEntry.nativeQueries ?? null,
     };
   }

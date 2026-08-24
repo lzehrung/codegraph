@@ -161,7 +161,7 @@ describe("rename preview", () => {
   });
 
   it("marks collisions and case-only renames unsafe", async () => {
-    const { root, serviceFile, session, target } = await renameFixture();
+    const { root, serviceFile, session, _target } = await renameFixture();
     await fsp.appendFile(serviceFile, "export const existing = 2;\n");
     session.invalidate();
     const refreshedSymbols = await workspaceSymbolsWithSession(session, { root, query: "service", exportedOnly: true });
@@ -472,7 +472,7 @@ describe("rename preview", () => {
   });
 
   it("reports a consumer binding collision for an implicit import rename", async () => {
-    const { root, consumerFile, session, target } = await renameFixture();
+    const { root, consumerFile, session, _target } = await renameFixture();
     await fsp.appendFile(consumerFile, "\nexport const renamedService = 2;\n");
     session.invalidate();
     const symbols = await workspaceSymbolsWithSession(session, { root, query: "service", exportedOnly: true });

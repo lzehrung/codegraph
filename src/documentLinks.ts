@@ -1,10 +1,6 @@
 import { type ModuleSpecifier } from "./util/specifiers.js";
 import { extractAsciidocModuleSpecifiers } from "./documentLinks/asciidoc.js";
-import {
-  extractHtmlAttributeSpecifiers,
-  extractHtmlInlineScriptSpecifiers,
-  extractHtmlStyleSpecifiers,
-} from "./documentLinks/html.js";
+import {} from "./documentLinks/html.js";
 import { extractMarkdownModuleSpecifiers, extractMdxModuleSpecifiers } from "./documentLinks/markdown.js";
 import { extractRstModuleSpecifiers } from "./documentLinks/rst.js";
 import { extractAstroModuleSpecifiers, extractHandlebarsModuleSpecifiers } from "./documentLinks/sfc.js";

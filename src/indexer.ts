@@ -10,67 +10,11 @@ import {
 } from "./indexer/parse-context.js";
 import { collectImportsForFile as collectImportsForFileFromImportsModule } from "./indexer/imports.js";
 import { collectLocalsAndExportsFromSource as collectLocalsAndExportsFromLocalsModule } from "./indexer/locals-and-exports.js";
-import {
-  buildGraphDelta,
-  buildProjectIndex,
-  buildProjectIndexFromFiles,
-  buildProjectIndexIncremental,
-} from "./indexer/build-index.js";
-import {
-  collectNamespaceMemberRefs,
-  findReferences,
-  goToDefinition,
-  resolveExport,
-  resolveImported,
-} from "./indexer/navigation.js";
-import {
-  defFromSymbolId,
-  findReferencesById,
-  getApiSurface,
-  goToDefinitionById,
-  listSymbols,
-  resolveSymbolId,
-  symbolId,
-} from "./indexer/symbols.js";
-import {
-  SymbolKind,
-  type ApiSurface,
-  type BackendReport,
-  type BuildFileReport,
-  type BuildOptions,
-  type BuildReport,
-  type BuildTimingReport,
-  type CacheReport,
-  type ExportEntry,
-  type FindReferencesResult,
-  type FallbackImportExtractionReport,
-  type GoToRequest,
-  type GoToResult,
-  type GraphDeltaReport,
-  type GraphReport,
-  type ImportBinding,
-  type IncrementalBuildOptions,
-  type ManifestReport,
-  type ModuleIndex,
-  type NativeBackendFallbackReason,
-  type NativeBackendLanguageReport,
-  type NativeBackendReport,
-  type ParserBackendDegradationReport,
-  type ProjectIndex,
-  type Reference,
-  type ResolutionProvenance,
-  type ResolvedExport,
-  type SymbolDef,
-  type SymbolHandle,
-  type SymbolListItem,
-  type WorkerPoolReport,
-} from "./indexer/types.js";
+import { type ImportBinding, type ModuleIndex, type ProjectIndex } from "./indexer/types.js";
 import { buildScopeIndexFromSource as buildScopeIndexFromSourceFromModule, type ScopeIndex } from "./indexer/scope.js";
 import type { LanguageSupport } from "./languages.js";
-import type { ParserLanguage, SyntaxTreeLike } from "./languages/types.js";
+import type { SyntaxTreeLike } from "./languages/types.js";
 import type { NativeQueryResults, NativeRuntimeMode } from "./native/treeSitterNative.js";
-import type { FileId } from "./types.js";
-import type { ParserSyntaxTree } from "./parserBackend.js";
 
 export { SymbolKind } from "./indexer/types.js";
 export type {
@@ -165,7 +109,6 @@ export function collectLocalsAndExportsFromSource(
   file: string,
   source: string,
   support: LanguageSupport,
-  lang?: ParserLanguage,
   imports: ImportBinding[] = [],
   opts?: {
     tree?: SyntaxTreeLike;
@@ -174,7 +117,7 @@ export function collectLocalsAndExportsFromSource(
     logLevel?: import("./logging.js").LogLevel;
   },
 ): ModuleIndex {
-  return collectLocalsAndExportsFromLocalsModule(file, source, support, lang, imports, opts);
+  return collectLocalsAndExportsFromLocalsModule(file, source, support, imports, opts);
 }
 
 export async function collectImportsForFile(
@@ -182,9 +125,7 @@ export async function collectImportsForFile(
   projectRoot: string,
   opts?: {
     source?: string;
-    tree?: ParserSyntaxTree;
     sup?: LanguageSupport;
-    lang?: ParserLanguage;
     nativeQueries?: NativeQueryResults | null;
     graphOptions?: GraphBuildOptions;
     native?: import("./native/treeSitterNative.js").NativeRuntimeMode;
@@ -210,11 +151,10 @@ export function buildScopeIndexFromSource(
   file: string,
   source: string,
   support: LanguageSupport,
-  lang?: ParserLanguage,
   imports: ImportBinding[] = [],
   opts?: { tree?: SyntaxTreeLike; nativeMode?: NativeRuntimeMode },
 ): ScopeIndex {
-  return buildScopeIndexFromSourceFromModule(file, source, support, lang, imports, opts);
+  return buildScopeIndexFromSourceFromModule(file, source, support, imports, opts);
 }
 
 export async function __buildSymbolGraphDetailedCompat(index: ProjectIndex): Promise<SymbolGraph> {

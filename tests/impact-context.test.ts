@@ -13,7 +13,7 @@ describe("Impact Context Collection", () => {
   describe("collectImpactContext", () => {
     it("should collect N-hop subgraph around impacted files", async () => {
       const index = await createTestIndex("typescript");
-      const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
+      const _samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
 
       // Get some impacted files from the index
       const impactedFiles = Array.from(index.byFile.keys()).slice(0, 2);

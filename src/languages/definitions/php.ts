@@ -1,11 +1,9 @@
 import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
 export const PHP_DEF: LanguageDefinition = {
   id: "php",
   extensions: [".php"],
-  grammar: () => loadTreeSitterLanguage("tree-sitter-php"),
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

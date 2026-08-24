@@ -23,11 +23,9 @@ import {
 } from "../src/indexer/build-cache/project-snapshot.js";
 import { cacheRoot, resolveCacheLocation } from "../src/indexer/build-cache/location.js";
 import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
-import { isNonNativeParserAvailable } from "../src/parserBackend.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
-const nonNativeParserDescribe = isNonNativeParserAvailable() ? describe : describe.skip;
 
 function moduleFor(file: string): ModuleIndex {
   return {
@@ -93,12 +91,6 @@ describe("persisted cache rehydration is confined to the project root", () => {
   nativeDescribe("workspace-external reexports", () => {
     it("retains the raw specifier across cold and warm native index builds", async () => {
       await expectWorkspaceExternalReexportCacheRoundTrip("required");
-    });
-  });
-
-  nonNativeParserDescribe("workspace-external reexports", () => {
-    it("retains the raw specifier across cold and warm fallback index builds", async () => {
-      await expectWorkspaceExternalReexportCacheRoundTrip("off");
     });
   });
 

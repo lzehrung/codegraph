@@ -11,7 +11,7 @@ describe("JS export fallback regressions", () => {
     );
     const support = supportForFile(file)!;
 
-    const moduleIndex = collectLocalsAndExportsFromSource(file, source, support, support.language(file));
+    const moduleIndex = collectLocalsAndExportsFromSource(file, source, support);
 
     expect(moduleIndex.exports).toEqual([
       expect.objectContaining({
@@ -32,7 +32,7 @@ describe("JS export fallback regressions", () => {
     ].join("\n");
     const support = supportForFile(file)!;
 
-    const moduleIndex = collectLocalsAndExportsFromSource(file, source, support, support.language(file));
+    const moduleIndex = collectLocalsAndExportsFromSource(file, source, support);
 
     expect(moduleIndex.exports).toHaveLength(0);
   });
@@ -42,7 +42,7 @@ describe("JS export fallback regressions", () => {
     const source = "export default async function () {\n  return 1;\n}\n";
     const support = supportForFile(file)!;
 
-    const moduleIndex = collectLocalsAndExportsFromSource(file, source, support, undefined, [], { nativeMode: "off" });
+    const moduleIndex = collectLocalsAndExportsFromSource(file, source, support, [], { nativeMode: "off" });
 
     expect(moduleIndex.exports).toEqual([
       expect.objectContaining({
@@ -57,7 +57,7 @@ describe("JS export fallback regressions", () => {
     const source = "export default function Foo() {\n  return 1;\n}\n";
     const support = supportForFile(file)!;
 
-    const moduleIndex = collectLocalsAndExportsFromSource(file, source, support, support.language(file));
+    const moduleIndex = collectLocalsAndExportsFromSource(file, source, support);
     const defaultExports = moduleIndex.exports.filter(
       (entry) => entry.type === "local" && entry.exportedAs === "default",
     );
@@ -86,7 +86,7 @@ describe("JS export fallback regressions", () => {
     ].join("\n");
     const support = supportForFile(file)!;
 
-    const moduleIndex = collectLocalsAndExportsFromSource(file, source, support, undefined, [], { nativeMode: "off" });
+    const moduleIndex = collectLocalsAndExportsFromSource(file, source, support, [], { nativeMode: "off" });
     const defaultExports = moduleIndex.exports.filter(
       (entry) => entry.type === "local" && entry.exportedAs === "default",
     );

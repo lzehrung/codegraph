@@ -432,7 +432,7 @@ export function createSymbolLoader(file: FileId, source: string, imports: Import
       sup,
       nativeQueries: null,
     });
-    const module = collectLocalsAndExportsFromSource(file, source, parsed.sup, parsed.lang, imports, {
+    const module = collectLocalsAndExportsFromSource(file, source, parsed.sup, imports, {
       tree: parsed.tree,
     });
     return Promise.resolve(module.locals);

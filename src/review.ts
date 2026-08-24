@@ -16,7 +16,7 @@ import type { GraphBuildOptions } from "./graphs/types.js";
 import type { FileChange, Hunk } from "./impact/types.js";
 import { normalizePath, toProjectDisplayPath } from "./util/paths.js";
 import { fileExists } from "./util/workspace.js";
-import { discoverProjectFiles, type ProjectFileInfo } from "./util/projectFiles.js";
+import { discoverProjectFiles } from "./util/projectFiles.js";
 import { mapLimit } from "./util/concurrency.js";
 import { collectReviewCandidateTests } from "./review/candidates.js";
 import { collectReviewChanges, deletedPathsForChange } from "./review/changes.js";

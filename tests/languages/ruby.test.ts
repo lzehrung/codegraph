@@ -107,7 +107,7 @@ describe("Ruby Struct.new declarations", () => {
     const samplePath = path.resolve(process.cwd(), "tests", "samples", "ruby");
     const file = path.join(samplePath, ".regressions", "struct_point.rb").replace(/\\/g, "/");
     const parsed = await parseFile(file);
-    const module = collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, parsed.lang, [], {
+    const module = collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
       tree: parsed.tree,
       nativeQueries: parsed.nativeQueries,
     });

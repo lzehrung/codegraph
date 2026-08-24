@@ -90,7 +90,6 @@ it("recovers Less option imports in reduced mode", () => {
   const support = supportById("less")!;
   const specifiers = collectModuleSpecifiersFromSource(
     support,
-    undefined,
     '@import (reference) "./reference";\n@import (css) "./css-mode";',
     { native: "off" },
   );

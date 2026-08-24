@@ -471,7 +471,7 @@ describe("agent session", () => {
 
   it("invalidates module, project snapshot, and detailed sidecar on core epoch drift", async () => {
     const root = await mkGitRepo();
-    const initial = await createAgentSession({ root }).loadProject();
+    const _initial = await createAgentSession({ root }).loadProject();
     const cacheDir = path.join(root, ".codegraph-cache", "index-v1");
     const manifestPath = path.join(cacheDir, "manifest.json");
     const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {

@@ -679,7 +679,7 @@ export async function tryLoadPersistedBloomFilters(
 
 function persistedBloomFiltersFromSidecar(
   value: unknown,
-  projectRoot: string,
+  _projectRoot: string,
 ): Pick<BloomFilterSnapshotPayload, "bloomFilters" | "fileSignatures"> | null {
   if (!value || typeof value !== "object") return null;
   const payload = value as Partial<BloomFilterSnapshotPayload>;

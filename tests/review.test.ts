@@ -13,7 +13,7 @@ import {
 import * as indexerBuild from "../src/indexer/build-index.js";
 import * as indexerNavigation from "../src/indexer/navigation.js";
 import type { BuildReport, IncrementalBuildOptions, SymbolDef } from "../src/indexer/types.js";
-import { boundReviewReportForTransport, DEFAULT_REVIEW_TRANSPORT_LIMITS } from "../src/review/types.js";
+import { boundReviewReportForTransport } from "../src/review/types.js";
 import { summarizeChangedFiles } from "../src/review/summaries.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import * as impactMap from "../src/impact/map.js";

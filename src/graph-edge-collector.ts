@@ -1,11 +1,9 @@
-import type { ParserLanguage } from "./parserBackend.js";
 import { prepareSourceInput, type PreparedSFCEmbeddedBlock } from "./languages/filePrep.js";
 import { supportForFile, type LanguageExtensionMap, type LanguageSupport } from "./languages.js";
 import type { Edge } from "./types.js";
 import { loadNearestTsconfigFor } from "./util/resolution.js";
 import type { WorkspaceConfig } from "./util/workspace.js";
 import { extractJsTsDynamicSpecifiers } from "./util/specifiers.js";
-import { logWithLevel } from "./logging.js";
 import { fileIdentityKey } from "./util/paths.js";
 import type { LogLevel } from "./logging.js";
 import {
@@ -81,7 +79,6 @@ export async function collectEdgesForFile(
       source: string;
       tree?: SyntaxTreeLike;
       sup: LanguageSupport;
-      lang?: ParserLanguage;
       nativeQueries?: NativeQueryResults | null;
       embeddedBlocks?: PreparedSFCEmbeddedBlock[];
     };
@@ -137,7 +134,6 @@ export async function collectEdgesForFile(
 
   const parsed = opts.parsed;
   let sup = parsed?.sup;
-  const lang = parsed?.lang;
   let src = parsed?.source;
   const nativeQueries = parsed?.nativeQueries ?? null;
   let embeddedBlocks = parsed?.embeddedBlocks ?? [];
@@ -175,7 +171,7 @@ export async function collectEdgesForFile(
   }
 
   const fast = !!opts.fast;
-  const specs = collectModuleSpecifiersFromSource(sup, lang, src, {
+  const specs = collectModuleSpecifiersFromSource(sup, src, {
     ...(parsed?.tree ? { tree: parsed.tree } : {}),
     ...(nativeQueries ? { nativeQueries } : {}),
     ...(compactNativeImports ? { compactNativeImports } : {}),
@@ -201,7 +197,7 @@ export async function collectEdgesForFile(
 
   const specSources = specs.map((entry) => ({ entry, support: sup }));
   for (const block of embeddedBlocks) {
-    const blockSpecs = collectModuleSpecifiersFromSource(block.sup, undefined, block.source, {
+    const blockSpecs = collectModuleSpecifiersFromSource(block.sup, block.source, {
       fast,
       file: normalizedFile,
       ...(opts.fastRegexDisabledLanguages ? { fastRegexDisabledLanguages: opts.fastRegexDisabledLanguages } : {}),

@@ -873,7 +873,7 @@ index 1234567..abcdef0 100644
   describe("Candidate Test Files", () => {
     it("should detect candidate test files via import edges on samples", async () => {
       const index = await createTestIndex("typescript");
-      const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
+      const _samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
 
       // Get some files and symbols from the index
       const files = Array.from(index.byFile.keys());
@@ -903,8 +903,8 @@ index 1234567..abcdef0 100644
       // Candidates should be sorted by confidence (high first)
       if (candidates.length > 1) {
         const highCount = candidates.filter((c) => c.confidence === "high").length;
-        const mediumCount = candidates.filter((c) => c.confidence === "medium").length;
-        const lowCount = candidates.filter((c) => c.confidence === "low").length;
+        const _mediumCount = candidates.filter((c) => c.confidence === "medium").length;
+        const _lowCount = candidates.filter((c) => c.confidence === "low").length;
 
         // High confidence should come first
         if (highCount > 0) {

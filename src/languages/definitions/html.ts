@@ -1,11 +1,9 @@
 import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
 export const HTML_DEF: LanguageDefinition = {
   id: "html",
   extensions: [".html", ".htm"],
-  grammar: () => loadTreeSitterLanguage("tree-sitter-html"),
   structure: {
     blocks: [
       {

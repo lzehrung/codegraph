@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import fsp, { type FileHandle } from "node:fs/promises";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { applyEdits, modify, parse as parseJsonc, type ParseError } from "jsonc-parser";
@@ -578,7 +578,7 @@ async function prepareUninstallPlan(
   settings: InstallerSettings,
   dryRun: boolean,
 ): Promise<InstallPlan> {
-  const bundledSkill = await fsp.readFile(bundledSkillFilePath());
+  const _bundledSkill = await fsp.readFile(bundledSkillFilePath());
   const files: PlannedInstallFile[] = [];
   for (const definition of definitions) {
     const skillTargetDir = getSkillTargetDirForAgent(definition.id, settings.homeDir, settings.env);
@@ -1117,19 +1117,6 @@ async function assertNoSymbolicLinksWithinRoot(filePath: string, root: string): 
   }
 }
 
-async function pathExistsUnlessMissing(filePath: string): Promise<boolean> {
-  try {
-    const stats = await fsp.lstat(filePath);
-    if (stats.isSymbolicLink()) throw unsafeSymbolicLinkError(filePath);
-    return true;
-  } catch (error) {
-    if (isFileSystemErrorCode(error, "ENOENT")) {
-      return await confirmMissingPathHasDirectoryAncestors(filePath);
-    }
-    throw error;
-  }
-}
-
 async function confirmMissingPathHasDirectoryAncestors(filePath: string): Promise<false> {
   let current = path.dirname(filePath);
   while (true) {
@@ -1171,16 +1158,6 @@ function change(
     path: normalizePathForDisplay(filePath),
     dryRun,
   };
-}
-
-async function readOptionalFile(filePath: string): Promise<string | null> {
-  await assertNoSymbolicLinkAtPath(filePath);
-  try {
-    return await fsp.readFile(filePath, "utf8");
-  } catch (error) {
-    if (isFileSystemErrorCode(error, "ENOENT")) return null;
-    throw error;
-  }
 }
 
 async function writeTextFileAtomic(

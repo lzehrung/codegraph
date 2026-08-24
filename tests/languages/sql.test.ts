@@ -136,14 +136,6 @@ describe("native-only SQL support", () => {
     });
 
     vi.resetModules();
-    vi.doMock("../../src/parserBackend.js", async () => {
-      const actual = await vi.importActual<typeof import("../../src/parserBackend.js")>("../../src/parserBackend.js");
-      return {
-        ...actual,
-        isNonNativeParserAvailable: () => false,
-        parseWithLanguage: parseSpy,
-      };
-    });
     vi.doMock("../../src/native/treeSitterNative.js", async () => {
       const actual = await vi.importActual<typeof import("../../src/native/treeSitterNative.js")>(
         "../../src/native/treeSitterNative.js",
@@ -173,7 +165,6 @@ describe("native-only SQL support", () => {
       );
       expect(parseSpy).not.toHaveBeenCalled();
     } finally {
-      vi.doUnmock("../../src/parserBackend.js");
       vi.doUnmock("../../src/native/treeSitterNative.js");
       vi.resetModules();
       await fsp.rm(root, { recursive: true, force: true });

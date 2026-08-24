@@ -30,7 +30,7 @@ import {
 import { collectNativeCaptureImportBindings } from "./imports/nativeCaptures.js";
 import { collectPythonImportsFromSource } from "./imports/python.js";
 import type { LanguageSupport } from "../languages.js";
-import type { ParserLanguage, SyntaxTreeLike } from "../languages/types.js";
+import type { SyntaxTreeLike } from "../languages/types.js";
 import type { ImportBinding } from "./types.js";
 
 export async function collectImportsForFile(
@@ -40,7 +40,6 @@ export async function collectImportsForFile(
     source?: string;
     tree?: SyntaxTreeLike;
     sup?: LanguageSupport;
-    lang?: ParserLanguage;
     nativeQueries?: NativeQueryResults | null;
     graphOptions?: GraphBuildOptions;
     native?: NativeRuntimeMode;
@@ -242,7 +241,7 @@ export async function collectImportsForFile(
     !imports.length &&
     (resolvedSup.id === "html" || resolvedSup.id === "css" || resolvedSup.id === "scss" || resolvedSup.id === "less")
   ) {
-    const specifiers = collectModuleSpecifiersFromSource(resolvedSup, undefined, resolvedSource, {
+    const specifiers = collectModuleSpecifiersFromSource(resolvedSup, resolvedSource, {
       file,
       ...(opts?.native ? { native: opts.native } : {}),
       ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),

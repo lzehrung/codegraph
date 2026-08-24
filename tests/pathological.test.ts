@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect } from "vitest";
 import path from "node:path";
-import { buildProjectIndex, collectGraph, findCycles, goToDefinition, listProjectFiles } from "../src/index.js";
+import { buildProjectIndex, collectGraph, findCycles, listProjectFiles } from "../src/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 
 const SAMPLES_ROOT = path.resolve(__dirname, "samples/pathological");

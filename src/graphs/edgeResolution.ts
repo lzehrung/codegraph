@@ -1,5 +1,5 @@
 import type { LanguageSupport } from "../languages.js";
-import type { Edge, EdgeTo } from "../types.js";
+import type { EdgeTo } from "../types.js";
 import {
   getGraphOnlyResolutionExtensions,
   resolveImportSpecifier,

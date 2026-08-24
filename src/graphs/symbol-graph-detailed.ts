@@ -1,4 +1,3 @@
-import { type LanguageSupport } from "../languages.js";
 import { isUnsupportedParserInputError, prepareSourceInput } from "../languages/filePrep.js";
 import type { SyntaxTreeLike } from "../languages/types.js";
 import { logWithLevel, type LogLevel } from "../logging.js";

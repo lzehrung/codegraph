@@ -364,7 +364,7 @@ describe("agent explore", () => {
     });
     const rankedFiles = [...new Set(response.anchors.map((anchor) => anchor.file))];
     const fileByHandle = new Map(response.anchors.map((anchor) => [anchor.handle, anchor.file]));
-    const packetFiles = response.packets.map((packet) => fileByHandle.get(packet.target) ?? packet.target);
+    const _packetFiles = response.packets.map((packet) => fileByHandle.get(packet.target) ?? packet.target);
     const leadingAnchorFiles = response.anchors.slice(0, 2).map((anchor) => anchor.file);
 
     expect(leadingAnchorFiles).toEqual(["src/z-installer.ts", "src/z-installer.ts"]);

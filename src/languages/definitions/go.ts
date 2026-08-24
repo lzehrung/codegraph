@@ -1,11 +1,9 @@
 import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
 export const GO_DEF: LanguageDefinition = {
   id: "go",
   extensions: [".go"],
-  grammar: () => loadTreeSitterLanguage("tree-sitter-go"),
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

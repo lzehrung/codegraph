@@ -1,5 +1,3 @@
-import { expect, vi } from "vitest";
-
 import type { ModuleIndex } from "../../src/index.js";
 import type { NativeSyntaxTree } from "../../src/native/contracts.js";
 import { __resetNativeTreeSitterBindingForTests } from "../../src/native/treeSitterNative.js";
@@ -34,34 +32,6 @@ export function createStubNativeSyntaxTree(kind: string = "program"): NativeSynt
 }
 
 export type NativeRuntimeMode = "native" | "reduced";
-
-export type NativeOwnershipFallbackSpies = {
-  parseSpy: ReturnType<typeof vi.fn>;
-  querySpy?: ReturnType<typeof vi.fn>;
-};
-
-export function createUnavailableParserBackendSpies(
-  grammarDescription: string,
-): Required<NativeOwnershipFallbackSpies> {
-  const parseSpy = vi.fn(() => {
-    throw new Error(
-      `Non-native Tree-sitter parser is unavailable for ${grammarDescription} loading; native parser is the only grammar backend`,
-    );
-  });
-  const querySpy = vi.fn(() => {
-    throw new Error(
-      "Non-native Tree-sitter parser is unavailable for query execution; native parser is the only grammar backend",
-    );
-  });
-  return { parseSpy, querySpy };
-}
-
-export function expectParserBackendUnusedForNativeOwnership(spies: NativeOwnershipFallbackSpies): void {
-  expect(spies.parseSpy).not.toHaveBeenCalled();
-  if (spies.querySpy) {
-    expect(spies.querySpy).not.toHaveBeenCalled();
-  }
-}
 
 function applyNativeRuntimeMode(mode: NativeRuntimeMode): void {
   if (mode === "reduced") {

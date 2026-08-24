@@ -1,5 +1,4 @@
 import type { BlockDefinition, LanguageDefinition, SyntaxNodeLike } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 
 export const cFamilyContainerTypes = new Set([
   "function_definition",
@@ -89,7 +88,6 @@ export function joinQueryPatterns(patterns: readonly string[]): string {
 export type CFamilyLanguageDefinitionOptions = {
   id: string;
   extensions: string[];
-  grammarPackage: string;
   includeFieldIdentifier: boolean;
   blocks: (functionNameQuery: string) => BlockDefinition[];
   splitPoints?: readonly string[];
@@ -124,7 +122,6 @@ export function createCFamilyLanguageDefinition(options: CFamilyLanguageDefiniti
   return {
     id: options.id,
     extensions: [...options.extensions],
-    grammar: () => loadTreeSitterLanguage(options.grammarPackage),
     structure: {
       blocks: options.blocks(functionNameQuery),
       splitPoints: [...(options.splitPoints ?? cFamilyControlSplitPoints)],

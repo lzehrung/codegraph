@@ -396,11 +396,7 @@ function buildRecommendedNext(
   return commands;
 }
 
-function formatPacketCommand(file: string): string {
-  return `codegraph packet get ${formatFileTargetCommandArg(file)}`;
-}
-
-function formatFileTargetCommandArg(file: string): string {
+function _formatFileTargetCommandArg(file: string): string {
   const target = fileNeedsRelativePrefix(file) ? `./${file}` : file;
   return quoteShellArg(target);
 }

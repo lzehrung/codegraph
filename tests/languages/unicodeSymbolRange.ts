@@ -22,7 +22,7 @@ export async function expectUnicodeSymbolRangeIdentity(opts: {
     const file = path.join(root, opts.fileName);
     await fsp.writeFile(file, opts.source, "utf8");
     const parsed = await parseFile(file);
-    const mod = collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, parsed.lang, [], {
+    const mod = collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
       tree: parsed.tree,
       nativeQueries: parsed.nativeQueries,
     });

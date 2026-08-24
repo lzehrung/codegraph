@@ -539,7 +539,7 @@ describe("Impact Analyzer Edge Cases", () => {
       try {
         const file = "main.py";
         const targetFile = path.join(root, file);
-        const before = `def helper(${receiverName}, a):\n    return a\n\nvalue = helper(obj, 1)\n`;
+        const _before = `def helper(${receiverName}, a):\n    return a\n\nvalue = helper(obj, 1)\n`;
         const after = `def helper(${receiverName}, a, b):\n    return a\n\nvalue = helper(obj, 1)\n`;
         await fsp.writeFile(targetFile, after, "utf8");
         const index = await buildProjectIndex(root, { cache: "memory" });

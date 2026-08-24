@@ -1,5 +1,4 @@
 import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 
 /**
  * Builds a graph-first markup language definition backed by an HTML parser stub.
@@ -20,7 +19,6 @@ export function htmlStubLanguage(id: string, extensions: string[]): LanguageDefi
   return {
     id,
     extensions,
-    grammar: () => loadTreeSitterLanguage("tree-sitter-html"),
     structure: {
       blocks: [],
       splitPoints: [],

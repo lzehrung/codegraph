@@ -7,7 +7,6 @@ import {
   computeFileSha256,
   readReleaseCandidateManifest,
   releaseCandidatePublicationOrder,
-  selectReleaseCandidatePackages,
   validateNativeTargetExceptions,
   validateReleaseCandidateManifest,
 } from "../scripts/certification/package-contract-lib.mjs";

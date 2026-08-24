@@ -15,7 +15,6 @@ import {
   type BuildReport,
 } from "../src/index.js";
 import type { ModuleIndex, ProjectIndex } from "../src/indexer/types.js";
-import * as indexer from "../src/indexer.js";
 import * as buildCache from "../src/indexer/build-cache.js";
 import {
   MANIFEST_VERSION,
@@ -34,7 +33,6 @@ import {
   clearImportResolutionCaches,
   clearResolutionCaches,
 } from "../src/util.js";
-import * as util from "../src/util.js";
 import * as projectFilesModule from "../src/util/projectFiles.js";
 import * as gitModule from "../src/util/git.js";
 import * as incrementalPlan from "../src/indexer/incremental-plan.js";

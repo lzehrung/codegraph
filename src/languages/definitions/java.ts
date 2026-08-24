@@ -1,5 +1,4 @@
 import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 import { hasNonAsciiCodePoint, JAVA_IDENTIFIER_IGNORABLE_SOURCE } from "../../util/identifiers.js";
 
@@ -8,7 +7,6 @@ const JAVA_IDENTIFIER_IGNORABLE_PATTERN = new RegExp(`[${JAVA_IDENTIFIER_IGNORAB
 export const JAVA_DEF: LanguageDefinition = {
   id: "java",
   extensions: [".java"],
-  grammar: () => loadTreeSitterLanguage("tree-sitter-java"),
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

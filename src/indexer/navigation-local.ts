@@ -1,5 +1,5 @@
 import type { LanguageSupport } from "../languages.js";
-import type { ParserLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { okGoToResult } from "./navigation-provenance.js";
@@ -44,14 +44,13 @@ export function getOrBuildScopeIndex(
   file: FileId,
   source: string,
   sup: LanguageSupport,
-  lang: ParserLanguage | undefined,
   mod: ModuleIndex,
   tree: SyntaxTreeLike,
 ): ScopeIndex {
   const fileKey = fileIdentityKey(file);
   let scopeIndex = index.scopeCache.get(fileKey);
   if (scopeIndex) return scopeIndex;
-  scopeIndex = buildScopeIndexFromSource(file, source, sup, lang, mod.imports, { tree });
+  scopeIndex = buildScopeIndexFromSource(file, source, sup, mod.imports, { tree });
   index.scopeCache.set(fileKey, scopeIndex);
   return scopeIndex;
 }

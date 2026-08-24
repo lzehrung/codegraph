@@ -243,7 +243,6 @@ const PYTHON_NATIVE_FROM_PATTERN = new RegExp(
 
 export function collectModuleSpecifiersFromSource(
   support: LanguageSupport,
-  _lang: unknown,
   source: string,
   opts?: CollectModuleSpecifiersOptions,
 ): ModuleSpecifier[] {

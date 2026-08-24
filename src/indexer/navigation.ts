@@ -27,7 +27,6 @@ import { extractEnclosingBlock, extractLineContext, rangeContains, sameDef } fro
 import { DEFAULT_REF_CONTEXT_LINES } from "./shared.js";
 import { type ScopeIndex } from "./scope.js";
 import { type FileId, type Range } from "../types.js";
-import { isJsTsLanguage } from "../languages/js-family.js";
 import { resolveImportSpecifier } from "../util/resolution.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
@@ -67,7 +66,6 @@ export async function goToDefinition(
     parsedContext ??
     (await ensureParsedContext(file, index.parsed?.get(fileIdentityKey(file)), index.languageExtensions));
   const sup = context.sup;
-  const lang = context.lang;
   const source = context.source;
   const tree = context.tree;
 
@@ -107,7 +105,7 @@ export async function goToDefinition(
   if (sup.supportsCrossModuleSymbols) {
     const scopeIndex =
       node.parent && isMemberAccessNode(sup, node.parent)
-        ? getOrBuildScopeIndex(index, file, source, sup, lang, mod, tree)
+        ? getOrBuildScopeIndex(index, file, source, sup, mod, tree)
         : null;
     const memberAccessResult = await resolveMemberAccessDefinition({
       index,
@@ -170,7 +168,7 @@ export async function goToDefinition(
   }
 
   if (name) {
-    const scopeIndex = getOrBuildScopeIndex(index, file, source, sup, lang, mod, tree);
+    const scopeIndex = getOrBuildScopeIndex(index, file, source, sup, mod, tree);
     const local = findClosestBinding(scopeIndex, file, name, node, sup);
     if (local) {
       return okGoToResult(index, local, {

@@ -68,7 +68,6 @@ describe("Kotlin import resolution regression", () => {
     const imports = await collectImportsForFile(mainFile, root, {
       source: parsed.source,
       sup: parsed.sup,
-      lang: parsed.lang,
       nativeQueries: parsed.nativeQueries,
     });
 
@@ -164,7 +163,6 @@ describe("Kotlin import resolution regression", () => {
     const imports = await collectImportsForFile(consumerFile, root, {
       source: parsed.source,
       sup: parsed.sup,
-      lang: parsed.lang,
       nativeQueries: parsed.nativeQueries,
     });
 

@@ -17,13 +17,7 @@ import {
   type SqliteTableColumn,
 } from "../../util/sqliteSchema.js";
 import type { BuildOptions, BuildReport, ExportEntry, ModuleIndex } from "../types.js";
-import {
-  assertFilePathWithinRoot,
-  fileIdentityKey,
-  isAbsoluteFilePath,
-  isFilePathWithinRoot,
-  normalizePath,
-} from "../../util/paths.js";
+import { assertFilePathWithinRoot, isAbsoluteFilePath, isFilePathWithinRoot, normalizePath } from "../../util/paths.js";
 import { lruMapGet, lruMapSet } from "../../util/lruMap.js";
 import { initCacheReport } from "./reports.js";
 import { cacheRoot } from "./location.js";

@@ -19,7 +19,6 @@ describe("Unicode scope bindings", () => {
       "consumer.php",
       "<?php\n$widget = new stdClass();\n$widget;\n",
       support,
-      undefined,
       imports,
     );
 

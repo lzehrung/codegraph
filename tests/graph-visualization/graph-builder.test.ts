@@ -5,7 +5,6 @@ import {
   edgeKey,
   normalizeGraphPayload,
   buildGraph,
-  FILE_NODE_COLOR,
   EXTERNAL_NODE_COLOR,
   SYMBOL_NODE_COLOR,
 } from "../../docs/graph-visualization/graph-builder.js";

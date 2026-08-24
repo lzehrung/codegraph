@@ -1,11 +1,9 @@
 import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
 export const RUBY_DEF: LanguageDefinition = {
   id: "ruby",
   extensions: [".rb"],
-  grammar: () => loadTreeSitterLanguage("tree-sitter-ruby"),
   structure: {
     blocks: [
       {
