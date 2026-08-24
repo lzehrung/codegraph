@@ -33,9 +33,10 @@ export async function expectUnicodeSymbolRangeIdentity(opts: {
 
     const expectedIndex = opts.source.indexOf(opts.symbolName);
     expect(expectedIndex).toBeGreaterThanOrEqual(0);
-    expect(sym!.range.start.index, "range.start.index must equal source.indexOf(name)").toBe(expectedIndex);
+    const startIndex = sym!.range.start.index;
+    expect(startIndex, "range.start.index must equal source.indexOf(name)").toBe(expectedIndex);
     expect(
-      opts.source.slice(sym!.range.start.index, sym!.range.start.index + opts.symbolName.length),
+      opts.source.slice(startIndex, (startIndex ?? 0) + opts.symbolName.length),
       "slicing the published range must recover the identifier text",
     ).toBe(opts.symbolName);
   } finally {

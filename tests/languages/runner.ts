@@ -174,9 +174,11 @@ export function runLanguageTests(def: LanguageTestDefinition) {
         assertExactDependencyGraph(def.parity.exact.dependencyGraph);
       }
 
-      if (def.parity.absentDependencyGraph) {
+      // Captured before the callback: narrowing on def.parity does not reach into it.
+      const absentDependencyGraph = def.parity.absentDependencyGraph;
+      if (absentDependencyGraph) {
         it("does not build unsupported dependency graph edges", () => {
-          for (const expectation of def.parity!.absentDependencyGraph) {
+          for (const expectation of absentDependencyGraph) {
             const found = graph.edges.some((edge) => matchEdge(edge, expectation));
             expect(found).toBe(false);
           }

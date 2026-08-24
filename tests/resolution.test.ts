@@ -192,8 +192,12 @@ describe("Import Resolution", () => {
 
     const mainModule = index.byFile.get(mainFile!);
     const helperImport = mainModule!.imports[0];
-    expect(typeof helperImport!.resolved).toBe("object");
-    expect(helperImport!.resolved.external).toBe("./nonexistent.js");
+    const resolved = helperImport!.resolved;
+    expect(typeof resolved).toBe("object");
+    if (typeof resolved !== "object" || resolved === null || !("external" in resolved)) {
+      throw new Error("expected an unresolved external import");
+    }
+    expect(resolved.external).toBe("./nonexistent.js");
   });
 
   it("does not resolve workspace packages to package directories without an entry file", async () => {

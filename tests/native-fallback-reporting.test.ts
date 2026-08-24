@@ -65,9 +65,13 @@ describe("native fallback reporting", () => {
         runLanguageQueries: () => {
           throw new Error("should not execute");
         },
+        extractLanguage: (): never => {
+          throw new Error("extractLanguage must not be used on this path");
+        },
         supportedLanguageIds: () => [],
       },
       supportedLanguageIds: new Set(["python"]),
+      origin: { mode: "workspace" as const, packageName: "@lzehrung/codegraph-native" },
     });
     expect(result.results).toBeNull();
     expect(result.fallbackReason).toBe("unsupportedLanguage");
@@ -82,9 +86,13 @@ describe("native fallback reporting", () => {
         runLanguageQueries: () => {
           throw new Error("bad native query");
         },
+        extractLanguage: (): never => {
+          throw new Error("extractLanguage must not be used on this path");
+        },
         supportedLanguageIds: () => ["ts"],
       },
       supportedLanguageIds: new Set(["ts"]),
+      origin: { mode: "workspace" as const, packageName: "@lzehrung/codegraph-native" },
     });
     expect(result.results).toBeNull();
     expect(result.fallbackReason).toBe("queryFailure");

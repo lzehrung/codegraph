@@ -25,9 +25,10 @@ function normalizeChunks(chunks: Chunk[]) {
 function stableChunks(chunks: Chunk[]) {
   return normalizeChunks(chunks).map((chunk) => ({
     ...chunk,
-    filePath: path.isAbsolute(chunk.filePath)
-      ? path.relative(process.cwd(), chunk.filePath).replace(/\\/g, "/")
-      : chunk.filePath,
+    filePath:
+      chunk.filePath && path.isAbsolute(chunk.filePath)
+        ? path.relative(process.cwd(), chunk.filePath).replace(/\\/g, "/")
+        : chunk.filePath,
   }));
 }
 

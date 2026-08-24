@@ -75,12 +75,6 @@ const definition: LanguageTestDefinition = {
           to: { type: "external", name: "demo.Missing" },
         },
       ],
-      absentDependencyGraph: [
-        {
-          from: "ResolutionImports.java",
-          to: { type: "file", path: "demo/A.java" },
-        },
-      ],
       symbols: [
         {
           file: "NestedTypes.java",
@@ -212,6 +206,12 @@ const definition: LanguageTestDefinition = {
         },
       ],
     },
+    absentDependencyGraph: [
+      {
+        from: "ResolutionImports.java",
+        to: { type: "file", path: "demo/A.java" },
+      },
+    ],
     goToDefinition: [
       {
         name: "go to definition resolves imported annotation types",

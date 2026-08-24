@@ -313,9 +313,9 @@ describe("Partial Results", () => {
 
     test("falls back to status and clamped coverage when result metadata is absent", () => {
       const results = [
-        { ...success([1]), metadata: undefined },
-        { ...partial([2], []), coverage: 2, metadata: undefined },
-        { ...failed<number[]>([], "broken"), coverage: -1, metadata: undefined },
+        { ...success([1]) },
+        { ...partial([2], []), coverage: 2 },
+        { ...failed<number[]>([], "broken"), coverage: -1 },
       ];
 
       const combined = combinePartialResults(results, (arrays) => arrays.flat());
