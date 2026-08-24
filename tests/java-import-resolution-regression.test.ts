@@ -131,8 +131,7 @@ describe("Java import resolution regression", () => {
 
     const fileEdges = graph.edges
       .filter((edge) => edge.from === mainFile.replace(/\\/g, "/"))
-      .filter((edge) => edge.to.type === "file")
-      .map((edge) => edge.to.path);
+      .flatMap((edge) => (edge.to.type === "file" ? [edge.to.path] : []));
 
     expect(fileEdges).toContain(alphaFile.replace(/\\/g, "/"));
     expect(fileEdges).toContain(betaFile.replace(/\\/g, "/"));

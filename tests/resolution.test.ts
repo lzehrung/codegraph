@@ -340,7 +340,7 @@ describe("Import Resolution", () => {
 
     // There should be a "uses" edge from main to helper
     const usesEdge = symbolGraph.edges.find(
-      (e) => e.from === mainFunc.id && e.to === helperFunc.id && e.label === "uses",
+      (e) => e.from === mainFunc!.id && e.to === helperFunc!.id && e.label === "uses",
     );
     expect(usesEdge).toBeDefined();
   });

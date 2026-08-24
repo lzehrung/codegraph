@@ -4,6 +4,7 @@ import os from "node:os";
 import fsp from "node:fs/promises";
 import { buildProjectIndex } from "../src/indexer.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import type { BuildReport } from "../src/indexer/types.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -94,7 +95,7 @@ describe("detailed symbol graph in native-only installs", () => {
     });
 
     const { buildProjectIndex } = await import("../src/indexer.js");
-    const report = { timings: {} };
+    const report: BuildReport = { timings: {} };
     const index = await buildProjectIndex(root, { report });
     const warnings = warnSpy.mock.calls.map((call) => String(call[0] ?? ""));
     expect(index.byFile.size).toBe(1);

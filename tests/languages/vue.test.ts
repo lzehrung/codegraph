@@ -213,8 +213,8 @@ it("preserves Vue block content and original coordinates while extracting embedd
 
   const graph = await collectGraph(sampleDir, [sourceFile, scriptFile, styleFile, templateFile]);
   const localTargets = graph.edges
-    .filter((edge) => edge.from === sourceFile && edge.to.type === "file")
-    .map((edge) => edge.to.path)
+    .filter((edge) => edge.from === sourceFile)
+    .flatMap((edge) => (edge.to.type === "file" ? [edge.to.path] : []))
     .filter((target) => target === scriptFile || target === styleFile || target === templateFile)
     .sort();
   expect(localTargets).toEqual([scriptFile, styleFile, templateFile].sort());

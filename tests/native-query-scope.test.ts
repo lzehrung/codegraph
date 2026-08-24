@@ -6,10 +6,12 @@ import {
   getCompactImportsExecution,
   getNativeQueryExecutionForState,
   isNativeTreeSitterAvailable,
+  type NativeCapture,
   type NativeMatch,
   type NativeQueryResults,
 } from "../src/native/treeSitterNative.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
+import type { NativeCompatibilityQueryKind } from "../src/languages/types.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
 
@@ -42,12 +44,19 @@ function createScopeSpy() {
         importBindings: [],
       };
     },
+    // Scope selection must reach native through runLanguageQueries. If it ever routes
+    // through the combined call instead, this fails loudly rather than silently
+    // recording no executed kinds.
+    extractLanguage: (): never => {
+      throw new Error("extractLanguage must not be used for scoped query execution");
+    },
     supportedLanguageIds: () => ["ts", "tsx", "js", "python", "go", "rust"],
   };
   const state = {
     loaded: true as const,
     binding,
     supportedLanguageIds: new Set(["ts", "tsx", "js", "python", "go", "rust"]),
+    origin: { mode: "workspace" as const, packageName: "@lzehrung/codegraph-native" },
   };
   return { executedKinds, state };
 }
@@ -219,7 +228,8 @@ describe("authoritative empty native results", () => {
       ...tsxSupport,
       native: {
         ...tsxSupport.native,
-        normalizeQuery: (kind, query) => (kind === "imports" ? `${query}\n;` : query),
+        normalizeQuery: (kind: NativeCompatibilityQueryKind, query: string) =>
+          kind === "imports" ? `${query}\n;` : query,
       },
     };
     const fallbackEvents: FallbackImportExtractionEvent[] = [];
@@ -253,7 +263,8 @@ describe("authoritative empty native results", () => {
       id: "ts-query-empty-test",
       native: {
         ...tsSupport.native,
-        normalizeQuery: (kind, query) => (kind === "importBindings" ? `${query}\n;` : query),
+        normalizeQuery: (kind: NativeCompatibilityQueryKind, query: string) =>
+          kind === "importBindings" ? `${query}\n;` : query,
       },
     };
     const fallbackEvents: FallbackImportExtractionEvent[] = [];
@@ -286,7 +297,7 @@ describe("authoritative empty native results", () => {
     const fallbackEvents: FallbackImportExtractionEvent[] = [];
     const failingMatch: NativeMatch = {
       patternIndex: 0,
-      get captures() {
+      get captures(): NativeCapture[] {
         throw new Error("bad native capture");
       },
     };
@@ -399,7 +410,8 @@ describe("authoritative empty native results", () => {
       ...vueSupport,
       native: {
         ...vueSupport.native,
-        normalizeQuery: (kind, query) => (kind === "imports" ? `${query}\n;` : query),
+        normalizeQuery: (kind: NativeCompatibilityQueryKind, query: string) =>
+          kind === "imports" ? `${query}\n;` : query,
       },
     };
     const fallbackEvents: FallbackImportExtractionEvent[] = [];

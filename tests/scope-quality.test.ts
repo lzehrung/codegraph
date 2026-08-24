@@ -188,8 +188,8 @@ describe("scope index quality", () => {
 
     // Check that 'inner' is not in the root scope's map
     const rootScope = scopeIndex.allScopes.find((s) => s.kind === "module");
-    expect(rootScope.map.has("outer")).toBe(true);
-    expect(rootScope.map.has("inner")).toBe(false);
+    expect(rootScope!.map.has("outer")).toBe(true);
+    expect(rootScope!.map.has("inner")).toBe(false);
   });
 
   it("should handle Python parameter shadowing", async () => {

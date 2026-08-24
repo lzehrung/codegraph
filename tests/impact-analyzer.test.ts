@@ -22,6 +22,7 @@ import type { Edge } from "../src/types.js";
 import type { FileChange, ImpactItem } from "../src/impact/types.js";
 import { goToSqlDefinition } from "../src/sql/navigation.js";
 import { createTestIndex } from "./test-utils.js";
+import { makeTestProjectIndex } from "./helpers/narrow.js";
 
 describe("Reference lookup cache", () => {
   it("scopes cached references by ProjectIndex instance", async () => {
@@ -788,12 +789,12 @@ describe("Impact Analyzer Edge Cases", () => {
           edges: [
             {
               from: dependentOnOld,
-              to: { type: "file", path: oldPath },
+              to: { type: "file" as const, path: oldPath },
               raw: "./old-name",
             },
             {
               from: dependentOnNew,
-              to: { type: "file", path: newPath },
+              to: { type: "file" as const, path: newPath },
               raw: "./renamed-file",
             },
           ],
@@ -832,7 +833,7 @@ describe("Impact Analyzer Edge Cases", () => {
       const edges: Edge[] = [
         {
           from: dependentFile,
-          to: { type: "file", path: changedFile },
+          to: { type: "file" as const, path: changedFile },
           raw: "./setup",
         },
       ];
@@ -877,7 +878,7 @@ describe("Impact Analyzer Edge Cases", () => {
         const edges: Edge[] = [
           {
             from: dependentFile,
-            to: { type: "file", path: lookupPath },
+            to: { type: "file" as const, path: lookupPath },
             raw: "./changed",
           },
         ];
@@ -980,7 +981,7 @@ describe("Impact Analyzer Edge Cases", () => {
       const edges: Edge[] = [
         {
           from: dependentFile,
-          to: { type: "file", path: featureFile },
+          to: { type: "file" as const, path: featureFile },
           raw: "./feature",
         },
       ];
@@ -1007,7 +1008,7 @@ describe("Impact Analyzer Edge Cases", () => {
       const edges: Edge[] = [
         {
           from: dependentFile,
-          to: { type: "file", path: featureFile },
+          to: { type: "file" as const, path: featureFile },
           raw: "./feature",
         },
       ];
@@ -1033,7 +1034,7 @@ describe("Impact Analyzer Edge Cases", () => {
       const edges: Edge[] = [
         {
           from: testFile,
-          to: { type: "file", path: featureFile },
+          to: { type: "file" as const, path: featureFile },
           raw: "./feature",
         },
       ];
@@ -1061,7 +1062,6 @@ describe("Impact Analyzer Edge Cases", () => {
         const featureFile = "C:/Repo/src/feature.ts";
         const testFile = "C:/Repo/Checks/MyTests.ts";
         const index: ProjectIndex = {
-          projectRoot: undefined,
           graph: { nodes: new Set([featureFile, testFile]), edges: [] },
           modules: new Map([
             [fileIdentityKey(featureFile), { file: featureFile, exports: [], imports: [], locals: [] }],
@@ -1089,7 +1089,7 @@ describe("Impact Analyzer Edge Cases", () => {
       const edges: Edge[] = [
         {
           from: testFile,
-          to: { type: "file", path: featureFile },
+          to: { type: "file" as const, path: featureFile },
           raw: "./feature",
         },
       ];
@@ -1127,10 +1127,10 @@ describe("Impact Analyzer Edge Cases", () => {
 
   describe("calculateSeverity", () => {
     it("should calculate severity with hints for exported symbols", async () => {
-      const mockIndex = {
-        graph: { edges: [] },
+      const mockIndex = makeTestProjectIndex({
+        graph: { nodes: new Set(), edges: [] },
         byFile: new Map(),
-      };
+      });
 
       const changedSymbol = {
         id: "test.ts::exportedFunc::100",
@@ -1144,7 +1144,7 @@ describe("Impact Analyzer Edge Cases", () => {
 
       const ref = {
         file: "user.ts",
-        range: { start: { line: 5, column: 10 } },
+        range: { start: { line: 5, column: 10 }, end: { line: 5, column: 10 } },
       };
 
       const result = await calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndex);
@@ -1155,10 +1155,10 @@ describe("Impact Analyzer Edge Cases", () => {
     });
 
     it("should apply depth decay correctly", async () => {
-      const mockIndex = {
-        graph: { edges: [] },
+      const mockIndex = makeTestProjectIndex({
+        graph: { nodes: new Set(), edges: [] },
         byFile: new Map(),
-      };
+      });
 
       const changedSymbol = {
         id: "test.ts::func::100",
@@ -1172,7 +1172,7 @@ describe("Impact Analyzer Edge Cases", () => {
 
       const ref = {
         file: "user.ts",
-        range: { start: { line: 5, column: 10 } },
+        range: { start: { line: 5, column: 10 }, end: { line: 5, column: 10 } },
       };
 
       const depth0 = await calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndex);
@@ -1185,10 +1185,10 @@ describe("Impact Analyzer Edge Cases", () => {
     });
 
     it("should boost severity for same-file references", async () => {
-      const mockIndex = {
-        graph: { edges: [] },
+      const mockIndex = makeTestProjectIndex({
+        graph: { nodes: new Set(), edges: [] },
         byFile: new Map(),
-      };
+      });
 
       const changedSymbol = {
         id: "test.ts::func::100",
@@ -1202,12 +1202,12 @@ describe("Impact Analyzer Edge Cases", () => {
 
       const sameFileRef = {
         file: "test.ts", // Same file
-        range: { start: { line: 5, column: 10 } },
+        range: { start: { line: 5, column: 10 }, end: { line: 5, column: 10 } },
       };
 
       const differentFileRef = {
         file: "other.ts", // Different file
-        range: { start: { line: 5, column: 10 } },
+        range: { start: { line: 5, column: 10 }, end: { line: 5, column: 10 } },
       };
 
       const sameFileResult = await calculateSeverity(changedSymbol, sameFileRef, ["directRef"], 0, mockIndex);
@@ -1226,10 +1226,10 @@ describe("Impact Analyzer Edge Cases", () => {
         resetFileIdentityCaseSensitivityForTests(true);
         setFileIdentityCaseInsensitive(true);
 
-        const mockIndex = {
-          graph: { edges: [] },
+        const mockIndex = makeTestProjectIndex({
+          graph: { nodes: new Set(), edges: [] },
           byFile: new Map(),
-        };
+        });
 
         const changedSymbol = {
           id: "test.ts::func::100",
@@ -1243,7 +1243,7 @@ describe("Impact Analyzer Edge Cases", () => {
 
         const mixedCaseRef = {
           file: "Src/User.ts",
-          range: { start: { line: 5, column: 10 } },
+          range: { start: { line: 5, column: 10 }, end: { line: 5, column: 10 } },
         };
 
         const result = calculateSeverity(changedSymbol, mixedCaseRef, ["directRef"], 0, mockIndex);
@@ -1257,10 +1257,10 @@ describe("Impact Analyzer Edge Cases", () => {
     });
 
     it("should penalize type-only changes", async () => {
-      const mockIndex = {
-        graph: { edges: [] },
+      const mockIndex = makeTestProjectIndex({
+        graph: { nodes: new Set(), edges: [] },
         byFile: new Map(),
-      };
+      });
 
       const typeOnlySymbol = {
         id: "test.ts::TypeAlias::100",
@@ -1284,7 +1284,7 @@ describe("Impact Analyzer Edge Cases", () => {
 
       const ref = {
         file: "user.ts",
-        range: { start: { line: 5, column: 10 } },
+        range: { start: { line: 5, column: 10 }, end: { line: 5, column: 10 } },
       };
 
       const typeOnlyResult = await calculateSeverity(typeOnlySymbol, ref, ["directRef"], 0, mockIndex);
@@ -1296,21 +1296,22 @@ describe("Impact Analyzer Edge Cases", () => {
     });
 
     it("should consider fan-in when calculating severity", async () => {
-      const mockIndexWithDeps = {
+      const mockIndexWithDeps = makeTestProjectIndex({
         graph: {
+          nodes: new Set(),
           edges: [
-            { to: { type: "file", path: "user.ts" } }, // One dependency
-            { to: { type: "file", path: "user.ts" } }, // Another dependency
-            { to: { type: "file", path: "user.ts" } }, // Third dependency
+            { from: "consumer1.ts", to: { type: "file" as const, path: "user.ts" }, raw: "./user" }, // One dependency
+            { from: "consumer2.ts", to: { type: "file" as const, path: "user.ts" }, raw: "./user" }, // Another dependency
+            { from: "consumer3.ts", to: { type: "file" as const, path: "user.ts" }, raw: "./user" }, // Third dependency
           ],
         },
         byFile: new Map(),
-      };
+      });
 
-      const mockIndexNoDeps = {
-        graph: { edges: [] },
+      const mockIndexNoDeps = makeTestProjectIndex({
+        graph: { nodes: new Set(), ...{ edges: [] } },
         byFile: new Map(),
-      };
+      });
 
       const changedSymbol = {
         id: "test.ts::func::100",
@@ -1324,7 +1325,7 @@ describe("Impact Analyzer Edge Cases", () => {
 
       const ref = {
         file: "user.ts",
-        range: { start: { line: 5, column: 10 } },
+        range: { start: { line: 5, column: 10 }, end: { line: 5, column: 10 } },
       };
 
       const highFanInResult = await calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndexWithDeps);
@@ -1343,16 +1344,17 @@ describe("Impact Analyzer Edge Cases", () => {
         resetFileIdentityCaseSensitivityForTests(true);
         setFileIdentityCaseInsensitive(true);
 
-        const mockIndex = {
+        const mockIndex = makeTestProjectIndex({
           graph: {
+            nodes: new Set(),
             edges: [
-              { to: { type: "file", path: "src/user.ts" } },
-              { to: { type: "file", path: "src/user.ts" } },
-              { to: { type: "file", path: "src/user.ts" } },
+              { from: "consumer4.ts", to: { type: "file" as const, path: "src/user.ts" }, raw: "./user" },
+              { from: "consumer5.ts", to: { type: "file" as const, path: "src/user.ts" }, raw: "./user" },
+              { from: "consumer6.ts", to: { type: "file" as const, path: "src/user.ts" }, raw: "./user" },
             ],
           },
           byFile: new Map(),
-        };
+        });
 
         const changedSymbol = {
           id: "test.ts::func::100",
@@ -1366,7 +1368,7 @@ describe("Impact Analyzer Edge Cases", () => {
 
         const ref = {
           file: "Src/User.ts",
-          range: { start: { line: 5, column: 10 } },
+          range: { start: { line: 5, column: 10 }, end: { line: 5, column: 10 } },
         };
 
         const result = calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndex);
@@ -1379,10 +1381,10 @@ describe("Impact Analyzer Edge Cases", () => {
     });
 
     it("should reject invalid severity weights instead of silently repairing them", () => {
-      const mockIndex = {
-        graph: { edges: [] },
+      const mockIndex = makeTestProjectIndex({
+        graph: { nodes: new Set(), edges: [] },
         byFile: new Map(),
-      };
+      });
 
       const changedSymbol = {
         id: "test.ts::func::100",
@@ -1396,7 +1398,7 @@ describe("Impact Analyzer Edge Cases", () => {
 
       const ref = {
         file: "user.ts",
-        range: { start: { line: 5, column: 10 } },
+        range: { start: { line: 5, column: 10 }, end: { line: 5, column: 10 } },
       };
 
       expect(() =>
@@ -1409,12 +1411,16 @@ describe("Impact Analyzer Edge Cases", () => {
     });
 
     it("should use the cached graph fan-in fallback when no fan-in map is provided", () => {
-      const mockIndex = {
+      const mockIndex = makeTestProjectIndex({
         graph: {
-          edges: [{ to: { type: "file", path: "user.ts" } }, { to: { type: "file", path: "user.ts" } }],
+          nodes: new Set(),
+          edges: [
+            { from: "consumer7.ts", to: { type: "file" as const, path: "user.ts" }, raw: "./user" },
+            { from: "consumer8.ts", to: { type: "file" as const, path: "user.ts" }, raw: "./user" },
+          ],
         },
         byFile: new Map(),
-      };
+      });
 
       const changedSymbol = {
         id: "test.ts::func::100",
@@ -1428,7 +1434,7 @@ describe("Impact Analyzer Edge Cases", () => {
 
       const ref = {
         file: "user.ts",
-        range: { start: { line: 5, column: 10 } },
+        range: { start: { line: 5, column: 10 }, end: { line: 5, column: 10 } },
       };
 
       const fallbackResult = calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndex);
@@ -1446,10 +1452,10 @@ describe("Impact Analyzer Edge Cases", () => {
     });
 
     it("discounts severity and confidence for medium-confidence resolved references", async () => {
-      const mockIndex = {
-        graph: { edges: [] },
+      const mockIndex = makeTestProjectIndex({
+        graph: { nodes: new Set(), edges: [] },
         byFile: new Map(),
-      };
+      });
 
       const changedSymbol = {
         id: "test.ts::func::100",
@@ -1463,13 +1469,13 @@ describe("Impact Analyzer Edge Cases", () => {
 
       const exactRef = {
         file: "user.ts",
-        range: { start: { line: 5, column: 10 } },
+        range: { start: { line: 5, column: 10 }, end: { line: 5, column: 10 } },
       };
 
       const memberAccessRef = {
         file: "user.ts",
-        range: { start: { line: 5, column: 10 } },
-        provenance: { resolution: "member-access", confidence: "medium" },
+        range: { start: { line: 5, column: 10 }, end: { line: 5, column: 10 } },
+        provenance: { resolution: "member-access" as const, confidence: "medium" as const },
       };
 
       const exactResult = await calculateSeverity(changedSymbol, exactRef, ["directRef"], 0, mockIndex);
@@ -1483,10 +1489,10 @@ describe("Impact Analyzer Edge Cases", () => {
     });
 
     it("discounts confidence more sharply for low-confidence resolved references", async () => {
-      const mockIndex = {
-        graph: { edges: [] },
+      const mockIndex = makeTestProjectIndex({
+        graph: { nodes: new Set(), edges: [] },
         byFile: new Map(),
-      };
+      });
 
       const changedSymbol = {
         id: "test.ts::func::100",
@@ -1500,14 +1506,14 @@ describe("Impact Analyzer Edge Cases", () => {
 
       const lowConfidenceRef = {
         file: "user.ts",
-        range: { start: { line: 5, column: 10 } },
-        provenance: { confidence: "low" },
+        range: { start: { line: 5, column: 10 }, end: { line: 5, column: 10 } },
+        provenance: { confidence: "low" as const },
       };
 
       const mediumConfidenceRef = {
         file: "user.ts",
-        range: { start: { line: 5, column: 10 } },
-        provenance: { confidence: "medium" },
+        range: { start: { line: 5, column: 10 }, end: { line: 5, column: 10 } },
+        provenance: { confidence: "medium" as const },
       };
 
       const lowResult = await calculateSeverity(changedSymbol, lowConfidenceRef, ["directRef"], 0, mockIndex);
@@ -2036,7 +2042,7 @@ describe("Impact Analyzer Edge Cases", () => {
           edges: [
             {
               from: { type: "file", path: "src/dep.ts" },
-              to: { type: "file", path: "src/with-incoming.ts" },
+              to: { type: "file" as const, path: "src/with-incoming.ts" },
               type: "imports",
             },
           ],
@@ -2497,7 +2503,7 @@ describe("path identity silent lookup regressions", () => {
           edges: [
             {
               from: mainPath,
-              to: { type: "file", path: utilPath },
+              to: { type: "file" as const, path: utilPath },
               raw: "./util",
             },
           ],

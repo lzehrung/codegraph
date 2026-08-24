@@ -4,6 +4,7 @@ import { collectGraph, buildProjectIndex } from "../src/index.js";
 import type { ImportBinding } from "../src/index.js";
 import { readOnlySamplePath } from "./helpers/filesystem.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import { exportedNameOf, expectFileEdgeTo } from "./helpers/narrow.js";
 
 function expectNamespaceImport(binding: ImportBinding | undefined, localNS: string): void {
   expect(binding).toBeDefined();
@@ -45,8 +46,7 @@ describe("Complex Monorepo Scenarios", () => {
     // Check if @complex/shadowed resolves to packages/core-logic/src/auth.ts
     const shadowedEdge = graph.edges.find((e) => e.from === mainFile && e.raw === "@complex/shadowed");
     expect(shadowedEdge).toBeDefined();
-    expect(shadowedEdge?.to.type).toBe("file");
-    expect(shadowedEdge?.to.path).toContain("packages/core-logic/src/auth.ts");
+    expect(expectFileEdgeTo(shadowedEdge?.to).path).toContain("packages/core-logic/src/auth.ts");
   });
 
   it("handles barrel circularity and local cycles", async () => {
@@ -140,8 +140,7 @@ describe("Complex Monorepo Scenarios", () => {
     // 'react' is shadowed to shared-types/src/index.ts in root tsconfig.json
     const reactEdge = graph.edges.find((e) => e.from === mainFile && e.raw === "react");
     expect(reactEdge).toBeDefined();
-    expect(reactEdge?.to.type).toBe("file");
-    expect(reactEdge?.to.path).toContain("packages/shared-types/src/index.ts");
+    expect(expectFileEdgeTo(reactEdge?.to).path).toContain("packages/shared-types/src/index.ts");
   });
 
   it("identifies impact from ambient global type changes", async () => {
@@ -192,7 +191,9 @@ describe("Complex Monorepo Scenarios", () => {
     const index = await buildProjectIndex(root, { cache: "off" });
 
     // Check for 'use utils::helper;' (captured by re-export in our current query)
-    const helperExport = index.byFile.get(fileIdentityKey(rustFile))?.exports.find((e) => e.exportedAs === "helper");
+    const helperExport = index.byFile
+      .get(fileIdentityKey(rustFile))
+      ?.exports.find((e) => exportedNameOf(e) === "helper");
     expect(helperExport).toBeDefined();
   });
 });

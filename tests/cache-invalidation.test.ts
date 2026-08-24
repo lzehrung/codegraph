@@ -767,7 +767,7 @@ describe("Cache invalidation and strict hashing", () => {
       graph: { fast: true },
     });
     const manifest = await readManifest(root);
-    expect(manifest.graphOptions.fast).toBe(true);
+    expect(manifest.graphOptions!.fast).toBe(true);
   });
 
   it("rebuilds incremental indexes when discovery globRoot changes", async () => {
@@ -1327,7 +1327,7 @@ describe("Cache invalidation and strict hashing", () => {
       incrementalStrict: true,
     });
     const manifest = await readManifest(root);
-    expect(manifest.graphOptions.fast).toBe(false);
+    expect(manifest.graphOptions!.fast).toBe(false);
   });
 
   it("keeps unchanged graph edges and refreshes changed ones during incremental builds", async () => {
