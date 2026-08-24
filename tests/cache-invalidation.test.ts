@@ -49,6 +49,7 @@ import * as resolverEnvironment from "../src/indexer/build-cache/resolver-enviro
 vi.mock("node:zlib", { spy: true });
 import { runGit } from "./helpers/git.js";
 import { createTempProjectRoot, mkTmpDir } from "./helpers/filesystem.js";
+import type { SnapshotComparableSignature } from "../src/indexer/build-cache/project-snapshot.js";
 
 function normalize(p: string): string {
   return p.replace(/\\/g, "/");
@@ -384,7 +385,16 @@ describe("Cache invalidation and strict hashing", () => {
     const unchangedSnapshotModules = await buildCache.tryLoadProjectSnapshotModules(
       root,
       { cache: "disk", cacheStrict: false },
-      new Map([[fileIdentityKey(utilFile), persistedSignature]]),
+      new Map<string, SnapshotComparableSignature>([
+        [
+          fileIdentityKey(utilFile),
+          {
+            sig: persistedSignature.sig,
+            ...(persistedSignature.gitSig ? { gitSig: persistedSignature.gitSig } : {}),
+            ...(persistedSignature.cacheSig ? { cacheSig: persistedSignature.cacheSig } : {}),
+          },
+        ],
+      ]),
     );
     expect(unchangedSnapshotModules?.has(fileIdentityKey(utilFile))).toBe(true);
 
@@ -650,7 +660,7 @@ describe("Cache invalidation and strict hashing", () => {
             edges: [
               {
                 from: file,
-                to: { type: "file", path: normalize(path.join(root, "stale.ts")) },
+                to: { type: "file" as const, path: normalize(path.join(root, "stale.ts")) },
                 raw: "./stale",
               },
             ],
@@ -691,7 +701,9 @@ describe("Cache invalidation and strict hashing", () => {
     stored.files = {
       [file]: {
         sig: "superseded-signature",
-        edges: [{ from: file, to: { type: "file", path: normalize(path.join(root, "stale.ts")) }, raw: "./stale" }],
+        edges: [
+          { from: file, to: { type: "file" as const, path: normalize(path.join(root, "stale.ts")) }, raw: "./stale" },
+        ],
       },
     };
     await fsp.writeFile(manifestPathFor(root), JSON.stringify(stored), "utf8");
@@ -862,7 +874,7 @@ describe("Cache invalidation and strict hashing", () => {
 
     expect(tsIndex.graph.edges).toContainEqual({
       from: normalize(mappedPath),
-      to: { type: "file", path: normalize(dependencyPath) },
+      to: { type: "file" as const, path: normalize(dependencyPath) },
       raw: "./dependency",
     });
   });
@@ -946,7 +958,7 @@ describe("Cache invalidation and strict hashing", () => {
       expect.objectContaining({
         from: reportFile,
         raw: "sql:cached:reads_from:users",
-        to: { type: "file", path: schemaFile },
+        to: { type: "file" as const, path: schemaFile },
       }),
     );
   });
@@ -970,7 +982,7 @@ describe("Cache invalidation and strict hashing", () => {
       expect.objectContaining({
         from: reportFile,
         raw: "sql:reads_from:users",
-        to: { type: "file", path: schemaFile },
+        to: { type: "file" as const, path: schemaFile },
       }),
     );
 
@@ -985,14 +997,14 @@ describe("Cache invalidation and strict hashing", () => {
       expect.objectContaining({
         from: reportFile,
         raw: "sql:reads_from:users",
-        to: { type: "file", path: schemaFile },
+        to: { type: "file" as const, path: schemaFile },
       }),
     );
     expect(rebuilt.graph.edges).toContainEqual(
       expect.objectContaining({
         from: reportFile,
         raw: "sql:reads_from:accounts",
-        to: { type: "file", path: schemaFile },
+        to: { type: "file" as const, path: schemaFile },
       }),
     );
   });
@@ -1017,7 +1029,7 @@ describe("Cache invalidation and strict hashing", () => {
         expect.objectContaining({
           from: reportFile,
           raw: "sql:reads_from:users",
-          to: { type: "file", path: schemaFile },
+          to: { type: "file" as const, path: schemaFile },
         }),
       );
       const sqlReads = readSpy.mock.calls
@@ -1058,20 +1070,20 @@ describe("Cache invalidation and strict hashing", () => {
     const cachedEdges = [
       {
         from: normalize(trackedPath),
-        to: { type: "file", path: normalize(depPath) },
+        to: { type: "file" as const, path: normalize(depPath) },
         raw: "./dep",
       },
     ];
 
     const fileSignatures = new Map<string, { sig: string; gitSig?: string }>([
-      [normalize(trackedPath), { sig: "mtime:changed", gitSig: gitSig ?? undefined }],
+      [normalize(trackedPath), { sig: "mtime:changed", ...(gitSig ? { gitSig } : {}) }],
     ]);
     const cachedFileEdges = new Map<string, { sig: string; gitSig?: string; edges: typeof cachedEdges }>([
       [
         normalize(trackedPath),
         {
           sig: "old-sig",
-          gitSig: gitSig ?? undefined,
+          ...(gitSig ? { gitSig } : {}),
           edges: cachedEdges,
         },
       ],
@@ -1349,14 +1361,14 @@ describe("Cache invalidation and strict hashing", () => {
     expect(aEntryBefore.edges).toEqual([
       {
         from: normalize(aPath),
-        to: { type: "file", path: normalize(bPath) },
+        to: { type: "file" as const, path: normalize(bPath) },
         raw: "./b",
       },
     ]);
     expect(bEntryBefore.edges).toEqual([
       {
         from: normalize(bPath),
-        to: { type: "file", path: normalize(cPath) },
+        to: { type: "file" as const, path: normalize(cPath) },
         raw: "./c",
       },
     ]);
@@ -1376,7 +1388,7 @@ describe("Cache invalidation and strict hashing", () => {
     expect(bEntryAfter.edges).toEqual([
       {
         from: normalize(bPath),
-        to: { type: "file", path: normalize(dPath) },
+        to: { type: "file" as const, path: normalize(dPath) },
         raw: "./d",
       },
     ]);
@@ -1471,7 +1483,7 @@ describe("Cache invalidation and strict hashing", () => {
     sourceEntry.edges[0] = {
       ...sourceEntry.edges[0],
       from: normalize(path.relative(root, outsideSource)),
-      to: { type: "file", path: normalize(path.relative(root, outsideDependency)) },
+      to: { type: "file" as const, path: normalize(path.relative(root, outsideDependency)) },
     };
     await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
 
@@ -1488,14 +1500,14 @@ describe("Cache invalidation and strict hashing", () => {
       expect(rebuilt.graph.edges).not.toContainEqual(
         expect.objectContaining({
           from: outsideSource,
-          to: { type: "file", path: outsideDependency },
+          to: { type: "file" as const, path: outsideDependency },
           raw: outsideDependency,
         }),
       );
       expect(rebuilt.graph.edges).toContainEqual(
         expect.objectContaining({
           from: normalize(sourcePath),
-          to: { type: "file", path: normalize(dependencyPath) },
+          to: { type: "file" as const, path: normalize(dependencyPath) },
         }),
       );
     } finally {
@@ -2003,7 +2015,15 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.writeFile(filePath, "export const moduleMemo = 1;\n", "utf8");
     await buildProjectIndex(root, { cache: "disk", threads: 1 });
     const manifest = await readManifest(root);
-    const signatures = new Map(Object.entries(manifest.files));
+    const signatures = new Map<string, SnapshotComparableSignature>(
+      Object.entries(manifest.files).map(([file, entry]) => [
+        file,
+        {
+          sig: entry.sig,
+          ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
+        },
+      ]),
+    );
     const snapshotPath = projectSnapshotPathFor(root);
     const snapshotBytes = await fsp.readFile(snapshotPath);
     await fsp.writeFile(snapshotPath, snapshotBytes);
@@ -3364,10 +3384,17 @@ describe("Cache invalidation and strict hashing", () => {
       const handle = await open(target, flags, mode);
       if (path.resolve(String(target)) === lockPath) {
         const originalRead = handle.read.bind(handle);
-        handle.read = async (buffer, offset, length, position) => {
+        // FileHandle.read is overloaded (positional and options forms); this stub only
+        // needs the positional one, which no single implementation signature can express.
+        handle.read = (async <T extends NodeJS.ArrayBufferView>(
+          buffer: T,
+          offset?: number | null,
+          length?: number | null,
+          position?: number | null,
+        ): Promise<fsp.FileReadResult<T>> => {
           if (typeof length === "number") readLengths.push(length);
-          return originalRead(buffer, offset, length, position);
-        };
+          return await originalRead(buffer, offset, length, position);
+        }) as typeof handle.read;
       }
       return handle;
     });
@@ -3398,10 +3425,16 @@ describe("Cache invalidation and strict hashing", () => {
       const handle = await open(target, flags, mode);
       if (path.resolve(String(target)) === lockPath) {
         const read = handle.read.bind(handle);
-        handle.read = async (buffer, offset, length, position) => {
+        // See the note above: only the positional overload is exercised here.
+        handle.read = (async <T extends NodeJS.ArrayBufferView>(
+          buffer: T,
+          offset?: number | null,
+          length?: number | null,
+          position?: number | null,
+        ): Promise<fsp.FileReadResult<T>> => {
           if (typeof length === "number") readLengths.push(length);
           return await read(buffer, offset, length, position);
-        };
+        }) as typeof handle.read;
       }
       return handle;
     });
@@ -3621,7 +3654,7 @@ describe("Cache invalidation and strict hashing", () => {
 
       expect(fromDiscoveredFiles).toEqual(fromFallbackDiscovery);
       expect(fromDiscoveredFiles).toEqual([
-        { from: normalize(packageA), to: { type: "file", path: normalize(packageB) }, raw: "@example/b" },
+        { from: normalize(packageA), to: { type: "file" as const, path: normalize(packageB) }, raw: "@example/b" },
       ]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

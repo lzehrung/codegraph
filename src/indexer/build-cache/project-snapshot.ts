@@ -595,10 +595,17 @@ export async function tryLoadProjectIndexSnapshot(
  * Load only modules and signatures from the last-written project snapshot. Path transforms avoid
  * cloning the graph and project metadata, while each returned module remains caller-owned.
  */
+/**
+ * The signature fields a snapshot comparison reads. `cacheSig` is optional here even
+ * though `FileSignature` requires it: manifest entries can predate it, and
+ * `snapshotSignatureMatches` already branches on its absence.
+ */
+export type SnapshotComparableSignature = Pick<FileSignature, "sig" | "gitSig"> & { cacheSig?: string | undefined };
+
 export async function tryLoadProjectSnapshotModules(
   projectRoot: string,
   opts: BuildOptions | undefined,
-  fileSignatures: ReadonlyMap<string, Pick<FileSignature, "sig" | "gitSig" | "cacheSig">>,
+  fileSignatures: ReadonlyMap<string, SnapshotComparableSignature>,
   report?: BuildReport,
 ): Promise<Map<string, ModuleIndex> | null> {
   if ((opts?.cache ?? "off") !== "disk") return null;
@@ -749,7 +756,7 @@ function createPersistedBloomFilters(
 
 function snapshotSignatureMatches(
   snapshotSignature: SnapshotFileSignature,
-  currentSignature: Pick<FileSignature, "sig" | "gitSig" | "cacheSig">,
+  currentSignature: SnapshotComparableSignature,
 ): boolean {
   const matchingGitSignature =
     !!snapshotSignature.gitSig && !!currentSignature.gitSig && snapshotSignature.gitSig === currentSignature.gitSig;

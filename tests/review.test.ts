@@ -673,7 +673,7 @@ describe("Review report", () => {
           supportedLanguageIds: [],
           filesUsed: 0,
           filesFellBack: 0,
-          fallbackReasons: {},
+          fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 0 },
           byLanguage: {},
           errors: [],
         },
@@ -2896,7 +2896,11 @@ describe("boundReviewReportForTransport", () => {
   it("I4 counts symbols in changed files omitted by the transport file cap", () => {
     const report = makeBaseReport({
       changedFiles: [
-        { file: "kept.ts", status: "updated", symbols: [{ name: "kept", kind: "function", handle: "kept" }] },
+        {
+          file: "kept.ts",
+          status: "updated",
+          symbols: [{ name: "kept", kind: "function", handle: "kept", exported: true }],
+        },
         {
           file: "omitted-a.ts",
           status: "updated",
@@ -2904,6 +2908,7 @@ describe("boundReviewReportForTransport", () => {
             name: `a${index}`,
             kind: "function",
             handle: `a${index}`,
+            exported: true,
           })),
         },
         {
@@ -2913,6 +2918,7 @@ describe("boundReviewReportForTransport", () => {
             name: `b${index}`,
             kind: "function",
             handle: `b${index}`,
+            exported: true,
           })),
         },
       ],
