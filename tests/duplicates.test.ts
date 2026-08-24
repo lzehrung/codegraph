@@ -64,7 +64,11 @@ afterEach(async () => {
 });
 
 const duplicateTokenizerNativeAvailable = isNativeDuplicateTokenizationAvailable("auto");
-const duplicateTokenizerParityTest = duplicateTokenizerNativeAvailable ? test : test.skip;
+// Under run-native-required-tests.mjs the native addon is already proven to load, so
+// this case must run and fail loudly rather than skip itself into looking like coverage.
+const duplicateTokenizerNativeRequired = process.env.CODEGRAPH_NATIVE_REQUIRED === "1";
+const duplicateTokenizerParityTest =
+  duplicateTokenizerNativeAvailable || duplicateTokenizerNativeRequired ? test : test.skip;
 const BMP_SCALAR_CODE_POINT_COUNT = 0x10000 - (0xe000 - 0xd800);
 const ASTRAL_IDENTIFIER_PARITY_SAMPLES = [
   0x10000, 0x10400, 0x16f50, 0x1d400, 0x20000, 0x2a6d6, 0x2b740, 0x2b81d, 0x2ceb0, 0x2ebef, 0x30000, 0x3134a, 0xe0100,

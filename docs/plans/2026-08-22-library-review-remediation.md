@@ -105,7 +105,7 @@ At 2,346 lines it is the largest module in the repository and mixes five concern
 
 - `npm run check` runs `test:native` and then `test:coverage`, and `test:coverage` runs the entire suite including the native suites, so the native-required tests execute twice per pre-commit run.
 - `scripts/coverage.mjs:170` passes `--maxWorkers 4`, overriding the `maxWorkers: 2` in `vitest.config.ts` whose comment explains that the bound exists to avoid exhausting the CI process limit.
-- `test:ci` is the only script wired to `scripts/report-slow-tests.mjs`, and no workflow invokes it (CI uses `test:coverage`), so slow-test reporting never runs.
+- `test:ci` is the only script wired to `scripts/report-slow-tests.mjs`, and no CI workflow invokes it (CI uses `test:coverage`). Correction made while implementing PR 1: `test:ci` is not dead - `scripts/release.mjs:471` and the `preversion` hook both run it, so slow-test reporting does run, just on release rather than per-PR. Deleting it would break the release flow; the open question is only whether per-PR CI should report slow tests too.
 
 ### F8: small correctness nit in portable handles
 
@@ -193,9 +193,9 @@ The library serves four use cases well today: agent repo orientation (`orient`, 
 
 No feature is proposed beyond this backlog. The gaps that matter are execution, not ideas.
 
-## PR 1: retire the dead parser seam and re-arm the quality gates
+## PR 1: retire the dead parser seam and re-arm the quality gates (implemented)
 
-Fixes F1, F2, F3, F7, and F8. Largest diff, simplest review: almost all of it is deletion. The seam and the gates belong in one change because they share a root cause. Turning the gates on without deleting the code first would only produce a red tree.
+Status: implemented, except the `typecheck` gate - see "What actually shipped" below. Fixes F1, F2, F3, F8, and part of F7. Largest diff, simplest review: almost all of it is deletion. The seam and the gates belong in one change because they share a root cause. Turning the gates on without deleting the code first would only produce a red tree.
 
 Removing `lang` from exported signatures is a breaking change to the library surface. It ships in a 2.x minor by explicit decision rather than waiting for a major, matching how 2.0.0 handled export narrowing with no compatibility aliases.
 
@@ -223,6 +223,47 @@ node ./dist/cli.js orient --root . --budget small --json
 ```
 
 Also confirm that `git grep -n "ParserLanguage\|isNonNativeParser\|loadTreeSitterLanguage"` returns nothing outside the deleted files, and that the coverage thresholds in `vitest.config.ts` still pass after roughly 30 dead `it()` blocks are removed. Those blocks never executed, so the numbers should not move; if they do, something in F2 was not actually dead and needs re-checking before merge.
+
+### What actually shipped, and one item that did not
+
+Everything in the list above landed except the `typecheck` gate, which turned out to be far
+larger than this plan assumed and is deliberately deferred rather than half-done.
+
+**The `typecheck` gate is not a one-line addition.** The plan says to add
+`tsc -p tsconfig.eslint.json --noEmit` to `npm run check` and the CI lint step "so test files
+are compiled". Measured on clean `main` before any of this PR's changes: that command reports
+**949 errors across 253 test files**. The gate has been off long enough that the test tree
+never type-checked, so switching it on is its own multi-day cleanup, not a gate flip. This PR
+leaves it off and records the real number here. PR 1's own changes moved that count to 918,
+i.e. 31 fewer errors, and were verified not to add any new ones by diffing the full error list
+before and after rather than by file name.
+
+**A method note worth keeping.** The first before/after comparison used to prove "no new type
+errors" compared the _set of files_ containing errors. That is not sound: a file already in the
+253 can acquire a new error invisibly. It did - `tests/scope-quality.test.ts` kept passing
+`undefined` in the removed `lang` slot, which silently shifted `imports` into the options
+parameter, and three tests failed at runtime before the coarse diff caught anything. Compare
+full error text, not file names.
+
+**Deviations from the plan's dev-loop item, both deliberate:**
+
+- The plan says to drop `test:native` from `npm run check` as redundant with `test:coverage`.
+  Only its JavaScript half is redundant. `test:native` also runs `cargo test` and enforces that
+  the native addon actually loads (`run-native-required-tests.mjs` exits non-zero if it does
+  not), neither of which `test:coverage` does. Dropping it would trade a real guarantee for
+  local speed, so it stays.
+- The plan offers "delete `test:ci`" as an option. It is live - see the correction under F7.
+
+**One addition beyond the plan.** `run-native-required-tests.mjs` now passes
+`CODEGRAPH_NATIVE_REQUIRED=1` to the suites it runs, and the duplicate-tokenizer parity case
+reads it. Previously that case self-skipped whenever native was unavailable, including inside
+the runner that had just _proven_ native was available - a skip that read as coverage while
+asserting nothing. `tests/duplicates.test.ts` joins the native-required list.
+
+**Unrelated flake observed, not fixed.** `tests/native-worker-parity.test.ts` failed once in
+three full-suite runs (`workerPool.enabled` false) and passed in isolation every time, on a
+tree whose changes do not touch worker enablement. It is load- or order-sensitive and predates
+this PR; recorded here rather than folded into it.
 
 ## PR 2: native runtime and worker startup costs
 
@@ -407,9 +448,9 @@ New tests must cover a registry written only after the server is reachable, `sta
 
 ## Sequencing
 
-PR 1, then PR 2, PR 2b, and PR 2c, then PR 3 and PR 4 in either order, then PR 5.
+PR 2b and PR 2c shipped first (out of order, driven by the indexing-performance investigation), then PR 1. Remaining: PR 2, then PR 3 and PR 4 in either order, then PR 5.
 
-PR 1 goes first because it removes code the later changes would otherwise have to preserve. PR 2, PR 2b, and PR 2c are next because they are the highest-value user-facing changes and their measurements feed PR 3's docs; PR 2 covers fixed per-process startup cost, PR 2b covers per-file syntax-tree marshalling, and PR 2c covers the non-worker path's redundant parse that PR 2b's own follow-up measurement had misread as a worker-coordination problem. Run PR 2 first, since its worker-startup fixes touch the same files PR 2b and PR 2c edit; PR 2c depends on PR 2b's columnar encoding existing, since its fix reuses the same `PreparedFileContext.syntaxTree` fast path PR 2b's worker case already relies on. PR 3 and PR 4 are independent of each other. PR 5 is last because it wants the lower startup cost from PR 2, PR 4's split MCP modules for its health endpoint, and PR 3's parity test to force its own docs to be written.
+PR 1 goes first because it removes code the later changes would otherwise have to preserve. PR 2, PR 2b, and PR 2c are next because they are the highest-value user-facing changes and their measurements feed PR 3's docs; PR 2 covers fixed per-process startup cost, PR 2b covers per-file syntax-tree marshalling, and PR 2c covers the non-worker path's redundant parse that PR 2b's own follow-up measurement had misread as a worker-coordination problem. (Stale as written: this said to run PR 2 first because its worker-startup fixes touch the same files PR 2b and PR 2c edit. Those two already shipped, so PR 2 now lands on top of their changed versions of `build-workers.ts` and `nativeExtractWorker.ts` instead.) PR 2c depends on PR 2b's columnar encoding existing, since its fix reuses the same `PreparedFileContext.syntaxTree` fast path PR 2b's worker case already relies on. PR 3 and PR 4 are independent of each other. PR 5 is last because it wants the lower startup cost from PR 2, PR 4's split MCP modules for its health endpoint, and PR 3's parity test to force its own docs to be written.
 
 ## Correction log
 

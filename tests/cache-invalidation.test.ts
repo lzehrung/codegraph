@@ -669,6 +669,44 @@ describe("Cache invalidation and strict hashing", () => {
     expect(manifest.buildOptions?.implementationFingerprint).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it("rebuilds cleanly from a manifest carrying a superseded implementation fingerprint", async () => {
+    // Dropping `behavior.grammar` from the language-definition fingerprint changes every
+    // stored fingerprint value. That is a one-time rebuild by design rather than a schema
+    // migration, so the guarantee under test is that a manifest written by the previous
+    // implementation is discarded and rebuilt, never partially trusted.
+    const root = await mkTmpDir("dg-cache-superseded-fingerprint-");
+    const entryPath = path.join(root, "entry.ts");
+    const file = normalize(path.resolve(entryPath));
+    await fsp.writeFile(entryPath, "export const current = 1;\n", "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    const stored = await readManifest(root);
+    const supersededFingerprint = "0".repeat(64);
+    expect(stored.buildOptions?.implementationFingerprint).not.toBe(supersededFingerprint);
+
+    // Rewrite the manifest as the previous implementation would have left it: a
+    // well-formed manifest whose fingerprint no longer matches, plus an edge that only
+    // a stale read could resurrect.
+    stored.buildOptions = { ...stored.buildOptions, implementationFingerprint: supersededFingerprint };
+    stored.files = {
+      [file]: {
+        sig: "superseded-signature",
+        edges: [{ from: file, to: { type: "file", path: normalize(path.join(root, "stale.ts")) }, raw: "./stale" }],
+      },
+    };
+    await fsp.writeFile(manifestPathFor(root), JSON.stringify(stored), "utf8");
+
+    const rebuilt = await buildProjectIndexIncremental(root, { threads: 2, cache: "disk" });
+
+    expect(rebuilt.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path.endsWith("/stale.ts"))).toBe(
+      false,
+    );
+    expect(moduleForPath(rebuilt, entryPath)?.locals.some((local) => local.localName === "current")).toBe(true);
+    const refreshed = await readManifest(root);
+    expect(refreshed.buildOptions?.implementationFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(refreshed.buildOptions?.implementationFingerprint).not.toBe(supersededFingerprint);
+  });
+
   it("rejects and rewrites a project snapshot stored for another root", async () => {
     const root = await mkTmpDir("dg-cache-snapshot-root-");
     const entryPath = path.join(root, "entry.ts");
