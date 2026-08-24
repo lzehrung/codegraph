@@ -189,8 +189,7 @@ describe("Python __all__ exports", () => {
     try {
       const parsed = await parseFile(file);
       return collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
-        tree: parsed.tree,
-        nativeQueries: parsed.nativeQueries,
+        ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
       });
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

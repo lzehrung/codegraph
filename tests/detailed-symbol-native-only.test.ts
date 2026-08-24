@@ -172,7 +172,7 @@ describe("detailed symbol graph in native-only installs", () => {
     const imports = await collectImportsForFile(entryFile, root, {
       source: parsed.source,
       sup: parsed.sup,
-      nativeQueries: parsed.nativeQueries,
+      ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
     });
 
     expect(imports).toEqual([

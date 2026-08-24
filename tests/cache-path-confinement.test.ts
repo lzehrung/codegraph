@@ -24,6 +24,8 @@ import {
 import { cacheRoot, resolveCacheLocation } from "../src/indexer/build-cache/location.js";
 import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
+import type { NativeRuntimeMode } from "../src/native/treeSitterNative.js";
+import { SymbolKind } from "../src/indexer/types.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
 
@@ -33,7 +35,12 @@ function moduleFor(file: string): ModuleIndex {
     exports: [],
     imports: [],
     locals: [
-      { file, localName: "value", kind: 1, range: { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } } },
+      {
+        file,
+        localName: "value",
+        kind: SymbolKind.Variable,
+        range: { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } },
+      },
     ],
   };
 }
@@ -42,7 +49,7 @@ function snapshotPathFor(root: string): string {
   return path.join(root, ".codegraph-cache", "index-v1", "project-index-snapshot.json");
 }
 
-async function expectWorkspaceExternalReexportCacheRoundTrip(native: "off" | "required"): Promise<void> {
+async function expectWorkspaceExternalReexportCacheRoundTrip(native: NativeRuntimeMode): Promise<void> {
   const workspaceRoot = await mkTmpDir("dg-cache-workspace-external-reexport-");
   const appRoot = path.join(workspaceRoot, "packages", "app");
   const externalPackageRoot = path.join(workspaceRoot, "packages", "external");
@@ -90,7 +97,7 @@ async function expectWorkspaceExternalReexportCacheRoundTrip(native: "off" | "re
 describe("persisted cache rehydration is confined to the project root", () => {
   nativeDescribe("workspace-external reexports", () => {
     it("retains the raw specifier across cold and warm native index builds", async () => {
-      await expectWorkspaceExternalReexportCacheRoundTrip("required");
+      await expectWorkspaceExternalReexportCacheRoundTrip("on");
     });
   });
 

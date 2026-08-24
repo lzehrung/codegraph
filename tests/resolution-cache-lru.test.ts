@@ -13,17 +13,19 @@ describe("resolveSpecifier cache", () => {
     await fsp.writeFile(fromFile, 'import "./entry";\nexport {}\n', "utf8");
 
     clearImportResolutionCaches();
-    const first = await resolveSpecifier(root, fromFile, "./entry", null, undefined, undefined, {
+    const first = await resolveSpecifier(fromFile, "./entry", root, undefined, undefined, {
       resolutionExtensions: [".ts"],
     });
-    const second = await resolveSpecifier(root, fromFile, "./entry", null, undefined, undefined, {
+    const second = await resolveSpecifier(fromFile, "./entry", root, undefined, undefined, {
       resolutionExtensions: [".ts"],
     });
 
+    // The call must actually resolve, or the cache assertions below hold vacuously.
+    expect(first).toBeTruthy();
     expect(second).toStrictEqual(first);
 
     clearImportResolutionCaches();
-    const afterClear = await resolveSpecifier(root, fromFile, "./entry", null, undefined, undefined, {
+    const afterClear = await resolveSpecifier(fromFile, "./entry", root, undefined, undefined, {
       resolutionExtensions: [".ts"],
     });
     expect(afterClear).toStrictEqual(first);

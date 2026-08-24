@@ -257,7 +257,7 @@ describe("codegraph MCP handlers", () => {
     const handlers = createCodegraphMcpHandlers({ root });
     const started = Promise.withResolvers<void>();
     const aborted = Promise.withResolvers<void>();
-    handlers.query_sqlite = async (_request, options) => {
+    handlers.query_sqlite = async (_request, options?) => {
       started.resolve();
       await new Promise<never>((_resolve, reject) => {
         options?.signal?.addEventListener("abort", () => {
@@ -3819,7 +3819,7 @@ describe("MCP transport isolation regressions (S8)", () => {
         params: { name: "workspace_symbols", arguments: { query: "validateUser" } },
       });
 
-      const call1Closed = Promise.withResolvers();
+      const call1Closed = Promise.withResolvers<void>();
       const req1 = httpRequest({
         hostname: endpoint.hostname,
         port: endpoint.port,

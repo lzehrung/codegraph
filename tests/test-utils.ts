@@ -6,8 +6,8 @@ import {
   goToDefinition,
   findReferences,
   listSymbols,
-  ProjectIndex,
-  SymbolListItem,
+  type ProjectIndex,
+  type SymbolListItem,
 } from "../src/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 

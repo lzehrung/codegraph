@@ -76,6 +76,7 @@ type MutableDetailedSymbolGraphSidecar = {
     edges: Array<{
       from: string;
       to: string;
+      label?: string;
       site?: {
         file: string;
         range: {
@@ -141,7 +142,8 @@ describe("agent session", () => {
 
     expect(baselineStats.filter((file) => file === missingFile)).toHaveLength(1);
     expect(baselineStats.filter((file) => coveredFiles.includes(file))).toHaveLength(0);
-    expect(await session.checkFreshness()).toEqual({ state: "fresh" });
+    expect(session.checkFreshness).toBeTypeOf("function");
+    expect(await session.checkFreshness!()).toEqual({ state: "fresh" });
   });
 
   it("starts fresh after a tracked file metadata-only change on the snapshot fast path", async () => {
@@ -154,7 +156,8 @@ describe("agent session", () => {
 
     await session.loadProject({ symbolGraph: "skip" });
 
-    expect(await session.checkFreshness()).toEqual({ state: "fresh" });
+    expect(session.checkFreshness).toBeTypeOf("function");
+    expect(await session.checkFreshness!()).toEqual({ state: "fresh" });
   });
 
   it("skips detailed symbol graph construction until requested", async () => {

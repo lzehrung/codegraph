@@ -10,7 +10,7 @@ import { analyzeImpact } from "../src/impact/analyzer.js";
 import { createImpactDiagnostics } from "../src/impact/collect.js";
 import { buildImpactReport } from "../src/impact/report.js";
 import { summarizeAnalysis } from "../src/analysisSummary.js";
-import { CompactImpactReport, type ChangedSymbol, type FileChange, type ImpactItem } from "../src/impact/types.js";
+import { type CompactImpactReport, type ChangedSymbol, type FileChange, type ImpactItem } from "../src/impact/types.js";
 import type { BuildReport, ProjectIndex, SymbolHandle } from "../src/indexer/types.js";
 import type { Range } from "../src/types.js";
 import { createTestIndex } from "./test-utils.js";
@@ -378,7 +378,7 @@ index 1234567..abcdef0 100644
             supportedLanguageIds: ["typescript"],
             filesUsed: 1,
             filesFellBack: 0,
-            fallbackReasons: {},
+            fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 0 },
             byLanguage: {},
             errors: [],
           },
@@ -420,7 +420,7 @@ index 1234567..abcdef0 100644
             supportedLanguageIds: [],
             filesUsed: 0,
             filesFellBack: 0,
-            fallbackReasons: {},
+            fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 0 },
             byLanguage: {},
             errors: [],
           },

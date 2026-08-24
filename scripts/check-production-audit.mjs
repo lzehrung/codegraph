@@ -50,6 +50,11 @@ function usage() {
   return "Usage: node ./scripts/check-production-audit.mjs [--json]";
 }
 
+/**
+ * @typedef {(text: string) => void} TextWriter
+ * @param {{ argv?: string[], runProductionAuditImpl?: () => unknown,
+ *   writeStdout?: TextWriter, writeStderr?: TextWriter }} [options]
+ */
 export function runProductionAuditCli({
   argv = process.argv.slice(2),
   runProductionAuditImpl = runProductionAudit,

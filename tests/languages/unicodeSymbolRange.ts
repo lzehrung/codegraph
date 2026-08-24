@@ -23,8 +23,7 @@ export async function expectUnicodeSymbolRangeIdentity(opts: {
     await fsp.writeFile(file, opts.source, "utf8");
     const parsed = await parseFile(file);
     const mod = collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
-      tree: parsed.tree,
-      nativeQueries: parsed.nativeQueries,
+      ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
     });
     const sym = mod.locals.find((s) => s.localName === opts.symbolName);
     expect(

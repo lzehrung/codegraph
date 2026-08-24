@@ -66,7 +66,7 @@ describe("Java import resolution regression", () => {
     const imports = await collectImportsForFile(mainFile, root, {
       source: parsed.source,
       sup: parsed.sup,
-      nativeQueries: parsed.nativeQueries,
+      ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
     });
 
     const resolvedFiles = imports

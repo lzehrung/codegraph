@@ -365,6 +365,7 @@ function reportError(error, fallbackCode) {
 }
 
 function createSeverityCounts(vulnerabilities) {
+  /** @type {Record<string, number>} */
   const counts = {};
   for (const severity of NPM_SEVERITIES) {
     counts[severity] = 0;
