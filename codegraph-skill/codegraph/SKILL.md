@@ -18,7 +18,7 @@ Use plain text search for exact strings, logs, config keys, secrets, and prose. 
 
 ## Choose the First Command
 
-Bare `codegraph` prints five task-first routes without scanning the project. Use `codegraph --help` for the full command catalog and `codegraph help <command>` for command help; unknown commands suggest but never execute alternatives.
+Bare `codegraph` prints five task-first routes without scanning the project. Use `codegraph --help` for the full command catalog and `codegraph help <command>` for command help; unknown commands suggest but never execute alternatives. Exit `0` means completion without a failure condition, `1` means findings, no matching target, or runtime failure, and `2` means invalid usage or input. `links` uses `1` for broken local links; do not treat it as an invocation error.
 
 | Task                                                      | Start here                                               |
 | --------------------------------------------------------- | -------------------------------------------------------- |
@@ -98,6 +98,9 @@ Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `ar
 - duplicate cleanup: `codegraph duplicates --root . ./src --profile cleanup`
 - full duplicate groups: `codegraph duplicates --root . ./src --json`
 - local Markdown link check: `codegraph links --json`
+- exported API summary: `codegraph apisurface --root . --json`
+- embedding-ready file chunks: `codegraph chunk src/auth.ts --json`
+- one indexed module: `codegraph dumpmod src/auth.ts --json`
 
 `links` checks root-confined local Markdown links and GitHub-style heading fragments, including raw HTML `a[href]` in `.md` files. It skips external URLs and unsupported formats; exit 1 reports broken links. Discovery honors `codegraph.config.json` discovery globs plus CLI `--include-glob` / `--ignore-glob` / `--no-gitignore`. `review` and non-empty `impact` include the same `markdownLinks` findings; `unresolved` excludes document edges.
 

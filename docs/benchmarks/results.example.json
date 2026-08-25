@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-03T05:06:07.947Z",
+  "generatedAt": "2026-08-25T18:15:24.337Z",
   "command": [
     "node",
     "scripts/benchmarks/run-scenario.mjs",
@@ -13,7 +13,7 @@
     "--require-complete"
   ],
   "environment": {
-    "nodeVersion": "v24.15.0",
+    "nodeVersion": "v22.16.0",
     "platform": "win32",
     "arch": "x64",
     "cpuModel": "Intel(R) Core(TM) i9-14900K",
@@ -21,7 +21,7 @@
     "totalMemoryBytes": 137141977088
   },
   "scenarioFile": "docs/benchmarks/scenarios.json",
-  "scenarioDigest": "sha256:cc8d9ce746ac09e44ed3068e42a1e5efd9daf372137541e27667989b576ba627",
+  "scenarioDigest": "sha256:0a1f07d7edf3d472c894986988243d41a7aeb0a78f88a2697d2c06157903f9a0",
   "scenarioIds": [
     "repo-orientation-small-ts",
     "python-import-reference",
@@ -38,7 +38,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 3.519
+        "wallTimeMs": 2.237
       },
       "checks": {
         "anchorsExpected": 3,
@@ -54,7 +54,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.529
+        "wallTimeMs": 2.061
       },
       "checks": {
         "anchorsExpected": 3,
@@ -70,7 +70,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.426
+        "wallTimeMs": 2.327
       },
       "checks": {
         "anchorsExpected": 3,
@@ -86,7 +86,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 410.586
+        "wallTimeMs": 557.457
       },
       "checks": {
         "anchorsExpected": 3,
@@ -102,7 +102,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 407.15
+        "wallTimeMs": 440.601
       },
       "checks": {
         "anchorsExpected": 3,
@@ -118,7 +118,103 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 433.541
+        "wallTimeMs": 442.139
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "repo-orientation-small-ts",
+      "variant": "warm-cli",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 459.635
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "repo-orientation-small-ts",
+      "variant": "warm-cli",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 479.033
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "repo-orientation-small-ts",
+      "variant": "warm-cli",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 464.708
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "repo-orientation-small-ts",
+      "variant": "warm-mcp",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 52.571
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "repo-orientation-small-ts",
+      "variant": "warm-mcp",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 7.8
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "repo-orientation-small-ts",
+      "variant": "warm-mcp",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 6.802
       },
       "checks": {
         "anchorsExpected": 3,
@@ -134,7 +230,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 28.508
+        "wallTimeMs": 1.775
       },
       "checks": {
         "anchorsExpected": 3,
@@ -150,7 +246,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.507
+        "wallTimeMs": 1.425
       },
       "checks": {
         "anchorsExpected": 3,
@@ -166,7 +262,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.28
+        "wallTimeMs": 1.439
       },
       "checks": {
         "anchorsExpected": 3,
@@ -182,7 +278,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 458.782
+        "wallTimeMs": 451.698
       },
       "checks": {
         "anchorsExpected": 3,
@@ -198,7 +294,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 447.115
+        "wallTimeMs": 465.373
       },
       "checks": {
         "anchorsExpected": 3,
@@ -214,7 +310,103 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 407.022
+        "wallTimeMs": 456.742
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "python-import-reference",
+      "variant": "warm-cli",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 504.046
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "python-import-reference",
+      "variant": "warm-cli",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 493.102
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "python-import-reference",
+      "variant": "warm-cli",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 475.074
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "python-import-reference",
+      "variant": "warm-mcp",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 56.583
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "python-import-reference",
+      "variant": "warm-mcp",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 22.237
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "python-import-reference",
+      "variant": "warm-mcp",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 25.613
       },
       "checks": {
         "anchorsExpected": 3,
@@ -230,7 +422,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 19.343
+        "wallTimeMs": 4.966
       },
       "checks": {
         "anchorsExpected": 3,
@@ -246,7 +438,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.515
+        "wallTimeMs": 4.592
       },
       "checks": {
         "anchorsExpected": 3,
@@ -262,7 +454,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.152
+        "wallTimeMs": 4.442
       },
       "checks": {
         "anchorsExpected": 3,
@@ -278,7 +470,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 456.471
+        "wallTimeMs": 484.377
       },
       "checks": {
         "anchorsExpected": 3,
@@ -294,7 +486,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 445.553
+        "wallTimeMs": 514.837
       },
       "checks": {
         "anchorsExpected": 3,
@@ -310,7 +502,103 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 475.487
+        "wallTimeMs": 552.335
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "sql-migration-application-review",
+      "variant": "warm-cli",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 459.707
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "sql-migration-application-review",
+      "variant": "warm-cli",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 473.824
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "sql-migration-application-review",
+      "variant": "warm-cli",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 507.419
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "sql-migration-application-review",
+      "variant": "warm-mcp",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 86.218
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "sql-migration-application-review",
+      "variant": "warm-mcp",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 7.307
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "sql-migration-application-review",
+      "variant": "warm-mcp",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 8.482
       },
       "checks": {
         "anchorsExpected": 3,
@@ -326,7 +614,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 33.791
+        "wallTimeMs": 4.386
       },
       "checks": {
         "anchorsExpected": 3,
@@ -342,7 +630,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 3.781
+        "wallTimeMs": 5.292
       },
       "checks": {
         "anchorsExpected": 3,
@@ -358,7 +646,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 3.261
+        "wallTimeMs": 5.054
       },
       "checks": {
         "anchorsExpected": 3,
@@ -374,7 +662,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 406.232
+        "wallTimeMs": 450.042
       },
       "checks": {
         "anchorsExpected": 3,
@@ -390,7 +678,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 400.407
+        "wallTimeMs": 429.26
       },
       "checks": {
         "anchorsExpected": 3,
@@ -406,7 +694,103 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 393.461
+        "wallTimeMs": 431.391
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "mixed-docs-source-graph",
+      "variant": "warm-cli",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 463.947
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "mixed-docs-source-graph",
+      "variant": "warm-cli",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 467.037
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "mixed-docs-source-graph",
+      "variant": "warm-cli",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 460.13
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "mixed-docs-source-graph",
+      "variant": "warm-mcp",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 46.482
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "mixed-docs-source-graph",
+      "variant": "warm-mcp",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 6.726
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "mixed-docs-source-graph",
+      "variant": "warm-mcp",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 7.462
       },
       "checks": {
         "anchorsExpected": 3,
@@ -422,7 +806,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.572
+        "wallTimeMs": 1.853
       },
       "checks": {
         "anchorsExpected": 3,
@@ -438,7 +822,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.365
+        "wallTimeMs": 1.713
       },
       "checks": {
         "anchorsExpected": 3,
@@ -454,7 +838,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.418
+        "wallTimeMs": 1.707
       },
       "checks": {
         "anchorsExpected": 3,
@@ -470,7 +854,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 429.018
+        "wallTimeMs": 451.822
       },
       "checks": {
         "anchorsExpected": 3,
@@ -531,7 +915,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 449.712
+        "wallTimeMs": 463.728
       },
       "checks": {
         "anchorsExpected": 3,
@@ -592,7 +976,373 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 435.459
+        "wallTimeMs": 472.501
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1,
+        "reviewedRelationships": {
+          "anchorOrder": [
+            {
+              "before": {
+                "file": "src/installer/registry.ts",
+                "label": "preserveExistingMcpConfig"
+              },
+              "after": {
+                "file": "src/mcp/server.ts",
+                "label": "handleExistingMcpSessionRequest"
+              },
+              "beforeRank": 1,
+              "afterRank": 3,
+              "beforeReciprocalRank": 1,
+              "afterReciprocalRank": 0.3333333333333333
+            },
+            {
+              "before": {
+                "file": "src/installer/registry.ts",
+                "label": "shouldPreserveExistingServer"
+              },
+              "after": {
+                "file": "src/benchmarks/realpathExisting.ts",
+                "label": "preserveExistingBenchmarkDirectory"
+              },
+              "beforeRank": 2,
+              "afterRank": 5,
+              "beforeReciprocalRank": 0.5,
+              "afterReciprocalRank": 0.2
+            }
+          ],
+          "recommendedFile": {
+            "expected": "src/installer/registry.ts",
+            "actual": "src/installer/registry.ts",
+            "rank": 1,
+            "reciprocalRank": 1
+          },
+          "candidateTests": [
+            {
+              "file": "tests/installer.test.ts",
+              "rank": 1,
+              "reciprocalRank": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenarioId": "installer-preservation-ranking",
+      "variant": "warm-cli",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 478.054
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1,
+        "reviewedRelationships": {
+          "anchorOrder": [
+            {
+              "before": {
+                "file": "src/installer/registry.ts",
+                "label": "preserveExistingMcpConfig"
+              },
+              "after": {
+                "file": "src/mcp/server.ts",
+                "label": "handleExistingMcpSessionRequest"
+              },
+              "beforeRank": 1,
+              "afterRank": 3,
+              "beforeReciprocalRank": 1,
+              "afterReciprocalRank": 0.3333333333333333
+            },
+            {
+              "before": {
+                "file": "src/installer/registry.ts",
+                "label": "shouldPreserveExistingServer"
+              },
+              "after": {
+                "file": "src/benchmarks/realpathExisting.ts",
+                "label": "preserveExistingBenchmarkDirectory"
+              },
+              "beforeRank": 2,
+              "afterRank": 5,
+              "beforeReciprocalRank": 0.5,
+              "afterReciprocalRank": 0.2
+            }
+          ],
+          "recommendedFile": {
+            "expected": "src/installer/registry.ts",
+            "actual": "src/installer/registry.ts",
+            "rank": 1,
+            "reciprocalRank": 1
+          },
+          "candidateTests": [
+            {
+              "file": "tests/installer.test.ts",
+              "rank": 1,
+              "reciprocalRank": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenarioId": "installer-preservation-ranking",
+      "variant": "warm-cli",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 462.372
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1,
+        "reviewedRelationships": {
+          "anchorOrder": [
+            {
+              "before": {
+                "file": "src/installer/registry.ts",
+                "label": "preserveExistingMcpConfig"
+              },
+              "after": {
+                "file": "src/mcp/server.ts",
+                "label": "handleExistingMcpSessionRequest"
+              },
+              "beforeRank": 1,
+              "afterRank": 3,
+              "beforeReciprocalRank": 1,
+              "afterReciprocalRank": 0.3333333333333333
+            },
+            {
+              "before": {
+                "file": "src/installer/registry.ts",
+                "label": "shouldPreserveExistingServer"
+              },
+              "after": {
+                "file": "src/benchmarks/realpathExisting.ts",
+                "label": "preserveExistingBenchmarkDirectory"
+              },
+              "beforeRank": 2,
+              "afterRank": 5,
+              "beforeReciprocalRank": 0.5,
+              "afterReciprocalRank": 0.2
+            }
+          ],
+          "recommendedFile": {
+            "expected": "src/installer/registry.ts",
+            "actual": "src/installer/registry.ts",
+            "rank": 1,
+            "reciprocalRank": 1
+          },
+          "candidateTests": [
+            {
+              "file": "tests/installer.test.ts",
+              "rank": 1,
+              "reciprocalRank": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenarioId": "installer-preservation-ranking",
+      "variant": "warm-cli",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 470.833
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1,
+        "reviewedRelationships": {
+          "anchorOrder": [
+            {
+              "before": {
+                "file": "src/installer/registry.ts",
+                "label": "preserveExistingMcpConfig"
+              },
+              "after": {
+                "file": "src/mcp/server.ts",
+                "label": "handleExistingMcpSessionRequest"
+              },
+              "beforeRank": 1,
+              "afterRank": 3,
+              "beforeReciprocalRank": 1,
+              "afterReciprocalRank": 0.3333333333333333
+            },
+            {
+              "before": {
+                "file": "src/installer/registry.ts",
+                "label": "shouldPreserveExistingServer"
+              },
+              "after": {
+                "file": "src/benchmarks/realpathExisting.ts",
+                "label": "preserveExistingBenchmarkDirectory"
+              },
+              "beforeRank": 2,
+              "afterRank": 5,
+              "beforeReciprocalRank": 0.5,
+              "afterReciprocalRank": 0.2
+            }
+          ],
+          "recommendedFile": {
+            "expected": "src/installer/registry.ts",
+            "actual": "src/installer/registry.ts",
+            "rank": 1,
+            "reciprocalRank": 1
+          },
+          "candidateTests": [
+            {
+              "file": "tests/installer.test.ts",
+              "rank": 1,
+              "reciprocalRank": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenarioId": "installer-preservation-ranking",
+      "variant": "warm-mcp",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 52.225
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1,
+        "reviewedRelationships": {
+          "anchorOrder": [
+            {
+              "before": {
+                "file": "src/installer/registry.ts",
+                "label": "preserveExistingMcpConfig"
+              },
+              "after": {
+                "file": "src/mcp/server.ts",
+                "label": "handleExistingMcpSessionRequest"
+              },
+              "beforeRank": 1,
+              "afterRank": 3,
+              "beforeReciprocalRank": 1,
+              "afterReciprocalRank": 0.3333333333333333
+            },
+            {
+              "before": {
+                "file": "src/installer/registry.ts",
+                "label": "shouldPreserveExistingServer"
+              },
+              "after": {
+                "file": "src/benchmarks/realpathExisting.ts",
+                "label": "preserveExistingBenchmarkDirectory"
+              },
+              "beforeRank": 2,
+              "afterRank": 5,
+              "beforeReciprocalRank": 0.5,
+              "afterReciprocalRank": 0.2
+            }
+          ],
+          "recommendedFile": {
+            "expected": "src/installer/registry.ts",
+            "actual": "src/installer/registry.ts",
+            "rank": 1,
+            "reciprocalRank": 1
+          },
+          "candidateTests": [
+            {
+              "file": "tests/installer.test.ts",
+              "rank": 1,
+              "reciprocalRank": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenarioId": "installer-preservation-ranking",
+      "variant": "warm-mcp",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 10.482
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1,
+        "reviewedRelationships": {
+          "anchorOrder": [
+            {
+              "before": {
+                "file": "src/installer/registry.ts",
+                "label": "preserveExistingMcpConfig"
+              },
+              "after": {
+                "file": "src/mcp/server.ts",
+                "label": "handleExistingMcpSessionRequest"
+              },
+              "beforeRank": 1,
+              "afterRank": 3,
+              "beforeReciprocalRank": 1,
+              "afterReciprocalRank": 0.3333333333333333
+            },
+            {
+              "before": {
+                "file": "src/installer/registry.ts",
+                "label": "shouldPreserveExistingServer"
+              },
+              "after": {
+                "file": "src/benchmarks/realpathExisting.ts",
+                "label": "preserveExistingBenchmarkDirectory"
+              },
+              "beforeRank": 2,
+              "afterRank": 5,
+              "beforeReciprocalRank": 0.5,
+              "afterReciprocalRank": 0.2
+            }
+          ],
+          "recommendedFile": {
+            "expected": "src/installer/registry.ts",
+            "actual": "src/installer/registry.ts",
+            "rank": 1,
+            "reciprocalRank": 1
+          },
+          "candidateTests": [
+            {
+              "file": "tests/installer.test.ts",
+              "rank": 1,
+              "reciprocalRank": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenarioId": "installer-preservation-ranking",
+      "variant": "warm-mcp",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 10.964
       },
       "checks": {
         "anchorsExpected": 3,

@@ -219,7 +219,7 @@ The local review session refreshes manually with `refresh()` and records stale-s
 For library callers performing repeated navigation or impact work, use sessions like this:
 
 ```ts
-import { createCodeReviewSession } from "@lzehrung/codegraph";
+import { createCodeReviewSession } from "@lzehrung/codegraph-core";
 
 const session = await createCodeReviewSession({
   root: "/path/to/repo",
@@ -262,7 +262,7 @@ Important session contracts:
 ### Session presets
 
 ```ts
-import { createCodeReviewSession } from "@lzehrung/codegraph";
+import { createCodeReviewSession } from "@lzehrung/codegraph-core";
 
 const session = await createCodeReviewSession({
   root: "/path/to/repo",
@@ -290,7 +290,7 @@ Available presets:
 ### Managing multiple sessions
 
 ```ts
-import { SessionManager, type SessionManagerOptions } from "@lzehrung/codegraph";
+import { SessionManager, type SessionManagerOptions } from "@lzehrung/codegraph-core";
 
 const options: SessionManagerOptions = { maxSessions: 32 };
 const manager = new SessionManager(options);
@@ -322,7 +322,7 @@ manager.dispose();
 Stream impact results as they are discovered so the agent can start reasoning before the full pass completes:
 
 ```ts
-import { buildProjectIndex, analyzeImpactStreaming } from "@lzehrung/codegraph";
+import { buildProjectIndex, analyzeImpactStreaming } from "@lzehrung/codegraph-core";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -351,7 +351,7 @@ Handle `error` as terminal: an overfull bounded queue does not emit `complete`. 
 Use the same pattern through a warm session when repeated review passes matter:
 
 ```ts
-import { createCodeReviewSession } from "@lzehrung/codegraph";
+import { createCodeReviewSession } from "@lzehrung/codegraph-core";
 
 const session = await createCodeReviewSession({ root: "/path/to/repo" });
 
@@ -361,7 +361,7 @@ for await (const chunk of session.analyzeImpactStream({
   head: "feature-branch",
 })) {
   if (chunk.type === "impactItem") {
-    await analyzeImpactedFile(chunk.item);
+    console.log(`Impacted: ${chunk.item.file}`);
   }
 }
 ```
@@ -371,10 +371,12 @@ for await (const chunk of session.analyzeImpactStream({
 Use partial-result helpers when the agent should keep going even if a subset of files fails:
 
 ```ts
-import { withPartialResults, summarizePartialResult } from "@lzehrung/codegraph";
+import { withPartialResults, summarizePartialResult } from "@lzehrung/codegraph-core";
 
 const files = ["file1.ts", "file2.ts", "file3.ts"];
-const result = await withPartialResults(files, async (file) => await analyzeFile(file), {
+const analyzeFile = async (file: string) => ({ file, analyzed: true });
+const processResults = (results: Array<{ file: string; analyzed: boolean }>) => console.log(results);
+const result = await withPartialResults(files, analyzeFile, {
   continueOnError: true,
   concurrency: 8,
 });
@@ -414,8 +416,10 @@ Supported keys:
 Programmatic helpers:
 
 ```ts
-import { querySymbols, querySymbolNeighbors } from "@lzehrung/codegraph";
+import { buildProjectIndex, buildSymbolGraph, querySymbols, querySymbolNeighbors } from "@lzehrung/codegraph-core";
 
+const index = await buildProjectIndex(process.cwd());
+const symbolGraph = await buildSymbolGraph(index);
 const hits = querySymbols(symbolGraph, {
   kinds: ["function"],
   nameIncludes: "handler",
@@ -428,6 +432,8 @@ const neighbors = querySymbolNeighbors(symbolGraph, {
   maxDepth: 2,
   edgeLabels: ["calls", "instantiates"],
 });
+
+console.log(neighbors);
 ```
 
 ## High-level agent tools
@@ -435,7 +441,7 @@ const neighbors = querySymbolNeighbors(symbolGraph, {
 These wrappers are designed to be imported directly into agent runtimes:
 
 ```ts
-import { buildProjectIndex } from "@lzehrung/codegraph";
+import { buildProjectIndex } from "@lzehrung/codegraph-core";
 import {
   tool_getFileOverview,
   tool_findSymbol,
@@ -445,7 +451,7 @@ import {
   tool_getHotspots,
   tool_goToDefinition,
   tool_findReferences,
-} from "@lzehrung/codegraph/agent";
+} from "@lzehrung/codegraph-core/agent";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -469,7 +475,7 @@ const references = await tool_findReferences(root, "src/main.ts", 10, 5, index);
 
 Wrapper notes:
 
-- Import only from `@lzehrung/codegraph`.
+- Import index and analysis APIs from `@lzehrung/codegraph-core`, and agent wrappers from `@lzehrung/codegraph-core/agent`.
 - When the agent runtime calls codegraph as a TypeScript library, prefer structured fields over rendered CLI text. A deterministic review agent should usually call `buildReviewReport()` for changed-file and task metadata, then `analyzeImpactFromDiff()` or `analyzeImpactStreaming()` for impact and graph context. Use CLI output only when the agent is operating through a shell tool.
 - Treat `callCompatibility` as a deterministic review lead, not compiler-grade type checking. Likely-mismatch support covers provider-backed source-language callsite arity when callee resolution, signature parsing, and argument counting are all high confidence.
 - For streaming review packs, keep the default `streamSummary: "full"` when the final pack needs suggestions, export summaries, re-export chains, ranked top impacts, graph edges, cycles, clusters, and surface area. Streaming always returns `format: "stream-summary"`. Use `streamSummary: "light"` when the agent only needs progressive chunks plus final changed/impacted counts and details.
@@ -551,7 +557,7 @@ These patterns combine codegraph's core capabilities with backend-review heurist
 ### 1. API route impact assessment
 
 ```ts
-import { analyzeImpactFromDiff, buildProjectIndex } from "@lzehrung/codegraph";
+import { analyzeImpactFromDiff, buildProjectIndex } from "@lzehrung/codegraph-core";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -560,16 +566,13 @@ const impact = await analyzeImpactFromDiff(root, index, {
   base: "main",
   head: "feature-branch",
   depth: 2,
-  compact: true,
 });
 
 const apiRoutes = impact.impacted.filter(
   (item) => item.file.includes("routes") || item.file.includes("controllers") || item.file.includes("api"),
 );
 
-const breakingChanges = impact.changedSymbols.filter(
-  (symbol) => symbol.exported && symbol.explain?.hints?.includes("signatureChanged"),
-);
+const breakingChanges = impact.changedSymbols.filter((symbol) => symbol.exported && symbol.signatureChanged);
 
 console.log(`API routes impacted: ${apiRoutes.length}`);
 console.log(`Breaking changes: ${breakingChanges.length}`);
@@ -578,8 +581,15 @@ console.log(`Breaking changes: ${breakingChanges.length}`);
 ### 2. Database schema impact analysis
 
 ```ts
-import { collectImpactContext } from "@lzehrung/codegraph";
+import { analyzeImpactFromDiff, buildProjectIndex, collectImpactContext } from "@lzehrung/codegraph-core";
 
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+const impact = await analyzeImpactFromDiff(root, index, {
+  provider: "git",
+  base: "main",
+  head: "feature-branch",
+});
 const schemaChanges = impact.changedSymbols.filter(
   (symbol) => symbol.file.includes("models") || symbol.file.includes("schema") || symbol.file.includes("migrations"),
 );
@@ -603,8 +613,15 @@ if (schemaChanges.length > 0) {
 ### 3. Test coverage validation
 
 ```ts
-import { listCandidateTestFiles } from "@lzehrung/codegraph";
+import { analyzeImpactFromDiff, buildProjectIndex, listCandidateTestFiles } from "@lzehrung/codegraph-core";
 
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+const impact = await analyzeImpactFromDiff(root, index, {
+  provider: "git",
+  base: "main",
+  head: "feature-branch",
+});
 const candidateTests = listCandidateTestFiles(
   index,
   impact.changedFiles.map((file) => file.file),
@@ -625,8 +642,15 @@ console.log(`Medium-priority tests to check: ${mediumPriorityTests.length}`);
 ### 4. Security-focused review
 
 ```ts
-import { textGrep } from "@lzehrung/codegraph";
+import { analyzeImpactFromDiff, buildProjectIndex, textGrep } from "@lzehrung/codegraph-core";
 
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+const impact = await analyzeImpactFromDiff(root, index, {
+  provider: "git",
+  base: "main",
+  head: "feature-branch",
+});
 const securityPatterns = [
   "exec\\(|eval\\(|spawn\\(",
   "password|secret|key.*=",
@@ -663,6 +687,15 @@ if (securityFindings.length > 0) {
 ### 5. Configuration and environment impact
 
 ```ts
+import { analyzeImpactFromDiff, buildProjectIndex } from "@lzehrung/codegraph-core";
+
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+const impact = await analyzeImpactFromDiff(root, index, {
+  provider: "git",
+  base: "main",
+  head: "feature-branch",
+});
 const configChanges = impact.changedFiles.filter(
   (file) =>
     file.file.includes("config") ||
@@ -680,6 +713,15 @@ if (configChanges.length > 0) {
 ### 6. Performance regression detection
 
 ```ts
+import { analyzeImpactFromDiff, buildProjectIndex } from "@lzehrung/codegraph-core";
+
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+const impact = await analyzeImpactFromDiff(root, index, {
+  provider: "git",
+  base: "main",
+  head: "feature-branch",
+});
 const perfHotspots = impact.impacted.filter(
   (item) =>
     item.file.includes("query") ||

@@ -29,11 +29,9 @@ const REVIEWED_SCENARIO_KEYS = [
   "expectedRecommendedFile",
   "requiredCandidateTests",
 ];
-const VARIANT_KEYS = ["baseline", "codegraph"];
-const VARIANT_ORDER = new Map([
-  ["baseline", 0],
-  ["codegraph", 1],
-]);
+const REQUIRED_VARIANT_KEYS = ["baseline", "codegraph"];
+const VARIANT_KEYS = [...REQUIRED_VARIANT_KEYS, "warm-cli", "warm-mcp"];
+const VARIANT_ORDER = new Map(VARIANT_KEYS.map((variant, index) => [variant, index]));
 
 function fail(location, message) {
   throw new Error(`${location}: ${message}`);
@@ -236,15 +234,25 @@ export function validateScenarioFile(value) {
       fail(`${location}.metrics`, `expected exactly ${METRIC_KEYS.join(", ")} in that order`);
     }
 
-    requireExactKeys(scenario.variants, VARIANT_KEYS, `${location}.variants`);
-    requireArray(scenario.variants.baseline, `${location}.variants.baseline`, { nonEmpty: true });
-    scenario.variants.baseline.forEach((step, stepIndex) =>
-      validateBaselineStep(step, `${location}.variants.baseline[${stepIndex}]`),
-    );
-    requireArray(scenario.variants.codegraph, `${location}.variants.codegraph`, { nonEmpty: true });
-    scenario.variants.codegraph.forEach((step, stepIndex) =>
-      validateCodegraphStep(step, `${location}.variants.codegraph[${stepIndex}]`),
-    );
+    requireObject(scenario.variants, `${location}.variants`);
+    const variantNames = Object.keys(scenario.variants);
+    const missingVariants = REQUIRED_VARIANT_KEYS.filter((variant) => !Object.hasOwn(scenario.variants, variant));
+    const unknownVariants = variantNames.filter((variant) => !VARIANT_ORDER.has(variant));
+    if (missingVariants.length || unknownVariants.length) {
+      const details = [];
+      if (missingVariants.length) details.push(`missing ${missingVariants.join(", ")}`);
+      if (unknownVariants.length) details.push(`unknown ${unknownVariants.join(", ")}`);
+      fail(`${location}.variants`, details.join("; "));
+    }
+    for (const variant of VARIANT_KEYS) {
+      if (!Object.hasOwn(scenario.variants, variant)) continue;
+      const steps = scenario.variants[variant];
+      requireArray(steps, `${location}.variants.${variant}`, { nonEmpty: true });
+      steps.forEach((step, stepIndex) => {
+        if (variant === "baseline") validateBaselineStep(step, `${location}.variants.${variant}[${stepIndex}]`);
+        else validateCodegraphStep(step, `${location}.variants.${variant}[${stepIndex}]`);
+      });
+    }
     validateReviewedScenario(scenario, location);
   });
 
@@ -263,10 +271,12 @@ function scenarioLookupFromOptions(options) {
       {
         expectedAnchorCount: scenario.expectedAnchors.length,
         expectedAnchors: new Set(scenario.expectedAnchors),
-        variantStepCounts: {
-          baseline: scenario.variants.baseline.length,
-          codegraph: scenario.variants.codegraph.length,
-        },
+        variantStepCounts: Object.fromEntries(
+          VARIANT_KEYS.filter((variant) => Object.hasOwn(scenario.variants, variant)).map((variant) => [
+            variant,
+            scenario.variants[variant].length,
+          ]),
+        ),
         baselineReadCount: scenario.variants.baseline.filter((step) => step.type === "read").length,
         scenario,
         index,
@@ -337,7 +347,7 @@ function validateRun(run, index) {
   requireExactKeys(run, RUN_KEYS, location);
   requireNonEmptyString(run.scenarioId, `${location}.scenarioId`);
   if (!VARIANT_ORDER.has(run.variant)) {
-    fail(`${location}.variant`, 'expected "baseline" or "codegraph"');
+    fail(`${location}.variant`, `expected one of ${VARIANT_KEYS.map((variant) => JSON.stringify(variant)).join(", ")}`);
   }
   requirePositiveInteger(run.run, `${location}.run`);
 
@@ -484,6 +494,9 @@ export function validateResults(value, options = {}) {
         );
       }
       const expectedToolCalls = scenario.variantStepCounts[run.variant];
+      if (expectedToolCalls === undefined) {
+        fail(`${location}.variant`, `is not declared for scenario ${JSON.stringify(run.scenarioId)}`);
+      }
       if (run.metrics.toolCalls !== expectedToolCalls) {
         fail(
           `${location}.metrics.toolCalls`,
@@ -504,7 +517,7 @@ export function validateResults(value, options = {}) {
           );
         }
       });
-      const expectsReviewed = run.variant === "codegraph" && hasReviewedRelationships(scenario.scenario);
+      const expectsReviewed = run.variant !== "baseline" && hasReviewedRelationships(scenario.scenario);
       const hasReviewed = Object.hasOwn(run.checks, "reviewedRelationships");
       if (expectsReviewed !== hasReviewed) {
         fail(
@@ -555,7 +568,10 @@ export function validateResults(value, options = {}) {
   });
 
   for (const scenarioId of value.scenarioIds) {
-    for (const variant of VARIANT_KEYS) {
+    const expectedVariants = scenarioLookup
+      ? Object.keys(scenarioLookup.get(scenarioId).variantStepCounts)
+      : REQUIRED_VARIANT_KEYS;
+    for (const variant of expectedVariants) {
       const scenarioVariantKey = `${scenarioId}\0${variant}`;
       const runNumbers = (runNumbersByScenarioVariant.get(scenarioVariantKey) ?? []).sort(
         (left, right) => left - right,
@@ -724,7 +740,10 @@ export function renderMarkdownTable(summaries) {
     requireExactKeys(summary, summaryKeys, location);
     requireNonEmptyString(summary.scenarioId, `${location}.scenarioId`);
     if (!VARIANT_ORDER.has(summary.variant)) {
-      fail(`${location}.variant`, 'expected "baseline" or "codegraph"');
+      fail(
+        `${location}.variant`,
+        `expected one of ${VARIANT_KEYS.map((variant) => JSON.stringify(variant)).join(", ")}`,
+      );
     }
     requirePositiveInteger(summary.sampleCount, `${location}.sampleCount`);
     requireExactKeys(summary.medians, METRIC_KEYS, `${location}.medians`);
