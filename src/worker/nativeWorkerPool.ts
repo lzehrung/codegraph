@@ -42,7 +42,7 @@ export function createNativeWorkerPool(opts?: NativeWorkerPoolOptions): Piscina 
   const requestedMax = opts?.maxThreads;
   const bounded =
     typeof requestedMax === "number" && Number.isFinite(requestedMax) && requestedMax > 0
-      ? Math.floor(requestedMax)
+      ? Math.max(1, Math.floor(requestedMax))
       : HARD_MAX_THREADS;
   const threads = Math.min(resolveThreadCount(opts?.threads), bounded);
   const workerPath = resolveNativeWorkerPath();

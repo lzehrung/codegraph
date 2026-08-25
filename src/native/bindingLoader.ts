@@ -17,6 +17,10 @@ export type NativeBindingCacheEntry = {
   loadedPath: string;
   cacheKey: string;
   sha256: string;
+  sourceSize: number;
+  sourceMtimeMs: number;
+  cachedSize: number;
+  cachedMtimeMs: number;
   verified: boolean;
 };
 
@@ -217,6 +221,10 @@ export function loadNativeBinding<T>(options: BindingLoaderOptions): NativeBindi
             loadedPath: cached.loadedPath,
             cacheKey: cached.cacheKey,
             sha256: cached.sha256,
+            sourceSize: cached.sourceSize,
+            sourceMtimeMs: cached.sourceMtimeMs,
+            cachedSize: cached.cachedSize,
+            cachedMtimeMs: cached.cachedMtimeMs,
             verified: cached.verified,
           },
         };

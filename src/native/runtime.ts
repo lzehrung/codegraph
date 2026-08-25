@@ -88,6 +88,10 @@ export function loadBinding(): NativeBindingState {
         loadedPath: loaded.cacheEntry.loadedPath,
         cacheKey: loaded.cacheEntry.cacheKey,
         sha256: loaded.cacheEntry.sha256,
+        sourceSize: loaded.cacheEntry.sourceSize,
+        sourceMtimeMs: loaded.cacheEntry.sourceMtimeMs,
+        cachedSize: loaded.cacheEntry.cachedSize,
+        cachedMtimeMs: loaded.cacheEntry.cachedMtimeMs,
         verifiedAt: new Date().toISOString(),
         supportedLanguageIds: Array.from(supportedLanguageIds).sort(),
         origin: loaded.origin,
@@ -220,6 +224,7 @@ export function resolveCachedRuntimeIdentity(
     );
     const hit = lookupNativeRuntimeCacheEntry({
       sourcePath: platformPackage.sourcePath,
+      packageName: `@lzehrung/codegraph-native-${target}`,
       packageVersion: platformPackage.packageVersion,
       target,
       ...(options.cacheRoot !== undefined ? { cacheRoot: options.cacheRoot } : {}),

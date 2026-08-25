@@ -87,12 +87,25 @@ function originFor(result: {
 }
 
 /** Record what a successful load would have recorded, so later calls can take the fast path. */
-function recordLoad(result: { sourcePath: string; loadedPath: string; cacheKey: string; sha256: string }): void {
+function recordLoad(result: {
+  sourcePath: string;
+  loadedPath: string;
+  cacheKey: string;
+  sha256: string;
+  sourceSize: number;
+  sourceMtimeMs: number;
+  cachedSize: number;
+  cachedMtimeMs: number;
+}): void {
   recordNativeRuntimeCacheIdentity({
     sourcePath: result.sourcePath,
     loadedPath: result.loadedPath,
     cacheKey: result.cacheKey,
     sha256: result.sha256,
+    sourceSize: result.sourceSize,
+    sourceMtimeMs: result.sourceMtimeMs,
+    cachedSize: result.cachedSize,
+    cachedMtimeMs: result.cachedMtimeMs,
     verifiedAt: new Date().toISOString(),
     supportedLanguageIds: LANGUAGES,
     origin: originFor(result),
@@ -133,11 +146,6 @@ describe("native runtime cache identity", () => {
     const fixture = await makeFixture();
     const populated = prepare(fixture);
     if (populated.status === "unavailable") throw new Error(populated.error.message);
-
-    // Swap the cached bytes, then record the identity, so the stored stats describe the file as
-    // it now is while the stored digest describes what it used to be. Hashing would catch the
-    // mismatch and rebuild the entry; the fast path is defined not to look.
-    rewriteContentOnly(populated.loadedPath, "tampered-bin-contents!");
     recordLoad(populated);
 
     const reused = prepare(fixture);
@@ -152,8 +160,20 @@ describe("native runtime cache identity", () => {
     const fixture = await makeFixture();
     const populated = prepare(fixture);
     if (populated.status === "unavailable") throw new Error(populated.error.message);
-    rewriteContentOnly(populated.loadedPath, "tampered-bin-contents!");
     recordLoad(populated);
+    rewriteContentOnly(populated.loadedPath, "tampered-bin-contents!");
+
+    // This simulates the stat-preserving substitution the TTL bounds. Production only creates
+    // this record from the verified snapshot, so it cannot accidentally create this state.
+    const identityPath = path.join(path.dirname(populated.loadedPath), "identity.json");
+    const identity = JSON.parse(await fs.readFile(identityPath, "utf8")) as {
+      cachedSize: number;
+      cachedMtimeMs: number;
+    };
+    const cachedStats = fsSync.statSync(populated.loadedPath);
+    identity.cachedSize = cachedStats.size;
+    identity.cachedMtimeMs = cachedStats.mtimeMs;
+    await fs.writeFile(identityPath, JSON.stringify(identity));
 
     const expired = prepare(fixture, Date.now() + 25 * 60 * 60 * 1000);
     if (expired.status === "unavailable") throw new Error(expired.error.message);
@@ -190,6 +210,57 @@ describe("native runtime cache identity", () => {
     expect(fsSync.readFileSync(rebuilt.loadedPath, "utf8")).toBe("native-binary-contents");
   });
 
+  it("declines an identity that points outside its immutable cache entry", async () => {
+    const fixture = await makeFixture();
+    const populated = prepare(fixture);
+    if (populated.status === "unavailable") throw new Error(populated.error.message);
+    recordLoad(populated);
+
+    const foreignPath = path.join(fixture.cacheRoot, TARGET, "foreign-addon.node");
+    await fs.copyFile(populated.loadedPath, foreignPath);
+    const foreignStats = fsSync.statSync(foreignPath);
+    const identityPath = path.join(path.dirname(populated.loadedPath), "identity.json");
+    const identity = JSON.parse(await fs.readFile(identityPath, "utf8")) as {
+      loadedPath: string;
+      cachedSize: number;
+      cachedMtimeMs: number;
+      origin: { loadedPath: string };
+    };
+    identity.loadedPath = foreignPath;
+    identity.cachedSize = foreignStats.size;
+    identity.cachedMtimeMs = foreignStats.mtimeMs;
+    identity.origin.loadedPath = foreignPath;
+    await fs.writeFile(identityPath, JSON.stringify(identity));
+
+    expect(
+      lookupNativeRuntimeCacheEntry({
+        sourcePath: fixture.binaryPath,
+        packageName: PACKAGE_NAME,
+        packageVersion: VERSION,
+        target: TARGET,
+        cacheRoot: fixture.cacheRoot,
+      }),
+    ).toBeNull();
+  });
+
+  it("declines to record an identity after verified source bytes change", async () => {
+    const fixture = await makeFixture();
+    const populated = prepare(fixture);
+    if (populated.status === "unavailable") throw new Error(populated.error.message);
+
+    rewriteContentOnly(fixture.binaryPath, "tampered-bin-contents!");
+    const afterVerification = new Date(Date.now() + 1_000);
+    fsSync.utimesSync(fixture.binaryPath, afterVerification, afterVerification);
+    recordLoad(populated);
+
+    const identityPath = path.join(path.dirname(populated.loadedPath), "identity.json");
+    expect(fsSync.existsSync(identityPath)).toBe(false);
+    const rebuilt = prepare(fixture);
+    if (rebuilt.status === "unavailable") throw new Error(rebuilt.error.message);
+    expect(rebuilt.verified).toBe(true);
+    expect(rebuilt.sha256).not.toBe(populated.sha256);
+  });
+
   it("ignores a malformed identity record instead of trusting it", async () => {
     const fixture = await makeFixture();
     const populated = prepare(fixture);
@@ -201,6 +272,7 @@ describe("native runtime cache identity", () => {
     expect(
       lookupNativeRuntimeCacheEntry({
         sourcePath: fixture.binaryPath,
+        packageName: PACKAGE_NAME,
         packageVersion: VERSION,
         target: TARGET,
         cacheRoot: fixture.cacheRoot,
@@ -233,6 +305,7 @@ describe("native runtime cache identity", () => {
       sourcePath: string;
       sourceSize: number;
       sourceMtimeMs: number;
+      origin: { sourcePath: string };
     };
     identity.sourceSize = siblingStats.size;
     identity.sourceMtimeMs = siblingStats.mtimeMs;
@@ -243,6 +316,7 @@ describe("native runtime cache identity", () => {
     expect(
       lookupNativeRuntimeCacheEntry({
         sourcePath: sibling.binaryPath,
+        packageName: PACKAGE_NAME,
         packageVersion: VERSION,
         target: TARGET,
         cacheRoot: fixture.cacheRoot,
@@ -252,10 +326,12 @@ describe("native runtime cache identity", () => {
     // Restoring only the path proves the path is what declined it: the same record, the same
     // stat values, now naming this install, is accepted.
     identity.sourcePath = fsSync.realpathSync.native(sibling.binaryPath);
+    identity.origin.sourcePath = identity.sourcePath;
     await fs.writeFile(identityPath, JSON.stringify(identity));
     expect(
       lookupNativeRuntimeCacheEntry({
         sourcePath: sibling.binaryPath,
+        packageName: PACKAGE_NAME,
         packageVersion: VERSION,
         target: TARGET,
         cacheRoot: fixture.cacheRoot,
@@ -282,6 +358,7 @@ describe("native runtime cache identity", () => {
     expect(
       lookupNativeRuntimeCacheEntry({
         sourcePath: fixture.binaryPath,
+        packageName: PACKAGE_NAME,
         packageVersion: VERSION,
         target: TARGET,
         cacheRoot: fixture.cacheRoot,

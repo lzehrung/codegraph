@@ -103,6 +103,11 @@ export type PrepareNativeRuntimeCacheResult =
       loadedPath: string;
       cacheKey: string;
       sha256: string;
+      /** Verified stat snapshots used to reject a source/cache replacement before identity recording. */
+      sourceSize: number;
+      sourceMtimeMs: number;
+      cachedSize: number;
+      cachedMtimeMs: number;
       /**
        * True when this call hashed the files rather than trusting a recorded identity. Only a
        * verified result may refresh the identity record, otherwise each fast-path hit would
@@ -119,6 +124,7 @@ export type PrepareNativeRuntimeCacheResult =
 type FileHash = {
   sha256: string;
   size: number;
+  mtimeMs: number;
 };
 
 function asError(error: unknown): Error {
@@ -209,10 +215,11 @@ export function hashFileStreaming(filePath: string, onChunk?: (bytesRead: number
     fs.closeSync(descriptor);
   }
 
-  if (size !== before.size) {
+  const after = fs.statSync(filePath);
+  if (!after.isFile() || size !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
     throw new Error(`native binary changed while hashing: ${filePath}`);
   }
-  return { sha256: hash.digest("hex"), size };
+  return { sha256: hash.digest("hex"), size, mtimeMs: before.mtimeMs };
 }
 
 function randomSuffix(): string {
@@ -249,12 +256,12 @@ function removeRegularTemporaryFile(filePath: string): void {
   }
 }
 
-function verifyFile(filePath: string, expected: FileHash): boolean {
+function verifyFile(filePath: string, expected: FileHash): FileHash | null {
   try {
     const actual = hashFileStreaming(filePath);
-    return actual.size === expected.size && actual.sha256 === expected.sha256;
+    return actual.size === expected.size && actual.sha256 === expected.sha256 ? actual : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -311,6 +318,7 @@ function writeManifest(entryPath: string, manifest: NativeCacheManifestV1): void
 
 export type NativeCacheLookupRequest = {
   sourcePath: string;
+  packageName: string;
   packageVersion: string;
   target: string;
   cacheRoot?: string | undefined;
@@ -376,14 +384,36 @@ function statOrNull(filePath: string): fs.Stats | null {
   }
 }
 
+function lstatRegularFileOrNull(filePath: string): fs.Stats | null {
+  try {
+    const stats = fs.lstatSync(filePath);
+    return stats.isFile() && !stats.isSymbolicLink() ? stats : null;
+  } catch {
+    return null;
+  }
+}
+
+function isSafeExistingDirectory(directoryPath: string): boolean {
+  try {
+    const stats = fs.lstatSync(directoryPath);
+    return stats.isDirectory() && !stats.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function pathsResolveEqual(left: string, right: string): boolean {
+  return path.resolve(left) === path.resolve(right);
+}
+
 /**
  * Find a cache entry for this (package version, target) whose recorded identity still matches
  * the files on disk, without hashing either of them.
  *
  * The entry directory is named `<packageVersion>-<sha256>`, so locating it the normal way means
  * hashing the source first. Scanning the target directory for the version prefix and comparing
- * the stat fields recorded at the last full verification reaches the same entry for the cost of
- * a readdir plus two stats. A miss - no entry, no identity file, a stat mismatch, or an expired
+ * the stat fields recorded at the last full verification reaches the same entry with bounded
+ * metadata reads. A miss - no entry, no identity file, a stat mismatch, or an expired
  * TTL - returns null, and every caller then does the full hash-and-verify pass.
  */
 export function lookupNativeRuntimeCacheEntry(request: NativeCacheLookupRequest): NativeCacheLookupHit | null {
@@ -398,8 +428,10 @@ export function lookupNativeRuntimeCacheEntry(request: NativeCacheLookupRequest)
     if (!sourceStats) return null;
 
     const runtime = currentRuntimeStamp();
+    const resolvedCacheRoot = path.resolve(cacheRoot);
+    const targetPath = path.join(resolvedCacheRoot, request.target);
+    if (!isSafeExistingDirectory(resolvedCacheRoot) || !isSafeExistingDirectory(targetPath)) return null;
 
-    const targetPath = path.join(path.resolve(cacheRoot), request.target);
     const prefix = `${request.packageVersion}-`;
     let entryNames: string[];
     try {
@@ -412,14 +444,43 @@ export function lookupNativeRuntimeCacheEntry(request: NativeCacheLookupRequest)
     for (const entryName of entryNames) {
       if (!entryName.startsWith(prefix)) continue;
       const entryPath = path.join(targetPath, entryName);
+      if (!isSafeExistingDirectory(entryPath)) continue;
       const identity = readCacheIdentity(entryPath);
       if (!identity) continue;
+
+      const expectedEntryName = `${request.packageVersion}-${identity.sha256}`;
+      const expectedCacheKey = `${request.packageName}@${request.packageVersion}:${request.target}:${identity.sha256}`;
+      const loadedPath = path.resolve(identity.loadedPath);
+      if (
+        entryName !== expectedEntryName ||
+        identity.cacheKey !== expectedCacheKey ||
+        identity.loadedPath !== loadedPath ||
+        path.dirname(loadedPath) !== entryPath ||
+        path.basename(loadedPath) !== path.basename(sourceRealPath)
+      ) {
+        continue;
+      }
+
       // Same version, same bytes, different install. The cache root is shared by every project
       // on the machine, and npm can produce byte-identical files with matching mtimes, so size
       // and mtime alone can match another project's record - whose sourcePath would then be
       // replayed into this build's binding origin and change its runtime fingerprint.
       if (identity.sourcePath !== sourceRealPath) continue;
       if (identity.sourceSize !== sourceStats.size || identity.sourceMtimeMs !== sourceStats.mtimeMs) continue;
+      if (
+        identity.origin.packageName !== request.packageName ||
+        identity.origin.packageVersion !== request.packageVersion ||
+        identity.origin.target !== request.target ||
+        identity.origin.sourcePath === undefined ||
+        identity.origin.loadedPath === undefined ||
+        !pathsResolveEqual(identity.origin.sourcePath, sourceRealPath) ||
+        !pathsResolveEqual(identity.origin.loadedPath, identity.loadedPath) ||
+        identity.origin.cacheKey !== identity.cacheKey ||
+        identity.origin.sha256 !== identity.sha256
+      ) {
+        continue;
+      }
+
       // Recorded by a runtime that could load the file. A different ABI cannot, and claiming
       // otherwise would report native as available for a build that falls back away from it.
       if (
@@ -430,13 +491,13 @@ export function lookupNativeRuntimeCacheEntry(request: NativeCacheLookupRequest)
         continue;
       }
 
-      const cachedStats = statOrNull(identity.loadedPath);
+      const cachedStats = lstatRegularFileOrNull(identity.loadedPath);
       if (!cachedStats) continue;
       if (identity.cachedSize !== cachedStats.size || identity.cachedMtimeMs !== cachedStats.mtimeMs) continue;
 
       const verifiedAt = Date.parse(identity.verifiedAt);
       if (!Number.isFinite(verifiedAt) || now - verifiedAt >= IDENTITY_REVERIFY_INTERVAL_MS) continue;
-      if (!isWithinDirectory(identity.loadedPath, path.resolve(cacheRoot))) continue;
+      if (!isWithinDirectory(identity.loadedPath, resolvedCacheRoot)) continue;
 
       return { entryPath, identity };
     }
@@ -454,24 +515,24 @@ export function lookupNativeRuntimeCacheEntry(request: NativeCacheLookupRequest)
  * Replaces any previous record atomically: the TTL refresh rewrites it, unlike the immutable
  * `manifest.json` beside it.
  */
-export function recordNativeRuntimeCacheIdentity(
-  identity: Omit<
-    NativeCacheIdentityV1,
-    "version" | "sourceSize" | "sourceMtimeMs" | "cachedSize" | "cachedMtimeMs" | "runtime"
-  >,
-): void {
+export function recordNativeRuntimeCacheIdentity(identity: Omit<NativeCacheIdentityV1, "version" | "runtime">): void {
   try {
     const sourceStats = statOrNull(identity.sourcePath);
-    const cachedStats = statOrNull(identity.loadedPath);
-    if (!sourceStats || !cachedStats) return;
+    const cachedStats = lstatRegularFileOrNull(identity.loadedPath);
+    if (
+      !sourceStats ||
+      !cachedStats ||
+      sourceStats.size !== identity.sourceSize ||
+      sourceStats.mtimeMs !== identity.sourceMtimeMs ||
+      cachedStats.size !== identity.cachedSize ||
+      cachedStats.mtimeMs !== identity.cachedMtimeMs
+    ) {
+      return;
+    }
 
     const entryPath = path.dirname(identity.loadedPath);
     const record: NativeCacheIdentityV1 = {
       version: IDENTITY_VERSION,
-      sourceSize: sourceStats.size,
-      sourceMtimeMs: sourceStats.mtimeMs,
-      cachedSize: cachedStats.size,
-      cachedMtimeMs: cachedStats.mtimeMs,
       runtime: currentRuntimeStamp(),
       ...identity,
     };
@@ -593,6 +654,7 @@ export function prepareNativeRuntimeCache(request: PrepareNativeRuntimeCacheRequ
     // mismatch still take the full path below.
     const hit = lookupNativeRuntimeCacheEntry({
       sourcePath,
+      packageName: request.packageName,
       packageVersion: request.packageVersion,
       target: request.target,
       ...(request.cacheRoot !== undefined ? { cacheRoot: request.cacheRoot } : {}),
@@ -605,6 +667,10 @@ export function prepareNativeRuntimeCache(request: PrepareNativeRuntimeCacheRequ
         loadedPath: hit.identity.loadedPath,
         cacheKey: hit.identity.cacheKey,
         sha256: hit.identity.sha256,
+        sourceSize: hit.identity.sourceSize,
+        sourceMtimeMs: hit.identity.sourceMtimeMs,
+        cachedSize: hit.identity.cachedSize,
+        cachedMtimeMs: hit.identity.cachedMtimeMs,
         verified: false,
       };
     }
@@ -626,11 +692,12 @@ export function prepareNativeRuntimeCache(request: PrepareNativeRuntimeCacheRequ
     const sourceFileName = path.basename(sourceRealPath);
     const finalPath = path.join(entryPath, sourceFileName);
     let status: "cached" | "reused" = "reused";
-    const finalExists = fs.existsSync(finalPath);
-    if (!finalExists || !verifyFile(finalPath, source)) {
-      if (finalExists) recoverCorruptFinal(finalPath);
+    let cached = fs.existsSync(finalPath) ? verifyFile(finalPath, source) : null;
+    if (!cached) {
+      if (fs.existsSync(finalPath)) recoverCorruptFinal(finalPath);
       status = populateBinary(sourceRealPath, finalPath, source) ? "cached" : "reused";
-      if (!verifyFile(finalPath, source)) {
+      cached = verifyFile(finalPath, source);
+      if (!cached) {
         throw new Error("native cache winner failed integrity verification");
       }
     }
@@ -656,6 +723,10 @@ export function prepareNativeRuntimeCache(request: PrepareNativeRuntimeCacheRequ
       loadedPath: finalPath,
       cacheKey,
       sha256: source.sha256,
+      sourceSize: source.size,
+      sourceMtimeMs: source.mtimeMs,
+      cachedSize: cached.size,
+      cachedMtimeMs: cached.mtimeMs,
       verified: true,
     };
   } catch (error) {

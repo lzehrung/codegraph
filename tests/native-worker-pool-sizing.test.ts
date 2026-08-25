@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../src/index.js";
 import { NATIVE_WORKER_AUTO_FILE_THRESHOLD, shouldEnableNativeWorkers } from "../src/indexer/build-workers.js";
 import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
+import { createNativeWorkerPool } from "../src/worker/nativeWorkerPool.js";
 import type { BuildReport } from "../src/indexer/types.js";
 
 async function makeProject(fileCount: number): Promise<string> {
@@ -39,6 +40,15 @@ describe("native worker pool enablement", () => {
     if (!isNativeTreeSitterAvailable()) return;
     expect(shouldEnableNativeWorkers({ useNativeWorkers: true }, 1)).toBe(true);
     expect(shouldEnableNativeWorkers({ useNativeWorkers: false }, 10_000)).toBe(false);
+  });
+
+  it("clamps a positive fractional thread bound to one worker", async () => {
+    const pool = createNativeWorkerPool({ maxThreads: 0.5 });
+    try {
+      expect(pool).toBeDefined();
+    } finally {
+      await pool.destroy();
+    }
   });
 });
 

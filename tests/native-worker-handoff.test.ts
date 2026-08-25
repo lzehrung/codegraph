@@ -97,12 +97,14 @@ describe("worker native binding handoff", () => {
   });
 
   it("extracts through a real worker using the handed-over addon", async () => {
+    loadBinding();
     const handoff = getNativeWorkerBindingHandoff();
     if (!handoff) throw new Error("expected a handoff after a successful load");
     expectExtracted(await runInPool({ nativeBinding: handoff }));
   });
 
   it("falls back to full resolution when the handoff cannot be loaded", async () => {
+    loadBinding();
     const handoff = getNativeWorkerBindingHandoff();
     if (!handoff) throw new Error("expected a handoff after a successful load");
     // A path that does not exist stands in for a stale or pruned cache entry. The worker must
