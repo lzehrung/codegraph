@@ -361,10 +361,9 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         ...(languageExtensions ? { languageExtensions } : {}),
         ...(cacheLocation ? { cacheLocation } : {}),
       };
-      // Deliberately left undecided. This used to force the pool on from the project's total
-      // file count, which was the only signal available when the build made the same decision
-      // the same way. The build now decides from the number of files it will actually parse, so
-      // forcing here would put a pool behind every small incremental update in a session.
+      // Let the incremental build decide after it identifies parse misses. Session file counts
+      // include cache hits and files that cannot use native workers, so forcing a pool here can
+      // start idle workers for a small incremental update.
       const buildReport: BuildReport = options.buildOptions?.report ?? { timings: {} };
       buildOptions.report = buildReport;
       const index = await buildProjectIndexIncremental(options.root, buildOptions);
