@@ -698,7 +698,7 @@ describe("agent session", () => {
     ]);
   });
 
-  it("auto-enables native workers for large agent builds unless explicitly disabled", async () => {
+  it("leaves the native worker decision to the build but still forwards an explicit one", async () => {
     const root = await mkTmpDir("cg-agent-session-large-");
     for (let index = 0; index < 260; index += 1) {
       await fs.writeFile(path.join(root, `file-${index}.ts`), `export const value${index} = ${index};\n`);
@@ -716,7 +716,11 @@ describe("agent session", () => {
     await createAgentSession({ root }).loadProject({ symbolGraph: "skip" });
     await createAgentSession({ root, buildOptions: { useNativeWorkers: false } }).loadProject({ symbolGraph: "skip" });
 
-    expect(buildSpy.mock.calls[0]?.[1]?.useNativeWorkers).toBe(true);
+    // A session knows the project's total file count, which is the wrong basis for the pool:
+    // the build creates it per run, sized by the files that run will parse. Leaving the option
+    // unset is what lets a small incremental update in a large project skip the pool.
+    expect(buildSpy.mock.calls[0]?.[1]?.useNativeWorkers).toBeUndefined();
+    // An explicit choice is still the caller's to make and must survive.
     expect(buildSpy.mock.calls[1]?.[1]?.useNativeWorkers).toBe(false);
   });
 

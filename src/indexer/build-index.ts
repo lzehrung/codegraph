@@ -99,6 +99,7 @@ import { finalizeProjectIndex } from "./finalize.js";
 import { toManifestFileEntry, writeIndexManifestSnapshot } from "./build-manifest.js";
 import {
   prepareFileContextForBuild,
+  emptyWorkerPoolSetup,
   setupWorkerPool,
   teardownWorkerPool,
   type WorkerPoolSetupResult,
@@ -1580,7 +1581,10 @@ export async function buildProjectIndexIncremental(
 
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
     const conc = buildConcurrency(opts);
-    const workerSetup = await setupWorkerPool(opts, allFiles.size);
+    // Created below, once the changed-file set is known. Building it here would spawn a full
+    // pool before the signature pass and the unchanged-snapshot early return, so a warm
+    // no-change run paid for threads that never received a task.
+    let workerSetup = emptyWorkerPoolSetup();
     try {
       const useGitSignatures = gitAvailable;
       const gitSigMap = useGitSignatures
@@ -1677,6 +1681,9 @@ export async function buildProjectIndexIncremental(
       }
       invalidateCachedDependents();
       const changedList = Array.from(changedFiles);
+      // Sized by the work that remains rather than the size of the project: an incremental build
+      // touching a handful of files gets a handful of threads, or none.
+      workerSetup = await setupWorkerPool(opts, changedList.length);
       let updateStartedAt: number | undefined;
       if (changedList.length || deletedTrackedFiles.size) {
         updateStartedAt = performance.now();

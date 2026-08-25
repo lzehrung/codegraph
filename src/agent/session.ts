@@ -361,9 +361,10 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         ...(languageExtensions ? { languageExtensions } : {}),
         ...(cacheLocation ? { cacheLocation } : {}),
       };
-      if (options.buildOptions?.useNativeWorkers === undefined && files.length >= NATIVE_WORKER_AUTO_FILE_THRESHOLD) {
-        buildOptions.useNativeWorkers = true;
-      }
+      // Deliberately left undecided. This used to force the pool on from the project's total
+      // file count, which was the only signal available when the build made the same decision
+      // the same way. The build now decides from the number of files it will actually parse, so
+      // forcing here would put a pool behind every small incremental update in a session.
       const buildReport: BuildReport = options.buildOptions?.report ?? { timings: {} };
       buildOptions.report = buildReport;
       const index = await buildProjectIndexIncremental(options.root, buildOptions);

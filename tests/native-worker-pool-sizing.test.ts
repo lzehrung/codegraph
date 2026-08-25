@@ -1,0 +1,85 @@
+import fsp from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { describe, expect, it } from "vitest";
+
+import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../src/index.js";
+import { NATIVE_WORKER_AUTO_FILE_THRESHOLD, shouldEnableNativeWorkers } from "../src/indexer/build-workers.js";
+import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
+import type { BuildReport } from "../src/indexer/types.js";
+
+async function makeProject(fileCount: number): Promise<string> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-pool-sizing-"));
+  for (let index = 0; index < fileCount; index += 1) {
+    await fsp.writeFile(path.join(root, `file-${index}.ts`), `export const value${index} = ${index};\n`, "utf8");
+  }
+  return root;
+}
+
+function filesIn(root: string, fileCount: number): string[] {
+  return Array.from({ length: fileCount }, (_, index) => path.join(root, `file-${index}.ts`));
+}
+
+describe("native worker pool enablement", () => {
+  it("declines when there is nothing to parse, even under an explicit request", () => {
+    // Piscina starts minThreads eagerly, so an explicit request with no work spawns a pool that
+    // is torn down without ever receiving a task.
+    expect(shouldEnableNativeWorkers({ useNativeWorkers: true }, 0)).toBe(false);
+    expect(shouldEnableNativeWorkers({}, 0)).toBe(false);
+  });
+
+  it("auto-enables from the measured threshold, not from an arbitrary project size", () => {
+    if (!isNativeTreeSitterAvailable()) return;
+    expect(shouldEnableNativeWorkers({}, NATIVE_WORKER_AUTO_FILE_THRESHOLD - 1)).toBe(false);
+    expect(shouldEnableNativeWorkers({}, NATIVE_WORKER_AUTO_FILE_THRESHOLD)).toBe(true);
+  });
+
+  it("honors an explicit request below the threshold", () => {
+    if (!isNativeTreeSitterAvailable()) return;
+    expect(shouldEnableNativeWorkers({ useNativeWorkers: true }, 1)).toBe(true);
+    expect(shouldEnableNativeWorkers({ useNativeWorkers: false }, 10_000)).toBe(false);
+  });
+});
+
+describe.runIf(isNativeTreeSitterAvailable())("native worker pool sizing", () => {
+  it("creates no worker threads for a warm run with nothing changed", async () => {
+    const root = await makeProject(NATIVE_WORKER_AUTO_FILE_THRESHOLD + 8);
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-pool-sizing-cache-"));
+    try {
+      const cold: BuildReport = { timings: {} };
+      await buildProjectIndexIncremental(root, { cache: "disk", cacheDir, report: cold });
+      expect(cold.workerPool?.threads ?? 0).toBeGreaterThan(0);
+
+      const warm: BuildReport = { timings: {} };
+      await buildProjectIndexIncremental(root, { cache: "disk", cacheDir, report: warm });
+      // Nothing changed, so nothing should have been spawned to parse it.
+      expect(warm.workerPool?.threads ?? 0).toBe(0);
+      expect(warm.workerPool?.tasksSubmitted ?? 0).toBe(0);
+    } finally {
+      await Promise.all([
+        fsp.rm(root, { recursive: true, force: true }),
+        fsp.rm(cacheDir, { recursive: true, force: true }),
+      ]);
+    }
+  }, 60_000);
+
+  it("never creates more threads than there are files to parse", async () => {
+    const root = await makeProject(3);
+    try {
+      const report: BuildReport = { timings: {} };
+      // Explicitly requested, so the pool is created despite being under the threshold; the
+      // point here is that it is sized by the work rather than by the machine.
+      await buildProjectIndexFromFiles(root, filesIn(root, 3), {
+        cache: "off",
+        useNativeWorkers: true,
+        report,
+      });
+      expect(report.workerPool?.enabled).toBe(true);
+      expect(report.workerPool?.threads).toBeGreaterThan(0);
+      expect(report.workerPool?.threads).toBeLessThanOrEqual(3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
