@@ -233,6 +233,100 @@ describe("native runtime cache identity", () => {
   });
 });
 
+describe("native cache pruning", () => {
+  async function fixtureAtVersion(version: string, bytes: string, cacheRoot: string): Promise<Fixture> {
+    const fixture = await makeFixture(bytes);
+    await fs.writeFile(
+      path.join(path.dirname(fixture.binaryPath), "package.json"),
+      JSON.stringify({ name: PACKAGE_NAME, version }),
+    );
+    return { ...fixture, cacheRoot };
+  }
+
+  function prepareAt(fixture: Fixture, version: string): ReturnType<typeof prepareNativeRuntimeCache> {
+    return prepareNativeRuntimeCache({
+      sourcePath: fixture.binaryPath,
+      packageName: PACKAGE_NAME,
+      packageVersion: version,
+      target: TARGET,
+      cacheRoot: fixture.cacheRoot,
+    });
+  }
+
+  function entryNames(cacheRoot: string): string[] {
+    return fsSync.readdirSync(path.join(cacheRoot, TARGET)).sort();
+  }
+
+  it("keeps only the version most recently installed", async () => {
+    const shared = await makeFixture();
+    const cacheRoot = shared.cacheRoot;
+
+    // Each install supersedes the one before it, so assert the directory after every step rather
+    // than only at the end: the guarantee is that the cache never accumulates, not that a final
+    // sweep tidies it.
+    const oldest = await fixtureAtVersion("1.9.0", "oldest-binary-contents", cacheRoot);
+    const first = prepareAt(oldest, "1.9.0");
+    if (first.status === "unavailable") throw new Error(first.error.message);
+    expect(entryNames(cacheRoot)).toEqual([path.basename(path.dirname(first.loadedPath))]);
+
+    const older = await fixtureAtVersion("1.9.1", "older-binary-contents", cacheRoot);
+    const second = prepareAt(older, "1.9.1");
+    if (second.status === "unavailable") throw new Error(second.error.message);
+    expect(entryNames(cacheRoot)).toEqual([path.basename(path.dirname(second.loadedPath))]);
+
+    const current = await fixtureAtVersion(VERSION, "current-binary-contents", cacheRoot);
+    const third = prepareAt(current, VERSION);
+    if (third.status === "unavailable") throw new Error(third.error.message);
+    expect(entryNames(cacheRoot)).toEqual([path.basename(path.dirname(third.loadedPath))]);
+    // The survivor is the one just installed, and it is intact rather than merely present.
+    expect(fsSync.readFileSync(third.loadedPath, "utf8")).toBe("current-binary-contents");
+  });
+
+  it("keeps entries it cannot identify and the one it just wrote", async () => {
+    const fixture = await makeFixture();
+    const populated = prepare(fixture);
+    if (populated.status === "unavailable") throw new Error(populated.error.message);
+
+    // A directory with no readable manifest looks exactly like another process part-way through
+    // populating an entry, so removing it would be a race, not a cleanup.
+    const targetPath = path.join(fixture.cacheRoot, TARGET);
+    const partial = path.join(targetPath, "9.9.9-partial");
+    await fs.mkdir(partial, { recursive: true });
+    await fs.writeFile(path.join(partial, "manifest.json"), "{not json");
+
+    const again = await fixtureAtVersion("2.0.0", "next-major-contents-x", fixture.cacheRoot);
+    const upgraded = prepareAt(again, "2.0.0");
+    if (upgraded.status === "unavailable") throw new Error(upgraded.error.message);
+
+    const remaining = entryNames(fixture.cacheRoot);
+    expect(remaining).toContain("9.9.9-partial");
+    expect(remaining).toContain(path.basename(path.dirname(upgraded.loadedPath)));
+    // The 1.9.3 entry had a readable manifest naming a superseded version, so it went.
+    expect(remaining).not.toContain(path.basename(path.dirname(populated.loadedPath)));
+  });
+
+  it("does not prune on a fast-path hit, which supersedes nothing", async () => {
+    const fixture = await makeFixture();
+    const populated = prepare(fixture);
+    if (populated.status === "unavailable") throw new Error(populated.error.message);
+    recordLoad(populated);
+
+    const targetPath = path.join(fixture.cacheRoot, TARGET);
+    const stale = path.join(targetPath, "1.0.0-stale");
+    await fs.mkdir(stale, { recursive: true });
+    await fs.writeFile(
+      path.join(stale, "manifest.json"),
+      JSON.stringify({ schemaVersion: 1, packageName: PACKAGE_NAME, packageVersion: "1.0.0" }),
+    );
+
+    const reused = prepare(fixture);
+    if (reused.status === "unavailable") throw new Error(reused.error.message);
+    expect(reused.verified).toBe(false);
+    // Nothing was installed, so nothing was superseded and the warm run did no directory work.
+    expect(entryNames(fixture.cacheRoot)).toContain("1.0.0-stale");
+  });
+});
+
 describe("runtime fingerprint without loading the addon", () => {
   it("answers from a recorded identity", async () => {
     const fixture = await makeFixture();

@@ -444,6 +444,67 @@ export function recordNativeRuntimeCacheIdentity(
   }
 }
 
+function readManifestVersion(entryPath: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(path.join(entryPath, "manifest.json"), "utf8"));
+    if (!parsed || typeof parsed !== "object") return null;
+    const version = (parsed as Partial<NativeCacheManifestV1>).packageVersion;
+    return typeof version === "string" && version ? version : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Delete entries for other package versions once the current one is in place.
+ *
+ * The cache only ever grew: every upgrade left roughly 29 MB behind, and a machine that had
+ * tracked a few releases carried well over a hundred megabytes of addons nothing would load
+ * again. Keeping the directory small also keeps it warm, which is what the stat-only fast path
+ * above depends on.
+ *
+ * Best effort throughout, and deliberately conservative:
+ * - the entry just produced is never a candidate;
+ * - an entry whose manifest is missing or unreadable is left alone, because that is what a
+ *   concurrent population in progress looks like;
+ * - Windows holds a lock on a loaded DLL, so removing an entry another process is running fails
+ *   with EBUSY or EPERM. That is the mechanism the "never deletes an entry in use" guarantee
+ *   rests on, so those failures are expected rather than exceptional and are simply skipped.
+ */
+function pruneSupersededEntries(
+  targetPath: string,
+  cacheRoot: string,
+  keepEntryPath: string,
+  keepVersion: string,
+): void {
+  let entryNames: string[];
+  try {
+    entryNames = fs.readdirSync(targetPath);
+  } catch {
+    return;
+  }
+
+  for (const entryName of entryNames) {
+    const entryPath = path.join(targetPath, entryName);
+    if (entryPath === keepEntryPath) continue;
+    if (!isWithinDirectory(entryPath, cacheRoot)) continue;
+    try {
+      if (!fs.lstatSync(entryPath).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    const version = readManifestVersion(entryPath);
+    // An unreadable manifest is indistinguishable from a half-written entry, and the current
+    // version is the one being kept.
+    if (!version || version === keepVersion) continue;
+    try {
+      fs.rmSync(entryPath, { recursive: true, force: true });
+    } catch {
+      // In use, or not ours to remove. Either way the next upgrade tries again.
+    }
+  }
+}
+
 export function prepareNativeRuntimeCache(request: PrepareNativeRuntimeCacheRequest): PrepareNativeRuntimeCacheResult {
   const sourcePath = path.resolve(request.sourcePath);
   try {
@@ -507,6 +568,10 @@ export function prepareNativeRuntimeCache(request: PrepareNativeRuntimeCacheRequ
       sourceSha256: source.sha256,
       cachedAt: new Date().toISOString(),
     });
+
+    // Only on the verified path. A fast-path hit means nothing new arrived, so there is nothing
+    // to supersede, and the warm run stays free of extra directory work.
+    pruneSupersededEntries(targetPath, cacheRoot, entryPath, request.packageVersion);
 
     return {
       status,
