@@ -195,8 +195,8 @@ Acceptance:
 
 ## Priority 4: Prune the native cache
 
-- [x] Implemented, on the verified path only: a fast-path hit means nothing new arrived and so
-      nothing was superseded.
+- [x] Implemented on the verified path only, but by age rather than by version - see the
+      acceptance note below. A fast-path hit installs nothing, so it prunes nothing.
 - [x] All removal failures are skipped, which is the mechanism behind the guarantee below.
 - [ ] **Not done, and not doable as written.** The fast path needs the source path and package
       version to locate the entry, which is exactly what the platform-package reads produce, and
@@ -206,10 +206,16 @@ Acceptance:
 
 Acceptance:
 
-- [x] Stronger in practice: only the running version survives, except entries that could not be
-      removed because another process holds them.
-- [x] Rests on the Windows DLL lock, plus never touching the entry just written and leaving any
-      entry whose manifest is unreadable, since that is what a concurrent population looks like.
+- [x] Met differently, and deliberately. Deleting every entry that is not the version now
+      installing looks right for one project and is wrong on a real machine: the cache root is
+      per-user and shared, so two projects pinned to different native versions would delete each
+      other's entry on every run, each re-copying 29 MB and never reaching the fast path - worse
+      than the growth this set out to fix. Entries are removed once no project has used them for
+      30 days instead. An entry in use is re-verified at least daily, which refreshes its
+      timestamp, so age separates abandoned from active where version does not.
+- [x] Rests on four things: the Windows DLL lock, never touching the entry just written or any
+      entry for its version, leaving any entry whose manifest is unreadable or undated since
+      that is what a concurrent population looks like, and the 30-day window above.
 
 ## Validation checklist
 

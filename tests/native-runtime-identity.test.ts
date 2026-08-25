@@ -212,6 +212,87 @@ describe("native runtime cache identity", () => {
     expect(rebuilt.verified).toBe(true);
   });
 
+  it("declines a record left by another install of the same version", async () => {
+    const fixture = await makeFixture();
+    const populated = prepare(fixture);
+    if (populated.status === "unavailable") throw new Error(populated.error.message);
+    recordLoad(populated);
+
+    // A second project with the same package version installed. npm can produce byte-identical
+    // files, and tarball extraction can give them the same mtime, so size and mtime alone would
+    // match the first project's record - and hand this build the other project's source path,
+    // which travels into the binding origin and changes the runtime fingerprint.
+    //
+    // The record's stat fields are set from the sibling rather than copying mtimes between
+    // files, because utimesSync truncates sub-millisecond precision: the lookup would then
+    // decline on the mtime and this test would pass without ever reaching the path comparison.
+    const sibling = await makeFixture();
+    const siblingStats = fsSync.statSync(sibling.binaryPath);
+    const identityPath = path.join(path.dirname(populated.loadedPath), "identity.json");
+    const identity = JSON.parse(await fs.readFile(identityPath, "utf8")) as {
+      sourcePath: string;
+      sourceSize: number;
+      sourceMtimeMs: number;
+    };
+    identity.sourceSize = siblingStats.size;
+    identity.sourceMtimeMs = siblingStats.mtimeMs;
+    await fs.writeFile(identityPath, JSON.stringify(identity));
+    // Everything the lookup compares now matches except which install the record describes.
+    expect(identity.sourcePath).not.toBe(fsSync.realpathSync.native(sibling.binaryPath));
+
+    expect(
+      lookupNativeRuntimeCacheEntry({
+        sourcePath: sibling.binaryPath,
+        packageVersion: VERSION,
+        target: TARGET,
+        cacheRoot: fixture.cacheRoot,
+      }),
+    ).toBeNull();
+
+    // Restoring only the path proves the path is what declined it: the same record, the same
+    // stat values, now naming this install, is accepted.
+    identity.sourcePath = fsSync.realpathSync.native(sibling.binaryPath);
+    await fs.writeFile(identityPath, JSON.stringify(identity));
+    expect(
+      lookupNativeRuntimeCacheEntry({
+        sourcePath: sibling.binaryPath,
+        packageVersion: VERSION,
+        target: TARGET,
+        cacheRoot: fixture.cacheRoot,
+      }),
+    ).not.toBeNull();
+  });
+
+  it("declines a record written by a runtime that cannot load it here", async () => {
+    const fixture = await makeFixture();
+    const populated = prepare(fixture);
+    if (populated.status === "unavailable") throw new Error(populated.error.message);
+    recordLoad(populated);
+
+    const identityPath = path.join(path.dirname(populated.loadedPath), "identity.json");
+    const identity = JSON.parse(await fs.readFile(identityPath, "utf8")) as { runtime: { abi: string } };
+    expect(identity.runtime.abi).toBe(process.versions.modules);
+
+    // A major Node upgrade changes the addon ABI: the bytes are untouched, every stat still
+    // matches, and the file no longer loads. Reporting it as available would stamp an index as
+    // natively built when the build actually fell back.
+    identity.runtime.abi = `${Number(process.versions.modules) + 1}`;
+    await fs.writeFile(identityPath, JSON.stringify(identity));
+
+    expect(
+      lookupNativeRuntimeCacheEntry({
+        sourcePath: fixture.binaryPath,
+        packageVersion: VERSION,
+        target: TARGET,
+        cacheRoot: fixture.cacheRoot,
+      }),
+    ).toBeNull();
+
+    const rebuilt = prepare(fixture);
+    if (rebuilt.status === "unavailable") throw new Error(rebuilt.error.message);
+    expect(rebuilt.verified).toBe(true);
+  });
+
   it("keeps working for an entry written before identity records existed", async () => {
     const fixture = await makeFixture();
     const populated = prepare(fixture);
@@ -234,6 +315,8 @@ describe("native runtime cache identity", () => {
 });
 
 describe("native cache pruning", () => {
+  const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
   async function fixtureAtVersion(version: string, bytes: string, cacheRoot: string): Promise<Fixture> {
     const fixture = await makeFixture(bytes);
     await fs.writeFile(
@@ -243,13 +326,14 @@ describe("native cache pruning", () => {
     return { ...fixture, cacheRoot };
   }
 
-  function prepareAt(fixture: Fixture, version: string): ReturnType<typeof prepareNativeRuntimeCache> {
+  function prepareAt(fixture: Fixture, version: string, now?: number): ReturnType<typeof prepareNativeRuntimeCache> {
     return prepareNativeRuntimeCache({
       sourcePath: fixture.binaryPath,
       packageName: PACKAGE_NAME,
       packageVersion: version,
       target: TARGET,
       cacheRoot: fixture.cacheRoot,
+      ...(now === undefined ? {} : { now }),
     });
   }
 
@@ -257,29 +341,43 @@ describe("native cache pruning", () => {
     return fsSync.readdirSync(path.join(cacheRoot, TARGET)).sort();
   }
 
-  it("keeps only the version most recently installed", async () => {
+  it("keeps entries for other versions that are still in use", async () => {
     const shared = await makeFixture();
     const cacheRoot = shared.cacheRoot;
 
-    // Each install supersedes the one before it, so assert the directory after every step rather
-    // than only at the end: the guarantee is that the cache never accumulates, not that a final
-    // sweep tidies it.
-    const oldest = await fixtureAtVersion("1.9.0", "oldest-binary-contents", cacheRoot);
-    const first = prepareAt(oldest, "1.9.0");
-    if (first.status === "unavailable") throw new Error(first.error.message);
-    expect(entryNames(cacheRoot)).toEqual([path.basename(path.dirname(first.loadedPath))]);
-
-    const older = await fixtureAtVersion("1.9.1", "older-binary-contents", cacheRoot);
-    const second = prepareAt(older, "1.9.1");
-    if (second.status === "unavailable") throw new Error(second.error.message);
-    expect(entryNames(cacheRoot)).toEqual([path.basename(path.dirname(second.loadedPath))]);
+    // The cache root is per-user and shared by every project on the machine. Two projects pinned
+    // to different native versions must not delete each other's entry, which is what pruning by
+    // "not the version installing right now" would do on every run.
+    const other = await fixtureAtVersion("1.9.0", "other-binary-contents", cacheRoot);
+    const otherEntry = prepareAt(other, "1.9.0");
+    if (otherEntry.status === "unavailable") throw new Error(otherEntry.error.message);
 
     const current = await fixtureAtVersion(VERSION, "current-binary-contents", cacheRoot);
-    const third = prepareAt(current, VERSION);
-    if (third.status === "unavailable") throw new Error(third.error.message);
-    expect(entryNames(cacheRoot)).toEqual([path.basename(path.dirname(third.loadedPath))]);
-    // The survivor is the one just installed, and it is intact rather than merely present.
-    expect(fsSync.readFileSync(third.loadedPath, "utf8")).toBe("current-binary-contents");
+    const currentEntry = prepareAt(current, VERSION);
+    if (currentEntry.status === "unavailable") throw new Error(currentEntry.error.message);
+
+    expect(entryNames(cacheRoot)).toEqual(
+      [path.basename(path.dirname(otherEntry.loadedPath)), path.basename(path.dirname(currentEntry.loadedPath))].sort(),
+    );
+    expect(fsSync.readFileSync(otherEntry.loadedPath, "utf8")).toBe("other-binary-contents");
+  });
+
+  it("removes entries no project has used for a month", async () => {
+    const shared = await makeFixture();
+    const cacheRoot = shared.cacheRoot;
+
+    const abandoned = await fixtureAtVersion("1.9.0", "other-binary-contents", cacheRoot);
+    const abandonedEntry = prepareAt(abandoned, "1.9.0");
+    if (abandonedEntry.status === "unavailable") throw new Error(abandonedEntry.error.message);
+
+    const current = await fixtureAtVersion(VERSION, "current-binary-contents", cacheRoot);
+    // Install far enough in the future that the other entry is past its retention window. An
+    // entry in use is re-verified within a day, so age is what separates abandoned from active.
+    const currentEntry = prepareAt(current, VERSION, Date.now() + RETENTION_MS + 60_000);
+    if (currentEntry.status === "unavailable") throw new Error(currentEntry.error.message);
+
+    expect(entryNames(cacheRoot)).toEqual([path.basename(path.dirname(currentEntry.loadedPath))]);
+    expect(fsSync.readFileSync(currentEntry.loadedPath, "utf8")).toBe("current-binary-contents");
   });
 
   it("keeps entries it cannot identify and the one it just wrote", async () => {
@@ -295,17 +393,17 @@ describe("native cache pruning", () => {
     await fs.writeFile(path.join(partial, "manifest.json"), "{not json");
 
     const again = await fixtureAtVersion("2.0.0", "next-major-contents-x", fixture.cacheRoot);
-    const upgraded = prepareAt(again, "2.0.0");
+    const upgraded = prepareAt(again, "2.0.0", Date.now() + RETENTION_MS + 60_000);
     if (upgraded.status === "unavailable") throw new Error(upgraded.error.message);
 
     const remaining = entryNames(fixture.cacheRoot);
     expect(remaining).toContain("9.9.9-partial");
     expect(remaining).toContain(path.basename(path.dirname(upgraded.loadedPath)));
-    // The 1.9.3 entry had a readable manifest naming a superseded version, so it went.
+    // The 1.9.3 entry was datable and long unused, so it went.
     expect(remaining).not.toContain(path.basename(path.dirname(populated.loadedPath)));
   });
 
-  it("does not prune on a fast-path hit, which supersedes nothing", async () => {
+  it("does not prune on a fast-path hit, which installs nothing", async () => {
     const fixture = await makeFixture();
     const populated = prepare(fixture);
     if (populated.status === "unavailable") throw new Error(populated.error.message);
@@ -316,13 +414,19 @@ describe("native cache pruning", () => {
     await fs.mkdir(stale, { recursive: true });
     await fs.writeFile(
       path.join(stale, "manifest.json"),
-      JSON.stringify({ schemaVersion: 1, packageName: PACKAGE_NAME, packageVersion: "1.0.0" }),
+      JSON.stringify({
+        schemaVersion: 1,
+        packageName: PACKAGE_NAME,
+        packageVersion: "1.0.0",
+        cachedAt: "2020-01-01T00:00:00.000Z",
+      }),
     );
 
     const reused = prepare(fixture);
     if (reused.status === "unavailable") throw new Error(reused.error.message);
     expect(reused.verified).toBe(false);
-    // Nothing was installed, so nothing was superseded and the warm run did no directory work.
+    // Nothing was installed, so the warm run did no directory work even though the stale entry
+    // is far past its retention window.
     expect(entryNames(fixture.cacheRoot)).toContain("1.0.0-stale");
   });
 });

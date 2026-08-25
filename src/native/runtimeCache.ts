@@ -20,6 +20,20 @@ const IDENTITY_VERSION = 1;
  */
 const IDENTITY_REVERIFY_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * How long an entry for another package version is kept before it is treated as abandoned.
+ *
+ * The cache root is per-user and shared by every project on the machine, so "not the version I
+ * am installing" does not mean "nobody's". Deleting on that basis alone makes two projects
+ * pinned to different native versions delete each other's entry on every run, each re-copying
+ * 29 MB and never reaching the fast path - worse than the unbounded growth it set out to fix.
+ *
+ * An entry in use is re-verified at least every IDENTITY_REVERIFY_INTERVAL_MS of use, and that
+ * refreshes its timestamp, so an entry older than this window is one no project has run in a
+ * month. That is the signal, rather than which version happens to be installing right now.
+ */
+const ABANDONED_ENTRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
 export type NativeCacheManifestV1 = {
   schemaVersion: 1;
   packageName: string;
@@ -52,6 +66,13 @@ export type NativeCacheIdentityV1 = {
   sourcePath: string;
   loadedPath: string;
   verifiedAt: string;
+  /**
+   * The runtime that proved this file loadable. The stat fields say the bytes are unchanged;
+   * they say nothing about whether this Node can still load them. A major Node upgrade changes
+   * the ABI, so the same bytes stop loading while every other check still matches, and the fast
+   * path would report an addon as available that the build then falls back away from.
+   */
+  runtime: { abi: string; platform: string; arch: string };
   /**
    * Recorded so a cache-hit command can answer "which languages does the addon support"
    * without loading it. Present only once a load has succeeded for this exact file.
@@ -302,6 +323,10 @@ export type NativeCacheLookupHit = {
   identity: NativeCacheIdentityV1;
 };
 
+function currentRuntimeStamp(): NativeCacheIdentityV1["runtime"] {
+  return { abi: process.versions.modules, platform: process.platform, arch: process.arch };
+}
+
 function identityFilePath(entryPath: string): string {
   return path.join(entryPath, IDENTITY_FILE_NAME);
 }
@@ -334,6 +359,11 @@ function readCacheIdentity(entryPath: string): NativeCacheIdentityV1 | null {
   if (!origin || typeof origin !== "object" || origin.mode !== "cache" || typeof origin.packageName !== "string") {
     return null;
   }
+  const runtime = candidate.runtime;
+  if (!runtime || typeof runtime !== "object") return null;
+  if (typeof runtime.abi !== "string" || typeof runtime.platform !== "string" || typeof runtime.arch !== "string") {
+    return null;
+  }
   return candidate as NativeCacheIdentityV1;
 }
 
@@ -363,8 +393,11 @@ export function lookupNativeRuntimeCacheEntry(request: NativeCacheLookupRequest)
     const cacheRoot = request.cacheRoot ?? findProductionCacheRoot();
     if (!cacheRoot) return null;
 
-    const sourceStats = statOrNull(fs.realpathSync.native(request.sourcePath));
+    const sourceRealPath = fs.realpathSync.native(request.sourcePath);
+    const sourceStats = statOrNull(sourceRealPath);
     if (!sourceStats) return null;
+
+    const runtime = currentRuntimeStamp();
 
     const targetPath = path.join(path.resolve(cacheRoot), request.target);
     const prefix = `${request.packageVersion}-`;
@@ -381,7 +414,21 @@ export function lookupNativeRuntimeCacheEntry(request: NativeCacheLookupRequest)
       const entryPath = path.join(targetPath, entryName);
       const identity = readCacheIdentity(entryPath);
       if (!identity) continue;
+      // Same version, same bytes, different install. The cache root is shared by every project
+      // on the machine, and npm can produce byte-identical files with matching mtimes, so size
+      // and mtime alone can match another project's record - whose sourcePath would then be
+      // replayed into this build's binding origin and change its runtime fingerprint.
+      if (identity.sourcePath !== sourceRealPath) continue;
       if (identity.sourceSize !== sourceStats.size || identity.sourceMtimeMs !== sourceStats.mtimeMs) continue;
+      // Recorded by a runtime that could load the file. A different ABI cannot, and claiming
+      // otherwise would report native as available for a build that falls back away from it.
+      if (
+        identity.runtime.abi !== runtime.abi ||
+        identity.runtime.platform !== runtime.platform ||
+        identity.runtime.arch !== runtime.arch
+      ) {
+        continue;
+      }
 
       const cachedStats = statOrNull(identity.loadedPath);
       if (!cachedStats) continue;
@@ -408,7 +455,10 @@ export function lookupNativeRuntimeCacheEntry(request: NativeCacheLookupRequest)
  * `manifest.json` beside it.
  */
 export function recordNativeRuntimeCacheIdentity(
-  identity: Omit<NativeCacheIdentityV1, "version" | "sourceSize" | "sourceMtimeMs" | "cachedSize" | "cachedMtimeMs">,
+  identity: Omit<
+    NativeCacheIdentityV1,
+    "version" | "sourceSize" | "sourceMtimeMs" | "cachedSize" | "cachedMtimeMs" | "runtime"
+  >,
 ): void {
   try {
     const sourceStats = statOrNull(identity.sourcePath);
@@ -422,6 +472,7 @@ export function recordNativeRuntimeCacheIdentity(
       sourceMtimeMs: sourceStats.mtimeMs,
       cachedSize: cachedStats.size,
       cachedMtimeMs: cachedStats.mtimeMs,
+      runtime: currentRuntimeStamp(),
       ...identity,
     };
 
@@ -444,38 +495,65 @@ export function recordNativeRuntimeCacheIdentity(
   }
 }
 
-function readManifestVersion(entryPath: string): string | null {
+/**
+ * When an entry was last known to be in use, and which version it holds.
+ *
+ * `identity.json` is refreshed whenever a process re-verifies the entry, so it is the freshest
+ * signal; `manifest.json`'s `cachedAt` covers an entry that has never been loaded through the
+ * fast path. An entry that yields neither is left alone rather than guessed about.
+ */
+function readEntrySummary(entryPath: string): { packageVersion: string; lastUsedMs: number } | null {
+  let packageVersion: string | null = null;
+  let cachedAtMs: number | null = null;
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(path.join(entryPath, "manifest.json"), "utf8"));
-    if (!parsed || typeof parsed !== "object") return null;
-    const version = (parsed as Partial<NativeCacheManifestV1>).packageVersion;
-    return typeof version === "string" && version ? version : null;
+    if (parsed && typeof parsed === "object") {
+      const manifest = parsed as Partial<NativeCacheManifestV1>;
+      if (typeof manifest.packageVersion === "string" && manifest.packageVersion) {
+        packageVersion = manifest.packageVersion;
+      }
+      const cachedAt = typeof manifest.cachedAt === "string" ? Date.parse(manifest.cachedAt) : Number.NaN;
+      if (Number.isFinite(cachedAt)) cachedAtMs = cachedAt;
+    }
   } catch {
+    // Missing or malformed: indistinguishable from an entry another process is still writing.
     return null;
   }
+  if (!packageVersion) return null;
+
+  const identity = readCacheIdentity(entryPath);
+  const verifiedAt = identity ? Date.parse(identity.verifiedAt) : Number.NaN;
+  const lastUsedMs = Number.isFinite(verifiedAt) ? verifiedAt : cachedAtMs;
+  if (lastUsedMs === null) return null;
+  return { packageVersion, lastUsedMs };
 }
 
 /**
- * Delete entries for other package versions once the current one is in place.
+ * Delete entries that no project has used in a long time.
  *
  * The cache only ever grew: every upgrade left roughly 29 MB behind, and a machine that had
  * tracked a few releases carried well over a hundred megabytes of addons nothing would load
  * again. Keeping the directory small also keeps it warm, which is what the stat-only fast path
  * above depends on.
  *
+ * Retention is by age rather than by version, because the cache root is per-user and shared by
+ * every project on the machine. Removing "every version that is not the one installing" would
+ * make two projects pinned to different native versions delete each other's entry on every run.
+ *
  * Best effort throughout, and deliberately conservative:
- * - the entry just produced is never a candidate;
- * - an entry whose manifest is missing or unreadable is left alone, because that is what a
- *   concurrent population in progress looks like;
+ * - the entry just produced is never a candidate, nor is any entry for its version;
+ * - an entry whose manifest is missing, unreadable, or undated is left alone, because that is
+ *   what a concurrent population in progress looks like;
  * - Windows holds a lock on a loaded DLL, so removing an entry another process is running fails
  *   with EBUSY or EPERM. That is the mechanism the "never deletes an entry in use" guarantee
  *   rests on, so those failures are expected rather than exceptional and are simply skipped.
  */
-function pruneSupersededEntries(
+function pruneAbandonedEntries(
   targetPath: string,
   cacheRoot: string,
   keepEntryPath: string,
   keepVersion: string,
+  now: number,
 ): void {
   let entryNames: string[];
   try {
@@ -493,14 +571,13 @@ function pruneSupersededEntries(
     } catch {
       continue;
     }
-    const version = readManifestVersion(entryPath);
-    // An unreadable manifest is indistinguishable from a half-written entry, and the current
-    // version is the one being kept.
-    if (!version || version === keepVersion) continue;
+    const summary = readEntrySummary(entryPath);
+    if (!summary || summary.packageVersion === keepVersion) continue;
+    if (now - summary.lastUsedMs < ABANDONED_ENTRY_RETENTION_MS) continue;
     try {
       fs.rmSync(entryPath, { recursive: true, force: true });
     } catch {
-      // In use, or not ours to remove. Either way the next upgrade tries again.
+      // In use, or not ours to remove. Either way the next install tries again.
     }
   }
 }
@@ -570,8 +647,8 @@ export function prepareNativeRuntimeCache(request: PrepareNativeRuntimeCacheRequ
     });
 
     // Only on the verified path. A fast-path hit means nothing new arrived, so there is nothing
-    // to supersede, and the warm run stays free of extra directory work.
-    pruneSupersededEntries(targetPath, cacheRoot, entryPath, request.packageVersion);
+    // to clean up, and the warm run stays free of extra directory work.
+    pruneAbandonedEntries(targetPath, cacheRoot, entryPath, request.packageVersion, request.now ?? Date.now());
 
     return {
       status,

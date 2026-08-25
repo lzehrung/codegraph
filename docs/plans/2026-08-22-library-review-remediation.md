@@ -322,11 +322,40 @@ was leaving real work single-threaded. Two callers - the agent session and `code
 were separately forcing the pool on from the project's total file count and would have overridden
 this on every small incremental update; both now leave the decision to the build.
 
-**One P4 sub-item was declined rather than left unticked.** The plan folds F6's filesystem probing
-into P4, on the reasoning that a valid cached entry makes the workspace probe and the
-platform-package metadata reads unnecessary. It does not: the fast path needs the source path and
-package version to locate the entry at all, and those reads are what produce them. Recorded as
-declined with the reasoning, in the native plan.
+**Two P4 items came out differently from the plan.** The first was declined rather than left
+unticked: the plan folds F6's filesystem probing into P4, on the reasoning that a valid cached
+entry makes the workspace probe and the platform-package metadata reads unnecessary. It does not -
+the fast path needs the source path and package version to locate the entry at all, and those
+reads are what produce them.
+
+The second is pruning itself. "Delete sibling entries whose version differs from the current one"
+is right for one project and wrong on a real machine: the cache root is per-user and shared, so
+two projects pinned to different native versions would delete each other's entry on every run,
+each re-copying 29 MB and never reaching the fast path - worse than the growth it set out to fix.
+Entries are removed once no project has used them for 30 days instead. An entry in use is
+re-verified at least daily and that refreshes its timestamp, so age separates abandoned from
+active where version does not. Both are recorded against their checkboxes in the native plan.
+
+**A review pass before opening the PR found three defects, all in the P0/P1 fast path**, and they
+are worth recording because they share a cause: a stat-only match is a weaker claim than the
+hashing it replaces, and each was a place where the claim was allowed to carry more than it had
+proven.
+
+- The lookup matched a record on package version, size, and mtime but never on _which install_
+  it described. The cache root is shared, and npm can produce byte-identical files with matching
+  mtimes, so a second project on the same version could be handed the first project's source
+  path - which travels into the binding origin and changes the runtime fingerprint, invalidating
+  its index cache on every run.
+- Nothing tied a record to the runtime that proved the file loadable. A major Node upgrade
+  changes the addon ABI: the bytes are untouched, every stat still matches, and the file no
+  longer loads. The fingerprint would have reported native as available for a build that then
+  fell back, stamping a degraded index as a native one.
+- Pruning, as above.
+
+The first two are fixed by recording the resolved source path and the runtime stamp
+(`process.versions.modules`, platform, arch) and requiring both to match, and by dropping any
+fast-path memo the moment a real load happens so later queries are answered from the binding
+rather than from a claim about it. Each guard has a test that fails when the guard is removed.
 
 ### Measured result
 

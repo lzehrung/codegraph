@@ -24,8 +24,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
   workers at all, and a small incremental update starts at most one per file. The auto threshold
   moved from 250 files to 32 on measurement, so incremental builds between those sizes are now
   parallelized. `--workers` and an explicit `useNativeWorkers` still override the decision.
-- Installing a new version of the native addon removes the cached copies of superseded versions,
-  which previously accumulated at roughly 29 MB each.
+- Installing a native addon now clears cached copies that no project has used in a month, which
+  previously accumulated at roughly 29 MB per version. Retention is by age rather than by
+  version because the cache is shared across projects on a machine: two projects pinned to
+  different native versions both keep their entry.
 
 ### Removed
 

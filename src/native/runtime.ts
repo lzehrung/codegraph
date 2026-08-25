@@ -61,6 +61,10 @@ export function normalizeNativeRuntimeMode(mode?: NativeRuntimeMode): NativeRunt
 
 export function loadBinding(): NativeBindingState {
   if (bindingState) return bindingState;
+  // Anything answered from a recorded identity was a claim about a binding this process had not
+  // loaded. From here the real one is available, so drop those memos and let every later query
+  // be answered from it, whether the load succeeded or not.
+  cachedRuntimeFingerprints.clear();
   const loaded = loadNativeBinding<NativeBinding>({
     packageName: "@lzehrung/codegraph-native",
     localPackageRoot: localNativePackageRoot,
@@ -249,14 +253,18 @@ export function getNativeRuntimeFingerprint(mode?: NativeRuntimeMode, env: NodeJ
     return fingerprint;
   }
 
-  const cachedKey = `${requestedMode}:${envDisabled}`;
-  const memoized = cachedRuntimeFingerprints.get(cachedKey);
-  if (memoized) return memoized;
-  const cachedIdentity = bindingState ? undefined : resolveCachedRuntimeIdentity();
-  if (cachedIdentity) {
-    const fingerprint = serializeNativeRuntimeFingerprint(requestedMode, envDisabled, cachedIdentity);
-    cachedRuntimeFingerprints.set(cachedKey, fingerprint);
-    return fingerprint;
+  // Only worth asking before a binding exists. Once one does, the real state is both cheaper to
+  // read and authoritative, and loadBinding has already dropped anything memoized here.
+  if (!bindingState) {
+    const cachedKey = `${requestedMode}:${envDisabled}`;
+    const memoized = cachedRuntimeFingerprints.get(cachedKey);
+    if (memoized) return memoized;
+    const cachedIdentity = resolveCachedRuntimeIdentity();
+    if (cachedIdentity) {
+      const fingerprint = serializeNativeRuntimeFingerprint(requestedMode, envDisabled, cachedIdentity);
+      cachedRuntimeFingerprints.set(cachedKey, fingerprint);
+      return fingerprint;
+    }
   }
 
   const state = loadBinding();
