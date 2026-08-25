@@ -180,8 +180,12 @@ describe("agent explore", () => {
     const root = await mkExploreRepo();
     const first = await exploreCodegraph({ root, query: "src/auth.ts" });
     const second = await exploreCodegraph({ root, query: "src/auth.ts" });
-
     expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+  });
+  it("releases the query-index sidecar after a one-shot exploration", async () => {
+    const root = await mkExploreRepo();
+    await exploreCodegraph({ root, query: "src/auth.ts" });
+    await expect(fs.rm(root, { recursive: true, force: true, maxRetries: 0 })).resolves.toBeUndefined();
   });
 
   it("attaches the live file view for exact indexed project paths containing spaces in library and CLI explore", async () => {
@@ -870,6 +874,8 @@ describe("agent explore", () => {
     expect(readArray(response.packets, "packets")).toHaveLength(1);
     expect(readArray(response.blastRadius, "blastRadius")).toHaveLength(1);
     expect(response.freshness).toBeTypeOf("object");
+    handlers.dispose();
+    await expect(fs.rm(root, { recursive: true, force: true, maxRetries: 0 })).resolves.toBeUndefined();
   });
   it("pins omission counts at and just past the limit for candidate tests and blast radius", async () => {
     const root = await mkExploreRepo();

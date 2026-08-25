@@ -473,7 +473,10 @@ const refs = await handlers.refs({ handle: search.results[0]!.handle });
 const rows = await handlers.query_sqlite({ query: "select path from files", limit: 5 });
 console.log(search.freshness.state);
 console.log(packet.kind, refs.references, rows.rows, rows.freshness.state);
+handlers.dispose();
 ```
+
+Call `handlers.dispose()` when the host stops using a handler set. It releases the session query-index database and cached analysis resources.
 
 `serveCodegraphMcp()` (from `@lzehrung/codegraph/mcp`) starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. MCP file and artifact paths are confined after realpath resolution.
 
