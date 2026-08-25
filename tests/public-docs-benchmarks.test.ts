@@ -22,6 +22,7 @@ import {
   runCli as runSummarizerCli,
   summarizeResults,
   validateResults,
+  validateScenarioFile,
 } from "../scripts/benchmarks/summarize-results-lib.mjs";
 
 const rootDir = path.resolve(import.meta.dirname, "..");
@@ -344,8 +345,8 @@ describe("public documentation benchmark scenarios", () => {
       expect(Object.keys(scenario.variants)).toEqual(["baseline", "codegraph", "warm-cli", "warm-mcp"]);
       expect(scenario.variants.baseline.length).toBeGreaterThan(0);
       expect(scenario.variants.codegraph.length).toBeGreaterThan(0);
-      expect(scenario.variants["warm-cli"]?.length).toBe(scenario.variants.codegraph.length);
-      expect(scenario.variants["warm-mcp"]?.length).toBe(scenario.variants.codegraph.length);
+      expect(scenario.variants["warm-cli"]).toEqual(scenario.variants.codegraph);
+      expect(scenario.variants["warm-mcp"]).toEqual(scenario.variants.codegraph);
       expect(scenario.variants.baseline.every((step) => step.type === "read")).toBe(true);
       for (const variant of ["codegraph", "warm-cli", "warm-mcp"] as const) {
         expect(
@@ -419,6 +420,17 @@ describe("public documentation benchmark scenarios", () => {
       testCase.mutate(document);
       expect(() => validateScenarioDocument(document, { rootDir: tempRoot }), testCase.name).toThrow();
     }
+  });
+
+  it("rejects warm benchmark variants that differ from the cold query steps", () => {
+    const tempRoot = createTempRoot();
+    const document = addWarmVariants(createScenarioFixture(tempRoot));
+    const warmCliSteps = document.scenarios[0].variants["warm-cli"];
+    if (!warmCliSteps) throw new Error("fixture is missing warm-cli steps");
+    warmCliSteps[0].query = "Use a different query.";
+
+    expect(() => validateScenarioDocument(document, { rootDir: tempRoot })).toThrow(/warm-cli.*codegraph/);
+    expect(() => validateScenarioFile(document)).toThrow(/warm-cli.*codegraph/);
   });
 
   it("strictly validates reviewed relationship fields and confines every declared path", () => {
@@ -1332,6 +1344,19 @@ describe("public documentation benchmark summarizer contracts", () => {
         testCase.expected,
       );
     }
+  });
+
+  it("requires every run for present optional variants without scenario metadata", () => {
+    const runs: BenchmarkRun[] = [];
+    for (const variant of ["baseline", "codegraph"] as const) {
+      for (let run = 1; run <= 3; run += 1) {
+        runs.push(makeRun({ variant, run }));
+      }
+    }
+    runs.push(makeRun({ variant: "warm-cli", run: 1 }));
+
+    const results = makeResults(runs, { runsPerVariant: 3 });
+    expect(() => validateResults(results)).toThrow(/missing required run tuple alpha\/warm-cli\/2/);
   });
 
   it("binds declared step counts while preserving output-derived Codegraph file reads", () => {

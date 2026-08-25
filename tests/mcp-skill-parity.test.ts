@@ -7,6 +7,19 @@ import { listCodegraphMcpTools } from "../src/mcp/tools.js";
 const LEGACY_ALIAS_NAMES = new Set(["callers", "callees", "supertypes", "subtypes", "deps", "rdeps"]);
 const rootDir = process.cwd();
 
+function listedCliCommands(document: string): Set<string> {
+  const commands = new Set<string>();
+  for (const match of document.matchAll(/`codegraph\s+([a-z][a-z-]*)(?=\s|`|$)/g)) {
+    commands.add(match[1]!);
+  }
+  for (const block of document.matchAll(/^```(?:bash|sh|shell)?\r?\n([\s\S]*?)^```$/gm)) {
+    for (const match of block[1]!.matchAll(/^\s*codegraph\s+([a-z][a-z-]*)(?=\s|$)/gm)) {
+      commands.add(match[1]!);
+    }
+  }
+  return commands;
+}
+
 describe("MCP / SKILL inventory parity", () => {
   it("lists every non-legacy MCP_TOOLS name in the SKILL inventory", async () => {
     const skillPath = path.join(process.cwd(), "codegraph-skill", "codegraph", "SKILL.md");
@@ -26,17 +39,20 @@ describe("MCP / SKILL inventory parity", () => {
     }
   });
 
-  it("documents every CLI command in the CLI reference and skill", async () => {
+  it("documents every CLI command in exact CLI examples in the reference and skill", async () => {
     const [cli, skill] = await Promise.all([
       fsp.readFile(path.join(rootDir, "docs", "cli.md"), "utf8"),
       fsp.readFile(path.join(rootDir, "codegraph-skill", "codegraph", "SKILL.md"), "utf8"),
     ]);
+    const cliCommands = listedCliCommands(cli);
+    const skillCommands = listedCliCommands(skill);
 
     for (const command of CLI_COMMAND_CATALOG) {
-      expect(cli.includes(command.name), `${command.name} missing from docs/cli.md`).toBe(true);
-      expect(skill.includes(command.name), `${command.name} missing from codegraph-skill/codegraph/SKILL.md`).toBe(
-        true,
-      );
+      expect(cliCommands.has(command.name), `${command.name} missing from docs/cli.md CLI examples`).toBe(true);
+      expect(
+        skillCommands.has(command.name),
+        `${command.name} missing from codegraph-skill/codegraph/SKILL.md CLI examples`,
+      ).toBe(true);
     }
   });
 });

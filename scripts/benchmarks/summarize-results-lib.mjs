@@ -253,6 +253,20 @@ export function validateScenarioFile(value) {
         else validateCodegraphStep(step, `${location}.variants.${variant}[${stepIndex}]`);
       });
     }
+    for (const variant of ["warm-cli", "warm-mcp"]) {
+      if (!Object.hasOwn(scenario.variants, variant)) continue;
+      const warmSteps = scenario.variants[variant];
+      const coldSteps = scenario.variants.codegraph;
+      const matchesColdSteps =
+        warmSteps.length === coldSteps.length &&
+        warmSteps.every((step, stepIndex) => {
+          const coldStep = coldSteps[stepIndex];
+          return coldStep !== undefined && step.command === coldStep.command && step.query === coldStep.query;
+        });
+      if (!matchesColdSteps) {
+        fail(`${location}.variants.${variant}`, `must exactly match ${location}.variants.codegraph`);
+      }
+    }
     validateReviewedScenario(scenario, location);
   });
 
@@ -570,7 +584,10 @@ export function validateResults(value, options = {}) {
   for (const scenarioId of value.scenarioIds) {
     const expectedVariants = scenarioLookup
       ? Object.keys(scenarioLookup.get(scenarioId).variantStepCounts)
-      : REQUIRED_VARIANT_KEYS;
+      : VARIANT_KEYS.filter(
+          (variant) =>
+            REQUIRED_VARIANT_KEYS.includes(variant) || runNumbersByScenarioVariant.has(`${scenarioId}\0${variant}`),
+        );
     for (const variant of expectedVariants) {
       const scenarioVariantKey = `${scenarioId}\0${variant}`;
       const runNumbers = (runNumbersByScenarioVariant.get(scenarioVariantKey) ?? []).sort(

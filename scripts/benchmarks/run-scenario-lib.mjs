@@ -188,6 +188,18 @@ function validateVariants(variants, label) {
       validateStep(steps[index], variant, `${label}.${variant}[${index}]`);
     }
   }
+  for (const variant of ["warm-cli", "warm-mcp"]) {
+    if (!Object.hasOwn(variants, variant)) continue;
+    const warmSteps = variants[variant];
+    const coldSteps = variants.codegraph;
+    const matchesColdSteps =
+      warmSteps.length === coldSteps.length &&
+      warmSteps.every((step, index) => {
+        const coldStep = coldSteps[index];
+        return coldStep !== undefined && step.command === coldStep.command && step.query === coldStep.query;
+      });
+    if (!matchesColdSteps) fail(`${label}.${variant} must exactly match ${label}.codegraph.`);
+  }
 }
 
 function validateRepoFile(repoAbsolute, repoRealpath, relativePath, label, fsImpl) {

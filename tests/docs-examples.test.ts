@@ -5,7 +5,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const rootDir = path.resolve(import.meta.dirname, "..");
-const documentedFiles = ["README.md", "docs/library-api.md", "docs/agent-workflows.md"] as const;
+const documentedFiles = [
+  "README.md",
+  "docs/library-api.md",
+  "docs/agent-workflows.md",
+  "packages/codegraph-core/README.md",
+] as const;
 const typescriptPath = path.join(rootDir, "node_modules", "typescript", "bin", "tsc");
 
 type DocumentedExample = {

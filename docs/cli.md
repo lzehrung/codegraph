@@ -251,6 +251,9 @@ codegraph packet get src/cli.ts
 codegraph file src/cli.ts
 codegraph file src/cli.ts --offset 201 --limit 100 --max-bytes 40000
 
+# Inspect one indexed module
+codegraph dumpmod src/cli.ts --json
+
 # Add direct importers, imports, and symbols only when needed
 codegraph file src/cli.ts --include-graph-context --json
 
