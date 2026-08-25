@@ -19,6 +19,7 @@ import {
   SQL_HELP_TEXT,
 } from "../src/cli/help.js";
 import { handleImpactCommand, type ImpactCommandContext } from "../src/cli/impact.js";
+import { NATIVE_WORKER_AUTO_FILE_THRESHOLD } from "../src/indexer/build-workers.js";
 import { handleIndexCommand, type IndexCommandContext } from "../src/cli/index.js";
 import { handleHotspotsCommand, handleInspectCommand, type InspectCommandContext } from "../src/cli/inspect.js";
 import {
@@ -1879,7 +1880,7 @@ describe("CLI command modules", () => {
     }
   });
 
-  test("inspect auto-enables native workers at the agent-session file threshold", async () => {
+  test("inspect leaves the worker decision to the build rather than forcing it", async () => {
     const emptyIndex: ProjectIndex = {
       graph: { nodes: new Set<string>(), edges: [] },
       modules: new Map(),
@@ -1888,15 +1889,18 @@ describe("CLI command modules", () => {
       scopeCache: new Map(),
     };
     const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockResolvedValue(emptyIndex);
-    const largeFiles = Array.from({ length: 250 }, (_, index) => `file-${index}.ts`);
-    const smallFiles = largeFiles.slice(1);
+    // Well above and well below the pool's auto threshold. Neither should decide anything here:
+    // a session sees the project's total file count, while the pool is worth creating or not
+    // based on how many files a given build will parse, which only the build knows.
+    const largeFiles = Array.from({ length: NATIVE_WORKER_AUTO_FILE_THRESHOLD * 8 }, (_, i) => `file-${i}.ts`);
+    const smallFiles = largeFiles.slice(0, 2);
 
     try {
       await handleInspectCommand(createInspectContext({ resolveFilesFromRoots: async () => smallFiles }));
       await handleInspectCommand(createInspectContext({ resolveFilesFromRoots: async () => largeFiles }));
 
       expect(buildSpy.mock.calls[0]?.[1]?.useNativeWorkers).toBeUndefined();
-      expect(buildSpy.mock.calls[1]?.[1]?.useNativeWorkers).toBe(true);
+      expect(buildSpy.mock.calls[1]?.[1]?.useNativeWorkers).toBeUndefined();
     } finally {
       buildSpy.mockRestore();
     }

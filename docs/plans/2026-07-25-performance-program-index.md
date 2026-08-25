@@ -70,12 +70,48 @@ It avoids loading and hashing a 29 MB addon for commands that never parse a file
 
 Measured on this repository, warm, after the program:
 
-- [ ] `codegraph --version` at or under 100 ms (from 299 ms).
-- [ ] Warm `orient --budget small` at or under 450 ms (from 1256 ms).
-- [ ] Warm `search --limit 3` at or under 700 ms (from 2664 ms).
+- [x] `codegraph --version` at or under 100 ms (from 299 ms). Measured 83 ms - see the
+      re-measurement below for the conditions.
+- [ ] Warm `orient --budget small` at or under 450 ms (from 1256 ms). **Not met**: measured
+      2530 ms.
+- [ ] Warm `search --limit 3` at or under 700 ms (from 2664 ms). **Not met**: measured 4852 ms.
 - [x] Redundant Git tree diffs and per-deleted-file subprocesses are removed.
-- [ ] First-touch cold `import` of the CLI entry at or under 1500 ms (from 6119 ms).
+- [ ] First-touch cold `import` of the CLI entry at or under 1500 ms (from 6119 ms). Not
+      re-measured.
 - [ ] `npm run check` green, with no reduction in output content for any command.
+
+### Re-measurement after the native runtime startup work
+
+Taken 2026-08-25 on Linux x64, Node v22.22.2, 4 cores, 811 indexed files, warm disk cache, from
+a workspace build. Five runs each after one untimed warm-up; the figure is the median.
+
+| Command                        | Original | Now  | Target | Met |
+| ------------------------------ | -------- | ---- | ------ | --- |
+| `--version`                    | 299      | 83   | 100    | yes |
+| `orient --budget small --json` | 1256     | 2530 | 450    | no  |
+| `search <symbol> --limit 3`    | 2664     | 4852 | 700    | no  |
+
+**These are a new baseline, not a before-and-after.** Three things differ from the original
+measurement and each moves these numbers on its own: a different OS and machine (Windows 11 on
+Node v24.15.0 originally), a different core count, and a repository that has grown from 668
+indexed files to 811. Nothing here should be read as a regression caused by the program, and
+nothing here should be read as evidence the program helped either.
+
+The one number that is close to comparable is `--version`, which does almost no work beyond
+process start and the module graph. It is under target.
+
+`orient` and `search` are both well over target and both slower than the original figure. Which
+part of that is the machine and which is real is not established, and guessing would repeat the
+mistake recorded in the F10 correction: measuring two configurations that were not what they
+were labelled. Establishing it needs a profile on the current machine, which belongs to its own
+change rather than being asserted here.
+
+Priorities P0, P1, and P4 of the native runtime startup plan save work that only exists on the
+Windows runtime cache path: the addon load inside the fingerprint, the two 29 MB SHA-256 passes,
+and the entries that accumulated across versions. On Linux the addon is resolved directly with
+no cache, so those savings are structurally invisible in the table above and cannot be
+demonstrated from this machine at all. P2 and P3 are platform-independent and were each measured
+where they apply - see their sections in the native plan.
 
 ## Non-goals
 

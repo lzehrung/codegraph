@@ -99,6 +99,8 @@ import { finalizeProjectIndex } from "./finalize.js";
 import { toManifestFileEntry, writeIndexManifestSnapshot } from "./build-manifest.js";
 import {
   prepareFileContextForBuild,
+  countNativeWorkerEligibleFiles,
+  emptyWorkerPoolSetup,
   setupWorkerPool,
   teardownWorkerPool,
   type WorkerPoolSetupResult,
@@ -771,7 +773,51 @@ async function buildIndexFromFileListShared(
     return !(matchesGitSig || cachedEdgesEntry.sig === sigInfo.sig);
   };
   const jsonDependencies = new Map<string, string>();
-  const workerSetup = await setupWorkerPool(opts, normalizedFiles.length);
+  type ModuleCacheProbe = { sigInfo: FileSignature; mod: ModuleIndex | null } | { error: unknown };
+  // Cache lookup determines the work a full build will actually parse. Complete that cheap phase
+  // before starting Piscina, so a warm build does not bootstrap workers and partial hits bound
+  // the pool to real parse misses rather than the input file list.
+  const cacheProbes = new Map<string, ModuleCacheProbe>(
+    await mapLimit(normalizedFiles, conc, async (file) => {
+      try {
+        let sigInfo = fileSignatures.get(file);
+        if (!sigInfo) {
+          const gitSig = gitSigMap.get(file);
+          const source = confinedRoot ? await readConfinedUtf8File(confinedRoot, projectRoot, file) : undefined;
+          if (source !== undefined) {
+            trustedSources?.set(file, source);
+            sigInfo = fileSignatureFromSource(source, gitSig);
+          } else {
+            sigInfo = await fileSignature(file, opts?.cacheStrict, gitSig, {
+              forceContentHash: cacheEnabled && !gitSig,
+            });
+          }
+          fileSignatures.set(file, sigInfo);
+        }
+        manifestEntriesForIndex.set(file, toProjectIndexManifestEntry(sigInfo));
+        if (manifestEntries) {
+          const initialManifestEntry = toManifestFileEntry({ ...sigInfo, edges: [] });
+          if (initialManifestEntry) manifestEntries.set(file, initialManifestEntry);
+        }
+        const cacheSig = cacheEnabled
+          ? await moduleCacheSignatureForFile(file, sigInfo, opts, resolverEnvironmentFingerprint)
+          : sigInfo.cacheSig;
+        const canReuseModuleCache =
+          cacheEnabled && (!graphOptions.resolveNodeModules || resolverEnvironmentFingerprint !== null);
+        const mod = canReuseModuleCache ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
+        return [file, { sigInfo, mod }] as const;
+      } catch (error) {
+        return [file, { error }] as const;
+      }
+    }),
+  );
+  const cacheMisses = Array.from(cacheProbes, ([file, probe]) =>
+    !("error" in probe) && !probe.mod ? file : null,
+  ).filter((file): file is string => file !== null);
+  const workerSetup = await setupWorkerPool(
+    opts,
+    countNativeWorkerEligibleFiles(cacheMisses, opts?.languageExtensions),
+  );
   try {
     const useBloomFilters = opts?.useBloomFilters ?? true;
     const bloomFilterCache = useBloomFilters
@@ -801,33 +847,11 @@ async function buildIndexFromFileListShared(
     };
     const fileResults = await mapLimit(normalizedFiles, conc, async (file) => {
       try {
-        let sigInfo = fileSignatures.get(file);
-        if (!sigInfo) {
-          const gitSig = gitSigMap.get(file);
-          const source = confinedRoot ? await readConfinedUtf8File(confinedRoot, projectRoot, file) : undefined;
-          if (source !== undefined) {
-            trustedSources?.set(file, source);
-            sigInfo = fileSignatureFromSource(source, gitSig);
-          } else {
-            sigInfo = await fileSignature(file, opts?.cacheStrict, gitSig, {
-              forceContentHash: cacheEnabled && !gitSig,
-            });
-          }
-          fileSignatures.set(file, sigInfo);
-        }
-        manifestEntriesForIndex.set(file, toProjectIndexManifestEntry(sigInfo));
-        if (manifestEntries) {
-          const initialManifestEntry = toManifestFileEntry({ ...sigInfo, edges: [] });
-          if (initialManifestEntry) manifestEntries.set(file, initialManifestEntry);
-        }
-        const cacheSig = cacheEnabled
-          ? await moduleCacheSignatureForFile(file, sigInfo, opts, resolverEnvironmentFingerprint)
-          : sigInfo.cacheSig;
-        const canReuseModuleCache =
-          cacheEnabled && (!graphOptions.resolveNodeModules || resolverEnvironmentFingerprint !== null);
-        let mod: ModuleIndex | null = canReuseModuleCache
-          ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report)
-          : null;
+        const cacheProbe = cacheProbes.get(file);
+        if (!cacheProbe) throw new Error(`Missing module cache probe for ${file}`);
+        if ("error" in cacheProbe) throw cacheProbe.error;
+        const { sigInfo } = cacheProbe;
+        let mod = cacheProbe.mod;
         if (mod && fileReport) {
           fileReport.cached = (fileReport.cached ?? 0) + 1;
         }
@@ -1580,7 +1604,10 @@ export async function buildProjectIndexIncremental(
 
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
     const conc = buildConcurrency(opts);
-    const workerSetup = await setupWorkerPool(opts, allFiles.size);
+    // Created below, once the changed-file set is known. Building it here would spawn a full
+    // pool before the signature pass and the unchanged-snapshot early return, so a warm
+    // no-change run paid for threads that never received a task.
+    let workerSetup = emptyWorkerPoolSetup();
     try {
       const useGitSignatures = gitAvailable;
       const gitSigMap = useGitSignatures
@@ -1677,6 +1704,9 @@ export async function buildProjectIndexIncremental(
       }
       invalidateCachedDependents();
       const changedList = Array.from(changedFiles);
+      // Sized by the work that remains rather than the size of the project: an incremental build
+      // touching a handful of files gets a handful of threads, or none.
+      workerSetup = await setupWorkerPool(opts, countNativeWorkerEligibleFiles(changedList, opts?.languageExtensions));
       let updateStartedAt: number | undefined;
       if (changedList.length || deletedTrackedFiles.size) {
         updateStartedAt = performance.now();

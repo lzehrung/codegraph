@@ -26,6 +26,7 @@ export {
   getNativeTreeSitterLoadError,
   getNativeBindingOrigin,
   getNativeRuntimeFingerprint,
+  getNativeWorkerBindingHandoff,
   getNativeTreeSitterSupportedLanguageIds,
   isNativeBindingLoadedForLanguage,
   isNativeRequiredUnavailableError,

@@ -9,6 +9,26 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Changed
+
+- Installed Windows packages that only read a warm cache no longer load the native addon. The
+  runtime fingerprint needed the addon's supported-language list, so every cache-validity check
+  paid a full load to prove it did not need one; Windows now replays that list from a record beside
+  the cached binary. The same record lets a warm run skip the two full-file SHA-256 passes the
+  Windows native cache performed per process, re-verifying once a day instead. A tampered binary
+  is still detected on the next verification, and any size or mtime change forces one immediately.
+- Extraction workers are handed the addon the main thread already resolved instead of repeating
+  the whole resolution, which on Windows was two 29 MB hashes and a cache verification per worker.
+- The indexer creates its worker pool after it knows which files changed, sizes it by that count,
+  and skips it entirely below a measured threshold. A warm run with nothing changed now starts no
+  workers at all, and a small incremental update starts at most one per file. The auto threshold
+  moved from 250 files to 32 on measurement, so incremental builds between those sizes are now
+  parallelized. `--workers` and an explicit `useNativeWorkers` still override the decision.
+- Installing a native addon now clears cached copies that no project has used in a month, which
+  previously accumulated at roughly 29 MB per version. Retention is by age rather than by
+  version because the cache is shared across projects on a machine: two projects pinned to
+  different native versions both keep their entry.
+
 ### Removed
 
 - Removed the inert non-native parser seam. `isNonNativeParserAvailable`, `isNonNativeParserUnavailableError`, `parseWithLanguage`, `executeQueryAsNativeMatches`, `loadTreeSitterLanguage`, `loadTypeScriptGrammars`, `isParserSyntaxTree`, `__resetParserBackendModuleForTests`, and the `ParserLanguage`, `ParserSyntaxTree`, `QueryMatch`, `QueryCapture`, and `QueryPoint` types are gone, along with `languageForFile`, `LanguageSupport.language`, and `LanguageDefinition.grammar`. Every one of them was either a stub that returned a placeholder, a function that always threw, or a type describing those. The native parser has been the only grammar backend since 2.0.0.

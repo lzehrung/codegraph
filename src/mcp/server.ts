@@ -389,7 +389,9 @@ type WithAbortSignal<T extends { query_sqlite: unknown }> = {
     : never;
 } & Pick<T, "query_sqlite">;
 
-export type CodegraphMcpHandlers = WithAbortSignal<CodegraphMcpHandlerDefinitions>;
+export type CodegraphMcpHandlers = WithAbortSignal<CodegraphMcpHandlerDefinitions> & {
+  dispose(): void;
+};
 
 type McpDependencyRequest = {
   file: string;
@@ -1133,6 +1135,9 @@ function createCodegraphMcpHandlersForSession(
         }
         return { ...result, freshness };
       }),
+    dispose: () => {
+      if (!options.session) session.invalidate();
+    },
   };
 }
 

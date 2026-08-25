@@ -273,9 +273,10 @@ three full-suite runs (`workerPool.enabled` false) and passed in isolation every
 tree whose changes do not touch worker enablement. It is load- or order-sensitive and predates
 this PR; recorded here rather than folded into it.
 
-## PR 2: native runtime and worker startup costs
+## PR 2: native runtime and worker startup costs (implemented)
 
-Fixes F4 and the stale performance numbers in F5. Implement [2026-07-25 native runtime startup](2026-07-25-native-runtime-startup.md) as written, priorities 0 through 4. That plan is measured, specific, and already reviewed; this is execution, not redesign.
+Status: implemented, priorities 0 through 4, with one sub-item of P4 declined on inspection - see
+"What actually shipped" below. Fixes F4 and the stale performance numbers in F5. Implement [2026-07-25 native runtime startup](2026-07-25-native-runtime-startup.md) as written, priorities 0 through 4. That plan is measured, specific, and already reviewed; this is execution, not redesign.
 
 - **P0**: extend the cache manifest (`src/native/runtimeCache.ts:208-230`) with `supportedLanguageIds` and the serialized fingerprint, and make `getNativeRuntimeFingerprint` (`src/native/runtime.ts:119-147`) read it on a size- and mtime-validated cache hit instead of calling `loadBinding()`. Keep `loadBinding()` on the parse paths in `src/native/execution.ts`.
 - **P1**: cheap-identity fast path. Record package name, version, target, source size, and source mtime, and skip both SHA-256 passes when they match, preserving path confinement and full hashing on any mismatch.
@@ -295,6 +296,96 @@ npm run check
 ```
 
 Plus the plan's own measurement protocol: a `process.dlopen` hook test asserting zero native loads on a warm cache-hit `orient`, `search`, and `refs`; `dlopen` count and total SHA-256 bytes recorded per process before and after; and measurement against a globally installed build rather than the workspace checkout, since the workspace resolves the addon by a different path.
+
+### What actually shipped
+
+Each priority landed as its own commit; the checkboxes in
+[the native runtime startup plan](2026-07-25-native-runtime-startup.md) record the detail. Three
+things are worth carrying here because they changed the shape of the work.
+
+**P0 and P1 turned out to be one mechanism.** Deriving the fingerprint without loading the addon
+needs the entry located without hashing, which is the same problem P1 solves. One path-keyed
+identity record per source realpath, written after a verified load, answers both: it holds the
+stat fields that let a later process find the entry, the digest that lets it skip verification,
+the addon's supported languages, and the binding origin. It is separate from `manifest.json`
+because the manifest is content-addressed and published once, while identity records are mutable
+and hold facts that only exist after a load. Entries with no matching record miss the fast path
+and take the old route.
+
+**P3's threshold was measured, and the plan's suggestion was wrong.** Cold builds of a fixed file
+list on this repository, median of 3, workers on versus off: 4 files -60%, 16 files -26%, 24 files
+-0.2%, 32 files +11%, 64 files +25%, 256 files +36%. The crossover is 24. The plan proposed 16,
+which is 26% slower than no pool at all. The threshold is now 32. The old value of 250 was chosen
+when that count meant "files in the project"; it now means "files this build will parse", so it
+was leaving real work single-threaded. Two callers - the agent session and `codegraph inspect` -
+were separately forcing the pool on from the project's total file count and would have overridden
+this on every small incremental update; both now leave the decision to the build.
+
+**Two P4 items came out differently from the plan.** The first was declined rather than left
+unticked: the plan folds F6's filesystem probing into P4, on the reasoning that a valid cached
+entry makes the workspace probe and the platform-package metadata reads unnecessary. It does not -
+the fast path needs the source path and package version to locate the entry at all, and those
+reads are what produce them.
+
+The second is pruning itself. "Delete sibling entries whose version differs from the current one"
+is right for one project and wrong on a real machine: the cache root is per-user and shared, so
+two projects pinned to different native versions would delete each other's entry on every run,
+each re-copying 29 MB and never reaching the fast path - worse than the growth it set out to fix.
+Entries are removed once no project has used them for 30 days instead. An entry in use is
+re-verified at least daily and that refreshes its timestamp, so age separates abandoned from
+active where version does not. Both are recorded against their checkboxes in the native plan.
+
+**A review pass before opening the PR found three defects, all in the P0/P1 fast path**, and they
+are worth recording because they share a cause: a stat-only match is a weaker claim than the
+hashing it replaces, and each was a place where the claim was allowed to carry more than it had
+proven.
+
+- The lookup matched a record on package version, size, and mtime but never on _which install_
+  it described. The cache root is shared, and npm can produce byte-identical files with matching
+  mtimes, so a second project on the same version could be handed the first project's source
+  path - which travels into the binding origin and changes the runtime fingerprint, invalidating
+  its index cache on every run.
+- Nothing tied a record to the runtime that proved the file loadable. A major Node upgrade
+  changes the addon ABI: the bytes are untouched, every stat still matches, and the file no
+  longer loads. The fingerprint would have reported native as available for a build that then
+  fell back, stamping a degraded index as a native one.
+- Pruning, as above.
+
+The first two are fixed by recording the resolved source path and the runtime stamp
+(`process.versions.modules`, platform, arch) and requiring both to match, and by dropping any
+fast-path memo the moment a real load happens so later queries are answered from the binding
+rather than from a claim about it. Each guard has a test that fails when the guard is removed.
+
+### Measured result
+
+P2 and P3 were each measured where they apply; P3's full-build check is in its commit and in the
+native plan. P0, P1, and P4 save work that exists only on the Windows runtime cache path - the
+addon load inside the fingerprint, two 29 MB SHA-256 passes per process, and entries accumulating
+across versions - so they are structurally invisible on Linux and could not be timed here. Their
+behavior is asserted instead, against an injected win32 platform and cache root.
+
+The re-measurement this PR also owed - warm `--version`, `orient --budget small`, and
+`search --limit 3`, with the acceptance boxes in
+[the performance program index](2026-07-25-performance-program-index.md) and `README.md` - is
+recorded there. `--version` meets its target at 83 ms. `orient` and `search` do not, and are also
+slower than the original figures, but the measurement was taken on a different OS, machine, core
+count, and a repository that has grown from 668 to 811 files, so it is a new baseline rather than
+a before-and-after. Which part of that gap is real is not established, and the F10 correction
+below is the reason for not guessing. `README.md` now states the conditions and the range instead
+of a single number.
+
+### Verification performed
+
+```bash
+npx vitest run tests/native-runtime-identity.test.ts tests/native-worker-handoff.test.ts \
+  tests/native-worker-pool-sizing.test.ts
+npx vitest run tests/native-fallback-contract.test.ts tests/native-fallback-reporting.test.ts
+npx vitest run tests/native-worker-parity.test.ts tests/native-semantic-parity.test.ts
+npm run typecheck && npm run lint && npm run check
+```
+
+Each new behavior was mutation-checked rather than assumed: disabling the identity lookup, the
+handoff branch, and the pruning call each fails the tests written for it.
 
 ## PR 2b: columnar syntax-tree encoding (implemented)
 

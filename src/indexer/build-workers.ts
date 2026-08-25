@@ -1,11 +1,12 @@
 import { performance } from "node:perf_hooks";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
-import type { LanguageSupport } from "../languages.js";
+import { supportForFile, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import { stringifyUnknown } from "../util/ast.js";
 import { readConfinedUtf8File } from "../util/confinedFile.js";
 import { recordNativeExecutionOutcome } from "../native/nativeBackendReport.js";
 import {
   getCachedNormalizedQuery,
+  getNativeWorkerBindingHandoff,
   isNativeRequiredUnavailableError,
   isNativeTreeSitterAvailable,
 } from "../native/treeSitterNative.js";
@@ -18,7 +19,27 @@ import { DEFAULT_NATIVE_SOURCE_MAX_BYTES, NATIVE_WORKER_BATCH_SIZE } from "../wo
 import { prepareFileForIndexing, type PreparedFileContext } from "./parse-context.js";
 import type { BuildOptions, BuildReport, WorkerPoolReport } from "./types.js";
 
-export const NATIVE_WORKER_AUTO_FILE_THRESHOLD = 250;
+/**
+ * Files below which the pool costs more than it saves, so auto mode stays single-threaded.
+ *
+ * Measured on this repository (4 cores, 3 pool threads), cold builds of a fixed file list,
+ * median of 3, workers on versus off:
+ *
+ * | files |  on |  off | delta  |
+ * | ----- | --- | ---- | ------ |
+ * |     4 | 264 |  165 | -60.0% |
+ * |    16 | 413 |  327 | -26.3% |
+ * |    24 | 456 |  455 |  -0.2% |
+ * |    32 | 515 |  578 | +10.9% |
+ * |    64 | 841 | 1124 | +25.2% |
+ * |   256 | 2990| 4635 | +35.5% |
+ *
+ * The crossover is 24; 32 is the first size that is clearly past it. The plan's suggested 16
+ * would have been 26% slower than no pool at all. The previous value, 250, was chosen when this
+ * count meant "files in the project"; it now means "files this build will parse", and anything
+ * from 32 up is measurably better with the pool than without.
+ */
+export const NATIVE_WORKER_AUTO_FILE_THRESHOLD = 32;
 
 type NativeWorkerPool = {
   run(task: NativeExtractTask | { tasks: NativeExtractTask[] }): Promise<unknown>;
@@ -34,14 +55,44 @@ export type WorkerPoolSetupResult = {
 
 export function shouldEnableNativeWorkers(opts: BuildOptions | undefined, fileCount?: number): boolean {
   if (opts?.native === "off") return false;
+  // No files to parse means no work to distribute. Piscina starts minThreads eagerly, so an
+  // explicit request would otherwise spawn a full pool for a warm no-change run and tear it
+  // down again without ever submitting a task.
+  if (fileCount === 0) return false;
   if (!isNativeTreeSitterAvailable(opts?.native)) return false;
   if (opts?.useNativeWorkers === false) return false;
   if (opts?.useNativeWorkers === true) return true;
   return (fileCount ?? 0) >= NATIVE_WORKER_AUTO_FILE_THRESHOLD;
 }
 
+/**
+ * A setup carrying no pool, for the window before one is created. Teardown accepts it, so the
+ * caller can install its `finally` before deciding whether any worker is warranted.
+ */
+export function emptyWorkerPoolSetup(): WorkerPoolSetupResult {
+  return { pool: null, report: undefined, startTime: 0, batchSize: NATIVE_WORKER_BATCH_SIZE };
+}
+
 function isSFCFile(filePath: string): boolean {
   return filePath.endsWith(".vue") || filePath.endsWith(".svelte") || filePath.endsWith(".astro");
+}
+
+export function isNativeWorkerEligibleFile(
+  filePath: string,
+  support: LanguageSupport | undefined,
+): support is LanguageSupport {
+  return !!support && !isSFCFile(filePath) && !isGraphOnlyLanguage(support.id);
+}
+
+export function countNativeWorkerEligibleFiles(
+  files: readonly string[],
+  languageExtensions: LanguageExtensionMap | undefined,
+): number {
+  let count = 0;
+  for (const file of files) {
+    if (isNativeWorkerEligibleFile(file, supportForFile(file, languageExtensions))) count++;
+  }
+  return count;
 }
 
 function buildWorkerTask(filePath: string, sup: LanguageSupport, source?: string): NativeExtractTask {
@@ -95,8 +146,15 @@ export async function setupWorkerPool(
   if (shouldUseWorkers) {
     try {
       const { createNativeWorkerPool } = await import("../worker/nativeWorkerPool.js");
+      // shouldEnableNativeWorkers has already resolved the binding on this thread, so the
+      // handoff is available here and saves every worker from repeating that resolution.
+      const handoff = getNativeWorkerBindingHandoff();
       const createdPool = createNativeWorkerPool({
         threads: opts?.nativeThreads,
+        // More threads than files means threads that bootstrap, idle, and exit having parsed
+        // nothing, which on a small incremental build is the whole cost of the pool.
+        ...(typeof fileCount === "number" && fileCount > 0 ? { maxThreads: fileCount } : {}),
+        ...(handoff ? { workerData: { nativeBinding: handoff } } : {}),
       });
       pool = createdPool;
       if (report) {
@@ -185,7 +243,7 @@ export async function prepareFileContextForBuild(
     return prepared;
   }
   let prepared: PreparedFileContext;
-  if (workerSetup.pool && !isSFCFile(file) && !isGraphOnlyLanguage(support.id)) {
+  if (workerSetup.pool && isNativeWorkerEligibleFile(file, support)) {
     if (workerSetup.report) workerSetup.report.tasksSubmitted++;
     try {
       const workerResult = (await workerSetup.pool.run(buildWorkerTask(file, support, source))) as NativeExtractResult;

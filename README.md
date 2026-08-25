@@ -18,7 +18,7 @@ codegraph is a local CLI **and TypeScript library** that turns a source tree int
 
 Without structural context, an agent burns early turns listing directories, guessing search terms, opening candidate files, and reconstructing relationships. codegraph does that discovery once so the context window can stay focused on the problem.
 
-On this repository under Node 24 with a warm cache, `codegraph orient --root . --budget small --json` returned in about **0.6s**, and the matching MCP `orient` call returned in about **100ms**.
+Warm-cache timings for `codegraph orient --root . --budget small --json` on this repository have ranged from about **0.6s** (Windows 11, Node 24) to about **2.5s** (a 4-core Linux container, Node 22), so treat them as machine-dependent rather than a headline figure; the matching MCP `orient` call returned in about **100ms** on the faster of the two. [The performance program index](docs/plans/2026-07-25-performance-program-index.md) records the current measurements and the conditions behind them.
 
 With Node.js 22.16 or newer, install from npm:
 

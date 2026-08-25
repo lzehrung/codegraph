@@ -1,7 +1,6 @@
 import { performance } from "node:perf_hooks";
 import fs from "node:fs";
 import path from "node:path";
-import { NATIVE_WORKER_AUTO_FILE_THRESHOLD } from "../agent/session.js";
 import { findDuplicates, type DuplicateConfidence, type DuplicateGroup } from "../duplicates.js";
 import { findDetailedCycles, getUnresolvedImports } from "../graphs/queries.js";
 import { getHotspots } from "../graphs/hotspots.js";
@@ -387,7 +386,11 @@ async function buildInspectReport(
   if (indexCache) {
     writeStderrLine(formatIndexCacheMetadata(indexCache));
   }
-  const useNativeWorkers = "useNativeWorkers" in workerOpts || files.length >= NATIVE_WORKER_AUTO_FILE_THRESHOLD;
+  // `--workers` still forces the pool on. The file-count arm that used to sit here decided from
+  // the project's size, which is the wrong signal now that the build sizes the pool by how many
+  // files it will actually parse; leaving the option unset lets that decision happen where the
+  // count is known.
+  const useNativeWorkers = "useNativeWorkers" in workerOpts;
   const index = await loadCurrentProjectIndex({
     root: projectRoot,
     scope: { kind: "resolved-files", files },

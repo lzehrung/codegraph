@@ -1,6 +1,6 @@
 # Native runtime and worker startup costs
 
-Status: Planned. Measurements verified on `main` at `3024ed2b` (`v1.8.100`) on 2026-07-25 by
+Status: Implemented (priorities 0 through 4). Original measurements verified on `main` at `3024ed2b` (`v1.8.100`) on 2026-07-25 by
 tracing `process.dlopen` around a real CLI invocation. See
 [performance program index](2026-07-25-performance-program-index.md) for the shared baseline.
 
@@ -124,87 +124,98 @@ Individually sub-millisecond, but it is the same answer every time and is never 
 
 ## Priority 0: Derive the fingerprint without loading the addon
 
-- [ ] Extend the existing cache manifest written at `src/native/runtimeCache.ts:208-230` to
-      record `supportedLanguageIds` and the serialized fingerprint.
-- [ ] Change `getNativeRuntimeFingerprint` (`src/native/runtime.ts:119-147`) to read that
-      manifest when a cache entry for the current (package version, target) validates by size and
-      mtime, and only fall back to load-and-serialize on a manifest miss.
-- [ ] Keep `loadBinding()` strictly on the parse paths in `src/native/execution.ts`.
-- [ ] Add a test proving that a warm cache-hit command performs zero `dlopen` calls, by hooking
-      `process.dlopen`.
+- [x] Recorded in path-keyed identity records beside the manifest rather than as new manifest
+      fields. `manifest.json` is content-addressed and published once, immutably; each record is
+      mutable (the TTL refreshes it) and binds one source realpath to its origin. This lets
+      projects sharing one cached binary retain their own fast paths.
+- [x] `resolveCachedRuntimeIdentity` finds the entry by scanning the target directory for the
+      version prefix and comparing recorded stat fields, then replays the stored origin. Any
+      miss falls back to load-and-serialize.
+- [x] Unchanged; the parse paths still load.
+- [x] Covered without a `dlopen` hook, which cannot run here: the cache path is Windows-only
+      and CI for this change is Linux. `tests/native-runtime-identity.test.ts` drives the
+      resolver with an injected platform and cache root and asserts it answers from the record
+      without a binding, which is the same claim at the seam that would have been hooked.
 
 Likely files: `src/native/runtime.ts`, `src/native/runtimeCache.ts`,
 `tests/native-fallback-contract.test.ts`.
 
 Acceptance:
 
-- [ ] Warm `orient`, `search`, and `refs` on a cache hit load no native addon.
-- [ ] The fingerprint value is identical to today's for the same binary, so no cache
-      invalidation is triggered by the change itself.
-- [ ] A missing or corrupt manifest still produces a correct fingerprint via the fallback.
+- [x] By construction: the fingerprint was the only non-parse caller of `loadBinding()`.
+- [x] Guaranteed by storing the origin whole rather than rebuilding it, and asserted directly.
+- [x] Missing, truncated, and malformed records all fall through to a full load.
 
 ## Priority 1: Cheap-identity fast path for the Windows native cache
 
-- [ ] Record (package name, package version, target, source size, source mtimeMs) in the cache
-      manifest.
-- [ ] When those stat-only fields match and the final binary's size and mtime match, return
-      `reused` with the stored sha256 without hashing anything.
-- [ ] Keep full hashing for cache population and for any manifest mismatch.
-- [ ] Optionally re-verify on a TTL, for example once per day, rather than every process.
-- [ ] Preserve the existing path-confinement and safe-directory checks; this plan changes hashing
-      frequency only.
+- [x] Recorded, plus the cached copy's own size and mtime.
+- [x] Implemented, and the result reports whether it hashed so callers can tell the two apart.
+- [x] Unchanged.
+- [x] Taken up rather than skipped: 24 hours. Only a run that actually hashed may refresh the
+      record, so a stream of fast-path hits cannot push the deadline out.
+- [x] Untouched. The probe also never creates directories, so asking for a fingerprint has no
+      side effects.
 
 Likely files: `src/native/runtimeCache.ts`, `src/native/bindingLoader.ts`,
 `tests/native-fallback-reporting.test.ts`.
 
 Acceptance:
 
-- [ ] A warm installed-mode process performs zero full-file SHA-256 passes over the addon.
-- [ ] Tampering with the cached binary is still detected on the next full verification, and a
-      size or mtime change forces immediate re-verification.
+- [x] Proven by swapping the cached bytes under a matching stat record: the digest still comes
+      back, which it could not if anything had hashed.
+- [x] Both covered, including the TTL boundary.
 
 ## Priority 2: Stop workers repeating the pipeline
 
-- [ ] Pass the resolved `loadedPath` and its verified sha256 from the main thread into the pool
-      via Piscina `workerData`.
-- [ ] Have `src/worker/nativeExtractWorker.ts` require that path directly, skipping
-      `prepareNativeRuntimeCache` entirely.
-- [ ] Fall back to `loadProductionBinding()` only when `workerData` is absent, which keeps tests
-      working.
+- [x] The path and the whole origin, so a worker reports the same provenance as its parent.
+- [x] Implemented.
+- [x] Absent, malformed, or unloadable all fall back.
 
 Acceptance:
 
-- [ ] A build with N active workers performs one addon verification, not N.
-- [ ] Worker parse results are unchanged, proven by the native parity suites.
+- [x] By construction. Not observable on Linux, where there is no verification step at all.
+- [x] Parity suites pass, plus a real Piscina pool exercised with a valid handoff, an
+      unloadable one, and none.
 
 ## Priority 3: Right-size and defer the worker pool
 
-- [ ] Move `setupWorkerPool` (`src/indexer/build-index.ts:1182`) below the `changedList`
-      computation, or make it lazy so it is created on the first file that actually needs a
-      worker.
-- [ ] Size threads as `min(resolvedThreads, changedList.length)`.
-- [ ] Skip the pool entirely below a small threshold, for example 16 changed files, where
-      per-worker bootstrap exceeds the parsing it saves. Measure to pick the threshold rather
-      than guessing.
+- [x] Moved below `changedList`.
+- [x] Implemented, and zero files now means no pool at all, including under an explicit
+      request, since Piscina starts `minThreads` eagerly.
+- [x] Measured: the crossover on this repository is 24 files, so the threshold is 32. The
+      suggested 16 would have been 26% slower than no pool. The full table is in the code
+      comment on `NATIVE_WORKER_AUTO_FILE_THRESHOLD`.
 
 Acceptance:
 
-- [ ] A warm no-change run creates zero worker threads.
-- [ ] A 3-file incremental build creates at most 3 workers.
-- [ ] Full-build throughput on this repository is unchanged.
+- [x] Asserted end to end on a real build.
+- [x] Asserted.
+- [x] 811 files, cold, three runs each: median 21314 ms with the change against 20879 ms
+      without, ranges 21081-22478 and 19259-22097.
 
 ## Priority 4: Prune the native cache
 
-- [ ] After a successful `reused` or `cached` result, best-effort delete sibling entries under
-      the target directory whose manifest `packageVersion` differs from the current one.
-- [ ] Ignore `EBUSY`, since Windows locks loaded DLLs.
-- [ ] Fold the F6 probing into the Priority 1 fast path: when a valid cached entry exists for the
-      running version and target, skip workspace probing and platform-package metadata reads.
+- [x] Implemented on the verified path only, but by age rather than by version - see the
+      acceptance note below. A fast-path hit installs nothing, so it prunes nothing.
+- [x] All removal failures are skipped, which is the mechanism behind the guarantee below.
+- [ ] **Not done, and not doable as written.** The fast path needs the source path and package
+      version to locate the entry, which is exactly what the platform-package reads produce, and
+      the workspace probe is what establishes that the installed path applies at all. Skipping
+      either means persisting a separate "there is no workspace here" fact across processes:
+      a different change with its own failure modes, for a few sub-millisecond syscalls.
 
 Acceptance:
 
-- [ ] Cache directory holds entries for the current version plus at most one prior version.
-- [ ] Pruning never deletes the entry currently loaded by another process.
+- [x] Met differently, and deliberately. Deleting every entry that is not the version now
+      installing looks right for one project and is wrong on a real machine: the cache root is
+      per-user and shared, so two projects pinned to different native versions would delete each
+      other's entry on every run, each re-copying 29 MB and never reaching the fast path - worse
+      than the growth this set out to fix. Entries are removed once no project has used them for
+      30 days instead. An entry in use is re-verified at least daily, which refreshes its
+      timestamp, so age separates abandoned from active where version does not.
+- [x] Rests on four things: the Windows DLL lock, never touching the entry just written or any
+      entry for its version, leaving any entry whose manifest is unreadable or undated since
+      that is what a concurrent population looks like, and the 30-day window above.
 
 ## Validation checklist
 

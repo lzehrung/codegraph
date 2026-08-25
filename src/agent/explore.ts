@@ -102,7 +102,11 @@ export async function exploreCodegraph(request: AgentExploreRequest): Promise<Ag
     root: request.root,
     ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
   });
-  return await exploreCodegraphWithSession(session, request);
+  try {
+    return await exploreCodegraphWithSession(session, request);
+  } finally {
+    session.invalidate();
+  }
 }
 
 export async function exploreCodegraphWithSession(

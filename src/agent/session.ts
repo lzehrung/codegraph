@@ -361,9 +361,9 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         ...(languageExtensions ? { languageExtensions } : {}),
         ...(cacheLocation ? { cacheLocation } : {}),
       };
-      if (options.buildOptions?.useNativeWorkers === undefined && files.length >= NATIVE_WORKER_AUTO_FILE_THRESHOLD) {
-        buildOptions.useNativeWorkers = true;
-      }
+      // Let the incremental build decide after it identifies parse misses. Session file counts
+      // include cache hits and files that cannot use native workers, so forcing a pool here can
+      // start idle workers for a small incremental update.
       const buildReport: BuildReport = options.buildOptions?.report ?? { timings: {} };
       buildOptions.report = buildReport;
       const index = await buildProjectIndexIncremental(options.root, buildOptions);

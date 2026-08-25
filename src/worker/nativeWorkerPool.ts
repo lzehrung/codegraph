@@ -11,6 +11,10 @@ export type { NativeExtractTask, NativeExtractResult };
 export type NativeWorkerPoolOptions = {
   threads?: number | undefined;
   maxQueue?: number | undefined;
+  /** Upper bound applied after the usual sizing policy, e.g. the number of files to parse. */
+  maxThreads?: number | undefined;
+  /** Passed through to each worker as node's `workerData`. */
+  workerData?: unknown;
 };
 
 const HARD_MAX_THREADS = 64;
@@ -35,7 +39,12 @@ export function resolveNativeWorkerPath(): string {
 }
 
 export function createNativeWorkerPool(opts?: NativeWorkerPoolOptions): Piscina {
-  const threads = resolveThreadCount(opts?.threads);
+  const requestedMax = opts?.maxThreads;
+  const bounded =
+    typeof requestedMax === "number" && Number.isFinite(requestedMax) && requestedMax > 0
+      ? Math.max(1, Math.floor(requestedMax))
+      : HARD_MAX_THREADS;
+  const threads = Math.min(resolveThreadCount(opts?.threads), bounded);
   const workerPath = resolveNativeWorkerPath();
   return new Piscina({
     filename: workerPath,
@@ -43,5 +52,6 @@ export function createNativeWorkerPool(opts?: NativeWorkerPoolOptions): Piscina 
     maxThreads: threads,
     maxQueue: opts?.maxQueue ?? threads * 4,
     idleTimeout: 30_000,
+    ...(opts?.workerData === undefined ? {} : { workerData: opts.workerData }),
   });
 }

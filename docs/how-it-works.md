@@ -34,6 +34,8 @@ In the normal `auto` runtime mode, the native addon performs this Tree-sitter pa
 
 On Windows, an installed codegraph package resolves the platform `.node` file without loading it, hashes it with a bounded streaming buffer, and publishes the verified bytes to `%LOCALAPPDATA%\codegraph\native-cache\v1`. Each cache entry is keyed by platform target, package version, and SHA-256; concurrent processes converge on one immutable final file without overwriting mapped binaries.
 
+After a verified load, a source-keyed identity record stores the source and cached-file metadata, runtime details, supported languages, and binding origin. A later process reuses it only while the exact files still match and the one-day re-verification interval has not expired; entries not verified for 30 days are pruned.
+
 The loader requires the cached path and records both the package-owned source and loaded origin. Local workspace builds bypass this cache so rebuilding `packages/codegraph-native` still takes effect immediately, while non-Windows installed packages keep their existing package loader.
 
 ### Opt-in: `--fast-graph`

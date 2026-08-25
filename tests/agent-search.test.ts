@@ -11,7 +11,6 @@ import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../src/indexer/types.js";
 import type { Edge, Graph, Range } from "../src/types.js";
-import { countingSession } from "./helpers/agent.js";
 import { createTempRootRegistry, isSymlinkUnavailable } from "./helpers/filesystem.js";
 
 const tempRoots = createTempRootRegistry();
@@ -625,11 +624,16 @@ describe("agent search", () => {
 
   it("loads one project snapshot for a search call", async () => {
     const root = await mkRepo();
-    const counted = countingSession(createAgentSession({ root }));
+    const session = createAgentSession({ root });
+    const loadProject = vi.spyOn(session, "loadProject");
 
-    await searchCodegraphWithSession(counted.session, { root, query: "validate user", mode: "hybrid", limit: 5 });
+    try {
+      await searchCodegraphWithSession(session, { root, query: "validate user", mode: "hybrid", limit: 5 });
 
-    expect(counted.loads()).toBe(1);
+      expect(loadProject).toHaveBeenCalledTimes(1);
+    } finally {
+      session.invalidate();
+    }
   });
 
   it("refreshes freshness on a cached session search response", async () => {

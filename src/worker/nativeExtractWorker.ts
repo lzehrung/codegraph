@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isMainThread, workerData } from "node:worker_threads";
 
 import type {
   CompactQueryResults,
@@ -9,6 +10,7 @@ import type {
   NativeFallbackReason,
   NativeQueryResults,
   NativeSyntaxTree,
+  NativeWorkerBindingHandoff,
 } from "../native/contracts.js";
 import { loadNativeBinding } from "../native/bindingLoader.js";
 import {
@@ -87,7 +89,38 @@ type NativeExtractorDeps = {
 
 export type NativeExtractor = (task: NativeExtractTask) => Promise<NativeExtractResult>;
 
-export function loadProductionBinding(): NativeBindingLoadResult<NativeBinding> {
+/**
+ * The addon the parent thread already resolved, verified, and loaded, if it passed one.
+ *
+ * Absent when this module is imported outside a worker (tests, direct use), or by a parent that
+ * had no loaded binding to offer. Both cases fall through to the full resolution below.
+ */
+export function readWorkerBindingHandoff(
+  source: unknown = isMainThread ? undefined : workerData,
+): NativeWorkerBindingHandoff | null {
+  if (!source || typeof source !== "object") return null;
+  const candidate = (source as { nativeBinding?: unknown }).nativeBinding;
+  if (!candidate || typeof candidate !== "object") return null;
+  const { loadedPath, origin } = candidate as Partial<NativeWorkerBindingHandoff>;
+  if (typeof loadedPath !== "string" || !loadedPath) return null;
+  if (!origin || typeof origin !== "object" || typeof origin.packageName !== "string") return null;
+  return { loadedPath, origin };
+}
+
+export function loadProductionBinding(
+  handoffSource: unknown = isMainThread ? undefined : workerData,
+): NativeBindingLoadResult<NativeBinding> {
+  const handoff = readWorkerBindingHandoff(handoffSource);
+  if (handoff) {
+    try {
+      // path.resolve puts the separators back in the platform's form; the parent normalizes
+      // them to forward slashes when it builds the origin.
+      return { binding: require(path.resolve(handoff.loadedPath)) as NativeBinding, origin: handoff.origin };
+    } catch {
+      // A handoff that will not load is a bug worth surviving rather than failing the build on:
+      // fall through and resolve the addon the long way, exactly as before.
+    }
+  }
   return loadNativeBinding<NativeBinding>({
     packageName: "@lzehrung/codegraph-native",
     localPackageRoot: localNativePackageRoot,

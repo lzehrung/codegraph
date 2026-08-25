@@ -2,8 +2,38 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import type { NativeBindingOrigin } from "./contracts.js";
+
 const CACHE_SCHEMA_VERSION = 1;
 const HASH_BUFFER_SIZE = 1024 * 1024;
+const IDENTITY_FILE_PREFIX = "identity-";
+const IDENTITY_FILE_SUFFIX = ".json";
+const IDENTITY_VERSION = 1;
+
+/**
+ * How long a stat-only match is trusted before the entry is hashed again.
+ *
+ * The fast path below skips two 29 MB SHA-256 passes when the source and cached binaries
+ * both match the size and mtime recorded at the last full verification. That is weaker than
+ * hashing: an attacker who can write the cache directory can also preserve both fields. The
+ * TTL bounds how long such a substitution goes unnoticed, so verification still happens -
+ * once a day per entry instead of twice per process.
+ */
+const IDENTITY_REVERIFY_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How long an entry for another package version is kept before it is treated as abandoned.
+ *
+ * The cache root is per-user and shared by every project on the machine, so "not the version I
+ * am installing" does not mean "nobody's". Deleting on that basis alone makes two projects
+ * pinned to different native versions delete each other's entry on every run, each re-copying
+ * 29 MB and never reaching the fast path - worse than the unbounded growth it set out to fix.
+ *
+ * An entry in use is re-verified at least every IDENTITY_REVERIFY_INTERVAL_MS of use, and that
+ * refreshes its timestamp, so an entry older than this window is one no project has run in a
+ * month. That is the signal, rather than which version happens to be installing right now.
+ */
+const ABANDONED_ENTRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export type NativeCacheManifestV1 = {
   schemaVersion: 1;
@@ -16,12 +46,54 @@ export type NativeCacheManifestV1 = {
   cachedAt: string;
 };
 
+/**
+ * Written as a path-keyed record beside `manifest.json` after a process has successfully
+ * loaded the cached binary. `manifest.json` is content-addressed and published once,
+ * immutably; these records are mutable (the TTL refreshes them) and carry facts that only exist
+ * after the addon loads. One record per source realpath lets projects sharing the binary retain
+ * their own origin without invalidating each other's fast path.
+ */
+export type NativeCacheIdentityV1 = {
+  version: 1;
+  /** Size and mtime of the installed source binary at the last full verification. */
+  sourceSize: number;
+  sourceMtimeMs: number;
+  /** Size and mtime of the cached copy that was verified and then loaded. */
+  cachedSize: number;
+  cachedMtimeMs: number;
+  sha256: string;
+  cacheKey: string;
+  sourcePath: string;
+  loadedPath: string;
+  verifiedAt: string;
+  /**
+   * The runtime that proved this file loadable. The stat fields say the bytes are unchanged;
+   * they say nothing about whether this Node can still load them. A major Node upgrade changes
+   * the ABI, so the same bytes stop loading while every other check still matches, and the fast
+   * path would report an addon as available that the build then falls back away from.
+   */
+  runtime: { abi: string; platform: string; arch: string };
+  /**
+   * Recorded so a cache-hit command can answer "which languages does the addon support"
+   * without loading it. Present only once a load has succeeded for this exact file.
+   */
+  supportedLanguageIds: string[];
+  /**
+   * The origin the loading process reported, stored whole rather than rebuilt field by field.
+   * The runtime fingerprint embeds this object verbatim, so replaying it is what guarantees a
+   * fast-path fingerprint is byte-identical to the one a full load produces.
+   */
+  origin: NativeBindingOrigin;
+};
+
 export type PrepareNativeRuntimeCacheRequest = {
   sourcePath: string;
   packageName: string;
   packageVersion: string;
   target: string;
   cacheRoot?: string | undefined;
+  /** Injected in tests so the identity TTL branch is reachable without waiting a day. */
+  now?: number | undefined;
 };
 
 export type PrepareNativeRuntimeCacheResult =
@@ -31,6 +103,17 @@ export type PrepareNativeRuntimeCacheResult =
       loadedPath: string;
       cacheKey: string;
       sha256: string;
+      /** Verified stat snapshots used to reject a source/cache replacement before identity recording. */
+      sourceSize: number;
+      sourceMtimeMs: number;
+      cachedSize: number;
+      cachedMtimeMs: number;
+      /**
+       * True when this call hashed the files rather than trusting a recorded identity. Only a
+       * verified result may refresh the identity record, otherwise each fast-path hit would
+       * push the re-verification TTL out and the entry would never be hashed again.
+       */
+      verified: boolean;
     }
   | {
       status: "unavailable";
@@ -41,6 +124,7 @@ export type PrepareNativeRuntimeCacheResult =
 type FileHash = {
   sha256: string;
   size: number;
+  mtimeMs: number;
 };
 
 function asError(error: unknown): Error {
@@ -68,7 +152,7 @@ function assertSafePathComponent(componentPath: string): void {
   }
 }
 
-function prepareSafeDirectory(directoryPath: string): string {
+function prepareSafeDirectory(directoryPath: string, create = true): string {
   const absolute = path.resolve(directoryPath);
   const parsed = path.parse(absolute);
   let current = parsed.root;
@@ -80,7 +164,7 @@ function prepareSafeDirectory(directoryPath: string): string {
     try {
       assertSafePathComponent(current);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !create) {
         throw error;
       }
       try {
@@ -95,12 +179,18 @@ function prepareSafeDirectory(directoryPath: string): string {
   return fs.realpathSync.native(absolute);
 }
 
-function resolveProductionCacheRoot(): string {
+function findProductionCacheRoot(): string | null {
   const localAppData = process.env.LOCALAPPDATA;
-  if (!localAppData) {
+  if (!localAppData) return null;
+  return path.join(localAppData, "codegraph", "native-cache", `v${CACHE_SCHEMA_VERSION}`);
+}
+
+function resolveProductionCacheRoot(): string {
+  const cacheRoot = findProductionCacheRoot();
+  if (!cacheRoot) {
     throw new Error("LOCALAPPDATA is unavailable; cannot prepare the Windows native runtime cache");
   }
-  return path.join(localAppData, "codegraph", "native-cache", `v${CACHE_SCHEMA_VERSION}`);
+  return cacheRoot;
 }
 
 export function hashFileStreaming(filePath: string, onChunk?: (bytesRead: number) => void): FileHash {
@@ -125,10 +215,11 @@ export function hashFileStreaming(filePath: string, onChunk?: (bytesRead: number
     fs.closeSync(descriptor);
   }
 
-  if (size !== before.size) {
+  const after = fs.statSync(filePath);
+  if (!after.isFile() || size !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
     throw new Error(`native binary changed while hashing: ${filePath}`);
   }
-  return { sha256: hash.digest("hex"), size };
+  return { sha256: hash.digest("hex"), size, mtimeMs: before.mtimeMs };
 }
 
 function randomSuffix(): string {
@@ -165,12 +256,12 @@ function removeRegularTemporaryFile(filePath: string): void {
   }
 }
 
-function verifyFile(filePath: string, expected: FileHash): boolean {
+function verifyFile(filePath: string, expected: FileHash): FileHash | null {
   try {
     const actual = hashFileStreaming(filePath);
-    return actual.size === expected.size && actual.sha256 === expected.sha256;
+    return actual.size === expected.size && actual.sha256 === expected.sha256 ? actual : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -225,11 +316,418 @@ function writeManifest(entryPath: string, manifest: NativeCacheManifestV1): void
   }
 }
 
+export type NativeCacheLookupRequest = {
+  sourcePath: string;
+  packageName: string;
+  packageVersion: string;
+  target: string;
+  cacheRoot?: string | undefined;
+  /** Injected in tests so the TTL branch is reachable without waiting a day. */
+  now?: number | undefined;
+};
+
+export type NativeCacheLookupHit = { entryPath: string; identity: NativeCacheIdentityV1; revalidateAt: number };
+
+function currentRuntimeStamp(): NativeCacheIdentityV1["runtime"] {
+  return { abi: process.versions.modules, platform: process.platform, arch: process.arch };
+}
+
+function identityFilePath(entryPath: string, sourcePath: string): string {
+  const sourceKey = createHash("sha256").update(sourcePath).digest("hex");
+  return path.join(entryPath, `${IDENTITY_FILE_PREFIX}${sourceKey}${IDENTITY_FILE_SUFFIX}`);
+}
+
+function isIdentityFileName(fileName: string): boolean {
+  return /^identity-[a-f0-9]{64}\.json$/.test(fileName);
+}
+
+function readCacheIdentityFile(filePath: string): NativeCacheIdentityV1 | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    // Absent (an entry written before this file existed), unreadable, or malformed. All three
+    // mean the same thing to the caller: no fast path, fall back to hashing.
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const candidate = parsed as Partial<NativeCacheIdentityV1>;
+  if (candidate.version !== IDENTITY_VERSION) return null;
+  const numbers = [candidate.sourceSize, candidate.sourceMtimeMs, candidate.cachedSize, candidate.cachedMtimeMs];
+  if (numbers.some((value) => typeof value !== "number" || !Number.isFinite(value))) return null;
+  const strings = [
+    candidate.sha256,
+    candidate.cacheKey,
+    candidate.sourcePath,
+    candidate.loadedPath,
+    candidate.verifiedAt,
+  ];
+  if (strings.some((value) => typeof value !== "string" || !value)) return null;
+  if (!Array.isArray(candidate.supportedLanguageIds)) return null;
+  if (candidate.supportedLanguageIds.some((value) => typeof value !== "string")) return null;
+  const origin = candidate.origin;
+  if (!origin || typeof origin !== "object" || origin.mode !== "cache" || typeof origin.packageName !== "string") {
+    return null;
+  }
+  const runtime = candidate.runtime;
+  if (!runtime || typeof runtime !== "object") return null;
+  if (typeof runtime.abi !== "string" || typeof runtime.platform !== "string" || typeof runtime.arch !== "string") {
+    return null;
+  }
+  return candidate as NativeCacheIdentityV1;
+}
+
+function readCacheIdentity(entryPath: string, sourcePath: string): NativeCacheIdentityV1 | null {
+  return readCacheIdentityFile(identityFilePath(entryPath, sourcePath));
+}
+
+function latestCacheIdentityVerifiedAt(entryPath: string, now: number): number {
+  let fileNames: string[];
+  try {
+    fileNames = fs.readdirSync(entryPath);
+  } catch {
+    return Number.NaN;
+  }
+
+  let latest = Number.NaN;
+  for (const fileName of fileNames) {
+    if (!isIdentityFileName(fileName)) continue;
+    const identity = readCacheIdentityFile(path.join(entryPath, fileName));
+    const verifiedAt = identity ? Date.parse(identity.verifiedAt) : Number.NaN;
+    if (!Number.isFinite(verifiedAt) || verifiedAt > now) continue;
+    if (!Number.isFinite(latest) || verifiedAt > latest) latest = verifiedAt;
+  }
+  return latest;
+}
+
+function statOrNull(filePath: string): fs.Stats | null {
+  try {
+    const stats = fs.statSync(filePath);
+    return stats.isFile() ? stats : null;
+  } catch {
+    return null;
+  }
+}
+
+function lstatRegularFileOrNull(filePath: string): fs.Stats | null {
+  try {
+    const stats = fs.lstatSync(filePath);
+    return stats.isFile() && !stats.isSymbolicLink() ? stats : null;
+  } catch {
+    return null;
+  }
+}
+
+function isSafeExistingDirectory(directoryPath: string): boolean {
+  try {
+    prepareSafeDirectory(directoryPath, false);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function pathsResolveEqual(left: string, right: string): boolean {
+  return path.resolve(left) === path.resolve(right);
+}
+
+/**
+ * Find a cache entry for this (package version, target) whose recorded identity still matches
+ * the files on disk, without hashing either of them.
+ *
+ * The entry directory is named `<packageVersion>-<sha256>`, so locating it the normal way means
+ * hashing the source first. Scanning the target directory for the version prefix and comparing
+ * the stat fields recorded at the last full verification reaches the same entry with bounded
+ * metadata reads. A miss - no entry, no identity file, a stat mismatch, or an expired
+ * TTL - returns null, and every caller then does the full hash-and-verify pass.
+ */
+export function lookupNativeRuntimeCacheEntry(request: NativeCacheLookupRequest): NativeCacheLookupHit | null {
+  try {
+    assertSafeCacheSegment(request.target, "target");
+    assertSafeCacheSegment(request.packageVersion, "package version");
+    const cacheRoot = request.cacheRoot ?? findProductionCacheRoot();
+    if (!cacheRoot) return null;
+
+    const sourceRealPath = fs.realpathSync.native(request.sourcePath);
+    const sourceStats = statOrNull(sourceRealPath);
+    if (!sourceStats) return null;
+
+    const runtime = currentRuntimeStamp();
+    const resolvedCacheRoot = path.resolve(cacheRoot);
+    const targetPath = path.join(resolvedCacheRoot, request.target);
+    if (!isSafeExistingDirectory(resolvedCacheRoot) || !isSafeExistingDirectory(targetPath)) return null;
+
+    const prefix = `${request.packageVersion}-`;
+    let entryNames: string[];
+    try {
+      entryNames = fs.readdirSync(targetPath);
+    } catch {
+      return null;
+    }
+
+    const now = request.now ?? Date.now();
+    for (const entryName of entryNames) {
+      if (!entryName.startsWith(prefix)) continue;
+      const entryPath = path.join(targetPath, entryName);
+      if (!isSafeExistingDirectory(entryPath)) continue;
+      const identity = readCacheIdentity(entryPath, sourceRealPath);
+      if (!identity) continue;
+
+      const expectedEntryName = `${request.packageVersion}-${identity.sha256}`;
+      const expectedCacheKey = `${request.packageName}@${request.packageVersion}:${request.target}:${identity.sha256}`;
+      const loadedPath = path.resolve(identity.loadedPath);
+      if (
+        entryName !== expectedEntryName ||
+        identity.cacheKey !== expectedCacheKey ||
+        identity.loadedPath !== loadedPath ||
+        path.dirname(loadedPath) !== entryPath ||
+        path.basename(loadedPath) !== path.basename(sourceRealPath)
+      ) {
+        continue;
+      }
+
+      // Same version, same bytes, different install. The cache root is shared by every project
+      // on the machine, and npm can produce byte-identical files with matching mtimes, so size
+      // and mtime alone can match another project's record - whose sourcePath would then be
+      // replayed into this build's binding origin and change its runtime fingerprint.
+      if (identity.sourcePath !== sourceRealPath) continue;
+      if (identity.sourceSize !== sourceStats.size || identity.sourceMtimeMs !== sourceStats.mtimeMs) continue;
+      if (
+        identity.origin.packageName !== request.packageName ||
+        identity.origin.packageVersion !== request.packageVersion ||
+        identity.origin.target !== request.target ||
+        identity.origin.sourcePath === undefined ||
+        identity.origin.loadedPath === undefined ||
+        !pathsResolveEqual(identity.origin.sourcePath, sourceRealPath) ||
+        !pathsResolveEqual(identity.origin.loadedPath, identity.loadedPath) ||
+        identity.origin.cacheKey !== identity.cacheKey ||
+        identity.origin.sha256 !== identity.sha256
+      ) {
+        continue;
+      }
+
+      // Recorded by a runtime that could load the file. A different ABI cannot, and claiming
+      // otherwise would report native as available for a build that falls back away from it.
+      if (
+        identity.runtime.abi !== runtime.abi ||
+        identity.runtime.platform !== runtime.platform ||
+        identity.runtime.arch !== runtime.arch
+      ) {
+        continue;
+      }
+
+      const cachedStats = lstatRegularFileOrNull(identity.loadedPath);
+      if (!cachedStats) continue;
+      if (identity.cachedSize !== cachedStats.size || identity.cachedMtimeMs !== cachedStats.mtimeMs) continue;
+
+      const verifiedAt = Date.parse(identity.verifiedAt);
+      if (!Number.isFinite(verifiedAt) || verifiedAt > now || now - verifiedAt >= IDENTITY_REVERIFY_INTERVAL_MS) {
+        continue;
+      }
+      if (!isWithinDirectory(identity.loadedPath, resolvedCacheRoot)) continue;
+
+      return { entryPath, identity, revalidateAt: verifiedAt + IDENTITY_REVERIFY_INTERVAL_MS };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Record what a successful load proved about this entry, so the next process can skip both
+ * SHA-256 passes and the addon load itself. Called only after the binary at `loadedPath` has
+ * been fully verified and then loaded, so every field describes a state known to work.
+ *
+ * Replaces any previous record atomically: the TTL refresh rewrites it, unlike the immutable
+ * `manifest.json` beside it.
+ */
+export function recordNativeRuntimeCacheIdentity(identity: Omit<NativeCacheIdentityV1, "version" | "runtime">): void {
+  try {
+    const sourceStats = statOrNull(identity.sourcePath);
+    const cachedStats = lstatRegularFileOrNull(identity.loadedPath);
+    if (
+      !sourceStats ||
+      !cachedStats ||
+      sourceStats.size !== identity.sourceSize ||
+      sourceStats.mtimeMs !== identity.sourceMtimeMs ||
+      cachedStats.size !== identity.cachedSize ||
+      cachedStats.mtimeMs !== identity.cachedMtimeMs
+    ) {
+      return;
+    }
+
+    const entryPath = path.dirname(identity.loadedPath);
+    const record: NativeCacheIdentityV1 = {
+      version: IDENTITY_VERSION,
+      runtime: currentRuntimeStamp(),
+      ...identity,
+    };
+
+    const finalPath = identityFilePath(entryPath, identity.sourcePath);
+    const temporaryPath = `${finalPath}.${randomSuffix()}.tmp`;
+    try {
+      const descriptor = fs.openSync(temporaryPath, "wx");
+      try {
+        fs.writeFileSync(descriptor, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+        fs.fsyncSync(descriptor);
+      } finally {
+        fs.closeSync(descriptor);
+      }
+      fs.renameSync(temporaryPath, finalPath);
+    } catch {
+      removeRegularTemporaryFile(temporaryPath);
+    }
+  } catch {
+    // Best effort. Failing to record identity costs the next process the slow path, nothing more.
+  }
+}
+
+/**
+ * When an entry was last known to be in use, and which version it holds.
+ *
+ * Path-keyed identity records are refreshed whenever a process re-verifies an entry, so their
+ * latest non-future timestamp is the freshest signal. `manifest.json`'s `cachedAt` covers an
+ * entry that has never been loaded through the fast path. An entry that yields neither is left
+ * alone rather than guessed about.
+ */
+function readEntrySummary(
+  entryPath: string,
+  now: number,
+): { packageVersion: string; lastUsedMs: number; sourceFileName: string } | null {
+  let packageVersion: string | null = null;
+  let sourceFileName: string | null = null;
+  let cachedAtMs: number | null = null;
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(path.join(entryPath, "manifest.json"), "utf8"));
+    if (parsed && typeof parsed === "object") {
+      const manifest = parsed as Partial<NativeCacheManifestV1>;
+      if (typeof manifest.packageVersion === "string" && manifest.packageVersion) {
+        packageVersion = manifest.packageVersion;
+      }
+      if (
+        typeof manifest.sourceFileName === "string" &&
+        manifest.sourceFileName &&
+        path.basename(manifest.sourceFileName) === manifest.sourceFileName
+      ) {
+        sourceFileName = manifest.sourceFileName;
+      }
+      const cachedAt = typeof manifest.cachedAt === "string" ? Date.parse(manifest.cachedAt) : Number.NaN;
+      if (Number.isFinite(cachedAt)) cachedAtMs = cachedAt;
+    }
+  } catch {
+    // Missing or malformed: indistinguishable from an entry another process is still writing.
+    return null;
+  }
+  if (!packageVersion || !sourceFileName) return null;
+
+  const verifiedAt = latestCacheIdentityVerifiedAt(entryPath, now);
+  const lastUsedMs = Number.isFinite(verifiedAt) ? verifiedAt : cachedAtMs;
+  if (lastUsedMs === null) return null;
+  return { packageVersion, lastUsedMs, sourceFileName };
+}
+
+/**
+ * Delete the mapped binary before its metadata. Windows rejects an unlink of a loaded DLL,
+ * leaving the whole entry unchanged instead of partially deleting it through recursive removal.
+ */
+function removeAbandonedEntry(entryPath: string, sourceFileName: string): void {
+  const cachedBinaryPath = path.join(entryPath, sourceFileName);
+  if (!isWithinDirectory(cachedBinaryPath, entryPath) || path.dirname(cachedBinaryPath) !== entryPath) {
+    throw new Error("invalid native cache binary path");
+  }
+  const stats = fs.lstatSync(cachedBinaryPath);
+  if (!stats.isFile() || stats.isSymbolicLink()) throw new Error("unsafe native cache binary");
+  fs.unlinkSync(cachedBinaryPath);
+  fs.rmSync(entryPath, { recursive: true, force: true });
+}
+
+/**
+ * Delete entries that no project has used in a long time.
+ *
+ * The cache only ever grew: every upgrade left roughly 29 MB behind, and a machine that had
+ * tracked a few releases carried well over a hundred megabytes of addons nothing would load
+ * again. Keeping the directory small also keeps it warm, which is what the stat-only fast path
+ * above depends on.
+ *
+ * Retention is by age rather than by version, because the cache root is per-user and shared by
+ * every project on the machine. Removing "every version that is not the one installing" would
+ * make two projects pinned to different native versions delete each other's entry on every run.
+ *
+ * Best effort throughout, and deliberately conservative:
+ * - the entry just produced is never a candidate, nor is any entry for its version;
+ * - an entry whose manifest is missing, unreadable, or undated is left alone, because that is
+ *   what a concurrent population in progress looks like;
+ * - Windows holds a lock on a loaded DLL, so unlinking its binary fails with EBUSY or EPERM
+ *   before recursive metadata removal begins. Those failures preserve the whole entry and are
+ *   expected rather than exceptional, so they are simply skipped.
+ */
+function pruneAbandonedEntries(
+  targetPath: string,
+  cacheRoot: string,
+  keepEntryPath: string,
+  keepVersion: string,
+  now: number,
+): void {
+  let entryNames: string[];
+  try {
+    entryNames = fs.readdirSync(targetPath);
+  } catch {
+    return;
+  }
+
+  for (const entryName of entryNames) {
+    const entryPath = path.join(targetPath, entryName);
+    if (entryPath === keepEntryPath) continue;
+    if (!isWithinDirectory(entryPath, cacheRoot)) continue;
+    try {
+      if (!fs.lstatSync(entryPath).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    const summary = readEntrySummary(entryPath, now);
+    if (!summary || summary.packageVersion === keepVersion) continue;
+    if (now - summary.lastUsedMs < ABANDONED_ENTRY_RETENTION_MS) continue;
+    try {
+      removeAbandonedEntry(entryPath, summary.sourceFileName);
+    } catch {
+      // In use, incomplete, or not ours to remove. The next install tries again.
+    }
+  }
+}
+
 export function prepareNativeRuntimeCache(request: PrepareNativeRuntimeCacheRequest): PrepareNativeRuntimeCacheResult {
   const sourcePath = path.resolve(request.sourcePath);
   try {
     assertSafeCacheSegment(request.target, "target");
     assertSafeCacheSegment(request.packageVersion, "package version");
+
+    // Cheap-identity fast path: a previous process verified this exact pair of files and
+    // recorded their stat fields, so nothing here needs to be hashed. Population and every
+    // mismatch still take the full path below.
+    const hit = lookupNativeRuntimeCacheEntry({
+      sourcePath,
+      packageName: request.packageName,
+      packageVersion: request.packageVersion,
+      target: request.target,
+      ...(request.cacheRoot !== undefined ? { cacheRoot: request.cacheRoot } : {}),
+      ...(request.now !== undefined ? { now: request.now } : {}),
+    });
+    if (hit) {
+      return {
+        status: "reused",
+        sourcePath: hit.identity.sourcePath,
+        loadedPath: hit.identity.loadedPath,
+        cacheKey: hit.identity.cacheKey,
+        sha256: hit.identity.sha256,
+        sourceSize: hit.identity.sourceSize,
+        sourceMtimeMs: hit.identity.sourceMtimeMs,
+        cachedSize: hit.identity.cachedSize,
+        cachedMtimeMs: hit.identity.cachedMtimeMs,
+        verified: false,
+      };
+    }
+
     const sourceRealPath = fs.realpathSync.native(sourcePath);
     const source = hashFileStreaming(sourceRealPath);
     const cacheRoot = prepareSafeDirectory(request.cacheRoot ?? resolveProductionCacheRoot());
@@ -247,11 +745,12 @@ export function prepareNativeRuntimeCache(request: PrepareNativeRuntimeCacheRequ
     const sourceFileName = path.basename(sourceRealPath);
     const finalPath = path.join(entryPath, sourceFileName);
     let status: "cached" | "reused" = "reused";
-    const finalExists = fs.existsSync(finalPath);
-    if (!finalExists || !verifyFile(finalPath, source)) {
-      if (finalExists) recoverCorruptFinal(finalPath);
+    let cached = fs.existsSync(finalPath) ? verifyFile(finalPath, source) : null;
+    if (!cached) {
+      if (fs.existsSync(finalPath)) recoverCorruptFinal(finalPath);
       status = populateBinary(sourceRealPath, finalPath, source) ? "cached" : "reused";
-      if (!verifyFile(finalPath, source)) {
+      cached = verifyFile(finalPath, source);
+      if (!cached) {
         throw new Error("native cache winner failed integrity verification");
       }
     }
@@ -267,12 +766,21 @@ export function prepareNativeRuntimeCache(request: PrepareNativeRuntimeCacheRequ
       cachedAt: new Date().toISOString(),
     });
 
+    // Only on the verified path. A fast-path hit means nothing new arrived, so there is nothing
+    // to clean up, and the warm run stays free of extra directory work.
+    pruneAbandonedEntries(targetPath, cacheRoot, entryPath, request.packageVersion, request.now ?? Date.now());
+
     return {
       status,
       sourcePath: sourceRealPath,
       loadedPath: finalPath,
       cacheKey,
       sha256: source.sha256,
+      sourceSize: source.size,
+      sourceMtimeMs: source.mtimeMs,
+      cachedSize: cached.size,
+      cachedMtimeMs: cached.mtimeMs,
+      verified: true,
     };
   } catch (error) {
     return { status: "unavailable", sourcePath, error: asError(error) };
