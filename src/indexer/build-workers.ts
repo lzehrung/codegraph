@@ -6,6 +6,7 @@ import { readConfinedUtf8File } from "../util/confinedFile.js";
 import { recordNativeExecutionOutcome } from "../native/nativeBackendReport.js";
 import {
   getCachedNormalizedQuery,
+  getNativeWorkerBindingHandoff,
   isNativeRequiredUnavailableError,
   isNativeTreeSitterAvailable,
 } from "../native/treeSitterNative.js";
@@ -95,8 +96,12 @@ export async function setupWorkerPool(
   if (shouldUseWorkers) {
     try {
       const { createNativeWorkerPool } = await import("../worker/nativeWorkerPool.js");
+      // shouldEnableNativeWorkers has already resolved the binding on this thread, so the
+      // handoff is available here and saves every worker from repeating that resolution.
+      const handoff = getNativeWorkerBindingHandoff();
       const createdPool = createNativeWorkerPool({
         threads: opts?.nativeThreads,
+        ...(handoff ? { workerData: { nativeBinding: handoff } } : {}),
       });
       pool = createdPool;
       if (report) {

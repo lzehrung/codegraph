@@ -11,6 +11,8 @@ export type { NativeExtractTask, NativeExtractResult };
 export type NativeWorkerPoolOptions = {
   threads?: number | undefined;
   maxQueue?: number | undefined;
+  /** Passed through to each worker as node's `workerData`. */
+  workerData?: unknown;
 };
 
 const HARD_MAX_THREADS = 64;
@@ -43,5 +45,6 @@ export function createNativeWorkerPool(opts?: NativeWorkerPoolOptions): Piscina 
     maxThreads: threads,
     maxQueue: opts?.maxQueue ?? threads * 4,
     idleTimeout: 30_000,
+    ...(opts?.workerData === undefined ? {} : { workerData: opts.workerData }),
   });
 }

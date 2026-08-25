@@ -10,7 +10,13 @@ import {
   readPlatformPackage,
 } from "./bindingLoader.js";
 import { lookupNativeRuntimeCacheEntry, recordNativeRuntimeCacheIdentity } from "./runtimeCache.js";
-import type { NativeBinding, NativeBindingOrigin, NativeBindingState, NativeRuntimeMode } from "./contracts.js";
+import type {
+  NativeBinding,
+  NativeBindingOrigin,
+  NativeBindingState,
+  NativeRuntimeMode,
+  NativeWorkerBindingHandoff,
+} from "./contracts.js";
 
 const require = createRequire(import.meta.url);
 const localNativePackageRoot = path.resolve(
@@ -281,6 +287,18 @@ export function getNativeBindingOrigin(): NativeBindingOrigin | undefined {
 
 export function getCurrentNativeBindingOrigin(): NativeBindingOrigin | undefined {
   return bindingState?.origin;
+}
+
+/**
+ * The resolved addon path for a binding this process has already loaded, for handing to worker
+ * threads. Undefined unless a load succeeded, so a worker is never pointed at a path that did
+ * not work here.
+ */
+export function getNativeWorkerBindingHandoff(): NativeWorkerBindingHandoff | undefined {
+  if (!bindingState?.loaded) return undefined;
+  const loadedPath = bindingState.origin.loadedPath;
+  if (!loadedPath) return undefined;
+  return { loadedPath, origin: bindingState.origin };
 }
 
 export function getNativeTreeSitterSupportedLanguageIds(mode?: NativeRuntimeMode): string[] {

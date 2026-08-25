@@ -177,6 +177,19 @@ export type NativeBindingOrigin = {
   cacheError?: string;
 };
 
+/**
+ * What the main thread tells an extraction worker about the addon it already resolved.
+ *
+ * Workers used to repeat the whole pipeline - workspace probe, platform-package resolve, two
+ * 29 MB hashes, cache verification - to arrive at a file the parent had just verified and
+ * loaded. Handing over the resolved path and the origin that goes with it makes that one
+ * require() call per worker instead.
+ */
+export type NativeWorkerBindingHandoff = {
+  loadedPath: string;
+  origin: NativeBindingOrigin;
+};
+
 export type NativeBindingState =
   | {
       loaded: true;
