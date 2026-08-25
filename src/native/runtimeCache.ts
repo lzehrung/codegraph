@@ -326,10 +326,7 @@ export type NativeCacheLookupRequest = {
   now?: number | undefined;
 };
 
-export type NativeCacheLookupHit = {
-  entryPath: string;
-  identity: NativeCacheIdentityV1;
-};
+export type NativeCacheLookupHit = { entryPath: string; identity: NativeCacheIdentityV1; revalidateAt: number };
 
 function currentRuntimeStamp(): NativeCacheIdentityV1["runtime"] {
   return { abi: process.versions.modules, platform: process.platform, arch: process.arch };
@@ -529,7 +526,7 @@ export function lookupNativeRuntimeCacheEntry(request: NativeCacheLookupRequest)
       }
       if (!isWithinDirectory(identity.loadedPath, resolvedCacheRoot)) continue;
 
-      return { entryPath, identity };
+      return { entryPath, identity, revalidateAt: verifiedAt + IDENTITY_REVERIFY_INTERVAL_MS };
     }
     return null;
   } catch {

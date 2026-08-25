@@ -7,12 +7,19 @@ import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 import type { NativeBindingOrigin } from "../src/native/contracts.js";
+import * as runtimeCache from "../src/native/runtimeCache.js";
 import {
   lookupNativeRuntimeCacheEntry,
   prepareNativeRuntimeCache,
   recordNativeRuntimeCacheIdentity,
 } from "../src/native/runtimeCache.js";
-import { resolveCachedRuntimeIdentity, serializeNativeRuntimeFingerprint } from "../src/native/runtime.js";
+import {
+  __resetNativeTreeSitterBindingForTests,
+  getNativeRuntimeFingerprint,
+  resolveCachedRuntimeIdentity,
+  serializeNativeRuntimeFingerprint,
+} from "../src/native/runtime.js";
+import * as bindingLoader from "../src/native/bindingLoader.js";
 
 const tempDirs: string[] = [];
 const TARGET = "win32-x64-msvc";
@@ -563,11 +570,12 @@ describe("runtime fingerprint without loading the addon", () => {
       cacheRoot: fixture.cacheRoot,
     });
 
-    expect(identity).toEqual({
+    expect(identity).toMatchObject({
       available: true,
       supportedLanguageIds: LANGUAGES,
       origin: originFor(populated),
     });
+    expect(identity?.cacheIdentityRevalidateAt).toBeGreaterThan(Date.now());
   });
 
   it("produces the same fingerprint a loaded binding would", async () => {
@@ -624,5 +632,49 @@ describe("runtime fingerprint without loading the addon", () => {
     expect(resolveCachedRuntimeIdentity({ ...base, platform: "win32", cacheRoot: fixture.emptyWorkspaceRoot })).toBe(
       undefined,
     );
+  });
+
+  it("reuses a cached fingerprint only until its identity revalidation deadline", async () => {
+    const fixture = await makeFixture();
+    const populated = prepare(fixture);
+    if (populated.status === "unavailable") throw new Error(populated.error.message);
+    recordLoad(populated);
+    const cacheEntry = lookupNativeRuntimeCacheEntry({
+      sourcePath: fixture.binaryPath,
+      packageName: PACKAGE_NAME,
+      packageVersion: VERSION,
+      target: TARGET,
+      cacheRoot: fixture.cacheRoot,
+    });
+    if (!cacheEntry) throw new Error("expected a recorded cache identity");
+
+    const workspaceProbe = vi.spyOn(bindingLoader, "findLocalNativeBinary").mockReturnValue(null);
+    const platformPackage = vi
+      .spyOn(bindingLoader, "readPlatformPackage")
+      .mockReturnValue({ sourcePath: fixture.binaryPath, packageVersion: VERSION });
+    const target = vi.spyOn(bindingLoader, "currentNativeTargetSuffix").mockReturnValue(TARGET);
+    const lookup = vi.spyOn(runtimeCache, "lookupNativeRuntimeCacheEntry").mockReturnValue(cacheEntry);
+    const now = Date.now();
+
+    try {
+      __resetNativeTreeSitterBindingForTests();
+      const first = getNativeRuntimeFingerprint();
+      expect(getNativeRuntimeFingerprint()).toBe(first);
+      expect(lookup).toHaveBeenCalledTimes(1);
+
+      vi.useFakeTimers();
+      const expiredAt = now + 24 * 60 * 60 * 1000 + 1_000;
+      vi.setSystemTime(expiredAt);
+      expect(Date.now()).toBe(expiredAt);
+      getNativeRuntimeFingerprint();
+      expect(lookup).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+      __resetNativeTreeSitterBindingForTests();
+      lookup.mockRestore();
+      target.mockRestore();
+      platformPackage.mockRestore();
+      workspaceProbe.mockRestore();
+    }
   });
 });
