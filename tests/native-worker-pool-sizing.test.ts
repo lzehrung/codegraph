@@ -78,6 +78,54 @@ describe.runIf(isNativeTreeSitterAvailable())("native worker pool sizing", () =>
     }
   }, 60_000);
 
+  it("skips workers for fully cached full builds", async () => {
+    const fileCount = NATIVE_WORKER_AUTO_FILE_THRESHOLD + 8;
+    const root = await makeProject(fileCount);
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-pool-sizing-full-cache-"));
+    try {
+      const files = filesIn(root, fileCount);
+      await buildProjectIndexFromFiles(root, files, { cache: "disk", cacheDir });
+
+      const warm: BuildReport = { timings: {} };
+      await buildProjectIndexFromFiles(root, files, { cache: "disk", cacheDir, report: warm });
+
+      expect(warm.workerPool?.threads ?? 0).toBe(0);
+      expect(warm.workerPool?.tasksSubmitted ?? 0).toBe(0);
+    } finally {
+      await Promise.all([
+        fsp.rm(root, { recursive: true, force: true }),
+        fsp.rm(cacheDir, { recursive: true, force: true }),
+      ]);
+    }
+  }, 60_000);
+
+  it("bounds an explicitly enabled full build pool to cache misses", async () => {
+    const fileCount = NATIVE_WORKER_AUTO_FILE_THRESHOLD + 8;
+    const root = await makeProject(fileCount);
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-pool-sizing-full-partial-"));
+    try {
+      const files = filesIn(root, fileCount);
+      await buildProjectIndexFromFiles(root, files, { cache: "disk", cacheDir });
+      await fsp.writeFile(path.join(root, "file-0.ts"), "export const value0 = 1000;\n", "utf8");
+
+      const partial: BuildReport = { timings: {} };
+      await buildProjectIndexFromFiles(root, files, {
+        cache: "disk",
+        cacheDir,
+        useNativeWorkers: true,
+        report: partial,
+      });
+
+      expect(partial.workerPool?.enabled).toBe(true);
+      expect(partial.workerPool?.threads).toBe(1);
+    } finally {
+      await Promise.all([
+        fsp.rm(root, { recursive: true, force: true }),
+        fsp.rm(cacheDir, { recursive: true, force: true }),
+      ]);
+    }
+  }, 60_000);
+
   it("never creates more threads than there are files to parse", async () => {
     const root = await makeProject(3);
     try {

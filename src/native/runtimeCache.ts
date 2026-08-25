@@ -594,8 +594,12 @@ export function recordNativeRuntimeCacheIdentity(identity: Omit<NativeCacheIdent
  * entry that has never been loaded through the fast path. An entry that yields neither is left
  * alone rather than guessed about.
  */
-function readEntrySummary(entryPath: string, now: number): { packageVersion: string; lastUsedMs: number } | null {
+function readEntrySummary(
+  entryPath: string,
+  now: number,
+): { packageVersion: string; lastUsedMs: number; sourceFileName: string } | null {
   let packageVersion: string | null = null;
+  let sourceFileName: string | null = null;
   let cachedAtMs: number | null = null;
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(path.join(entryPath, "manifest.json"), "utf8"));
@@ -604,6 +608,13 @@ function readEntrySummary(entryPath: string, now: number): { packageVersion: str
       if (typeof manifest.packageVersion === "string" && manifest.packageVersion) {
         packageVersion = manifest.packageVersion;
       }
+      if (
+        typeof manifest.sourceFileName === "string" &&
+        manifest.sourceFileName &&
+        path.basename(manifest.sourceFileName) === manifest.sourceFileName
+      ) {
+        sourceFileName = manifest.sourceFileName;
+      }
       const cachedAt = typeof manifest.cachedAt === "string" ? Date.parse(manifest.cachedAt) : Number.NaN;
       if (Number.isFinite(cachedAt)) cachedAtMs = cachedAt;
     }
@@ -611,12 +622,27 @@ function readEntrySummary(entryPath: string, now: number): { packageVersion: str
     // Missing or malformed: indistinguishable from an entry another process is still writing.
     return null;
   }
-  if (!packageVersion) return null;
+  if (!packageVersion || !sourceFileName) return null;
 
   const verifiedAt = latestCacheIdentityVerifiedAt(entryPath, now);
   const lastUsedMs = Number.isFinite(verifiedAt) ? verifiedAt : cachedAtMs;
   if (lastUsedMs === null) return null;
-  return { packageVersion, lastUsedMs };
+  return { packageVersion, lastUsedMs, sourceFileName };
+}
+
+/**
+ * Delete the mapped binary before its metadata. Windows rejects an unlink of a loaded DLL,
+ * leaving the whole entry unchanged instead of partially deleting it through recursive removal.
+ */
+function removeAbandonedEntry(entryPath: string, sourceFileName: string): void {
+  const cachedBinaryPath = path.join(entryPath, sourceFileName);
+  if (!isWithinDirectory(cachedBinaryPath, entryPath) || path.dirname(cachedBinaryPath) !== entryPath) {
+    throw new Error("invalid native cache binary path");
+  }
+  const stats = fs.lstatSync(cachedBinaryPath);
+  if (!stats.isFile() || stats.isSymbolicLink()) throw new Error("unsafe native cache binary");
+  fs.unlinkSync(cachedBinaryPath);
+  fs.rmSync(entryPath, { recursive: true, force: true });
 }
 
 /**
@@ -635,9 +661,9 @@ function readEntrySummary(entryPath: string, now: number): { packageVersion: str
  * - the entry just produced is never a candidate, nor is any entry for its version;
  * - an entry whose manifest is missing, unreadable, or undated is left alone, because that is
  *   what a concurrent population in progress looks like;
- * - Windows holds a lock on a loaded DLL, so removing an entry another process is running fails
- *   with EBUSY or EPERM. That is the mechanism the "never deletes an entry in use" guarantee
- *   rests on, so those failures are expected rather than exceptional and are simply skipped.
+ * - Windows holds a lock on a loaded DLL, so unlinking its binary fails with EBUSY or EPERM
+ *   before recursive metadata removal begins. Those failures preserve the whole entry and are
+ *   expected rather than exceptional, so they are simply skipped.
  */
 function pruneAbandonedEntries(
   targetPath: string,
@@ -666,9 +692,9 @@ function pruneAbandonedEntries(
     if (!summary || summary.packageVersion === keepVersion) continue;
     if (now - summary.lastUsedMs < ABANDONED_ENTRY_RETENTION_MS) continue;
     try {
-      fs.rmSync(entryPath, { recursive: true, force: true });
+      removeAbandonedEntry(entryPath, summary.sourceFileName);
     } catch {
-      // In use, or not ours to remove. Either way the next install tries again.
+      // In use, incomplete, or not ours to remove. The next install tries again.
     }
   }
 }

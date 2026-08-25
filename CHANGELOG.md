@@ -11,12 +11,12 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Changed
 
-- Commands that only read a warm cache no longer load the native addon. The runtime fingerprint
-  needed the addon's supported-language list, so every cache-validity check paid a full load to
-  prove it did not need one; on Windows it now replays that list from a record written beside the
-  cached binary. The same record lets a warm run skip the two full-file SHA-256 passes the Windows
-  native cache performed per process, re-verifying once a day instead. A tampered binary is still
-  detected on the next verification, and any size or mtime change forces one immediately.
+- Installed Windows packages that only read a warm cache no longer load the native addon. The
+  runtime fingerprint needed the addon's supported-language list, so every cache-validity check
+  paid a full load to prove it did not need one; Windows now replays that list from a record beside
+  the cached binary. The same record lets a warm run skip the two full-file SHA-256 passes the
+  Windows native cache performed per process, re-verifying once a day instead. A tampered binary
+  is still detected on the next verification, and any size or mtime change forces one immediately.
 - Extraction workers are handed the addon the main thread already resolved instead of repeating
   the whole resolution, which on Windows was two 29 MB hashes and a cache verification per worker.
 - The indexer creates its worker pool after it knows which files changed, sizes it by that count,

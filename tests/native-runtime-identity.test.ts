@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import type { NativeBindingOrigin } from "../src/native/contracts.js";
 import {
@@ -465,6 +465,36 @@ describe("native cache pruning", () => {
 
     expect(entryNames(cacheRoot)).toEqual([path.basename(path.dirname(currentEntry.loadedPath))]);
     expect(fsSync.readFileSync(currentEntry.loadedPath, "utf8")).toBe("current-binary-contents");
+  });
+
+  it("leaves a locked entry intact", async () => {
+    const shared = await makeFixture();
+    const cacheRoot = shared.cacheRoot;
+
+    const abandoned = await fixtureAtVersion("1.9.0", "other-binary-contents", cacheRoot);
+    const abandonedEntry = prepareAt(abandoned, "1.9.0");
+    if (abandonedEntry.status === "unavailable") throw new Error(abandonedEntry.error.message);
+    const abandonedManifest = path.join(path.dirname(abandonedEntry.loadedPath), "manifest.json");
+
+    const originalUnlink = fsSync.unlinkSync;
+    const unlink = vi.spyOn(fsSync, "unlinkSync").mockImplementation((filePath) => {
+      if (path.resolve(filePath.toString()) === path.resolve(abandonedEntry.loadedPath)) {
+        const error = new Error("native cache binary is in use") as NodeJS.ErrnoException;
+        error.code = "EBUSY";
+        throw error;
+      }
+      originalUnlink(filePath);
+    });
+    try {
+      const current = await fixtureAtVersion(VERSION, "current-binary-contents", cacheRoot);
+      const currentEntry = prepareAt(current, VERSION, Date.now() + RETENTION_MS + 60_000);
+      if (currentEntry.status === "unavailable") throw new Error(currentEntry.error.message);
+    } finally {
+      unlink.mockRestore();
+    }
+
+    expect(fsSync.existsSync(abandonedEntry.loadedPath)).toBe(true);
+    expect(fsSync.existsSync(abandonedManifest)).toBe(true);
   });
 
   it("keeps entries it cannot identify and the one it just wrote", async () => {
