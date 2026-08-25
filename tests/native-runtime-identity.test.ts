@@ -126,6 +126,13 @@ function recordLoad(result: {
   });
 }
 
+function useWindowsPlatformForRuntimeTest(): () => void {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  if (!descriptor) throw new Error("expected process.platform descriptor");
+  Object.defineProperty(process, "platform", { ...descriptor, value: "win32" });
+  return () => Object.defineProperty(process, "platform", descriptor);
+}
+
 /**
  * Replace a file's bytes, keeping its size, so only content differs. Recording the identity
  * afterwards produces the situation the stat-only fast path cannot detect: stats that match a
@@ -222,6 +229,28 @@ describe("native runtime cache identity", () => {
     if (rebuilt.status === "unavailable") throw new Error(rebuilt.error.message);
     expect(rebuilt.verified).toBe(true);
     expect(fsSync.readFileSync(rebuilt.loadedPath, "utf8")).toBe("native-binary-contents");
+  });
+
+  it("rejects a cache root whose ancestor became a symlink", async () => {
+    const fixture = await makeFixture();
+    const populated = prepare(fixture);
+    if (populated.status === "unavailable") throw new Error(populated.error.message);
+    recordLoad(populated);
+
+    const cacheParent = path.dirname(fixture.cacheRoot);
+    const relocatedParent = path.join(fixture.emptyWorkspaceRoot, "relocated-cache");
+    await fs.rename(cacheParent, relocatedParent);
+    await fs.symlink(relocatedParent, cacheParent, process.platform === "win32" ? "junction" : "dir");
+
+    expect(
+      lookupNativeRuntimeCacheEntry({
+        sourcePath: fixture.binaryPath,
+        packageName: PACKAGE_NAME,
+        packageVersion: VERSION,
+        target: TARGET,
+        cacheRoot: fixture.cacheRoot,
+      }),
+    ).toBeNull();
   });
 
   it("declines an identity that points outside its immutable cache entry", async () => {
@@ -648,9 +677,7 @@ describe("runtime fingerprint without loading the addon", () => {
     });
     if (!cacheEntry) throw new Error("expected a recorded cache identity");
 
-    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-    if (!platformDescriptor) throw new Error("expected process.platform descriptor");
-    Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
+    const restorePlatform = useWindowsPlatformForRuntimeTest();
 
     const workspaceProbe = vi.spyOn(bindingLoader, "findLocalNativeBinary").mockReturnValue(null);
     const platformPackage = vi
@@ -679,7 +706,48 @@ describe("runtime fingerprint without loading the addon", () => {
       target.mockRestore();
       platformPackage.mockRestore();
       workspaceProbe.mockRestore();
-      Object.defineProperty(process, "platform", platformDescriptor);
+      restorePlatform();
+    }
+  });
+
+  it("revalidates a memoized fingerprint when a file changes before the deadline", async () => {
+    const fixture = await makeFixture();
+    const populated = prepare(fixture);
+    if (populated.status === "unavailable") throw new Error(populated.error.message);
+    recordLoad(populated);
+    const cacheEntry = lookupNativeRuntimeCacheEntry({
+      sourcePath: fixture.binaryPath,
+      packageName: PACKAGE_NAME,
+      packageVersion: VERSION,
+      target: TARGET,
+      cacheRoot: fixture.cacheRoot,
+    });
+    if (!cacheEntry) throw new Error("expected a recorded cache identity");
+
+    const restorePlatform = useWindowsPlatformForRuntimeTest();
+    const workspaceProbe = vi.spyOn(bindingLoader, "findLocalNativeBinary").mockReturnValue(null);
+    const platformPackage = vi
+      .spyOn(bindingLoader, "readPlatformPackage")
+      .mockReturnValue({ sourcePath: fixture.binaryPath, packageVersion: VERSION });
+    const target = vi.spyOn(bindingLoader, "currentNativeTargetSuffix").mockReturnValue(TARGET);
+    const lookup = vi.spyOn(runtimeCache, "lookupNativeRuntimeCacheEntry").mockReturnValue(cacheEntry);
+
+    try {
+      __resetNativeTreeSitterBindingForTests();
+      getNativeRuntimeFingerprint();
+      expect(getNativeRuntimeFingerprint()).toBeDefined();
+      expect(lookup).toHaveBeenCalledTimes(1);
+
+      await fs.writeFile(fixture.binaryPath, "changed-native-binary");
+      getNativeRuntimeFingerprint();
+      expect(lookup).toHaveBeenCalledTimes(2);
+    } finally {
+      __resetNativeTreeSitterBindingForTests();
+      lookup.mockRestore();
+      target.mockRestore();
+      platformPackage.mockRestore();
+      workspaceProbe.mockRestore();
+      restorePlatform();
     }
   });
 });

@@ -152,7 +152,7 @@ function assertSafePathComponent(componentPath: string): void {
   }
 }
 
-function prepareSafeDirectory(directoryPath: string): string {
+function prepareSafeDirectory(directoryPath: string, create = true): string {
   const absolute = path.resolve(directoryPath);
   const parsed = path.parse(absolute);
   let current = parsed.root;
@@ -164,7 +164,7 @@ function prepareSafeDirectory(directoryPath: string): string {
     try {
       assertSafePathComponent(current);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !create) {
         throw error;
       }
       try {
@@ -420,8 +420,8 @@ function lstatRegularFileOrNull(filePath: string): fs.Stats | null {
 
 function isSafeExistingDirectory(directoryPath: string): boolean {
   try {
-    const stats = fs.lstatSync(directoryPath);
-    return stats.isDirectory() && !stats.isSymbolicLink();
+    prepareSafeDirectory(directoryPath, false);
+    return true;
   } catch {
     return false;
   }

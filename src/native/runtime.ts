@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -36,7 +37,23 @@ let loadedRuntimeFingerprint:
     }
   | undefined;
 const disabledRuntimeFingerprints = new Map<string, string>();
-const cachedRuntimeFingerprints = new Map<string, { value: string; revalidateAt: number }>();
+type CachedRuntimeFingerprintValidation = {
+  sourcePath: string;
+  sourceSize: number;
+  sourceMtimeMs: number;
+  loadedPath: string;
+  cachedSize: number;
+  cachedMtimeMs: number;
+};
+
+type CachedRuntimeFingerprint = {
+  value: string;
+  revalidateAt: number;
+  validation: CachedRuntimeFingerprintValidation;
+};
+
+const cachedRuntimeFingerprints = new Map<string, CachedRuntimeFingerprint>();
+const cachedRuntimeIdentityValidations = new WeakMap<NativeRuntimeIdentity, CachedRuntimeFingerprintValidation>();
 
 export function __resetNativeTreeSitterBindingForTests(): void {
   bindingState = undefined;
@@ -141,6 +158,33 @@ function identityFromState(state: NativeBindingState): NativeRuntimeIdentity {
   };
 }
 
+function cacheFingerprintFilesMatch(validation: CachedRuntimeFingerprintValidation): boolean {
+  try {
+    const sourcePath = fs.realpathSync.native(validation.sourcePath);
+    if (sourcePath !== validation.sourcePath) return false;
+    const sourceStats = fs.statSync(sourcePath);
+    if (
+      !sourceStats.isFile() ||
+      sourceStats.size !== validation.sourceSize ||
+      sourceStats.mtimeMs !== validation.sourceMtimeMs
+    ) {
+      return false;
+    }
+
+    const loadedPath = fs.realpathSync.native(validation.loadedPath);
+    if (loadedPath !== validation.loadedPath) return false;
+    const cachedStats = fs.lstatSync(loadedPath);
+    return (
+      cachedStats.isFile() &&
+      !cachedStats.isSymbolicLink() &&
+      cachedStats.size === validation.cachedSize &&
+      cachedStats.mtimeMs === validation.cachedMtimeMs
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Takes the binding-derived facts rather than a NativeBindingState, because the cache fast path
  * below reconstructs those facts from a recorded identity and has no binding to hand.
@@ -228,12 +272,21 @@ export function resolveCachedRuntimeIdentity(
       ...(options.now !== undefined ? { now: options.now } : {}),
     });
     if (!hit) return undefined;
-    return {
+    const identity: NativeRuntimeIdentity = {
       available: true,
       supportedLanguageIds: hit.identity.supportedLanguageIds,
       origin: hit.identity.origin,
       cacheIdentityRevalidateAt: hit.revalidateAt,
     };
+    cachedRuntimeIdentityValidations.set(identity, {
+      sourcePath: hit.identity.sourcePath,
+      sourceSize: hit.identity.sourceSize,
+      sourceMtimeMs: hit.identity.sourceMtimeMs,
+      loadedPath: hit.identity.loadedPath,
+      cachedSize: hit.identity.cachedSize,
+      cachedMtimeMs: hit.identity.cachedMtimeMs,
+    });
+    return identity;
   } catch {
     return undefined;
   }
@@ -263,14 +316,22 @@ export function getNativeRuntimeFingerprint(mode?: NativeRuntimeMode, env: NodeJ
     const cacheKey = `${requestedMode}:${envDisabled}`;
     const now = Date.now();
     const memoized = cachedRuntimeFingerprints.get(cacheKey);
-    if (memoized && now < memoized.revalidateAt) return memoized.value;
+    if (memoized && now < memoized.revalidateAt && cacheFingerprintFilesMatch(memoized.validation)) {
+      return memoized.value;
+    }
 
     const cachedIdentity = resolveCachedRuntimeIdentity();
-    if (cachedIdentity?.cacheIdentityRevalidateAt !== undefined) {
+    const validation = cachedIdentity ? cachedRuntimeIdentityValidations.get(cachedIdentity) : undefined;
+    if (
+      cachedIdentity?.cacheIdentityRevalidateAt !== undefined &&
+      validation &&
+      cacheFingerprintFilesMatch(validation)
+    ) {
       const value = serializeNativeRuntimeFingerprint(requestedMode, envDisabled, cachedIdentity);
       cachedRuntimeFingerprints.set(cacheKey, {
         value,
         revalidateAt: cachedIdentity.cacheIdentityRevalidateAt,
+        validation,
       });
       return value;
     }
