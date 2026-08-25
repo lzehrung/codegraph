@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -87,6 +88,12 @@ function originFor(result: {
 }
 
 /** Record what a successful load would have recorded, so later calls can take the fast path. */
+function identityPathFor(result: { sourcePath: string; loadedPath: string }): string {
+  const sourcePath = fsSync.realpathSync.native(result.sourcePath);
+  const sourceKey = createHash("sha256").update(sourcePath).digest("hex");
+  return path.join(path.dirname(result.loadedPath), `identity-${sourceKey}.json`);
+}
+
 function recordLoad(result: {
   sourcePath: string;
   loadedPath: string;
@@ -165,7 +172,7 @@ describe("native runtime cache identity", () => {
 
     // This simulates the stat-preserving substitution the TTL bounds. Production only creates
     // this record from the verified snapshot, so it cannot accidentally create this state.
-    const identityPath = path.join(path.dirname(populated.loadedPath), "identity.json");
+    const identityPath = identityPathFor(populated);
     const identity = JSON.parse(await fs.readFile(identityPath, "utf8")) as {
       cachedSize: number;
       cachedMtimeMs: number;
@@ -219,7 +226,7 @@ describe("native runtime cache identity", () => {
     const foreignPath = path.join(fixture.cacheRoot, TARGET, "foreign-addon.node");
     await fs.copyFile(populated.loadedPath, foreignPath);
     const foreignStats = fsSync.statSync(foreignPath);
-    const identityPath = path.join(path.dirname(populated.loadedPath), "identity.json");
+    const identityPath = identityPathFor(populated);
     const identity = JSON.parse(await fs.readFile(identityPath, "utf8")) as {
       loadedPath: string;
       cachedSize: number;
@@ -253,7 +260,7 @@ describe("native runtime cache identity", () => {
     fsSync.utimesSync(fixture.binaryPath, afterVerification, afterVerification);
     recordLoad(populated);
 
-    const identityPath = path.join(path.dirname(populated.loadedPath), "identity.json");
+    const identityPath = identityPathFor(populated);
     expect(fsSync.existsSync(identityPath)).toBe(false);
     const rebuilt = prepare(fixture);
     if (rebuilt.status === "unavailable") throw new Error(rebuilt.error.message);
@@ -267,7 +274,7 @@ describe("native runtime cache identity", () => {
     if (populated.status === "unavailable") throw new Error(populated.error.message);
     recordLoad(populated);
 
-    const identityPath = path.join(path.dirname(populated.loadedPath), "identity.json");
+    const identityPath = identityPathFor(populated);
     await fs.writeFile(identityPath, '{"version":1,"sha256":');
     expect(
       lookupNativeRuntimeCacheEntry({
@@ -284,50 +291,28 @@ describe("native runtime cache identity", () => {
     expect(rebuilt.verified).toBe(true);
   });
 
-  it("declines a record left by another install of the same version", async () => {
+  it("retains fast identities for every install sharing one cache entry", async () => {
     const fixture = await makeFixture();
     const populated = prepare(fixture);
     if (populated.status === "unavailable") throw new Error(populated.error.message);
     recordLoad(populated);
 
-    // A second project with the same package version installed. npm can produce byte-identical
-    // files, and tarball extraction can give them the same mtime, so size and mtime alone would
-    // match the first project's record - and hand this build the other project's source path,
-    // which travels into the binding origin and changes the runtime fingerprint.
-    //
-    // The record's stat fields are set from the sibling rather than copying mtimes between
-    // files, because utimesSync truncates sub-millisecond precision: the lookup would then
-    // decline on the mtime and this test would pass without ever reaching the path comparison.
-    const sibling = await makeFixture();
-    const siblingStats = fsSync.statSync(sibling.binaryPath);
-    const identityPath = path.join(path.dirname(populated.loadedPath), "identity.json");
-    const identity = JSON.parse(await fs.readFile(identityPath, "utf8")) as {
-      sourcePath: string;
-      sourceSize: number;
-      sourceMtimeMs: number;
-      origin: { sourcePath: string };
-    };
-    identity.sourceSize = siblingStats.size;
-    identity.sourceMtimeMs = siblingStats.mtimeMs;
-    await fs.writeFile(identityPath, JSON.stringify(identity));
-    // Everything the lookup compares now matches except which install the record describes.
-    expect(identity.sourcePath).not.toBe(fsSync.realpathSync.native(sibling.binaryPath));
+    // Projects can install the same binary under different realpaths yet share its
+    // content-addressed cache entry. Each must keep its own origin and warm fast path.
+    const sibling = { ...(await makeFixture()), cacheRoot: fixture.cacheRoot };
+    const siblingPrepared = prepare(sibling);
+    if (siblingPrepared.status === "unavailable") throw new Error(siblingPrepared.error.message);
+    recordLoad(siblingPrepared);
 
     expect(
       lookupNativeRuntimeCacheEntry({
-        sourcePath: sibling.binaryPath,
+        sourcePath: fixture.binaryPath,
         packageName: PACKAGE_NAME,
         packageVersion: VERSION,
         target: TARGET,
         cacheRoot: fixture.cacheRoot,
       }),
-    ).toBeNull();
-
-    // Restoring only the path proves the path is what declined it: the same record, the same
-    // stat values, now naming this install, is accepted.
-    identity.sourcePath = fsSync.realpathSync.native(sibling.binaryPath);
-    identity.origin.sourcePath = identity.sourcePath;
-    await fs.writeFile(identityPath, JSON.stringify(identity));
+    ).not.toBeNull();
     expect(
       lookupNativeRuntimeCacheEntry({
         sourcePath: sibling.binaryPath,
@@ -337,6 +322,31 @@ describe("native runtime cache identity", () => {
         cacheRoot: fixture.cacheRoot,
       }),
     ).not.toBeNull();
+    expect(prepare(fixture)).toMatchObject({ verified: false });
+    expect(prepare(sibling)).toMatchObject({ verified: false });
+  });
+
+  it("rejects an identity timestamp from the future", async () => {
+    const fixture = await makeFixture();
+    const populated = prepare(fixture);
+    if (populated.status === "unavailable") throw new Error(populated.error.message);
+    recordLoad(populated);
+
+    const identityPath = identityPathFor(populated);
+    const identity = JSON.parse(await fs.readFile(identityPath, "utf8")) as { verifiedAt: string };
+    identity.verifiedAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await fs.writeFile(identityPath, JSON.stringify(identity));
+
+    expect(
+      lookupNativeRuntimeCacheEntry({
+        sourcePath: fixture.binaryPath,
+        packageName: PACKAGE_NAME,
+        packageVersion: VERSION,
+        target: TARGET,
+        cacheRoot: fixture.cacheRoot,
+      }),
+    ).toBeNull();
+    expect(prepare(fixture)).toMatchObject({ verified: true });
   });
 
   it("declines a record written by a runtime that cannot load it here", async () => {
@@ -345,7 +355,7 @@ describe("native runtime cache identity", () => {
     if (populated.status === "unavailable") throw new Error(populated.error.message);
     recordLoad(populated);
 
-    const identityPath = path.join(path.dirname(populated.loadedPath), "identity.json");
+    const identityPath = identityPathFor(populated);
     const identity = JSON.parse(await fs.readFile(identityPath, "utf8")) as { runtime: { abi: string } };
     expect(identity.runtime.abi).toBe(process.versions.modules);
 
@@ -376,10 +386,10 @@ describe("native runtime cache identity", () => {
     if (populated.status === "unavailable") throw new Error(populated.error.message);
     recordLoad(populated);
 
-    // An entry produced by the previous implementation: manifest.json and the binary, no
-    // identity.json. It must still resolve, just without the fast path.
+    // An entry produced before path-keyed identity records: manifest.json and the binary, no
+    // matching record. It must still resolve, just without the fast path.
     const entryPath = path.dirname(populated.loadedPath);
-    await fs.rm(path.join(entryPath, "identity.json"));
+    await fs.rm(identityPathFor(populated));
     expect(fsSync.existsSync(path.join(entryPath, "manifest.json"))).toBe(true);
 
     const legacy = prepare(fixture);

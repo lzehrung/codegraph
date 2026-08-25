@@ -6,7 +6,8 @@ import type { NativeBindingOrigin } from "./contracts.js";
 
 const CACHE_SCHEMA_VERSION = 1;
 const HASH_BUFFER_SIZE = 1024 * 1024;
-const IDENTITY_FILE_NAME = "identity.json";
+const IDENTITY_FILE_PREFIX = "identity-";
+const IDENTITY_FILE_SUFFIX = ".json";
 const IDENTITY_VERSION = 1;
 
 /**
@@ -46,12 +47,11 @@ export type NativeCacheManifestV1 = {
 };
 
 /**
- * Written beside `manifest.json` after a process has successfully loaded the cached binary.
- *
- * It is deliberately a separate file rather than extra manifest fields. `manifest.json` is
- * content-addressed and published once, immutably; this record is mutable (the TTL refreshes
- * it) and carries facts that are only known after the addon loads. Keeping them apart means
- * an entry written by an older version stays valid and simply misses the fast path.
+ * Written as a path-keyed record beside `manifest.json` after a process has successfully
+ * loaded the cached binary. `manifest.json` is content-addressed and published once,
+ * immutably; these records are mutable (the TTL refreshes them) and carry facts that only exist
+ * after the addon loads. One record per source realpath lets projects sharing the binary retain
+ * their own origin without invalidating each other's fast path.
  */
 export type NativeCacheIdentityV1 = {
   version: 1;
@@ -335,14 +335,19 @@ function currentRuntimeStamp(): NativeCacheIdentityV1["runtime"] {
   return { abi: process.versions.modules, platform: process.platform, arch: process.arch };
 }
 
-function identityFilePath(entryPath: string): string {
-  return path.join(entryPath, IDENTITY_FILE_NAME);
+function identityFilePath(entryPath: string, sourcePath: string): string {
+  const sourceKey = createHash("sha256").update(sourcePath).digest("hex");
+  return path.join(entryPath, `${IDENTITY_FILE_PREFIX}${sourceKey}${IDENTITY_FILE_SUFFIX}`);
 }
 
-function readCacheIdentity(entryPath: string): NativeCacheIdentityV1 | null {
+function isIdentityFileName(fileName: string): boolean {
+  return /^identity-[a-f0-9]{64}\.json$/.test(fileName);
+}
+
+function readCacheIdentityFile(filePath: string): NativeCacheIdentityV1 | null {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(fs.readFileSync(identityFilePath(entryPath), "utf8"));
+    parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
   } catch {
     // Absent (an entry written before this file existed), unreadable, or malformed. All three
     // mean the same thing to the caller: no fast path, fall back to hashing.
@@ -373,6 +378,29 @@ function readCacheIdentity(entryPath: string): NativeCacheIdentityV1 | null {
     return null;
   }
   return candidate as NativeCacheIdentityV1;
+}
+
+function readCacheIdentity(entryPath: string, sourcePath: string): NativeCacheIdentityV1 | null {
+  return readCacheIdentityFile(identityFilePath(entryPath, sourcePath));
+}
+
+function latestCacheIdentityVerifiedAt(entryPath: string, now: number): number {
+  let fileNames: string[];
+  try {
+    fileNames = fs.readdirSync(entryPath);
+  } catch {
+    return Number.NaN;
+  }
+
+  let latest = Number.NaN;
+  for (const fileName of fileNames) {
+    if (!isIdentityFileName(fileName)) continue;
+    const identity = readCacheIdentityFile(path.join(entryPath, fileName));
+    const verifiedAt = identity ? Date.parse(identity.verifiedAt) : Number.NaN;
+    if (!Number.isFinite(verifiedAt) || verifiedAt > now) continue;
+    if (!Number.isFinite(latest) || verifiedAt > latest) latest = verifiedAt;
+  }
+  return latest;
 }
 
 function statOrNull(filePath: string): fs.Stats | null {
@@ -445,7 +473,7 @@ export function lookupNativeRuntimeCacheEntry(request: NativeCacheLookupRequest)
       if (!entryName.startsWith(prefix)) continue;
       const entryPath = path.join(targetPath, entryName);
       if (!isSafeExistingDirectory(entryPath)) continue;
-      const identity = readCacheIdentity(entryPath);
+      const identity = readCacheIdentity(entryPath, sourceRealPath);
       if (!identity) continue;
 
       const expectedEntryName = `${request.packageVersion}-${identity.sha256}`;
@@ -496,7 +524,9 @@ export function lookupNativeRuntimeCacheEntry(request: NativeCacheLookupRequest)
       if (identity.cachedSize !== cachedStats.size || identity.cachedMtimeMs !== cachedStats.mtimeMs) continue;
 
       const verifiedAt = Date.parse(identity.verifiedAt);
-      if (!Number.isFinite(verifiedAt) || now - verifiedAt >= IDENTITY_REVERIFY_INTERVAL_MS) continue;
+      if (!Number.isFinite(verifiedAt) || verifiedAt > now || now - verifiedAt >= IDENTITY_REVERIFY_INTERVAL_MS) {
+        continue;
+      }
       if (!isWithinDirectory(identity.loadedPath, resolvedCacheRoot)) continue;
 
       return { entryPath, identity };
@@ -537,7 +567,7 @@ export function recordNativeRuntimeCacheIdentity(identity: Omit<NativeCacheIdent
       ...identity,
     };
 
-    const finalPath = identityFilePath(entryPath);
+    const finalPath = identityFilePath(entryPath, identity.sourcePath);
     const temporaryPath = `${finalPath}.${randomSuffix()}.tmp`;
     try {
       const descriptor = fs.openSync(temporaryPath, "wx");
@@ -559,11 +589,12 @@ export function recordNativeRuntimeCacheIdentity(identity: Omit<NativeCacheIdent
 /**
  * When an entry was last known to be in use, and which version it holds.
  *
- * `identity.json` is refreshed whenever a process re-verifies the entry, so it is the freshest
- * signal; `manifest.json`'s `cachedAt` covers an entry that has never been loaded through the
- * fast path. An entry that yields neither is left alone rather than guessed about.
+ * Path-keyed identity records are refreshed whenever a process re-verifies an entry, so their
+ * latest non-future timestamp is the freshest signal. `manifest.json`'s `cachedAt` covers an
+ * entry that has never been loaded through the fast path. An entry that yields neither is left
+ * alone rather than guessed about.
  */
-function readEntrySummary(entryPath: string): { packageVersion: string; lastUsedMs: number } | null {
+function readEntrySummary(entryPath: string, now: number): { packageVersion: string; lastUsedMs: number } | null {
   let packageVersion: string | null = null;
   let cachedAtMs: number | null = null;
   try {
@@ -582,8 +613,7 @@ function readEntrySummary(entryPath: string): { packageVersion: string; lastUsed
   }
   if (!packageVersion) return null;
 
-  const identity = readCacheIdentity(entryPath);
-  const verifiedAt = identity ? Date.parse(identity.verifiedAt) : Number.NaN;
+  const verifiedAt = latestCacheIdentityVerifiedAt(entryPath, now);
   const lastUsedMs = Number.isFinite(verifiedAt) ? verifiedAt : cachedAtMs;
   if (lastUsedMs === null) return null;
   return { packageVersion, lastUsedMs };
@@ -632,7 +662,7 @@ function pruneAbandonedEntries(
     } catch {
       continue;
     }
-    const summary = readEntrySummary(entryPath);
+    const summary = readEntrySummary(entryPath, now);
     if (!summary || summary.packageVersion === keepVersion) continue;
     if (now - summary.lastUsedMs < ABANDONED_ENTRY_RETENTION_MS) continue;
     try {

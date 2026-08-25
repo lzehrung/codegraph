@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
-import type { LanguageSupport } from "../languages.js";
+import { supportForFile, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import { stringifyUnknown } from "../util/ast.js";
 import { readConfinedUtf8File } from "../util/confinedFile.js";
 import { recordNativeExecutionOutcome } from "../native/nativeBackendReport.js";
@@ -75,6 +75,24 @@ export function emptyWorkerPoolSetup(): WorkerPoolSetupResult {
 
 function isSFCFile(filePath: string): boolean {
   return filePath.endsWith(".vue") || filePath.endsWith(".svelte") || filePath.endsWith(".astro");
+}
+
+export function isNativeWorkerEligibleFile(
+  filePath: string,
+  support: LanguageSupport | undefined,
+): support is LanguageSupport {
+  return !!support && !isSFCFile(filePath) && !isGraphOnlyLanguage(support.id);
+}
+
+export function countNativeWorkerEligibleFiles(
+  files: readonly string[],
+  languageExtensions: LanguageExtensionMap | undefined,
+): number {
+  let count = 0;
+  for (const file of files) {
+    if (isNativeWorkerEligibleFile(file, supportForFile(file, languageExtensions))) count++;
+  }
+  return count;
 }
 
 function buildWorkerTask(filePath: string, sup: LanguageSupport, source?: string): NativeExtractTask {
@@ -225,7 +243,7 @@ export async function prepareFileContextForBuild(
     return prepared;
   }
   let prepared: PreparedFileContext;
-  if (workerSetup.pool && !isSFCFile(file) && !isGraphOnlyLanguage(support.id)) {
+  if (workerSetup.pool && isNativeWorkerEligibleFile(file, support)) {
     if (workerSetup.report) workerSetup.report.tasksSubmitted++;
     try {
       const workerResult = (await workerSetup.pool.run(buildWorkerTask(file, support, source))) as NativeExtractResult;

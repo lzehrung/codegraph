@@ -10,16 +10,20 @@ import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 import { createNativeWorkerPool } from "../src/worker/nativeWorkerPool.js";
 import type { BuildReport } from "../src/indexer/types.js";
 
-async function makeProject(fileCount: number): Promise<string> {
+async function makeProject(fileCount: number, extension = ".ts"): Promise<string> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-pool-sizing-"));
   for (let index = 0; index < fileCount; index += 1) {
-    await fsp.writeFile(path.join(root, `file-${index}.ts`), `export const value${index} = ${index};\n`, "utf8");
+    const source =
+      extension === ".vue"
+        ? `<script lang="ts">export const value${index} = ${index};</script>\n`
+        : `export const value${index} = ${index};\n`;
+    await fsp.writeFile(path.join(root, `file-${index}${extension}`), source, "utf8");
   }
   return root;
 }
 
-function filesIn(root: string, fileCount: number): string[] {
-  return Array.from({ length: fileCount }, (_, index) => path.join(root, `file-${index}.ts`));
+function filesIn(root: string, fileCount: number, extension = ".ts"): string[] {
+  return Array.from({ length: fileCount }, (_, index) => path.join(root, `file-${index}${extension}`));
 }
 
 describe("native worker pool enablement", () => {
@@ -88,6 +92,22 @@ describe.runIf(isNativeTreeSitterAvailable())("native worker pool sizing", () =>
       expect(report.workerPool?.enabled).toBe(true);
       expect(report.workerPool?.threads).toBeGreaterThan(0);
       expect(report.workerPool?.threads).toBeLessThanOrEqual(3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("skips the pool when every changed file stays on the main thread", async () => {
+    const fileCount = NATIVE_WORKER_AUTO_FILE_THRESHOLD + 8;
+    const root = await makeProject(fileCount, ".vue");
+    try {
+      const report: BuildReport = { timings: {} };
+      await buildProjectIndexFromFiles(root, filesIn(root, fileCount, ".vue"), {
+        cache: "off",
+        report,
+      });
+      expect(report.workerPool?.threads ?? 0).toBe(0);
+      expect(report.workerPool?.tasksSubmitted ?? 0).toBe(0);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

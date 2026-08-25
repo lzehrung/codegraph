@@ -99,6 +99,7 @@ import { finalizeProjectIndex } from "./finalize.js";
 import { toManifestFileEntry, writeIndexManifestSnapshot } from "./build-manifest.js";
 import {
   prepareFileContextForBuild,
+  countNativeWorkerEligibleFiles,
   emptyWorkerPoolSetup,
   setupWorkerPool,
   teardownWorkerPool,
@@ -772,7 +773,10 @@ async function buildIndexFromFileListShared(
     return !(matchesGitSig || cachedEdgesEntry.sig === sigInfo.sig);
   };
   const jsonDependencies = new Map<string, string>();
-  const workerSetup = await setupWorkerPool(opts, normalizedFiles.length);
+  const workerSetup = await setupWorkerPool(
+    opts,
+    countNativeWorkerEligibleFiles(normalizedFiles, opts?.languageExtensions),
+  );
   try {
     const useBloomFilters = opts?.useBloomFilters ?? true;
     const bloomFilterCache = useBloomFilters
@@ -1683,7 +1687,7 @@ export async function buildProjectIndexIncremental(
       const changedList = Array.from(changedFiles);
       // Sized by the work that remains rather than the size of the project: an incremental build
       // touching a handful of files gets a handful of threads, or none.
-      workerSetup = await setupWorkerPool(opts, changedList.length);
+      workerSetup = await setupWorkerPool(opts, countNativeWorkerEligibleFiles(changedList, opts?.languageExtensions));
       let updateStartedAt: number | undefined;
       if (changedList.length || deletedTrackedFiles.size) {
         updateStartedAt = performance.now();

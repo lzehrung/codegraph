@@ -124,10 +124,10 @@ Individually sub-millisecond, but it is the same answer every time and is never 
 
 ## Priority 0: Derive the fingerprint without loading the addon
 
-- [x] Recorded, in a separate `identity.json` beside the manifest rather than as new manifest
-      fields. `manifest.json` is content-addressed and published once, immutably; this record is
-      mutable (the TTL refreshes it) and holds facts that only exist after a load. Keeping them
-      apart is what lets an entry written by the previous version stay valid.
+- [x] Recorded in path-keyed identity records beside the manifest rather than as new manifest
+      fields. `manifest.json` is content-addressed and published once, immutably; each record is
+      mutable (the TTL refreshes it) and binds one source realpath to its origin. This lets
+      projects sharing one cached binary retain their own fast paths.
 - [x] `resolveCachedRuntimeIdentity` finds the entry by scanning the target directory for the
       version prefix and comparing recorded stat fields, then replays the stored origin. Any
       miss falls back to load-and-serialize.

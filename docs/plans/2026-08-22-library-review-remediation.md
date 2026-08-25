@@ -304,14 +304,13 @@ Each priority landed as its own commit; the checkboxes in
 things are worth carrying here because they changed the shape of the work.
 
 **P0 and P1 turned out to be one mechanism.** Deriving the fingerprint without loading the addon
-needs the entry located without hashing, which is the same problem P1 solves. One `identity.json`
-per cache entry, written after a verified load, answers both: it holds the stat fields that let a
-later process find the entry, the digest that lets it skip verification, the addon's supported
-languages, and the binding origin. It is a separate file rather than new `manifest.json` fields
-because the manifest is content-addressed and published once, immutably, while this record is
-mutable and holds facts that only exist after a load. That separation is also the migration path:
-an entry written by the previous version has no `identity.json`, misses the fast path, and takes
-the old route.
+needs the entry located without hashing, which is the same problem P1 solves. One path-keyed
+identity record per source realpath, written after a verified load, answers both: it holds the
+stat fields that let a later process find the entry, the digest that lets it skip verification,
+the addon's supported languages, and the binding origin. It is separate from `manifest.json`
+because the manifest is content-addressed and published once, while identity records are mutable
+and hold facts that only exist after a load. Entries with no matching record miss the fast path
+and take the old route.
 
 **P3's threshold was measured, and the plan's suggestion was wrong.** Cold builds of a fixed file
 list on this repository, median of 3, workers on versus off: 4 files -60%, 16 files -26%, 24 files
