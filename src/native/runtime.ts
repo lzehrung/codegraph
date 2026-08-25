@@ -36,14 +36,10 @@ let loadedRuntimeFingerprint:
     }
   | undefined;
 const disabledRuntimeFingerprints = new Map<string, string>();
-// Fingerprints answered from a recorded cache identity. Cache validation asks for this string
-// several times per process, and each miss would otherwise repeat the readdir and stat probe.
-const cachedRuntimeFingerprints = new Map<string, string>();
 
 export function __resetNativeTreeSitterBindingForTests(): void {
   bindingState = undefined;
   loadedRuntimeFingerprint = undefined;
-  cachedRuntimeFingerprints.clear();
 }
 
 export function isNativeTreeSitterDisabledByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -61,10 +57,6 @@ export function normalizeNativeRuntimeMode(mode?: NativeRuntimeMode): NativeRunt
 
 export function loadBinding(): NativeBindingState {
   if (bindingState) return bindingState;
-  // Anything answered from a recorded identity was a claim about a binding this process had not
-  // loaded. From here the real one is available, so drop those memos and let every later query
-  // be answered from it, whether the load succeeded or not.
-  cachedRuntimeFingerprints.clear();
   const loaded = loadNativeBinding<NativeBinding>({
     packageName: "@lzehrung/codegraph-native",
     localPackageRoot: localNativePackageRoot,
@@ -258,18 +250,12 @@ export function getNativeRuntimeFingerprint(mode?: NativeRuntimeMode, env: NodeJ
     return fingerprint;
   }
 
-  // Only worth asking before a binding exists. Once one does, the real state is both cheaper to
-  // read and authoritative, and loadBinding has already dropped anything memoized here.
+  // A cached identity is valid only while its current source and cache stats match and its
+  // re-verification window has not elapsed. Recheck it on every fingerprint request; the probe
+  // stays cheap (one directory read and two stats) and avoids extending stat-only trust.
   if (!bindingState) {
-    const cachedKey = `${requestedMode}:${envDisabled}`;
-    const memoized = cachedRuntimeFingerprints.get(cachedKey);
-    if (memoized) return memoized;
     const cachedIdentity = resolveCachedRuntimeIdentity();
-    if (cachedIdentity) {
-      const fingerprint = serializeNativeRuntimeFingerprint(requestedMode, envDisabled, cachedIdentity);
-      cachedRuntimeFingerprints.set(cachedKey, fingerprint);
-      return fingerprint;
-    }
+    if (cachedIdentity) return serializeNativeRuntimeFingerprint(requestedMode, envDisabled, cachedIdentity);
   }
 
   const state = loadBinding();
