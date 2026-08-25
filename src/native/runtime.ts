@@ -2,7 +2,14 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { stringifyUnknown } from "../util/ast.js";
-import { loadNativeBinding } from "./bindingLoader.js";
+import {
+  currentNativeTargetSuffix,
+  findLocalNativeBinary,
+  loadNativeBinding,
+  nativeTargetSuffixFor,
+  readPlatformPackage,
+} from "./bindingLoader.js";
+import { lookupNativeRuntimeCacheEntry, recordNativeRuntimeCacheIdentity } from "./runtimeCache.js";
 import type { NativeBinding, NativeBindingOrigin, NativeBindingState, NativeRuntimeMode } from "./contracts.js";
 
 const require = createRequire(import.meta.url);
@@ -23,10 +30,14 @@ let loadedRuntimeFingerprint:
     }
   | undefined;
 const disabledRuntimeFingerprints = new Map<string, string>();
+// Fingerprints answered from a recorded cache identity. Cache validation asks for this string
+// several times per process, and each miss would otherwise repeat the readdir and stat probe.
+const cachedRuntimeFingerprints = new Map<string, string>();
 
 export function __resetNativeTreeSitterBindingForTests(): void {
   bindingState = undefined;
   loadedRuntimeFingerprint = undefined;
+  cachedRuntimeFingerprints.clear();
 }
 
 export function isNativeTreeSitterDisabledByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -51,12 +62,27 @@ export function loadBinding(): NativeBindingState {
     resolveFn: require.resolve,
   });
   if (loaded.binding) {
+    const supportedLanguageIds = new Set(loaded.binding.supportedLanguageIds());
     bindingState = {
       loaded: true,
       binding: loaded.binding,
-      supportedLanguageIds: new Set(loaded.binding.supportedLanguageIds()),
+      supportedLanguageIds,
       origin: loaded.origin,
     };
+    // Now, and only now, every fact a later process needs to skip this work is known: the files
+    // were hashed and verified, the addon loaded, and it reported its languages. Recording only
+    // a verified load keeps the re-verification TTL honest - a fast-path hit must not renew it.
+    if (loaded.cacheEntry?.verified) {
+      recordNativeRuntimeCacheIdentity({
+        sourcePath: loaded.cacheEntry.sourcePath,
+        loadedPath: loaded.cacheEntry.loadedPath,
+        cacheKey: loaded.cacheEntry.cacheKey,
+        sha256: loaded.cacheEntry.sha256,
+        verifiedAt: new Date().toISOString(),
+        supportedLanguageIds: Array.from(supportedLanguageIds).sort(),
+        origin: loaded.origin,
+      });
+    }
     return bindingState;
   }
   bindingState = {
@@ -86,18 +112,39 @@ export function resolveNativeBindingState(
   }
   return loadBinding();
 }
-function serializeNativeRuntimeFingerprint(
+/**
+ * The binding-derived half of the runtime fingerprint: everything the serializer reads that a
+ * full addon load would otherwise be needed to obtain.
+ */
+export type NativeRuntimeIdentity = {
+  available: boolean;
+  supportedLanguageIds: string[];
+  origin: NativeBindingOrigin | undefined;
+};
+
+function identityFromState(state: NativeBindingState): NativeRuntimeIdentity {
+  return {
+    available: state.loaded,
+    supportedLanguageIds: state.loaded ? Array.from(state.supportedLanguageIds).sort() : [],
+    origin: state.origin,
+  };
+}
+
+/**
+ * Takes the binding-derived facts rather than a NativeBindingState, because the cache fast path
+ * below reconstructs those facts from a recorded identity and has no binding to hand.
+ */
+export function serializeNativeRuntimeFingerprint(
   requestedMode: NativeRuntimeMode,
   envDisabled: boolean,
-  state: NativeBindingState,
+  identity: NativeRuntimeIdentity,
 ): string {
-  const supportedLanguageIds = state.loaded ? Array.from(state.supportedLanguageIds).sort() : [];
-  const origin = state.origin;
+  const { available, supportedLanguageIds, origin } = identity;
   return JSON.stringify({
     version: 1,
     requestedMode,
     envDisabled,
-    available: state.loaded,
+    available,
     supportedLanguageIds,
     ...(origin
       ? {
@@ -116,6 +163,69 @@ function serializeNativeRuntimeFingerprint(
   });
 }
 
+/**
+ * Rebuild the binding-derived half of the fingerprint from a recorded cache identity, without
+ * mapping the addon.
+ *
+ * Every caller of getNativeRuntimeFingerprint reaches it to decide whether an on-disk index is
+ * still valid, which is why a command that only reads a warm cache used to pay a full native
+ * load to prove it did not need one. A recorded identity supplies the two things the load was
+ * for - the supported language list and the binding origin - and stores the origin whole, so
+ * the string produced here is the same one a load produces.
+ *
+ * Returns undefined whenever anything is unproven: a workspace checkout (which resolves its own
+ * binary and never populates the cache), a platform without the runtime cache, an unresolvable
+ * platform package, or no identity record that still matches the files on disk.
+ */
+export type CachedRuntimeIdentityOptions = {
+  /** Injected in tests; the runtime cache exists only on Windows. */
+  platform?: NodeJS.Platform | undefined;
+  arch?: string | undefined;
+  localPackageRoot?: string | undefined;
+  resolveFn?: ((specifier: string) => string) | undefined;
+  cacheRoot?: string | undefined;
+  now?: number | undefined;
+};
+
+export function resolveCachedRuntimeIdentity(
+  options: CachedRuntimeIdentityOptions = {},
+): NativeRuntimeIdentity | undefined {
+  // A workspace binary wins in loadNativeBinding, so its fingerprint must not be answered from
+  // a cache entry describing the installed package.
+  if (findLocalNativeBinary(options.localPackageRoot ?? localNativePackageRoot)) return undefined;
+  if ((options.platform ?? process.platform) !== "win32") return undefined;
+
+  // currentNativeTargetSuffix reads the real process; when a platform is injected the suffix has
+  // to be derived from it, or a Linux test box would look for its own target under a win32 root.
+  const target = options.platform
+    ? nativeTargetSuffixFor(options.platform, options.arch ?? process.arch)
+    : currentNativeTargetSuffix();
+  if (!target) return undefined;
+
+  try {
+    const platformPackage = readPlatformPackage(
+      "@lzehrung/codegraph-native",
+      target,
+      options.resolveFn ?? require.resolve,
+    );
+    const hit = lookupNativeRuntimeCacheEntry({
+      sourcePath: platformPackage.sourcePath,
+      packageVersion: platformPackage.packageVersion,
+      target,
+      ...(options.cacheRoot !== undefined ? { cacheRoot: options.cacheRoot } : {}),
+      ...(options.now !== undefined ? { now: options.now } : {}),
+    });
+    if (!hit) return undefined;
+    return {
+      available: true,
+      supportedLanguageIds: hit.identity.supportedLanguageIds,
+      origin: hit.identity.origin,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export function getNativeRuntimeFingerprint(mode?: NativeRuntimeMode, env: NodeJS.ProcessEnv = process.env): string {
   const requestedMode = normalizeNativeRuntimeMode(mode);
   const envDisabled = isNativeTreeSitterDisabledByEnv(env);
@@ -127,9 +237,19 @@ export function getNativeRuntimeFingerprint(mode?: NativeRuntimeMode, env: NodeJ
     const fingerprint = serializeNativeRuntimeFingerprint(
       requestedMode,
       envDisabled,
-      resolveNativeBindingState(mode, env),
+      identityFromState(resolveNativeBindingState(mode, env)),
     );
     disabledRuntimeFingerprints.set(key, fingerprint);
+    return fingerprint;
+  }
+
+  const cachedKey = `${requestedMode}:${envDisabled}`;
+  const memoized = cachedRuntimeFingerprints.get(cachedKey);
+  if (memoized) return memoized;
+  const cachedIdentity = bindingState ? undefined : resolveCachedRuntimeIdentity();
+  if (cachedIdentity) {
+    const fingerprint = serializeNativeRuntimeFingerprint(requestedMode, envDisabled, cachedIdentity);
+    cachedRuntimeFingerprints.set(cachedKey, fingerprint);
     return fingerprint;
   }
 
@@ -141,7 +261,7 @@ export function getNativeRuntimeFingerprint(mode?: NativeRuntimeMode, env: NodeJ
   ) {
     return loadedRuntimeFingerprint.value;
   }
-  const value = serializeNativeRuntimeFingerprint(requestedMode, envDisabled, state);
+  const value = serializeNativeRuntimeFingerprint(requestedMode, envDisabled, identityFromState(state));
   loadedRuntimeFingerprint = { state, requestedMode, envDisabled, value };
   return value;
 }

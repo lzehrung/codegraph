@@ -7,8 +7,21 @@ import { errorMessage } from "../util/errors.js";
 import type { NativeBindingOrigin } from "./contracts.js";
 import { prepareNativeRuntimeCache } from "./runtimeCache.js";
 
+/**
+ * Raw (un-normalized) paths for a load that came from the Windows runtime cache, plus whether
+ * this process verified them by hashing. The caller records these once it can also supply the
+ * addon's supported languages, which only exist after the binding loads.
+ */
+export type NativeBindingCacheEntry = {
+  sourcePath: string;
+  loadedPath: string;
+  cacheKey: string;
+  sha256: string;
+  verified: boolean;
+};
+
 export type NativeBindingLoadResult<T> =
-  | { binding: T; error?: undefined; origin: NativeBindingOrigin }
+  | { binding: T; error?: undefined; origin: NativeBindingOrigin; cacheEntry?: NativeBindingCacheEntry }
   | { binding: null; error?: unknown; origin?: NativeBindingOrigin };
 
 export type BindingLoaderOptions = {
@@ -78,7 +91,13 @@ export function findLocalNativeBinary(packageRoot: string): string | null {
   }
 }
 
-function readPlatformPackage(
+/**
+ * Locate the installed platform package's binary and version without loading it.
+ *
+ * Exported so the runtime fingerprint can find the matching cache entry on a warm run; it
+ * costs a resolve, a realpath, a stat, and a small JSON read, none of which map the addon.
+ */
+export function readPlatformPackage(
   packageName: string,
   target: string,
   resolveFn: (specifier: string) => string,
@@ -192,6 +211,13 @@ export function loadNativeBinding<T>(options: BindingLoaderOptions): NativeBindi
             loadedPath: normalizePath(cached.loadedPath),
             cacheKey: cached.cacheKey,
             sha256: cached.sha256,
+          },
+          cacheEntry: {
+            sourcePath: cached.sourcePath,
+            loadedPath: cached.loadedPath,
+            cacheKey: cached.cacheKey,
+            sha256: cached.sha256,
+            verified: cached.verified,
           },
         };
       } catch (error) {
