@@ -44,6 +44,7 @@ function documentationTsconfig() {
       skipLibCheck: true,
       strict: true,
       target: "esnext",
+      typeRoots: [path.join(rootDir, "node_modules", "@types")],
       types: ["node"],
       verbatimModuleSyntax: true,
       paths: {
