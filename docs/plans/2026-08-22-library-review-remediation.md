@@ -460,7 +460,7 @@ Verified mechanistically, not just by wall-clock delta: profiled the single-thre
 
 F11: `NativeCapture` is now the largest remaining marshalled payload and has the same per-item-object shape problem the tree used to have, but fixing it safely needs a JS-side reconstruction layer across six correctness-critical consumer files rather than a same-sized rewrite - sized, not yet scheduled. `transformModulePaths`'s whole-`ModuleIndex` `structuredClone` for a handful of path-field rewrites is a separate, smaller, path-confinement-sensitive follow-up.
 
-## PR 3: documentation accuracy contracts
+## PR 3: documentation accuracy contracts (implemented)
 
 Fixes the rest of F5. Small diff, high durability: the point is to make the docs enforceable so this review does not need repeating.
 
