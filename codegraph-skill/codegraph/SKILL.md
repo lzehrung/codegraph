@@ -18,7 +18,11 @@ Use plain text search for exact strings, logs, config keys, secrets, and prose. 
 
 ## Choose the First Command
 
-Bare `codegraph` prints five task-first routes without scanning the project. Use `codegraph --help` for the full command catalog and `codegraph help <command>` for command help; unknown commands suggest but never execute alternatives. Exit `0` means completion without a failure condition, `1` means findings, no matching target, or runtime failure, and `2` means invalid usage or input. `links` uses `1` for broken local links; do not treat it as an invocation error.
+Bare `codegraph` prints five task-first routes without scanning the project. Use `codegraph --help` for the full command catalog and `codegraph help <command>` for command help; unknown commands suggest but never execute alternatives.
+
+Exit `0` means completion without a failure condition. Exit `1` can mean findings, no matching target, or a runtime failure. Inspect its output before continuing; findings and no matching targets are actionable, while runtime or analysis failures need error handling.
+
+Exit `2` means invalid usage or input. `links` uses `1` for broken local links; do not treat it as an invocation error.
 
 | Task                                                      | Start here                                               |
 | --------------------------------------------------------- | -------------------------------------------------------- |

@@ -26,7 +26,7 @@ Numeric options such as `--limit`, `--threads`, `--depth`, `--max-refs`, and tok
 - `1`: valid input produced a finding, no matching target, or a runtime or analysis failure. `links` uses `1` for broken local links; `drift` uses it when its selected policy fails; `goto`, `refs`, `deps`, `rdeps`, `path`, `dumpmod`, `file`, and `packet` use it when they cannot resolve the requested target; and `chunk` uses it for an unsupported language.
 - `2`: invalid usage or input, including an unknown command or flag, invalid option values, incompatible flags, unresolvable positional roots, and installer writes without `--yes`.
 
-Automation must treat `1` as a completed command with actionable output, and `2` as an invocation error.
+With status `1`, inspect the command output before deciding how to continue. Findings and unresolved targets are actionable; runtime or analysis failures require error handling. Status `2` is an invocation error.
 
 Default workflow:
 
