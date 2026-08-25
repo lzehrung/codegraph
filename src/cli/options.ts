@@ -488,6 +488,38 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     ),
   ],
   [
+    "server",
+    commandSchema(
+      [
+        "--cache-strict",
+        "--cache-verify",
+        "--no-gitignore",
+        "--replace",
+        "--warmup",
+        "--warmup-symbols",
+        "--workers",
+        ...JSON_OUTPUT_FLAGS,
+      ],
+      [
+        "--cache",
+        "--cache-dir",
+        "--host",
+        "--ignore-glob",
+        "--include-glob",
+        "--native",
+        "--port",
+        "--resolution-hint",
+        "--root",
+        "--threads",
+      ],
+      {
+        kind: "max",
+        max: 1,
+        usage: "Usage: codegraph server <start|status|stop> [--root <path>]",
+      },
+    ),
+  ],
+  [
     "orient",
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], [...SHARED_BUILD_OPTIONS, "--budget", "--health"], {
       kind: "any",

@@ -74,6 +74,7 @@ describe("source module structure", () => {
       "src/cli/help.ts",
       "src/cli/mcp.ts",
       "src/cli/search.ts",
+      "src/cli/server.ts",
       "src/cli/skill.ts",
       "src/cli/sql.ts",
     ];

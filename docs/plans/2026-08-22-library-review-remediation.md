@@ -482,7 +482,7 @@ node ./dist/cli.js links --root .
 npm run check
 ```
 
-## PR 4: split `src/mcp/server.ts`
+## PR 4: split `src/mcp/server.ts` (implemented)
 
 Fixes F6. Pure move, no behavior change. Break the module along the five seams in F6, keeping `src/mcp/server.ts` as the composition root that re-exports the public surface (`createCodegraphMcpHandlers`, `listCodegraphMcpTools`, `serveCodegraphMcp`) so `src/mcp.ts` and `@lzehrung/codegraph/mcp` are unchanged.
 
@@ -509,7 +509,7 @@ npm run build && npm run check
 
 Also confirm that `npm run build:core` still rejects MCP modules from the core package closure (`tests/core-package-surface.test.ts`), since the split adds new files that must stay product-only, and smoke-test `node ./dist/cli.js mcp serve --root .` over stdio with a `tools/list` followed by one `tools/call`.
 
-## PR 5: shared server lifecycle
+## PR 5: shared server lifecycle (implemented)
 
 Implements [shared server lifecycle](2026-07-03-03-shared-server-lifecycle.md). Lands after PR 2, which reduces the per-process cost this feature then stops paying entirely.
 
@@ -547,7 +547,7 @@ New tests must cover a registry written only after the server is reachable, `sta
 
 ## Sequencing
 
-PR 2b and PR 2c shipped first (out of order, driven by the indexing-performance investigation), then PR 1. Remaining: PR 2, then PR 3 and PR 4 in either order, then PR 5.
+PR 2b and PR 2c shipped first (out of order, driven by the indexing-performance investigation), then PR 1, PR 3, PR 4, and PR 5. Remaining: PR 2.
 
 PR 1 goes first because it removes code the later changes would otherwise have to preserve. PR 2, PR 2b, and PR 2c are next because they are the highest-value user-facing changes and their measurements feed PR 3's docs; PR 2 covers fixed per-process startup cost, PR 2b covers per-file syntax-tree marshalling, and PR 2c covers the non-worker path's redundant parse that PR 2b's own follow-up measurement had misread as a worker-coordination problem. (Stale as written: this said to run PR 2 first because its worker-startup fixes touch the same files PR 2b and PR 2c edit. Those two already shipped, so PR 2 now lands on top of their changed versions of `build-workers.ts` and `nativeExtractWorker.ts` instead.) PR 2c depends on PR 2b's columnar encoding existing, since its fix reuses the same `PreparedFileContext.syntaxTree` fast path PR 2b's worker case already relies on. PR 3 and PR 4 are independent of each other. PR 5 is last because it wants the lower startup cost from PR 2, PR 4's split MCP modules for its health endpoint, and PR 3's parity test to force its own docs to be written.
 

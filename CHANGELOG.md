@@ -11,6 +11,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Changed
 
+- Added `codegraph server start|status|stop` to manage one project-local MCP HTTP server. The loopback-only default records only process metadata after a same-root health check, detects stale state, and requires an explicit restart after a package update.
 - Installed Windows packages that only read a warm cache no longer load the native addon. The
   runtime fingerprint needed the addon's supported-language list, so every cache-validity check
   paid a full load to prove it did not need one; Windows now replays that list from a record beside

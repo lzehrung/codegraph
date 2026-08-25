@@ -404,6 +404,26 @@ Defaults:
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
 
+export const SERVER_HELP_TEXT = `codegraph server - Manage a shared project-local MCP HTTP server
+
+Usage:
+  codegraph server start [--root <path>] [--host <host>] [--port <1-65535>] [--replace] [--warmup | --warmup-symbols]
+  codegraph server status [--root <path>] [--json | --pretty]
+  codegraph server stop [--root <path>]
+
+Behavior:
+  start runs codegraph mcp serve in a separate process, waits for its /health endpoint, then writes .codegraph/server.json.
+  The default server listens on 127.0.0.1:7331. A public bind requires an explicit --host.
+  status verifies the health response and reports stale registries with a safe remedy. stop only signals a Codegraph server that reports the same root.
+
+Forwarded startup options:
+  --cache, --cache-dir, --cache-strict, --cache-verify, --native, --threads, --workers,
+  --include-glob, --ignore-glob, --no-gitignore, and --resolution-hint pass to mcp serve.
+
+Safety:
+  The registry stores process metadata only. An installed-version change requires an explicit server restart; Codegraph does not replace mapped native files or terminate clients automatically.
+`;
+
 export const MCP_HELP_TEXT = `codegraph mcp - Serve MCP tools for agent graph navigation
 
 Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--idle-timeout-ms <ms>] [--allow-build] [--warmup | --warmup-symbols]
@@ -757,6 +777,7 @@ export function helpTextForCommand(command: string, positionals: readonly string
   if (command === "skill") return SKILL_HELP_TEXT;
   if (command === "dumpmod") return DUMPMOD_HELP_TEXT;
   if (command === "version") return VERSION_HELP_TEXT;
+  if (command === "server") return SERVER_HELP_TEXT;
   if (command === "mcp") {
     return positionals[0] === undefined || positionals[0] === "serve" ? MCP_SERVE_HELP_TEXT : MCP_HELP_TEXT;
   }

@@ -12,7 +12,19 @@ Stdio is the default transport and is the best fit when the MCP client launches 
 codegraph mcp serve --root . --stdio
 ```
 
-Streamable HTTP is useful when multiple IDE, terminal, or agent instances should share one repo-local server:
+For one reusable repo-local HTTP server, use the lifecycle wrapper:
+
+```bash
+codegraph server start --root /path/to/repo --warmup
+codegraph server status --root /path/to/repo --json
+codegraph server stop --root /path/to/repo
+```
+
+`server start` launches `mcp serve`, waits for its `/health` response, then records the process at `.codegraph/server.json`. It defaults to `127.0.0.1:7331`; use `--host` explicitly for a non-loopback bind and `--replace` only to restart a live server for the same root.
+
+`server status` verifies HTTP liveness and reports stale registry metadata with a remedy. `server stop` removes stale metadata or signals only a Codegraph process whose health response identifies the requested root. The registry contains process metadata only; installed-version drift requires an explicit restart.
+
+Use `mcp serve` directly when another process manager owns the server:
 
 ```bash
 codegraph mcp serve --root /path/to/repo --port 7331 --warmup

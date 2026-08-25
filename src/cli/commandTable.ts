@@ -312,6 +312,23 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
       });
     },
   },
+  server: {
+    stage: "base",
+    run: async (ctx) => {
+      const { handleServerCommand } = await import("./server.js");
+      await handleServerCommand({
+        positionals: ctx.parsed.positionals,
+        root: ctx.projectRootAbs,
+        parsedOptions: ctx.parsed.options,
+        getOpt: ctx.getOpt,
+        hasFlag: ctx.hasFlag,
+        writeJSONLine,
+        writeStdoutLine,
+        writeStderrLine,
+        exit: exitCli,
+      });
+    },
+  },
   "graph-delta": {
     stage: "project",
     run: async (ctx) => {

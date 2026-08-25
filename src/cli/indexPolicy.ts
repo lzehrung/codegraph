@@ -92,6 +92,7 @@ export const CLI_INDEX_POLICY: readonly CliIndexPolicyEntry[] = [
   },
   { command: "drift", behaviors: ["historical"], reason: "Builds revision-isolated snapshots for comparison." },
   { command: "mcp", behaviors: ["agent-session"], reason: "Serves MCP tools over a long-lived agent session." },
+  { command: "server", behaviors: ["none"], reason: "Starts, checks, or stops a separate MCP server process." },
   { command: "viewer", behaviors: ["none"], reason: "Serves prebuilt viewer assets." },
   { command: "index", behaviors: ["explicit-build"], reason: "Explicit index build, prewarm, or materialization." },
   { command: "init", behaviors: ["explicit-build"], reason: "Lifecycle metadata build for project onboarding." },

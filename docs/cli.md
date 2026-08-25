@@ -196,6 +196,20 @@ Graph, index, search, inspect, and review reports include `backend.native.byLang
 - `uninit` removes only recognized lifecycle state by default and leaves any root `.gitignore` rule in place. It refuses unknown `.codegraph/` entries unless `--force` is passed.
 - Lifecycle commands accept either a positional project path or `--root <path>`. They reject using both together because lifecycle manifests and automatic ignore updates always use one resolved project boundary, not include-root subsets.
 
+### Shared MCP HTTP server
+
+```bash
+codegraph server start --root . --warmup
+codegraph server status --root . --json
+codegraph server stop --root .
+```
+
+`server start` launches `mcp serve` in a separate process, then writes `.codegraph/server.json` only after its loopback `/health` response identifies the requested root. It defaults to `127.0.0.1:7331`; pass `--host` explicitly for any non-loopback bind, and pass `--replace` only to restart a live server for the same root.
+
+`server status` validates HTTP liveness instead of trusting a PID. Stale registries report a remedy, while `server stop` removes stale metadata or signals only a Codegraph server whose health response reports the same root. The registry stores only `schemaVersion`, `pid`, `url`, `root`, `startedAt`, and `version`; package version drift requires an explicit restart.
+
+`server start` forwards `--warmup`, `--warmup-symbols`, cache, native, worker, and discovery options to `mcp serve`. It does not start implicitly from other commands or manage a general background daemon.
+
 ### Affected tests
 
 - `affected` maps changed source files to likely test files by traversing reverse dependencies through the project graph. It also includes directly changed test files at depth 0.

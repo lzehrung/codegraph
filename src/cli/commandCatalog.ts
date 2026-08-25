@@ -39,6 +39,7 @@ export const CLI_COMMAND_CATALOG: readonly CliCommandMetadata[] = [
   { name: "links", summary: "Check local Markdown links", family: "review" },
   { name: "drift", summary: "Compare architecture health between refs or artifacts", family: "review" },
   { name: "mcp", summary: "Serve MCP tools for agent graph navigation", family: "manage" },
+  { name: "server", summary: "Manage a shared project-local MCP HTTP server", family: "manage" },
   { name: "viewer", summary: "Serve the bundled graph visualization viewer for people", family: "manage" },
   { name: "index", summary: "Build the project symbol index", family: "manage" },
   { name: "init", summary: "Initialize project-local Codegraph lifecycle metadata", family: "manage" },
