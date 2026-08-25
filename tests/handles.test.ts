@@ -94,7 +94,7 @@ describe("Agent-friendly symbol handles", () => {
       return;
     }
 
-    const exactMatch = result.matches.find((match) => match.name === "aHelper" && match.exactMatch);
+    const exactMatch = result.matches!.find((match) => match.name === "aHelper" && match.exactMatch);
     expect(exactMatch).toBeDefined();
     expect(typeof exactMatch?.id).toBe("string");
 

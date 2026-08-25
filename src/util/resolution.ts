@@ -2,7 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { GRAPH_ONLY_RESOLUTION_EXTENSIONS } from "./graphOnlyExtensions.js";
-import { fileIdentityKey, isFilePathWithinRoot, normalizePath, normalizeResolutionHints } from "./paths.js";
+import { fileIdentityKey, isFilePathWithinRoot, normalizeResolutionHints } from "./paths.js";
 import {
   DEFAULT_RESOLUTION_EXTENSIONS,
   STYLESHEET_RESOLUTION_EXTENSIONS,
@@ -12,7 +12,6 @@ import {
   clearWorkspaceCaches,
   clearFileExistsCache,
   fileExists,
-  loadWorkspaceConfig,
   resolveWorkspacePackage,
   type WorkspaceConfig,
 } from "./workspace.js";
@@ -20,10 +19,10 @@ import { clearJvmResolutionCaches, resolveJavaImportPath, resolveKotlinImportPat
 import { findFirstExistingResolutionCandidate } from "./resolution/findFirstExisting.js";
 import { resolveGoImportPath } from "./resolution/go.js";
 import { resolveFromNodeModules } from "./resolution/node.js";
-import { clearPhpResolutionCaches, getPhpComposerImplicitFiles, resolvePhpImportPath } from "./resolution/php.js";
-import { clearPythonResolutionCache, resolvePythonModule } from "./resolution/python.js";
+import { clearPhpResolutionCaches, resolvePhpImportPath } from "./resolution/php.js";
+import { clearPythonResolutionCache } from "./resolution/python.js";
 import { resolveRustImportPath } from "./resolution/rust.js";
-import { clearTsconfigCache, loadNearestTsconfigFor, type MatchPathFn } from "./resolution/tsconfig.js";
+import { clearTsconfigCache, type MatchPathFn } from "./resolution/tsconfig.js";
 import type { ModuleSpecifierExportCondition, ModuleSpecifierResolutionKind } from "./specifiers.js";
 import type { PackageExportConditionMode } from "./packageExports.js";
 import { lruMapGet, lruMapSet } from "./lruMap.js";

@@ -1043,7 +1043,7 @@ index 1234567..abcdef0 100644
 
   test("should keep a disposed session expired when init completes later", async () => {
     const originalBuild = indexerBuild.buildProjectIndexIncremental;
-    let releaseBuild: (() => void) | null = null;
+    let releaseBuild: () => void = () => {};
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
@@ -1060,7 +1060,7 @@ index 1234567..abcdef0 100644
 
       const initPromise = session.init();
       session.dispose();
-      releaseBuild?.();
+      releaseBuild();
 
       await expect(initPromise).rejects.toThrow(/disposed during initialization/);
       expect(session.getStatus()).toBe("expired");
@@ -1076,7 +1076,7 @@ index 1234567..abcdef0 100644
       buildOptions: sampleBuildOptions(),
     });
     const originalBuild = indexerBuild.buildProjectIndexIncremental;
-    let releaseBuild: (() => void) | null = null;
+    let releaseBuild: () => void = () => {};
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
@@ -1088,7 +1088,7 @@ index 1234567..abcdef0 100644
     try {
       const refreshPromise = session.refresh();
       session.dispose();
-      releaseBuild?.();
+      releaseBuild();
 
       await expect(refreshPromise).rejects.toThrow(/disposed during refresh/);
       expect(session.getStatus()).toBe("expired");
@@ -1112,7 +1112,7 @@ index 1234567..abcdef0 100644
       await fsp.writeFile(utilsPath, "export function helper(value: string) { return value.trim(); }\n", "utf8");
 
       const originalBuild = indexerBuild.buildProjectIndexIncremental;
-      let releaseBuild: (() => void) | null = null;
+      let releaseBuild: () => void = () => {};
       let markBuildStarted: (() => void) | null = null;
       const buildGate = new Promise<void>((resolve) => {
         releaseBuild = resolve;
@@ -1139,7 +1139,7 @@ index 1234567..abcdef0 100644
           column: 19,
         });
 
-        releaseBuild?.();
+        releaseBuild();
         const [firstResult, secondResult] = await Promise.all([first, second]);
 
         expect(firstResult.status).toBe("ok");
@@ -1417,7 +1417,7 @@ describe("SessionManager", () => {
 
   test("should not repopulate a session disposed during initialization", async () => {
     const originalBuild = indexerBuild.buildProjectIndexIncremental;
-    let releaseBuild: (() => void) | null = null;
+    let releaseBuild: () => void = () => {};
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
@@ -1434,7 +1434,7 @@ describe("SessionManager", () => {
 
       await Promise.resolve();
       manager.disposeSession("pending");
-      releaseBuild?.();
+      releaseBuild();
 
       await expect(pendingSession).rejects.toThrow(/disposed during initialization/);
       expect(manager.getSession("pending")).toBeUndefined();
@@ -1447,7 +1447,7 @@ describe("SessionManager", () => {
   test("retains pending initialization capacity after disposal until it settles", async () => {
     const limitedManager = new SessionManager({ maxSessions: 1, evictionIntervalMs: 0 });
     const originalBuild = indexerBuild.buildProjectIndexIncremental;
-    let releaseBuild: (() => void) | null = null;
+    let releaseBuild: () => void = () => {};
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
@@ -1477,7 +1477,7 @@ describe("SessionManager", () => {
         }),
       ).rejects.toThrow("Session capacity reached (1)");
 
-      releaseBuild?.();
+      releaseBuild();
       await expect(firstSession).rejects.toThrow(/disposed during initialization/);
 
       const replacement = await limitedManager.getOrCreateSession("replacement", {
@@ -1494,7 +1494,7 @@ describe("SessionManager", () => {
   test("retains pending initialization capacity after disposeAll until it settles", async () => {
     const limitedManager = new SessionManager({ maxSessions: 1, evictionIntervalMs: 0 });
     const originalBuild = indexerBuild.buildProjectIndexIncremental;
-    let releaseBuild: (() => void) | null = null;
+    let releaseBuild: () => void = () => {};
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
@@ -1518,7 +1518,7 @@ describe("SessionManager", () => {
         }),
       ).rejects.toThrow("Session capacity reached (1)");
 
-      releaseBuild?.();
+      releaseBuild();
       await expect(firstSession).rejects.toThrow(/disposed during initialization/);
 
       const replacement = await limitedManager.getOrCreateSession("replacement", {
@@ -1863,7 +1863,7 @@ describe("SessionManager", () => {
 
   test("should not repopulate sessions when warmup is disposed mid-initialization", async () => {
     const originalBuild = indexerBuild.buildProjectIndexIncremental;
-    let releaseBuild: (() => void) | null = null;
+    let releaseBuild: () => void = () => {};
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
@@ -1885,7 +1885,7 @@ describe("SessionManager", () => {
 
       await Promise.resolve();
       manager.disposeAll();
-      releaseBuild?.();
+      releaseBuild();
 
       await expect(warmupPromise).rejects.toThrow(/disposed during initialization/);
       expect(manager.getSession("warm")).toBeUndefined();
@@ -1897,7 +1897,7 @@ describe("SessionManager", () => {
 
   test("should share warmup work with concurrent getOrCreateSession", async () => {
     const originalBuild = indexerBuild.buildProjectIndexIncremental;
-    let releaseBuild: (() => void) | null = null;
+    let releaseBuild: () => void = () => {};
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
@@ -1922,7 +1922,7 @@ describe("SessionManager", () => {
       });
 
       await Promise.resolve();
-      releaseBuild?.();
+      releaseBuild();
 
       const [, session] = await Promise.all([warmupPromise, sessionPromise]);
       expect(session).toBe(manager.getSession("shared"));
@@ -1935,7 +1935,7 @@ describe("SessionManager", () => {
 
   test("should warm multiple independent sessions in parallel", async () => {
     const originalBuild = indexerBuild.buildProjectIndexIncremental;
-    let releaseBuild: (() => void) | null = null;
+    let releaseBuild: () => void = () => {};
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
@@ -1975,7 +1975,7 @@ describe("SessionManager", () => {
 
         expect(buildSpy).toHaveBeenCalledTimes(2);
 
-        releaseBuild?.();
+        releaseBuild();
         await warmupPromise;
 
         expect(manager.getSession("parallel-a")?.getStatus()).toBe("ready");

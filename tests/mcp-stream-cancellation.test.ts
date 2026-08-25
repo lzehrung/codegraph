@@ -11,7 +11,9 @@ import {
   createCodegraphMcpProtocolServer,
   DEFAULT_MCP_TOOL_CONCURRENCY,
   runWithLegacyRequestAbortSignal,
+  type CodegraphMcpFreshResult,
 } from "../src/mcp/server.js";
+import type { RawSqlResult } from "../src/sqlite.js";
 
 describe("MCP query_sqlite cancellation", () => {
   it("forwards a cancelled tool stream to the raw query handler", async () => {
@@ -19,11 +21,11 @@ describe("MCP query_sqlite cancellation", () => {
     const handlers = createCodegraphMcpHandlers({ root });
     const started = Promise.withResolvers<void>();
     const cancelled = Promise.withResolvers<void>();
-    handlers.query_sqlite = async (_request, executionOptions) => {
+    handlers.query_sqlite = async (_request, executionOptions?): Promise<CodegraphMcpFreshResult<RawSqlResult>> => {
       const signal = executionOptions?.signal;
       if (!signal) throw new Error("MCP query_sqlite did not receive a cancellation signal.");
       started.resolve();
-      await new Promise<never>((_resolve, reject) => {
+      return await new Promise<never>((_resolve, reject) => {
         signal.addEventListener(
           "abort",
           () => {
@@ -62,7 +64,7 @@ describe("MCP query_sqlite cancellation", () => {
     const started = Promise.withResolvers<void>();
     const aborted = Promise.withResolvers<void>();
     let calls = 0;
-    handlers.query_sqlite = async (_request, executionOptions) => {
+    handlers.query_sqlite = async (_request, executionOptions?): Promise<CodegraphMcpFreshResult<RawSqlResult>> => {
       calls += 1;
       if (calls === 1) {
         started.resolve();
@@ -77,7 +79,7 @@ describe("MCP query_sqlite cancellation", () => {
           );
         });
       }
-      return { columns: [], rows: [] };
+      return { columns: [], rows: [], freshness: { state: "fresh" } };
     };
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -101,7 +103,7 @@ describe("MCP query_sqlite cancellation", () => {
       const disabledRelease = Promise.withResolvers<void>();
       let disabledSettled = false;
       let disabledAbortObserved = false;
-      handlers.query_sqlite = async (_request, executionOptions) => {
+      handlers.query_sqlite = async (_request, executionOptions?): Promise<CodegraphMcpFreshResult<RawSqlResult>> => {
         disabledStarted.resolve();
         executionOptions?.signal?.addEventListener(
           "abort",
@@ -111,7 +113,7 @@ describe("MCP query_sqlite cancellation", () => {
           { once: true },
         );
         await disabledRelease.promise;
-        return { columns: [], rows: [] };
+        return { columns: [], rows: [], freshness: { state: "fresh" } };
       };
       const disabledServer = createCodegraphMcpProtocolServer(handlers, undefined, undefined, undefined, 1, 0);
       const [disabledClientTransport, disabledServerTransport] = InMemoryTransport.createLinkedPair();
@@ -147,7 +149,7 @@ describe("MCP query_sqlite cancellation", () => {
     const started = Promise.withResolvers<void>();
     const aborted = Promise.withResolvers<void>();
     let calls = 0;
-    handlers.query_sqlite = async (_request, executionOptions) => {
+    handlers.query_sqlite = async (_request, executionOptions?): Promise<CodegraphMcpFreshResult<RawSqlResult>> => {
       calls += 1;
       if (calls === 1) {
         started.resolve();
@@ -162,13 +164,22 @@ describe("MCP query_sqlite cancellation", () => {
           );
         });
       }
-      return { columns: [], rows: [] };
+      return { columns: [], rows: [], freshness: { state: "fresh" } };
     };
     const modernHandler = createMcpHandler(() => createCodegraphMcpProtocolServer(handlers), { legacy: "stateless" });
     const nodeHandler = toNodeHandler(modernHandler);
     const handlerFailures: unknown[] = [];
     const httpServer = createServer((request, response) => {
-      void nodeHandler(request, response).catch((error: unknown) => handlerFailures.push(error));
+      const { method, url } = request;
+      // Node types `method` and `url` as optional; the SDK handler requires both.
+      // Reattach them as definite values on the same object so the stream keeps its
+      // prototype.
+      if (method === undefined || url === undefined) {
+        throw new Error("HTTP request arrived without a method or url.");
+      }
+      void nodeHandler(Object.assign(request, { method, url }), response).catch((error: unknown) =>
+        handlerFailures.push(error),
+      );
     });
     await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
     const address = httpServer.address();
@@ -224,7 +235,7 @@ describe("MCP query_sqlite cancellation", () => {
     const started = Promise.withResolvers<void>();
     const aborted = Promise.withResolvers<void>();
     let calls = 0;
-    handlers.query_sqlite = async (_request, executionOptions) => {
+    handlers.query_sqlite = async (_request, executionOptions?): Promise<CodegraphMcpFreshResult<RawSqlResult>> => {
       calls += 1;
       if (calls === 1) {
         started.resolve();
@@ -239,7 +250,7 @@ describe("MCP query_sqlite cancellation", () => {
           );
         });
       }
-      return { columns: [], rows: [] };
+      return { columns: [], rows: [], freshness: { state: "fresh" } };
     };
     const protocolServer = createCodegraphMcpProtocolServer(handlers);
     const transport = new NodeStreamableHTTPServerTransport({
@@ -337,7 +348,7 @@ describe("MCP query_sqlite cancellation", () => {
       activeCalls += 1;
       if (activeCalls === DEFAULT_MCP_TOOL_CONCURRENCY) started.resolve();
       await release.promise;
-      return { columns: [], rows: [] };
+      return { columns: [], rows: [], freshness: { state: "fresh" } };
     };
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

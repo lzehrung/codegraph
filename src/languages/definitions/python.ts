@@ -1,12 +1,10 @@
 import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 import { hasNonAsciiCodePoint } from "../../util/identifiers.js";
 
 export const PYTHON_DEF: LanguageDefinition = {
   id: "python",
   extensions: [".py", ".pyi"],
-  grammar: () => loadTreeSitterLanguage("tree-sitter-python"),
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

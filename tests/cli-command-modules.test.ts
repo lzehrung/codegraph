@@ -118,6 +118,7 @@ function createNavigationContext(overrides: Partial<NavigationCommandContext>): 
     hasFlag: (name) => name === "--json",
     nativeMode: "auto",
     workerOpts: {},
+    cacheLocation: undefined,
     progressHandler: undefined,
     writeJSONLine: () => {
       throw new Error("unexpected json output");
@@ -138,12 +139,14 @@ function createNavigationContext(overrides: Partial<NavigationCommandContext>): 
 function createInspectContext(overrides: Partial<InspectCommandContext>): InspectCommandContext {
   const projectRoot = path.join(os.tmpdir(), "codegraph-inspect-context").replace(/\\/g, "/");
   return {
+    languageExtensions: undefined,
     projectRootFs: projectRoot,
     includeRootsAbs: [projectRoot],
     discoveryOptions: {},
     graphOptions: undefined,
     nativeMode: "auto",
     workerOpts: {},
+    cacheLocation: undefined,
     progressHandler: undefined,
     getOpt: (name) => (name === "--cache" ? "off" : undefined),
     hasFlag: (name) => name === "--json",
@@ -162,6 +165,7 @@ function createGraphContext(overrides: Partial<GraphCommandContext>): GraphComma
     discoveryOptions: {},
     nativeMode: "auto",
     workerOpts: {},
+    cacheLocation: undefined,
     progressHandler: undefined,
     graphFlags: {
       fast: false,
@@ -195,12 +199,13 @@ function createIndexContext(overrides: Partial<IndexCommandContext>): IndexComma
   return {
     projectRootFs: projectRoot,
     includeRootsAbs: [projectRoot],
+    languageExtensions: undefined,
     gitBase: undefined,
     changedSince: undefined,
     discoveryOptions: {},
     nativeMode: "auto",
-    languageExtensions: undefined,
     workerOpts: {},
+    cacheLocation: undefined,
     progressHandler: undefined,
     graphOptions: undefined,
     reportEnabled: false,
@@ -285,6 +290,7 @@ function createImpactContext(overrides: Partial<ImpactCommandContext>): ImpactCo
     parsedOptions: new Map(),
     nativeMode: "auto",
     workerOpts: {},
+    cacheLocation: undefined,
     graphOptions: undefined,
     progressHandler: undefined,
     readStdin: async () => "",
@@ -1849,6 +1855,8 @@ describe("CLI command modules", () => {
         cwd: () => process.cwd(),
         nativeMode: "auto",
         workerOpts: {},
+        cacheLocation: undefined,
+        progressHandler: undefined,
         graphOptions: undefined,
         languageExtensions,
         gitBase: undefined,
@@ -2014,11 +2022,16 @@ describe("CLI command modules", () => {
         cwd: () => process.cwd(),
         nativeMode: "auto",
         workerOpts: {},
+        cacheLocation: undefined,
+        progressHandler: undefined,
         graphOptions: undefined,
         languageExtensions: undefined,
         gitBase: undefined,
         gitHead: undefined,
         changedSince: undefined,
+        writeStdoutLine: () => {
+          throw new Error("unexpected stdout");
+        },
         writeJSONLine: () => {
           throw new Error("unexpected json stdout");
         },

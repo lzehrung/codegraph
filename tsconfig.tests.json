@@ -1,0 +1,26 @@
+{
+  "$comment": [
+    "Type-checking config for the test tree. src/ keeps the stricter tsconfig.json;",
+    "this file only relaxes options whose value is specific to shipped code:",
+    "- noUncheckedIndexedAccess: tests index fixtures and arrays whose shape they have",
+    "  just asserted, so requiring a guard on every index adds noise without catching bugs.",
+    "- allowJs/checkJs: tests import plain-JS helpers under scripts/ and docs/ that have",
+    "  no type declarations and are not shipped.",
+    "- lib adds dom because the graph-visualization tests exercise browser-side viewer code.",
+    "- types adds vitest/globals because vitest.config.ts sets globals: true, so some suites",
+    "  use describe/it/expect without importing them.",
+    "Everything else, including strict and exactOptionalPropertyTypes, stays on."
+  ],
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "lib": ["esnext", "dom"],
+    "types": ["node", "vitest/globals"],
+    "noUncheckedIndexedAccess": false,
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": ["tests/**/*.ts"],
+  "exclude": ["node_modules", "dist", "docs", "tests/.tmp/**", "tests/samples/**", "tests/languages/samples/**"]
+}

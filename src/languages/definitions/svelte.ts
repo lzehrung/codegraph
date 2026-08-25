@@ -1,11 +1,9 @@
 import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
 export const SVELTE_DEF: LanguageDefinition = {
   id: "svelte",
   extensions: [".svelte"],
-  grammar: () => loadTreeSitterLanguage("@tree-sitter-grammars/tree-sitter-svelte"),
   structure: {
     blocks: [
       { type: "script_element", captureId: "script" },

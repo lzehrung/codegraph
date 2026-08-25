@@ -1,11 +1,9 @@
 import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
 export const SQL_DEF: LanguageDefinition = {
   id: "sql",
   extensions: [".sql"],
-  grammar: () => loadTreeSitterLanguage("@derekstride/tree-sitter-sql"),
   structure: {
     blocks: [
       { type: "statement", nameQuery: "(create_table)", captureId: "create" },

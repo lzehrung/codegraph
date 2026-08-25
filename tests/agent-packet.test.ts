@@ -47,10 +47,11 @@ describe("agent packet", () => {
 
     expect(packet.schemaVersion).toBe(2);
     expect(packet.kind).toBe("symbol");
-    if (packet.packet.schemaVersion !== 1) {
+    const payload = packet.packet;
+    if (!("target" in payload)) {
       throw new Error("expected explanation packet");
     }
-    expect(packet.packet.target.kind).toBe("symbol");
+    expect(payload.target.kind).toBe("symbol");
   });
 
   it("retrieves duplicate context in file packets", async () => {

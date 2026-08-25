@@ -87,7 +87,7 @@ runLanguageTests(definition);
 
 it("recovers media-qualified CSS imports in reduced mode", () => {
   const support = supportById("css")!;
-  const specifiers = collectModuleSpecifiersFromSource(support, undefined, '@import "./print.css" screen;', {
+  const specifiers = collectModuleSpecifiersFromSource(support, '@import "./print.css" screen;', {
     native: "off",
   });
 

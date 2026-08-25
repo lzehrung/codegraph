@@ -22,6 +22,7 @@ import type { BuildOptions } from "../src/indexer/types.js";
 import { captureCli } from "./helpers/cli.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 import { CODEGRAPH_CONFIG_FILE } from "../src/config.js";
+import type { PathLike } from "node:fs";
 
 const execFileAsync = promisify(execFile);
 
@@ -1158,12 +1159,15 @@ describe("project lifecycle commands", () => {
     const eaccesError = Object.assign(new Error(`EACCES: permission denied, scandir '${dirPath}'`), {
       code: "EACCES",
     });
-    const readdirSpy = vi.spyOn(fsp, "readdir").mockImplementation(async (dir, options) => {
+    // fsp.readdir is overloaded on its options; no single implementation signature
+    // satisfies every overload, and this stub only needs to intercept one directory.
+    const readdirImpl = (async (dir: PathLike, options: never) => {
       if (dir === dirPath) {
         throw eaccesError;
       }
-      return await originalReaddir(dir, options as never);
-    });
+      return await originalReaddir(dir, options);
+    }) as typeof fsp.readdir;
+    const readdirSpy = vi.spyOn(fsp, "readdir").mockImplementation(readdirImpl);
 
     try {
       const uninitPromise = uninitCodegraphLifecycle(root);

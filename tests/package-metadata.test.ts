@@ -116,10 +116,10 @@ function parsePackedPaths(stdout: string): Set<string> {
         const first = parsed[0];
         if (first && typeof first === "object" && "files" in first && Array.isArray(first.files)) {
           const paths = first.files
-            .filter((file): file is { path: string } => {
+            .filter((file: unknown): file is { path: string } => {
               return Boolean(file && typeof file === "object" && "path" in file && typeof file.path === "string");
             })
-            .map((file) => file.path);
+            .map((file: { path: string }) => file.path);
           return new Set(paths);
         }
       }

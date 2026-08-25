@@ -53,10 +53,11 @@
   ],
   "scripts": {
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\"",
-    "check": "npm run security:production && npm run lint && npm run format:check && npm run build && npm run test:native && npm run test:coverage && npm run fixtures:check-clean",
+    "check": "npm run security:production && npm run typecheck && npm run lint && npm run format:check && npm run build && npm run test:native && npm run test:coverage && npm run fixtures:check-clean",
     "build": "npm run clean && tsc -p tsconfig.json && node ./scripts/bundle-cli.mjs && node ./scripts/stage-core-package.mjs && node ./scripts/build-native-if-available.mjs",
     "generate:duplicate-keywords": "node ./scripts/generate-duplicate-keywords.mjs",
     "format": "prettier --write . --ignore-unknown",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.tests.json --noEmit",
     "lint": "npx eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
     "lint:fix": "npx eslint \"src/**/*.ts\" \"tests/**/*.ts\" --fix",
     "prepare": "node ./scripts/prepare-package.mjs",

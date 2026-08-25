@@ -50,6 +50,14 @@ function usage() {
   return "Usage: node ./scripts/check-production-audit.mjs [--json]";
 }
 
+/**
+ * @typedef {(text: string) => void} TextWriter
+ * The injected audit returns the real report shape rather than `unknown`: the result goes
+ * straight to formatProductionAuditSummary and its `status` decides the exit code, so a
+ * malformed test double should fail typecheck instead of failing at runtime.
+ * @param {{ argv?: string[], runProductionAuditImpl?: () => ReturnType<typeof runProductionAudit>,
+ *   writeStdout?: TextWriter, writeStderr?: TextWriter }} [options]
+ */
 export function runProductionAuditCli({
   argv = process.argv.slice(2),
   runProductionAuditImpl = runProductionAudit,

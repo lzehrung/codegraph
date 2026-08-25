@@ -18,6 +18,7 @@ import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import type { NativeBinding, NativeSyntaxTree } from "../src/native/contracts.js";
 import { createStubNativeSyntaxTree } from "./helpers/native.js";
+import type { BuildReport } from "../src/indexer/types.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -67,7 +68,7 @@ describe("native extraction resource limits", () => {
   });
 
   it("returns a structured fallback when provided source exceeds the byte cap", async () => {
-    const extractLanguage = vi.fn(() => ({ results: emptyResults(), syntaxTree: null }));
+    const extractLanguage = vi.fn(() => ({ results: emptyResults(), syntaxTree: createStubNativeSyntaxTree() }));
     const extractor = createNativeExtractor({
       loadBinding: () => ({
         binding: {
@@ -75,6 +76,7 @@ describe("native extraction resource limits", () => {
           runLanguageQueries: () => emptyResults(),
           extractLanguage,
         } satisfies NativeBinding,
+        origin: { mode: "workspace" as const, packageName: "@lzehrung/codegraph-native" },
       }),
       readFile: async () => {
         throw new Error("should not read");
@@ -104,7 +106,7 @@ describe("native extraction resource limits", () => {
 
   it("stats the file before reading when the on-disk size exceeds the configurable cap", async () => {
     const readFile = vi.fn(async () => "should not load");
-    const extractLanguage = vi.fn(() => ({ results: emptyResults(), syntaxTree: null }));
+    const extractLanguage = vi.fn(() => ({ results: emptyResults(), syntaxTree: createStubNativeSyntaxTree() }));
     const extractor = createNativeExtractor({
       loadBinding: () => ({
         binding: {
@@ -112,6 +114,7 @@ describe("native extraction resource limits", () => {
           runLanguageQueries: () => emptyResults(),
           extractLanguage,
         } satisfies NativeBinding,
+        origin: { mode: "workspace" as const, packageName: "@lzehrung/codegraph-native" },
       }),
       readFile,
       statFile: async () => ({ size: 64 }),
@@ -143,6 +146,7 @@ describe("native extraction resource limits", () => {
             throw new Error(`syntax tree projection exceeded max depth limit (${DEFAULT_NATIVE_MAX_PROJECTED_DEPTH})`);
           },
         } satisfies NativeBinding,
+        origin: { mode: "workspace" as const, packageName: "@lzehrung/codegraph-native" },
       }),
       readFile: async () => "export const value = 1;\n",
     });
@@ -171,6 +175,7 @@ describe("native extraction resource limits", () => {
           runLanguageQueries: () => emptyResults(),
           extractLanguage: () => ({ results: emptyResults(), syntaxTree: tree }),
         } satisfies NativeBinding,
+        origin: { mode: "workspace" as const, packageName: "@lzehrung/codegraph-native" },
       }),
       readFile: async () => "export const value = 1;\n",
     });
@@ -200,7 +205,7 @@ describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache beh
     await fsp.writeFile(file, source, "utf8");
 
     try {
-      const firstReport = { timings: {} };
+      const firstReport: BuildReport = { timings: {} };
       const first = await buildProjectIndexFromFiles(root, [file], {
         cache: "disk",
         native: "on",
@@ -222,7 +227,7 @@ describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache beh
         db.close();
       }
 
-      const secondReport = { timings: {} };
+      const secondReport: BuildReport = { timings: {} };
       await buildProjectIndexFromFiles(root, [file], {
         cache: "disk",
         native: "on",
@@ -259,7 +264,7 @@ describe.runIf(isNativeTreeSitterAvailable())("module cache upgrade behavior", (
         { cache: "disk", native: "on" },
       );
 
-      const report = { timings: {} };
+      const report: BuildReport = { timings: {} };
       const index = await buildProjectIndexFromFiles(root, [file], {
         cache: "disk",
         native: "on",

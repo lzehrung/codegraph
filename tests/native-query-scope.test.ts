@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isNonNativeParserAvailable } from "../src/parserBackend.js";
 import { supportById } from "../src/languages.js";
 import { collectModuleSpecifiersFromSource, type FallbackImportExtractionEvent } from "../src/graphs.js";
 import { collectImportsForFile } from "../src/indexer.js";
@@ -7,14 +6,14 @@ import {
   getCompactImportsExecution,
   getNativeQueryExecutionForState,
   isNativeTreeSitterAvailable,
+  type NativeCapture,
   type NativeMatch,
   type NativeQueryResults,
 } from "../src/native/treeSitterNative.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
-import * as parserBackend from "../src/parserBackend.js";
+import type { NativeCompatibilityQueryKind } from "../src/languages/types.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
-const nonNativeParserDescribe = isNonNativeParserAvailable() ? describe : describe.skip;
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -45,12 +44,19 @@ function createScopeSpy() {
         importBindings: [],
       };
     },
+    // Scope selection must reach native through runLanguageQueries. If it ever routes
+    // through the combined call instead, this fails loudly rather than silently
+    // recording no executed kinds.
+    extractLanguage: (): never => {
+      throw new Error("extractLanguage must not be used for scoped query execution");
+    },
     supportedLanguageIds: () => ["ts", "tsx", "js", "python", "go", "rust"],
   };
   const state = {
     loaded: true as const,
     binding,
     supportedLanguageIds: new Set(["ts", "tsx", "js", "python", "go", "rust"]),
+    origin: { mode: "workspace" as const, packageName: "@lzehrung/codegraph-native" },
   };
   return { executedKinds, state };
 }
@@ -162,7 +168,7 @@ describe("authoritative empty native results", () => {
       locals: [],
       importBindings: [],
     };
-    const specs = collectModuleSpecifiersFromSource(support, undefined, "const x = 1;\n", {
+    const specs = collectModuleSpecifiersFromSource(support, "const x = 1;\n", {
       nativeQueries: emptyNativeResults,
     });
     expect(specs).toEqual([]);
@@ -177,7 +183,7 @@ describe("authoritative empty native results", () => {
       importBindings: [],
     };
     // Source that has no import keyword at all
-    const specs = collectModuleSpecifiersFromSource(support, undefined, "export const value = 42;\n", {
+    const specs = collectModuleSpecifiersFromSource(support, "export const value = 42;\n", {
       nativeQueries: emptyNativeResults,
     });
     expect(specs).toEqual([]);
@@ -185,7 +191,7 @@ describe("authoritative empty native results", () => {
 
   it("uses regex recovery when native queries are absent", () => {
     const support = supportById("ts")!;
-    const specs = collectModuleSpecifiersFromSource(support, undefined, "import { foo } from './bar';\n");
+    const specs = collectModuleSpecifiersFromSource(support, "import { foo } from './bar';\n");
     // Without nativeQueries, text recovery should find the import
     expect(specs.length).toBeGreaterThan(0);
     expect(specs[0]!.spec).toBe("./bar");
@@ -194,7 +200,7 @@ describe("authoritative empty native results", () => {
   it("extracts triple-slash reference specifiers when native imports are empty", () => {
     const support = supportById("ts")!;
     const source = '/// <reference path="./globals.d.ts" />\nexport const x = 1;\n';
-    const specs = collectModuleSpecifiersFromSource(support, undefined, source, {
+    const specs = collectModuleSpecifiersFromSource(support, source, {
       nativeQueries: { imports: [], exports: [], locals: [], importBindings: [] },
     });
     expect(specs).toContainEqual(expect.objectContaining({ spec: "./globals.d.ts", typeOnly: true }));
@@ -203,7 +209,7 @@ describe("authoritative empty native results", () => {
   it("extracts a path= attribute regardless of its position among other reference attributes", () => {
     const support = supportById("ts")!;
     const source = '/// <reference no-default-lib="true" path="./globals.d.ts" />\nexport const x = 1;\n';
-    const specs = collectModuleSpecifiersFromSource(support, undefined, source, {
+    const specs = collectModuleSpecifiersFromSource(support, source, {
       nativeQueries: { imports: [], exports: [], locals: [], importBindings: [] },
     });
     expect(specs).toContainEqual(expect.objectContaining({ spec: "./globals.d.ts", typeOnly: true }));
@@ -212,7 +218,7 @@ describe("authoritative empty native results", () => {
   it("extracts triple-slash reference specifiers in fast mode", () => {
     const support = supportById("ts")!;
     const source = '/// <reference path="./globals.d.ts" />\nexport const x = 1;\n';
-    const specs = collectModuleSpecifiersFromSource(support, undefined, source, { fast: true });
+    const specs = collectModuleSpecifiersFromSource(support, source, { fast: true });
     expect(specs).toContainEqual(expect.objectContaining({ spec: "./globals.d.ts", typeOnly: true }));
   });
 
@@ -222,7 +228,8 @@ describe("authoritative empty native results", () => {
       ...tsxSupport,
       native: {
         ...tsxSupport.native,
-        normalizeQuery: (kind, query) => (kind === "imports" ? `${query}\n;` : query),
+        normalizeQuery: (kind: NativeCompatibilityQueryKind, query: string) =>
+          kind === "imports" ? `${query}\n;` : query,
       },
     };
     const fallbackEvents: FallbackImportExtractionEvent[] = [];
@@ -233,7 +240,7 @@ describe("authoritative empty native results", () => {
       importBindings: [],
     };
 
-    const specs = collectModuleSpecifiersFromSource(support, undefined, "import { foo } from './bar';\n", {
+    const specs = collectModuleSpecifiersFromSource(support, "import { foo } from './bar';\n", {
       file: "main.tsx",
       nativeQueries: emptyNativeResults,
       onFallbackImportExtraction: (event) => fallbackEvents.push(event),
@@ -256,7 +263,8 @@ describe("authoritative empty native results", () => {
       id: "ts-query-empty-test",
       native: {
         ...tsSupport.native,
-        normalizeQuery: (kind, query) => (kind === "importBindings" ? `${query}\n;` : query),
+        normalizeQuery: (kind: NativeCompatibilityQueryKind, query: string) =>
+          kind === "importBindings" ? `${query}\n;` : query,
       },
     };
     const fallbackEvents: FallbackImportExtractionEvent[] = [];
@@ -289,7 +297,7 @@ describe("authoritative empty native results", () => {
     const fallbackEvents: FallbackImportExtractionEvent[] = [];
     const failingMatch: NativeMatch = {
       patternIndex: 0,
-      get captures() {
+      get captures(): NativeCapture[] {
         throw new Error("bad native capture");
       },
     };
@@ -350,14 +358,10 @@ describe("authoritative empty native results", () => {
 
   it("uses regex recovery for TypeScript without non-native parser queries", () => {
     const support = supportById("ts")!;
-    const executeSpy = vi.spyOn(parserBackend, "executeQueryAsNativeMatches").mockImplementation(() => {
-      throw new Error("Non-native parser should not be used for TypeScript import recovery");
-    });
     const fallbackEvents: FallbackImportExtractionEvent[] = [];
 
     const specs = collectModuleSpecifiersFromSource(
       support,
-      undefined,
       "import { foo } from './bar';\nexport { baz } from './qux';\n",
       {
         file: "main.ts",
@@ -367,7 +371,6 @@ describe("authoritative empty native results", () => {
     );
 
     expect(specs).toEqual([{ spec: "./bar" }, { spec: "./qux" }]);
-    expect(executeSpy).not.toHaveBeenCalled();
     expect(fallbackEvents).toEqual([
       expect.objectContaining({
         language: "ts",
@@ -384,7 +387,6 @@ describe("authoritative empty native results", () => {
     try {
       const specs = collectModuleSpecifiersFromSource(
         support,
-        undefined,
         '<script src="./app.js"></script><a href="./about.html">About</a>',
         {
           file: "index.html",
@@ -408,7 +410,8 @@ describe("authoritative empty native results", () => {
       ...vueSupport,
       native: {
         ...vueSupport.native,
-        normalizeQuery: (kind, query) => (kind === "imports" ? `${query}\n;` : query),
+        normalizeQuery: (kind: NativeCompatibilityQueryKind, query: string) =>
+          kind === "imports" ? `${query}\n;` : query,
       },
     };
     const fallbackEvents: FallbackImportExtractionEvent[] = [];
@@ -419,7 +422,7 @@ describe("authoritative empty native results", () => {
       importBindings: [],
     };
 
-    const specs = collectModuleSpecifiersFromSource(support, undefined, '<script src="./app.js"></script>', {
+    const specs = collectModuleSpecifiersFromSource(support, '<script src="./app.js"></script>', {
       file: "App.vue",
       nativeQueries: emptyNativeResults,
       onFallbackImportExtraction: (event) => fallbackEvents.push(event),
@@ -457,13 +460,13 @@ nativeDescribe("compact imports execution", () => {
 
     // Full native path
     const fullExecution = getNativeQueryExecutionForState(source, support, undefined, "imports");
-    const fullSpecs = collectModuleSpecifiersFromSource(support, undefined, source, {
+    const fullSpecs = collectModuleSpecifiersFromSource(support, source, {
       nativeQueries: fullExecution.results,
     });
 
     // Compact path
     const compactExecution = getCompactImportsExecution(source, support);
-    const compactSpecs = collectModuleSpecifiersFromSource(support, undefined, source, {
+    const compactSpecs = collectModuleSpecifiersFromSource(support, source, {
       compactNativeImports: compactExecution.results,
     });
 
@@ -487,7 +490,7 @@ nativeDescribe("compact imports execution", () => {
     ].join("\n");
 
     const execution = getCompactImportsExecution(source, support);
-    const specs = collectModuleSpecifiersFromSource(support, undefined, source, {
+    const specs = collectModuleSpecifiersFromSource(support, source, {
       compactNativeImports: execution.results,
     });
 
@@ -496,88 +499,10 @@ nativeDescribe("compact imports execution", () => {
 
   it("falls back to regex extraction for Python when compact native imports are empty", () => {
     const support = supportById("python")!;
-    const specs = collectModuleSpecifiersFromSource(support, undefined, "import os\nfrom pkg import value\n", {
+    const specs = collectModuleSpecifiersFromSource(support, "import os\nfrom pkg import value\n", {
       compactNativeImports: { imports: [] },
     });
 
     expect(specs).toEqual([{ spec: "os" }, { spec: "pkg" }]);
-  });
-});
-
-nonNativeParserDescribe("native import fallback contract by language", () => {
-  it("treats empty native imports as authoritative for TypeScript and Java", () => {
-    const cases = [
-      {
-        supportId: "ts",
-        fileName: "main.ts",
-        source: "import { foo } from './bar';\n",
-      },
-      {
-        supportId: "java",
-        fileName: "Main.java",
-        source: "package demo;\nimport demo.util.Helper;\nclass Main {}\n",
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const support = supportById(testCase.supportId)!;
-      const specs = collectModuleSpecifiersFromSource(support, support.language(testCase.fileName), testCase.source, {
-        nativeQueries: {
-          imports: [],
-          exports: [],
-          locals: [],
-          importBindings: [],
-        },
-        file: testCase.fileName,
-      });
-
-      expect(specs).toEqual([]);
-    }
-  });
-
-  it("treats empty native imports as authoritative for Kotlin once native normalization is authoritative", () => {
-    const support = supportById("kotlin")!;
-    const specs = collectModuleSpecifiersFromSource(
-      support,
-      support.language("Main.kt"),
-      "package demo\nimport demo.util.Helper\nclass Main\n",
-      {
-        nativeQueries: {
-          imports: [],
-          exports: [],
-          locals: [],
-          importBindings: [],
-        },
-        file: "Main.kt",
-      },
-    );
-
-    expect(specs).toEqual([]);
-  });
-
-  it("uses parser fallback for Java and Kotlin when native imports are unavailable", () => {
-    const cases = [
-      {
-        supportId: "java",
-        fileName: "Main.java",
-        source: "package demo;\nimport demo.util.Helper;\nclass Main {}\n",
-        expected: [{ spec: "demo.util.Helper" }],
-      },
-      {
-        supportId: "kotlin",
-        fileName: "Main.kt",
-        source: "package demo\nimport demo.util.Helper\nclass Main\n",
-        expected: [{ spec: "demo.util.Helper" }],
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const support = supportById(testCase.supportId)!;
-      const specs = collectModuleSpecifiersFromSource(support, support.language(testCase.fileName), testCase.source, {
-        file: testCase.fileName,
-      });
-
-      expect(specs).toEqual(testCase.expected);
-    }
   });
 });

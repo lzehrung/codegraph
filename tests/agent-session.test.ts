@@ -76,6 +76,7 @@ type MutableDetailedSymbolGraphSidecar = {
     edges: Array<{
       from: string;
       to: string;
+      label?: string;
       site?: {
         file: string;
         range: {
@@ -141,7 +142,8 @@ describe("agent session", () => {
 
     expect(baselineStats.filter((file) => file === missingFile)).toHaveLength(1);
     expect(baselineStats.filter((file) => coveredFiles.includes(file))).toHaveLength(0);
-    expect(await session.checkFreshness()).toEqual({ state: "fresh" });
+    expect(session.checkFreshness).toBeTypeOf("function");
+    expect(await session.checkFreshness!()).toEqual({ state: "fresh" });
   });
 
   it("starts fresh after a tracked file metadata-only change on the snapshot fast path", async () => {
@@ -154,7 +156,8 @@ describe("agent session", () => {
 
     await session.loadProject({ symbolGraph: "skip" });
 
-    expect(await session.checkFreshness()).toEqual({ state: "fresh" });
+    expect(session.checkFreshness).toBeTypeOf("function");
+    expect(await session.checkFreshness!()).toEqual({ state: "fresh" });
   });
 
   it("skips detailed symbol graph construction until requested", async () => {
@@ -471,7 +474,9 @@ describe("agent session", () => {
 
   it("invalidates module, project snapshot, and detailed sidecar on core epoch drift", async () => {
     const root = await mkGitRepo();
-    const initial = await createAgentSession({ root }).loadProject();
+    // Builds the cache this test then rewrites with a stale epoch; the returned project is
+    // not needed, only the on-disk state it leaves behind.
+    await createAgentSession({ root }).loadProject();
     const cacheDir = path.join(root, ".codegraph-cache", "index-v1");
     const manifestPath = path.join(cacheDir, "manifest.json");
     const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {

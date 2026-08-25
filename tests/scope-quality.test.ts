@@ -47,7 +47,7 @@ describe("scope index quality", () => {
     ];
 
     for (const testCase of cases) {
-      const scopeIndex = buildScopeIndexFromSource(testCase.file, source, testCase.support, undefined, [
+      const scopeIndex = buildScopeIndexFromSource(testCase.file, source, testCase.support, [
         { kind: "named", local: "helper", imported: "helper", from: "./helper.js" },
       ]);
       const helperBindings = scopeIndex.bindings.get("helper");
@@ -188,8 +188,8 @@ describe("scope index quality", () => {
 
     // Check that 'inner' is not in the root scope's map
     const rootScope = scopeIndex.allScopes.find((s) => s.kind === "module");
-    expect(rootScope.map.has("outer")).toBe(true);
-    expect(rootScope.map.has("inner")).toBe(false);
+    expect(rootScope!.map.has("outer")).toBe(true);
+    expect(rootScope!.map.has("inner")).toBe(false);
   });
 
   it("should handle Python parameter shadowing", async () => {
@@ -392,7 +392,7 @@ def foo(x):
         typeOnly: false,
       },
     ];
-    const scopeIndex = buildScopeIndexFromSource(file, source, TS_SUPPORT, undefined, imports);
+    const scopeIndex = buildScopeIndexFromSource(file, source, TS_SUPPORT, imports);
     const binding = scopeIndex.bindings.get("localValue")?.[0];
 
     expect(binding?.import?.from).toBe("./dep");
@@ -416,7 +416,7 @@ def foo(x):
         mechanism: "cjs",
       },
     ];
-    const scopeIndex = buildScopeIndexFromSource(file, source, TS_SUPPORT, undefined, imports);
+    const scopeIndex = buildScopeIndexFromSource(file, source, TS_SUPPORT, imports);
     const shallowBindings = scopeIndex.bindings.get("shallow") ?? [];
     const valueBindings = scopeIndex.bindings.get("value") ?? [];
     const firstBindings = scopeIndex.bindings.get("first") ?? [];

@@ -1,6 +1,5 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { stringifyUnknown } from "../ast.js";
 import { mapLimitSemaphore } from "../concurrency.js";
 import { findFirstExistingResolutionCandidate } from "./findFirstExisting.js";
 import {
@@ -22,8 +21,6 @@ import {
 import { PHP_IDENTIFIER_SOURCE } from "../identifiers.js";
 
 const PHP_IDENTIFIER_PATTERN = new RegExp(PHP_IDENTIFIER_SOURCE, "uy");
-
-type FileId = string;
 
 async function resolvePhpPathLikeSpecifier(
   projectRoot: string,

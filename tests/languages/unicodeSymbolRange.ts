@@ -22,9 +22,8 @@ export async function expectUnicodeSymbolRangeIdentity(opts: {
     const file = path.join(root, opts.fileName);
     await fsp.writeFile(file, opts.source, "utf8");
     const parsed = await parseFile(file);
-    const mod = collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, parsed.lang, [], {
-      tree: parsed.tree,
-      nativeQueries: parsed.nativeQueries,
+    const mod = collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
+      ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
     });
     const sym = mod.locals.find((s) => s.localName === opts.symbolName);
     expect(
@@ -34,9 +33,10 @@ export async function expectUnicodeSymbolRangeIdentity(opts: {
 
     const expectedIndex = opts.source.indexOf(opts.symbolName);
     expect(expectedIndex).toBeGreaterThanOrEqual(0);
-    expect(sym!.range.start.index, "range.start.index must equal source.indexOf(name)").toBe(expectedIndex);
+    const startIndex = sym!.range.start.index;
+    expect(startIndex, "range.start.index must equal source.indexOf(name)").toBe(expectedIndex);
     expect(
-      opts.source.slice(sym!.range.start.index, sym!.range.start.index + opts.symbolName.length),
+      opts.source.slice(startIndex, (startIndex ?? 0) + opts.symbolName.length),
       "slicing the published range must recover the identifier text",
     ).toBe(opts.symbolName);
   } finally {

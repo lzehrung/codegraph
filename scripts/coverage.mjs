@@ -169,7 +169,10 @@ ${mainContent.trimEnd()}
 
 function runJavaScriptCoverage() {
   run(process.execPath, ["./scripts/ensure-dist-for-tests.mjs"]);
-  run("npx", ["vitest", "run", "--coverage", "--exclude", "tests/bench-harness.test.ts", "--maxWorkers", "4"]);
+  // No --maxWorkers override: vitest.config.ts sets maxWorkers: 2, and a second value
+  // here silently won that argument, so the coverage run used a different concurrency
+  // than every other vitest invocation.
+  run("npx", ["vitest", "run", "--coverage", "--exclude", "tests/bench-harness.test.ts"]);
 }
 
 function runNativeCoverage() {

@@ -348,7 +348,7 @@ describe("disk cache uses sqlite backend", () => {
     await fsp.writeFile(path.join(root, "a.ts"), 'import { b } from "./b";\nexport const a = b + 1;\n', "utf8");
     await fsp.writeFile(path.join(root, "b.ts"), "export const b = 2;\n", "utf8");
 
-    const report1: BuildReport = {};
+    const report1: BuildReport = { timings: {} };
     await buildProjectIndex(root, {
       cache: "disk",
       keepParsed: false,
@@ -356,7 +356,7 @@ describe("disk cache uses sqlite backend", () => {
       threads: 1,
     });
 
-    const report2: BuildReport = {};
+    const report2: BuildReport = { timings: {} };
     await buildProjectIndex(root, {
       cache: "disk",
       keepParsed: false,
@@ -984,7 +984,7 @@ describe("disk cache uses sqlite backend", () => {
       ),
     ).toBe(1);
 
-    const report: BuildReport = {};
+    const report: BuildReport = { timings: {} };
     const index = await buildProjectIndex(root, { cache: "disk", threads: 1, report });
     const after = new DatabaseSync(moduleCacheDbPath(root));
     const row = after.prepare("SELECT file, updated_at FROM module_cache WHERE file = ?").get(seeded.relativeFile) as
@@ -1050,7 +1050,7 @@ describe("disk cache uses sqlite backend", () => {
     expect(seeded.version).toBe(3);
     expect(Object.keys(seeded.files).every((file) => path.isAbsolute(file))).toBe(true);
 
-    const report: BuildReport = {};
+    const report: BuildReport = { timings: {} };
     const index = await buildProjectIndex(root, { cache: "disk", threads: 1, report });
     const rewritten = JSON.parse(await fsp.readFile(manifestPath(root), "utf8")) as IndexManifest;
 
@@ -1085,7 +1085,7 @@ describe("disk cache uses sqlite backend", () => {
         ?.locals.some((local) => local.localName === "snapshotMigrated"),
     ).toBe(true);
 
-    const report: BuildReport = {};
+    const report: BuildReport = { timings: {} };
     const index = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1, report });
     expect(index.byFile.has(fileIdentityKey(absoluteProjectPath(root, "entry.ts")))).toBe(true);
     expect(report.files?.parsed ?? 0).toBe(0);

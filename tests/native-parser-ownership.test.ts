@@ -1,7 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
-import { createUnavailableParserBackendSpies, expectParserBackendUnusedForNativeOwnership } from "./helpers/native.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 
@@ -59,23 +58,10 @@ nativeDescribe("native parser ownership", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.resetModules();
-    vi.doUnmock("../src/parserBackend.js");
   });
 
   it("keeps representative source-language navigation on the native runtime when no non-native parser is available", async () => {
-    const fallbackSpies = createUnavailableParserBackendSpies("grammar");
-
     vi.resetModules();
-    vi.doMock("../src/parserBackend.js", async () => {
-      const actual = await vi.importActual<typeof import("../src/parserBackend.js")>("../src/parserBackend.js");
-      return {
-        ...actual,
-        isNonNativeParserAvailable: () => false,
-        parseWithLanguage: fallbackSpies.parseSpy,
-        executeQueryAsNativeMatches: fallbackSpies.querySpy,
-      };
-    });
-
     const { buildProjectIndexFromFiles, findReferences, goToDefinition, listSymbols } = await import("../src/index.js");
 
     const cases: NativeSemanticCase[] = [
@@ -239,24 +225,10 @@ nativeDescribe("native parser ownership", () => {
       });
       expect(referencesResult.status).toBe(testCase.references.expectedStatus);
     }
-
-    expectParserBackendUnusedForNativeOwnership(fallbackSpies);
   }, 45_000);
 
   it("builds detailed TypeScript symbol edges without loading a non-native parser", async () => {
-    const fallbackSpies = createUnavailableParserBackendSpies("grammar");
-
     vi.resetModules();
-    vi.doMock("../src/parserBackend.js", async () => {
-      const actual = await vi.importActual<typeof import("../src/parserBackend.js")>("../src/parserBackend.js");
-      return {
-        ...actual,
-        isNonNativeParserAvailable: () => false,
-        parseWithLanguage: fallbackSpies.parseSpy,
-        executeQueryAsNativeMatches: fallbackSpies.querySpy,
-      };
-    });
-
     const { buildProjectIndexFromFiles } = await import("../src/index.js");
     const { buildSymbolGraphDetailed } = await import("../src/graphs.js");
     const root = path.join(sampleRoot, "typescript");
@@ -269,6 +241,5 @@ nativeDescribe("native parser ownership", () => {
 
     expect(detailed.nodes.size).toBeGreaterThan(0);
     expect(detailed.edges.length).toBeGreaterThan(0);
-    expectParserBackendUnusedForNativeOwnership(fallbackSpies);
   });
 });

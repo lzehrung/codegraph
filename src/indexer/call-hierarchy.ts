@@ -1,4 +1,4 @@
-import type { SymbolEdge, SymbolGraph, SymbolNode } from "../graphs/symbol-graph.js";
+import type { SymbolGraph, SymbolNode } from "../graphs/symbol-graph.js";
 import type { FileId, Range } from "../types.js";
 
 export type CallHierarchyDirection = "incoming" | "outgoing";

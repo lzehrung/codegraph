@@ -1,11 +1,9 @@
 import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
 export const SWIFT_DEF: LanguageDefinition = {
   id: "swift",
   extensions: [".swift"],
-  grammar: () => loadTreeSitterLanguage("tree-sitter-swift"),
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

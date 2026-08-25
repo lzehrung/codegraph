@@ -72,6 +72,7 @@ export {
   type DependencyNode,
   type GraphBuildOptions,
   type SymbolGraph,
+  type SymbolNode,
   type SymbolNodeKind,
   type DetailedCycle,
   type CycleInternalEdge,

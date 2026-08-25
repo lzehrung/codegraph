@@ -3,7 +3,6 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
-import os from "node:os";
 
 const rootDir = process.cwd();
 const benchScript = path.join(rootDir, "scripts", "bench-native.mjs");

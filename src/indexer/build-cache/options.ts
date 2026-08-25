@@ -44,7 +44,6 @@ type LanguageDefinitionFingerprintDescriptor = {
     normalizeQuery?: string;
   };
   behavior: {
-    grammar: string;
     classifyDefinition?: string;
     isDeclarationName?: string;
     scopeDeclarationNames?: string;
@@ -93,7 +92,6 @@ function languageDefinitionFingerprintDescriptor(
         }
       : {}),
     behavior: {
-      grammar: functionSource(definition.grammar) ?? "",
       // Booleans serialize under the same defaults adaptDefinition applies, so the
       // fingerprint tracks effective behavior rather than incidental optionality.
       usesQueryDrivenLocals: definition.usesQueryDrivenLocals ?? false,
@@ -122,7 +120,6 @@ function languageDefinitionFingerprintDescriptor(
 export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof LanguageDefinition, true>> = {
   id: true,
   extensions: true,
-  grammar: true,
   structure: true,
   graph: true,
   usesQueryDrivenLocals: true,

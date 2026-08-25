@@ -99,6 +99,43 @@ unless they specifically need these shapes.
 Internal-only modules (anything outside the documented entry points above) are
 not covered by semver.
 
+### Removed in the current unreleased line (breaking)
+
+The non-native parser seam is gone. It had been inert since 2.0.0 - every function in it either
+returned a placeholder or threw - and the native addon has been the only grammar backend since
+then. These exports no longer exist and have no replacement, because nothing they described was
+reachable: `isNonNativeParserAvailable`, `isNonNativeParserUnavailableError`, `parseWithLanguage`,
+`executeQueryAsNativeMatches`, `loadTreeSitterLanguage`, `loadTypeScriptGrammars`,
+`isParserSyntaxTree`, `__resetParserBackendModuleForTests`, `languageForFile`, the
+`ParserLanguage`, `ParserSyntaxTree`, `QueryMatch`, `QueryCapture`, and `QueryPoint` types, and the
+`LanguageSupport.language` and `LanguageDefinition.grammar` fields. Callers that branched on native
+availability should use the native runtime checks in the core helpers instead.
+
+Four exported signatures dropped a `lang` argument that no implementation read. The removed
+positions are shown below; every other argument keeps its place, so delete the argument at the
+call site and nothing else changes:
+
+```ts
+// before
+collectLocalsAndExportsFromSource(file, source, support, lang, imports, opts);
+buildScopeIndexFromSource(file, source, support, lang, imports, opts);
+collectModuleSpecifiersFromSource(support, lang, source, opts);
+collectImportsForFile(file, root, { lang, tree, ...rest }); // both options were unread
+
+// after
+collectLocalsAndExportsFromSource(file, source, support, imports, opts);
+buildScopeIndexFromSource(file, source, support, imports, opts);
+collectModuleSpecifiersFromSource(support, source, opts);
+collectImportsForFile(file, root, { ...rest });
+```
+
+The first three removals are positional, so leaving `undefined` in the vacated slot compiles
+and then misbehaves: `imports` slides into the `opts` position and both are read as the wrong
+thing. Delete the argument rather than blanking it.
+
+This ships in a 2.x minor by explicit decision rather than waiting for a major, matching how
+2.0.0 handled export narrowing without compatibility aliases.
+
 ## Symbol target resolution
 
 `resolveSymbolTarget(index, input)` is the index-level capability for turning a

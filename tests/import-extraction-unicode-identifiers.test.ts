@@ -433,7 +433,7 @@ describe("Unicode import parser seams", () => {
     // Mirrors the shape collectModuleSpecifiersFromSource reads from a native compact
     // imports execution: one match per statement, with the full statement text under a
     // "stmt" capture.
-    const specs = collectModuleSpecifiersFromSource(support, undefined, "import café\u0301\nfrom pkg import x\n", {
+    const specs = collectModuleSpecifiersFromSource(support, "import café\u0301\nfrom pkg import x\n", {
       compactNativeImports: {
         imports: [
           { patternIndex: 0, captures: [{ name: "stmt", text: "import café\u0301" }] },

@@ -71,10 +71,7 @@ async function assertModernConversation(client: Client): Promise<void> {
     "MCP search tool call",
   );
   expect(result.isError).not.toBe(true);
-  const text = result.content
-    .filter(isTextContent)
-    .map((entry) => entry.text)
-    .join("\n");
+  const text = result.content.flatMap((entry) => (isTextContent(entry) ? [entry.text] : [])).join("\n");
   expect(text).toContain(SEARCH_SYMBOL);
 }
 

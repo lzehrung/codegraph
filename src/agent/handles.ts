@@ -103,14 +103,8 @@ export function parseAgentSqlHandle(handle: string): AgentSqlHandle | null {
     return { name, file, line };
   }
 
-  if (parts.length > 4) {
-    const name = parts[1];
-    const file = parts.slice(2, -1).join(":");
-    const line = Number(parts[parts.length - 1]);
-    if (!name || !file || !Number.isFinite(line)) return null;
-    return { name, file, line };
-  }
-
+  // No `parts.length > 4` case: formatAgentSqlHandle percent-encodes name and file,
+  // so a colon inside either never survives as a separator.
   return null;
 }
 

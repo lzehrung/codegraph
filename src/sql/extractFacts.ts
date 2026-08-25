@@ -7,7 +7,6 @@ import {
   normalizeSqlObjectName,
   SQL_OBJECT_NAME_PATTERN,
   splitTopLevelCommaSeparated,
-  sqlObjectBaseName,
   sqlParenDepthAt,
 } from "./lex.js";
 import { sqlObjectLookupKeys } from "./lookup.js";

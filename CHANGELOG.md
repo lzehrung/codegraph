@@ -9,9 +9,21 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the inert non-native parser seam. `isNonNativeParserAvailable`, `isNonNativeParserUnavailableError`, `parseWithLanguage`, `executeQueryAsNativeMatches`, `loadTreeSitterLanguage`, `loadTypeScriptGrammars`, `isParserSyntaxTree`, `__resetParserBackendModuleForTests`, and the `ParserLanguage`, `ParserSyntaxTree`, `QueryMatch`, `QueryCapture`, and `QueryPoint` types are gone, along with `languageForFile`, `LanguageSupport.language`, and `LanguageDefinition.grammar`. Every one of them was either a stub that returned a placeholder, a function that always threw, or a type describing those. The native parser has been the only grammar backend since 2.0.0.
+- Removed the `lang` parameter and option from the exported signatures that threaded it: `collectLocalsAndExportsFromSource`, `buildScopeIndexFromSource`, `collectImportsForFile`, and `collectModuleSpecifiersFromSource`, plus the unread `tree` option on `collectImportsForFile`. Callers should drop the argument; nothing read it. This is a breaking change to the library surface, shipping in a 2.x minor by explicit decision, matching how 2.0.0 handled export narrowing without compatibility aliases.
+- Dropped `behavior.grammar` from the language-definition cache fingerprint. Existing build caches rebuild once on first run after upgrading, which is the designed rebuild path rather than a schema migration.
+- Deleted five leftover declarations that no code read: the superseded `codegraph packet get` command formatters in agent orientation, a duplicate ignorable-character pattern in JVM symbol resolution, a per-file source split in locals extraction, and a bundled-skill read copied into the uninstall planner. `codegraph uninstall` no longer fails when the package's bundled skill file is missing, which it never needed.
+
 ### Fixed
 
+- `parseAgentSqlHandle` no longer carries an unreachable branch for handles with more than four colon-separated parts. `formatAgentSqlHandle` percent-encodes the name and file, so a colon in either can never survive as a separator, and that branch would have skipped decoding had it ever run.
 - Retried transient Windows filesystem failures while moving standalone-install versions, and restored a clean-installable npm lockfile.
+
+### Changed
+
+- `@typescript-eslint/no-unused-vars` is enforced as an error (with `^_` ignore patterns) instead of being switched off.
 
 ## [2.1.2] - 2026-08-19
 

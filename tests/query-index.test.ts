@@ -387,7 +387,8 @@ describe("persistent query index", () => {
         root,
         files,
         index,
-        graph: index.graph,
+        fileGraph: index.graph,
+        symbolGraph: { nodes: new Map(), edges: [] },
         analysis: index.analysis ?? {
           mode: "reduced",
           backend: "unknown",
@@ -397,7 +398,7 @@ describe("persistent query index", () => {
           nativeFilesFellBack: 0,
           label: "reduced",
         },
-        buildReport: index.buildReport,
+        ...(index.buildReport ? { buildReport: index.buildReport } : {}),
       };
     };
 
@@ -612,7 +613,7 @@ describe("persistent query index", () => {
       projectSnapshotIdentity: string,
       read: () => T,
     ): T {
-      return originalWithReadSnapshot.call(this, projectSnapshotIdentity, () => {
+      return originalWithReadSnapshot.call<unknown, [string, () => T], T>(this, projectSnapshotIdentity, () => {
         read();
         throw new Error("forced post-read failure");
       });

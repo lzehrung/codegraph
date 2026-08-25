@@ -7,7 +7,7 @@ describe("Python monorepo package navigation", () => {
   const root = readOnlySamplePath("monorepo");
   const pyUtils = path.join(root, "packages", "py-app", "utils.py");
   const pyMain = path.join(root, "packages", "py-app", "main.py");
-  const pyInit = path.join(root, "packages", "py-app", "__init__.py");
+  const _pyInit = path.join(root, "packages", "py-app", "__init__.py");
 
   it("goToDefinition from main.py Utility -> utils.py", async () => {
     const index = await buildProjectIndex(root, { cache: "off" });
@@ -25,7 +25,6 @@ describe("Python monorepo package navigation", () => {
       file: pyUtils.replace(/\\/g, "/"),
       line: 1,
       column: 5,
-      includeDeclaration: true,
     });
     expect(res.status).toBe("ok");
     if (res.status === "ok") {

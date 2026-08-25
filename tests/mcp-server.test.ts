@@ -257,9 +257,10 @@ describe("codegraph MCP handlers", () => {
     const handlers = createCodegraphMcpHandlers({ root });
     const started = Promise.withResolvers<void>();
     const aborted = Promise.withResolvers<void>();
-    handlers.query_sqlite = async (_request, options) => {
+    handlers.query_sqlite = async (_request, options?) => {
       started.resolve();
-      await new Promise<never>((_resolve, reject) => {
+      // The body always rejects; returning the never satisfies the declared result type.
+      return await new Promise<never>((_resolve, reject) => {
         options?.signal?.addEventListener("abort", () => {
           aborted.resolve();
           reject(new Error("cancelled"));
@@ -2162,7 +2163,10 @@ describe("codegraph MCP handlers", () => {
   it("keeps refs handle-or-position validation in the handler", async () => {
     const handlers = createCodegraphMcpHandlers({ root: process.cwd() });
 
-    await expect(handlers.refs({ file: "src/index.ts", line: 1 })).rejects.toThrow(
+    // Deliberately omits column, which the request type forbids, so that the handler's
+    // own runtime validation is what rejects it.
+    const incompleteRefsRequest = { file: "src/index.ts", line: 1 } as Parameters<typeof handlers.refs>[0];
+    await expect(handlers.refs(incompleteRefsRequest)).rejects.toThrow(
       "refs requires either handle or file, line, and column.",
     );
     await expect(
@@ -3635,13 +3639,13 @@ describe("MCP session teardown regressions (S2)", () => {
 
       const snapshot = await session.loadProject();
       const handle = await ensureSessionQueryIndex(session, snapshot);
-      expect(handle.store?.closed).toBe(false);
+      expect(handle.store?.isClosed).toBe(false);
       expect(invalidationHookRan).toBe(false);
 
       await httpServer.close();
 
       expect(invalidationHookRan).toBe(true);
-      expect(handle.store?.closed).toBe(true);
+      expect(handle.store?.isClosed).toBe(true);
     } finally {
       await httpServer.close();
     }
@@ -3819,7 +3823,7 @@ describe("MCP transport isolation regressions (S8)", () => {
         params: { name: "workspace_symbols", arguments: { query: "validateUser" } },
       });
 
-      const call1Closed = Promise.withResolvers();
+      const call1Closed = Promise.withResolvers<void>();
       const req1 = httpRequest({
         hostname: endpoint.hostname,
         port: endpoint.port,

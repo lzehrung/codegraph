@@ -56,7 +56,7 @@ import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { parseQualifiedSymbolPath } from "../indexer/symbols.js";
 import { analyzeImpactFromDiff, type CompactImpactReport } from "../impact/index.js";
 import { DEFAULT_BOUNDED_IMPACT_BUDGETS } from "../impact/budgets.js";
-import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../review.js";
+import { buildReviewReport, type ReviewDepth } from "../review.js";
 import { boundReviewReportForTransport, type ReviewReportForTransport } from "../review/types.js";
 import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY, queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
 import { boundList, countOmitted } from "../presentation/bounds.js";

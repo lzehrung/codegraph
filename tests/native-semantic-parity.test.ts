@@ -61,15 +61,6 @@ function normalizeFile(file: string): string {
   return path.resolve(file).replace(/\\/g, "/");
 }
 
-function normalizeGraphEdges(index: ProjectIndex): string[] {
-  return index.graph.edges
-    .map((edge) => {
-      const target = edge.to.type === "file" ? `file:${normalizeFile(edge.to.path)}` : `external:${edge.to.name}`;
-      return `${normalizeFile(edge.from)}=>${target}`;
-    })
-    .sort();
-}
-
 function normalizeSymbols(
   index: ProjectIndex,
   expectations: SymbolExpectation[] | undefined,
@@ -200,14 +191,22 @@ function sampleExpectation(
   return {
     root,
     files: files.map((file) => path.join(root, file)),
-    symbols: symbols?.map((expectation) => ({
-      file: path.join(root, expectation.file),
-      names: expectation.names,
-    })),
-    sqlFacts: sqlFacts?.map((expectation) => ({
-      file: path.join(root, expectation.file),
-      facts: expectation.facts,
-    })),
+    ...(symbols
+      ? {
+          symbols: symbols.map((expectation) => ({
+            file: path.join(root, expectation.file),
+            names: expectation.names,
+          })),
+        }
+      : {}),
+    ...(sqlFacts
+      ? {
+          sqlFacts: sqlFacts.map((expectation) => ({
+            file: path.join(root, expectation.file),
+            facts: expectation.facts,
+          })),
+        }
+      : {}),
     goto: { ...goto, file: path.join(root, goto.file) },
     references: { ...references, file: path.join(root, references.file) },
   };

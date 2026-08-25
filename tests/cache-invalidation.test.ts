@@ -15,7 +15,6 @@ import {
   type BuildReport,
 } from "../src/index.js";
 import type { ModuleIndex, ProjectIndex } from "../src/indexer/types.js";
-import * as indexer from "../src/indexer.js";
 import * as buildCache from "../src/indexer/build-cache.js";
 import {
   MANIFEST_VERSION,
@@ -34,7 +33,6 @@ import {
   clearImportResolutionCaches,
   clearResolutionCaches,
 } from "../src/util.js";
-import * as util from "../src/util.js";
 import * as projectFilesModule from "../src/util/projectFiles.js";
 import * as gitModule from "../src/util/git.js";
 import * as incrementalPlan from "../src/indexer/incremental-plan.js";
@@ -51,6 +49,7 @@ import * as resolverEnvironment from "../src/indexer/build-cache/resolver-enviro
 vi.mock("node:zlib", { spy: true });
 import { runGit } from "./helpers/git.js";
 import { createTempProjectRoot, mkTmpDir } from "./helpers/filesystem.js";
+import type { SnapshotComparableSignature } from "../src/indexer/build-cache/project-snapshot.js";
 
 function normalize(p: string): string {
   return p.replace(/\\/g, "/");
@@ -386,7 +385,16 @@ describe("Cache invalidation and strict hashing", () => {
     const unchangedSnapshotModules = await buildCache.tryLoadProjectSnapshotModules(
       root,
       { cache: "disk", cacheStrict: false },
-      new Map([[fileIdentityKey(utilFile), persistedSignature]]),
+      new Map<string, SnapshotComparableSignature>([
+        [
+          fileIdentityKey(utilFile),
+          {
+            sig: persistedSignature.sig,
+            ...(persistedSignature.gitSig ? { gitSig: persistedSignature.gitSig } : {}),
+            ...(persistedSignature.cacheSig ? { cacheSig: persistedSignature.cacheSig } : {}),
+          },
+        ],
+      ]),
     );
     expect(unchangedSnapshotModules?.has(fileIdentityKey(utilFile))).toBe(true);
 
@@ -652,7 +660,7 @@ describe("Cache invalidation and strict hashing", () => {
             edges: [
               {
                 from: file,
-                to: { type: "file", path: normalize(path.join(root, "stale.ts")) },
+                to: { type: "file" as const, path: normalize(path.join(root, "stale.ts")) },
                 raw: "./stale",
               },
             ],
@@ -669,6 +677,64 @@ describe("Cache invalidation and strict hashing", () => {
     );
     expect(manifest.version).toBe(MANIFEST_VERSION);
     expect(manifest.buildOptions?.implementationFingerprint).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  // The implementation fingerprint written by the release before `behavior.grammar` was
+  // dropped from the language-definition descriptor, captured at package version 2.1.2 from
+  // commit 6b706fa. Regenerate by checking out that commit and printing
+  // `getImplementationFingerprint()` from `src/indexer/build-cache/options.js`.
+  //
+  // Post-change, the same tree at the same version produces
+  // cd265cf53c5dc654bfb305b4191c3cb58219bdf52a8736ab42c4b0b9a72b54df, so dropping the field
+  // really did move every stored value rather than leaving the descriptor unchanged. Pinning
+  // the literal keeps that a fact the suite can check instead of an assumption: a synthetic
+  // value such as 64 zeroes would exercise the generic mismatch path just as well and would
+  // still pass had the removal been a no-op on the fingerprint.
+  const PRE_GRAMMAR_REMOVAL_FINGERPRINT = "d4e0bcab722e969fb2d91c8b1bccf283b138baf9fd99d7a155fed0b7bec14e9c";
+
+  it("rebuilds cleanly from a manifest written before behavior.grammar left the fingerprint", async () => {
+    // Removing `behavior.grammar` changes every stored fingerprint value. That is a one-time
+    // rebuild by design rather than a schema migration, so the guarantee under test is that a
+    // manifest written by the previous implementation is discarded and rebuilt, never
+    // partially trusted.
+    const root = await mkTmpDir("dg-cache-superseded-fingerprint-");
+    const entryPath = path.join(root, "entry.ts");
+    const file = normalize(path.resolve(entryPath));
+    await fsp.writeFile(entryPath, "export const current = 1;\n", "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    const stored = await readManifest(root);
+    // The pinned pre-change value is a real fingerprint, not a placeholder, so this also
+    // asserts that today's descriptor cannot collide with the superseded one.
+    expect(PRE_GRAMMAR_REMOVAL_FINGERPRINT).toMatch(/^[a-f0-9]{64}$/);
+    expect(stored.buildOptions?.implementationFingerprint).not.toBe(PRE_GRAMMAR_REMOVAL_FINGERPRINT);
+
+    // Rewrite the manifest as the previous implementation would have left it: a
+    // well-formed manifest carrying that release's fingerprint, plus an edge that only
+    // a stale read could resurrect.
+    stored.buildOptions = { ...stored.buildOptions, implementationFingerprint: PRE_GRAMMAR_REMOVAL_FINGERPRINT };
+    stored.files = {
+      [file]: {
+        sig: "superseded-signature",
+        edges: [
+          { from: file, to: { type: "file" as const, path: normalize(path.join(root, "stale.ts")) }, raw: "./stale" },
+        ],
+      },
+    };
+    await fsp.writeFile(manifestPathFor(root), JSON.stringify(stored), "utf8");
+
+    const report: BuildReport = { timings: {} };
+    const rebuilt = await buildProjectIndexIncremental(root, { threads: 2, cache: "disk", report });
+
+    expect(report.manifest?.optionsMismatch).toContain("implementation");
+    expect(report.files?.parsed).toBe(1);
+    expect(rebuilt.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path.endsWith("/stale.ts"))).toBe(
+      false,
+    );
+    expect(moduleForPath(rebuilt, entryPath)?.locals.some((local) => local.localName === "current")).toBe(true);
+    const refreshed = await readManifest(root);
+    expect(refreshed.buildOptions?.implementationFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(refreshed.buildOptions?.implementationFingerprint).not.toBe(PRE_GRAMMAR_REMOVAL_FINGERPRINT);
   });
 
   it("rejects and rewrites a project snapshot stored for another root", async () => {
@@ -731,7 +797,7 @@ describe("Cache invalidation and strict hashing", () => {
       graph: { fast: true },
     });
     const manifest = await readManifest(root);
-    expect(manifest.graphOptions.fast).toBe(true);
+    expect(manifest.graphOptions!.fast).toBe(true);
   });
 
   it("rebuilds incremental indexes when discovery globRoot changes", async () => {
@@ -826,7 +892,7 @@ describe("Cache invalidation and strict hashing", () => {
 
     expect(tsIndex.graph.edges).toContainEqual({
       from: normalize(mappedPath),
-      to: { type: "file", path: normalize(dependencyPath) },
+      to: { type: "file" as const, path: normalize(dependencyPath) },
       raw: "./dependency",
     });
   });
@@ -910,7 +976,7 @@ describe("Cache invalidation and strict hashing", () => {
       expect.objectContaining({
         from: reportFile,
         raw: "sql:cached:reads_from:users",
-        to: { type: "file", path: schemaFile },
+        to: { type: "file" as const, path: schemaFile },
       }),
     );
   });
@@ -934,7 +1000,7 @@ describe("Cache invalidation and strict hashing", () => {
       expect.objectContaining({
         from: reportFile,
         raw: "sql:reads_from:users",
-        to: { type: "file", path: schemaFile },
+        to: { type: "file" as const, path: schemaFile },
       }),
     );
 
@@ -949,14 +1015,14 @@ describe("Cache invalidation and strict hashing", () => {
       expect.objectContaining({
         from: reportFile,
         raw: "sql:reads_from:users",
-        to: { type: "file", path: schemaFile },
+        to: { type: "file" as const, path: schemaFile },
       }),
     );
     expect(rebuilt.graph.edges).toContainEqual(
       expect.objectContaining({
         from: reportFile,
         raw: "sql:reads_from:accounts",
-        to: { type: "file", path: schemaFile },
+        to: { type: "file" as const, path: schemaFile },
       }),
     );
   });
@@ -981,7 +1047,7 @@ describe("Cache invalidation and strict hashing", () => {
         expect.objectContaining({
           from: reportFile,
           raw: "sql:reads_from:users",
-          to: { type: "file", path: schemaFile },
+          to: { type: "file" as const, path: schemaFile },
         }),
       );
       const sqlReads = readSpy.mock.calls
@@ -1022,20 +1088,20 @@ describe("Cache invalidation and strict hashing", () => {
     const cachedEdges = [
       {
         from: normalize(trackedPath),
-        to: { type: "file", path: normalize(depPath) },
+        to: { type: "file" as const, path: normalize(depPath) },
         raw: "./dep",
       },
     ];
 
     const fileSignatures = new Map<string, { sig: string; gitSig?: string }>([
-      [normalize(trackedPath), { sig: "mtime:changed", gitSig: gitSig ?? undefined }],
+      [normalize(trackedPath), { sig: "mtime:changed", ...(gitSig ? { gitSig } : {}) }],
     ]);
     const cachedFileEdges = new Map<string, { sig: string; gitSig?: string; edges: typeof cachedEdges }>([
       [
         normalize(trackedPath),
         {
           sig: "old-sig",
-          gitSig: gitSig ?? undefined,
+          ...(gitSig ? { gitSig } : {}),
           edges: cachedEdges,
         },
       ],
@@ -1291,7 +1357,7 @@ describe("Cache invalidation and strict hashing", () => {
       incrementalStrict: true,
     });
     const manifest = await readManifest(root);
-    expect(manifest.graphOptions.fast).toBe(false);
+    expect(manifest.graphOptions!.fast).toBe(false);
   });
 
   it("keeps unchanged graph edges and refreshes changed ones during incremental builds", async () => {
@@ -1313,14 +1379,14 @@ describe("Cache invalidation and strict hashing", () => {
     expect(aEntryBefore.edges).toEqual([
       {
         from: normalize(aPath),
-        to: { type: "file", path: normalize(bPath) },
+        to: { type: "file" as const, path: normalize(bPath) },
         raw: "./b",
       },
     ]);
     expect(bEntryBefore.edges).toEqual([
       {
         from: normalize(bPath),
-        to: { type: "file", path: normalize(cPath) },
+        to: { type: "file" as const, path: normalize(cPath) },
         raw: "./c",
       },
     ]);
@@ -1340,7 +1406,7 @@ describe("Cache invalidation and strict hashing", () => {
     expect(bEntryAfter.edges).toEqual([
       {
         from: normalize(bPath),
-        to: { type: "file", path: normalize(dPath) },
+        to: { type: "file" as const, path: normalize(dPath) },
         raw: "./d",
       },
     ]);
@@ -1435,7 +1501,7 @@ describe("Cache invalidation and strict hashing", () => {
     sourceEntry.edges[0] = {
       ...sourceEntry.edges[0],
       from: normalize(path.relative(root, outsideSource)),
-      to: { type: "file", path: normalize(path.relative(root, outsideDependency)) },
+      to: { type: "file" as const, path: normalize(path.relative(root, outsideDependency)) },
     };
     await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
 
@@ -1450,12 +1516,16 @@ describe("Cache invalidation and strict hashing", () => {
       expect(existsSpy).not.toHaveBeenCalledWith(outsideDependency);
       expect(accessSpy).not.toHaveBeenCalledWith(outsideDependency);
       expect(rebuilt.graph.edges).not.toContainEqual(
-        expect.objectContaining({ from: outsideSource, to: { type: "file", path: outsideDependency } }),
+        expect.objectContaining({
+          from: outsideSource,
+          to: { type: "file" as const, path: outsideDependency },
+          raw: outsideDependency,
+        }),
       );
       expect(rebuilt.graph.edges).toContainEqual(
         expect.objectContaining({
           from: normalize(sourcePath),
-          to: { type: "file", path: normalize(dependencyPath) },
+          to: { type: "file" as const, path: normalize(dependencyPath) },
         }),
       );
     } finally {
@@ -1963,7 +2033,15 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.writeFile(filePath, "export const moduleMemo = 1;\n", "utf8");
     await buildProjectIndex(root, { cache: "disk", threads: 1 });
     const manifest = await readManifest(root);
-    const signatures = new Map(Object.entries(manifest.files));
+    const signatures = new Map<string, SnapshotComparableSignature>(
+      Object.entries(manifest.files).map(([file, entry]) => [
+        file,
+        {
+          sig: entry.sig,
+          ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
+        },
+      ]),
+    );
     const snapshotPath = projectSnapshotPathFor(root);
     const snapshotBytes = await fsp.readFile(snapshotPath);
     await fsp.writeFile(snapshotPath, snapshotBytes);
@@ -3324,10 +3402,17 @@ describe("Cache invalidation and strict hashing", () => {
       const handle = await open(target, flags, mode);
       if (path.resolve(String(target)) === lockPath) {
         const originalRead = handle.read.bind(handle);
-        handle.read = async (buffer, offset, length, position) => {
+        // FileHandle.read is overloaded (positional and options forms); this stub only
+        // needs the positional one, which no single implementation signature can express.
+        handle.read = (async <T extends NodeJS.ArrayBufferView>(
+          buffer: T,
+          offset?: number | null,
+          length?: number | null,
+          position?: number | null,
+        ): Promise<fsp.FileReadResult<T>> => {
           if (typeof length === "number") readLengths.push(length);
-          return originalRead(buffer, offset, length, position);
-        };
+          return await originalRead(buffer, offset, length, position);
+        }) as typeof handle.read;
       }
       return handle;
     });
@@ -3358,10 +3443,16 @@ describe("Cache invalidation and strict hashing", () => {
       const handle = await open(target, flags, mode);
       if (path.resolve(String(target)) === lockPath) {
         const read = handle.read.bind(handle);
-        handle.read = async (buffer, offset, length, position) => {
+        // See the note above: only the positional overload is exercised here.
+        handle.read = (async <T extends NodeJS.ArrayBufferView>(
+          buffer: T,
+          offset?: number | null,
+          length?: number | null,
+          position?: number | null,
+        ): Promise<fsp.FileReadResult<T>> => {
           if (typeof length === "number") readLengths.push(length);
           return await read(buffer, offset, length, position);
-        };
+        }) as typeof handle.read;
       }
       return handle;
     });
@@ -3581,7 +3672,7 @@ describe("Cache invalidation and strict hashing", () => {
 
       expect(fromDiscoveredFiles).toEqual(fromFallbackDiscovery);
       expect(fromDiscoveredFiles).toEqual([
-        { from: normalize(packageA), to: { type: "file", path: normalize(packageB) }, raw: "@example/b" },
+        { from: normalize(packageA), to: { type: "file" as const, path: normalize(packageB) }, raw: "@example/b" },
       ]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

@@ -44,7 +44,7 @@ describe.runIf(isNativeTreeSitterAvailable())("locals/exports byte-index map reu
     const buildSpy = vi.spyOn(byteIndexModule, "buildByteToStringIndexMap");
 
     try {
-      const moduleIndex = collectLocalsAndExportsFromSource(file, source, support, support.language(file));
+      const moduleIndex = collectLocalsAndExportsFromSource(file, source, support);
       // Every native-capture range conversion (locals, exports) and every tree lookup during
       // this call must share one byte-index map instead of each rescanning the source.
       expect(buildSpy).toHaveBeenCalledTimes(1);

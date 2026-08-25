@@ -303,6 +303,7 @@ describe("package smoke modes", () => {
     });
 
     expect(report.status).toBe("pass");
+    if (!("selectedNativePath" in report)) throw new Error("expected a report naming the selected native path");
     expect(report.selectedNativePath).toContain("codegraph-native-win32-x64-msvc");
     expect(report.checks.map((check: { name: string }) => check.name)).toEqual(
       expect.arrayContaining(["install", "native-import", "version", "doctor", "native-parse", "mcp-stdio"]),

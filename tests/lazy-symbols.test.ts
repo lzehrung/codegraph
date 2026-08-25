@@ -3,6 +3,7 @@ import os from "node:os";
 import fsp from "node:fs/promises";
 import { describe, test, expect } from "vitest";
 import { LazyArray, LazyProjectIndex, createSymbolLoader } from "../src/util/lazySymbols.js";
+import { SymbolKind } from "../src/indexer/types.js";
 
 describe("LazyArray", () => {
   test("should not load data immediately", () => {
@@ -211,7 +212,7 @@ describe("LazyProjectIndex", () => {
         {
           file: "file1.ts",
           localName: "foo",
-          kind: 1,
+          kind: SymbolKind.Function,
           range: {
             start: { line: 1, column: 0, index: 0 },
             end: { line: 1, column: 3, index: 3 },
@@ -327,7 +328,7 @@ describe("LazyProjectIndex", () => {
         {
           file: "file1.ts",
           localName: "foo",
-          kind: 1,
+          kind: SymbolKind.Function,
           range: {
             start: { line: 1, column: 0, index: 0 },
             end: { line: 1, column: 3, index: 3 },
@@ -381,14 +382,28 @@ describe("LazyProjectIndex", () => {
       loaded: false,
       imports: [],
       exports: [],
-      locals: new LazyArray(async () => [{ file: "file1.ts", localName: "one", kind: 1 }]),
+      locals: new LazyArray(async () => [
+        {
+          file: "file1.ts",
+          localName: "one",
+          kind: SymbolKind.Function,
+          range: { start: { line: 1, column: 0, index: 0 }, end: { line: 1, column: 3, index: 3 } },
+        },
+      ]),
     });
     index.addModule("file2.ts", {
       file: "file2.ts",
       loaded: false,
       imports: [],
       exports: [],
-      locals: new LazyArray(async () => [{ file: "file2.ts", localName: "two", kind: 1 }]),
+      locals: new LazyArray(async () => [
+        {
+          file: "file2.ts",
+          localName: "two",
+          kind: SymbolKind.Function,
+          range: { start: { line: 1, column: 0, index: 0 }, end: { line: 1, column: 3, index: 3 } },
+        },
+      ]),
     });
 
     await index.getModule("file1.ts");

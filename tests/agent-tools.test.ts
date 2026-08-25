@@ -222,10 +222,10 @@ describe("Agent Tools", () => {
     const result = await tool_getHotspots(samplePath, { limit: 3 });
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
-      expect(result.hotspots.length).toBeLessThanOrEqual(3);
-      expect(result.hotspots.every((entry) => !path.isAbsolute(entry.file))).toBe(true);
-      expect(result.hotspots.every((entry) => typeof entry.score === "number")).toBe(true);
-      expect(result.hotspots.some((entry) => entry.file === "utils.ts")).toBe(true);
+      expect(result.hotspots!.length).toBeLessThanOrEqual(3);
+      expect(result.hotspots!.every((entry) => !path.isAbsolute(entry.file))).toBe(true);
+      expect(result.hotspots!.every((entry) => typeof entry.score === "number")).toBe(true);
+      expect(result.hotspots!.some((entry) => entry.file === "utils.ts")).toBe(true);
     }
   });
 
@@ -290,8 +290,8 @@ describe("Agent Tools", () => {
     const symbols = await tool_findSymbol(root, "value");
     expect(symbols.status).toBe("ok");
     if (symbols.status === "ok") {
-      const exportedValue = symbols.matches.find((entry) => entry.name === "value" && entry.line === 1);
-      const shadowedValue = symbols.matches.find((entry) => entry.name === "value" && entry.line === 2);
+      const exportedValue = symbols.matches!.find((entry) => entry.name === "value" && entry.line === 1);
+      const shadowedValue = symbols.matches!.find((entry) => entry.name === "value" && entry.line === 2);
       expect(exportedValue?.exported).toBe(true);
       expect(shadowedValue?.exported).toBe(false);
     }
@@ -335,9 +335,9 @@ describe("Agent Tools", () => {
     const result = await tool_goToDefinition(samplePath, mainFile, 7, 25);
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
-      expect(result.definition.file).toBe("utils.ts");
-      expect(result.definition.range.start.line).toBe(1);
-      expect(path.isAbsolute(result.definition.file)).toBe(false);
+      expect(result.definition!.file).toBe("utils.ts");
+      expect(result.definition!.range.start.line).toBe(1);
+      expect(path.isAbsolute(result.definition!.file)).toBe(false);
       expect(path.isAbsolute(result.via?.importedFrom ?? "")).toBe(false);
       expect(typeof result.via?.exportedName).toBe("string");
       expect(result.provenance?.resolution).toBe("namespace");
@@ -352,11 +352,11 @@ describe("Agent Tools", () => {
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
       expect(result.definition?.file).toBe("utils.ts");
-      expect(result.references.length).toBeGreaterThan(0);
-      expect(result.references.every((reference) => !path.isAbsolute(reference.file))).toBe(true);
-      const firstImportReference = result.references.find((reference) => reference.via?.import);
+      expect(result.references!.length).toBeGreaterThan(0);
+      expect(result.references!.every((reference) => !path.isAbsolute(reference.file))).toBe(true);
+      const firstImportReference = result.references!.find((reference) => reference.via?.import);
       expect(firstImportReference?.via?.import?.resolved).toBe("utils.ts");
-      expect(result.references.every((reference) => typeof reference.range.start.line === "number")).toBe(true);
+      expect(result.references!.every((reference) => typeof reference.range.start.line === "number")).toBe(true);
       expect(result.provenance?.resolution).toBe("exact");
       expect(result.provenance?.confidence).toBe("high");
     }
@@ -366,7 +366,7 @@ describe("Agent Tools", () => {
     const result = await tool_goToDefinition(samplePath, "main.ts", 7, 25);
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
-      expect(result.definition.file).toBe("utils.ts");
+      expect(result.definition!.file).toBe("utils.ts");
     }
   });
 
@@ -404,9 +404,9 @@ describe("Agent Tools", () => {
     const result = await tool_findSymbol(samplePath, "helperFunction");
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
-      expect(result.matches.length).toBeGreaterThan(0);
-      expect(result.matches.some((match) => match.name === "helperFunction")).toBe(true);
-      const firstMatch = result.matches[0];
+      expect(result.matches!.length).toBeGreaterThan(0);
+      expect(result.matches!.some((match) => match.name === "helperFunction")).toBe(true);
+      const firstMatch = result.matches![0];
       expect(firstMatch?.name).toBe("helperFunction");
       expect(firstMatch?.kind).toBe("function");
       expect(["helpers.ts", "utils.ts"]).toContain(firstMatch?.file);

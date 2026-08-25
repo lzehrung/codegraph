@@ -121,13 +121,13 @@ export function runLanguageTests(def: LanguageTestDefinition) {
         const addFile = (filePath: string) => {
           files.add(resolveSamplePath(filePath));
         };
-        for (const expectation of def.parity.exact.dependencyGraph ?? []) {
+        for (const expectation of def.parity!.exact.dependencyGraph ?? []) {
           addFile(expectation.from);
           if (expectation.to.type === "file") {
             addFile(expectation.to.path);
           }
         }
-        for (const expectation of def.parity.absentDependencyGraph ?? []) {
+        for (const expectation of def.parity!.absentDependencyGraph ?? []) {
           addFile(expectation.from);
           if (expectation.to.type === "file") {
             const targetFile = resolveSamplePath(expectation.to.path);
@@ -136,16 +136,16 @@ export function runLanguageTests(def: LanguageTestDefinition) {
             }
           }
         }
-        for (const expectation of def.parity.exact.symbols ?? []) {
+        for (const expectation of def.parity!.exact.symbols ?? []) {
           addFile(expectation.file);
         }
-        for (const expectation of def.parity.goToDefinition ?? []) {
+        for (const expectation of def.parity!.goToDefinition ?? []) {
           addFile(expectation.file);
           if (expectation.expectedDefinition) {
             addFile(expectation.expectedDefinition.file);
           }
         }
-        for (const expectation of def.parity.exact.references ?? []) {
+        for (const expectation of def.parity!.exact.references ?? []) {
           addFile(expectation.file);
           if (expectation.expectedStatus !== "not_found") {
             for (const site of expectation.references) {
@@ -174,9 +174,11 @@ export function runLanguageTests(def: LanguageTestDefinition) {
         assertExactDependencyGraph(def.parity.exact.dependencyGraph);
       }
 
-      if (def.parity.absentDependencyGraph) {
+      // Captured before the callback: narrowing on def.parity does not reach into it.
+      const absentDependencyGraph = def.parity.absentDependencyGraph;
+      if (absentDependencyGraph) {
         it("does not build unsupported dependency graph edges", () => {
-          for (const expectation of def.parity.absentDependencyGraph) {
+          for (const expectation of absentDependencyGraph) {
             const found = graph.edges.some((edge) => matchEdge(edge, expectation));
             expect(found).toBe(false);
           }

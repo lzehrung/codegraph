@@ -58,7 +58,8 @@ function readJsonFile(filePath: string): Record<string, unknown> {
 }
 
 function reportHasGlibcRuntime(report: ReturnType<NonNullable<typeof process.report>["getReport"]>): boolean {
-  return "glibcVersionRuntime" in report.header;
+  const header = (report as { header?: unknown }).header;
+  return typeof header === "object" && header !== null && "glibcVersionRuntime" in header;
 }
 
 function currentNativeTargetSuffix(): string | null {

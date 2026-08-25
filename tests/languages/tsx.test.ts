@@ -50,29 +50,6 @@ const definition: LanguageTestDefinition = {
           to: { type: "file", path: "reexport-barrel.tsx" },
         },
       ],
-      goToDefinition: [
-        {
-          name: "resolves aliased TSX re-export",
-          file: "reexport-consumer.tsx",
-          line: 3,
-          column: 25,
-          expectedDefinition: { file: "reexport-source.tsx", line: 1 },
-        },
-        {
-          name: "resolves star TSX re-export",
-          file: "reexport-consumer.tsx",
-          line: 4,
-          column: 24,
-          expectedDefinition: { file: "reexport-source.tsx", line: 2 },
-        },
-        {
-          name: "resolves namespace TSX re-export",
-          file: "reexport-consumer.tsx",
-          line: 5,
-          column: 45,
-          expectedDefinition: { file: "reexport-source.tsx", line: 3 },
-        },
-      ],
       references: [
         {
           name: "finds aliased TSX re-export references",
@@ -87,6 +64,29 @@ const definition: LanguageTestDefinition = {
         },
       ],
     },
+    goToDefinition: [
+      {
+        name: "resolves aliased TSX re-export",
+        file: "reexport-consumer.tsx",
+        line: 3,
+        column: 25,
+        expectedDefinition: { file: "reexport-source.tsx", line: 1 },
+      },
+      {
+        name: "resolves star TSX re-export",
+        file: "reexport-consumer.tsx",
+        line: 4,
+        column: 24,
+        expectedDefinition: { file: "reexport-source.tsx", line: 2 },
+      },
+      {
+        name: "resolves namespace TSX re-export",
+        file: "reexport-consumer.tsx",
+        line: 5,
+        column: 45,
+        expectedDefinition: { file: "reexport-source.tsx", line: 3 },
+      },
+    ],
   },
 };
 

@@ -396,27 +396,6 @@ function buildRecommendedNext(
   return commands;
 }
 
-function formatPacketCommand(file: string): string {
-  return `codegraph packet get ${formatFileTargetCommandArg(file)}`;
-}
-
-function formatFileTargetCommandArg(file: string): string {
-  const target = fileNeedsRelativePrefix(file) ? `./${file}` : file;
-  return quoteShellArg(target);
-}
-
-function fileNeedsRelativePrefix(file: string): boolean {
-  return (
-    file.startsWith("-") ||
-    file.startsWith("file:") ||
-    file.startsWith("symbol:") ||
-    file.startsWith("chunk:") ||
-    file.startsWith("sql:") ||
-    file.startsWith("graph:") ||
-    file.startsWith("review:")
-  );
-}
-
 function labelForFollowUp(focus: AgentOrientationFocus, followUp: AgentFollowUp): string {
   const label = focus.file ?? focus.label ?? "focus target";
   if (followUp.tool === "packet_get") return `Get packet for ${label}`;

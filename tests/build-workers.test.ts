@@ -150,6 +150,7 @@ describe("native build worker batches", () => {
       files.map((file) => ({ file, support })),
       { native: "off" },
       workerSetup,
+      undefined,
     );
 
     expect(run).toHaveBeenCalledOnce();
@@ -229,7 +230,10 @@ describe("native build worker batches", () => {
     expect(mainAttempt.parsed).toBeNull();
     expect(mainAttempt.nativeFallbackReason).toBe("queryFailure");
     expect(mainAttempt.nativeError).toBe(expectedDiagnostic);
-    const unlabeledAttempt = attemptParsePreparedFileContext({ ...mainPrepared, nativeError: undefined });
+    // Omit the diagnostic rather than setting it undefined: the field is optional, and
+    // this asserts the no-diagnostic path.
+    const { nativeError: _nativeError, ...withoutDiagnostic } = mainPrepared;
+    const unlabeledAttempt = attemptParsePreparedFileContext(withoutDiagnostic);
     expect(unlabeledAttempt.parsed).toBeNull();
     expect(unlabeledAttempt.nativeFallbackReason).toBe("queryFailure");
     expect(unlabeledAttempt.nativeError).toBeUndefined();

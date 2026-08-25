@@ -31,13 +31,12 @@ describe("Symbol-level graph", () => {
       expect(mainImport).toBeDefined();
 
       const hasEdge = sg.edges.some(
-        (e) => e.from === mainImport.id && e.to === utilsDef.id && e.label === "helperFunction",
+        (e) => e.from === mainImport!.id && e.to === utilsDef!.id && e.label === "helperFunction",
       );
       expect(hasEdge).toBe(true);
     });
 
     it("ignores commented-out TS imports in fallback parsing", async () => {
-      const root = path.resolve(process.cwd(), "tests", "samples", "typescript");
       const index = await createTestIndex("typescript");
       const sg = await buildSymbolGraph(index);
       const nodes = [...sg.nodes.values()].map((n) => ({ ...n, file: norm(n.file) }));
@@ -107,7 +106,7 @@ describe("Symbol-level graph", () => {
       );
       expect(namedImport).toBeDefined();
       const namedEdge = sg.edges.some(
-        (e) => e.from === namedImport.id && e.to === def.id && e.label === "helper_function",
+        (e) => e.from === namedImport!.id && e.to === def!.id && e.label === "helper_function",
       );
       expect(namedEdge).toBe(true);
 
@@ -115,7 +114,7 @@ describe("Symbol-level graph", () => {
         (n) => n.file.endsWith("/tests/samples/python/main.py") && n.name === "utils" && n.kind === "namespaceImport",
       );
       expect(nsImport).toBeDefined();
-      const nsEdge = sg.edges.find((e) => e.from === nsImport.id && e.to === def.id && e.label === "helper_function");
+      const nsEdge = sg.edges.find((e) => e.from === nsImport!.id && e.to === def!.id && e.label === "helper_function");
       expect(nsEdge).toBeDefined();
     });
 

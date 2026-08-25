@@ -17,7 +17,7 @@ import { bindingKindToSymbolKind } from "./declarations.js";
 import { buildScopeIndexFromSource } from "./scope.js";
 import { SymbolKind } from "./types.js";
 import type { LanguageSupport } from "../languages.js";
-import type { ParserLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { ExportEntry, ImportBinding, ModuleIndex, SymbolDef } from "./types.js";
 import type { Range } from "../types.js";
 
@@ -288,7 +288,6 @@ export function collectLocalsAndExportsFromSource(
   file: string,
   source: string,
   support: LanguageSupport,
-  lang?: ParserLanguage,
   imports: ImportBinding[] = [],
   opts?: {
     tree?: SyntaxTreeLike;
@@ -303,8 +302,6 @@ export function collectLocalsAndExportsFromSource(
   assertNativeRequiredAvailable(opts?.nativeMode);
 
   const normalizeDocstringLine = (line: string) => line.replace(/^\s*(?:\/\/\/?\s?|#\s?)/, "").replace(/^\s*\*\s?/, "");
-
-  const _sourceLines = source.split(/\r?\n/);
 
   const extractLeadingDocstring = (node: SyntaxNodeLike | null): string | undefined => {
     if (!node) return undefined;
@@ -519,7 +516,7 @@ export function collectLocalsAndExportsFromSource(
   if (!usedQueryLocals) {
     const scopeTree = ensureTree();
     if (scopeTree) {
-      const scopeIdx = buildScopeIndexFromSource(file, source, support, lang, imports, { tree: scopeTree });
+      const scopeIdx = buildScopeIndexFromSource(file, source, support, imports, { tree: scopeTree });
       for (const b of scopeIdx.all) {
         if (!b.def) continue;
         const kind = bindingKindToSymbolKind(b.kind);

@@ -31,9 +31,7 @@ describe("import binding regressions", () => {
     const imports = await collectImportsForFile(file, root, {
       source: parsed.source,
       sup: parsed.sup,
-      lang: parsed.lang,
-      tree: parsed.tree,
-      nativeQueries: parsed.nativeQueries,
+      ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
     });
 
     expect(simplifyImports(imports)).toContainEqual({
@@ -54,9 +52,7 @@ describe("import binding regressions", () => {
     const imports = await collectImportsForFile(file, root, {
       source: parsed.source,
       sup: parsed.sup,
-      lang: parsed.lang,
-      tree: parsed.tree,
-      nativeQueries: parsed.nativeQueries,
+      ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
     });
 
     expect(simplifyImports(imports)).toContainEqual({
@@ -77,9 +73,7 @@ describe("import binding regressions", () => {
     const imports = await collectImportsForFile(file, root, {
       source: parsed.source,
       sup: parsed.sup,
-      lang: parsed.lang,
-      tree: parsed.tree,
-      nativeQueries: parsed.nativeQueries,
+      ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
     });
 
     const simplified = simplifyImports(imports);

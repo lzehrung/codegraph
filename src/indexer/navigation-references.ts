@@ -1,6 +1,6 @@
 import { supportForFile, type LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
-import type { ParserLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
@@ -99,7 +99,6 @@ export function getCachedScope(
   parsedCtx: {
     source: string;
     sup: LanguageSupport;
-    lang?: ParserLanguage;
     tree: SyntaxTreeLike;
   },
 ): ScopeIndex {
@@ -113,16 +112,9 @@ export function getCachedScope(
     }
     return cachedScope;
   }
-  const scopeIndex = buildScopeIndexFromSource(
-    fileId,
-    parsedCtx.source,
-    parsedCtx.sup,
-    parsedCtx.lang,
-    moduleIndex.imports,
-    {
-      tree: parsedCtx.tree,
-    },
-  );
+  const scopeIndex = buildScopeIndexFromSource(fileId, parsedCtx.source, parsedCtx.sup, moduleIndex.imports, {
+    tree: parsedCtx.tree,
+  });
   for (const binding of scopeIndex.all) {
     binding.occurrences = binding.occurrences.filter(
       (occurrence) => !exportFromIdentifier(index, fileId, occurrence, parsedCtx)?.isExportFrom,

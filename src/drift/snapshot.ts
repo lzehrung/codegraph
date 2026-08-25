@@ -7,7 +7,7 @@ import { getApiSurface } from "../indexer/symbols.js";
 import type { Edge } from "../types.js";
 import { DEFAULT_PROJECT_PATTERNS, listProjectFiles } from "../util/projectFiles.js";
 import { isPathUnderIncludeRoots, normalizeIncludeRootsAbsolute } from "../util/includeRoots.js";
-import { normalizePath, resolveFilePathFromRoot, toProjectDisplayPath } from "../util/paths.js";
+import { normalizePath, toProjectDisplayPath } from "../util/paths.js";
 import { countFilesByLanguage } from "./languages.js";
 import {
   ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION,

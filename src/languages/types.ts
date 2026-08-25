@@ -1,8 +1,24 @@
-import type { ParserLanguage, ParserSyntaxNode, SyntaxPoint } from "../parserBackend.js";
-export type { ParserLanguage };
+export interface SyntaxPositionLike {
+  row: number;
+  column: number;
+}
 
-export type SyntaxPositionLike = SyntaxPoint;
-export type SyntaxNodeLike = ParserSyntaxNode;
+export interface SyntaxNodeLike {
+  readonly id?: number;
+  type: string;
+  text: string;
+  startIndex: number;
+  endIndex: number;
+  startPosition: SyntaxPositionLike;
+  endPosition: SyntaxPositionLike;
+  parent: SyntaxNodeLike | null;
+  namedChildren: SyntaxNodeLike[];
+  previousSibling?: SyntaxNodeLike | null;
+  previousNamedSibling?: SyntaxNodeLike | null;
+  child(index: number): SyntaxNodeLike | null;
+  childForFieldName(fieldName: string): SyntaxNodeLike | null;
+}
+
 export interface SyntaxTreeLike {
   rootNode: SyntaxNodeLike & {
     descendantForIndex(startIndex: number, endIndex: number): SyntaxNodeLike;
@@ -23,7 +39,6 @@ export interface NativeCompatibility {
 export interface LanguageDefinition {
   id: string;
   extensions: string[];
-  grammar: (filename?: string) => ParserLanguage;
 
   /**
    * Configuration for semantic chunking.

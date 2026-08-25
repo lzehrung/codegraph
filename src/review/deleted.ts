@@ -9,7 +9,7 @@ import { collectLocalsAndExportsFromSource } from "../indexer/locals-and-exports
 import { type ExportEntry, type ImportBinding, type ModuleIndex, type ProjectIndex } from "../indexer/types.js";
 import { supportForFile } from "../languages.js";
 import type { Edge, FileId } from "../types.js";
-import { edgeKey, toRelativeEdge } from "../util/graphEdges.js";
+import { edgeKey } from "../util/graphEdges.js";
 import { listResolutionCandidates, loadNearestTsconfigFor } from "../util/resolution.js";
 import {
   listWorkspacePackageResolutionCandidates,
@@ -303,7 +303,7 @@ export async function buildDeletedFileSnapshots(
       sup: support,
       ...(opts.graphOptions ? { graphOptions: opts.graphOptions } : {}),
     });
-    const module = collectLocalsAndExportsFromSource(normalizedFile, source, support, undefined, imports);
+    const module = collectLocalsAndExportsFromSource(normalizedFile, source, support, imports);
     snapshots.set(normalizedFile, {
       source,
       module,

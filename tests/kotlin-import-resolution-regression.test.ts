@@ -68,8 +68,7 @@ describe("Kotlin import resolution regression", () => {
     const imports = await collectImportsForFile(mainFile, root, {
       source: parsed.source,
       sup: parsed.sup,
-      lang: parsed.lang,
-      nativeQueries: parsed.nativeQueries,
+      ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
     });
 
     const resolvedFiles = imports
@@ -86,7 +85,7 @@ describe("Kotlin import resolution regression", () => {
 
     const startedAt = performance.now();
     const index = await buildProjectIndex(root, {
-      cache: "none",
+      cache: "off",
       logLevel: "silent",
     });
     const elapsedMs = performance.now() - startedAt;
@@ -131,8 +130,7 @@ describe("Kotlin import resolution regression", () => {
 
     const fileEdges = graph.edges
       .filter((edge) => edge.from === mainFile.replace(/\\/g, "/"))
-      .filter((edge) => edge.to.type === "file")
-      .map((edge) => edge.to.path);
+      .flatMap((edge) => (edge.to.type === "file" ? [edge.to.path] : []));
 
     expect(fileEdges).toContain(alphaFile.replace(/\\/g, "/"));
     expect(fileEdges).toContain(betaFile.replace(/\\/g, "/"));
@@ -164,8 +162,7 @@ describe("Kotlin import resolution regression", () => {
     const imports = await collectImportsForFile(consumerFile, root, {
       source: parsed.source,
       sup: parsed.sup,
-      lang: parsed.lang,
-      nativeQueries: parsed.nativeQueries,
+      ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
     });
 
     expect(imports).toHaveLength(1);

@@ -1,5 +1,4 @@
 import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
 function normalizeKotlinNativeQuery(kind: string, query: string): string {
@@ -25,7 +24,6 @@ function normalizeKotlinNativeQuery(kind: string, query: string): string {
 export const KOTLIN_DEF: LanguageDefinition = {
   id: "kotlin",
   extensions: [".kt", ".kts"],
-  grammar: () => loadTreeSitterLanguage("tree-sitter-kotlin"),
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

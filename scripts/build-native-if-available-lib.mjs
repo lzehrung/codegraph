@@ -113,6 +113,32 @@ export function hasCargo({ spawnSyncImpl = spawnSync, platform = process.platfor
   return result.status === 0;
 }
 
+/**
+ * Injection seams for tests. Each is the minimal shape this module actually uses, so a
+ * test double does not have to satisfy the full Node signature it stands in for. Only
+ * `warn` is ever called on the logger, for instance, so a full Console is not required.
+ * @typedef {{ warn: (message: string) => void }} BuildLogger
+ * @typedef {{ name: string, isDirectory: () => boolean }} BuildDirEntry
+ * `stderr` is optional but part of the seam: the failure path reads it through stderrText,
+ * which accepts either encoding spawnSync can produce.
+ * @typedef {(command: string, args: string[], options?: unknown) =>
+ *   { status?: number | null, error?: unknown, stderr?: string | Buffer }} SpawnSyncImpl
+ * @typedef {(dir: string, options?: unknown) => BuildDirEntry[]} ReaddirSyncImpl
+ * @typedef {(target: string, options?: unknown) => void} RmSyncImpl
+ */
+
+/**
+ * @param {{
+ *   spawnSyncImpl?: SpawnSyncImpl,
+ *   platform?: string,
+ *   arch?: string,
+ *   logger?: BuildLogger,
+ *   strict?: boolean,
+ *   cwd?: string,
+ *   readdirSyncImpl?: ReaddirSyncImpl,
+ *   rmSyncImpl?: RmSyncImpl,
+ * }} [options]
+ */
 export function runBuildNativeIfAvailable({
   spawnSyncImpl = spawnSync,
   platform = process.platform,

@@ -124,7 +124,14 @@ export function getSessionPreset(preset: PresetName, root: string): SessionPrese
 /**
  * Merge preset with custom options
  */
-export function mergePreset<T extends Record<string, unknown>>(preset: T, custom?: Partial<T>): T {
+/**
+ * Overrides may carry explicit `undefined` values; those are skipped rather than applied,
+ * so the parameter type admits them instead of forcing callers to omit the key.
+ */
+export function mergePreset<T extends Record<string, unknown>>(
+  preset: T,
+  custom?: { [K in keyof T]?: T[K] | undefined },
+): T {
   if (!custom) return preset;
 
   const merged: Record<string, unknown> = { ...preset };

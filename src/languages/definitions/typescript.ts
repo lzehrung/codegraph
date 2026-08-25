@@ -1,5 +1,4 @@
 import type { LanguageDefinition, SyntaxNodeLike } from "../types.js";
-import { loadTypeScriptGrammars } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 import {
   ECMASCRIPT_CONTROL_SPLIT_POINTS,
@@ -186,7 +185,6 @@ const BASE_HELPERS = {
 export const TYPESCRIPT_DEF: LanguageDefinition = {
   id: "ts",
   extensions: [".ts", ".mts", ".cts"],
-  grammar: () => loadTypeScriptGrammars().typescript,
   structure: BASE_STRUCTURE,
   graph: BASE_GRAPH,
   ...BASE_HELPERS,
@@ -202,7 +200,6 @@ registerLanguage(TYPESCRIPT_DEF);
 export const TSX_DEF: LanguageDefinition = {
   id: "tsx",
   extensions: [".tsx"],
-  grammar: () => loadTypeScriptGrammars().tsx,
   structure: {
     ...BASE_STRUCTURE,
     blocks: [

@@ -1,14 +1,13 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { expect } from "vitest";
 import path from "node:path";
 import {
   buildProjectIndex,
   buildProjectIndexFromFiles,
   goToDefinition,
   findReferences,
-  collectGraph,
   listSymbols,
-  ProjectIndex,
-  SymbolListItem,
+  type ProjectIndex,
+  type SymbolListItem,
 } from "../src/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 

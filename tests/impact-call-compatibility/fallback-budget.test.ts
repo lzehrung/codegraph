@@ -7,6 +7,7 @@ import { findReferences, goToDefinition } from "../../src/indexer/navigation.js"
 import { attachCallCompatibilityHints } from "../../src/impact/callCompatibility.js";
 import type { ChangedSymbol } from "../../src/impact/types.js";
 import type { Range } from "../../src/types.js";
+import { SymbolKind } from "../../src/indexer/types.js";
 
 vi.mock(
   "../../src/indexer/navigation.js",
@@ -85,6 +86,12 @@ describe("call compatibility fallback budget", () => {
     try {
       vi.mocked(findReferences).mockResolvedValue({
         status: "ok",
+        definition: {
+          file: "definition.ts",
+          localName: "helper",
+          kind: SymbolKind.Function,
+          range: { start: { line: 1, column: 0 }, end: { line: 1, column: 6 } },
+        },
         references: [{ file: fixture.indexedMainFile, range: rangeFor(fixture.mainSource, "helper") }],
       });
 
@@ -113,6 +120,12 @@ describe("call compatibility fallback budget", () => {
     try {
       vi.mocked(findReferences).mockResolvedValue({
         status: "ok",
+        definition: {
+          file: "definition.ts",
+          localName: "helper",
+          kind: SymbolKind.Function,
+          range: { start: { line: 1, column: 0 }, end: { line: 1, column: 6 } },
+        },
         references: [{ file: fixture.indexedMainFile, range: rangeFor(fixture.mainSource, "helper") }],
       });
 

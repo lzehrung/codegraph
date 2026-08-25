@@ -6,7 +6,8 @@ import {
   loadCurrentProjectIndex,
   createCurrentProjectIndexLoader,
 } from "../src/indexer/load-current-index.js";
-import type { BuildReport, ProgressUpdate } from "../src/index.js";
+import type { BuildReport } from "../src/index.js";
+import type { ProgressUpdate } from "../src/types.js";
 import { createTempProjectRoot, normalizeTestPath } from "./helpers/filesystem.js";
 import { runGit } from "./helpers/git.js";
 

@@ -8,7 +8,7 @@ import {
   type ImpactStreamChunk,
   type ImpactStreamSummaryReport,
 } from "../src/impact/index.js";
-import { impactItemEmissionKey, ImpactStreamOverflowError } from "../src/impact/streaming.js";
+import { impactItemEmissionKey } from "../src/impact/streaming.js";
 import { buildProjectIndex } from "../src/index.js";
 import * as navigation from "../src/indexer/navigation.js";
 import { runGit as git } from "./helpers/git.js";

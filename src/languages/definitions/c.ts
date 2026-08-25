@@ -15,7 +15,6 @@ import {
 export const C_DEF = createCFamilyLanguageDefinition({
   id: "c",
   extensions: [".c", ".h", ".i"],
-  grammarPackage: "tree-sitter-c",
   includeFieldIdentifier: false,
   blocks: (functionNameQuery) => [
     cFamilyFunctionBlock(functionNameQuery),

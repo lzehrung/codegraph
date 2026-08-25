@@ -14,13 +14,8 @@ import type { ParsedFileContext } from "../indexer/parse-context.js";
 import { attemptParsePreparedFileContext } from "../indexer/parse-context.js";
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "../indexer/types.js";
 import { prepareSourceInput } from "../languages/filePrep.js";
-import {
-  getNativeDuplicateTokens,
-  getNativeTreeSitterSupportedLanguageIds,
-  isNativeDuplicateTokenizationAvailable,
-  isNativeTreeSitterDisabledByEnv,
-} from "../native/treeSitterNative.js";
-import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import { getNativeDuplicateTokens } from "../native/treeSitterNative.js";
+import type { SyntaxNodeLike } from "../languages/types.js";
 import { maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { collectLineStartOffsets } from "../util/lines.js";
 import {
@@ -30,12 +25,10 @@ import {
   toProjectDisplayPath,
   toProjectRelativePath,
 } from "../util/paths.js";
-import { logWithLevel } from "../logging.js";
 import {
   duplicateUnitCacheVariant,
   tryLoadDuplicateUnitsFromCache,
   writeDuplicateUnitsBatchToCache,
-  writeDuplicateUnitsToCache,
   type PendingDuplicateUnitCacheWrite,
 } from "./unitCache.js";
 import type {

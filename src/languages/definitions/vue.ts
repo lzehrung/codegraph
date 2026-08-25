@@ -1,11 +1,9 @@
 import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
 export const VUE_DEF: LanguageDefinition = {
   id: "vue",
   extensions: [".vue"],
-  grammar: () => loadTreeSitterLanguage("tree-sitter-vue"),
   structure: {
     blocks: [
       { type: "template_element", captureId: "template" },

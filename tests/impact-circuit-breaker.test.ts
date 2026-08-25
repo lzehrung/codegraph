@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { analyzeImpactFromDiff } from "../src/impact/index.js";
-import { ProjectIndex } from "../src/indexer.js";
+import { type ProjectIndex } from "../src/indexer.js";
 import { Readable } from "node:stream";
+import { makeTestProjectIndex } from "./helpers/narrow.js";
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual("node:child_process");
@@ -40,11 +41,7 @@ describe("Impact Circuit Breaker & Warning Propagation", () => {
     mockSpawn.mockReturnValueOnce(setupSpawnCall(diffContent(insertions, deletions)));
   };
 
-  const index: ProjectIndex = {
-    files: [],
-    byFile: new Map(),
-    graph: { nodes: [], edges: [] },
-  };
+  const index: ProjectIndex = makeTestProjectIndex();
 
   it("should trigger warning at exactly 50,001 lines", async () => {
     setupDiff(25_001, 25_000);

@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect } from "vitest";
 import path from "node:path";
-import { buildProjectIndex, collectGraph, findCycles, goToDefinition, listProjectFiles } from "../src/index.js";
+import { buildProjectIndex, collectGraph, findCycles, listProjectFiles } from "../src/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 
 const SAMPLES_ROOT = path.resolve(__dirname, "samples/pathological");
@@ -11,7 +11,7 @@ describe("Pathological Test Cases", () => {
 
     it("should resolve imports through 5 levels of re-exports", async () => {
       const index = await buildProjectIndex(projectRoot, {
-        cache: "none",
+        cache: "off",
         logLevel: "silent",
       });
 
@@ -66,7 +66,7 @@ describe("Pathological Test Cases", () => {
 
     it("should handle circular re-exports without infinite loop", async () => {
       const index = await buildProjectIndex(projectRoot, {
-        cache: "none",
+        cache: "off",
         logLevel: "silent",
       });
 
@@ -83,7 +83,7 @@ describe("Pathological Test Cases", () => {
       // The parser should recover and extract what it can
       try {
         const index = await buildProjectIndex(projectRoot, {
-          cache: "none",
+          cache: "off",
           logLevel: "silent",
         });
 
@@ -109,7 +109,7 @@ describe("Pathological Test Cases", () => {
       const start = performance.now();
 
       await buildProjectIndex(projectRoot, {
-        cache: "none",
+        cache: "off",
         logLevel: "silent",
       });
 

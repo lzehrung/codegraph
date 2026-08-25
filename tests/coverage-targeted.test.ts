@@ -16,6 +16,7 @@ import { compareEdges, edgeKey, parseGoImportAlias, toRelativeEdge } from "../sr
 import { collectImportsForFile } from "../src/indexer.js";
 import { TS_SUPPORT } from "../src/languages.js";
 import type { NativeCapture, NativeQueryResults } from "../src/native/treeSitterNative.js";
+import { createStubNativeSyntaxTree } from "./helpers/native.js";
 
 const makeRange = (start: number, end: number) => ({
   start: { line: 1, column: start + 1, index: start },
@@ -301,7 +302,6 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
       name: "main",
       kind: "function",
       file: "src/main.ts",
-      range: makeRange(0, 4),
       docstring: "Entrypoint",
       lineSpan: 3,
       complexity: 2,
@@ -333,6 +333,7 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
       importBindingsQuery: "",
     });
 
+    if ("results" in result) throw new Error("expected a single extraction result, received a batch");
     expect(result.filePath).toBe("virtual.ts");
     expect(result.languageId).toBe("definitely-not-a-supported-language");
     expect(result.source).toBe("export const value = 1;\n");
@@ -357,6 +358,7 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
             throw new Error("unexpected query");
           },
         },
+        origin: { mode: "workspace" as const, packageName: "@lzehrung/codegraph-native" },
       }),
       readFile: async () => "from disk",
     });
@@ -415,12 +417,13 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
                 locals: [{ patternIndex: 0, captures: [capture("query", localsQuery)] }],
                 importBindings: [{ patternIndex: 0, captures: [capture("query", importBindingsQuery)] }],
               },
-              syntaxTree: null,
+              syntaxTree: createStubNativeSyntaxTree(),
             }),
             runImportsQueryCompact: (source, languageId, importsQuery) => ({
               imports: [{ patternIndex: 0, captures: [{ name: languageId, text: `${importsQuery}:${source}` }] }],
             }),
           },
+          origin: { mode: "workspace" as const, packageName: "@lzehrung/codegraph-native" },
         };
       },
       readFile: async () => "from disk",
@@ -462,6 +465,7 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
             throw new Error("query failed");
           },
         },
+        origin: { mode: "workspace" as const, packageName: "@lzehrung/codegraph-native" },
       }),
       readFile: async () => {
         throw new Error("unexpected read");

@@ -8,6 +8,7 @@ import { buildProjectIndex, collectLocalsAndExportsFromSource, parseFile } from 
 import { expectFileInIndex, findSymbolsByName } from "../test-utils.js";
 import { findReferences, goToDefinition } from "../../src/index.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
+import { exportedNameOf } from "../helpers/narrow.js";
 
 const definition: LanguageTestDefinition = {
   id: "python",
@@ -145,7 +146,7 @@ describe("Python local imports", () => {
       const barrel = index.byFile.get(fileIdentityKey(barrelFile));
       const result = await goToDefinition(index, { file: consumerFile, line: 2, column: 1 });
 
-      expect(barrel?.exports.some((entry) => entry.exportedAs === "hidden")).toBe(false);
+      expect(barrel?.exports.some((entry) => exportedNameOf(entry) === "hidden")).toBe(false);
       expect(result.status).not.toBe("ok");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
@@ -187,9 +188,8 @@ describe("Python __all__ exports", () => {
     await fsp.writeFile(file, source, "utf8");
     try {
       const parsed = await parseFile(file);
-      return collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, parsed.lang, [], {
-        tree: parsed.tree,
-        nativeQueries: parsed.nativeQueries,
+      return collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
+        ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
       });
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
@@ -208,7 +208,7 @@ __all__ = (
 `;
     const mod = await collectModule(source);
 
-    const exportedNames = mod.exports.map((e) => e.exportedAs).sort();
+    const exportedNames = mod.exports.map((e) => exportedNameOf(e)).sort();
     expect(exportedNames).toEqual(["bar", "foo"]);
   });
 
@@ -226,7 +226,7 @@ description = "This module uses private_func internally"
 `;
     const mod = await collectModule(source);
 
-    const exportedNames = mod.exports.map((e) => e.exportedAs).sort();
+    const exportedNames = mod.exports.map((e) => exportedNameOf(e)).sort();
     // It should NOT contain private_func
     expect(exportedNames).toEqual(["foo"]);
   });

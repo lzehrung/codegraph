@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import path from "node:path";
 import type { BuildOptions, BuildReport } from "../indexer/types.js";
 import type { ReviewBuildReport } from "../review.js";
 import { errorMessage } from "../util/errors.js";
