@@ -1136,7 +1136,7 @@ function createCodegraphMcpHandlersForSession(
         return { ...result, freshness };
       }),
     dispose: () => {
-      session.invalidate();
+      if (!options.session) session.invalidate();
     },
   };
 }

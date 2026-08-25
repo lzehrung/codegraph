@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
-import { exploreCodegraph, formatAgentExploreResponse } from "../src/agent.js";
+import { createAgentSession, exploreCodegraph, formatAgentExploreResponse } from "../src/agent.js";
 import * as impactContext from "../src/impact/context.js";
 import { createCodegraphMcpHandlers, listCodegraphMcpTools } from "../src/mcp/server.js";
 import { captureCli } from "./helpers/cli.js";
@@ -876,6 +876,27 @@ describe("agent explore", () => {
     expect(response.freshness).toBeTypeOf("object");
     handlers.dispose();
     await expect(fs.rm(root, { recursive: true, force: true, maxRetries: 0 })).resolves.toBeUndefined();
+  });
+
+  it("keeps a caller-owned MCP session active after disposing another handler set", async () => {
+    const root = await mkExploreRepo();
+    const session = createAgentSession({ root });
+    const first = createCodegraphMcpHandlers({ root, session });
+    const second = createCodegraphMcpHandlers({ root, session });
+    const invalidate = vi.spyOn(session, "invalidate");
+
+    try {
+      await first.search({ query: "validate user", limit: 5 });
+      first.dispose();
+
+      expect(invalidate).not.toHaveBeenCalled();
+      const search = await second.search({ query: "validate user", limit: 5 });
+      expect(search.results.length).toBeGreaterThan(0);
+    } finally {
+      second.dispose();
+      session.invalidate();
+      invalidate.mockRestore();
+    }
   });
   it("pins omission counts at and just past the limit for candidate tests and blast radius", async () => {
     const root = await mkExploreRepo();

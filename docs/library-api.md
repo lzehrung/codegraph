@@ -476,7 +476,7 @@ console.log(packet.kind, refs.references, rows.rows, rows.freshness.state);
 handlers.dispose();
 ```
 
-Call `handlers.dispose()` when the host stops using a handler set. It releases the session query-index database and cached analysis resources.
+Handler sets created without `session` own their session; call `handlers.dispose()` when the host stops using one to release its query-index database and cached analysis. When `session` is supplied, the caller owns its lifecycle: disposing a handler set does not invalidate the shared session, and the caller must call `session.invalidate()` after every consumer is done.
 
 `serveCodegraphMcp()` (from `@lzehrung/codegraph/mcp`) starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. MCP file and artifact paths are confined after realpath resolution.
 
