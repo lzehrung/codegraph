@@ -648,6 +648,10 @@ describe("runtime fingerprint without loading the addon", () => {
     });
     if (!cacheEntry) throw new Error("expected a recorded cache identity");
 
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!platformDescriptor) throw new Error("expected process.platform descriptor");
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
+
     const workspaceProbe = vi.spyOn(bindingLoader, "findLocalNativeBinary").mockReturnValue(null);
     const platformPackage = vi
       .spyOn(bindingLoader, "readPlatformPackage")
@@ -675,6 +679,7 @@ describe("runtime fingerprint without loading the addon", () => {
       target.mockRestore();
       platformPackage.mockRestore();
       workspaceProbe.mockRestore();
+      Object.defineProperty(process, "platform", platformDescriptor);
     }
   });
 });
