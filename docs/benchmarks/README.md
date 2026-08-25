@@ -2,10 +2,11 @@
 
 ## What the checked results show
 
-On these tiny local fixtures, with codegraph caching disabled and a fresh process for each sample:
+On these tiny local fixtures:
 
 - The preselected-read baseline completes in the low single-digit milliseconds. It is a filesystem floor with known paths, not a competing repository-discovery workflow.
-- codegraph uses one declared `explore` step while the baseline uses three declared read steps. This count does not represent equivalent work, agent round trips, or tool quality.
+- Each codegraph variant uses one declared `explore` step while the baseline uses three declared read steps. This count does not represent equivalent work, agent round trips, or tool quality.
+- Cold CLI starts a fresh process with caching disabled. Warm CLI starts a fresh process for each measured sample after an unmeasured disk-cache warmup. Warm MCP reuses one handler session after an unmeasured first request.
 - Every expected evidence anchor is present in every checked run.
 - The installer-preservation corpus keeps reviewed installer anchors ahead of generic MCP and benchmark decoys, recommends the installer source first, and returns its direct test.
 
@@ -19,7 +20,7 @@ From the repository root, run:
 npm run bench:docs
 ```
 
-This command rebuilds stale `dist` output when needed, runs every scenario and both variants serially, requires complete anchors and reviewed relationships, rewrites `results.example.json` and the generated table below, and prints the median table. The fixtures are local and the run makes no network requests.
+This command rebuilds stale `dist` output when needed, runs every scenario and all four variants serially, requires complete anchors and reviewed relationships, rewrites `results.example.json` and the generated table below, and prints the median table. Each warm workflow uses an isolated temporary cache that is removed after its scenario. The fixtures are local and the run makes no network requests.
 
 ### Focused semantic regression fixture
 
@@ -45,35 +46,47 @@ Results are not universal latency claims; compare the same root, revision, query
 
 ## Workflow definitions
 
-Each checked scenario in [`scenarios.json`](./scenarios.json) defines a local fixture, a task, expected anchors, and the exact steps for both variants.
+Each checked scenario in [`scenarios.json`](./scenarios.json) defines a local fixture, a task, expected anchors, and exact steps for the required baseline and cold CLI variants. It may also declare the warm CLI and warm MCP variants, which use the same query steps.
 
 - **Baseline workflow:** three declared direct UTF-8 file reads from preselected files.
-- **codegraph workflow:** one local `codegraph explore <query> --root <fixture> --cache off --json` call.
-- **Tool calls:** declared workflow steps only.
+- **Cold CLI workflow (`codegraph`):** one local `codegraph explore <query> --root <fixture> --cache off --json` call in a new process for every sample.
+- **Warm CLI workflow (`warm-cli`):** one local `explore` call in a new process for every measured sample, using an isolated disk cache populated by the same unmeasured query.
+- **Warm MCP workflow (`warm-mcp`):** one `explore` call through one in-process MCP handler session after the same unmeasured first request. It uses a separate isolated disk cache.
+- **Tool calls:** declared measured workflow steps only. Warmup calls are excluded.
 - **File reads:** baseline read steps, or unique source paths codegraph returns in `packets` or `fileView`.
-- **Wall time:** elapsed time around the declared steps.
-- **Completeness:** whether the expected anchors were present in the captured evidence.
+- **Wall time:** elapsed time around declared measured steps. It excludes setup, warmup, and cache cleanup.
+- **Completeness:** whether the expected anchors were present in the captured evidence. Reviewed scenarios also require their declared order, recommendation, and candidate-test relationships in every codegraph variant.
 
 Medians are calculated independently for each scenario and variant.
 
 ## Checked results
 
-[`results.example.json`](./results.example.json) contains the checked runs behind this table. A SHA-256 digest binds it to the exact ordered scenario definitions. Validation requires every selected scenario, both variants, and every expected run exactly once; it also checks declared step counts and the exact reviewed relationship schema. The summarizer generates and orders every table cell, and `npm run bench:docs:check` detects drift.
+[`results.example.json`](./results.example.json) contains the checked runs behind this table. A SHA-256 digest binds it to the exact ordered scenario definitions. Validation requires every selected scenario, each declared variant, and every expected run exactly once; it also checks declared step counts and the exact reviewed relationship schema. The summarizer generates and orders every table cell, and `npm run bench:docs:check` detects drift.
 
 <!-- benchmark-results:start -->
 
 | Scenario                         | Variant   | Samples | Median tool calls | Median file reads | Median wall time (ms) | Complete runs | Minimum completeness | Reviewed relationships                              |
 | -------------------------------- | --------- | ------: | ----------------: | ----------------: | --------------------: | ------------: | -------------------: | --------------------------------------------------- |
-| repo-orientation-small-ts        | baseline  |       3 |                 3 |                 3 |                 2.529 |             3 |                 100% | -                                                   |
-| repo-orientation-small-ts        | codegraph |       3 |                 1 |                 3 |               410.586 |             3 |                 100% | -                                                   |
-| python-import-reference          | baseline  |       3 |                 3 |                 3 |                 2.507 |             3 |                 100% | -                                                   |
-| python-import-reference          | codegraph |       3 |                 1 |                 3 |               447.115 |             3 |                 100% | -                                                   |
-| sql-migration-application-review | baseline  |       3 |                 3 |                 3 |                 2.515 |             3 |                 100% | -                                                   |
-| sql-migration-application-review | codegraph |       3 |                 1 |                 3 |               456.471 |             3 |                 100% | -                                                   |
-| mixed-docs-source-graph          | baseline  |       3 |                 3 |                 3 |                 3.781 |             3 |                 100% | -                                                   |
-| mixed-docs-source-graph          | codegraph |       3 |                 1 |                 3 |               400.407 |             3 |                 100% | -                                                   |
-| installer-preservation-ranking   | baseline  |       3 |                 3 |                 3 |                 2.418 |             3 |                 100% | -                                                   |
-| installer-preservation-ranking   | codegraph |       3 |                 1 |                 3 |               435.459 |             3 |                 100% | 4 exact observations; ranks in results.example.json |
+| repo-orientation-small-ts        | baseline  |       3 |                 3 |                 3 |                 2.237 |             3 |                 100% | -                                                   |
+| repo-orientation-small-ts        | codegraph |       3 |                 1 |                 3 |               442.139 |             3 |                 100% | -                                                   |
+| repo-orientation-small-ts        | warm-cli  |       3 |                 1 |                 3 |               464.708 |             3 |                 100% | -                                                   |
+| repo-orientation-small-ts        | warm-mcp  |       3 |                 1 |                 3 |                   7.8 |             3 |                 100% | -                                                   |
+| python-import-reference          | baseline  |       3 |                 3 |                 3 |                 1.439 |             3 |                 100% | -                                                   |
+| python-import-reference          | codegraph |       3 |                 1 |                 3 |               456.742 |             3 |                 100% | -                                                   |
+| python-import-reference          | warm-cli  |       3 |                 1 |                 3 |               493.102 |             3 |                 100% | -                                                   |
+| python-import-reference          | warm-mcp  |       3 |                 1 |                 3 |                25.613 |             3 |                 100% | -                                                   |
+| sql-migration-application-review | baseline  |       3 |                 3 |                 3 |                 4.592 |             3 |                 100% | -                                                   |
+| sql-migration-application-review | codegraph |       3 |                 1 |                 3 |               514.837 |             3 |                 100% | -                                                   |
+| sql-migration-application-review | warm-cli  |       3 |                 1 |                 3 |               473.824 |             3 |                 100% | -                                                   |
+| sql-migration-application-review | warm-mcp  |       3 |                 1 |                 3 |                 8.482 |             3 |                 100% | -                                                   |
+| mixed-docs-source-graph          | baseline  |       3 |                 3 |                 3 |                 5.054 |             3 |                 100% | -                                                   |
+| mixed-docs-source-graph          | codegraph |       3 |                 1 |                 3 |               431.391 |             3 |                 100% | -                                                   |
+| mixed-docs-source-graph          | warm-cli  |       3 |                 1 |                 3 |               463.947 |             3 |                 100% | -                                                   |
+| mixed-docs-source-graph          | warm-mcp  |       3 |                 1 |                 3 |                 7.462 |             3 |                 100% | -                                                   |
+| installer-preservation-ranking   | baseline  |       3 |                 3 |                 3 |                 1.713 |             3 |                 100% | -                                                   |
+| installer-preservation-ranking   | codegraph |       3 |                 1 |                 3 |               463.728 |             3 |                 100% | 4 exact observations; ranks in results.example.json |
+| installer-preservation-ranking   | warm-cli  |       3 |                 1 |                 3 |               470.833 |             3 |                 100% | 4 exact observations; ranks in results.example.json |
+| installer-preservation-ranking   | warm-mcp  |       3 |                 1 |                 3 |                10.964 |             3 |                 100% | 4 exact observations; ranks in results.example.json |
 
 <!-- benchmark-results:end -->
 
@@ -83,19 +96,19 @@ The checked result document records Node, platform, architecture, CPU, logical C
 
 The checked artifact was produced from a Windows checkout. Its environment metadata is recorded in `results.example.json`, and the generated table above is the source of its measured values.
 
-The comparison is intentionally end-to-end but not process-symmetric. Baseline reads execute inside the already-running harness and read three preselected files; codegraph launches a fresh Node process, discovers files, builds a cold index, searches, constructs evidence packets, and serializes JSON. The table measures workflow latency and call count, not equivalent-operation throughput or native parser speed.
+The comparison is intentionally end-to-end but not process-symmetric. Baseline reads execute inside the already-running harness and read three preselected files; cold CLI launches a fresh Node process, discovers files, builds a cold index, searches, constructs evidence packets, and serializes JSON. Warm CLI separates cache reuse from process startup.
 
-Read the codegraph wall-time rows as absolute cold CLI latency. Do not divide them by the baseline rows to estimate a slowdown; use an equal-work engine benchmark for parser or index throughput comparisons.
-Compare query benchmarks only when root, revision, query, Node version, and machine state are the same.
+Warm MCP also reuses an in-process handler session. The table measures workflow latency and call count, not equivalent-operation throughput or native parser speed.
 
-Persistent MCP/server sessions amortize process startup and project loading. Measure those warm workflows separately before using this cold CLI table to set interactive latency targets.
+Read each wall-time row only as the named workflow latency. Do not divide any codegraph row by the baseline row to estimate a slowdown; use an equal-work engine benchmark for parser or index throughput comparisons. Compare query benchmarks only when root, revision, query, Node version, and machine state are the same.
 
 ## Limitations and variability
 
-- These fixtures are tiny, local, synthetic, and network-free. They do not represent large repositories, remote tools, warm indexes, long sessions, concurrent agents, or ambiguous discovery tasks.
-- The baseline reads preselected files, while codegraph starts a process, parses, indexes, and returns structured evidence. The workflows do not perform equivalent internal work.
-- codegraph runs with `--cache off`; the harness does not clear operating-system file caches or reboot the host. Node version, hardware, storage, memory pressure, antivirus, scheduling, build freshness, and system load can change wall times.
-- Three samples per variant are a modest evidence set. Treat small timing differences cautiously and compare reruns using the recorded environment.
+- These fixtures are tiny, local, synthetic, and network-free. They do not represent large repositories, remote tools, concurrent agents, or ambiguous discovery tasks.
+- The baseline reads preselected files, while codegraph discovers, indexes, and returns structured evidence. The workflows do not perform equivalent internal work.
+- Cold CLI runs with `--cache off`. The two warm workflows use fresh isolated temporary disk-cache directories, but the harness does not clear operating-system file caches or reboot the host. Node version, hardware, storage, memory pressure, antivirus, scheduling, build freshness, and system load can change wall times.
+- Warm MCP is an in-process handler measurement. It excludes transport framing and client-process overhead.
+- Three measured samples per variant are a modest evidence set. Treat small timing differences cautiously and compare reruns using the recorded environment.
 - The benchmark does not measure answer quality, tokens, output size, or human effort. Complete anchors can still accompany misleading evidence or a wrong answer.
 - Fixture trees, scenario files, and output parents are trusted local maintainer inputs. Traversal and symlink checks prevent common mistakes, but the harness is not an adversarial sandbox; do not rename or retarget these paths during a run.
 

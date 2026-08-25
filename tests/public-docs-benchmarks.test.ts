@@ -22,6 +22,7 @@ import {
   runCli as runSummarizerCli,
   summarizeResults,
   validateResults,
+  validateScenarioFile,
 } from "../scripts/benchmarks/summarize-results-lib.mjs";
 
 const rootDir = path.resolve(import.meta.dirname, "..");
@@ -88,6 +89,8 @@ interface Scenario {
   variants: {
     baseline: BaselineStep[];
     codegraph: CodegraphStep[];
+    "warm-cli"?: CodegraphStep[];
+    "warm-mcp"?: CodegraphStep[];
   };
 }
 
@@ -96,7 +99,7 @@ interface ScenarioDocument {
   scenarios: Scenario[];
 }
 
-type Variant = "baseline" | "codegraph";
+type Variant = "baseline" | "codegraph" | "warm-cli" | "warm-mcp";
 
 interface BenchmarkRun {
   scenarioId: string;
@@ -231,6 +234,14 @@ function addSecondaryScenario(document: ScenarioDocument): ScenarioDocument {
   return document;
 }
 
+function addWarmVariants(document: ScenarioDocument): ScenarioDocument {
+  for (const scenario of document.scenarios) {
+    scenario.variants["warm-cli"] = structuredClone(scenario.variants.codegraph);
+    scenario.variants["warm-mcp"] = structuredClone(scenario.variants.codegraph);
+  }
+  return document;
+}
+
 function makeRun(input: RunInput = {}): BenchmarkRun {
   const anchorsExpected = input.anchorsExpected ?? 2;
   const anchorsFound = input.anchorsFound ?? anchorsExpected;
@@ -284,14 +295,19 @@ function makeScenarioResults(
   const selectedScenarios = document.scenarios.filter((scenario) => selectedIds.has(scenario.id));
   const runs: BenchmarkRun[] = [];
   for (const scenario of selectedScenarios) {
-    for (const variant of ["baseline", "codegraph"] as const) {
+    const variants: Variant[] = ["baseline", "codegraph"];
+    if (scenario.variants["warm-cli"]) variants.push("warm-cli");
+    if (scenario.variants["warm-mcp"]) variants.push("warm-mcp");
+    for (const variant of variants) {
+      const steps = scenario.variants[variant];
+      if (!steps) throw new Error(`Missing declared steps for ${variant}.`);
       for (let run = 1; run <= runsPerVariant; run += 1) {
         runs.push(
           makeRun({
             scenarioId: scenario.id,
             variant,
             run,
-            toolCalls: scenario.variants[variant].length,
+            toolCalls: steps.length,
             fileReads: variant === "baseline" ? scenario.variants.baseline.length : scenario.expectedAnchors.length,
             anchorsExpected: scenario.expectedAnchors.length,
           }),
@@ -326,13 +342,17 @@ describe("public documentation benchmark scenarios", () => {
     expect(document.scenarios.map((scenario) => scenario.id)).toEqual(scenarioIds);
     for (const scenario of document.scenarios) {
       expect(scenario.metrics).toEqual(metrics);
-      expect(Object.keys(scenario.variants)).toEqual(["baseline", "codegraph"]);
+      expect(Object.keys(scenario.variants)).toEqual(["baseline", "codegraph", "warm-cli", "warm-mcp"]);
       expect(scenario.variants.baseline.length).toBeGreaterThan(0);
       expect(scenario.variants.codegraph.length).toBeGreaterThan(0);
+      expect(scenario.variants["warm-cli"]).toEqual(scenario.variants.codegraph);
+      expect(scenario.variants["warm-mcp"]).toEqual(scenario.variants.codegraph);
       expect(scenario.variants.baseline.every((step) => step.type === "read")).toBe(true);
-      expect(scenario.variants.codegraph.every((step) => step.type === "codegraph" && step.command === "explore")).toBe(
-        true,
-      );
+      for (const variant of ["codegraph", "warm-cli", "warm-mcp"] as const) {
+        expect(
+          scenario.variants[variant]?.every((step) => step.type === "codegraph" && step.command === "explore"),
+        ).toBe(true);
+      }
       expect(scenario.repo).not.toMatch(/^(?:[a-z][a-z\d+.-]*:|[/\\~])/iu);
       const fixtureRoot = path.join(rootDir, ...scenario.repo.split("/"));
       expect(fs.statSync(fixtureRoot).isDirectory()).toBe(true);
@@ -387,6 +407,12 @@ describe("public documentation benchmark scenarios", () => {
           Object.assign(document.scenarios[0].variants.codegraph[0], { unexpected: true });
         },
       },
+      {
+        name: "unknown variant",
+        mutate: (document) => {
+          Object.assign(document.scenarios[0].variants, { unknown: [] });
+        },
+      },
     ];
 
     for (const testCase of mutations) {
@@ -394,6 +420,17 @@ describe("public documentation benchmark scenarios", () => {
       testCase.mutate(document);
       expect(() => validateScenarioDocument(document, { rootDir: tempRoot }), testCase.name).toThrow();
     }
+  });
+
+  it("rejects warm benchmark variants that differ from the cold query steps", () => {
+    const tempRoot = createTempRoot();
+    const document = addWarmVariants(createScenarioFixture(tempRoot));
+    const warmCliSteps = document.scenarios[0].variants["warm-cli"];
+    if (!warmCliSteps) throw new Error("fixture is missing warm-cli steps");
+    warmCliSteps[0].query = "Use a different query.";
+
+    expect(() => validateScenarioDocument(document, { rootDir: tempRoot })).toThrow(/warm-cli.*codegraph/);
+    expect(() => validateScenarioFile(document)).toThrow(/warm-cli.*codegraph/);
   });
 
   it("strictly validates reviewed relationship fields and confines every declared path", () => {
@@ -651,6 +688,107 @@ describe("public documentation benchmark runner contracts", () => {
     expect(serialized.endsWith("\n")).toBe(true);
     expect(serialized).not.toContain(tempRoot);
     expect(serialized).not.toContain(JSON.stringify(tempRoot).slice(1, -1));
+  });
+
+  it("uses measured warm cache and MCP calls after separate unmeasured warmups", async () => {
+    const tempRoot = createTempRoot();
+    const document = addWarmVariants(createScenarioFixture(tempRoot));
+    const scenario = document.scenarios[0];
+    const cacheDir = path.join(tempRoot, "benchmark-cache");
+    const cliCalls: Array<{ cache: string; cacheDir: string | undefined }> = [];
+    const mcpOptions: Array<{ cacheDir: string | undefined }> = [];
+    let mcpCalls = 0;
+    let mcpDisposals = 0;
+    const response = {
+      anchors: ["src/actual.ts", "src/anchor.ts"],
+      packets: [{ target: "src/actual.ts" }, { target: "src/anchor.ts" }],
+    };
+
+    const runs = await runScenario(scenario, {
+      rootDir: tempRoot,
+      runs: 2,
+      cacheDir,
+      now: () => 0,
+      executeCodegraph: async (options: { cache: string; cacheDir?: string }) => {
+        cliCalls.push({ cache: options.cache, cacheDir: options.cacheDir });
+        return response;
+      },
+      createWarmMcp: async (options: { cacheDir?: string }) => {
+        mcpOptions.push({ cacheDir: options.cacheDir });
+        return {
+          execute: async () => {
+            mcpCalls += 1;
+            return response;
+          },
+          dispose: () => {
+            mcpDisposals += 1;
+          },
+        };
+      },
+    });
+
+    expect(runs.map((run: BenchmarkRun) => run.variant)).toEqual([
+      "baseline",
+      "baseline",
+      "codegraph",
+      "codegraph",
+      "warm-cli",
+      "warm-cli",
+      "warm-mcp",
+      "warm-mcp",
+    ]);
+    expect(
+      runs.filter((run: BenchmarkRun) => run.variant === "warm-cli").every((run) => run.metrics.toolCalls === 1),
+    ).toBe(true);
+    expect(
+      runs.filter((run: BenchmarkRun) => run.variant === "warm-mcp").every((run) => run.metrics.toolCalls === 1),
+    ).toBe(true);
+    expect(cliCalls).toEqual([
+      { cache: "off", cacheDir: undefined },
+      { cache: "off", cacheDir: undefined },
+      { cache: "disk", cacheDir: path.join(cacheDir, "cli") },
+      { cache: "disk", cacheDir: path.join(cacheDir, "cli") },
+      { cache: "disk", cacheDir: path.join(cacheDir, "cli") },
+    ]);
+    expect(mcpOptions).toEqual([{ cacheDir: path.join(cacheDir, "mcp") }]);
+    expect(mcpCalls).toBe(3);
+    expect(mcpDisposals).toBe(1);
+    expect(() =>
+      validateResults(
+        makeResults(runs, {
+          scenarioDigest: calculateScenarioDigest(document.schemaVersion, document.scenarios),
+          scenarioIds: document.scenarios.map((scenario) => scenario.id),
+        }),
+        { scenarioFile: document },
+      ),
+    ).not.toThrow();
+  });
+
+  it("disposes a warm MCP session when its warmup request fails", async () => {
+    const tempRoot = createTempRoot();
+    const scenario = addWarmVariants(createScenarioFixture(tempRoot)).scenarios[0];
+    const response = {
+      anchors: ["src/actual.ts", "src/anchor.ts"],
+      packets: [{ target: "src/actual.ts" }, { target: "src/anchor.ts" }],
+    };
+    let disposals = 0;
+
+    await expect(
+      runScenario(scenario, {
+        rootDir: tempRoot,
+        runs: 1,
+        executeCodegraph: async () => response,
+        createWarmMcp: async () => ({
+          execute: async () => {
+            throw new Error("MCP warmup failed");
+          },
+          dispose: () => {
+            disposals += 1;
+          },
+        }),
+      }),
+    ).rejects.toThrow("MCP warmup failed");
+    expect(disposals).toBe(1);
   });
 
   it("binds the scenario digest to repo, task, query, and ordered baseline steps", () => {
@@ -913,8 +1051,11 @@ describe("public documentation benchmark runner contracts", () => {
     const scenario = document.scenarios.find((candidate) => candidate.id === "installer-preservation-ranking");
     if (!scenario) throw new Error("Missing installer-preservation scenario.");
     const runs = (await runScenario(scenario, { rootDir, runs: 1, now: () => 0 })) as BenchmarkRun[];
-    expect(runs).toHaveLength(2);
+    expect(runs).toHaveLength(4);
     expect(() => assertComplete({ runs })).not.toThrow();
+    expect(
+      runs.filter((run: BenchmarkRun) => run.variant !== "baseline").every((run) => run.checks.reviewedRelationships),
+    ).toBe(true);
     expect(runs[1].checks.reviewedRelationships?.recommendedFile).toMatchObject({
       expected: "src/installer/registry.ts",
       actual: "src/installer/registry.ts",
@@ -1232,6 +1373,19 @@ describe("public documentation benchmark summarizer contracts", () => {
     }
   });
 
+  it("requires every run for present optional variants without scenario metadata", () => {
+    const runs: BenchmarkRun[] = [];
+    for (const variant of ["baseline", "codegraph"] as const) {
+      for (let run = 1; run <= 3; run += 1) {
+        runs.push(makeRun({ variant, run }));
+      }
+    }
+    runs.push(makeRun({ variant: "warm-cli", run: 1 }));
+
+    const results = makeResults(runs, { runsPerVariant: 3 });
+    expect(() => validateResults(results)).toThrow(/missing required run tuple alpha\/warm-cli\/2/);
+  });
+
   it("binds declared step counts while preserving output-derived Codegraph file reads", () => {
     const tempRoot = createTempRoot();
     const document = addSecondaryScenario(createScenarioFixture(tempRoot));
@@ -1434,7 +1588,7 @@ describe("public documentation benchmark summarizer contracts", () => {
 });
 
 describe("public documentation benchmark subprocess", () => {
-  it("runs one complete local scenario through both variants without native or network requirements", () => {
+  it("runs one complete local scenario through all variants without native or network requirements", () => {
     const result = spawnSync(
       process.execPath,
       [runnerPath, "--runs", "1", "--scenario", "repo-orientation-small-ts", "--require-complete", "--json"],
@@ -1448,11 +1602,11 @@ describe("public documentation benchmark subprocess", () => {
 
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(result.stderr).not.toContain("Benchmark error:");
     const output: BenchmarkResults = JSON.parse(result.stdout);
     const scenarioDocument: ScenarioDocument = JSON.parse(fs.readFileSync(scenarioFilePath, "utf8"));
     expect(() => validateResults(output, { scenarioFile: scenarioDocument })).not.toThrow();
-    expect(output.runs.map((run) => run.variant)).toEqual(["baseline", "codegraph"]);
+    expect(output.runs.map((run) => run.variant)).toEqual(["baseline", "codegraph", "warm-cli", "warm-mcp"]);
     for (const run of output.runs) {
       expect(run.scenarioId).toBe("repo-orientation-small-ts");
       expect(Object.keys(run.metrics)).toEqual(metrics);

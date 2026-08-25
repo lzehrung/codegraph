@@ -31,6 +31,13 @@ describe("links CLI", () => {
     }
   });
 
+  it("uses status 2 for an unknown option", async () => {
+    const result = await captureCli(["links", "--unknown-option"]);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("Unknown option for links: --unknown-option");
+  });
+
   it("uses singular wording for one broken link", async () => {
     const projectRoot = await createMarkdownProject({
       "README.md": "[missing](missing.md)\n",

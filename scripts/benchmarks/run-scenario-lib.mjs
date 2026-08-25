@@ -3,13 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { calculateScenarioDigest } from "./benchmark-contract-lib.mjs";
 
 export const DEFAULT_SCENARIO_FILE = "docs/benchmarks/scenarios.json";
 export const DEFAULT_RUNS = 3;
 export const METRICS = Object.freeze(["toolCalls", "fileReads", "wallTimeMs"]);
-export const VARIANTS = Object.freeze(["baseline", "codegraph"]);
+export const REQUIRED_VARIANTS = Object.freeze(["baseline", "codegraph"]);
+export const VARIANTS = Object.freeze([...REQUIRED_VARIANTS, "warm-cli", "warm-mcp"]);
 export const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const SCHEME_OR_DRIVE_PATH = /^[a-zA-Z][a-zA-Z\d+.-]*:/;
@@ -160,14 +161,44 @@ function validateStep(step, variant, label) {
   assertNonEmptyString(step.query, `${label}.query`);
 }
 
+function selectedVariants(variants) {
+  return VARIANTS.filter((variant) => Object.hasOwn(variants, variant));
+}
+
 function validateVariants(variants, label) {
-  assertExactKeys(variants, VARIANTS, label);
-  for (const variant of VARIANTS) {
+  if (!isPlainObject(variants)) fail(`${label} must be an object.`);
+  const actual = Object.keys(variants);
+  const missing = REQUIRED_VARIANTS.filter((variant) => !Object.hasOwn(variants, variant));
+  const unexpected = actual.filter((variant) => !VARIANTS.includes(variant));
+  if (missing.length || unexpected.length) {
+    const details = [
+      missing.length ? `missing ${missing.join(", ")}` : "",
+      unexpected.length ? `unexpected ${unexpected.join(", ")}` : "",
+    ]
+      .filter(Boolean)
+      .join("; ");
+    fail(
+      `${label} must include ${REQUIRED_VARIANTS.join(", ")} and may include ${VARIANTS.slice(2).join(", ")} (${details}).`,
+    );
+  }
+  for (const variant of selectedVariants(variants)) {
     const steps = variants[variant];
     if (!Array.isArray(steps) || steps.length === 0) fail(`${label}.${variant} must be a non-empty array.`);
     for (let index = 0; index < steps.length; index += 1) {
       validateStep(steps[index], variant, `${label}.${variant}[${index}]`);
     }
+  }
+  for (const variant of ["warm-cli", "warm-mcp"]) {
+    if (!Object.hasOwn(variants, variant)) continue;
+    const warmSteps = variants[variant];
+    const coldSteps = variants.codegraph;
+    const matchesColdSteps =
+      warmSteps.length === coldSteps.length &&
+      warmSteps.every((step, index) => {
+        const coldStep = coldSteps[index];
+        return coldStep !== undefined && step.command === coldStep.command && step.query === coldStep.query;
+      });
+    if (!matchesColdSteps) fail(`${label}.${variant} must exactly match ${label}.codegraph.`);
   }
 }
 
@@ -504,9 +535,12 @@ export async function executeCodegraphExplore(options) {
     rootDir = repositoryRoot,
     repo,
     query,
+    cache = "off",
+    cacheDir,
     distCliPath = path.join(rootDir, "dist", "cli.js"),
     spawn = spawnChild,
   } = options;
+  if (cache !== "off" && cache !== "disk") fail(`Unsupported benchmark cache mode ${JSON.stringify(cache)}.`);
   if (!fs.existsSync(distCliPath)) {
     fail("Built CLI not found at dist/cli.js. Run node scripts/ensure-dist-for-tests.mjs first.");
   }
@@ -515,7 +549,9 @@ export async function executeCodegraphExplore(options) {
   const repoAbsolute = resolveConfinedPath(absoluteRoot, repo, "Scenario repo");
   const repoRealpath = assertNoSymlinkEscape(rootRealpath, repoAbsolute, "Scenario repo");
   if (!fs.statSync(repoRealpath).isDirectory()) fail("Scenario repo must name an existing directory.");
-  const argv = [distCliPath, "explore", query, "--root", repoRealpath, "--cache", "off", "--json"];
+  const argv = [distCliPath, "explore", query, "--root", repoRealpath, "--cache", cache];
+  if (cacheDir) argv.push("--cache-dir", cacheDir);
+  argv.push("--json");
   let result;
   try {
     result = await spawnCaptured(process.execPath, argv, { cwd: rootDir, spawn });
@@ -538,6 +574,33 @@ export async function executeCodegraphExplore(options) {
   }
   if (!isPlainObject(data)) fail("Codegraph explore returned JSON that is not an object.");
   return { data, stdout: result.stdout, stderr: result.stderr };
+}
+
+export async function createWarmMcpExecutor(options) {
+  const { rootDir = repositoryRoot, repo, cacheDir, distMcpPath = path.join(rootDir, "dist", "mcp.js") } = options;
+  if (!fs.existsSync(distMcpPath)) {
+    fail("Built MCP module not found at dist/mcp.js. Run node scripts/ensure-dist-for-tests.mjs first.");
+  }
+  const absoluteRoot = path.resolve(rootDir);
+  const rootRealpath = realpathExisting(absoluteRoot, "Repository root");
+  const repoAbsolute = resolveConfinedPath(absoluteRoot, repo, "Scenario repo");
+  const repoRealpath = assertNoSymlinkEscape(rootRealpath, repoAbsolute, "Scenario repo");
+  if (!fs.statSync(repoRealpath).isDirectory()) fail("Scenario repo must name an existing directory.");
+  let createCodegraphMcpHandlers;
+  try {
+    ({ createCodegraphMcpHandlers } = await import(pathToFileURL(distMcpPath).href));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    fail(`Unable to load Codegraph MCP handlers: ${detail}`);
+  }
+  const handlers = createCodegraphMcpHandlers({
+    root: repoRealpath,
+    buildOptions: { cache: "disk", ...(cacheDir ? { cacheDir } : {}) },
+  });
+  return {
+    execute: async ({ query }) => await handlers.explore({ query }),
+    dispose: () => handlers.dispose(),
+  };
 }
 
 function normalizeExploreExecution(result) {
@@ -639,7 +702,7 @@ export function calculateReviewedRelationships(scenario, exploreOutputs) {
 }
 
 async function runVariant(scenario, variant, runNumber, options) {
-  const { rootDir, readFile, executeCodegraph, now } = options;
+  const { rootDir, readFile, executeCodegraph, now, cacheDir, warmMcp } = options;
   const capturedOutputs = [];
   const exploreOutputs = [];
   const startedAt = now();
@@ -658,9 +721,18 @@ async function runVariant(scenario, variant, runNumber, options) {
         const content = await readFile(fileRealpath, "utf8");
         capturedOutputs.push(JSON.stringify({ path: step.path, content: String(content) }));
       } else {
-        const execution = normalizeExploreExecution(
-          await executeCodegraph({ rootDir, repo: scenario.repo, query: step.query, command: step.command }),
-        );
+        const rawExecution =
+          variant === "warm-mcp"
+            ? await warmMcp.execute({ query: step.query })
+            : await executeCodegraph({
+                rootDir,
+                repo: scenario.repo,
+                query: step.query,
+                command: step.command,
+                cache: variant === "warm-cli" ? "disk" : "off",
+                ...(cacheDir ? { cacheDir } : {}),
+              });
+        const execution = normalizeExploreExecution(rawExecution);
         if (!isPlainObject(execution.data)) fail("Codegraph explore returned JSON that is not an object.");
         exploreOutputs.push(execution.data);
         capturedOutputs.push(captureCodegraphEvidence(execution.data));
@@ -683,29 +755,85 @@ async function runVariant(scenario, variant, runNumber, options) {
     },
     checks: {
       ...calculateCompleteness(scenario.expectedAnchors, capturedOutputs),
-      ...(variant === "codegraph" && hasReviewedRelationships(scenario)
+      ...(variant !== "baseline" && hasReviewedRelationships(scenario)
         ? { reviewedRelationships: calculateReviewedRelationships(scenario, exploreOutputs) }
         : {}),
     },
   };
 }
 
+async function warmScenarioVariant(scenario, variant, options) {
+  const { rootDir, executeCodegraph, createWarmMcp, cacheDir } = options;
+  const steps = scenario.variants[variant];
+  if (variant === "warm-cli") {
+    for (const step of steps) {
+      await executeCodegraph({
+        rootDir,
+        repo: scenario.repo,
+        query: step.query,
+        command: step.command,
+        cache: "disk",
+        ...(cacheDir ? { cacheDir } : {}),
+      });
+    }
+    return undefined;
+  }
+  if (variant === "warm-mcp") {
+    const warmMcp = await createWarmMcp({ rootDir, repo: scenario.repo, ...(cacheDir ? { cacheDir } : {}) });
+    try {
+      for (const step of steps) await warmMcp.execute({ query: step.query });
+      return warmMcp;
+    } catch (error) {
+      warmMcp.dispose();
+      throw error;
+    }
+  }
+  return undefined;
+}
+
 export async function runScenario(scenario, options = {}) {
   const rootDir = path.resolve(options.rootDir ?? repositoryRoot);
   const runs = options.runs ?? DEFAULT_RUNS;
   if (!Number.isSafeInteger(runs) || runs < 1) fail("runs must be a positive safe integer.");
+  const variants = selectedVariants(scenario.variants);
+  const hasWarmCacheVariant = variants.includes("warm-cli") || variants.includes("warm-mcp");
+  const temporaryCacheRoot =
+    hasWarmCacheVariant && !options.cacheDir
+      ? await fs.promises.mkdtemp(path.join(os.tmpdir(), "codegraph-docs-benchmark-"))
+      : undefined;
+  const cacheRoot = options.cacheDir ?? temporaryCacheRoot;
   const dependencies = {
     rootDir,
     runs,
     readFile: options.readFile ?? fs.promises.readFile,
     executeCodegraph: options.executeCodegraph ?? executeCodegraphExplore,
+    createWarmMcp: options.createWarmMcp ?? createWarmMcpExecutor,
     now: options.now ?? performance.now.bind(performance),
   };
   const results = [];
-  for (const variant of VARIANTS) {
-    for (let runNumber = 1; runNumber <= runs; runNumber += 1) {
-      results.push(await runVariant(scenario, variant, runNumber, dependencies));
+  let warmMcp;
+  try {
+    for (const variant of variants) {
+      let cacheDir;
+      if (variant === "warm-cli" && cacheRoot) {
+        cacheDir = path.join(cacheRoot, "cli");
+      } else if (variant === "warm-mcp" && cacheRoot) {
+        cacheDir = path.join(cacheRoot, "mcp");
+      }
+      if (variant === "warm-cli" || variant === "warm-mcp") {
+        warmMcp = await warmScenarioVariant(scenario, variant, { ...dependencies, cacheDir });
+      }
+      for (let runNumber = 1; runNumber <= runs; runNumber += 1) {
+        results.push(await runVariant(scenario, variant, runNumber, { ...dependencies, cacheDir, warmMcp }));
+      }
+      if (warmMcp) {
+        warmMcp.dispose();
+        warmMcp = undefined;
+      }
     }
+  } finally {
+    if (warmMcp) warmMcp.dispose();
+    if (temporaryCacheRoot) await fs.promises.rm(temporaryCacheRoot, { recursive: true, force: true });
   }
   return results;
 }
@@ -788,6 +916,8 @@ export async function runBenchmark(options = {}, dependencies = {}) {
     runs: normalizedOptions.runs,
     readFile: dependencies.readFile,
     executeCodegraph: dependencies.executeCodegraph,
+    createWarmMcp: dependencies.createWarmMcp,
+    cacheDir: dependencies.cacheDir,
     now: dependencies.now,
   });
   const date = dependencies.date ?? (() => new Date());

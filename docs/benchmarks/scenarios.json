@@ -28,6 +28,20 @@
             "command": "explore",
             "query": "Trace serveRequest from src/server.ts through dispatchRequest in src/routes.ts to getHealth in src/handlers/health.ts."
           }
+        ],
+        "warm-cli": [
+          {
+            "type": "codegraph",
+            "command": "explore",
+            "query": "Trace serveRequest from src/server.ts through dispatchRequest in src/routes.ts to getHealth in src/handlers/health.ts."
+          }
+        ],
+        "warm-mcp": [
+          {
+            "type": "codegraph",
+            "command": "explore",
+            "query": "Trace serveRequest from src/server.ts through dispatchRequest in src/routes.ts to getHealth in src/handlers/health.ts."
+          }
         ]
       }
     },
@@ -53,6 +67,20 @@
           }
         ],
         "codegraph": [
+          {
+            "type": "codegraph",
+            "command": "explore",
+            "query": "Trace the imports in main.py for helper_function, UtilityClass, and another_helper to their definitions in utils.py and helpers.py."
+          }
+        ],
+        "warm-cli": [
+          {
+            "type": "codegraph",
+            "command": "explore",
+            "query": "Trace the imports in main.py for helper_function, UtilityClass, and another_helper to their definitions in utils.py and helpers.py."
+          }
+        ],
+        "warm-mcp": [
           {
             "type": "codegraph",
             "command": "explore",
@@ -88,6 +116,20 @@
             "command": "explore",
             "query": "Locate how the accounts definition in schema.sql, the status addition in migrations/001_add_account_status.sql, and the active-account query in src/list-active-accounts.ts are coupled by table and column usage."
           }
+        ],
+        "warm-cli": [
+          {
+            "type": "codegraph",
+            "command": "explore",
+            "query": "Locate how the accounts definition in schema.sql, the status addition in migrations/001_add_account_status.sql, and the active-account query in src/list-active-accounts.ts are coupled by table and column usage."
+          }
+        ],
+        "warm-mcp": [
+          {
+            "type": "codegraph",
+            "command": "explore",
+            "query": "Locate how the accounts definition in schema.sql, the status addition in migrations/001_add_account_status.sql, and the active-account query in src/list-active-accounts.ts are coupled by table and column usage."
+          }
         ]
       }
     },
@@ -113,6 +155,20 @@
           }
         ],
         "codegraph": [
+          {
+            "type": "codegraph",
+            "command": "explore",
+            "query": "Follow docs/request-flow.md to sendRequest in src/client.ts, then trace its import and call to formatRequest in src/transport.ts."
+          }
+        ],
+        "warm-cli": [
+          {
+            "type": "codegraph",
+            "command": "explore",
+            "query": "Follow docs/request-flow.md to sendRequest in src/client.ts, then trace its import and call to formatRequest in src/transport.ts."
+          }
+        ],
+        "warm-mcp": [
           {
             "type": "codegraph",
             "command": "explore",
@@ -167,6 +223,20 @@
           }
         ],
         "codegraph": [
+          {
+            "type": "codegraph",
+            "command": "explore",
+            "query": "How does the installer preserve an existing MCP server configuration?"
+          }
+        ],
+        "warm-cli": [
+          {
+            "type": "codegraph",
+            "command": "explore",
+            "query": "How does the installer preserve an existing MCP server configuration?"
+          }
+        ],
+        "warm-mcp": [
           {
             "type": "codegraph",
             "command": "explore",

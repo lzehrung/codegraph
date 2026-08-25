@@ -115,14 +115,14 @@ Four exported signatures dropped a `lang` argument that no implementation read. 
 positions are shown below; every other argument keeps its place, so delete the argument at the
 call site and nothing else changes:
 
-```ts
-// before
+```text
+before
 collectLocalsAndExportsFromSource(file, source, support, lang, imports, opts);
 buildScopeIndexFromSource(file, source, support, lang, imports, opts);
 collectModuleSpecifiersFromSource(support, lang, source, opts);
 collectImportsForFile(file, root, { lang, tree, ...rest }); // both options were unread
 
-// after
+after
 collectLocalsAndExportsFromSource(file, source, support, imports, opts);
 buildScopeIndexFromSource(file, source, support, imports, opts);
 collectModuleSpecifiersFromSource(support, source, opts);
@@ -424,9 +424,11 @@ Use `mode: "sql"` for SQL objects, or pass `from` plus `depth` with `mode: "grap
 `explainCodegraphTarget()` resolves a file path, symbol name, SQL object name, or search handle into a bounded packet for follow-up agent work. Explanations include the same top-level `analysis` label as search so reduced or mixed runs stay visible. SQL object names resolve by exact name first; unqualified basenames resolve only when unique. File and symbol explanations also include bounded medium-or-higher duplicate context that touches the target, with stable handles and conservative repair hints. SQL related objects include a `relation` such as `incoming:reads_from`, `outgoing:writes_to`, or `same_file`. With changed context enabled, the packet includes compact review tasks and candidate tests:
 
 ```ts
+import { explainCodegraphTarget } from "@lzehrung/codegraph-core/agent";
+
 const explanation = await explainCodegraphTarget({
   root: process.cwd(),
-  target: first?.handle ?? "src/auth.ts",
+  target: "src/auth.ts",
   maxSymbols: 25,
   maxDependencies: 10,
   maxReferences: 10,
@@ -443,6 +445,8 @@ Reference and snippet omission counts are lower bounds once the bounded navigati
 `buildCodegraphArtifact()` writes the same core artifacts agents usually need for offline navigation. Artifact contents exclude the output directory itself when it is inside the repo; hosts that write through a resolved path while indexing through a symlinked root can pass `filterOutDir` with the lexical project-relative output path:
 
 ```ts
+import { buildCodegraphArtifact } from "@lzehrung/codegraph-core/agent";
+
 const artifact = await buildCodegraphArtifact({
   root: process.cwd(),
   outDir: "codegraph-out",
@@ -501,8 +505,10 @@ Nested semantic candidates retain hierarchical granularity: a parent and its dec
 import { chunkFile, chunkTextFile, LANG_CONFIGS } from "@lzehrung/codegraph-core";
 
 const source = `function hello(name) { return "Hello " + name; }`;
+const javascript = LANG_CONFIGS.javascript;
+if (!javascript) throw new Error("JavaScript chunking configuration is unavailable.");
 const chunks = chunkFile({
-  language: LANG_CONFIGS.javascript,
+  language: javascript,
   source,
   filePath: "utils.js",
   minTokens: 150,
@@ -640,8 +646,11 @@ if (res.status === "ok") {
 Find references with the same index:
 
 ```ts
-import { findReferences } from "@lzehrung/codegraph-core";
+import { buildProjectIndex, findReferences } from "@lzehrung/codegraph-core";
 
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+const file = `${root}/tests/samples/monorepo/packages/pkg-b/src/index.js`.replace(/\\/g, "/");
 const refs = await findReferences(index, { file, line: 21, column: 18 });
 if (refs.status === "ok") {
   console.log(
@@ -766,8 +775,10 @@ console.log({ files: index.byFile.size, edges: index.graph.edges.length });
 Produce a Mermaid diagram string from an in-memory graph:
 
 ```ts
-import { graphToMermaid } from "@lzehrung/codegraph-core";
+import { collectGraph, graphToMermaid, listProjectFiles } from "@lzehrung/codegraph-core";
 
+const root = process.cwd();
+const graph = await collectGraph(root, await listProjectFiles(root));
 const mermaid = graphToMermaid(graph);
 console.log(mermaid);
 ```
@@ -845,8 +856,6 @@ if (handle) {
 
 ## Impact analysis from code
 
-```ts
-
 Optional request-wide budgets on `ImpactOptions` constrain computation before work is scheduled:
 
 - `maxChangedSymbols`, `maxReferenceLookups`, `maxTotalReferences`, `timeBudgetMs`
@@ -855,6 +864,7 @@ Optional request-wide budgets on `ImpactOptions` constrain computation before wo
 
 `ReviewOptions.duplicateTasks: false` skips duplicate analysis entirely.
 
+```ts
 import { buildProjectIndex, analyzeImpactFromDiff } from "@lzehrung/codegraph-core";
 
 const root = process.cwd();
@@ -891,6 +901,15 @@ Use them to prioritize follow-up review:
 - `callsiteFile` and `callsiteRange` identify the location to inspect.
 
 ```ts
+import { analyzeImpactFromDiff, buildProjectIndex } from "@lzehrung/codegraph-core";
+
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+const report = await analyzeImpactFromDiff(root, index, {
+  provider: "git",
+  base: "main",
+  head: "feature-branch",
+});
 const likelyMismatches = report.changedSymbols.flatMap((symbol) =>
   (symbol.callCompatibility ?? []).filter((hint) => hint.status === "likely_mismatch"),
 );
@@ -908,6 +927,10 @@ Coverage is intentionally conservative:
 Include reference context snippets when needed:
 
 ```ts
+import { analyzeImpactFromDiff, buildProjectIndex } from "@lzehrung/codegraph-core";
+
+const root = process.cwd();
+const index = await buildProjectIndex(root);
 const reportWithLineContext = await analyzeImpactFromDiff(root, index, {
   provider: "git",
   base: "main",
@@ -923,6 +946,8 @@ const reportWithBlockContext = await analyzeImpactFromDiff(root, index, {
   refContext: "block",
   refBlockMaxLines: 30,
 });
+
+console.log(reportWithLineContext.impacted.length, reportWithBlockContext.impacted.length);
 ```
 
 ## Agent tool wrappers

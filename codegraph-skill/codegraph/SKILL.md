@@ -20,6 +20,10 @@ Use plain text search for exact strings, logs, config keys, secrets, and prose. 
 
 Bare `codegraph` prints five task-first routes without scanning the project. Use `codegraph --help` for the full command catalog and `codegraph help <command>` for command help; unknown commands suggest but never execute alternatives.
 
+Exit `0` means completion without a failure condition. Exit `1` can mean findings, no matching target, or a runtime failure. Inspect its output before continuing; findings and no matching targets are actionable, while runtime or analysis failures need error handling.
+
+Exit `2` means invalid usage or input. `links` uses `1` for broken local links; do not treat it as an invocation error.
+
 | Task                                                      | Start here                                               |
 | --------------------------------------------------------- | -------------------------------------------------------- |
 | Review staged and unstaged work                           | `codegraph review`                                       |
@@ -98,6 +102,17 @@ Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `ar
 - duplicate cleanup: `codegraph duplicates --root . ./src --profile cleanup`
 - full duplicate groups: `codegraph duplicates --root . ./src --json`
 - local Markdown link check: `codegraph links --json`
+- exported API summary: `codegraph apisurface --root . --json`
+- embedding-ready file chunks: `codegraph chunk src/auth.ts --json`
+- one indexed module: `codegraph dumpmod src/auth.ts --json`
+- prewarm or repair disk state: `codegraph index --root .`
+- inspect complex files: `codegraph hotspots --root . --limit 20`
+- list unresolved source imports: `codegraph unresolved --root . --json`
+- search text with a regex: `codegraph grep "TODO|FIXME" --glob "src/**/*.ts"`
+- query an exported SQLite graph: `codegraph sql codegraph.sqlite "SELECT * FROM files LIMIT 20"`
+- compare graph changes across revisions: `codegraph graph-delta --git-base origin/main --git-head HEAD --json`
+- create a durable artifact: `codegraph artifact --root . --out codegraph-out --sqlite --graph-json`
+- start a warm local tool server: `codegraph mcp --root . --stdio`
 
 `links` checks root-confined local Markdown links and GitHub-style heading fragments, including raw HTML `a[href]` in `.md` files. It skips external URLs and unsupported formats; exit 1 reports broken links. Discovery honors `codegraph.config.json` discovery globs plus CLI `--include-glob` / `--ignore-glob` / `--no-gitignore`. `review` and non-empty `impact` include the same `markdownLinks` findings; `unresolved` excludes document edges.
 
@@ -198,7 +213,10 @@ codegraph install --target codex,claude --yes
 codegraph install --target codex --yes --force
 codegraph install --all --dry-run
 codegraph install --all --yes
+codegraph uninstall --target codex --yes
 ```
+
+Use `codegraph version` to inspect package identity and `codegraph skill doctor` to inspect bundled skill targets.
 
 Interactive confirmation accepts only `y` or `yes` and defaults to no. Noninteractive writes require `--yes`. `--all` is install-only, configures `codex`, `claude`, `cursor`, `gemini`, `opencode`, `omp`, `kilo`, and `agents`, and cannot be combined with target selection, `--detect`, or `--print-config`.
 
