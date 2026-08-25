@@ -873,7 +873,6 @@ index 1234567..abcdef0 100644
   describe("Candidate Test Files", () => {
     it("should detect candidate test files via import edges on samples", async () => {
       const index = await createTestIndex("typescript");
-      const _samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
 
       // Get some files and symbols from the index
       const files = Array.from(index.byFile.keys());
@@ -900,16 +899,43 @@ index 1234567..abcdef0 100644
         expect(["importsChanged", "dependsOnChanged", "pattern"]).toContain(candidate.reason);
       }
 
-      // Candidates should be sorted by confidence (high first)
-      if (candidates.length > 1) {
-        const highCount = candidates.filter((c) => c.confidence === "high").length;
-        const _mediumCount = candidates.filter((c) => c.confidence === "medium").length;
-        const _lowCount = candidates.filter((c) => c.confidence === "low").length;
+      // Ordering is asserted by the next test, which builds a fixture that actually
+      // produces all three confidences. The shared TypeScript sample yields at most one
+      // candidate, so an ordering check here would never execute.
+    });
 
-        // High confidence should come first
-        if (highCount > 0) {
-          expect(candidates[0].confidence).toBe("high");
-        }
+    it("orders candidates high, then medium, then low", async () => {
+      const root = await fsp.mkdtemp(path.join(process.cwd(), "tmp-impact-candidate-order-"));
+      try {
+        // One file per confidence level listCandidateTestFiles can assign:
+        // direct.test.ts imports the changed file (high), indirect.test.ts reaches it through
+        // middle.ts on one extra reverse hop (medium), and unrelated.test.ts matches the test
+        // pattern with no path to the change at all (low).
+        await fsp.writeFile(path.join(root, "changed.ts"), "export const changed = 1;\n", "utf8");
+        await fsp.writeFile(path.join(root, "middle.ts"), 'import "./changed";\nexport const middle = 2;\n', "utf8");
+        await fsp.writeFile(path.join(root, "direct.test.ts"), 'import "./changed";\n', "utf8");
+        await fsp.writeFile(path.join(root, "indirect.test.ts"), 'import "./middle";\n', "utf8");
+        await fsp.writeFile(path.join(root, "unrelated.test.ts"), "export const unrelated = 3;\n", "utf8");
+
+        const files = ["changed.ts", "middle.ts", "direct.test.ts", "indirect.test.ts", "unrelated.test.ts"].map(
+          (name) => path.join(root, name),
+        );
+        const index = await buildProjectIndexFromFiles(root, files);
+        const candidates = listCandidateTestFiles(index, [path.join(root, "changed.ts")], [], { maxCandidates: 10 });
+
+        // Guard the fixture itself: if a future change stops producing all three levels, the
+        // ordering assertion below would pass vacuously instead of reporting the gap.
+        const byConfidence = new Map(candidates.map((candidate) => [candidate.confidence, candidate]));
+        expect([...byConfidence.keys()].sort()).toEqual(["high", "low", "medium"]);
+        expect(path.basename(byConfidence.get("high")!.file)).toBe("direct.test.ts");
+        expect(path.basename(byConfidence.get("medium")!.file)).toBe("indirect.test.ts");
+        expect(path.basename(byConfidence.get("low")!.file)).toBe("unrelated.test.ts");
+
+        // The whole sequence, not just the first entry: high, low, medium would satisfy a
+        // check that only looks at candidates[0].
+        expect(candidates.map((candidate) => candidate.confidence)).toEqual(["high", "medium", "low"]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
       }
     });
   });

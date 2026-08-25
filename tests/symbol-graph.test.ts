@@ -37,7 +37,6 @@ describe("Symbol-level graph", () => {
     });
 
     it("ignores commented-out TS imports in fallback parsing", async () => {
-      const _root = path.resolve(process.cwd(), "tests", "samples", "typescript");
       const index = await createTestIndex("typescript");
       const sg = await buildSymbolGraph(index);
       const nodes = [...sg.nodes.values()].map((n) => ({ ...n, file: norm(n.file) }));

@@ -127,7 +127,7 @@ nativeDescribe("type hierarchy language parity", () => {
     const nodesByName = new Map([...graph.nodes.values()].map((node) => [node.name, node.id]));
     const actualRelations = new Set(
       graph.edges
-        .filter((edge) => !!edge.label && ["extends", "implements", "trait", "mixin"].includes(edge.label))
+        .filter((edge) => edge.label && ["extends", "implements", "trait", "mixin"].includes(edge.label))
         .map((edge) => `${graph.nodes.get(edge.from)?.name}:${edge.label}:${graph.nodes.get(edge.to)?.name}`),
     );
 

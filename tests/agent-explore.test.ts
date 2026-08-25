@@ -364,12 +364,16 @@ describe("agent explore", () => {
     });
     const rankedFiles = [...new Set(response.anchors.map((anchor) => anchor.file))];
     const fileByHandle = new Map(response.anchors.map((anchor) => [anchor.handle, anchor.file]));
-    const _packetFiles = response.packets.map((packet) => fileByHandle.get(packet.target) ?? packet.target);
+    const packetFiles = response.packets.map((packet) => fileByHandle.get(packet.target) ?? packet.target);
     const leadingAnchorFiles = response.anchors.slice(0, 2).map((anchor) => anchor.file);
 
     expect(leadingAnchorFiles).toEqual(["src/z-installer.ts", "src/z-installer.ts"]);
 
     expect(rankedFiles.slice(0, 2)).toEqual(["src/z-installer.ts", "src/a-registry.ts"]);
+    // The anchors lead with two hits in the same file, so packets are the part of this
+    // response that shows ranked order across distinct files. Asserting only the anchors
+    // would leave a reordering inside collectPacketTargets undetected.
+    expect(packetFiles).toEqual(rankedFiles.slice(0, 2));
     expect(response.followUps[0]).toEqual({ tool: "get_file", arguments: { file: "src/z-installer.ts" } });
     expect(response.blastRadius.slice(0, 2).map((entry) => entry.file)).toEqual([
       "src/z-installer.ts",
