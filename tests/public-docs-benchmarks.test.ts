@@ -764,6 +764,33 @@ describe("public documentation benchmark runner contracts", () => {
     ).not.toThrow();
   });
 
+  it("disposes a warm MCP session when its warmup request fails", async () => {
+    const tempRoot = createTempRoot();
+    const scenario = addWarmVariants(createScenarioFixture(tempRoot)).scenarios[0];
+    const response = {
+      anchors: ["src/actual.ts", "src/anchor.ts"],
+      packets: [{ target: "src/actual.ts" }, { target: "src/anchor.ts" }],
+    };
+    let disposals = 0;
+
+    await expect(
+      runScenario(scenario, {
+        rootDir: tempRoot,
+        runs: 1,
+        executeCodegraph: async () => response,
+        createWarmMcp: async () => ({
+          execute: async () => {
+            throw new Error("MCP warmup failed");
+          },
+          dispose: () => {
+            disposals += 1;
+          },
+        }),
+      }),
+    ).rejects.toThrow("MCP warmup failed");
+    expect(disposals).toBe(1);
+  });
+
   it("binds the scenario digest to repo, task, query, and ordered baseline steps", () => {
     const tempRoot = createTempRoot();
     const document = createScenarioFixture(tempRoot);

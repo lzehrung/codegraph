@@ -780,8 +780,13 @@ async function warmScenarioVariant(scenario, variant, options) {
   }
   if (variant === "warm-mcp") {
     const warmMcp = await createWarmMcp({ rootDir, repo: scenario.repo, ...(cacheDir ? { cacheDir } : {}) });
-    for (const step of steps) await warmMcp.execute({ query: step.query });
-    return warmMcp;
+    try {
+      for (const step of steps) await warmMcp.execute({ query: step.query });
+      return warmMcp;
+    } catch (error) {
+      warmMcp.dispose();
+      throw error;
+    }
   }
   return undefined;
 }

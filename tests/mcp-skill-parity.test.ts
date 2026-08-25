@@ -6,6 +6,10 @@ import { listCodegraphMcpTools } from "../src/mcp/tools.js";
 
 const LEGACY_ALIAS_NAMES = new Set(["callers", "callees", "supertypes", "subtypes", "deps", "rdeps"]);
 const rootDir = process.cwd();
+const supportedCliCommands = new Set([
+  ...CLI_COMMAND_CATALOG.flatMap((command) => [command.name, ...(command.aliases ?? [])]),
+  "help",
+]);
 
 function listedCliCommands(document: string): Set<string> {
   const commands = new Set<string>();
@@ -39,20 +43,29 @@ describe("MCP / SKILL inventory parity", () => {
     }
   });
 
-  it("documents every CLI command in exact CLI examples in the reference and skill", async () => {
+  it("keeps exact CLI examples synchronized with the supported command inventory", async () => {
     const [cli, skill] = await Promise.all([
       fsp.readFile(path.join(rootDir, "docs", "cli.md"), "utf8"),
       fsp.readFile(path.join(rootDir, "codegraph-skill", "codegraph", "SKILL.md"), "utf8"),
     ]);
-    const cliCommands = listedCliCommands(cli);
-    const skillCommands = listedCliCommands(skill);
+    const commandDocuments = [
+      { name: "docs/cli.md", commands: listedCliCommands(cli) },
+      { name: "codegraph-skill/codegraph/SKILL.md", commands: listedCliCommands(skill) },
+    ];
 
     for (const command of CLI_COMMAND_CATALOG) {
-      expect(cliCommands.has(command.name), `${command.name} missing from docs/cli.md CLI examples`).toBe(true);
-      expect(
-        skillCommands.has(command.name),
-        `${command.name} missing from codegraph-skill/codegraph/SKILL.md CLI examples`,
-      ).toBe(true);
+      for (const document of commandDocuments) {
+        expect(document.commands.has(command.name), `${command.name} missing from ${document.name} CLI examples`).toBe(
+          true,
+        );
+      }
+    }
+    for (const document of commandDocuments) {
+      for (const command of document.commands) {
+        expect(supportedCliCommands.has(command), `${command} in ${document.name} is not a supported CLI command`).toBe(
+          true,
+        );
+      }
     }
   });
 });
