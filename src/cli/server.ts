@@ -83,12 +83,22 @@ type ServerHealth = {
   lifecycleProof?: string;
 };
 
-type ServerStatus = {
-  status: "live" | "stale" | "unreachable" | "not_started";
-  registry?: CodegraphServerRegistry;
-  health?: ServerHealth;
-  reason?: string;
-};
+type ServerStatus =
+  | {
+      status: "stale";
+      requestedRoot: string;
+      safeToRemove: boolean;
+      registry?: CodegraphServerRegistry;
+      health?: ServerHealth;
+      reason?: string;
+    }
+  | {
+      status: "live" | "unreachable" | "not_started";
+      requestedRoot: string;
+      registry?: CodegraphServerRegistry;
+      health?: ServerHealth;
+      reason?: string;
+    };
 type RegistryReadResult =
   | { status: "found"; registry: CodegraphServerRegistry }
   | { status: "missing" }
@@ -388,38 +398,50 @@ function serverStatusRemedy(status: ServerStatus): string | undefined {
     return "verify the server process and /health endpoint before retrying.";
   }
   if (status.status !== "stale") return undefined;
-  if (requiresIdentityVerification(status)) {
+  if (!status.safeToRemove) {
     return "verify the registry and live server identity before retrying.";
   }
-  return "run codegraph server stop --root . or codegraph server start --replace --root .";
-}
-
-function requiresIdentityVerification(status: ServerStatus): boolean {
-  return status.health !== undefined || Boolean(status.reason?.includes("does not match"));
+  const root = JSON.stringify(status.requestedRoot);
+  return `run codegraph server stop --root ${root} or codegraph server start --replace --root ${root}`;
 }
 
 function canSafelyRemoveStaleRegistry(status: ServerStatus): boolean {
-  return status.status === "stale" && !requiresIdentityVerification(status);
+  return status.status === "stale" && status.safeToRemove;
 }
 
 async function readServerStatus(root: string): Promise<ServerStatus> {
   const registryPath = await resolveRegistryPath(root, false);
-  if (!registryPath) return { status: "not_started" };
+  if (!registryPath) return { status: "not_started", requestedRoot: root };
   const readResult = await readRegistry(registryPath);
-  if (readResult.status === "missing") return { status: "not_started" };
-  if (readResult.status === "invalid") return { status: "stale", reason: "Server registry is invalid." };
+  if (readResult.status === "missing") return { status: "not_started", requestedRoot: root };
+  if (readResult.status === "invalid") {
+    return { status: "stale", requestedRoot: root, safeToRemove: true, reason: "Server registry is invalid." };
+  }
 
   const registry = readResult.registry;
   if (!sameRoot(registry.root, root)) {
-    return { status: "stale", registry, reason: "Registry root does not match the requested root." };
+    return {
+      status: "stale",
+      requestedRoot: root,
+      safeToRemove: false,
+      registry,
+      reason: "Registry root does not match the requested root.",
+    };
   }
 
   if (registry.schemaVersion === 1) {
     if (getServerProcessState(registry.pid) === "missing") {
-      return { status: "stale", registry, reason: "Server process is not running." };
+      return {
+        status: "stale",
+        requestedRoot: root,
+        safeToRemove: true,
+        registry,
+        reason: "Server process is not running.",
+      };
     }
     return {
       status: "unreachable",
+      requestedRoot: root,
       registry,
       reason: "Server registry predates lifecycle credentials. Stop the server manually, then start it again.",
     };
@@ -428,10 +450,17 @@ async function readServerStatus(root: string): Promise<ServerStatus> {
   const lifecycleCredential = await readServerLifecycleCredential(root, registry.credentialId);
   if (!lifecycleCredential) {
     if (getServerProcessState(registry.pid) === "missing") {
-      return { status: "stale", registry, reason: "Server process is not running." };
+      return {
+        status: "stale",
+        requestedRoot: root,
+        safeToRemove: true,
+        registry,
+        reason: "Server process is not running.",
+      };
     }
     return {
       status: "unreachable",
+      requestedRoot: root,
       registry,
       reason: "Server lifecycle credential is unavailable.",
     };
@@ -440,24 +469,52 @@ async function readServerStatus(root: string): Promise<ServerStatus> {
   const health = await waitForServerHealth(registry.url, SERVER_HEALTH_GRACE_TIMEOUT_MS, lifecycleCredential.token);
   if (!health) {
     if (getServerProcessState(registry.pid) === "missing") {
-      return { status: "stale", registry, reason: "Server process is not running." };
+      return {
+        status: "stale",
+        requestedRoot: root,
+        safeToRemove: true,
+        registry,
+        reason: "Server process is not running.",
+      };
     }
     return {
       status: "unreachable",
+      requestedRoot: root,
       registry,
       reason: `Server health endpoint did not prove its lifecycle identity within ${SERVER_HEALTH_GRACE_TIMEOUT_MS}ms.`,
     };
   }
   if (!sameRoot(health.root, root)) {
-    return { status: "stale", registry, health, reason: "Server health root does not match the requested root." };
+    return {
+      status: "stale",
+      requestedRoot: root,
+      safeToRemove: false,
+      registry,
+      health,
+      reason: "Server health root does not match the requested root.",
+    };
   }
   if (health.pid !== registry.pid) {
-    return { status: "stale", registry, health, reason: "Server process identifier does not match the registry." };
+    return {
+      status: "stale",
+      requestedRoot: root,
+      safeToRemove: false,
+      registry,
+      health,
+      reason: "Server process identifier does not match the registry.",
+    };
   }
   if (health.startedAt !== registry.startedAt) {
-    return { status: "stale", registry, health, reason: "Server startup time does not match the registry." };
+    return {
+      status: "stale",
+      requestedRoot: root,
+      safeToRemove: false,
+      registry,
+      health,
+      reason: "Server startup time does not match the registry.",
+    };
   }
-  return { status: "live", registry, health };
+  return { status: "live", requestedRoot: root, registry, health };
 }
 
 async function stopLiveServer(registry: CodegraphServerRegistry, health: ServerHealth, root: string): Promise<void> {

@@ -421,7 +421,7 @@ Forwarded startup options:
   --include-glob, --ignore-glob, --no-gitignore, and --resolution-hint pass to mcp serve.
 
 Safety:
-  The v2 registry stores process metadata and a non-secret credential ID; its credential remains in the per-user cache. A live v1 registry is never signaled. An installed-version change requires an explicit server restart; Codegraph does not replace mapped native files or terminate clients automatically.
+  The registry stores process metadata and a non-secret credential ID. Its credential remains in the per-user Codegraph state directory, outside the project and separate from compiler cache data. An installed-version change requires an explicit server restart; Codegraph does not replace mapped native files or terminate clients automatically.
 `;
 
 export const MCP_HELP_TEXT = `codegraph mcp - Serve MCP tools for agent graph navigation

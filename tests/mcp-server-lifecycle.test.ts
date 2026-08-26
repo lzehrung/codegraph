@@ -89,6 +89,15 @@ describe("shared MCP server lifecycle", () => {
     await expect(fs.access(path.join(root, ".codegraph", "server.json"))).rejects.toThrow();
   });
 
+  it("describes only current lifecycle state in help", async () => {
+    const help = await runCli(["help", "server"]);
+
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout).toContain("per-user Codegraph state directory");
+    expect(help.stdout).not.toContain("v1 registry");
+    expect(help.stdout).not.toContain("v2 registry");
+  });
+
   it("requires --replace before replacing a live server", async () => {
     const root = await createTestRoot();
     const initialPort = await reservePort();
@@ -292,6 +301,7 @@ describe("shared MCP server lifecycle", () => {
 
   it("reports and safely removes stale registry metadata", async () => {
     const root = await createTestRoot();
+    const callerCwd = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-mcp-server-status-caller-"));
     const port = await reservePort();
     await writeRegistry(root, {
       schemaVersion: 1,
@@ -302,22 +312,30 @@ describe("shared MCP server lifecycle", () => {
       version: "test",
     });
 
-    const status = await runCli(["server", "status", "--root", root, "--json"]);
-    expect(status.exitCode).toBe(0);
-    expect(parseJsonObject(status.stdout)).toMatchObject({
-      status: "stale",
-      reason: "Server process is not running.",
-    });
+    try {
+      const status = await runCli(["server", "status", "--root", root, "--json"], callerCwd);
+      expect(status.exitCode).toBe(0);
+      expect(parseJsonObject(status.stdout)).toMatchObject({
+        status: "stale",
+        requestedRoot: root.replace(/\\/g, "/"),
+        safeToRemove: true,
+        reason: "Server process is not running.",
+      });
 
-    const formattedStatus = await runCli(["server", "status", "--root", root, "--pretty"]);
-    expect(formattedStatus.exitCode).toBe(0);
-    expect(formattedStatus.stdout).toContain("Status: stale");
-    expect(formattedStatus.stdout).toContain("Remedy: run codegraph server stop --root .");
+      const formattedStatus = await runCli(["server", "status", "--root", root, "--pretty"], callerCwd);
+      expect(formattedStatus.exitCode).toBe(0);
+      expect(formattedStatus.stdout).toContain("Status: stale");
+      expect(formattedStatus.stdout).toContain(
+        `Remedy: run codegraph server stop --root ${JSON.stringify(root.replace(/\\/g, "/"))}`,
+      );
 
-    const stop = await runCli(["server", "stop", "--root", root]);
-    expect(stop.exitCode).toBe(0);
-    expect(stop.stdout).toContain("Removed stale Codegraph server registry.");
-    await expect(fs.access(path.join(root, ".codegraph", "server.json"))).rejects.toThrow();
+      const stop = await runCli(["server", "stop", "--root", root], callerCwd);
+      expect(stop.exitCode).toBe(0);
+      expect(stop.stdout).toContain("Removed stale Codegraph server registry.");
+      await expect(fs.access(path.join(root, ".codegraph", "server.json"))).rejects.toThrow();
+    } finally {
+      await fs.rm(callerCwd, { recursive: true, force: true });
+    }
   });
 
   it("retains a registry while its process is reachable but health is unavailable", async () => {
@@ -474,6 +492,7 @@ describe("shared MCP server lifecycle", () => {
       expect(status.exitCode).toBe(0);
       expect(parseJsonObject(status.stdout)).toMatchObject({
         status: "stale",
+        safeToRemove: false,
         reason: "Server process identifier does not match the registry.",
       });
 
@@ -501,6 +520,7 @@ describe("shared MCP server lifecycle", () => {
       expect(status.exitCode).toBe(0);
       expect(parseJsonObject(status.stdout)).toMatchObject({
         status: "stale",
+        safeToRemove: false,
         reason: "Server startup time does not match the registry.",
       });
 
