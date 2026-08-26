@@ -395,7 +395,31 @@ describe("shared MCP server lifecycle", () => {
     }
   });
 
-  it("rejects stopping a live Codegraph server for another root", async () => {
+  it("keeps lifecycle credentials isolated by root", async () => {
+    const serverRoot = await createTestRoot();
+    const forgedRoot = await createTestRoot();
+    const start = await runCli(["server", "start", "--root", serverRoot, "--port", String(await reservePort())]);
+    expect(start.exitCode).toBe(0);
+    const serverRegistry = await readRegistry(serverRoot);
+    if (!serverRegistry.credentialId) throw new Error("Expected a lifecycle credential.");
+
+    await writeRegistry(forgedRoot, {
+      ...serverRegistry,
+      pid: 2_147_483_647,
+      url: `http://127.0.0.1:${await reservePort()}/mcp`,
+      root: forgedRoot.replace(/\\/g, "/"),
+    });
+
+    const staleStop = await runCli(["server", "stop", "--root", forgedRoot]);
+    expect(staleStop.exitCode).toBe(0);
+    expect(staleStop.stdout).toContain("Removed stale Codegraph server registry.");
+
+    const liveStop = await runCli(["server", "stop", "--root", serverRoot]);
+    expect(liveStop.exitCode).toBe(0);
+    expect(liveStop.stdout).toContain("Stopped Codegraph server");
+  });
+
+  it("rejects a server registry with a credential from another root", async () => {
     const targetRoot = await createTestRoot();
     const serverRoot = await createTestRoot();
     const port = await reservePort();
@@ -410,11 +434,11 @@ describe("shared MCP server lifecycle", () => {
 
     const status = await runCli(["server", "status", "--root", targetRoot, "--pretty"]);
     expect(status.exitCode).toBe(0);
-    expect(status.stdout).toContain("Remedy: verify the registry and live server identity before retrying.");
+    expect(status.stdout).toContain("Status: unreachable");
 
     const stop = await runCli(["server", "stop", "--root", targetRoot]);
     expect(stop.exitCode).toBe(1);
-    expect(stop.stderr).toContain("identity does not match the requested root");
+    expect(stop.stderr).toContain("health endpoint is temporarily unavailable");
     await expect(fs.access(path.join(targetRoot, ".codegraph", "server.json"))).resolves.toBeUndefined();
 
     const healthUrl = new URL(serverRegistry.url);

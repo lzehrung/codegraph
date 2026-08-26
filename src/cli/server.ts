@@ -859,9 +859,16 @@ async function removeServerLifecycleCredential(root: string, credentialId: strin
   }
 }
 
-async function resolveServerLifecycleCredentialPath(_root: string, credentialId: string): Promise<string> {
+async function resolveServerLifecycleCredentialPath(root: string, credentialId: string): Promise<string> {
   const compileCache = await import("./compileCache.js");
-  return path.join(compileCache.resolveCodegraphUserCacheRoot(), "server-lifecycle-v1", credentialId + ".credential");
+  const crypto = await import("node:crypto");
+  const rootId = crypto.createHash("sha256").update(normalizeServerRoot(root)).digest("hex");
+  return path.join(
+    compileCache.resolveCodegraphUserCacheRoot(),
+    "server-lifecycle-v1",
+    rootId,
+    credentialId + ".credential",
+  );
 }
 
 async function writeRegistry(root: string, registry: CodegraphServerRegistry): Promise<void> {
