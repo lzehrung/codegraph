@@ -198,7 +198,7 @@ Interactive confirmation accepts only `y` or `yes` and defaults to no. Nonintera
 ## MCP server
 
 Use `codegraph mcp serve --root . --stdio` when an agent can spawn and own a stdio MCP subprocess.
-Use `codegraph server start --root /path/to/repo --warmup` for one shared repo-local Streamable HTTP server, then point clients at `http://127.0.0.1:7331/mcp`. Check it with `codegraph server status --root /path/to/repo --json`, and stop it explicitly with `codegraph server stop --root /path/to/repo`.
+Use `codegraph server start --root /path/to/repo --warmup` for one shared repo-local Streamable HTTP server, then point clients at `http://127.0.0.1:7331/mcp`. Add `--startup-timeout-ms <milliseconds>` when warmup exceeds the 15-second default. Check it with `codegraph server status --root /path/to/repo --json`, and stop it explicitly with `codegraph server stop --root /path/to/repo`.
 MCP is an ergonomics and performance layer over the same analysis engine; it keeps warm session state, returns bounded resources, confines paths to the project root, and keeps tools read-only unless the server is started with `--allow-build`.
 
 Restart or reload the owning client after `codegraph install` or a codegraph update. A running MCP server keeps the version and tool catalog captured at startup; `codegraph doctor --json` diagnoses package/native identity, while MCP `refresh_index` only refreshes repository analysis state.

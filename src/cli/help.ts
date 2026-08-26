@@ -407,14 +407,14 @@ ${SHARED_INDEX_OPTIONS_HELP}
 export const SERVER_HELP_TEXT = `codegraph server - Manage a shared project-local MCP HTTP server
 
 Usage:
-  codegraph server start [--root <path>] [--host <host>] [--port <1-65535>] [--replace] [--warmup | --warmup-symbols]
+  codegraph server start [--root <path>] [--host <host>] [--port <1-65535>] [--startup-timeout-ms <1-86400000>] [--replace] [--warmup | --warmup-symbols]
   codegraph server status [--root <path>] [--json | --pretty]
   codegraph server stop [--root <path>]
 
 Behavior:
   start runs codegraph mcp serve in a separate process, waits for its /health endpoint, then writes .codegraph/server.json.
-  The default server listens on 127.0.0.1:7331. A public bind requires an explicit --host.
-  status verifies the health response and reports stale registries with a safe remedy. stop only signals a Codegraph server that reports the same root.
+  The default server listens on 127.0.0.1:7331. A public bind requires an explicit --host. --startup-timeout-ms defaults to 15000 and allows up to 86400000 for long warmups.
+  status verifies the health response and reports stale registries with a safe remedy. stop only signals a Codegraph server whose root, process, and startup time match the registry.
 
 Forwarded startup options:
   --cache, --cache-dir, --cache-strict, --cache-verify, --native, --threads, --workers,

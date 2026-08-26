@@ -20,9 +20,9 @@ codegraph server status --root /path/to/repo --json
 codegraph server stop --root /path/to/repo
 ```
 
-`server start` launches `mcp serve`, waits for its `/health` response, then records the process at `.codegraph/server.json`. It defaults to `127.0.0.1:7331`; use `--host` explicitly for a non-loopback bind and `--replace` only to restart a live server for the same root.
+`server start` serializes lifecycle changes, launches `mcp serve`, waits for a same-root process and startup identity from `/health`, then records the process at `.codegraph/server.json`. It defaults to `127.0.0.1:7331`; use `--host` explicitly for a non-loopback bind, `--replace` only to restart a live server for the same root, and `--startup-timeout-ms <1-86400000>` when a warmup needs more than the 15-second default.
 
-`server status` verifies HTTP liveness and reports stale registry metadata with a remedy. `server stop` removes stale metadata or signals only a Codegraph process whose health response identifies the requested root. The registry contains process metadata only; installed-version drift requires an explicit restart.
+`server status` verifies HTTP liveness and reports stale registry metadata with a remedy. `server stop` removes stale metadata or signals only a Codegraph process whose health identity matches the registry. The registry contains process metadata only; installed-version drift requires an explicit restart.
 
 Use `mcp serve` directly when another process manager owns the server:
 

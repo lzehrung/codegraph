@@ -144,7 +144,7 @@ describe("shared MCP server lifecycle", () => {
 
     const stop = await runCli(["server", "stop", "--root", targetRoot]);
     expect(stop.exitCode).toBe(1);
-    expect(stop.stderr).toContain("root does not match the requested root");
+    expect(stop.stderr).toContain("identity does not match the requested root");
     await expect(fs.access(path.join(targetRoot, ".codegraph", "server.json"))).resolves.toBeUndefined();
 
     const healthUrl = new URL(serverRegistry.url);
@@ -176,6 +176,90 @@ describe("shared MCP server lifecycle", () => {
       expect((await fetch(healthUrl)).ok).toBe(true);
     } finally {
       await writeRegistry(root, originalRegistry);
+    }
+  });
+
+  it("refuses a registry with a different startup identity", async () => {
+    const root = await createTestRoot();
+    const port = await reservePort();
+    const start = await runCli(["server", "start", "--root", root, "--port", String(port)]);
+    expect(start.exitCode).toBe(0);
+    const originalRegistry = await readRegistry(root);
+    await writeRegistry(root, { ...originalRegistry, startedAt: "2026-08-25T00:00:00.000Z" });
+
+    try {
+      const status = await runCli(["server", "status", "--root", root, "--json"]);
+      expect(status.exitCode).toBe(0);
+      expect(parseJsonObject(status.stdout)).toMatchObject({
+        status: "stale",
+        reason: "Server startup time does not match the registry.",
+      });
+
+      const stop = await runCli(["server", "stop", "--root", root]);
+      expect(stop.exitCode).toBe(1);
+      expect(stop.stderr).toContain("identity does not match the requested root");
+      const healthUrl = new URL(originalRegistry.url);
+      healthUrl.pathname = "/health";
+      expect((await fetch(healthUrl)).ok).toBe(true);
+    } finally {
+      await writeRegistry(root, originalRegistry);
+    }
+  });
+
+  it("rejects subcommand options that would have no effect", async () => {
+    const root = await createTestRoot();
+
+    const status = await runCli(["server", "status", "--root", root, "--port", "9000"]);
+    expect(status.exitCode).toBe(2);
+    expect(status.stderr).toContain("--port is not valid for codegraph server status.");
+
+    const stop = await runCli(["server", "stop", "--root", root, "--json"]);
+    expect(stop.exitCode).toBe(2);
+    expect(stop.stderr).toContain("--json is not valid for codegraph server stop.");
+
+    const start = await runCli(["server", "start", "--root", root, "--startup-timeout-ms", "0"]);
+    expect(start.exitCode).toBe(2);
+    expect(start.stderr).toContain('Invalid --startup-timeout-ms value "0".');
+  });
+
+  it("does not start while another lifecycle command holds the project lock", async () => {
+    const root = await createTestRoot();
+    await fs.writeFile(
+      path.join(root, ".codegraph-server.lock"),
+      `${JSON.stringify({ owner: "test", pid: process.pid, leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() })}\n`,
+      "utf8",
+    );
+
+    const start = await runCli(["server", "start", "--root", root, "--port", String(await reservePort())]);
+
+    expect(start.exitCode).toBe(1);
+    expect(start.stderr).toContain("Another Codegraph server lifecycle command is in progress");
+    await expect(fs.access(path.join(root, ".codegraph", "server.json"))).rejects.toThrow();
+  });
+
+  it("rejects registry directories that resolve outside the project root", async (context) => {
+    const root = await createTestRoot();
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-mcp-server-registry-outside-"));
+    const registryPath = path.join(outside, "server.json");
+    const sentinel = "outside registry must remain unchanged\n";
+    await fs.writeFile(registryPath, sentinel, "utf8");
+    try {
+      if (!(await tryCreateDirectorySymlink(outside, path.join(root, ".codegraph")))) {
+        context.skip();
+        return;
+      }
+      for (const args of [
+        ["server", "status", "--root", root],
+        ["server", "start", "--root", root, "--port", String(await reservePort())],
+        ["server", "stop", "--root", root],
+      ]) {
+        const result = await runCli(args);
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain("registry directory resolves outside project root");
+        expect(await fs.readFile(registryPath, "utf8")).toBe(sentinel);
+      }
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
     }
   });
 
@@ -256,6 +340,15 @@ async function writeRegistry(root: string, registry: ServerRegistry): Promise<vo
   const registryPath = path.join(root, ".codegraph", "server.json");
   await fs.mkdir(path.dirname(registryPath), { recursive: true });
   await fs.writeFile(registryPath, `${JSON.stringify(registry)}\n`, "utf8");
+}
+
+async function tryCreateDirectorySymlink(target: string, linkPath: string): Promise<boolean> {
+  try {
+    await fs.symlink(target, linkPath, process.platform === "win32" ? "junction" : "dir");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function parseJsonObject(value: string): Record<string, unknown> {

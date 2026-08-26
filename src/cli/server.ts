@@ -2,18 +2,53 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { withInstallerLeaseLock } from "../installer/locks.js";
 import { isPlainRecord } from "../util/guards.js";
-import { normalizePath } from "../util/paths.js";
+import { isFilePathWithinRoot, normalizePath } from "../util/paths.js";
 import { exitWithError, type CliOptionContext, type CliPositionalsContext, type CliRootContext } from "./context.js";
 import { parseOptionalBoundedIntegerOption } from "./options.js";
 import { writeCliOutput } from "./pretty.js";
 
+type ServerCommand = "start" | "status" | "stop";
+
 const SERVER_REGISTRY_SCHEMA_VERSION = 1;
 const DEFAULT_SERVER_HOST = "127.0.0.1";
 const DEFAULT_SERVER_PORT = 7331;
-const SERVER_START_TIMEOUT_MS = 15_000;
+const DEFAULT_SERVER_START_TIMEOUT_MS = 15_000;
+const MAX_SERVER_START_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const SERVER_STOP_TIMEOUT_MS = 5_000;
 const SERVER_RETRY_DELAY_MS = 50;
+const SERVER_COMMAND_VALUE_OPTIONS: Record<ServerCommand, readonly string[]> = {
+  start: [
+    "--root",
+    "--cache",
+    "--cache-dir",
+    "--host",
+    "--ignore-glob",
+    "--include-glob",
+    "--native",
+    "--port",
+    "--resolution-hint",
+    "--startup-timeout-ms",
+    "--threads",
+  ],
+  status: ["--root"],
+  stop: ["--root"],
+};
+const SERVER_COMMAND_FLAGS: Record<ServerCommand, readonly string[]> = {
+  start: [
+    "--cache-strict",
+    "--cache-verify",
+    "--no-gitignore",
+    "--replace",
+    "--warmup",
+    "--warmup-symbols",
+    "--workers",
+    "--json",
+  ],
+  status: ["--json", "--pretty"],
+  stop: [],
+};
 const FORWARDED_VALUE_OPTIONS = [
   "--cache",
   "--cache-dir",
@@ -25,7 +60,6 @@ const FORWARDED_VALUE_OPTIONS = [
 ] as const;
 const FORWARDED_FLAGS = ["--cache-strict", "--cache-verify", "--no-gitignore", "--workers"] as const;
 
-type ServerCommand = "start" | "status" | "stop";
 class ServerUsageError extends Error {}
 type ServerHealth = {
   service: "codegraph";
@@ -80,6 +114,7 @@ export async function handleServerCommand(context: ServerCommandContext): Promis
   }
 
   try {
+    assertServerCommandOptions(command, context);
     if (command === "start") {
       await startServer(context);
       return;
@@ -98,23 +133,65 @@ function isServerCommand(command: string | undefined): command is ServerCommand 
   return command === "start" || command === "status" || command === "stop";
 }
 
+function assertServerCommandOptions(command: ServerCommand, context: ServerCommandContext): void {
+  const allowedOptions = SERVER_COMMAND_VALUE_OPTIONS[command];
+  for (const option of context.parsedOptions.keys()) {
+    if (!allowedOptions.includes(option)) {
+      throw new ServerUsageError(`${option} is not valid for codegraph server ${command}.`);
+    }
+  }
+  const allowedFlags = SERVER_COMMAND_FLAGS[command];
+  for (const flags of Object.values(SERVER_COMMAND_FLAGS)) {
+    for (const flag of flags) {
+      if (context.hasFlag(flag) && !allowedFlags.includes(flag)) {
+        throw new ServerUsageError(`${flag} is not valid for codegraph server ${command}.`);
+      }
+    }
+  }
+}
+
+type ServerStartOptions = {
+  host: string;
+  port: number;
+  startupTimeoutMs: number;
+};
+
 async function startServer(context: ServerCommandContext): Promise<void> {
   const root = await resolveServerRoot(context.root);
-  const registryPath = registryPathForRoot(root);
+  const options = parseServerStartOptions(context);
+  await withServerLifecycleLock(root, async () => {
+    await startServerForRoot(context, root, options);
+  });
+}
+
+function parseServerStartOptions(context: ServerCommandContext): ServerStartOptions {
   const host = context.getOpt("--host") ?? DEFAULT_SERVER_HOST;
   if (!host.trim()) throw new ServerUsageError("Invalid --host value. Expected a non-empty host name or address.");
-  let parsedPort: number | undefined;
   try {
-    parsedPort = parseOptionalBoundedIntegerOption(context.getOpt("--port"), "--port", 1, 65535);
+    const port = parseOptionalBoundedIntegerOption(context.getOpt("--port"), "--port", 1, 65535) ?? DEFAULT_SERVER_PORT;
+    const startupTimeoutMs =
+      parseOptionalBoundedIntegerOption(
+        context.getOpt("--startup-timeout-ms"),
+        "--startup-timeout-ms",
+        1,
+        MAX_SERVER_START_TIMEOUT_MS,
+      ) ?? DEFAULT_SERVER_START_TIMEOUT_MS;
+    return { host, port, startupTimeoutMs };
   } catch (error) {
     throw new ServerUsageError(error instanceof Error ? error.message : String(error));
   }
-  const port = parsedPort ?? DEFAULT_SERVER_PORT;
+}
+
+async function startServerForRoot(
+  context: ServerCommandContext,
+  root: string,
+  options: ServerStartOptions,
+): Promise<void> {
   if (context.hasFlag("--warmup") && context.hasFlag("--warmup-symbols")) {
     throw new ServerUsageError("Choose either --warmup or --warmup-symbols for server start.");
   }
 
-  const existingStatus = await readServerStatus(registryPath, root);
+  const existingStatus = await readServerStatus(root);
   if (existingStatus.status === "live") {
     if (!context.hasFlag("--replace")) {
       throw new Error(
@@ -122,39 +199,45 @@ async function startServer(context: ServerCommandContext): Promise<void> {
       );
     }
     await stopLiveServer(existingStatus.registry!, existingStatus.health!, root);
-    await removeRegistry(registryPath);
+    await removeRegistry(root);
   } else if (existingStatus.status === "stale") {
     if (existingStatus.health) {
-      throw new Error("Refusing to replace a Codegraph server whose root does not match the requested root.");
+      throw new Error("Refusing to replace a Codegraph server whose identity does not match the requested root.");
     }
-    await removeRegistry(registryPath);
+    await removeRegistry(root);
   }
 
   const startedAfterMs = Date.now();
-  const child = spawnServerProcess(root, host, port, context);
-  if (!child.pid) {
+  const child = spawnServerProcess(root, options.host, options.port, context);
+  const childPid = child.pid;
+  if (!childPid) {
     child.kill();
     throw new Error("Codegraph server process did not provide a pid.");
   }
 
-  const url = serverUrl(host, port);
+  const url = serverUrl(options.host, options.port);
   let health: ServerHealth;
   try {
-    health = await waitForLiveServer(url, root, SERVER_START_TIMEOUT_MS, child, child.pid, startedAfterMs);
+    health = await waitForLiveServer(url, root, options.startupTimeoutMs, child, childPid, startedAfterMs);
   } catch (error) {
-    child.kill();
+    await terminateServerProcess(child);
     throw error;
   }
 
   const registry: CodegraphServerRegistry = {
     schemaVersion: SERVER_REGISTRY_SCHEMA_VERSION,
-    pid: child.pid,
+    pid: childPid,
     url,
     root,
     startedAt: health.startedAt,
     version: health.version,
   };
-  await writeRegistry(registryPath, registry);
+  try {
+    await writeRegistry(root, registry);
+  } catch (error) {
+    await terminateServerProcess(child);
+    throw error;
+  }
   child.unref();
 
   if (context.hasFlag("--json")) {
@@ -166,7 +249,7 @@ async function startServer(context: ServerCommandContext): Promise<void> {
 
 async function showServerStatus(context: ServerCommandContext): Promise<void> {
   const root = await resolveServerRoot(context.root);
-  const status = await readServerStatus(registryPathForRoot(root), root);
+  const status = await readServerStatus(root);
   writeCliOutput(
     {
       hasFlag: context.hasFlag,
@@ -180,24 +263,25 @@ async function showServerStatus(context: ServerCommandContext): Promise<void> {
 
 async function stopServer(context: ServerCommandContext): Promise<void> {
   const root = await resolveServerRoot(context.root);
-  const registryPath = registryPathForRoot(root);
-  const status = await readServerStatus(registryPath, root);
-  if (status.status === "not_started") {
-    context.writeStdoutLine("No Codegraph server registry exists for this root.");
-    return;
-  }
-  if (status.status === "stale") {
-    if (status.health || (status.registry && !sameRoot(status.registry.root, root))) {
-      throw new Error("Refusing to stop a Codegraph server whose root does not match the requested root.");
+  await withServerLifecycleLock(root, async () => {
+    const status = await readServerStatus(root);
+    if (status.status === "not_started") {
+      context.writeStdoutLine("No Codegraph server registry exists for this root.");
+      return;
     }
-    await removeRegistry(registryPath);
-    context.writeStdoutLine("Removed stale Codegraph server registry.");
-    return;
-  }
+    if (status.status === "stale") {
+      if (status.health || (status.registry && !sameRoot(status.registry.root, root))) {
+        throw new Error("Refusing to stop a Codegraph server whose identity does not match the requested root.");
+      }
+      await removeRegistry(root);
+      context.writeStdoutLine("Removed stale Codegraph server registry.");
+      return;
+    }
 
-  await stopLiveServer(status.registry!, status.health!, root);
-  await removeRegistry(registryPath);
-  context.writeStdoutLine(`Stopped Codegraph server at ${status.registry!.url}`);
+    await stopLiveServer(status.registry!, status.health!, root);
+    await removeRegistry(root);
+    context.writeStdoutLine(`Stopped Codegraph server at ${status.registry!.url}`);
+  });
 }
 
 export function formatServerStatus(status: ServerStatus): string {
@@ -238,7 +322,9 @@ export function formatServerStatus(status: ServerStatus): string {
   return lines.join("\n");
 }
 
-async function readServerStatus(registryPath: string, root: string): Promise<ServerStatus> {
+async function readServerStatus(root: string): Promise<ServerStatus> {
+  const registryPath = await resolveRegistryPath(root, false);
+  if (!registryPath) return { status: "not_started" };
   const readResult = await readRegistry(registryPath);
   if (readResult.status === "missing") return { status: "not_started" };
   if (readResult.status === "invalid") return { status: "stale", reason: "Server registry is invalid." };
@@ -256,12 +342,20 @@ async function readServerStatus(registryPath: string, root: string): Promise<Ser
   if (health.pid !== registry.pid) {
     return { status: "stale", registry, health, reason: "Server process identifier does not match the registry." };
   }
+  if (health.startedAt !== registry.startedAt) {
+    return { status: "stale", registry, health, reason: "Server startup time does not match the registry." };
+  }
   return { status: "live", registry, health };
 }
 
 async function stopLiveServer(registry: CodegraphServerRegistry, health: ServerHealth, root: string): Promise<void> {
-  if (!sameRoot(registry.root, root) || !sameRoot(health.root, root) || health.pid !== registry.pid) {
-    throw new Error("Refusing to stop a Codegraph server whose root does not match the requested root.");
+  if (
+    !sameRoot(registry.root, root) ||
+    !sameRoot(health.root, root) ||
+    health.pid !== registry.pid ||
+    health.startedAt !== registry.startedAt
+  ) {
+    throw new Error("Refusing to stop a Codegraph server whose identity does not match the requested root.");
   }
   try {
     process.kill(registry.pid, "SIGTERM");
@@ -330,6 +424,38 @@ function serverStartedAfter(health: ServerHealth, startedAfterMs: number): boole
   return Number.isFinite(startedAtMs) && startedAtMs >= startedAfterMs;
 }
 
+async function terminateServerProcess(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null) return;
+  try {
+    child.kill("SIGTERM");
+  } catch (error) {
+    if (!isMissingProcessError(error)) throw error;
+    return;
+  }
+  if (!(await waitForChildExit(child, SERVER_STOP_TIMEOUT_MS))) {
+    try {
+      child.kill("SIGKILL");
+    } catch (error) {
+      if (!isMissingProcessError(error)) throw error;
+    }
+    await waitForChildExit(child, SERVER_STOP_TIMEOUT_MS);
+  }
+  child.unref();
+}
+
+async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null) return true;
+  const { promise, resolve } = Promise.withResolvers<void>();
+  const onExit = () => resolve();
+  child.once("exit", onExit);
+  try {
+    await Promise.race([promise, wait(timeoutMs)]);
+    return child.exitCode !== null;
+  } finally {
+    child.removeListener("exit", onExit);
+  }
+}
+
 async function waitForServerStop(url: string, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -388,6 +514,8 @@ function isServerHealth(value: unknown): value is ServerHealth {
 async function readRegistry(registryPath: string): Promise<RegistryReadResult> {
   let raw: string;
   try {
+    const stats = await fs.lstat(registryPath);
+    if (!stats.isFile() || stats.isSymbolicLink()) return { status: "invalid" };
     raw = await fs.readFile(registryPath, "utf8");
   } catch (error) {
     return isMissingFileError(error) ? { status: "missing" } : { status: "invalid" };
@@ -414,8 +542,9 @@ function isServerRegistry(value: unknown): value is CodegraphServerRegistry {
   );
 }
 
-async function writeRegistry(registryPath: string, registry: CodegraphServerRegistry): Promise<void> {
-  await fs.mkdir(path.dirname(registryPath), { recursive: true });
+async function writeRegistry(root: string, registry: CodegraphServerRegistry): Promise<void> {
+  const registryPath = await resolveRegistryPath(root, true);
+  if (!registryPath) throw new Error("Codegraph server registry directory is unavailable.");
   const temporaryPath = `${registryPath}.${process.pid}.${Date.now()}.tmp`;
   try {
     await fs.writeFile(temporaryPath, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
@@ -425,12 +554,51 @@ async function writeRegistry(registryPath: string, registry: CodegraphServerRegi
   }
 }
 
-async function removeRegistry(registryPath: string): Promise<void> {
-  await fs.rm(registryPath, { force: true });
+async function removeRegistry(root: string): Promise<void> {
+  const registryPath = await resolveRegistryPath(root, false);
+  if (registryPath) await fs.rm(registryPath, { force: true });
 }
 
-function registryPathForRoot(root: string): string {
-  return path.join(root, ".codegraph", "server.json");
+async function resolveRegistryPath(root: string, createDirectory: boolean): Promise<string | undefined> {
+  const registryDirectory = path.join(root, ".codegraph");
+  let realDirectory: string;
+  try {
+    realDirectory = await fs.realpath(registryDirectory);
+  } catch (error) {
+    if (!isMissingFileError(error)) throw error;
+    if (!createDirectory) return undefined;
+    await fs.mkdir(registryDirectory, { recursive: true });
+    realDirectory = await fs.realpath(registryDirectory);
+  }
+  if (!isFilePathWithinRoot(root, realDirectory)) {
+    throw new Error(
+      `Codegraph server registry directory resolves outside project root: ${normalizePath(realDirectory)}`,
+    );
+  }
+  const stats = await fs.stat(realDirectory);
+  if (!stats.isDirectory()) {
+    throw new Error(`Codegraph server registry path is not a directory: ${normalizePath(realDirectory)}`);
+  }
+  return path.join(realDirectory, "server.json");
+}
+
+async function withServerLifecycleLock<T>(root: string, operation: () => Promise<T>): Promise<T> {
+  const lockPath = path.join(root, ".codegraph-server.lock");
+  try {
+    return await withInstallerLeaseLock(lockPath, `MCP server lifecycle for ${normalizePath(root)}`, operation);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Another Codegraph installer")) {
+      throw new Error(`Another Codegraph server lifecycle command is in progress for ${normalizePath(root)}.`, {
+        cause: error,
+      });
+    }
+    if (error instanceof Error && error.message.startsWith("Codegraph installer found an existing lock")) {
+      throw new Error(`Could not safely acquire the Codegraph server lifecycle lock for ${normalizePath(root)}.`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
 }
 
 async function resolveServerRoot(root: string): Promise<string> {

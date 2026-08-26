@@ -93,6 +93,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--graph",
   "--port",
   "--idle-timeout-ms",
+  "--startup-timeout-ms",
   "--offset",
   "--max-bytes",
   "--max-edits",
@@ -510,6 +511,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
         "--port",
         "--resolution-hint",
         "--root",
+        "--startup-timeout-ms",
         "--threads",
       ],
       {
