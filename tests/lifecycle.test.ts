@@ -762,6 +762,29 @@ describe("project lifecycle commands", () => {
     await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("refuses forced cleanup through a symlinked lifecycle directory", async () => {
+    const root = await mkTmpDir("cg-life-uninit-symlink-root-");
+    const externalDirectory = await mkTmpDir("cg-life-uninit-symlink-external-");
+    const sentinelPath = path.join(externalDirectory, "sentinel.txt");
+    await fsp.writeFile(sentinelPath, "operator data\n", "utf8");
+
+    try {
+      await fsp.symlink(
+        externalDirectory,
+        path.join(root, ".codegraph"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    } catch (error) {
+      if (process.platform === "win32" && error instanceof Error && "code" in error && error.code === "EPERM") return;
+      throw error;
+    }
+
+    await expect(uninitCodegraphLifecycle(root, { force: true })).rejects.toThrow(
+      "Refusing to traverse symbolic link as .codegraph lifecycle directory",
+    );
+    await expect(fsp.readFile(sentinelPath, "utf8")).resolves.toBe("operator data\n");
+  });
+
   it("uninit without --force removes a manifest-only .codegraph directory", async () => {
     const root = await mkTmpDir("cg-life-uninit-manifest-only-");
     await writeFile(root, "src/main.ts", "export const main = 1;\n");

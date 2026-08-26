@@ -434,8 +434,15 @@ async function removeCodegraphPath(target: string, options: { recursive?: boolea
 
 async function readCodegraphDirEntries(dir: string): Promise<string[]> {
   try {
+    const stats = await fsp.lstat(dir);
+    if (stats.isSymbolicLink()) {
+      throw new CodegraphLifecycleUserError(
+        `Refusing to traverse symbolic link as .codegraph lifecycle directory: ${dir}`,
+      );
+    }
     return await fsp.readdir(dir);
   } catch (error) {
+    if (error instanceof CodegraphLifecycleUserError) throw error;
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
     throw new CodegraphLifecycleUserError(`Unable to read ${dir}: ${stringifyError(error)}`);
   }
