@@ -131,6 +131,8 @@ describe("shared MCP server lifecycle", () => {
     expect(firstStart.exitCode).toBe(0);
     const registryPath = path.join(root, ".codegraph", "server.json");
     const originalRegistry = await fs.readFile(registryPath, "utf8");
+    const serverLogPath = path.join(root, ".codegraph", "server.log");
+    await fs.appendFile(serverLogPath, "previous server diagnostics\n", "utf8");
     await fs.rm(registryPath);
 
     try {
@@ -138,8 +140,9 @@ describe("shared MCP server lifecycle", () => {
       expect(duplicateStart.exitCode).toBe(1);
       expect(duplicateStart.stderr).toContain("process exited before accepting requests");
       expect(duplicateStart.stderr).toContain("EADDRINUSE");
-      const serverLog = await fs.readFile(path.join(root, ".codegraph", "server.log"), "utf8");
+      const serverLog = await fs.readFile(serverLogPath, "utf8");
       expect(serverLog).toContain("EADDRINUSE");
+      expect(serverLog).not.toContain("previous server diagnostics");
       await expect(fs.access(registryPath)).rejects.toThrow();
     } finally {
       await fs.writeFile(registryPath, originalRegistry, "utf8");
@@ -202,6 +205,39 @@ describe("shared MCP server lifecycle", () => {
 
     expect(start.exitCode).toBe(0);
     expect((await readRegistry(root)).url).toBe(`http://0.0.0.0:${port}/mcp`);
+  });
+
+  it("preserves caller-relative cache paths when starting a server", async () => {
+    const root = await createTestRoot();
+    const callerCwd = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-mcp-server-caller-"));
+    const cacheDirectory = "relative-cache";
+    await fs.writeFile(path.join(root, "input.ts"), "export const value = 1;\n", "utf8");
+
+    try {
+      const start = await runCli(
+        [
+          "server",
+          "start",
+          "--root",
+          root,
+          "--port",
+          String(await reservePort()),
+          "--cache",
+          "disk",
+          "--cache-dir",
+          cacheDirectory,
+          "--warmup",
+        ],
+        callerCwd,
+      );
+      expect(start.exitCode).toBe(0);
+      await expect(fs.access(path.join(callerCwd, cacheDirectory))).resolves.toBeUndefined();
+      await expect(fs.access(path.join(root, cacheDirectory))).rejects.toThrow();
+      const stop = await runCli(["server", "stop", "--root", root], callerCwd);
+      expect(stop.exitCode).toBe(0);
+    } finally {
+      await fs.rm(callerCwd, { recursive: true, force: true });
+    }
   });
 
   it("reports and safely removes stale registry metadata", async () => {
@@ -520,9 +556,9 @@ async function reservePort(): Promise<number> {
   return address.port;
 }
 
-async function runCli(args: string[]): Promise<CliResult> {
+async function runCli(args: string[], cwd = repoRoot): Promise<CliResult> {
   const child = spawn(process.execPath, [cliPath, ...args], {
-    cwd: repoRoot,
+    cwd,
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });

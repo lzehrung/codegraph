@@ -244,6 +244,7 @@ async function startServerForRoot(
 
   const startupSignals = ["SIGINT", "SIGTERM"] as const;
   const { promise: interrupted, reject: interruptStart } = Promise.withResolvers<never>();
+  void interrupted.catch(() => undefined);
   const onStartupSignal = (signal: NodeJS.Signals): void => {
     interruptStart(new Error(`Codegraph server start was interrupted by ${signal}.`));
   };
@@ -501,17 +502,36 @@ async function spawnServerProcess(
   const startupDiagnostics = await createServerStartupDiagnostics(root);
   try {
     const child = spawn(process.execPath, args, {
-      cwd: root,
       detached: true,
       env: { ...process.env, [lifecycleHealth.MCP_LIFECYCLE_HEALTH_TOKEN_ENV]: lifecycleCredential },
       stdio: ["ignore", "ignore", startupDiagnostics.fileDescriptor],
       windowsHide: true,
     });
+    await waitForServerProcessSpawn(child);
     return { child, startupDiagnostics };
   } catch (error) {
     await startupDiagnostics.dispose();
     throw error;
   }
+}
+
+function waitForServerProcessSpawn(child: ChildProcess): Promise<void> {
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  const onSpawn = (): void => {
+    cleanup();
+    resolve();
+  };
+  const onError = (error: Error): void => {
+    cleanup();
+    reject(error);
+  };
+  const cleanup = (): void => {
+    child.removeListener("spawn", onSpawn);
+    child.removeListener("error", onError);
+  };
+  child.once("spawn", onSpawn);
+  child.once("error", onError);
+  return promise;
 }
 
 async function createServerStartupDiagnostics(
@@ -520,7 +540,7 @@ async function createServerStartupDiagnostics(
   const logPath = await resolveServerStatePath(root, SERVER_LOG_FILE, true);
   if (!logPath) throw new Error("Codegraph server log path is unavailable.");
   await assertRegularServerStateFile(logPath);
-  const logFile = await fs.open(logPath, "a", 0o600);
+  const logFile = await fs.open(logPath, "w", 0o600);
   try {
     const startOffset = (await logFile.stat()).size;
     await logFile.chmod(0o600);

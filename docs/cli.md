@@ -211,7 +211,7 @@ codegraph server stop --root .
 
 The v2 registry stores only `schemaVersion`, `pid`, `url`, `root`, `startedAt`, `version`, and a non-secret `credentialId`; its credential remains in the per-user cache, outside the project. A v1 registry with a live process is never signaled; stop that old process manually, then start it again.
 
-`server start` forwards `--warmup`, `--warmup-symbols`, cache, native, worker, and discovery options to `mcp serve`; startup failures append diagnostics to `.codegraph/server.log`. `status` accepts only `--json` or `--pretty`, and `stop` accepts no output or startup options. The commands do not start implicitly from unrelated commands or manage a general background daemon.
+`server start` forwards `--warmup`, `--warmup-symbols`, cache, native, worker, and discovery options to `mcp serve`; each start truncates `.codegraph/server.log` for server stderr and startup diagnostics. `status` accepts only `--json` or `--pretty`, and `stop` accepts no output or startup options. The commands do not start implicitly from unrelated commands or manage a general background daemon.
 
 ### Affected tests
 
