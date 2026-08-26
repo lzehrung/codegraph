@@ -102,6 +102,23 @@ describe("shared MCP server lifecycle", () => {
     });
   });
 
+  it("preserves a live server registry during forced lifecycle cleanup", async () => {
+    const root = await createTestRoot();
+    const port = await reservePort();
+    const start = await runCli(["server", "start", "--root", root, "--port", String(port)]);
+    expect(start.exitCode).toBe(0);
+
+    const uninit = await runCli(["uninit", "--root", root, "--force"]);
+    expect(uninit.exitCode).toBe(0);
+    const registry = await readRegistry(root);
+    const healthUrl = new URL(registry.url);
+    healthUrl.pathname = "/health";
+    expect((await fetch(healthUrl)).ok).toBe(true);
+
+    const stop = await runCli(["server", "stop", "--root", root]);
+    expect(stop.exitCode).toBe(0);
+  });
+
   it("does not register a previous same-root server when its child cannot bind the port", async () => {
     const root = await createTestRoot();
     const port = await reservePort();
@@ -115,6 +132,7 @@ describe("shared MCP server lifecycle", () => {
       const duplicateStart = await runCli(["server", "start", "--root", root, "--port", String(port)]);
       expect(duplicateStart.exitCode).toBe(1);
       expect(duplicateStart.stderr).toContain("process exited before accepting requests");
+      expect(duplicateStart.stderr).toContain("EADDRINUSE");
       await expect(fs.access(registryPath)).rejects.toThrow();
     } finally {
       await fs.writeFile(registryPath, originalRegistry, "utf8");

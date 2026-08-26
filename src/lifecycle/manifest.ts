@@ -73,12 +73,13 @@ export type CodegraphLifecycleUninitResult = {
 const MANIFEST_SCHEMA_VERSION = 1;
 const CODEGRAPH_DIR = ".codegraph";
 const MANIFEST_FILE = "manifest.json";
+const SERVER_REGISTRY_FILE = "server.json";
 
 type LifecycleBuildOptionsSummary = ManifestBuildOptions & {
   graph: ReturnType<typeof normalizeGraphOptions>;
   native: BuildOptions["native"];
 };
-const KNOWN_CODEGRAPH_FILES = new Set([MANIFEST_FILE]);
+const KNOWN_CODEGRAPH_FILES = new Set([MANIFEST_FILE, SERVER_REGISTRY_FILE]);
 
 export function codegraphLifecycleManifestPath(root: string): string {
   return path.join(root, CODEGRAPH_DIR, MANIFEST_FILE);
@@ -217,7 +218,11 @@ export async function uninitCodegraphLifecycle(
     );
   }
   if (options.force) {
-    await removeCodegraphPath(dir, { recursive: true });
+    for (const entry of entries) {
+      if (entry === SERVER_REGISTRY_FILE) continue;
+      await removeCodegraphPath(path.join(dir, entry), { recursive: true });
+    }
+    await removeDirIfEmpty(dir);
   } else {
     await removeCodegraphPath(manifestPath, {});
     await removeDirIfEmpty(dir);

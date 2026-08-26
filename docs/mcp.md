@@ -61,7 +61,7 @@ HTTP enforces Host and Origin policies. A missing `Origin` is accepted for non-b
 
 ## Runtime identity and updates
 
-The MCP initialize response advertises the codegraph package version captured when the server starts. The server checks its captured package metadata path at most once every 30 seconds during requests, including health checks; a changed or temporarily unavailable installation produces a deduplicated stderr warning but does not fail the request or terminate the server.
+The MCP initialize response advertises the codegraph package version captured when the server starts. MCP tool calls share one cached checker that reads captured package metadata at most once every 30 seconds and emits a deduplicated stderr warning when the installation changes or is unavailable. The health endpoint uses its own cached silent checker, so a health call and a tool call can each read package metadata in the same interval without failing the request or terminating the server.
 
 On Windows, installed-package servers map the verified native addon from `%LOCALAPPDATA%\codegraph\native-cache\v1`, not from npm's package directory. An old server may therefore remain healthy after npm installs a new release, but it must be restarted to use the new JavaScript runtime and cache identity.
 

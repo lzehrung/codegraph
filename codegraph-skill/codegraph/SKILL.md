@@ -225,7 +225,7 @@ Compatible JSON MCP entries and equivalent unmarked Codex tables are preserved b
 
 The installer manages codegraph-owned MCP entries, skill payloads, and marker files; uninstall removes only recognized codegraph-owned content. Existing user-owned `SKILL.md` files are preserved unless an ownership marker and known payload match, or `--force` is passed.
 
-Lifecycle commands manage `.codegraph/manifest.json`; other commands do not require that manifest:
+Lifecycle commands manage `.codegraph/manifest.json`; shared server commands separately manage `.codegraph/server.json`, and other commands do not require the manifest:
 
 ```bash
 codegraph init --root .
@@ -239,7 +239,7 @@ codegraph sync --root . --init --no-update-gitignore
 
 `init` and `sync --init` use Git's effective ignore semantics before lifecycle hashing. When the untracked manifest is not already ignored, they append exactly `.codegraph/` to the resolved root's `.gitignore`; effective parent/global/info excludes are honored, tracked manifests are left unchanged with a warning, and non-Git roots are not modified.
 
-Use `--no-update-gitignore` to opt out during `init` or `sync --init`; ordinary `sync` never updates ignore policy. `uninit` removes lifecycle state but leaves the root rule, while `init` and `sync` may warm or update `.codegraph-cache/index-v1/`.
+Use `--no-update-gitignore` to opt out during `init` or `sync --init`; ordinary `sync` never updates ignore policy. `uninit` preserves `.codegraph/server.json` even with `--force`, so stop a shared server explicitly; it leaves the root rule, while `init` and `sync` may warm or update `.codegraph-cache/index-v1/`.
 
 Lifecycle commands accept either one positional project path or `--root <path>`, never both. Automatic ignore updates are bound to that same resolved project root.
 

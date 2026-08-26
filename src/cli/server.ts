@@ -21,6 +21,7 @@ const SERVER_RETRY_DELAY_MS = 50;
 const SERVER_HEALTH_GRACE_TIMEOUT_MS = 3_000;
 const SERVER_HEALTH_REQUEST_TIMEOUT_MS = 1_000;
 const SERVER_HEALTH_RETRY_DELAY_MS = 250;
+const MAX_SERVER_START_DIAGNOSTICS_BYTES = 8 * 1024;
 const SERVER_COMMAND_VALUE_OPTIONS: Record<ServerCommand, readonly string[]> = {
   start: [
     "--root",
@@ -89,6 +90,17 @@ type RegistryReadResult =
   | { status: "found"; registry: CodegraphServerRegistry }
   | { status: "missing" }
   | { status: "invalid" };
+type SpawnedServerProcess = {
+  child: ChildProcess;
+  startupDiagnostics: ServerStartupDiagnostics;
+};
+type ServerStartupDiagnostics = {
+  read: () => string;
+  dispose: () => void;
+};
+type UnrefableReadable = {
+  unref: () => void;
+};
 
 export type CodegraphServerRegistry = {
   schemaVersion: 1;
@@ -222,10 +234,13 @@ async function startServerForRoot(
   }
 
   let child: ChildProcess | undefined;
+  let startupDiagnostics: ServerStartupDiagnostics | undefined;
   let registryWrite: Promise<void> | undefined;
   try {
     const startedAfterMs = Date.now();
-    child = spawnServerProcess(root, options.host, options.port, context);
+    const spawned = spawnServerProcess(root, options.host, options.port, context);
+    child = spawned.child;
+    startupDiagnostics = spawned.startupDiagnostics;
     const childPid = child.pid;
     if (!childPid) throw new Error("Codegraph server process did not provide a pid.");
 
@@ -257,8 +272,9 @@ async function startServerForRoot(
       await removeRegistry(root).catch(() => undefined);
     }
     if (child) await terminateServerProcess(child);
-    throw error;
+    throw withServerStartupDiagnostics(error, startupDiagnostics);
   } finally {
+    startupDiagnostics?.dispose();
     for (const signal of startupSignals) {
       process.removeListener(signal, onStartupSignal);
     }
@@ -407,7 +423,12 @@ async function stopLiveServer(registry: CodegraphServerRegistry, health: ServerH
   await waitForServerStop(registry.url, registry.pid, SERVER_STOP_TIMEOUT_MS);
 }
 
-function spawnServerProcess(root: string, host: string, port: number, context: ServerCommandContext) {
+function spawnServerProcess(
+  root: string,
+  host: string,
+  port: number,
+  context: ServerCommandContext,
+): SpawnedServerProcess {
   const entryPath = process.argv[1];
   if (!entryPath) throw new Error("Unable to locate the Codegraph CLI entrypoint.");
   const args = [entryPath, "mcp", "serve", "--root", root, "--host", host, "--port", String(port)];
@@ -421,7 +442,52 @@ function spawnServerProcess(root: string, host: string, port: number, context: S
       args.push(option, value);
     }
   }
-  return spawn(process.execPath, args, { cwd: root, detached: true, stdio: "ignore", windowsHide: true });
+  const child = spawn(process.execPath, args, {
+    cwd: root,
+    detached: true,
+    stdio: ["ignore", "ignore", "pipe"],
+    windowsHide: true,
+  });
+  return { child, startupDiagnostics: collectServerStartupDiagnostics(child) };
+}
+
+function collectServerStartupDiagnostics(child: ChildProcess): ServerStartupDiagnostics {
+  const stderr = child.stderr;
+  if (!stderr) {
+    return { read: () => "", dispose: () => undefined };
+  }
+
+  let bufferedBytes = 0;
+  let output = "";
+  const onData = (chunk: Buffer): void => {
+    if (bufferedBytes >= MAX_SERVER_START_DIAGNOSTICS_BYTES) return;
+    const retainedBytes = Math.min(chunk.length, MAX_SERVER_START_DIAGNOSTICS_BYTES - bufferedBytes);
+    output += chunk.subarray(0, retainedBytes).toString("utf8");
+    bufferedBytes += retainedBytes;
+  };
+  stderr.on("data", onData);
+  return {
+    read: () => output.trim(),
+    dispose: () => {
+      stderr.removeListener("data", onData);
+      stderr.resume();
+      if (isUnrefableReadable(stderr)) stderr.unref();
+    },
+  };
+}
+
+function isUnrefableReadable(value: object): value is UnrefableReadable {
+  return "unref" in value && typeof value.unref === "function";
+}
+
+function withServerStartupDiagnostics(error: unknown, diagnostics: ServerStartupDiagnostics | undefined): Error {
+  const output = diagnostics?.read();
+  if (!output) {
+    if (error instanceof Error) return error;
+    return new Error(String(error));
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return new Error([message, "Server startup diagnostics:", output].join("\n"), { cause: error });
 }
 
 async function waitForLiveServer(
@@ -432,15 +498,15 @@ async function waitForLiveServer(
   childPid: number,
   startedAfterMs: number,
 ): Promise<ServerHealth> {
-  const { promise: childExited, resolve: resolveChildExit } = Promise.withResolvers<void>();
-  const onChildExit = () => resolveChildExit();
-  child.once("exit", onChildExit);
+  const { promise: childClosed, resolve: resolveChildClose } = Promise.withResolvers<void>();
+  const onChildClose = () => resolveChildClose();
+  child.once("close", onChildClose);
   try {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const result = await Promise.race([
         requestServerHealth(url).then((health) => ({ kind: "health" as const, health })),
-        childExited.then(() => ({ kind: "child-exited" as const })),
+        childClosed.then(() => ({ kind: "child-exited" as const })),
       ]);
       if (result.kind === "child-exited") {
         throw new Error(`Codegraph server process exited before accepting requests at ${url}.`);
@@ -456,7 +522,7 @@ async function waitForLiveServer(
       await wait(SERVER_RETRY_DELAY_MS);
     }
   } finally {
-    child.removeListener("exit", onChildExit);
+    child.removeListener("close", onChildClose);
   }
   throw new Error(`Codegraph server did not become reachable at ${url} within ${timeoutMs}ms.`);
 }

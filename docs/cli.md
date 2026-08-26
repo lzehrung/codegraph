@@ -193,7 +193,8 @@ Graph, index, search, inspect, and review reports include `backend.native.byLang
 - `status` reports whether lifecycle metadata exists, last sync time, then/current file counts, per-file content drift (files changed even when counts match, e.g. edits in place or N files swapped for N others), config/build-option drift, analysis label, and the suggested next command. Use `--json` for `schemaVersion: 1`.
 - `sync` refreshes the manifest after edits and requires an initialized project unless `--init` is passed. `sync --init` performs the same ignore preparation and accepts `--no-update-gitignore`; ordinary `sync` never changes ignore policy.
 - Initializing JSON results add an optional `gitignore` object with `.gitignore` path and `added`, `already-ignored`, `tracked`, `not-git`, or `disabled` status. The lifecycle manifest schema remains unchanged.
-- `uninit` removes only recognized lifecycle state by default and leaves any root `.gitignore` rule in place. It refuses unknown `.codegraph/` entries unless `--force` is passed.
+- `uninit` removes only recognized lifecycle state by default and leaves any root `.gitignore` rule in place. It preserves `.codegraph/server.json` even with `--force`, so stop a shared server explicitly.
+- `uninit` refuses unknown `.codegraph/` entries unless `--force` is passed.
 - Lifecycle commands accept either a positional project path or `--root <path>`. They reject using both together because lifecycle manifests and automatic ignore updates always use one resolved project boundary, not include-root subsets.
 
 ### Shared MCP HTTP server

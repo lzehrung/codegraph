@@ -1302,13 +1302,13 @@ describe("project lifecycle commands", () => {
     await writeFile(root, "src/main.ts", "export const main = 1;\n");
     await initCodegraphLifecycle(root);
 
-    const dirPath = path.join(root, ".codegraph");
+    const manifestPath = codegraphLifecycleManifestPath(root);
     const originalRm = fsp.rm.bind(fsp);
-    const eaccesError = Object.assign(new Error(`EACCES: permission denied, rm '${dirPath}'`), {
+    const eaccesError = Object.assign(new Error(`EACCES: permission denied, rm '${manifestPath}'`), {
       code: "EACCES",
     });
     const rmSpy = vi.spyOn(fsp, "rm").mockImplementation(async (target, options) => {
-      if (target === dirPath) {
+      if (target === manifestPath) {
         throw eaccesError;
       }
       return await originalRm(target, options as never);
@@ -1320,7 +1320,7 @@ describe("project lifecycle commands", () => {
       // must be the dedicated CodegraphLifecycleUserError, not merely `instanceof Error`.
       const uninitPromise = uninitCodegraphLifecycle(root, { force: true });
       await expect(uninitPromise).rejects.toBeInstanceOf(CodegraphLifecycleUserError);
-      await expect(uninitPromise).rejects.toThrow(`Unable to remove ${dirPath}`);
+      await expect(uninitPromise).rejects.toThrow(`Unable to remove ${manifestPath}`);
     } finally {
       rmSpy.mockRestore();
     }

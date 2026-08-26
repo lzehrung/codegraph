@@ -1,6 +1,6 @@
 # Shared server lifecycle
 
-Status: Planned - not implemented
+Status: Implemented
 
 ## Goal
 
@@ -45,21 +45,21 @@ Validate liveness with an HTTP health request, not only `pid` existence. PIDs ca
 
 - Refuse to start if a live server is already registered for the root unless `--replace` is passed.
 - Default host remains `127.0.0.1`.
-- Default port can be `7331`, but if busy, either fail clearly or support `--port auto`.
-- Write registry after the server is accepting requests.
+- Default port is `7331`; a busy port fails with startup diagnostics.
+- Write the registry only after health identifies the requested root, child PID, and startup time.
 - Forward `--warmup`, `--warmup-symbols`, `--cache`, `--native`, `--workers`, and discovery flags.
 
 ### status
 
-- Print URL, pid, liveness, root, version, and warmup mode if known.
-- Add `--json`.
-- If registry is stale, say so and suggest `server stop --stale` or `server start --replace`.
+- Print URL, pid, status, root, startup time, version, and update state.
+- Add `--json` and `--pretty`.
+- Report stale registries with a safe remedy. Retain unreachable and identity-mismatched registries for operator verification.
 
 ### stop
 
-- Only stop a process that responds as Codegraph for the same root.
-- Prefer graceful shutdown endpoint if added; otherwise send signal on POSIX and use process kill fallback.
-- Remove stale registry files safely.
+- Only stop a process whose health response matches the Codegraph root, PID, and startup time in the registry.
+- Send a termination signal and wait for the process to stop.
+- Remove only confirmed stale registry files safely.
 
 ## Non-goals
 
