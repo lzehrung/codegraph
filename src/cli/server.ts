@@ -800,8 +800,7 @@ function isServerRegistry(value: unknown): value is CodegraphServerRegistry {
 async function createServerLifecycleCredential(root: string): Promise<ServerLifecycleCredential> {
   const crypto = await import("node:crypto");
   const id = crypto.randomUUID();
-  const credentialPath = await resolveServerLifecycleCredentialPath(root, id);
-  await fs.mkdir(path.dirname(credentialPath), { recursive: true });
+  const credentialPath = await resolveServerLifecycleCredentialPath(root, id, true);
   await assertRegularServerStateFile(credentialPath);
 
   const lifecycleHealth = await import("../mcp/lifecycleHealth.js");
@@ -859,16 +858,35 @@ async function removeServerLifecycleCredential(root: string, credentialId: strin
   }
 }
 
-async function resolveServerLifecycleCredentialPath(root: string, credentialId: string): Promise<string> {
+async function resolveServerLifecycleCredentialPath(
+  root: string,
+  credentialId: string,
+  createDirectory = false,
+): Promise<string> {
   const compileCache = await import("./compileCache.js");
   const crypto = await import("node:crypto");
   const rootId = crypto.createHash("sha256").update(normalizeServerRoot(root)).digest("hex");
-  return path.join(
-    compileCache.resolveCodegraphUserCacheRoot(),
-    "server-lifecycle-v1",
-    rootId,
-    credentialId + ".credential",
-  );
+  const credentialDirectory = path.resolve(compileCache.resolveCodegraphUserStateRoot(), "server-lifecycle-v1", rootId);
+  if (isFilePathWithinRoot(root, credentialDirectory)) {
+    throw new Error(
+      `Codegraph server lifecycle credentials must resolve outside project root: ${normalizePath(credentialDirectory)}`,
+    );
+  }
+  if (createDirectory) await fs.mkdir(credentialDirectory, { recursive: true });
+
+  let realDirectory: string;
+  try {
+    realDirectory = await fs.realpath(credentialDirectory);
+  } catch (error) {
+    if (isMissingFileError(error)) return path.join(credentialDirectory, credentialId + ".credential");
+    throw error;
+  }
+  if (isFilePathWithinRoot(root, realDirectory)) {
+    throw new Error(
+      `Codegraph server lifecycle credentials must resolve outside project root: ${normalizePath(realDirectory)}`,
+    );
+  }
+  return path.join(realDirectory, credentialId + ".credential");
 }
 
 async function writeRegistry(root: string, registry: CodegraphServerRegistry): Promise<void> {

@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { resolveCliCompileCacheDirectory, resolveCodegraphUserCacheRoot } from "../src/cli/compileCache.js";
+import {
+  resolveCliCompileCacheDirectory,
+  resolveCodegraphUserCacheRoot,
+  resolveCodegraphUserStateRoot,
+} from "../src/cli/compileCache.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bundledCli = path.join(rootDir, "dist", "bin", "cli.js");
@@ -31,6 +35,19 @@ describe("CLI compile cache", () => {
 
     const linuxDefault = resolveCodegraphUserCacheRoot({}, "/home/me", "linux");
     expect(linuxDefault.replaceAll("\\", "/")).toBe("/home/me/.cache/codegraph");
+
+    const windowsStateRoot = resolveCodegraphUserStateRoot(
+      { LOCALAPPDATA: String.raw`C:\Users\me\AppData\Local` },
+      String.raw`C:\Users\me`,
+      "win32",
+    );
+    expect(windowsStateRoot.replaceAll("\\", "/")).toBe("C:/Users/me/AppData/Local/codegraph");
+
+    const linuxStateRoot = resolveCodegraphUserStateRoot({ XDG_STATE_HOME: "/var/state" }, "/home/me", "linux");
+    expect(linuxStateRoot.replaceAll("\\", "/")).toBe("/var/state/codegraph");
+
+    const defaultLinuxStateRoot = resolveCodegraphUserStateRoot({}, "/home/me", "linux");
+    expect(defaultLinuxStateRoot.replaceAll("\\", "/")).toBe("/home/me/.local/state/codegraph");
 
     const compileDir = resolveCliCompileCacheDirectory(
       { LOCALAPPDATA: String.raw`C:\Users\me\AppData\Local` },

@@ -141,6 +141,21 @@ describe("shared MCP server lifecycle", () => {
     });
   });
 
+  it("refuses lifecycle credentials rooted in the project", async () => {
+    const root = await createTestRoot();
+    const env = process.platform === "win32" ? { LOCALAPPDATA: root } : { XDG_STATE_HOME: root };
+
+    const start = await runCli(
+      ["server", "start", "--root", root, "--port", String(await reservePort())],
+      repoRoot,
+      env,
+    );
+
+    expect(start.exitCode).toBe(1);
+    expect(start.stderr).toContain("lifecycle credentials must resolve outside project root");
+    await expect(fs.access(path.join(root, ".codegraph", "server.json"))).rejects.toThrow();
+  });
+
   it("preserves a live server registry during forced lifecycle cleanup", async () => {
     const root = await createTestRoot();
     const port = await reservePort();
@@ -615,9 +630,10 @@ async function reservePort(): Promise<number> {
   return address.port;
 }
 
-async function runCli(args: string[], cwd = repoRoot): Promise<CliResult> {
+async function runCli(args: string[], cwd = repoRoot, env: NodeJS.ProcessEnv = {}): Promise<CliResult> {
   const child = spawn(process.execPath, [cliPath, ...args], {
     cwd,
+    env: { ...process.env, ...env },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });

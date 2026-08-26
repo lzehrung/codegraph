@@ -518,7 +518,7 @@ Add `codegraph server start|status|stop` as a convenience wrapper over `codegrap
 - `start` refuses to start when a live server is already registered for the root unless `--replace`, defaults to host `127.0.0.1` and port `7331`, writes the registry only after the server accepts requests, and forwards `--warmup`, `--warmup-symbols`, `--cache`, `--native`, `--workers`, and the discovery flags.
 - `status` validates liveness with an HTTP health request rather than `pid` existence, because PIDs are reused, and supports `--json`. A stale registry is reported as stale with the remedy, not treated as live.
 - `stop` only stops a process that identifies as codegraph for the same root, and removes stale registry files safely.
-- The registry stores process metadata only (`schemaVersion`, `pid`, `url`, `root`, `startedAt`, `version`), never analysis data.
+- The registry stores process metadata only (`schemaVersion`, `pid`, `url`, `root`, `startedAt`, `version`, `credentialId`), never analysis data or a credential secret. The credential stays in per-user Codegraph state outside the project.
 - Preserve the immutable Windows native cache semantics: report installed-version drift and require an explicit restart rather than replacing mapped runtime files or terminating clients.
 
 Files: new `src/cli/server.ts`, plus `src/cli/commandCatalog.ts`, `src/cli/help.ts`, `src/cli/options.ts`, `src/cli.ts`, and an optional health endpoint in the MCP server, which should land after PR 4 so it targets the split modules. Docs: `docs/cli.md`, `docs/mcp.md`, `docs/agent-workflows.md`, and `codegraph-skill/codegraph/SKILL.md`.

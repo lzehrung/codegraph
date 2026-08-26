@@ -24,7 +24,7 @@ codegraph server stop --root /path/to/repo
 
 `server start --json` emits `status: "started"`, the registry fields, and `update`. `server status` retries challenged HTTP health checks and reports a verification remedy instead of removing metadata for an unreachable or identity-mismatched server. `server stop` removes only confirmed stale metadata or signals a Codegraph process whose proven health identity matches the registry.
 
-The v2 registry contains process metadata and a non-secret credential ID; the secret stays in the per-user cache, outside the project. A live v1 registry is never signaled, so stop its old process manually before a new start.
+The v2 registry contains process metadata and a non-secret credential ID; the secret stays in the per-user Codegraph state directory, outside the project and separate from package files and compiler cache data. A live v1 registry is never signaled, so stop its old process manually before a new start.
 
 Use `mcp serve` directly when another process manager owns the server:
 

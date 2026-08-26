@@ -28,16 +28,17 @@ Store only process metadata:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "pid": 12345,
   "url": "http://127.0.0.1:7331/mcp",
   "root": ".",
   "startedAt": "2026-07-03T00:00:00.000Z",
-  "version": "1.8.91"
+  "version": "1.8.91",
+  "credentialId": "f58ea428-2cb3-4c0a-9c88-097ae09c6ea4"
 }
 ```
 
-Validate liveness with an HTTP health request, not only `pid` existence. PIDs can be reused.
+`credentialId` is non-secret. Its random credential stays in the per-user Codegraph state directory, outside the project and separate from package files and compiler cache data. Validate liveness with a challenged HTTP health request, not only `pid` existence. PIDs can be reused.
 
 ## Behavior
 

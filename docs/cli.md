@@ -209,7 +209,7 @@ codegraph server stop --root .
 
 `server start --json` emits `status: "started"`, the registry fields, and `update`. `server status` retries challenged HTTP health checks instead of trusting a PID and asks users to verify an unreachable or identity-mismatched server. `server stop` removes only confirmed stale metadata or signals a Codegraph server whose proven health identity matches the registry.
 
-The v2 registry stores only `schemaVersion`, `pid`, `url`, `root`, `startedAt`, `version`, and a non-secret `credentialId`; its credential remains in the per-user cache, outside the project. A v1 registry with a live process is never signaled; stop that old process manually, then start it again.
+The v2 registry stores only `schemaVersion`, `pid`, `url`, `root`, `startedAt`, `version`, and a non-secret `credentialId`; its credential remains in the per-user Codegraph state directory, outside the project and separate from package files and compiler cache data. A v1 registry with a live process is never signaled; stop that old process manually, then start it again.
 
 `server start` forwards `--warmup`, `--warmup-symbols`, cache, native, worker, and discovery options to `mcp serve`; each start truncates `.codegraph/server.log` for server stderr and startup diagnostics. `status` accepts only `--json` or `--pretty`, and `stop` accepts no output or startup options. The commands do not start implicitly from unrelated commands or manage a general background daemon.
 
