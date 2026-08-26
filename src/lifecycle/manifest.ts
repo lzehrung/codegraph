@@ -74,12 +74,13 @@ const MANIFEST_SCHEMA_VERSION = 1;
 const CODEGRAPH_DIR = ".codegraph";
 const MANIFEST_FILE = "manifest.json";
 const SERVER_REGISTRY_FILE = "server.json";
+const SERVER_LOG_FILE = "server.log";
 
 type LifecycleBuildOptionsSummary = ManifestBuildOptions & {
   graph: ReturnType<typeof normalizeGraphOptions>;
   native: BuildOptions["native"];
 };
-const KNOWN_CODEGRAPH_FILES = new Set([MANIFEST_FILE, SERVER_REGISTRY_FILE]);
+const KNOWN_CODEGRAPH_FILES = new Set([MANIFEST_FILE, SERVER_REGISTRY_FILE, SERVER_LOG_FILE]);
 
 export function codegraphLifecycleManifestPath(root: string): string {
   return path.join(root, CODEGRAPH_DIR, MANIFEST_FILE);
@@ -219,7 +220,7 @@ export async function uninitCodegraphLifecycle(
   }
   if (options.force) {
     for (const entry of entries) {
-      if (entry === SERVER_REGISTRY_FILE) continue;
+      if (entry === SERVER_REGISTRY_FILE || entry === SERVER_LOG_FILE) continue;
       await removeCodegraphPath(path.join(dir, entry), { recursive: true });
     }
     await removeDirIfEmpty(dir);

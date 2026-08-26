@@ -11,7 +11,8 @@ import { writeCliOutput } from "./pretty.js";
 
 type ServerCommand = "start" | "status" | "stop";
 
-const SERVER_REGISTRY_SCHEMA_VERSION = 1;
+const SERVER_REGISTRY_SCHEMA_VERSION = 2;
+const SERVER_HEALTH_SCHEMA_VERSION = 1;
 const DEFAULT_SERVER_HOST = "127.0.0.1";
 const DEFAULT_SERVER_PORT = 7331;
 const DEFAULT_SERVER_START_TIMEOUT_MS = 15_000;
@@ -22,6 +23,7 @@ const SERVER_HEALTH_GRACE_TIMEOUT_MS = 3_000;
 const SERVER_HEALTH_REQUEST_TIMEOUT_MS = 1_000;
 const SERVER_HEALTH_RETRY_DELAY_MS = 250;
 const MAX_SERVER_START_DIAGNOSTICS_BYTES = 8 * 1024;
+const SERVER_LOG_FILE = "server.log";
 const SERVER_COMMAND_VALUE_OPTIONS: Record<ServerCommand, readonly string[]> = {
   start: [
     "--root",
@@ -78,6 +80,7 @@ type ServerHealth = {
     installedVersion?: string;
     reason?: string;
   };
+  lifecycleProof?: string;
 };
 
 type ServerStatus = {
@@ -95,20 +98,35 @@ type SpawnedServerProcess = {
   startupDiagnostics: ServerStartupDiagnostics;
 };
 type ServerStartupDiagnostics = {
-  read: () => string;
-  dispose: () => void;
-};
-type UnrefableReadable = {
-  unref: () => void;
+  read: () => Promise<string>;
+  dispose: () => Promise<void>;
 };
 
-export type CodegraphServerRegistry = {
+type LegacyCodegraphServerRegistry = {
   schemaVersion: 1;
   pid: number;
   url: string;
   root: string;
   startedAt: string;
   version: string;
+  credentialId?: undefined;
+};
+
+export type CodegraphServerRegistry =
+  | LegacyCodegraphServerRegistry
+  | {
+      schemaVersion: 2;
+      pid: number;
+      url: string;
+      root: string;
+      startedAt: string;
+      version: string;
+      credentialId: string;
+    };
+
+type ServerLifecycleCredential = {
+  id: string;
+  token: string;
 };
 
 export type ServerCommandContext = CliPositionalsContext &
@@ -214,12 +232,12 @@ async function startServerForRoot(
       );
     }
     await stopLiveServer(existingStatus.registry!, existingStatus.health!, root);
-    await removeRegistry(root);
+    await removeRegistry(root, existingStatus.registry!.credentialId);
   } else if (existingStatus.status === "stale") {
     if (!canSafelyRemoveStaleRegistry(existingStatus)) {
       throw new Error("Refusing to replace a Codegraph server whose identity does not match the requested root.");
     }
-    await removeRegistry(root);
+    await removeRegistry(root, existingStatus.registry?.credentialId);
   } else if (existingStatus.status === "unreachable") {
     throw new Error("Refusing to replace a Codegraph server whose health endpoint is temporarily unavailable.");
   }
@@ -235,10 +253,12 @@ async function startServerForRoot(
 
   let child: ChildProcess | undefined;
   let startupDiagnostics: ServerStartupDiagnostics | undefined;
+  let lifecycleCredential: ServerLifecycleCredential | undefined;
   let registryWrite: Promise<void> | undefined;
   try {
     const startedAfterMs = Date.now();
-    const spawned = spawnServerProcess(root, options.host, options.port, context);
+    lifecycleCredential = await createServerLifecycleCredential(root);
+    const spawned = await spawnServerProcess(root, options.host, options.port, lifecycleCredential.token, context);
     child = spawned.child;
     startupDiagnostics = spawned.startupDiagnostics;
     const childPid = child.pid;
@@ -246,7 +266,15 @@ async function startServerForRoot(
 
     const url = serverUrl(options.host, options.port);
     const health = await Promise.race([
-      waitForLiveServer(url, root, options.startupTimeoutMs, child, childPid, startedAfterMs),
+      waitForLiveServer(
+        url,
+        root,
+        options.startupTimeoutMs,
+        child,
+        childPid,
+        startedAfterMs,
+        lifecycleCredential.token,
+      ),
       interrupted,
     ]);
     const registry: CodegraphServerRegistry = {
@@ -256,6 +284,7 @@ async function startServerForRoot(
       root,
       startedAt: health.startedAt,
       version: health.version,
+      credentialId: lifecycleCredential.id,
     };
     registryWrite = writeRegistry(root, registry);
     await Promise.race([registryWrite, interrupted]);
@@ -269,12 +298,13 @@ async function startServerForRoot(
   } catch (error) {
     if (registryWrite) {
       await registryWrite.catch(() => undefined);
-      await removeRegistry(root).catch(() => undefined);
+      await removeRegistry(root, lifecycleCredential?.id).catch(() => undefined);
     }
     if (child) await terminateServerProcess(child);
-    throw withServerStartupDiagnostics(error, startupDiagnostics);
+    if (lifecycleCredential) await removeServerLifecycleCredential(root, lifecycleCredential.id).catch(() => undefined);
+    throw await withServerStartupDiagnostics(error, startupDiagnostics);
   } finally {
-    startupDiagnostics?.dispose();
+    await startupDiagnostics?.dispose();
     for (const signal of startupSignals) {
       process.removeListener(signal, onStartupSignal);
     }
@@ -310,13 +340,13 @@ async function stopServer(context: ServerCommandContext): Promise<void> {
       if (!canSafelyRemoveStaleRegistry(status)) {
         throw new Error("Refusing to stop a Codegraph server whose identity does not match the requested root.");
       }
-      await removeRegistry(root);
+      await removeRegistry(root, status.registry?.credentialId);
       context.writeStdoutLine("Removed stale Codegraph server registry.");
       return;
     }
 
     await stopLiveServer(status.registry!, status.health!, root);
-    await removeRegistry(root);
+    await removeRegistry(root, status.registry!.credentialId);
     context.writeStdoutLine(`Stopped Codegraph server at ${status.registry!.url}`);
   });
 }
@@ -383,7 +413,30 @@ async function readServerStatus(root: string): Promise<ServerStatus> {
     return { status: "stale", registry, reason: "Registry root does not match the requested root." };
   }
 
-  const health = await waitForServerHealth(registry.url, SERVER_HEALTH_GRACE_TIMEOUT_MS);
+  if (registry.schemaVersion === 1) {
+    if (getServerProcessState(registry.pid) === "missing") {
+      return { status: "stale", registry, reason: "Server process is not running." };
+    }
+    return {
+      status: "unreachable",
+      registry,
+      reason: "Server registry predates lifecycle credentials. Stop the server manually, then start it again.",
+    };
+  }
+
+  const lifecycleCredential = await readServerLifecycleCredential(root, registry.credentialId);
+  if (!lifecycleCredential) {
+    if (getServerProcessState(registry.pid) === "missing") {
+      return { status: "stale", registry, reason: "Server process is not running." };
+    }
+    return {
+      status: "unreachable",
+      registry,
+      reason: "Server lifecycle credential is unavailable.",
+    };
+  }
+
+  const health = await waitForServerHealth(registry.url, SERVER_HEALTH_GRACE_TIMEOUT_MS, lifecycleCredential.token);
   if (!health) {
     if (getServerProcessState(registry.pid) === "missing") {
       return { status: "stale", registry, reason: "Server process is not running." };
@@ -391,7 +444,7 @@ async function readServerStatus(root: string): Promise<ServerStatus> {
     return {
       status: "unreachable",
       registry,
-      reason: `Server health endpoint did not respond within ${SERVER_HEALTH_GRACE_TIMEOUT_MS}ms.`,
+      reason: `Server health endpoint did not prove its lifecycle identity within ${SERVER_HEALTH_GRACE_TIMEOUT_MS}ms.`,
     };
   }
   if (!sameRoot(health.root, root)) {
@@ -423,12 +476,13 @@ async function stopLiveServer(registry: CodegraphServerRegistry, health: ServerH
   await waitForServerStop(registry.url, registry.pid, SERVER_STOP_TIMEOUT_MS);
 }
 
-function spawnServerProcess(
+async function spawnServerProcess(
   root: string,
   host: string,
   port: number,
+  lifecycleCredential: string,
   context: ServerCommandContext,
-): SpawnedServerProcess {
+): Promise<SpawnedServerProcess> {
   const entryPath = process.argv[1];
   if (!entryPath) throw new Error("Unable to locate the Codegraph CLI entrypoint.");
   const args = [entryPath, "mcp", "serve", "--root", root, "--host", host, "--port", String(port)];
@@ -442,46 +496,60 @@ function spawnServerProcess(
       args.push(option, value);
     }
   }
-  const child = spawn(process.execPath, args, {
-    cwd: root,
-    detached: true,
-    stdio: ["ignore", "ignore", "pipe"],
-    windowsHide: true,
-  });
-  return { child, startupDiagnostics: collectServerStartupDiagnostics(child) };
-}
 
-function collectServerStartupDiagnostics(child: ChildProcess): ServerStartupDiagnostics {
-  const stderr = child.stderr;
-  if (!stderr) {
-    return { read: () => "", dispose: () => undefined };
+  const lifecycleHealth = await import("../mcp/lifecycleHealth.js");
+  const startupDiagnostics = await createServerStartupDiagnostics(root);
+  try {
+    const child = spawn(process.execPath, args, {
+      cwd: root,
+      detached: true,
+      env: { ...process.env, [lifecycleHealth.MCP_LIFECYCLE_HEALTH_TOKEN_ENV]: lifecycleCredential },
+      stdio: ["ignore", "ignore", startupDiagnostics.fileDescriptor],
+      windowsHide: true,
+    });
+    return { child, startupDiagnostics };
+  } catch (error) {
+    await startupDiagnostics.dispose();
+    throw error;
   }
-
-  let bufferedBytes = 0;
-  let output = "";
-  const onData = (chunk: Buffer): void => {
-    if (bufferedBytes >= MAX_SERVER_START_DIAGNOSTICS_BYTES) return;
-    const retainedBytes = Math.min(chunk.length, MAX_SERVER_START_DIAGNOSTICS_BYTES - bufferedBytes);
-    output += chunk.subarray(0, retainedBytes).toString("utf8");
-    bufferedBytes += retainedBytes;
-  };
-  stderr.on("data", onData);
-  return {
-    read: () => output.trim(),
-    dispose: () => {
-      stderr.removeListener("data", onData);
-      stderr.resume();
-      if (isUnrefableReadable(stderr)) stderr.unref();
-    },
-  };
 }
 
-function isUnrefableReadable(value: object): value is UnrefableReadable {
-  return "unref" in value && typeof value.unref === "function";
+async function createServerStartupDiagnostics(
+  root: string,
+): Promise<ServerStartupDiagnostics & { fileDescriptor: number }> {
+  const logPath = await resolveServerStatePath(root, SERVER_LOG_FILE, true);
+  if (!logPath) throw new Error("Codegraph server log path is unavailable.");
+  await assertRegularServerStateFile(logPath);
+  const logFile = await fs.open(logPath, "a", 0o600);
+  try {
+    const startOffset = (await logFile.stat()).size;
+    await logFile.chmod(0o600);
+    return {
+      fileDescriptor: logFile.fd,
+      read: () => readServerLogTail(logPath, startOffset),
+      dispose: () => logFile.close(),
+    };
+  } catch (error) {
+    await logFile.close();
+    throw error;
+  }
 }
 
-function withServerStartupDiagnostics(error: unknown, diagnostics: ServerStartupDiagnostics | undefined): Error {
-  const output = diagnostics?.read();
+async function readServerLogTail(logPath: string, startOffset: number): Promise<string> {
+  try {
+    const contents = await fs.readFile(logPath);
+    const offset = Math.max(startOffset, contents.length - MAX_SERVER_START_DIAGNOSTICS_BYTES);
+    return contents.subarray(offset).toString("utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+async function withServerStartupDiagnostics(
+  error: unknown,
+  diagnostics: ServerStartupDiagnostics | undefined,
+): Promise<Error> {
+  const output = await diagnostics?.read();
   if (!output) {
     if (error instanceof Error) return error;
     return new Error(String(error));
@@ -497,6 +565,7 @@ async function waitForLiveServer(
   child: ChildProcess,
   childPid: number,
   startedAfterMs: number,
+  lifecycleCredential: string,
 ): Promise<ServerHealth> {
   const { promise: childClosed, resolve: resolveChildClose } = Promise.withResolvers<void>();
   const onChildClose = () => resolveChildClose();
@@ -504,8 +573,15 @@ async function waitForLiveServer(
   try {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) break;
       const result = await Promise.race([
-        requestServerHealth(url).then((health) => ({ kind: "health" as const, health })),
+        requestServerHealth(url, Math.min(SERVER_HEALTH_REQUEST_TIMEOUT_MS, remainingMs), lifecycleCredential).then(
+          (health) => ({
+            kind: "health" as const,
+            health,
+          }),
+        ),
         childClosed.then(() => ({ kind: "child-exited" as const })),
       ]);
       if (result.kind === "child-exited") {
@@ -552,15 +628,15 @@ async function terminateServerProcess(child: ChildProcess): Promise<void> {
 }
 
 async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
-  if (child.exitCode !== null) return true;
+  if (child.exitCode !== null || child.signalCode !== null) return true;
   const { promise, resolve } = Promise.withResolvers<void>();
-  const onExit = () => resolve();
-  child.once("exit", onExit);
+  const onClose = () => resolve();
+  child.once("close", onClose);
   try {
     await Promise.race([promise, wait(timeoutMs)]);
-    return child.exitCode !== null;
+    return child.exitCode !== null || child.signalCode !== null;
   } finally {
-    child.removeListener("exit", onExit);
+    child.removeListener("close", onClose);
   }
 }
 
@@ -574,12 +650,20 @@ async function waitForServerStop(url: string, pid: number, timeoutMs: number): P
   throw new Error(`Codegraph server at ${url} did not stop within ${timeoutMs}ms.`);
 }
 
-async function waitForServerHealth(serverUrl: string, timeoutMs: number): Promise<ServerHealth | undefined> {
+async function waitForServerHealth(
+  serverUrl: string,
+  timeoutMs: number,
+  lifecycleCredential: string,
+): Promise<ServerHealth | undefined> {
   const deadline = Date.now() + timeoutMs;
   while (true) {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return undefined;
-    const health = await requestServerHealth(serverUrl, Math.min(SERVER_HEALTH_REQUEST_TIMEOUT_MS, remainingMs));
+    const health = await requestServerHealth(
+      serverUrl,
+      Math.min(SERVER_HEALTH_REQUEST_TIMEOUT_MS, remainingMs),
+      lifecycleCredential,
+    );
     if (health) return health;
     const retryDelayMs = Math.min(SERVER_HEALTH_RETRY_DELAY_MS, deadline - Date.now());
     if (retryDelayMs <= 0) return undefined;
@@ -596,6 +680,7 @@ function wait(delayMs: number): Promise<void> {
 async function requestServerHealth(
   serverUrl: string,
   timeoutMs = SERVER_HEALTH_REQUEST_TIMEOUT_MS,
+  lifecycleCredential?: string,
 ): Promise<ServerHealth | undefined> {
   let healthUrl: URL;
   try {
@@ -606,11 +691,29 @@ async function requestServerHealth(
     return undefined;
   }
 
+  let lifecycleHealth: typeof import("../mcp/lifecycleHealth.js") | undefined;
+  let challenge: string | undefined;
+  if (lifecycleCredential) {
+    lifecycleHealth = await import("../mcp/lifecycleHealth.js");
+    challenge = lifecycleHealth.createMcpLifecycleHealthChallenge();
+  }
+  const requestOptions: RequestInit = { signal: AbortSignal.timeout(timeoutMs) };
+  if (challenge) requestOptions.headers = { "x-codegraph-health-challenge": challenge };
+
   try {
-    const response = await fetch(healthUrl, { signal: AbortSignal.timeout(timeoutMs) });
+    const response = await fetch(healthUrl, requestOptions);
     if (!response.ok) return undefined;
     const body: unknown = await response.json();
-    return isServerHealth(body) ? body : undefined;
+    if (!isServerHealth(body)) return undefined;
+    if (
+      lifecycleCredential &&
+      challenge &&
+      lifecycleHealth &&
+      !lifecycleHealth.matchesMcpLifecycleHealthProof(body.lifecycleProof, lifecycleCredential, challenge, body)
+    ) {
+      return undefined;
+    }
+    return body;
   } catch {
     return undefined;
   }
@@ -622,7 +725,7 @@ function isServerHealth(value: unknown): value is ServerHealth {
   if (!isPlainRecord(update)) return false;
   return (
     value.service === "codegraph" &&
-    value.schemaVersion === SERVER_REGISTRY_SCHEMA_VERSION &&
+    value.schemaVersion === SERVER_HEALTH_SCHEMA_VERSION &&
     typeof value.pid === "number" &&
     Number.isSafeInteger(value.pid) &&
     value.pid > 0 &&
@@ -632,7 +735,8 @@ function isServerHealth(value: unknown): value is ServerHealth {
     typeof update.restartRequired === "boolean" &&
     typeof update.runningVersion === "string" &&
     (update.installedVersion === undefined || typeof update.installedVersion === "string") &&
-    (update.reason === undefined || typeof update.reason === "string")
+    (update.reason === undefined || typeof update.reason === "string") &&
+    (value.lifecycleProof === undefined || typeof value.lifecycleProof === "string")
   );
 }
 
@@ -654,17 +758,89 @@ async function readRegistry(registryPath: string): Promise<RegistryReadResult> {
 }
 
 function isServerRegistry(value: unknown): value is CodegraphServerRegistry {
-  return (
-    isPlainRecord(value) &&
-    value.schemaVersion === SERVER_REGISTRY_SCHEMA_VERSION &&
+  if (!isPlainRecord(value)) return false;
+  const isCommonRegistry =
     typeof value.pid === "number" &&
     Number.isSafeInteger(value.pid) &&
     value.pid > 0 &&
     typeof value.url === "string" &&
     typeof value.root === "string" &&
     typeof value.startedAt === "string" &&
-    typeof value.version === "string"
+    typeof value.version === "string";
+  if (!isCommonRegistry) return false;
+  if (value.schemaVersion === 1) return value.credentialId === undefined;
+  return (
+    value.schemaVersion === SERVER_REGISTRY_SCHEMA_VERSION &&
+    typeof value.credentialId === "string" &&
+    /^[a-f0-9-]{36}$/.test(value.credentialId)
   );
+}
+
+async function createServerLifecycleCredential(root: string): Promise<ServerLifecycleCredential> {
+  const crypto = await import("node:crypto");
+  const id = crypto.randomUUID();
+  const credentialPath = await resolveServerLifecycleCredentialPath(root, id);
+  await fs.mkdir(path.dirname(credentialPath), { recursive: true });
+  await assertRegularServerStateFile(credentialPath);
+
+  const lifecycleHealth = await import("../mcp/lifecycleHealth.js");
+  const credential = lifecycleHealth.createMcpLifecycleHealthToken();
+  const temporaryPath = credentialPath + "." + process.pid + "." + Date.now() + ".tmp";
+  try {
+    await fs.writeFile(temporaryPath, credential + "\n", {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    await fs.rename(temporaryPath, credentialPath);
+    return { id, token: credential };
+  } finally {
+    await fs.rm(temporaryPath, { force: true });
+  }
+}
+
+async function readServerLifecycleCredential(
+  root: string,
+  credentialId: string,
+): Promise<ServerLifecycleCredential | undefined> {
+  const credentialPath = await resolveServerLifecycleCredentialPath(root, credentialId);
+  let raw: string;
+  try {
+    const stats = await fs.lstat(credentialPath);
+    if (!stats.isFile() || stats.isSymbolicLink()) {
+      throw new Error(`Codegraph server lifecycle credential is not a regular file: ${normalizePath(credentialPath)}`);
+    }
+    raw = await fs.readFile(credentialPath, "utf8");
+  } catch (error) {
+    if (isMissingFileError(error)) return undefined;
+    throw error;
+  }
+
+  const lifecycleHealth = await import("../mcp/lifecycleHealth.js");
+  const env: NodeJS.ProcessEnv = {};
+  env[lifecycleHealth.MCP_LIFECYCLE_HEALTH_TOKEN_ENV] = raw.trim();
+  const token = lifecycleHealth.readMcpLifecycleHealthToken(env);
+  if (!token) return undefined;
+  return { id: credentialId, token };
+}
+
+async function removeServerLifecycleCredential(root: string, credentialId: string): Promise<void> {
+  const credentialPath = await resolveServerLifecycleCredentialPath(root, credentialId);
+  try {
+    const stats = await fs.lstat(credentialPath);
+    if (!stats.isFile() || stats.isSymbolicLink()) {
+      throw new Error(`Refusing to remove non-regular server lifecycle credential: ${normalizePath(credentialPath)}`);
+    }
+    await fs.rm(credentialPath);
+  } catch (error) {
+    if (isMissingFileError(error)) return;
+    throw error;
+  }
+}
+
+async function resolveServerLifecycleCredentialPath(_root: string, credentialId: string): Promise<string> {
+  const compileCache = await import("./compileCache.js");
+  return path.join(compileCache.resolveCodegraphUserCacheRoot(), "server-lifecycle-v1", credentialId + ".credential");
 }
 
 async function writeRegistry(root: string, registry: CodegraphServerRegistry): Promise<void> {
@@ -679,12 +855,27 @@ async function writeRegistry(root: string, registry: CodegraphServerRegistry): P
   }
 }
 
-async function removeRegistry(root: string): Promise<void> {
+async function removeRegistry(root: string, credentialId: string | undefined): Promise<void> {
   const registryPath = await resolveRegistryPath(root, false);
   if (registryPath) await fs.rm(registryPath, { force: true });
+  if (credentialId) await removeServerLifecycleCredential(root, credentialId);
 }
 
 async function resolveRegistryPath(root: string, createDirectory: boolean): Promise<string | undefined> {
+  return resolveServerStatePath(root, "server.json", createDirectory);
+}
+
+async function resolveServerStatePath(
+  root: string,
+  fileName: string,
+  createDirectory: boolean,
+): Promise<string | undefined> {
+  const directory = await resolveServerStateDirectory(root, createDirectory);
+  if (!directory) return undefined;
+  return path.join(directory, fileName);
+}
+
+async function resolveServerStateDirectory(root: string, createDirectory: boolean): Promise<string | undefined> {
   const registryDirectory = path.join(root, ".codegraph");
   let realDirectory: string;
   try {
@@ -695,7 +886,7 @@ async function resolveRegistryPath(root: string, createDirectory: boolean): Prom
     await fs.mkdir(registryDirectory, { recursive: true });
     realDirectory = await fs.realpath(registryDirectory);
   }
-  if (!isFilePathWithinRoot(root, realDirectory)) {
+  if (!isFilePathWithinRoot(root, realDirectory) || sameRoot(root, realDirectory)) {
     throw new Error(
       `Codegraph server registry directory resolves outside project root: ${normalizePath(realDirectory)}`,
     );
@@ -704,7 +895,19 @@ async function resolveRegistryPath(root: string, createDirectory: boolean): Prom
   if (!stats.isDirectory()) {
     throw new Error(`Codegraph server registry path is not a directory: ${normalizePath(realDirectory)}`);
   }
-  return path.join(realDirectory, "server.json");
+  return realDirectory;
+}
+
+async function assertRegularServerStateFile(filePath: string): Promise<void> {
+  try {
+    const stats = await fs.lstat(filePath);
+    if (!stats.isFile() || stats.isSymbolicLink()) {
+      throw new Error(`Codegraph server state path is not a regular file: ${normalizePath(filePath)}`);
+    }
+  } catch (error) {
+    if (isMissingFileError(error)) return;
+    throw error;
+  }
 }
 
 async function withServerLifecycleLock<T>(root: string, operation: () => Promise<T>): Promise<T> {
@@ -731,11 +934,12 @@ async function resolveServerRoot(root: string): Promise<string> {
 }
 
 function sameRoot(left: string, right: string): boolean {
-  const normalize = (value: string): string => {
-    const resolved = normalizePath(path.resolve(value));
-    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-  };
-  return normalize(left) === normalize(right);
+  return normalizeServerRoot(left) === normalizeServerRoot(right);
+}
+
+function normalizeServerRoot(root: string): string {
+  const resolved = normalizePath(path.resolve(root));
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 function serverUrl(host: string, port: number): string {

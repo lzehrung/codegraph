@@ -140,8 +140,8 @@ Usage:
   codegraph uninit --root <path> [--force] [--json | --pretty]
 
 State:
-  Lifecycle commands own only .codegraph/manifest.json metadata; a shared MCP server separately owns .codegraph/server.json. In a Git worktree, init and sync --init ensure the manifest is effectively ignored, appending .codegraph/ and .codegraph-cache/ to the resolved root's .gitignore only when needed; opt out with --no-update-gitignore.
-  A tracked manifest is left tracked with a warning. Uninit preserves server.json even with --force, so stop a shared server explicitly; it leaves the root .gitignore rule, and ordinary sync never changes ignore policy.
+  Lifecycle commands own only .codegraph/manifest.json metadata; a shared MCP server separately owns .codegraph/server.json and .codegraph/server.log. In a Git worktree, init and sync --init ensure the manifest is effectively ignored, appending .codegraph/ and .codegraph-cache/ to the resolved root's .gitignore only when needed; opt out with --no-update-gitignore.
+  A tracked manifest is left tracked with a warning. Uninit preserves server.json and server.log even with --force, so stop a shared server explicitly; it leaves the root .gitignore rule, and ordinary sync never changes ignore policy.
   Init and sync may warm or update the disk cache under .codegraph-cache/index-v1/. Other commands do not depend on the manifest.
   Positional paths and --root are alternatives for lifecycle commands; do not combine them.
 `;
@@ -412,16 +412,16 @@ Usage:
   codegraph server stop [--root <path>]
 
 Behavior:
-  start runs codegraph mcp serve in a separate process, waits for its /health endpoint, then writes .codegraph/server.json. --json emits the started registry with status and update fields.
+  start runs codegraph mcp serve in a separate process, waits for a challenged /health proof, then writes .codegraph/server.json. --json emits the started registry with status and update fields; startup diagnostics go to .codegraph/server.log.
   The default server listens on 127.0.0.1:7331. A public bind requires an explicit --host. --startup-timeout-ms defaults to 15000 and allows up to 86400000 for long warmups.
-  status retries health checks and reports a verification remedy for an unreachable or mismatched server. stop removes only confirmed stale registries or signals a Codegraph server whose root, process, and startup time match the registry.
+  status retries proven health checks and reports a verification remedy for an unreachable or mismatched server. stop removes only confirmed stale registries or signals a Codegraph server whose root, process, and startup time match the registry.
 
 Forwarded startup options:
   --cache, --cache-dir, --cache-strict, --cache-verify, --native, --threads, --workers,
   --include-glob, --ignore-glob, --no-gitignore, and --resolution-hint pass to mcp serve.
 
 Safety:
-  The registry stores process metadata only. An installed-version change requires an explicit server restart; Codegraph does not replace mapped native files or terminate clients automatically.
+  The v2 registry stores process metadata and a non-secret credential ID; its credential remains in the per-user cache. A live v1 registry is never signaled. An installed-version change requires an explicit server restart; Codegraph does not replace mapped native files or terminate clients automatically.
 `;
 
 export const MCP_HELP_TEXT = `codegraph mcp - Serve MCP tools for agent graph navigation

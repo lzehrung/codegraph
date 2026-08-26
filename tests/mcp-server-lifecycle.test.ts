@@ -23,6 +23,7 @@ type ServerRegistry = {
   root: string;
   startedAt: string;
   version: string;
+  credentialId?: string;
 };
 
 afterEach(async () => {
@@ -44,9 +45,10 @@ describe("shared MCP server lifecycle", () => {
     expect(start.stdout).toContain(`http://127.0.0.1:${port}/mcp`);
     const registry = await readRegistry(root);
     expect(registry).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       url: `http://127.0.0.1:${port}/mcp`,
       root: root.replace(/\\/g, "/"),
+      credentialId: expect.any(String),
     });
     expect(registry.pid).toBeGreaterThan(0);
 
@@ -55,6 +57,7 @@ describe("shared MCP server lifecycle", () => {
     const healthResponse = await fetch(healthUrl);
     const health: unknown = await healthResponse.json();
     expect(healthResponse.ok).toBe(true);
+    expect(health).not.toHaveProperty("lifecycleProof");
     expect(health).toMatchObject({
       service: "codegraph",
       schemaVersion: 1,
@@ -95,9 +98,10 @@ describe("shared MCP server lifecycle", () => {
     expect(start.exitCode).toBe(0);
     expect(parseJsonObject(start.stdout)).toMatchObject({
       status: "started",
-      schemaVersion: 1,
+      schemaVersion: 2,
       url: `http://127.0.0.1:${port}/mcp`,
       root: root.replace(/\\/g, "/"),
+      credentialId: expect.any(String),
       update: { restartRequired: false },
     });
   });
@@ -111,6 +115,7 @@ describe("shared MCP server lifecycle", () => {
     const uninit = await runCli(["uninit", "--root", root, "--force"]);
     expect(uninit.exitCode).toBe(0);
     const registry = await readRegistry(root);
+    await expect(fs.access(path.join(root, ".codegraph", "server.log"))).resolves.toBeUndefined();
     const healthUrl = new URL(registry.url);
     healthUrl.pathname = "/health";
     expect((await fetch(healthUrl)).ok).toBe(true);
@@ -133,9 +138,59 @@ describe("shared MCP server lifecycle", () => {
       expect(duplicateStart.exitCode).toBe(1);
       expect(duplicateStart.stderr).toContain("process exited before accepting requests");
       expect(duplicateStart.stderr).toContain("EADDRINUSE");
+      const serverLog = await fs.readFile(path.join(root, ".codegraph", "server.log"), "utf8");
+      expect(serverLog).toContain("EADDRINUSE");
       await expect(fs.access(registryPath)).rejects.toThrow();
     } finally {
       await fs.writeFile(registryPath, originalRegistry, "utf8");
+    }
+  });
+
+  it("rejects a structurally valid health response that cannot prove lifecycle ownership", async () => {
+    const root = await createTestRoot();
+    const serverPort = await reservePort();
+    const start = await runCli(["server", "start", "--root", root, "--port", String(serverPort)]);
+    expect(start.exitCode).toBe(0);
+    const originalRegistry = await readRegistry(root);
+    const impersonatorPort = await reservePort();
+    const impersonator = createServer((_request, response) => {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(
+        JSON.stringify({
+          service: "codegraph",
+          schemaVersion: 1,
+          pid: originalRegistry.pid,
+          root: originalRegistry.root,
+          version: originalRegistry.version,
+          startedAt: originalRegistry.startedAt,
+          update: { restartRequired: false, runningVersion: originalRegistry.version },
+        }),
+      );
+    });
+    const { promise: listening, resolve: resolveListening, reject: rejectListening } = Promise.withResolvers<void>();
+    impersonator.once("error", rejectListening);
+    impersonator.listen(impersonatorPort, "127.0.0.1", resolveListening);
+    await listening;
+    await writeRegistry(root, { ...originalRegistry, url: `http://127.0.0.1:${impersonatorPort}/mcp` });
+
+    try {
+      const status = await runCli(["server", "status", "--root", root, "--json"]);
+      expect(status.exitCode).toBe(0);
+      expect(parseJsonObject(status.stdout)).toMatchObject({
+        status: "unreachable",
+        reason: "Server health endpoint did not prove its lifecycle identity within 3000ms.",
+      });
+    } finally {
+      await writeRegistry(root, originalRegistry);
+      await new Promise<void>((resolve, reject) => {
+        impersonator.close((error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
+      });
     }
   });
 
@@ -196,7 +251,7 @@ describe("shared MCP server lifecycle", () => {
     expect(status.exitCode).toBe(0);
     expect(parseJsonObject(status.stdout)).toMatchObject({
       status: "unreachable",
-      reason: "Server health endpoint did not respond within 3000ms.",
+      reason: "Server registry predates lifecycle credentials. Stop the server manually, then start it again.",
     });
 
     const start = await runCli(["server", "start", "--root", root, "--port", String(await reservePort())]);
@@ -216,7 +271,7 @@ describe("shared MCP server lifecycle", () => {
     await fs.rm(registryPath);
   });
 
-  it("treats an unsupported health schema as unreachable", async () => {
+  it("treats a live legacy registry as unreachable", async () => {
     const root = await createTestRoot();
     const port = await reservePort();
     const registryPath = path.join(root, ".codegraph", "server.json");
@@ -252,7 +307,7 @@ describe("shared MCP server lifecycle", () => {
       expect(status.exitCode).toBe(0);
       expect(parseJsonObject(status.stdout)).toMatchObject({
         status: "unreachable",
-        reason: "Server health endpoint did not respond within 3000ms.",
+        reason: "Server registry predates lifecycle credentials. Stop the server manually, then start it again.",
       });
       await expect(fs.access(registryPath)).resolves.toBeUndefined();
     } finally {
@@ -405,6 +460,27 @@ describe("shared MCP server lifecycle", () => {
     } finally {
       await fs.rm(outside, { recursive: true, force: true });
     }
+  });
+
+  it("honors short startup timeouts without waiting for a fixed health request", async () => {
+    const root = await createTestRoot();
+    const startedAt = performance.now();
+
+    const result = await runCli([
+      "server",
+      "start",
+      "--root",
+      root,
+      "--port",
+      String(await reservePort()),
+      "--startup-timeout-ms",
+      "1",
+      "--warmup",
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("did not become reachable");
+    expect(performance.now() - startedAt).toBeLessThan(900);
   });
 
   it("rejects an ephemeral server port before it starts", async () => {

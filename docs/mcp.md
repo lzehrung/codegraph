@@ -20,11 +20,11 @@ codegraph server status --root /path/to/repo --json
 codegraph server stop --root /path/to/repo
 ```
 
-`server start` serializes lifecycle changes, launches `mcp serve`, waits for a same-root process and startup identity from `/health`, then records the process at `.codegraph/server.json`. It defaults to `127.0.0.1:7331`; use `--host` explicitly for a non-loopback bind, `--replace` only to restart a live server for the same root, and `--startup-timeout-ms <1-86400000>` when a warmup needs more than the 15-second default.
+`server start` serializes lifecycle changes, launches `mcp serve`, waits for a same-root process and startup identity proved by a challenged `/health` response, then records the process at `.codegraph/server.json`. It defaults to `127.0.0.1:7331`; use `--host` explicitly for a non-loopback bind, `--replace` only to restart a live server for the same root, and `--startup-timeout-ms <1-86400000>` when a warmup needs more than the 15-second default.
 
-`server start --json` emits `status: "started"`, the registry fields, and `update`. `server status` retries HTTP health checks and reports a verification remedy instead of removing metadata for an unreachable or identity-mismatched server. `server stop` removes only confirmed stale metadata or signals a Codegraph process whose health identity matches the registry.
+`server start --json` emits `status: "started"`, the registry fields, and `update`. `server status` retries challenged HTTP health checks and reports a verification remedy instead of removing metadata for an unreachable or identity-mismatched server. `server stop` removes only confirmed stale metadata or signals a Codegraph process whose proven health identity matches the registry.
 
-The registry contains process metadata only; installed-version drift requires an explicit restart.
+The v2 registry contains process metadata and a non-secret credential ID; the secret stays in the per-user cache, outside the project. A live v1 registry is never signaled, so stop its old process manually before a new start.
 
 Use `mcp serve` directly when another process manager owns the server:
 
