@@ -11,6 +11,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Changed
 
+- Added `codegraph server start|status|stop` to manage one project-local MCP HTTP server. The loopback-only default serializes lifecycle changes, records a non-secret credential ID after a challenged root, process, and startup-identity health check, keeps the credential in per-user Codegraph state outside the project and separate from package files and compiler cache data, writes startup diagnostics to `.codegraph/server.log`, distinguishes confirmed stale state from an unreachable server, and requires an explicit restart after a package update.
 - Installed Windows packages that only read a warm cache no longer load the native addon. The
   runtime fingerprint needed the addon's supported-language list, so every cache-validity check
   paid a full load to prove it did not need one; Windows now replays that list from a record beside

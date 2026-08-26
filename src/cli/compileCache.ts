@@ -38,6 +38,30 @@ export function resolveCodegraphUserCacheRoot(
   return path.join(homedir, ".cache", "codegraph");
 }
 
+/**
+ * Per-user Codegraph state root. Long-lived server lifecycle records live here,
+ * separate from replaceable package files and disposable compiler cache data.
+ */
+export function resolveCodegraphUserStateRoot(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: string = os.homedir(),
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === "win32") {
+    const localAppData = env.LOCALAPPDATA?.trim();
+    if (localAppData) {
+      return path.join(localAppData, "codegraph");
+    }
+    return path.join(homedir, "AppData", "Local", "codegraph");
+  }
+
+  const xdgStateHome = env.XDG_STATE_HOME?.trim();
+  if (xdgStateHome) {
+    return path.join(xdgStateHome, "codegraph");
+  }
+  return path.join(homedir, ".local", "state", "codegraph");
+}
+
 export function resolveCliCompileCacheDirectory(
   env: NodeJS.ProcessEnv = process.env,
   homedir: string = os.homedir(),

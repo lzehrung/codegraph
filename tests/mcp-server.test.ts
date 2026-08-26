@@ -1476,6 +1476,34 @@ describe("codegraph MCP handlers", () => {
     }
   });
 
+  it("caches installed-version health checks", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-health-version-cache-"));
+    const packageJsonPath = path.join(root, "package.json");
+    await fs.writeFile(packageJsonPath, JSON.stringify({ version: "1.0.0" }), "utf8");
+    const runtimeIdentity: CodegraphRuntimeIdentity = {
+      startedAt: "2026-08-26T00:00:00.000Z",
+      runningVersion: "1.0.0",
+      packageRoot: root,
+      packageJsonPath,
+    };
+    const httpServer = await startCodegraphMcpHttpServer({ root, port: 0, runtimeIdentity });
+
+    try {
+      const healthUrl = new URL(httpServer.url);
+      healthUrl.pathname = "/health";
+      const firstHealth = readObject(await (await fetch(healthUrl)).json());
+      expect(readObject(firstHealth.update).installedVersion).toBe("1.0.0");
+
+      await fs.writeFile(packageJsonPath, JSON.stringify({ version: "1.0.1" }), "utf8");
+
+      const cachedHealth = readObject(await (await fetch(healthUrl)).json());
+      expect(readObject(cachedHealth.update).installedVersion).toBe("1.0.0");
+    } finally {
+      await httpServer.close();
+      await fs.rm(root, { force: true, recursive: true });
+    }
+  });
+
   it("accepts loopback host and Origin headers on an all-interface HTTP bind", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-wildcard-host-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");

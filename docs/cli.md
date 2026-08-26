@@ -193,8 +193,25 @@ Graph, index, search, inspect, and review reports include `backend.native.byLang
 - `status` reports whether lifecycle metadata exists, last sync time, then/current file counts, per-file content drift (files changed even when counts match, e.g. edits in place or N files swapped for N others), config/build-option drift, analysis label, and the suggested next command. Use `--json` for `schemaVersion: 1`.
 - `sync` refreshes the manifest after edits and requires an initialized project unless `--init` is passed. `sync --init` performs the same ignore preparation and accepts `--no-update-gitignore`; ordinary `sync` never changes ignore policy.
 - Initializing JSON results add an optional `gitignore` object with `.gitignore` path and `added`, `already-ignored`, `tracked`, `not-git`, or `disabled` status. The lifecycle manifest schema remains unchanged.
-- `uninit` removes only recognized lifecycle state by default and leaves any root `.gitignore` rule in place. It refuses unknown `.codegraph/` entries unless `--force` is passed.
+- `uninit` removes only recognized lifecycle state by default and leaves any root `.gitignore` rule in place. It preserves `.codegraph/server.json` and `.codegraph/server.log` even with `--force`, so stop a shared server explicitly.
+- `uninit` refuses unknown `.codegraph/` entries unless `--force` is passed.
 - Lifecycle commands accept either a positional project path or `--root <path>`. They reject using both together because lifecycle manifests and automatic ignore updates always use one resolved project boundary, not include-root subsets.
+
+### Shared MCP HTTP server
+
+```bash
+codegraph server start --root . --warmup
+codegraph server status --root . --json
+codegraph server stop --root .
+```
+
+`server start` serializes lifecycle changes per project, launches `mcp serve` in a separate process, then writes `.codegraph/server.json` only after a challenged `/health` response proves the requested root, process, and startup time. It defaults to `127.0.0.1:7331`; pass `--host` explicitly for any non-loopback bind, pass `--replace` only to restart a live server for the same root, and use `--startup-timeout-ms <1-86400000>` when a warmup needs more than the 15-second default.
+
+`server start --json` emits `status: "started"`, the registry fields, and `update`. `server status` retries challenged HTTP health checks instead of trusting a PID and asks users to verify an unreachable or identity-mismatched server. `server stop` removes only confirmed stale metadata or signals a Codegraph server whose proven health identity matches the registry.
+
+The v2 registry stores only `schemaVersion`, `pid`, `url`, `root`, `startedAt`, `version`, and a non-secret `credentialId`; its credential remains in the per-user Codegraph state directory, outside the project and separate from package files and compiler cache data. A v1 registry with a live process is never signaled; stop that old process manually, then start it again.
+
+`server start` forwards `--warmup`, `--warmup-symbols`, cache, native, worker, and discovery options to `mcp serve`; each start truncates `.codegraph/server.log` for server stderr and startup diagnostics. `status` accepts only `--json` or `--pretty`, and `stop` accepts no output or startup options. The commands do not start implicitly from unrelated commands or manage a general background daemon.
 
 ### Affected tests
 

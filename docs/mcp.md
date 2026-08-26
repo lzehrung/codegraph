@@ -12,7 +12,21 @@ Stdio is the default transport and is the best fit when the MCP client launches 
 codegraph mcp serve --root . --stdio
 ```
 
-Streamable HTTP is useful when multiple IDE, terminal, or agent instances should share one repo-local server:
+For one reusable repo-local HTTP server, use the lifecycle wrapper:
+
+```bash
+codegraph server start --root /path/to/repo --warmup
+codegraph server status --root /path/to/repo --json
+codegraph server stop --root /path/to/repo
+```
+
+`server start` serializes lifecycle changes, launches `mcp serve`, waits for a same-root process and startup identity proved by a challenged `/health` response, then records the process at `.codegraph/server.json`. It defaults to `127.0.0.1:7331`; use `--host` explicitly for a non-loopback bind, `--replace` only to restart a live server for the same root, and `--startup-timeout-ms <1-86400000>` when a warmup needs more than the 15-second default.
+
+`server start --json` emits `status: "started"`, the registry fields, and `update`. `server status` retries challenged HTTP health checks and reports a verification remedy instead of removing metadata for an unreachable or identity-mismatched server. `server stop` removes only confirmed stale metadata or signals a Codegraph process whose proven health identity matches the registry.
+
+The v2 registry contains process metadata and a non-secret credential ID; the secret stays in the per-user Codegraph state directory, outside the project and separate from package files and compiler cache data. A live v1 registry is never signaled, so stop its old process manually before a new start.
+
+Use `mcp serve` directly when another process manager owns the server:
 
 ```bash
 codegraph mcp serve --root /path/to/repo --port 7331 --warmup
@@ -47,7 +61,7 @@ HTTP enforces Host and Origin policies. A missing `Origin` is accepted for non-b
 
 ## Runtime identity and updates
 
-The MCP initialize response advertises the codegraph package version captured when the server starts. The server checks its captured package metadata path at most once every 30 seconds during tool calls; a changed or temporarily unavailable installation produces a deduplicated stderr warning but does not fail the request or terminate the server.
+The MCP initialize response advertises the codegraph package version captured when the server starts. MCP tool calls share one cached checker that reads captured package metadata at most once every 30 seconds and emits a deduplicated stderr warning when the installation changes or is unavailable. The health endpoint uses its own cached silent checker, so a health call and a tool call can each read package metadata in the same interval without failing the request or terminating the server.
 
 On Windows, installed-package servers map the verified native addon from `%LOCALAPPDATA%\codegraph\native-cache\v1`, not from npm's package directory. An old server may therefore remain healthy after npm installs a new release, but it must be restarted to use the new JavaScript runtime and cache identity.
 

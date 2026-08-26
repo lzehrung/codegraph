@@ -61,6 +61,7 @@ export const CLI_DISPATCHABLE_COMMANDS = [
   "rename-preview",
   "review",
   "search",
+  "server",
   "skill",
   "sql",
   "status",

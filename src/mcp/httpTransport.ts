@@ -23,7 +23,7 @@ import {
   type AllowedHostHeaderRules,
 } from "./http.js";
 import { getCurrentNativeBindingOrigin } from "../native/runtime.js";
-import { captureCodegraphRuntimeIdentity } from "../runtimeIdentity.js";
+import { captureCodegraphRuntimeIdentity, createInstalledVersionChecker } from "../runtimeIdentity.js";
 import {
   createWarmedCodegraphMcpResources,
   type CodegraphMcpHttpServerInfo,
@@ -73,9 +73,11 @@ export async function startCodegraphMcpHttpServer(
   const configuredMcpToolTimeout =
     options.mcpToolTimeoutMs === undefined ? DEFAULT_MCP_TOOL_TIMEOUT_MS : options.mcpToolTimeoutMs;
   const mcpToolTimeoutMs = assertMcpToolTimeout(configuredMcpToolTimeout);
-  const host = options.host ?? "127.0.0.1";
+  const host = options.host ?? "127.0.0.1",
+    lifecycleHealth = await import("./lifecycleHealth.js");
   const { handlers, session } = await createWarmedCodegraphMcpResources(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
+  const installedVersionChecker = createInstalledVersionChecker(runtimeIdentity, { warn: () => {} });
   const protocolFactory = createCodegraphMcpProtocolFactory(
     handlers,
     runtimeIdentity,
@@ -125,6 +127,26 @@ export async function startCodegraphMcpHttpServer(
       modernNodeHandler,
       protocolFactory.create,
       httpBodyTimeoutMs,
+      (request: IncomingMessage) => {
+        const health = {
+          service: "codegraph" as const,
+          schemaVersion: 1,
+          pid: process.pid,
+          root: options.root,
+          version: runtimeIdentity.runningVersion,
+          startedAt: runtimeIdentity.startedAt,
+          update: installedVersionChecker.check(),
+        };
+        const lifecycleHealthToken = lifecycleHealth.readMcpLifecycleHealthToken();
+        const challenge = request.headers["x-codegraph-health-challenge"];
+        if (lifecycleHealthToken && typeof challenge === "string") {
+          return {
+            ...health,
+            lifecycleProof: lifecycleHealth.createMcpLifecycleHealthProof(lifecycleHealthToken, challenge, health),
+          };
+        }
+        return health;
+      },
     );
   });
 
@@ -168,6 +190,7 @@ async function handleMcpHttpRequest(
   modernNodeHandler: NodeMcpRequestHandler,
   createProtocolServer: () => Server,
   bodyTimeoutMs: number,
+  getHealth: (request: IncomingMessage) => object,
 ): Promise<void> {
   const writeClosingJsonRpcError = (statusCode: number, message: string): void => {
     response.setHeader("connection", "close");
@@ -176,16 +199,23 @@ async function handleMcpHttpRequest(
   };
 
   const requestPath = getRequestPath(request);
-  if (requestPath !== MCP_HTTP_PATH) {
-    writeJsonResponse(response, 404, { error: "Not found" });
-    return;
-  }
-
   if (!isAllowedHostHeader(request, getAllowedHostHeaders())) {
     writeJsonRpcError(response, 403, "Forbidden host header");
     return;
   }
   if (!validateOrigin(request, response)) return;
+  if (requestPath === "/health") {
+    if (request.method === "GET") {
+      writeJsonResponse(response, 200, getHealth(request));
+    } else {
+      writeJsonResponse(response, 405, { error: "Method not allowed" });
+    }
+    return;
+  }
+  if (requestPath !== MCP_HTTP_PATH) {
+    writeJsonResponse(response, 404, { error: "Not found" });
+    return;
+  }
 
   try {
     if (request.method === "POST") {

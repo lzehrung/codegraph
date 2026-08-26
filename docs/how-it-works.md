@@ -64,64 +64,27 @@ The resulting file nodes and typed edges are stored with forward and reverse adj
 
 ## Semantic navigation and impact
 
-Impact and review commands can apply request-wide work budgets so large diffs return ranked partial evidence with exact omit counts instead of hanging. External review orchestrators should treat human-readable `impact` and `review` as bounded accelerants, not as an owned review workflow or packet protocol.
+The semantic index links definitions, scopes, exports, imports, and resolved calls. `goto`, `refs`, workspace symbols, call and type hierarchies, implementations, and impact read that index. Results use one snapshot and project-relative locations.
 
-The semantic index connects definitions, scopes, exports, and import bindings to graph edges. `goto` resolves local definitions and imported bindings, including supported namespace-member cases. `refs` follows local and imported references through the same model.
+Only proven semantic links are reported. Dynamic dispatch, unresolved symbols, and unsupported language features stay absent or appear as limitations; bounds report exact omissions. See the [language parity matrix](./language-parity.md) for per-language coverage.
 
-Workspace-symbol lookup builds a cached candidate view from indexed definitions and only materializes import aliases when requested. It applies kind, exported, and project-relative file-glob filters before deterministic ranking: qualified and exact names lead, followed by case-insensitive exact, prefix, identifier-token, and substring matches.
+`rename_preview` and refactor planning produce review evidence only. They never write files, and stale, conflicting, uncertain, or truncated rename plans are not safe.
 
-Call hierarchy reads resolved `calls` edges from the detailed symbol graph. It builds incoming and outgoing adjacency once per symbol-graph snapshot, attributes nested calls to the nearest indexed callable, groups multiple exact callsites by symbol pair, and traverses breadth-first with deterministic depth and result bounds.
-
-Agent, CLI, and MCP callers reuse the project snapshot and cached adjacency. Results do not reparse source, treat file dependencies or arbitrary references as calls, or guess unresolved dynamic dispatch; reduced graph-only recovery therefore does not claim equivalent call hierarchy coverage.
-
-Type hierarchy extraction adds resolved `extends` and `implements` edges to the detailed symbol graph. Breadth-first supertype and subtype queries deduplicate cycles, sort deterministically by depth and symbol identity, and apply limits after traversal so omission counts remain exact.
-
-Implementation lookup follows the same proven edges. Interface or trait member lookup also requires a proven implementing type and an indexed same-name member inside that type; it does not infer structural conformance, dynamic dispatch, unrelated same-name methods, or unresolved external bases.
-
-Rename preview resolves the target handle through the same semantic index, collects proven definitions, references, imports, exports, and supported interface-member implementations, then validates scope collisions and source freshness. Optional comment and string scans are marked low confidence, edit limits produce explicit omissions and `safe: false`, and every output path is normalized to the project root.
-
-The operation only returns a plan. Filename matches are suggestions, and the library, CLI, agent-tool, and MCP surfaces never write or expose an apply command.
-
-Refactor planning resolves either a portable search/workspace-symbol handle or an exact internal review/impact symbol handle, then composes references, direct calls, hierarchy, implementations, candidate tests, and follow-ups from one loaded snapshot and freshness decision. Each section is bounded independently, omissions remain explicit, and internal input identities are normalized to portable target handles in output.
-
-An optional rename uses the same snapshot and preserves the nested rename preview without weakening `rename.safe`. Refactor planning is evidence composition rather than compiler-grade transformation: unsupported dispatch, unresolved external symbols, stale evidence, conflicts, and truncation remain limitations or safety blockers.
-
-The result limit is applied after ranking, so omission counts describe matching candidates rather than pre-filter truncation. Agent, CLI, and MCP surfaces then normalize paths and qualified names to the project root and attach portable handles, exact locations, analysis, freshness, and provenance.
-
-Impact analysis maps diff hunks to changed symbols, follows resolved references and reverse dependencies, and ranks affected files by an effective `severity` score. Severity combines impact factors with resolution confidence, then uses monotonic saturation rather than a hard cap so exported and high-fan-in references remain distinguishable. The separately displayed `confidence` score records certainty: it starts from how the reference relates to the changed symbol, then is discounted when the reference was verified through medium- or low-confidence resolution (for example receiver/instance member-call matching) rather than an exact scope or import binding. Equal effective scores are ordered by higher confidence, shallower depth, file path, and symbol name. Review and agent-facing commands build on that evidence, adding bounded snippets or related findings as requested.
-
-`diagnostics.memberResolutionCoverage` separately flags source languages where receiver-call resolution is not implemented at all, so consumers reached only through a receiver may be missing from the ranked list rather than merely lower-confidence. Call compatibility is deliberately narrower than type checking: it reports high-confidence arity mismatches for resolved callable changes, not overload, dispatch, macro, or data-flow conclusions.
-
-Precise semantic navigation depends on successful parsing and queries. Reduced recovery can preserve useful file edges without claiming equivalent symbol or scope analysis. Current per-language capabilities are listed in the [language parity matrix](./language-parity.md).
+Impact maps changed symbols to resolved references and reverse dependencies. Severity ranks likely effects, confidence shows resolution certainty, and `diagnostics.memberResolutionCoverage` warns when a language cannot resolve receiver calls.
 
 ## Cache and session behavior
 
-Caching avoids repeating work; it does not change extraction or resolution semantics.
+Caching avoids repeated work; it does not change extraction or resolution semantics.
 
-- `off` is useful for a deliberately cold run.
-- `memory` reuses parsed work inside one process.
-- `disk` persists compatible parsed-file entries and an incremental graph manifest under `.codegraph-cache/index-v1` for later commands.
-- Strict content hashes favor reliable reuse. Non-strict metadata checks are an explicit speed tradeoff.
+- `off` runs cold.
+- `memory` reuses parsed work in one process.
+- `disk` persists parsed files and an incremental graph under `.codegraph-cache/index-v1`.
 
-An incremental graph starts from a compatible manifest, keeps edges for unchanged files, and replaces edges for changed files. Changes to file signatures, discovery configuration, graph options, cache schema, or relevant build options invalidate the affected reuse boundary. Corrupt or unsupported cache data is rebuilt rather than treated as current analysis.
+Disk loads reuse unchanged files and update changed ones. Codegraph validates file, configuration, build, and available Git state before reuse; incompatible or corrupt data is rebuilt. Strict mode hashes content, while non-strict mode accepts the documented metadata speed tradeoff.
 
-On disk-backed incremental loads, codegraph consults Git only for repository state that the persisted manifest cannot prove by itself: tracked working-tree changes, newly untracked files, and the current revision. Repository detection is memoized per root within a process, independent Git probes run concurrently, and impact/review reuse their parsed unified diff instead of walking the same diff twice. Without that Git signal (a non-Git project, or `--cache-strict`) the load rediscovers project files instead of trusting the manifest file list, so a new file is never invisible to a warm query. Strict cache verification still hashes content; non-strict cache mode uses the documented metadata tradeoff.
+Disk search can also store normalized source and chunk text in SQLite. Treat that cache as sensitive derived source data; use `--cache off` to avoid it and stop codegraph before deletion.
 
-Disk-backed text and hybrid search lazily maintain `.codegraph-cache/index-v1/search-v1.sqlite`. Its file and chunk rows come from the loaded snapshot's manifest signatures. SQLite FTS5 selects candidates only; the existing exact matcher and ranker remain authoritative.
-
-A bounded worker pool updates added, changed, deleted, and retired files. One SQLite transaction commits the affected rows and metadata.
-
-Readers use the sidecar only when its project snapshot identity matches the loaded snapshot. On a mismatch, codegraph updates and revalidates the sidecar; it falls back to in-memory source scanning only if that update cannot be used. Writer contention, unavailable storage, future schemas, or corruption also use in-memory source scanning. codegraph never returns mixed-snapshot results.
-
-The sidecar stores normalized source and chunk text; treat it as sensitive derived source data. Use `--cache off` to avoid it, and stop codegraph before deleting `.codegraph-cache`.
-
-Long-lived agent and review sessions reuse only compatible index state. They refresh it when relevant file, configuration, or project signals drift.
-
-Project lifecycle state is optional. `codegraph init` creates `.codegraph/manifest.json` and warms the disk cache, but index-backed queries build and reuse `.codegraph-cache/index-v1` without requiring lifecycle initialization.
-
-One internal policy owns current-state loading: `loadCurrentProjectIndex` chooses the incremental loader, defaults the cache to disk unless the caller set a mode, and encodes scope as either the whole project or an already resolved file set. Freshness itself stays in the incremental indexer. Artifact production, lifecycle operations, revision reconstruction (`drift`, `graph-delta`), and long-lived agent sessions keep their own explicit semantics, so `codegraph index` and `codegraph sync` prewarm or repair state rather than gate queries.
-
-The browser viewer uses that same disk-backed session loader to derive portable graph JSON on demand. Each UI reload validates current project state and regenerates the projection, so neither lifecycle initialization nor a separately managed graph file is required.
+Long-lived sessions reuse only compatible state and refresh on drift. `codegraph init` can warm the disk cache, but index-backed commands do not require lifecycle initialization.
 
 ## Performance choices
 

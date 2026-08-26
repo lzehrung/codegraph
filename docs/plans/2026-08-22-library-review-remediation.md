@@ -482,7 +482,7 @@ node ./dist/cli.js links --root .
 npm run check
 ```
 
-## PR 4: split `src/mcp/server.ts`
+## PR 4: split `src/mcp/server.ts` (implemented)
 
 Fixes F6. Pure move, no behavior change. Break the module along the five seams in F6, keeping `src/mcp/server.ts` as the composition root that re-exports the public surface (`createCodegraphMcpHandlers`, `listCodegraphMcpTools`, `serveCodegraphMcp`) so `src/mcp.ts` and `@lzehrung/codegraph/mcp` are unchanged.
 
@@ -509,16 +509,16 @@ npm run build && npm run check
 
 Also confirm that `npm run build:core` still rejects MCP modules from the core package closure (`tests/core-package-surface.test.ts`), since the split adds new files that must stay product-only, and smoke-test `node ./dist/cli.js mcp serve --root .` over stdio with a `tools/list` followed by one `tools/call`.
 
-## PR 5: shared server lifecycle
+## PR 5: shared server lifecycle (implemented)
 
-Implements [shared server lifecycle](2026-07-03-03-shared-server-lifecycle.md). Lands after PR 2, which reduces the per-process cost this feature then stops paying entirely.
+Implements [shared server lifecycle](2026-07-03-03-shared-server-lifecycle.md). It shipped after the MCP split and before the remaining PR 2 startup work; the shared server reduces repeated process startup cost independently of that remaining optimization.
 
 Add `codegraph server start|status|stop` as a convenience wrapper over `codegraph mcp serve`, with a project-local registry at `.codegraph/server.json`. Follow that plan as written; the parts that matter most:
 
 - `start` refuses to start when a live server is already registered for the root unless `--replace`, defaults to host `127.0.0.1` and port `7331`, writes the registry only after the server accepts requests, and forwards `--warmup`, `--warmup-symbols`, `--cache`, `--native`, `--workers`, and the discovery flags.
 - `status` validates liveness with an HTTP health request rather than `pid` existence, because PIDs are reused, and supports `--json`. A stale registry is reported as stale with the remedy, not treated as live.
 - `stop` only stops a process that identifies as codegraph for the same root, and removes stale registry files safely.
-- The registry stores process metadata only (`schemaVersion`, `pid`, `url`, `root`, `startedAt`, `version`), never analysis data.
+- The registry stores process metadata only (`schemaVersion`, `pid`, `url`, `root`, `startedAt`, `version`, `credentialId`), never analysis data or a credential secret. The credential stays in per-user Codegraph state outside the project.
 - Preserve the immutable Windows native cache semantics: report installed-version drift and require an explicit restart rather than replacing mapped runtime files or terminating clients.
 
 Files: new `src/cli/server.ts`, plus `src/cli/commandCatalog.ts`, `src/cli/help.ts`, `src/cli/options.ts`, `src/cli.ts`, and an optional health endpoint in the MCP server, which should land after PR 4 so it targets the split modules. Docs: `docs/cli.md`, `docs/mcp.md`, `docs/agent-workflows.md`, and `codegraph-skill/codegraph/SKILL.md`.
@@ -547,9 +547,11 @@ New tests must cover a registry written only after the server is reachable, `sta
 
 ## Sequencing
 
-PR 2b and PR 2c shipped first (out of order, driven by the indexing-performance investigation), then PR 1. Remaining: PR 2, then PR 3 and PR 4 in either order, then PR 5.
+PR 2b and PR 2c shipped first, driven by the indexing-performance investigation. PR 1, PR 3, PR 4, and PR 5 then shipped; PR 2 remains.
 
-PR 1 goes first because it removes code the later changes would otherwise have to preserve. PR 2, PR 2b, and PR 2c are next because they are the highest-value user-facing changes and their measurements feed PR 3's docs; PR 2 covers fixed per-process startup cost, PR 2b covers per-file syntax-tree marshalling, and PR 2c covers the non-worker path's redundant parse that PR 2b's own follow-up measurement had misread as a worker-coordination problem. (Stale as written: this said to run PR 2 first because its worker-startup fixes touch the same files PR 2b and PR 2c edit. Those two already shipped, so PR 2 now lands on top of their changed versions of `build-workers.ts` and `nativeExtractWorker.ts` instead.) PR 2c depends on PR 2b's columnar encoding existing, since its fix reuses the same `PreparedFileContext.syntaxTree` fast path PR 2b's worker case already relies on. PR 3 and PR 4 are independent of each other. PR 5 is last because it wants the lower startup cost from PR 2, PR 4's split MCP modules for its health endpoint, and PR 3's parity test to force its own docs to be written.
+PR 1 removed code that later changes would otherwise preserve. PR 2b and PR 2c changed the worker path first, so the remaining PR 2 startup work now lands on their versions of `build-workers.ts` and `nativeExtractWorker.ts`.
+
+PR 3 added the documentation contracts and PR 4 split the MCP server. PR 5 then used the split modules; it has no delivery dependency on the remaining PR 2 work because a shared server avoids repeated process startup regardless of that optimization.
 
 ## Correction log
 

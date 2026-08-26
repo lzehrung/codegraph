@@ -762,6 +762,29 @@ describe("project lifecycle commands", () => {
     await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("refuses forced cleanup through a symlinked lifecycle directory", async () => {
+    const root = await mkTmpDir("cg-life-uninit-symlink-root-");
+    const externalDirectory = await mkTmpDir("cg-life-uninit-symlink-external-");
+    const sentinelPath = path.join(externalDirectory, "sentinel.txt");
+    await fsp.writeFile(sentinelPath, "operator data\n", "utf8");
+
+    try {
+      await fsp.symlink(
+        externalDirectory,
+        path.join(root, ".codegraph"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    } catch (error) {
+      if (process.platform === "win32" && error instanceof Error && "code" in error && error.code === "EPERM") return;
+      throw error;
+    }
+
+    await expect(uninitCodegraphLifecycle(root, { force: true })).rejects.toThrow(
+      "Refusing to traverse symbolic link as .codegraph lifecycle directory",
+    );
+    await expect(fsp.readFile(sentinelPath, "utf8")).resolves.toBe("operator data\n");
+  });
+
   it("uninit without --force removes a manifest-only .codegraph directory", async () => {
     const root = await mkTmpDir("cg-life-uninit-manifest-only-");
     await writeFile(root, "src/main.ts", "export const main = 1;\n");
@@ -771,6 +794,21 @@ describe("project lifecycle commands", () => {
 
     expect(result.removed).toBeTruthy();
     await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("preserves server-only state without reporting lifecycle removal", async () => {
+    const root = await mkTmpDir("cg-life-uninit-server-only-");
+    const codegraphDirectory = path.join(root, ".codegraph");
+    await fsp.mkdir(codegraphDirectory);
+    await fsp.writeFile(path.join(codegraphDirectory, "server.json"), "{}\n", "utf8");
+    await fsp.writeFile(path.join(codegraphDirectory, "server.log"), "server diagnostics\n", "utf8");
+
+    const regularResult = await uninitCodegraphLifecycle(root);
+    const forcedResult = await uninitCodegraphLifecycle(root, { force: true });
+
+    expect(regularResult.removed).toBe(false);
+    expect(forcedResult.removed).toBe(false);
+    expect(await readCodegraphEntries(root)).toEqual(["server.json", "server.log"]);
   });
 
   it("CLI JSON captures cover lifecycle mutating commands with positional roots", async () => {
@@ -1302,13 +1340,13 @@ describe("project lifecycle commands", () => {
     await writeFile(root, "src/main.ts", "export const main = 1;\n");
     await initCodegraphLifecycle(root);
 
-    const dirPath = path.join(root, ".codegraph");
+    const manifestPath = codegraphLifecycleManifestPath(root);
     const originalRm = fsp.rm.bind(fsp);
-    const eaccesError = Object.assign(new Error(`EACCES: permission denied, rm '${dirPath}'`), {
+    const eaccesError = Object.assign(new Error(`EACCES: permission denied, rm '${manifestPath}'`), {
       code: "EACCES",
     });
     const rmSpy = vi.spyOn(fsp, "rm").mockImplementation(async (target, options) => {
-      if (target === dirPath) {
+      if (target === manifestPath) {
         throw eaccesError;
       }
       return await originalRm(target, options as never);
@@ -1320,7 +1358,7 @@ describe("project lifecycle commands", () => {
       // must be the dedicated CodegraphLifecycleUserError, not merely `instanceof Error`.
       const uninitPromise = uninitCodegraphLifecycle(root, { force: true });
       await expect(uninitPromise).rejects.toBeInstanceOf(CodegraphLifecycleUserError);
-      await expect(uninitPromise).rejects.toThrow(`Unable to remove ${dirPath}`);
+      await expect(uninitPromise).rejects.toThrow(`Unable to remove ${manifestPath}`);
     } finally {
       rmSpy.mockRestore();
     }

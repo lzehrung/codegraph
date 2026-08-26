@@ -73,12 +73,14 @@ export type CodegraphLifecycleUninitResult = {
 const MANIFEST_SCHEMA_VERSION = 1;
 const CODEGRAPH_DIR = ".codegraph";
 const MANIFEST_FILE = "manifest.json";
+const SERVER_REGISTRY_FILE = "server.json";
+const SERVER_LOG_FILE = "server.log";
 
 type LifecycleBuildOptionsSummary = ManifestBuildOptions & {
   graph: ReturnType<typeof normalizeGraphOptions>;
   native: BuildOptions["native"];
 };
-const KNOWN_CODEGRAPH_FILES = new Set([MANIFEST_FILE]);
+const KNOWN_CODEGRAPH_FILES = new Set([MANIFEST_FILE, SERVER_REGISTRY_FILE, SERVER_LOG_FILE]);
 
 export function codegraphLifecycleManifestPath(root: string): string {
   return path.join(root, CODEGRAPH_DIR, MANIFEST_FILE);
@@ -216,13 +218,22 @@ export async function uninitCodegraphLifecycle(
       `Refusing to remove .codegraph with unknown entries: ${unknownEntries.join(", ")}. Use --force to remove them.`,
     );
   }
+  const removableEntries = entries.filter((entry) => entry !== SERVER_REGISTRY_FILE && entry !== SERVER_LOG_FILE);
   if (options.force) {
-    await removeCodegraphPath(dir, { recursive: true });
-  } else {
+    for (const entry of removableEntries) {
+      await removeCodegraphPath(path.join(dir, entry), { recursive: true });
+    }
+    await removeDirIfEmpty(dir);
+  } else if (removableEntries.includes(MANIFEST_FILE)) {
     await removeCodegraphPath(manifestPath, {});
     await removeDirIfEmpty(dir);
   }
-  return { schemaVersion: MANIFEST_SCHEMA_VERSION, root, removed: true, manifestPath };
+  return {
+    schemaVersion: MANIFEST_SCHEMA_VERSION,
+    root,
+    removed: options.force ? Boolean(removableEntries.length) : removableEntries.includes(MANIFEST_FILE),
+    manifestPath,
+  };
 }
 
 async function buildLifecycleManifest(
@@ -423,8 +434,15 @@ async function removeCodegraphPath(target: string, options: { recursive?: boolea
 
 async function readCodegraphDirEntries(dir: string): Promise<string[]> {
   try {
+    const stats = await fsp.lstat(dir);
+    if (stats.isSymbolicLink()) {
+      throw new CodegraphLifecycleUserError(
+        `Refusing to traverse symbolic link as .codegraph lifecycle directory: ${dir}`,
+      );
+    }
     return await fsp.readdir(dir);
   } catch (error) {
+    if (error instanceof CodegraphLifecycleUserError) throw error;
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
     throw new CodegraphLifecycleUserError(`Unable to read ${dir}: ${stringifyError(error)}`);
   }
