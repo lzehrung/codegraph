@@ -89,6 +89,41 @@ describe("shared MCP server lifecycle", () => {
     await expect(fs.access(path.join(root, ".codegraph", "server.json"))).rejects.toThrow();
   });
 
+  it("requires --replace before replacing a live server", async () => {
+    const root = await createTestRoot();
+    const initialPort = await reservePort();
+    const initialStart = await runCli(["server", "start", "--root", root, "--port", String(initialPort)]);
+    expect(initialStart.exitCode).toBe(0);
+    const initialRegistry = await readRegistry(root);
+
+    const refusedStart = await runCli(["server", "start", "--root", root, "--port", String(await reservePort())]);
+    expect(refusedStart.exitCode).toBe(1);
+    expect(refusedStart.stderr).toContain("Codegraph server is already live");
+    expect(await readRegistry(root)).toEqual(initialRegistry);
+
+    const replacementPort = await reservePort();
+    const replacementStart = await runCli([
+      "server",
+      "start",
+      "--root",
+      root,
+      "--port",
+      String(replacementPort),
+      "--replace",
+    ]);
+    expect(replacementStart.exitCode).toBe(0);
+    const replacementRegistry = await readRegistry(root);
+    expect(replacementRegistry).toMatchObject({
+      url: `http://127.0.0.1:${replacementPort}/mcp`,
+      root: initialRegistry.root,
+    });
+    expect(replacementRegistry.pid).not.toBe(initialRegistry.pid);
+    expect(replacementRegistry.startedAt).not.toBe(initialRegistry.startedAt);
+    const initialHealthUrl = new URL(initialRegistry.url);
+    initialHealthUrl.pathname = "/health";
+    await expect(fetch(initialHealthUrl)).rejects.toThrow();
+  });
+
   it("emits the started registry and update state as JSON", async () => {
     const root = await createTestRoot();
     const port = await reservePort();

@@ -218,17 +218,22 @@ export async function uninitCodegraphLifecycle(
       `Refusing to remove .codegraph with unknown entries: ${unknownEntries.join(", ")}. Use --force to remove them.`,
     );
   }
+  const removableEntries = entries.filter((entry) => entry !== SERVER_REGISTRY_FILE && entry !== SERVER_LOG_FILE);
   if (options.force) {
-    for (const entry of entries) {
-      if (entry === SERVER_REGISTRY_FILE || entry === SERVER_LOG_FILE) continue;
+    for (const entry of removableEntries) {
       await removeCodegraphPath(path.join(dir, entry), { recursive: true });
     }
     await removeDirIfEmpty(dir);
-  } else {
+  } else if (removableEntries.includes(MANIFEST_FILE)) {
     await removeCodegraphPath(manifestPath, {});
     await removeDirIfEmpty(dir);
   }
-  return { schemaVersion: MANIFEST_SCHEMA_VERSION, root, removed: true, manifestPath };
+  return {
+    schemaVersion: MANIFEST_SCHEMA_VERSION,
+    root,
+    removed: options.force ? Boolean(removableEntries.length) : removableEntries.includes(MANIFEST_FILE),
+    manifestPath,
+  };
 }
 
 async function buildLifecycleManifest(

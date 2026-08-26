@@ -773,6 +773,21 @@ describe("project lifecycle commands", () => {
     await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("preserves server-only state without reporting lifecycle removal", async () => {
+    const root = await mkTmpDir("cg-life-uninit-server-only-");
+    const codegraphDirectory = path.join(root, ".codegraph");
+    await fsp.mkdir(codegraphDirectory);
+    await fsp.writeFile(path.join(codegraphDirectory, "server.json"), "{}\n", "utf8");
+    await fsp.writeFile(path.join(codegraphDirectory, "server.log"), "server diagnostics\n", "utf8");
+
+    const regularResult = await uninitCodegraphLifecycle(root);
+    const forcedResult = await uninitCodegraphLifecycle(root, { force: true });
+
+    expect(regularResult.removed).toBe(false);
+    expect(forcedResult.removed).toBe(false);
+    expect(await readCodegraphEntries(root)).toEqual(["server.json", "server.log"]);
+  });
+
   it("CLI JSON captures cover lifecycle mutating commands with positional roots", async () => {
     const initRoot = await mkTmpDir("cg-life-cli-init-");
     await writeFile(initRoot, "src/main.ts", "export const main = 1;\n");

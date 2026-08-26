@@ -590,6 +590,7 @@ async function waitForLiveServer(
   const { promise: childClosed, resolve: resolveChildClose } = Promise.withResolvers<void>();
   const onChildClose = () => resolveChildClose();
   child.once("close", onChildClose);
+  if (child.exitCode !== null || child.signalCode !== null) resolveChildClose();
   try {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
