@@ -198,6 +198,59 @@ describe("shared MCP server lifecycle", () => {
     await fs.rm(registryPath);
   });
 
+  it("treats an unsupported health schema as unreachable", async () => {
+    const root = await createTestRoot();
+    const port = await reservePort();
+    const registryPath = path.join(root, ".codegraph", "server.json");
+    const healthServer = createServer((_request, response) => {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(
+        JSON.stringify({
+          service: "codegraph",
+          schemaVersion: 2,
+          pid: process.pid,
+          root: root.replace(/\\/g, "/"),
+          version: "test",
+          startedAt: "2026-08-25T00:00:00.000Z",
+          update: { restartRequired: false, runningVersion: "test" },
+        }),
+      );
+    });
+    const { promise: listening, resolve: resolveListening, reject: rejectListening } = Promise.withResolvers<void>();
+    healthServer.once("error", rejectListening);
+    healthServer.listen(port, "127.0.0.1", resolveListening);
+    await listening;
+    await writeRegistry(root, {
+      schemaVersion: 1,
+      pid: process.pid,
+      url: "http://127.0.0.1:" + port + "/mcp",
+      root: root.replace(/\\/g, "/"),
+      startedAt: "2026-08-25T00:00:00.000Z",
+      version: "test",
+    });
+
+    try {
+      const status = await runCli(["server", "status", "--root", root, "--json"]);
+      expect(status.exitCode).toBe(0);
+      expect(parseJsonObject(status.stdout)).toMatchObject({
+        status: "unreachable",
+        reason: "Server health endpoint did not respond within 3000ms.",
+      });
+      await expect(fs.access(registryPath)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(registryPath, { force: true });
+      const { promise: closed, resolve: resolveClosed, reject: rejectClosed } = Promise.withResolvers<void>();
+      healthServer.close((error) => {
+        if (error) {
+          rejectClosed(error);
+        } else {
+          resolveClosed();
+        }
+      });
+      await closed;
+    }
+  });
+
   it("rejects stopping a live Codegraph server for another root", async () => {
     const targetRoot = await createTestRoot();
     const serverRoot = await createTestRoot();

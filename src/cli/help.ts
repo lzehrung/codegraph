@@ -414,7 +414,7 @@ Usage:
 Behavior:
   start runs codegraph mcp serve in a separate process, waits for its /health endpoint, then writes .codegraph/server.json. --json emits the started registry with status and update fields.
   The default server listens on 127.0.0.1:7331. A public bind requires an explicit --host. --startup-timeout-ms defaults to 15000 and allows up to 86400000 for long warmups.
-  status retries health checks, removes only confirmed stale registries, and reports a verification remedy for an unreachable or mismatched server. stop only signals a Codegraph server whose root, process, and startup time match the registry.
+  status retries health checks and reports a verification remedy for an unreachable or mismatched server. stop removes only confirmed stale registries or signals a Codegraph server whose root, process, and startup time match the registry.
 
 Forwarded startup options:
   --cache, --cache-dir, --cache-strict, --cache-verify, --native, --threads, --workers,

@@ -212,44 +212,57 @@ async function startServerForRoot(
     throw new Error("Refusing to replace a Codegraph server whose health endpoint is temporarily unavailable.");
   }
 
-  const startedAfterMs = Date.now();
-  const child = spawnServerProcess(root, options.host, options.port, context);
-  const childPid = child.pid;
-  if (!childPid) {
-    child.kill();
-    throw new Error("Codegraph server process did not provide a pid.");
-  }
-
-  const url = serverUrl(options.host, options.port);
-  let health: ServerHealth;
-  try {
-    health = await waitForLiveServer(url, root, options.startupTimeoutMs, child, childPid, startedAfterMs);
-  } catch (error) {
-    await terminateServerProcess(child);
-    throw error;
-  }
-
-  const registry: CodegraphServerRegistry = {
-    schemaVersion: SERVER_REGISTRY_SCHEMA_VERSION,
-    pid: childPid,
-    url,
-    root,
-    startedAt: health.startedAt,
-    version: health.version,
+  const startupSignals = ["SIGINT", "SIGTERM"] as const;
+  const { promise: interrupted, reject: interruptStart } = Promise.withResolvers<never>();
+  const onStartupSignal = (signal: NodeJS.Signals): void => {
+    interruptStart(new Error(`Codegraph server start was interrupted by ${signal}.`));
   };
-  try {
-    await writeRegistry(root, registry);
-  } catch (error) {
-    await terminateServerProcess(child);
-    throw error;
+  for (const signal of startupSignals) {
+    process.once(signal, onStartupSignal);
   }
-  child.unref();
 
-  if (context.hasFlag("--json")) {
-    context.writeJSONLine({ status: "started", ...registry, update: health.update });
-    return;
+  let child: ChildProcess | undefined;
+  let registryWrite: Promise<void> | undefined;
+  try {
+    const startedAfterMs = Date.now();
+    child = spawnServerProcess(root, options.host, options.port, context);
+    const childPid = child.pid;
+    if (!childPid) throw new Error("Codegraph server process did not provide a pid.");
+
+    const url = serverUrl(options.host, options.port);
+    const health = await Promise.race([
+      waitForLiveServer(url, root, options.startupTimeoutMs, child, childPid, startedAfterMs),
+      interrupted,
+    ]);
+    const registry: CodegraphServerRegistry = {
+      schemaVersion: SERVER_REGISTRY_SCHEMA_VERSION,
+      pid: childPid,
+      url,
+      root,
+      startedAt: health.startedAt,
+      version: health.version,
+    };
+    registryWrite = writeRegistry(root, registry);
+    await Promise.race([registryWrite, interrupted]);
+    child.unref();
+
+    if (context.hasFlag("--json")) {
+      context.writeJSONLine({ status: "started", ...registry, update: health.update });
+      return;
+    }
+    context.writeStdoutLine(`Codegraph server started at ${registry.url}`);
+  } catch (error) {
+    if (registryWrite) {
+      await registryWrite.catch(() => undefined);
+      await removeRegistry(root).catch(() => undefined);
+    }
+    if (child) await terminateServerProcess(child);
+    throw error;
+  } finally {
+    for (const signal of startupSignals) {
+      process.removeListener(signal, onStartupSignal);
+    }
   }
-  context.writeStdoutLine(`Codegraph server started at ${registry.url}`);
 }
 
 async function showServerStatus(context: ServerCommandContext): Promise<void> {
@@ -543,7 +556,7 @@ function isServerHealth(value: unknown): value is ServerHealth {
   if (!isPlainRecord(update)) return false;
   return (
     value.service === "codegraph" &&
-    typeof value.schemaVersion === "number" &&
+    value.schemaVersion === SERVER_REGISTRY_SCHEMA_VERSION &&
     typeof value.pid === "number" &&
     Number.isSafeInteger(value.pid) &&
     value.pid > 0 &&
