@@ -206,7 +206,9 @@ codegraph server stop --root .
 
 `server start` serializes lifecycle changes per project, launches `mcp serve` in a separate process, then writes `.codegraph/server.json` only after its loopback `/health` response identifies the requested root, process, and startup time. It defaults to `127.0.0.1:7331`; pass `--host` explicitly for any non-loopback bind, pass `--replace` only to restart a live server for the same root, and use `--startup-timeout-ms <1-86400000>` when a warmup needs more than the 15-second default.
 
-`server status` validates HTTP liveness instead of trusting a PID. Stale registries report a remedy, while `server stop` removes stale metadata or signals only a Codegraph server whose health identity matches the registry. The registry stores only `schemaVersion`, `pid`, `url`, `root`, `startedAt`, and `version`; package version drift requires an explicit restart.
+`server start --json` emits `status: "started"`, the registry fields, and `update`. `server status` retries HTTP health checks instead of trusting a PID; it removes only confirmed stale metadata and asks users to verify an unreachable or identity-mismatched server. `server stop` signals only a Codegraph server whose health identity matches the registry.
+
+The registry stores only `schemaVersion`, `pid`, `url`, `root`, `startedAt`, and `version`; package version drift requires an explicit restart.
 
 `server start` forwards `--warmup`, `--warmup-symbols`, cache, native, worker, and discovery options to `mcp serve`. `status` accepts only `--json` or `--pretty`, and `stop` accepts no output or startup options. The commands do not start implicitly from unrelated commands or manage a general background daemon.
 

@@ -76,6 +76,7 @@ export async function startCodegraphMcpHttpServer(
   const host = options.host ?? "127.0.0.1";
   const { handlers, session } = await createWarmedCodegraphMcpResources(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
+  const installedVersionChecker = createInstalledVersionChecker(runtimeIdentity, { warn: () => {} });
   const protocolFactory = createCodegraphMcpProtocolFactory(
     handlers,
     runtimeIdentity,
@@ -132,7 +133,7 @@ export async function startCodegraphMcpHttpServer(
         root: options.root,
         version: runtimeIdentity.runningVersion,
         startedAt: runtimeIdentity.startedAt,
-        update: createInstalledVersionChecker(runtimeIdentity, { warn: () => {} }).check(true),
+        update: installedVersionChecker.check(),
       }),
     );
   });

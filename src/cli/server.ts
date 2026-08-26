@@ -18,6 +18,9 @@ const DEFAULT_SERVER_START_TIMEOUT_MS = 15_000;
 const MAX_SERVER_START_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const SERVER_STOP_TIMEOUT_MS = 5_000;
 const SERVER_RETRY_DELAY_MS = 50;
+const SERVER_HEALTH_GRACE_TIMEOUT_MS = 3_000;
+const SERVER_HEALTH_REQUEST_TIMEOUT_MS = 1_000;
+const SERVER_HEALTH_RETRY_DELAY_MS = 250;
 const SERVER_COMMAND_VALUE_OPTIONS: Record<ServerCommand, readonly string[]> = {
   start: [
     "--root",
@@ -77,7 +80,7 @@ type ServerHealth = {
 };
 
 type ServerStatus = {
-  status: "live" | "stale" | "not_started";
+  status: "live" | "stale" | "unreachable" | "not_started";
   registry?: CodegraphServerRegistry;
   health?: ServerHealth;
   reason?: string;
@@ -201,10 +204,12 @@ async function startServerForRoot(
     await stopLiveServer(existingStatus.registry!, existingStatus.health!, root);
     await removeRegistry(root);
   } else if (existingStatus.status === "stale") {
-    if (existingStatus.health) {
+    if (!canSafelyRemoveStaleRegistry(existingStatus)) {
       throw new Error("Refusing to replace a Codegraph server whose identity does not match the requested root.");
     }
     await removeRegistry(root);
+  } else if (existingStatus.status === "unreachable") {
+    throw new Error("Refusing to replace a Codegraph server whose health endpoint is temporarily unavailable.");
   }
 
   const startedAfterMs = Date.now();
@@ -269,8 +274,11 @@ async function stopServer(context: ServerCommandContext): Promise<void> {
       context.writeStdoutLine("No Codegraph server registry exists for this root.");
       return;
     }
+    if (status.status === "unreachable") {
+      throw new Error("Refusing to stop a Codegraph server whose health endpoint is temporarily unavailable.");
+    }
     if (status.status === "stale") {
-      if (status.health || (status.registry && !sameRoot(status.registry.root, root))) {
+      if (!canSafelyRemoveStaleRegistry(status)) {
         throw new Error("Refusing to stop a Codegraph server whose identity does not match the requested root.");
       }
       await removeRegistry(root);
@@ -285,41 +293,53 @@ async function stopServer(context: ServerCommandContext): Promise<void> {
 }
 
 export function formatServerStatus(status: ServerStatus): string {
-  if (!status.registry) {
-    const lines = ["Codegraph server status", "=======================", `Status: ${status.status}`];
-    if (status.reason) lines.push(`Reason: ${status.reason}`);
-    if (status.status === "stale") {
-      lines.push("Remedy: run codegraph server stop --root . or codegraph server start --replace --root .");
-    }
-    return lines.join("\n");
+  const lines = ["Codegraph server status", "=======================", `Status: ${status.status}`];
+  if (status.registry) {
+    const registry = status.registry;
+    lines.push(
+      `URL: ${registry.url}`,
+      `PID: ${registry.pid}`,
+      `Root: ${registry.root}`,
+      `Started: ${registry.startedAt}`,
+      `Version: ${registry.version}`,
+    );
   }
-
-  const registry = status.registry;
-  const lines = [
-    "Codegraph server status",
-    "=======================",
-    `Status: ${status.status}`,
-    `URL: ${registry.url}`,
-    `PID: ${registry.pid}`,
-    `Root: ${registry.root}`,
-    `Started: ${registry.startedAt}`,
-    `Version: ${registry.version}`,
-  ];
   if (status.reason) lines.push(`Reason: ${status.reason}`);
   if (status.health) {
     lines.push(`Running version: ${status.health.update.runningVersion}`);
-    if (status.health.update.installedVersion)
+    if (status.health.update.installedVersion) {
       lines.push(`Installed version: ${status.health.update.installedVersion}`);
+    }
     if (status.health.update.restartRequired) {
-      lines.push(`Restart required: yes${status.health.update.reason ? ` (${status.health.update.reason})` : ""}`);
+      let restartMessage = "Restart required: yes";
+      if (status.health.update.reason) restartMessage += ` (${status.health.update.reason})`;
+      lines.push(restartMessage);
     } else {
       lines.push("Restart required: no");
     }
   }
-  if (status.status === "stale") {
-    lines.push("Remedy: run codegraph server stop --root . or codegraph server start --replace --root .");
-  }
+  const remedy = serverStatusRemedy(status);
+  if (remedy) lines.push(`Remedy: ${remedy}`);
   return lines.join("\n");
+}
+
+function serverStatusRemedy(status: ServerStatus): string | undefined {
+  if (status.status === "unreachable") {
+    return "verify the server process and /health endpoint before retrying.";
+  }
+  if (status.status !== "stale") return undefined;
+  if (requiresIdentityVerification(status)) {
+    return "verify the registry and live server identity before retrying.";
+  }
+  return "run codegraph server stop --root . or codegraph server start --replace --root .";
+}
+
+function requiresIdentityVerification(status: ServerStatus): boolean {
+  return status.health !== undefined || Boolean(status.reason?.includes("does not match"));
+}
+
+function canSafelyRemoveStaleRegistry(status: ServerStatus): boolean {
+  return status.status === "stale" && !requiresIdentityVerification(status);
 }
 
 async function readServerStatus(root: string): Promise<ServerStatus> {
@@ -334,8 +354,17 @@ async function readServerStatus(root: string): Promise<ServerStatus> {
     return { status: "stale", registry, reason: "Registry root does not match the requested root." };
   }
 
-  const health = await requestServerHealth(registry.url);
-  if (!health) return { status: "stale", registry, reason: "Server health endpoint did not respond." };
+  const health = await waitForServerHealth(registry.url, SERVER_HEALTH_GRACE_TIMEOUT_MS);
+  if (!health) {
+    if (getServerProcessState(registry.pid) === "missing") {
+      return { status: "stale", registry, reason: "Server process is not running." };
+    }
+    return {
+      status: "unreachable",
+      registry,
+      reason: `Server health endpoint did not respond within ${SERVER_HEALTH_GRACE_TIMEOUT_MS}ms.`,
+    };
+  }
   if (!sameRoot(health.root, root)) {
     return { status: "stale", registry, health, reason: "Server health root does not match the requested root." };
   }
@@ -362,7 +391,7 @@ async function stopLiveServer(registry: CodegraphServerRegistry, health: ServerH
   } catch (error) {
     if (!isMissingProcessError(error)) throw error;
   }
-  await waitForServerStop(registry.url, SERVER_STOP_TIMEOUT_MS);
+  await waitForServerStop(registry.url, registry.pid, SERVER_STOP_TIMEOUT_MS);
 }
 
 function spawnServerProcess(root: string, host: string, port: number, context: ServerCommandContext) {
@@ -456,13 +485,27 @@ async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise
   }
 }
 
-async function waitForServerStop(url: string, timeoutMs: number): Promise<void> {
+async function waitForServerStop(url: string, pid: number, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (!(await requestServerHealth(url))) return;
+    const health = await requestServerHealth(url);
+    if (!health && getServerProcessState(pid) === "missing") return;
     await wait(SERVER_RETRY_DELAY_MS);
   }
   throw new Error(`Codegraph server at ${url} did not stop within ${timeoutMs}ms.`);
+}
+
+async function waitForServerHealth(serverUrl: string, timeoutMs: number): Promise<ServerHealth | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return undefined;
+    const health = await requestServerHealth(serverUrl, Math.min(SERVER_HEALTH_REQUEST_TIMEOUT_MS, remainingMs));
+    if (health) return health;
+    const retryDelayMs = Math.min(SERVER_HEALTH_RETRY_DELAY_MS, deadline - Date.now());
+    if (retryDelayMs <= 0) return undefined;
+    await wait(retryDelayMs);
+  }
 }
 
 function wait(delayMs: number): Promise<void> {
@@ -471,7 +514,10 @@ function wait(delayMs: number): Promise<void> {
   return promise;
 }
 
-async function requestServerHealth(serverUrl: string): Promise<ServerHealth | undefined> {
+async function requestServerHealth(
+  serverUrl: string,
+  timeoutMs = SERVER_HEALTH_REQUEST_TIMEOUT_MS,
+): Promise<ServerHealth | undefined> {
   let healthUrl: URL;
   try {
     healthUrl = new URL(serverUrl);
@@ -482,7 +528,7 @@ async function requestServerHealth(serverUrl: string): Promise<ServerHealth | un
   }
 
   try {
-    const response = await fetch(healthUrl, { signal: AbortSignal.timeout(1_000) });
+    const response = await fetch(healthUrl, { signal: AbortSignal.timeout(timeoutMs) });
     if (!response.ok) return undefined;
     const body: unknown = await response.json();
     return isServerHealth(body) ? body : undefined;
@@ -622,6 +668,23 @@ function isMissingFileError(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
+type ServerProcessState = "running" | "missing" | "unknown";
+
+function getServerProcessState(pid: number): ServerProcessState {
+  try {
+    process.kill(pid, 0);
+    return "running";
+  } catch (error) {
+    if (isMissingProcessError(error)) return "missing";
+    if (isPermissionProcessError(error)) return "unknown";
+    throw error;
+  }
+}
+
 function isMissingProcessError(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ESRCH";
+}
+
+function isPermissionProcessError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "EPERM";
 }
