@@ -107,15 +107,19 @@ export async function goToDefinition(
     const exportFrom = exportFromIdentifier(index, file, toRange(node), context);
     if (exportFrom?.entry) {
       const { matchPath } = await loadNearestTsconfigFor(file, index.projectRoot);
-      const resolvedTarget = await resolveImportSpecifier(
-        index.projectRoot,
-        file,
-        exportFrom.entry.fromModule,
-        sup.id,
-        {
-          ...(matchPath ? { matchPath } : {}),
-        },
-      );
+      // Index construction normalizes in-root re-export targets. Re-resolving a POSIX absolute
+      // path would instead treat its leading slash as project-root-relative.
+      const resolvedTarget = index.byFile.has(fileIdentityKey(exportFrom.entry.fromModule))
+        ? exportFrom.entry.fromModule
+        : await resolveImportSpecifier(
+            index.projectRoot,
+            file,
+            exportFrom.entry.moduleSpecifier ?? exportFrom.entry.fromModule,
+            sup.id,
+            {
+              ...(matchPath ? { matchPath } : {}),
+            },
+          );
       if (typeof resolvedTarget === "string") {
         const hit = resolveExport(index, resolvedTarget, exportFrom.entry.sourceSpecifier);
         if (hit?.kind === "resolved") {
