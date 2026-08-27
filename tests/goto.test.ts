@@ -6,7 +6,12 @@ import { goToDefinition } from "../src/index.js";
 import { JAVA_SUPPORT } from "../src/languages.js";
 import { resolveNamedDefinition } from "../src/indexer/navigation-local.js";
 import { fileIdentityKey } from "../src/util/paths.js";
-import { createTestIndex, createTestIndexFromFiles, testGoToDefinition } from "./test-utils.js";
+import {
+  createTestIndex,
+  createTestIndexFromFiles,
+  createTestIndexFromPath,
+  testGoToDefinition,
+} from "./test-utils.js";
 
 describe("Go to Definition", () => {
   describe("SQL", () => {
@@ -368,6 +373,44 @@ describe("Go to Definition", () => {
         const index = await createTestIndexFromFiles(root, [typesFile, consumerFile]);
 
         await testGoToDefinition(index, consumerFile, 2, usageLine.indexOf("Mode.Light") + 1, typesFile, 1);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves relative re-export declarations", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-relative-reexport-goto-"));
+      try {
+        const sourceFile = path.join(root, "x.ts").replace(/\\/g, "/");
+        const barrelFile = path.join(root, "barrel.ts").replace(/\\/g, "/");
+        const barrelSource = 'export { X } from "./x";\n';
+        await fsp.writeFile(sourceFile, "export const X = 1;\n", "utf8");
+        await fsp.writeFile(barrelFile, barrelSource, "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, barrelFile]);
+
+        await testGoToDefinition(index, barrelFile, 1, barrelSource.indexOf("X") + 1, sourceFile, 1);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves tsconfig path-alias re-export declarations", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-path-alias-reexport-goto-"));
+      try {
+        const sourceFile = path.join(root, "src", "x.ts").replace(/\\/g, "/");
+        const barrelFile = path.join(root, "barrel.ts").replace(/\\/g, "/");
+        const barrelSource = 'export { X } from "@scope/x";\n';
+        await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "tsconfig.json"),
+          JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@scope/*": ["src/*"] } } }),
+          "utf8",
+        );
+        await fsp.writeFile(sourceFile, "export const X = 1;\n", "utf8");
+        await fsp.writeFile(barrelFile, barrelSource, "utf8");
+        const index = await createTestIndexFromPath(root);
+
+        await testGoToDefinition(index, barrelFile, 1, barrelSource.indexOf("X") + 1, sourceFile, 1);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
