@@ -1620,11 +1620,16 @@ export async function buildProjectIndexIncremental(
     }
 
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
-    const { matchPath } = await loadNearestTsconfigFor(
-      path.join(projectRoot, "__codegraph__.ts"),
-      projectRoot,
-      opts?.logLevel,
-    );
+    const tsconfigMatchPathByDirectory = new Map<string, Promise<MatchPathFn | undefined>>();
+    const loadMatchPathForFile = (file: string): Promise<MatchPathFn | undefined> => {
+      const directory = path.dirname(file);
+      let matchPath = tsconfigMatchPathByDirectory.get(directory);
+      if (!matchPath) {
+        matchPath = loadNearestTsconfigFor(file, projectRoot, opts?.logLevel).then((tsconfig) => tsconfig.matchPath);
+        tsconfigMatchPathByDirectory.set(directory, matchPath);
+      }
+      return matchPath;
+    };
     const conc = buildConcurrency(opts);
     // Created below, once the changed-file set is known. Building it here would spawn a full
     // pool before the signature pass and the unchanged-snapshot early return, so a warm
@@ -1744,6 +1749,8 @@ export async function buildProjectIndexIncremental(
             if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
             const support = supportForFile(file, opts?.languageExtensions);
             if (!support) return [file, createEmptyModuleIndex(file)] as const;
+            const matchPath =
+              support.id === "ts" || support.id === "tsx" ? await loadMatchPathForFile(file) : undefined;
             const built = await buildIndexedModuleForFile({
               file,
               support,
