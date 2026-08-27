@@ -10,17 +10,20 @@
  * 7. TypeScript ambient module augmentation creates a file-graph edge
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
-import { buildProjectIndex, analyzeImpactFromDiff } from "../src/index.js";
+import { buildProjectIndex, buildProjectIndexIncremental, analyzeImpactFromDiff } from "../src/index.js";
+import { supportForFile } from "../src/languages.js";
+import { collectLocalsAndExportsFromSource } from "../src/indexer/locals-and-exports.js";
 import type { CompactImpactReport, ImpactReport, ImpactItem } from "../src/impact/types.js";
 import { collectChangedLines } from "../src/impact/map.js";
 import { seedTransitiveFromFiles } from "../src/impact/analyzer.js";
 import type { ProjectIndex } from "../src/indexer.js";
 import type { Edge } from "../src/types.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import type { ExportEntry } from "../src/indexer/types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -500,6 +503,219 @@ describe("appendUniqueSpecifiers deduplication", () => {
 
       // Both extraction paths discovered ./app.js but it should appear once
       expect(edgesFromHtml.length).toBe(1);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. JavaScript/TypeScript export recovery after native export captures
+// ---------------------------------------------------------------------------
+
+describe("JavaScript and TypeScript export recovery", () => {
+  it.each([
+    {
+      name: "compact named re-export",
+      file: "module.ts",
+      source: 'export const nativeCapture = 1;\nexport{source as compact}from "./dep";\n',
+      matches: (exports: ExportEntry[]) =>
+        exports.some(
+          (entry) => entry.type === "reexport" && entry.exportedAs === "compact" && entry.fromModule === "./dep",
+        ),
+    },
+    {
+      name: "spaced named re-export",
+      file: "module.ts",
+      source: 'export const nativeCapture = 1;\nexport {source as spaced}from "./dep";\n',
+      matches: (exports: ExportEntry[]) =>
+        exports.some(
+          (entry) => entry.type === "reexport" && entry.exportedAs === "spaced" && entry.fromModule === "./dep",
+        ),
+    },
+    {
+      name: "multiline named re-export",
+      file: "module.ts",
+      source: 'export const nativeCapture = 1;\nexport\n{\nsource as multiline\n}\nfrom "./dep";\n',
+      matches: (exports: ExportEntry[]) =>
+        exports.some(
+          (entry) => entry.type === "reexport" && entry.exportedAs === "multiline" && entry.fromModule === "./dep",
+        ),
+    },
+    {
+      name: "compact star re-export",
+      file: "module.ts",
+      source: 'export const nativeCapture = 1;\nexport*from "./dep";\n',
+      matches: (exports: ExportEntry[]) =>
+        exports.some((entry) => entry.type === "exportStar" && entry.fromModule === "./dep"),
+    },
+    {
+      name: "spaced star re-export",
+      file: "module.ts",
+      source: 'export const nativeCapture = 1;\nexport * from "./dep";\n',
+      matches: (exports: ExportEntry[]) =>
+        exports.some((entry) => entry.type === "exportStar" && entry.fromModule === "./dep"),
+    },
+    {
+      name: "namespace star re-export",
+      file: "module.ts",
+      source: 'export const nativeCapture = 1;\nexport * as namespace from "./dep";\n',
+      matches: (exports: ExportEntry[]) =>
+        exports.some(
+          (entry) =>
+            entry.type === "namespaceReexport" && entry.exportedAs === "namespace" && entry.fromModule === "./dep",
+        ),
+    },
+    {
+      name: "compact TypeScript export assignment",
+      file: "module.ts",
+      source: "export const nativeCapture = 1;\nconst compactValue = 1;\nexport=compactValue;\n",
+      matches: (exports: ExportEntry[]) =>
+        exports.some(
+          (entry) =>
+            entry.type === "local" && entry.exportedAs === "default" && entry.target.localName === "compactValue",
+        ),
+    },
+    {
+      name: "spaced TypeScript export assignment",
+      file: "module.ts",
+      source: "export const nativeCapture = 1;\nconst spacedValue = 1;\nexport = spacedValue;\n",
+      matches: (exports: ExportEntry[]) =>
+        exports.some(
+          (entry) =>
+            entry.type === "local" && entry.exportedAs === "default" && entry.target.localName === "spacedValue",
+        ),
+    },
+    {
+      name: "module.exports member assignment",
+      file: "module.js",
+      source: "export const nativeCapture = 1;\nmodule.exports.member = function member() {};\n",
+      matches: (exports: ExportEntry[]) =>
+        exports.some((entry) => entry.type === "local" && entry.exportedAs === "member"),
+    },
+    {
+      name: "module.exports default assignment",
+      file: "module.js",
+      source: "export const nativeCapture = 1;\nmodule.exports = { defaultMember: function defaultMember() {} };\n",
+      matches: (exports: ExportEntry[]) =>
+        exports.some((entry) => entry.type === "local" && entry.exportedAs === "defaultMember"),
+    },
+    {
+      name: "exports member assignment",
+      file: "module.js",
+      source: "export const nativeCapture = 1;\nexports.member = function member() {};\n",
+      matches: (exports: ExportEntry[]) =>
+        exports.some((entry) => entry.type === "local" && entry.exportedAs === "member"),
+    },
+  ])("$name remains indexed after native export captures", ({ file, source, matches }) => {
+    const support = supportForFile(file);
+    expect(support).toBeDefined();
+    if (!support) throw new Error(`Expected language support for ${file}`);
+
+    const moduleIndex = collectLocalsAndExportsFromSource(file, source, support, [], {
+      nativeQueries: {
+        imports: [],
+        exports: [{ patternIndex: 0, captures: [] }],
+        locals: [],
+        importBindings: [],
+      },
+    });
+
+    expect(matches(moduleIndex.exports)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 9. Build-scoped workspace and tsconfig resolution
+// ---------------------------------------------------------------------------
+
+describe("build-scoped workspace resolution", () => {
+  it("loads workspace configuration once for a multi-file monorepo build", async () => {
+    await withTmpDir("workspace-config-once", async (root) => {
+      await fsp.mkdir(path.join(root, "packages", "app", "src"), { recursive: true });
+      await fsp.mkdir(path.join(root, "packages", "lib", "src"), { recursive: true });
+      const packageJson = path.join(root, "package.json");
+      await fsp.writeFile(packageJson, JSON.stringify({ workspaces: ["packages/*"] }), "utf8");
+      await fsp.writeFile(
+        path.join(root, "tsconfig.base.json"),
+        JSON.stringify({ compilerOptions: { baseUrl: "." } }),
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(root, "tsconfig.json"),
+        JSON.stringify({
+          extends: "./tsconfig.base.json",
+          compilerOptions: { paths: { "@lib/*": ["packages/lib/src/*"] } },
+        }),
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(root, "packages", "app", "package.json"),
+        JSON.stringify({ name: "@app/main" }),
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(root, "packages", "lib", "package.json"),
+        JSON.stringify({ name: "@lib/main" }),
+        "utf8",
+      );
+      await fsp.writeFile(path.join(root, "packages", "lib", "src", "value.ts"), "export const value = 1;\n", "utf8");
+      for (let index = 0; index < 8; index += 1) {
+        await fsp.writeFile(
+          path.join(root, "packages", "app", "src", `entry-${index}.ts`),
+          `import { value } from "@lib/value"; export const entry${index} = value;\n`,
+          "utf8",
+        );
+      }
+
+      const readSpy = vi.spyOn(fsp, "readFile");
+      try {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const workspaceReads = readSpy.mock.calls.filter(([file]) => path.resolve(String(file)) === packageJson).length;
+
+        const entry = [...index.byFile.values()].find((module) => module.file.endsWith("entry-0.ts"));
+        expect(entry?.imports[0]?.resolved).toContain("packages/lib/src/value.ts");
+        expect(workspaceReads).toBeLessThanOrEqual(5);
+      } finally {
+        readSpy.mockRestore();
+      }
+    });
+  });
+});
+// ---------------------------------------------------------------------------
+// 10. Incremental per-directory tsconfig resolution preserves nested path aliases
+// ---------------------------------------------------------------------------
+
+describe("nested tsconfig path resolution", () => {
+  it("preserves a nested package mapping during an incremental rebuild", async () => {
+    await withTmpDir("nested-tsconfig-paths", async (root) => {
+      await fsp.mkdir(path.join(root, "root-target"), { recursive: true });
+      await fsp.mkdir(path.join(root, "packages", "app", "src"), { recursive: true });
+      await fsp.mkdir(path.join(root, "packages", "app", "local-target"), { recursive: true });
+      await fsp.writeFile(
+        path.join(root, "tsconfig.json"),
+        JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@target/*": ["root-target/*"] } } }),
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(root, "packages", "app", "tsconfig.json"),
+        JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@target/*": ["local-target/*"] } } }),
+        "utf8",
+      );
+      await fsp.writeFile(path.join(root, "root-target", "value.ts"), "export const value = 'root';\n", "utf8");
+      await fsp.writeFile(
+        path.join(root, "packages", "app", "local-target", "value.ts"),
+        "export const value = 'nested';\n",
+        "utf8",
+      );
+      const consumer = path.join(root, "packages", "app", "src", "consumer.ts");
+      await fsp.writeFile(consumer, 'import { value } from "@target/value"; export { value };\n', "utf8");
+
+      await buildProjectIndex(root, { cache: "disk" });
+      await fsp.writeFile(consumer, 'import { value } from "@target/value";\nexport { value };\n', "utf8");
+
+      const index = await buildProjectIndexIncremental(root, { cache: "disk" });
+      const resolved = index.byFile.get(fileIdentityKey(consumer))?.imports[0]?.resolved;
+
+      expect(resolved).toContain("packages/app/local-target/value.ts");
     });
   });
 });

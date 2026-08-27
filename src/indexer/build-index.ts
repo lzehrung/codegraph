@@ -5,7 +5,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { languageExtensionPatterns, supportForFile, type LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
-import { loadWorkspaceConfig, resolveWorkspacePackage } from "../util/workspace.js";
+import { loadWorkspaceConfig, resolveWorkspacePackage, type WorkspaceConfig } from "../util/workspace.js";
 import {
   DEFAULT_PROJECT_PATTERNS,
   discoverProjectFiles,
@@ -13,7 +13,12 @@ import {
   type ProjectFileInfo,
 } from "../util/projectFiles.js";
 import { getGitHead, isGitRepo, getGitBlobHashes, listChangedFiles } from "../util/git.js";
-import { clearResolutionCaches, resolveSpecifier } from "../util/resolution.js";
+import {
+  clearResolutionCaches,
+  loadNearestTsconfigFor,
+  resolveSpecifier,
+  type MatchPathFn,
+} from "../util/resolution.js";
 import {
   fileIdentityKey,
   initializeFileIdentityCaseSensitivity,
@@ -23,7 +28,7 @@ import {
 import { mapLimit } from "../util/concurrency.js";
 import { readConfinedUtf8File } from "../util/confinedFile.js";
 import { resolveWorkerThreadCount } from "../util/workerThreads.js";
-import { logWithLevel, type LogLevel } from "../logging.js";
+import { logWithLevel } from "../logging.js";
 import { collectGraph } from "../graph-builder.js";
 import { collectEdgesForFile } from "../graph-edge-collector.js";
 import { buildGraphAdjacency } from "../graphs/adjacency.js";
@@ -197,18 +202,15 @@ async function resolveCrossModuleSymbolExports(
   support: LanguageSupport,
   projectRoot: string,
   graphOptions: GraphBuildOptions,
-  workspaceConfig: Awaited<ReturnType<typeof loadWorkspaceConfig>>,
-  logLevel: LogLevel | undefined,
+  workspaceConfig: WorkspaceConfig | undefined,
+  matchPath: MatchPathFn | undefined,
 ): Promise<void> {
-  if (!support.supportsCrossModuleSymbols) return;
-  if (!isJsTsLanguage(support.id)) return;
-  const { matchPath } = await import("../util/resolution.js").then((mod) =>
-    mod.loadNearestTsconfigFor(file, projectRoot, logLevel),
+  if (!support.supportsCrossModuleSymbols || !isJsTsLanguage(support.id)) return;
+  const reexports = mod.exports.filter(
+    (entry) => entry.type === "reexport" || entry.type === "exportStar" || entry.type === "namespaceReexport",
   );
-  for (const entry of mod.exports) {
-    if (entry.type !== "reexport" && entry.type !== "exportStar" && entry.type !== "namespaceReexport") {
-      continue;
-    }
+  if (!reexports.length) return;
+  for (const entry of reexports) {
     if (entry.fromModule.startsWith(".")) {
       entry.moduleSpecifier ??= entry.fromModule;
       const resolved = await resolveSpecifier(file, entry.fromModule, projectRoot, matchPath, workspaceConfig, {
@@ -233,7 +235,8 @@ async function buildIndexedModuleForFile(args: {
   opts: BuildOptions | undefined;
   report: BuildReport | undefined;
   graphOptions: GraphBuildOptions;
-  workspaceConfig: Awaited<ReturnType<typeof loadWorkspaceConfig>>;
+  workspaceConfig?: WorkspaceConfig;
+  matchPath?: MatchPathFn;
   workerSetup: WorkerPoolSetupResult;
   parsedMap: Map<string, ParsedFileContext>;
   parsedCacheMaxEntries: number;
@@ -313,12 +316,13 @@ async function buildIndexedModuleForFile(args: {
   // every embedded (SFC) block, instead of one path silently missing a future option.
   const sharedImportOptions = {
     graphOptions: args.graphOptions,
+    ...(args.workspaceConfig ? { workspaceConfig: args.workspaceConfig } : {}),
+    ...(args.matchPath ? { matchPath: args.matchPath } : {}),
     ...(args.opts?.native ? { native: args.opts.native } : {}),
     ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
     ...(args.opts?.languageExtensions ? { languageExtensions: args.opts.languageExtensions } : {}),
     ...(args.onFallbackImportExtraction ? { onFallbackImportExtraction: args.onFallbackImportExtraction } : {}),
   };
-
   const imports =
     nativeSourceLimitFallback || sup.id === "sql"
       ? []
@@ -359,7 +363,7 @@ async function buildIndexedModuleForFile(args: {
     args.projectRoot,
     args.graphOptions,
     args.workspaceConfig,
-    args.opts?.logLevel,
+    args.matchPath,
   );
 
   const sigInfo = args.fileSignatures.get(args.file);
@@ -608,10 +612,9 @@ function buildConcurrency(opts: BuildOptions | undefined): number {
 async function prepareFileSignatures(args: {
   projectRoot: string;
   files: string[];
-  opts: BuildOptions | undefined;
   gitSigMap: Map<string, string>;
   cacheEnabled: boolean;
-  needsContentHash: boolean;
+  signatureStrict: boolean | undefined;
   concurrency: number;
   confinedRoot?: string;
   trustedSources?: Map<string, string> | undefined;
@@ -625,7 +628,7 @@ async function prepareFileSignatures(args: {
       args.trustedSources?.set(file, source);
       return [file, fileSignatureFromSource(source, gitSig)] as const;
     }
-    const sigInfo = await fileSignature(file, args.needsContentHash ? args.opts?.cacheStrict : false, gitSig, {
+    const sigInfo = await fileSignature(file, args.signatureStrict, gitSig, {
       forceContentHash: args.cacheEnabled && !gitSig,
     });
     return [file, sigInfo] as const;
@@ -651,16 +654,8 @@ async function buildIndexFromFileListShared(
 ): Promise<ProjectIndex> {
   clearResolutionCaches();
   await initializeFileIdentityCaseSensitivity(projectRoot);
-  const {
-    normalizedProjectRoot,
-    report,
-    timings,
-    totalStart,
-    cacheMode,
-    cacheEnabled,
-    graphOptions,
-    onFallbackImportExtraction,
-  } = createIndexBuildRunState(projectRoot, opts);
+  const { normalizedProjectRoot, report, timings, totalStart, cacheEnabled, graphOptions, onFallbackImportExtraction } =
+    createIndexBuildRunState(projectRoot, opts);
   const manifestMode: ManifestMode = helperOpts?.manifestMode ?? "off";
   const useManifest = manifestMode !== "off";
   const shouldWriteManifest = manifestMode === "read-write";
@@ -731,13 +726,15 @@ async function buildIndexFromFileListShared(
     : new Map<string, ProjectIndexManifestEntry>();
   const modules = new Map<FileId, ModuleIndex>();
   const gitAvailable = await isGitRepo(projectRoot);
-  const useGitSignatures = gitAvailable && (cacheMode !== "off" || opts?.cacheStrict);
+  const needsPersistentSignatures = cacheEnabled || useManifest;
+  const useGitSignatures = gitAvailable && needsPersistentSignatures;
   const gitSigMap = useGitSignatures
     ? await getGitBlobHashes(projectRoot, normalizedFiles, {
         gitAvailable,
         ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
       })
     : new Map<string, string>();
+  const signatureStrict = needsPersistentSignatures ? opts?.cacheStrict : false;
   const conc = edgeProbeConcurrency;
   const languageExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
   const sqlFiles = normalizedFiles
@@ -749,10 +746,9 @@ async function buildIndexFromFileListShared(
   const fileSignatures = await prepareFileSignatures({
     projectRoot,
     files: sqlFiles,
-    opts,
     gitSigMap,
     cacheEnabled,
-    needsContentHash: true,
+    signatureStrict,
     concurrency: conc,
     ...(confinedRoot ? { confinedRoot, trustedSources } : {}),
   });
@@ -788,7 +784,7 @@ async function buildIndexFromFileListShared(
             trustedSources?.set(file, source);
             sigInfo = fileSignatureFromSource(source, gitSig);
           } else {
-            sigInfo = await fileSignature(file, opts?.cacheStrict, gitSig, {
+            sigInfo = await fileSignature(file, signatureStrict, gitSig, {
               forceContentHash: cacheEnabled && !gitSig,
             });
           }
@@ -828,6 +824,16 @@ async function buildIndexFromFileListShared(
       : null;
     const parsedMap = new Map<string, ParsedFileContext>();
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+    const tsconfigMatchPathByDirectory = new Map<string, Promise<MatchPathFn | undefined>>();
+    const loadMatchPathForFile = (file: string): Promise<MatchPathFn | undefined> => {
+      const directory = path.dirname(file);
+      let matchPath = tsconfigMatchPathByDirectory.get(directory);
+      if (!matchPath) {
+        matchPath = loadNearestTsconfigFor(file, projectRoot, opts?.logLevel).then((tsconfig) => tsconfig.matchPath);
+        tsconfigMatchPathByDirectory.set(directory, matchPath);
+      }
+      return matchPath;
+    };
     const parseStart = performance.now();
     const graph: Graph = { nodes: new Set(normalizedFiles), edges: [] };
     const onFileEdges = manifestEntries
@@ -902,6 +908,7 @@ async function buildIndexFromFileListShared(
         ensureBuildProgressStarted();
         let graphContext: IndexedFileGraphContext | undefined;
         let cacheWrite: PendingModuleCacheWrite | undefined;
+        const matchPath = support.id === "ts" || support.id === "tsx" ? await loadMatchPathForFile(file) : undefined;
         if (!mod) {
           const built = await buildIndexedModuleForFile({
             file,
@@ -910,7 +917,8 @@ async function buildIndexFromFileListShared(
             opts,
             report,
             graphOptions,
-            workspaceConfig,
+            ...(workspaceConfig ? { workspaceConfig } : {}),
+            ...(matchPath ? { matchPath } : {}),
             workerSetup,
             ...(resolverEnvironmentFingerprint !== undefined ? { resolverEnvironmentFingerprint } : {}),
             parsedMap,
@@ -1603,6 +1611,16 @@ export async function buildProjectIndexIncremental(
     }
 
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+    const tsconfigMatchPathByDirectory = new Map<string, Promise<MatchPathFn | undefined>>();
+    const loadMatchPathForFile = (file: string): Promise<MatchPathFn | undefined> => {
+      const directory = path.dirname(file);
+      let matchPath = tsconfigMatchPathByDirectory.get(directory);
+      if (!matchPath) {
+        matchPath = loadNearestTsconfigFor(file, projectRoot, opts?.logLevel).then((tsconfig) => tsconfig.matchPath);
+        tsconfigMatchPathByDirectory.set(directory, matchPath);
+      }
+      return matchPath;
+    };
     const conc = buildConcurrency(opts);
     // Created below, once the changed-file set is known. Building it here would spawn a full
     // pool before the signature pass and the unchanged-snapshot early return, so a warm
@@ -1619,10 +1637,9 @@ export async function buildProjectIndexIncremental(
       const fileSignatures = await prepareFileSignatures({
         projectRoot,
         files: Array.from(allFiles),
-        opts,
         gitSigMap,
         cacheEnabled,
-        needsContentHash: cacheEnabled || manifestUsed || opts?.cacheStrict === true,
+        signatureStrict: opts?.cacheStrict,
         concurrency: conc,
       });
       const modules = new Map<FileId, ModuleIndex>();
@@ -1722,6 +1739,8 @@ export async function buildProjectIndexIncremental(
             if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
             const support = supportForFile(file, opts?.languageExtensions);
             if (!support) return [file, createEmptyModuleIndex(file)] as const;
+            const matchPath =
+              support.id === "ts" || support.id === "tsx" ? await loadMatchPathForFile(file) : undefined;
             const built = await buildIndexedModuleForFile({
               file,
               support,
@@ -1729,7 +1748,8 @@ export async function buildProjectIndexIncremental(
               opts,
               report,
               graphOptions,
-              workspaceConfig,
+              ...(workspaceConfig ? { workspaceConfig } : {}),
+              ...(matchPath ? { matchPath } : {}),
               workerSetup,
               parsedMap,
               parsedCacheMaxEntries: parsedCacheMaxEntries(opts),
