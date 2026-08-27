@@ -69,7 +69,11 @@ describe("CLI index progress", () => {
     }
   });
 
-  it("uses singular file progress wording for a single-file index", async () => {
+  it.each([
+    ["a single file", 1, "0/1 file", "1 file"],
+    ["multiple files", 2, "0/2 files", "2 files"],
+    ["an unknown total", 0, "0 files processed", "no files"],
+  ] as const)("renders %s correctly in log mode", async (_description, total, progressCount, completionCount) => {
     const chunks: string[] = [];
     vi.useFakeTimers();
 
@@ -84,35 +88,63 @@ describe("CLI index progress", () => {
         mode: "build",
         message: "Building project index",
         current: 0,
-        total: 1,
+        total,
       });
       await vi.advanceTimersByTimeAsync(1_000);
-      display.update({
-        type: "progress",
-        phase: "update",
-        mode: "build",
-        message: "Indexed only.ts",
-        current: 1,
-        total: 1,
-      });
       display.update({
         type: "progress",
         phase: "complete",
         mode: "build",
         message: "Index ready",
-        current: 1,
-        total: 1,
+        current: total,
+        total,
       });
 
-      expect(chunks.join("")).toContain("[Progress] Building project index: 0/1 file.");
-      expect(chunks.join("")).toContain("[Progress] 1 file processed.");
-      expect(chunks.join("")).toContain("[Progress] Built project index: 1 file.");
+      expect(chunks.join("")).toBe(
+        `[Progress] Building project index.\n[Progress] Building project index: ${progressCount}.\n[Progress] Built project index: ${completionCount}.\n`,
+      );
+      if (!total) expect(chunks.join("")).not.toContain("0/0");
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("renders and completes an interactive build without writing file paths", () => {
+  it.each([
+    ["a single file", 1, "0/1 file", "1 file"],
+    ["multiple files", 2, "0/2 files", "2 files"],
+    ["an unknown total", 0, "0 files processed", "no files"],
+  ] as const)("renders %s correctly in interactive mode", (_description, total, progressCount, completionCount) => {
+    const chunks: string[] = [];
+    const display = createCliProgressDisplay({
+      presentation: "interactive",
+      write: (chunk) => chunks.push(chunk),
+    });
+
+    display.update({
+      type: "progress",
+      phase: "start",
+      mode: "build",
+      message: "Building project index",
+      current: 0,
+      total,
+    });
+    display.update({
+      type: "progress",
+      phase: "complete",
+      mode: "build",
+      message: "Index ready",
+      current: total,
+      total,
+    });
+
+    const output = chunks.join("");
+    expect(output).toBe(
+      `\r\u001b[2KBuilding project index... - ${progressCount}\r\u001b[2KBuilt project index: ${completionCount}.\n`,
+    );
+    if (!total) expect(output).not.toContain("0/0");
+  });
+
+  it("does not write file paths in interactive mode", () => {
     const chunks: string[] = [];
     const display = createCliProgressDisplay({ presentation: "interactive", write: (chunk) => chunks.push(chunk) });
 
@@ -122,7 +154,7 @@ describe("CLI index progress", () => {
       mode: "build",
       message: "Building project index",
       current: 0,
-      total: 0,
+      total: 2,
     });
     display.update({
       type: "progress",
@@ -139,14 +171,39 @@ describe("CLI index progress", () => {
       message: "Index ready",
       current: 2,
       total: 2,
-      elapsedMs: 1_250,
     });
-    display.dispose();
 
-    const output = chunks.join("");
-    expect(output).toContain("Building project index");
-    expect(output).toContain("Built project index: 2 files in 1.3s.");
-    expect(output).not.toContain("secret.ts");
+    expect(chunks.join("")).not.toContain("secret.ts");
+  });
+
+  it("does not render negative elapsed time", () => {
+    const chunks: string[] = [];
+    const display = createCliProgressDisplay({
+      presentation: "log",
+      write: (chunk) => chunks.push(chunk),
+    });
+
+    display.update({
+      type: "progress",
+      phase: "start",
+      mode: "build",
+      message: "Building project index",
+      current: 0,
+      total: 1,
+    });
+    display.update({
+      type: "progress",
+      phase: "complete",
+      mode: "build",
+      message: "Index ready",
+      current: 1,
+      total: 1,
+      elapsedMs: -1_000,
+    });
+
+    expect(chunks.join("")).toBe(
+      "[Progress] Building project index.\n[Progress] Built project index: 1 file in 0ms.\n",
+    );
   });
 
   it("uses newline-delimited output without control sequences in log mode", () => {

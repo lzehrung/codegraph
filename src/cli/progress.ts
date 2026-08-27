@@ -56,7 +56,7 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
     const action = progressAction(mode);
     const frame = SPINNER_FRAMES[frameIndex % SPINNER_FRAMES.length]!;
     frameIndex += 1;
-    const count = total > 0 ? ` ${current}/${total} files` : "";
+    const count = formatProgressCount(current, total);
     write(`${CLEAR_LINE}${action} project index... ${frame}${count}`);
     rendered = true;
   };
@@ -99,10 +99,9 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
     if (!rendered) return;
     clear();
     const verb = progressCompleteVerb(mode);
-    const fileCount = update.total;
-    const files = fileCount === 1 ? "file" : "files";
+    const fileCount = formatFileCount(update.total, "words");
     const elapsed = update.elapsedMs === undefined ? "" : ` in ${formatDuration(update.elapsedMs)}`;
-    write(`${verb} project index: ${fileCount} ${files}${elapsed}.\n`);
+    write(`${verb} project index: ${fileCount}${elapsed}.\n`);
   };
 
   return {
@@ -132,8 +131,14 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
   };
 }
 
-function formatFileCount(count: number): string {
+function formatFileCount(count: number, zeroFormat: "numeric" | "words" = "numeric"): string {
+  if (!count && zeroFormat === "words") return "no files";
   return `${count} file${count === 1 ? "" : "s"}`;
+}
+
+function formatProgressCount(current: number, total: number): string {
+  if (total > 0) return ` ${current}/${formatFileCount(total)}`;
+  return ` ${formatFileCount(current)} processed`;
 }
 
 function createLogProgressDisplay(write: (chunk: string) => void, delayMs: number = 0): CliProgressDisplay {
@@ -161,7 +166,7 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
     write(`[Progress] ${progressAction(mode)} project index.\n`);
     heartbeat = setInterval(() => {
       if (!active) return;
-      write(`[Progress] ${progressAction(mode)} project index: ${current}/${formatFileCount(total)}.\n`);
+      write(`[Progress] ${progressAction(mode)} project index:${formatProgressCount(current, total)}.\n`);
     }, 1_000);
     heartbeat.unref();
   };
@@ -193,7 +198,7 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
         if (!rendered) return;
         const verb = progressCompleteVerb(mode);
         const elapsed = update.elapsedMs === undefined ? "" : ` in ${formatDuration(update.elapsedMs)}`;
-        write(`[Progress] ${verb} project index: ${formatFileCount(update.total)}${elapsed}.\n`);
+        write(`[Progress] ${verb} project index: ${formatFileCount(update.total, "words")}${elapsed}.\n`);
         return;
       }
       if (!active) {
@@ -203,7 +208,7 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
       current = update.current;
       total = update.total;
       mode = update.mode ?? mode;
-      const isComplete = update.current >= update.total;
+      const isComplete = update.total > 0 && update.current >= update.total;
       if (rendered && (update.current === 1 || isComplete || update.current % 100 === 0)) {
         write(`[Progress] ${formatFileCount(update.current)} processed.\n`);
       }
@@ -229,6 +234,7 @@ function progressCompleteVerb(mode: NonNullable<ProgressUpdate["mode"]>): string
 }
 
 function formatDuration(elapsedMs: number): string {
-  if (elapsedMs < 1_000) return `${Math.max(0, Math.round(elapsedMs))}ms`;
-  return `${(elapsedMs / 1_000).toFixed(1)}s`;
+  const durationMs = Math.max(0, elapsedMs);
+  if (durationMs < 1_000) return `${Math.round(durationMs)}ms`;
+  return `${(durationMs / 1_000).toFixed(1)}s`;
 }
