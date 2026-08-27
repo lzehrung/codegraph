@@ -78,12 +78,7 @@ export {
   buildProjectIndexIncremental,
 } from "./indexer/build-index.js";
 
-export {
-  findReferences,
-  goToDefinition,
-  resolveExport,
-  resolveImported,
-} from "./indexer/navigation.js";
+export { findReferences, goToDefinition, resolveExport, resolveImported } from "./indexer/navigation.js";
 
 export {
   defFromSymbolId,
@@ -141,4 +136,3 @@ export function buildScopeIndexFromSource(
 ): ScopeIndex {
   return buildScopeIndexFromSourceFromModule(file, source, support, imports, opts);
 }
-
