@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isPlainRecord } from "../src/util/guards.js";
-import { captureCli } from "./helpers/cli.js";
+import { captureCli, stripCliProgressLines } from "./helpers/cli.js";
 
 let root = "";
 
@@ -60,7 +60,8 @@ describe("type hierarchy CLI", () => {
     ]);
     const parsed: unknown = JSON.parse(result.stdout);
 
-    expect(result).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(result.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(result.stderr)).toBe("");
     expect(parsed).toMatchObject({
       schemaVersion: 1,
       direction: "sub",
@@ -81,7 +82,8 @@ describe("type hierarchy CLI", () => {
   it("renders concise pretty hierarchy and implementation output", async () => {
     const specialized = await symbolHandle("Specialized");
     const supertypes = await captureCli(["supertypes", specialized, "--root", root, "--cache", "off", "--depth", "3"]);
-    expect(supertypes).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(supertypes.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(supertypes.stderr)).toBe("");
     expect(supertypes.stdout).toContain("Target: Specialized [class] types.ts:4:");
     expect(supertypes.stdout).toContain("Supertypes: 3");
     expect(supertypes.stdout).toContain("1. Worker [class] types.ts:3:");
@@ -89,7 +91,8 @@ describe("type hierarchy CLI", () => {
 
     const service = await symbolHandle("Service");
     const implementations = await captureCli(["implementations", service, "--root", root, "--cache", "off"]);
-    expect(implementations).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(implementations.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(implementations.stderr)).toBe("");
     expect(implementations.stdout).toContain("Implementations: 2");
     expect(implementations.stdout).toContain("Worker [class] types.ts:3:");
     expect(implementations.stdout).toContain("Specialized [class] types.ts:4:");

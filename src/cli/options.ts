@@ -728,7 +728,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       kind: "max",
       max: 2,
       usage:
-        'Usage: codegraph sql <sqlite-path> "SELECT ..." [--json | --pretty] OR codegraph sql --db <sqlite path> --query "SELECT ..." [--json | --pretty]',
+        'Usage: codegraph sql <sqlite-path> "SELECT ..." [--json | --pretty] OR codegraph sql --db <sqlite-path> --query "SELECT ..." [--json | --pretty]',
     }),
   ],
   [

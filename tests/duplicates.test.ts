@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, test } from "vitest";
-import { captureCli, runCliOrThrow } from "./helpers/cli.js";
+import { captureCli, runCliOrThrow, stripCliProgressLines } from "./helpers/cli.js";
 import { runCli } from "../src/cli.js";
 import { appendDuplicateLeadSummary, collectDuplicateLeadSummary } from "../src/duplicatesLeads.js";
 import { buildProjectIndex, findDuplicateContext, findDuplicateContexts, findDuplicates } from "../src/index.js";
@@ -1523,7 +1523,7 @@ export function sharedClone(rows) {
     };
 
     expect(result.exitCode).toBeUndefined();
-    expect(result.stderr).toBe("");
+    expect(stripCliProgressLines(result.stderr)).toBe("");
     expect(parsed.groups).toHaveLength(1);
     expect(parsed.groups?.[0]?.primaryLeft?.file).toBe("configs/a.json");
     expect(parsed.groups?.[0]?.primaryRight?.file).toBe("configs/b.json");
@@ -1623,7 +1623,7 @@ export function summarizeOrders(rows: number[]) {
     };
 
     expect(result.exitCode).toBeUndefined();
-    expect(result.stderr).toBe("");
+    expect(stripCliProgressLines(result.stderr)).toBe("");
     expect(parsed.groups?.length).toBeGreaterThan(0);
     for (const group of parsed.groups ?? []) {
       expect(group.primaryLeft?.file?.startsWith("tests/unit/")).toBeTruthy();
@@ -1935,7 +1935,7 @@ export function summarizeOrders(rows: number[]) {
     const result = await captureCli(["duplicates", "--root", ".", "src", "--json", "--pretty"], { cwd: root });
 
     expect(result.exitCode).toBeUndefined();
-    expect(result.stderr).toBe("");
+    expect(stripCliProgressLines(result.stderr)).toBe("");
     expect(() => JSON.parse(result.stdout)).not.toThrow();
   });
   test("duplicates CLI rejects --sort actionability with --raw-pairs", async () => {
@@ -2410,7 +2410,7 @@ export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
     const parsed = JSON.parse(result.stdout) as { groups?: Array<{ score?: number }> };
 
     expect(result.exitCode).toBeUndefined();
-    expect(result.stderr).toBe("");
+    expect(stripCliProgressLines(result.stderr)).toBe("");
     expect(parsed.groups).toHaveLength(1);
     expect(parsed.groups?.[0]?.score).toBeGreaterThan(90);
   });
@@ -2476,7 +2476,7 @@ export function sameRows(rows: number[]) {
     };
 
     expect(result.exitCode).toBeUndefined();
-    expect(result.stderr).toBe("");
+    expect(stripCliProgressLines(result.stderr)).toBe("");
     expect(parsed.groups).toHaveLength(0);
     expect(parsed.omittedCounts?.groups).toBeGreaterThan(0);
     expect(parsed.omittedCounts?.candidatePairs).toBe(0);

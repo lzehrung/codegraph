@@ -356,11 +356,6 @@ function writePrettyReferences(context: NavigationCommandContext, result: FindRe
   }
 }
 
-const gotoUsage =
-  "Usage: goto <file|file::symbol|symbol:...> [--root <path>] [--json | --pretty]\n       goto <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]";
-const refsUsage =
-  "Usage: refs <file|file::symbol|symbol:...> [--root <path>] [--json | --pretty]\n       refs <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]\n       refs --file <file> [--line <line> --col <column>] [--root <path>] [--json | --pretty]";
-
 export async function handleGotoCommand(context: NavigationCommandContext): Promise<void> {
   let input: ResolvedNavigationInput | null;
   try {
@@ -369,7 +364,7 @@ export async function handleGotoCommand(context: NavigationCommandContext): Prom
     exitWithError(context, error, 2);
   }
   if (!input) {
-    context.writeStderrLine(gotoUsage);
+    context.writeStderrLine(getCliCommandUsage("goto"));
     context.exit(2);
   }
   const resolvedFile = resolveCliProjectFile(context.projectRootFs, input.file, "File");
@@ -428,7 +423,7 @@ export async function handleRefsCommand(context: NavigationCommandContext): Prom
     exitWithError(context, error, 2);
   }
   if (!input) {
-    context.writeStderrLine(refsUsage);
+    context.writeStderrLine(getCliCommandUsage("refs"));
     context.exit(2);
   }
   const pretty = !context.hasFlag("--json");

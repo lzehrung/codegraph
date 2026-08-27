@@ -37,7 +37,7 @@ import { handleSearchCommand } from "../src/cli/search.js";
 import { handleSkillCommand, type SkillCommandContext } from "../src/cli/skill.js";
 import { handleSqlCommand } from "../src/cli/sql.js";
 import { runCli } from "../src/cli.js";
-import { captureCli } from "./helpers/cli.js";
+import { captureCli, stripCliProgressLines } from "./helpers/cli.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import { diffBuildOptions, summarizeBuildOptions } from "../src/indexer/build-cache.js";
 import type { ProjectIndex } from "../src/indexer.js";
@@ -485,7 +485,7 @@ describe("CLI command modules", () => {
     ).rejects.toThrow("navigation exit 2");
 
     expect(stderr).toEqual([
-      "Usage: goto <file|file::symbol|symbol:...> [--root <path>] [--json | --pretty]\n       goto <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]",
+      "Usage: codegraph goto <file|file::symbol|symbol:...> [--root <path>] [--json | --pretty]\n       codegraph goto <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]",
     ]);
   });
   test("refs command documents every accepted target form when target is missing", async () => {
@@ -501,7 +501,7 @@ describe("CLI command modules", () => {
     ).rejects.toThrow("navigation exit 2");
 
     expect(stderr).toEqual([
-      "Usage: refs <file|file::symbol|symbol:...> [--root <path>] [--json | --pretty]\n       refs <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]\n       refs --file <file> [--line <line> --col <column>] [--root <path>] [--json | --pretty]",
+      "Usage: codegraph refs <file|file::symbol|symbol:...> [--root <path>] [--json | --pretty]\n       codegraph refs <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]\n       codegraph refs --file <file> [--line <line> --col <column>] [--root <path>] [--json | --pretty]",
     ]);
   });
   test("goto pretty output renders a concise definition summary", async () => {
@@ -1808,7 +1808,7 @@ describe("CLI command modules", () => {
     ).rejects.toThrow("sql exit 2");
 
     expect(stderrLines).toEqual([
-      'Usage: codegraph sql <sqlite-path> "SELECT ..." [--json | --pretty] OR codegraph sql --db <sqlite path> --query "SELECT ..." [--json | --pretty]',
+      'Usage: codegraph sql <sqlite-path> "SELECT ..." [--json | --pretty] OR codegraph sql --db <sqlite-path> --query "SELECT ..." [--json | --pretty]',
     ]);
   });
 
@@ -2481,7 +2481,8 @@ describe("CLI command modules", () => {
       const report = readJsonRecord(JSON.parse(await fsp.readFile(reportPath, "utf8")));
       const timings = readJsonRecord(report.timings);
 
-      expect(result).toMatchObject({ stderr: "", exitCode: undefined });
+      expect(result.exitCode).toBeUndefined();
+      expect(stripCliProgressLines(result.stderr)).toBe("");
       expect(response.results).toBeTypeOf("object");
       expect(report.command).toBe("search");
       expect(timings.commandMs).toBeTypeOf("number");
