@@ -484,7 +484,25 @@ describe("CLI command modules", () => {
       ),
     ).rejects.toThrow("navigation exit 2");
 
-    expect(stderr).toEqual(["Usage: goto <file>[:line[:column]] [line] [column]"]);
+    expect(stderr).toEqual([
+      "Usage: goto <file|file::symbol|symbol:...> [--root <path>] [--json | --pretty]\n       goto <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]",
+    ]);
+  });
+  test("refs command documents every accepted target form when target is missing", async () => {
+    const stderr: string[] = [];
+
+    await expect(
+      handleRefsCommand(
+        createNavigationContext({
+          positionals: [],
+          writeStderrLine: (message) => stderr.push(message),
+        }),
+      ),
+    ).rejects.toThrow("navigation exit 2");
+
+    expect(stderr).toEqual([
+      "Usage: refs <file|file::symbol|symbol:...> [--root <path>] [--json | --pretty]\n       refs <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]\n       refs --file <file> [--line <line> --col <column>] [--root <path>] [--json | --pretty]",
+    ]);
   });
   test("goto pretty output renders a concise definition summary", async () => {
     const root = await mkTmpDir("codegraph-goto-pretty-");
@@ -2198,6 +2216,46 @@ describe("CLI command modules", () => {
 
     expect(stderrLines).toContain("Usage: chunk <file-path> [options]");
     expect(stderrLines).toContain("  --text            Force text chunking mode");
+  });
+
+  test("accepts every chunk language advertised in its usage output", async () => {
+    const stderrLines: string[] = [];
+    await expect(
+      handleChunkCommand(
+        createChunkContext({
+          writeStderrLine: (message) => stderrLines.push(message),
+        }),
+      ),
+    ).rejects.toThrow("chunk exit 2");
+
+    const languageHelp = stderrLines.find((line) => line.startsWith("  --language LANG"));
+    const languages = languageHelp?.match(/\((.+)\)$/)?.[1].split(", ") ?? [];
+    expect(languages.length).toBeGreaterThan(0);
+
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-chunk-languages-"));
+    const filePath = path.join(tempDir, "sample.txt");
+    await fsp.writeFile(filePath, "export const value = 1;\n", "utf8");
+
+    try {
+      for (const language of languages) {
+        await expect(
+          handleChunkCommand(
+            createChunkContext({
+              positionals: [filePath],
+              getOpt: (name) => {
+                if (name === "--language") return language;
+                if (name === "--min-tokens") return "1";
+                if (name === "--max-tokens") return "50";
+                return undefined;
+              },
+              writeJSONLine: () => {},
+            }),
+          ),
+        ).resolves.toBeUndefined();
+      }
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   test("rejects invalid chunk token bounds", async () => {

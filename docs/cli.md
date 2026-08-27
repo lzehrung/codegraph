@@ -533,7 +533,7 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 
 #### Chunking
 
-`chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. `--language` accepts only listed supported language IDs; an unrecognized extension still falls back to text. Use `--text` to force text chunking.
+`chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. `--language` accepts `c`, `cpp`, `csharp`, `css`, `go`, `html`, `java`, `javascript`, `json`, `kotlin`, `less`, `php`, `python`, `ruby`, `rust`, `scss`, `sql`, `svelte`, `swift`, `text`, `tsx`, `typescript`, `vue`, `yaml`, or `zig`; an unrecognized extension still falls back to text. Use `--text` to force text chunking.
 
 ### Dependency analysis and diagnostics
 

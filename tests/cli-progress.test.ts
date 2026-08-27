@@ -69,6 +69,49 @@ describe("CLI index progress", () => {
     }
   });
 
+  it("uses singular file progress wording for a single-file index", async () => {
+    const chunks: string[] = [];
+    vi.useFakeTimers();
+
+    try {
+      const display = createCliProgressDisplay({
+        presentation: "log",
+        write: (chunk) => chunks.push(chunk),
+      });
+      display.update({
+        type: "progress",
+        phase: "start",
+        mode: "build",
+        message: "Building project index",
+        current: 0,
+        total: 1,
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      display.update({
+        type: "progress",
+        phase: "update",
+        mode: "build",
+        message: "Indexed only.ts",
+        current: 1,
+        total: 1,
+      });
+      display.update({
+        type: "progress",
+        phase: "complete",
+        mode: "build",
+        message: "Index ready",
+        current: 1,
+        total: 1,
+      });
+
+      expect(chunks.join("")).toContain("[Progress] Building project index: 0/1 file.");
+      expect(chunks.join("")).toContain("[Progress] 1 file processed.");
+      expect(chunks.join("")).toContain("[Progress] Built project index: 1 file.");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("renders and completes an interactive build without writing file paths", () => {
     const chunks: string[] = [];
     const display = createCliProgressDisplay({ presentation: "interactive", write: (chunk) => chunks.push(chunk) });
@@ -138,7 +181,7 @@ describe("CLI index progress", () => {
 
     const output = chunks.join("");
     expect(output).toContain("[Progress] Updating project index.\n");
-    expect(output).toContain("[Progress] 1/1 files processed.\n");
+    expect(output).toContain("[Progress] 1 file processed.\n");
     expect(output).toContain("[Progress] Updated project index: 3 files in 25ms.\n");
     expect(output).not.toContain("\u001b[");
     expect(output).not.toContain("\r");

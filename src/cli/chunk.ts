@@ -30,9 +30,8 @@ const chunkTextLanguageByExtension: Record<string, string> = {
   ".yml": "yaml",
 };
 
-const chunkLanguageHelp = Array.from(
-  new Set([...Object.keys(LANG_CONFIGS).sort(), "vue", "svelte", "json", "yaml", "text"]),
-).join(", ");
+const supportedChunkLanguageIds = new Set([...Object.keys(LANG_CONFIGS), "vue", "svelte", "json", "yaml", "text"]);
+const chunkLanguageHelp = [...supportedChunkLanguageIds].sort().join(", ");
 
 function normalizeChunkLanguageId(languageId: string): string {
   return chunkLanguageAliases[languageId] ?? languageId;
@@ -75,8 +74,7 @@ export async function handleChunkCommand(context: ChunkCommandContext): Promise<
   const languageOverride = context.getOpt("--language");
   if (languageOverride) {
     const languageId = normalizeChunkLanguageId(languageOverride);
-    const isSupported =
-      languageId === "vue" || languageId === "svelte" || languageId === "text" || !!LANG_CONFIGS[languageId];
+    const isSupported = supportedChunkLanguageIds.has(languageId);
     if (!isSupported) {
       context.writeStderrLine(
         `Unsupported --language value "${languageId}". Supported languages: ${chunkLanguageHelp}.`,

@@ -132,6 +132,10 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
   };
 }
 
+function formatFileCount(count: number): string {
+  return `${count} file${count === 1 ? "" : "s"}`;
+}
+
 function createLogProgressDisplay(write: (chunk: string) => void, delayMs: number = 0): CliProgressDisplay {
   let active = false;
   let rendered = false;
@@ -157,7 +161,7 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
     write(`[Progress] ${progressAction(mode)} project index.\n`);
     heartbeat = setInterval(() => {
       if (!active) return;
-      write(`[Progress] ${progressAction(mode)} project index: ${current}/${total} files.\n`);
+      write(`[Progress] ${progressAction(mode)} project index: ${current}/${formatFileCount(total)}.\n`);
     }, 1_000);
     heartbeat.unref();
   };
@@ -189,7 +193,7 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
         if (!rendered) return;
         const verb = progressCompleteVerb(mode);
         const elapsed = update.elapsedMs === undefined ? "" : ` in ${formatDuration(update.elapsedMs)}`;
-        write(`[Progress] ${verb} project index: ${update.total} files${elapsed}.\n`);
+        write(`[Progress] ${verb} project index: ${formatFileCount(update.total)}${elapsed}.\n`);
         return;
       }
       if (!active) {
@@ -201,7 +205,7 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
       mode = update.mode ?? mode;
       const isComplete = update.current >= update.total;
       if (rendered && (update.current === 1 || isComplete || update.current % 100 === 0)) {
-        write(`[Progress] ${update.current}/${update.total} files processed.\n`);
+        write(`[Progress] ${formatFileCount(update.current)} processed.\n`);
       }
     },
     clear: () => {},
