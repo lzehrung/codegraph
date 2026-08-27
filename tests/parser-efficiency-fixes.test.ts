@@ -14,7 +14,7 @@ import { describe, it, expect, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
-import { buildProjectIndex, analyzeImpactFromDiff } from "../src/index.js";
+import { buildProjectIndex, buildProjectIndexIncremental, analyzeImpactFromDiff } from "../src/index.js";
 import { supportForFile } from "../src/languages.js";
 import { collectLocalsAndExportsFromSource } from "../src/indexer/locals-and-exports.js";
 import type { CompactImpactReport, ImpactReport, ImpactItem } from "../src/impact/types.js";
@@ -529,14 +529,16 @@ describe("CommonJS export fallback", () => {
       expect(exportedNames).toEqual(expect.arrayContaining(["esm", "named", "member"]));
     });
   });
-  it("skips JavaScript export-gap scans for non-JavaScript sources", () => {
-    const support = supportForFile("module.py");
+  it("skips JavaScript export-gap scans when native export captures are empty", () => {
+    const support = supportForFile("module.ts");
     expect(support).toBeDefined();
-    if (!support) throw new Error("Expected Python language support");
+    if (!support) throw new Error("Expected TypeScript language support");
 
     const includesSpy = vi.spyOn(String.prototype, "includes");
     try {
-      collectLocalsAndExportsFromSource("module.py", "def answer():\n    return 42\n", support);
+      collectLocalsAndExportsFromSource("module.ts", "export const answer = 42;\n", support, [], {
+        nativeQueries: { imports: [], exports: [], locals: [], importBindings: [] },
+      });
       const regexFallbackNeedles = new Set(["exports.", "module.exports.", "export {", "export *", "export ="]);
       const fallbackScans = includesSpy.mock.calls.filter(([needle]) => regexFallbackNeedles.has(needle));
 
@@ -604,13 +606,12 @@ describe("build-scoped workspace resolution", () => {
     });
   });
 });
-
 // ---------------------------------------------------------------------------
-// 10. Per-directory tsconfig resolution preserves nested path aliases
+// 10. Incremental per-directory tsconfig resolution preserves nested path aliases
 // ---------------------------------------------------------------------------
 
 describe("nested tsconfig path resolution", () => {
-  it("uses a nested package mapping instead of the root mapping for the same alias", async () => {
+  it("preserves a nested package mapping during an incremental rebuild", async () => {
     await withTmpDir("nested-tsconfig-paths", async (root) => {
       await fsp.mkdir(path.join(root, "root-target"), { recursive: true });
       await fsp.mkdir(path.join(root, "packages", "app", "src"), { recursive: true });
@@ -634,7 +635,10 @@ describe("nested tsconfig path resolution", () => {
       const consumer = path.join(root, "packages", "app", "src", "consumer.ts");
       await fsp.writeFile(consumer, 'import { value } from "@target/value"; export { value };\n', "utf8");
 
-      const index = await buildProjectIndex(root, { cache: "off" });
+      await buildProjectIndex(root, { cache: "disk" });
+      await fsp.writeFile(consumer, 'import { value } from "@target/value";\nexport { value };\n', "utf8");
+
+      const index = await buildProjectIndexIncremental(root, { cache: "disk" });
       const resolved = index.byFile.get(fileIdentityKey(consumer))?.imports[0]?.resolved;
 
       expect(resolved).toContain("packages/app/local-target/value.ts");

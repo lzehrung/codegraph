@@ -961,14 +961,16 @@ export function collectLocalsAndExportsFromSource(
   // The native query does not cover CommonJS member assignments and some
   // re-export forms, so preserve the fallback for those known grammar gaps.
   const isJsLike = support.id === "ts" || support.id === "tsx" || support.id === "js";
-  if (isJsLike) {
+  if (isJsLike && !nativeExportQueryProducedResults) {
+    appendJsLikeRegexFallbackExports(file, source, locals, exports);
+  } else if (isJsLike) {
     const hasKnownRegexExportGap =
       source.includes("exports.") ||
       source.includes("module.exports.") ||
       source.includes("export {") ||
       source.includes("export *") ||
       source.includes("export =");
-    if (!nativeExportQueryProducedResults || hasKnownRegexExportGap) {
+    if (hasKnownRegexExportGap) {
       appendJsLikeRegexFallbackExports(file, source, locals, exports);
     }
   }
