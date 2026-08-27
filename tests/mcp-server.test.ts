@@ -257,6 +257,8 @@ describe("codegraph MCP handlers", () => {
         followUps: [
           { tool: "chunk", arguments: { file: "fixture.ts" } },
           { tool: "duplicates", arguments: { files: ["a.ts", "b.ts"] } },
+          { tool: "explore", arguments: { query: "auth" } },
+          { tool: "impact", arguments: { provider: "git", base: "main", head: "HEAD" } },
         ],
         anchors: [{ followUps: [{ tool: "chunk", arguments: { file: "anchor.ts" } }] }],
         packets: [{ followUps: [{ tool: "duplicates", arguments: { files: ["packet.ts"] } }] }],
@@ -273,6 +275,8 @@ describe("codegraph MCP handlers", () => {
         followUps: [
           { tool: "get_file", arguments: { file: "fixture.ts" } },
           { tool: "packet_get", arguments: { target: "a.ts" } },
+          { tool: "explore", arguments: { query: "auth", includeSource: true } },
+          { tool: "impact", arguments: { base: "main", head: "HEAD" } },
         ],
         anchors: [{ followUps: [{ tool: "get_file", arguments: { file: "anchor.ts" } }] }],
         packets: [{ followUps: [{ tool: "packet_get", arguments: { target: "packet.ts" } }] }],
@@ -356,6 +360,10 @@ describe("codegraph MCP handlers", () => {
             expect(callableToolNames).toContain(readObject(followUp).tool);
           }
         }
+        const topLevelFollowUps = transportResult.followUps;
+        if (!Array.isArray(topLevelFollowUps)) throw new Error("MCP response did not contain top-level follow-ups.");
+        const sourceRequest = topLevelFollowUps.find((followUp) => readObject(followUp).tool === "explore");
+        expect(readObject(sourceRequest).arguments).toEqual({ query: "auth", includeSource: true });
       } finally {
         await server.close();
       }

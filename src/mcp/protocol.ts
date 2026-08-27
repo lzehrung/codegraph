@@ -541,6 +541,17 @@ function translateMcpFollowUp(followUp: AgentFollowUp): AgentFollowUp {
       arguments: { target: firstDuplicateFile(followUp.arguments) },
     };
   }
+  if (followUp.tool === "explore" && followUp.arguments.includeSource === undefined) {
+    return {
+      ...followUp,
+      arguments: { ...followUp.arguments, includeSource: true },
+    };
+  }
+  if (followUp.tool === "impact" && followUp.arguments.provider === "git") {
+    const arguments_ = { ...followUp.arguments };
+    delete arguments_.provider;
+    return { ...followUp, arguments: arguments_ };
+  }
   return followUp;
 }
 
