@@ -250,6 +250,124 @@ describe("codegraph MCP handlers", () => {
 
       await expect(failure).resolves.toMatchObject({ message: "MCP stdio frame exceeded 10 MiB." });
     });
+    it("serializes tool results compactly while preserving payload objects that resemble follow-ups", async () => {
+      const handlers = createCodegraphMcpHandlers({ root: process.cwd() });
+      const expected = { file: "fixture.ts", nested: { answer: 42 } };
+      const agentResult = {
+        followUps: [
+          { tool: "chunk", arguments: { file: "fixture.ts" } },
+          { tool: "duplicates", arguments: { files: ["a.ts", "b.ts"] } },
+          { tool: "explore", arguments: { query: "auth" } },
+          { tool: "impact", arguments: { provider: "git", base: "main", head: "HEAD" } },
+        ],
+        anchors: [{ followUps: [{ tool: "chunk", arguments: { file: "anchor.ts" } }] }],
+        packets: [{ followUps: [{ tool: "duplicates", arguments: { files: ["packet.ts"] } }] }],
+        packet: { followUps: [{ tool: "duplicates", arguments: { files: ["nested-packet.ts"] } }] },
+        focus: [{ followUps: [{ tool: "chunk", arguments: { file: "focus.ts" } }] }],
+        results: [
+          {
+            source: { metadata: { tool: "chunk", arguments: { file: "source-snippet.ts" } } },
+            followUps: [{ tool: "duplicates", arguments: { files: ["result.ts"] } }],
+          },
+        ],
+      };
+      const mappedResult = {
+        followUps: [
+          { tool: "get_file", arguments: { file: "fixture.ts" } },
+          { tool: "packet_get", arguments: { target: "a.ts" } },
+          { tool: "explore", arguments: { query: "auth", includeSource: true } },
+          { tool: "impact", arguments: { base: "main", head: "HEAD" } },
+        ],
+        anchors: [{ followUps: [{ tool: "get_file", arguments: { file: "anchor.ts" } }] }],
+        packets: [{ followUps: [{ tool: "packet_get", arguments: { target: "packet.ts" } }] }],
+        packet: { followUps: [{ tool: "packet_get", arguments: { target: "nested-packet.ts" } }] },
+        focus: [{ followUps: [{ tool: "get_file", arguments: { file: "focus.ts" } }] }],
+        results: [
+          {
+            source: { metadata: { tool: "chunk", arguments: { file: "source-snippet.ts" } } },
+            followUps: [{ tool: "packet_get", arguments: { target: "result.ts" } }],
+          },
+        ],
+      };
+      handlers.get_file = async () => expected as never;
+      const server = createCodegraphMcpProtocolServer(handlers);
+      const sent: JsonRpcObject[] = [];
+      const transport = {
+        onclose: undefined,
+        onerror: undefined,
+        onmessage: undefined,
+        async start() {},
+        async send(message: unknown) {
+          sent.push(readJsonRpcObject(message));
+        },
+        async close() {},
+      } as Parameters<typeof server.connect>[0];
+      try {
+        await server.connect(transport);
+        if (transport.onmessage === undefined) throw new Error("MCP transport did not start.");
+        transport.onmessage({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1" } },
+        });
+        await vi.waitFor(() => expect(sent.some((message) => message.id === 1)).toBe(true));
+        transport.onmessage({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "get_file", arguments: { file: "fixture.ts" } },
+        });
+        await vi.waitFor(() => expect(sent.some((message) => message.id === 2)).toBe(true));
+        const result = readObject(sent.find((message) => message.id === 2)?.result);
+        const content = result.content;
+        if (!Array.isArray(content) || !content.length)
+          throw new Error("MCP tool result did not contain text content.");
+        const serialized = readObject(content[0]).text;
+        expect(serialized).toBeTypeOf("string");
+        if (typeof serialized !== "string") throw new Error("MCP tool result content was not text.");
+        expect(serialized).not.toContain("\n  ");
+        const parsed = readObject(JSON.parse(serialized));
+        expect(parsed).toEqual(expected);
+
+        handlers.get_file = async () => agentResult as never;
+        transport.onmessage({
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: { name: "get_file", arguments: { file: "fixture.ts" } },
+        });
+        await vi.waitFor(() => expect(sent.some((message) => message.id === 3)).toBe(true));
+        const mappedContent = readObject(sent.find((message) => message.id === 3)?.result).content;
+        if (!Array.isArray(mappedContent) || !mappedContent.length)
+          throw new Error("MCP tool result did not contain text content.");
+        const mappedResultText = readObject(mappedContent[0]).text;
+        if (typeof mappedResultText !== "string") throw new Error("MCP tool result content was not text.");
+        const transportResult = readObject(JSON.parse(mappedResultText));
+        expect(transportResult).toEqual(mappedResult);
+        const responseShapes = [
+          transportResult.followUps,
+          readObject((transportResult.anchors as unknown[])[0]).followUps,
+          readObject((transportResult.packets as unknown[])[0]).followUps,
+          readObject(transportResult.packet).followUps,
+          readObject((transportResult.focus as unknown[])[0]).followUps,
+          readObject((transportResult.results as unknown[])[0]).followUps,
+        ];
+        const callableToolNames = new Set(MCP_TOOL_REGISTRY.map((tool) => tool.name));
+        for (const followUps of responseShapes) {
+          if (!Array.isArray(followUps)) throw new Error("MCP response shape did not contain follow-ups.");
+          for (const followUp of followUps) {
+            expect(callableToolNames).toContain(readObject(followUp).tool);
+          }
+        }
+        const topLevelFollowUps = transportResult.followUps;
+        if (!Array.isArray(topLevelFollowUps)) throw new Error("MCP response did not contain top-level follow-ups.");
+        const sourceRequest = topLevelFollowUps.find((followUp) => readObject(followUp).tool === "explore");
+        expect(readObject(sourceRequest).arguments).toEqual({ query: "auth", includeSource: true });
+      } finally {
+        await server.close();
+      }
+    });
   });
 
   it("honors cancellation notifications for request id zero", async () => {

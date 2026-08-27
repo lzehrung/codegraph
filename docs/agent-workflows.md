@@ -70,6 +70,8 @@ Explore orchestrates existing search, packet, path, reverse-dependency, and cand
 
 Human-readable output ends with one `Recommended next:` command selected from the first bounded follow-up. Use `--no-source` when the caller only needs anchors, paths, and follow-up commands.
 
+CLI `explore` includes source packets and exact-path `fileView` by default because people read its inline output; use `--no-source` to omit them. MCP `explore` instead defaults `includeSource` to `false` so source-bearing packets do not dominate an agent response; anchors and follow-ups identify the focused source request to make next.
+
 ## Live file reads
 
 Use `file` when the target path is known and the agent needs current source rather than an indexed explanation packet. Its default keeps the exact `number<TAB>line` source format with a readable header and next-page command; use `--json` for tool chaining.
