@@ -570,7 +570,6 @@ Cycle detection reports source dependency cycles. Document-only link loops, such
 Dependency read commands keep the same output contracts while using the indexed graph path and derived adjacency maps internally when available. This makes repeated `deps`, `rdeps`, and `path` reads cheaper on warm manifest-backed projects.
 `deps` and `rdeps` show depth 1 by default and state the count of deeper entries omitted from text output. Pass `--depth <n>` to choose another finite bound or `--all` for unbounded traversal.
 
-
 #### Markdown link validation
 
 `links` validates links authored in Markdown files under the project root. It covers inline links, reference-style links and definitions, autolinks, and raw HTML `a[href]` links, resolving local targets relative to the source file; `/path` targets resolve from the project root. Discovery uses the same `codegraph.config.json` `discovery.ignoreGlobs` / `discovery.includeGlobs` settings and CLI `--include-glob` / `--ignore-glob` / `--no-gitignore` filters as other discovery-backed commands.

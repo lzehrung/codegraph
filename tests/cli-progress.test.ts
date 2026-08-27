@@ -39,7 +39,14 @@ describe("CLI index progress", () => {
         write: (chunk) => chunks.push(chunk),
         delayMs: 1_000,
       });
-      display.update({ type: "progress", phase: "start", mode: "check", current: 0, total: 10 });
+      display.update({
+        type: "progress",
+        phase: "start",
+        mode: "check",
+        message: "Checking project index",
+        current: 0,
+        total: 10,
+      });
       await vi.advanceTimersByTimeAsync(999);
       expect(chunks).toEqual([]);
 
@@ -47,7 +54,15 @@ describe("CLI index progress", () => {
       expect(chunks.join("")).toContain("[Progress] Checking project index.");
       expect(chunks.join("")).toContain("[Progress] Checking project index: 0/10 files.");
 
-      display.update({ type: "progress", phase: "complete", mode: "check", current: 10, total: 10, elapsedMs: 2_000 });
+      display.update({
+        type: "progress",
+        phase: "complete",
+        mode: "check",
+        message: "Index checked",
+        current: 10,
+        total: 10,
+        elapsedMs: 2_000,
+      });
       expect(chunks.join("")).toContain("[Progress] Checked project index: 10 files in 2.0s.");
     } finally {
       vi.useRealTimers();

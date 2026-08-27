@@ -134,7 +134,6 @@ Commands:
 ${renderCliCommandList(true)}
 `;
 
-
 export const LIFECYCLE_HELP_TEXT = `codegraph init/status/sync/uninit - Initialize, inspect, refresh, or remove project-local Codegraph state
 
 Usage:

@@ -128,14 +128,14 @@ describe("type hierarchy CLI", () => {
     expect(highDepth).toEqual({
       stdout: "",
       stderr: 'Invalid --depth value "11". Expected an integer from 1 to 10.\n',
-      exitCode: 1,
+      exitCode: 2,
     });
 
     const highLimit = await captureCli(["implementations", "--json", "cg:symbol:unused", "--limit", "501"]);
     expect(highLimit).toEqual({
       stdout: "",
       stderr: 'Invalid --limit value "501". Expected an integer from 0 to 500.\n',
-      exitCode: 1,
+      exitCode: 2,
     });
   });
 

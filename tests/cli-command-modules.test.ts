@@ -12,6 +12,7 @@ import { handleGraphCommand, type GraphCommandContext } from "../src/cli/graph.j
 import { handleGraphDeltaCommand } from "../src/cli/graphDelta.js";
 import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/cli/graphQueries.js";
 import {
+  ADVANCED_HELP_TEXT,
   CLI_HELP_TEXT,
   FILE_HELP_TEXT,
   MCP_SERVE_HELP_TEXT,
@@ -339,22 +340,18 @@ describe("CLI command modules", () => {
     expect(buildOptions).toContain("--progress");
   });
 
-  test("lists MCP as a top-level command in CLI help", () => {
-    const commands = CLI_HELP_TEXT.slice(CLI_HELP_TEXT.indexOf("Commands:"), CLI_HELP_TEXT.indexOf("Graph Options:"));
-
-    expect(commands).toContain("  mcp");
-    expect(commands).toContain("Serve MCP tools for agent graph navigation");
+  test("lists MCP in advanced CLI help", () => {
+    expect(ADVANCED_HELP_TEXT).toContain("  mcp");
+    expect(ADVANCED_HELP_TEXT).toContain("Serve MCP tools for agent graph navigation");
   });
 
   test("documents --pretty for both SQL command forms", () => {
     expect(SQL_HELP_TEXT).toContain('codegraph sql --db <sqlite-path> --query "SELECT ..." [--json | --pretty]');
   });
 
-  test("lists all public top-level commands in CLI help", () => {
-    const commands = CLI_HELP_TEXT.slice(CLI_HELP_TEXT.indexOf("Commands:"), CLI_HELP_TEXT.indexOf("Graph Options:"));
-
+  test("lists all public top-level commands in advanced CLI help", () => {
     for (const command of ["apisurface", "graph-delta", "grep", "index", "path", "sql", "unresolved"]) {
-      expect(commands).toContain(`  ${command}`);
+      expect(ADVANCED_HELP_TEXT).toContain(`  ${command}`);
     }
   });
 
@@ -2688,10 +2685,7 @@ describe("CLI command modules", () => {
       },
     });
 
-    expect(stdoutLines).toEqual([
-      "Dependencies for main.ts (depth 1; 1 omitted):",
-      "   util.ts (depth 1)",
-    ]);
+    expect(stdoutLines).toEqual(["Dependencies for main.ts (depth 1; 1 omitted):", "   util.ts (depth 1)"]);
   });
 
   test("loads graph query commands through the project index when no graph collector is injected", async () => {

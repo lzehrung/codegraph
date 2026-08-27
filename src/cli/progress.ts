@@ -28,7 +28,6 @@ export function resolveCliProgressPresentation(input: {
   if (input.stderrIsTTY) {
     return input.terminalSupportsControlSequences ? "interactive" : "log";
   }
-  if (input.policy === "never") return "off";
   return "log";
 }
 

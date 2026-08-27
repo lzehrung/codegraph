@@ -75,13 +75,15 @@ export async function handleChunkCommand(context: ChunkCommandContext): Promise<
   const languageOverride = context.getOpt("--language");
   if (languageOverride) {
     const languageId = normalizeChunkLanguageId(languageOverride);
-    const isSupported = languageId === "vue" || languageId === "svelte" || languageId === "text" || !!LANG_CONFIGS[languageId];
+    const isSupported =
+      languageId === "vue" || languageId === "svelte" || languageId === "text" || !!LANG_CONFIGS[languageId];
     if (!isSupported) {
-      context.writeStderrLine(`Unsupported --language value "${languageId}". Supported languages: ${chunkLanguageHelp}.`);
+      context.writeStderrLine(
+        `Unsupported --language value "${languageId}". Supported languages: ${chunkLanguageHelp}.`,
+      );
       context.exit(2);
     }
   }
-
 
   try {
     const filePath = path.resolve(context.cwd(), parseSourceLocationInput(inputFilePath).file);
