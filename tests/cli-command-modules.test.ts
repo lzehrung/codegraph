@@ -2528,7 +2528,7 @@ describe("CLI command modules", () => {
       expect(warmDeps.stderr).toContain("Checked project index");
       expect(warmDeps.stderr).not.toContain("Building project index");
       expect(warmDeps.stderr).not.toContain("files processed");
-      expect(rdeps.stdout).toContain("Reverse dependencies for util.ts:");
+      expect(rdeps.stdout).toContain("Reverse dependencies for util.ts (depth 1; 0 omitted):");
       expect(graphPath.stdout).toContain("main.ts");
       expect(graphPath.stdout).toContain("util.ts");
       expect(cycles.stdout).toContain("No dependency cycles found.");
@@ -2651,6 +2651,49 @@ describe("CLI command modules", () => {
     expect(stderrLines).toEqual([]);
   });
 
+  test("bounds text dependency output at depth 1 and reports omitted entries", async () => {
+    const projectRoot = path.join(os.tmpdir(), "codegraph-graph-query-depth-default").replace(/\\/g, "/");
+    const mainPath = `${projectRoot}/main.ts`;
+    const utilPath = `${projectRoot}/util.ts`;
+    const leafPath = `${projectRoot}/leaf.ts`;
+    const stdoutLines: string[] = [];
+
+    await handleGraphQueryCommand({
+      command: "deps",
+      positionals: ["main.ts"],
+      projectRootFs: projectRoot,
+      projectRootAbs: projectRoot,
+      getOpt: () => undefined,
+      hasFlag: () => false,
+      writeJSONLine: () => {
+        throw new Error("unexpected JSON output");
+      },
+      writeStdoutLine: (message) => stdoutLines.push(message),
+      writeStderrLine: (message) => {
+        throw new Error(`unexpected stderr: ${message}`);
+      },
+      exit: (code) => {
+        throw new Error(`unexpected exit ${code}`);
+      },
+      listProjectFilesForScan: async () => [mainPath, utilPath, leafPath],
+      collectGraph: async () => ({
+        nodes: new Set([mainPath, utilPath, leafPath]),
+        edges: [
+          { from: mainPath, to: { type: "file", path: utilPath }, raw: "./util" },
+          { from: utilPath, to: { type: "file", path: leafPath }, raw: "./leaf" },
+        ],
+      }),
+      loadCurrentIndex: async () => {
+        throw new Error("unexpected index build");
+      },
+    });
+
+    expect(stdoutLines).toEqual([
+      "Dependencies for main.ts (depth 1; 1 omitted):",
+      "   util.ts (depth 1)",
+    ]);
+  });
+
   test("loads graph query commands through the project index when no graph collector is injected", async () => {
     const projectRoot = path.join(os.tmpdir(), "codegraph-query-index").replace(/\\/g, "/");
     const mainPath = `${projectRoot}/main.ts`;
@@ -2756,7 +2799,7 @@ describe("CLI command modules", () => {
       ),
     ).rejects.toThrow("graph query exit 2");
 
-    expect(stderrLines).toEqual(["Usage: deps <file|file::symbol|symbol:...> [--depth N] [--json]"]);
+    expect(stderrLines).toEqual(["Usage: deps <file|file::symbol|symbol:...> [--depth N | --all] [--json]"]);
   });
 
   test("rejects invalid graph query depth values before scanning the graph", async () => {

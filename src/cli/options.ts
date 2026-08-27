@@ -238,10 +238,10 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "deps",
-    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], [...SHARED_BUILD_OPTIONS, "--depth"], {
+    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--all"], [...SHARED_BUILD_OPTIONS, "--depth"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph deps <file> [--root <path>] [--depth <n>] [--json | --pretty]",
+      usage: "Usage: codegraph deps <file> [--root <path>] [--depth <n> | --all] [--json | --pretty]",
     }),
   ],
   [
@@ -549,10 +549,10 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "rdeps",
-    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], [...SHARED_BUILD_OPTIONS, "--depth"], {
+    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--all"], [...SHARED_BUILD_OPTIONS, "--depth"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph rdeps <file> [--root <path>] [--depth <n>] [--json | --pretty]",
+      usage: "Usage: codegraph rdeps <file> [--root <path>] [--depth <n> | --all] [--json | --pretty]",
     }),
   ],
   [

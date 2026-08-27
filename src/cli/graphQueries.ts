@@ -65,10 +65,17 @@ async function loadGraph(context: GraphQueryCommandContext): Promise<LoadedGraph
 async function handleDepsCommand(context: GraphQueryCommandContext): Promise<void> {
   const [fileArg] = context.positionals;
   if (!fileArg) {
-    context.writeStderrLine(`Usage: ${context.command} <file|file::symbol|symbol:...> [--depth N] [--json]`);
+    context.writeStderrLine(
+      `Usage: ${context.command} <file|file::symbol|symbol:...> [--depth N | --all] [--json]`,
+    );
     context.exit(2);
   }
   const depthRaw = context.getOpt("--depth");
+  const all = context.hasFlag("--all");
+  if (all && depthRaw !== undefined) {
+    context.writeStderrLine("--all cannot be combined with --depth.");
+    context.exit(2);
+  }
   let depth: number | undefined;
   try {
     depth = parseOptionalNonNegativeIntegerOption(depthRaw, "--depth");
@@ -148,23 +155,27 @@ async function handleDepsCommand(context: GraphQueryCommandContext): Promise<voi
     context.exit(1);
   }
   targetFile = matchedGraphNode;
-  const results =
+  const allResults =
     context.command === "deps"
       ? getDependencies(loaded.graph, targetFile, {
-          ...(depth !== undefined ? { depth } : {}),
           ...(loaded.adjacency ? { adjacency: loaded.adjacency } : {}),
         })
       : getReverseDependencies(loaded.graph, targetFile, {
-          ...(depth !== undefined ? { depth } : {}),
           ...(loaded.adjacency ? { adjacency: loaded.adjacency } : {}),
         });
+  const effectiveDepth = depth ?? 1;
+  const results = all ? allResults : allResults.filter((result) => result.depth <= effectiveDepth);
+  const omittedCount = allResults.length - results.length;
 
   if (json) {
     context.writeJSONLine(results);
     return;
   }
 
-  context.writeStdoutLine(`${context.command === "deps" ? "Dependencies" : "Reverse dependencies"} for ${fileArg}:`);
+  const depthDescription = all ? "all depths" : `depth ${effectiveDepth}`;
+  context.writeStdoutLine(
+    `${context.command === "deps" ? "Dependencies" : "Reverse dependencies"} for ${fileArg} (${depthDescription}; ${omittedCount} omitted):`,
+  );
   for (const result of results) {
     const rel = toProjectDisplayPath(context.projectRootFs, result.file);
     context.writeStdoutLine(`${"  ".repeat(result.depth)} ${rel} (depth ${result.depth})`);

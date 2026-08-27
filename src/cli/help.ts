@@ -625,7 +625,9 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const DEPS_HELP_TEXT = `codegraph deps - List file dependencies
 
-Usage: codegraph deps <file|file::symbol|symbol:...> [--root <path>] [--depth <n>] [--json | --pretty]
+Usage: codegraph deps <file|file::symbol|symbol:...> [--root <path>] [--depth <n> | --all] [--json | --pretty]
+
+By default, shows dependencies through depth 1 and reports deeper entries omitted from text output. Use --all for unbounded traversal.
 
 A qualified symbol path or portable symbol handle uses its declaring file for file-graph traversal. Use callees for symbol-level call relationships.
 
@@ -634,7 +636,9 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const RDEPS_HELP_TEXT = `codegraph rdeps - List reverse file dependencies
 
-Usage: codegraph rdeps <file|file::symbol|symbol:...> [--root <path>] [--depth <n>] [--json | --pretty]
+Usage: codegraph rdeps <file|file::symbol|symbol:...> [--root <path>] [--depth <n> | --all] [--json | --pretty]
+
+By default, shows reverse dependencies through depth 1 and reports deeper entries omitted from text output. Use --all for unbounded traversal.
 
 A qualified symbol path or portable symbol handle uses its declaring file for file-graph traversal. Use callers for symbol-level call relationships.
 
