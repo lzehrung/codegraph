@@ -86,7 +86,7 @@ The independent `--max-references`, `--max-callers`, and `--max-hierarchy` bound
 - shortest path: `codegraph path <from> <to>`
 - definition at a source location: `codegraph goto <file>:<line>:<column>`
 - references at a source location: `codegraph refs <file>:<line>:<column>`
-- definition or references without coordinates: `codegraph goto|refs <file>::<symbol>` or `symbol:...`
+- coordinate-free definition or references: `goto <file>::<symbol>` returns one definition; `refs <file>::<symbol>` resolves one definition then reports its references (both accept `symbol:...`)
 - references for every definition in a file: `codegraph refs <file>`
 
 Use line and column coordinates when known; this is the primary navigation form. Use an exact project-relative `file::symbol` path or portable `symbol:` handle when coordinates are unavailable; neither can be combined with line or column input. `deps` and `rdeps` accept either form or a portable `symbol:` handle and resolve it to its defining file. `deps` and `rdeps` show depth 1 by default; use `--depth <n>` for another finite output depth or `--all` to include every depth. `deps` and `rdeps` return `{ items, truncated }` with `--json`. `callers` and `callees` expose symbol-level calls and return symbols and callsites separately, both bounded and with truncation metadata.

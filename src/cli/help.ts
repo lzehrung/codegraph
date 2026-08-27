@@ -250,7 +250,7 @@ Usage: codegraph refs <file|file::symbol|symbol:...> [--root <path>] [--json | -
        codegraph refs <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]
        codegraph refs --file <file> [--line <line> --col <column>] [--root <path>] [--json | --pretty]
 
-A qualified symbol path or portable symbol handle resolves one definition without a location. A file-only target finds references for every definition in the file.
+A qualified symbol path or portable symbol handle resolves one definition and reports references to it without a location. A file-only target finds references for every definition in the file.
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
