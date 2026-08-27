@@ -20,13 +20,18 @@ function readPackageExportNames(): Record<string, string[]> {
 
   // Sort by subpath so reordering the `exports` object in package.json cannot fail
   // this guard; only added or removed names should.
-  const declarationEntries = Object.entries(exports)
+  const packageExports = exports as Record<string, unknown>;
+  const declarationEntries = Object.entries(packageExports)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([subpath, target]) => {
-      if (!target || typeof target !== "object" || !("types" in target) || typeof target.types !== "string") {
+      if (!target || typeof target !== "object" || !("types" in target)) {
         throw new Error(`Package export ${subpath} must declare a types entrypoint.`);
       }
-      return [subpath, path.resolve(process.cwd(), target.types)] as const;
+      const targetRecord = target as Record<string, unknown>;
+      if (typeof targetRecord.types !== "string") {
+        throw new Error(`Package export ${subpath} must declare a types entrypoint.`);
+      }
+      return [subpath, path.resolve(process.cwd(), targetRecord.types)] as const;
     });
   const program = ts.createProgram(
     declarationEntries.map(([, declarationPath]) => declarationPath),
@@ -164,13 +169,17 @@ function parsePackedPaths(stdout: string): Set<string> {
       const parsed: unknown = JSON.parse(stdout.slice(jsonStart));
       if (Array.isArray(parsed)) {
         const first = parsed[0];
-        if (first && typeof first === "object" && "files" in first && Array.isArray(first.files)) {
-          const paths = first.files
-            .filter((file: unknown): file is { path: string } => {
-              return Boolean(file && typeof file === "object" && "path" in file && typeof file.path === "string");
-            })
-            .map((file: { path: string }) => file.path);
-          return new Set(paths);
+        if (first && typeof first === "object" && "files" in first) {
+          const packedResult = first as Record<string, unknown>;
+          const files = packedResult.files;
+          if (Array.isArray(files)) {
+            const paths = (files as unknown[])
+              .filter((file: unknown): file is { path: string } => {
+                return Boolean(file && typeof file === "object" && "path" in file && typeof file.path === "string");
+              })
+              .map((file: { path: string }) => file.path);
+            return new Set(paths);
+          }
         }
       }
     } catch {
