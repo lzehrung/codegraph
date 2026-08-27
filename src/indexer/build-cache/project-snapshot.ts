@@ -571,13 +571,26 @@ export async function tryLoadProjectIndexSnapshot(
     );
     const nativeRuntimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
     const implementationFingerprint = getImplementationFingerprint();
+    if (!isProjectIndexSnapshotPayload(payload)) {
+      recordSnapshotCorruption(
+        report,
+        projectSnapshotPath(projectRoot, opts),
+        "invalid project snapshot payload",
+        opts?.logLevel,
+      );
+      return null;
+    }
     if (
-      !isProjectIndexSnapshotPayload(payload) ||
       payload.filesSignature !== filesSignature ||
       payload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
       payload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint ||
       payload.implementationFingerprint !== implementationFingerprint
     ) {
+      recordSnapshotInvalidation(
+        projectSnapshotPath(projectRoot, opts),
+        "project snapshot identity mismatch",
+        opts?.logLevel,
+      );
       return null;
     }
     const graph: Graph = {
@@ -647,12 +660,25 @@ export async function tryLoadProjectSnapshotModules(
     );
     const nativeRuntimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
     const implementationFingerprint = getImplementationFingerprint();
+    if (!isProjectSnapshotModulesPayload(payload)) {
+      recordSnapshotCorruption(
+        report,
+        projectSnapshotPath(projectRoot, opts),
+        "invalid project snapshot payload",
+        opts?.logLevel,
+      );
+      return null;
+    }
     if (
-      !isProjectSnapshotModulesPayload(payload) ||
       payload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
       payload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint ||
       payload.implementationFingerprint !== implementationFingerprint
     ) {
+      recordSnapshotInvalidation(
+        projectSnapshotPath(projectRoot, opts),
+        "project snapshot identity mismatch",
+        opts?.logLevel,
+      );
       return null;
     }
     const normalizedFileSignatures = new Map(
@@ -693,8 +719,7 @@ export async function tryLoadPersistedBloomFilters(
     }
     const sidecar = sidecarParsed as Partial<BloomFilterSnapshotPayload>;
     const identityMismatch =
-      !!sidecarParsed &&
-      typeof sidecarParsed === "object" &&
+      isUnknownRecord(sidecarParsed) &&
       (sidecar.version !== BLOOM_FILTER_SNAPSHOT_VERSION ||
         sidecar.implementationFingerprint !== getImplementationFingerprint() ||
         typeof sidecar.projectSnapshotIdentity !== "string");
