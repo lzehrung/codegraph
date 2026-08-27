@@ -153,20 +153,21 @@ async function handleDepsCommand(context: GraphQueryCommandContext): Promise<voi
     context.exit(1);
   }
   targetFile = matchedGraphNode;
+  const effectiveDepth = depth ?? 1;
+  const traversalOptions = {
+    ...(loaded.adjacency ? { adjacency: loaded.adjacency } : {}),
+    ...(json && !all ? { depth: effectiveDepth + 1 } : {}),
+  };
   const allResults =
     context.command === "deps"
-      ? getDependencies(loaded.graph, targetFile, {
-          ...(loaded.adjacency ? { adjacency: loaded.adjacency } : {}),
-        })
-      : getReverseDependencies(loaded.graph, targetFile, {
-          ...(loaded.adjacency ? { adjacency: loaded.adjacency } : {}),
-        });
-  const effectiveDepth = depth ?? 1;
+      ? getDependencies(loaded.graph, targetFile, traversalOptions)
+      : getReverseDependencies(loaded.graph, targetFile, traversalOptions);
   const results = all ? allResults : allResults.filter((result) => result.depth <= effectiveDepth);
+  const truncated = results.length !== allResults.length;
   const omittedCount = allResults.length - results.length;
 
   if (json) {
-    context.writeJSONLine(results);
+    context.writeJSONLine({ items: results, truncated });
     return;
   }
 

@@ -286,7 +286,7 @@ Use `--kind <kind,...>`, `--exported`, `--include-imports`, `--file-glob <projec
 
 Structured results include `schemaVersion`, root and analysis metadata, freshness, effective limits, omission counts, the normalized query, total candidates, and deterministic project-relative symbols. Resolvable named/default import aliases keep their binding location but carry a handle for the declaration; namespace/star aliases, unresolved aliases, and failed import scans are reported under `omittedCounts`.
 
-Line-and-column navigation remains primary: use `<file>:<line>:<column>` with `goto` or `refs` when the source location is known. An exact qualified path, `<project-relative-file>::<local-symbol>`, is the coordinate-free alternative for one declaration. `deps` and `rdeps` accept either file form, then traverse the defining file's dependency edges; use `callers` or `callees` for symbol-level call relationships. If one file defines multiple declarations with the same local name, codegraph returns candidates and requires the portable handle from `symbols` to avoid guessing.
+Line-and-column navigation remains primary: use `<file>:<line>:<column>` with `goto` or `refs` when the source location is known. An exact qualified path, `<project-relative-file>::<local-symbol>`, is the coordinate-free alternative for one declaration; both commands also accept a portable `symbol:` handle from `symbols`. `deps` and `rdeps` accept files, qualified paths, or portable handles, then traverse the defining file's dependency edges; use `callers` or `callees` for symbol-level call relationships. If one file defines multiple declarations with the same local name, codegraph returns candidates and requires the portable handle from `symbols` to avoid guessing.
 
 `callers` and `callees` accept one portable function or callable-member handle from `symbols`. Depth defaults to 1 and caps at 5; the symbol limit defaults to 100 and caps at 500, while callsites are grouped under each related symbol and bounded separately.
 
@@ -568,7 +568,7 @@ codegraph hotspots ./src --limit 20
 Cycle detection reports source dependency cycles. Document-only link loops, such as Markdown files linking to each other, remain in the graph for navigation but are not reported as dependency cycles.
 
 Dependency read commands keep the same output contracts while using the indexed graph path and derived adjacency maps internally when available. This makes repeated `deps`, `rdeps`, and `path` reads cheaper on warm manifest-backed projects.
-`deps` and `rdeps` show depth 1 by default and state the count of deeper entries omitted from text output. Pass `--depth <n>` to choose another finite bound or `--all` for unbounded traversal.
+`deps` and `rdeps` show depth 1 by default and state the count of deeper entries omitted from text output. Pass `--depth <n>` to choose another finite output depth or `--all` to include every depth. Their JSON output is `{ items, truncated }`; `truncated` is true when a finite depth omits deeper entries.
 
 #### Markdown link validation
 

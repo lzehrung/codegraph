@@ -241,7 +241,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--all"], [...SHARED_BUILD_OPTIONS, "--depth"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph deps <file> [--root <path>] [--depth <n> | --all] [--json | --pretty]",
+      usage:
+        "Usage: codegraph deps <file|file::symbol|symbol:...> [--root <path>] [--depth <n> | --all] [--json | --pretty]",
     }),
   ],
   [
@@ -345,7 +346,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], SHARED_BUILD_OPTIONS, {
       kind: "max",
       max: 3,
-      usage: "Usage: codegraph goto <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]",
+      usage:
+        "Usage: codegraph goto <file|file::symbol|symbol:...> [--root <path>] [--json | --pretty]\n       codegraph goto <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]",
     }),
   ],
   ["graph", graphCommandSchema({ kind: "any" })],
@@ -552,7 +554,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--all"], [...SHARED_BUILD_OPTIONS, "--depth"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph rdeps <file> [--root <path>] [--depth <n> | --all] [--json | --pretty]",
+      usage:
+        "Usage: codegraph rdeps <file|file::symbol|symbol:...> [--root <path>] [--depth <n> | --all] [--json | --pretty]",
     }),
   ],
   [
@@ -563,7 +566,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       {
         kind: "max",
         max: 3,
-        usage: "Usage: codegraph refs <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]",
+        usage:
+          "Usage: codegraph refs <file|file::symbol|symbol:...> [--root <path>] [--json | --pretty]\n       codegraph refs <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]\n       codegraph refs --file <file> [--line <line> --col <column>] [--root <path>] [--json | --pretty]",
       },
     ),
   ],

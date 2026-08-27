@@ -2643,9 +2643,49 @@ describe("CLI command modules", () => {
       },
     });
 
-    expect(jsonLines).toEqual([[{ file: utilPath, depth: 1 }]]);
+    expect(jsonLines).toEqual([{ items: [{ file: utilPath, depth: 1 }], truncated: false }]);
     expect(stdoutLines).toEqual([]);
     expect(stderrLines).toEqual([]);
+  });
+
+  test("bounds JSON dependency output and signals deeper entries", async () => {
+    const projectRoot = path.join(os.tmpdir(), "codegraph-graph-query-json-depth").replace(/\\/g, "/");
+    const mainPath = `${projectRoot}/main.ts`;
+    const utilPath = `${projectRoot}/util.ts`;
+    const leafPath = `${projectRoot}/leaf.ts`;
+    const jsonLines: unknown[] = [];
+
+    await handleGraphQueryCommand({
+      command: "deps",
+      positionals: ["main.ts"],
+      projectRootFs: projectRoot,
+      projectRootAbs: projectRoot,
+      getOpt: () => undefined,
+      hasFlag: (name) => name === "--json",
+      writeJSONLine: (value) => jsonLines.push(value),
+      writeStdoutLine: () => {
+        throw new Error("unexpected text output");
+      },
+      writeStderrLine: (message) => {
+        throw new Error(`unexpected stderr: ${message}`);
+      },
+      exit: (code) => {
+        throw new Error(`unexpected exit ${code}`);
+      },
+      listProjectFilesForScan: async () => [mainPath, utilPath, leafPath],
+      collectGraph: async () => ({
+        nodes: new Set([mainPath, utilPath, leafPath]),
+        edges: [
+          { from: mainPath, to: { type: "file", path: utilPath }, raw: "./util" },
+          { from: utilPath, to: { type: "file", path: leafPath }, raw: "./leaf" },
+        ],
+      }),
+      loadCurrentIndex: async () => {
+        throw new Error("unexpected index build");
+      },
+    });
+
+    expect(jsonLines).toEqual([{ items: [{ file: utilPath, depth: 1 }], truncated: true }]);
   });
 
   test("bounds text dependency output at depth 1 and reports omitted entries", async () => {
@@ -2773,7 +2813,8 @@ describe("CLI command modules", () => {
         },
       });
 
-      expect(jsonLines).toEqual([entry.expected]);
+      const expected = entry.command === "path" ? entry.expected : { items: entry.expected, truncated: false };
+      expect(jsonLines).toEqual([expected]);
     }
 
     expect(buildCount).toBe(cases.length);
