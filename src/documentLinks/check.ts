@@ -2,7 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { extractMarkdownLinkOccurrences, type MarkdownLinkOccurrence } from "./markdown.js";
 import { supportForFile } from "../languages.js";
-import { isFilePathWithinRoot, normalizePath, toProjectDisplayPath } from "../util/paths.js";
+import { isFilePathWithinRoot, normalizePath, toProjectDisplayPath, toProjectRelativePath } from "../util/paths.js";
 import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 
 type MarkdownLinkCheckPosition = {
@@ -64,7 +64,8 @@ export async function checkMarkdownLinksInFiles(
   const markdownFileCandidates = await Promise.all(
     Array.from(files, async (file) => {
       const absoluteFile = path.resolve(root, file);
-      if (isFilePathWithinRoot(root, absoluteFile)) return path.resolve(realRoot, path.relative(root, absoluteFile));
+      const relativeFile = toProjectRelativePath(root, absoluteFile);
+      if (relativeFile !== null) return path.resolve(realRoot, relativeFile);
       try {
         return await fsp.realpath(absoluteFile);
       } catch {

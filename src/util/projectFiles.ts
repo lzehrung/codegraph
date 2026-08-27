@@ -500,7 +500,7 @@ export function createDiscoveredFileMatcher(
 
 async function isSafeSymlinkDirectory(root: string, linkPath: string, realRoot: string): Promise<boolean> {
   try {
-    if (!isFilePathWithinRoot(root, linkPath)) return false;
+    if (!isRelativePathInside(path.relative(root, linkPath))) return false;
     const [linkStats, realPath, targetStats] = await Promise.all([
       fsp.lstat(linkPath),
       fsp.realpath(linkPath),
