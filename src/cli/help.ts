@@ -24,8 +24,10 @@ Start here:
 
 Usage: codegraph <command> [options] [path]
 
-Commands:
+Core commands:
 ${renderCliCommandList()}
+
+For the complete catalog, run: codegraph help advanced
 
 Graph Options:
   --fast-graph                Use text import extraction for plain .js and .ts
@@ -126,6 +128,12 @@ Examples:
   codegraph version
   codegraph -v
 `;
+export const ADVANCED_HELP_TEXT = `codegraph - Complete command catalog
+
+Commands:
+${renderCliCommandList(true)}
+`;
+
 
 export const LIFECYCLE_HELP_TEXT = `codegraph init/status/sync/uninit - Initialize, inspect, refresh, or remove project-local Codegraph state
 
