@@ -72,18 +72,28 @@ export async function handleChunkCommand(context: ChunkCommandContext): Promise<
     context.writeStderrLine("  --text            Force text chunking mode");
     context.exit(2);
   }
+  const languageOverride = context.getOpt("--language");
+  if (languageOverride) {
+    const languageId = normalizeChunkLanguageId(languageOverride);
+    const isSupported = languageId === "vue" || languageId === "svelte" || languageId === "text" || !!LANG_CONFIGS[languageId];
+    if (!isSupported) {
+      context.writeStderrLine(`Unsupported --language value "${languageId}". Supported languages: ${chunkLanguageHelp}.`);
+      context.exit(2);
+    }
+  }
+
 
   try {
     const filePath = path.resolve(context.cwd(), parseSourceLocationInput(inputFilePath).file);
     const source = await fsp.readFile(filePath, "utf8");
     const ext = path.extname(filePath).toLowerCase();
 
-    let languageId = context.getOpt("--language");
-    if (!languageId) {
+    let languageId: string;
+    if (!languageOverride) {
       const support = supportForFile(filePath);
       languageId = support ? normalizeChunkLanguageId(support.id) : chunkTextLanguageByExtension[ext] || "text";
     } else {
-      languageId = normalizeChunkLanguageId(languageId);
+      languageId = normalizeChunkLanguageId(languageOverride);
     }
 
     const forceText = context.hasFlag("--text");

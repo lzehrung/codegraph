@@ -301,6 +301,15 @@ describe("CLI regressions", () => {
     expect(isSorted(graph.files.map(normalize))).toBe(true);
   });
 
+  it("rejects unsupported explicit chunk language overrides", async () => {
+    const result = await runCliWithExit(["chunk", "README.md", "--language", "not-a-language"], process.cwd());
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain('Unsupported --language value "not-a-language".');
+    expect(result.stderr).toContain("Supported languages:");
+  });
+
   it("chunk detects Zig files by extension", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-zig-chunk-"));
     const filePath = path.join(tmpDir, "main.zig");
