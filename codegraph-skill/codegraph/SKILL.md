@@ -86,10 +86,16 @@ The independent `--max-references`, `--max-callers`, and `--max-hierarchy` bound
 - shortest path: `codegraph path <from> <to>`
 - definition at a source location: `codegraph goto <file>:<line>:<column>`
 - references at a source location: `codegraph refs <file>:<line>:<column>`
-- coordinate-free definition or references: `goto <file>::<symbol>` returns one definition; `refs <file>::<symbol>` resolves one definition then reports its references (both accept `symbol:...`)
+- coordinate-free definition or references: `codegraph goto <file>::<symbol>` returns one definition; `codegraph refs <file>::<symbol>` resolves one definition then reports its references (both accept `symbol:...`)
 - references for every definition in a file: `codegraph refs <file>`
 
-Use line and column coordinates when known; this is the primary navigation form. Use an exact project-relative `file::symbol` path or portable `symbol:` handle when coordinates are unavailable; neither can be combined with line or column input. `deps` and `rdeps` accept either form or a portable `symbol:` handle and resolve it to its defining file. `deps` and `rdeps` show depth 1 by default; use `--depth <n>` for another finite output depth or `--all` to include every depth. `deps` and `rdeps` return `{ items, truncated }` with `--json`. `callers` and `callees` expose symbol-level calls and return symbols and callsites separately, both bounded and with truncation metadata.
+Use line and column coordinates when known; this is the primary navigation form. Use an exact project-relative `file::symbol` path or portable `symbol:` handle when coordinates are unavailable; neither can be combined with line or column input.
+
+- `deps` and `rdeps` accept either form or a portable `symbol:` handle, resolved to its defining file.
+- `deps` and `rdeps` show depth 1 by default; use `--depth <n>` for another finite output depth or `--all` for every depth.
+- `deps` and `rdeps` return `{ items, truncated }` with `--json`.
+- `callers` and `callees` expose symbol-level calls, returning symbols and callsites separately, both bounded and with truncation metadata.
+
 Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `artifact`, `packet`, and `mcp` infer `build`, `get`, and `serve`. `artifact --sqlite` is equivalent to `artifact build --sqlite`; `grep <regex>` and `sql <db> "SELECT ..."` accept positional forms. Explicit options remain valid. `grep --json` returns an envelope `{ items, limit, totalSeen, truncated, omitted }`, not a bare hit array: `limit` is the effective `--max-hits` cap for text greps (default 5000, capped at 200000) and `null` for uncapped `--query` AST greps. Check `truncated` before treating text results as complete, and raise `--max-hits` when it is true - `truncated` stays exact through that ceiling. `graph` output selectors are mutually exclusive.
 
 - compact review handoff: `codegraph review`
