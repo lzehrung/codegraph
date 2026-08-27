@@ -23,6 +23,7 @@ import { seedTransitiveFromFiles } from "../src/impact/analyzer.js";
 import type { ProjectIndex } from "../src/indexer.js";
 import type { Edge } from "../src/types.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import type { ExportEntry } from "../src/indexer/types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -507,45 +508,118 @@ describe("appendUniqueSpecifiers deduplication", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 8. Native export matches skip regex fallback except for CommonJS assignments
+// 8. JavaScript/TypeScript export recovery after native export captures
 // ---------------------------------------------------------------------------
 
-describe("CommonJS export fallback", () => {
-  it("keeps CommonJS member assignments when native export matches exist", async () => {
-    await withTmpDir("commonjs-export-fallback", async (root) => {
-      const file = path.join(root, "module.js");
-      await fsp.writeFile(
-        file,
-        ["export const esm = 1;", "exports.named = function named() {};", "module.exports.member = () => {};", ""].join(
-          "\n",
+describe("JavaScript and TypeScript export recovery", () => {
+  it.each([
+    {
+      name: "compact named re-export",
+      file: "module.ts",
+      source: 'export const nativeCapture = 1;\nexport{source as compact}from "./dep";\n',
+      matches: (exports: ExportEntry[]) =>
+        exports.some(
+          (entry) => entry.type === "reexport" && entry.exportedAs === "compact" && entry.fromModule === "./dep",
         ),
-        "utf8",
-      );
-
-      const index = await buildProjectIndex(root, { cache: "off" });
-      const moduleIndex = index.byFile.get(fileIdentityKey(file));
-      const exportedNames = moduleIndex?.exports.flatMap((entry) => ("exportedAs" in entry ? [entry.exportedAs] : []));
-
-      expect(exportedNames).toEqual(expect.arrayContaining(["esm", "named", "member"]));
-    });
-  });
-  it("skips JavaScript export-gap scans when native export captures are empty", () => {
-    const support = supportForFile("module.ts");
+    },
+    {
+      name: "spaced named re-export",
+      file: "module.ts",
+      source: 'export const nativeCapture = 1;\nexport {source as spaced}from "./dep";\n',
+      matches: (exports: ExportEntry[]) =>
+        exports.some(
+          (entry) => entry.type === "reexport" && entry.exportedAs === "spaced" && entry.fromModule === "./dep",
+        ),
+    },
+    {
+      name: "multiline named re-export",
+      file: "module.ts",
+      source: 'export const nativeCapture = 1;\nexport\n{\nsource as multiline\n}\nfrom "./dep";\n',
+      matches: (exports: ExportEntry[]) =>
+        exports.some(
+          (entry) => entry.type === "reexport" && entry.exportedAs === "multiline" && entry.fromModule === "./dep",
+        ),
+    },
+    {
+      name: "compact star re-export",
+      file: "module.ts",
+      source: 'export const nativeCapture = 1;\nexport*from "./dep";\n',
+      matches: (exports: ExportEntry[]) =>
+        exports.some((entry) => entry.type === "exportStar" && entry.fromModule === "./dep"),
+    },
+    {
+      name: "spaced star re-export",
+      file: "module.ts",
+      source: 'export const nativeCapture = 1;\nexport * from "./dep";\n',
+      matches: (exports: ExportEntry[]) =>
+        exports.some((entry) => entry.type === "exportStar" && entry.fromModule === "./dep"),
+    },
+    {
+      name: "namespace star re-export",
+      file: "module.ts",
+      source: 'export const nativeCapture = 1;\nexport * as namespace from "./dep";\n',
+      matches: (exports: ExportEntry[]) =>
+        exports.some(
+          (entry) =>
+            entry.type === "namespaceReexport" && entry.exportedAs === "namespace" && entry.fromModule === "./dep",
+        ),
+    },
+    {
+      name: "compact TypeScript export assignment",
+      file: "module.ts",
+      source: "export const nativeCapture = 1;\nconst compactValue = 1;\nexport=compactValue;\n",
+      matches: (exports: ExportEntry[]) =>
+        exports.some(
+          (entry) =>
+            entry.type === "local" && entry.exportedAs === "default" && entry.target.localName === "compactValue",
+        ),
+    },
+    {
+      name: "spaced TypeScript export assignment",
+      file: "module.ts",
+      source: "export const nativeCapture = 1;\nconst spacedValue = 1;\nexport = spacedValue;\n",
+      matches: (exports: ExportEntry[]) =>
+        exports.some(
+          (entry) =>
+            entry.type === "local" && entry.exportedAs === "default" && entry.target.localName === "spacedValue",
+        ),
+    },
+    {
+      name: "module.exports member assignment",
+      file: "module.js",
+      source: "export const nativeCapture = 1;\nmodule.exports.member = function member() {};\n",
+      matches: (exports: ExportEntry[]) =>
+        exports.some((entry) => entry.type === "local" && entry.exportedAs === "member"),
+    },
+    {
+      name: "module.exports default assignment",
+      file: "module.js",
+      source: "export const nativeCapture = 1;\nmodule.exports = { defaultMember: function defaultMember() {} };\n",
+      matches: (exports: ExportEntry[]) =>
+        exports.some((entry) => entry.type === "local" && entry.exportedAs === "defaultMember"),
+    },
+    {
+      name: "exports member assignment",
+      file: "module.js",
+      source: "export const nativeCapture = 1;\nexports.member = function member() {};\n",
+      matches: (exports: ExportEntry[]) =>
+        exports.some((entry) => entry.type === "local" && entry.exportedAs === "member"),
+    },
+  ])("$name remains indexed after native export captures", ({ file, source, matches }) => {
+    const support = supportForFile(file);
     expect(support).toBeDefined();
-    if (!support) throw new Error("Expected TypeScript language support");
+    if (!support) throw new Error(`Expected language support for ${file}`);
 
-    const includesSpy = vi.spyOn(String.prototype, "includes");
-    try {
-      collectLocalsAndExportsFromSource("module.ts", "export const answer = 42;\n", support, [], {
-        nativeQueries: { imports: [], exports: [], locals: [], importBindings: [] },
-      });
-      const regexFallbackNeedles = new Set(["exports.", "module.exports.", "export {", "export *", "export ="]);
-      const fallbackScans = includesSpy.mock.calls.filter(([needle]) => regexFallbackNeedles.has(needle));
+    const moduleIndex = collectLocalsAndExportsFromSource(file, source, support, [], {
+      nativeQueries: {
+        imports: [],
+        exports: [{ patternIndex: 0, captures: [] }],
+        locals: [],
+        importBindings: [],
+      },
+    });
 
-      expect(fallbackScans).toHaveLength(0);
-    } finally {
-      includesSpy.mockRestore();
-    }
+    expect(matches(moduleIndex.exports)).toBe(true);
   });
 });
 
