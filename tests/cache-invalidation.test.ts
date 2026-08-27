@@ -57,6 +57,15 @@ import { runGit } from "./helpers/git.js";
 import { createTempProjectRoot, mkTmpDir } from "./helpers/filesystem.js";
 import type { SnapshotComparableSignature } from "../src/indexer/build-cache/project-snapshot.js";
 
+/** Newest mtime under a file or directory, used to detect a `dist` build older than its sources. */
+async function newestMtimeMs(entry: string): Promise<number> {
+  const stat = await fsp.stat(entry).catch(() => null);
+  if (!stat) return 0;
+  if (!stat.isDirectory()) return stat.mtimeMs;
+  const children = await fsp.readdir(entry, { withFileTypes: true });
+  const times = await Promise.all(children.map((child) => newestMtimeMs(path.join(entry, child.name))));
+  return Math.max(stat.mtimeMs, ...times);
+}
 function normalize(p: string): string {
   return p.replace(/\\/g, "/");
 }
@@ -528,6 +537,23 @@ describe("Cache invalidation and strict hashing", () => {
     const packageRoot = path.resolve(import.meta.dirname, "..");
     const bundledCli = path.join(packageRoot, "dist", "bin", "cli.js");
     const unbundledIndex = pathToFileURL(path.join(packageRoot, "dist", "index.js")).href;
+
+    // This test compares two build shapes of `dist`. A `dist` that is older than the
+    // sources feeding the fingerprint produces a mismatch that has nothing to do with
+    // the fingerprint contract, so fail with an actionable message instead.
+    const fingerprintSources = [
+      path.join(packageRoot, "src", "indexer", "build-cache", "options.ts"),
+      path.join(packageRoot, "src", "languages"),
+    ];
+    const newestSourceMs = Math.max(...(await Promise.all(fingerprintSources.map((entry) => newestMtimeMs(entry)))));
+    for (const artifact of [bundledCli, path.join(packageRoot, "dist", "index.js")]) {
+      const built = await fsp.stat(artifact).catch(() => null);
+      expect(built, `${artifact} is missing; run \`npm run build\` before this test.`).not.toBeNull();
+      expect(
+        built!.mtimeMs,
+        `${artifact} is older than the fingerprint sources; run \`npm run build\` before this test.`,
+      ).toBeGreaterThanOrEqual(newestSourceMs);
+    }
     const bundled = spawnSync(process.execPath, [bundledCli, "index", "--root", root, "--cache", "disk"], {
       encoding: "utf8",
     });
