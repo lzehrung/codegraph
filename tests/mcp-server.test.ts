@@ -250,6 +250,52 @@ describe("codegraph MCP handlers", () => {
 
       await expect(failure).resolves.toMatchObject({ message: "MCP stdio frame exceeded 10 MiB." });
     });
+    it("serializes tool results compactly without changing their JSON value", async () => {
+      const handlers = createCodegraphMcpHandlers({ root: process.cwd() });
+      const expected = { file: "fixture.ts", nested: { answer: 42 } };
+      handlers.get_file = async () => expected as never;
+      const server = createCodegraphMcpProtocolServer(handlers);
+      const sent: JsonRpcObject[] = [];
+      const transport = {
+        onclose: undefined,
+        onerror: undefined,
+        onmessage: undefined,
+        async start() {},
+        async send(message: unknown) {
+          sent.push(readJsonRpcObject(message));
+        },
+        async close() {},
+      } as Parameters<typeof server.connect>[0];
+      try {
+        await server.connect(transport);
+        if (transport.onmessage === undefined) throw new Error("MCP transport did not start.");
+        transport.onmessage({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1" } },
+        });
+        await vi.waitFor(() => expect(sent.some((message) => message.id === 1)).toBe(true));
+        transport.onmessage({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "get_file", arguments: { file: "fixture.ts" } },
+        });
+        await vi.waitFor(() => expect(sent.some((message) => message.id === 2)).toBe(true));
+        const result = readObject(sent.find((message) => message.id === 2)?.result);
+        const content = result.content;
+        if (!Array.isArray(content) || !content.length) throw new Error("MCP tool result did not contain text content.");
+        const serialized = readObject(content[0]).text;
+        expect(serialized).toBeTypeOf("string");
+        if (typeof serialized !== "string") throw new Error("MCP tool result content was not text.");
+        expect(serialized).not.toContain("\n  ");
+        expect(JSON.parse(serialized)).toEqual(expected);
+      } finally {
+        await server.close();
+      }
+    });
+
   });
 
   it("honors cancellation notifications for request id zero", async () => {

@@ -475,7 +475,7 @@ function toToolResult(value: unknown): CallToolResult {
     content: [
       {
         type: "text",
-        text: JSON.stringify(value, null, 2),
+        text: JSON.stringify(value),
       },
     ],
   };
