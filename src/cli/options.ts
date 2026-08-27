@@ -428,7 +428,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       {
         kind: "max",
         max: 1,
-        usage: "Usage: codegraph impact [project-root] [--provider git|github|raw] [options] [--json | --pretty]",
+        usage:
+          "Usage: codegraph impact [project-root] [--provider git|github|raw] [--depth <n>] [options] [--json | --pretty]",
       },
     ),
   ],
