@@ -181,7 +181,11 @@ async function collectNamedNodeReferences(
   }
 }
 
-export type VerifiedNamedNodeReference = { range: Range; provenance?: ResolutionProvenance };
+export type VerifiedNamedNodeReference = {
+  range: Range;
+  provenance?: ResolutionProvenance;
+  via?: { reexport: true };
+};
 
 export async function collectVerifiedNamedNodeReferences(
   index: ProjectIndex,
@@ -206,7 +210,14 @@ export async function collectVerifiedNamedNodeReferences(
     if (maxVerified !== undefined && maxVerified > 0 && verified.length >= maxVerified) {
       break;
     }
-    if (exportFromIdentifier(index, fileId, range, parsed)?.isExportFrom) continue;
+    const exportFrom = exportFromIdentifier(index, fileId, range, parsed);
+    if (exportFrom?.entry) {
+      const reexported = resolveExport(index, exportFrom.entry.fromModule, exportFrom.entry.sourceSpecifier);
+      if (reexported?.kind === "resolved" && sameDef(reexported.def, expectedDef, index.languageExtensions)) {
+        verified.push({ range, via: { reexport: true } });
+      }
+      continue;
+    }
     const resolved = await resolveDefinition(
       {
         file: fileId,
@@ -217,7 +228,11 @@ export async function collectVerifiedNamedNodeReferences(
     );
     if (resolved.status !== "ok" || !resolved.definition) continue;
     if (sameDef(resolved.definition, expectedDef, index.languageExtensions)) {
-      verified.push({ range, ...(resolved.provenance ? { provenance: resolved.provenance } : {}) });
+      verified.push({
+        range,
+        ...(exportFrom?.isExportFrom ? { via: { reexport: true } } : {}),
+        ...(resolved.provenance ? { provenance: resolved.provenance } : {}),
+      });
     }
   }
   return verified;
@@ -397,9 +412,13 @@ export function getCachedReferenceCandidateFiles(
   const candidateFileEntries =
     getIndexedReferenceCandidateFiles(index, def, exportedNames) ??
     Array.from(index.byFile.values(), (module) => module.file);
-  const exportingFiles = new Set(
-    filesExportingDefinition(index, def, exportedNames).map((file) => fileIdentityKey(file)),
-  );
+  const exportingFileIds = filesExportingDefinition(index, def, exportedNames);
+  const exportingFiles = new Set(exportingFileIds.map((file) => fileIdentityKey(file)));
+  for (const fileId of exportingFileIds) {
+    if (fileIdentityKey(fileId) !== fileIdentityKey(def.file)) {
+      candidates.set(fileIdentityKey(fileId), fileId);
+    }
+  }
   for (const fileId of candidateFileEntries) {
     if (fileIdentityKey(fileId) === fileIdentityKey(def.file)) continue;
     const moduleIndex = index.byFile.get(fileIdentityKey(fileId));
