@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
@@ -6,6 +6,7 @@ import { goToDefinition } from "../src/index.js";
 import { JAVA_SUPPORT } from "../src/languages.js";
 import { resolveNamedDefinition } from "../src/indexer/navigation-local.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import { clearTsconfigCache } from "../src/util/resolution/tsconfig.js";
 import {
   createTestIndex,
   createTestIndexFromFiles,
@@ -389,6 +390,40 @@ describe("Go to Definition", () => {
         const index = await createTestIndexFromFiles(root, [sourceFile, barrelFile]);
 
         await testGoToDefinition(index, barrelFile, 1, barrelSource.indexOf("X") + 1, sourceFile, 1);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not read tsconfig for a relative re-export goto", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-reexport-goto-no-tsconfig-"));
+      try {
+        const sourceFile = path.join(root, "x.ts").replace(/\\/g, "/");
+        const barrelFile = path.join(root, "barrel.ts").replace(/\\/g, "/");
+        const barrelSource = 'export { X } from "./x";\n';
+        // A real tsconfig must exist, otherwise the nearest-tsconfig walk reads nothing and
+        // the assertion below would hold whether or not the load is deferred.
+        await fsp.writeFile(
+          path.join(root, "tsconfig.json"),
+          JSON.stringify({ compilerOptions: { baseUrl: "." } }),
+          "utf8",
+        );
+        await fsp.writeFile(sourceFile, "export const X = 1;\n", "utf8");
+        await fsp.writeFile(barrelFile, barrelSource, "utf8");
+        const index = await createTestIndexFromPath(root);
+
+        // Index construction already normalized "./x" into an in-root file, so goto takes the
+        // fast path and never needs matchPath. Clear the cache first, or a load during index
+        // construction would mask a load during goto.
+        clearTsconfigCache();
+        const readSpy = vi.spyOn(fsp, "readFile");
+        try {
+          await testGoToDefinition(index, barrelFile, 1, barrelSource.indexOf("X") + 1, sourceFile, 1);
+          const tsconfigReads = readSpy.mock.calls.filter(([file]) => String(file).endsWith("tsconfig.json")).length;
+          expect(tsconfigReads).toBe(0);
+        } finally {
+          readSpy.mockRestore();
+        }
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

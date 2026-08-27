@@ -106,20 +106,26 @@ export async function goToDefinition(
   if (node && sup.supportsExportFromReferences && index.projectRoot) {
     const exportFrom = exportFromIdentifier(index, file, toRange(node), context);
     if (exportFrom?.entry) {
-      const { matchPath } = await loadNearestTsconfigFor(file, index.projectRoot);
-      // Index construction normalizes in-root re-export targets. Re-resolving a POSIX absolute
-      // path would instead treat its leading slash as project-root-relative.
-      const resolvedTarget = index.byFile.has(fileIdentityKey(exportFrom.entry.fromModule))
-        ? exportFrom.entry.fromModule
-        : await resolveImportSpecifier(
-            index.projectRoot,
-            file,
-            exportFrom.entry.moduleSpecifier ?? exportFrom.entry.fromModule,
-            sup.id,
-            {
-              ...(matchPath ? { matchPath } : {}),
-            },
-          );
+      // Index construction normalizes in-root re-export targets, so the common relative
+      // case needs no resolver at all. Re-resolving a POSIX absolute path would instead
+      // treat its leading slash as project-root-relative. Only a path alias or package
+      // specifier reaches the resolver, so defer the nearest-tsconfig walk until then
+      // rather than paying it on every re-export goto.
+      let resolvedTarget: FileId | { external: string };
+      if (index.byFile.has(fileIdentityKey(exportFrom.entry.fromModule))) {
+        resolvedTarget = exportFrom.entry.fromModule;
+      } else {
+        const { matchPath } = await loadNearestTsconfigFor(file, index.projectRoot);
+        resolvedTarget = await resolveImportSpecifier(
+          index.projectRoot,
+          file,
+          exportFrom.entry.moduleSpecifier ?? exportFrom.entry.fromModule,
+          sup.id,
+          {
+            ...(matchPath ? { matchPath } : {}),
+          },
+        );
+      }
       if (typeof resolvedTarget === "string") {
         const hit = resolveExport(index, resolvedTarget, exportFrom.entry.sourceSpecifier);
         if (hit?.kind === "resolved") {
