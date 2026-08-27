@@ -1,16 +1,9 @@
 import type { FallbackImportExtractionEvent } from "./graphs/specifiers.js";
-import { buildSymbolGraphDetailed } from "./graphs/symbol-graph-detailed.js";
-import type { SymbolGraph } from "./graphs/symbol-graph.js";
 import type { GraphBuildOptions } from "./graphs/types.js";
-import {
-  ensureParsedContext as ensureParsedContextFromModule,
-  parseFile as parseFileFromModule,
-  type ParsedFileCacheEntry,
-  type ParsedFileContext,
-} from "./indexer/parse-context.js";
+import { parseFile as parseFileFromModule, type ParsedFileContext } from "./indexer/parse-context.js";
 import { collectImportsForFile as collectImportsForFileFromImportsModule } from "./indexer/imports.js";
 import { collectLocalsAndExportsFromSource as collectLocalsAndExportsFromLocalsModule } from "./indexer/locals-and-exports.js";
-import { type ImportBinding, type ModuleIndex, type ProjectIndex } from "./indexer/types.js";
+import { type ImportBinding, type ModuleIndex } from "./indexer/types.js";
 import { buildScopeIndexFromSource as buildScopeIndexFromSourceFromModule, type ScopeIndex } from "./indexer/scope.js";
 import type { LanguageSupport } from "./languages.js";
 import type { SyntaxTreeLike } from "./languages/types.js";
@@ -85,13 +78,7 @@ export {
   buildProjectIndexIncremental,
 } from "./indexer/build-index.js";
 
-export {
-  collectNamespaceMemberRefs,
-  findReferences,
-  goToDefinition,
-  resolveExport,
-  resolveImported,
-} from "./indexer/navigation.js";
+export { findReferences, goToDefinition, resolveExport, resolveImported } from "./indexer/navigation.js";
 
 export {
   defFromSymbolId,
@@ -140,13 +127,6 @@ export async function parseFile(file: string): Promise<ParsedFileContext> {
   return await parseFileFromModule(file);
 }
 
-export async function ensureParsedContext(
-  file: string,
-  parsedEntry?: ParsedFileCacheEntry,
-): Promise<ParsedFileContext> {
-  return await ensureParsedContextFromModule(file, parsedEntry);
-}
-
 export function buildScopeIndexFromSource(
   file: string,
   source: string,
@@ -155,8 +135,4 @@ export function buildScopeIndexFromSource(
   opts?: { tree?: SyntaxTreeLike; nativeMode?: NativeRuntimeMode },
 ): ScopeIndex {
   return buildScopeIndexFromSourceFromModule(file, source, support, imports, opts);
-}
-
-export async function __buildSymbolGraphDetailedCompat(index: ProjectIndex): Promise<SymbolGraph> {
-  return await buildSymbolGraphDetailed(index);
 }
