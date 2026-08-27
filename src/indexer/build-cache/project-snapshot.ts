@@ -218,21 +218,24 @@ function transformHandle(root: string, value: string, toRelative: boolean): stri
 }
 
 function transformModule(root: string, module: ModuleIndex, toRelative: boolean): ModuleIndex {
-  const copy = structuredClone(module);
   const file = (value: string): string => transformPath(root, value, toRelative);
-  copy.file = file(copy.file);
-  for (const local of copy.locals) local.file = file(local.file);
-  for (const entry of copy.exports) {
-    if (entry.type === "local") {
-      entry.target.file = file(entry.target.file);
-    } else {
-      transformPersistedExportFromModule(root, entry, toRelative);
-    }
-  }
-  for (const binding of copy.imports) {
-    if (typeof binding.resolved === "string") binding.resolved = file(binding.resolved);
-  }
-  return copy;
+  return {
+    ...module,
+    file: file(module.file),
+    locals: module.locals.map((local) => ({ ...local, file: file(local.file) })),
+    exports: module.exports.map((entry) => {
+      if (entry.type === "local") {
+        return { ...entry, target: { ...entry.target, file: file(entry.target.file) } };
+      }
+      const copy = { ...entry };
+      transformPersistedExportFromModule(root, copy, toRelative);
+      return copy;
+    }),
+    imports: module.imports.map((binding) => ({
+      ...binding,
+      ...(typeof binding.resolved === "string" ? { resolved: file(binding.resolved) } : {}),
+    })),
+  };
 }
 
 function transformSnapshotPaths(
@@ -240,34 +243,40 @@ function transformSnapshotPaths(
   root: string,
   toRelative: boolean,
 ): ProjectIndexSnapshotPayload {
-  const copy = structuredClone(payload);
-  copy.graph.nodes = copy.graph.nodes.map((node) => transformPath(root, node, toRelative));
-  copy.graph.edges = copy.graph.edges.map((edge) => ({
-    ...edge,
-    from: transformPath(root, edge.from, toRelative),
-    to: edge.to.type === "file" ? { ...edge.to, path: transformPath(root, edge.to.path, toRelative) } : edge.to,
-  }));
-  copy.modules = copy.modules.map((module) => transformModule(root, module, toRelative));
-  if (copy.projectFiles) {
-    copy.projectFiles = copy.projectFiles.map((file) => ({
-      ...file,
-      path: transformPath(root, file.path, toRelative),
-      projectRoot: transformPath(root, file.projectRoot, toRelative),
-    }));
-  }
-  if (copy.bloomFilters) {
-    const bloomFilters: Record<string, SerializedBloomFilter> = {};
-    for (const [file, filter] of Object.entries(copy.bloomFilters)) {
-      bloomFilters[transformPath(root, file, toRelative)] = filter;
-    }
-    copy.bloomFilters = bloomFilters;
-  }
-  const fileSignatures: Record<string, SnapshotFileSignature> = {};
-  for (const [file, signature] of Object.entries(copy.fileSignatures ?? {})) {
-    fileSignatures[transformPath(root, file, toRelative)] = signature;
-  }
-  copy.fileSignatures = fileSignatures;
-  return copy;
+  const bloomFilters = payload.bloomFilters
+    ? Object.fromEntries(
+        Object.entries(payload.bloomFilters).map(([file, filter]) => [transformPath(root, file, toRelative), filter]),
+      )
+    : undefined;
+  const fileSignatures = Object.fromEntries(
+    Object.entries(payload.fileSignatures ?? {}).map(([file, signature]) => [
+      transformPath(root, file, toRelative),
+      signature,
+    ]),
+  );
+  return {
+    ...payload,
+    graph: {
+      nodes: payload.graph.nodes.map((node) => transformPath(root, node, toRelative)),
+      edges: payload.graph.edges.map((edge) => ({
+        ...edge,
+        from: transformPath(root, edge.from, toRelative),
+        to: edge.to.type === "file" ? { ...edge.to, path: transformPath(root, edge.to.path, toRelative) } : edge.to,
+      })),
+    },
+    modules: payload.modules.map((module) => transformModule(root, module, toRelative)),
+    ...(payload.projectFiles
+      ? {
+          projectFiles: payload.projectFiles.map((file) => ({
+            ...file,
+            path: transformPath(root, file.path, toRelative),
+            projectRoot: transformPath(root, file.projectRoot, toRelative),
+          })),
+        }
+      : {}),
+    ...(bloomFilters ? { bloomFilters } : {}),
+    fileSignatures,
+  };
 }
 function migrateProjectSnapshotPayload(value: unknown, currentRoot: string): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
@@ -401,6 +410,13 @@ function setBoundedSnapshotCache<K, V>(cache: Map<K, V>, key: K, value: V): void
   }
 }
 
+function freezeSnapshotPayload<T>(value: T): T {
+  if (!value || typeof value !== "object") return value;
+  Object.freeze(value);
+  for (const child of Object.values(value)) freezeSnapshotPayload(child);
+  return value;
+}
+
 function materializeDetailedSymbolGraph(payload: DetailedSymbolGraphSnapshotPayload["graph"]): SymbolGraph {
   const graph = structuredClone(payload);
   return {
@@ -428,6 +444,10 @@ function recordSnapshotCorruption(
   }
   logWithLevel(logLevel, "warn", `Warning: Corrupt cache artifact ${artifact}: ${reason}`);
 }
+
+function recordSnapshotInvalidation(artifact: string, reason: string, logLevel: BuildOptions["logLevel"]): void {
+  logWithLevel(logLevel, "debug", `Cache artifact invalidated ${artifact}: ${reason}`);
+}
 function isMissingArtifactError(error: unknown): boolean {
   return !!error && typeof error === "object" && "code" in error && error.code === "ENOENT";
 }
@@ -450,6 +470,7 @@ async function readParsedSnapshot(snapshotPath: string): Promise<{ identity: Sna
   }
   return { identity: before, payload };
 }
+
 function transformCachedProjectSnapshot(
   snapshotPath: string,
   identity: SnapshotFileIdentity,
@@ -459,16 +480,22 @@ function transformCachedProjectSnapshot(
   const cached = transformedSnapshotCache.get(snapshotPath);
   if (cached && cached.root === projectRoot && sameSnapshotFileIdentity(cached.identity, identity)) {
     setBoundedSnapshotCache(transformedSnapshotCache, snapshotPath, cached);
-    return structuredClone(cached.payload);
+    return cached.payload;
   }
   const migratedPayload = migrateProjectSnapshotPayload(rawPayload, projectRoot);
   const payload =
     migratedPayload && typeof migratedPayload === "object" && !Array.isArray(migratedPayload)
       ? transformSnapshotPaths(migratedPayload as ProjectIndexSnapshotPayload, projectRoot, false)
       : migratedPayload;
-  setBoundedSnapshotCache(transformedSnapshotCache, snapshotPath, { identity, root: projectRoot, payload });
-  return structuredClone(payload);
+  const immutablePayload = freezeSnapshotPayload(payload);
+  setBoundedSnapshotCache(transformedSnapshotCache, snapshotPath, {
+    identity,
+    root: projectRoot,
+    payload: immutablePayload,
+  });
+  return immutablePayload;
 }
+
 function transformCachedProjectSnapshotModules(
   snapshotPath: string,
   identity: SnapshotFileIdentity,
@@ -478,7 +505,7 @@ function transformCachedProjectSnapshotModules(
   const cached = transformedSnapshotModulesCache.get(snapshotPath);
   if (cached && cached.root === projectRoot && sameSnapshotFileIdentity(cached.identity, identity)) {
     setBoundedSnapshotCache(transformedSnapshotModulesCache, snapshotPath, cached);
-    return structuredClone(cached.payload);
+    return cached.payload;
   }
   const migratedPayload = migrateProjectSnapshotPayload(rawPayload, projectRoot);
   if (!migratedPayload || typeof migratedPayload !== "object" || Array.isArray(migratedPayload)) {
@@ -488,7 +515,7 @@ function transformCachedProjectSnapshotModules(
   if (!Array.isArray(payload.modules) || !payload.fileSignatures || typeof payload.fileSignatures !== "object") {
     return migratedPayload;
   }
-  const modules = structuredClone(payload.modules).map((module) => transformModule(projectRoot, module, false));
+  const modules = payload.modules.map((module) => transformModule(projectRoot, module, false));
   const fileSignatures: Record<string, SnapshotFileSignature> = {};
   for (const [file, signature] of Object.entries(payload.fileSignatures)) {
     fileSignatures[transformPath(projectRoot, file, false)] = signature;
@@ -503,12 +530,13 @@ function transformCachedProjectSnapshotModules(
     modules,
     fileSignatures,
   };
+  const immutablePayload = freezeSnapshotPayload(transformed);
   setBoundedSnapshotCache(transformedSnapshotModulesCache, snapshotPath, {
     identity,
     root: projectRoot,
-    payload: transformed,
+    payload: immutablePayload,
   });
-  return structuredClone(transformed);
+  return immutablePayload;
 }
 
 function projectIndexManifestEntries(
@@ -543,13 +571,26 @@ export async function tryLoadProjectIndexSnapshot(
     );
     const nativeRuntimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
     const implementationFingerprint = getImplementationFingerprint();
+    if (!isProjectIndexSnapshotPayload(payload)) {
+      recordSnapshotCorruption(
+        report,
+        projectSnapshotPath(projectRoot, opts),
+        "invalid project snapshot payload",
+        opts?.logLevel,
+      );
+      return null;
+    }
     if (
-      !isProjectIndexSnapshotPayload(payload) ||
       payload.filesSignature !== filesSignature ||
       payload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
       payload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint ||
       payload.implementationFingerprint !== implementationFingerprint
     ) {
+      recordSnapshotInvalidation(
+        projectSnapshotPath(projectRoot, opts),
+        "project snapshot identity mismatch",
+        opts?.logLevel,
+      );
       return null;
     }
     const graph: Graph = {
@@ -619,12 +660,25 @@ export async function tryLoadProjectSnapshotModules(
     );
     const nativeRuntimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
     const implementationFingerprint = getImplementationFingerprint();
+    if (!isProjectSnapshotModulesPayload(payload)) {
+      recordSnapshotCorruption(
+        report,
+        projectSnapshotPath(projectRoot, opts),
+        "invalid project snapshot payload",
+        opts?.logLevel,
+      );
+      return null;
+    }
     if (
-      !isProjectSnapshotModulesPayload(payload) ||
       payload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
       payload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint ||
       payload.implementationFingerprint !== implementationFingerprint
     ) {
+      recordSnapshotInvalidation(
+        projectSnapshotPath(projectRoot, opts),
+        "project snapshot identity mismatch",
+        opts?.logLevel,
+      );
       return null;
     }
     const normalizedFileSignatures = new Map(
@@ -663,7 +717,17 @@ export async function tryLoadPersistedBloomFilters(
     if (sidecarBloom) {
       return createPersistedBloomFilters(sidecarBloom.bloomFilters, sidecarBloom.fileSignatures, projectRoot);
     }
-    recordSnapshotCorruption(report, sidecarPath, "invalid bloom filter payload", opts?.logLevel);
+    const sidecar = sidecarParsed as Partial<BloomFilterSnapshotPayload>;
+    const identityMismatch =
+      isUnknownRecord(sidecarParsed) &&
+      (sidecar.version !== BLOOM_FILTER_SNAPSHOT_VERSION ||
+        sidecar.implementationFingerprint !== getImplementationFingerprint() ||
+        typeof sidecar.projectSnapshotIdentity !== "string");
+    if (identityMismatch) {
+      recordSnapshotInvalidation(sidecarPath, "bloom filter identity mismatch", opts?.logLevel);
+    } else {
+      recordSnapshotCorruption(report, sidecarPath, "invalid bloom filter payload", opts?.logLevel);
+    }
   } catch (error) {
     const isMissing = error && typeof error === "object" && "code" in error && error.code === "ENOENT";
     if (!isMissing) {
@@ -955,12 +1019,16 @@ export async function tryLoadDetailedSymbolGraphSnapshot(
             ),
           }
         : migratedPayload;
-    if (
-      !isDetailedSymbolGraphSnapshotPayload(payload) ||
-      payload.implementationFingerprint !== getImplementationFingerprint() ||
-      payload.projectSnapshotIdentity !== index.projectSnapshotIdentity
-    ) {
+    if (!isDetailedSymbolGraphSnapshotPayload(payload)) {
       recordSnapshotCorruption(report, snapshotPath, "invalid detailed symbol graph payload", opts?.logLevel);
+      return null;
+    }
+    if (payload.implementationFingerprint !== getImplementationFingerprint()) {
+      recordSnapshotInvalidation(snapshotPath, "implementation fingerprint mismatch", opts?.logLevel);
+      return null;
+    }
+    if (payload.projectSnapshotIdentity !== index.projectSnapshotIdentity) {
+      recordSnapshotInvalidation(snapshotPath, "project snapshot identity mismatch", opts?.logLevel);
       return null;
     }
     const graph = materializeDetailedSymbolGraph(payload.graph);

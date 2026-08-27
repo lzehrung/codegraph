@@ -6,10 +6,13 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import * as zlib from "node:zlib";
+import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import {
   buildProjectIndex,
   buildProjectIndexFromFiles,
   buildProjectIndexIncremental,
+  buildSymbolGraphDetailed,
   findReferences,
   resolveExport,
   type BuildReport,
@@ -41,6 +44,9 @@ import { getAllLanguages, getLanguageById } from "../src/languages/registry.js";
 import type { LanguageDefinition } from "../src/languages/types.js";
 import {
   clearImplementationFingerprintCache,
+  getImplementationFingerprint,
+  getImplementationFingerprintForEpoch,
+  LANGUAGE_BEHAVIOR_EPOCH,
   languageDefinitionFingerprintCoverage,
 } from "../src/indexer/build-cache/options.js";
 import { fileIdentityKey } from "../src/util/paths.js";
@@ -51,6 +57,15 @@ import { runGit } from "./helpers/git.js";
 import { createTempProjectRoot, mkTmpDir } from "./helpers/filesystem.js";
 import type { SnapshotComparableSignature } from "../src/indexer/build-cache/project-snapshot.js";
 
+/** Newest mtime under a file or directory, used to detect a `dist` build older than its sources. */
+async function newestMtimeMs(entry: string): Promise<number> {
+  const stat = await fsp.stat(entry).catch(() => null);
+  if (!stat) return 0;
+  if (!stat.isDirectory()) return stat.mtimeMs;
+  const children = await fsp.readdir(entry, { withFileTypes: true });
+  const times = await Promise.all(children.map((child) => newestMtimeMs(path.join(entry, child.name))));
+  return Math.max(stat.mtimeMs, ...times);
+}
 function normalize(p: string): string {
   return p.replace(/\\/g, "/");
 }
@@ -498,10 +513,72 @@ describe("Cache invalidation and strict hashing", () => {
     }
   });
 
-  // Each mutation changes only the named definition field; source bytes stay fixed.
-  // Values are chosen to flip the field's effective behavior (or, for hooks, to
-  // introduce a behavior-neutral hook where none existed) so any fingerprint
-  // change is attributable to descriptor coverage alone.
+  it("invalidates behavior-hook changes through LANGUAGE_BEHAVIOR_EPOCH", () => {
+    const typescript = getLanguageById("ts");
+    if (!typescript) throw new Error("Expected TypeScript language definition.");
+    const originalNormalizeIdentifier = typescript.normalizeIdentifier;
+    const fingerprint = getImplementationFingerprint();
+    try {
+      typescript.normalizeIdentifier = (name) => name;
+      clearImplementationFingerprintCache();
+
+      expect(getImplementationFingerprint()).toBe(fingerprint);
+      expect(getImplementationFingerprintForEpoch(LANGUAGE_BEHAVIOR_EPOCH + 1)).not.toBe(fingerprint);
+    } finally {
+      if (originalNormalizeIdentifier === undefined) delete typescript.normalizeIdentifier;
+      else typescript.normalizeIdentifier = originalNormalizeIdentifier;
+      clearImplementationFingerprintCache();
+    }
+  });
+
+  it("uses one implementation fingerprint from bundled and unbundled entrypoints", async () => {
+    const root = await mkTmpDir("dg-fingerprint-build-shapes-");
+    await fsp.writeFile(path.join(root, "entry.ts"), "export const value = 1;\n", "utf8");
+    const packageRoot = path.resolve(import.meta.dirname, "..");
+    const bundledCli = path.join(packageRoot, "dist", "bin", "cli.js");
+    const unbundledIndex = pathToFileURL(path.join(packageRoot, "dist", "index.js")).href;
+
+    // This test compares two build shapes of `dist`. A `dist` that is older than the
+    // sources feeding the fingerprint produces a mismatch that has nothing to do with
+    // the fingerprint contract, so fail with an actionable message instead.
+    const fingerprintSources = [
+      path.join(packageRoot, "src", "indexer", "build-cache", "options.ts"),
+      path.join(packageRoot, "src", "languages"),
+    ];
+    const newestSourceMs = Math.max(...(await Promise.all(fingerprintSources.map((entry) => newestMtimeMs(entry)))));
+    for (const artifact of [bundledCli, path.join(packageRoot, "dist", "index.js")]) {
+      const built = await fsp.stat(artifact).catch(() => null);
+      expect(built, `${artifact} is missing; run \`npm run build\` before this test.`).not.toBeNull();
+      expect(
+        built!.mtimeMs,
+        `${artifact} is older than the fingerprint sources; run \`npm run build\` before this test.`,
+      ).toBeGreaterThanOrEqual(newestSourceMs);
+    }
+    const bundled = spawnSync(process.execPath, [bundledCli, "index", "--root", root, "--cache", "disk"], {
+      encoding: "utf8",
+    });
+    expect(bundled.status, bundled.stderr).toBe(0);
+    const manifestPath = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
+    const bundledManifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as IndexManifest;
+    const unbundled = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `const { buildProjectIndex } = await import(${JSON.stringify(unbundledIndex)}); await buildProjectIndex(${JSON.stringify(root)}, { cache: "disk", threads: 1 });`,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(unbundled.status, unbundled.stderr).toBe(0);
+    const unbundledManifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as IndexManifest;
+
+    expect(bundledManifest.buildOptions?.implementationFingerprint).toBe(
+      unbundledManifest.buildOptions?.implementationFingerprint,
+    );
+  });
+
+  // Declarative fields remain fingerprinted independently. Function-valued hooks
+  // are instead covered by LANGUAGE_BEHAVIOR_EPOCH.
   const snapshotField = <K extends keyof LanguageDefinition>(
     definition: LanguageDefinition,
     field: K,
@@ -518,21 +595,9 @@ describe("Cache invalidation and strict hashing", () => {
   };
 
   const definitionFieldMutations: Array<{
-    field: "scopeDeclarationNames" | "normalizeIdentifier" | "usesQueryDrivenLocals" | "membersAreImplicitlyInScope";
+    field: "usesQueryDrivenLocals" | "membersAreImplicitlyInScope";
     apply: (definition: LanguageDefinition) => void;
   }> = [
-    {
-      field: "scopeDeclarationNames",
-      apply: (definition) => {
-        definition.scopeDeclarationNames = () => false;
-      },
-    },
-    {
-      field: "normalizeIdentifier",
-      apply: (definition) => {
-        definition.normalizeIdentifier = (name) => name;
-      },
-    },
     {
       field: "usesQueryDrivenLocals",
       apply: (definition) => {
@@ -1698,6 +1763,182 @@ describe("Cache invalidation and strict hashing", () => {
     const moduleIndex = incremental.byFile.get(fileIdentityKey(normalize(filePath)));
     expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
   });
+  it.each([
+    ["array", []],
+    ["primitive string", "corrupt"],
+    ["primitive null", null],
+  ])("reports a malformed %s project snapshot as corruption", async (_description, corruptedPayload) => {
+    const root = await mkTmpDir("dg-project-snapshot-structural-corruption-");
+    const filePath = path.join(root, "entry.ts");
+    await fsp.writeFile(filePath, "export const projectSnapshot = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+
+    await writeProjectSnapshot(projectSnapshotPathFor(root), corruptedPayload);
+    const manifest = await readManifest(root);
+    const report: BuildReport = { timings: {} };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const loaded = await buildCache.tryLoadProjectIndexSnapshot(
+        root,
+        { cache: "disk", logLevel: "debug" },
+        new Map(Object.entries(manifest.files).map(([file, entry]) => [path.join(root, file), entry])),
+        report,
+      );
+
+      expect(loaded).toBeNull();
+      expect(
+        report.manifest?.corruptions?.some((entry) => entry.artifact.endsWith("project-index-snapshot.json")),
+      ).toBe(true);
+      expect(warnSpy.mock.calls.flat().join(" ")).toContain("Corrupt cache artifact");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("reports a project snapshot implementation fingerprint mismatch as invalidation", async () => {
+    const root = await mkTmpDir("dg-project-snapshot-identity-mismatch-");
+    const filePath = path.join(root, "entry.ts");
+    await fsp.writeFile(filePath, "export const projectSnapshot = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshot = await readProjectSnapshot(snapshotPath);
+    snapshot.implementationFingerprint = "0".repeat(64);
+    await writeProjectSnapshot(snapshotPath, snapshot);
+    const manifest = await readManifest(root);
+    const report: BuildReport = { timings: {} };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    try {
+      const loaded = await buildCache.tryLoadProjectIndexSnapshot(
+        root,
+        { cache: "disk", logLevel: "debug" },
+        new Map(Object.entries(manifest.files).map(([file, entry]) => [path.join(root, file), entry])),
+        report,
+      );
+
+      expect(loaded).toBeNull();
+      expect(report.manifest?.corruptions).toBeUndefined();
+      expect(debugSpy.mock.calls.flat().join(" ")).toContain("Cache artifact invalidated");
+      expect(warnSpy.mock.calls.flat().join(" ")).not.toContain("Corrupt cache artifact");
+    } finally {
+      debugSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ["array", []],
+    ["primitive string", "corrupt"],
+    ["primitive null", null],
+  ])("reports a malformed %s bloom sidecar as corruption", async (_description, corruptedPayload) => {
+    const root = await mkTmpDir("dg-bloom-sidecar-structural-corruption-");
+    await fsp.writeFile(path.join(root, "entry.ts"), "export const bloomSnapshot = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1, useBloomFilters: true });
+
+    await writeProjectSnapshot(path.join(root, ".codegraph-cache", "index-v1", "bloom-filters.json"), corruptedPayload);
+    const report: BuildReport = { timings: {} };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await buildCache.tryLoadPersistedBloomFilters(root, { cache: "disk", logLevel: "debug" }, report);
+
+      expect(report.manifest?.corruptions?.some((entry) => entry.artifact.endsWith("bloom-filters.json"))).toBe(true);
+      expect(warnSpy.mock.calls.flat().join(" ")).toContain("Corrupt cache artifact");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("reports a bloom sidecar implementation fingerprint mismatch as invalidation", async () => {
+    const root = await mkTmpDir("dg-bloom-sidecar-identity-mismatch-");
+    await fsp.writeFile(path.join(root, "entry.ts"), "export const bloomSnapshot = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1, useBloomFilters: true });
+
+    const sidecarPath = path.join(root, ".codegraph-cache", "index-v1", "bloom-filters.json");
+    const sidecar = await readProjectSnapshot(sidecarPath);
+    sidecar.implementationFingerprint = "0".repeat(64);
+    await writeProjectSnapshot(sidecarPath, sidecar);
+    const report: BuildReport = { timings: {} };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    try {
+      await buildCache.tryLoadPersistedBloomFilters(root, { cache: "disk", logLevel: "debug" }, report);
+
+      expect(report.manifest?.corruptions).toBeUndefined();
+      expect(debugSpy.mock.calls.flat().join(" ")).toContain("Cache artifact invalidated");
+      expect(warnSpy.mock.calls.flat().join(" ")).not.toContain("Corrupt cache artifact");
+    } finally {
+      debugSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ["array", []],
+    ["primitive string", "corrupt"],
+    ["primitive null", null],
+  ])("reports a malformed %s detailed symbol graph sidecar as corruption", async (_description, corruptedPayload) => {
+    const root = await mkTmpDir("dg-detailed-sidecar-structural-corruption-");
+    await fsp.writeFile(path.join(root, "entry.ts"), "export function detailedSnapshot() { return 1; }\n", "utf8");
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const graph = await buildSymbolGraphDetailed(index);
+    await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, graph);
+
+    await writeProjectSnapshot(
+      path.join(root, ".codegraph-cache", "index-v1", "detailed-symbol-graph.json"),
+      corruptedPayload,
+    );
+    const report: BuildReport = { timings: {} };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const loaded = await buildCache.tryLoadDetailedSymbolGraphSnapshot(
+        root,
+        { cache: "disk", logLevel: "debug" },
+        index,
+        report,
+      );
+
+      expect(loaded).toBeNull();
+      expect(report.manifest?.corruptions?.some((entry) => entry.artifact.endsWith("detailed-symbol-graph.json"))).toBe(
+        true,
+      );
+      expect(warnSpy.mock.calls.flat().join(" ")).toContain("Corrupt cache artifact");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("reports a detailed symbol graph implementation fingerprint mismatch as invalidation", async () => {
+    const root = await mkTmpDir("dg-detailed-sidecar-identity-mismatch-");
+    await fsp.writeFile(path.join(root, "entry.ts"), "export function detailedSnapshot() { return 1; }\n", "utf8");
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const graph = await buildSymbolGraphDetailed(index);
+    await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, graph);
+
+    const sidecarPath = path.join(root, ".codegraph-cache", "index-v1", "detailed-symbol-graph.json");
+    const sidecar = await readProjectSnapshot(sidecarPath);
+    sidecar.implementationFingerprint = "0".repeat(64);
+    await writeProjectSnapshot(sidecarPath, sidecar);
+    const report: BuildReport = { timings: {} };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    try {
+      const loaded = await buildCache.tryLoadDetailedSymbolGraphSnapshot(
+        root,
+        { cache: "disk", logLevel: "debug" },
+        index,
+        report,
+      );
+
+      expect(loaded).toBeNull();
+      expect(report.manifest?.corruptions).toBeUndefined();
+      expect(debugSpy.mock.calls.flat().join(" ")).toContain("Cache artifact invalidated");
+      expect(warnSpy.mock.calls.flat().join(" ")).not.toContain("Corrupt cache artifact");
+    } finally {
+      debugSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
 
   it("falls back when project snapshot symbol entries are malformed", async () => {
     const root = await mkTmpDir("dg-incremental-bad-project-snapshot-symbol-");
@@ -2011,7 +2252,9 @@ describe("Cache invalidation and strict hashing", () => {
     const first = await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries);
     const firstModule = first?.index.byFile.get(fileIdentityKey(normalize(path.join(root, "main.ts"))));
     if (!firstModule) throw new Error("Expected cached module.");
-    firstModule.locals.length = 0;
+    expect(() => {
+      firstModule.locals.length = 0;
+    }).toThrow(TypeError);
     const second = await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries);
     const beforeRewrite = await fsp.stat(snapshotPath);
     const unchangedBytes = (await originalReadFile(snapshotPath)) as Buffer;
@@ -2051,18 +2294,16 @@ describe("Cache invalidation and strict hashing", () => {
     const cloneSpy = vi.spyOn(globalThis, "structuredClone");
     try {
       const first = await buildCache.tryLoadProjectSnapshotModules(root, { cache: "disk" }, signatures);
-      first?.get(fileIdentityKey(filePath))?.locals.splice(0);
+      expect(() => {
+        first?.get(fileIdentityKey(filePath))?.locals.splice(0);
+      }).toThrow(TypeError);
       const second = await buildCache.tryLoadProjectSnapshotModules(root, { cache: "disk" }, signatures);
 
       expect(second?.get(fileIdentityKey(filePath))?.locals.some((local) => local.localName === "moduleMemo")).toBe(
         true,
       );
       expect(decompressSpy).toHaveBeenCalledTimes(1);
-      expect(
-        cloneSpy.mock.calls.some(
-          ([value]) => !!value && typeof value === "object" && !Array.isArray(value) && "graph" in value,
-        ),
-      ).toBe(false);
+      expect(cloneSpy).not.toHaveBeenCalled();
     } finally {
       cloneSpy.mockRestore();
       decompressSpy.mockClear();
