@@ -13,7 +13,12 @@ import {
   type ProjectFileInfo,
 } from "../util/projectFiles.js";
 import { getGitHead, isGitRepo, getGitBlobHashes, listChangedFiles } from "../util/git.js";
-import { clearResolutionCaches, loadNearestTsconfigFor, resolveSpecifier, type MatchPathFn } from "../util/resolution.js";
+import {
+  clearResolutionCaches,
+  loadNearestTsconfigFor,
+  resolveSpecifier,
+  type MatchPathFn,
+} from "../util/resolution.js";
 import {
   fileIdentityKey,
   initializeFileIdentityCaseSensitivity,
@@ -23,7 +28,7 @@ import {
 import { mapLimit } from "../util/concurrency.js";
 import { readConfinedUtf8File } from "../util/confinedFile.js";
 import { resolveWorkerThreadCount } from "../util/workerThreads.js";
-import { logWithLevel, type LogLevel } from "../logging.js";
+import { logWithLevel } from "../logging.js";
 import { collectGraph } from "../graph-builder.js";
 import { collectEdgesForFile } from "../graph-edge-collector.js";
 import { buildGraphAdjacency } from "../graphs/adjacency.js";
@@ -776,6 +781,7 @@ async function buildIndexFromFileListShared(
   // Cache lookup determines the work a full build will actually parse. Complete that cheap phase
   // before starting Piscina, so a warm build does not bootstrap workers and partial hits bound
   // the pool to real parse misses rather than the input file list.
+  const signatureStrict = cacheEnabled || useManifest || !!manifestEntries ? opts?.cacheStrict : false;
   const cacheProbes = new Map<string, ModuleCacheProbe>(
     await mapLimit(normalizedFiles, conc, async (file) => {
       try {
@@ -787,7 +793,7 @@ async function buildIndexFromFileListShared(
             trustedSources?.set(file, source);
             sigInfo = fileSignatureFromSource(source, gitSig);
           } else {
-            sigInfo = await fileSignature(file, opts?.cacheStrict, gitSig, {
+            sigInfo = await fileSignature(file, signatureStrict, gitSig, {
               forceContentHash: cacheEnabled && !gitSig,
             });
           }
@@ -827,7 +833,11 @@ async function buildIndexFromFileListShared(
       : null;
     const parsedMap = new Map<string, ParsedFileContext>();
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
-    const { matchPath } = await loadNearestTsconfigFor(path.join(projectRoot, "__codegraph__.ts"), projectRoot, opts?.logLevel);
+    const { matchPath } = await loadNearestTsconfigFor(
+      path.join(projectRoot, "__codegraph__.ts"),
+      projectRoot,
+      opts?.logLevel,
+    );
     const parseStart = performance.now();
     const graph: Graph = { nodes: new Set(normalizedFiles), edges: [] };
     const onFileEdges = manifestEntries
@@ -1604,7 +1614,11 @@ export async function buildProjectIndexIncremental(
     }
 
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
-    const { matchPath } = await loadNearestTsconfigFor(path.join(projectRoot, "__codegraph__.ts"), projectRoot, opts?.logLevel);
+    const { matchPath } = await loadNearestTsconfigFor(
+      path.join(projectRoot, "__codegraph__.ts"),
+      projectRoot,
+      opts?.logLevel,
+    );
     const conc = buildConcurrency(opts);
     // Created below, once the changed-file set is known. Building it here would spawn a full
     // pool before the signature pass and the unchanged-snapshot early return, so a warm

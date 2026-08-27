@@ -522,7 +522,7 @@ describe("CommonJS export fallback", () => {
 
       const index = await buildProjectIndex(root, { cache: "off" });
       const moduleIndex = index.byFile.get(fileIdentityKey(file));
-      const exportedNames = moduleIndex?.exports.map((entry) => entry.exportedAs);
+      const exportedNames = moduleIndex?.exports.flatMap((entry) => ("exportedAs" in entry ? [entry.exportedAs] : []));
 
       expect(exportedNames).toEqual(expect.arrayContaining(["esm", "named", "member"]));
     });
@@ -540,14 +540,29 @@ describe("build-scoped workspace resolution", () => {
       await fsp.mkdir(path.join(root, "packages", "lib", "src"), { recursive: true });
       const packageJson = path.join(root, "package.json");
       await fsp.writeFile(packageJson, JSON.stringify({ workspaces: ["packages/*"] }), "utf8");
-      await fsp.writeFile(path.join(root, "tsconfig.base.json"), JSON.stringify({ compilerOptions: { baseUrl: "." } }), "utf8");
       await fsp.writeFile(
-        path.join(root, "tsconfig.json"),
-        JSON.stringify({ extends: "./tsconfig.base.json", compilerOptions: { paths: { "@lib/*": ["packages/lib/src/*"] } } }),
+        path.join(root, "tsconfig.base.json"),
+        JSON.stringify({ compilerOptions: { baseUrl: "." } }),
         "utf8",
       );
-      await fsp.writeFile(path.join(root, "packages", "app", "package.json"), JSON.stringify({ name: "@app/main" }), "utf8");
-      await fsp.writeFile(path.join(root, "packages", "lib", "package.json"), JSON.stringify({ name: "@lib/main" }), "utf8");
+      await fsp.writeFile(
+        path.join(root, "tsconfig.json"),
+        JSON.stringify({
+          extends: "./tsconfig.base.json",
+          compilerOptions: { paths: { "@lib/*": ["packages/lib/src/*"] } },
+        }),
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(root, "packages", "app", "package.json"),
+        JSON.stringify({ name: "@app/main" }),
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(root, "packages", "lib", "package.json"),
+        JSON.stringify({ name: "@lib/main" }),
+        "utf8",
+      );
       await fsp.writeFile(path.join(root, "packages", "lib", "src", "value.ts"), "export const value = 1;\n", "utf8");
       for (let index = 0; index < 8; index += 1) {
         await fsp.writeFile(
