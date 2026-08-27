@@ -87,4 +87,27 @@ describe("Incremental cache modes", () => {
     expect(fs.existsSync(dbPath)).toBe(true);
     expect(second.byFile.get(fileIdentityKey(absoluteFile))?.file).toBe(absoluteFile);
   });
+
+  it("treats cache strict as a no-op when cache is off", async () => {
+    const root = await mkTmpDir("dg-cache-off-strict-");
+    await fsp.writeFile(path.join(root, "util.ts"), "export const value = 1;\n", "utf8");
+    await fsp.writeFile(path.join(root, "schema.sql"), "CREATE TABLE accounts (id INTEGER);\n", "utf8");
+
+    const defaultIndex = await buildProjectIndex(root, { cache: "off", threads: 1 });
+    const strictIndex = await buildProjectIndex(root, { cache: "off", cacheStrict: true, threads: 1 });
+    const comparableIndex = (index: typeof defaultIndex) => ({
+      analysis: index.analysis,
+      byFile: index.byFile,
+      cacheMode: index.cacheMode,
+      graph: index.graph,
+      manifestEntries: index.manifestEntries,
+    });
+    const reportWithoutTimings = (index: typeof defaultIndex) => {
+      const { timings: _, ...report } = index.buildReport ?? { timings: {} };
+      return report;
+    };
+
+    expect(comparableIndex(strictIndex)).toEqual(comparableIndex(defaultIndex));
+    expect(reportWithoutTimings(strictIndex)).toEqual(reportWithoutTimings(defaultIndex));
+  });
 });
