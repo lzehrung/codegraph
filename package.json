@@ -1,6 +1,6 @@
 {
   "name": "@lzehrung/codegraph",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -179,7 +179,7 @@
     "vitest": "^4.1.8"
   },
   "dependencies": {
-    "@lzehrung/codegraph-core": "2.2.1",
+    "@lzehrung/codegraph-core": "2.2.2",
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
     "fast-glob": "^3.3.3",
@@ -196,6 +196,6 @@
     "@emnapi/runtime": "1.11.3"
   },
   "optionalDependencies": {
-    "@lzehrung/codegraph-native": "^1.11.1"
+    "@lzehrung/codegraph-native": "^1.11.2"
   }
 }
