@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { orientCodegraph, orientCodegraphWithSession } from "../src/agent/orient.js";
 import { createAgentSession } from "../src/agent/session.js";
-import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
+import { dedupeAgentFollowUps, formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
 import * as duplicates from "../src/duplicates.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import { countingSession } from "./helpers/agent.js";
@@ -59,6 +59,14 @@ describe("agent orient", () => {
 
     expect(response.focus[0]?.file).toBe("-entry.ts");
     expect(formatAgentFollowUpAsCli(response.focus[0]!.followUps[0]!)).toBe("codegraph packet get ./-entry.ts");
+  });
+
+  it("deduplicates focus follow-ups by tool and serialized arguments, not label", () => {
+    const first = { tool: "packet_get", arguments: { target: "src/core.ts" }, label: "Read core" };
+    const repeated = { tool: "packet_get", arguments: { target: "src/core.ts" }, label: "Inspect core" };
+    const second = { tool: "packet_get", arguments: { target: "src/entry.ts" }, label: "Read entry" };
+
+    expect(dedupeAgentFollowUps([first, repeated, second])).toEqual([first, second]);
   });
 
   it.skipIf(process.platform === "win32")("disambiguates handle-like file targets in follow-up commands", async () => {
@@ -166,11 +174,7 @@ describe("agent orient", () => {
 
     expect(response.focus[0]?.file).toBe("src/core.ts");
     expect(response.focus[0]?.kind).toBe("hotspot");
-    expect(
-      response.focus[0]?.followUps.some(
-        (followUp) => followUp.tool === "packet_get" && followUp.arguments.target === "src/core.ts",
-      ),
-    ).toBe(true);
+    expect(response.focus[0]?.followUps).toEqual([{ tool: "packet_get", arguments: { target: "src/core.ts" } }]);
   });
 
   it("uses small budget to skip deep health analysis", async () => {
