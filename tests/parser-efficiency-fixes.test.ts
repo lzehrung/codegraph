@@ -15,6 +15,8 @@ import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { buildProjectIndex, analyzeImpactFromDiff } from "../src/index.js";
+import { supportForFile } from "../src/languages.js";
+import { collectLocalsAndExportsFromSource } from "../src/indexer/locals-and-exports.js";
 import type { CompactImpactReport, ImpactReport, ImpactItem } from "../src/impact/types.js";
 import { collectChangedLines } from "../src/impact/map.js";
 import { seedTransitiveFromFiles } from "../src/impact/analyzer.js";
@@ -527,6 +529,22 @@ describe("CommonJS export fallback", () => {
       expect(exportedNames).toEqual(expect.arrayContaining(["esm", "named", "member"]));
     });
   });
+  it("skips JavaScript export-gap scans for non-JavaScript sources", () => {
+    const support = supportForFile("module.py");
+    expect(support).toBeDefined();
+    if (!support) throw new Error("Expected Python language support");
+
+    const includesSpy = vi.spyOn(String.prototype, "includes");
+    try {
+      collectLocalsAndExportsFromSource("module.py", "def answer():\n    return 42\n", support);
+      const regexFallbackNeedles = new Set(["exports.", "module.exports.", "export {", "export *", "export ="]);
+      const fallbackScans = includesSpy.mock.calls.filter(([needle]) => regexFallbackNeedles.has(needle));
+
+      expect(fallbackScans).toHaveLength(0);
+    } finally {
+      includesSpy.mockRestore();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -583,6 +601,43 @@ describe("build-scoped workspace resolution", () => {
       } finally {
         readSpy.mockRestore();
       }
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 10. Per-directory tsconfig resolution preserves nested path aliases
+// ---------------------------------------------------------------------------
+
+describe("nested tsconfig path resolution", () => {
+  it("uses a nested package mapping instead of the root mapping for the same alias", async () => {
+    await withTmpDir("nested-tsconfig-paths", async (root) => {
+      await fsp.mkdir(path.join(root, "root-target"), { recursive: true });
+      await fsp.mkdir(path.join(root, "packages", "app", "src"), { recursive: true });
+      await fsp.mkdir(path.join(root, "packages", "app", "local-target"), { recursive: true });
+      await fsp.writeFile(
+        path.join(root, "tsconfig.json"),
+        JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@target/*": ["root-target/*"] } } }),
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(root, "packages", "app", "tsconfig.json"),
+        JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@target/*": ["local-target/*"] } } }),
+        "utf8",
+      );
+      await fsp.writeFile(path.join(root, "root-target", "value.ts"), "export const value = 'root';\n", "utf8");
+      await fsp.writeFile(
+        path.join(root, "packages", "app", "local-target", "value.ts"),
+        "export const value = 'nested';\n",
+        "utf8",
+      );
+      const consumer = path.join(root, "packages", "app", "src", "consumer.ts");
+      await fsp.writeFile(consumer, 'import { value } from "@target/value"; export { value };\n', "utf8");
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const resolved = index.byFile.get(fileIdentityKey(consumer))?.imports[0]?.resolved;
+
+      expect(resolved).toContain("packages/app/local-target/value.ts");
     });
   });
 });

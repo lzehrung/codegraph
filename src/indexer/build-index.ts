@@ -833,11 +833,16 @@ async function buildIndexFromFileListShared(
       : null;
     const parsedMap = new Map<string, ParsedFileContext>();
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
-    const { matchPath } = await loadNearestTsconfigFor(
-      path.join(projectRoot, "__codegraph__.ts"),
-      projectRoot,
-      opts?.logLevel,
-    );
+    const tsconfigMatchPathByDirectory = new Map<string, Promise<MatchPathFn | undefined>>();
+    const loadMatchPathForFile = (file: string): Promise<MatchPathFn | undefined> => {
+      const directory = path.dirname(file);
+      let matchPath = tsconfigMatchPathByDirectory.get(directory);
+      if (!matchPath) {
+        matchPath = loadNearestTsconfigFor(file, projectRoot, opts?.logLevel).then((tsconfig) => tsconfig.matchPath);
+        tsconfigMatchPathByDirectory.set(directory, matchPath);
+      }
+      return matchPath;
+    };
     const parseStart = performance.now();
     const graph: Graph = { nodes: new Set(normalizedFiles), edges: [] };
     const onFileEdges = manifestEntries
@@ -912,6 +917,7 @@ async function buildIndexFromFileListShared(
         ensureBuildProgressStarted();
         let graphContext: IndexedFileGraphContext | undefined;
         let cacheWrite: PendingModuleCacheWrite | undefined;
+        const matchPath = support.id === "ts" || support.id === "tsx" ? await loadMatchPathForFile(file) : undefined;
         if (!mod) {
           const built = await buildIndexedModuleForFile({
             file,
