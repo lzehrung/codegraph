@@ -515,7 +515,8 @@ describe("Cache invalidation and strict hashing", () => {
       expect(getImplementationFingerprint()).toBe(fingerprint);
       expect(getImplementationFingerprintForEpoch(LANGUAGE_BEHAVIOR_EPOCH + 1)).not.toBe(fingerprint);
     } finally {
-      typescript.normalizeIdentifier = originalNormalizeIdentifier;
+      if (originalNormalizeIdentifier === undefined) delete typescript.normalizeIdentifier;
+      else typescript.normalizeIdentifier = originalNormalizeIdentifier;
       clearImplementationFingerprintCache();
     }
   });

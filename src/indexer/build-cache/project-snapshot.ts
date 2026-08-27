@@ -445,11 +445,7 @@ function recordSnapshotCorruption(
   logWithLevel(logLevel, "warn", `Warning: Corrupt cache artifact ${artifact}: ${reason}`);
 }
 
-function recordSnapshotInvalidation(
-  artifact: string,
-  reason: string,
-  logLevel: BuildOptions["logLevel"],
-): void {
+function recordSnapshotInvalidation(artifact: string, reason: string, logLevel: BuildOptions["logLevel"]): void {
   logWithLevel(logLevel, "debug", `Cache artifact invalidated ${artifact}: ${reason}`);
 }
 function isMissingArtifactError(error: unknown): boolean {
@@ -474,6 +470,7 @@ async function readParsedSnapshot(snapshotPath: string): Promise<{ identity: Sna
   }
   return { identity: before, payload };
 }
+
 function transformCachedProjectSnapshot(
   snapshotPath: string,
   identity: SnapshotFileIdentity,
@@ -491,7 +488,11 @@ function transformCachedProjectSnapshot(
       ? transformSnapshotPaths(migratedPayload as ProjectIndexSnapshotPayload, projectRoot, false)
       : migratedPayload;
   const immutablePayload = freezeSnapshotPayload(payload);
-  setBoundedSnapshotCache(transformedSnapshotCache, snapshotPath, { identity, root: projectRoot, payload: immutablePayload });
+  setBoundedSnapshotCache(transformedSnapshotCache, snapshotPath, {
+    identity,
+    root: projectRoot,
+    payload: immutablePayload,
+  });
   return immutablePayload;
 }
 
@@ -690,7 +691,18 @@ export async function tryLoadPersistedBloomFilters(
     if (sidecarBloom) {
       return createPersistedBloomFilters(sidecarBloom.bloomFilters, sidecarBloom.fileSignatures, projectRoot);
     }
-    recordSnapshotCorruption(report, sidecarPath, "invalid bloom filter payload", opts?.logLevel);
+    const sidecar = sidecarParsed as Partial<BloomFilterSnapshotPayload>;
+    const identityMismatch =
+      !!sidecarParsed &&
+      typeof sidecarParsed === "object" &&
+      (sidecar.version !== BLOOM_FILTER_SNAPSHOT_VERSION ||
+        sidecar.implementationFingerprint !== getImplementationFingerprint() ||
+        typeof sidecar.projectSnapshotIdentity !== "string");
+    if (identityMismatch) {
+      recordSnapshotInvalidation(sidecarPath, "bloom filter identity mismatch", opts?.logLevel);
+    } else {
+      recordSnapshotCorruption(report, sidecarPath, "invalid bloom filter payload", opts?.logLevel);
+    }
   } catch (error) {
     const isMissing = error && typeof error === "object" && "code" in error && error.code === "ENOENT";
     if (!isMissing) {
