@@ -597,6 +597,14 @@ describe("package metadata", () => {
     expect(scripts["test:ci"]).not.toContain("--exclude tests/native-tree-sitter.test.ts");
   });
 
+  it("keeps the native benchmark smoke lane free of timing gates", () => {
+    const rootPackage = readJson("package.json");
+    const scripts = readStringRecord(rootPackage.scripts);
+
+    expect(scripts["bench:native:smoke"]).toContain("--fixtures typescript,python,go,rust,mixed");
+    expect(scripts["bench:native:smoke"]).not.toContain("--max-slowdown");
+  });
+
   it("gates JavaScript coverage in check via enforced thresholds, native and Markdown reporting stay opt-in", () => {
     const rootPackage = readJson("package.json");
     const scripts = readStringRecord(rootPackage.scripts);
