@@ -18,6 +18,7 @@ import {
   buildPhpQualifiedNames,
   collectVerifiedNamedNodeReferences,
   getCachedScope,
+  exportFromIdentifier,
   getCachedReferenceCandidateFiles,
   getCandidateReferenceNames,
   hasExpandedNamedImport,
@@ -27,7 +28,7 @@ import { extractEnclosingBlock, extractLineContext, rangeContains, sameDef } fro
 import { DEFAULT_REF_CONTEXT_LINES } from "./shared.js";
 import { type ScopeIndex } from "./scope.js";
 import { type FileId, type Range } from "../types.js";
-import { resolveImportSpecifier } from "../util/resolution.js";
+import { loadNearestTsconfigFor, resolveImportSpecifier } from "../util/resolution.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
 import {
@@ -99,6 +100,42 @@ export async function goToDefinition(
     const declNameNode = findDeclarationNameNode(sup, node);
     if (declNameNode) {
       name = sliceText(declNameNode, source);
+    }
+  }
+
+  if (node && sup.supportsExportFromReferences && index.projectRoot) {
+    const exportFrom = exportFromIdentifier(index, file, toRange(node), context);
+    if (exportFrom?.entry) {
+      // Index construction normalizes in-root re-export targets, so the common relative
+      // case needs no resolver at all. Re-resolving a POSIX absolute path would instead
+      // treat its leading slash as project-root-relative. Only a path alias or package
+      // specifier reaches the resolver, so defer the nearest-tsconfig walk until then
+      // rather than paying it on every re-export goto.
+      let resolvedTarget: FileId | { external: string };
+      if (index.byFile.has(fileIdentityKey(exportFrom.entry.fromModule))) {
+        resolvedTarget = exportFrom.entry.fromModule;
+      } else {
+        const { matchPath } = await loadNearestTsconfigFor(file, index.projectRoot);
+        resolvedTarget = await resolveImportSpecifier(
+          index.projectRoot,
+          file,
+          exportFrom.entry.moduleSpecifier ?? exportFrom.entry.fromModule,
+          sup.id,
+          {
+            ...(matchPath ? { matchPath } : {}),
+          },
+        );
+      }
+      if (typeof resolvedTarget === "string") {
+        const hit = resolveExport(index, resolvedTarget, exportFrom.entry.sourceSpecifier);
+        if (hit?.kind === "resolved") {
+          return okGoToResult(index, hit.def, {
+            via: { importedFrom: resolvedTarget, exportedName: exportFrom.entry.sourceSpecifier },
+            resolution: "import",
+            confidence: "high",
+          });
+        }
+      }
     }
   }
 
@@ -330,6 +367,30 @@ export async function findReferences(
       return scopeIndex;
     };
 
+    if (supportForFile(fileId, index.languageExtensions)?.supportsExportFromReferences) {
+      for (const entry of module.exports) {
+        if (hasReachedMaxReferences()) break;
+        if (entry.type !== "reexport") continue;
+        if (!exportedNameSet.has(entry.sourceSpecifier)) continue;
+        const resolved = resolveExport(index, entry.fromModule, entry.sourceSpecifier);
+        if (resolved?.kind === "resolved" && !sameDef(resolved.def, def, index.languageExtensions)) continue;
+        const remainingReferences = maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
+        const ranges = await collectVerifiedNamedNodeReferences(
+          index,
+          fileId,
+          entry.sourceSpecifier,
+          def,
+          (params, parsed) => goToDefinition(index, params, parsed),
+          remainingReferences,
+        );
+        for (const { range, provenance, via } of ranges) {
+          if (hasReachedMaxReferences()) break;
+          if (!via?.reexport) continue;
+          pushRef({ file: fileId, range, via, ...(provenance ? { provenance } : {}) });
+        }
+      }
+    }
+
     for (const imp of module.imports) {
       if (hasReachedMaxReferences()) break;
       const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
@@ -377,9 +438,14 @@ export async function findReferences(
             (params, parsed) => goToDefinition(index, params, parsed),
             remainingReferences,
           );
-          for (const { range, provenance } of ranges) {
+          for (const { range, provenance, via } of ranges) {
             if (hasReachedMaxReferences()) break;
-            pushRef({ file: fileId, range, via: { import: imp }, ...(provenance ? { provenance } : {}) });
+            pushRef({
+              file: fileId,
+              range,
+              via: { import: imp, ...(via ?? {}) },
+              ...(provenance ? { provenance } : {}),
+            });
           }
         } else {
           let exported = exportedName;
@@ -402,9 +468,14 @@ export async function findReferences(
               (params, parsed) => goToDefinition(index, params, parsed),
               remainingReferences,
             );
-            for (const { range, provenance } of ranges) {
+            for (const { range, provenance, via } of ranges) {
               if (hasReachedMaxReferences()) break;
-              pushRef({ file: fileId, range, via: { import: imp }, ...(provenance ? { provenance } : {}) });
+              pushRef({
+                file: fileId,
+                range,
+                via: { import: imp, ...(via ?? {}) },
+                ...(provenance ? { provenance } : {}),
+              });
             }
             continue;
           }
@@ -436,9 +507,9 @@ export async function findReferences(
           (params, parsed) => goToDefinition(index, params, parsed),
           remainingReferences,
         );
-        for (const { range, provenance } of ranges) {
+        for (const { range, provenance, via } of ranges) {
           if (hasReachedMaxReferences()) break;
-          pushRef({ file: fileId, range, ...(provenance ? { provenance } : {}) });
+          pushRef({ file: fileId, range, ...(via ? { via } : {}), ...(provenance ? { provenance } : {}) });
         }
       }
     }
@@ -463,9 +534,9 @@ export async function findReferences(
         (params, parsed) => goToDefinition(index, params, parsed),
         remainingReferences,
       );
-      for (const { range, provenance } of ranges) {
+      for (const { range, provenance, via } of ranges) {
         if (hasReachedMaxReferences()) break;
-        pushRef({ file: fileId, range, ...(provenance ? { provenance } : {}) });
+        pushRef({ file: fileId, range, ...(via ? { via } : {}), ...(provenance ? { provenance } : {}) });
       }
     }
   }

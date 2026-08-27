@@ -5,6 +5,7 @@ import fsp from "node:fs/promises";
 import * as indexer from "../src/indexer.js";
 import * as scopeModule from "../src/indexer/scope.js";
 import { getCachedReferenceCandidateFiles } from "../src/indexer/navigation-references.js";
+import { createReferenceLookupCache } from "../src/impact/referenceCache.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import {
   createTestIndex,
@@ -47,6 +48,88 @@ describe("Find References", () => {
       expect(candidates).toContain(cFile);
       expect(candidates).not.toContain(dFile);
       expect(candidates).not.toContain(otherFile);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("labels re-export declarations and preserves the label through the reference cache", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-reexport-reference-"));
+    try {
+      const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+      const barrelFile = path.join(root, "barrel.ts").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+      await fsp.writeFile(sourceFile, "export const target = 1;\n", "utf8");
+      await fsp.writeFile(barrelFile, 'export { target } from "./source";\n', "utf8");
+      await fsp.writeFile(consumerFile, 'import { target } from "./barrel";\ntarget;\n', "utf8");
+
+      const index = await createTestIndexFromFiles(root, [sourceFile, barrelFile, consumerFile]);
+      const def = index.byFile.get(fileIdentityKey(sourceFile))?.locals.find((local) => local.localName === "target");
+      if (!def) throw new Error("Expected target definition");
+
+      const cache = createReferenceLookupCache();
+      expect(getCachedReferenceCandidateFiles(index, def, ["target"], false)).toContain(barrelFile);
+      const cold = await cache.get(index, def);
+      const warm = await cache.get(index, def);
+
+      expect(cold.status).toBe("ok");
+      expect(warm.status).toBe("ok");
+      if (cold.status !== "ok" || warm.status !== "ok") return;
+
+      const expectedReexport = expect.objectContaining({
+        file: barrelFile,
+        range: expect.objectContaining({ start: expect.objectContaining({ line: 1 }) }),
+        via: { reexport: true },
+      });
+      expect(cold.references).toContainEqual(expectedReexport);
+      expect(warm.references).toContainEqual(expectedReexport);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("labels path-alias re-export declarations", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-path-alias-reexport-reference-"));
+    try {
+      const sourceFile = path.join(root, "src", "mod.ts").replace(/\\/g, "/");
+      const barrelFile = path.join(root, "barrel.ts").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+      await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
+      await fsp.writeFile(
+        path.join(root, "tsconfig.json"),
+        JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@scope/*": ["src/*"] } } }),
+        "utf8",
+      );
+      await fsp.writeFile(sourceFile, "export const target = 1;\n", "utf8");
+      for (const name of ["unrelatedOne", "unrelatedTwo", "unrelatedThree"]) {
+        await fsp.writeFile(path.join(root, "src", `${name}.ts`), `export const ${name} = 1;\n`, "utf8");
+      }
+      await fsp.writeFile(
+        barrelFile,
+        [
+          'export { target } from "@scope/mod";',
+          'export { unrelatedOne } from "@scope/unrelatedOne";',
+          'export { unrelatedTwo } from "@scope/unrelatedTwo";',
+          'export { unrelatedThree } from "@scope/unrelatedThree";',
+        ].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(consumerFile, 'import { target } from "./barrel";\ntarget;\n', "utf8");
+
+      const index = await createTestIndexFromPath(root);
+      const def = index.byFile.get(fileIdentityKey(sourceFile))?.locals.find((local) => local.localName === "target");
+      if (!def) throw new Error("Expected target definition");
+
+      const result = await createReferenceLookupCache().get(index, def);
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.references).toContainEqual(
+        expect.objectContaining({
+          file: barrelFile,
+          range: expect.objectContaining({ start: expect.objectContaining({ line: 1 }) }),
+          via: { reexport: true },
+        }),
+      );
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -2039,8 +2122,12 @@ describe("Find References", () => {
         expect(typeResult.status).toBe("ok");
         if (typeResult.status === "ok") {
           expect(typeResult.references.map((reference) => [reference.file, reference.range.start.line])).toEqual([
+            [entryFile, 2],
             [sourceFile, 1],
           ]);
+          expect(typeResult.references).toContainEqual(
+            expect.objectContaining({ file: entryFile, via: { reexport: true } }),
+          );
         }
 
         const localNamespace = await testFindReferences(index, entryFile, 1, 7, 1);

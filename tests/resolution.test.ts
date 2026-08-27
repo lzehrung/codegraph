@@ -318,6 +318,45 @@ describe("Import Resolution", () => {
     }
   });
 
+  it("prefers workspace and node_modules packages over an in-root JavaScript path-like shadow", async () => {
+    const root = await mkTmpDir("dg-resolve-js-package-shadow-");
+    const sourceFile = path.join(root, "src", "main.ts");
+    const projectShadow = path.join(root, "lodash", "fp.ts");
+    const workspaceEntry = path.join(root, "packages", "lodash", "src", "fp.ts");
+    const nodeModulesEntry = path.join(root, "node_modules", "lodash", "fp.js");
+    await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
+    await fsp.mkdir(path.dirname(projectShadow), { recursive: true });
+    await fsp.mkdir(path.dirname(workspaceEntry), { recursive: true });
+    await fsp.mkdir(path.dirname(nodeModulesEntry), { recursive: true });
+    await fsp.writeFile(sourceFile, 'import { fp } from "lodash/fp";\nexport { fp };\n', "utf8");
+    await fsp.writeFile(projectShadow, "export const fp = 'project';\n", "utf8");
+    await fsp.writeFile(workspaceEntry, "export const fp = 'workspace';\n", "utf8");
+    await fsp.writeFile(nodeModulesEntry, "export const fp = 'node_modules';\n", "utf8");
+    await fsp.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ private: true, workspaces: ["packages/*"] }),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "packages", "lodash", "package.json"),
+      JSON.stringify({ name: "lodash", exports: { "./fp": "./src/fp.ts" } }),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "node_modules", "lodash", "package.json"),
+      JSON.stringify({ name: "lodash", exports: { "./fp": "./fp.js" } }),
+      "utf8",
+    );
+
+    const workspaceConfig = await loadWorkspaceConfig(root);
+    await expect(
+      resolveSpecifier(sourceFile, "lodash/fp", root, undefined, workspaceConfig, { resolveNodeModules: true }),
+    ).resolves.toBe(workspaceEntry);
+    await expect(
+      resolveSpecifier(sourceFile, "lodash/fp", root, undefined, undefined, { resolveNodeModules: true }),
+    ).resolves.toBe(nodeModulesEntry.replace(/\\/g, "/"));
+  });
+
   it("should handle detailed symbol graph with .js imports to .ts files", async () => {
     const root = await mkTmpDir("dg-resolve-detailed-");
 

@@ -112,6 +112,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
   },
   "references": {
     "refs": [
+      "reexport-barrel.tsx:1",
       "reexport-consumer.tsx:1",
       "reexport-consumer.tsx:3",
       "reexport-source.tsx:1",

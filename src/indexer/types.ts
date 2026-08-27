@@ -393,7 +393,7 @@ export type Reference = {
   file: FileId;
   range: Range;
   context?: string;
-  via?: { import?: ImportBinding; namespaceMember?: string };
+  via?: { import?: ImportBinding; namespaceMember?: string; reexport?: true };
   /**
    * Resolution provenance for this specific reference, populated only when the
    * reference was verified through a goto-style lookup (e.g. member-access

@@ -30,6 +30,7 @@ export type LanguageSupport = {
   supportsCrossModuleSymbols: boolean;
   isTypeOnly: (stmtText: string) => boolean;
   usesQueryDrivenLocals: boolean;
+  supportsExportFromReferences: boolean;
   native?: NativeCompatibility;
   normalizeIdentifier: (name: string) => string;
 };
@@ -49,6 +50,7 @@ function adaptDefinition(def: LanguageDefinition): LanguageSupport {
     membersAreImplicitlyInScope: def.membersAreImplicitlyInScope ?? true,
     supportsCrossModuleSymbols: def.supportsCrossModuleSymbols || false,
     isTypeOnly: def.isTypeOnly || (() => false),
+    supportsExportFromReferences: def.supportsExportFromReferences ?? false,
     usesQueryDrivenLocals: def.usesQueryDrivenLocals || false,
     normalizeIdentifier: def.normalizeIdentifier || ((name) => name),
     ...(def.native ? { native: def.native } : {}),

@@ -525,9 +525,11 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
-  const methodSupplementTree = ensureTree();
-  if (methodSupplementTree) {
-    supplementMethodLocalsFromSyntaxTree(methodSupplementTree.rootNode);
+  if (support.id === "ts" || support.id === "tsx" || support.id === "js") {
+    const methodSupplementTree = ensureTree();
+    if (methodSupplementTree) {
+      supplementMethodLocalsFromSyntaxTree(methodSupplementTree.rootNode);
+    }
   }
 
   function supplementMethodLocalsFromSyntaxTree(node: SyntaxNodeLike): void {
@@ -955,8 +957,11 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
-  // Regex fallback for JS/TS exports when queries miss some patterns (e.g., re-exports)
-  if (support.id === "ts" || support.id === "tsx" || support.id === "js") {
+  // The native query does not cover CommonJS member assignments and some
+  // re-export forms. Always run the deduplicating fallback for JS-like files:
+  // source-form probes are too error-prone to risk silently dropping exports.
+  const isJsLike = support.id === "ts" || support.id === "tsx" || support.id === "js";
+  if (isJsLike) {
     appendJsLikeRegexFallbackExports(file, source, locals, exports);
   }
 
