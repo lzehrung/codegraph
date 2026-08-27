@@ -932,6 +932,7 @@ export function collectLocalsAndExportsFromSource(
     }
   };
 
+  const nativeExportQueryProducedResults = nativeQueries?.exports.length;
   if (support.queries.exports.trim() && nativeQueries) {
     try {
       appendExportsFromMatches(nativeQueries.exports, ensureTree() ?? undefined);
@@ -955,8 +956,18 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
-  // Regex fallback for JS/TS exports when queries miss some patterns (e.g., re-exports)
-  if (support.id === "ts" || support.id === "tsx" || support.id === "js") {
+  // The native query does not cover CommonJS member assignments and some
+  // re-export forms, so preserve the fallback for those known grammar gaps.
+  const hasKnownRegexExportGap =
+    source.includes("exports.") ||
+    source.includes("module.exports.") ||
+    source.includes("export {") ||
+    source.includes("export *") ||
+    source.includes("export =");
+  if (
+    (support.id === "ts" || support.id === "tsx" || support.id === "js") &&
+    (!nativeExportQueryProducedResults || hasKnownRegexExportGap)
+  ) {
     appendJsLikeRegexFallbackExports(file, source, locals, exports);
   }
 
