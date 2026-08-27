@@ -2688,6 +2688,89 @@ describe("CLI command modules", () => {
     expect(jsonLines).toEqual([{ items: [{ file: utilPath, depth: 1 }], truncated: true }]);
   });
 
+  test("emits complete JSON dependency envelopes for explicit depth, all depths, and empty results", async () => {
+    const projectRoot = path.join(os.tmpdir(), "codegraph-graph-query-json-envelope").replace(/\\/g, "/");
+    const mainPath = `${projectRoot}/main.ts`;
+    const utilPath = `${projectRoot}/util.ts`;
+    const leafPath = `${projectRoot}/leaf.ts`;
+    const graph = {
+      nodes: new Set([mainPath, utilPath, leafPath]),
+      edges: [
+        { from: mainPath, to: { type: "file" as const, path: utilPath }, raw: "./util" },
+        { from: utilPath, to: { type: "file" as const, path: leafPath }, raw: "./leaf" },
+      ],
+    };
+
+    const run = async (
+      command: "deps" | "rdeps",
+      target: string,
+      options: { all?: boolean; depth?: string } = {},
+    ): Promise<unknown> => {
+      const jsonLines: unknown[] = [];
+      await handleGraphQueryCommand({
+        command,
+        positionals: [target],
+        projectRootFs: projectRoot,
+        projectRootAbs: projectRoot,
+        getOpt: (name) => (name === "--depth" ? options.depth : undefined),
+        hasFlag: (name) => name === "--json" || (name === "--all" && Boolean(options.all)),
+        writeJSONLine: (value) => jsonLines.push(value),
+        writeStdoutLine: () => {
+          throw new Error("unexpected text output");
+        },
+        writeStderrLine: (message) => {
+          throw new Error(`unexpected stderr: ${message}`);
+        },
+        exit: (code) => {
+          throw new Error(`unexpected exit ${code}`);
+        },
+        listProjectFilesForScan: async () => [mainPath, utilPath, leafPath],
+        collectGraph: async () => graph,
+        loadCurrentIndex: async () => {
+          throw new Error("unexpected index build");
+        },
+      });
+      expect(jsonLines).toHaveLength(1);
+      return jsonLines[0];
+    };
+
+    const completeItems = [
+      { file: utilPath, depth: 1 },
+      { file: leafPath, depth: 2 },
+    ];
+    const completeReverseItems = [
+      { file: utilPath, depth: 1 },
+      { file: mainPath, depth: 2 },
+    ];
+    await expect(run("deps", "main.ts")).resolves.toEqual({
+      items: [{ file: utilPath, depth: 1 }],
+      truncated: true,
+    });
+    await expect(run("rdeps", "leaf.ts")).resolves.toEqual({
+      items: [{ file: utilPath, depth: 1 }],
+      truncated: true,
+    });
+
+    await expect(run("deps", "main.ts", { depth: "2" })).resolves.toEqual({
+      items: completeItems,
+      truncated: false,
+    });
+    await expect(run("deps", "main.ts", { all: true })).resolves.toEqual({
+      items: completeItems,
+      truncated: false,
+    });
+    await expect(run("rdeps", "leaf.ts", { depth: "2" })).resolves.toEqual({
+      items: completeReverseItems,
+      truncated: false,
+    });
+    await expect(run("rdeps", "leaf.ts", { all: true })).resolves.toEqual({
+      items: completeReverseItems,
+      truncated: false,
+    });
+    await expect(run("deps", "leaf.ts")).resolves.toEqual({ items: [], truncated: false });
+    await expect(run("rdeps", "main.ts")).resolves.toEqual({ items: [], truncated: false });
+  });
+
   test("bounds text dependency output at depth 1 and reports omitted entries", async () => {
     const projectRoot = path.join(os.tmpdir(), "codegraph-graph-query-depth-default").replace(/\\/g, "/");
     const mainPath = `${projectRoot}/main.ts`;

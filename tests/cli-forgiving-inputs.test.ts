@@ -17,6 +17,12 @@ function jsonRecord(stdout: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function dependencyItems(stdout: string): unknown[] {
+  const items = jsonRecord(stdout).items;
+  if (!Array.isArray(items)) throw new Error("Expected dependency JSON envelope items");
+  return items;
+}
+
 describe("forgiving CLI inputs", () => {
   let root = "";
 
@@ -97,21 +103,21 @@ describe("forgiving CLI inputs", () => {
     const qualifiedRefs = jsonRecord((await runCliOrThrow(["refs", qualifiedTarget, "--root", root, "--json"])).stdout);
     expect(qualifiedRefs).toMatchObject({ status: "ok", definition: { localName: "target" } });
 
-    const dependencies = JSON.parse(
+    const dependencies = dependencyItems(
       (await runCliOrThrow(["deps", "consumer.ts::downstream", "--root", root, "--json"])).stdout,
-    ) as Array<{ file: string }>;
+    );
     expect(dependencies).toEqual(
       expect.arrayContaining([expect.objectContaining({ file: expect.stringMatching(/main\.ts$/u) })]),
     );
-    const reverseDependencies = JSON.parse(
+    const reverseDependencies = dependencyItems(
       (await runCliOrThrow(["rdeps", qualifiedTarget, "--root", root, "--json"])).stdout,
-    ) as Array<{ file: string }>;
+    );
     expect(reverseDependencies).toEqual(
       expect.arrayContaining([expect.objectContaining({ file: expect.stringMatching(/consumer\.ts$/u) })]),
     );
-    const reverseDependenciesByHandle = JSON.parse(
+    const reverseDependenciesByHandle = dependencyItems(
       (await runCliOrThrow(["rdeps", handle, "--root", root, "--json"])).stdout,
-    ) as Array<{ file: string }>;
+    );
     expect(reverseDependenciesByHandle).toEqual(
       expect.arrayContaining([expect.objectContaining({ file: expect.stringMatching(/consumer\.ts$/u) })]),
     );

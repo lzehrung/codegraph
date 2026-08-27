@@ -46,6 +46,31 @@ function stableJson(raw: string): unknown {
   return stripNondeterministic(parsed);
 }
 
+function dependencyItems(raw: string): Array<{ file: string }> {
+  const value: unknown = JSON.parse(raw);
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    !("items" in value) ||
+    !Array.isArray(value.items)
+  ) {
+    throw new Error("Expected dependency JSON envelope items");
+  }
+  return value.items.map((item) => {
+    if (
+      !item ||
+      typeof item !== "object" ||
+      Array.isArray(item) ||
+      !("file" in item) ||
+      typeof item.file !== "string"
+    ) {
+      throw new Error("Expected dependency JSON item file");
+    }
+    return { file: item.file };
+  });
+}
+
 function stripNondeterministic(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripNondeterministic);
   if (value && typeof value === "object") {
@@ -86,7 +111,10 @@ describe("CLI current-state index freshness", () => {
   it("requires no manual index or sync before the first query", async () => {
     const root = await createFreshnessProject("dg-freshness-cold-");
     const result = await runCliOrThrow(["deps", "src/app.ts", "--root", root, "--json"]);
-    expect(JSON.parse(result.stdout)).toEqual([{ file: `${root.replace(/\\/g, "/")}/src/helper.ts`, depth: 1 }]);
+    expect(JSON.parse(result.stdout)).toEqual({
+      items: [{ file: `${root.replace(/\\/g, "/")}/src/helper.ts`, depth: 1 }],
+      truncated: false,
+    });
     await expect(fsp.stat(path.join(root, ".codegraph-cache", "index-v1", "manifest.json"))).resolves.toBeDefined();
   });
 
@@ -102,9 +130,7 @@ describe("CLI current-state index freshness", () => {
     );
 
     const updated = await runCliOrThrow(["deps", "src/app.ts", "--root", root, "--json", "--progress"]);
-    const dependencies = (JSON.parse(updated.stdout) as Array<{ file: string }>).map((entry) =>
-      path.posix.basename(entry.file),
-    );
+    const dependencies = dependencyItems(updated.stdout).map((entry) => path.posix.basename(entry.file));
     expect(dependencies.sort()).toEqual(["extra.ts", "helper.ts"]);
     expect(updated.stderr).toContain(CHECK_START);
   });

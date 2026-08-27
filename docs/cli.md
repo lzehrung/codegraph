@@ -567,8 +567,8 @@ codegraph hotspots ./src --limit 20
 
 Cycle detection reports source dependency cycles. Document-only link loops, such as Markdown files linking to each other, remain in the graph for navigation but are not reported as dependency cycles.
 
-Dependency read commands keep the same output contracts while using the indexed graph path and derived adjacency maps internally when available. This makes repeated `deps`, `rdeps`, and `path` reads cheaper on warm manifest-backed projects.
-`deps` and `rdeps` show depth 1 by default and state the count of deeper entries omitted from text output. Pass `--depth <n>` to choose another finite output depth or `--all` to include every depth. Their JSON output is `{ items, truncated }`; `truncated` is true when a finite depth omits deeper entries.
+Dependency read commands use the indexed graph path and derived adjacency maps internally when available. This makes repeated `deps`, `rdeps`, and `path` reads cheaper on warm manifest-backed projects.
+`deps` and `rdeps` show depth 1 by default and state the count of deeper entries omitted from text output. Pass `--depth <n>` to choose another finite output depth or `--all` to include every depth. This is a breaking JSON contract change: previous versions emitted a bare array, `[{ "depth": 1, "file": "src/util.ts" }]`; they now emit `{ "items": [{ "depth": 1, "file": "src/util.ts" }], "truncated": false }`. `truncated` is always present and is `true` when a finite depth omitted deeper entries, including `false` for complete and empty results. Use `--all` to receive the full dependency set.
 
 #### Markdown link validation
 
