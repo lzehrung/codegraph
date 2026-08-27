@@ -58,6 +58,9 @@ const definition: LanguageTestDefinition = {
           column: 14,
           references: [
             { file: "reexport-source.tsx", line: 1 },
+            // The barrel's own `export { ... } from` line is an API-surface use,
+            // reported with `via.reexport` so executable-use consumers can filter it.
+            { file: "reexport-barrel.tsx", line: 1 },
             { file: "reexport-consumer.tsx", line: 1 },
             { file: "reexport-consumer.tsx", line: 3 },
           ],

@@ -2081,7 +2081,6 @@ describe("Find References", () => {
           expect(typeResult.references).toContainEqual(
             expect.objectContaining({ file: entryFile, via: { reexport: true } }),
           );
-
         }
 
         const localNamespace = await testFindReferences(index, entryFile, 1, 7, 1);
