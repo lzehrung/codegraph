@@ -525,9 +525,11 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
-  const methodSupplementTree = ensureTree();
-  if (methodSupplementTree) {
-    supplementMethodLocalsFromSyntaxTree(methodSupplementTree.rootNode);
+  if (support.id === "ts" || support.id === "tsx" || support.id === "js") {
+    const methodSupplementTree = ensureTree();
+    if (methodSupplementTree) {
+      supplementMethodLocalsFromSyntaxTree(methodSupplementTree.rootNode);
+    }
   }
 
   function supplementMethodLocalsFromSyntaxTree(node: SyntaxNodeLike): void {
