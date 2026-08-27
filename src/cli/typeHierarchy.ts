@@ -29,14 +29,30 @@ export async function handleTypeHierarchyCommand(
     context.exit(2);
   }
 
+  let limit: number;
+  let depth: number | undefined;
   try {
-    const limit = parseBoundedIntegerOption(
+    limit = parseBoundedIntegerOption(
       context.getOpt("--limit"),
       "--limit",
       DEFAULT_HIERARCHY_LIMIT,
       0,
       MAX_HIERARCHY_LIMIT,
     );
+    if (command !== "implementations") {
+      depth = parseBoundedIntegerOption(
+        context.getOpt("--depth"),
+        "--depth",
+        DEFAULT_HIERARCHY_DEPTH,
+        1,
+        MAX_HIERARCHY_DEPTH,
+      );
+    }
+  } catch (error: unknown) {
+    exitWithError(context, error, 2);
+  }
+
+  try {
     if (command === "implementations") {
       const response = await findImplementations({
         root: context.root,
@@ -48,18 +64,11 @@ export async function handleTypeHierarchyCommand(
       return;
     }
 
-    const depth = parseBoundedIntegerOption(
-      context.getOpt("--depth"),
-      "--depth",
-      DEFAULT_HIERARCHY_DEPTH,
-      1,
-      MAX_HIERARCHY_DEPTH,
-    );
     const request = {
       root: context.root,
       handle,
       ...(context.buildOptions ? { buildOptions: context.buildOptions } : {}),
-      depth,
+      depth: depth!,
       limit,
     };
     const response = command === "supertypes" ? await findSupertypes(request) : await findSubtypes(request);

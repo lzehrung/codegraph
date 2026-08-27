@@ -49,4 +49,7 @@ export async function handleExplainCommand(context: ExplainCommandContext): Prom
   } else {
     context.writeStdoutLine(formatAgentExplanation(response));
   }
+  if (response.target.kind === "not_found") {
+    context.exit(1);
+  }
 }

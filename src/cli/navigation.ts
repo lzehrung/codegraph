@@ -19,6 +19,7 @@ import { parseCacheModeOption, parseNonNegativeIntegerOption, parsePositiveInteg
 import { parseCliSourceLocation } from "./location.js";
 import { resolveCliProjectFile, writeCliProjectFileError } from "./projectFile.js";
 import { writeCliOutput } from "./pretty.js";
+import { exitWithError } from "./context.js";
 
 export type NavigationCommandContext = {
   projectRootFs: string;
@@ -351,7 +352,12 @@ function writePrettyReferences(context: NavigationCommandContext, result: FindRe
 }
 
 export async function handleGotoCommand(context: NavigationCommandContext): Promise<void> {
-  const input = parseNavigationInput(context, false);
+  let input: ResolvedNavigationInput | null;
+  try {
+    input = parseNavigationInput(context, false);
+  } catch (error: unknown) {
+    exitWithError(context, error, 2);
+  }
   if (!input) {
     context.writeStderrLine("Usage: goto <file>[:line[:column]] [line] [column]");
     context.exit(2);
@@ -405,7 +411,12 @@ export async function handleGotoCommand(context: NavigationCommandContext): Prom
 }
 
 export async function handleRefsCommand(context: NavigationCommandContext): Promise<void> {
-  const input = parseNavigationInput(context, true);
+  let input: ResolvedNavigationInput | null;
+  try {
+    input = parseNavigationInput(context, true);
+  } catch (error: unknown) {
+    exitWithError(context, error, 2);
+  }
   if (!input) {
     context.writeStderrLine(
       "Usage: refs <file>[:line[:column]] [line] [column] OR refs --file <file> [--line <line> --col <column>]",

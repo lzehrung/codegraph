@@ -752,6 +752,7 @@ describe("CLI regressions", () => {
       process.cwd(),
     );
     expect(pathResultCapture.exitCode).toBe(1);
+
     const pathResult = JSON.parse(pathResultCapture.stdout) as {
       status: string;
       reason?: string;
@@ -760,6 +761,28 @@ describe("CLI regressions", () => {
     expect(pathResult.status).toBe("error");
     expect(pathResult.reason).toBe("outside_project_root");
   });
+  it("uses exit 2 for parse failures and exit 1 for valid unmatched targets", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-exit-codes-"));
+    await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
+
+    try {
+      const malformedOption = await runCliWithExit(
+        ["supertypes", "value", "--depth", "not-a-number", "--root", root, "--json"],
+        root,
+      );
+      const badPath = await runCliWithExit(["deps", "missing.ts", "--root", root, "--json"], root);
+      const unresolvedSymbol = await runCliWithExit(["goto", "main.ts::missing", "--root", root, "--json"], root);
+      const missingExplainTarget = await runCliWithExit(["explain", "missing.ts", "--root", root, "--json"], root);
+
+      expect(malformedOption.exitCode).toBe(2);
+      expect(badPath.exitCode).toBe(1);
+      expect(unresolvedSymbol.exitCode).toBe(1);
+      expect(missingExplainTarget.exitCode).toBe(1);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
 
   it("exits non-zero for missing deps files instead of empty arrays", async () => {
     const missing = path.join(tsRoot, "definitely-missing-file.ts");
