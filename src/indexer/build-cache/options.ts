@@ -52,6 +52,7 @@ type LanguageDefinitionFingerprintDescriptor = {
     scopeDeclarationNames?: "all";
     usesQueryDrivenLocals: boolean;
     membersAreImplicitlyInScope: boolean;
+    supportsExportFromReferences: boolean;
   };
 };
 
@@ -83,6 +84,7 @@ function languageDefinitionFingerprintDescriptor(
       // CLI and library builds invalidate one another's caches.
       usesQueryDrivenLocals: definition.usesQueryDrivenLocals ?? false,
       membersAreImplicitlyInScope: definition.membersAreImplicitlyInScope ?? true,
+      supportsExportFromReferences: definition.supportsExportFromReferences ?? false,
       ...(scopeDeclarationNames ? { scopeDeclarationNames } : {}),
     },
   };
@@ -103,6 +105,7 @@ export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof Langua
   structure: true,
   graph: true,
   usesQueryDrivenLocals: true,
+  supportsExportFromReferences: true,
   classifyDefinition: true,
   isDeclarationName: true,
   scopeDeclarationNames: true,

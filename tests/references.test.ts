@@ -87,6 +87,41 @@ describe("Find References", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+  it("labels path-alias re-export declarations", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-path-alias-reexport-reference-"));
+    try {
+      const sourceFile = path.join(root, "src", "mod.ts").replace(/\\/g, "/");
+      const barrelFile = path.join(root, "barrel.ts").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+      await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
+      await fsp.writeFile(
+        path.join(root, "tsconfig.json"),
+        JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@scope/*": ["src/*"] } } }),
+        "utf8",
+      );
+      await fsp.writeFile(sourceFile, "export const target = 1;\n", "utf8");
+      await fsp.writeFile(barrelFile, 'export { target } from "@scope/mod";\n', "utf8");
+      await fsp.writeFile(consumerFile, 'import { target } from "./barrel";\ntarget;\n', "utf8");
+
+      const index = await createTestIndexFromPath(root);
+      const def = index.byFile.get(fileIdentityKey(sourceFile))?.locals.find((local) => local.localName === "target");
+      if (!def) throw new Error("Expected target definition");
+
+      const result = await createReferenceLookupCache().get(index, def);
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.references).toContainEqual(
+        expect.objectContaining({
+          file: barrelFile,
+          range: expect.objectContaining({ start: expect.objectContaining({ line: 1 }) }),
+          via: { reexport: true },
+        }),
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 
   describe("SQL", () => {
     it("finds SQL object references across SQL files", async () => {
