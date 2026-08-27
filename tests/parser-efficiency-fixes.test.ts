@@ -10,7 +10,7 @@
  * 7. TypeScript ambient module augmentation creates a file-graph edge
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
@@ -525,6 +525,49 @@ describe("CommonJS export fallback", () => {
       const exportedNames = moduleIndex?.exports.map((entry) => entry.exportedAs);
 
       expect(exportedNames).toEqual(expect.arrayContaining(["esm", "named", "member"]));
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 9. Build-scoped workspace and tsconfig resolution
+// ---------------------------------------------------------------------------
+
+describe("build-scoped workspace resolution", () => {
+  it("loads workspace configuration once for a multi-file monorepo build", async () => {
+    await withTmpDir("workspace-config-once", async (root) => {
+      await fsp.mkdir(path.join(root, "packages", "app", "src"), { recursive: true });
+      await fsp.mkdir(path.join(root, "packages", "lib", "src"), { recursive: true });
+      const packageJson = path.join(root, "package.json");
+      await fsp.writeFile(packageJson, JSON.stringify({ workspaces: ["packages/*"] }), "utf8");
+      await fsp.writeFile(path.join(root, "tsconfig.base.json"), JSON.stringify({ compilerOptions: { baseUrl: "." } }), "utf8");
+      await fsp.writeFile(
+        path.join(root, "tsconfig.json"),
+        JSON.stringify({ extends: "./tsconfig.base.json", compilerOptions: { paths: { "@lib/*": ["packages/lib/src/*"] } } }),
+        "utf8",
+      );
+      await fsp.writeFile(path.join(root, "packages", "app", "package.json"), JSON.stringify({ name: "@app/main" }), "utf8");
+      await fsp.writeFile(path.join(root, "packages", "lib", "package.json"), JSON.stringify({ name: "@lib/main" }), "utf8");
+      await fsp.writeFile(path.join(root, "packages", "lib", "src", "value.ts"), "export const value = 1;\n", "utf8");
+      for (let index = 0; index < 8; index += 1) {
+        await fsp.writeFile(
+          path.join(root, "packages", "app", "src", `entry-${index}.ts`),
+          `import { value } from "@lib/value"; export const entry${index} = value;\n`,
+          "utf8",
+        );
+      }
+
+      const readSpy = vi.spyOn(fsp, "readFile");
+      try {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const workspaceReads = readSpy.mock.calls.filter(([file]) => path.resolve(String(file)) === packageJson).length;
+
+        const entry = [...index.byFile.values()].find((module) => module.file.endsWith("entry-0.ts"));
+        expect(entry?.imports[0]?.resolved).toContain("packages/lib/src/value.ts");
+        expect(workspaceReads).toBeLessThanOrEqual(5);
+      } finally {
+        readSpy.mockRestore();
+      }
     });
   });
 });

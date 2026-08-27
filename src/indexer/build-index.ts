@@ -5,7 +5,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { languageExtensionPatterns, supportForFile, type LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
-import { loadWorkspaceConfig, resolveWorkspacePackage } from "../util/workspace.js";
+import { loadWorkspaceConfig, resolveWorkspacePackage, type WorkspaceConfig } from "../util/workspace.js";
 import {
   DEFAULT_PROJECT_PATTERNS,
   discoverProjectFiles,
@@ -13,7 +13,7 @@ import {
   type ProjectFileInfo,
 } from "../util/projectFiles.js";
 import { getGitHead, isGitRepo, getGitBlobHashes, listChangedFiles } from "../util/git.js";
-import { clearResolutionCaches, resolveSpecifier } from "../util/resolution.js";
+import { clearResolutionCaches, loadNearestTsconfigFor, resolveSpecifier, type MatchPathFn } from "../util/resolution.js";
 import {
   fileIdentityKey,
   initializeFileIdentityCaseSensitivity,
@@ -197,18 +197,15 @@ async function resolveCrossModuleSymbolExports(
   support: LanguageSupport,
   projectRoot: string,
   graphOptions: GraphBuildOptions,
-  workspaceConfig: Awaited<ReturnType<typeof loadWorkspaceConfig>>,
-  logLevel: LogLevel | undefined,
+  workspaceConfig: WorkspaceConfig | undefined,
+  matchPath: MatchPathFn | undefined,
 ): Promise<void> {
-  if (!support.supportsCrossModuleSymbols) return;
-  if (!isJsTsLanguage(support.id)) return;
-  const { matchPath } = await import("../util/resolution.js").then((mod) =>
-    mod.loadNearestTsconfigFor(file, projectRoot, logLevel),
+  if (!support.supportsCrossModuleSymbols || !isJsTsLanguage(support.id)) return;
+  const reexports = mod.exports.filter(
+    (entry) => entry.type === "reexport" || entry.type === "exportStar" || entry.type === "namespaceReexport",
   );
-  for (const entry of mod.exports) {
-    if (entry.type !== "reexport" && entry.type !== "exportStar" && entry.type !== "namespaceReexport") {
-      continue;
-    }
+  if (!reexports.length) return;
+  for (const entry of reexports) {
     if (entry.fromModule.startsWith(".")) {
       entry.moduleSpecifier ??= entry.fromModule;
       const resolved = await resolveSpecifier(file, entry.fromModule, projectRoot, matchPath, workspaceConfig, {
@@ -233,7 +230,8 @@ async function buildIndexedModuleForFile(args: {
   opts: BuildOptions | undefined;
   report: BuildReport | undefined;
   graphOptions: GraphBuildOptions;
-  workspaceConfig: Awaited<ReturnType<typeof loadWorkspaceConfig>>;
+  workspaceConfig?: WorkspaceConfig;
+  matchPath?: MatchPathFn;
   workerSetup: WorkerPoolSetupResult;
   parsedMap: Map<string, ParsedFileContext>;
   parsedCacheMaxEntries: number;
@@ -313,12 +311,13 @@ async function buildIndexedModuleForFile(args: {
   // every embedded (SFC) block, instead of one path silently missing a future option.
   const sharedImportOptions = {
     graphOptions: args.graphOptions,
+    ...(args.workspaceConfig ? { workspaceConfig: args.workspaceConfig } : {}),
+    ...(args.matchPath ? { matchPath: args.matchPath } : {}),
     ...(args.opts?.native ? { native: args.opts.native } : {}),
     ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
     ...(args.opts?.languageExtensions ? { languageExtensions: args.opts.languageExtensions } : {}),
     ...(args.onFallbackImportExtraction ? { onFallbackImportExtraction: args.onFallbackImportExtraction } : {}),
   };
-
   const imports =
     nativeSourceLimitFallback || sup.id === "sql"
       ? []
@@ -359,7 +358,7 @@ async function buildIndexedModuleForFile(args: {
     args.projectRoot,
     args.graphOptions,
     args.workspaceConfig,
-    args.opts?.logLevel,
+    args.matchPath,
   );
 
   const sigInfo = args.fileSignatures.get(args.file);
@@ -828,6 +827,7 @@ async function buildIndexFromFileListShared(
       : null;
     const parsedMap = new Map<string, ParsedFileContext>();
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+    const { matchPath } = await loadNearestTsconfigFor(path.join(projectRoot, "__codegraph__.ts"), projectRoot, opts?.logLevel);
     const parseStart = performance.now();
     const graph: Graph = { nodes: new Set(normalizedFiles), edges: [] };
     const onFileEdges = manifestEntries
@@ -910,7 +910,8 @@ async function buildIndexFromFileListShared(
             opts,
             report,
             graphOptions,
-            workspaceConfig,
+            ...(workspaceConfig ? { workspaceConfig } : {}),
+            ...(matchPath ? { matchPath } : {}),
             workerSetup,
             ...(resolverEnvironmentFingerprint !== undefined ? { resolverEnvironmentFingerprint } : {}),
             parsedMap,
@@ -1603,6 +1604,7 @@ export async function buildProjectIndexIncremental(
     }
 
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+    const { matchPath } = await loadNearestTsconfigFor(path.join(projectRoot, "__codegraph__.ts"), projectRoot, opts?.logLevel);
     const conc = buildConcurrency(opts);
     // Created below, once the changed-file set is known. Building it here would spawn a full
     // pool before the signature pass and the unchanged-snapshot early return, so a warm
@@ -1729,7 +1731,8 @@ export async function buildProjectIndexIncremental(
               opts,
               report,
               graphOptions,
-              workspaceConfig,
+              ...(workspaceConfig ? { workspaceConfig } : {}),
+              ...(matchPath ? { matchPath } : {}),
               workerSetup,
               parsedMap,
               parsedCacheMaxEntries: parsedCacheMaxEntries(opts),

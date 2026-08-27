@@ -1,6 +1,6 @@
 import { prepareSourceInput } from "../languages/filePrep.js";
-import { loadNearestTsconfigFor, resolveImportSpecifier } from "../util/resolution.js";
-import { loadWorkspaceConfig } from "../util/workspace.js";
+import { loadNearestTsconfigFor, resolveImportSpecifier, type MatchPathFn } from "../util/resolution.js";
+import { loadWorkspaceConfig, type WorkspaceConfig } from "../util/workspace.js";
 import type { LogLevel } from "../logging.js";
 import {
   collectModuleSpecifiersFromSource,
@@ -44,6 +44,8 @@ export async function collectImportsForFile(
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
     logLevel?: LogLevel;
     languageExtensions?: LanguageExtensionMap;
+    workspaceConfig?: WorkspaceConfig;
+    matchPath?: MatchPathFn;
   },
 ): Promise<ImportBinding[]> {
   let source = opts?.source;
@@ -101,11 +103,11 @@ export async function collectImportsForFile(
     return imports;
   }
 
-  const tsCfg =
-    resolvedSup.id === "ts" || resolvedSup.id === "tsx"
-      ? await loadNearestTsconfigFor(file, projectRoot, opts?.logLevel)
-      : undefined;
-  const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+  let matchPath = opts?.matchPath;
+  if ((resolvedSup.id === "ts" || resolvedSup.id === "tsx") && !matchPath) {
+    ({ matchPath } = await loadNearestTsconfigFor(file, projectRoot, opts?.logLevel));
+  }
+  const workspaceConfig = opts?.workspaceConfig ?? (await loadWorkspaceConfig(projectRoot));
   const resolvedImportCache = new Map<string, Promise<ResolvedImportTarget>>();
 
   const resolveFrom = async (
@@ -118,7 +120,7 @@ export async function collectImportsForFile(
     const resolutionHints = opts?.graphOptions?.resolutionHints;
     const resolved = (async (): Promise<ResolvedImportTarget> => {
       const result = await resolveImportSpecifier(projectRoot, file, from, resolvedSup.id, {
-        ...(tsCfg?.matchPath ? { matchPath: tsCfg.matchPath } : {}),
+        ...(matchPath ? { matchPath } : {}),
         ...(workspaceConfig ? { workspaceConfig } : {}),
         resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
         ...(resolutionHints ? { resolutionHints } : {}),
