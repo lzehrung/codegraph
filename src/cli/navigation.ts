@@ -15,7 +15,12 @@ import {
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { fileIdentityKey, toProjectDisplayPath } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
-import { parseCacheModeOption, parseNonNegativeIntegerOption, parsePositiveIntegerOption } from "./options.js";
+import {
+  getCliCommandUsage,
+  parseCacheModeOption,
+  parseNonNegativeIntegerOption,
+  parsePositiveIntegerOption,
+} from "./options.js";
 import { parseCliSourceLocation } from "./location.js";
 import { resolveCliProjectFile, writeCliProjectFileError } from "./projectFile.js";
 import { writeCliOutput } from "./pretty.js";
@@ -192,7 +197,7 @@ function formatGotoOutput(projectRootFs: string, output: GotoCliOutput): string 
 export async function handleDumpmodCommand(context: NavigationCommandContext): Promise<void> {
   const [fileArg] = context.positionals;
   if (!fileArg) {
-    context.writeStderrLine("Usage: dumpmod <file>");
+    context.writeStderrLine(getCliCommandUsage("dumpmod"));
     context.exit(2);
   }
   const resolvedFile = resolveCliProjectFile(context.projectRootFs, fileArg, "File");

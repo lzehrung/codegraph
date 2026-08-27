@@ -1684,7 +1684,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
   it("grep rejects ambiguous usage (both --query and --pattern)", async () => {
     await expect(
       runCliCommand(["grep", "--json", "--root", tsRoot, "--query", "(identifier) @id", "--pattern", "foo"]),
-    ).rejects.toThrow(/Usage: grep/i);
+    ).rejects.toThrow(/Usage: codegraph grep/i);
   });
 
   it("search returns ranked agent-ready results", async () => {

@@ -10,7 +10,7 @@ import { listDirectDeletedFileImporters } from "../review/deleted.js";
 import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath, resolveFilePathWithinRoot, toProjectDisplayPath } from "../util/paths.js";
 import { exitWithError } from "./context.js";
-import { parseNonNegativeIntegerOption } from "./options.js";
+import { getCliCommandUsage, parseNonNegativeIntegerOption } from "./options.js";
 
 export type AffectedTestEntry = {
   file: string;
@@ -304,7 +304,7 @@ function deletedPathsForChange(change: FileChange): string[] {
 async function buildAffectedReportFromContext(context: AffectedCommandContext): Promise<AffectedTestsReport> {
   const inputs = await collectChangedFileInputs(context);
   if (!inputs.files.length) {
-    throw new Error("Usage: codegraph affected <file...> [--stdin] [--base <ref> --head <ref>] [--root <path>]");
+    throw new Error(getCliCommandUsage("affected"));
   }
 
   const normalizedChangedFiles = Array.from(

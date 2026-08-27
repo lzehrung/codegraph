@@ -104,7 +104,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
 ]);
 
 type CliPositionalPolicy =
-  | { kind: "any" }
+  | { kind: "any"; usage?: string }
   | { kind: "max"; max: number; usage: string }
   | { kind: "none"; usage: string };
 
@@ -199,6 +199,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       [...SHARED_BUILD_OPTIONS, "--base", "--depth", "--filter", "--head"],
       {
         kind: "any",
+        usage:
+          "Usage: codegraph affected <file...> [--stdin] [--base <ref> --head <ref>] [--root <path>] [--depth <n>] [--filter <glob>] [--json | --quiet]",
       },
     ),
   ],
@@ -227,7 +229,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...JSON_OUTPUT_FLAGS, "--text"], ["--language", "--max-tokens", "--min-tokens"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph chunk <file-path> [options]",
+      usage:
+        "Usage: codegraph chunk <file-path> [--language <language>] [--min-tokens <n>] [--max-tokens <n>] [--text] [--json | --pretty]",
     }),
   ],
   [
@@ -378,7 +381,10 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       ["--ignore-case", "--json", "--pretty", "-i", "--no-gitignore"],
       ["--glob", "--ignore-glob", "--include-glob", "--max-hits", "--pattern", "--query", "--regex", "--root"],
       {
-        kind: "any",
+        kind: "max",
+        max: 1,
+        usage:
+          "Usage: codegraph grep <regex> [--root <dir>] [--pattern|--regex <expr>] [--query <tree-sitter-query>] [--glob|--include-glob|--ignore-glob <glob>] [--ignore-case|-i] [--no-gitignore] [--max-hits <n>] [--json | --pretty]",
       },
     ),
   ],
@@ -422,7 +428,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       {
         kind: "max",
         max: 1,
-        usage: "Usage: codegraph impact [project-root] [--provider git|github|raw] [options]",
+        usage: "Usage: codegraph impact [project-root] [--provider git|github|raw] [options] [--json | --pretty]",
       },
     ),
   ],
@@ -519,7 +525,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       {
         kind: "max",
         max: 1,
-        usage: "Usage: codegraph server <start|status|stop> [--root <path>]",
+        usage: "Usage: codegraph server <start|status|stop> [--root <path>] [--json | --pretty]",
       },
     ),
   ],
@@ -770,6 +776,37 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     }),
   ],
 ]);
+
+export type CliCommandUsageSchema = {
+  command: string;
+  flags: readonly string[];
+  options: readonly string[];
+  usage: string;
+};
+
+export function getCliCommandUsageSchemas(): readonly CliCommandUsageSchema[] {
+  return [...CLI_COMMAND_SCHEMAS].flatMap(([command, schema]) => {
+    const usage = schema.positionals.usage;
+    return usage
+      ? [
+          {
+            command,
+            flags: schema.flags ?? [],
+            options: schema.options ?? [],
+            usage,
+          },
+        ]
+      : [];
+  });
+}
+
+export function getCliCommandUsage(command: string): string {
+  const usage = CLI_COMMAND_SCHEMAS.get(command)?.positionals.usage;
+  if (!usage) {
+    throw new Error(`No validation usage is defined for ${command}.`);
+  }
+  return usage;
+}
 
 function allowedFlagsForSchema(schema: CliCommandSchema): Set<string> {
   return new Set(["--help", "-h", "--version", "-v", "--debug", ...(schema.flags ?? [])]);

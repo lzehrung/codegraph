@@ -13,7 +13,7 @@ import {
 import { type GraphBuildOptions } from "../graphs/types.js";
 import type { Graph } from "../types.js";
 import { fileIdentityKey, toProjectDisplayPath } from "../util/paths.js";
-import { parseOptionalNonNegativeIntegerOption } from "./options.js";
+import { getCliCommandUsage, parseOptionalNonNegativeIntegerOption } from "./options.js";
 import { resolveCliProjectFile, writeCliProjectFileError } from "./projectFile.js";
 
 export type GraphQueryCommand = "deps" | "rdeps" | "path" | "cycles" | "unresolved" | "apisurface";
@@ -65,7 +65,7 @@ async function loadGraph(context: GraphQueryCommandContext): Promise<LoadedGraph
 async function handleDepsCommand(context: GraphQueryCommandContext): Promise<void> {
   const [fileArg] = context.positionals;
   if (!fileArg) {
-    context.writeStderrLine(`Usage: ${context.command} <file|file::symbol|symbol:...> [--depth N | --all] [--json]`);
+    context.writeStderrLine(getCliCommandUsage(context.command));
     context.exit(2);
   }
   const depthRaw = context.getOpt("--depth");
@@ -184,7 +184,7 @@ async function handleDepsCommand(context: GraphQueryCommandContext): Promise<voi
 async function handlePathCommand(context: GraphQueryCommandContext): Promise<void> {
   const [fromArg, toArg] = context.positionals;
   if (!fromArg || !toArg) {
-    context.writeStderrLine("Usage: path <from-file> <to-file> [--json]");
+    context.writeStderrLine(getCliCommandUsage("path"));
     context.exit(2);
   }
   const json = context.hasFlag("--json");

@@ -16,7 +16,7 @@ import {
   type CliStderrExitContext,
   type CliStdoutWriterContext,
 } from "./context.js";
-import { parsePositiveIntegerOption } from "./options.js";
+import { getCliCommandUsage, parsePositiveIntegerOption } from "./options.js";
 import { writeCliOutput } from "./pretty.js";
 
 const chunkLanguageAliases: Record<string, string> = {
@@ -63,7 +63,7 @@ export type ChunkCommandContext = CliPositionalsContext &
 export async function handleChunkCommand(context: ChunkCommandContext): Promise<void> {
   const inputFilePath = context.positionals[0];
   if (!inputFilePath) {
-    context.writeStderrLine("Usage: chunk <file-path> [options]");
+    context.writeStderrLine(getCliCommandUsage("chunk"));
     context.writeStderrLine("Options:");
     context.writeStderrLine("  --min-tokens N    Minimum tokens per chunk (default: 150)");
     context.writeStderrLine("  --max-tokens N    Maximum tokens per chunk (default: 400)");

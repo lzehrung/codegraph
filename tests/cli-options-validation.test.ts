@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { parseCliArgs, runWithCliRuntime, writeError } from "../src/cli/context.js";
 import {
+  getCliCommandUsageSchemas,
   parseImpactScopeOption,
   parseNonNegativeIntegerOption,
   parseRefContextOption,
@@ -180,6 +181,21 @@ describe("CLI command option validation", () => {
     for (const command of ["status", "uninit"]) {
       const parsed = parseCliArgs(command, ["--no-update-gitignore"]);
       expect(() => validateCliArgs(command, parsed)).toThrow(`Unknown option for ${command}: --no-update-gitignore`);
+    }
+  });
+});
+
+describe("validation usage schema alignment", () => {
+  it("mentions every schema-accepted output-format and traversal flag", () => {
+    const trackedFlags = ["--json", "--pretty", "--depth", "--all"];
+
+    for (const schema of getCliCommandUsageSchemas()) {
+      const acceptedFlags = [...schema.flags, ...schema.options];
+      for (const flag of trackedFlags) {
+        if (acceptedFlags.includes(flag)) {
+          expect(schema.usage, `${schema.command} usage should mention ${flag}`).toContain(flag);
+        }
+      }
     }
   });
 });

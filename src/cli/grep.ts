@@ -16,7 +16,7 @@ import {
   type CliStderrExitContext,
   type CliStdoutWriterContext,
 } from "./context.js";
-import { parseOptionalBoundedIntegerOption } from "./options.js";
+import { getCliCommandUsage, parseOptionalBoundedIntegerOption } from "./options.js";
 
 export type GrepCommandContext = CliOptionContext &
   CliJsonWriterContext &
@@ -59,7 +59,7 @@ export async function handleGrepCommand(context: GrepCommandContext): Promise<vo
   }
 
   if ((querySource ? 1 : 0) + (patternSource ? 1 : 0) !== 1) {
-    context.writeStderrLine("Usage: grep <regex> [--root <dir>] OR grep --query '<tree-sitter query>' [--root <dir>]");
+    context.writeStderrLine(getCliCommandUsage("grep"));
     context.exit(2);
   }
 

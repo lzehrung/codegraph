@@ -1808,7 +1808,7 @@ describe("CLI command modules", () => {
     ).rejects.toThrow("sql exit 2");
 
     expect(stderrLines).toEqual([
-      'Usage: sql <sqlite-path> "SELECT ..." OR sql --db <sqlite-path> --query "SELECT ..."',
+      'Usage: codegraph sql <sqlite-path> "SELECT ..." [--json | --pretty] OR codegraph sql --db <sqlite path> --query "SELECT ..." [--json | --pretty]',
     ]);
   });
 
@@ -2214,7 +2214,9 @@ describe("CLI command modules", () => {
       ),
     ).rejects.toThrow("chunk exit 2");
 
-    expect(stderrLines).toContain("Usage: chunk <file-path> [options]");
+    expect(stderrLines).toContain(
+      "Usage: codegraph chunk <file-path> [--language <language>] [--min-tokens <n>] [--max-tokens <n>] [--text] [--json | --pretty]",
+    );
     expect(stderrLines).toContain("  --text            Force text chunking mode");
   });
 
@@ -2963,19 +2965,28 @@ describe("CLI command modules", () => {
     expect(edgeIterations).toBe(0);
   });
 
-  test("prints graph query usage for missing file arguments", async () => {
+  test.each([
+    [
+      "deps",
+      "Usage: codegraph deps <file|file::symbol|symbol:...> [--root <path>] [--depth <n> | --all] [--json | --pretty]",
+    ],
+    [
+      "rdeps",
+      "Usage: codegraph rdeps <file|file::symbol|symbol:...> [--root <path>] [--depth <n> | --all] [--json | --pretty]",
+    ],
+  ])("prints graph query usage for missing %s file arguments", async (command, usage) => {
     const stderrLines: string[] = [];
 
     await expect(
       handleGraphQueryCommand(
         createGraphQueryContext({
-          command: "deps",
+          command: command as "deps" | "rdeps",
           writeStderrLine: (message) => stderrLines.push(message),
         }),
       ),
     ).rejects.toThrow("graph query exit 2");
 
-    expect(stderrLines).toEqual(["Usage: deps <file|file::symbol|symbol:...> [--depth N | --all] [--json]"]);
+    expect(stderrLines).toEqual([usage]);
   });
 
   test("rejects invalid graph query depth values before scanning the graph", async () => {
