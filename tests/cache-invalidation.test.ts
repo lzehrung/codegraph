@@ -6,6 +6,8 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import * as zlib from "node:zlib";
+import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import {
   buildProjectIndex,
   buildProjectIndexFromFiles,
@@ -41,6 +43,9 @@ import { getAllLanguages, getLanguageById } from "../src/languages/registry.js";
 import type { LanguageDefinition } from "../src/languages/types.js";
 import {
   clearImplementationFingerprintCache,
+  getImplementationFingerprint,
+  getImplementationFingerprintForEpoch,
+  LANGUAGE_BEHAVIOR_EPOCH,
   languageDefinitionFingerprintCoverage,
 } from "../src/indexer/build-cache/options.js";
 import { fileIdentityKey } from "../src/util/paths.js";
@@ -498,10 +503,54 @@ describe("Cache invalidation and strict hashing", () => {
     }
   });
 
-  // Each mutation changes only the named definition field; source bytes stay fixed.
-  // Values are chosen to flip the field's effective behavior (or, for hooks, to
-  // introduce a behavior-neutral hook where none existed) so any fingerprint
-  // change is attributable to descriptor coverage alone.
+  it("invalidates behavior-hook changes through LANGUAGE_BEHAVIOR_EPOCH", () => {
+    const typescript = getLanguageById("ts");
+    if (!typescript) throw new Error("Expected TypeScript language definition.");
+    const originalNormalizeIdentifier = typescript.normalizeIdentifier;
+    const fingerprint = getImplementationFingerprint();
+    try {
+      typescript.normalizeIdentifier = (name) => name;
+      clearImplementationFingerprintCache();
+
+      expect(getImplementationFingerprint()).toBe(fingerprint);
+      expect(getImplementationFingerprintForEpoch(LANGUAGE_BEHAVIOR_EPOCH + 1)).not.toBe(fingerprint);
+    } finally {
+      typescript.normalizeIdentifier = originalNormalizeIdentifier;
+      clearImplementationFingerprintCache();
+    }
+  });
+
+  it("uses one implementation fingerprint from bundled and unbundled entrypoints", async () => {
+    const root = await mkTmpDir("dg-fingerprint-build-shapes-");
+    await fsp.writeFile(path.join(root, "entry.ts"), "export const value = 1;\n", "utf8");
+    const packageRoot = path.resolve(import.meta.dirname, "..");
+    const bundledCli = path.join(packageRoot, "dist", "bin", "cli.js");
+    const unbundledIndex = pathToFileURL(path.join(packageRoot, "dist", "index.js")).href;
+    const bundled = spawnSync(process.execPath, [bundledCli, "index", "--root", root, "--cache", "disk"], {
+      encoding: "utf8",
+    });
+    expect(bundled.status, bundled.stderr).toBe(0);
+    const manifestPath = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
+    const bundledManifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as IndexManifest;
+    const unbundled = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `const { buildProjectIndex } = await import(${JSON.stringify(unbundledIndex)}); await buildProjectIndex(${JSON.stringify(root)}, { cache: "disk", threads: 1 });`,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(unbundled.status, unbundled.stderr).toBe(0);
+    const unbundledManifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as IndexManifest;
+
+    expect(bundledManifest.buildOptions?.implementationFingerprint).toBe(
+      unbundledManifest.buildOptions?.implementationFingerprint,
+    );
+  });
+
+  // Declarative fields remain fingerprinted independently. Function-valued hooks
+  // are instead covered by LANGUAGE_BEHAVIOR_EPOCH.
   const snapshotField = <K extends keyof LanguageDefinition>(
     definition: LanguageDefinition,
     field: K,
@@ -518,21 +567,9 @@ describe("Cache invalidation and strict hashing", () => {
   };
 
   const definitionFieldMutations: Array<{
-    field: "scopeDeclarationNames" | "normalizeIdentifier" | "usesQueryDrivenLocals" | "membersAreImplicitlyInScope";
+    field: "usesQueryDrivenLocals" | "membersAreImplicitlyInScope";
     apply: (definition: LanguageDefinition) => void;
   }> = [
-    {
-      field: "scopeDeclarationNames",
-      apply: (definition) => {
-        definition.scopeDeclarationNames = () => false;
-      },
-    },
-    {
-      field: "normalizeIdentifier",
-      apply: (definition) => {
-        definition.normalizeIdentifier = (name) => name;
-      },
-    },
     {
       field: "usesQueryDrivenLocals",
       apply: (definition) => {

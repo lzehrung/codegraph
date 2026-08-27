@@ -29,6 +29,7 @@ Checklist for landing a new first-class source language without drifting from re
 - Define chunk blocks, split points, comments, and node-type hints in the language definition.
 - Add import, export, local, and import-binding queries that match the real grammar node names.
 - Implement `classifyDefinition`, `isDeclarationName`, and scope helpers so symbol indexing and navigation stay consistent with other source languages.
+- When changing a function-valued language behavior hook, bump `LANGUAGE_BEHAVIOR_EPOCH` in `src/indexer/build-cache/options.ts`. The disk-cache fingerprint deliberately uses this declared epoch rather than hook source text so bundled CLI and library builds share caches.
 - Prefer shared pipeline hooks over language-specific branches. Add a language-specific branch only when the grammar shape actually requires it.
 
 ## 5. Implement import binding and resolution
