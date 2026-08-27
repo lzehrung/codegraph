@@ -5,7 +5,7 @@ import fg from "fast-glob";
 import picomatch from "picomatch";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { stringifyUnknown } from "./ast.js";
-import { isFilePathWithinRoot, normalizePath } from "./paths.js";
+import { fileIdentityKey, isFilePathWithinRoot, normalizePath } from "./paths.js";
 import { isRelativePathInside, matchesDiscoveryGlob } from "./discoveryPath.js";
 
 export { isRelativePathInside, matchesDiscoveryGlob } from "./discoveryPath.js";
@@ -16,6 +16,7 @@ import {
 } from "./projectFiles/definitions.js";
 import { trimToNull } from "./projectFiles/parsers.js";
 import { mapLimitSemaphore } from "./concurrency.js";
+import { isGitRepo, listGitSubmoduleDirectories, listTrackedFiles, listUntrackedFiles } from "./git.js";
 
 export type {
   ProjectFileDefinition,
@@ -260,62 +261,111 @@ function parseGitignoreRule(baseDir: string, rawLine: string): GitignoreRule | n
   };
 }
 
-async function loadGitignoreRules(projectRoot: string): Promise<GitignoreRule[]> {
-  const gitignoreFiles = await fg(["**/.gitignore"], {
+type GitignoreIndex = {
+  hasRules: boolean;
+  /**
+   * Rules grouped by the directory of the `.gitignore` that declared them, keyed by
+   * {@link fileIdentityKey} so one base directory can never be keyed two ways.
+   */
+  byBaseDir: Map<string, GitignoreRule[]>;
+};
+
+const EMPTY_GITIGNORE_INDEX: GitignoreIndex = { hasRules: false, byBaseDir: new Map() };
+
+/**
+ * Parse `.gitignore` rules from an already-discovered set of `.gitignore` files.
+ *
+ * Shallowest-first ordering means the rules that could ignore a nested `.gitignore` are
+ * indexed before it is considered, so rules inside ignored trees are skipped exactly as
+ * Git never descends there. It also preserves the "last match wins" order that deeper
+ * files depend on.
+ */
+async function buildGitignoreIndex(gitignoreFiles: readonly string[]): Promise<GitignoreIndex> {
+  const sorted = [...gitignoreFiles].sort((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
+  const gitignoreIndex: GitignoreIndex = { hasRules: false, byBaseDir: new Map() };
+  for (const gitignoreFile of sorted) {
+    if (isIgnoredByGitignore(gitignoreFile, gitignoreIndex)) {
+      continue;
+    }
+    let raw: string;
+    try {
+      raw = await fsp.readFile(gitignoreFile, "utf8");
+    } catch {
+      continue;
+    }
+    const baseDir = path.dirname(gitignoreFile);
+    const baseKey = fileIdentityKey(baseDir);
+    for (const line of raw.split(/\r?\n/)) {
+      const rule = parseGitignoreRule(baseDir, line);
+      if (!rule) continue;
+      const existing = gitignoreIndex.byBaseDir.get(baseKey);
+      if (existing) existing.push(rule);
+      else gitignoreIndex.byBaseDir.set(baseKey, [rule]);
+      gitignoreIndex.hasRules = true;
+    }
+  }
+  return gitignoreIndex;
+}
+
+async function findGitignoreFiles(projectRoot: string): Promise<string[]> {
+  return await fg(["**/.gitignore"], {
     cwd: projectRoot,
     absolute: true,
     dot: true,
     followSymbolicLinks: false,
     ignore: DEFAULT_PROJECT_FILE_IGNORES,
   });
-  gitignoreFiles.sort((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
-  const rules: GitignoreRule[] = [];
-  for (const gitignoreFile of gitignoreFiles) {
-    if (isIgnoredByGitignore(gitignoreFile, rules)) {
-      continue;
-    }
-    try {
-      const baseDir = path.dirname(gitignoreFile);
-      const raw = await fsp.readFile(gitignoreFile, "utf8");
-      rules.push(
-        ...raw
-          .split(/\r?\n/)
-          .map((line) => parseGitignoreRule(baseDir, line))
-          .filter((rule): rule is GitignoreRule => !!rule),
-      );
-    } catch {
-      continue;
-    }
-  }
-  return rules;
 }
 
-async function loadGitignoreRulesForRootAliases(projectRoot: string): Promise<GitignoreRule[]> {
+async function loadGitignoreIndexForRootAliases(projectRoot: string): Promise<GitignoreIndex> {
   const roots = [projectRoot];
   const realRoot = await fsp.realpath(projectRoot);
   if (normalizePath(realRoot) !== normalizePath(projectRoot)) {
     roots.push(realRoot);
   }
-  const rules: GitignoreRule[] = [];
+  const gitignoreFiles: string[] = [];
   for (const root of roots) {
-    rules.push(...(await loadGitignoreRules(root)));
+    gitignoreFiles.push(...(await findGitignoreFiles(root)));
   }
-  return rules;
+  return await buildGitignoreIndex(gitignoreFiles);
 }
 
-function isIgnoredByGitignore(absolutePath: string, rules: GitignoreRule[]): boolean {
+/**
+ * Whether `.gitignore` rules ignore `absolutePath`.
+ *
+ * Only a `.gitignore` on the path's own ancestor chain can match it, so this walks that
+ * chain rather than testing every rule in the project. The skipped rules are exactly the
+ * ones whose relative-path check would have rejected them, and applying the chain
+ * shallowest-first reproduces the flat list's ordering, so the answer is unchanged.
+ * Testing every rule cost O(files x rules): on an Unreal project that meant 55,983
+ * candidates against 2,266 rules from 173 `.gitignore` files, or 253.7M evaluations and
+ * roughly 21.7s of a 26.1s discovery.
+ */
+function isIgnoredByGitignore(absolutePath: string, gitignoreIndex: GitignoreIndex): boolean {
+  if (!gitignoreIndex.hasRules) return false;
+  const chain: GitignoreRule[][] = [];
+  let current = normalizePath(path.dirname(absolutePath));
+  for (;;) {
+    const rules = gitignoreIndex.byBaseDir.get(fileIdentityKey(current));
+    if (rules) chain.push(rules);
+    const parent = normalizePath(path.dirname(current));
+    if (parent === current) break;
+    current = parent;
+  }
   let ignored = false;
-  for (const rule of rules) {
-    const relativePath = path.relative(rule.baseDir, absolutePath);
-    if (!isRelativePathInside(relativePath)) {
-      continue;
-    }
-    const normalizedRelativePath = normalizePath(relativePath);
-    if (rule.dirOnly && !normalizedRelativePath.includes("/")) {
-      continue;
-    }
-    if (rule.matches(normalizedRelativePath)) {
-      ignored = !rule.negated;
+  for (let depth = chain.length - 1; depth >= 0; depth -= 1) {
+    for (const rule of chain[depth]!) {
+      const relativePath = path.relative(rule.baseDir, absolutePath);
+      if (!isRelativePathInside(relativePath)) {
+        continue;
+      }
+      const normalizedRelativePath = normalizePath(relativePath);
+      if (rule.dirOnly && !normalizedRelativePath.includes("/")) {
+        continue;
+      }
+      if (rule.matches(normalizedRelativePath)) {
+        ignored = !rule.negated;
+      }
     }
   }
   return ignored;
@@ -333,6 +383,46 @@ async function ensureDirectoryReadable(directoryPath: string, label: string): Pr
     throw new Error(`${label} is not a directory: ${resolvedPath}`);
   }
   return resolvedPath;
+}
+
+type GitCandidateSet = {
+  files: string[];
+  gitignoreFiles: string[];
+};
+
+/**
+ * Enumerate candidate project files through Git, or `null` when Git cannot answer.
+ *
+ * Tracked plus untracked-but-not-ignored files are exactly the working-tree files Git
+ * treats as part of the project. `.gitignore` files come out of that same listing, so
+ * the rules the confinement checks still need cost no additional walk. Any Git failure
+ * returns `null` and discovery falls back to scanning the filesystem.
+ *
+ * Submodules need explicit handling or their contents vanish from the index: the
+ * superproject records only a gitlink. Tracked files come from `--recurse-submodules`,
+ * which cannot combine with `--others`, so untracked files are listed once per
+ * submodule directory instead.
+ */
+async function listGitCandidateFiles(root: string, logLevel: LogLevel | undefined): Promise<GitCandidateSet | null> {
+  try {
+    if (!(await isGitRepo(root))) return null;
+    const [tracked, untracked, submoduleDirectories] = await Promise.all([
+      listTrackedFiles(root, { recurseSubmodules: true, ...(logLevel === undefined ? {} : { logLevel }) }),
+      listUntrackedFiles(root, { respectGitignore: true }),
+      listGitSubmoduleDirectories(root),
+    ]);
+    const submoduleUntracked = await Promise.all(
+      submoduleDirectories.map(async (directory) => await listUntrackedFiles(directory, { respectGitignore: true })),
+    );
+    // Sorted so discovery order is reproducible rather than an artifact of how three
+    // separate Git listings happened to be concatenated. Callers that surface results
+    // in discovery order then behave the same way on every machine.
+    const files = Array.from(new Set([...tracked, ...untracked, ...submoduleUntracked.flat()])).sort();
+    return { files, gitignoreFiles: files.filter((file) => path.basename(file) === ".gitignore") };
+  } catch (error) {
+    logWithLevel(logLevel, "debug", `Git discovery unavailable for ${root}: ${stringifyUnknown(error)}`);
+    return null;
+  }
 }
 
 export async function listProjectFiles(
@@ -369,18 +459,37 @@ export async function listProjectFiles(
   try {
     const useGitignore = options?.useGitignore ?? true;
     const realRoot = await fsp.realpath(root);
-    const gitignoreRules = !useGitignore
-      ? []
-      : await loadGitignoreRulesForRootAliases(
-          options?.gitignoreRoot ? await ensureDirectoryReadable(options.gitignoreRoot, "Gitignore root") : root,
-        );
-    const files = await fg(patterns, {
-      cwd: root,
-      absolute: true,
-      dot: true,
-      followSymbolicLinks: false,
-      ignore: fastGlobIgnoreGlobs,
-    });
+    // Enumerate through Git when Git's ignore rules are the ones this call wants anyway.
+    // Git applies them while walking, so ignored trees are never descended into and never
+    // reach the realpath and gitignore checks below. Scanning instead costs O(files on
+    // disk): on an Unreal project holding 100,168 files (818 tracked) the scan produced
+    // 55,983 pattern-matching candidates, nearly all generated sources under a gitignored
+    // `Intermediate/` tree, and discovery took 26.1s. Git lists 4,010 in about 111ms.
+    // An aliased root or a gitignore-root override means Git's notion of the project is
+    // not this call's, so those fall back to the scan.
+    const gitCandidates =
+      useGitignore && options?.gitignoreRoot === undefined && normalizePath(realRoot) === normalizePath(root)
+        ? await listGitCandidateFiles(root, options?.logLevel)
+        : null;
+    let gitignoreIndex = EMPTY_GITIGNORE_INDEX;
+    if (useGitignore) {
+      gitignoreIndex = gitCandidates
+        ? await buildGitignoreIndex(gitCandidates.gitignoreFiles)
+        : await loadGitignoreIndexForRootAliases(
+            options?.gitignoreRoot ? await ensureDirectoryReadable(options.gitignoreRoot, "Gitignore root") : root,
+          );
+    }
+    // Git returns a candidate set, not a filtered result: the pattern, include,
+    // default-ignore, and gitignore checks below still decide what is indexable.
+    const files = gitCandidates
+      ? gitCandidates.files
+      : await fg(patterns, {
+          cwd: root,
+          absolute: true,
+          dot: true,
+          followSymbolicLinks: false,
+          ignore: fastGlobIgnoreGlobs,
+        });
     // Explicit includeGlobs may re-open default-ignored trees (for example vendored
     // dependency dirs). Scan those include patterns without default ignores, then keep
     // only paths that still match the project patterns and include globs below.
@@ -445,7 +554,7 @@ export async function listProjectFiles(
         if (ignoredByDefault && !(includeMatchers.length > 0 && matchesInclude)) {
           return false;
         }
-        return !isIgnoredByGitignore(filePath, gitignoreRules) && !isIgnoredByGitignore(realPath, gitignoreRules);
+        return !isIgnoredByGitignore(filePath, gitignoreIndex) && !isIgnoredByGitignore(realPath, gitignoreIndex);
       })
       .map(({ filePath }) => filePath);
   } catch (error) {

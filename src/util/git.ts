@@ -535,6 +535,78 @@ export async function listChangedFiles(
 }
 
 /**
+ * List files Git tracks under `projectRoot`, as absolute normalized paths.
+ *
+ * Paired with `listUntrackedFiles` this enumerates exactly the working-tree files
+ * Git considers part of the project, which is the indexable candidate set: Git
+ * applies ignore rules while walking, so ignored trees are never descended into.
+ * A recursive directory scan instead costs O(files on disk), which on trees full
+ * of generated artifacts is orders of magnitude larger than the project itself.
+ * `recurseSubmodules` also lists files tracked inside initialized submodules, whose
+ * contents are otherwise invisible here: a submodule is a separate repository, so the
+ * superproject records only a gitlink and reports nothing under it. Paths stay relative
+ * to `projectRoot`, so they resolve the same way as the non-recursive listing.
+ *
+ * Deliberately no pathspec arguments: one argv entry per file hits Windows'
+ * ~32,767-character command-line limit past roughly 1,100 files. Full-repo NUL
+ * listings can also exceed Node's default 1 MiB stdout buffer on large trees, so
+ * this raises `maxBuffer` for the same reason `getGitBlobHashes` does.
+ */
+export async function listTrackedFiles(
+  projectRoot: string,
+  opts?: { gitAvailable?: boolean; logLevel?: LogLevel; recurseSubmodules?: boolean },
+): Promise<string[]> {
+  if (!(opts?.gitAvailable ?? true)) return [];
+  const args = ["ls-files", "-z"];
+  if (opts?.recurseSubmodules) args.push("--recurse-submodules");
+  try {
+    const { stdout } = await runGit(projectRoot, args, { maxBuffer: 64 * 1024 * 1024 });
+    // `git ls-files -z` NUL-delimits entries; the trailing split segment is always an
+    // empty string rather than a filename, so drop empties without trimming (leading
+    // and trailing whitespace can be a legitimate part of a real filename).
+    const out: string[] = [];
+    for (const rel of stdout.split("\0").filter(Boolean)) {
+      const abs = normalizePath(path.resolve(projectRoot, rel));
+      if (abs) out.push(abs);
+    }
+    return Array.from(new Set(out));
+  } catch (error) {
+    throw createGitError(projectRoot, args, error);
+  }
+}
+
+/**
+ * Directories of initialized submodules under `projectRoot`, as absolute paths.
+ *
+ * Read from the index rather than `.gitmodules` so the result reflects what Git
+ * actually tracks: a gitlink entry carries mode 160000. Callers enumerating untracked
+ * files need this because `--recurse-submodules` cannot combine with `--others`, so
+ * untracked files inside a submodule require a separate listing rooted there.
+ */
+export async function listGitSubmoduleDirectories(
+  projectRoot: string,
+  opts?: { gitAvailable?: boolean },
+): Promise<string[]> {
+  if (!(opts?.gitAvailable ?? true)) return [];
+  const args = ["ls-files", "--stage", "-z"];
+  try {
+    const { stdout } = await runGit(projectRoot, args, { maxBuffer: 64 * 1024 * 1024 });
+    const out: string[] = [];
+    for (const record of stdout.split("\0").filter(Boolean)) {
+      // Each record is `<mode> <object> <stage>\t<path>`; 160000 marks a gitlink.
+      if (!record.startsWith("160000 ")) continue;
+      const tabIndex = record.indexOf("\t");
+      if (tabIndex < 0) continue;
+      const rel = record.slice(tabIndex + 1);
+      if (rel) out.push(normalizePath(path.resolve(projectRoot, rel)));
+    }
+    return Array.from(new Set(out));
+  } catch (error) {
+    throw createGitError(projectRoot, args, error);
+  }
+}
+
+/**
  * List files in the working tree that Git does not track (new, uncommitted files).
  *
  * Used to cheaply detect newly created project files without a full recursive

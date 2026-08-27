@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
@@ -11,6 +11,8 @@ import {
 } from "../src/util/projectFiles.js";
 import { parseDotnetName, parseGoModuleName, parsePomName, parseTomlName } from "../src/util/projectFiles/parsers.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
+import { runGit as git } from "./helpers/git.js";
+import { listGitSubmoduleDirectories } from "../src/util/git.js";
 
 const normalize = (value: string) => value.replace(/\\/g, "/");
 
@@ -983,5 +985,105 @@ describe("createDiscoveredFileMatcher", () => {
     expect(isDiscovered(`${root}/src/index.ts`)).toBe(true);
     expect(isDiscovered(`${root}/src/generated/output.ts`)).toBe(false);
     expect(isDiscovered(`${root}/other/index.ts`)).toBe(false);
+  });
+});
+
+describe("git-native project file discovery", () => {
+  const gitTempDirs: string[] = [];
+
+  async function makeRepo(prefix: string): Promise<string> {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    gitTempDirs.push(root);
+    git(root, ["init"]);
+    git(root, ["config", "user.email", "tests@example.com"]);
+    git(root, ["config", "user.name", "Tests"]);
+    return root;
+  }
+
+  afterEach(async () => {
+    for (const root of gitTempDirs.splice(0)) {
+      await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("discovers sources tracked inside a submodule", async () => {
+    // A submodule is a separate repository, so the superproject index records only a
+    // gitlink and `git ls-files` reports nothing beneath it. Enumerating through Git
+    // without recursion silently drops every submodule source from the index.
+    const submodule = await makeRepo("codegraph-discovery-submodule-src-");
+    await createFile(path.join(submodule, "plugin.ts"), "export const plugin = 1;\n");
+    git(submodule, ["add", "."]);
+    git(submodule, ["commit", "-m", "plugin"]);
+
+    const root = await makeRepo("codegraph-discovery-submodule-super-");
+    await createFile(path.join(root, "app.ts"), "export const app = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "app"]);
+    git(root, ["-c", "protocol.file.allow=always", "submodule", "add", normalize(submodule), "plugins/example"]);
+
+    const files = (await listProjectFiles(root)).map(normalize);
+    expect(files.some((file) => file.endsWith("/app.ts"))).toBe(true);
+    expect(files.some((file) => file.endsWith("/plugins/example/plugin.ts"))).toBe(true);
+  });
+
+  it("excludes gitignored trees while keeping tracked sources", async () => {
+    const root = await makeRepo("codegraph-discovery-ignored-tree-");
+    await createFile(path.join(root, ".gitignore"), "generated/\n");
+    await createFile(path.join(root, "src", "keep.ts"), "export const keep = 1;\n");
+    await createFile(path.join(root, "generated", "drop.ts"), "export const drop = 1;\n");
+
+    const files = (await listProjectFiles(root)).map(normalize);
+    expect(files.some((file) => file.endsWith("/src/keep.ts"))).toBe(true);
+    expect(files.some((file) => file.endsWith("/generated/drop.ts"))).toBe(false);
+  });
+
+  it("honors a nested negation that re-includes an ignored source", async () => {
+    // Rules are grouped per `.gitignore` directory and applied shallowest-first, so a
+    // deeper negation must still win under "last match wins".
+    const root = await makeRepo("codegraph-discovery-negation-");
+    await createFile(path.join(root, ".gitignore"), "*.ts\n");
+    await createFile(path.join(root, "sub", ".gitignore"), "!keep.ts\n");
+    await createFile(path.join(root, "sub", "keep.ts"), "export const keep = 1;\n");
+    await createFile(path.join(root, "sub", "drop.ts"), "export const drop = 1;\n");
+
+    const files = (await listProjectFiles(root)).map(normalize);
+    expect(files.some((file) => file.endsWith("/sub/keep.ts"))).toBe(true);
+    expect(files.some((file) => file.endsWith("/sub/drop.ts"))).toBe(false);
+  });
+
+  it("includes gitignored sources when useGitignore is disabled", async () => {
+    const root = await makeRepo("codegraph-discovery-no-gitignore-");
+    await createFile(path.join(root, ".gitignore"), "generated/\n");
+    await createFile(path.join(root, "generated", "drop.ts"), "export const drop = 1;\n");
+
+    const files = (await listProjectFiles(root, undefined, { useGitignore: false })).map(normalize);
+    expect(files.some((file) => file.endsWith("/generated/drop.ts"))).toBe(true);
+  });
+
+  it("falls back to a filesystem scan outside a Git repository", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-discovery-no-git-"));
+    gitTempDirs.push(root);
+    await createFile(path.join(root, "src", "app.ts"), "export const app = 1;\n");
+
+    const files = (await listProjectFiles(root)).map(normalize);
+    expect(files.some((file) => file.endsWith("/src/app.ts"))).toBe(true);
+  });
+
+  it("reports submodule directories from index gitlink entries", async () => {
+    const submodule = await makeRepo("codegraph-discovery-gitlink-src-");
+    await createFile(path.join(submodule, "plugin.ts"), "export const plugin = 1;\n");
+    git(submodule, ["add", "."]);
+    git(submodule, ["commit", "-m", "plugin"]);
+
+    const root = await makeRepo("codegraph-discovery-gitlink-super-");
+    await createFile(path.join(root, "app.ts"), "export const app = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "app"]);
+    expect(await listGitSubmoduleDirectories(root)).toEqual([]);
+
+    git(root, ["-c", "protocol.file.allow=always", "submodule", "add", normalize(submodule), "plugins/example"]);
+    expect((await listGitSubmoduleDirectories(root)).map(normalize)).toEqual([
+      normalize(path.join(root, "plugins/example")),
+    ]);
   });
 });
