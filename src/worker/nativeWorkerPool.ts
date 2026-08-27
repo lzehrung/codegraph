@@ -48,7 +48,7 @@ export function createNativeWorkerPool(opts?: NativeWorkerPoolOptions): Piscina 
   const workerPath = resolveNativeWorkerPath();
   return new Piscina({
     filename: workerPath,
-    minThreads: threads,
+    minThreads: 1,
     maxThreads: threads,
     maxQueue: opts?.maxQueue ?? threads * 4,
     idleTimeout: 30_000,
