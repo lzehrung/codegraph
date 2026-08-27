@@ -25,6 +25,7 @@ const JS_OBJECT_METHOD_EXPORT_NATIVE_PATTERN = `
 export const JAVASCRIPT_DEF: LanguageDefinition = {
   id: "js",
   extensions: [".js", ".jsx", ".mjs", ".cjs"],
+  supportsExportFromReferences: true,
   structure: {
     blocks: [...ECMASCRIPT_CORE_FUNCTION_BLOCKS, ...ECMASCRIPT_MODULE_VAR_BLOCKS],
     splitPoints: [...ECMASCRIPT_CONTROL_SPLIT_POINTS],

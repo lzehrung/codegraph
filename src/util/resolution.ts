@@ -292,9 +292,8 @@ export async function resolveSpecifier(
     }
     const fromExt = path.extname(fromFile).toLowerCase();
     const prefersPathLikeFallback = [".go", ".java", ".cs", ".rb", ".rs", ".swift"].includes(fromExt);
-    const shouldTryPathLikeFallback = prefersPathLikeFallback || spec.includes("/") || spec.includes(".");
-    if (shouldTryPathLikeFallback) {
-      // Try path-like fallback for languages that often map package-like names to source paths.
+    if (prefersPathLikeFallback) {
+      // These languages use package-like specifiers for first-party source paths.
       const pathLike = await resolvePathLikeModule(projectRoot, spec, opts?.resolutionExtensions);
       if (pathLike && isFilePathWithinRoot(projectRoot, pathLike)) {
         setResolveSpecifierCacheEntry(cacheKey, pathLike);
