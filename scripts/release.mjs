@@ -124,15 +124,12 @@ function refreshDependencies() {
 }
 
 /**
- * `npm install` resolves against the node_modules already present on this host, so
- * optional dependencies that this platform does not install get pruned from the lock.
- * That produced a 2.2.1 lock missing `@emnapi/core` and `@emnapi/runtime`, which are
- * reachable only through the wasm-only `@napi-rs/wasm-runtime` and
- * `@rolldown/binding-wasm32-wasi` packages. `npm ci` then failed on Linux and Windows
- * while macOS still passed, because macOS resolves a different optional set.
+ * `npm install` resolves against this host's node_modules, so optional dependencies it
+ * did not install get pruned from the lock. `--package-lock-only` re-resolves from the
+ * registry instead, recording every optional variant regardless of release host.
  *
- * `--package-lock-only` re-resolves from the registry instead of from node_modules, so
- * the lock describes every optional variant regardless of the release host.
+ * The 2.2.1 lock lost `@emnapi/core` and `@emnapi/runtime` that way, which broke
+ * `npm ci` on Linux and Windows while macOS still passed.
  */
 function normalizeLockfile() {
   run("npm", ["install", "--package-lock-only", "--ignore-scripts"]);
