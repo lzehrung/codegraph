@@ -90,6 +90,17 @@ describe("release script helpers", () => {
     expect(
       releaseScript.indexOf('run("node", ["./scripts/build-native-if-available.mjs", "--strict"])'),
     ).toBeGreaterThan(releaseScript.indexOf('run("npm", ["install"])'));
+
+    // A plain `npm install` prunes optional dependencies this host did not install; the
+    // 2.2.1 lock lost @emnapi/* that way and broke `npm ci` off macOS. `--package-lock-only`
+    // records every variant, and the dry-run gate fails the release instead of main.
+    expect(releaseScript).toContain('run("npm", ["install", "--package-lock-only", "--ignore-scripts"])');
+    expect(releaseScript).toContain('runOutput("npm", ["ci", "--ignore-scripts", "--dry-run"])');
+    const refreshBody = /function refreshDependencies\(\)\s*\{([\s\S]*?)\n\}/.exec(releaseScript);
+    expect(refreshBody, "refreshDependencies must exist").not.toBeNull();
+    expect(refreshBody![1]).toContain("normalizeLockfile()");
+    expect(refreshBody![1]).toContain("verifyLockfileInstallable()");
+    expect(releaseScript).toMatch(/verifyLockfileInstallable[\s\S]*?throw new Error\(/);
     expect(releaseScript).toContain('run("node", ["./scripts/stage-native-package.mjs", "--if-missing"])');
     expect(releaseScript).toContain("assertCompleteNativeTargetArtifacts(nativeRootPath");
     expect(releaseScript).toContain("if (!rootVersion && nativeVersion)");

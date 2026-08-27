@@ -119,6 +119,39 @@ function runOutput(command, args, options = {}) {
 
 function refreshDependencies() {
   run("npm", ["install"]);
+  normalizeLockfile();
+  verifyLockfileInstallable();
+}
+
+/**
+ * `npm install` resolves against this host's node_modules, so optional dependencies it
+ * did not install get pruned from the lock. `--package-lock-only` re-resolves from the
+ * registry instead, recording every optional variant regardless of release host.
+ *
+ * The 2.2.1 lock lost `@emnapi/core` and `@emnapi/runtime` that way, which broke
+ * `npm ci` on Linux and Windows while macOS still passed.
+ */
+function normalizeLockfile() {
+  run("npm", ["install", "--package-lock-only", "--ignore-scripts"]);
+}
+
+/**
+ * A release must never publish a lock that `npm ci` rejects. This is the gate that
+ * turns a post-release main breakage into a pre-release failure.
+ */
+function verifyLockfileInstallable() {
+  const result = runOutput("npm", ["ci", "--ignore-scripts", "--dry-run"]);
+  if (result.status === 0) {
+    return;
+  }
+  // npm can exit non-zero without writing anything, for example on a spawn failure,
+  // so always report the command and exit status rather than an empty line.
+  const npmOutput = (result.stderr || result.stdout).trim();
+  console.error(npmOutput || `npm ci --ignore-scripts --dry-run exited ${result.status} without output.`);
+  throw new Error(
+    "package-lock.json is not installable with `npm ci` after the version bump. " +
+      "Run `npm install --package-lock-only --ignore-scripts` and commit the result before releasing.",
+  );
 }
 
 function gitOutput(args) {
