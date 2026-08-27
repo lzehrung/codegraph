@@ -15,10 +15,16 @@ import {
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { fileIdentityKey, toProjectDisplayPath } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
-import { parseCacheModeOption, parseNonNegativeIntegerOption, parsePositiveIntegerOption } from "./options.js";
+import {
+  getCliCommandUsage,
+  parseCacheModeOption,
+  parseNonNegativeIntegerOption,
+  parsePositiveIntegerOption,
+} from "./options.js";
 import { parseCliSourceLocation } from "./location.js";
 import { resolveCliProjectFile, writeCliProjectFileError } from "./projectFile.js";
 import { writeCliOutput } from "./pretty.js";
+import { exitWithError } from "./context.js";
 
 export type NavigationCommandContext = {
   projectRootFs: string;
@@ -191,7 +197,7 @@ function formatGotoOutput(projectRootFs: string, output: GotoCliOutput): string 
 export async function handleDumpmodCommand(context: NavigationCommandContext): Promise<void> {
   const [fileArg] = context.positionals;
   if (!fileArg) {
-    context.writeStderrLine("Usage: dumpmod <file>");
+    context.writeStderrLine(getCliCommandUsage("dumpmod"));
     context.exit(2);
   }
   const resolvedFile = resolveCliProjectFile(context.projectRootFs, fileArg, "File");
@@ -351,9 +357,14 @@ function writePrettyReferences(context: NavigationCommandContext, result: FindRe
 }
 
 export async function handleGotoCommand(context: NavigationCommandContext): Promise<void> {
-  const input = parseNavigationInput(context, false);
+  let input: ResolvedNavigationInput | null;
+  try {
+    input = parseNavigationInput(context, false);
+  } catch (error: unknown) {
+    exitWithError(context, error, 2);
+  }
   if (!input) {
-    context.writeStderrLine("Usage: goto <file>[:line[:column]] [line] [column]");
+    context.writeStderrLine(getCliCommandUsage("goto"));
     context.exit(2);
   }
   const resolvedFile = resolveCliProjectFile(context.projectRootFs, input.file, "File");
@@ -405,11 +416,14 @@ export async function handleGotoCommand(context: NavigationCommandContext): Prom
 }
 
 export async function handleRefsCommand(context: NavigationCommandContext): Promise<void> {
-  const input = parseNavigationInput(context, true);
+  let input: ResolvedNavigationInput | null;
+  try {
+    input = parseNavigationInput(context, true);
+  } catch (error: unknown) {
+    exitWithError(context, error, 2);
+  }
   if (!input) {
-    context.writeStderrLine(
-      "Usage: refs <file>[:line[:column]] [line] [column] OR refs --file <file> [--line <line> --col <column>]",
-    );
+    context.writeStderrLine(getCliCommandUsage("refs"));
     context.exit(2);
   }
   const pretty = !context.hasFlag("--json");

@@ -2,7 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { captureCli, runCliOrThrow } from "./helpers/cli.js";
+import { captureCli, runCliOrThrow, stripCliProgressLines } from "./helpers/cli.js";
 import { mkTmpDir, normalizeTestPath } from "./helpers/filesystem.js";
 import { runGit } from "./helpers/git.js";
 
@@ -52,7 +52,7 @@ async function runAffectedJson(
     cwd,
     stdin,
   });
-  expect(result.stderr).toBe("");
+  expect(stripCliProgressLines(result.stderr)).toBe("");
   return JSON.parse(result.stdout) as AffectedJsonReport;
 }
 
@@ -60,7 +60,7 @@ async function runAffectedQuiet(root: string, args: readonly string[]): Promise<
   const result = await runCliOrThrow(["affected", "--root", root, "--cache", "memory", "--quiet", ...args], {
     cwd: root,
   });
-  expect(result.stderr).toBe("");
+  expect(stripCliProgressLines(result.stderr)).toBe("");
   return result.stdout.trimEnd().split("\n").filter(Boolean);
 }
 

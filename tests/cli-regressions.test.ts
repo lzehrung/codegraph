@@ -291,14 +291,30 @@ describe("CLI regressions", () => {
     }
   });
 
-  it("graph --stable produces sorted deterministic JSON", async () => {
-    const args = ["graph", "--json", "--stable", tsRoot];
-    const out1 = await runCliCommand(args);
-    const out2 = await runCliCommand(args);
-    expect(out1).toBe(out2);
+  it("produces deterministic graph output by default", async () => {
+    const jsonArgs = ["graph", "--json", tsRoot];
+    const jsonOutputs = await Promise.all([runCliCommand(jsonArgs), runCliCommand(jsonArgs), runCliCommand(jsonArgs)]);
+    expect(new Set(jsonOutputs).size).toBe(1);
 
-    const graph = JSON.parse(out1) as { files: string[] };
+    const graph = JSON.parse(jsonOutputs[0]) as { files: string[] };
     expect(isSorted(graph.files.map(normalize))).toBe(true);
+
+    for (const args of [
+      ["graph", "--mermaid", tsRoot],
+      ["graph", "--dot", tsRoot],
+    ]) {
+      const [first, second] = await Promise.all([runCliCommand(args), runCliCommand(args)]);
+      expect(first).toBe(second);
+    }
+  });
+
+  it("rejects unsupported explicit chunk language overrides", async () => {
+    const result = await runCliWithExit(["chunk", "README.md", "--language", "not-a-language"], process.cwd());
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain('Unsupported --language value "not-a-language".');
+    expect(result.stderr).toContain("Supported languages:");
   });
 
   it("chunk detects Zig files by extension", async () => {
@@ -743,6 +759,7 @@ describe("CLI regressions", () => {
       process.cwd(),
     );
     expect(pathResultCapture.exitCode).toBe(1);
+
     const pathResult = JSON.parse(pathResultCapture.stdout) as {
       status: string;
       reason?: string;
@@ -750,6 +767,27 @@ describe("CLI regressions", () => {
     };
     expect(pathResult.status).toBe("error");
     expect(pathResult.reason).toBe("outside_project_root");
+  });
+  it("uses exit 2 for parse failures and exit 1 for valid unmatched targets", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-exit-codes-"));
+    await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
+
+    try {
+      const malformedOption = await runCliWithExit(
+        ["supertypes", "value", "--depth", "not-a-number", "--root", root, "--json"],
+        root,
+      );
+      const badPath = await runCliWithExit(["deps", "missing.ts", "--root", root, "--json"], root);
+      const unresolvedSymbol = await runCliWithExit(["goto", "main.ts::missing", "--root", root, "--json"], root);
+      const missingExplainTarget = await runCliWithExit(["explain", "missing.ts", "--root", root, "--json"], root);
+
+      expect(malformedOption.exitCode).toBe(2);
+      expect(badPath.exitCode).toBe(1);
+      expect(unresolvedSymbol.exitCode).toBe(1);
+      expect(missingExplainTarget.exitCode).toBe(1);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("exits non-zero for missing deps files instead of empty arrays", async () => {
@@ -1646,7 +1684,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
   it("grep rejects ambiguous usage (both --query and --pattern)", async () => {
     await expect(
       runCliCommand(["grep", "--json", "--root", tsRoot, "--query", "(identifier) @id", "--pattern", "foo"]),
-    ).rejects.toThrow(/Usage: grep/i);
+    ).rejects.toThrow(/Usage: codegraph grep/i);
   });
 
   it("search returns ranked agent-ready results", async () => {

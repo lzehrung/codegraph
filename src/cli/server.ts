@@ -6,7 +6,7 @@ import { withInstallerLeaseLock } from "../installer/locks.js";
 import { isPlainRecord } from "../util/guards.js";
 import { isFilePathWithinRoot, normalizePath } from "../util/paths.js";
 import { exitWithError, type CliOptionContext, type CliPositionalsContext, type CliRootContext } from "./context.js";
-import { parseOptionalBoundedIntegerOption } from "./options.js";
+import { getCliCommandUsage, parseOptionalBoundedIntegerOption } from "./options.js";
 import { writeCliOutput } from "./pretty.js";
 
 type ServerCommand = "start" | "status" | "stop";
@@ -51,6 +51,7 @@ const SERVER_COMMAND_FLAGS: Record<ServerCommand, readonly string[]> = {
     "--warmup-symbols",
     "--workers",
     "--json",
+    "--pretty",
   ],
   status: ["--json", "--pretty"],
   stop: [],
@@ -152,7 +153,7 @@ export type ServerCommandContext = CliPositionalsContext &
 export async function handleServerCommand(context: ServerCommandContext): Promise<void> {
   const command = context.positionals[0];
   if (!isServerCommand(command)) {
-    context.writeStderrLine("Usage: codegraph server <start|status|stop> [--root <path>]");
+    context.writeStderrLine(getCliCommandUsage("server"));
     context.exit(2);
   }
 

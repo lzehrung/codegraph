@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAgentSession } from "../src/agent/session.js";
 import { workspaceSymbolsWithSession } from "../src/agent/workspaceSymbols.js";
 import { isPlainRecord } from "../src/util/guards.js";
-import { captureCli } from "./helpers/cli.js";
+import { captureCli, stripCliProgressLines } from "./helpers/cli.js";
 
 let root = "";
 let handle = "";
@@ -55,7 +55,8 @@ describe("refactor plan CLI", () => {
     ]);
     const parsed: unknown = JSON.parse(result.stdout);
 
-    expect(result).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(result.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(result.stderr)).toBe("");
     expect(parsed).toMatchObject({
       target: { name: "service", handle, location: { file: "service.ts" } },
       references: [],
@@ -96,7 +97,8 @@ describe("refactor plan CLI", () => {
       "0",
     ]);
 
-    expect(result).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(result.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(result.stderr)).toBe("");
     expect(result.stdout).toContain("Target: service [function] service.ts:2:17");
     expect(result.stdout).toContain("Counts: references 0, callers 1, callees 1");
     expect(result.stdout).toContain("Rename safe: yes");

@@ -18,11 +18,11 @@ Use plain text search for exact strings, logs, config keys, secrets, and prose. 
 
 ## Choose the First Command
 
-Bare `codegraph` prints five task-first routes without scanning the project. Use `codegraph --help` for the full command catalog and `codegraph help <command>` for command help; unknown commands suggest but never execute alternatives.
+Bare `codegraph` prints five task-first routes without scanning the project. Use `codegraph --help` for Core commands, `codegraph help advanced` for the complete catalog, and `codegraph help <command>` for command help; unknown commands suggest but never execute alternatives.
 
 Exit `0` means completion without a failure condition. Exit `1` can mean findings, no matching target, or a runtime failure. Inspect its output before continuing; findings and no matching targets are actionable, while runtime or analysis failures need error handling.
 
-Exit `2` means invalid usage or input. `links` uses `1` for broken local links; do not treat it as an invocation error.
+Exit `2` means invalid usage or input, including malformed options and unsupported explicit `chunk --language` values. `links` uses `1` for broken local links; do not treat it as an invocation error.
 
 | Task                                                      | Start here                                               |
 | --------------------------------------------------------- | -------------------------------------------------------- |
@@ -45,7 +45,7 @@ Use `--root` to define the boundary for config lookup, path confinement, and out
 - `languages.extensions` maps literal suffixes such as `.tpl` to supported language IDs; longest suffix wins, while `.vue` and `.svelte` cannot be remapped.
 - CLI `--include-glob` and `--ignore-glob` values are one-off filters relative to each active scan root.
 - Use `--no-gitignore` only when ignored files are intentionally in scope.
-- Commands that load the project index first report cache validation as `Checking project index`, then report build or update progress only when index work is required. Warm cache hits complete as `Checked project index` without claiming a rebuild. Use `--progress` for redirected logs or `--no-progress` to suppress feedback, and JSON stdout remains unchanged.
+- Index-backed commands stay quiet for their first second, then write progress and a heartbeat to stderr. Use `--progress` for immediate logs or `--no-progress` to suppress feedback; JSON stdout remains unchanged.
 
 ## Choose the Smallest Follow-up
 
@@ -86,10 +86,16 @@ The independent `--max-references`, `--max-callers`, and `--max-hierarchy` bound
 - shortest path: `codegraph path <from> <to>`
 - definition at a source location: `codegraph goto <file>:<line>:<column>`
 - references at a source location: `codegraph refs <file>:<line>:<column>`
-- definition or references without coordinates: `codegraph goto|refs <file>::<symbol>`
+- coordinate-free definition or references: `codegraph goto <file>::<symbol>` returns one definition; `codegraph refs <file>::<symbol>` resolves one definition then reports its references (both accept `symbol:...`)
 - references for every definition in a file: `codegraph refs <file>`
 
-Use line and column coordinates when known; this is the primary navigation form. Use an exact project-relative `file::symbol` path when coordinates are unavailable; it cannot be combined with line or column input. `deps` and `rdeps` accept either form or a portable `symbol:` handle and resolve it to its defining file, while `callers` and `callees` expose symbol-level calls. Duplicate local names return declaration candidates; run `codegraph symbols` to get a portable handle.
+Use line and column coordinates when known; this is the primary navigation form. Use an exact project-relative `file::symbol` path or portable `symbol:` handle when coordinates are unavailable; neither can be combined with line or column input.
+
+- `deps` and `rdeps` accept either form or a portable `symbol:` handle, resolved to its defining file.
+- `deps` and `rdeps` show depth 1 by default; use `--depth <n>` for another finite output depth or `--all` for every depth.
+- `deps` and `rdeps` return `{ items, truncated }` with `--json`.
+- `callers` and `callees` expose symbol-level calls, returning symbols and callsites separately, both bounded and with truncation metadata.
+
 Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `artifact`, `packet`, and `mcp` infer `build`, `get`, and `serve`. `artifact --sqlite` is equivalent to `artifact build --sqlite`; `grep <regex>` and `sql <db> "SELECT ..."` accept positional forms. Explicit options remain valid. `grep --json` returns an envelope `{ items, limit, totalSeen, truncated, omitted }`, not a bare hit array: `limit` is the effective `--max-hits` cap for text greps (default 5000, capped at 200000) and `null` for uncapped `--query` AST greps. Check `truncated` before treating text results as complete, and raise `--max-hits` when it is true - `truncated` stays exact through that ceiling. `graph` output selectors are mutually exclusive.
 
 - compact review handoff: `codegraph review`
@@ -103,7 +109,7 @@ Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `ar
 - full duplicate groups: `codegraph duplicates --root . ./src --json`
 - local Markdown link check: `codegraph links --json`
 - exported API summary: `codegraph apisurface --root . --json`
-- embedding-ready file chunks: `codegraph chunk src/auth.ts --json`
+- embedding-ready file chunks: `codegraph chunk src/auth.ts --json` (explicit `--language` must be supported; unknown extensions use text)
 - one indexed module: `codegraph dumpmod src/auth.ts --json`
 - prewarm or repair disk state: `codegraph index --root .`
 - inspect complex files: `codegraph hotspots --root . --limit 20`

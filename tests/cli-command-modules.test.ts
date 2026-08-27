@@ -12,6 +12,7 @@ import { handleGraphCommand, type GraphCommandContext } from "../src/cli/graph.j
 import { handleGraphDeltaCommand } from "../src/cli/graphDelta.js";
 import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/cli/graphQueries.js";
 import {
+  ADVANCED_HELP_TEXT,
   CLI_HELP_TEXT,
   FILE_HELP_TEXT,
   MCP_SERVE_HELP_TEXT,
@@ -36,7 +37,7 @@ import { handleSearchCommand } from "../src/cli/search.js";
 import { handleSkillCommand, type SkillCommandContext } from "../src/cli/skill.js";
 import { handleSqlCommand } from "../src/cli/sql.js";
 import { runCli } from "../src/cli.js";
-import { captureCli } from "./helpers/cli.js";
+import { captureCli, stripCliProgressLines } from "./helpers/cli.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import { diffBuildOptions, summarizeBuildOptions } from "../src/indexer/build-cache.js";
 import type { ProjectIndex } from "../src/indexer.js";
@@ -339,22 +340,18 @@ describe("CLI command modules", () => {
     expect(buildOptions).toContain("--progress");
   });
 
-  test("lists MCP as a top-level command in CLI help", () => {
-    const commands = CLI_HELP_TEXT.slice(CLI_HELP_TEXT.indexOf("Commands:"), CLI_HELP_TEXT.indexOf("Graph Options:"));
-
-    expect(commands).toContain("  mcp");
-    expect(commands).toContain("Serve MCP tools for agent graph navigation");
+  test("lists MCP in advanced CLI help", () => {
+    expect(ADVANCED_HELP_TEXT).toContain("  mcp");
+    expect(ADVANCED_HELP_TEXT).toContain("Serve MCP tools for agent graph navigation");
   });
 
   test("documents --pretty for both SQL command forms", () => {
     expect(SQL_HELP_TEXT).toContain('codegraph sql --db <sqlite-path> --query "SELECT ..." [--json | --pretty]');
   });
 
-  test("lists all public top-level commands in CLI help", () => {
-    const commands = CLI_HELP_TEXT.slice(CLI_HELP_TEXT.indexOf("Commands:"), CLI_HELP_TEXT.indexOf("Graph Options:"));
-
+  test("lists all public top-level commands in advanced CLI help", () => {
     for (const command of ["apisurface", "graph-delta", "grep", "index", "path", "sql", "unresolved"]) {
-      expect(commands).toContain(`  ${command}`);
+      expect(ADVANCED_HELP_TEXT).toContain(`  ${command}`);
     }
   });
 
@@ -487,7 +484,25 @@ describe("CLI command modules", () => {
       ),
     ).rejects.toThrow("navigation exit 2");
 
-    expect(stderr).toEqual(["Usage: goto <file>[:line[:column]] [line] [column]"]);
+    expect(stderr).toEqual([
+      "Usage: codegraph goto <file|file::symbol|symbol:...> [--root <path>] [--json | --pretty]\n       codegraph goto <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]",
+    ]);
+  });
+  test("refs command documents every accepted target form when target is missing", async () => {
+    const stderr: string[] = [];
+
+    await expect(
+      handleRefsCommand(
+        createNavigationContext({
+          positionals: [],
+          writeStderrLine: (message) => stderr.push(message),
+        }),
+      ),
+    ).rejects.toThrow("navigation exit 2");
+
+    expect(stderr).toEqual([
+      "Usage: codegraph refs <file|file::symbol|symbol:...> [--root <path>] [--json | --pretty]\n       codegraph refs <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]\n       codegraph refs --file <file> [--line <line> --col <column>] [--root <path>] [--json | --pretty]",
+    ]);
   });
   test("goto pretty output renders a concise definition summary", async () => {
     const root = await mkTmpDir("codegraph-goto-pretty-");
@@ -1793,7 +1808,7 @@ describe("CLI command modules", () => {
     ).rejects.toThrow("sql exit 2");
 
     expect(stderrLines).toEqual([
-      'Usage: sql <sqlite-path> "SELECT ..." OR sql --db <sqlite-path> --query "SELECT ..."',
+      'Usage: codegraph sql <sqlite-path> "SELECT ..." [--json | --pretty] OR codegraph sql --db <sqlite-path> --query "SELECT ..." [--json | --pretty]',
     ]);
   });
 
@@ -2199,8 +2214,50 @@ describe("CLI command modules", () => {
       ),
     ).rejects.toThrow("chunk exit 2");
 
-    expect(stderrLines).toContain("Usage: chunk <file-path> [options]");
+    expect(stderrLines).toContain(
+      "Usage: codegraph chunk <file-path> [--language <language>] [--min-tokens <n>] [--max-tokens <n>] [--text] [--json | --pretty]",
+    );
     expect(stderrLines).toContain("  --text            Force text chunking mode");
+  });
+
+  test("accepts every chunk language advertised in its usage output", async () => {
+    const stderrLines: string[] = [];
+    await expect(
+      handleChunkCommand(
+        createChunkContext({
+          writeStderrLine: (message) => stderrLines.push(message),
+        }),
+      ),
+    ).rejects.toThrow("chunk exit 2");
+
+    const languageHelp = stderrLines.find((line) => line.startsWith("  --language LANG"));
+    const languages = languageHelp?.match(/\((.+)\)$/)?.[1].split(", ") ?? [];
+    expect(languages.length).toBeGreaterThan(0);
+
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-chunk-languages-"));
+    const filePath = path.join(tempDir, "sample.txt");
+    await fsp.writeFile(filePath, "export const value = 1;\n", "utf8");
+
+    try {
+      for (const language of languages) {
+        await expect(
+          handleChunkCommand(
+            createChunkContext({
+              positionals: [filePath],
+              getOpt: (name) => {
+                if (name === "--language") return language;
+                if (name === "--min-tokens") return "1";
+                if (name === "--max-tokens") return "50";
+                return undefined;
+              },
+              writeJSONLine: () => {},
+            }),
+          ),
+        ).resolves.toBeUndefined();
+      }
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   test("rejects invalid chunk token bounds", async () => {
@@ -2424,7 +2481,8 @@ describe("CLI command modules", () => {
       const report = readJsonRecord(JSON.parse(await fsp.readFile(reportPath, "utf8")));
       const timings = readJsonRecord(report.timings);
 
-      expect(result).toMatchObject({ stderr: "", exitCode: undefined });
+      expect(result.exitCode).toBeUndefined();
+      expect(stripCliProgressLines(result.stderr)).toBe("");
       expect(response.results).toBeTypeOf("object");
       expect(report.command).toBe("search");
       expect(timings.commandMs).toBeTypeOf("number");
@@ -2528,7 +2586,7 @@ describe("CLI command modules", () => {
       expect(warmDeps.stderr).toContain("Checked project index");
       expect(warmDeps.stderr).not.toContain("Building project index");
       expect(warmDeps.stderr).not.toContain("files processed");
-      expect(rdeps.stdout).toContain("Reverse dependencies for util.ts:");
+      expect(rdeps.stdout).toContain("Reverse dependencies for util.ts (depth 1; 0 omitted):");
       expect(graphPath.stdout).toContain("main.ts");
       expect(graphPath.stdout).toContain("util.ts");
       expect(cycles.stdout).toContain("No dependency cycles found.");
@@ -2646,9 +2704,172 @@ describe("CLI command modules", () => {
       },
     });
 
-    expect(jsonLines).toEqual([[{ file: utilPath, depth: 1 }]]);
+    expect(jsonLines).toEqual([{ items: [{ file: utilPath, depth: 1 }], truncated: false }]);
     expect(stdoutLines).toEqual([]);
     expect(stderrLines).toEqual([]);
+  });
+
+  test("bounds JSON dependency output and signals deeper entries", async () => {
+    const projectRoot = path.join(os.tmpdir(), "codegraph-graph-query-json-depth").replace(/\\/g, "/");
+    const mainPath = `${projectRoot}/main.ts`;
+    const utilPath = `${projectRoot}/util.ts`;
+    const leafPath = `${projectRoot}/leaf.ts`;
+    const jsonLines: unknown[] = [];
+
+    await handleGraphQueryCommand({
+      command: "deps",
+      positionals: ["main.ts"],
+      projectRootFs: projectRoot,
+      projectRootAbs: projectRoot,
+      getOpt: () => undefined,
+      hasFlag: (name) => name === "--json",
+      writeJSONLine: (value) => jsonLines.push(value),
+      writeStdoutLine: () => {
+        throw new Error("unexpected text output");
+      },
+      writeStderrLine: (message) => {
+        throw new Error(`unexpected stderr: ${message}`);
+      },
+      exit: (code) => {
+        throw new Error(`unexpected exit ${code}`);
+      },
+      listProjectFilesForScan: async () => [mainPath, utilPath, leafPath],
+      collectGraph: async () => ({
+        nodes: new Set([mainPath, utilPath, leafPath]),
+        edges: [
+          { from: mainPath, to: { type: "file", path: utilPath }, raw: "./util" },
+          { from: utilPath, to: { type: "file", path: leafPath }, raw: "./leaf" },
+        ],
+      }),
+      loadCurrentIndex: async () => {
+        throw new Error("unexpected index build");
+      },
+    });
+
+    expect(jsonLines).toEqual([{ items: [{ file: utilPath, depth: 1 }], truncated: true }]);
+  });
+
+  test("emits complete JSON dependency envelopes for explicit depth, all depths, and empty results", async () => {
+    const projectRoot = path.join(os.tmpdir(), "codegraph-graph-query-json-envelope").replace(/\\/g, "/");
+    const mainPath = `${projectRoot}/main.ts`;
+    const utilPath = `${projectRoot}/util.ts`;
+    const leafPath = `${projectRoot}/leaf.ts`;
+    const graph = {
+      nodes: new Set([mainPath, utilPath, leafPath]),
+      edges: [
+        { from: mainPath, to: { type: "file" as const, path: utilPath }, raw: "./util" },
+        { from: utilPath, to: { type: "file" as const, path: leafPath }, raw: "./leaf" },
+      ],
+    };
+
+    const run = async (
+      command: "deps" | "rdeps",
+      target: string,
+      options: { all?: boolean; depth?: string } = {},
+    ): Promise<unknown> => {
+      const jsonLines: unknown[] = [];
+      await handleGraphQueryCommand({
+        command,
+        positionals: [target],
+        projectRootFs: projectRoot,
+        projectRootAbs: projectRoot,
+        getOpt: (name) => (name === "--depth" ? options.depth : undefined),
+        hasFlag: (name) => name === "--json" || (name === "--all" && Boolean(options.all)),
+        writeJSONLine: (value) => jsonLines.push(value),
+        writeStdoutLine: () => {
+          throw new Error("unexpected text output");
+        },
+        writeStderrLine: (message) => {
+          throw new Error(`unexpected stderr: ${message}`);
+        },
+        exit: (code) => {
+          throw new Error(`unexpected exit ${code}`);
+        },
+        listProjectFilesForScan: async () => [mainPath, utilPath, leafPath],
+        collectGraph: async () => graph,
+        loadCurrentIndex: async () => {
+          throw new Error("unexpected index build");
+        },
+      });
+      expect(jsonLines).toHaveLength(1);
+      return jsonLines[0];
+    };
+
+    const completeItems = [
+      { file: utilPath, depth: 1 },
+      { file: leafPath, depth: 2 },
+    ];
+    const completeReverseItems = [
+      { file: utilPath, depth: 1 },
+      { file: mainPath, depth: 2 },
+    ];
+    await expect(run("deps", "main.ts")).resolves.toEqual({
+      items: [{ file: utilPath, depth: 1 }],
+      truncated: true,
+    });
+    await expect(run("rdeps", "leaf.ts")).resolves.toEqual({
+      items: [{ file: utilPath, depth: 1 }],
+      truncated: true,
+    });
+
+    await expect(run("deps", "main.ts", { depth: "2" })).resolves.toEqual({
+      items: completeItems,
+      truncated: false,
+    });
+    await expect(run("deps", "main.ts", { all: true })).resolves.toEqual({
+      items: completeItems,
+      truncated: false,
+    });
+    await expect(run("rdeps", "leaf.ts", { depth: "2" })).resolves.toEqual({
+      items: completeReverseItems,
+      truncated: false,
+    });
+    await expect(run("rdeps", "leaf.ts", { all: true })).resolves.toEqual({
+      items: completeReverseItems,
+      truncated: false,
+    });
+    await expect(run("deps", "leaf.ts")).resolves.toEqual({ items: [], truncated: false });
+    await expect(run("rdeps", "main.ts")).resolves.toEqual({ items: [], truncated: false });
+  });
+
+  test("bounds text dependency output at depth 1 and reports omitted entries", async () => {
+    const projectRoot = path.join(os.tmpdir(), "codegraph-graph-query-depth-default").replace(/\\/g, "/");
+    const mainPath = `${projectRoot}/main.ts`;
+    const utilPath = `${projectRoot}/util.ts`;
+    const leafPath = `${projectRoot}/leaf.ts`;
+    const stdoutLines: string[] = [];
+
+    await handleGraphQueryCommand({
+      command: "deps",
+      positionals: ["main.ts"],
+      projectRootFs: projectRoot,
+      projectRootAbs: projectRoot,
+      getOpt: () => undefined,
+      hasFlag: () => false,
+      writeJSONLine: () => {
+        throw new Error("unexpected JSON output");
+      },
+      writeStdoutLine: (message) => stdoutLines.push(message),
+      writeStderrLine: (message) => {
+        throw new Error(`unexpected stderr: ${message}`);
+      },
+      exit: (code) => {
+        throw new Error(`unexpected exit ${code}`);
+      },
+      listProjectFilesForScan: async () => [mainPath, utilPath, leafPath],
+      collectGraph: async () => ({
+        nodes: new Set([mainPath, utilPath, leafPath]),
+        edges: [
+          { from: mainPath, to: { type: "file", path: utilPath }, raw: "./util" },
+          { from: utilPath, to: { type: "file", path: leafPath }, raw: "./leaf" },
+        ],
+      }),
+      loadCurrentIndex: async () => {
+        throw new Error("unexpected index build");
+      },
+    });
+
+    expect(stdoutLines).toEqual(["Dependencies for main.ts (depth 1; 1 omitted):", "   util.ts (depth 1)"]);
   });
 
   test("loads graph query commands through the project index when no graph collector is injected", async () => {
@@ -2736,7 +2957,8 @@ describe("CLI command modules", () => {
         },
       });
 
-      expect(jsonLines).toEqual([entry.expected]);
+      const expected = entry.command === "path" ? entry.expected : { items: entry.expected, truncated: false };
+      expect(jsonLines).toEqual([expected]);
     }
 
     expect(buildCount).toBe(cases.length);
@@ -2744,19 +2966,28 @@ describe("CLI command modules", () => {
     expect(edgeIterations).toBe(0);
   });
 
-  test("prints graph query usage for missing file arguments", async () => {
+  test.each([
+    [
+      "deps",
+      "Usage: codegraph deps <file|file::symbol|symbol:...> [--root <path>] [--depth <n> | --all] [--json | --pretty]",
+    ],
+    [
+      "rdeps",
+      "Usage: codegraph rdeps <file|file::symbol|symbol:...> [--root <path>] [--depth <n> | --all] [--json | --pretty]",
+    ],
+  ])("prints graph query usage for missing %s file arguments", async (command, usage) => {
     const stderrLines: string[] = [];
 
     await expect(
       handleGraphQueryCommand(
         createGraphQueryContext({
-          command: "deps",
+          command: command as "deps" | "rdeps",
           writeStderrLine: (message) => stderrLines.push(message),
         }),
       ),
     ).rejects.toThrow("graph query exit 2");
 
-    expect(stderrLines).toEqual(["Usage: deps <file|file::symbol|symbol:...> [--depth N] [--json]"]);
+    expect(stderrLines).toEqual([usage]);
   });
 
   test("rejects invalid graph query depth values before scanning the graph", async () => {

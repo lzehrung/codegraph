@@ -24,8 +24,10 @@ Start here:
 
 Usage: codegraph <command> [options] [path]
 
-Commands:
+Core commands:
 ${renderCliCommandList()}
+
+For the complete catalog, run: codegraph help advanced
 
 Graph Options:
   --fast-graph                Use text import extraction for plain .js and .ts
@@ -125,6 +127,11 @@ Examples:
   codegraph refactor-plan Service --rename RenamedService
   codegraph version
   codegraph -v
+`;
+export const ADVANCED_HELP_TEXT = `codegraph - Complete command catalog
+
+Commands:
+${renderCliCommandList(true)}
 `;
 
 export const LIFECYCLE_HELP_TEXT = `codegraph init/status/sync/uninit - Initialize, inspect, refresh, or remove project-local Codegraph state
@@ -229,21 +236,21 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const GOTO_HELP_TEXT = `codegraph goto - Go to a definition
 
-Usage: codegraph goto <file>::<symbol> [--root <path>] [--json | --pretty]
+Usage: codegraph goto <file|file::symbol|symbol:...> [--root <path>] [--json | --pretty]
        codegraph goto <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]
 
-A qualified symbol path resolves one definition without a location. A file-only target succeeds when the file defines one symbol; otherwise JSON returns bounded candidates. Search-result locations and portable symbol handles can be pasted directly.
+A qualified symbol path or portable symbol handle resolves one definition without a location. A file-only target succeeds when the file defines one symbol; otherwise JSON returns bounded candidates. Search-result locations and portable symbol handles can be pasted directly.
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const REFS_HELP_TEXT = `codegraph refs - Find semantic references
 
-Usage: codegraph refs <file>::<symbol> [--root <path>] [--json | --pretty]
+Usage: codegraph refs <file|file::symbol|symbol:...> [--root <path>] [--json | --pretty]
        codegraph refs <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]
        codegraph refs --file <file> [--line <line> --col <column>] [--root <path>] [--json | --pretty]
 
-A qualified symbol path finds references for one declaration without a location. A file-only target finds references for every symbol defined in that file. Search-result locations and portable symbol handles can be pasted directly.
+A qualified symbol path or portable symbol handle resolves one definition and reports references to it without a location. A file-only target finds references for every definition in the file.
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
@@ -625,7 +632,9 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const DEPS_HELP_TEXT = `codegraph deps - List file dependencies
 
-Usage: codegraph deps <file|file::symbol|symbol:...> [--root <path>] [--depth <n>] [--json | --pretty]
+Usage: codegraph deps <file|file::symbol|symbol:...> [--root <path>] [--depth <n> | --all] [--json | --pretty]
+
+By default, outputs dependencies through depth 1. Use --depth for another finite output depth, or --all to include every depth.
 
 A qualified symbol path or portable symbol handle uses its declaring file for file-graph traversal. Use callees for symbol-level call relationships.
 
@@ -634,7 +643,9 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const RDEPS_HELP_TEXT = `codegraph rdeps - List reverse file dependencies
 
-Usage: codegraph rdeps <file|file::symbol|symbol:...> [--root <path>] [--depth <n>] [--json | --pretty]
+Usage: codegraph rdeps <file|file::symbol|symbol:...> [--root <path>] [--depth <n> | --all] [--json | --pretty]
+
+By default, outputs reverse dependencies through depth 1. Use --depth for another finite output depth, or --all to include every depth.
 
 A qualified symbol path or portable symbol handle uses its declaring file for file-graph traversal. Use callers for symbol-level call relationships.
 

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { resolveFilePathFromRoot } from "../util/paths.js";
+import { getCliCommandUsage } from "./options.js";
 
 // A slash- or backslash-prefixed path is drive-relative on Windows. Node resolves it
 // against the current drive, but resolveFilePathFromRoot leaves it unchanged because
@@ -121,10 +122,7 @@ export function resolveCliRootPolicy(input: {
     if (!isLegacyImpactRoot) {
       return {
         status: "error",
-        messages: [
-          `Unexpected positional argument for impact: ${impactRootArg}`,
-          "Usage: codegraph impact [project-root] [--provider git|github|raw] [options]",
-        ],
+        messages: [`Unexpected positional argument for impact: ${impactRootArg}`, getCliCommandUsage("impact")],
       };
     }
   }

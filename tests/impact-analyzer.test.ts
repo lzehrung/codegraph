@@ -2510,7 +2510,7 @@ describe("path identity silent lookup regressions", () => {
         },
       });
 
-      expect(jsonLines).toEqual([[{ file: utilPath, depth: 1 }]]);
+      expect(jsonLines).toEqual([{ items: [{ file: utilPath, depth: 1 }], truncated: false }]);
     } finally {
       resetFileIdentityCaseSensitivityForTests(originalCaseSensitivity);
     }
