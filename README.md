@@ -251,7 +251,7 @@ Structured output carries the underlying changed files, symbols, graph edges, re
 
 ### Spend context on the problem, not repository discovery
 
-One bounded `explore` response can combine ranked anchors, relevant source, dependency paths, blast radius, candidate tests, and next commands. The agent gets an evidence-backed starting point without first dumping the tree or repeatedly guessing which files to open.
+One bounded CLI `explore` response can combine ranked anchors, relevant source, dependency paths, blast radius, candidate tests, and next commands. CLI `explore` includes source by default for a human reader, while MCP `explore` defaults `includeSource` to `false` so source-bearing packets do not dominate agent responses; its anchors and follow-ups identify the focused source request to make next. The agent gets an evidence-backed starting point without first dumping the tree or repeatedly guessing which files to open.
 
 ### Ground the next action
 

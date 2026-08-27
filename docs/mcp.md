@@ -73,7 +73,7 @@ Run `codegraph doctor` in the installed release to inspect `native.origin`, `nat
 
 The server exposes the same bounded primitives as the CLI and library session layer:
 
-- `explore`: recommended first tool for broad repo questions; returns bounded anchors, packets, paths, blast radius, candidate tests, and follow-ups.
+- `explore`: recommended first tool for broad repo questions; returns bounded anchors, paths, blast radius, candidate tests, and follow-ups. Set `includeSource: true` when source packets or an exact-path `fileView` are needed.
 - `orient`: compact first-turn repo context.
 - `packet_get`: bounded evidence packet by file path, symbol name, SQL object name, or stable target.
 - `search`: deterministic ranked search across paths, symbols, chunks, SQL objects, and graph context.
@@ -98,16 +98,18 @@ The server exposes the same bounded primitives as the CLI and library session la
 
 Compact contracts for high-traffic tools (`src/mcp/tools.ts`). Write gating: only `artifact_build` requires write access (`--allow-build`); all others are read-only.
 
-| Tool             | Required | Key enums / fields                                                                | Defaults                                                      | Maxima                                  | Write gate            |
-| ---------------- | -------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------- | --------------------------------------- | --------------------- |
-| `search`         | `query`  | `mode`: hybrid\|symbol\|path\|text\|graph\|sql; optional `from`, `depth`, `limit` | `depth` 1, `limit` 20                                         | `depth` 5, `limit` 100                  | no                    |
-| `explore`        | `query`  | optional `limit`, `maxPackets`, `maxPaths`, `includeSource`                       | `limit` 5, `maxPackets` 3, `maxPaths` 3, `includeSource` true | `limit` 50, packets/paths 10            | no                    |
-| `packet_get`     | `target` | optional `maxSymbols`, `maxSnippets`, `maxDuplicates`                             | (unset uses server defaults)                                  | symbols 200, snippets 50, duplicates 20 | no                    |
-| `query_sqlite`   | `query`  | optional `params[]`, `limit`                                                      | `limit` 100                                                   | `limit` 500                             | no                    |
-| `refresh_index`  | (none)   | optional `warmup`: off\|base\|symbols                                             | (omit = invalidate only)                                      | -                                       | no                    |
-| `artifact_build` | (none)   | optional `outDir`, `sqlite`, `graphJson`, `report`, `questions`, `force`          | -                                                             | -                                       | yes (`--allow-build`) |
+| Tool             | Required | Key enums / fields                                                                | Defaults                                                       | Maxima                                  | Write gate            |
+| ---------------- | -------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------- | --------------------- |
+| `search`         | `query`  | `mode`: hybrid\|symbol\|path\|text\|graph\|sql; optional `from`, `depth`, `limit` | `depth` 1, `limit` 20                                          | `depth` 5, `limit` 100                  | no                    |
+| `explore`        | `query`  | optional `limit`, `maxPackets`, `maxPaths`, `includeSource`                       | `limit` 5, `maxPackets` 3, `maxPaths` 3, `includeSource` false | `limit` 50, packets/paths 10            | no                    |
+| `packet_get`     | `target` | optional `maxSymbols`, `maxSnippets`, `maxDuplicates`                             | (unset uses server defaults)                                   | symbols 200, snippets 50, duplicates 20 | no                    |
+| `query_sqlite`   | `query`  | optional `params[]`, `limit`                                                      | `limit` 100                                                    | `limit` 500                             | no                    |
+| `refresh_index`  | (none)   | optional `warmup`: off\|base\|symbols                                             | (omit = invalidate only)                                       | -                                       | no                    |
+| `artifact_build` | (none)   | optional `outDir`, `sqlite`, `graphJson`, `report`, `questions`, `force`          | -                                                              | -                                       | yes (`--allow-build`) |
 
 `refs` / `file_deps` collection limits: default 25, maximum 500. Legacy alias tool names are accepted by `tools/call` but omitted from `tools/list`.
+
+For MCP `explore`, `includeSource` defaults to `false`: source-bearing packets dominate response size, while anchors and follow-ups identify the focused source request to make next. In this repository, the default MCP response fell from 140,966 bytes and 7,956 ms to 13,168 bytes and 1,537 ms, about 10.7x smaller and 5.2x faster. This differs intentionally from the CLI, where `codegraph explore` includes inline source by default because a human reads that output; pass `--no-source` to omit it, or pass `includeSource: true` to MCP when source is needed.
 
 ## Session lifecycle
 
@@ -223,7 +225,7 @@ Within the 16 MiB input limit, ordinary reads and structural summaries for recog
 
 ### Exact-path `explore`
 
-An MCP `explore` request whose entire query resolves to an indexed project-relative file path, or one uniquely matching basename, includes the same live response under `fileView`. Set `includeSource: false` to suppress it; use `get_file` when pagination, graph context, or an intentional raw sensitive read needs explicit controls.
+An MCP `explore` request whose entire query resolves to an indexed project-relative file path, or one uniquely matching basename, includes the same live response under `fileView` only when `includeSource: true`; the MCP default is `false`. Use `get_file` when pagination, graph context, or an intentional raw sensitive read needs explicit controls.
 
 ```json
 { "query": "src/auth.ts", "includeSource": true }

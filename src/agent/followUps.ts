@@ -14,6 +14,17 @@ export function toolFollowUp(tool: string, arguments_: Record<string, unknown> =
   };
 }
 
+export function dedupeAgentFollowUps(followUps: readonly AgentFollowUp[]): AgentFollowUp[] {
+  const seen = new Set<string>();
+  return followUps.filter((followUp) => {
+    const serializedArguments = JSON.stringify(followUp.arguments);
+    const key = `${followUp.tool.length}|${followUp.tool}${serializedArguments}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export function formatAgentFollowUpAsCli(followUp: AgentFollowUp): string {
   const args = followUp.arguments;
   switch (followUp.tool) {
