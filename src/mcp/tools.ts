@@ -278,7 +278,7 @@ export const MCP_TOOL_REGISTRY: McpToolDefinition[] = [
         limit: { type: "integer", minimum: 0, maximum: 50, default: 5 },
         maxPackets: { type: "integer", minimum: 0, maximum: 10, default: 3 },
         maxPaths: { type: "integer", minimum: 0, maximum: 10, default: 3 },
-        includeSource: { type: "boolean", default: true },
+        includeSource: { type: "boolean", default: false },
       },
       ["query"],
     ),

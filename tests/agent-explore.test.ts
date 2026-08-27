@@ -861,7 +861,7 @@ describe("agent explore", () => {
     expect(properties.limit).toEqual(expect.objectContaining({ type: "integer", minimum: 0 }));
     expect(properties.maxPackets).toEqual(expect.objectContaining({ type: "integer", minimum: 0 }));
     expect(properties.maxPaths).toEqual(expect.objectContaining({ type: "integer", minimum: 0 }));
-    expect(properties.includeSource).toEqual(expect.objectContaining({ type: "boolean" }));
+    expect(properties.includeSource).toEqual(expect.objectContaining({ type: "boolean", default: false }));
 
     const handlers = createCodegraphMcpHandlers({ root });
     const query = "validateUser";
@@ -871,8 +871,9 @@ describe("agent explore", () => {
     );
 
     expect(readArray(response.anchors, "anchors")).toHaveLength(1);
-    expect(readArray(response.packets, "packets")).toHaveLength(1);
+    expect(readArray(response.packets, "packets")).toEqual([]);
     expect(readArray(response.blastRadius, "blastRadius")).toHaveLength(1);
+    expect(readArray(response.followUps, "followUps")).toContainEqual({ tool: "explore", arguments: { query } });
     expect(response.freshness).toBeTypeOf("object");
     handlers.dispose();
     await expect(fs.rm(root, { recursive: true, force: true, maxRetries: 0 })).resolves.toBeUndefined();

@@ -780,7 +780,7 @@ function createCodegraphMcpHandlersForSession(
             ...(request.limit !== undefined ? { limit: request.limit } : {}),
             ...(request.maxPackets !== undefined ? { maxPackets: request.maxPackets } : {}),
             ...(request.maxPaths !== undefined ? { maxPaths: request.maxPaths } : {}),
-            ...(request.includeSource !== undefined ? { includeSource: request.includeSource } : {}),
+            includeSource: request.includeSource ?? false,
           }),
       ),
 
