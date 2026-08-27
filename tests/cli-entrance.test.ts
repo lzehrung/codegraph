@@ -21,6 +21,21 @@ describe("lightweight CLI entrance", () => {
     expect(result.stdout.trimEnd().split("\n").length).toBeLessThanOrEqual(15);
   });
 
+  it("groups core help and documents every command in advanced help", async () => {
+    const core = await captureCli(["help"]);
+    const advanced = await captureCli(["help", "advanced"]);
+
+    expect(core).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(core.stdout).toContain("Core commands:");
+    expect(core.stdout).toContain("codegraph help advanced");
+    expect(core.stdout).not.toContain("  implementations");
+    expect(advanced).toMatchObject({ stderr: "", exitCode: undefined });
+    for (const command of CLI_COMMAND_CATALOG) {
+      expect(advanced.stdout).toContain(`  ${command.name}`);
+      expect(CLI_DISPATCHABLE_COMMANDS).toContain(command.name);
+    }
+  });
+
   it("supports help as an alias without project discovery", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-help-alias-"));
     await fs.writeFile(path.join(root, "codegraph.config.json"), "{ invalid json", "utf8");
@@ -29,7 +44,7 @@ describe("lightweight CLI entrance", () => {
     const command = await captureCli(["help", "explore"], { cwd: root });
 
     expect(topLevel).toMatchObject({ stderr: "", exitCode: undefined });
-    expect(topLevel.stdout.indexOf("Start here:")).toBeLessThan(topLevel.stdout.indexOf("Commands:"));
+    expect(topLevel.stdout.indexOf("Start here:")).toBeLessThan(topLevel.stdout.indexOf("Core commands:"));
     expect(command).toMatchObject({ stderr: "", exitCode: undefined });
     expect(command.stdout).toContain('Usage: codegraph explore "<query>"');
   });

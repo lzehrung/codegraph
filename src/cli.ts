@@ -15,7 +15,13 @@ import {
   writeStdoutLine,
   type CliRuntime,
 } from "./cli/context.js";
-import { CLI_HELP_TEXT, CLI_TASK_HELP_TEXT, helpTextForCommand, isKnownCliCommand } from "./cli/help.js";
+import {
+  ADVANCED_HELP_TEXT,
+  CLI_HELP_TEXT,
+  CLI_TASK_HELP_TEXT,
+  helpTextForCommand,
+  isKnownCliCommand,
+} from "./cli/help.js";
 import { routeForCliIntent, suggestCliCommands } from "./cli/commandCatalog.js";
 import { createCliBaseContext, createCliOptionAccessors, loadCliProjectContext } from "./cli/invocationContext.js";
 import { validateCliArgs, type ParsedCliArgs } from "./cli/options.js";
@@ -108,6 +114,10 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     const command = rawArgs[1];
     if (!command) {
       writeStdoutLine(CLI_HELP_TEXT.trimEnd());
+      return;
+    }
+    if (command === "advanced") {
+      writeStdoutLine(ADVANCED_HELP_TEXT.trimEnd());
       return;
     }
     if (!isKnownCliCommand(command)) {

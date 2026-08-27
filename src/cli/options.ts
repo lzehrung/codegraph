@@ -104,7 +104,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
 ]);
 
 type CliPositionalPolicy =
-  | { kind: "any" }
+  | { kind: "any"; usage?: string }
   | { kind: "max"; max: number; usage: string }
   | { kind: "none"; usage: string };
 
@@ -199,6 +199,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       [...SHARED_BUILD_OPTIONS, "--base", "--depth", "--filter", "--head"],
       {
         kind: "any",
+        usage:
+          "Usage: codegraph affected <file...> [--stdin] [--base <ref> --head <ref>] [--root <path>] [--depth <n>] [--filter <glob>] [--json | --quiet]",
       },
     ),
   ],
@@ -227,7 +229,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...JSON_OUTPUT_FLAGS, "--text"], ["--language", "--max-tokens", "--min-tokens"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph chunk <file-path> [options]",
+      usage:
+        "Usage: codegraph chunk <file-path> [--language <language>] [--min-tokens <n>] [--max-tokens <n>] [--text] [--json | --pretty]",
     }),
   ],
   [
@@ -238,10 +241,11 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "deps",
-    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], [...SHARED_BUILD_OPTIONS, "--depth"], {
+    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--all"], [...SHARED_BUILD_OPTIONS, "--depth"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph deps <file> [--root <path>] [--depth <n>] [--json | --pretty]",
+      usage:
+        "Usage: codegraph deps <file|file::symbol|symbol:...> [--root <path>] [--depth <n> | --all] [--json | --pretty]",
     }),
   ],
   [
@@ -345,7 +349,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], SHARED_BUILD_OPTIONS, {
       kind: "max",
       max: 3,
-      usage: "Usage: codegraph goto <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]",
+      usage:
+        "Usage: codegraph goto <file|file::symbol|symbol:...> [--root <path>] [--json | --pretty]\n       codegraph goto <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]",
     }),
   ],
   ["graph", graphCommandSchema({ kind: "any" })],
@@ -376,7 +381,16 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       ["--ignore-case", "--json", "--pretty", "-i", "--no-gitignore"],
       ["--glob", "--ignore-glob", "--include-glob", "--max-hits", "--pattern", "--query", "--regex", "--root"],
       {
-        kind: "any",
+        kind: "max",
+        max: 1,
+        // `handleGrepCommand` takes the pattern from --pattern, then --regex, then the
+        // positional, and --query is a separate syntax-tree mode. Present all three forms
+        // so a parse failure does not imply the positional regex is mandatory.
+        usage: [
+          "Usage: codegraph grep <regex> [--root <dir>] [--glob|--include-glob|--ignore-glob <glob>] [--ignore-case|-i] [--no-gitignore] [--max-hits <n>] [--json | --pretty]",
+          "       codegraph grep --pattern|--regex <expr> [--root <dir>] [--glob|--include-glob|--ignore-glob <glob>] [--ignore-case|-i] [--no-gitignore] [--max-hits <n>] [--json | --pretty]",
+          "       codegraph grep --query <tree-sitter-query> [--root <dir>] [--json | --pretty]",
+        ].join("\n"),
       },
     ),
   ],
@@ -420,7 +434,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       {
         kind: "max",
         max: 1,
-        usage: "Usage: codegraph impact [project-root] [--provider git|github|raw] [options]",
+        usage:
+          "Usage: codegraph impact [project-root] [--provider git|github|raw] [--depth <n>] [options] [--json | --pretty]",
       },
     ),
   ],
@@ -517,7 +532,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       {
         kind: "max",
         max: 1,
-        usage: "Usage: codegraph server <start|status|stop> [--root <path>]",
+        usage: "Usage: codegraph server <start|status|stop> [--root <path>] [--json | --pretty]",
       },
     ),
   ],
@@ -549,10 +564,11 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "rdeps",
-    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], [...SHARED_BUILD_OPTIONS, "--depth"], {
+    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--all"], [...SHARED_BUILD_OPTIONS, "--depth"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph rdeps <file> [--root <path>] [--depth <n>] [--json | --pretty]",
+      usage:
+        "Usage: codegraph rdeps <file|file::symbol|symbol:...> [--root <path>] [--depth <n> | --all] [--json | --pretty]",
     }),
   ],
   [
@@ -563,7 +579,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       {
         kind: "max",
         max: 3,
-        usage: "Usage: codegraph refs <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]",
+        usage:
+          "Usage: codegraph refs <file|file::symbol|symbol:...> [--root <path>] [--json | --pretty]\n       codegraph refs <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]\n       codegraph refs --file <file> [--line <line> --col <column>] [--root <path>] [--json | --pretty]",
       },
     ),
   ],
@@ -717,7 +734,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       kind: "max",
       max: 2,
       usage:
-        'Usage: codegraph sql <sqlite-path> "SELECT ..." [--json | --pretty] OR codegraph sql --db <sqlite path> --query "SELECT ..." [--json | --pretty]',
+        'Usage: codegraph sql <sqlite-path> "SELECT ..." [--json | --pretty] OR codegraph sql --db <sqlite-path> --query "SELECT ..." [--json | --pretty]',
     }),
   ],
   [
@@ -766,6 +783,37 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     }),
   ],
 ]);
+
+export type CliCommandUsageSchema = {
+  command: string;
+  flags: readonly string[];
+  options: readonly string[];
+  usage: string;
+};
+
+export function getCliCommandUsageSchemas(): readonly CliCommandUsageSchema[] {
+  return [...CLI_COMMAND_SCHEMAS].flatMap(([command, schema]) => {
+    const usage = schema.positionals.usage;
+    return usage
+      ? [
+          {
+            command,
+            flags: schema.flags ?? [],
+            options: schema.options ?? [],
+            usage,
+          },
+        ]
+      : [];
+  });
+}
+
+export function getCliCommandUsage(command: string): string {
+  const usage = CLI_COMMAND_SCHEMAS.get(command)?.positionals.usage;
+  if (!usage) {
+    throw new Error(`No validation usage is defined for ${command}.`);
+  }
+  return usage;
+}
 
 function allowedFlagsForSchema(schema: CliCommandSchema): Set<string> {
   return new Set(["--help", "-h", "--version", "-v", "--debug", ...(schema.flags ?? [])]);

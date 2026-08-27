@@ -85,13 +85,18 @@ describe("viewer server", () => {
     expect(result.stderr).toContain("Invalid --port");
   });
 
-  test("appears in command-specific and global help", async () => {
-    const [commandHelp, globalHelp] = await Promise.all([captureCli(["viewer", "--help"]), captureCli(["--help"])]);
+  test("appears in command-specific and advanced help", async () => {
+    const [commandHelp, advancedHelp] = await Promise.all([
+      captureCli(["viewer", "--help"]),
+      captureCli(["help", "advanced"]),
+    ]);
 
     expect(commandHelp.stdout).toContain("codegraph viewer - Serve the bundled graph visualization viewer");
     expect(commandHelp.stdout).toContain("--print-url");
-    expect(globalHelp.stdout).toContain("viewer");
-    expect(globalHelp.stdout).toContain("Serve the bundled graph visualization viewer for people");
+    // `viewer` is a human-only UI, so the grouped top-level help routes it to the
+    // complete catalog under `codegraph help advanced` rather than the core list.
+    expect(advancedHelp.stdout).toContain("viewer");
+    expect(advancedHelp.stdout).toContain("Serve the bundled graph visualization viewer for people");
   });
 
   test("serves fixed assets and the selected graph, then closes cleanly", async () => {

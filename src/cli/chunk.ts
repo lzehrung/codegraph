@@ -16,7 +16,7 @@ import {
   type CliStderrExitContext,
   type CliStdoutWriterContext,
 } from "./context.js";
-import { parsePositiveIntegerOption } from "./options.js";
+import { getCliCommandUsage, parsePositiveIntegerOption } from "./options.js";
 import { writeCliOutput } from "./pretty.js";
 
 const chunkLanguageAliases: Record<string, string> = {
@@ -30,9 +30,8 @@ const chunkTextLanguageByExtension: Record<string, string> = {
   ".yml": "yaml",
 };
 
-const chunkLanguageHelp = Array.from(
-  new Set([...Object.keys(LANG_CONFIGS).sort(), "vue", "svelte", "json", "yaml", "text"]),
-).join(", ");
+const supportedChunkLanguageIds = new Set([...Object.keys(LANG_CONFIGS), "vue", "svelte", "json", "yaml", "text"]);
+const chunkLanguageHelp = [...supportedChunkLanguageIds].sort().join(", ");
 
 function normalizeChunkLanguageId(languageId: string): string {
   return chunkLanguageAliases[languageId] ?? languageId;
@@ -64,7 +63,7 @@ export type ChunkCommandContext = CliPositionalsContext &
 export async function handleChunkCommand(context: ChunkCommandContext): Promise<void> {
   const inputFilePath = context.positionals[0];
   if (!inputFilePath) {
-    context.writeStderrLine("Usage: chunk <file-path> [options]");
+    context.writeStderrLine(getCliCommandUsage("chunk"));
     context.writeStderrLine("Options:");
     context.writeStderrLine("  --min-tokens N    Minimum tokens per chunk (default: 150)");
     context.writeStderrLine("  --max-tokens N    Maximum tokens per chunk (default: 400)");
@@ -72,18 +71,29 @@ export async function handleChunkCommand(context: ChunkCommandContext): Promise<
     context.writeStderrLine("  --text            Force text chunking mode");
     context.exit(2);
   }
+  const languageOverride = context.getOpt("--language");
+  if (languageOverride) {
+    const languageId = normalizeChunkLanguageId(languageOverride);
+    const isSupported = supportedChunkLanguageIds.has(languageId);
+    if (!isSupported) {
+      context.writeStderrLine(
+        `Unsupported --language value "${languageId}". Supported languages: ${chunkLanguageHelp}.`,
+      );
+      context.exit(2);
+    }
+  }
 
   try {
     const filePath = path.resolve(context.cwd(), parseSourceLocationInput(inputFilePath).file);
     const source = await fsp.readFile(filePath, "utf8");
     const ext = path.extname(filePath).toLowerCase();
 
-    let languageId = context.getOpt("--language");
-    if (!languageId) {
+    let languageId: string;
+    if (!languageOverride) {
       const support = supportForFile(filePath);
       languageId = support ? normalizeChunkLanguageId(support.id) : chunkTextLanguageByExtension[ext] || "text";
     } else {
-      languageId = normalizeChunkLanguageId(languageId);
+      languageId = normalizeChunkLanguageId(languageOverride);
     }
 
     const forceText = context.hasFlag("--text");

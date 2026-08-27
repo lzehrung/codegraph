@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { captureCli } from "./helpers/cli.js";
+import { captureCli, stripCliProgressLines } from "./helpers/cli.js";
 import { isPlainRecord } from "../src/util/guards.js";
 
 let root = "";
@@ -29,7 +29,8 @@ describe("symbols CLI", () => {
     const result = await captureCli(["symbols", "Service", "--root", root, "--cache", "off", "--json"]);
     const parsed: unknown = JSON.parse(result.stdout);
 
-    expect(result).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(result.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(result.stderr)).toBe("");
     expect(isPlainRecord(parsed)).toBe(true);
     if (!isPlainRecord(parsed)) throw new Error("symbols JSON response was not an object");
     expect(parsed).toMatchObject({ schemaVersion: 1, query: "Service", limits: { symbols: 50 } });
@@ -46,7 +47,8 @@ describe("symbols CLI", () => {
   it("reuses the workspace formatter for concise pretty output", async () => {
     const result = await captureCli(["symbols", "Service", "--root", root, "--cache", "off", "--pretty"]);
 
-    expect(result).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(result.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(result.stderr)).toBe("");
     expect(result.stdout).toContain("Analysis: ");
     expect(result.stdout).toContain("Symbols: ");
     expect(result.stdout).toContain("Service [class] src/service.ts:1:");

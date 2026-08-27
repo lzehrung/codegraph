@@ -30,11 +30,10 @@ import {
 
 // Graph JSON output is always index-based: repeated file paths and symbol ids are
 // replaced with integer offsets into `files[]`/`symbolIdIndex[]` so large graphs don't
-// duplicate the same strings across every node/edge. Index assignment is always sorted
-// (independent of `stable`) because `fgraph.nodes`/`sgraph.nodes` insertion order can vary
-// run to run under concurrent extraction, which would otherwise change what an index means
-// even when the underlying graph is identical; `stable` only additionally sorts the
-// fileEdges/symbolEdges arrays for byte-identical output across runs.
+// duplicate the same strings across every node/edge. Index assignment and edge arrays
+// are always sorted because concurrent extraction completion order is unstable and must
+// not affect exported graph bytes. The legacy `--stable` option remains accepted as a
+// compatibility no-op.
 export type CompactEdgeTo = { type: "file"; path: number } | { type: "external"; name: string };
 export type CompactFileEdge = Omit<Edge, "from" | "to"> & { from: number; to: CompactEdgeTo };
 export type CompactSymbolEdge = Omit<SymbolEdge, "from" | "to"> & { from: number; to: number };
@@ -258,7 +257,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     ...(cacheDir ? { cacheDir } : {}),
     ...(context.cacheLocation ? { cacheLocation: context.cacheLocation } : {}),
   };
-  const stable = context.hasFlag("--stable");
+  const stable = true;
   let format: "mermaid" | "dot" | "json" = "mermaid";
   if (context.hasFlag("--json")) {
     format = "json";

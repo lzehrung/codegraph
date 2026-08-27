@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isPlainRecord } from "../src/util/guards.js";
-import { captureCli } from "./helpers/cli.js";
+import { captureCli, stripCliProgressLines } from "./helpers/cli.js";
 
 let root = "";
 
@@ -53,7 +53,8 @@ describe("call hierarchy CLI", () => {
     ]);
     const parsed: unknown = JSON.parse(result.stdout);
 
-    expect(result).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(result.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(result.stderr)).toBe("");
     expect(parsed).toMatchObject({
       schemaVersion: 1,
       direction: "incoming",
@@ -77,7 +78,8 @@ describe("call hierarchy CLI", () => {
   it("renders concise pretty transitive callees and recursive calls", async () => {
     const outer = await symbolHandle("outer");
     const callees = await captureCli(["callees", outer, "--root", root, "--cache", "off", "--depth", "2"]);
-    expect(callees).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(callees.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(callees.stderr)).toBe("");
     expect(callees.stdout).toContain("Target: outer [function] calls.ts:3:");
     expect(callees.stdout).toContain("Callees: 2");
     expect(callees.stdout).toContain("1. middle [function] calls.ts:2:");
@@ -138,7 +140,8 @@ describe("call hierarchy CLI", () => {
       "auto",
     ]);
     const parsed: unknown = JSON.parse(refs.stdout);
-    expect(refs).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(refs.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(refs.stderr)).toBe("");
     expect(parsed).toMatchObject({ status: "ok", references: expect.any(Array) });
     if (!isPlainRecord(parsed) || !Array.isArray(parsed.references)) throw new Error("refs response was invalid");
     expect(parsed.references).toHaveLength(3);

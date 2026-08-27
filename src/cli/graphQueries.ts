@@ -13,7 +13,7 @@ import {
 import { type GraphBuildOptions } from "../graphs/types.js";
 import type { Graph } from "../types.js";
 import { fileIdentityKey, toProjectDisplayPath } from "../util/paths.js";
-import { parseOptionalNonNegativeIntegerOption } from "./options.js";
+import { getCliCommandUsage, parseOptionalNonNegativeIntegerOption } from "./options.js";
 import { resolveCliProjectFile, writeCliProjectFileError } from "./projectFile.js";
 
 export type GraphQueryCommand = "deps" | "rdeps" | "path" | "cycles" | "unresolved" | "apisurface";
@@ -65,10 +65,15 @@ async function loadGraph(context: GraphQueryCommandContext): Promise<LoadedGraph
 async function handleDepsCommand(context: GraphQueryCommandContext): Promise<void> {
   const [fileArg] = context.positionals;
   if (!fileArg) {
-    context.writeStderrLine(`Usage: ${context.command} <file|file::symbol|symbol:...> [--depth N] [--json]`);
+    context.writeStderrLine(getCliCommandUsage(context.command));
     context.exit(2);
   }
   const depthRaw = context.getOpt("--depth");
+  const all = context.hasFlag("--all");
+  if (all && depthRaw !== undefined) {
+    context.writeStderrLine("--all cannot be combined with --depth.");
+    context.exit(2);
+  }
   let depth: number | undefined;
   try {
     depth = parseOptionalNonNegativeIntegerOption(depthRaw, "--depth");
@@ -148,23 +153,28 @@ async function handleDepsCommand(context: GraphQueryCommandContext): Promise<voi
     context.exit(1);
   }
   targetFile = matchedGraphNode;
-  const results =
+  const effectiveDepth = depth ?? 1;
+  const traversalOptions = {
+    ...(loaded.adjacency ? { adjacency: loaded.adjacency } : {}),
+    ...(json && !all ? { depth: effectiveDepth + 1 } : {}),
+  };
+  const allResults =
     context.command === "deps"
-      ? getDependencies(loaded.graph, targetFile, {
-          ...(depth !== undefined ? { depth } : {}),
-          ...(loaded.adjacency ? { adjacency: loaded.adjacency } : {}),
-        })
-      : getReverseDependencies(loaded.graph, targetFile, {
-          ...(depth !== undefined ? { depth } : {}),
-          ...(loaded.adjacency ? { adjacency: loaded.adjacency } : {}),
-        });
+      ? getDependencies(loaded.graph, targetFile, traversalOptions)
+      : getReverseDependencies(loaded.graph, targetFile, traversalOptions);
+  const results = all ? allResults : allResults.filter((result) => result.depth <= effectiveDepth);
+  const truncated = results.length !== allResults.length;
+  const omittedCount = allResults.length - results.length;
 
   if (json) {
-    context.writeJSONLine(results);
+    context.writeJSONLine({ items: results, truncated });
     return;
   }
 
-  context.writeStdoutLine(`${context.command === "deps" ? "Dependencies" : "Reverse dependencies"} for ${fileArg}:`);
+  const depthDescription = all ? "all depths" : `depth ${effectiveDepth}`;
+  context.writeStdoutLine(
+    `${context.command === "deps" ? "Dependencies" : "Reverse dependencies"} for ${fileArg} (${depthDescription}; ${omittedCount} omitted):`,
+  );
   for (const result of results) {
     const rel = toProjectDisplayPath(context.projectRootFs, result.file);
     context.writeStdoutLine(`${"  ".repeat(result.depth)} ${rel} (depth ${result.depth})`);
@@ -174,7 +184,7 @@ async function handleDepsCommand(context: GraphQueryCommandContext): Promise<voi
 async function handlePathCommand(context: GraphQueryCommandContext): Promise<void> {
   const [fromArg, toArg] = context.positionals;
   if (!fromArg || !toArg) {
-    context.writeStderrLine("Usage: path <from-file> <to-file> [--json]");
+    context.writeStderrLine(getCliCommandUsage("path"));
     context.exit(2);
   }
   const json = context.hasFlag("--json");

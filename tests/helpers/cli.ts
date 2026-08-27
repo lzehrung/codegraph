@@ -35,6 +35,10 @@ async function readCliStdin(stdin: CliCaptureOptions["stdin"]): Promise<string> 
   return stdin ?? "";
 }
 
+export function stripCliProgressLines(stderr: string): string {
+  return stderr.replace(/^\[Progress\].*(?:\r?\n|$)/gm, "");
+}
+
 export async function captureCli(args: string[], options: CliCaptureOptions = {}): Promise<CapturedCliResult> {
   let stdout = "";
   let stderr = "";
