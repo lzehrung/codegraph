@@ -119,6 +119,39 @@ function runOutput(command, args, options = {}) {
 
 function refreshDependencies() {
   run("npm", ["install"]);
+  normalizeLockfile();
+  verifyLockfileInstallable();
+}
+
+/**
+ * `npm install` resolves against the node_modules already present on this host, so
+ * optional dependencies that this platform does not install get pruned from the lock.
+ * That produced a 2.2.1 lock missing `@emnapi/core` and `@emnapi/runtime`, which are
+ * reachable only through the wasm-only `@napi-rs/wasm-runtime` and
+ * `@rolldown/binding-wasm32-wasi` packages. `npm ci` then failed on Linux and Windows
+ * while macOS still passed, because macOS resolves a different optional set.
+ *
+ * `--package-lock-only` re-resolves from the registry instead of from node_modules, so
+ * the lock describes every optional variant regardless of the release host.
+ */
+function normalizeLockfile() {
+  run("npm", ["install", "--package-lock-only", "--ignore-scripts"]);
+}
+
+/**
+ * A release must never publish a lock that `npm ci` rejects. This is the gate that
+ * turns a post-release main breakage into a pre-release failure.
+ */
+function verifyLockfileInstallable() {
+  const result = runOutput("npm", ["ci", "--ignore-scripts", "--dry-run"]);
+  if (result.status === 0) {
+    return;
+  }
+  console.error(result.stderr || result.stdout);
+  throw new Error(
+    "package-lock.json is not installable with `npm ci` after the version bump. " +
+      "Run `npm install --package-lock-only --ignore-scripts` and commit the result before releasing.",
+  );
 }
 
 function gitOutput(args) {
