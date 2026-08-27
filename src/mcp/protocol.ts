@@ -483,30 +483,40 @@ function toToolResult(value: unknown): CallToolResult {
 }
 
 function translateMcpFollowUps(value: unknown): unknown {
+  if (Array.isArray(value)) return translateFollowUpCollection(value);
   if (typeof value !== "object" || value === null) return value;
-  const anchors = "anchors" in value ? value.anchors : undefined;
-  const packets = "packets" in value ? value.packets : undefined;
-  const focus = "focus" in value ? value.focus : undefined;
-  const results = "results" in value ? value.results : undefined;
-  return {
-    ...translateFollowUps(value),
-    anchors: translateFollowUpCollection(anchors),
-    packets: translateFollowUpCollection(packets),
-    focus: translateFollowUpCollection(focus),
-    results: translateFollowUpCollection(results),
-  };
+
+  const source = value as Record<string, unknown>;
+  let translated: Record<string, unknown> | undefined;
+  for (const [key, nestedValue] of Object.entries(source)) {
+    const nestedTranslation = translateMcpFollowUps(nestedValue);
+    if (nestedTranslation === nestedValue) continue;
+    translated ??= { ...source };
+    translated[key] = nestedTranslation;
+  }
+  return translateFollowUps(translated ?? source);
 }
 
-function translateFollowUpCollection(value: unknown): unknown {
-  if (!Array.isArray(value)) return value;
-  return value.map((entry) => (typeof entry === "object" && entry !== null ? translateFollowUps(entry) : entry));
+function translateFollowUpCollection(value: readonly unknown[]): unknown[] | readonly unknown[] {
+  let translated: unknown[] | undefined;
+  for (const [index, entry] of value.entries()) {
+    const entryTranslation = translateMcpFollowUps(entry);
+    if (entryTranslation === entry) {
+      if (translated !== undefined) translated.push(entry);
+      continue;
+    }
+    translated ??= [...value.slice(0, index)];
+    translated.push(entryTranslation);
+  }
+  return translated ?? value;
 }
 
-function translateFollowUps(value: object): object {
-  if (!("followUps" in value)) return value;
+function translateFollowUps(value: Record<string, unknown>): Record<string, unknown> {
   const followUps = value.followUps;
   if (!Array.isArray(followUps) || !followUps.every(isAgentFollowUp)) return value;
-  return { ...value, followUps: followUps.map(translateMcpFollowUp) };
+  const translatedFollowUps = followUps.map(translateMcpFollowUp);
+  if (translatedFollowUps.every((followUp, index) => followUp === followUps[index])) return value;
+  return { ...value, followUps: translatedFollowUps };
 }
 
 function isAgentFollowUp(value: unknown): value is AgentFollowUp {

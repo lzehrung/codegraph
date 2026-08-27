@@ -69,6 +69,13 @@ describe("agent orient", () => {
     expect(dedupeAgentFollowUps([first, repeated, second])).toEqual([first, second]);
   });
 
+  it("does not collide when a tool name and serialized arguments contain the dedupe separator", () => {
+    const first = { tool: "packet|get", arguments: { target: "src|core.ts" } };
+    const second = { tool: "packet", arguments: { target: "get|src|core.ts" } };
+
+    expect(dedupeAgentFollowUps([first, second])).toEqual([first, second]);
+  });
+
   it.skipIf(process.platform === "win32")("disambiguates handle-like file targets in follow-up commands", async () => {
     const root = await mkTmpDir("cg-agent-orient-handle-like-file-");
     await writeFile(root, "file:entry.ts", "export const value = 1;\n");

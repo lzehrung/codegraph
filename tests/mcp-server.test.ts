@@ -260,6 +260,7 @@ describe("codegraph MCP handlers", () => {
         ],
         anchors: [{ followUps: [{ tool: "chunk", arguments: { file: "anchor.ts" } }] }],
         packets: [{ followUps: [{ tool: "duplicates", arguments: { files: ["packet.ts"] } }] }],
+        packet: { followUps: [{ tool: "duplicates", arguments: { files: ["nested-packet.ts"] } }] },
         focus: [{ followUps: [{ tool: "chunk", arguments: { file: "focus.ts" } }] }],
         results: [
           {
@@ -275,6 +276,7 @@ describe("codegraph MCP handlers", () => {
         ],
         anchors: [{ followUps: [{ tool: "get_file", arguments: { file: "anchor.ts" } }] }],
         packets: [{ followUps: [{ tool: "packet_get", arguments: { target: "packet.ts" } }] }],
+        packet: { followUps: [{ tool: "packet_get", arguments: { target: "nested-packet.ts" } }] },
         focus: [{ followUps: [{ tool: "get_file", arguments: { file: "focus.ts" } }] }],
         results: [
           {
@@ -343,6 +345,7 @@ describe("codegraph MCP handlers", () => {
           transportResult.followUps,
           readObject((transportResult.anchors as unknown[])[0]).followUps,
           readObject((transportResult.packets as unknown[])[0]).followUps,
+          readObject(transportResult.packet).followUps,
           readObject((transportResult.focus as unknown[])[0]).followUps,
           readObject((transportResult.results as unknown[])[0]).followUps,
         ];
