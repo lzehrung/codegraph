@@ -1,5 +1,4 @@
 import { supportForFile, type LanguageSupport } from "../languages.js";
-import { isJsTsLanguage } from "../languages/js-family.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { fileIdentityKey } from "../util/paths.js";
@@ -29,13 +28,13 @@ type ExportFromIdentifier = {
   entry?: ReexportEntry;
 };
 
-function exportFromIdentifier(
+export function exportFromIdentifier(
   index: ProjectIndex,
   fileId: string,
   range: Range,
   parsed: ParsedFileContext,
 ): ExportFromIdentifier | null {
-  if (!isJsTsLanguage(parsed.sup.id)) return null;
+  if (!parsed.sup.supportsExportFromReferences) return null;
   const startIndex = range.start.index;
   if (typeof startIndex !== "number") return null;
   const moduleIndex = index.byFile.get(fileIdentityKey(fileId));
@@ -213,10 +212,12 @@ export async function collectVerifiedNamedNodeReferences(
     const exportFrom = exportFromIdentifier(index, fileId, range, parsed);
     if (exportFrom?.entry) {
       const reexported = resolveExport(index, exportFrom.entry.fromModule, exportFrom.entry.sourceSpecifier);
-      if (reexported?.kind === "resolved" && sameDef(reexported.def, expectedDef, index.languageExtensions)) {
-        verified.push({ range, via: { reexport: true } });
+      if (reexported?.kind === "resolved") {
+        if (sameDef(reexported.def, expectedDef, index.languageExtensions)) {
+          verified.push({ range, via: { reexport: true } });
+        }
+        continue;
       }
-      continue;
     }
     const resolved = await resolveDefinition(
       {
@@ -354,6 +355,16 @@ function filesExportingDefinition(index: ProjectIndex, def: SymbolDef, exportedN
         files.set(fileIdentityKey(fileId), fileId);
         break;
       }
+    }
+    if (
+      moduleIndex.exports.some(
+        (entry) =>
+          entry.type === "reexport" &&
+          exportedNames.includes(entry.sourceSpecifier) &&
+          resolveExport(index, entry.fromModule, entry.sourceSpecifier)?.kind !== "resolved",
+      )
+    ) {
+      files.set(fileIdentityKey(fileId), fileId);
     }
   }
   return [...files.values()];

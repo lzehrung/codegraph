@@ -120,6 +120,11 @@ export interface LanguageDefinition {
   isTypeOnly?: (stmtText: string) => boolean;
 
   /**
+   * Whether export-from declarations can be reported as symbol references.
+   */
+  supportsExportFromReferences?: boolean;
+
+  /**
    * Specific node types used for symbol resolution
    */
   nodeTypes?: {

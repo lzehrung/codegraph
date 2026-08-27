@@ -18,6 +18,7 @@ import {
   buildPhpQualifiedNames,
   collectVerifiedNamedNodeReferences,
   getCachedScope,
+  exportFromIdentifier,
   getCachedReferenceCandidateFiles,
   getCandidateReferenceNames,
   hasExpandedNamedImport,
@@ -27,7 +28,7 @@ import { extractEnclosingBlock, extractLineContext, rangeContains, sameDef } fro
 import { DEFAULT_REF_CONTEXT_LINES } from "./shared.js";
 import { type ScopeIndex } from "./scope.js";
 import { type FileId, type Range } from "../types.js";
-import { resolveImportSpecifier } from "../util/resolution.js";
+import { loadNearestTsconfigFor, resolveImportSpecifier } from "../util/resolution.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
 import {
@@ -99,6 +100,32 @@ export async function goToDefinition(
     const declNameNode = findDeclarationNameNode(sup, node);
     if (declNameNode) {
       name = sliceText(declNameNode, source);
+    }
+  }
+
+  if (node && sup.supportsExportFromReferences && index.projectRoot) {
+    const exportFrom = exportFromIdentifier(index, file, toRange(node), context);
+    if (exportFrom?.entry) {
+      const { matchPath } = await loadNearestTsconfigFor(file, index.projectRoot);
+      const resolvedTarget = await resolveImportSpecifier(
+        index.projectRoot,
+        file,
+        exportFrom.entry.fromModule,
+        sup.id,
+        {
+          ...(matchPath ? { matchPath } : {}),
+        },
+      );
+      if (typeof resolvedTarget === "string") {
+        const hit = resolveExport(index, resolvedTarget, exportFrom.entry.sourceSpecifier);
+        if (hit?.kind === "resolved") {
+          return okGoToResult(index, hit.def, {
+            via: { importedFrom: resolvedTarget, exportedName: exportFrom.entry.sourceSpecifier },
+            resolution: "import",
+            confidence: "high",
+          });
+        }
+      }
     }
   }
 
@@ -330,24 +357,26 @@ export async function findReferences(
       return scopeIndex;
     };
 
-    for (const entry of module.exports) {
-      if (hasReachedMaxReferences()) break;
-      if (entry.type !== "reexport") continue;
-      const resolved = resolveExport(index, entry.fromModule, entry.sourceSpecifier);
-      if (resolved?.kind !== "resolved" || !sameDef(resolved.def, def, index.languageExtensions)) continue;
-      const remainingReferences = maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
-      const ranges = await collectVerifiedNamedNodeReferences(
-        index,
-        fileId,
-        entry.sourceSpecifier,
-        def,
-        (params, parsed) => goToDefinition(index, params, parsed),
-        remainingReferences,
-      );
-      for (const { range, provenance, via } of ranges) {
+    if (supportForFile(fileId, index.languageExtensions)?.supportsExportFromReferences) {
+      for (const entry of module.exports) {
         if (hasReachedMaxReferences()) break;
-        if (!via?.reexport) continue;
-        pushRef({ file: fileId, range, via, ...(provenance ? { provenance } : {}) });
+        if (entry.type !== "reexport") continue;
+        const resolved = resolveExport(index, entry.fromModule, entry.sourceSpecifier);
+        if (resolved?.kind === "resolved" && !sameDef(resolved.def, def, index.languageExtensions)) continue;
+        const remainingReferences = maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
+        const ranges = await collectVerifiedNamedNodeReferences(
+          index,
+          fileId,
+          entry.sourceSpecifier,
+          def,
+          (params, parsed) => goToDefinition(index, params, parsed),
+          remainingReferences,
+        );
+        for (const { range, provenance, via } of ranges) {
+          if (hasReachedMaxReferences()) break;
+          if (!via?.reexport) continue;
+          pushRef({ file: fileId, range, via, ...(provenance ? { provenance } : {}) });
+        }
       }
     }
 

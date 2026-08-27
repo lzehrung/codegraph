@@ -187,6 +187,7 @@ export const TYPESCRIPT_DEF: LanguageDefinition = {
   extensions: [".ts", ".mts", ".cts"],
   structure: BASE_STRUCTURE,
   graph: BASE_GRAPH,
+  supportsExportFromReferences: true,
   ...BASE_HELPERS,
   isTypeOnly: (stmtText: string) => /\b(import|export)\s+type\b/.test(stmtText),
   native: {
@@ -209,6 +210,7 @@ export const TSX_DEF: LanguageDefinition = {
     ],
   },
   graph: BASE_GRAPH,
+  supportsExportFromReferences: true,
   ...BASE_HELPERS,
   isTypeOnly: (stmtText: string) => /\b(import|export)\s+type\b/.test(stmtText),
   native: {
