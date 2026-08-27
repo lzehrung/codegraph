@@ -612,10 +612,9 @@ function buildConcurrency(opts: BuildOptions | undefined): number {
 async function prepareFileSignatures(args: {
   projectRoot: string;
   files: string[];
-  opts: BuildOptions | undefined;
   gitSigMap: Map<string, string>;
   cacheEnabled: boolean;
-  needsContentHash: boolean;
+  signatureStrict: boolean | undefined;
   concurrency: number;
   confinedRoot?: string;
   trustedSources?: Map<string, string> | undefined;
@@ -629,7 +628,7 @@ async function prepareFileSignatures(args: {
       args.trustedSources?.set(file, source);
       return [file, fileSignatureFromSource(source, gitSig)] as const;
     }
-    const sigInfo = await fileSignature(file, args.needsContentHash ? args.opts?.cacheStrict : false, gitSig, {
+    const sigInfo = await fileSignature(file, args.signatureStrict, gitSig, {
       forceContentHash: args.cacheEnabled && !gitSig,
     });
     return [file, sigInfo] as const;
@@ -655,16 +654,8 @@ async function buildIndexFromFileListShared(
 ): Promise<ProjectIndex> {
   clearResolutionCaches();
   await initializeFileIdentityCaseSensitivity(projectRoot);
-  const {
-    normalizedProjectRoot,
-    report,
-    timings,
-    totalStart,
-    cacheMode,
-    cacheEnabled,
-    graphOptions,
-    onFallbackImportExtraction,
-  } = createIndexBuildRunState(projectRoot, opts);
+  const { normalizedProjectRoot, report, timings, totalStart, cacheEnabled, graphOptions, onFallbackImportExtraction } =
+    createIndexBuildRunState(projectRoot, opts);
   const manifestMode: ManifestMode = helperOpts?.manifestMode ?? "off";
   const useManifest = manifestMode !== "off";
   const shouldWriteManifest = manifestMode === "read-write";
@@ -735,13 +726,15 @@ async function buildIndexFromFileListShared(
     : new Map<string, ProjectIndexManifestEntry>();
   const modules = new Map<FileId, ModuleIndex>();
   const gitAvailable = await isGitRepo(projectRoot);
-  const useGitSignatures = gitAvailable && (cacheMode !== "off" || opts?.cacheStrict);
+  const needsPersistentSignatures = cacheEnabled || useManifest;
+  const useGitSignatures = gitAvailable && needsPersistentSignatures;
   const gitSigMap = useGitSignatures
     ? await getGitBlobHashes(projectRoot, normalizedFiles, {
         gitAvailable,
         ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
       })
     : new Map<string, string>();
+  const signatureStrict = needsPersistentSignatures ? opts?.cacheStrict : false;
   const conc = edgeProbeConcurrency;
   const languageExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
   const sqlFiles = normalizedFiles
@@ -753,10 +746,9 @@ async function buildIndexFromFileListShared(
   const fileSignatures = await prepareFileSignatures({
     projectRoot,
     files: sqlFiles,
-    opts,
     gitSigMap,
     cacheEnabled,
-    needsContentHash: true,
+    signatureStrict,
     concurrency: conc,
     ...(confinedRoot ? { confinedRoot, trustedSources } : {}),
   });
@@ -781,7 +773,6 @@ async function buildIndexFromFileListShared(
   // Cache lookup determines the work a full build will actually parse. Complete that cheap phase
   // before starting Piscina, so a warm build does not bootstrap workers and partial hits bound
   // the pool to real parse misses rather than the input file list.
-  const signatureStrict = cacheEnabled || useManifest || !!manifestEntries ? opts?.cacheStrict : false;
   const cacheProbes = new Map<string, ModuleCacheProbe>(
     await mapLimit(normalizedFiles, conc, async (file) => {
       try {
@@ -1646,10 +1637,9 @@ export async function buildProjectIndexIncremental(
       const fileSignatures = await prepareFileSignatures({
         projectRoot,
         files: Array.from(allFiles),
-        opts,
         gitSigMap,
         cacheEnabled,
-        needsContentHash: cacheEnabled || manifestUsed || opts?.cacheStrict === true,
+        signatureStrict: opts?.cacheStrict,
         concurrency: conc,
       });
       const modules = new Map<FileId, ModuleIndex>();
