@@ -3,6 +3,7 @@ import { Transform, type Readable, type Writable } from "node:stream";
 import { ProtocolError, ProtocolErrorCode, Server, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { AgentExplanationReference } from "../agent/explain.js";
+import type { AgentFollowUp } from "../agent/followUps.js";
 import { MAX_FILE_VIEW_BYTES, MAX_FILE_VIEW_LINES } from "../agent/fileView.js";
 import { MAX_GRAPH_DEPTH } from "../agent/search.js";
 import { errorMessage } from "../util/errors.js";
@@ -475,30 +476,68 @@ function toToolResult(value: unknown): CallToolResult {
     content: [
       {
         type: "text",
-        text: JSON.stringify(value, mcpToolResultReplacer),
+        text: JSON.stringify(translateMcpFollowUps(value)),
       },
     ],
   };
 }
 
-function mcpToolResultReplacer(this: unknown, key: string, value: unknown): unknown {
-  if (key === "tool") {
-    if (value === "chunk") return "get_file";
-    if (value === "duplicates") return "packet_get";
-  }
-  if (key === "arguments" && isDuplicateFollowUp(this)) {
-    return { target: firstDuplicateFile(value) };
-  }
-  return value;
+function translateMcpFollowUps(value: unknown): unknown {
+  if (typeof value !== "object" || value === null) return value;
+  const anchors = "anchors" in value ? value.anchors : undefined;
+  const packets = "packets" in value ? value.packets : undefined;
+  const focus = "focus" in value ? value.focus : undefined;
+  const results = "results" in value ? value.results : undefined;
+  return {
+    ...translateFollowUps(value),
+    anchors: translateFollowUpCollection(anchors),
+    packets: translateFollowUpCollection(packets),
+    focus: translateFollowUpCollection(focus),
+    results: translateFollowUpCollection(results),
+  };
 }
 
-function isDuplicateFollowUp(value: unknown): value is { tool: unknown } {
-  return typeof value === "object" && value !== null && "tool" in value && value.tool === "duplicates";
+function translateFollowUpCollection(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.map((entry) => (typeof entry === "object" && entry !== null ? translateFollowUps(entry) : entry));
 }
 
-function firstDuplicateFile(value: unknown): string {
-  if (typeof value !== "object" || value === null || !("files" in value) || !Array.isArray(value.files)) return ".";
-  return value.files.find((file): file is string => typeof file === "string") ?? ".";
+function translateFollowUps(value: object): object {
+  if (!("followUps" in value)) return value;
+  const followUps = value.followUps;
+  if (!Array.isArray(followUps) || !followUps.every(isAgentFollowUp)) return value;
+  return { ...value, followUps: followUps.map(translateMcpFollowUp) };
+}
+
+function isAgentFollowUp(value: unknown): value is AgentFollowUp {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "tool" in value &&
+    typeof value.tool === "string" &&
+    "arguments" in value &&
+    typeof value.arguments === "object" &&
+    value.arguments !== null &&
+    !Array.isArray(value.arguments)
+  );
+}
+
+function translateMcpFollowUp(followUp: AgentFollowUp): AgentFollowUp {
+  if (followUp.tool === "chunk") return { ...followUp, tool: "get_file" };
+  if (followUp.tool === "duplicates") {
+    return {
+      ...followUp,
+      tool: "packet_get",
+      arguments: { target: firstDuplicateFile(followUp.arguments) },
+    };
+  }
+  return followUp;
+}
+
+function firstDuplicateFile(arguments_: Record<string, unknown>): string {
+  const files = arguments_.files;
+  if (!Array.isArray(files)) return ".";
+  return files.find((file): file is string => typeof file === "string") ?? ".";
 }
 
 function toToolErrorResult(error: unknown): CallToolResult {

@@ -250,7 +250,7 @@ describe("codegraph MCP handlers", () => {
 
       await expect(failure).resolves.toMatchObject({ message: "MCP stdio frame exceeded 10 MiB." });
     });
-    it("serializes tool results compactly without changing their JSON value", async () => {
+    it("serializes tool results compactly while preserving payload objects that resemble follow-ups", async () => {
       const handlers = createCodegraphMcpHandlers({ root: process.cwd() });
       const expected = { file: "fixture.ts", nested: { answer: 42 } };
       const agentResult = {
@@ -261,7 +261,12 @@ describe("codegraph MCP handlers", () => {
         anchors: [{ followUps: [{ tool: "chunk", arguments: { file: "anchor.ts" } }] }],
         packets: [{ followUps: [{ tool: "duplicates", arguments: { files: ["packet.ts"] } }] }],
         focus: [{ followUps: [{ tool: "chunk", arguments: { file: "focus.ts" } }] }],
-        results: [{ followUps: [{ tool: "duplicates", arguments: { files: ["result.ts"] } }] }],
+        results: [
+          {
+            source: { metadata: { tool: "chunk", arguments: { file: "source-snippet.ts" } } },
+            followUps: [{ tool: "duplicates", arguments: { files: ["result.ts"] } }],
+          },
+        ],
       };
       const mappedResult = {
         followUps: [
@@ -271,7 +276,12 @@ describe("codegraph MCP handlers", () => {
         anchors: [{ followUps: [{ tool: "get_file", arguments: { file: "anchor.ts" } }] }],
         packets: [{ followUps: [{ tool: "packet_get", arguments: { target: "packet.ts" } }] }],
         focus: [{ followUps: [{ tool: "get_file", arguments: { file: "focus.ts" } }] }],
-        results: [{ followUps: [{ tool: "packet_get", arguments: { target: "result.ts" } }] }],
+        results: [
+          {
+            source: { metadata: { tool: "chunk", arguments: { file: "source-snippet.ts" } } },
+            followUps: [{ tool: "packet_get", arguments: { target: "result.ts" } }],
+          },
+        ],
       };
       handlers.get_file = async () => expected as never;
       const server = createCodegraphMcpProtocolServer(handlers);
