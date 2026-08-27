@@ -934,7 +934,6 @@ export function collectLocalsAndExportsFromSource(
     }
   };
 
-  const nativeExportQueryProducedResults = nativeQueries?.exports.length;
   if (support.queries.exports.trim() && nativeQueries) {
     try {
       appendExportsFromMatches(nativeQueries.exports, ensureTree() ?? undefined);
@@ -959,20 +958,11 @@ export function collectLocalsAndExportsFromSource(
   }
 
   // The native query does not cover CommonJS member assignments and some
-  // re-export forms, so preserve the fallback for those known grammar gaps.
+  // re-export forms. Always run the deduplicating fallback for JS-like files:
+  // source-form probes are too error-prone to risk silently dropping exports.
   const isJsLike = support.id === "ts" || support.id === "tsx" || support.id === "js";
-  if (isJsLike && !nativeExportQueryProducedResults) {
+  if (isJsLike) {
     appendJsLikeRegexFallbackExports(file, source, locals, exports);
-  } else if (isJsLike) {
-    const hasKnownRegexExportGap =
-      source.includes("exports.") ||
-      source.includes("module.exports.") ||
-      source.includes("export {") ||
-      source.includes("export *") ||
-      source.includes("export =");
-    if (hasKnownRegexExportGap) {
-      appendJsLikeRegexFallbackExports(file, source, locals, exports);
-    }
   }
 
   if (support.id === "python") {
