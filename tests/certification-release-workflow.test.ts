@@ -251,24 +251,4 @@ describe("certified release workflows", () => {
     expect(smoke).toMatch(/target: win32-arm64-msvc\n\s+mode: structural/);
     expect(funnel).not.toContain("win32-arm64");
   });
-
-  it("normalizes and verifies package-lock.json during a release", () => {
-    const releaseScript = fs.readFileSync("scripts/release.mjs", "utf8");
-
-    // A plain `npm install` resolves against the host's node_modules and prunes
-    // optional dependencies it did not install. The 2.2.1 release produced a lock
-    // missing @emnapi/core and @emnapi/runtime that way, which broke `npm ci` on
-    // Linux and Windows while macOS still passed.
-    expect(releaseScript).toContain('run("npm", ["install", "--package-lock-only", "--ignore-scripts"]);');
-    expect(releaseScript).toContain('runOutput("npm", ["ci", "--ignore-scripts", "--dry-run"]);');
-
-    // Both steps must run as part of the dependency refresh, after the version bump.
-    const refresh = /function refreshDependencies\(\)\s*\{([\s\S]*?)\n\}/.exec(releaseScript);
-    expect(refresh, "refreshDependencies must exist").not.toBeNull();
-    expect(refresh![1]).toContain("normalizeLockfile()");
-    expect(refresh![1]).toContain("verifyLockfileInstallable()");
-
-    // The verification must fail the release rather than warn.
-    expect(releaseScript).toMatch(/verifyLockfileInstallable[\s\S]*?throw new Error\(/);
-  });
 });

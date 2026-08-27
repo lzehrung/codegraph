@@ -147,7 +147,10 @@ function verifyLockfileInstallable() {
   if (result.status === 0) {
     return;
   }
-  console.error(result.stderr || result.stdout);
+  // npm can exit non-zero without writing anything, for example on a spawn failure,
+  // so always report the command and exit status rather than an empty line.
+  const npmOutput = (result.stderr || result.stdout).trim();
+  console.error(npmOutput || `npm ci --ignore-scripts --dry-run exited ${result.status} without output.`);
   throw new Error(
     "package-lock.json is not installable with `npm ci` after the version bump. " +
       "Run `npm install --package-lock-only --ignore-scripts` and commit the result before releasing.",
