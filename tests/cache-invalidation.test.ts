@@ -2048,7 +2048,9 @@ describe("Cache invalidation and strict hashing", () => {
     const first = await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries);
     const firstModule = first?.index.byFile.get(fileIdentityKey(normalize(path.join(root, "main.ts"))));
     if (!firstModule) throw new Error("Expected cached module.");
-    firstModule.locals.length = 0;
+    expect(() => {
+      firstModule.locals.length = 0;
+    }).toThrow(TypeError);
     const second = await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries);
     const beforeRewrite = await fsp.stat(snapshotPath);
     const unchangedBytes = (await originalReadFile(snapshotPath)) as Buffer;
@@ -2088,18 +2090,16 @@ describe("Cache invalidation and strict hashing", () => {
     const cloneSpy = vi.spyOn(globalThis, "structuredClone");
     try {
       const first = await buildCache.tryLoadProjectSnapshotModules(root, { cache: "disk" }, signatures);
-      first?.get(fileIdentityKey(filePath))?.locals.splice(0);
+      expect(() => {
+        first?.get(fileIdentityKey(filePath))?.locals.splice(0);
+      }).toThrow(TypeError);
       const second = await buildCache.tryLoadProjectSnapshotModules(root, { cache: "disk" }, signatures);
 
       expect(second?.get(fileIdentityKey(filePath))?.locals.some((local) => local.localName === "moduleMemo")).toBe(
         true,
       );
       expect(decompressSpy).toHaveBeenCalledTimes(1);
-      expect(
-        cloneSpy.mock.calls.some(
-          ([value]) => !!value && typeof value === "object" && !Array.isArray(value) && "graph" in value,
-        ),
-      ).toBe(false);
+      expect(cloneSpy).not.toHaveBeenCalled();
     } finally {
       cloneSpy.mockRestore();
       decompressSpy.mockClear();
