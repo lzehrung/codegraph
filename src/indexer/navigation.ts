@@ -365,6 +365,7 @@ export async function findReferences(
       for (const entry of module.exports) {
         if (hasReachedMaxReferences()) break;
         if (entry.type !== "reexport") continue;
+        if (!exportedNameSet.has(entry.sourceSpecifier)) continue;
         const resolved = resolveExport(index, entry.fromModule, entry.sourceSpecifier);
         if (resolved?.kind === "resolved" && !sameDef(resolved.def, def, index.languageExtensions)) continue;
         const remainingReferences = maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;

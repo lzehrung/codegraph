@@ -100,7 +100,19 @@ describe("Find References", () => {
         "utf8",
       );
       await fsp.writeFile(sourceFile, "export const target = 1;\n", "utf8");
-      await fsp.writeFile(barrelFile, 'export { target } from "@scope/mod";\n', "utf8");
+      for (const name of ["unrelatedOne", "unrelatedTwo", "unrelatedThree"]) {
+        await fsp.writeFile(path.join(root, "src", `${name}.ts`), `export const ${name} = 1;\n`, "utf8");
+      }
+      await fsp.writeFile(
+        barrelFile,
+        [
+          'export { target } from "@scope/mod";',
+          'export { unrelatedOne } from "@scope/unrelatedOne";',
+          'export { unrelatedTwo } from "@scope/unrelatedTwo";',
+          'export { unrelatedThree } from "@scope/unrelatedThree";',
+        ].join("\n"),
+        "utf8",
+      );
       await fsp.writeFile(consumerFile, 'import { target } from "./barrel";\ntarget;\n', "utf8");
 
       const index = await createTestIndexFromPath(root);
