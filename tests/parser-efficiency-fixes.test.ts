@@ -503,3 +503,28 @@ describe("appendUniqueSpecifiers deduplication", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// 8. Native export matches skip regex fallback except for CommonJS assignments
+// ---------------------------------------------------------------------------
+
+describe("CommonJS export fallback", () => {
+  it("keeps CommonJS member assignments when native export matches exist", async () => {
+    await withTmpDir("commonjs-export-fallback", async (root) => {
+      const file = path.join(root, "module.js");
+      await fsp.writeFile(
+        file,
+        ["export const esm = 1;", "exports.named = function named() {};", "module.exports.member = () => {};", ""].join(
+          "\n",
+        ),
+        "utf8",
+      );
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const moduleIndex = index.byFile.get(fileIdentityKey(file));
+      const exportedNames = moduleIndex?.exports.map((entry) => entry.exportedAs);
+
+      expect(exportedNames).toEqual(expect.arrayContaining(["esm", "named", "member"]));
+    });
+  });
+});
