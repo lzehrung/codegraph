@@ -253,6 +253,26 @@ describe("codegraph MCP handlers", () => {
     it("serializes tool results compactly without changing their JSON value", async () => {
       const handlers = createCodegraphMcpHandlers({ root: process.cwd() });
       const expected = { file: "fixture.ts", nested: { answer: 42 } };
+      const agentResult = {
+        followUps: [
+          { tool: "chunk", arguments: { file: "fixture.ts" } },
+          { tool: "duplicates", arguments: { files: ["a.ts", "b.ts"] } },
+        ],
+        anchors: [{ followUps: [{ tool: "chunk", arguments: { file: "anchor.ts" } }] }],
+        packets: [{ followUps: [{ tool: "duplicates", arguments: { files: ["packet.ts"] } }] }],
+        focus: [{ followUps: [{ tool: "chunk", arguments: { file: "focus.ts" } }] }],
+        results: [{ followUps: [{ tool: "duplicates", arguments: { files: ["result.ts"] } }] }],
+      };
+      const mappedResult = {
+        followUps: [
+          { tool: "get_file", arguments: { file: "fixture.ts" } },
+          { tool: "packet_get", arguments: { target: "a.ts" } },
+        ],
+        anchors: [{ followUps: [{ tool: "get_file", arguments: { file: "anchor.ts" } }] }],
+        packets: [{ followUps: [{ tool: "packet_get", arguments: { target: "packet.ts" } }] }],
+        focus: [{ followUps: [{ tool: "get_file", arguments: { file: "focus.ts" } }] }],
+        results: [{ followUps: [{ tool: "packet_get", arguments: { target: "result.ts" } }] }],
+      };
       handlers.get_file = async () => expected as never;
       const server = createCodegraphMcpProtocolServer(handlers);
       const sent: JsonRpcObject[] = [];
@@ -285,17 +305,48 @@ describe("codegraph MCP handlers", () => {
         await vi.waitFor(() => expect(sent.some((message) => message.id === 2)).toBe(true));
         const result = readObject(sent.find((message) => message.id === 2)?.result);
         const content = result.content;
-        if (!Array.isArray(content) || !content.length) throw new Error("MCP tool result did not contain text content.");
+        if (!Array.isArray(content) || !content.length)
+          throw new Error("MCP tool result did not contain text content.");
         const serialized = readObject(content[0]).text;
         expect(serialized).toBeTypeOf("string");
         if (typeof serialized !== "string") throw new Error("MCP tool result content was not text.");
         expect(serialized).not.toContain("\n  ");
-        expect(JSON.parse(serialized)).toEqual(expected);
+        const parsed = readObject(JSON.parse(serialized));
+        expect(parsed).toEqual(expected);
+
+        handlers.get_file = async () => agentResult as never;
+        transport.onmessage({
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: { name: "get_file", arguments: { file: "fixture.ts" } },
+        });
+        await vi.waitFor(() => expect(sent.some((message) => message.id === 3)).toBe(true));
+        const mappedContent = readObject(sent.find((message) => message.id === 3)?.result).content;
+        if (!Array.isArray(mappedContent) || !mappedContent.length)
+          throw new Error("MCP tool result did not contain text content.");
+        const mappedResultText = readObject(mappedContent[0]).text;
+        if (typeof mappedResultText !== "string") throw new Error("MCP tool result content was not text.");
+        const transportResult = readObject(JSON.parse(mappedResultText));
+        expect(transportResult).toEqual(mappedResult);
+        const responseShapes = [
+          transportResult.followUps,
+          readObject((transportResult.anchors as unknown[])[0]).followUps,
+          readObject((transportResult.packets as unknown[])[0]).followUps,
+          readObject((transportResult.focus as unknown[])[0]).followUps,
+          readObject((transportResult.results as unknown[])[0]).followUps,
+        ];
+        const callableToolNames = new Set(MCP_TOOL_REGISTRY.map((tool) => tool.name));
+        for (const followUps of responseShapes) {
+          if (!Array.isArray(followUps)) throw new Error("MCP response shape did not contain follow-ups.");
+          for (const followUp of followUps) {
+            expect(callableToolNames).toContain(readObject(followUp).tool);
+          }
+        }
       } finally {
         await server.close();
       }
     });
-
   });
 
   it("honors cancellation notifications for request id zero", async () => {

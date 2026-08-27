@@ -475,10 +475,30 @@ function toToolResult(value: unknown): CallToolResult {
     content: [
       {
         type: "text",
-        text: JSON.stringify(value),
+        text: JSON.stringify(value, mcpToolResultReplacer),
       },
     ],
   };
+}
+
+function mcpToolResultReplacer(this: unknown, key: string, value: unknown): unknown {
+  if (key === "tool") {
+    if (value === "chunk") return "get_file";
+    if (value === "duplicates") return "packet_get";
+  }
+  if (key === "arguments" && isDuplicateFollowUp(this)) {
+    return { target: firstDuplicateFile(value) };
+  }
+  return value;
+}
+
+function isDuplicateFollowUp(value: unknown): value is { tool: unknown } {
+  return typeof value === "object" && value !== null && "tool" in value && value.tool === "duplicates";
+}
+
+function firstDuplicateFile(value: unknown): string {
+  if (typeof value !== "object" || value === null || !("files" in value) || !Array.isArray(value.files)) return ".";
+  return value.files.find((file): file is string => typeof file === "string") ?? ".";
 }
 
 function toToolErrorResult(error: unknown): CallToolResult {
