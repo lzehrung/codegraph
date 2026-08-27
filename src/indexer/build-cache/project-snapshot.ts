@@ -1245,11 +1245,11 @@ function sameSymbolEdgeMultiset(expected: readonly SymbolEdge[], actual: readonl
   if (expected.length !== actual.length) return false;
   const counts = new Map<string, number>();
   for (const edge of expected) {
-    const key = serializedSymbolEdge(edge);
+    const key = symbolEdgeKey(edge);
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   for (const edge of actual) {
-    const key = serializedSymbolEdge(edge);
+    const key = symbolEdgeKey(edge);
     const remaining = counts.get(key);
     if (remaining === undefined) return false;
     if (remaining === 1) counts.delete(key);
@@ -1258,29 +1258,31 @@ function sameSymbolEdgeMultiset(expected: readonly SymbolEdge[], actual: readonl
   return !counts.size;
 }
 
-function serializedSymbolEdge(edge: SymbolEdge): string {
-  return JSON.stringify({
-    from: edge.from,
-    to: edge.to,
-    label: edge.label,
-    site: edge.site
-      ? {
-          file: edge.site.file,
-          range: {
-            start: {
-              line: edge.site.range.start.line,
-              column: edge.site.range.start.column,
-              ...(edge.site.range.start.index !== undefined ? { index: edge.site.range.start.index } : {}),
-            },
-            end: {
-              line: edge.site.range.end.line,
-              column: edge.site.range.end.column,
-              ...(edge.site.range.end.index !== undefined ? { index: edge.site.range.end.index } : {}),
-            },
-          },
-        }
-      : undefined,
-  });
+function symbolEdgeKey(edge: SymbolEdge): string {
+  const from = lengthPrefixedSymbolEdgeField(edge.from);
+  const to = lengthPrefixedSymbolEdgeField(edge.to);
+  const label = edge.label === undefined ? "u" : `s${lengthPrefixedSymbolEdgeField(edge.label)}`;
+  if (!edge.site) return `f${from}t${to}l${label}s`;
+
+  const { file, range } = edge.site;
+  const startIndex = range.start.index === undefined ? "u" : `n${range.start.index}`;
+  const endIndex = range.end.index === undefined ? "u" : `n${range.end.index}`;
+  return [
+    `f${from}`,
+    `t${to}`,
+    `l${label}`,
+    `s${lengthPrefixedSymbolEdgeField(file)}`,
+    `sl${range.start.line}`,
+    `sc${range.start.column}`,
+    `si${startIndex}`,
+    `el${range.end.line}`,
+    `ec${range.end.column}`,
+    `ei${endIndex}`,
+  ].join("");
+}
+
+function lengthPrefixedSymbolEdgeField(value: string): string {
+  return `${value.length}:${value}`;
 }
 
 function normalizedSnapshotNativeMode(
