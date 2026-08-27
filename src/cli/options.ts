@@ -383,8 +383,14 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       {
         kind: "max",
         max: 1,
-        usage:
-          "Usage: codegraph grep <regex> [--root <dir>] [--pattern|--regex <expr>] [--query <tree-sitter-query>] [--glob|--include-glob|--ignore-glob <glob>] [--ignore-case|-i] [--no-gitignore] [--max-hits <n>] [--json | --pretty]",
+        // `handleGrepCommand` takes the pattern from --pattern, then --regex, then the
+        // positional, and --query is a separate syntax-tree mode. Present all three forms
+        // so a parse failure does not imply the positional regex is mandatory.
+        usage: [
+          "Usage: codegraph grep <regex> [--root <dir>] [--glob|--include-glob|--ignore-glob <glob>] [--ignore-case|-i] [--no-gitignore] [--max-hits <n>] [--json | --pretty]",
+          "       codegraph grep --pattern|--regex <expr> [--root <dir>] [--glob|--include-glob|--ignore-glob <glob>] [--ignore-case|-i] [--no-gitignore] [--max-hits <n>] [--json | --pretty]",
+          "       codegraph grep --query <tree-sitter-query> [--root <dir>] [--json | --pretty]",
+        ].join("\n"),
       },
     ),
   ],
