@@ -14,7 +14,7 @@ import { runGit } from "./helpers/git.js";
 describe("CLI index progress", () => {
   it.each([
     ["auto", true, true, "interactive"],
-    ["auto", false, false, "off"],
+    ["auto", false, false, "log"],
     ["always", true, true, "interactive"],
     ["always", false, false, "log"],
     ["never", true, true, "off"],
@@ -27,6 +27,31 @@ describe("CLI index progress", () => {
         terminalSupportsControlSequences: controlSequences,
       }),
     ).toBe(expected);
+  });
+
+  it("delays automatic redirected progress and emits a heartbeat for slow index work", async () => {
+    const chunks: string[] = [];
+    vi.useFakeTimers();
+
+    try {
+      const display = createCliProgressDisplay({
+        presentation: "log",
+        write: (chunk) => chunks.push(chunk),
+        delayMs: 1_000,
+      });
+      display.update({ type: "progress", phase: "start", mode: "check", current: 0, total: 10 });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(chunks).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(chunks.join("")).toContain("[Progress] Checking project index.");
+      expect(chunks.join("")).toContain("[Progress] Checking project index: 0/10 files.");
+
+      display.update({ type: "progress", phase: "complete", mode: "check", current: 10, total: 10, elapsedMs: 2_000 });
+      expect(chunks.join("")).toContain("[Progress] Checked project index: 10 files in 2.0s.");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("renders and completes an interactive build without writing file paths", () => {
@@ -131,7 +156,7 @@ describe("CLI index progress", () => {
     );
   });
 
-  it("clears an active interactive display when the CLI runtime fails", async () => {
+  it("does not render delayed automatic progress when the CLI runtime fails quickly", async () => {
     const chunks: string[] = [];
 
     await expect(
@@ -157,10 +182,10 @@ describe("CLI index progress", () => {
       ),
     ).rejects.toThrow("synthetic build failure");
 
-    expect(chunks.join("").endsWith("\r\u001b[2K")).toBe(true);
+    expect(chunks).toEqual([]);
   });
 
-  it("automatically reports a required build only on interactive stderr", async () => {
+  it("keeps fast automatic redirected JSON commands quiet", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-progress-"));
     await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
 
@@ -170,10 +195,10 @@ describe("CLI index progress", () => {
         terminalSupportsControlSequences: true,
       });
       expect(() => JSON.parse(interactive.stdout)).not.toThrow();
-      expect(interactive.stderr).toContain("Building project index");
-      expect(interactive.stderr).toContain("Built project index");
+      expect(interactive.stderr).toBe("");
 
       const redirected = await captureCli(["orient", "--root", root, "--cache", "off", "--json"]);
+      expect(() => JSON.parse(redirected.stdout)).not.toThrow();
       expect(redirected.stderr).toBe("");
 
       const forced = await captureCli(["orient", "--root", root, "--cache", "off", "--json", "--progress"]);
@@ -222,7 +247,7 @@ describe("CLI index progress", () => {
       vi.useRealTimers();
       releaseConfigLoad.resolve();
       const result = await resultPromise;
-      expect(result.stderr).toContain("Building project index");
+      expect(result.stderr).toBe("");
     } finally {
       releaseConfigLoad.resolve();
       vi.useRealTimers();
@@ -242,8 +267,7 @@ describe("CLI index progress", () => {
         progressPreparationDelayMs: 0,
       });
       expect(interactive.stderr).not.toContain("Preparing project index");
-      expect(interactive.stderr).toContain("Building project index");
-      expect(interactive.stderr).toContain("Built project index");
+      expect(interactive.stderr).toBe("");
 
       // Cache-off builds are hermetic: the prior call did not persist a manifest,
       // so every invocation reports a fresh build.
@@ -285,7 +309,7 @@ describe("CLI index progress", () => {
         },
       );
       expect(graphFile.stderr).not.toContain("Preparing project index");
-      expect(graphFile.stderr).toContain("Building project index");
+      expect(graphFile.stderr).not.toContain("project index");
       expect(() => JSON.parse(graphFile.stdout)).not.toThrow();
 
       const pathSearch = await captureCli(["search", "main", "--root", root, "--mode", "path", "--json"], {
@@ -506,8 +530,8 @@ describe("CLI index progress", () => {
         progressPreparationDelayMs: 2000,
       });
       expect(() => JSON.parse(cached.stdout)).not.toThrow();
-      expect(cached.stderr).toContain("Checking project index");
-      expect(cached.stderr).toContain("Checked project index");
+      expect(cached.stderr).not.toContain("Checking project index");
+      expect(cached.stderr).not.toContain("Checked project index");
       expect(cached.stderr).not.toContain("Building project index");
       expect(cached.stderr).not.toContain("Updating project index");
 
@@ -517,8 +541,8 @@ describe("CLI index progress", () => {
         terminalSupportsControlSequences: true,
       });
       expect(() => JSON.parse(stale.stdout)).not.toThrow();
-      expect(stale.stderr).toContain("Updating project index");
-      expect(stale.stderr).toContain("Updated project index");
+      expect(stale.stderr).not.toContain("Updating project index");
+      expect(stale.stderr).not.toContain("Updated project index");
       expect(stale.stderr).not.toContain("Building project index");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

@@ -330,6 +330,7 @@ export function createCliProgressHandler(policy: CliProgressPolicy): BuildOption
   const display = createCliProgressDisplay({
     presentation,
     write: context.runtime.stderr,
+    ...(policy === "auto" ? { delayMs: 1_000 } : {}),
   });
   context.progressDisplay = display;
   return display.update;
