@@ -190,13 +190,6 @@ function createMockCommandRunner(
 
   async function run(command: string, args: string[], commandOptions: CommandOptions = {}): Promise<CommandResult> {
     calls.push([command, ...args]);
-    if (args[0] === "pack" && args.includes("--dry-run")) {
-      const pkg = byTarball.get(path.resolve(args[1] ?? ""));
-      if (!pkg) throw new Error(`Unexpected archive inspection ${String(args[1])}`);
-      const pack = { ...pkg.pack };
-      if (options.wrongTargetPackage && pkg.name.includes("native-win32")) pack.name = options.wrongTargetPackage;
-      return success([pack]);
-    }
     if (args[0] === "install") {
       const installDirectory = commandOptions.cwd;
       if (!installDirectory) throw new Error("Mocked install omitted cwd");
@@ -212,6 +205,12 @@ function createMockCommandRunner(
       const destination = args[args.indexOf("-C") + 1];
       if (!destination) throw new Error("Mocked archive extraction omitted destination");
       fs.cpSync(pkg.sourceDirectory, path.join(destination, "package"), { recursive: true });
+      if (options.wrongTargetPackage && pkg.name.includes("native-win32")) {
+        const manifestPath = path.join(destination, "package", "package.json");
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+        manifest.name = options.wrongTargetPackage;
+        writeJson(manifestPath, manifest);
+      }
       return success("extracted certified package");
     }
     if (args.includes("--eval")) {
@@ -280,7 +279,7 @@ describe("package smoke modes", () => {
     expect(report.status).toBe("pass");
     expect(report.mode).toBe("structural");
     expect(commandRunner.calls).toHaveLength(4);
-    expect(commandRunner.calls.every((call) => call.includes("--dry-run"))).toBe(true);
+    expect(commandRunner.calls.every((call) => call[0] === "tar" && call[1] === "-xzf")).toBe(true);
   });
 
   it("runs install, identity, native parse, and MCP checks for runtime targets", async () => {
@@ -310,6 +309,7 @@ describe("package smoke modes", () => {
     );
     expect(mcpCalls).toEqual(["initialize", "tools/list", "tools/call:search"]);
     expect(commandRunner.calls.some((call) => call[1] === "install")).toBe(true);
+    expect(commandRunner.calls.find((call) => call[1] === "install")).toContain("--prefer-offline");
     expect(commandRunner.calls.filter((call) => call[0] === "tar")).toHaveLength(4);
     expect(commandRunner.calls.some((call) => call.includes("--pack-destination"))).toBe(false);
   });

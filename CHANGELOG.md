@@ -11,19 +11,33 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Changed
 
-- Release candidate assembly now runs only source-quality checks and one package build, leaving
-  tests, security, fixture, and package certification to their dedicated release jobs.
-- Clean disk-cache builds now skip module lookups when the cache database does not exist, while
-  preserving per-file miss accounting.
+- Release package smoke now inspects certified tarballs directly, reuses extracted file records,
+  prefers the npm cache, and leaves temporary installs for ephemeral runner cleanup.
 - Disk cache writes copy only module fields whose paths change; cache reads transform their
   private parsed payload in place instead of deep-cloning every module.
 - Worker-eligible cold builds now construct reference bloom filters in native extraction workers,
   parallelizing identifier hashing instead of doing it on the main thread.
 
+## [2.3.2] - 2026-08-28
+
+### Changed
+
+- Clean disk-cache builds now skip module lookups when the cache database does not exist, while
+  preserving per-file miss accounting ([#302](https://github.com/lzehrung/codegraph/pull/302)).
+
+## [2.3.1] - 2026-08-28
+
+### Changed
+
+- Release candidate assembly now runs only source-quality checks and one package build, leaving
+  tests, security, fixture, and package certification to their dedicated release jobs
+  ([#301](https://github.com/lzehrung/codegraph/pull/301)).
+
 ### Fixed
 
 - The certified release workflow now generates and validates its final committed lock under Node
-  22/npm 10, matching the minimum supported CI runtime.
+  22/npm 10, matching the minimum supported CI runtime
+  ([#300](https://github.com/lzehrung/codegraph/pull/300)).
 
 ## [2.3.0] - 2026-08-28
 
