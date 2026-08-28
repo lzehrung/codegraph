@@ -268,13 +268,21 @@ function parseGitignoreRule(baseDir: string, rawLine: string): GitignoreRule | n
   };
 }
 
+/**
+ * The rules one `.gitignore` directory declares, kept with that directory.
+ *
+ * Storing the base alongside the rules lets the matcher resolve one relative path per
+ * group instead of one per rule.
+ */
+type GitignoreRuleGroup = { baseDir: string; rules: GitignoreRule[] };
+
 type GitignoreIndex = {
   hasRules: boolean;
   /**
-   * Rules grouped by the directory of the `.gitignore` that declared them, keyed by
-   * {@link fileIdentityKey} so one base directory can never be keyed two ways.
+   * Rule groups keyed by {@link fileIdentityKey} of the declaring directory, so one base
+   * directory can never be keyed two ways.
    */
-  byBaseDir: Map<string, GitignoreRule[]>;
+  byBaseDir: Map<string, GitignoreRuleGroup>;
 };
 
 const EMPTY_GITIGNORE_INDEX: GitignoreIndex = { hasRules: false, byBaseDir: new Map() };
@@ -321,8 +329,8 @@ async function buildGitignoreIndex(sources: readonly GitignoreSource[]): Promise
       const rule = parseGitignoreRule(baseDir, line);
       if (!rule) continue;
       const existing = gitignoreIndex.byBaseDir.get(baseKey);
-      if (existing) existing.push(rule);
-      else gitignoreIndex.byBaseDir.set(baseKey, [rule]);
+      if (existing) existing.rules.push(rule);
+      else gitignoreIndex.byBaseDir.set(baseKey, { baseDir, rules: [rule] });
       gitignoreIndex.hasRules = true;
     }
   }
@@ -364,27 +372,34 @@ async function loadGitignoreIndexForRootAliases(projectRoot: string): Promise<Gi
  * Testing every rule cost O(files x rules): on an Unreal project that meant 55,983
  * candidates against 2,266 rules from 173 `.gitignore` files, or 253.7M evaluations and
  * roughly 21.7s of a 26.1s discovery.
+ *
+ * The relative path is computed once per declaring directory rather than once per rule.
+ * Every rule in a group shares that directory, so the per-rule form repeated identical
+ * `path.relative` and normalization work; on the same project that repetition was the
+ * dominant remaining cost, at 2.6s of a 3.8s discovery.
  */
 function isIgnoredByGitignore(absolutePath: string, gitignoreIndex: GitignoreIndex): boolean {
   if (!gitignoreIndex.hasRules) return false;
-  const chain: GitignoreRule[][] = [];
+  const chain: GitignoreRuleGroup[] = [];
   let current = normalizePath(path.dirname(absolutePath));
   for (;;) {
-    const rules = gitignoreIndex.byBaseDir.get(fileIdentityKey(current));
-    if (rules) chain.push(rules);
+    const group = gitignoreIndex.byBaseDir.get(fileIdentityKey(current));
+    if (group) chain.push(group);
     const parent = normalizePath(path.dirname(current));
     if (parent === current) break;
     current = parent;
   }
   let ignored = false;
   for (let depth = chain.length - 1; depth >= 0; depth -= 1) {
-    for (const rule of chain[depth]!) {
-      const relativePath = path.relative(rule.baseDir, absolutePath);
-      if (!isRelativePathInside(relativePath)) {
-        continue;
-      }
-      const normalizedRelativePath = normalizePath(relativePath);
-      if (rule.dirOnly && !normalizedRelativePath.includes("/")) {
+    const group = chain[depth]!;
+    const relativePath = path.relative(group.baseDir, absolutePath);
+    if (!isRelativePathInside(relativePath)) {
+      continue;
+    }
+    const normalizedRelativePath = normalizePath(relativePath);
+    const hasSeparator = normalizedRelativePath.includes("/");
+    for (const rule of group.rules) {
+      if (rule.dirOnly && !hasSeparator) {
         continue;
       }
       if (rule.matches(normalizedRelativePath)) {
@@ -639,7 +654,10 @@ export async function listProjectFiles(
         if (ignoredByDefault && !(includeMatchers.length > 0 && matchesInclude)) {
           return false;
         }
-        return !isIgnoredByGitignore(filePath, gitignoreIndex) && !isIgnoredByGitignore(realPath, gitignoreIndex);
+        if (isIgnoredByGitignore(filePath, gitignoreIndex)) return false;
+        // The real path only differs when the entry was reached through a symlink, so
+        // testing it again for every ordinary file doubled the matcher work for nothing.
+        return normalizePath(realPath) === filePath || !isIgnoredByGitignore(realPath, gitignoreIndex);
       })
       .map(({ filePath }) => filePath);
   } catch (error) {
