@@ -1,14 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
+import fsp from "node:fs/promises";
 import {
   clearMemoryCache,
   closeDiskCacheDatabase,
+  diskModuleCacheExists,
   tryLoadFromCache,
   writeToCache,
 } from "../src/indexer/build-cache/module-cache.js";
 import { SqliteDatabase } from "../src/sqlite-driver.js";
-import type { ModuleIndex } from "../src/indexer/types.js";
+import type { BuildReport, ModuleIndex } from "../src/indexer/types.js";
 import { SymbolKind } from "../src/indexer/types.js";
 
 function moduleFor(file: string, label: string): ModuleIndex {
@@ -81,6 +83,21 @@ describe("module memory cache bounds", () => {
     clearMemoryCache();
   });
 });
+it("records a known-absent disk cache miss without creating SQLite", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cache-known-absent-"));
+  const opts = { cache: "disk" as const };
+  const report: BuildReport = { timings: {} };
+  const databasePath = path.join(root, ".codegraph", "cache", "index-v1", "index-cache.sqlite");
+  try {
+    expect(diskModuleCacheExists(root, opts)).toBe(false);
+    expect(tryLoadFromCache(root, path.join(root, "missing.ts"), "sig", opts, report, false)).toBeNull();
+    expect(report.cache).toMatchObject({ mode: "disk", hits: 0, misses: 1 });
+    await expect(fsp.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+});
+
 it("degrades disk cache cleanly when node:sqlite lacks setReturnArrays", () => {
   const root = path.join(os.tmpdir(), "dg-cache-old-node-sqlite");
   const sig = "sig-disk";
