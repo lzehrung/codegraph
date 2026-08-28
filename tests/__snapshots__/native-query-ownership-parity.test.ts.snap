@@ -300,6 +300,13 @@ exports[`native query ownership > keeps astGrep productive in native mode 1`] = 
 [
   {
     "capture": "mod",
+    "column": 23,
+    "file": ".regressions/unicode_nfd_consumer.ts",
+    "line": 1,
+    "snippet": ""./unicode_nfc_def"",
+  },
+  {
+    "capture": "mod",
     "column": 75,
     "file": "main.ts",
     "line": 1,
@@ -325,13 +332,6 @@ exports[`native query ownership > keeps astGrep productive in native mode 1`] = 
     "file": "main.ts",
     "line": 4,
     "snippet": ""./utils"",
-  },
-  {
-    "capture": "mod",
-    "column": 23,
-    "file": ".regressions/unicode_nfd_consumer.ts",
-    "line": 1,
-    "snippet": ""./unicode_nfc_def"",
   },
 ]
 `;

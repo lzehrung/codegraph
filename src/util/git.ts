@@ -1,5 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
+import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { stringifyUnknown } from "./ast.js";
 import { normalizePath } from "./paths.js";
@@ -12,7 +14,11 @@ import { logWithLevel, type LogLevel } from "../logging.js";
  */
 export const DEFAULT_GIT_TIMEOUT_MS = 30_000;
 
+type GitExcludeFile = { file: string; baseDir: string };
+
 const gitRepositoryChecks = new Map<string, Promise<boolean>>();
+const gitDiscoveryRootIgnoredChecks = new Map<string, Promise<boolean>>();
+const gitExcludeFileChecks = new Map<string, Promise<GitExcludeFile[]>>();
 const MAX_GIT_HASH_OBJECT_ARGUMENT_BYTES = 24 * 1024;
 
 let gitExecutableForTests: string | null = null;
@@ -82,9 +88,15 @@ export type RunGitOptions = {
   onSpawn?: ((child: { pid?: number }) => void) | undefined;
 };
 
-/** Test-only: drop memoized `isGitRepo` promises. */
+/** Test-only: drop memoized Git repository checks. */
 export function clearGitRepositoryCheckCacheForTests(): void {
   gitRepositoryChecks.clear();
+}
+
+/** Test-only: drop memoized Git discovery facts. */
+export function clearGitDiscoveryCacheForTests(): void {
+  gitDiscoveryRootIgnoredChecks.clear();
+  gitExcludeFileChecks.clear();
 }
 
 function resolveGitTimeoutMs(timeoutMs: number | undefined): number {
@@ -373,6 +385,19 @@ export async function isGitPathIgnored(projectRoot: string, file: string): Promi
   return await runGitPathPredicate(projectRoot, ["check-ignore", "--quiet", "--no-index", "--", normalizePath(file)]);
 }
 
+/**
+ * Whether Git ignores the requested project root. This value is static for a root during
+ * process lifetime and lets repeated discovery avoid spawning `git check-ignore`.
+ */
+export async function isGitProjectRootIgnored(projectRoot: string): Promise<boolean> {
+  const resolvedRoot = path.resolve(projectRoot);
+  const cached = gitDiscoveryRootIgnoredChecks.get(resolvedRoot);
+  if (cached) return await cached;
+  const check = isGitPathIgnored(resolvedRoot, resolvedRoot);
+  gitDiscoveryRootIgnoredChecks.set(resolvedRoot, check);
+  return await check;
+}
+
 async function runGitPathPredicate(projectRoot: string, args: string[]): Promise<boolean> {
   try {
     await runGit(projectRoot, args);
@@ -532,6 +557,152 @@ export async function listChangedFiles(
   } catch (error) {
     throw createGitError(projectRoot, args, error);
   }
+}
+
+/**
+ * List files Git tracks under `projectRoot`, as absolute normalized paths.
+ *
+ * Paired with `listUntrackedFiles` this enumerates exactly the working-tree files
+ * Git considers part of the project, which is the indexable candidate set: Git
+ * applies ignore rules while walking, so ignored trees are never descended into.
+ * A recursive directory scan instead costs O(files on disk), which on trees full
+ * of generated artifacts is orders of magnitude larger than the project itself.
+ * `recurseSubmodules` also lists files tracked inside initialized submodules, whose
+ * contents are otherwise invisible here: a submodule is a separate repository, so the
+ * superproject records only a gitlink and reports nothing under it. Paths stay relative
+ * to `projectRoot`, so they resolve the same way as the non-recursive listing.
+ *
+ * Deliberately no pathspec arguments: one argv entry per file hits Windows'
+ * ~32,767-character command-line limit past roughly 1,100 files. Full-repo NUL
+ * listings can also exceed Node's default 1 MiB stdout buffer on large trees, so
+ * this raises `maxBuffer` for the same reason `getGitBlobHashes` does.
+ */
+export async function listTrackedFiles(
+  projectRoot: string,
+  opts?: { gitAvailable?: boolean; logLevel?: LogLevel; recurseSubmodules?: boolean },
+): Promise<string[]> {
+  if (!(opts?.gitAvailable ?? true)) return [];
+  const args = ["ls-files", "-z"];
+  if (opts?.recurseSubmodules) args.push("--recurse-submodules");
+  try {
+    const { stdout } = await runGit(projectRoot, args, { maxBuffer: 64 * 1024 * 1024 });
+    // `git ls-files -z` NUL-delimits entries; the trailing split segment is always an
+    // empty string rather than a filename, so drop empties without trimming (leading
+    // and trailing whitespace can be a legitimate part of a real filename).
+    const out: string[] = [];
+    for (const rel of stdout.split("\0").filter(Boolean)) {
+      const abs = normalizePath(path.resolve(projectRoot, rel));
+      if (abs) out.push(abs);
+    }
+    return Array.from(new Set(out));
+  } catch (error) {
+    throw createGitError(projectRoot, args, error);
+  }
+}
+
+/**
+ * Directories of initialized submodules under `projectRoot`, as absolute paths.
+ *
+ * Read from the index rather than `.gitmodules` so the result reflects what Git
+ * actually tracks: a gitlink entry carries mode 160000. Callers enumerating untracked
+ * files need this because `--recurse-submodules` cannot combine with `--others`, so
+ * untracked files inside a submodule require a separate listing rooted there.
+ *
+ * `recurse` descends into each submodule to find gitlinks it records in turn. A
+ * superproject's index lists only its own direct submodules, so without this a new
+ * file inside a submodule of a submodule is invisible to untracked enumeration even
+ * though the tracked listing recurses all the way down.
+ */
+export async function listGitSubmoduleDirectories(
+  projectRoot: string,
+  opts?: { gitAvailable?: boolean; recurse?: boolean },
+): Promise<string[]> {
+  if (!(opts?.gitAvailable ?? true)) return [];
+  const args = ["ls-files", "--stage", "-z"];
+  try {
+    const { stdout } = await runGit(projectRoot, args, { maxBuffer: 64 * 1024 * 1024 });
+    const direct: string[] = [];
+    for (const record of stdout.split("\0").filter(Boolean)) {
+      // Each record is `<mode> <object> <stage>\t<path>`; 160000 marks a gitlink.
+      if (!record.startsWith("160000 ")) continue;
+      const tabIndex = record.indexOf("\t");
+      if (tabIndex < 0) continue;
+      const rel = record.slice(tabIndex + 1);
+      if (rel) direct.push(normalizePath(path.resolve(projectRoot, rel)));
+    }
+    if (!opts?.recurse || !direct.length) return Array.from(new Set(direct));
+    const nested = await Promise.all(
+      direct.map(async (directory) => await listGitSubmoduleDirectories(directory, opts)),
+    );
+    return Array.from(new Set([...direct, ...nested.flat()]));
+  } catch (error) {
+    throw createGitError(projectRoot, args, error);
+  }
+}
+
+/**
+ * Git's non-`.gitignore` ignore sources for `projectRoot`, paired with the directory
+ * their patterns resolve against.
+ *
+ * Git consults the per-repository exclude file and the user's `core.excludesFile` in
+ * addition to `.gitignore`, and matches both as if declared at the repository root.
+ * Callers that filter paths Git never listed need these or they apply a strictly
+ * narrower rule set than Git did. Missing or unset sources are omitted rather than
+ * treated as an error, since neither is required to exist.
+ */
+export async function listGitExcludeFiles(
+  projectRoot: string,
+  opts?: { gitAvailable?: boolean },
+): Promise<GitExcludeFile[]> {
+  if (!(opts?.gitAvailable ?? true)) return [];
+  const resolvedRoot = path.resolve(projectRoot);
+  const cached = gitExcludeFileChecks.get(resolvedRoot);
+  if (cached) return await cached;
+  const check = listGitExcludeFilesUncached(resolvedRoot);
+  gitExcludeFileChecks.set(resolvedRoot, check);
+  return await check;
+}
+
+async function listGitExcludeFilesUncached(projectRoot: string): Promise<GitExcludeFile[]> {
+  let baseDir: string;
+  try {
+    const { stdout } = await runGit(projectRoot, ["rev-parse", "--show-toplevel"]);
+    baseDir = normalizePath(stdout.trim());
+  } catch {
+    return [];
+  }
+  if (!baseDir) return [];
+  const candidates: string[] = [];
+  try {
+    // `--git-path` resolves `info/exclude` correctly when `.git` is a file, as it is in
+    // linked worktrees and submodules, where guessing `<root>/.git/info` would miss it.
+    const { stdout } = await runGit(projectRoot, ["rev-parse", "--git-path", "info/exclude"]);
+    const resolved = stdout.trim();
+    if (resolved) candidates.push(normalizePath(path.resolve(projectRoot, resolved)));
+  } catch {
+    // No exclude file for this repository layout.
+  }
+  try {
+    const { stdout } = await runGit(projectRoot, ["config", "--get", "core.excludesFile"]);
+    const configured = stdout.trim();
+    if (configured) {
+      const expanded = configured.startsWith("~")
+        ? path.join(os.homedir(), configured.slice(1))
+        : path.resolve(projectRoot, configured);
+      candidates.push(normalizePath(expanded));
+    }
+  } catch {
+    // `git config --get` exits non-zero when the key is unset.
+  }
+  const sources: GitExcludeFile[] = [];
+  for (const file of Array.from(new Set(candidates))) {
+    try {
+      if ((await fsp.stat(file)).isFile()) sources.push({ file, baseDir });
+    } catch {
+      // Configured but absent; Git ignores it too.
+    }
+  }
+  return sources;
 }
 
 /**
