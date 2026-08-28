@@ -6,6 +6,7 @@ import { errorMessage } from "../util/errors.js";
 import { CodegraphLifecycleUserError } from "./errors.js";
 
 const LIFECYCLE_MANIFEST_PATH = ".codegraph/manifest.json";
+const LIFECYCLE_CACHE_PATH = ".codegraph/cache/index-v1";
 const GITIGNORE_PATH = ".gitignore";
 const LIFECYCLE_GITIGNORE_RULE = ".codegraph/";
 export const CODEGRAPH_GITIGNORE_RULES = [LIFECYCLE_GITIGNORE_RULE] as const;
@@ -70,8 +71,9 @@ export async function prepareCodegraphLifecycleGitignore(
   if (!(await isGitRepo(resolvedRoot))) return { status: "not-git", path: GITIGNORE_PATH };
   const manifestTracked = await isGitPathTracked(resolvedRoot, LIFECYCLE_MANIFEST_PATH);
   if (manifestTracked) return { status: "tracked", path: GITIGNORE_PATH };
-  const lifecycleIgnored = await isGitPathIgnored(resolvedRoot, LIFECYCLE_MANIFEST_PATH);
-  if (lifecycleIgnored) {
+  const manifestIgnored = await isGitPathIgnored(resolvedRoot, LIFECYCLE_MANIFEST_PATH);
+  const cacheIgnored = await isGitPathIgnored(resolvedRoot, LIFECYCLE_CACHE_PATH);
+  if (manifestIgnored && cacheIgnored) {
     return { status: "already-ignored", path: GITIGNORE_PATH, rules: [...CODEGRAPH_GITIGNORE_RULES] };
   }
   const missingRules = [LIFECYCLE_GITIGNORE_RULE];

@@ -82,12 +82,6 @@ function detectIndexedArtifactType(filePath: string, stats: fs.Stats | null): In
     return "artifactBundle";
   }
   const normalized = normalizePathForDisplay(filePath).toLowerCase();
-  if (normalized.endsWith("/codegraph.json") || normalized.endsWith(".json")) {
-    return "jsonGraph";
-  }
-  if (normalized.endsWith("/graph.sqlite") || normalized.endsWith(".sqlite")) {
-    return "sqliteGraph";
-  }
   if (
     normalized.endsWith("/.codegraph/cache") ||
     normalized.includes("/.codegraph/cache/") ||
@@ -95,6 +89,12 @@ function detectIndexedArtifactType(filePath: string, stats: fs.Stats | null): In
     normalized.includes("/.codegraph-cache/")
   ) {
     return "diskCache";
+  }
+  if (normalized.endsWith("/codegraph.json") || normalized.endsWith(".json")) {
+    return "jsonGraph";
+  }
+  if (normalized.endsWith("/graph.sqlite") || normalized.endsWith(".sqlite")) {
+    return "sqliteGraph";
   }
   return "unknown";
 }

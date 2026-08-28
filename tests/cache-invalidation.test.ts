@@ -3445,6 +3445,45 @@ describe("Cache invalidation and strict hashing", () => {
     );
     await expect(fsp.stat(path.join(root, ".codegraph-cache"))).rejects.toMatchObject({ code: "ENOENT" });
   });
+  it("keeps the legacy cache when migration rename fails and logs only at debug level", async () => {
+    const cases = [
+      { logLevel: undefined, debugCalls: 0 },
+      { logLevel: "warn" as const, debugCalls: 0 },
+      { logLevel: "debug" as const, debugCalls: 1 },
+    ];
+
+    for (const testCase of cases) {
+      const root = await mkTmpDir(`dg-cache-legacy-migration-failure-${testCase.logLevel ?? "default"}-`);
+      const legacyCachePath = path.join(root, ".codegraph-cache", "index-v1");
+      const legacyArtifactPath = path.join(legacyCachePath, "manifest.json");
+      const expectedCachePath = path.join(root, ".codegraph", "cache", "index-v1");
+      const renameError = Object.assign(new Error("cross-device migration failure"), { code: "EXDEV" });
+      await fsp.mkdir(legacyCachePath, { recursive: true });
+      await fsp.writeFile(legacyArtifactPath, '{"schemaVersion":1}\n', "utf8");
+      const originalRenameSync = fs.renameSync;
+      const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation((oldPath, newPath) => {
+        if (oldPath === legacyCachePath) throw renameError;
+        originalRenameSync(oldPath, newPath);
+      });
+      const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+      try {
+        const resolution = buildCache.resolveCacheLocation(root, {
+          cache: "disk",
+          ...(testCase.logLevel ? { logLevel: testCase.logLevel } : {}),
+        });
+
+        expect(resolution.path).toBe(expectedCachePath);
+        await expect(fsp.readFile(legacyArtifactPath, "utf8")).resolves.toBe('{"schemaVersion":1}\n');
+        expect(debugSpy).toHaveBeenCalledTimes(testCase.debugCalls);
+        if (testCase.logLevel === "debug") {
+          expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining(legacyCachePath), renameError);
+        }
+      } finally {
+        debugSpy.mockRestore();
+        renameSpy.mockRestore();
+      }
+    }
+  });
 
   it("migrates only the matching repo-anchored cache namespace", async () => {
     const repoRoot = await mkTmpDir("dg-cache-namespaced-legacy-migration-");

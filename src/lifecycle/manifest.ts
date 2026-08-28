@@ -209,7 +209,7 @@ export async function uninitCodegraphLifecycle(
   if (!entries.length) {
     return { schemaVersion: MANIFEST_SCHEMA_VERSION, root, removed: false, manifestPath };
   }
-  const unknownEntries = entries.filter((entry) => !KNOWN_CODEGRAPH_FILES[entry]);
+  const unknownEntries = entries.filter((entry) => !Object.hasOwn(KNOWN_CODEGRAPH_FILES, entry));
   if (unknownEntries.length && !options.force) {
     throw new CodegraphLifecycleUserError(
       `Refusing to remove .codegraph with unknown entries: ${unknownEntries.join(", ")}. Use --force to remove them.`,

@@ -917,46 +917,35 @@ describe("CLI regressions", () => {
     expect(report.indexArtifact).toBeUndefined();
   });
 
-  it("doctor reports the explicit index artifact path when provided", async () => {
+  it("doctor classifies cache artifacts before generic JSON and SQLite files", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-doctor-"));
-    await fsp.mkdir(path.join(tmpDir, ".codegraph-cache", "index-v1"), {
-      recursive: true,
-    });
-    await fsp.writeFile(path.join(tmpDir, ".codegraph-cache", "index-v1", "manifest.json"), "{}\n", "utf8");
-    await fsp.writeFile(path.join(tmpDir, "codegraph.json"), "{}\n", "utf8");
+    const cases = [
+      { name: "consolidated manifest", relativePath: ".codegraph/cache/index-v1/manifest.json", type: "diskCache" },
+      {
+        name: "consolidated SQLite",
+        relativePath: ".codegraph/cache/index-v1/index-cache.sqlite",
+        type: "diskCache",
+      },
+      { name: "legacy manifest", relativePath: ".codegraph-cache/index-v1/manifest.json", type: "diskCache" },
+      { name: "legacy SQLite", relativePath: ".codegraph-cache/index-v1/index-cache.sqlite", type: "diskCache" },
+      { name: "ordinary JSON", relativePath: "codegraph.json", type: "jsonGraph" },
+      { name: "ordinary SQLite", relativePath: "graph.sqlite", type: "sqliteGraph" },
+    ] as const;
 
-    const cachePath = path.join(tmpDir, ".codegraph-cache", "index-v1");
-    const result = await runCliCommandDetailed(["doctor", "--json", cachePath], undefined, tmpDir);
-    const report = JSON.parse(result.stdout) as {
-      native: { available: boolean; supportedLanguageIds: string[] };
-      indexArtifact: {
-        type: string;
-        exists: boolean;
-        path: string;
-        details?: Record<string, unknown>;
+    for (const testCase of cases) {
+      const artifactPath = path.join(tmpDir, testCase.relativePath);
+      await fsp.mkdir(path.dirname(artifactPath), { recursive: true });
+      await fsp.writeFile(artifactPath, "{}\n", "utf8");
+
+      const result = await runCliCommandDetailed(["doctor", "--json", artifactPath], undefined, tmpDir);
+      const report = JSON.parse(result.stdout) as {
+        indexArtifact: { type: string; exists: boolean; path: string };
       };
-    };
 
-    expect(typeof report.native.available).toBe("boolean");
-    expect(Array.isArray(report.native.supportedLanguageIds)).toBe(true);
-    expect(report.indexArtifact.type).toBe("diskCache");
-    expect(report.indexArtifact.exists).toBe(true);
-    expect(normalize(report.indexArtifact.path)).toBe(normalize(cachePath));
-    expect(report.indexArtifact.details?.manifestPresent).toBe(true);
-
-    const consolidatedCachePath = path.join(tmpDir, ".codegraph", "cache", "index-v1");
-    await fsp.mkdir(consolidatedCachePath, { recursive: true });
-    await fsp.writeFile(path.join(consolidatedCachePath, "manifest.json"), "{}\n", "utf8");
-    const consolidatedResult = await runCliCommandDetailed(
-      ["doctor", "--json", consolidatedCachePath],
-      undefined,
-      tmpDir,
-    );
-    const consolidatedReport = JSON.parse(consolidatedResult.stdout) as {
-      indexArtifact: { type: string; path: string };
-    };
-    expect(consolidatedReport.indexArtifact.type).toBe("diskCache");
-    expect(normalize(consolidatedReport.indexArtifact.path)).toBe(normalize(consolidatedCachePath));
+      expect(report.indexArtifact.type).toBe(testCase.type);
+      expect(report.indexArtifact.exists).toBe(true);
+      expect(normalize(report.indexArtifact.path)).toBe(normalize(artifactPath));
+    }
   });
 
   it("hotspots honors --limit and include roots, and reuses the disk index cache when present", async () => {

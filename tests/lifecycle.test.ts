@@ -103,11 +103,36 @@ describe("project lifecycle commands", () => {
     }
   });
 
-  it("honors effective consolidated lifecycle ignores without rewriting Git policy", async () => {
+  it("adds the consolidated rule unless both lifecycle manifest and cache are effectively ignored", async () => {
     const cases = [
-      { name: "exact", policyPath: ".gitignore", policy: ".codegraph/manifest.json\n", expectsRootGitignore: true },
-      { name: "broader", policyPath: ".gitignore", policy: ".codegraph/\n", expectsRootGitignore: true },
-      { name: "info-exclude", policyPath: ".git/info/exclude", policy: ".codegraph/\n", expectsRootGitignore: false },
+      {
+        name: "manifest-and-cache",
+        policyPath: ".git/info/exclude",
+        policy: ".codegraph/\n",
+        expectedGitignore: null,
+        status: "already-ignored",
+      },
+      {
+        name: "manifest-only",
+        policyPath: ".gitignore",
+        policy: ".codegraph/manifest.json\n",
+        expectedGitignore: ".codegraph/manifest.json\n.codegraph/\n",
+        status: "added",
+      },
+      {
+        name: "cache-only",
+        policyPath: ".git/info/exclude",
+        policy: ".codegraph/cache/\n",
+        expectedGitignore: ".codegraph/\n",
+        status: "added",
+      },
+      {
+        name: "neither",
+        policyPath: ".gitignore",
+        policy: "",
+        expectedGitignore: ".codegraph/\n",
+        status: "added",
+      },
     ] as const;
 
     for (const testCase of cases) {
@@ -118,11 +143,15 @@ describe("project lifecycle commands", () => {
 
       const result = await initCodegraphLifecycle(root);
 
-      expect(result.gitignore).toEqual({ status: "already-ignored", path: ".gitignore", rules: [".codegraph/"] });
-      if (testCase.expectsRootGitignore) {
-        expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(testCase.policy);
-      } else {
+      expect(result.gitignore).toEqual({
+        status: testCase.status,
+        path: ".gitignore",
+        rules: [".codegraph/"],
+      });
+      if (testCase.expectedGitignore === null) {
         await expect(fsp.stat(path.join(root, ".gitignore"))).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(testCase.expectedGitignore);
       }
     }
   });
@@ -725,6 +754,34 @@ describe("project lifecycle commands", () => {
 
     expect(result.removed).toBeTruthy();
     await expectDiskIndexCacheHasArtifacts(root);
+  });
+  it("uninit refuses inherited lookup keys as unknown lifecycle entries", async () => {
+    const inheritedEntries = ["toString", "__proto__"] as const;
+    let verifiedEntries = 0;
+
+    for (const entry of inheritedEntries) {
+      const root = await mkTmpDir(`cg-life-uninit-inherited-${entry}-`);
+      await writeFile(root, "src/main.ts", "export const main = 1;\n");
+      await initCodegraphLifecycle(root);
+      try {
+        await fsp.writeFile(path.join(root, ".codegraph", entry), "operator data\n", "utf8");
+      } catch (error) {
+        if (
+          process.platform === "win32" &&
+          error instanceof Error &&
+          "code" in error &&
+          (error.code === "EINVAL" || error.code === "EPERM")
+        ) {
+          continue;
+        }
+        throw error;
+      }
+
+      await expect(uninitCodegraphLifecycle(root)).rejects.toThrow(new RegExp(`unknown entries: ${entry}`));
+      verifiedEntries += 1;
+    }
+
+    expect(verifiedEntries).toBeGreaterThan(0);
   });
 
   it("refuses forced cleanup through a symlinked lifecycle directory", async () => {
