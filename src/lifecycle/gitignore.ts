@@ -1,12 +1,13 @@
 import type { Stats } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { PROJECT_CACHE_RELATIVE_PATH } from "../indexer/build-cache/location.js";
 import { isGitPathIgnored, isGitPathTracked, isGitRepo } from "../util/git.js";
 import { errorMessage } from "../util/errors.js";
 import { CodegraphLifecycleUserError } from "./errors.js";
 
 const LIFECYCLE_MANIFEST_PATH = ".codegraph/manifest.json";
-const LIFECYCLE_CACHE_PATH = ".codegraph/cache/index-v1";
+const LIFECYCLE_CACHE_PATH = PROJECT_CACHE_RELATIVE_PATH.replaceAll(path.sep, "/");
 const GITIGNORE_PATH = ".gitignore";
 const LIFECYCLE_GITIGNORE_RULE = ".codegraph/";
 export const CODEGRAPH_GITIGNORE_RULES = [LIFECYCLE_GITIGNORE_RULE] as const;
