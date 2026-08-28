@@ -105,6 +105,11 @@ function diskCacheDatabasePath(projectRoot: string, opts?: BuildOptions): string
   return cacheDatabasePath(projectRoot, opts, "index-cache.sqlite");
 }
 
+export function diskModuleCacheExists(projectRoot: string, opts?: BuildOptions): boolean {
+  if ((opts?.cache ?? "off") !== "disk") return false;
+  return fs.existsSync(diskCacheDatabasePath(projectRoot, opts));
+}
+
 function createModuleCacheTable(db: SqliteDatabase): void {
   createSqliteTableIfMissing(db, MODULE_CACHE_TABLE, MODULE_CACHE_COLUMNS);
 }
@@ -399,6 +404,7 @@ export function tryLoadFromCache(
   sig: string,
   opts?: BuildOptions,
   report?: BuildReport,
+  diskCacheAvailable = true,
 ): ModuleIndex | null {
   const mode = opts?.cache ?? "off";
   const cacheReport = initCacheReport(report, mode);
@@ -418,6 +424,10 @@ export function tryLoadFromCache(
     return null;
   }
   if (mode === "disk") {
+    if (!diskCacheAvailable) {
+      if (cacheEnabled && cacheReport) cacheReport.misses += 1;
+      return null;
+    }
     try {
       const cache = getDiskModuleCache(projectRoot, opts);
       const row = cache.load.get(cacheRelativePath(projectRoot, file)) as

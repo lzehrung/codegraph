@@ -18,6 +18,7 @@ export {
   cacheSignatureForFile,
   clearMemoryCache,
   closeDiskCacheDatabase,
+  diskModuleCacheExists,
   fileSignature,
   fileSignatureFromSource,
   pruneDiskModuleCache,

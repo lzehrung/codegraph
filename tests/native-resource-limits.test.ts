@@ -1,7 +1,6 @@
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -217,15 +216,8 @@ describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache beh
       expect(firstReport.backend?.native.filesFellBack).toBe(1);
       expect(firstReport.backend?.native.errors[0]?.file).toBe(normalizedFile);
 
-      const db = new DatabaseSync(path.join(root, ".codegraph", "cache", "index-v1", "index-cache.sqlite"), {
-        readOnly: true,
-      });
-      try {
-        const row = db.prepare("SELECT file FROM module_cache WHERE file = ?").get(normalizedFile);
-        expect(row).toBeUndefined();
-      } finally {
-        db.close();
-      }
+      const databasePath = path.join(root, ".codegraph", "cache", "index-v1", "index-cache.sqlite");
+      await expect(fsp.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
 
       const secondReport: BuildReport = { timings: {} };
       await buildProjectIndexFromFiles(root, [file], {
@@ -237,6 +229,7 @@ describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache beh
       });
       expect(secondReport.cache?.hits).toBe(0);
       expect(secondReport.workerPool?.tasksSubmitted).toBe(0);
+      await expect(fsp.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

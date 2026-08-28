@@ -51,6 +51,7 @@ import {
   buildBloomFilterForFile,
   cacheSignatureForFile,
   closeDiskCacheDatabase,
+  diskModuleCacheExists,
   collectWorkspaceManifestDependencyEdges,
   computeConfigHash,
   createFallbackImportExtractionHandler,
@@ -773,6 +774,7 @@ async function buildIndexFromFileListShared(
   // Cache lookup determines the work a full build will actually parse. Complete that cheap phase
   // before starting Piscina, so a warm build does not bootstrap workers and partial hits bound
   // the pool to real parse misses rather than the input file list.
+  const moduleCacheAvailable = opts?.cache !== "disk" || diskModuleCacheExists(projectRoot, opts);
   const cacheProbes = new Map<string, ModuleCacheProbe>(
     await mapLimit(normalizedFiles, conc, async (file) => {
       try {
@@ -800,7 +802,9 @@ async function buildIndexFromFileListShared(
           : sigInfo.cacheSig;
         const canReuseModuleCache =
           cacheEnabled && (!graphOptions.resolveNodeModules || resolverEnvironmentFingerprint !== null);
-        const mod = canReuseModuleCache ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
+        const mod = canReuseModuleCache
+          ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report, moduleCacheAvailable)
+          : null;
         return [file, { sigInfo, mod }] as const;
       } catch (error) {
         return [file, { error }] as const;

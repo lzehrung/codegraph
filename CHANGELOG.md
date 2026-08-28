@@ -13,6 +13,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 - Release candidate assembly now runs only source-quality checks and one package build, leaving
   tests, security, fixture, and package certification to their dedicated release jobs.
+- Clean disk-cache builds now skip module lookups when the cache database does not exist, while
+  preserving per-file miss accounting.
 
 ### Fixed
 
