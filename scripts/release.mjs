@@ -396,6 +396,14 @@ function planVersions(selectedPackages, currentVersions, { releaseType, shouldRe
 }
 
 function commitAndTag(selectedPackages, versionPlan) {
+  // The lock verified in refreshDependencies is not the lock reaching this commit: the
+  // publish block rewrites managed manifests, and `npm publish` and `npm run build` can
+  // rewrite package-lock.json against whatever this host installed. That is how the 2.2.2
+  // lock lost `@emnapi/core` and `@emnapi/runtime` after passing the earlier gate, which
+  // broke `npm ci` on Linux and Windows for every branch cut from main. Normalizing and
+  // verifying here makes the committed lock the verified lock by construction.
+  normalizeLockfile();
+  verifyLockfileInstallable();
   runGit([
     "add",
     "package.json",

@@ -101,6 +101,16 @@ describe("release script helpers", () => {
     expect(refreshBody![1]).toContain("normalizeLockfile()");
     expect(refreshBody![1]).toContain("verifyLockfileInstallable()");
     expect(releaseScript).toMatch(/verifyLockfileInstallable[\s\S]*?throw new Error\(/);
+
+    // Verifying inside refreshDependencies is not enough: the publish block rewrites
+    // managed manifests and npm can rewrite the lock afterward, so the 2.2.2 release
+    // committed a lock that had passed the gate and still dropped @emnapi/*. The
+    // committed lock must be re-normalized and re-verified immediately before `git add`.
+    const commitBody = /function commitAndTag\([\s\S]*?\n\}/.exec(releaseScript);
+    expect(commitBody, "commitAndTag must exist").not.toBeNull();
+    expect(commitBody![0]).toContain("normalizeLockfile()");
+    expect(commitBody![0]).toContain("verifyLockfileInstallable()");
+    expect(commitBody![0].indexOf("verifyLockfileInstallable()")).toBeLessThan(commitBody![0].indexOf("runGit(["));
     expect(releaseScript).toContain('run("node", ["./scripts/stage-native-package.mjs", "--if-missing"])');
     expect(releaseScript).toContain("assertCompleteNativeTargetArtifacts(nativeRootPath");
     expect(releaseScript).toContain("if (!rootVersion && nativeVersion)");
