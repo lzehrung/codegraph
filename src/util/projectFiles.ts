@@ -124,6 +124,8 @@ export const DEFAULT_PROJECT_PATTERNS = [
 
 const REALPATH_FILTER_CONCURRENCY = 64;
 
+export type SymlinkProbeMode = "known" | "git-candidates" | "filesystem";
+
 export type ProjectFileDiscoveryOptions = {
   includeGlobs?: string[];
   ignoreGlobs?: string[];
@@ -133,13 +135,13 @@ export type ProjectFileDiscoveryOptions = {
   logLevel?: LogLevel;
   /**
    * Previously discovered symlinked directories under the project root. When provided
-   * (including an empty array), discovery skips the full-tree symlink-directory probe
-   * and instead re-verifies each entry directly, avoiding a second full recursive walk
-   * on warm runs. Omit when the symlink-directory set is not yet known; discovery then
-   * probes once and reports what it found via `onSymlinkDirectoriesDiscovered`.
+   * (including an empty array), discovery re-verifies each entry directly and skips the
+   * probe on warm runs. Omit it to probe once and report the result through
+   * `onSymlinkDirectoriesDiscovered`. The callback mode distinguishes persisted hints,
+   * Git candidate screening, and the non-Git filesystem fallback.
    */
   knownSymlinkDirectories?: readonly string[];
-  onSymlinkDirectoriesDiscovered?: (directories: readonly string[]) => void;
+  onSymlinkDirectoriesDiscovered?: (directories: readonly string[], mode: SymlinkProbeMode) => void;
 };
 
 type GitignoreRule = {
@@ -162,8 +164,9 @@ type SafeSymlinkDirectoryCrawlOptions = {
   onlyFiles?: boolean;
   markDirectories?: boolean;
   knownSymlinkDirectories?: readonly string[];
+  candidatePaths?: readonly string[];
   resolvedSafeSymlinkDirectories?: readonly string[];
-  onSymlinkDirectoriesDiscovered?: (directories: readonly string[]) => void;
+  onSymlinkDirectoriesDiscovered?: (directories: readonly string[], mode: SymlinkProbeMode) => void;
 };
 
 type RootSafePath = {
@@ -267,13 +270,21 @@ function parseGitignoreRule(baseDir: string, rawLine: string): GitignoreRule | n
   };
 }
 
+/**
+ * The rules one `.gitignore` directory declares, kept with that directory.
+ *
+ * Storing the base alongside the rules lets the matcher resolve one relative path per
+ * group instead of one per rule.
+ */
+type GitignoreRuleGroup = { baseDir: string; rules: GitignoreRule[] };
+
 type GitignoreIndex = {
   hasRules: boolean;
   /**
-   * Rules grouped by the directory of the `.gitignore` that declared them, keyed by
-   * {@link fileIdentityKey} so one base directory can never be keyed two ways.
+   * Rule groups keyed by {@link fileIdentityKey} of the declaring directory, so one base
+   * directory can never be keyed two ways.
    */
-  byBaseDir: Map<string, GitignoreRule[]>;
+  byBaseDir: Map<string, GitignoreRuleGroup>;
 };
 
 const EMPTY_GITIGNORE_INDEX: GitignoreIndex = { hasRules: false, byBaseDir: new Map() };
@@ -322,8 +333,8 @@ async function buildGitignoreIndex(sources: readonly GitignoreSource[]): Promise
       const rule = parseGitignoreRule(baseDir, line);
       if (!rule) continue;
       const existing = gitignoreIndex.byBaseDir.get(baseKey);
-      if (existing) existing.push(rule);
-      else gitignoreIndex.byBaseDir.set(baseKey, [rule]);
+      if (existing) existing.rules.push(rule);
+      else gitignoreIndex.byBaseDir.set(baseKey, { baseDir, rules: [rule] });
       gitignoreIndex.hasRules = true;
     }
   }
@@ -365,27 +376,34 @@ async function loadGitignoreIndexForRootAliases(projectRoot: string): Promise<Gi
  * Testing every rule cost O(files x rules): on an Unreal project that meant 55,983
  * candidates against 2,266 rules from 173 `.gitignore` files, or 253.7M evaluations and
  * roughly 21.7s of a 26.1s discovery.
+ *
+ * The relative path is computed once per declaring directory rather than once per rule.
+ * Every rule in a group shares that directory, so the per-rule form repeated identical
+ * `path.relative` and normalization work; on the same project that repetition was the
+ * dominant remaining cost, at 2.6s of a 3.8s discovery.
  */
 function isIgnoredByGitignore(absolutePath: string, gitignoreIndex: GitignoreIndex): boolean {
   if (!gitignoreIndex.hasRules) return false;
-  const chain: GitignoreRule[][] = [];
+  const chain: GitignoreRuleGroup[] = [];
   let current = normalizePath(path.dirname(absolutePath));
   for (;;) {
-    const rules = gitignoreIndex.byBaseDir.get(fileIdentityKey(current));
-    if (rules) chain.push(rules);
+    const group = gitignoreIndex.byBaseDir.get(fileIdentityKey(current));
+    if (group) chain.push(group);
     const parent = normalizePath(path.dirname(current));
     if (parent === current) break;
     current = parent;
   }
   let ignored = false;
   for (let depth = chain.length - 1; depth >= 0; depth -= 1) {
-    for (const rule of chain[depth]!) {
-      const relativePath = path.relative(rule.baseDir, absolutePath);
-      if (!isRelativePathInside(relativePath)) {
-        continue;
-      }
-      const normalizedRelativePath = normalizePath(relativePath);
-      if (rule.dirOnly && !normalizedRelativePath.includes("/")) {
+    const group = chain[depth]!;
+    const relativePath = path.relative(group.baseDir, absolutePath);
+    if (!isRelativePathInside(relativePath)) {
+      continue;
+    }
+    const normalizedRelativePath = normalizePath(relativePath);
+    const hasSeparator = normalizedRelativePath.includes("/");
+    for (const rule of group.rules) {
+      if (rule.dirOnly && !hasSeparator) {
         continue;
       }
       if (rule.matches(normalizedRelativePath)) {
@@ -590,6 +608,7 @@ export async function listProjectFiles(
         : [];
     const symlinkOptions = {
       globRoot,
+      ...(gitCandidates ? { candidatePaths: gitCandidates.files } : {}),
       ...(options?.knownSymlinkDirectories !== undefined
         ? { knownSymlinkDirectories: options.knownSymlinkDirectories }
         : {}),
@@ -640,7 +659,10 @@ export async function listProjectFiles(
         if (ignoredByDefault && !(includeMatchers.length > 0 && matchesInclude)) {
           return false;
         }
-        return !isIgnoredByGitignore(filePath, gitignoreIndex) && !isIgnoredByGitignore(realPath, gitignoreIndex);
+        if (isIgnoredByGitignore(filePath, gitignoreIndex)) return false;
+        // The real path only differs when the entry was reached through a symlink, so
+        // testing it again for every ordinary file doubled the matcher work for nothing.
+        return normalizePath(realPath) === filePath || !isIgnoredByGitignore(realPath, gitignoreIndex);
       })
       .map(({ filePath }) => filePath);
   } catch (error) {
@@ -693,15 +715,19 @@ export function createDiscoveredFileMatcher(
   };
 }
 
+/**
+ * Whether `linkPath` is a directory symlink that is safe to crawl for project files.
+ *
+ * `lstat` runs before `realpath` and `stat` so a candidate that is not a symlink costs
+ * one syscall rather than three. That matters for callers screening a broad candidate
+ * list, where nearly every entry is an ordinary file, and costs nothing for callers
+ * passing entries a walk already identified as links.
+ */
 async function isSafeSymlinkDirectory(root: string, linkPath: string, realRoot: string): Promise<boolean> {
   try {
     if (!isRelativePathInside(path.relative(root, linkPath))) return false;
-    const [linkStats, realPath, targetStats] = await Promise.all([
-      fsp.lstat(linkPath),
-      fsp.realpath(linkPath),
-      fsp.stat(linkPath),
-    ]);
-    if (!linkStats.isSymbolicLink()) return false;
+    if (!(await fsp.lstat(linkPath)).isSymbolicLink()) return false;
+    const [realPath, targetStats] = await Promise.all([fsp.realpath(linkPath), fsp.stat(linkPath)]);
     if (!targetStats.isDirectory()) return false;
     if (!isFilePathWithinRoot(realRoot, realPath)) return false;
     return normalizePath(realPath) !== normalizePath(realRoot);
@@ -714,10 +740,11 @@ async function isSafeSymlinkDirectory(root: string, linkPath: string, realRoot: 
  * Resolve the symlinked directories under `root` that are safe to crawl.
  *
  * When `knownSymlinkDirectories` is provided, this re-verifies each previously
- * discovered path directly (stat + realpath per entry) instead of walking the
- * whole tree again. Otherwise it probes once via a full `fg(["**\/*"])` walk
- * and, if `onSymlinkDirectoriesDiscovered` is set, reports what it found so a
- * caller can persist the result for future warm runs.
+ * discovered path directly. Otherwise a Git-derived `candidatePaths` list avoids a
+ * separate full-tree scan: Git already enumerated every tracked and non-ignored
+ * untracked entry, including symlinks. Non-Git discovery retains the existing
+ * `fg(["**\/*"])` fallback. Every path still passes the same lstat, target-directory,
+ * and realpath-confinement checks before it can be crawled.
  */
 async function resolveSafeSymlinkDirectories(
   root: string,
@@ -732,8 +759,25 @@ async function resolveSafeSymlinkDirectories(
       async (linkPath) => ((await isSafeSymlinkDirectory(root, linkPath, realRoot)) ? linkPath : null),
     );
     const resolved = verified.filter((entry): entry is string => entry !== null);
-    options.onSymlinkDirectoriesDiscovered?.(resolved);
+    options.onSymlinkDirectoriesDiscovered?.(resolved, "known");
     return resolved;
+  }
+  if (options.candidatePaths !== undefined) {
+    const ignoreMatchers = ignore
+      .map(normalizeGlobPattern)
+      .filter(Boolean)
+      .map((pattern) => picomatch(pattern, { dot: true }));
+    const candidatePaths = Array.from(new Set(options.candidatePaths)).filter((candidatePath) => {
+      const relativePath = normalizePath(path.relative(root, candidatePath));
+      if (!isRelativePathInside(relativePath)) return false;
+      return !ignoreMatchers.some((matcher) => matcher(relativePath));
+    });
+    const verified = await mapLimitSemaphore(candidatePaths, REALPATH_FILTER_CONCURRENCY, async (linkPath) =>
+      (await isSafeSymlinkDirectory(root, linkPath, realRoot)) ? linkPath : null,
+    );
+    const discovered = verified.filter((entry): entry is string => entry !== null);
+    options.onSymlinkDirectoriesDiscovered?.(discovered, "git-candidates");
+    return discovered;
   }
   const entries = (await fg(["**/*"], {
     cwd: root,
@@ -750,7 +794,7 @@ async function resolveSafeSymlinkDirectories(
     async (linkPath) => ((await isSafeSymlinkDirectory(root, linkPath, realRoot)) ? linkPath : null),
   );
   const discovered = candidates.filter((entry): entry is string => entry !== null);
-  options.onSymlinkDirectoriesDiscovered?.(discovered);
+  options.onSymlinkDirectoriesDiscovered?.(discovered, "filesystem");
   return discovered;
 }
 
@@ -854,7 +898,7 @@ export async function discoverProjectFiles(
   options?: {
     logLevel?: LogLevel;
     knownSymlinkDirectories?: readonly string[];
-    onSymlinkDirectoriesDiscovered?: (directories: readonly string[]) => void;
+    onSymlinkDirectoriesDiscovered?: (directories: readonly string[], mode: SymlinkProbeMode) => void;
   },
 ): Promise<ProjectFileInfo[]> {
   const root = await ensureDirectoryReadable(projectRoot, "Project root");

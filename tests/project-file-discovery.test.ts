@@ -908,7 +908,7 @@ describe("project file discovery", () => {
 
     expect(discoveredSet.has(normalize(path.join(packageDir, "src", "index.ts")))).toBe(true);
     expect(discoveredSet.has(normalize(path.join(outsideLink, "src", "index.ts")))).toBe(false);
-    expect(discoveredCallback).toHaveBeenCalledWith([]);
+    expect(discoveredCallback).toHaveBeenCalledWith([], "known");
   });
 
   it("reports the discovered symlink directories through onSymlinkDirectoriesDiscovered on a probing run", async () => {
@@ -945,7 +945,7 @@ describe("project file discovery", () => {
       onSymlinkDirectoriesDiscovered: discoveredCallback,
     });
 
-    expect(discoveredCallback).toHaveBeenCalledWith([]);
+    expect(discoveredCallback).toHaveBeenCalledWith([], "filesystem");
   });
 });
 
@@ -1025,6 +1025,74 @@ describe("git-native project file discovery", () => {
     const files = (await listProjectFiles(root)).map(normalize);
     expect(files.some((file) => file.endsWith("/app.ts"))).toBe(true);
     expect(files.some((file) => file.endsWith("/plugins/example/plugin.ts"))).toBe(true);
+  });
+
+  it("screens Git candidates for safe symlink directories without a second tree walk", async () => {
+    const root = await makeRepo("codegraph-discovery-git-symlink-");
+    const packageDir = path.join(root, "packages", "core");
+    const linkedPackage = path.join(root, "linked-core");
+    await createFile(path.join(packageDir, "index.ts"), "export const core = 1;\n");
+    try {
+      // A Windows junction is traversed directly by Git and reports as a directory to
+      // lstat, so it does not exercise the candidate symlink verifier.
+      await fs.symlink(packageDir, linkedPackage, "dir");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+    const discoveredCallback = vi.fn();
+
+    const files = await listProjectFiles(root, undefined, {
+      onSymlinkDirectoriesDiscovered: discoveredCallback,
+    });
+
+    expect(files.map(normalize)).toContain(normalize(path.join(linkedPackage, "index.ts")));
+    // The mode is the test seam for the performance contract. Deleting the
+    // `candidatePaths` branch changes this to "filesystem" and fails the assertion.
+    expect(discoveredCallback).toHaveBeenCalledWith([normalize(linkedPackage)], "git-candidates");
+  });
+
+  it("filters ignored Git symlink candidates before resolving or crawling them", async () => {
+    const root = await makeRepo("codegraph-discovery-git-symlink-ignored-");
+    const packageDir = path.join(root, "packages", "core");
+    const linkedPackage = path.join(root, "node_modules");
+    await createFile(path.join(packageDir, "index.ts"), "export const core = 1;\n");
+    try {
+      await fs.symlink(packageDir, linkedPackage, "dir");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+    const discoveredCallback = vi.fn();
+
+    const files = await listProjectFiles(root, undefined, {
+      onSymlinkDirectoriesDiscovered: discoveredCallback,
+    });
+
+    expect(files.map(normalize)).not.toContain(normalize(path.join(linkedPackage, "index.ts")));
+    expect(discoveredCallback).toHaveBeenCalledWith([], "git-candidates");
+  });
+
+  it("screens a Git symlink candidate reopened by includeGlobs", async () => {
+    const root = await makeRepo("codegraph-discovery-git-symlink-reopened-");
+    const packageDir = path.join(root, "packages", "core");
+    const linkedPackage = path.join(root, "node_modules");
+    await createFile(path.join(packageDir, "index.ts"), "export const core = 1;\n");
+    try {
+      await fs.symlink(packageDir, linkedPackage, "dir");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+    const discoveredCallback = vi.fn();
+
+    const files = await listProjectFiles(root, undefined, {
+      includeGlobs: ["node_modules/**"],
+      onSymlinkDirectoriesDiscovered: discoveredCallback,
+    });
+
+    expect(files.map(normalize)).toContain(normalize(path.join(linkedPackage, "index.ts")));
+    expect(discoveredCallback).toHaveBeenCalledWith([normalize(linkedPackage)], "git-candidates");
   });
 
   it("excludes gitignored trees while keeping tracked sources", async () => {
