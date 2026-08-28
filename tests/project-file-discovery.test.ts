@@ -12,7 +12,7 @@ import {
 import { parseDotnetName, parseGoModuleName, parsePomName, parseTomlName } from "../src/util/projectFiles/parsers.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
 import { runGit as git } from "./helpers/git.js";
-import { listGitSubmoduleDirectories } from "../src/util/git.js";
+import { clearGitDiscoveryCacheForTests, listGitSubmoduleDirectories } from "../src/util/git.js";
 
 const normalize = (value: string) => value.replace(/\\/g, "/");
 
@@ -1004,6 +1004,7 @@ describe("git-native project file discovery", () => {
     for (const root of gitTempDirs.splice(0)) {
       await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
+    clearGitDiscoveryCacheForTests();
   });
 
   it("discovers sources tracked inside a submodule", async () => {

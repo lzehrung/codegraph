@@ -17,7 +17,7 @@ import {
 import { trimToNull } from "./projectFiles/parsers.js";
 import { mapLimitSemaphore } from "./concurrency.js";
 import {
-  isGitPathIgnored,
+  isGitProjectRootIgnored,
   isGitRepo,
   listGitExcludeFiles,
   listGitSubmoduleDirectories,
@@ -483,7 +483,7 @@ async function findGitIgnoreSources(root: string, files: readonly string[]): Pro
 async function listGitCandidateFiles(root: string, logLevel: LogLevel | undefined): Promise<GitCandidateSet | null> {
   try {
     if (!(await isGitRepo(root))) return null;
-    if (await isGitPathIgnored(root, root)) return null;
+    if (await isGitProjectRootIgnored(root)) return null;
     const [tracked, untracked, submoduleDirectories] = await Promise.all([
       listTrackedFiles(root, { recurseSubmodules: true, ...(logLevel === undefined ? {} : { logLevel }) }),
       listUntrackedFiles(root, { respectGitignore: true }),

@@ -14,7 +14,11 @@ import { logWithLevel, type LogLevel } from "../logging.js";
  */
 export const DEFAULT_GIT_TIMEOUT_MS = 30_000;
 
+type GitExcludeFile = { file: string; baseDir: string };
+
 const gitRepositoryChecks = new Map<string, Promise<boolean>>();
+const gitDiscoveryRootIgnoredChecks = new Map<string, Promise<boolean>>();
+const gitExcludeFileChecks = new Map<string, Promise<GitExcludeFile[]>>();
 const MAX_GIT_HASH_OBJECT_ARGUMENT_BYTES = 24 * 1024;
 
 let gitExecutableForTests: string | null = null;
@@ -84,9 +88,15 @@ export type RunGitOptions = {
   onSpawn?: ((child: { pid?: number }) => void) | undefined;
 };
 
-/** Test-only: drop memoized `isGitRepo` promises. */
+/** Test-only: drop memoized Git repository checks. */
 export function clearGitRepositoryCheckCacheForTests(): void {
   gitRepositoryChecks.clear();
+}
+
+/** Test-only: drop memoized Git discovery facts. */
+export function clearGitDiscoveryCacheForTests(): void {
+  gitDiscoveryRootIgnoredChecks.clear();
+  gitExcludeFileChecks.clear();
 }
 
 function resolveGitTimeoutMs(timeoutMs: number | undefined): number {
@@ -375,6 +385,19 @@ export async function isGitPathIgnored(projectRoot: string, file: string): Promi
   return await runGitPathPredicate(projectRoot, ["check-ignore", "--quiet", "--no-index", "--", normalizePath(file)]);
 }
 
+/**
+ * Whether Git ignores the requested project root. This value is static for a root during
+ * process lifetime and lets repeated discovery avoid spawning `git check-ignore`.
+ */
+export async function isGitProjectRootIgnored(projectRoot: string): Promise<boolean> {
+  const resolvedRoot = path.resolve(projectRoot);
+  const cached = gitDiscoveryRootIgnoredChecks.get(resolvedRoot);
+  if (cached) return await cached;
+  const check = isGitPathIgnored(resolvedRoot, resolvedRoot);
+  gitDiscoveryRootIgnoredChecks.set(resolvedRoot, check);
+  return await check;
+}
+
 async function runGitPathPredicate(projectRoot: string, args: string[]): Promise<boolean> {
   try {
     await runGit(projectRoot, args);
@@ -630,8 +653,17 @@ export async function listGitSubmoduleDirectories(
 export async function listGitExcludeFiles(
   projectRoot: string,
   opts?: { gitAvailable?: boolean },
-): Promise<{ file: string; baseDir: string }[]> {
+): Promise<GitExcludeFile[]> {
   if (!(opts?.gitAvailable ?? true)) return [];
+  const resolvedRoot = path.resolve(projectRoot);
+  const cached = gitExcludeFileChecks.get(resolvedRoot);
+  if (cached) return await cached;
+  const check = listGitExcludeFilesUncached(resolvedRoot);
+  gitExcludeFileChecks.set(resolvedRoot, check);
+  return await check;
+}
+
+async function listGitExcludeFilesUncached(projectRoot: string): Promise<GitExcludeFile[]> {
   let baseDir: string;
   try {
     const { stdout } = await runGit(projectRoot, ["rev-parse", "--show-toplevel"]);
@@ -662,7 +694,7 @@ export async function listGitExcludeFiles(
   } catch {
     // `git config --get` exits non-zero when the key is unset.
   }
-  const sources: { file: string; baseDir: string }[] = [];
+  const sources: GitExcludeFile[] = [];
   for (const file of Array.from(new Set(candidates))) {
     try {
       if ((await fsp.stat(file)).isFile()) sources.push({ file, baseDir });
