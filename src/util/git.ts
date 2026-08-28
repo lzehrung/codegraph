@@ -1,5 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
+import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { stringifyUnknown } from "./ast.js";
 import { normalizePath } from "./paths.js";
@@ -582,28 +584,93 @@ export async function listTrackedFiles(
  * actually tracks: a gitlink entry carries mode 160000. Callers enumerating untracked
  * files need this because `--recurse-submodules` cannot combine with `--others`, so
  * untracked files inside a submodule require a separate listing rooted there.
+ *
+ * `recurse` descends into each submodule to find gitlinks it records in turn. A
+ * superproject's index lists only its own direct submodules, so without this a new
+ * file inside a submodule of a submodule is invisible to untracked enumeration even
+ * though the tracked listing recurses all the way down.
  */
 export async function listGitSubmoduleDirectories(
   projectRoot: string,
-  opts?: { gitAvailable?: boolean },
+  opts?: { gitAvailable?: boolean; recurse?: boolean },
 ): Promise<string[]> {
   if (!(opts?.gitAvailable ?? true)) return [];
   const args = ["ls-files", "--stage", "-z"];
   try {
     const { stdout } = await runGit(projectRoot, args, { maxBuffer: 64 * 1024 * 1024 });
-    const out: string[] = [];
+    const direct: string[] = [];
     for (const record of stdout.split("\0").filter(Boolean)) {
       // Each record is `<mode> <object> <stage>\t<path>`; 160000 marks a gitlink.
       if (!record.startsWith("160000 ")) continue;
       const tabIndex = record.indexOf("\t");
       if (tabIndex < 0) continue;
       const rel = record.slice(tabIndex + 1);
-      if (rel) out.push(normalizePath(path.resolve(projectRoot, rel)));
+      if (rel) direct.push(normalizePath(path.resolve(projectRoot, rel)));
     }
-    return Array.from(new Set(out));
+    if (!opts?.recurse || !direct.length) return Array.from(new Set(direct));
+    const nested = await Promise.all(
+      direct.map(async (directory) => await listGitSubmoduleDirectories(directory, opts)),
+    );
+    return Array.from(new Set([...direct, ...nested.flat()]));
   } catch (error) {
     throw createGitError(projectRoot, args, error);
   }
+}
+
+/**
+ * Git's non-`.gitignore` ignore sources for `projectRoot`, paired with the directory
+ * their patterns resolve against.
+ *
+ * Git consults the per-repository exclude file and the user's `core.excludesFile` in
+ * addition to `.gitignore`, and matches both as if declared at the repository root.
+ * Callers that filter paths Git never listed need these or they apply a strictly
+ * narrower rule set than Git did. Missing or unset sources are omitted rather than
+ * treated as an error, since neither is required to exist.
+ */
+export async function listGitExcludeFiles(
+  projectRoot: string,
+  opts?: { gitAvailable?: boolean },
+): Promise<{ file: string; baseDir: string }[]> {
+  if (!(opts?.gitAvailable ?? true)) return [];
+  let baseDir: string;
+  try {
+    const { stdout } = await runGit(projectRoot, ["rev-parse", "--show-toplevel"]);
+    baseDir = normalizePath(stdout.trim());
+  } catch {
+    return [];
+  }
+  if (!baseDir) return [];
+  const candidates: string[] = [];
+  try {
+    // `--git-path` resolves `info/exclude` correctly when `.git` is a file, as it is in
+    // linked worktrees and submodules, where guessing `<root>/.git/info` would miss it.
+    const { stdout } = await runGit(projectRoot, ["rev-parse", "--git-path", "info/exclude"]);
+    const resolved = stdout.trim();
+    if (resolved) candidates.push(normalizePath(path.resolve(projectRoot, resolved)));
+  } catch {
+    // No exclude file for this repository layout.
+  }
+  try {
+    const { stdout } = await runGit(projectRoot, ["config", "--get", "core.excludesFile"]);
+    const configured = stdout.trim();
+    if (configured) {
+      const expanded = configured.startsWith("~")
+        ? path.join(os.homedir(), configured.slice(1))
+        : path.resolve(projectRoot, configured);
+      candidates.push(normalizePath(expanded));
+    }
+  } catch {
+    // `git config --get` exits non-zero when the key is unset.
+  }
+  const sources: { file: string; baseDir: string }[] = [];
+  for (const file of Array.from(new Set(candidates))) {
+    try {
+      if ((await fsp.stat(file)).isFile()) sources.push({ file, baseDir });
+    } catch {
+      // Configured but absent; Git ignores it too.
+    }
+  }
+  return sources;
 }
 
 /**
