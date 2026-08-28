@@ -9,6 +9,11 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Changed
+
+- Release candidate assembly now runs only source-quality checks and one package build, leaving
+  tests, security, fixture, and package certification to their dedicated release jobs.
+
 ### Fixed
 
 - The certified release workflow now generates and validates its final committed lock under Node
