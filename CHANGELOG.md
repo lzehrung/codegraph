@@ -11,6 +11,18 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Changed
 
+- Release candidate assembly now runs only source-quality checks and one package build, leaving
+  tests, security, fixture, and package certification to their dedicated release jobs.
+
+### Fixed
+
+- The certified release workflow now generates and validates its final committed lock under Node
+  22/npm 10, matching the minimum supported CI runtime.
+
+## [2.3.0] - 2026-08-28
+
+### Changed
+
 - MCP tool responses now use compact JSON, `explore` omits source by default, and follow-ups are
   deduplicated and limited to callable MCP tools
   ([#286](https://github.com/lzehrung/codegraph/pull/286)).
@@ -22,8 +34,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Fixed
 
-- Lockfile generation and validation now use the npm 10 version from the minimum-supported Node 22
-  CI lane, preventing a Node 24/npm 11 release from publishing a lock that ordinary CI rejects.
+- Pinned standalone release-script lock generation and validation to npm 10.9.2.
 
 ### Removed
 
