@@ -11,40 +11,73 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Changed
 
-- Added `codegraph server start|status|stop` to manage one project-local MCP HTTP server. The loopback-only default serializes lifecycle changes, records a non-secret credential ID after a challenged root, process, and startup-identity health check, keeps the credential in per-user Codegraph state outside the project and separate from package files and compiler cache data, writes startup diagnostics to `.codegraph/server.log`, distinguishes confirmed stale state from an unreachable server, and requires an explicit restart after a package update.
-- Installed Windows packages that only read a warm cache no longer load the native addon. The
-  runtime fingerprint needed the addon's supported-language list, so every cache-validity check
-  paid a full load to prove it did not need one; Windows now replays that list from a record beside
-  the cached binary. The same record lets a warm run skip the two full-file SHA-256 passes the
-  Windows native cache performed per process, re-verifying once a day instead. A tampered binary
-  is still detected on the next verification, and any size or mtime change forces one immediately.
-- Extraction workers are handed the addon the main thread already resolved instead of repeating
-  the whole resolution, which on Windows was two 29 MB hashes and a cache verification per worker.
-- The indexer creates its worker pool after it knows which files changed, sizes it by that count,
-  and skips it entirely below a measured threshold. A warm run with nothing changed now starts no
-  workers at all, and a small incremental update starts at most one per file. The auto threshold
-  moved from 250 files to 32 on measurement, so incremental builds between those sizes are now
-  parallelized. `--workers` and an explicit `useNativeWorkers` still override the decision.
-- Installing a native addon now clears cached copies that no project has used in a month, which
-  previously accumulated at roughly 29 MB per version. Retention is by age rather than by
-  version because the cache is shared across projects on a machine: two projects pinned to
-  different native versions both keep their entry.
-
-### Removed
-
-- Removed the inert non-native parser seam. `isNonNativeParserAvailable`, `isNonNativeParserUnavailableError`, `parseWithLanguage`, `executeQueryAsNativeMatches`, `loadTreeSitterLanguage`, `loadTypeScriptGrammars`, `isParserSyntaxTree`, `__resetParserBackendModuleForTests`, and the `ParserLanguage`, `ParserSyntaxTree`, `QueryMatch`, `QueryCapture`, and `QueryPoint` types are gone, along with `languageForFile`, `LanguageSupport.language`, and `LanguageDefinition.grammar`. Every one of them was either a stub that returned a placeholder, a function that always threw, or a type describing those. The native parser has been the only grammar backend since 2.0.0.
-- Removed the `lang` parameter and option from the exported signatures that threaded it: `collectLocalsAndExportsFromSource`, `buildScopeIndexFromSource`, `collectImportsForFile`, and `collectModuleSpecifiersFromSource`, plus the unread `tree` option on `collectImportsForFile`. Callers should drop the argument; nothing read it. This is a breaking change to the library surface, shipping in a 2.x minor by explicit decision, matching how 2.0.0 handled export narrowing without compatibility aliases.
-- Dropped `behavior.grammar` from the language-definition cache fingerprint. Existing build caches rebuild once on first run after upgrading, which is the designed rebuild path rather than a schema migration.
-- Deleted five leftover declarations that no code read: the superseded `codegraph packet get` command formatters in agent orientation, a duplicate ignorable-character pattern in JVM symbol resolution, a per-file source split in locals extraction, and a bundled-skill read copied into the uninstall planner. `codegraph uninstall` no longer fails when the package's bundled skill file is missing, which it never needed.
+- Cold discovery now uses Git-aware file enumeration, cached repository facts, grouped ignore
+  matching, and bounded symlink screening. On the measured Unreal project, discovery fell from
+  26.1 seconds to 1.0-1.4 seconds with the same 3,841 files
+  ([#293](https://github.com/lzehrung/codegraph/pull/293),
+  [#297](https://github.com/lzehrung/codegraph/pull/297)).
+- Project-local state now lives under one `.codegraph/` directory, with disk caches in
+  `.codegraph/cache/index-v1/`. Existing project and repository caches migrate automatically
+  ([#296](https://github.com/lzehrung/codegraph/pull/296)).
 
 ### Fixed
 
-- `parseAgentSqlHandle` no longer carries an unreachable branch for handles with more than four colon-separated parts. `formatAgentSqlHandle` percent-encodes the name and file, so a colon in either can never survive as a separator, and that branch would have skipped decoding had it ever run.
-- Retried transient Windows filesystem failures while moving standalone-install versions, and restored a clean-installable npm lockfile.
+- Release commits now normalize and verify the exact lockfile immediately before staging it,
+  preventing later manifest or publication steps from committing a host-pruned dependency graph
+  ([#294](https://github.com/lzehrung/codegraph/pull/294)).
+
+## [2.2.2] - 2026-08-27
 
 ### Changed
 
-- `@typescript-eslint/no-unused-vars` is enforced as an error (with `^_` ignore patterns) instead of being switched off.
+- Stabilized cache implementation fingerprints, reused hydrated snapshots without cloning, and
+  reported cache invalidation causes more clearly
+  ([#283](https://github.com/lzehrung/codegraph/pull/283)).
+- Reduced index and navigation work while preserving nested tsconfig aliases and resolved re-export
+  targets ([#292](https://github.com/lzehrung/codegraph/pull/292)).
+
+### Fixed
+
+- Restored optional emnapi lockfile entries required by clean installs and added a pre-publication
+  `npm ci` lockfile gate
+  ([#289](https://github.com/lzehrung/codegraph/pull/289),
+  [#291](https://github.com/lzehrung/codegraph/pull/291)).
+
+## [2.2.1] - 2026-08-27
+
+### Fixed
+
+- Corrected Markdown link checks for aliased project roots and kept cached symlink hints confined to
+  the requested root.
+
+## [2.2.0] - 2026-08-26
+
+### Added
+
+- Added `codegraph server start|status|stop` for one project-local, loopback-only MCP HTTP server,
+  with health checks, per-user credentials, startup diagnostics, and explicit restart behavior
+  ([#281](https://github.com/lzehrung/codegraph/pull/281)).
+
+### Changed
+
+- Added columnar native syntax-tree encoding and removed a redundant parse
+  ([#276](https://github.com/lzehrung/codegraph/pull/276)).
+- Reduced native addon loading, hashing, and worker startup on warm and incremental runs, and removed
+  cached addon versions unused for one month
+  ([#278](https://github.com/lzehrung/codegraph/pull/278)).
+- Enforced `@typescript-eslint/no-unused-vars` as an error with `^_` ignore patterns.
+
+### Removed
+
+- Removed the inert non-native parser seam, unread extraction parameters, and leftover declarations
+  that no code used. Existing caches rebuild once after the fingerprint change
+  ([#277](https://github.com/lzehrung/codegraph/pull/277)).
+
+### Fixed
+
+- Removed an unreachable `parseAgentSqlHandle` branch that could have skipped decoding.
+- Retried transient Windows filesystem failures during standalone installation and restored a
+  clean-installable npm lockfile.
 
 ## [2.1.2] - 2026-08-19
 
