@@ -11,7 +11,7 @@ import {
   DEFAULT_NATIVE_SOURCE_MAX_BYTES,
   runExtractionBatch,
 } from "../src/worker/nativeExtractWorker.js";
-import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
+import { buildProjectIndex, buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { cacheSignatureForFile, fileSignature, writeToCache } from "../src/indexer/build-cache/module-cache.js";
 import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
@@ -205,7 +205,7 @@ describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache beh
 
     try {
       const firstReport: BuildReport = { timings: {} };
-      const first = await buildProjectIndexFromFiles(root, [file], {
+      const first = await buildProjectIndex(root, {
         cache: "disk",
         native: "on",
         nativeThreads: 1,
@@ -215,12 +215,13 @@ describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache beh
       expect(first.byFile.get(fileIdentityKey(normalizedFile))?.locals).toEqual([]);
       expect(firstReport.backend?.native.filesFellBack).toBe(1);
       expect(firstReport.backend?.native.errors[0]?.file).toBe(normalizedFile);
+      expect(firstReport.workerPool?.tasksSubmitted).toBe(1);
 
       const databasePath = path.join(root, ".codegraph", "cache", "index-v1", "index-cache.sqlite");
       await expect(fsp.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
 
       const secondReport: BuildReport = { timings: {} };
-      await buildProjectIndexFromFiles(root, [file], {
+      await buildProjectIndex(root, {
         cache: "disk",
         native: "on",
         nativeThreads: 1,
@@ -228,7 +229,7 @@ describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache beh
         report: secondReport,
       });
       expect(secondReport.cache?.hits).toBe(0);
-      expect(secondReport.workerPool?.tasksSubmitted).toBe(0);
+      expect(secondReport.workerPool?.tasksSubmitted).toBe(1);
       await expect(fsp.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

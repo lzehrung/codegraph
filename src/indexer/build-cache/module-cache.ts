@@ -212,6 +212,7 @@ export function closeDiskCacheDatabase(projectRoot: string, opts?: BuildOptions)
 
 export function pruneDiskModuleCache(projectRoot: string, liveFiles: Iterable<string>, opts?: BuildOptions): number {
   if ((opts?.cache ?? "off") !== "disk") return 0;
+  if (!diskModuleCacheExists(projectRoot, opts)) return 0;
   try {
     const cache = getDiskModuleCache(projectRoot, opts);
     const deleted = cache.db.transaction(() => {
