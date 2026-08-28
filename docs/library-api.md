@@ -417,7 +417,7 @@ console.log(exactFile.fileView?.content, exactFile.fileView?.page?.nextOffset);
 ```
 
 Use `exploreCodegraph()` when the caller has a broad question and needs one bounded response over the existing search, packet, path, reverse-dependency, and candidate-test surfaces. The response has `schemaVersion: 1`, the original query, `analysis`, summary bullets, anchors, packets, paths, blast radius with per-entry omitted lower bounds, candidate tests, follow-ups, flat limits, and omission counts. Path and blast-radius omissions may be lower bounds after bounded scans reach their caps.
-When the entire query resolves to an indexed project-relative file path, or to one uniquely matching basename, the response also includes the live `fileView` described above. `includeSource: false` suppresses it; `includeGraphContext` and `allowSensitive` remain explicit request options and are never enabled automatically.
+When the entire query resolves to an indexed project-relative file path, or to one uniquely matching basename, the response also includes the live `fileView` described above. The library API defaults `includeSource` to `true`, like the CLI, because its caller controls the in-process response; `includeSource: false` suppresses source packets and `fileView`. In contrast, MCP `explore` defaults `includeSource` to `false` because source-bearing packets dominate transport responses; anchors and follow-ups identify the focused source request to make next. `includeGraphContext` and `allowSensitive` remain explicit request options and are never enabled automatically.
 
 Use `mode: "sql"` for SQL objects, or pass `from` plus `depth` with `mode: "graph"` to boost matches near a file path, file/chunk/graph handle, symbol handle, SQL handle, or symbol name.
 

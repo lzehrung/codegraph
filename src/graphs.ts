@@ -1,4 +1,3 @@
-export { collectEdgesForFile } from "./graph-edge-collector.js";
 export { collectGraph } from "./graph-builder.js";
 export { astGrep, textGrep } from "./graphs/grep.js";
 export { getHotspots } from "./graphs/hotspots.js";

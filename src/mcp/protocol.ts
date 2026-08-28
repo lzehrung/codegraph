@@ -3,6 +3,7 @@ import { Transform, type Readable, type Writable } from "node:stream";
 import { ProtocolError, ProtocolErrorCode, Server, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { AgentExplanationReference } from "../agent/explain.js";
+import type { AgentFollowUp } from "../agent/followUps.js";
 import { MAX_FILE_VIEW_BYTES, MAX_FILE_VIEW_LINES } from "../agent/fileView.js";
 import { MAX_GRAPH_DEPTH } from "../agent/search.js";
 import { errorMessage } from "../util/errors.js";
@@ -475,10 +476,89 @@ function toToolResult(value: unknown): CallToolResult {
     content: [
       {
         type: "text",
-        text: JSON.stringify(value, null, 2),
+        text: JSON.stringify(translateMcpFollowUps(value)),
       },
     ],
   };
+}
+
+function translateMcpFollowUps(value: unknown): unknown {
+  if (Array.isArray(value)) return translateFollowUpCollection(value);
+  if (typeof value !== "object" || value === null) return value;
+
+  const source = value as Record<string, unknown>;
+  let translated: Record<string, unknown> | undefined;
+  for (const [key, nestedValue] of Object.entries(source)) {
+    const nestedTranslation = translateMcpFollowUps(nestedValue);
+    if (nestedTranslation === nestedValue) continue;
+    translated ??= { ...source };
+    translated[key] = nestedTranslation;
+  }
+  return translateFollowUps(translated ?? source);
+}
+
+function translateFollowUpCollection(value: readonly unknown[]): unknown[] | readonly unknown[] {
+  let translated: unknown[] | undefined;
+  for (const [index, entry] of value.entries()) {
+    const entryTranslation = translateMcpFollowUps(entry);
+    if (entryTranslation === entry) {
+      if (translated !== undefined) translated.push(entry);
+      continue;
+    }
+    translated ??= [...value.slice(0, index)];
+    translated.push(entryTranslation);
+  }
+  return translated ?? value;
+}
+
+function translateFollowUps(value: Record<string, unknown>): Record<string, unknown> {
+  const followUps = value.followUps;
+  if (!Array.isArray(followUps) || !followUps.every(isAgentFollowUp)) return value;
+  const translatedFollowUps = followUps.map(translateMcpFollowUp);
+  if (translatedFollowUps.every((followUp, index) => followUp === followUps[index])) return value;
+  return { ...value, followUps: translatedFollowUps };
+}
+
+function isAgentFollowUp(value: unknown): value is AgentFollowUp {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "tool" in value &&
+    typeof value.tool === "string" &&
+    "arguments" in value &&
+    typeof value.arguments === "object" &&
+    value.arguments !== null &&
+    !Array.isArray(value.arguments)
+  );
+}
+
+function translateMcpFollowUp(followUp: AgentFollowUp): AgentFollowUp {
+  if (followUp.tool === "chunk") return { ...followUp, tool: "get_file" };
+  if (followUp.tool === "duplicates") {
+    return {
+      ...followUp,
+      tool: "packet_get",
+      arguments: { target: firstDuplicateFile(followUp.arguments) },
+    };
+  }
+  if (followUp.tool === "explore" && followUp.arguments.includeSource === undefined) {
+    return {
+      ...followUp,
+      arguments: { ...followUp.arguments, includeSource: true },
+    };
+  }
+  if (followUp.tool === "impact" && followUp.arguments.provider === "git") {
+    const arguments_ = { ...followUp.arguments };
+    delete arguments_.provider;
+    return { ...followUp, arguments: arguments_ };
+  }
+  return followUp;
+}
+
+function firstDuplicateFile(arguments_: Record<string, unknown>): string {
+  const files = arguments_.files;
+  if (!Array.isArray(files)) return ".";
+  return files.find((file): file is string => typeof file === "string") ?? ".";
 }
 
 function toToolErrorResult(error: unknown): CallToolResult {

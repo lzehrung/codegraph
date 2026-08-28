@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAgentSession } from "../src/agent/session.js";
 import { workspaceSymbolsWithSession } from "../src/agent/workspaceSymbols.js";
 import { isPlainRecord } from "../src/util/guards.js";
-import { captureCli } from "./helpers/cli.js";
+import { captureCli, stripCliProgressLines } from "./helpers/cli.js";
 
 let root = "";
 let handle = "";
@@ -57,7 +57,8 @@ describe("rename preview CLI", () => {
     ]);
     const parsed: unknown = JSON.parse(result.stdout);
 
-    expect(result).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(result.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(result.stderr)).toBe("");
     expect(parsed).toMatchObject({
       safe: true,
       newName: "RenamedService",
@@ -93,7 +94,8 @@ describe("rename preview CLI", () => {
       "--json",
     ]);
     const limitedResponse: unknown = JSON.parse(limited.stdout);
-    expect(limited).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(limited.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(limited.stderr)).toBe("");
     expect(limitedResponse).toMatchObject({
       safe: false,
       omittedCounts: { edits: 2 },
@@ -111,7 +113,8 @@ describe("rename preview CLI", () => {
       "--json",
     ]);
     const invalidResponse: unknown = JSON.parse(invalid.stdout);
-    expect(invalid).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(invalid.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(invalid.stderr)).toBe("");
     expect(invalidResponse).toMatchObject({
       safe: false,
       conflicts: [expect.objectContaining({ reason: "invalid_identifier" })],
@@ -164,7 +167,8 @@ describe("rename preview CLI", () => {
       "off",
       "--include-filenames",
     ]);
-    expect(pretty).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(pretty.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(pretty.stderr)).toBe("");
     expect(pretty.stdout).toContain("Safe: yes");
     expect(pretty.stdout).toContain("Filename suggestions: 1 (suggestions only; no apply command)");
     expect(pretty.stdout).not.toContain('"schemaVersion"');

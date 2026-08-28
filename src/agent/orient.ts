@@ -11,7 +11,7 @@ import { isPathUnderIncludeRoots, normalizeIncludeRootsRelative } from "../util/
 import { normalizePath } from "../util/paths.js";
 import { createAgentSession, type AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
-import { formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./followUps.js";
+import { dedupeAgentFollowUps, formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./followUps.js";
 
 export type AgentOrientBudget = "small" | "medium" | "large";
 export type AgentOrientHealthMode = "skip" | "summary" | "full";
@@ -341,10 +341,10 @@ function buildFocusTargets(
         kind: "hotspot" as const,
         file: module.file,
         why: `graph-central module: fan-in ${module.fanIn}, fan-out ${module.fanOut}, score ${module.score}`,
-        followUps: [
+        followUps: dedupeAgentFollowUps([
           toolFollowUp("packet_get", { target: packet.file }),
           toolFollowUp("packet_get", { target: module.file }),
-        ],
+        ]),
       });
       continue;
     }

@@ -11,6 +11,7 @@ import type {
   CliStderrExitContext,
   CliStdoutWriterContext,
 } from "./context.js";
+import { getCliCommandUsage } from "./options.js";
 
 function formatSqlCell(value: unknown): string {
   if (value === null) return "null";
@@ -40,7 +41,7 @@ export async function handleSqlCommand(context: SqlCommandContext): Promise<void
   const dbOpt = context.getOpt("--db") ?? context.getOpt("--sqlite") ?? context.positionals[0];
   const queryText = context.getOpt("--query") ?? context.positionals[1];
   if (!dbOpt || !queryText) {
-    context.writeStderrLine('Usage: sql <sqlite-path> "SELECT ..." OR sql --db <sqlite-path> --query "SELECT ..."');
+    context.writeStderrLine(getCliCommandUsage("sql"));
     context.exit(2);
   }
   const dbPath = path.isAbsolute(dbOpt)

@@ -8,7 +8,7 @@ If the CLI is not installed yet, use the install paths in [docs/installation.md]
 
 ## Entry and help
 
-Bare `codegraph` prints concise task-oriented help and exits without reading project config or building an index. Use `codegraph --help` or `codegraph help` for the full command catalog, and `codegraph help <command>` or `codegraph <command> --help` for command help.
+Bare `codegraph` prints concise task-oriented help and exits without reading project config or building an index. Use `codegraph --help` or `codegraph help` for the Core command catalog, `codegraph help advanced` for the complete catalog, and `codegraph help <command>` or `codegraph <command> --help` for command help.
 
 Unknown commands, invalid command arguments (including unknown flags/options and unresolvable positional roots), and noninteractive installer writes without `--yes` all exit with status 2. Unknown commands also print up to three deterministic suggestions and may print one task route. They never guess and execute a command.
 
@@ -23,8 +23,8 @@ Numeric options such as `--limit`, `--threads`, `--depth`, `--max-refs`, and tok
 ## Exit codes
 
 - `0`: the command completed and reported no failure condition. Commands that return an empty result normally, such as `search`, still use `0`.
-- `1`: valid input produced a finding, no matching target, or a runtime or analysis failure. `links` uses `1` for broken local links; `drift` uses it when its selected policy fails; `goto`, `refs`, `deps`, `rdeps`, `path`, `dumpmod`, `file`, and `packet` use it when they cannot resolve the requested target; and `chunk` uses it for an unsupported language.
-- `2`: invalid usage or input, including an unknown command or flag, invalid option values, incompatible flags, unresolvable positional roots, and installer writes without `--yes`.
+- `1`: valid input produced a finding, no matching target, or a runtime or analysis failure. `links` uses `1` for broken local links; `drift` uses it when its selected policy fails; and `goto`, `refs`, `deps`, `rdeps`, `path`, `dumpmod`, `file`, `packet`, and `explain` use it when they cannot resolve the requested target.
+- `2`: invalid usage or input, including an unknown command or flag, invalid option values, incompatible flags, unsupported explicit `chunk --language` values, unresolvable positional roots, and installer writes without `--yes`.
 
 With status `1`, inspect the command output before deciding how to continue. Findings and unresolved targets are actionable; runtime or analysis failures require error handling. Status `2` is an invocation error.
 
@@ -51,7 +51,7 @@ Reduced-accuracy runs are never silent: `graph` and `index` print a one-line `Ba
 
 ## Index and cache guidance
 
-Current-state, index-backed commands validate freshness automatically and default to the on-disk cache. The first query for a project may build the index; interactive progress is written to stderr, leaving JSON stdout parseable. Later commands with the same `--root`, discovery configuration, graph options, and compatible build options reuse disk state under `.codegraph/cache/index-v1`, updating incrementally when files changed and rebuilding when compatibility cannot be established.
+Current-state, index-backed commands validate freshness automatically and default to the on-disk cache. The first query for a project may build the index; after one second, progress is written to stderr with a continuing heartbeat, leaving JSON stdout parseable. Later commands with the same `--root`, discovery configuration, graph options, and compatible build options reuse disk state under `.codegraph/cache/index-v1`, updating incrementally when files changed and rebuilding when compatibility cannot be established.
 
 `codegraph index` and `codegraph sync` prewarm or repair that state; they are not prerequisites for `deps`, `refs`, `inspect`, `impact`, `review`, or any other current-state query. Artifact production (`graph`, `artifact`), lifecycle commands, and historical comparisons (`drift`, `graph-delta`) keep explicit build and range semantics instead.
 
@@ -59,7 +59,7 @@ Use `--cache disk` for reuse across CLI processes, `--cache memory` for reuse wi
 
 Lifecycle exceptions (`src/cli/options.ts` `LIFECYCLE_BUILD_OPTIONS` / `STATUS_BUILD_*`): `init`/`status`/`sync` omit `--cache` because they always use the disk cache path. `status` also omits `--cache-verify`, `--progress`, `--no-progress`, `--workers`, and `--threads` because it only hashes config/build options and lists project files for signature hashing (no index build).
 
-Keep `--root` stable for repeat queries. Use `--progress` to force redirected progress logs, `--no-progress` to suppress them, and `codegraph doctor` or `--report` when backend or cache behavior needs diagnosis.
+Keep `--root` stable for repeat queries. Use `--progress` for immediate redirected progress logs, `--no-progress` to suppress feedback, and `codegraph doctor` or `--report` when backend or cache behavior needs diagnosis.
 
 ## Project config
 
@@ -287,7 +287,7 @@ Use `--kind <kind,...>`, `--exported`, `--include-imports`, `--file-glob <projec
 
 Structured results include `schemaVersion`, root and analysis metadata, freshness, effective limits, omission counts, the normalized query, total candidates, and deterministic project-relative symbols. Resolvable named/default import aliases keep their binding location but carry a handle for the declaration; namespace/star aliases, unresolved aliases, and failed import scans are reported under `omittedCounts`.
 
-Line-and-column navigation remains primary: use `<file>:<line>:<column>` with `goto` or `refs` when the source location is known. An exact qualified path, `<project-relative-file>::<local-symbol>`, is the coordinate-free alternative for one declaration. `deps` and `rdeps` accept either file form, then traverse the defining file's dependency edges; use `callers` or `callees` for symbol-level call relationships. If one file defines multiple declarations with the same local name, codegraph returns candidates and requires the portable handle from `symbols` to avoid guessing.
+Line-and-column navigation remains primary: use `<file>:<line>:<column>` with `goto` or `refs` when the source location is known. An exact qualified path, `<project-relative-file>::<local-symbol>`, is the coordinate-free alternative for one declaration; both commands also accept a portable `symbol:` handle from `symbols`. `goto` returns that definition, while `refs` resolves it then reports its references. `deps` and `rdeps` accept files, qualified paths, or portable handles, then traverse the defining file's dependency edges; use `callers` or `callees` for symbol-level call relationships. If one file defines multiple declarations with the same local name, codegraph returns candidates and requires the portable handle from `symbols` to avoid guessing.
 
 `callers` and `callees` accept one portable function or callable-member handle from `symbols`. Depth defaults to 1 and caps at 5; the symbol limit defaults to 100 and caps at 500, while callsites are grouped under each related symbol and bounded separately.
 
@@ -534,7 +534,7 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 
 #### Chunking
 
-`chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. Use `--text` to force text chunking.
+`chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. `--language` accepts `c`, `cpp`, `csharp`, `css`, `go`, `html`, `java`, `javascript`, `json`, `kotlin`, `less`, `php`, `python`, `ruby`, `rust`, `scss`, `sql`, `svelte`, `swift`, `text`, `tsx`, `typescript`, `vue`, `yaml`, or `zig`; an unrecognized extension still falls back to text. Use `--text` to force text chunking.
 
 ### Dependency analysis and diagnostics
 
@@ -568,7 +568,8 @@ codegraph hotspots ./src --limit 20
 
 Cycle detection reports source dependency cycles. Document-only link loops, such as Markdown files linking to each other, remain in the graph for navigation but are not reported as dependency cycles.
 
-Dependency read commands keep the same output contracts while using the indexed graph path and derived adjacency maps internally when available. This makes repeated `deps`, `rdeps`, and `path` reads cheaper on warm manifest-backed projects.
+Dependency read commands use the indexed graph path and derived adjacency maps internally when available. This makes repeated `deps`, `rdeps`, and `path` reads cheaper on warm manifest-backed projects.
+`deps` and `rdeps` show depth 1 by default and state the count of deeper entries omitted from text output. Pass `--depth <n>` to choose another finite output depth or `--all` to include every depth. This is a breaking JSON contract change: previous versions emitted a bare array, `[{ "depth": 1, "file": "src/util.ts" }]`; they now emit `{ "items": [{ "depth": 1, "file": "src/util.ts" }], "truncated": false }`. `truncated` is always present and is `true` when a finite depth omitted deeper entries, including `false` for complete and empty results. Use `--all` to receive the full dependency set.
 
 #### Markdown link validation
 

@@ -5,7 +5,7 @@ import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
 import { createAgentSession, exploreCodegraph, formatAgentExploreResponse } from "../src/agent.js";
 import * as impactContext from "../src/impact/context.js";
 import { createCodegraphMcpHandlers, listCodegraphMcpTools } from "../src/mcp/server.js";
-import { captureCli } from "./helpers/cli.js";
+import { captureCli, stripCliProgressLines } from "./helpers/cli.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
 const tempRoots = createTempRootRegistry();
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -213,8 +213,10 @@ describe("agent explore", () => {
     const exploreResult = await captureCli(["explore", spacedExplorePath, "--root", root, "--json"]);
     const fileResult = await captureCli(["file", spacedExplorePath, "--root", root, "--json"]);
 
-    expect(exploreResult).toMatchObject({ stderr: "", exitCode: undefined });
-    expect(fileResult).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(exploreResult.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(exploreResult.stderr)).toBe("");
+    expect(fileResult.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(fileResult.stderr)).toBe("");
     const cliExploreResponse = readRecord(JSON.parse(exploreResult.stdout) as unknown, "CLI explore response");
     const cliExploreView = readRecord(cliExploreResponse.fileView, "CLI explore fileView");
     const cliFileView = readRecord(JSON.parse(fileResult.stdout) as unknown, "CLI file response");
@@ -678,7 +680,7 @@ describe("agent explore", () => {
     ]);
 
     expect(result.exitCode).toBeUndefined();
-    expect(result.stderr).toBe("");
+    expect(stripCliProgressLines(result.stderr)).toBe("");
     const response = expectExploreEnvelope(JSON.parse(result.stdout) as unknown, query);
     const limits = readRecord(response.limits, "limits");
     expect(readArray(response.anchors, "anchors")).toHaveLength(0);
@@ -709,7 +711,7 @@ describe("agent explore", () => {
     const result = await captureCli(["explore", query, "--root", root, "--json"]);
 
     expect(result.exitCode).toBeUndefined();
-    expect(result.stderr).toBe("");
+    expect(stripCliProgressLines(result.stderr)).toBe("");
     expectExploreEnvelope(JSON.parse(result.stdout) as unknown, query);
   });
 
@@ -720,8 +722,10 @@ describe("agent explore", () => {
     const exploreResult = await captureCli(["explore", query, "--root", root, "--json"]);
     const fileResult = await captureCli(["file", query, "--root", root, "--json"]);
 
-    expect(exploreResult).toMatchObject({ stderr: "", exitCode: undefined });
-    expect(fileResult).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(exploreResult.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(exploreResult.stderr)).toBe("");
+    expect(fileResult.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(fileResult.stderr)).toBe("");
     const exploreResponse = readRecord(JSON.parse(exploreResult.stdout) as unknown, "explore response");
     const exploreView = readRecord(exploreResponse.fileView, "explore fileView");
     const fileView = readRecord(JSON.parse(fileResult.stdout) as unknown, "file response");
@@ -752,8 +756,10 @@ describe("agent explore", () => {
     ]);
     const contextualFileResult = await captureCli(["file", query, "--root", root, "--include-graph-context", "--json"]);
 
-    expect(contextualExploreResult).toMatchObject({ stderr: "", exitCode: undefined });
-    expect(contextualFileResult).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(contextualExploreResult.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(contextualExploreResult.stderr)).toBe("");
+    expect(contextualFileResult.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(contextualFileResult.stderr)).toBe("");
     const contextualExploreResponse = readRecord(
       JSON.parse(contextualExploreResult.stdout) as unknown,
       "contextual explore response",
@@ -808,8 +814,10 @@ describe("agent explore", () => {
     ]);
     const fileResult = await captureCli(["file", query, "--root", root, "--allow-sensitive", "--json"]);
 
-    expect(exploreResult).toMatchObject({ stderr: "", exitCode: undefined });
-    expect(fileResult).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(exploreResult.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(exploreResult.stderr)).toBe("");
+    expect(fileResult.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(fileResult.stderr)).toBe("");
     const exploreResponse = readRecord(JSON.parse(exploreResult.stdout) as unknown, "sensitive explore response");
     const exploreView = readRecord(exploreResponse.fileView, "sensitive explore fileView");
     const fileView = readRecord(JSON.parse(fileResult.stdout) as unknown, "sensitive file response");
@@ -836,7 +844,8 @@ describe("agent explore", () => {
 
     const result = await captureCli(["explore", query, "--root", root, "--no-source", "--json"]);
 
-    expect(result).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(result.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(result.stderr)).toBe("");
     const response = readRecord(JSON.parse(result.stdout) as unknown, "no-source explore response");
     expect(response).not.toHaveProperty("fileView");
     expect(response.packets).toEqual([]);
@@ -861,7 +870,7 @@ describe("agent explore", () => {
     expect(properties.limit).toEqual(expect.objectContaining({ type: "integer", minimum: 0 }));
     expect(properties.maxPackets).toEqual(expect.objectContaining({ type: "integer", minimum: 0 }));
     expect(properties.maxPaths).toEqual(expect.objectContaining({ type: "integer", minimum: 0 }));
-    expect(properties.includeSource).toEqual(expect.objectContaining({ type: "boolean" }));
+    expect(properties.includeSource).toEqual(expect.objectContaining({ type: "boolean", default: false }));
 
     const handlers = createCodegraphMcpHandlers({ root });
     const query = "validateUser";
@@ -871,8 +880,9 @@ describe("agent explore", () => {
     );
 
     expect(readArray(response.anchors, "anchors")).toHaveLength(1);
-    expect(readArray(response.packets, "packets")).toHaveLength(1);
+    expect(readArray(response.packets, "packets")).toEqual([]);
     expect(readArray(response.blastRadius, "blastRadius")).toHaveLength(1);
+    expect(readArray(response.followUps, "followUps")).toContainEqual({ tool: "explore", arguments: { query } });
     expect(response.freshness).toBeTypeOf("object");
     handlers.dispose();
     await expect(fs.rm(root, { recursive: true, force: true, maxRetries: 0 })).resolves.toBeUndefined();

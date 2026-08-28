@@ -12,6 +12,7 @@ export type CliProgressDisplay = {
 type CreateCliProgressDisplayOptions = {
   presentation: Exclude<CliProgressPresentation, "off">;
   write: (chunk: string) => void;
+  delayMs?: number;
 };
 
 const REFRESH_INTERVAL_MS = 100;
@@ -27,16 +28,15 @@ export function resolveCliProgressPresentation(input: {
   if (input.stderrIsTTY) {
     return input.terminalSupportsControlSequences ? "interactive" : "log";
   }
-  if (input.policy === "always") return "log";
-  return "off";
+  return "log";
 }
 
 export function createCliProgressDisplay(options: CreateCliProgressDisplayOptions): CliProgressDisplay {
-  if (options.presentation === "log") return createLogProgressDisplay(options.write);
-  return createInteractiveProgressDisplay(options.write);
+  if (options.presentation === "log") return createLogProgressDisplay(options.write, options.delayMs);
+  return createInteractiveProgressDisplay(options.write, options.delayMs);
 }
 
-function createInteractiveProgressDisplay(write: (chunk: string) => void): CliProgressDisplay {
+function createInteractiveProgressDisplay(write: (chunk: string) => void, delayMs: number = 0): CliProgressDisplay {
   let active = false;
   let rendered = false;
   let frameIndex = 0;
@@ -44,6 +44,7 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void): CliPr
   let total = 0;
   let mode: NonNullable<ProgressUpdate["mode"]> = "build";
   let interval: NodeJS.Timeout | undefined;
+  let delay: NodeJS.Timeout | undefined;
   const clear = (): void => {
     if (!rendered) return;
     write(CLEAR_LINE);
@@ -55,40 +56,52 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void): CliPr
     const action = progressAction(mode);
     const frame = SPINNER_FRAMES[frameIndex % SPINNER_FRAMES.length]!;
     frameIndex += 1;
-    const count = total > 0 ? ` ${current}/${total} files` : "";
+    const count = formatProgressCount(current, total);
     write(`${CLEAR_LINE}${action} project index... ${frame}${count}`);
     rendered = true;
   };
-
   const stopInterval = (): void => {
-    if (interval === undefined) return;
-    clearInterval(interval);
-    interval = undefined;
+    if (interval !== undefined) {
+      clearInterval(interval);
+      interval = undefined;
+    }
+    if (delay !== undefined) {
+      clearTimeout(delay);
+      delay = undefined;
+    }
   };
-
   const start = (update: ProgressUpdate): void => {
     stopInterval();
     clear();
     active = true;
+    rendered = false;
     frameIndex = 0;
     current = update.current;
     total = update.total;
     mode = update.mode ?? "build";
-    render();
-    interval = setInterval(render, REFRESH_INTERVAL_MS);
-    interval.unref();
+    const beginRendering = (): void => {
+      if (!active) return;
+      render();
+      interval = setInterval(render, REFRESH_INTERVAL_MS);
+      interval.unref();
+    };
+    if (delayMs) {
+      delay = setTimeout(beginRendering, delayMs);
+      delay.unref();
+    } else {
+      beginRendering();
+    }
   };
-
   const complete = (update: ProgressUpdate): void => {
     if (!active) return;
     active = false;
     stopInterval();
+    if (!rendered) return;
     clear();
     const verb = progressCompleteVerb(mode);
-    const fileCount = update.total;
-    const files = fileCount === 1 ? "file" : "files";
+    const fileCount = formatFileCount(update.total, "words");
     const elapsed = update.elapsedMs === undefined ? "" : ` in ${formatDuration(update.elapsedMs)}`;
-    write(`${verb} project index: ${fileCount} ${files}${elapsed}.\n`);
+    write(`${verb} project index: ${fileCount}${elapsed}.\n`);
   };
 
   return {
@@ -118,38 +131,92 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void): CliPr
   };
 }
 
-function createLogProgressDisplay(write: (chunk: string) => void): CliProgressDisplay {
+function formatFileCount(count: number, zeroFormat: "numeric" | "words" = "numeric"): string {
+  if (!count && zeroFormat === "words") return "no files";
+  return `${count} file${count === 1 ? "" : "s"}`;
+}
+
+function formatProgressCount(current: number, total: number): string {
+  if (total > 0) return ` ${current}/${formatFileCount(total)}`;
+  return ` ${formatFileCount(current)} processed`;
+}
+
+function createLogProgressDisplay(write: (chunk: string) => void, delayMs: number = 0): CliProgressDisplay {
   let active = false;
+  let rendered = false;
+  let current = 0;
+  let total = 0;
   let mode: NonNullable<ProgressUpdate["mode"]> = "build";
+  let delay: NodeJS.Timeout | undefined;
+  let heartbeat: NodeJS.Timeout | undefined;
+
+  const stopTimers = (): void => {
+    if (delay !== undefined) {
+      clearTimeout(delay);
+      delay = undefined;
+    }
+    if (heartbeat !== undefined) {
+      clearInterval(heartbeat);
+      heartbeat = undefined;
+    }
+  };
+  const renderStart = (): void => {
+    if (!active || rendered) return;
+    rendered = true;
+    write(`[Progress] ${progressAction(mode)} project index.\n`);
+    heartbeat = setInterval(() => {
+      if (!active) return;
+      write(`[Progress] ${progressAction(mode)} project index:${formatProgressCount(current, total)}.\n`);
+    }, 1_000);
+    heartbeat.unref();
+  };
+  const start = (update: ProgressUpdate): void => {
+    stopTimers();
+    active = true;
+    rendered = false;
+    current = update.current;
+    total = update.total;
+    mode = update.mode ?? "build";
+    if (delayMs) {
+      delay = setTimeout(renderStart, delayMs);
+      delay.unref();
+    } else {
+      renderStart();
+    }
+  };
+
   return {
     update: (update) => {
       if (update.phase === "start") {
-        active = true;
-        mode = update.mode ?? "build";
-        const action = progressAction(mode);
-        write(`[Progress] ${action} project index.\n`);
+        start(update);
         return;
       }
       if (update.phase === "complete") {
         if (!active) return;
         active = false;
+        stopTimers();
+        if (!rendered) return;
         const verb = progressCompleteVerb(mode);
         const elapsed = update.elapsedMs === undefined ? "" : ` in ${formatDuration(update.elapsedMs)}`;
-        write(`[Progress] ${verb} project index: ${update.total} files${elapsed}.\n`);
+        write(`[Progress] ${verb} project index: ${formatFileCount(update.total, "words")}${elapsed}.\n`);
         return;
       }
       if (!active) {
         if (update.phase === "update") return;
-        active = true;
+        start(update);
       }
-      const isComplete = update.current >= update.total;
-      if (update.current === 1 || isComplete || update.current % 100 === 0) {
-        write(`[Progress] ${update.current}/${update.total} files processed.\n`);
+      current = update.current;
+      total = update.total;
+      mode = update.mode ?? mode;
+      const isComplete = update.total > 0 && update.current >= update.total;
+      if (rendered && (update.current === 1 || isComplete || update.current % 100 === 0)) {
+        write(`[Progress] ${formatFileCount(update.current)} processed.\n`);
       }
     },
     clear: () => {},
     dispose: () => {
       active = false;
+      stopTimers();
     },
   };
 }
@@ -167,6 +234,7 @@ function progressCompleteVerb(mode: NonNullable<ProgressUpdate["mode"]>): string
 }
 
 function formatDuration(elapsedMs: number): string {
-  if (elapsedMs < 1_000) return `${Math.max(0, Math.round(elapsedMs))}ms`;
-  return `${(elapsedMs / 1_000).toFixed(1)}s`;
+  const durationMs = Math.max(0, elapsedMs);
+  if (durationMs < 1_000) return `${Math.round(durationMs)}ms`;
+  return `${(durationMs / 1_000).toFixed(1)}s`;
 }

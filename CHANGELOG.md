@@ -11,6 +11,29 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Changed
 
+- MCP tool responses now use compact JSON, `explore` omits source by default, and follow-ups are
+  deduplicated and limited to callable MCP tools
+  ([#286](https://github.com/lzehrung/codegraph/pull/286)).
+- CLI help and validation are grouped more clearly, dependency traversal is bounded by default,
+  graph JSON is deterministic, and long index checks emit a delayed progress heartbeat
+  ([#287](https://github.com/lzehrung/codegraph/pull/287)).
+- Detailed graph cache comparison now avoids temporary edge maps and repeated string allocation
+  ([#290](https://github.com/lzehrung/codegraph/pull/290)).
+
+### Fixed
+
+- Lockfile generation and validation now use the npm 10 version from the minimum-supported Node 22
+  CI lane, preventing a Node 24/npm 11 release from publishing a lock that ordinary CI rejects.
+
+### Removed
+
+- Removed four unused low-level facade exports and added a deterministic snapshot guard for future
+  public API changes ([#288](https://github.com/lzehrung/codegraph/pull/288)).
+
+## [2.2.3] - 2026-08-28
+
+### Changed
+
 - Cold discovery now uses Git-aware file enumeration, cached repository facts, grouped ignore
   matching, and bounded symlink screening. On the measured Unreal project, discovery fell from
   26.1 seconds to 1.0-1.4 seconds with the same 3,841 files

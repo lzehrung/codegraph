@@ -120,7 +120,20 @@ export function routeForCliIntent(input: string): string | undefined {
   return INTENT_ROUTES.find((route) => route.pattern.test(input))?.command;
 }
 
-export function renderCliCommandList(): string {
-  const width = Math.max(...CLI_COMMAND_CATALOG.map((command) => command.name.length));
-  return CLI_COMMAND_CATALOG.map((command) => `  ${command.name.padEnd(width)}  ${command.summary}`).join("\n");
+const CORE_COMMAND_NAMES: Record<string, true> = {
+  doctor: true,
+  orient: true,
+  explore: true,
+  search: true,
+  file: true,
+  deps: true,
+  review: true,
+};
+
+export function renderCliCommandList(advanced: boolean = false): string {
+  const commands = advanced
+    ? CLI_COMMAND_CATALOG
+    : CLI_COMMAND_CATALOG.filter((command) => CORE_COMMAND_NAMES[command.name]);
+  const width = Math.max(...commands.map((command) => command.name.length));
+  return commands.map((command) => `  ${command.name.padEnd(width)}  ${command.summary}`).join("\n");
 }
