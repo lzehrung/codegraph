@@ -943,6 +943,20 @@ describe("CLI regressions", () => {
     expect(report.indexArtifact.exists).toBe(true);
     expect(normalize(report.indexArtifact.path)).toBe(normalize(cachePath));
     expect(report.indexArtifact.details?.manifestPresent).toBe(true);
+
+    const consolidatedCachePath = path.join(tmpDir, ".codegraph", "cache", "index-v1");
+    await fsp.mkdir(consolidatedCachePath, { recursive: true });
+    await fsp.writeFile(path.join(consolidatedCachePath, "manifest.json"), "{}\n", "utf8");
+    const consolidatedResult = await runCliCommandDetailed(
+      ["doctor", "--json", consolidatedCachePath],
+      undefined,
+      tmpDir,
+    );
+    const consolidatedReport = JSON.parse(consolidatedResult.stdout) as {
+      indexArtifact: { type: string; path: string };
+    };
+    expect(consolidatedReport.indexArtifact.type).toBe("diskCache");
+    expect(normalize(consolidatedReport.indexArtifact.path)).toBe(normalize(consolidatedCachePath));
   });
 
   it("hotspots honors --limit and include roots, and reuses the disk index cache when present", async () => {
@@ -1013,7 +1027,7 @@ describe("CLI regressions", () => {
 
     await runCliCommand(["index", "--json", "--root", tmpDir, "--cache-dir", cacheDir]);
     await expect(fsp.stat(path.join(expectedCachePath, "manifest.json"))).resolves.toBeTruthy();
-    await expect(fsp.stat(path.join(tmpDir, ".codegraph-cache", "index-v1", "manifest.json"))).rejects.toThrow();
+    await expect(fsp.stat(path.join(tmpDir, ".codegraph", "cache", "index-v1", "manifest.json"))).rejects.toThrow();
 
     await fsp.rm(expectedCachePath, { recursive: true, force: true });
     const gotoStdout = await runCliCommand([
@@ -1149,7 +1163,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       `codegraph duplicates --root "${normalize(tmpDir)}" "${normalize(srcDir)}" --json --min-confidence medium --limit 20 --include-same-file`,
     );
     expect(report.recommendedCommands).toContain(
-      `codegraph doctor "${normalize(path.join(tmpDir, ".codegraph-cache", "index-v1"))}"`,
+      `codegraph doctor "${normalize(path.join(tmpDir, ".codegraph", "cache", "index-v1"))}"`,
     );
   });
 
@@ -1263,7 +1277,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     const warmReport = readReport(warmResult.stdout);
     expectScopedReport(warmReport);
     expect(warmReport.indexCache?.manifestPath).toBe(
-      normalize(path.join(tmpDir, ".codegraph-cache", "index-v1", "manifest.json")),
+      normalize(path.join(tmpDir, ".codegraph", "cache", "index-v1", "manifest.json")),
     );
     expect(warmResult.stderr).toContain("Index cache: manifest=");
   });

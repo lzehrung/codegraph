@@ -29,7 +29,7 @@ describe("fixture copies", () => {
       await writeFixtureFile(sourceRoot, "root.ts");
       await writeFixtureFile(sourceRoot, path.join("nested", "kept.ts"));
       await writeFixtureFile(sourceRoot, path.join("nested", ".codegraph", "manifest.json"));
-      await writeFixtureFile(sourceRoot, path.join("nested", ".codegraph-cache", "index-v1", "cache.json"));
+      await writeFixtureFile(sourceRoot, path.join("nested", ".codegraph", "cache", "index-v1", "cache.json"));
 
       await copyFixtureSubset(sourceRoot, destinationRoot, { subset: ["nested"] });
 
@@ -50,7 +50,7 @@ describe("fixture copies", () => {
     try {
       await writeFixtureFile(root, "source.ts", "export const value = 1;\n");
       await buildProjectIndex(root, { cache: "off" });
-      expect(fs.existsSync(path.join(root, ".codegraph-cache"))).toBe(false);
+      expect(fs.existsSync(path.join(root, ".codegraph", "cache"))).toBe(false);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

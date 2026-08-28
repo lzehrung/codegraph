@@ -88,7 +88,12 @@ function detectIndexedArtifactType(filePath: string, stats: fs.Stats | null): In
   if (normalized.endsWith("/graph.sqlite") || normalized.endsWith(".sqlite")) {
     return "sqliteGraph";
   }
-  if (normalized.endsWith("/.codegraph-cache") || normalized.includes("/.codegraph-cache/")) {
+  if (
+    normalized.endsWith("/.codegraph/cache") ||
+    normalized.includes("/.codegraph/cache/") ||
+    normalized.endsWith("/.codegraph-cache") ||
+    normalized.includes("/.codegraph-cache/")
+  ) {
     return "diskCache";
   }
   return "unknown";

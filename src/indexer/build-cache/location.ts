@@ -6,6 +6,10 @@ import path from "node:path";
 import type { BuildOptions } from "../types.js";
 import { fileIdentityKey } from "../../util/paths.js";
 
+export const PROJECT_CACHE_DIRECTORY = ".codegraph";
+export const PROJECT_CACHE_RELATIVE_PATH = path.join(PROJECT_CACHE_DIRECTORY, "cache", "index-v1");
+const LEGACY_PROJECT_CACHE_RELATIVE_PATH = path.join(".codegraph-cache", "index-v1");
+
 export type CacheAnchorResolution = {
   anchor: string;
   layer: "explicit" | "environment" | "manifest" | "git" | "project" | "user";
@@ -99,15 +103,46 @@ function assertAnchorNotForbidden(resolution: CacheAnchorResolution): void {
   throw new Error(
     `Cache anchor "${resolution.anchor}" (from ${CONFIGURED_ANCHOR_LAYER_LABELS[resolution.layer]}) is the ` +
       `home directory or a filesystem root. codegraph refuses to use it as a cache root. Use a subdirectory ` +
-      `instead, e.g. "${path.join(resolution.anchor, ".codegraph-cache")}".`,
+      `instead, e.g. "${path.join(resolution.anchor, PROJECT_CACHE_DIRECTORY)}".`,
   );
+}
+
+type LegacyProjectCache = { path: string; cleanupBoundary: string };
+
+function migrateLegacyProjectCache(
+  candidate: string,
+  legacyCandidates: readonly LegacyProjectCache[],
+  logLevel: BuildOptions["logLevel"],
+): void {
+  if (fs.existsSync(candidate)) return;
+  const legacy = legacyCandidates.find(({ path: legacyPath }) => fs.existsSync(legacyPath));
+  if (!legacy) return;
+
+  try {
+    fs.mkdirSync(path.dirname(candidate), { recursive: true });
+    fs.renameSync(legacy.path, candidate);
+  } catch (error) {
+    if (logLevel === "debug") console.debug(`Unable to migrate legacy cache from ${legacy.path}:`, error);
+    return;
+  }
+
+  let current = path.dirname(legacy.path);
+  for (;;) {
+    try {
+      fs.rmdirSync(current);
+    } catch {
+      break;
+    }
+    if (fileIdentityKey(current) === fileIdentityKey(legacy.cleanupBoundary)) break;
+    current = path.dirname(current);
+  }
 }
 
 /**
  * Resolves the effective on-disk cache path along with the anchor/layer that actually
  * produced it. This can differ from `resolveCacheAnchor`'s intended anchor when that
- * anchor is not writable (falls back to the project root) or when an existing legacy
- * in-project cache is reused instead of the configured anchor.
+ * anchor is not writable (falls back to the project root). Project-local legacy caches
+ * are migrated to the consolidated cache directory when possible.
  */
 export function resolveCacheLocation(projectRoot: string, opts?: BuildOptions): CacheLocationResolution {
   const root = path.resolve(projectRoot);
@@ -119,35 +154,53 @@ export function resolveCacheLocation(projectRoot: string, opts?: BuildOptions): 
   const anchor = anchorWritable ? resolution.anchor : root;
   const effectiveLayer = anchorWritable ? resolution.layer : "project";
   const sameRoot = fileIdentityKey(anchor) === fileIdentityKey(root);
-  if (
-    sameRoot &&
-    !opts?.cacheDir &&
-    !process.env.CODEGRAPH_CACHE_DIR?.trim() &&
-    (!opts?.cacheLocation || opts.cacheLocation === "project")
-  ) {
-    return { path: path.join(root, ".codegraph-cache", "index-v1"), anchor, layer: effectiveLayer };
+  const explicitBase = opts?.cacheDir?.trim() || process.env.CODEGRAPH_CACHE_DIR?.trim();
+  if (sameRoot && !explicitBase && (!opts?.cacheLocation || opts.cacheLocation === "project")) {
+    const candidate = path.join(root, PROJECT_CACHE_RELATIVE_PATH);
+    migrateLegacyProjectCache(
+      candidate,
+      [
+        {
+          path: path.join(root, LEGACY_PROJECT_CACHE_RELATIVE_PATH),
+          cleanupBoundary: path.join(root, ".codegraph-cache"),
+        },
+      ],
+      opts?.logLevel,
+    );
+    return { path: candidate, anchor, layer: effectiveLayer };
   }
   const namespace = projectCacheNamespace(
     root,
     effectiveLayer === "git" || effectiveLayer === "manifest" ? anchor : undefined,
   );
-  const explicitBase = opts?.cacheDir?.trim() || process.env.CODEGRAPH_CACHE_DIR?.trim();
   if (explicitBase) {
     const configured = path.resolve(explicitBase);
     const configuredPath = path.basename(configured) === namespace ? configured : path.join(configured, namespace);
     return { path: configuredPath, anchor, layer: effectiveLayer };
   }
-  const base = opts?.cacheLocation === "user" ? resolveCodegraphUserCacheRoot() : path.join(anchor, ".codegraph-cache");
-  const candidate = path.join(path.resolve(base), "index-v1", namespace);
-  if (!sameRoot && !opts?.cacheLocation) {
-    const legacy = path.join(root, ".codegraph-cache", "index-v1");
-    if (!fs.existsSync(candidate) && fs.existsSync(legacy)) {
-      return { path: legacy, anchor: root, layer: "project" };
-    }
+  if (opts?.cacheLocation === "user") {
+    return {
+      path: path.join(resolveCodegraphUserCacheRoot(), "index-v1", namespace),
+      anchor,
+      layer: effectiveLayer,
+    };
   }
+  const candidate = path.join(anchor, PROJECT_CACHE_RELATIVE_PATH, namespace);
+  const legacyCandidates: LegacyProjectCache[] = [
+    {
+      path: path.join(anchor, LEGACY_PROJECT_CACHE_RELATIVE_PATH, namespace),
+      cleanupBoundary: path.join(anchor, ".codegraph-cache"),
+    },
+  ];
+  if (!sameRoot && !opts?.cacheLocation) {
+    legacyCandidates.push({
+      path: path.join(root, LEGACY_PROJECT_CACHE_RELATIVE_PATH),
+      cleanupBoundary: path.join(root, ".codegraph-cache"),
+    });
+  }
+  migrateLegacyProjectCache(candidate, legacyCandidates, opts?.logLevel);
   return { path: candidate, anchor, layer: effectiveLayer };
 }
-
 export function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
   return resolveCacheLocation(projectRoot, opts).path;
 }

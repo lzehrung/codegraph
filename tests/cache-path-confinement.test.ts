@@ -46,7 +46,7 @@ function moduleFor(file: string): ModuleIndex {
 }
 
 function snapshotPathFor(root: string): string {
-  return path.join(root, ".codegraph-cache", "index-v1", "project-index-snapshot.json");
+  return path.join(root, ".codegraph", "cache", "index-v1", "project-index-snapshot.json");
 }
 
 async function expectWorkspaceExternalReexportCacheRoundTrip(native: NativeRuntimeMode): Promise<void> {
@@ -345,7 +345,7 @@ describe("persisted cache rehydration is confined to the project root", () => {
     await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
     await buildProjectIndex(root, { cache: "disk", threads: 1 });
 
-    const manifestPath = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
+    const manifestPath = path.join(root, ".codegraph", "cache", "index-v1", "manifest.json");
     const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as { files?: Record<string, unknown> };
     manifest.files = { "../../outside.ts": { sig: "tampered", edges: [] } };
     await fsp.writeFile(manifestPath, JSON.stringify(manifest), "utf8");

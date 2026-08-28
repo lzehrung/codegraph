@@ -452,7 +452,7 @@ describe("CLI index progress", () => {
         const warmScoped = readScopedResult(firstWarm.stdout);
         expect(warmScoped).toEqual(coldScoped);
         expect(readScopedResult(secondWarm.stdout)).toEqual(warmScoped);
-        const manifestPath = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
+        const manifestPath = path.join(root, ".codegraph", "cache", "index-v1", "manifest.json");
         const legacyManifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as {
           buildOptions?: { nativeRuntimeFingerprint?: string };
         };

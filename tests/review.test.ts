@@ -777,7 +777,7 @@ describe("Review report", () => {
     expect([...ordinaryIndex.graph.nodes].sort()).toEqual([...coldIndex.graph.nodes].sort());
     expect(ordinaryIndex.graph.edges).toEqual(coldIndex.graph.edges);
     const manifest = JSON.parse(
-      await fsp.readFile(path.join(root, ".codegraph-cache", "index-v1", "manifest.json"), "utf8"),
+      await fsp.readFile(path.join(root, ".codegraph", "cache", "index-v1", "manifest.json"), "utf8"),
     ) as { transientFiles?: string[] };
     expect(manifest.transientFiles).toEqual([]);
   });
@@ -2234,7 +2234,7 @@ describe("Review report", () => {
     await fsp.writeFile(testFile, `import { helper } from '../src/feature';\nhelper();\n`, "utf8");
 
     await buildProjectIndex(root, { cache: "disk" });
-    const manifestPath = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
+    const manifestPath = path.join(root, ".codegraph", "cache", "index-v1", "manifest.json");
     expect(fs.existsSync(manifestPath)).toBe(true);
 
     await fsp.writeFile(featureFile, `export function helper() { return 2; }\n`, "utf8");

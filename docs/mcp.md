@@ -116,7 +116,7 @@ On the first `tools/call`, codegraph can emit `notifications/message` and, when 
 
 Because startup is lazy, client startup timeouts only cover process boot and `initialize`, so the `startup_timeout_ms = 20000` examples below are sufficient even on large repositories. A cold full index runs inside the first `tools/call` and can exceed 20 seconds on a large tree; clients that enforce per-request timeouts should send `_meta.progressToken` (clients that observe progress notifications can keep the request alive) or allow a longer timeout for the first call after a fresh install or cache clear.
 
-Text and hybrid searches reuse a prepared handle for `.codegraph-cache/index-v1/search-v1.sqlite` and cache identical responses by snapshot identity and request options. A detected refresh or explicit `refresh_index` closes the handle and clears cached responses before the next snapshot.
+Text and hybrid searches reuse a prepared handle for `.codegraph/cache/index-v1/search-v1.sqlite` and cache identical responses by snapshot identity and request options. A detected refresh or explicit `refresh_index` closes the handle and clears cached responses before the next snapshot.
 
 If the sidecar is busy or unavailable, MCP uses the same exact in-memory matcher. [How it works](./how-it-works.md#cache-and-session-behavior) explains the search cache.
 

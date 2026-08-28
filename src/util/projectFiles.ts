@@ -28,10 +28,9 @@ export type {
 export const DEFAULT_PROJECT_FILE_IGNORES = [
   "**/node_modules/**",
   "**/.git/**",
-  // Never treat Codegraph's own on-disk state as project input. `.codegraph/` is the
-  // lifecycle manifest root; `.codegraph-cache/` is the indexer disk cache. Either can
-  // contain JSON/markdown/source-looking files that would otherwise match discovery
-  // patterns and create perpetual "new untracked file" / reindex churn.
+  // Never treat Codegraph's own on-disk state as project input. `.codegraph/` contains
+  // lifecycle metadata and the indexer disk cache. Keep the legacy cache ignore so
+  // pre-migration checkouts stay excluded from discovery.
   "**/.codegraph/**",
   "**/.codegraph-cache/**",
   "**/dist/**",

@@ -80,13 +80,13 @@ async function renameProjectTree(sourceRoot: string, movedRoot: string): Promise
   } catch (error) {
     if (!(error instanceof Error) || !("code" in error) || error.code !== "EPERM") throw error;
   }
-  const cachePath = path.join(sourceRoot, ".codegraph-cache", "index-v1");
+  const cachePath = path.join(sourceRoot, ".codegraph", "cache", "index-v1");
   const detachedCachePath = `${sourceRoot}-index-v1-detached`;
   await fsp.rename(cachePath, detachedCachePath);
   try {
     await fsp.rename(sourceRoot, movedRoot);
-    await fsp.mkdir(path.join(movedRoot, ".codegraph-cache"), { recursive: true });
-    await fsp.rename(detachedCachePath, path.join(movedRoot, ".codegraph-cache", "index-v1"));
+    await fsp.mkdir(path.join(movedRoot, ".codegraph", "cache"), { recursive: true });
+    await fsp.rename(detachedCachePath, path.join(movedRoot, ".codegraph", "cache", "index-v1"));
   } catch (error) {
     let detachedCacheExists = true;
     try {
@@ -103,7 +103,7 @@ async function renameProjectTree(sourceRoot: string, movedRoot: string): Promise
 }
 
 function diskCacheDbPathFor(root: string): string {
-  return path.join(root, ".codegraph-cache", "index-v1", "index-cache.sqlite");
+  return path.join(root, ".codegraph", "cache", "index-v1", "index-cache.sqlite");
 }
 
 function cacheFile(root: string, file: string): string {
@@ -142,7 +142,7 @@ function moduleForPath(index: ProjectIndex, filePath: string): ModuleIndex | und
 }
 
 function manifestPathFor(root: string): string {
-  return path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
+  return path.join(root, ".codegraph", "cache", "index-v1", "manifest.json");
 }
 
 describe("navigation package cache invalidation", () => {
@@ -229,7 +229,7 @@ describe("navigation package cache invalidation", () => {
 });
 
 function projectSnapshotPathFor(root: string): string {
-  return path.join(root, ".codegraph-cache", "index-v1", "project-index-snapshot.json");
+  return path.join(root, ".codegraph", "cache", "index-v1", "project-index-snapshot.json");
 }
 
 async function readProjectSnapshot(snapshotPath: string): Promise<Record<string, unknown>> {
@@ -262,7 +262,7 @@ async function rewriteProjectSnapshot(root: string, index: ProjectIndex): Promis
 }
 
 async function readManifest(root: string): Promise<IndexManifest> {
-  const manifestPath = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
+  const manifestPath = path.join(root, ".codegraph", "cache", "index-v1", "manifest.json");
   const raw = await fsp.readFile(manifestPath, "utf8");
   const manifest = JSON.parse(raw) as IndexManifest;
   const files: Record<string, (typeof manifest.files)[string]> = {};
@@ -558,7 +558,7 @@ describe("Cache invalidation and strict hashing", () => {
       encoding: "utf8",
     });
     expect(bundled.status, bundled.stderr).toBe(0);
-    const manifestPath = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
+    const manifestPath = path.join(root, ".codegraph", "cache", "index-v1", "manifest.json");
     const bundledManifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as IndexManifest;
     const unbundled = spawnSync(
       process.execPath,
@@ -1362,10 +1362,10 @@ describe("Cache invalidation and strict hashing", () => {
     const root = await mkTmpDir("dg-ignore-codegraph-cache-");
     await fsp.mkdir(path.join(root, "src"), { recursive: true });
     await fsp.mkdir(path.join(root, ".codegraph-cache", "index-v1"), { recursive: true });
-    await fsp.mkdir(path.join(root, ".codegraph"), { recursive: true });
+    await fsp.mkdir(path.join(root, ".codegraph", "cache", "index-v1"), { recursive: true });
     await fsp.writeFile(path.join(root, "src", "app.ts"), "export const app = 1;\n", "utf8");
     await fsp.writeFile(
-      path.join(root, ".codegraph-cache", "index-v1", "stale.ts"),
+      path.join(root, ".codegraph", "cache", "index-v1", "stale.ts"),
       "export const stale = 1;\n",
       "utf8",
     );
@@ -1384,7 +1384,7 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.writeFile(filePath, `export const a = 1;\n`, "utf8");
 
     await buildProjectIndex(root, { threads: 2, cache: "disk" });
-    const manifestPath = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
+    const manifestPath = path.join(root, ".codegraph", "cache", "index-v1", "manifest.json");
     const manifest = await readManifest(root);
     manifest.files[normalize(filePath)].sig = "bad-signature";
     await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
@@ -1836,7 +1836,10 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.writeFile(path.join(root, "entry.ts"), "export const bloomSnapshot = 1;\n", "utf8");
     await buildProjectIndex(root, { cache: "disk", threads: 1, useBloomFilters: true });
 
-    await writeProjectSnapshot(path.join(root, ".codegraph-cache", "index-v1", "bloom-filters.json"), corruptedPayload);
+    await writeProjectSnapshot(
+      path.join(root, ".codegraph", "cache", "index-v1", "bloom-filters.json"),
+      corruptedPayload,
+    );
     const report: BuildReport = { timings: {} };
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
@@ -1854,7 +1857,7 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.writeFile(path.join(root, "entry.ts"), "export const bloomSnapshot = 1;\n", "utf8");
     await buildProjectIndex(root, { cache: "disk", threads: 1, useBloomFilters: true });
 
-    const sidecarPath = path.join(root, ".codegraph-cache", "index-v1", "bloom-filters.json");
+    const sidecarPath = path.join(root, ".codegraph", "cache", "index-v1", "bloom-filters.json");
     const sidecar = await readProjectSnapshot(sidecarPath);
     sidecar.implementationFingerprint = "0".repeat(64);
     await writeProjectSnapshot(sidecarPath, sidecar);
@@ -1885,7 +1888,7 @@ describe("Cache invalidation and strict hashing", () => {
     await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, graph);
 
     await writeProjectSnapshot(
-      path.join(root, ".codegraph-cache", "index-v1", "detailed-symbol-graph.json"),
+      path.join(root, ".codegraph", "cache", "index-v1", "detailed-symbol-graph.json"),
       corruptedPayload,
     );
     const report: BuildReport = { timings: {} };
@@ -1915,7 +1918,7 @@ describe("Cache invalidation and strict hashing", () => {
     const graph = await buildSymbolGraphDetailed(index);
     await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, graph);
 
-    const sidecarPath = path.join(root, ".codegraph-cache", "index-v1", "detailed-symbol-graph.json");
+    const sidecarPath = path.join(root, ".codegraph", "cache", "index-v1", "detailed-symbol-graph.json");
     const sidecar = await readProjectSnapshot(sidecarPath);
     sidecar.implementationFingerprint = "0".repeat(64);
     await writeProjectSnapshot(sidecarPath, sidecar);
@@ -2167,7 +2170,7 @@ describe("Cache invalidation and strict hashing", () => {
       edges: [],
     };
     await fsp.writeFile(
-      path.join(root, ".codegraph-cache", "index-v1", "manifest.json"),
+      path.join(root, ".codegraph", "cache", "index-v1", "manifest.json"),
       JSON.stringify(manifest, null, 2),
       "utf8",
     );
@@ -2530,7 +2533,7 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.writeFile(gammaPath, "export const gammaValue = 3;\n", "utf8");
 
     await buildProjectIndex(root, { threads: 2, cache: "disk", useBloomFilters: true });
-    const bloomSidecarPath = path.join(root, ".codegraph-cache", "index-v1", "bloom-filters.json");
+    const bloomSidecarPath = path.join(root, ".codegraph", "cache", "index-v1", "bloom-filters.json");
     expect(await fsp.stat(bloomSidecarPath)).toBeTruthy();
     await fsp.rm(bloomSidecarPath);
 
@@ -2570,7 +2573,7 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.writeFile(triggerPath, "export const triggerValue = 1;\n", "utf8");
     await buildProjectIndex(root, { threads: 1, cache: "disk", useBloomFilters: true });
 
-    const sidecarPath = path.join(root, ".codegraph-cache", "index-v1", "bloom-filters.json");
+    const sidecarPath = path.join(root, ".codegraph", "cache", "index-v1", "bloom-filters.json");
     const staleSidecar = await readProjectSnapshot(sidecarPath);
     staleSidecar.version = 3;
     await writeProjectSnapshot(sidecarPath, staleSidecar);
@@ -2630,7 +2633,7 @@ describe("Cache invalidation and strict hashing", () => {
     await buildProjectIndex(root, { threads: 1, cache: "disk", useBloomFilters: true });
 
     const snapshotPath = projectSnapshotPathFor(root);
-    const sidecarPath = path.join(root, ".codegraph-cache", "index-v1", "bloom-filters.json");
+    const sidecarPath = path.join(root, ".codegraph", "cache", "index-v1", "bloom-filters.json");
     const staleSnapshot = await fsp.readFile(snapshotPath);
     const staleSidecar = await fsp.readFile(sidecarPath);
     await fsp.writeFile(definitionPath, "export class Worker { currentBloomMethod() {} }\n", "utf8");
@@ -2921,7 +2924,7 @@ describe("Cache invalidation and strict hashing", () => {
 
     await buildProjectIndexIncremental(root, { cache: "disk" });
 
-    const manifestPath = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
+    const manifestPath = path.join(root, ".codegraph", "cache", "index-v1", "manifest.json");
     const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as { configHash?: unknown };
     expect(typeof manifest.configHash).toBe("string");
 
@@ -2947,7 +2950,7 @@ describe("Cache invalidation and strict hashing", () => {
 
     await buildProjectIndex(root, { cache: "disk" });
 
-    const manifestPath = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
+    const manifestPath = path.join(root, ".codegraph", "cache", "index-v1", "manifest.json");
     const manifestBefore = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as { configHash?: unknown };
     expect(typeof manifestBefore.configHash).toBe("string");
 
@@ -3313,7 +3316,7 @@ describe("Cache invalidation and strict hashing", () => {
   it("rebuilds successfully from a pre-existing manifest that predates the symlinkDirectories field", async () => {
     const root = await mkTmpDir("dg-manifest-symlink-migration-");
     await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
-    await fsp.mkdir(path.join(root, ".codegraph-cache", "index-v1"), { recursive: true });
+    await fsp.mkdir(path.join(root, ".codegraph", "cache", "index-v1"), { recursive: true });
     const oldSchemaManifest = createManifest(root);
     expect("symlinkDirectories" in oldSchemaManifest).toBe(false);
     expect("transientFiles" in oldSchemaManifest).toBe(false);
@@ -3423,23 +3426,61 @@ describe("Cache invalidation and strict hashing", () => {
     const siblingRoot = path.join(repoRoot, "packages", "other");
     await fsp.mkdir(siblingRoot, { recursive: true });
     const siblingCachePath = buildCache.cacheRoot(siblingRoot, { cache: "disk" });
-    expect(cachePath).not.toBe(path.join(projectRoot, ".codegraph-cache", "index-v1"));
+    expect(cachePath).not.toBe(path.join(projectRoot, ".codegraph", "cache", "index-v1"));
     expect(cachePath).not.toBe(siblingCachePath);
   });
 
-  it("reports the legacy in-project anchor and layer when reusing a legacy cache under a git anchor", async () => {
-    const repoRoot = await mkTmpDir("dg-cache-legacy-anchor-repo-");
+  it("migrates a legacy cache into the consolidated project directory", async () => {
+    const root = await mkTmpDir("dg-cache-legacy-migration-");
+    const legacyCachePath = path.join(root, ".codegraph-cache", "index-v1");
+    const legacyArtifactPath = path.join(legacyCachePath, "manifest.json");
+    await fsp.mkdir(legacyCachePath, { recursive: true });
+    await fsp.writeFile(legacyArtifactPath, '{"schemaVersion":1}\n', "utf8");
+
+    const resolution = buildCache.resolveCacheLocation(root, { cache: "disk" });
+
+    expect(resolution.path).toBe(path.join(root, ".codegraph", "cache", "index-v1"));
+    await expect(fsp.readFile(path.join(resolution.path, "manifest.json"), "utf8")).resolves.toBe(
+      '{"schemaVersion":1}\n',
+    );
+    await expect(fsp.stat(path.join(root, ".codegraph-cache"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("migrates only the matching repo-anchored cache namespace", async () => {
+    const repoRoot = await mkTmpDir("dg-cache-namespaced-legacy-migration-");
     const projectRoot = path.join(repoRoot, "packages", "app");
     await fsp.mkdir(projectRoot, { recursive: true });
     await fsp.writeFile(path.join(repoRoot, ".git"), "gitdir: external\n", "utf8");
-    const legacyCachePath = path.join(projectRoot, ".codegraph-cache", "index-v1");
-    await fsp.mkdir(legacyCachePath, { recursive: true });
+    const candidate = buildCache.cacheRoot(projectRoot, { cache: "disk" });
+    const namespace = path.basename(candidate);
+    const legacyIndexRoot = path.join(repoRoot, ".codegraph-cache", "index-v1");
+    const legacyNamespace = path.join(legacyIndexRoot, namespace);
+    const siblingNamespace = path.join(legacyIndexRoot, "project-sibling");
+    await fsp.mkdir(legacyNamespace, { recursive: true });
+    await fsp.mkdir(siblingNamespace, { recursive: true });
+    await fsp.writeFile(path.join(legacyNamespace, "manifest.json"), "matching\n", "utf8");
+    await fsp.writeFile(path.join(siblingNamespace, "manifest.json"), "sibling\n", "utf8");
 
     const resolution = buildCache.resolveCacheLocation(projectRoot, { cache: "disk" });
 
-    expect(resolution.path).toBe(legacyCachePath);
-    expect(fileIdentityKey(resolution.anchor)).toBe(fileIdentityKey(projectRoot));
-    expect(resolution.layer).toBe("project");
+    expect(resolution.path).toBe(candidate);
+    await expect(fsp.readFile(path.join(candidate, "manifest.json"), "utf8")).resolves.toBe("matching\n");
+    await expect(fsp.stat(legacyNamespace)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fsp.readFile(path.join(siblingNamespace, "manifest.json"), "utf8")).resolves.toBe("sibling\n");
+  });
+
+  it("migrates a nested project's legacy local fallback cache", async () => {
+    const repoRoot = await mkTmpDir("dg-cache-local-fallback-migration-");
+    const projectRoot = path.join(repoRoot, "packages", "app");
+    const legacyCachePath = path.join(projectRoot, ".codegraph-cache", "index-v1");
+    await fsp.mkdir(legacyCachePath, { recursive: true });
+    await fsp.writeFile(path.join(repoRoot, ".git"), "gitdir: external\n", "utf8");
+    await fsp.writeFile(path.join(legacyCachePath, "manifest.json"), "fallback\n", "utf8");
+
+    const resolution = buildCache.resolveCacheLocation(projectRoot, { cache: "disk" });
+
+    await expect(fsp.readFile(path.join(resolution.path, "manifest.json"), "utf8")).resolves.toBe("fallback\n");
+    await expect(fsp.stat(path.join(projectRoot, ".codegraph-cache"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("keeps the repo-anchored cache namespace stable when the repository moves", async () => {

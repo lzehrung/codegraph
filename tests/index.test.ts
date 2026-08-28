@@ -101,7 +101,7 @@ describe("Project Indexing", () => {
       expect(cachedUpdates[0]).toMatchObject({ phase: "start", mode: "check", current: 0, total: 0 });
       expect(cachedUpdates[1]).toMatchObject({ phase: "complete", mode: "check", current: 1, total: 1 });
 
-      await fsp.rm(path.join(root, ".codegraph-cache", "index-v1", "project-index-snapshot.json"), {
+      await fsp.rm(path.join(root, ".codegraph", "cache", "index-v1", "project-index-snapshot.json"), {
         force: true,
       });
       const moduleCacheUpdates: ProgressUpdate[] = [];

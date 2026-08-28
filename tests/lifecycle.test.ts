@@ -44,11 +44,11 @@ async function readManifest(root: string): Promise<CodegraphLifecycleManifest> {
 }
 
 async function readCodegraphEntries(root: string): Promise<string[]> {
-  return (await fsp.readdir(path.join(root, ".codegraph"))).sort();
+  return (await fsp.readdir(path.join(root, ".codegraph"))).filter((entry) => entry !== "cache").sort();
 }
 
 async function expectDiskIndexCacheHasArtifacts(root: string): Promise<void> {
-  const cacheRoot = path.join(root, ".codegraph-cache", "index-v1");
+  const cacheRoot = path.join(root, ".codegraph", "cache", "index-v1");
   const stats = await fsp.stat(cacheRoot);
   expect(stats.isDirectory()).toBeTruthy();
   const entries = await fsp.readdir(cacheRoot);
@@ -73,16 +73,12 @@ describe("project lifecycle commands", () => {
     expect(await readCodegraphEntries(root)).toEqual(["manifest.json"]);
   });
 
-  it("init appends Codegraph ignore rules while preserving file bytes, newline style, and permissions", async () => {
+  it("init appends only the consolidated Codegraph ignore rule while preserving file bytes, newline style, and permissions", async () => {
     const cases = [
-      { name: "missing", initial: null, expected: ".codegraph/\n.codegraph-cache/\n" },
-      { name: "LF", initial: "node_modules/\n", expected: "node_modules/\n.codegraph/\n.codegraph-cache/\n" },
-      {
-        name: "no-final-newline",
-        initial: "node_modules/",
-        expected: "node_modules/\n.codegraph/\n.codegraph-cache/\n",
-      },
-      { name: "CRLF", initial: "node_modules/\r\n", expected: "node_modules/\r\n.codegraph/\r\n.codegraph-cache/\r\n" },
+      { name: "missing", initial: null, expected: ".codegraph/\n" },
+      { name: "LF", initial: "node_modules/\n", expected: "node_modules/\n.codegraph/\n" },
+      { name: "no-final-newline", initial: "node_modules/", expected: "node_modules/\n.codegraph/\n" },
+      { name: "CRLF", initial: "node_modules/\r\n", expected: "node_modules/\r\n.codegraph/\r\n" },
     ] as const;
 
     for (const testCase of cases) {
@@ -97,16 +93,8 @@ describe("project lifecycle commands", () => {
       const first = await initCodegraphLifecycle(root);
       const second = await initCodegraphLifecycle(root);
 
-      expect(first.gitignore).toEqual({
-        status: "added",
-        path: ".gitignore",
-        rules: [".codegraph/", ".codegraph-cache/"],
-      });
-      expect(second.gitignore).toEqual({
-        status: "already-ignored",
-        path: ".gitignore",
-        rules: [".codegraph/", ".codegraph-cache/"],
-      });
+      expect(first.gitignore).toEqual({ status: "added", path: ".gitignore", rules: [".codegraph/"] });
+      expect(second.gitignore).toEqual({ status: "already-ignored", path: ".gitignore", rules: [".codegraph/"] });
       expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(testCase.expected);
       if (testCase.initial !== null && process.platform !== "win32") {
         expect((await fsp.stat(path.join(root, ".gitignore"))).mode & 0o777).toBe(0o640);
@@ -115,37 +103,11 @@ describe("project lifecycle commands", () => {
     }
   });
 
-  it("init honors effective lifecycle ignores and still adds a missing disk-cache rule", async () => {
+  it("honors effective consolidated lifecycle ignores without rewriting Git policy", async () => {
     const cases = [
-      {
-        name: "exact",
-        policyPath: ".gitignore",
-        policy: ".codegraph/manifest.json\n",
-        expectedGitignore: ".codegraph/manifest.json\n.codegraph-cache/\n",
-        createsRootGitignore: true,
-      },
-      {
-        name: "broader",
-        policyPath: ".gitignore",
-        policy: ".codegraph/\n",
-        expectedGitignore: ".codegraph/\n.codegraph-cache/\n",
-        createsRootGitignore: true,
-      },
-      {
-        name: "info-exclude",
-        policyPath: ".git/info/exclude",
-        policy: ".codegraph/\n",
-        expectedGitignore: ".codegraph-cache/\n",
-        createsRootGitignore: true,
-      },
-      {
-        name: "both-root",
-        policyPath: ".gitignore",
-        policy: ".codegraph/\n.codegraph-cache/\n",
-        expectedGitignore: ".codegraph/\n.codegraph-cache/\n",
-        createsRootGitignore: true,
-        alreadyIgnored: true,
-      },
+      { name: "exact", policyPath: ".gitignore", policy: ".codegraph/manifest.json\n", expectsRootGitignore: true },
+      { name: "broader", policyPath: ".gitignore", policy: ".codegraph/\n", expectsRootGitignore: true },
+      { name: "info-exclude", policyPath: ".git/info/exclude", policy: ".codegraph/\n", expectsRootGitignore: false },
     ] as const;
 
     for (const testCase of cases) {
@@ -156,20 +118,26 @@ describe("project lifecycle commands", () => {
 
       const result = await initCodegraphLifecycle(root);
 
-      if ("alreadyIgnored" in testCase && testCase.alreadyIgnored) {
-        expect(result.gitignore).toEqual({
-          status: "already-ignored",
-          path: ".gitignore",
-          rules: [".codegraph/", ".codegraph-cache/"],
-        });
+      expect(result.gitignore).toEqual({ status: "already-ignored", path: ".gitignore", rules: [".codegraph/"] });
+      if (testCase.expectsRootGitignore) {
+        expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(testCase.policy);
       } else {
-        expect(result.gitignore).toEqual({
-          status: "added",
-          path: ".gitignore",
-          rules: [".codegraph-cache/"],
-        });
+        await expect(fsp.stat(path.join(root, ".gitignore"))).rejects.toMatchObject({ code: "ENOENT" });
       }
-      expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(testCase.expectedGitignore);
+    }
+  });
+
+  it("adds the consolidated rule when only a legacy cache rule exists", async () => {
+    for (const legacyRule of [".codegraph-cache/\n", "/.codegraph-cache/\n"]) {
+      const root = await mkTmpDir("cg-life-legacy-ignore-");
+      await initializeGitRepository(root);
+      await writeFile(root, "src/main.ts", "export const main = 1;\n");
+      await writeFile(root, ".gitignore", legacyRule);
+
+      const result = await initCodegraphLifecycle(root);
+
+      expect(result.gitignore).toEqual({ status: "added", path: ".gitignore", rules: [".codegraph/"] });
+      expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(`${legacyRule}.codegraph/\n`);
     }
   });
 
@@ -188,12 +156,10 @@ describe("project lifecycle commands", () => {
     expect(refreshed.gitignore).toEqual({
       status: "added",
       path: ".gitignore",
-      rules: [".codegraph/", ".codegraph-cache/"],
+      rules: [".codegraph/"],
     });
     expect(refreshed.manifest.configHash).not.toBe(before.manifest.configHash);
-    expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(
-      `${negatedPolicy}.codegraph/\n.codegraph-cache/\n`,
-    );
+    expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(`${negatedPolicy}.codegraph/\n`);
     expect(status.configChanged).toBeFalsy();
     expect(status.suggestedNextCommand).toBe("codegraph status");
   });
@@ -221,11 +187,9 @@ describe("project lifecycle commands", () => {
     expect(initialized.gitignore).toEqual({
       status: "added",
       path: ".gitignore",
-      rules: [".codegraph/", ".codegraph-cache/"],
+      rules: [".codegraph/"],
     });
-    expect(await fsp.readFile(path.join(initializedRoot, ".gitignore"), "utf8")).toBe(
-      ".codegraph/\n.codegraph-cache/\n",
-    );
+    expect(await fsp.readFile(path.join(initializedRoot, ".gitignore"), "utf8")).toBe(".codegraph/\n");
 
     const disabledRoot = await mkTmpDir("cg-life-sync-init-gitignore-disabled-");
     await initializeGitRepository(disabledRoot);
@@ -355,8 +319,9 @@ describe("project lifecycle commands", () => {
 
     await uninitCodegraphLifecycle(root);
 
-    expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(".codegraph/\n.codegraph-cache/\n");
-    await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(".codegraph/\n");
+    await expect(fsp.stat(codegraphLifecycleManifestPath(root))).rejects.toMatchObject({ code: "ENOENT" });
+    await expectDiskIndexCacheHasArtifacts(root);
   });
 
   it("init --force refreshes lastSyncAt when project files and options are current", async () => {
@@ -723,7 +688,7 @@ describe("project lifecycle commands", () => {
 
   it("init and sync keep lifecycle metadata separate from the disk index cache", async () => {
     const root = await mkTmpDir("cg-life-cache-warm-");
-    const cacheRoot = path.join(root, ".codegraph-cache", "index-v1");
+    const cacheRoot = path.join(root, ".codegraph", "cache", "index-v1");
     await writeFile(root, "src/main.ts", "export const main = 1;\n");
 
     await initCodegraphLifecycle(root);
@@ -759,7 +724,7 @@ describe("project lifecycle commands", () => {
     const result = await uninitCodegraphLifecycle(root, { force: true });
 
     expect(result.removed).toBeTruthy();
-    await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expectDiskIndexCacheHasArtifacts(root);
   });
 
   it("refuses forced cleanup through a symlinked lifecycle directory", async () => {
@@ -785,7 +750,7 @@ describe("project lifecycle commands", () => {
     await expect(fsp.readFile(sentinelPath, "utf8")).resolves.toBe("operator data\n");
   });
 
-  it("uninit without --force removes a manifest-only .codegraph directory", async () => {
+  it("uninit without --force removes the manifest while preserving the disk cache", async () => {
     const root = await mkTmpDir("cg-life-uninit-manifest-only-");
     await writeFile(root, "src/main.ts", "export const main = 1;\n");
     await initCodegraphLifecycle(root);
@@ -793,7 +758,8 @@ describe("project lifecycle commands", () => {
     const result = await uninitCodegraphLifecycle(root);
 
     expect(result.removed).toBeTruthy();
-    await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fsp.stat(codegraphLifecycleManifestPath(root))).rejects.toMatchObject({ code: "ENOENT" });
+    await expectDiskIndexCacheHasArtifacts(root);
   });
 
   it("preserves server-only state without reporting lifecycle removal", async () => {
@@ -856,7 +822,7 @@ describe("project lifecycle commands", () => {
     const uninitPayload = JSON.parse(uninitResult.stdout) as CodegraphLifecycleUninitResult;
     expect(uninitPayload.root).toBe(syncRoot);
     expect(uninitPayload.removed).toBeTruthy();
-    await expect(fsp.stat(path.join(syncRoot, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expectDiskIndexCacheHasArtifacts(syncRoot);
   });
 
   it("CLI JSON and pretty output expose only initializing ignore-policy outcomes", async () => {
@@ -872,7 +838,7 @@ describe("project lifecycle commands", () => {
     expect(payload.gitignore).toEqual({
       status: "added",
       path: ".gitignore",
-      rules: [".codegraph/", ".codegraph-cache/"],
+      rules: [".codegraph/"],
     });
     expect(jsonResult.stdout.trim().startsWith("{")).toBeTruthy();
     expect(jsonResult.stdout.trim().endsWith("}")).toBeTruthy();
@@ -883,7 +849,7 @@ describe("project lifecycle commands", () => {
     const prettyResult = await captureCli(["init", prettyRoot]);
     expect(prettyResult.stderr).toBe("");
     expect(prettyResult.stdout).toContain(`Updated Git ignore policy at ${path.join(prettyRoot, ".gitignore")}`);
-    expect(prettyResult.stdout).toContain("added .codegraph/, .codegraph-cache/");
+    expect(prettyResult.stdout).toContain("added .codegraph/");
 
     const trackedRoot = await mkTmpDir("cg-life-cli-gitignore-tracked-");
     await initializeGitRepository(trackedRoot);
@@ -951,7 +917,7 @@ describe("project lifecycle commands", () => {
         const payload = JSON.parse(result.stdout) as CodegraphLifecycleUninitResult;
         expect(payload.root, command).toBe(flagRoot);
         expect(payload.removed, command).toBeTruthy();
-        await expect(fsp.stat(path.join(flagRoot, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+        await expectDiskIndexCacheHasArtifacts(flagRoot);
       } else {
         const payload = JSON.parse(result.stdout) as CodegraphLifecycleSyncResult;
         expect(payload.root, command).toBe(flagRoot);
@@ -1225,7 +1191,7 @@ describe("project lifecycle commands", () => {
     await initCodegraphLifecycle(baselineRoot);
     const baselineResult = await uninitCodegraphLifecycle(baselineRoot);
     expect(baselineResult.removed).toBe(true);
-    await expect(fsp.stat(path.join(baselineRoot, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expectDiskIndexCacheHasArtifacts(baselineRoot);
   });
 
   it("surfaces a non-ENOTEMPTY/non-ENOENT uninit directory-removal failure as CodegraphLifecycleUserError, not a raw Error", async () => {
@@ -1262,7 +1228,7 @@ describe("project lifecycle commands", () => {
     await initCodegraphLifecycle(baselineRoot);
     const baselineResult = await uninitCodegraphLifecycle(baselineRoot);
     expect(baselineResult.removed).toBe(true);
-    await expect(fsp.stat(path.join(baselineRoot, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expectDiskIndexCacheHasArtifacts(baselineRoot);
   });
 
   it("surfaces a non-ENOENT manifest write (rename) failure as CodegraphLifecycleUserError, not a raw Error", async () => {
@@ -1370,7 +1336,7 @@ describe("project lifecycle commands", () => {
     await initCodegraphLifecycle(baselineRoot);
     const baselineResult = await uninitCodegraphLifecycle(baselineRoot, { force: true });
     expect(baselineResult.removed).toBe(true);
-    await expect(fsp.stat(path.join(baselineRoot, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expectDiskIndexCacheHasArtifacts(baselineRoot);
   });
 
   it("surfaces a non-ENOENT non-force uninit manifest-removal failure as CodegraphLifecycleUserError, not a raw Error", async () => {

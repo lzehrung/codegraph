@@ -51,7 +51,7 @@ Reduced-accuracy runs are never silent: `graph` and `index` print a one-line `Ba
 
 ## Index and cache guidance
 
-Current-state, index-backed commands validate freshness automatically and default to the on-disk cache. The first query for a project may build the index; interactive progress is written to stderr, leaving JSON stdout parseable. Later commands with the same `--root`, discovery configuration, graph options, and compatible build options reuse disk state under `.codegraph-cache/index-v1`, updating incrementally when files changed and rebuilding when compatibility cannot be established.
+Current-state, index-backed commands validate freshness automatically and default to the on-disk cache. The first query for a project may build the index; interactive progress is written to stderr, leaving JSON stdout parseable. Later commands with the same `--root`, discovery configuration, graph options, and compatible build options reuse disk state under `.codegraph/cache/index-v1`, updating incrementally when files changed and rebuilding when compatibility cannot be established.
 
 `codegraph index` and `codegraph sync` prewarm or repair that state; they are not prerequisites for `deps`, `refs`, `inspect`, `impact`, `review`, or any other current-state query. Artifact production (`graph`, `artifact`), lifecycle commands, and historical comparisons (`drift`, `graph-delta`) keep explicit build and range semantics instead.
 
@@ -83,7 +83,7 @@ Commands that scan a project read `codegraph.config.json` from `--root` when it 
 ```
 
 - `discovery.includeGlobs` and `discovery.ignoreGlobs` are project-root-relative, even when a command scans child include roots.
-- Default discovery already ignores common dependency and build trees: `node_modules/`, `.git/`, `.codegraph/`, `.codegraph-cache/`, `dist/`, `build/`, `target/` (Java/Kotlin/Rust), Python `.venv/`/`venv/`/`site-packages/`/`__pycache__/`, Ruby `vendor/bundle/`, Swift `.build/`, and CocoaPods `Pods/`. Bare `vendor/`, `env/`, `bin/`, and `obj/` stay discoverable because they are ambiguous across ecosystems; add them through `discovery.ignoreGlobs` when needed.
+- Default discovery already ignores common dependency and build trees: `node_modules/`, `.git/`, `.codegraph/` (including the disk cache), legacy `.codegraph-cache/`, `dist/`, `build/`, `target/` (Java/Kotlin/Rust), Python `.venv/`/`venv/`/`site-packages/`/`__pycache__/`, Ruby `vendor/bundle/`, Swift `.build/`, and CocoaPods `Pods/`. Bare `vendor/`, `env/`, `bin/`, and `obj/` stay discoverable because they are ambiguous across ecosystems; add them through `discovery.ignoreGlobs` when needed.
 - `discovery.ignoreGlobs` is for additional large fixture, generated, or vendored folders that should not be indexed.
 - `discovery.includeGlobs` can re-include a default-ignored tree when you intentionally want that path indexed (for example `vendor/bundle/**`). User `ignoreGlobs` and `.gitignore` still apply.
 - `languages.extensions` maps additional or built-in literal suffixes to supported language IDs; keys must start with `.` and may contain letters, digits, `.`, `_`, `+`, and `-`, values must name a supported language, and the longest suffix wins.
@@ -188,8 +188,9 @@ Graph, index, search, inspect, and review reports include `backend.native.byLang
 ### Project lifecycle
 
 - `init` creates `.codegraph/manifest.json`, warms the existing disk cache through the index build path, and is idempotent when the manifest is current. Use `--force` to rebuild and overwrite the manifest metadata.
-- In a Git worktree, `init` first checks Git's effective ignore policy for `.codegraph/manifest.json` and `.codegraph-cache/`. If either is untracked and not already ignored by root/parent rules, negations, `.git/info/exclude`, or global excludes, it appends the missing `.codegraph/` and/or `.codegraph-cache/` rules to the resolved project root's `.gitignore`; use `--no-update-gitignore` to opt out.
-- A tracked manifest is left tracked and the ignore policy is unchanged. Non-Git projects remain supported without creating `.gitignore`, and directory or symlink `.gitignore` paths fail before manifest creation with guidance to replace the path or opt out.
+- In a Git worktree, `init` first checks Git's effective ignore policy for `.codegraph/manifest.json`. If it is untracked and not already ignored by root/parent rules, negations, `.git/info/exclude`, or global excludes, it appends the missing `.codegraph/` rule to the resolved project root's `.gitignore`; use `--no-update-gitignore` to opt out. Existing legacy `.codegraph-cache/` rules are retained and recognized.
+- The disk cache lives under `.codegraph/cache/index-v1`; an existing `.codegraph-cache/` directory migrates automatically on the next run.
+- A tracked manifest is left tracked and the ignore policy is unchanged. `uninit` preserves `.codegraph/cache/` and shared server state even with `--force`. Non-Git projects remain supported without creating `.gitignore`, and directory or symlink `.gitignore` paths fail before manifest creation with guidance to replace the path or opt out.
 - `status` reports whether lifecycle metadata exists, last sync time, then/current file counts, per-file content drift (files changed even when counts match, e.g. edits in place or N files swapped for N others), config/build-option drift, analysis label, and the suggested next command. Use `--json` for `schemaVersion: 1`.
 - `sync` refreshes the manifest after edits and requires an initialized project unless `--init` is passed. `sync --init` performs the same ignore preparation and accepts `--no-update-gitignore`; ordinary `sync` never changes ignore policy.
 - Initializing JSON results add an optional `gitignore` object with `.gitignore` path and `added`, `already-ignored`, `tracked`, `not-git`, or `disabled` status. The lifecycle manifest schema remains unchanged.
@@ -398,7 +399,7 @@ codegraph viewer --root . --graph codegraph-out/graph.json --open
 codegraph viewer --root . --port 4173 --print-url
 ```
 
-Without `--graph`, each UI load or reload builds the current project graph through the automatically validated `.codegraph-cache` index; `init`, `index`, and exported JSON are not prerequisites. An explicit `--graph` is served through the same `/graph.json` route, and manual upload remains available. The viewer loads Sigma, Graphology, and ForceAtlas2 from bundled `docs/graph-visualization/vendor/` assets, so the UI stays offline and self-contained once codegraph is installed.
+Without `--graph`, each UI load or reload builds the current project graph through the automatically validated `.codegraph/cache/index-v1` index; `init`, `index`, and exported JSON are not prerequisites. An explicit `--graph` is served through the same `/graph.json` route, and manual upload remains available. The viewer loads Sigma, Graphology, and ForceAtlas2 from bundled `docs/graph-visualization/vendor/` assets, so the UI stays offline and self-contained once codegraph is installed.
 
 `review`, `goto`, `refs`, `dumpmod`, `deps`, `rdeps`, `path`, `cycles`, `unresolved`, `apisurface`, `inspect`, `hotspots`, `duplicates`, `impact`, and `affected` load current repository state through one shared policy: they validate the on-disk manifest, reuse it when inputs are unchanged, and update incrementally otherwise. Review and impact diff selectors (`--base`, `--head`, and `--changed-since`) choose changed files but do not narrow index freshness; pass `--cache off` for an exhaustive uncached rebuild, or `--cache memory|disk` to select a cache explicitly.
 
@@ -752,7 +753,7 @@ codegraph version --json
 codegraph doctor
 
 # Inspect one explicit graph or index artifact path
-codegraph doctor ./.codegraph-cache/index-v1
+codegraph doctor ./.codegraph/cache/index-v1
 
 # Inspect an artifact bundle directory or one artifact file
 codegraph doctor ./codegraph-out
