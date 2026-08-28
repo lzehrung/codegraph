@@ -91,11 +91,17 @@ describe("release script helpers", () => {
       releaseScript.indexOf('run("node", ["./scripts/build-native-if-available.mjs", "--strict"])'),
     ).toBeGreaterThan(releaseScript.indexOf('run("npm", ["install"])'));
 
-    // A plain `npm install` prunes optional dependencies this host did not install; the
-    // 2.2.1 lock lost @emnapi/* that way and broke `npm ci` off macOS. `--package-lock-only`
-    // records every variant, and the dry-run gate fails the release instead of main.
-    expect(releaseScript).toContain('run("npm", ["install", "--package-lock-only", "--ignore-scripts"])');
-    expect(releaseScript).toContain('runOutput("npm", ["ci", "--ignore-scripts", "--dry-run"])');
+    // Release packaging runs on npm 11, but the minimum supported Node 22 lane uses npm 10.
+    // Pin both lock generation and validation to the CI npm version so the release host cannot
+    // accept a lock that ordinary CI rejects.
+    expect(releaseScript).toContain('const LOCKFILE_NPM_PACKAGE = "npm@10.9.2"');
+    expect(releaseScript).toContain(
+      'run("npx", ["--yes", LOCKFILE_NPM_PACKAGE, "install", "--package-lock-only", "--ignore-scripts"])',
+    );
+    expect(releaseScript).toContain(
+      'runOutput("npx", ["--yes", LOCKFILE_NPM_PACKAGE, "ci", "--ignore-scripts", "--dry-run"])',
+    );
+    expect(releaseScript).not.toContain('run("npm", ["install", "--package-lock-only", "--ignore-scripts"])');
     const refreshBody = /function refreshDependencies\(\)\s*\{([\s\S]*?)\n\}/.exec(releaseScript);
     expect(refreshBody, "refreshDependencies must exist").not.toBeNull();
     expect(refreshBody![1]).toContain("normalizeLockfile()");

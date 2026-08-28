@@ -116,6 +116,7 @@ function runOutput(command, args, options = {}) {
     stderr: result.stderr?.trim() ?? "",
   };
 }
+const LOCKFILE_NPM_PACKAGE = "npm@10.9.2";
 
 function refreshDependencies() {
   run("npm", ["install"]);
@@ -124,33 +125,33 @@ function refreshDependencies() {
 }
 
 /**
- * `npm install` resolves against this host's node_modules, so optional dependencies it
- * did not install get pruned from the lock. `--package-lock-only` re-resolves from the
- * registry instead, recording every optional variant regardless of release host.
- *
- * The 2.2.1 lock lost `@emnapi/core` and `@emnapi/runtime` that way, which broke
- * `npm ci` on Linux and Windows while macOS still passed.
+ * The release runs on Node 24/npm 11, while the minimum supported Node 22 CI lane uses npm 10.
+ * npm 11 accepted the 2.2.3 lock after pruning emnapi entries that npm 10 requires, so validating
+ * only with the host npm published a lock that failed immediately on ordinary CI. Pin lockfile
+ * generation and validation to the CI npm version while leaving release builds on Node 24.
  */
 function normalizeLockfile() {
-  run("npm", ["install", "--package-lock-only", "--ignore-scripts"]);
+  run("npx", ["--yes", LOCKFILE_NPM_PACKAGE, "install", "--package-lock-only", "--ignore-scripts"]);
 }
 
 /**
- * A release must never publish a lock that `npm ci` rejects. This is the gate that
- * turns a post-release main breakage into a pre-release failure.
+ * A release must never publish a lock that the minimum supported CI npm rejects.
  */
 function verifyLockfileInstallable() {
-  const result = runOutput("npm", ["ci", "--ignore-scripts", "--dry-run"]);
+  const result = runOutput("npx", ["--yes", LOCKFILE_NPM_PACKAGE, "ci", "--ignore-scripts", "--dry-run"]);
   if (result.status === 0) {
     return;
   }
   // npm can exit non-zero without writing anything, for example on a spawn failure,
   // so always report the command and exit status rather than an empty line.
   const npmOutput = (result.stderr || result.stdout).trim();
-  console.error(npmOutput || `npm ci --ignore-scripts --dry-run exited ${result.status} without output.`);
+  console.error(
+    npmOutput ||
+      `npx --yes ${LOCKFILE_NPM_PACKAGE} ci --ignore-scripts --dry-run exited ${result.status} without output.`,
+  );
   throw new Error(
-    "package-lock.json is not installable with `npm ci` after the version bump. " +
-      "Run `npm install --package-lock-only --ignore-scripts` and commit the result before releasing.",
+    "package-lock.json is not installable with the CI npm version after the version bump. " +
+      `Run npx --yes ${LOCKFILE_NPM_PACKAGE} install --package-lock-only --ignore-scripts and commit the result.`,
   );
 }
 

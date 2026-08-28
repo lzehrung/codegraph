@@ -20,6 +20,11 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - Detailed graph cache comparison now avoids temporary edge maps and repeated string allocation
   ([#290](https://github.com/lzehrung/codegraph/pull/290)).
 
+### Fixed
+
+- Lockfile generation and validation now use the npm 10 version from the minimum-supported Node 22
+  CI lane, preventing a Node 24/npm 11 release from publishing a lock that ordinary CI rejects.
+
 ### Removed
 
 - Removed four unused low-level facade exports and added a deterministic snapshot guard for future
