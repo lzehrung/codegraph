@@ -300,10 +300,12 @@ async function buildGitignoreIndex(sources: readonly GitignoreSource[]): Promise
   const sorted = [...sources]
     .map(({ file, baseDir }) => ({ file: normalizePath(file), baseDir: normalizePath(baseDir) }))
     .sort((left, right) => {
-      const depthDelta = left.file.split("/").length - right.file.split("/").length;
+      const leftFile = left.file;
+      const rightFile = right.file;
+      const depthDelta = leftFile.split("/").length - rightFile.split("/").length;
       if (depthDelta !== 0) return depthDelta;
-      if (left.file < right.file) return -1;
-      return left.file > right.file ? 1 : 0;
+      if (leftFile < rightFile) return -1;
+      return leftFile > rightFile ? 1 : 0;
     });
   const gitignoreIndex: GitignoreIndex = { hasRules: false, byBaseDir: new Map() };
   for (const { file, baseDir } of sorted) {
