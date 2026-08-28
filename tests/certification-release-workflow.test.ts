@@ -149,6 +149,20 @@ describe("certified release workflows", () => {
     expect(releaseIndex).toBeGreaterThan(publishIndex);
   });
 
+  it("generates and validates the committed lock with the minimum supported Node runtime", () => {
+    const publish = jobBlock(releaseWorkflow, "publish-certified");
+    const packagePublishIndex = publish.indexOf("Publish only certified tarballs");
+    const lockRuntimeIndex = publish.indexOf("Setup Node for lockfile compatibility");
+    const releaseCommitIndex = publish.indexOf("Create release version commit and tags");
+
+    expect(lockRuntimeIndex).toBeGreaterThan(packagePublishIndex);
+    expect(lockRuntimeIndex).toBeLessThan(releaseCommitIndex);
+    expect(publish).toContain("node-version: 22.16.0");
+    expect(publish).toContain("npx --yes npm@10.9.2 install --package-lock-only --ignore-scripts");
+    expect(publish).toContain("npx --yes npm@10.9.2 ci --ignore-scripts --dry-run");
+    expect(publish).not.toContain("\n          npm install --package-lock-only --ignore-scripts");
+  });
+
   it("certifies planned package identities and records every release manifest", () => {
     const tests = jobBlock(releaseWorkflow, "tests-release");
     const publish = jobBlock(releaseWorkflow, "publish-certified");
