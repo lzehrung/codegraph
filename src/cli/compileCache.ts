@@ -15,8 +15,8 @@ type EnableCompileCacheFn = {
 };
 
 /**
- * Per-user codegraph cache root (not project-local `.codegraph/` /
- * `.codegraph-cache/`), so V8 compile cache never enters discovery.
+ * Per-user codegraph cache root (not project-local `.codegraph/`), so V8 compile cache
+ * never enters discovery.
  */
 export function resolveCodegraphUserCacheRoot(
   env: NodeJS.ProcessEnv = process.env,

@@ -1,16 +1,16 @@
 import type { Stats } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { PROJECT_CACHE_RELATIVE_PATH } from "../indexer/build-cache/location.js";
 import { isGitPathIgnored, isGitPathTracked, isGitRepo } from "../util/git.js";
 import { errorMessage } from "../util/errors.js";
 import { CodegraphLifecycleUserError } from "./errors.js";
 
 const LIFECYCLE_MANIFEST_PATH = ".codegraph/manifest.json";
-const DISK_CACHE_PROBE_PATH = ".codegraph-cache/index-v1/manifest.json";
+const LIFECYCLE_CACHE_PATH = PROJECT_CACHE_RELATIVE_PATH.replaceAll(path.sep, "/");
 const GITIGNORE_PATH = ".gitignore";
 const LIFECYCLE_GITIGNORE_RULE = ".codegraph/";
-const DISK_CACHE_GITIGNORE_RULE = ".codegraph-cache/";
-export const CODEGRAPH_GITIGNORE_RULES = [LIFECYCLE_GITIGNORE_RULE, DISK_CACHE_GITIGNORE_RULE] as const;
+export const CODEGRAPH_GITIGNORE_RULES = [LIFECYCLE_GITIGNORE_RULE] as const;
 
 export type CodegraphLifecycleGitignoreResult = {
   status: "added" | "already-ignored" | "tracked" | "not-git" | "disabled";
@@ -72,17 +72,12 @@ export async function prepareCodegraphLifecycleGitignore(
   if (!(await isGitRepo(resolvedRoot))) return { status: "not-git", path: GITIGNORE_PATH };
   const manifestTracked = await isGitPathTracked(resolvedRoot, LIFECYCLE_MANIFEST_PATH);
   if (manifestTracked) return { status: "tracked", path: GITIGNORE_PATH };
-  const [lifecycleIgnored, diskCacheIgnored] = await Promise.all([
-    isGitPathIgnored(resolvedRoot, LIFECYCLE_MANIFEST_PATH),
-    isGitPathIgnored(resolvedRoot, DISK_CACHE_PROBE_PATH),
-  ]);
-  const missingRules = [
-    ...(!lifecycleIgnored ? [LIFECYCLE_GITIGNORE_RULE] : []),
-    ...(!diskCacheIgnored ? [DISK_CACHE_GITIGNORE_RULE] : []),
-  ];
-  if (!missingRules.length) {
+  const manifestIgnored = await isGitPathIgnored(resolvedRoot, LIFECYCLE_MANIFEST_PATH);
+  const cacheIgnored = await isGitPathIgnored(resolvedRoot, LIFECYCLE_CACHE_PATH);
+  if (manifestIgnored && cacheIgnored) {
     return { status: "already-ignored", path: GITIGNORE_PATH, rules: [...CODEGRAPH_GITIGNORE_RULES] };
   }
+  const missingRules = [LIFECYCLE_GITIGNORE_RULE];
 
   const gitignorePath = path.join(resolvedRoot, GITIGNORE_PATH);
   const { existing, newline } = await readGitignoreFile(gitignorePath);

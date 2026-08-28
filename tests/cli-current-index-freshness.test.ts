@@ -87,7 +87,7 @@ describe("CLI current-state index freshness", () => {
     const root = await createFreshnessProject("dg-freshness-cold-");
     const result = await runCliOrThrow(["deps", "src/app.ts", "--root", root, "--json"]);
     expect(JSON.parse(result.stdout)).toEqual([{ file: `${root.replace(/\\/g, "/")}/src/helper.ts`, depth: 1 }]);
-    await expect(fsp.stat(path.join(root, ".codegraph-cache", "index-v1", "manifest.json"))).resolves.toBeDefined();
+    await expect(fsp.stat(path.join(root, ".codegraph", "cache", "index-v1", "manifest.json"))).resolves.toBeDefined();
   });
 
   it("observes a repository change automatically on the next query", async () => {

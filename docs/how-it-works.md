@@ -78,9 +78,11 @@ Caching avoids repeated work; it does not change extraction or resolution semant
 
 - `off` runs cold.
 - `memory` reuses parsed work in one process.
-- `disk` persists parsed files and an incremental graph under `.codegraph-cache/index-v1`.
+- `disk` persists parsed files and an incremental graph under `.codegraph/cache/index-v1`.
 
 Disk loads reuse unchanged files and update changed ones. Codegraph validates file, configuration, build, and available Git state before reuse; incompatible or corrupt data is rebuilt. Strict mode hashes content, while non-strict mode accepts the documented metadata speed tradeoff.
+
+Existing `.codegraph-cache/` directories migrate automatically to `.codegraph/cache/` on the next run.
 
 Disk search can also store normalized source and chunk text in SQLite. Treat that cache as sensitive derived source data; use `--cache off` to avoid it and stop codegraph before deletion.
 

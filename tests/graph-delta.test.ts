@@ -18,7 +18,7 @@ function hasFileEdge(
 }
 
 function manifestPathFor(root: string): string {
-  return path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
+  return path.join(root, ".codegraph", "cache", "index-v1", "manifest.json");
 }
 
 describe("Graph delta export", () => {

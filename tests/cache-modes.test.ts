@@ -15,7 +15,7 @@ async function mkTmpDir(prefix: string): Promise<string> {
 describe("Incremental cache modes", () => {
   const normalize = (p: string) => p.replace(/\\/g, "/");
   const diskCacheDbPathFor = (projectRoot: string): string =>
-    path.join(projectRoot, ".codegraph-cache", "index-v1", "index-cache.sqlite");
+    path.join(projectRoot, ".codegraph", "cache", "index-v1", "index-cache.sqlite");
 
   const readDiskCacheRow = (
     projectRoot: string,

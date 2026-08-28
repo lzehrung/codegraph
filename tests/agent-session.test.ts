@@ -42,11 +42,11 @@ async function mkGitRepo(): Promise<string> {
   return root;
 }
 function detailedSymbolGraphSnapshotPath(root: string): string {
-  return path.join(root, ".codegraph-cache", "index-v1", "detailed-symbol-graph.json");
+  return path.join(root, ".codegraph", "cache", "index-v1", "detailed-symbol-graph.json");
 }
 
 function projectSnapshotPath(root: string): string {
-  return path.join(root, ".codegraph-cache", "index-v1", "project-index-snapshot.json");
+  return path.join(root, ".codegraph", "cache", "index-v1", "project-index-snapshot.json");
 }
 
 async function readDetailedSidecar(sidecarPath: string): Promise<unknown> {
@@ -477,7 +477,7 @@ describe("agent session", () => {
     // Builds the cache this test then rewrites with a stale epoch; the returned project is
     // not needed, only the on-disk state it leaves behind.
     await createAgentSession({ root }).loadProject();
-    const cacheDir = path.join(root, ".codegraph-cache", "index-v1");
+    const cacheDir = path.join(root, ".codegraph", "cache", "index-v1");
     const manifestPath = path.join(cacheDir, "manifest.json");
     const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
       buildOptions?: { coreAlgorithmEpoch?: number; implementationFingerprint?: string };

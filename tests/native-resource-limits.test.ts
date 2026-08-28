@@ -217,7 +217,7 @@ describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache beh
       expect(firstReport.backend?.native.filesFellBack).toBe(1);
       expect(firstReport.backend?.native.errors[0]?.file).toBe(normalizedFile);
 
-      const db = new DatabaseSync(path.join(root, ".codegraph-cache", "index-v1", "index-cache.sqlite"), {
+      const db = new DatabaseSync(path.join(root, ".codegraph", "cache", "index-v1", "index-cache.sqlite"), {
         readOnly: true,
       });
       try {

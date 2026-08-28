@@ -26,7 +26,7 @@ import { mkTmpDir } from "./helpers/filesystem.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 
 function cacheDir(root: string): string {
-  return path.join(root, ".codegraph-cache", "index-v1");
+  return path.join(root, ".codegraph", "cache", "index-v1");
 }
 
 function moduleCacheDbPath(root: string): string {

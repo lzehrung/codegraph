@@ -123,7 +123,7 @@ Status key:
 
 Default discovery ignores:
 
-- Always skipped: `node_modules/`, `.git/`, `.codegraph/`, `.codegraph-cache/`, `dist/`, `build/`, and `target/` (covers Maven/Gradle and Rust).
+- Always skipped: `node_modules/`, `.git/`, `.codegraph/` (including the disk cache), legacy `.codegraph-cache/`, `dist/`, `build/`, and `target/` (covers Maven/Gradle and Rust).
 - Python: `.venv/`, `venv/`, `site-packages/`, and `__pycache__/`. Bare `env/` is not ignored by default because many repos use that name for configuration, not a virtualenv.
 - Ruby: `vendor/bundle/` (Bundler). Bare `vendor/` is left alone so Go and Composer trees that projects intentionally track remain indexable; exclude them with `discovery.ignoreGlobs` when desired.
 - Swift / CocoaPods: `.build/` and `Pods/`.

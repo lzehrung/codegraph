@@ -1934,7 +1934,7 @@ describe("CLI command modules", () => {
 
   test("passes resolved hotspot files as the current project scope", async () => {
     const root = await mkTmpDir("codegraph-hotspots-scope-options-");
-    const cacheDir = path.join(root, ".codegraph-cache", "index-v1");
+    const cacheDir = path.join(root, ".codegraph", "cache", "index-v1");
     const files = [path.join(root, "src", "main.ts")];
     const emptyIndex: ProjectIndex = {
       graph: { nodes: new Set<string>(), edges: [] },

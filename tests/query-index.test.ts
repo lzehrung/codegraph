@@ -1026,7 +1026,7 @@ describe("persistent query index", () => {
     const session = createSession(root, "off");
     const response = await search(session, root, "validate user");
     expect(response.results.some((result) => result.file === "src/auth.ts")).toBe(true);
-    await expect(fs.stat(path.join(root, ".codegraph-cache"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(path.join(root, ".codegraph", "cache"))).rejects.toMatchObject({ code: "ENOENT" });
   });
   it("bounds query index generation retries under sustained invalidation and surfaces a clear error", async () => {
     const root = await createRepo();

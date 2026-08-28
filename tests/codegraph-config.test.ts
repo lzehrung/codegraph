@@ -84,7 +84,7 @@ describe("codegraph config", () => {
       });
 
       expect(config.cache).toBeUndefined();
-      expect(resolvedCacheRoot).not.toBe(path.join(projectRoot, ".codegraph-cache", "index-v1"));
+      expect(resolvedCacheRoot).not.toBe(path.join(projectRoot, ".codegraph", "cache", "index-v1"));
     } finally {
       vi.unstubAllEnvs();
     }
@@ -107,7 +107,7 @@ describe("codegraph config", () => {
     const location = path.join(root, "new-cache-anchor");
 
     expect(cacheRoot(root, { cache: "disk", cacheLocation: location })).toBe(
-      path.join(location, ".codegraph-cache", "index-v1", projectCacheNamespace(root)),
+      path.join(location, ".codegraph", "cache", "index-v1", projectCacheNamespace(root)),
     );
     await expect(fs.stat(location)).rejects.toThrow();
   });

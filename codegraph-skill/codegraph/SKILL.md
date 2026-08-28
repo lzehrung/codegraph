@@ -239,7 +239,7 @@ codegraph sync --root . --init --no-update-gitignore
 
 `init` and `sync --init` use Git's effective ignore semantics before lifecycle hashing. When the untracked manifest is not already ignored, they append exactly `.codegraph/` to the resolved root's `.gitignore`; effective parent/global/info excludes are honored, tracked manifests are left unchanged with a warning, and non-Git roots are not modified.
 
-Use `--no-update-gitignore` to opt out during `init` or `sync --init`; ordinary `sync` never updates ignore policy. `uninit` preserves `.codegraph/server.json` and `.codegraph/server.log` even with `--force`, so stop a shared server explicitly; it leaves the root rule, while `init` and `sync` may warm or update `.codegraph-cache/index-v1/`.
+Use `--no-update-gitignore` to opt out during `init` or `sync --init`; ordinary `sync` never updates ignore policy. `uninit` preserves `.codegraph/server.json`, `.codegraph/server.log`, and `.codegraph/cache/` even with `--force`, so stop a shared server explicitly; it leaves the root rule, while `init` and `sync` may warm or update `.codegraph/cache/index-v1/`. An existing `.codegraph-cache/` directory migrates automatically on the next run.
 
 Lifecycle commands accept either one positional project path or `--root <path>`, never both. Automatic ignore updates are bound to that same resolved project root.
 

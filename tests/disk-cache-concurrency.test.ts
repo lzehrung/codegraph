@@ -36,11 +36,11 @@ type WorkerSuccess = { ok: true; role: string; id: number; fileCount: number };
 type WorkerFailure = { ok: false; error: string };
 
 function moduleCacheDbPath(projectRoot: string): string {
-  return path.join(projectRoot, ".codegraph-cache", "index-v1", "index-cache.sqlite");
+  return path.join(projectRoot, ".codegraph", "cache", "index-v1", "index-cache.sqlite");
 }
 
 function snapshotPath(projectRoot: string): string {
-  return path.join(projectRoot, ".codegraph-cache", "index-v1", "project-index-snapshot.json");
+  return path.join(projectRoot, ".codegraph", "cache", "index-v1", "project-index-snapshot.json");
 }
 
 function errorMessage(error: unknown): string {

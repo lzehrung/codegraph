@@ -5,11 +5,7 @@ import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
 import { computeConfigHash } from "../indexer/build-cache/manifest.js";
 import { logWithLevel } from "../logging.js";
 import { mapLimit } from "../util/concurrency.js";
-import {
-  normalizeGraphOptions,
-  summarizeBuildOptions,
-  type ManifestBuildOptions,
-} from "../indexer/build-cache/options.js";
+import { normalizeGraphOptions, summarizeBuildOptions } from "../indexer/build-cache/options.js";
 import type { BuildOptions } from "../indexer/types.js";
 import type { AnalysisSummary } from "../analysisSummary.js";
 import { CodegraphLifecycleUserError } from "./errors.js";
@@ -75,12 +71,13 @@ const CODEGRAPH_DIR = ".codegraph";
 const MANIFEST_FILE = "manifest.json";
 const SERVER_REGISTRY_FILE = "server.json";
 const SERVER_LOG_FILE = "server.log";
-
-type LifecycleBuildOptionsSummary = ManifestBuildOptions & {
-  graph: ReturnType<typeof normalizeGraphOptions>;
-  native: BuildOptions["native"];
+const CACHE_DIRECTORY = "cache";
+const KNOWN_CODEGRAPH_FILES: Record<string, true> = {
+  [MANIFEST_FILE]: true,
+  [SERVER_REGISTRY_FILE]: true,
+  [SERVER_LOG_FILE]: true,
+  [CACHE_DIRECTORY]: true,
 };
-const KNOWN_CODEGRAPH_FILES = new Set([MANIFEST_FILE, SERVER_REGISTRY_FILE, SERVER_LOG_FILE]);
 
 export function codegraphLifecycleManifestPath(root: string): string {
   return path.join(root, CODEGRAPH_DIR, MANIFEST_FILE);
@@ -212,13 +209,15 @@ export async function uninitCodegraphLifecycle(
   if (!entries.length) {
     return { schemaVersion: MANIFEST_SCHEMA_VERSION, root, removed: false, manifestPath };
   }
-  const unknownEntries = entries.filter((entry) => !KNOWN_CODEGRAPH_FILES.has(entry));
+  const unknownEntries = entries.filter((entry) => !Object.hasOwn(KNOWN_CODEGRAPH_FILES, entry));
   if (unknownEntries.length && !options.force) {
     throw new CodegraphLifecycleUserError(
       `Refusing to remove .codegraph with unknown entries: ${unknownEntries.join(", ")}. Use --force to remove them.`,
     );
   }
-  const removableEntries = entries.filter((entry) => entry !== SERVER_REGISTRY_FILE && entry !== SERVER_LOG_FILE);
+  const removableEntries = entries.filter(
+    (entry) => entry !== SERVER_REGISTRY_FILE && entry !== SERVER_LOG_FILE && entry !== CACHE_DIRECTORY,
+  );
   if (options.force) {
     for (const entry of removableEntries) {
       await removeCodegraphPath(path.join(dir, entry), { recursive: true });
@@ -393,7 +392,7 @@ function hashBuildOptions(buildOptions: BuildOptions | undefined): string {
   return sha256(stableStringify(summarizeLifecycleBuildOptions(buildOptions)));
 }
 
-function summarizeLifecycleBuildOptions(buildOptions: BuildOptions | undefined): LifecycleBuildOptionsSummary {
+function summarizeLifecycleBuildOptions(buildOptions: BuildOptions | undefined) {
   return {
     ...summarizeBuildOptions(buildOptions),
     graph: normalizeGraphOptions(buildOptions?.graph),

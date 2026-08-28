@@ -24,7 +24,7 @@ function entry(edges: Edge[]): ManifestFileEntry {
 }
 
 function manifestPathFor(root: string): string {
-  return path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
+  return path.join(root, ".codegraph", "cache", "index-v1", "manifest.json");
 }
 
 describe("incremental-plan dependents", () => {
