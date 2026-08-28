@@ -76,10 +76,19 @@ describe("certified release workflows", () => {
     expect(assemble).toContain("npm run lint");
     expect(assemble).toContain("npm run format:check");
     expect(assemble).not.toContain("npm run check");
-    expect(assemble.match(/npm run build/g)).toHaveLength(1);
-    expect(assemble).not.toContain("npm run test:");
-    expect(assemble).not.toContain("npm run security:production");
-    expect(assemble).not.toContain("npm run fixtures:check-clean");
+    expect(assemble.match(/^\s+run:\s+npm run build\s*$/gm) ?? []).toHaveLength(1);
+    expect(assemble).not.toMatch(/\bnpm run build:[^\s]+/);
+    for (const duplicateCommand of [
+      "npm test",
+      "npm run test:",
+      "npm run security:production",
+      "npm run fixtures:check-clean",
+      "run-release-tests.mjs",
+      "check-production-audit.mjs",
+      "check-fixture-cleanliness.mjs",
+    ]) {
+      expect(assemble).not.toContain(duplicateCommand);
+    }
     expect(releaseTests).toContain("run-release-tests.mjs");
     expect(security).toContain("check-production-audit.mjs");
     expect(fixtures).toContain("check-fixture-cleanliness.mjs");
