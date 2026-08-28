@@ -125,6 +125,8 @@ export const DEFAULT_PROJECT_PATTERNS = [
 
 const REALPATH_FILTER_CONCURRENCY = 64;
 
+export type SymlinkProbeMode = "known" | "git-candidates" | "filesystem";
+
 export type ProjectFileDiscoveryOptions = {
   includeGlobs?: string[];
   ignoreGlobs?: string[];
@@ -134,13 +136,13 @@ export type ProjectFileDiscoveryOptions = {
   logLevel?: LogLevel;
   /**
    * Previously discovered symlinked directories under the project root. When provided
-   * (including an empty array), discovery skips the full-tree symlink-directory probe
-   * and instead re-verifies each entry directly, avoiding a second full recursive walk
-   * on warm runs. Omit when the symlink-directory set is not yet known; discovery then
-   * probes once and reports what it found via `onSymlinkDirectoriesDiscovered`.
+   * (including an empty array), discovery re-verifies each entry directly and skips the
+   * probe on warm runs. Omit it to probe once and report the result through
+   * `onSymlinkDirectoriesDiscovered`. The callback mode distinguishes persisted hints,
+   * Git candidate screening, and the non-Git filesystem fallback.
    */
   knownSymlinkDirectories?: readonly string[];
-  onSymlinkDirectoriesDiscovered?: (directories: readonly string[]) => void;
+  onSymlinkDirectoriesDiscovered?: (directories: readonly string[], mode: SymlinkProbeMode) => void;
 };
 
 type GitignoreRule = {
@@ -165,7 +167,7 @@ type SafeSymlinkDirectoryCrawlOptions = {
   knownSymlinkDirectories?: readonly string[];
   candidatePaths?: readonly string[];
   resolvedSafeSymlinkDirectories?: readonly string[];
-  onSymlinkDirectoriesDiscovered?: (directories: readonly string[]) => void;
+  onSymlinkDirectoriesDiscovered?: (directories: readonly string[], mode: SymlinkProbeMode) => void;
 };
 
 type RootSafePath = {
@@ -756,17 +758,24 @@ async function resolveSafeSymlinkDirectories(
       async (linkPath) => ((await isSafeSymlinkDirectory(root, linkPath, realRoot)) ? linkPath : null),
     );
     const resolved = verified.filter((entry): entry is string => entry !== null);
-    options.onSymlinkDirectoriesDiscovered?.(resolved);
+    options.onSymlinkDirectoriesDiscovered?.(resolved, "known");
     return resolved;
   }
   if (options.candidatePaths !== undefined) {
-    const verified = await mapLimitSemaphore(
-      Array.from(new Set(options.candidatePaths)),
-      REALPATH_FILTER_CONCURRENCY,
-      async (linkPath) => ((await isSafeSymlinkDirectory(root, linkPath, realRoot)) ? linkPath : null),
+    const ignoreMatchers = ignore
+      .map(normalizeGlobPattern)
+      .filter(Boolean)
+      .map((pattern) => picomatch(pattern, { dot: true }));
+    const candidatePaths = Array.from(new Set(options.candidatePaths)).filter((candidatePath) => {
+      const relativePath = normalizePath(path.relative(root, candidatePath));
+      if (!isRelativePathInside(relativePath)) return false;
+      return !ignoreMatchers.some((matcher) => matcher(relativePath));
+    });
+    const verified = await mapLimitSemaphore(candidatePaths, REALPATH_FILTER_CONCURRENCY, async (linkPath) =>
+      (await isSafeSymlinkDirectory(root, linkPath, realRoot)) ? linkPath : null,
     );
     const discovered = verified.filter((entry): entry is string => entry !== null);
-    options.onSymlinkDirectoriesDiscovered?.(discovered);
+    options.onSymlinkDirectoriesDiscovered?.(discovered, "git-candidates");
     return discovered;
   }
   const entries = (await fg(["**/*"], {
@@ -784,7 +793,7 @@ async function resolveSafeSymlinkDirectories(
     async (linkPath) => ((await isSafeSymlinkDirectory(root, linkPath, realRoot)) ? linkPath : null),
   );
   const discovered = candidates.filter((entry): entry is string => entry !== null);
-  options.onSymlinkDirectoriesDiscovered?.(discovered);
+  options.onSymlinkDirectoriesDiscovered?.(discovered, "filesystem");
   return discovered;
 }
 
@@ -888,7 +897,7 @@ export async function discoverProjectFiles(
   options?: {
     logLevel?: LogLevel;
     knownSymlinkDirectories?: readonly string[];
-    onSymlinkDirectoriesDiscovered?: (directories: readonly string[]) => void;
+    onSymlinkDirectoriesDiscovered?: (directories: readonly string[], mode: SymlinkProbeMode) => void;
   },
 ): Promise<ProjectFileInfo[]> {
   const root = await ensureDirectoryReadable(projectRoot, "Project root");
