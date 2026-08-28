@@ -798,6 +798,11 @@ jobs:
             --expected-root-version ${{ needs.plan-release.outputs.root_version }} \
             --expected-native-version ${{ needs.plan-release.outputs.native_version }}
 
+      - name: Setup Node for lockfile compatibility
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.16.0
+
       - name: Create release version commit and tags
         env:
           ROOT_VERSION: ${{ needs.plan-release.outputs.root_version }}
@@ -831,7 +836,8 @@ jobs:
             `${JSON.stringify(restoreNativePackageManifest(nativePackage, process.env.NATIVE_VERSION), null, 2)}\n`,
           );
           NODE
-          npm install --package-lock-only --ignore-scripts
+          npx --yes npm@10.9.2 install --package-lock-only --ignore-scripts
+          npx --yes npm@10.9.2 ci --ignore-scripts --dry-run
           git add package.json package-lock.json packages/codegraph-core/package.json packages/codegraph-native/package.json
           git commit -m "release: @lzehrung/codegraph@${ROOT_VERSION}, @lzehrung/codegraph-core@${ROOT_VERSION}, @lzehrung/codegraph-native@${NATIVE_VERSION}"
           node --input-type=module <<'NODE'
