@@ -1027,6 +1027,29 @@ describe("git-native project file discovery", () => {
     expect(files.some((file) => file.endsWith("/plugins/example/plugin.ts"))).toBe(true);
   });
 
+  it("screens Git candidates for safe symlink directories without a second tree walk", async () => {
+    const root = await makeRepo("codegraph-discovery-git-symlink-");
+    const packageDir = path.join(root, "packages", "core");
+    const linkedPackage = path.join(root, "linked-core");
+    await createFile(path.join(packageDir, "index.ts"), "export const core = 1;\n");
+    try {
+      // A Windows junction is traversed directly by Git and reports as a directory to
+      // lstat, so it does not exercise the candidate symlink verifier.
+      await fs.symlink(packageDir, linkedPackage, "dir");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+    const discoveredCallback = vi.fn();
+
+    const files = await listProjectFiles(root, undefined, {
+      onSymlinkDirectoriesDiscovered: discoveredCallback,
+    });
+
+    expect(files.map(normalize)).toContain(normalize(path.join(linkedPackage, "index.ts")));
+    expect(discoveredCallback).toHaveBeenCalledWith([normalize(linkedPackage)]);
+  });
+
   it("excludes gitignored trees while keeping tracked sources", async () => {
     const root = await makeRepo("codegraph-discovery-ignored-tree-");
     await createFile(path.join(root, ".gitignore"), "generated/\n");

@@ -163,6 +163,7 @@ type SafeSymlinkDirectoryCrawlOptions = {
   onlyFiles?: boolean;
   markDirectories?: boolean;
   knownSymlinkDirectories?: readonly string[];
+  candidatePaths?: readonly string[];
   resolvedSafeSymlinkDirectories?: readonly string[];
   onSymlinkDirectoriesDiscovered?: (directories: readonly string[]) => void;
 };
@@ -604,6 +605,7 @@ export async function listProjectFiles(
         : [];
     const symlinkOptions = {
       globRoot,
+      ...(gitCandidates ? { candidatePaths: gitCandidates.files } : {}),
       ...(options?.knownSymlinkDirectories !== undefined
         ? { knownSymlinkDirectories: options.knownSymlinkDirectories }
         : {}),
@@ -735,10 +737,11 @@ async function isSafeSymlinkDirectory(root: string, linkPath: string, realRoot: 
  * Resolve the symlinked directories under `root` that are safe to crawl.
  *
  * When `knownSymlinkDirectories` is provided, this re-verifies each previously
- * discovered path directly (stat + realpath per entry) instead of walking the
- * whole tree again. Otherwise it probes once via a full `fg(["**\/*"])` walk
- * and, if `onSymlinkDirectoriesDiscovered` is set, reports what it found so a
- * caller can persist the result for future warm runs.
+ * discovered path directly. Otherwise a Git-derived `candidatePaths` list avoids a
+ * separate full-tree scan: Git already enumerated every tracked and non-ignored
+ * untracked entry, including symlinks. Non-Git discovery retains the existing
+ * `fg(["**\/*"])` fallback. Every path still passes the same lstat, target-directory,
+ * and realpath-confinement checks before it can be crawled.
  */
 async function resolveSafeSymlinkDirectories(
   root: string,
@@ -755,6 +758,16 @@ async function resolveSafeSymlinkDirectories(
     const resolved = verified.filter((entry): entry is string => entry !== null);
     options.onSymlinkDirectoriesDiscovered?.(resolved);
     return resolved;
+  }
+  if (options.candidatePaths !== undefined) {
+    const verified = await mapLimitSemaphore(
+      Array.from(new Set(options.candidatePaths)),
+      REALPATH_FILTER_CONCURRENCY,
+      async (linkPath) => ((await isSafeSymlinkDirectory(root, linkPath, realRoot)) ? linkPath : null),
+    );
+    const discovered = verified.filter((entry): entry is string => entry !== null);
+    options.onSymlinkDirectoriesDiscovered?.(discovered);
+    return discovered;
   }
   const entries = (await fg(["**/*"], {
     cwd: root,
