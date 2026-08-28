@@ -710,15 +710,19 @@ export function createDiscoveredFileMatcher(
   };
 }
 
+/**
+ * Whether `linkPath` is a directory symlink that is safe to crawl for project files.
+ *
+ * `lstat` runs before `realpath` and `stat` so a candidate that is not a symlink costs
+ * one syscall rather than three. That matters for callers screening a broad candidate
+ * list, where nearly every entry is an ordinary file, and costs nothing for callers
+ * passing entries a walk already identified as links.
+ */
 async function isSafeSymlinkDirectory(root: string, linkPath: string, realRoot: string): Promise<boolean> {
   try {
     if (!isRelativePathInside(path.relative(root, linkPath))) return false;
-    const [linkStats, realPath, targetStats] = await Promise.all([
-      fsp.lstat(linkPath),
-      fsp.realpath(linkPath),
-      fsp.stat(linkPath),
-    ]);
-    if (!linkStats.isSymbolicLink()) return false;
+    if (!(await fsp.lstat(linkPath)).isSymbolicLink()) return false;
+    const [realPath, targetStats] = await Promise.all([fsp.realpath(linkPath), fsp.stat(linkPath)]);
     if (!targetStats.isDirectory()) return false;
     if (!isFilePathWithinRoot(realRoot, realPath)) return false;
     return normalizePath(realPath) !== normalizePath(realRoot);
