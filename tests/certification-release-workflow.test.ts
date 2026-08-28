@@ -62,14 +62,36 @@ describe("certified release workflows", () => {
     expect(releaseWorkflow).not.toContain("standalone-funnel");
     expect(releaseWorkflow).not.toContain("standalone-release-assets");
   });
-  it("runs release checks, candidate identity gates, and source CI coverage", () => {
+  it("keeps assembly checks non-redundant with dedicated certification jobs", () => {
     const assemble = jobBlock(releaseWorkflow, "assemble-release-candidates");
+    const releaseTests = jobBlock(releaseWorkflow, "tests-release");
+    const security = jobBlock(releaseWorkflow, "security-production");
+    const fixtures = jobBlock(releaseWorkflow, "fixture-hermeticity");
     const download = jobBlock(standaloneWorkflow, "download-release-candidates");
     const source = jobBlock(onDemandWorkflow, "build-and-test-source");
     const windows = jobBlock(onDemandWorkflow, "build-and-test-windows");
 
-    expect(assemble).toContain("Run release pre-pack checks");
-    expect(assemble).toContain("npm run check");
+    expect(assemble).toContain("Run release source checks");
+    expect(assemble).toContain("npm run typecheck");
+    expect(assemble).toContain("npm run lint");
+    expect(assemble).toContain("npm run format:check");
+    expect(assemble).not.toContain("npm run check");
+    expect(assemble.match(/^\s+run:\s+npm run build\s*$/gm) ?? []).toHaveLength(1);
+    expect(assemble).not.toMatch(/\bnpm run build:[^\s]+/);
+    for (const duplicateCommand of [
+      "npm test",
+      "npm run test:",
+      "npm run security:production",
+      "npm run fixtures:check-clean",
+      "run-release-tests.mjs",
+      "check-production-audit.mjs",
+      "check-fixture-cleanliness.mjs",
+    ]) {
+      expect(assemble).not.toContain(duplicateCommand);
+    }
+    expect(releaseTests).toContain("run-release-tests.mjs");
+    expect(security).toContain("check-production-audit.mjs");
+    expect(fixtures).toContain("check-fixture-cleanliness.mjs");
     expect(download).toContain("EXPECTED_ROOT_VERSION");
     expect(download).toContain("EXPECTED_NATIVE_VERSION");
     expect(download).toContain("manifest.rootVersion");
