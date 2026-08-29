@@ -1,3 +1,4 @@
+import os from "node:os";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -18,9 +19,25 @@ export type NativeWorkerPoolOptions = {
 };
 
 const HARD_MAX_THREADS = 64;
+const DEFAULT_NATIVE_THREAD_CAP = 8;
+
+export function defaultNativeWorkerThreadCount(availableParallelism = os.availableParallelism()): number {
+  return Math.min(DEFAULT_NATIVE_THREAD_CAP, Math.max(1, Math.floor(availableParallelism * 0.75)));
+}
+
+export function resolveNativeWorkerThreadCount(
+  requested?: number,
+  availableParallelism = os.availableParallelism(),
+): number {
+  return resolveWorkerThreadCount({
+    requested,
+    defaultCount: defaultNativeWorkerThreadCount(availableParallelism),
+    max: HARD_MAX_THREADS,
+  });
+}
 
 function resolveThreadCount(requested?: number): number {
-  return resolveWorkerThreadCount({ requested, max: HARD_MAX_THREADS });
+  return resolveNativeWorkerThreadCount(requested);
 }
 
 export function resolveNativeWorkerPath(): string {

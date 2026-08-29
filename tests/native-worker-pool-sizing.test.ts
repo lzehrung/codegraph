@@ -7,7 +7,11 @@ import { describe, expect, it } from "vitest";
 import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../src/index.js";
 import { NATIVE_WORKER_AUTO_FILE_THRESHOLD, shouldEnableNativeWorkers } from "../src/indexer/build-workers.js";
 import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
-import { createNativeWorkerPool } from "../src/worker/nativeWorkerPool.js";
+import {
+  createNativeWorkerPool,
+  defaultNativeWorkerThreadCount,
+  resolveNativeWorkerThreadCount,
+} from "../src/worker/nativeWorkerPool.js";
 import type { BuildReport } from "../src/indexer/types.js";
 
 async function makeProject(fileCount: number, extension = ".ts"): Promise<string> {
@@ -53,6 +57,19 @@ describe("native worker pool enablement", () => {
     } finally {
       await pool.destroy();
     }
+  });
+
+  it("reserves capacity for automatic native worker sizing", () => {
+    expect(defaultNativeWorkerThreadCount(1)).toBe(1);
+    expect(defaultNativeWorkerThreadCount(2)).toBe(1);
+    expect(defaultNativeWorkerThreadCount(4)).toBe(3);
+    expect(defaultNativeWorkerThreadCount(8)).toBe(6);
+    expect(defaultNativeWorkerThreadCount(32)).toBe(8);
+  });
+
+  it("keeps explicit native thread overrides available", () => {
+    expect(resolveNativeWorkerThreadCount(24, 32)).toBe(24);
+    expect(resolveNativeWorkerThreadCount(0, 32)).toBe(8);
   });
 });
 
