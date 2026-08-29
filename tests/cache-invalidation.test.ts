@@ -2756,7 +2756,7 @@ describe("Cache invalidation and strict hashing", () => {
       nativeRuntimeFingerprint?: string;
       implementationFingerprint?: string;
     };
-    expect(rewrittenSnapshot.version).toBe(9);
+    expect(rewrittenSnapshot.version).toBe(10);
     expect(initial.byFile.has(fileIdentityKey(normalize(entryPath)))).toBe(true);
     expect(rebuilt.byFile.has(fileIdentityKey(normalize(entryPath)))).toBe(true);
     expect(rebuilt.bloomFilters?.get(normalize(entryPath))?.mightContain("versioned")).toBe(true);

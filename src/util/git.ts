@@ -14,7 +14,7 @@ import { logWithLevel, type LogLevel } from "../logging.js";
  */
 export const DEFAULT_GIT_TIMEOUT_MS = 30_000;
 
-type GitExcludeFile = { file: string; baseDir: string };
+type GitExcludeFile = { file: string; baseDir: string; priority: number };
 
 const gitRepositoryChecks = new Map<string, Promise<boolean>>();
 const gitDiscoveryRootIgnoredChecks = new Map<string, Promise<boolean>>();
@@ -682,13 +682,13 @@ async function listGitExcludeFilesUncached(projectRoot: string): Promise<GitExcl
     return [];
   }
   if (!baseDir) return [];
-  const candidates: string[] = [];
+  const candidates: Array<{ file: string; priority: number }> = [];
   try {
     // `--git-path` resolves `info/exclude` correctly when `.git` is a file, as it is in
     // linked worktrees and submodules, where guessing `<root>/.git/info` would miss it.
     const { stdout } = await runGit(projectRoot, ["rev-parse", "--git-path", "info/exclude"]);
     const resolved = stdout.trim();
-    if (resolved) candidates.push(normalizePath(path.resolve(projectRoot, resolved)));
+    if (resolved) candidates.push({ file: normalizePath(path.resolve(projectRoot, resolved)), priority: 1 });
   } catch {
     // No exclude file for this repository layout.
   }
@@ -699,15 +699,22 @@ async function listGitExcludeFilesUncached(projectRoot: string): Promise<GitExcl
       const expanded = configured.startsWith("~")
         ? path.join(os.homedir(), configured.slice(1))
         : path.resolve(projectRoot, configured);
-      candidates.push(normalizePath(expanded));
+      candidates.push({ file: normalizePath(expanded), priority: 0 });
     }
   } catch {
     // `git config --get` exits non-zero when the key is unset.
   }
   const sources: GitExcludeFile[] = [];
-  for (const file of Array.from(new Set(candidates))) {
+  const uniqueCandidates = new Map<string, number>();
+  for (const candidate of candidates) {
+    uniqueCandidates.set(
+      candidate.file,
+      Math.max(uniqueCandidates.get(candidate.file) ?? candidate.priority, candidate.priority),
+    );
+  }
+  for (const [file, priority] of uniqueCandidates) {
     try {
-      if ((await fsp.stat(file)).isFile()) sources.push({ file, baseDir });
+      if ((await fsp.stat(file)).isFile()) sources.push({ file, baseDir, priority });
     } catch {
       // Configured but absent; Git ignores it too.
     }

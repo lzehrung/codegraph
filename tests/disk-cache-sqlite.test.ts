@@ -1094,7 +1094,7 @@ describe("disk cache uses sqlite backend", () => {
     // Force a snapshot rewrite so the migrated relative schema is what remains on disk.
     await buildProjectIndex(root, { cache: "disk", threads: 1 });
     const rewritten = await readBrotliJson(projectSnapshotPath(root));
-    expect(rewritten.version).toBe(9);
+    expect(rewritten.version).toBe(10);
     expect(((rewritten.graph as { nodes: string[] }).nodes ?? []).every((node) => !path.isAbsolute(node))).toBe(true);
   });
 
