@@ -126,6 +126,18 @@ const REALPATH_FILTER_CONCURRENCY = 64;
 
 export type SymlinkProbeMode = "known" | "git-candidates" | "filesystem";
 
+/**
+ * Working-tree candidate listing shared by `listProjectFiles` and `discoverProjectFiles`.
+ *
+ * `files` are tracked plus untracked-but-not-ignored paths (including initialized submodule
+ * contents). `gitignoreFiles` are the ignore sources that still apply to those paths, so a
+ * caller can reuse the set without re-probing Git.
+ */
+export type GitCandidateSet = {
+  files: string[];
+  gitignoreFiles: GitignoreSource[];
+};
+
 export type ProjectFileDiscoveryOptions = {
   includeGlobs?: string[];
   ignoreGlobs?: string[];
@@ -142,6 +154,14 @@ export type ProjectFileDiscoveryOptions = {
    */
   knownSymlinkDirectories?: readonly string[];
   onSymlinkDirectoriesDiscovered?: (directories: readonly string[], mode: SymlinkProbeMode) => void;
+  /**
+   * Git candidate set already enumerated for this root. When provided (including `null`),
+   * metadata discovery reuses it and does not spawn Git. Omit it to enumerate through Git
+   * when available. Pair with `onGitCandidatesDiscovered` the same way symlink hints pair
+   * with `onSymlinkDirectoriesDiscovered`.
+   */
+  knownGitCandidates?: GitCandidateSet | null;
+  onGitCandidatesDiscovered?: (candidates: GitCandidateSet | null) => void;
 };
 
 type GitignoreRule = {
@@ -295,7 +315,7 @@ const EMPTY_GITIGNORE_INDEX: GitignoreIndex = { hasRules: false, byBaseDir: new 
  * For `.gitignore` the base is its own directory; for Git's exclude files the base is
  * the repository root, which is how Git matches them.
  */
-type GitignoreSource = { file: string; baseDir: string };
+export type GitignoreSource = { file: string; baseDir: string };
 
 /**
  * Parse `.gitignore` rules from an already-discovered set of `.gitignore` files.
@@ -428,11 +448,6 @@ async function ensureDirectoryReadable(directoryPath: string, label: string): Pr
   return resolvedPath;
 }
 
-type GitCandidateSet = {
-  files: string[];
-  gitignoreFiles: GitignoreSource[];
-};
-
 /**
  * Every directory on the ancestor chain of `files`, up to and including `root`.
  *
@@ -564,10 +579,15 @@ export async function listProjectFiles(
     // `Intermediate/` tree, and discovery took 26.1s. Git lists 4,010 in about 111ms.
     // An aliased root or a gitignore-root override means Git's notion of the project is
     // not this call's, so those fall back to the scan.
-    const gitCandidates =
-      useGitignore && options?.gitignoreRoot === undefined && normalizePath(realRoot) === normalizePath(root)
-        ? await listGitCandidateFiles(root, options?.logLevel)
-        : null;
+    const attemptedGitCandidates =
+      useGitignore && options?.gitignoreRoot === undefined && normalizePath(realRoot) === normalizePath(root);
+    const gitCandidates = attemptedGitCandidates ? await listGitCandidateFiles(root, options?.logLevel) : null;
+    // Report only when this call actually asked Git, including a null result. Callers that
+    // already enumerated candidates (build-index) can hand the same set to metadata discovery
+    // and skip a second Git spawn; omitting the callback keeps prior caller behavior.
+    if (attemptedGitCandidates) {
+      options?.onGitCandidatesDiscovered?.(gitCandidates);
+    }
     let gitignoreIndex = EMPTY_GITIGNORE_INDEX;
     if (useGitignore && gitCandidates) {
       gitignoreIndex = await buildGitignoreIndex(gitCandidates.gitignoreFiles);
@@ -899,6 +919,8 @@ export async function discoverProjectFiles(
     logLevel?: LogLevel;
     knownSymlinkDirectories?: readonly string[];
     onSymlinkDirectoriesDiscovered?: (directories: readonly string[], mode: SymlinkProbeMode) => void;
+    knownGitCandidates?: GitCandidateSet | null;
+    onGitCandidatesDiscovered?: (candidates: GitCandidateSet | null) => void;
   },
 ): Promise<ProjectFileInfo[]> {
   const root = await ensureDirectoryReadable(projectRoot, "Project root");
@@ -924,8 +946,19 @@ export async function discoverProjectFiles(
     // as `.idea` and `*.xcodeproj` are recovered from ancestor paths of those files.
     // Non-Git roots and any Git failure keep the recursive filesystem scan, including
     // empty directory markers markDirectories can still see.
-    const gitCandidates =
-      normalizePath(realRoot) === normalizePath(root) ? await listGitCandidateFiles(root, options?.logLevel) : null;
+    //
+    // A caller that already enumerated candidates (typically listProjectFiles in the same
+    // build) can pass knownGitCandidates to skip a second Git spawn. undefined means
+    // enumerate here; null means Git was already found unavailable.
+    let gitCandidates: GitCandidateSet | null;
+    if (options?.knownGitCandidates !== undefined) {
+      gitCandidates = options.knownGitCandidates;
+    } else if (normalizePath(realRoot) === normalizePath(root)) {
+      gitCandidates = await listGitCandidateFiles(root, options?.logLevel);
+    } else {
+      gitCandidates = null;
+    }
+    options?.onGitCandidatesDiscovered?.(gitCandidates);
     let rootSafeMatches: string[];
     if (gitCandidates) {
       const gitignoreIndex = await buildGitignoreIndex(gitCandidates.gitignoreFiles);

@@ -1,7 +1,7 @@
 import { normalizeLanguageExtensions } from "../languages.js";
 import { buildGraphAdjacency } from "../graphs/adjacency.js";
 import { performance } from "node:perf_hooks";
-import { discoverProjectFiles, type ProjectFileInfo } from "../util/projectFiles.js";
+import { discoverProjectFiles, type GitCandidateSet, type ProjectFileInfo } from "../util/projectFiles.js";
 import type { FileId, Graph } from "../types.js";
 import type { BloomFilterCache } from "../util/bloomFilter.js";
 import type { ParsedFileContext } from "./parse-context.js";
@@ -21,6 +21,7 @@ export async function finalizeProjectIndex(args: {
   parsedMap: Map<string, ParsedFileContext>;
   bloomFilterCache: BloomFilterCache | undefined;
   projectFiles?: ProjectFileInfo[] | Promise<ProjectFileInfo[]>;
+  knownGitCandidates?: GitCandidateSet | null;
   manifestEntries?: Map<FileId, ProjectIndexManifestEntry>;
   buildReport?: BuildReport | undefined;
 }): Promise<ProjectIndex> {
@@ -28,6 +29,7 @@ export async function finalizeProjectIndex(args: {
   const projectFiles = await (args.projectFiles ??
     discoverProjectFiles(args.projectRoot, {
       ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
+      ...(args.knownGitCandidates !== undefined ? { knownGitCandidates: args.knownGitCandidates } : {}),
     }));
   const languageExtensions = normalizeLanguageExtensions(args.opts?.languageExtensions);
   const parsed = retainedParsedCache(args.parsedMap, args.opts);

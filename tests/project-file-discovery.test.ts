@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
-import { buildProjectIndex, listProjectFiles, discoverProjectFiles } from "../src/index.js";
+import { buildProjectIndex, listProjectFiles, discoverProjectFiles, type GitCandidateSet } from "../src/index.js";
 import { DEFAULT_PROJECT_MANIFESTS } from "../src/util.js";
 import {
   createDiscoveredFileMatcher,
@@ -12,7 +12,12 @@ import {
 import { parseDotnetName, parseGoModuleName, parsePomName, parseTomlName } from "../src/util/projectFiles/parsers.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
 import { runGit as git } from "./helpers/git.js";
-import { clearGitDiscoveryCacheForTests, listGitSubmoduleDirectories } from "../src/util/git.js";
+import {
+  clearGitDiscoveryCacheForTests,
+  clearGitRepositoryCheckCacheForTests,
+  listGitSubmoduleDirectories,
+  setGitExecutableForTests,
+} from "../src/util/git.js";
 
 const normalize = (value: string) => value.replace(/\\/g, "/");
 
@@ -1004,7 +1009,9 @@ describe("git-native project file discovery", () => {
     for (const root of gitTempDirs.splice(0)) {
       await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
+    setGitExecutableForTests(null);
     clearGitDiscoveryCacheForTests();
+    clearGitRepositoryCheckCacheForTests();
   });
 
   it("discovers sources tracked inside a submodule", async () => {
@@ -1298,6 +1305,61 @@ describe("git-native project file discovery", () => {
       kind: "dir",
       name: "App",
     });
+  });
+
+  it("reuses a supplied Git candidate set without spawning Git", async () => {
+    const root = await makeRepo("codegraph-discovery-meta-known-");
+    const packageJson = path.join(root, "package.json");
+    const ignoredPackageJson = path.join(root, "vendor", "package.json");
+    const ideaDir = path.join(root, "ide", ".idea");
+    await createFile(path.join(root, ".gitignore"), "vendor/\n");
+    await createFile(packageJson, JSON.stringify({ name: "known-app" }, null, 2));
+    await createFile(ignoredPackageJson, JSON.stringify({ name: "ignored-pkg" }, null, 2));
+    await createFile(path.join(ideaDir, "workspace.xml"), "<project />\n");
+    git(root, ["add", ".gitignore", "package.json", "ide/.idea/workspace.xml"]);
+    git(root, ["commit", "-m", "fixtures"]);
+
+    let known: GitCandidateSet | null | undefined;
+    await listProjectFiles(root, undefined, {
+      onGitCandidatesDiscovered: (candidates) => {
+        known = candidates;
+      },
+    });
+    expect(known).toBeTruthy();
+    expect(known!.files.some((file) => normalize(file) === normalize(packageJson))).toBe(true);
+
+    const baseline = await discoverProjectFiles(root);
+    // Point Git at a non-executable path so any spawn fails and discovery would fall back
+    // to the filesystem scan (which includes the gitignored manifest). Equality with the
+    // Git-aware baseline therefore proves the known-candidate path spawned no Git at all.
+    setGitExecutableForTests(path.join(root, "not-a-git-executable"));
+    clearGitDiscoveryCacheForTests();
+    clearGitRepositoryCheckCacheForTests();
+    try {
+      const withKnown = await discoverProjectFiles(root, { knownGitCandidates: known! });
+      expect(withKnown).toEqual(baseline);
+
+      const byPath = new Map(withKnown.map((entry) => [normalize(entry.path), entry]));
+      expect(byPath.get(normalize(packageJson))).toMatchObject({
+        type: "node",
+        role: "manifest",
+        kind: "file",
+        name: "known-app",
+      });
+      expect(byPath.has(normalize(ignoredPackageJson))).toBe(false);
+      expect(byPath.get(normalize(ideaDir))).toMatchObject({
+        type: "ide",
+        role: "ide",
+        kind: "dir",
+      });
+
+      const fallback = await discoverProjectFiles(root);
+      expect(fallback.some((entry) => normalize(entry.path) === normalize(ignoredPackageJson))).toBe(true);
+    } finally {
+      setGitExecutableForTests(null);
+      clearGitDiscoveryCacheForTests();
+      clearGitRepositoryCheckCacheForTests();
+    }
   });
 
   it("reports submodule directories from index gitlink entries", async () => {
