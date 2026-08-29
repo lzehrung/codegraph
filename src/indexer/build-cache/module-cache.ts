@@ -379,24 +379,44 @@ export function transformPersistedExportFromModule(
 }
 
 function transformModulePaths(projectRoot: string, module: ModuleIndex, toRelative: boolean): ModuleIndex {
-  const copy = structuredClone(module);
   const transform = (file: string): string =>
     toRelative
       ? cacheRelativePath(projectRoot, file)
       : assertFilePathWithinRoot(projectRoot, cacheAbsolutePath(projectRoot, file), "Persisted cache path");
-  copy.file = transform(copy.file);
-  for (const local of copy.locals) local.file = transform(local.file);
-  for (const entry of copy.exports) {
-    if (entry.type === "local") {
-      entry.target.file = transform(entry.target.file);
-    } else {
-      transformPersistedExportFromModule(projectRoot, entry, toRelative);
+
+  if (!toRelative) {
+    module.file = transform(module.file);
+    for (const local of module.locals) local.file = transform(local.file);
+    for (const entry of module.exports) {
+      if (entry.type === "local") {
+        entry.target.file = transform(entry.target.file);
+      } else {
+        transformPersistedExportFromModule(projectRoot, entry, false);
+      }
     }
+    for (const binding of module.imports) {
+      if (typeof binding.resolved === "string") binding.resolved = transform(binding.resolved);
+    }
+    return module;
   }
-  for (const binding of copy.imports) {
-    if (typeof binding.resolved === "string") binding.resolved = transform(binding.resolved);
-  }
-  return copy;
+
+  return {
+    ...module,
+    file: transform(module.file),
+    locals: module.locals.map((local) => ({ ...local, file: transform(local.file) })),
+    exports: module.exports.map((entry) => {
+      if (entry.type === "local") {
+        return { ...entry, target: { ...entry.target, file: transform(entry.target.file) } };
+      }
+      const copy = { ...entry };
+      transformPersistedExportFromModule(projectRoot, copy, true);
+      return copy;
+    }),
+    imports: module.imports.map((binding) => ({
+      ...binding,
+      ...(typeof binding.resolved === "string" ? { resolved: transform(binding.resolved) } : {}),
+    })),
+  };
 }
 
 export function tryLoadFromCache(
