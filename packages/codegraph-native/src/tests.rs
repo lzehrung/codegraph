@@ -5,7 +5,10 @@ use super::{
 use crate::projection::ProjectedColumns;
 use crate::languages::language_for_id;
 use crate::parser_pool::{parse_invocations_for_tests, reset_parse_invocations_for_tests};
-use crate::query::{execute_language_queries_separately, execute_query, LanguageQueryTexts};
+use crate::query::{
+    execute_language_queries_cached_with_match_limit, execute_language_queries_separately, execute_query,
+    try_execute_merged_language_queries_with_match_limit, LanguageQueryTexts,
+};
 use crate::types::NativeMatch;
 use std::collections::HashSet;
 use tree_sitter::Parser;
@@ -278,6 +281,55 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
                 "merged query results should preserve every capture and pattern index for {language_id}"
             );
         }
+    }
+
+    #[test]
+    fn merged_language_queries_fall_back_when_the_match_limit_is_exceeded() {
+        let source = "/* one */\n/* two */\n/* three */\nfunction target() {}";
+        let query = "(((comment) @comment)* (function_declaration name: (identifier) @name))";
+        let language = language_for_id("js").expect("javascript language should exist");
+        let tree = parse_root(source, "js");
+        let queries = LanguageQueryTexts {
+            imports: query,
+            exports: query,
+            locals: "",
+            import_bindings: "",
+        };
+        let merged = try_execute_merged_language_queries_with_match_limit(
+            source,
+            tree.root_node(),
+            &language,
+            "js",
+            queries,
+            1,
+        )
+        .expect("valid queries should execute");
+        assert!(
+            merged.is_none(),
+            "an exceeded shared match limit must reject partial merged results"
+        );
+
+        let fallback = execute_language_queries_cached_with_match_limit(
+            source,
+            tree.root_node(),
+            &language,
+            "js",
+            queries,
+            1,
+        )
+        .expect("fallback queries should execute");
+        let separate = execute_language_queries_separately(
+            source,
+            tree.root_node(),
+            &language,
+            "js",
+            queries,
+        )
+        .expect("independent queries should execute");
+        assert_eq!(
+            fallback, separate,
+            "an exceeded shared match limit must return independent-query results"
+        );
     }
 
     #[test]

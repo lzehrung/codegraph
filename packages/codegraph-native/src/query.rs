@@ -228,12 +228,32 @@ pub(crate) fn execute_language_queries_separately(
     })
 }
 
-fn try_execute_merged_language_queries(
+#[cfg(test)]
+pub(crate) fn try_execute_merged_language_queries_with_match_limit(
     source: &str,
     root: tree_sitter::Node<'_>,
     language: &Language,
     language_id: &str,
     queries: LanguageQueryTexts<'_>,
+    match_limit: u32,
+) -> Result<Option<NativeQueryResults>> {
+    try_execute_merged_language_queries_with_limit(
+        source,
+        root,
+        language,
+        language_id,
+        queries,
+        Some(match_limit),
+    )
+}
+
+fn try_execute_merged_language_queries_with_limit(
+    source: &str,
+    root: tree_sitter::Node<'_>,
+    language: &Language,
+    language_id: &str,
+    queries: LanguageQueryTexts<'_>,
+    match_limit: Option<u32>,
 ) -> Result<Option<NativeQueryResults>> {
     QUERY_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
@@ -272,34 +292,42 @@ fn try_execute_merged_language_queries(
         };
         let capture_names = query.capture_names();
         let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(query, root, source.as_bytes());
+        if let Some(match_limit) = match_limit {
+            cursor.set_match_limit(match_limit);
+        }
         let mut results = empty_query_results();
 
-        while let Some(query_match) = matches.next() {
-            let pattern_index = query_match.pattern_index;
-            let route = routes
-                .iter()
-                .find(|route| route.pattern_range.contains(&pattern_index))
-                .ok_or_else(|| {
-                    napi::Error::from_reason(format!(
-                        "Merged query returned an unknown pattern index: {pattern_index}"
-                    ))
-                })?;
-            let captures = query_match
-                .captures
-                .iter()
-                .map(|capture| capture_to_object(source, capture, capture_names))
-                .collect();
-            push_query_match(
-                &mut results,
-                route.kind,
-                NativeMatch {
-                    pattern_index: (pattern_index - route.pattern_range.start) as u32,
-                    captures,
-                },
-            );
+        {
+            let mut matches = cursor.matches(query, root, source.as_bytes());
+            while let Some(query_match) = matches.next() {
+                let pattern_index = query_match.pattern_index;
+                let route = routes
+                    .iter()
+                    .find(|route| route.pattern_range.contains(&pattern_index))
+                    .ok_or_else(|| {
+                        napi::Error::from_reason(format!(
+                            "Merged query returned an unknown pattern index: {pattern_index}"
+                        ))
+                    })?;
+                let captures = query_match
+                    .captures
+                    .iter()
+                    .map(|capture| capture_to_object(source, capture, capture_names))
+                    .collect();
+                push_query_match(
+                    &mut results,
+                    route.kind,
+                    NativeMatch {
+                        pattern_index: (pattern_index - route.pattern_range.start) as u32,
+                        captures,
+                    },
+                );
+            }
         }
 
+        if cursor.did_exceed_match_limit() {
+            return Ok(None);
+        }
         Ok(Some(results))
     })
 }
@@ -314,7 +342,44 @@ pub(crate) fn execute_language_queries_cached(
     language_id: &str,
     queries: LanguageQueryTexts<'_>,
 ) -> Result<NativeQueryResults> {
-    match try_execute_merged_language_queries(source, root, language, language_id, queries)? {
+    execute_language_queries_cached_with_limit(source, root, language, language_id, queries, None)
+}
+
+#[cfg(test)]
+pub(crate) fn execute_language_queries_cached_with_match_limit(
+    source: &str,
+    root: tree_sitter::Node<'_>,
+    language: &Language,
+    language_id: &str,
+    queries: LanguageQueryTexts<'_>,
+    match_limit: u32,
+) -> Result<NativeQueryResults> {
+    execute_language_queries_cached_with_limit(
+        source,
+        root,
+        language,
+        language_id,
+        queries,
+        Some(match_limit),
+    )
+}
+
+fn execute_language_queries_cached_with_limit(
+    source: &str,
+    root: tree_sitter::Node<'_>,
+    language: &Language,
+    language_id: &str,
+    queries: LanguageQueryTexts<'_>,
+    match_limit: Option<u32>,
+) -> Result<NativeQueryResults> {
+    match try_execute_merged_language_queries_with_limit(
+        source,
+        root,
+        language,
+        language_id,
+        queries,
+        match_limit,
+    )? {
         Some(results) => Ok(results),
         None => execute_language_queries_separately(source, root, language, language_id, queries),
     }
