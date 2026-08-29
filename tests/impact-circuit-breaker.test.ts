@@ -54,7 +54,10 @@ describe("Impact Circuit Breaker & Warning Propagation", () => {
 
     expect(result.warning).toContain("Large diff detected");
     expect(result.warning).toContain("50,001 lines");
-    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    // The circuit breaker must never re-run the diff. Count diff invocations rather than
+    // every spawn, because project-file discovery legitimately probes Git on its own.
+    const diffCalls = mockSpawn.mock.calls.filter((call) => Array.isArray(call[1]) && call[1].includes("diff"));
+    expect(diffCalls).toHaveLength(1);
   });
 
   it("should NOT trigger warning at exactly 50,000 lines", async () => {

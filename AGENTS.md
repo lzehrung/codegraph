@@ -29,3 +29,25 @@
 - Installation guidance must use `@lzehrung/codegraph` and the `@lzehrung` GitHub Packages registry. Keep detailed install docs in `docs/installation.md`.
 - Any persistent storage schema change (e.g. SQLite tables/columns/indexes) MUST include a migration path for existing on-disk data. If using `CREATE TABLE IF NOT EXISTS`, you must also `ALTER TABLE` / backfill as needed (or introduce explicit schema versioning) and add a regression test that starts from an older schema to prove upgrades work.
 - DO NOT use curly quote variants or other non-standard characters humans would not type with a standard QWERTY keyboard.
+
+## Path, Cache, and Review Safety
+
+- Path-bearing code MUST keep the requested logical root, resolved physical root, and owning Git
+  repository distinct. Use logical paths for output, cache-relative values, and caller-facing
+  results; use physical paths only for confinement and symlink validation.
+- A path from Git MUST be classified as absolute or relative before resolving it. Preserve Git's
+  path spelling when the Git cwd is an alias, and test aliases to repository roots and subdirectories.
+- Git ignore changes MUST respect `.gitignore`, repository and configured excludes, nested
+  submodule boundaries, source precedence, ignored ignore files, and directory rules. Extend the
+  existing matcher rather than adding a second one, and test logical and physical paths.
+- If a derived cached field changes behavior, invalidate existing snapshots by version or by
+  fingerprinting every new input. Legacy snapshot migration MUST drop or recompute affected
+  derived fields rather than relabel stale data as current.
+- Before extracting an archive, validate its verified location, entry paths, and entry types.
+  Reject links and special files before extraction. Report a missing executable as an environment
+  failure, not invalid input.
+- A worker-pool test MUST build `dist` first and verify the actual worker path. A bare
+  `npx vitest run` can silently disable workers when the compiled worker file is absent.
+- After resolving review feedback, run the focused regression and require a fresh clean review
+  plus green CI after any rebase before merging. Do not treat a prior review as current after
+  the branch changes.

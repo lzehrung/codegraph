@@ -43,7 +43,7 @@ import { cacheRoot } from "./location.js";
 import type { ManifestFileEntry } from "./manifest.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
-const PROJECT_SNAPSHOT_VERSION = 9;
+const PROJECT_SNAPSHOT_VERSION = 10;
 export const BLOOM_FILTER_SNAPSHOT_VERSION = 4;
 export const BLOOM_FILTER_SNAPSHOT_FILENAME = "bloom-filters.json";
 
@@ -286,6 +286,9 @@ function migrateProjectSnapshotPayload(value: unknown, currentRoot: string): unk
   const migrated = transformSnapshotPaths(relative, currentRoot, false);
   migrated.version = PROJECT_SNAPSHOT_VERSION;
   migrated.projectRoot = serializedProjectRoot(currentRoot);
+  // Git-aware metadata discovery changed after v5. Keep reusable graph data, but rebuild this
+  // derived field under current ignore rules before the migrated snapshot is reused.
+  delete migrated.projectFiles;
   return migrated;
 }
 function transformDetailedGraph(

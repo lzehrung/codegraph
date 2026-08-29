@@ -2756,7 +2756,7 @@ describe("Cache invalidation and strict hashing", () => {
       nativeRuntimeFingerprint?: string;
       implementationFingerprint?: string;
     };
-    expect(rewrittenSnapshot.version).toBe(9);
+    expect(rewrittenSnapshot.version).toBe(10);
     expect(initial.byFile.has(fileIdentityKey(normalize(entryPath)))).toBe(true);
     expect(rebuilt.byFile.has(fileIdentityKey(normalize(entryPath)))).toBe(true);
     expect(rebuilt.bloomFilters?.get(normalize(entryPath))?.mightContain("versioned")).toBe(true);
@@ -3053,6 +3053,26 @@ describe("Cache invalidation and strict hashing", () => {
 
     expect(rebuilt.byFile.has(fileIdentityKey(normalize(trackedPath)))).toBe(true);
     expect(rebuilt.byFile.has(fileIdentityKey(normalize(generatedPath)))).toBe(false);
+  });
+
+  it("rebuilds when Git info exclude changes", async () => {
+    const root = await mkTmpDir("dg-info-exclude-config-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "tests@example.com"]);
+    runGit(root, ["config", "user.name", "Tests"]);
+    const entryPath = path.join(root, "entry.ts");
+    await fsp.writeFile(entryPath, "export const entry = 1;\n", "utf8");
+    runGit(root, ["add", "entry.ts"]);
+    runGit(root, ["commit", "-m", "base"]);
+    await buildProjectIndex(root, { cache: "disk" });
+
+    await fsp.writeFile(path.join(root, ".git", "info", "exclude"), "entry.ts\n", "utf8");
+
+    const report: BuildReport = { timings: {} };
+    await buildProjectIndexIncremental(root, { cache: "disk", report });
+
+    expect(report.manifest?.used).toBe(true);
+    expect(report.manifest?.reused).toBe(false);
   });
 
   it("picks up a newly created untracked file on an incremental build without an explicit file list", async () => {
