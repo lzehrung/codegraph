@@ -1,6 +1,6 @@
 use napi::bindgen_prelude::Result;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language, Query, QueryCapture, QueryCursor};
 
@@ -58,12 +58,15 @@ struct QueryCache {
     /// Nested map: language_id -> query_text -> compiled Query.
     /// Using nested maps allows lookups with &str keys (no allocation on hits).
     entries: HashMap<String, HashMap<String, Query>>,
+    /// Merged query text that is valid only in separate query-kind executions.
+    failed_merged: HashMap<String, HashSet<String>>,
 }
 
 impl QueryCache {
     fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            failed_merged: HashMap::new(),
         }
     }
 
@@ -80,6 +83,19 @@ impl QueryCache {
             by_text.insert(query_text.to_string(), query);
         }
         Ok(by_text.get(query_text).unwrap())
+    }
+
+    fn has_failed_merged(&self, language_id: &str, query_text: &str) -> bool {
+        self.failed_merged
+            .get(language_id)
+            .is_some_and(|failed_queries| failed_queries.contains(query_text))
+    }
+
+    fn record_failed_merged(&mut self, language_id: &str, query_text: &str) {
+        self.failed_merged
+            .entry(language_id.to_string())
+            .or_default()
+            .insert(query_text.to_string());
     }
 }
 
@@ -247,6 +263,15 @@ pub(crate) fn try_execute_merged_language_queries(
 }
 
 #[cfg(test)]
+pub(crate) fn record_merged_query_compile_failure_for_tests(language_id: &str, query_text: &str) {
+    QUERY_CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .record_failed_merged(language_id, query_text)
+    });
+}
+
+#[cfg(test)]
 pub(crate) fn try_execute_merged_language_queries_with_match_limit(
     source: &str,
     root: tree_sitter::Node<'_>,
@@ -304,9 +329,15 @@ fn try_execute_merged_language_queries_with_limit(
             return Ok(Some(empty_query_results()));
         }
 
+        if cache.has_failed_merged(language_id, &merged_query) {
+            return Ok(None);
+        }
         let query = match cache.get_or_compile(language_id, language, &merged_query) {
             Ok(query) => query,
-            Err(_) => return Ok(None),
+            Err(_) => {
+                cache.record_failed_merged(language_id, &merged_query);
+                return Ok(None);
+            }
         };
         let capture_names = query.capture_names();
         let mut cursor = QueryCursor::new();

@@ -6,8 +6,13 @@ use crate::projection::ProjectedColumns;
 use crate::languages::language_for_id;
 use crate::parser_pool::{parse_invocations_for_tests, reset_parse_invocations_for_tests};
 use crate::query::{
-    execute_language_queries_cached_with_match_limit, execute_language_queries_separately, execute_query,
-    try_execute_merged_language_queries, try_execute_merged_language_queries_with_match_limit, LanguageQueryTexts,
+    execute_language_queries_cached_with_match_limit,
+    execute_language_queries_separately,
+    execute_query,
+    record_merged_query_compile_failure_for_tests,
+    try_execute_merged_language_queries,
+    try_execute_merged_language_queries_with_match_limit,
+    LanguageQueryTexts,
 };
 use crate::types::NativeMatch;
 use std::collections::HashSet;
@@ -284,6 +289,34 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
                 "merged query results should preserve every capture and pattern index for {language_id}"
             );
         }
+    }
+
+    #[test]
+    fn cached_merged_compile_failures_skip_retries() {
+        let source = "const cachedMergeFailure = 1;";
+        let query = "(identifier) @cached_merge_failure";
+        let language = language_for_id("ts").expect("typescript language should exist");
+        let tree = parse_root(source, "ts");
+        record_merged_query_compile_failure_for_tests("ts", &format!("{query}\n"));
+
+        let merged = try_execute_merged_language_queries(
+            source,
+            tree.root_node(),
+            &language,
+            "ts",
+            LanguageQueryTexts {
+                imports: query,
+                exports: "",
+                locals: "",
+                import_bindings: "",
+            },
+        )
+        .expect("individual query should compile");
+
+        assert!(
+            merged.is_none(),
+            "a cached merged compile failure must skip recompiling the same query text"
+        );
     }
 
     #[test]
