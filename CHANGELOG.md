@@ -19,6 +19,9 @@ GitHub Releases remain the certified publish record. This file summarizes produc
   parallelizing identifier hashing instead of doing it on the main thread.
 - Native language extraction now attempts one parsed-tree traversal for imports, exports, locals,
   and import bindings. It keeps independent traversals when the combined query cannot safely run.
+- Project metadata discovery now reuses the Git file listing that source discovery already
+  produced, and no longer reports manifests from gitignored paths. Non-Git roots keep the
+  filesystem scan.
 
 ## [2.3.2] - 2026-08-28
 
