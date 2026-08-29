@@ -8,7 +8,7 @@ import { isJsTsLanguage } from "../languages/js-family.js";
 import { loadWorkspaceConfig, resolveWorkspacePackage, type WorkspaceConfig } from "../util/workspace.js";
 import {
   DEFAULT_PROJECT_PATTERNS,
-  discoverProjectFiles,
+  discoverProjectFilesWithGitCandidates,
   listProjectFilesWithGitCandidates,
   type GitCandidateSet,
   type ProjectFileInfo,
@@ -1148,7 +1148,7 @@ async function buildProjectIndexWithManifestOptions(
     const discoveredFileSet = new Set(discoveredFiles);
     const files = Array.from(new Set([...discoveredFiles, ...additionalFiles]));
     const transientFiles = additionalFiles.filter((file) => !discoveredFileSet.has(file));
-    const projectFiles = await discoverProjectFiles(projectRoot, {
+    const projectFiles = await discoverProjectFilesWithGitCandidates(projectRoot, {
       ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
       ...(discoveredSymlinkDirectories !== undefined ? { knownSymlinkDirectories: discoveredSymlinkDirectories } : {}),
       ...(discoveredGitCandidates !== undefined ? { knownGitCandidates: discoveredGitCandidates } : {}),
@@ -1580,7 +1580,7 @@ export async function buildProjectIndexIncremental(
       if (!snapshotLoad) return null;
 
       const snapshot = snapshotLoad.index;
-      snapshot.projectFiles ??= await discoverProjectFiles(projectRoot, {
+      snapshot.projectFiles ??= await discoverProjectFilesWithGitCandidates(projectRoot, {
         ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
         ...(discoveredGitCandidates !== undefined ? { knownGitCandidates: discoveredGitCandidates } : {}),
       });

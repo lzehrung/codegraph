@@ -377,6 +377,16 @@ export async function isGitRepo(projectRoot: string): Promise<boolean> {
   return await check;
 }
 
+export async function getGitRepositoryRoot(projectRoot: string): Promise<string | null> {
+  try {
+    const { stdout } = await runGit(projectRoot, ["rev-parse", "--show-toplevel"]);
+    const root = normalizePath(stdout.trim());
+    return root || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function isGitPathTracked(projectRoot: string, file: string): Promise<boolean> {
   return await runGitPathPredicate(projectRoot, ["ls-files", "--error-unmatch", "--", normalizePath(file)]);
 }

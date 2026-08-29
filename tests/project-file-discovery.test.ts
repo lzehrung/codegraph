@@ -6,6 +6,7 @@ import { buildProjectIndex, listProjectFiles, discoverProjectFiles } from "../sr
 import { DEFAULT_PROJECT_MANIFESTS } from "../src/util.js";
 import {
   createDiscoveredFileMatcher,
+  discoverProjectFilesWithGitCandidates,
   isRelativePathInside,
   listProjectFilesWithGitCandidates,
   translateGlobRootIgnoreGlobsForScanRoot,
@@ -1340,6 +1341,37 @@ describe("git-native project file discovery", () => {
     expect(paths.has(normalize(path.join(root, "plugins", "example", "package.json")))).toBe(false);
   });
 
+  it("does not apply superproject ignore rules inside initialized submodules", async () => {
+    const submodule = await makeRepo("codegraph-discovery-meta-submodule-boundary-src-");
+    await createFile(path.join(submodule, "package.json"), JSON.stringify({ name: "submodule-pkg" }, null, 2));
+    git(submodule, ["add", "package.json"]);
+    git(submodule, ["commit", "-m", "package"]);
+
+    const root = await makeRepo("codegraph-discovery-meta-submodule-boundary-super-");
+    await createFile(path.join(root, ".gitignore"), "package.json\n");
+    await createFile(path.join(root, "src", "app.ts"), "export const app = 1;\n");
+    git(root, ["add", ".gitignore", "src/app.ts"]);
+    git(root, ["commit", "-m", "app"]);
+    git(root, ["-c", "protocol.file.allow=always", "submodule", "add", normalize(submodule), "plugins/example"]);
+
+    const paths = new Set((await discoverProjectFiles(root)).map((item) => normalize(item.path)));
+    expect(paths.has(normalize(path.join(root, "plugins", "example", "package.json")))).toBe(true);
+  });
+
+  it("honors ancestor gitignore rules when discovery starts in a repository subdirectory", async () => {
+    const root = await makeRepo("codegraph-discovery-meta-subdirectory-ignore-");
+    const child = path.join(root, "child");
+    const ignoredPackage = path.join(child, "vendor", "package.json");
+    await createFile(path.join(root, ".gitignore"), "child/vendor/\n");
+    await createFile(ignoredPackage, JSON.stringify({ name: "ignored-child-pkg" }, null, 2));
+    git(root, ["add", ".gitignore"]);
+    git(root, ["add", "-f", "child/vendor/package.json"]);
+    git(root, ["commit", "-m", "ignored child"]);
+
+    const paths = new Set((await discoverProjectFiles(child)).map((item) => normalize(item.path)));
+    expect(paths.has(normalize(ignoredPackage))).toBe(false);
+  });
+
   it("discovers a tracked package.json with unchanged metadata fields", async () => {
     const root = await makeRepo("codegraph-discovery-meta-tracked-");
     const packageJson = path.join(root, "package.json");
@@ -1449,7 +1481,7 @@ describe("git-native project file discovery", () => {
     clearGitDiscoveryCacheForTests();
     clearGitRepositoryCheckCacheForTests();
     try {
-      const withKnown = await discoverProjectFiles(root, { knownGitCandidates: known! });
+      const withKnown = await discoverProjectFilesWithGitCandidates(root, { knownGitCandidates: known! });
       expect(withKnown).toEqual(baseline);
 
       const byPath = new Map(withKnown.map((entry) => [normalize(entry.path), entry]));

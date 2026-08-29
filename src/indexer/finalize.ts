@@ -1,7 +1,11 @@
 import { normalizeLanguageExtensions } from "../languages.js";
 import { buildGraphAdjacency } from "../graphs/adjacency.js";
 import { performance } from "node:perf_hooks";
-import { discoverProjectFiles, type GitCandidateSet, type ProjectFileInfo } from "../util/projectFiles.js";
+import {
+  discoverProjectFilesWithGitCandidates,
+  type GitCandidateSet,
+  type ProjectFileInfo,
+} from "../util/projectFiles.js";
 import type { FileId, Graph } from "../types.js";
 import type { BloomFilterCache } from "../util/bloomFilter.js";
 import type { ParsedFileContext } from "./parse-context.js";
@@ -27,7 +31,7 @@ export async function finalizeProjectIndex(args: {
 }): Promise<ProjectIndex> {
   if (args.timings) args.timings.totalMs = Math.round(performance.now() - args.totalStart);
   const projectFiles = await (args.projectFiles ??
-    discoverProjectFiles(args.projectRoot, {
+    discoverProjectFilesWithGitCandidates(args.projectRoot, {
       ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
       ...(args.knownGitCandidates !== undefined ? { knownGitCandidates: args.knownGitCandidates } : {}),
     }));

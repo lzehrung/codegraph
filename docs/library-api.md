@@ -703,6 +703,11 @@ config) the same way they merge `discovery`, `graph`, and `languages.extensions`
 `listProjectFiles` defaults to source files plus common project manifests and lockfiles across supported languages, for example `package.json`, `requirements.txt`, `pyproject.toml`, and `Cargo.toml`.
 When scanning a child directory with project-root-relative include or ignore globs, pass `globRoot`.
 
+`discoverProjectFiles` honors Git ignore rules in a Git worktree, including `.gitignore`,
+`.git/info/exclude`, configured excludes, and initialized submodule boundaries. It omits ignored
+metadata paths. Outside Git, it uses the filesystem scan and can discover empty directory markers
+such as `*.xcodeproj`.
+
 ```ts
 import { listProjectFiles, discoverProjectFiles, collectGraph } from "@lzehrung/codegraph-core";
 
