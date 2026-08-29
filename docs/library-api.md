@@ -705,8 +705,9 @@ When scanning a child directory with project-root-relative include or ignore glo
 
 `discoverProjectFiles` honors Git ignore rules in a Git worktree, including `.gitignore`,
 `.git/info/exclude`, configured excludes, and initialized submodule boundaries. It omits ignored
-metadata paths. Outside Git, it uses the filesystem scan and can discover empty directory markers
-such as `*.xcodeproj`.
+metadata paths. When the requested root is itself Git-ignored, discovery intentionally uses the
+filesystem scan so an explicit root does not appear empty; that case can return ignored metadata.
+Outside Git, the filesystem scan can also discover empty directory markers such as `*.xcodeproj`.
 
 ```ts
 import { listProjectFiles, discoverProjectFiles, collectGraph } from "@lzehrung/codegraph-core";
