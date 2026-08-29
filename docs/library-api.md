@@ -459,7 +459,14 @@ The `graph.json` artifact is self-describing (`schemaVersion: 2`, `format: "code
 
 `createAgentSession()` (from `@lzehrung/codegraph-core/agent`) keeps one in-process project snapshot warm for repeated explore, orient, search, explain, packet, artifact, and MCP calls. It uses incremental indexing with disk cache by default, auto-enables native workers for large cold builds, and carries forward top-level analysis metadata from the build report.
 Session callers can use `freshness: { policy: "check" | "auto" | "manual" }` plus `checkFreshness()` to detect file edits before reusing a warm snapshot. `check` reports stale state without invalidating, `auto` invalidates for bounded changes, and stale results include `changedFileCount`, `omittedChangedFileCount`, `reason`, and a bounded changed-file sample.
-Set `buildOptions.useNativeWorkers` to `false` to opt out. Use `buildCodegraphArtifactWithSession()` when a host already has a session and wants SQLite, graph JSON, report, questions, and manifest outputs from the same snapshot. `createCodegraphMcpHandlers()` (from `@lzehrung/codegraph/mcp`) exposes the same primitives without starting stdio, which is useful for tests or host applications:
+Set `buildOptions.useNativeWorkers` to `false` to opt out. Automatic native workers use at most
+eight threads and reserve at least one quarter of available CPU capacity when more than one CPU
+is available; a single-CPU host uses one worker. Set `buildOptions.nativeThreads` to override
+automatic sizing deliberately. Use
+`buildCodegraphArtifactWithSession()` when a host already has a session and wants SQLite, graph
+JSON, report, questions, and manifest outputs from the same snapshot. `createCodegraphMcpHandlers()`
+(from `@lzehrung/codegraph/mcp`) exposes the same primitives without starting stdio, which is useful
+for tests or host applications:
 
 ```ts
 import { createCodegraphMcpHandlers } from "@lzehrung/codegraph/mcp";
