@@ -17,35 +17,29 @@ use napi_derive::napi;
 use crate::languages::language_for_id;
 use crate::parser_pool::parse_source;
 use crate::projection::{project_columns, ProjectedColumns, ProjectionLimits};
-use crate::query::{execute_query_cached, execute_query_compact};
-#[cfg(not(test))]
-use crate::types::{NativeLanguageExtraction, NativeSyntaxTree};
+use crate::query::{
+    execute_language_queries_cached, execute_query_cached, execute_query_compact,
+    LanguageQueryTexts,
+};
 use crate::types::{
     CompactQueryResults, NativeDuplicateTokens, NativeQueryResults, NativeQueryRunResult,
 };
+#[cfg(not(test))]
+use crate::types::{NativeLanguageExtraction, NativeSyntaxTree};
 
 #[napi]
 pub fn supported_language_ids() -> Vec<String> {
     languages::supported_language_ids()
 }
 
-
 fn execute_language_queries(
     source: &str,
     language_id: &str,
     language: &tree_sitter::Language,
     root: tree_sitter::Node<'_>,
-    imports_query: &str,
-    exports_query: &str,
-    locals_query: &str,
-    import_bindings_query: &str,
+    queries: LanguageQueryTexts<'_>,
 ) -> Result<NativeQueryResults> {
-    Ok(NativeQueryResults {
-        imports: execute_query_cached(source, root, language, imports_query, language_id)?,
-        exports: execute_query_cached(source, root, language, exports_query, language_id)?,
-        locals: execute_query_cached(source, root, language, locals_query, language_id)?,
-        import_bindings: execute_query_cached(source, root, language, import_bindings_query, language_id)?,
-    })
+    execute_language_queries_cached(source, root, language, language_id, queries)
 }
 
 /// Parse and project without touching any JS value, so unit tests can exercise the
@@ -58,30 +52,18 @@ fn parse_syntax_tree_columns(source: &str, language_id: &str) -> Result<Projecte
         .map_err(|error| napi::Error::from_reason(error.message()))
 }
 
-/// Run the four language queries and project the tree from a single parse, without
-/// touching any JS value. `extract_language` is the thin marshalling wrapper.
+/// Run the language queries and project the tree from a single parse, without touching
+/// any JS value. `extract_language` is the thin marshalling wrapper.
 fn extract_language_parts(
     source: &str,
     language_id: &str,
-    imports_query: &str,
-    exports_query: &str,
-    locals_query: &str,
-    import_bindings_query: &str,
+    queries: LanguageQueryTexts<'_>,
 ) -> Result<(NativeQueryResults, ProjectedColumns)> {
     let language = language_for_id(language_id)
         .ok_or_else(|| napi::Error::from_reason(format!("Unsupported language: {language_id}")))?;
     let tree = parse_source(source, language_id, &language)?;
     let root = tree.root_node();
-    let results = execute_language_queries(
-        source,
-        language_id,
-        &language,
-        root,
-        imports_query,
-        exports_query,
-        locals_query,
-        import_bindings_query,
-    )?;
+    let results = execute_language_queries(source, language_id, &language, root, queries)?;
     let columns = project_columns(root, ProjectionLimits::default())
         .map_err(|error| napi::Error::from_reason(error.message()))?;
     Ok((results, columns))
@@ -129,10 +111,12 @@ pub fn run_language_queries(
         language_id.as_str(),
         &language,
         root,
-        imports_query.as_str(),
-        exports_query.as_str(),
-        locals_query.as_str(),
-        import_bindings_query.as_str(),
+        LanguageQueryTexts {
+            imports: imports_query.as_str(),
+            exports: exports_query.as_str(),
+            locals: locals_query.as_str(),
+            import_bindings: import_bindings_query.as_str(),
+        },
     )
 }
 
@@ -149,10 +133,12 @@ pub fn extract_language(
     let (results, columns) = extract_language_parts(
         source.as_str(),
         language_id.as_str(),
-        imports_query.as_str(),
-        exports_query.as_str(),
-        locals_query.as_str(),
-        import_bindings_query.as_str(),
+        LanguageQueryTexts {
+            imports: imports_query.as_str(),
+            exports: exports_query.as_str(),
+            locals: locals_query.as_str(),
+            import_bindings: import_bindings_query.as_str(),
+        },
     )?;
     Ok(NativeLanguageExtraction {
         results,

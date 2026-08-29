@@ -5,7 +5,15 @@ use super::{
 use crate::projection::ProjectedColumns;
 use crate::languages::language_for_id;
 use crate::parser_pool::{parse_invocations_for_tests, reset_parse_invocations_for_tests};
-use crate::query::execute_query;
+use crate::query::{
+    execute_language_queries_cached_with_match_limit,
+    execute_language_queries_separately,
+    execute_query,
+    record_merged_query_compile_failure_for_tests,
+    try_execute_merged_language_queries,
+    try_execute_merged_language_queries_with_match_limit,
+    LanguageQueryTexts,
+};
 use crate::types::NativeMatch;
 use std::collections::HashSet;
 use tree_sitter::Parser;
@@ -239,6 +247,154 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
     }
 
     #[test]
+    fn merged_language_queries_match_separate_queries_for_every_supported_language() {
+        for language_id in supported_language_ids() {
+            let (source, query) = smoke_case(language_id.as_str());
+            let language = language_for_id(language_id.as_str())
+                .expect("supported language should resolve to a parser language");
+            let tree = parse_root(source, language_id.as_str());
+            let two_patterns = format!("{query}\n{query}");
+            let queries = LanguageQueryTexts {
+                imports: query,
+                exports: two_patterns.as_str(),
+                locals: "",
+                import_bindings: query,
+            };
+            let separate = execute_language_queries_separately(
+                source,
+                tree.root_node(),
+                &language,
+                language_id.as_str(),
+                queries,
+            )
+            .unwrap_or_else(|error| {
+                panic!("separate query execution failed for {language_id}: {error}")
+            });
+            let merged = try_execute_merged_language_queries(
+                source,
+                tree.root_node(),
+                &language,
+                language_id.as_str(),
+                queries,
+            )
+            .unwrap_or_else(|error| {
+                panic!("merged query execution failed for {language_id}: {error}")
+            })
+            .unwrap_or_else(|| {
+                panic!("merged query should compile for {language_id}");
+            });
+
+            assert_eq!(
+                merged, separate,
+                "merged query results should preserve every capture and pattern index for {language_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn cached_merged_compile_failures_skip_retries() {
+        let source = "const cachedMergeFailure = 1;";
+        let query = "(identifier) @cached_merge_failure";
+        let language = language_for_id("ts").expect("typescript language should exist");
+        let tree = parse_root(source, "ts");
+        record_merged_query_compile_failure_for_tests("ts", &format!("{query}\n{query}\n"));
+
+        let merged = try_execute_merged_language_queries(
+            source,
+            tree.root_node(),
+            &language,
+            "ts",
+            LanguageQueryTexts {
+                imports: query,
+                exports: query,
+                locals: "",
+                import_bindings: "",
+            },
+        )
+        .expect("individual query should compile");
+
+        assert!(
+            merged.is_none(),
+            "a cached merged compile failure must skip recompiling the same query text"
+        );
+    }
+
+    #[test]
+    fn merged_language_queries_skip_single_active_kind() {
+        let source = "const singleQueryKind = 1;";
+        let query = "(identifier) @single_query_kind";
+        let language = language_for_id("ts").expect("typescript language should exist");
+        let tree = parse_root(source, "ts");
+        let merged = try_execute_merged_language_queries(
+            source,
+            tree.root_node(),
+            &language,
+            "ts",
+            LanguageQueryTexts {
+                imports: query,
+                exports: "",
+                locals: "",
+                import_bindings: "",
+            },
+        )
+        .expect("individual query should compile");
+
+        assert!(
+            merged.is_none(),
+            "one active query kind should use the independent executor without merged compilation"
+        );
+    }
+
+    #[test]
+    fn merged_language_queries_fall_back_when_the_match_limit_is_exceeded() {
+        let source = "/* one */\n/* two */\n/* three */\nfunction target() {}";
+        let query = "(((comment) @comment)* (function_declaration name: (identifier) @name))";
+        let language = language_for_id("js").expect("javascript language should exist");
+        let tree = parse_root(source, "js");
+        let queries = LanguageQueryTexts {
+            imports: query,
+            exports: query,
+            locals: "",
+            import_bindings: "",
+        };
+        let merged = try_execute_merged_language_queries_with_match_limit(
+            source,
+            tree.root_node(),
+            &language,
+            "js",
+            queries,
+            1,
+        )
+        .expect("valid queries should execute");
+        assert!(
+            merged.is_none(),
+            "an exceeded shared match limit must reject partial merged results"
+        );
+
+        let fallback = execute_language_queries_cached_with_match_limit(
+            source,
+            tree.root_node(),
+            &language,
+            "js",
+            queries,
+            1,
+        )
+        .expect("fallback queries should execute");
+        let separate = execute_language_queries_separately(
+            source,
+            tree.root_node(),
+            &language,
+            "js",
+            queries,
+        )
+        .expect("independent queries should execute");
+        assert_eq!(
+            fallback, separate,
+            "an exceeded shared match limit must return independent-query results"
+        );
+    }
+
+    #[test]
     fn extract_language_matches_separate_queries_and_projection_with_one_parse() {
         let cases = [
             (
@@ -272,9 +428,17 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
                 .expect("separate syntax tree projection should succeed");
 
             reset_parse_invocations_for_tests();
-            let (combined_results, combined_tree) =
-                extract_language_parts(source, language_id, "", "", locals_query, "")
-                    .expect("combined native extraction should succeed");
+            let (combined_results, combined_tree) = extract_language_parts(
+                source,
+                language_id,
+                LanguageQueryTexts {
+                    imports: "",
+                    exports: "",
+                    locals: locals_query,
+                    import_bindings: "",
+                },
+            )
+            .expect("combined native extraction should succeed");
 
             assert_eq!(
                 parse_invocations_for_tests(),

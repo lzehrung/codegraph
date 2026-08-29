@@ -19,6 +19,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
   private parsed payload in place instead of deep-cloning every module.
 - Worker-eligible cold builds now construct reference bloom filters in native extraction workers,
   parallelizing identifier hashing instead of doing it on the main thread.
+- Native language extraction now attempts one parsed-tree traversal for imports, exports, locals,
+  and import bindings. It keeps independent traversals when the combined query cannot safely run.
 
 ### Fixed
 
