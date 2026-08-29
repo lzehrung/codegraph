@@ -1207,6 +1207,99 @@ describe("git-native project file discovery", () => {
     expect(files.some((file) => file.endsWith("/src/app.ts"))).toBe(true);
   });
 
+  it("excludes a gitignored package.json from metadata discovery", async () => {
+    const root = await makeRepo("codegraph-discovery-meta-ignored-");
+    await createFile(path.join(root, ".gitignore"), "vendor/\n");
+    await createFile(path.join(root, "vendor", "package.json"), JSON.stringify({ name: "ignored-pkg" }, null, 2));
+    await createFile(path.join(root, "src", "app.ts"), "export const app = 1;\n");
+    git(root, ["add", ".gitignore", "src/app.ts"]);
+    git(root, ["commit", "-m", "tracked"]);
+
+    const discovered = await discoverProjectFiles(root);
+    const paths = new Set(discovered.map((entry) => normalize(entry.path)));
+    expect(paths.has(normalize(path.join(root, "vendor", "package.json")))).toBe(false);
+  });
+
+  it("discovers a tracked package.json with unchanged metadata fields", async () => {
+    const root = await makeRepo("codegraph-discovery-meta-tracked-");
+    const packageJson = path.join(root, "package.json");
+    await createFile(packageJson, JSON.stringify({ name: "tracked-app" }, null, 2));
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "manifest"]);
+
+    const discovered = await discoverProjectFiles(root);
+    const entry = discovered.find((item) => normalize(item.path) === normalize(packageJson));
+    expect(entry).toMatchObject({
+      type: "node",
+      role: "manifest",
+      kind: "file",
+      name: "tracked-app",
+    });
+  });
+
+  it("discovers a manifest tracked inside an initialized submodule", async () => {
+    const submodule = await makeRepo("codegraph-discovery-meta-sub-src-");
+    const packageJson = path.join(submodule, "package.json");
+    await createFile(packageJson, JSON.stringify({ name: "plugin-pkg" }, null, 2));
+    git(submodule, ["add", "."]);
+    git(submodule, ["commit", "-m", "plugin manifest"]);
+
+    const root = await makeRepo("codegraph-discovery-meta-sub-super-");
+    await createFile(path.join(root, "app.ts"), "export const app = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "app"]);
+    git(root, ["-c", "protocol.file.allow=always", "submodule", "add", normalize(submodule), "plugins/example"]);
+
+    const discovered = await discoverProjectFiles(root);
+    const entry = discovered.find((item) => normalize(item.path).endsWith("/plugins/example/package.json"));
+    expect(entry).toMatchObject({
+      type: "node",
+      role: "manifest",
+      kind: "file",
+      name: "plugin-pkg",
+    });
+  });
+
+  it("discovers a .idea directory that contains a tracked file", async () => {
+    const root = await makeRepo("codegraph-discovery-meta-idea-");
+    const ideaDir = path.join(root, "ide", ".idea");
+    await createFile(path.join(ideaDir, "workspace.xml"), "<project />\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "idea"]);
+
+    const discovered = await discoverProjectFiles(root);
+    const entry = discovered.find((item) => normalize(item.path) === normalize(ideaDir));
+    expect(entry).toMatchObject({
+      type: "ide",
+      role: "ide",
+      kind: "dir",
+    });
+  });
+
+  it("keeps filesystem fallback metadata discovery including empty xcodeproj dirs", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-discovery-meta-nongit-"));
+    gitTempDirs.push(root);
+    const packageJson = path.join(root, "package.json");
+    const xcodeprojDir = path.join(root, "App.xcodeproj");
+    await createFile(packageJson, JSON.stringify({ name: "fallback-app" }, null, 2));
+    await fs.mkdir(xcodeprojDir, { recursive: true });
+
+    const discovered = await discoverProjectFiles(root);
+    const byPath = new Map(discovered.map((entry) => [normalize(entry.path), entry]));
+    expect(byPath.get(normalize(packageJson))).toMatchObject({
+      type: "node",
+      role: "manifest",
+      kind: "file",
+      name: "fallback-app",
+    });
+    expect(byPath.get(normalize(xcodeprojDir))).toMatchObject({
+      type: "swift",
+      role: "config",
+      kind: "dir",
+      name: "App",
+    });
+  });
+
   it("reports submodule directories from index gitlink entries", async () => {
     const submodule = await makeRepo("codegraph-discovery-gitlink-src-");
     await createFile(path.join(submodule, "plugin.ts"), "export const plugin = 1;\n");

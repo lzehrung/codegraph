@@ -904,37 +904,6 @@ export async function discoverProjectFiles(
   const root = await ensureDirectoryReadable(projectRoot, "Project root");
   try {
     const realRoot = await fsp.realpath(root);
-    const allPatterns = PROJECT_FILE_DEFINITIONS.flatMap((def) => def.patterns.map(toProjectGlob));
-    const matches = await fg(allPatterns, {
-      cwd: root,
-      absolute: true,
-      dot: true,
-      followSymbolicLinks: false,
-      ignore: DEFAULT_PROJECT_FILE_IGNORES,
-      markDirectories: true,
-      onlyFiles: false,
-    });
-    const linkedMatches = await listEntriesFromSafeSymlinkDirectories(
-      root,
-      realRoot,
-      allPatterns,
-      DEFAULT_PROJECT_FILE_IGNORES,
-      {
-        markDirectories: true,
-        onlyFiles: false,
-        ...(options?.knownSymlinkDirectories !== undefined
-          ? { knownSymlinkDirectories: options.knownSymlinkDirectories }
-          : {}),
-        ...(options?.onSymlinkDirectoriesDiscovered
-          ? { onSymlinkDirectoriesDiscovered: options.onSymlinkDirectoriesDiscovered }
-          : {}),
-      },
-    );
-    const rootSafeMatches = await filterRealPathsWithinRoot(
-      [...matches, ...linkedMatches].map((match) => (match.endsWith("/") ? match.slice(0, -1) : match)),
-      realRoot,
-    );
-
     const projectFileDefinitionMatchers = PROJECT_FILE_DEFINITIONS.map((definition) =>
       definition.patterns.map((pattern) =>
         pattern.includes("*") || pattern.includes("?")
@@ -942,6 +911,114 @@ export async function discoverProjectFiles(
           : undefined,
       ),
     );
+    const matchesDefinition = (fileName: string, definitionIndex: number): boolean => {
+      const definition = PROJECT_FILE_DEFINITIONS[definitionIndex]!;
+      return definition.patterns.some((pattern, patternIndex) => {
+        const matcher = projectFileDefinitionMatchers[definitionIndex]![patternIndex];
+        return matcher ? matcher.test(fileName) : pattern === fileName;
+      });
+    };
+    // Prefer the same Git candidate set listProjectFiles uses. That listing already
+    // honors ignore rules, so gitignored manifests (including vendored submodule trees)
+    // never become metadata. Git tracks files, not directories, so directory markers such
+    // as `.idea` and `*.xcodeproj` are recovered from ancestor paths of those files.
+    // Non-Git roots and any Git failure keep the recursive filesystem scan, including
+    // empty directory markers markDirectories can still see.
+    const gitCandidates =
+      normalizePath(realRoot) === normalizePath(root) ? await listGitCandidateFiles(root, options?.logLevel) : null;
+    let rootSafeMatches: string[];
+    if (gitCandidates) {
+      const gitignoreIndex = await buildGitignoreIndex(gitCandidates.gitignoreFiles);
+      const defaultIgnoreMatchers = DEFAULT_PROJECT_FILE_IGNORES.map((globPattern) =>
+        picomatch(globPattern, { dot: true }),
+      );
+      const symlinkOptions = {
+        candidatePaths: gitCandidates.files,
+        ...(options?.knownSymlinkDirectories !== undefined
+          ? { knownSymlinkDirectories: options.knownSymlinkDirectories }
+          : {}),
+        ...(options?.onSymlinkDirectoriesDiscovered
+          ? { onSymlinkDirectoriesDiscovered: options.onSymlinkDirectoriesDiscovered }
+          : {}),
+      };
+      const safeSymlinkDirectories = await resolveSafeSymlinkDirectories(
+        root,
+        realRoot,
+        DEFAULT_PROJECT_FILE_IGNORES,
+        symlinkOptions,
+      );
+      const allPatterns = PROJECT_FILE_DEFINITIONS.flatMap((definition) => definition.patterns.map(toProjectGlob));
+      const linkedMatches = await listEntriesFromSafeSymlinkDirectories(
+        root,
+        realRoot,
+        allPatterns,
+        DEFAULT_PROJECT_FILE_IGNORES,
+        {
+          markDirectories: true,
+          onlyFiles: false,
+          resolvedSafeSymlinkDirectories: safeSymlinkDirectories,
+        },
+      );
+      const rootSafeFiles = await filterRealPathsWithinRootEntries(gitCandidates.files, realRoot);
+      const filteredFiles = rootSafeFiles
+        .map(({ path: filePath, realPath }) => ({ filePath: normalizePath(filePath), realPath }))
+        .filter(({ filePath, realPath }) => {
+          const rootRelative = normalizePath(path.relative(root, filePath));
+          if (!isRelativePathInside(rootRelative)) return false;
+          if (defaultIgnoreMatchers.some((matcher) => matcher(rootRelative))) return false;
+          if (isIgnoredByGitignore(filePath, gitignoreIndex)) return false;
+          return normalizePath(realPath) === filePath || !isIgnoredByGitignore(realPath, gitignoreIndex);
+        })
+        .map(({ filePath }) => filePath);
+      const fileMatches = filteredFiles.filter((file) =>
+        PROJECT_FILE_DEFINITIONS.some(
+          (definition, definitionIndex) =>
+            definition.kind === "file" && matchesDefinition(path.basename(file), definitionIndex),
+        ),
+      );
+      const directoryMatches = collectCandidateAncestorDirectories(root, filteredFiles).filter((directory) =>
+        PROJECT_FILE_DEFINITIONS.some(
+          (definition, definitionIndex) =>
+            definition.kind === "dir" && matchesDefinition(path.basename(directory), definitionIndex),
+        ),
+      );
+      const rootSafeLinked = await filterRealPathsWithinRoot(
+        linkedMatches.map((match) => (match.endsWith("/") ? match.slice(0, -1) : match)),
+        realRoot,
+      );
+      rootSafeMatches = [...fileMatches, ...directoryMatches, ...rootSafeLinked];
+    } else {
+      const allPatterns = PROJECT_FILE_DEFINITIONS.flatMap((definition) => definition.patterns.map(toProjectGlob));
+      const matches = await fg(allPatterns, {
+        cwd: root,
+        absolute: true,
+        dot: true,
+        followSymbolicLinks: false,
+        ignore: DEFAULT_PROJECT_FILE_IGNORES,
+        markDirectories: true,
+        onlyFiles: false,
+      });
+      const linkedMatches = await listEntriesFromSafeSymlinkDirectories(
+        root,
+        realRoot,
+        allPatterns,
+        DEFAULT_PROJECT_FILE_IGNORES,
+        {
+          markDirectories: true,
+          onlyFiles: false,
+          ...(options?.knownSymlinkDirectories !== undefined
+            ? { knownSymlinkDirectories: options.knownSymlinkDirectories }
+            : {}),
+          ...(options?.onSymlinkDirectoriesDiscovered
+            ? { onSymlinkDirectoriesDiscovered: options.onSymlinkDirectoriesDiscovered }
+            : {}),
+        },
+      );
+      rootSafeMatches = await filterRealPathsWithinRoot(
+        [...matches, ...linkedMatches].map((match) => (match.endsWith("/") ? match.slice(0, -1) : match)),
+        realRoot,
+      );
+    }
     const entries: ProjectFileInfo[] = [];
     const matchTasks = rootSafeMatches.map(async (cleanMatch) => {
       const stats = await fsp.stat(cleanMatch);
@@ -953,10 +1030,7 @@ export async function discoverProjectFiles(
         if (isDir && def.kind !== "dir") continue;
         if (!isDir && def.kind !== "file") continue;
 
-        const matchesPattern = def.patterns.some((pattern, patternIndex) => {
-          const matcher = projectFileDefinitionMatchers[definitionIndex]![patternIndex];
-          return matcher ? matcher.test(fileName) : pattern === fileName;
-        });
+        const matchesPattern = matchesDefinition(fileName, definitionIndex);
 
         if (matchesPattern) {
           entries.push(await buildProjectFileInfo(def, cleanMatch));
