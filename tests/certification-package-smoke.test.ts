@@ -180,7 +180,11 @@ async function createCandidateSet(target: string): Promise<{
 
 function createMockCommandRunner(
   packages: TinyPackage[],
-  options: { wrongTargetPackage?: string } = {},
+  options: {
+    wrongTargetPackage?: string;
+    archiveEntries?: string[];
+    unsupportedArchiveEntry?: boolean;
+  } = {},
 ): {
   calls: string[][];
   run: (command: string, args: string[], commandOptions?: CommandOptions) => Promise<CommandResult>;
@@ -199,12 +203,21 @@ function createMockCommandRunner(
       }
       return success("installed local tarballs");
     }
+    if (command === "tar" && args[0] === "-tzf") {
+      const pkg = byTarball.get(path.resolve(commandOptions.cwd ?? "", args[1] ?? ""));
+      if (!pkg) throw new Error(`Unexpected archive listing ${String(args[1])}`);
+      const entries = options.archiveEntries ?? pkg.pack.files.map((file) => `package/${file.path}`);
+      return success(entries.join("\n"));
+    }
     if (command === "tar" && args[0] === "-xzf") {
       const pkg = byTarball.get(path.resolve(commandOptions.cwd ?? "", args[1] ?? ""));
       if (!pkg) throw new Error(`Unexpected archive extraction ${String(args[1])}`);
       const destination = args[args.indexOf("-C") + 1];
       if (!destination) throw new Error("Mocked archive extraction omitted destination");
       fs.cpSync(pkg.sourceDirectory, path.join(destination, "package"), { recursive: true });
+      if (options.unsupportedArchiveEntry) {
+        fs.symlinkSync("package.json", path.join(destination, "package", "unsupported-link"), "file");
+      }
       if (options.wrongTargetPackage && pkg.name.includes("native-win32")) {
         const manifestPath = path.join(destination, "package", "package.json");
         const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
@@ -278,8 +291,8 @@ describe("package smoke modes", () => {
 
     expect(report.status).toBe("pass");
     expect(report.mode).toBe("structural");
-    expect(commandRunner.calls).toHaveLength(4);
-    expect(commandRunner.calls.every((call) => call[0] === "tar" && call[1] === "-xzf")).toBe(true);
+    expect(commandRunner.calls).toHaveLength(8);
+    expect(commandRunner.calls.every((call) => call[0] === "tar" && ["-tzf", "-xzf"].includes(call[1]!))).toBe(true);
   });
 
   it("runs install, identity, native parse, and MCP checks for runtime targets", async () => {
@@ -310,7 +323,7 @@ describe("package smoke modes", () => {
     expect(mcpCalls).toEqual(["initialize", "tools/list", "tools/call:search"]);
     expect(commandRunner.calls.some((call) => call[1] === "install")).toBe(true);
     expect(commandRunner.calls.find((call) => call[1] === "install")).toContain("--prefer-offline");
-    expect(commandRunner.calls.filter((call) => call[0] === "tar")).toHaveLength(4);
+    expect(commandRunner.calls.filter((call) => call[0] === "tar")).toHaveLength(8);
     expect(commandRunner.calls.some((call) => call.includes("--pack-destination"))).toBe(false);
   });
 
@@ -337,5 +350,58 @@ describe("package smoke modes", () => {
         commandRunner: commandRunner.run,
       }),
     ).rejects.toMatchObject({ code: "target-mismatch" });
+  });
+
+  it("rejects unsafe archive paths before extraction", async () => {
+    const target = "win32-arm64-msvc";
+    for (const archiveEntries of [
+      ["package/package.json", "../outside.txt"],
+      ["package/package.json", "package/C:/outside.txt"],
+    ]) {
+      const candidates = await createCandidateSet(target);
+      const commandRunner = createMockCommandRunner(candidates.packages, { archiveEntries });
+
+      await expect(
+        runPackageSmoke({
+          manifestPath: candidates.manifestPath,
+          target,
+          mode: "structural",
+          expectedTargets: [target],
+          structuralException: {
+            target,
+            certificationClass: "structural",
+            owner: "@release-owner",
+            expires: "2027-01-31",
+            reason: "No matching runtime host is available.",
+          },
+          commandRunner: commandRunner.run,
+        }),
+      ).rejects.toMatchObject({ code: "archive-invalid" });
+      expect(commandRunner.calls).toHaveLength(1);
+      expect(commandRunner.calls[0]?.[1]).toBe("-tzf");
+    }
+  });
+
+  it("reports unsupported archive entries as archive-invalid", async () => {
+    const target = "win32-arm64-msvc";
+    const candidates = await createCandidateSet(target);
+    const commandRunner = createMockCommandRunner(candidates.packages, { unsupportedArchiveEntry: true });
+
+    await expect(
+      runPackageSmoke({
+        manifestPath: candidates.manifestPath,
+        target,
+        mode: "structural",
+        expectedTargets: [target],
+        structuralException: {
+          target,
+          certificationClass: "structural",
+          owner: "@release-owner",
+          expires: "2027-01-31",
+          reason: "No matching runtime host is available.",
+        },
+        commandRunner: commandRunner.run,
+      }),
+    ).rejects.toMatchObject({ code: "archive-invalid" });
   });
 });
