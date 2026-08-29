@@ -412,10 +412,9 @@ function transformModulePaths(projectRoot: string, module: ModuleIndex, toRelati
       transformPersistedExportFromModule(projectRoot, copy, true);
       return copy;
     }),
-    imports: module.imports.map((binding) => ({
-      ...binding,
-      ...(typeof binding.resolved === "string" ? { resolved: transform(binding.resolved) } : {}),
-    })),
+    imports: module.imports.map((binding) =>
+      typeof binding.resolved === "string" ? { ...binding, resolved: transform(binding.resolved) } : binding,
+    ),
   };
 }
 
