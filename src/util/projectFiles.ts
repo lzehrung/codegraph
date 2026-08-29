@@ -402,7 +402,7 @@ async function loadGitignoreIndexForRootAliases(projectRoot: string): Promise<Gi
  * `path.relative` and normalization work; on the same project that repetition was the
  * dominant remaining cost, at 2.6s of a 3.8s discovery.
  */
-function isIgnoredByGitignore(absolutePath: string, gitignoreIndex: GitignoreIndex): boolean {
+function isIgnoredByGitignore(absolutePath: string, gitignoreIndex: GitignoreIndex, isDirectory = false): boolean {
   if (!gitignoreIndex.hasRules) return false;
   const chain: GitignoreRuleGroup[] = [];
   let current = normalizePath(path.dirname(absolutePath));
@@ -423,10 +423,11 @@ function isIgnoredByGitignore(absolutePath: string, gitignoreIndex: GitignoreInd
     const normalizedRelativePath = normalizePath(relativePath);
     const hasSeparator = normalizedRelativePath.includes("/");
     for (const rule of group.rules) {
-      if (rule.dirOnly && !hasSeparator) {
+      if (rule.dirOnly && !hasSeparator && !isDirectory) {
         continue;
       }
-      if (rule.matches(normalizedRelativePath)) {
+      const matchesDirectory = isDirectory && rule.dirOnly && rule.matches(`${normalizedRelativePath}/.directory`);
+      if (rule.matches(normalizedRelativePath) || matchesDirectory) {
         ignored = !rule.negated;
       }
     }
@@ -483,7 +484,11 @@ function collectCandidateAncestorDirectories(root: string, files: readonly strin
  * not come from Git, such as entries behind a directory symlink, are then filtered by
  * the same rules Git applied to the candidate listing.
  */
-async function findGitIgnoreSources(root: string, files: readonly string[]): Promise<GitignoreSource[]> {
+async function findGitIgnoreSources(
+  root: string,
+  files: readonly string[],
+  submoduleDirectories: readonly string[] = [],
+): Promise<GitignoreSource[]> {
   const directories = collectCandidateAncestorDirectories(root, files);
   const present = await mapLimitSemaphore(directories, REALPATH_FILTER_CONCURRENCY, async (directory) => {
     const candidate = normalizePath(path.join(directory, ".gitignore"));
@@ -494,7 +499,9 @@ async function findGitIgnoreSources(root: string, files: readonly string[]): Pro
     }
   });
   const sources = present.filter((entry): entry is GitignoreSource => entry !== null);
-  sources.push(...(await listGitExcludeFiles(root)));
+  for (const gitRoot of [root, ...submoduleDirectories]) {
+    sources.push(...(await listGitExcludeFiles(gitRoot)));
+  }
   return sources;
 }
 
@@ -530,7 +537,7 @@ async function listGitCandidateFiles(root: string, logLevel: LogLevel | undefine
     // separate Git listings happened to be concatenated. Callers that surface results
     // in discovery order then behave the same way on every machine.
     const files = Array.from(new Set([...tracked, ...untracked, ...submoduleUntracked.flat()])).sort();
-    return { files, gitignoreFiles: await findGitIgnoreSources(root, files) };
+    return { files, gitignoreFiles: await findGitIgnoreSources(root, files, submoduleDirectories) };
   } catch (error) {
     logWithLevel(logLevel, "debug", `Git discovery unavailable for ${root}: ${stringifyUnknown(error)}`);
     return null;
@@ -953,10 +960,8 @@ export async function discoverProjectFiles(
     let gitCandidates: GitCandidateSet | null;
     if (options?.knownGitCandidates !== undefined) {
       gitCandidates = options.knownGitCandidates;
-    } else if (normalizePath(realRoot) === normalizePath(root)) {
-      gitCandidates = await listGitCandidateFiles(root, options?.logLevel);
     } else {
-      gitCandidates = null;
+      gitCandidates = await listGitCandidateFiles(root, options?.logLevel);
     }
     options?.onGitCandidatesDiscovered?.(gitCandidates);
     let rootSafeMatches: string[];
@@ -965,15 +970,19 @@ export async function discoverProjectFiles(
       const defaultIgnoreMatchers = DEFAULT_PROJECT_FILE_IGNORES.map((globPattern) =>
         picomatch(globPattern, { dot: true }),
       );
-      const filterGitIgnoredEntries = (entries: RootSafePath[]): string[] =>
+      const filterGitIgnoredEntries = (
+        entries: RootSafePath[],
+        directoryKeys: ReadonlySet<string> = new Set(),
+      ): string[] =>
         entries
           .map(({ path: filePath, realPath }) => ({ filePath: normalizePath(filePath), realPath }))
           .filter(({ filePath, realPath }) => {
+            const isDirectory = directoryKeys.has(fileIdentityKey(filePath));
             const rootRelative = normalizePath(path.relative(root, filePath));
             if (!isRelativePathInside(rootRelative)) return false;
             if (defaultIgnoreMatchers.some((matcher) => matcher(rootRelative))) return false;
-            if (isIgnoredByGitignore(filePath, gitignoreIndex)) return false;
-            return normalizePath(realPath) === filePath || !isIgnoredByGitignore(realPath, gitignoreIndex);
+            if (isIgnoredByGitignore(filePath, gitignoreIndex, isDirectory)) return false;
+            return normalizePath(realPath) === filePath || !isIgnoredByGitignore(realPath, gitignoreIndex, isDirectory);
           })
           .map(({ filePath }) => filePath);
       const symlinkOptions = {
@@ -1012,17 +1021,28 @@ export async function discoverProjectFiles(
             definition.kind === "file" && matchesDefinition(path.basename(file), definitionIndex),
         ),
       );
-      const directoryMatches = collectCandidateAncestorDirectories(root, filteredFiles).filter((directory) =>
+      const safeSymlinkDirectoryKeys = new Set(safeSymlinkDirectories.map(fileIdentityKey));
+      const directoryMatches = [
+        ...collectCandidateAncestorDirectories(root, filteredFiles),
+        ...filterGitIgnoredEntries(
+          await filterRealPathsWithinRootEntries(safeSymlinkDirectories, realRoot),
+          safeSymlinkDirectoryKeys,
+        ),
+      ].filter((directory) =>
         PROJECT_FILE_DEFINITIONS.some(
           (definition, definitionIndex) =>
             definition.kind === "dir" && matchesDefinition(path.basename(directory), definitionIndex),
         ),
+      );
+      const linkedDirectoryKeys = new Set(
+        linkedMatches.filter((match) => match.endsWith("/")).map((match) => fileIdentityKey(match.slice(0, -1))),
       );
       const rootSafeLinked = filterGitIgnoredEntries(
         await filterRealPathsWithinRootEntries(
           linkedMatches.map((match) => (match.endsWith("/") ? match.slice(0, -1) : match)),
           realRoot,
         ),
+        linkedDirectoryKeys,
       );
       rootSafeMatches = [...fileMatches, ...directoryMatches, ...rootSafeLinked];
     } else {

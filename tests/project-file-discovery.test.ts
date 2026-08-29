@@ -1248,6 +1248,84 @@ describe("git-native project file discovery", () => {
     expect(paths.has(normalize(path.join(linkedPackage, "package.json")))).toBe(false);
   });
 
+  it("discovers a safe directory symlink that is itself a metadata marker", async () => {
+    const root = await makeRepo("codegraph-discovery-meta-symlink-marker-");
+    const target = path.join(root, "packages", "app");
+    const marker = path.join(root, "App.xcodeproj");
+    await createFile(path.join(target, "project.pbxproj"), "// project\n");
+    try {
+      await fs.symlink(target, marker, "dir");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+    git(root, ["add", "App.xcodeproj"]);
+    git(root, ["commit", "-m", "marker"]);
+
+    const entry = (await discoverProjectFiles(root)).find((item) => normalize(item.path) === normalize(marker));
+    expect(entry).toMatchObject({ kind: "dir" });
+  });
+
+  it("excludes an ignored directory metadata marker reached through a safe symlink", async () => {
+    const root = await makeRepo("codegraph-discovery-meta-symlink-directory-ignore-");
+    const target = path.join(root, "packages", "App.xcodeproj");
+    const marker = path.join(root, "LinkedApp.xcodeproj");
+    await createFile(path.join(root, ".gitignore"), "packages/App.xcodeproj/\n");
+    await createFile(path.join(target, "project.pbxproj"), "// project\n");
+    try {
+      await fs.symlink(target, marker, "dir");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+    git(root, ["add", ".gitignore", "LinkedApp.xcodeproj"]);
+    git(root, ["commit", "-m", "ignored marker"]);
+
+    const paths = new Set((await discoverProjectFiles(root)).map((item) => normalize(item.path)));
+    expect(paths.has(normalize(marker))).toBe(false);
+  });
+
+  it("honors gitignore when discovery starts through a repository symlink", async () => {
+    const root = await makeRepo("codegraph-discovery-meta-root-alias-");
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-discovery-meta-root-alias-parent-"));
+    gitTempDirs.push(parent);
+    const alias = path.join(parent, "repo-link");
+    await createFile(path.join(root, ".gitignore"), "vendor/\n");
+    await createFile(path.join(root, "vendor", "package.json"), JSON.stringify({ name: "ignored-pkg" }, null, 2));
+    await createFile(path.join(root, "src", "app.ts"), "export const app = 1;\n");
+    try {
+      await fs.symlink(root, alias, "dir");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+    git(root, ["add", ".gitignore", "src/app.ts"]);
+    git(root, ["commit", "-m", "tracked"]);
+
+    const paths = new Set((await discoverProjectFiles(alias)).map((item) => normalize(item.path)));
+    expect(paths.has(normalize(path.join(alias, "vendor", "package.json")))).toBe(false);
+  });
+
+  it("honors initialized submodule exclude sources for metadata", async () => {
+    const submodule = await makeRepo("codegraph-discovery-meta-submodule-exclude-src-");
+    const packageJson = path.join(submodule, "package.json");
+    await createFile(packageJson, JSON.stringify({ name: "ignored-submodule-pkg" }, null, 2));
+    git(submodule, ["add", "-f", "package.json"]);
+    git(submodule, ["commit", "-m", "package"]);
+
+    const root = await makeRepo("codegraph-discovery-meta-submodule-exclude-super-");
+    await createFile(path.join(root, "src", "app.ts"), "export const app = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "app"]);
+    git(root, ["-c", "protocol.file.allow=always", "submodule", "add", normalize(submodule), "plugins/example"]);
+    const initializedSubmodule = path.join(root, "plugins", "example");
+    const excludePath = git(initializedSubmodule, ["rev-parse", "--git-path", "info/exclude"]);
+    await fs.writeFile(path.resolve(initializedSubmodule, excludePath), "package.json\n", "utf8");
+
+    const paths = new Set((await discoverProjectFiles(root)).map((item) => normalize(item.path)));
+    expect(paths.has(normalize(path.join(root, "plugins", "example", "package.json")))).toBe(false);
+  });
+
   it("discovers a tracked package.json with unchanged metadata fields", async () => {
     const root = await makeRepo("codegraph-discovery-meta-tracked-");
     const packageJson = path.join(root, "package.json");
