@@ -578,8 +578,16 @@ async function listGitCandidateFiles(root: string, logLevel: LogLevel | undefine
       listUntrackedFiles(gitRoot, { respectGitignore: true }),
       listGitSubmoduleDirectories(gitRoot, { recurse: true }),
     ]);
+    const submoduleRoots = await Promise.all(
+      submoduleDirectories.map(async (logicalPath) => ({
+        logicalPath: normalizePath(logicalPath),
+        physicalPath: normalizePath(await fsp.realpath(logicalPath).catch(() => logicalPath)),
+      })),
+    );
     const submoduleUntracked = await Promise.all(
-      submoduleDirectories.map(async (directory) => await listUntrackedFiles(directory, { respectGitignore: true })),
+      submoduleRoots.map(
+        async ({ physicalPath }) => await listUntrackedFiles(physicalPath, { respectGitignore: true }),
+      ),
     );
     const rawFiles = Array.from(new Set([...tracked, ...untracked, ...submoduleUntracked.flat()])).sort();
     const files = Array.from(
@@ -591,16 +599,33 @@ async function listGitCandidateFiles(root: string, logLevel: LogLevel | undefine
         ),
       ),
     ).sort();
-    const gitignoreRoots = [gitRepositoryRoot, ...submoduleDirectories].map(normalizePath);
+    const physicalFiles =
+      normalizePath(root) === realRoot
+        ? []
+        : (
+            await mapLimitSemaphore(files, REALPATH_FILTER_CONCURRENCY, async (file) => {
+              try {
+                return normalizePath(await fsp.realpath(file));
+              } catch {
+                return null;
+              }
+            })
+          ).filter((file): file is string => file !== null);
+    const gitignoreRoots = [gitRepositoryRoot, ...submoduleRoots.map(({ physicalPath }) => physicalPath)].map(
+      normalizePath,
+    );
     const sourceRoots = [
       { path: root, repositoryRoot: gitRepositoryRoot },
       { path: realRoot, repositoryRoot: gitRepositoryRoot },
       { path: gitRepositoryRoot, repositoryRoot: gitRepositoryRoot },
-      ...submoduleDirectories.map((directory) => ({ path: directory, repositoryRoot: directory })),
+      ...submoduleRoots.flatMap(({ logicalPath, physicalPath }) => [
+        { path: logicalPath, repositoryRoot: physicalPath },
+        { path: physicalPath, repositoryRoot: physicalPath },
+      ]),
     ];
     return {
       files,
-      gitignoreFiles: await findGitIgnoreSources(sourceRoots, [...rawFiles, ...files]),
+      gitignoreFiles: await findGitIgnoreSources(sourceRoots, [...rawFiles, ...files, ...physicalFiles]),
       gitignoreRoots,
     };
   } catch (error) {
