@@ -21,7 +21,12 @@ import {
   toProjectRelativePath,
 } from "../../util/paths.js";
 import { assertRealPathCandidateWithinRoot } from "../../util/confinedFile.js";
-import { getGitBlobHashes } from "../../util/git.js";
+import {
+  getGitRepositoryRoot,
+  getGitBlobHashes,
+  listGitExcludeFiles,
+  listGitSubmoduleDirectories,
+} from "../../util/git.js";
 import { stringifyUnknown } from "../../util/ast.js";
 
 import { cacheAbsolutePath, cacheRelativePath, fileSignature } from "./module-cache.js";
@@ -260,14 +265,41 @@ function resolveManifestSymlinkDirectories(
   return [...resolvedDirectories];
 }
 
+async function gitIgnoreConfigFiles(projectRoot: string): Promise<string[]> {
+  const gitRoot = await getGitRepositoryRoot(projectRoot);
+  if (!gitRoot) return [];
+  const submoduleDirectories = await listGitSubmoduleDirectories(gitRoot, { recurse: true });
+  const sourceRoots = [projectRoot, gitRoot, ...submoduleDirectories];
+  const gitignoreFiles = await Promise.all(
+    sourceRoots.map(
+      async (root) =>
+        await fg(["**/.gitignore"], {
+          cwd: root,
+          absolute: true,
+          dot: true,
+          ignore: DEFAULT_PROJECT_FILE_IGNORES,
+        }),
+    ),
+  );
+  const excludeFiles = await Promise.all(
+    [gitRoot, ...submoduleDirectories].map(async (root) => await listGitExcludeFiles(root)),
+  );
+  return Array.from(new Set([...gitignoreFiles.flat(), ...excludeFiles.flat().map(({ file }) => file)])).sort();
+}
+
 export async function computeConfigHash(projectRoot: string, logLevel?: LogLevel): Promise<ConfigHashResult> {
   try {
-    const configFiles = await fg([...DEFAULT_PROJECT_MANIFESTS, CODEGRAPH_CONFIG_FILE, "**/.gitignore"], {
-      cwd: projectRoot,
-      absolute: true,
-      dot: true,
-      ignore: DEFAULT_PROJECT_FILE_IGNORES,
-    });
+    const configFiles = Array.from(
+      new Set([
+        ...(await fg([...DEFAULT_PROJECT_MANIFESTS, CODEGRAPH_CONFIG_FILE, "**/.gitignore"], {
+          cwd: projectRoot,
+          absolute: true,
+          dot: true,
+          ignore: DEFAULT_PROJECT_FILE_IGNORES,
+        })),
+        ...(await gitIgnoreConfigFiles(projectRoot)),
+      ]),
+    );
     configFiles.sort();
     const hash = crypto.createHash("sha1");
     let firstError: string | undefined;

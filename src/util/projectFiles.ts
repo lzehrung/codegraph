@@ -382,7 +382,7 @@ async function buildGitignoreIndex(
     byBaseDir: new Map(),
   };
   for (const { file, baseDir, repositoryRoot } of sorted) {
-    if (isIgnoredByGitignore(file, gitignoreIndex)) {
+    if (isIgnoredByGitignore(path.dirname(file), gitignoreIndex, true)) {
       continue;
     }
     let raw: string;

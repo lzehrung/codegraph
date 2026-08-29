@@ -1199,6 +1199,19 @@ describe("git-native project file discovery", () => {
     expect(files.some((file) => file.endsWith("/-vendor/lib.ts"))).toBe(false);
   });
 
+  it("loads a Gitignored .gitignore after info exclude marks only that file", async () => {
+    const root = await makeRepo("codegraph-discovery-info-exclude-gitignore-");
+    const packageJson = path.join(root, "package.json");
+    await createFile(path.join(root, ".gitignore"), "package.json\n");
+    await createFile(packageJson, JSON.stringify({ name: "ignored-pkg" }, null, 2));
+    await fs.writeFile(path.join(root, ".git", "info", "exclude"), ".gitignore\n", "utf8");
+    git(root, ["add", "-f", ".gitignore", "package.json"]);
+    git(root, ["commit", "-m", "self ignored rules"]);
+
+    const paths = new Set((await discoverProjectFiles(root)).map((entry) => normalize(entry.path)));
+    expect(paths.has(normalize(packageJson))).toBe(false);
+  });
+
   it("includes gitignored sources when useGitignore is disabled", async () => {
     const root = await makeRepo("codegraph-discovery-no-gitignore-");
     await createFile(path.join(root, ".gitignore"), "generated/\n");
