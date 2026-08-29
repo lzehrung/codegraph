@@ -328,6 +328,9 @@ fn try_execute_merged_language_queries_with_limit(
         if routes.is_empty() {
             return Ok(Some(empty_query_results()));
         }
+        if routes.len() == 1 {
+            return Ok(None);
+        }
 
         if cache.has_failed_merged(language_id, &merged_query) {
             return Ok(None);

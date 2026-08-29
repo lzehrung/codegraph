@@ -297,8 +297,34 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
         let query = "(identifier) @cached_merge_failure";
         let language = language_for_id("ts").expect("typescript language should exist");
         let tree = parse_root(source, "ts");
-        record_merged_query_compile_failure_for_tests("ts", &format!("{query}\n"));
+        record_merged_query_compile_failure_for_tests("ts", &format!("{query}\n{query}\n"));
 
+        let merged = try_execute_merged_language_queries(
+            source,
+            tree.root_node(),
+            &language,
+            "ts",
+            LanguageQueryTexts {
+                imports: query,
+                exports: query,
+                locals: "",
+                import_bindings: "",
+            },
+        )
+        .expect("individual query should compile");
+
+        assert!(
+            merged.is_none(),
+            "a cached merged compile failure must skip recompiling the same query text"
+        );
+    }
+
+    #[test]
+    fn merged_language_queries_skip_single_active_kind() {
+        let source = "const singleQueryKind = 1;";
+        let query = "(identifier) @single_query_kind";
+        let language = language_for_id("ts").expect("typescript language should exist");
+        let tree = parse_root(source, "ts");
         let merged = try_execute_merged_language_queries(
             source,
             tree.root_node(),
@@ -315,7 +341,7 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
 
         assert!(
             merged.is_none(),
-            "a cached merged compile failure must skip recompiling the same query text"
+            "one active query kind should use the independent executor without merged compilation"
         );
     }
 
