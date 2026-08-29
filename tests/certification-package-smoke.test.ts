@@ -23,13 +23,14 @@ type TinyPackage = {
 };
 type CommandResult = {
   command: string;
-  exitCode: number;
+  exitCode: number | null;
   signal: null;
   stdout: string;
   stderr: string;
   rawStdout: string;
   rawStderr: string;
   durationMs: number;
+  error?: string;
 };
 type CommandOptions = { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number };
 
@@ -184,6 +185,7 @@ function createMockCommandRunner(
     wrongTargetPackage?: string;
     archiveEntries?: string[];
     unsupportedArchiveEntry?: boolean;
+    tarUnavailable?: boolean;
   } = {},
 ): {
   calls: string[][];
@@ -194,6 +196,9 @@ function createMockCommandRunner(
 
   async function run(command: string, args: string[], commandOptions: CommandOptions = {}): Promise<CommandResult> {
     calls.push([command, ...args]);
+    if (command === "tar" && options.tarUnavailable) {
+      return { ...success(), exitCode: null, error: "spawnSync tar ENOENT" };
+    }
     if (args[0] === "install") {
       const installDirectory = commandOptions.cwd;
       if (!installDirectory) throw new Error("Mocked install omitted cwd");
@@ -439,5 +444,30 @@ describe("package smoke modes", () => {
       }),
     ).rejects.toMatchObject({ code: "archive-invalid" });
     expect(commandRunner.calls.some((call) => call[1] === "-xzf")).toBe(false);
+  });
+
+  it("reports an unavailable tar executable separately from an invalid archive", async () => {
+    const target = "win32-arm64-msvc";
+    const candidates = await createCandidateSet(target);
+    const commandRunner = createMockCommandRunner(candidates.packages, { tarUnavailable: true });
+
+    await expect(
+      runPackageSmoke({
+        manifestPath: candidates.manifestPath,
+        target,
+        mode: "structural",
+        expectedTargets: [target],
+        structuralException: {
+          target,
+          certificationClass: "structural",
+          owner: "@release-owner",
+          expires: "2027-01-31",
+          reason: "No matching runtime host is available.",
+        },
+        commandRunner: commandRunner.run,
+      }),
+    ).rejects.toMatchObject({ code: "subprocess-unavailable", context: { file: expect.any(String) } });
+    expect(commandRunner.calls).toHaveLength(1);
+    expect(commandRunner.calls[0]?.[1]).toBe("-tzf");
   });
 });

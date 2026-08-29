@@ -115,6 +115,16 @@ function requireSuccessfulCommand(result, code, message, context = {}) {
   }
 }
 
+function requireTarCommand(result, entry, message) {
+  const unavailable = /\bENOENT\b/.test(result.error ?? "");
+  requireSuccessfulCommand(
+    result,
+    unavailable ? "subprocess-unavailable" : "archive-invalid",
+    unavailable ? "Could not run tar for package certification." : message,
+    { file: entry.file },
+  );
+}
+
 function parseJsonOutput(result, code, description) {
   requireSuccessfulCommand(result, code, `${description} failed.`);
   try {
@@ -182,9 +192,7 @@ function validateArchiveEntryTypes(archiveFile, output) {
 
 async function validateArchiveEntries({ entry, tarballPath, manifestDirectory, commandRunner }) {
   const pathResult = await commandRunner("tar", ["-tzf", tarballPath], { cwd: manifestDirectory });
-  requireSuccessfulCommand(pathResult, "archive-invalid", `Listing archive ${entry.file} failed.`, {
-    file: entry.file,
-  });
+  requireTarCommand(pathResult, entry, `Listing archive ${entry.file} failed.`);
   const archivePaths = String(pathResult.rawStdout ?? "")
     .split(/\r?\n/)
     .filter(Boolean);
@@ -196,9 +204,7 @@ async function validateArchiveEntries({ entry, tarballPath, manifestDirectory, c
   for (const archivePath of archivePaths) validateArchiveEntryPath(entry.file, archivePath);
 
   const typeResult = await commandRunner("tar", ["-tvzf", tarballPath], { cwd: manifestDirectory });
-  requireSuccessfulCommand(typeResult, "archive-invalid", `Listing archive ${entry.file} types failed.`, {
-    file: entry.file,
-  });
+  requireTarCommand(typeResult, entry, `Listing archive ${entry.file} types failed.`);
   validateArchiveEntryTypes(entry.file, typeResult.rawStdout);
   return [pathResult, typeResult];
 }
@@ -216,9 +222,7 @@ export async function inspectPackageTarball({ manifest, entry, manifestDirectory
     const extractionResult = await commandRunner("tar", ["-xzf", tarballPath, "-C", extractionDirectory], {
       cwd: manifestDirectory,
     });
-    requireSuccessfulCommand(extractionResult, "archive-invalid", `Extracting archive ${entry.file} failed.`, {
-      file: entry.file,
-    });
+    requireTarCommand(extractionResult, entry, `Extracting archive ${entry.file} failed.`);
     const packageDirectory = path.join(extractionDirectory, "package");
     let packageManifest;
     try {
