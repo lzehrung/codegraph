@@ -1228,6 +1228,26 @@ describe("git-native project file discovery", () => {
     expect(paths.has(normalize(path.join(root, "vendor", "package.json")))).toBe(false);
   });
 
+  it("excludes gitignored metadata reached through a safe symlink", async () => {
+    const root = await makeRepo("codegraph-discovery-meta-symlink-ignored-");
+    const packageDir = path.join(root, "packages", "core");
+    const linkedPackage = path.join(root, "linked-core");
+    await createFile(path.join(root, ".gitignore"), "packages/core/\n");
+    await createFile(path.join(packageDir, "package.json"), JSON.stringify({ name: "ignored-pkg" }, null, 2));
+    await createFile(path.join(root, "src", "app.ts"), "export const app = 1;\n");
+    try {
+      await fs.symlink(packageDir, linkedPackage, "dir");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+    git(root, ["add", ".gitignore", "src/app.ts"]);
+    git(root, ["commit", "-m", "tracked"]);
+
+    const paths = new Set((await discoverProjectFiles(root)).map((entry) => normalize(entry.path)));
+    expect(paths.has(normalize(path.join(linkedPackage, "package.json")))).toBe(false);
+  });
+
   it("discovers a tracked package.json with unchanged metadata fields", async () => {
     const root = await makeRepo("codegraph-discovery-meta-tracked-");
     const packageJson = path.join(root, "package.json");

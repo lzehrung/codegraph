@@ -965,6 +965,17 @@ export async function discoverProjectFiles(
       const defaultIgnoreMatchers = DEFAULT_PROJECT_FILE_IGNORES.map((globPattern) =>
         picomatch(globPattern, { dot: true }),
       );
+      const filterGitIgnoredEntries = (entries: RootSafePath[]): string[] =>
+        entries
+          .map(({ path: filePath, realPath }) => ({ filePath: normalizePath(filePath), realPath }))
+          .filter(({ filePath, realPath }) => {
+            const rootRelative = normalizePath(path.relative(root, filePath));
+            if (!isRelativePathInside(rootRelative)) return false;
+            if (defaultIgnoreMatchers.some((matcher) => matcher(rootRelative))) return false;
+            if (isIgnoredByGitignore(filePath, gitignoreIndex)) return false;
+            return normalizePath(realPath) === filePath || !isIgnoredByGitignore(realPath, gitignoreIndex);
+          })
+          .map(({ filePath }) => filePath);
       const symlinkOptions = {
         candidatePaths: gitCandidates.files,
         ...(options?.knownSymlinkDirectories !== undefined
@@ -992,17 +1003,9 @@ export async function discoverProjectFiles(
           resolvedSafeSymlinkDirectories: safeSymlinkDirectories,
         },
       );
-      const rootSafeFiles = await filterRealPathsWithinRootEntries(gitCandidates.files, realRoot);
-      const filteredFiles = rootSafeFiles
-        .map(({ path: filePath, realPath }) => ({ filePath: normalizePath(filePath), realPath }))
-        .filter(({ filePath, realPath }) => {
-          const rootRelative = normalizePath(path.relative(root, filePath));
-          if (!isRelativePathInside(rootRelative)) return false;
-          if (defaultIgnoreMatchers.some((matcher) => matcher(rootRelative))) return false;
-          if (isIgnoredByGitignore(filePath, gitignoreIndex)) return false;
-          return normalizePath(realPath) === filePath || !isIgnoredByGitignore(realPath, gitignoreIndex);
-        })
-        .map(({ filePath }) => filePath);
+      const filteredFiles = filterGitIgnoredEntries(
+        await filterRealPathsWithinRootEntries(gitCandidates.files, realRoot),
+      );
       const fileMatches = filteredFiles.filter((file) =>
         PROJECT_FILE_DEFINITIONS.some(
           (definition, definitionIndex) =>
@@ -1015,9 +1018,11 @@ export async function discoverProjectFiles(
             definition.kind === "dir" && matchesDefinition(path.basename(directory), definitionIndex),
         ),
       );
-      const rootSafeLinked = await filterRealPathsWithinRoot(
-        linkedMatches.map((match) => (match.endsWith("/") ? match.slice(0, -1) : match)),
-        realRoot,
+      const rootSafeLinked = filterGitIgnoredEntries(
+        await filterRealPathsWithinRootEntries(
+          linkedMatches.map((match) => (match.endsWith("/") ? match.slice(0, -1) : match)),
+          realRoot,
+        ),
       );
       rootSafeMatches = [...fileMatches, ...directoryMatches, ...rootSafeLinked];
     } else {
