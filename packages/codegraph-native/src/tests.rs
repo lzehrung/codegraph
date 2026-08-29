@@ -5,7 +5,7 @@ use super::{
 use crate::projection::ProjectedColumns;
 use crate::languages::language_for_id;
 use crate::parser_pool::{parse_invocations_for_tests, reset_parse_invocations_for_tests};
-use crate::query::execute_query;
+use crate::query::{execute_language_queries_separately, execute_query, LanguageQueryTexts};
 use crate::types::NativeMatch;
 use std::collections::HashSet;
 use tree_sitter::Parser;
@@ -239,6 +239,48 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
     }
 
     #[test]
+    fn merged_language_queries_match_separate_queries_for_every_supported_language() {
+        for language_id in supported_language_ids() {
+            let (source, query) = smoke_case(language_id.as_str());
+            let language = language_for_id(language_id.as_str())
+                .expect("supported language should resolve to a parser language");
+            let tree = parse_root(source, language_id.as_str());
+            let two_patterns = format!("{query}\n{query}");
+            let separate = execute_language_queries_separately(
+                source,
+                tree.root_node(),
+                &language,
+                language_id.as_str(),
+                LanguageQueryTexts {
+                    imports: query,
+                    exports: two_patterns.as_str(),
+                    locals: "",
+                    import_bindings: query,
+                },
+            )
+            .unwrap_or_else(|error| {
+                panic!("separate query execution failed for {language_id}: {error}")
+            });
+            let merged = run_language_queries(
+                source.to_string(),
+                language_id.clone(),
+                query.to_string(),
+                two_patterns,
+                "".to_string(),
+                query.to_string(),
+            )
+            .unwrap_or_else(|error| {
+                panic!("merged query execution failed for {language_id}: {error}")
+            });
+
+            assert_eq!(
+                merged, separate,
+                "merged query results should preserve every capture and pattern index for {language_id}"
+            );
+        }
+    }
+
+    #[test]
     fn extract_language_matches_separate_queries_and_projection_with_one_parse() {
         let cases = [
             (
@@ -272,9 +314,17 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
                 .expect("separate syntax tree projection should succeed");
 
             reset_parse_invocations_for_tests();
-            let (combined_results, combined_tree) =
-                extract_language_parts(source, language_id, "", "", locals_query, "")
-                    .expect("combined native extraction should succeed");
+            let (combined_results, combined_tree) = extract_language_parts(
+                source,
+                language_id,
+                LanguageQueryTexts {
+                    imports: "",
+                    exports: "",
+                    locals: locals_query,
+                    import_bindings: "",
+                },
+            )
+            .expect("combined native extraction should succeed");
 
             assert_eq!(
                 parse_invocations_for_tests(),

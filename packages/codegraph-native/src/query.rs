@@ -5,10 +5,14 @@ use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language, Query, QueryCapture, QueryCursor};
 
 use crate::types::{
-    point_with_index, CompactCapture, CompactMatch, NativeCapture, NativeMatch,
+    point_with_index, CompactCapture, CompactMatch, NativeCapture, NativeMatch, NativeQueryResults,
 };
 
-fn capture_to_compact(source: &str, capture: &QueryCapture<'_>, capture_names: &[&str]) -> CompactCapture {
+fn capture_to_compact(
+    source: &str,
+    capture: &QueryCapture<'_>,
+    capture_names: &[&str],
+) -> CompactCapture {
     let node = capture.node;
     let name = capture_names
         .get(capture.index as usize)
@@ -22,7 +26,11 @@ fn capture_to_compact(source: &str, capture: &QueryCapture<'_>, capture_names: &
     CompactCapture { name, text }
 }
 
-fn capture_to_object(source: &str, capture: &QueryCapture<'_>, capture_names: &[&str]) -> NativeCapture {
+fn capture_to_object(
+    source: &str,
+    capture: &QueryCapture<'_>,
+    capture_names: &[&str],
+) -> NativeCapture {
     let node = capture.node;
     let name = capture_names
         .get(capture.index as usize)
@@ -79,6 +87,49 @@ thread_local! {
     static QUERY_CACHE: RefCell<QueryCache> = RefCell::new(QueryCache::new());
 }
 
+#[derive(Clone, Copy)]
+enum QueryResultKind {
+    Imports,
+    Exports,
+    Locals,
+    ImportBindings,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct LanguageQueryTexts<'a> {
+    pub(crate) imports: &'a str,
+    pub(crate) exports: &'a str,
+    pub(crate) locals: &'a str,
+    pub(crate) import_bindings: &'a str,
+}
+
+struct QueryRoute {
+    kind: QueryResultKind,
+    pattern_range: std::ops::Range<usize>,
+}
+
+fn empty_query_results() -> NativeQueryResults {
+    NativeQueryResults {
+        imports: Vec::new(),
+        exports: Vec::new(),
+        locals: Vec::new(),
+        import_bindings: Vec::new(),
+    }
+}
+
+fn push_query_match(
+    results: &mut NativeQueryResults,
+    kind: QueryResultKind,
+    query_match: NativeMatch,
+) {
+    match kind {
+        QueryResultKind::Imports => results.imports.push(query_match),
+        QueryResultKind::Exports => results.exports.push(query_match),
+        QueryResultKind::Locals => results.locals.push(query_match),
+        QueryResultKind::ImportBindings => results.import_bindings.push(query_match),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Query execution using cached queries.
 // ---------------------------------------------------------------------------
@@ -107,7 +158,7 @@ pub(crate) fn execute_query(
         let captures = query_match
             .captures
             .iter()
-            .map(|capture| capture_to_object(source, capture, &capture_names))
+            .map(|capture| capture_to_object(source, capture, capture_names))
             .collect();
         out.push(NativeMatch {
             pattern_index: query_match.pattern_index as u32,
@@ -144,7 +195,7 @@ pub(crate) fn execute_query_cached(
             let captures = query_match
                 .captures
                 .iter()
-                .map(|capture| capture_to_object(source, capture, &capture_names))
+                .map(|capture| capture_to_object(source, capture, capture_names))
                 .collect();
             out.push(NativeMatch {
                 pattern_index: query_match.pattern_index as u32,
@@ -154,6 +205,119 @@ pub(crate) fn execute_query_cached(
 
         Ok(out)
     })
+}
+
+pub(crate) fn execute_language_queries_separately(
+    source: &str,
+    root: tree_sitter::Node<'_>,
+    language: &Language,
+    language_id: &str,
+    queries: LanguageQueryTexts<'_>,
+) -> Result<NativeQueryResults> {
+    Ok(NativeQueryResults {
+        imports: execute_query_cached(source, root, language, queries.imports, language_id)?,
+        exports: execute_query_cached(source, root, language, queries.exports, language_id)?,
+        locals: execute_query_cached(source, root, language, queries.locals, language_id)?,
+        import_bindings: execute_query_cached(
+            source,
+            root,
+            language,
+            queries.import_bindings,
+            language_id,
+        )?,
+    })
+}
+
+fn try_execute_merged_language_queries(
+    source: &str,
+    root: tree_sitter::Node<'_>,
+    language: &Language,
+    language_id: &str,
+    queries: LanguageQueryTexts<'_>,
+) -> Result<Option<NativeQueryResults>> {
+    QUERY_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let query_kinds = [
+            (QueryResultKind::Imports, queries.imports),
+            (QueryResultKind::Exports, queries.exports),
+            (QueryResultKind::Locals, queries.locals),
+            (QueryResultKind::ImportBindings, queries.import_bindings),
+        ];
+        let mut merged_query = String::new();
+        let mut routes = Vec::new();
+        let mut pattern_start = 0;
+
+        for (kind, query_text) in query_kinds {
+            if query_text.trim().is_empty() {
+                continue;
+            }
+            let query = cache.get_or_compile(language_id, language, query_text)?;
+            let pattern_end = pattern_start + query.pattern_count();
+            routes.push(QueryRoute {
+                kind,
+                pattern_range: pattern_start..pattern_end,
+            });
+            merged_query.push_str(query_text);
+            merged_query.push('\n');
+            pattern_start = pattern_end;
+        }
+
+        if routes.is_empty() {
+            return Ok(Some(empty_query_results()));
+        }
+
+        let query = match cache.get_or_compile(language_id, language, &merged_query) {
+            Ok(query) => query,
+            Err(_) => return Ok(None),
+        };
+        let capture_names = query.capture_names();
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(query, root, source.as_bytes());
+        let mut results = empty_query_results();
+
+        while let Some(query_match) = matches.next() {
+            let pattern_index = query_match.pattern_index;
+            let route = routes
+                .iter()
+                .find(|route| route.pattern_range.contains(&pattern_index))
+                .ok_or_else(|| {
+                    napi::Error::from_reason(format!(
+                        "Merged query returned an unknown pattern index: {pattern_index}"
+                    ))
+                })?;
+            let captures = query_match
+                .captures
+                .iter()
+                .map(|capture| capture_to_object(source, capture, capture_names))
+                .collect();
+            push_query_match(
+                &mut results,
+                route.kind,
+                NativeMatch {
+                    pattern_index: (pattern_index - route.pattern_range.start) as u32,
+                    captures,
+                },
+            );
+        }
+
+        Ok(Some(results))
+    })
+}
+
+/// Execute all query kinds with one tree traversal. Each original query is compiled
+/// first, preserving its existing validation error. If the concatenation is invalid,
+/// retain the established independent-query behavior.
+pub(crate) fn execute_language_queries_cached(
+    source: &str,
+    root: tree_sitter::Node<'_>,
+    language: &Language,
+    language_id: &str,
+    queries: LanguageQueryTexts<'_>,
+) -> Result<NativeQueryResults> {
+    match try_execute_merged_language_queries(source, root, language, language_id, queries)? {
+        Some(results) => Ok(results),
+        None => execute_language_queries_separately(source, root, language, language_id, queries),
+    }
 }
 /// Execute a compact imports-only query. Returns only name+text per capture,
 /// skipping nodeType and position data to reduce marshaling overhead.
@@ -180,7 +344,7 @@ pub(crate) fn execute_query_compact(
             let captures = query_match
                 .captures
                 .iter()
-                .map(|capture| capture_to_compact(source, capture, &capture_names))
+                .map(|capture| capture_to_compact(source, capture, capture_names))
                 .collect();
             out.push(CompactMatch {
                 pattern_index: query_match.pattern_index as u32,
