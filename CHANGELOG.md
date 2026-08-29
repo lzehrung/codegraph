@@ -15,6 +15,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
   tests, security, fixture, and package certification to their dedicated release jobs.
 - Clean disk-cache builds now skip module lookups when the cache database does not exist, while
   preserving per-file miss accounting.
+- Disk cache writes copy only module fields whose paths change; cache reads transform their
+  private parsed payload in place instead of deep-cloning every module.
 
 ### Fixed
 

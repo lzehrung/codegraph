@@ -2,10 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
+import { brotliCompressSync, brotliDecompressSync } from "node:zlib";
 import {
+  cacheDatabasePath,
+  cacheRelativePath,
   clearMemoryCache,
   closeDiskCacheDatabase,
   diskModuleCacheExists,
+  transformPersistedExportFromModule,
   tryLoadFromCache,
   writeToCache,
 } from "../src/indexer/build-cache/module-cache.js";
@@ -28,6 +33,167 @@ function moduleFor(file: string, label: string): ModuleIndex {
     ],
   };
 }
+
+function referenceWriteTransform(projectRoot: string, module: ModuleIndex): ModuleIndex {
+  const copy = structuredClone(module);
+  const transform = (file: string): string => cacheRelativePath(projectRoot, file);
+  copy.file = transform(copy.file);
+  for (const local of copy.locals) local.file = transform(local.file);
+  for (const entry of copy.exports) {
+    if (entry.type === "local") {
+      entry.target.file = transform(entry.target.file);
+    } else {
+      transformPersistedExportFromModule(projectRoot, entry, true);
+    }
+  }
+  for (const binding of copy.imports) {
+    if (typeof binding.resolved === "string") binding.resolved = transform(binding.resolved);
+  }
+  return copy;
+}
+
+function readCachedPayload(projectRoot: string, file: string): ModuleIndex {
+  const db = new DatabaseSync(cacheDatabasePath(projectRoot, { cache: "disk" }, "index-cache.sqlite"));
+  try {
+    const row = db
+      .prepare("SELECT payload FROM module_cache WHERE file = ?")
+      .get(cacheRelativePath(projectRoot, file)) as { payload: Uint8Array } | undefined;
+    if (!row) throw new Error("Expected a persisted module cache row.");
+
+    return JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as ModuleIndex;
+  } finally {
+    db.close();
+  }
+}
+
+function pathFixture(root: string): ModuleIndex {
+  const projectPath = (...parts: string[]): string => path.join(root, ...parts).replace(/\\/g, "/");
+  const file = projectPath("src", "entry.ts");
+  const dependency = projectPath("src", "dependency.ts");
+  const namespace = projectPath("src", "namespace.ts");
+  return {
+    file,
+    exports: [
+      {
+        type: "local",
+        exportedAs: "entryValue",
+        target: {
+          file,
+          localName: "entryValue",
+          kind: SymbolKind.Variable,
+          range: { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } },
+        },
+      },
+      {
+        type: "reexport",
+        exportedAs: "dependencyValue",
+        fromModule: dependency,
+        moduleSpecifier: "./dependency",
+        sourceSpecifier: "./dependency",
+      },
+      {
+        type: "reexport",
+        exportedAs: "packageValue",
+        fromModule: "package-name",
+        moduleSpecifier: "package-name",
+        sourceSpecifier: "package-name",
+      },
+      {
+        type: "namespaceReexport",
+        exportedAs: "namespace",
+        fromModule: namespace,
+        moduleSpecifier: "./namespace",
+      },
+    ],
+    imports: [
+      {
+        kind: "default",
+        local: "dependency",
+        from: "./dependency",
+        resolved: dependency,
+      },
+      {
+        kind: "star",
+        from: "package-name",
+      },
+    ],
+    locals: [
+      {
+        file,
+        localName: "entryValue",
+        kind: SymbolKind.Variable,
+        range: { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } },
+      },
+      {
+        file: dependency,
+        localName: "dependencyValue",
+        kind: SymbolKind.Function,
+        range: { start: { line: 2, column: 0 }, end: { line: 3, column: 1 } },
+      },
+    ],
+  };
+}
+
+describe("typed module cache path transforms", () => {
+  it("matches the structured-clone reference and leaves the input unchanged", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cache-typed-transform-"));
+    const module = pathFixture(root);
+    const before = structuredClone(module);
+    try {
+      writeToCache(root, module.file, "sig-typed", module, { cache: "disk" });
+      expect(module).toStrictEqual(before);
+
+      closeDiskCacheDatabase(root, { cache: "disk" });
+      expect(readCachedPayload(root, module.file)).toStrictEqual(referenceWriteTransform(root, module));
+    } finally {
+      closeDiskCacheDatabase(root, { cache: "disk" });
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("restores absolute paths through a disk-cache round trip", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cache-typed-round-trip-"));
+    const module = pathFixture(root);
+    try {
+      writeToCache(root, module.file, "sig-round-trip", module, { cache: "disk" });
+      closeDiskCacheDatabase(root, { cache: "disk" });
+
+      const loaded = tryLoadFromCache(root, module.file, "sig-round-trip", { cache: "disk" });
+      expect(loaded).toStrictEqual(module);
+      expect(loaded?.file).toBe(module.file);
+      expect(loaded?.imports[0]?.resolved).toBe(module.imports[0]?.resolved);
+    } finally {
+      closeDiskCacheDatabase(root, { cache: "disk" });
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a cached module path that escapes the project root", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cache-typed-confinement-"));
+    const file = path.join(root, "entry.ts");
+    try {
+      writeToCache(root, file, "sig-escape", moduleFor(file, "entry"), { cache: "disk" });
+      closeDiskCacheDatabase(root, { cache: "disk" });
+
+      const db = new DatabaseSync(cacheDatabasePath(root, { cache: "disk" }, "index-cache.sqlite"));
+      try {
+        const maliciousModule: ModuleIndex = { file: "../outside.ts", exports: [], imports: [], locals: [] };
+        const payload = brotliCompressSync(Buffer.from(JSON.stringify(maliciousModule)));
+        db.prepare("UPDATE module_cache SET payload = ? WHERE file = ?").run(payload, cacheRelativePath(root, file));
+      } finally {
+        db.close();
+      }
+
+      expect(tryLoadFromCache(root, file, "sig-escape", { cache: "disk" })).toBeNull();
+    } finally {
+      closeDiskCacheDatabase(root, { cache: "disk" });
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("module memory cache bounds", () => {
   it("evicts oldest entries and clears on teardown", () => {
