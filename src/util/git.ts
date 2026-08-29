@@ -587,6 +587,10 @@ export async function listChangedFiles(
  * listings can also exceed Node's default 1 MiB stdout buffer on large trees, so
  * this raises `maxBuffer` for the same reason `getGitBlobHashes` does.
  */
+
+function resolveGitListedPath(projectRoot: string, listedPath: string): string {
+  return normalizePath(path.isAbsolute(listedPath) ? listedPath : path.resolve(projectRoot, listedPath));
+}
 export async function listTrackedFiles(
   projectRoot: string,
   opts?: { gitAvailable?: boolean; logLevel?: LogLevel; recurseSubmodules?: boolean },
@@ -601,7 +605,7 @@ export async function listTrackedFiles(
     // and trailing whitespace can be a legitimate part of a real filename).
     const out: string[] = [];
     for (const rel of stdout.split("\0").filter(Boolean)) {
-      const abs = normalizePath(path.resolve(projectRoot, rel));
+      const abs = resolveGitListedPath(projectRoot, rel);
       if (abs) out.push(abs);
     }
     return Array.from(new Set(out));
@@ -749,7 +753,7 @@ export async function listUntrackedFiles(
     const relFiles = stdout.toString().split("\0").filter(Boolean);
     const out: string[] = [];
     for (const rel of relFiles) {
-      const abs = normalizePath(path.resolve(projectRoot, rel));
+      const abs = resolveGitListedPath(projectRoot, rel);
       if (abs) out.push(abs);
     }
     return Array.from(new Set(out));

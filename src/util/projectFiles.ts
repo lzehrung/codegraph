@@ -138,6 +138,7 @@ export type GitCandidateSet = {
   files: string[];
   gitignoreFiles: GitignoreSource[];
   gitignoreRoots: string[];
+  gitignoreAliases: GitIgnoreSourceRoot[];
 };
 
 export type ProjectFileDiscoveryOptions = {
@@ -313,6 +314,7 @@ type GitignoreRuleGroup = {
 type GitignoreIndex = {
   hasRules: boolean;
   repositoryRoots: string[];
+  repositoryAliases: GitIgnoreSourceRoot[];
   /**
    * Rule groups keyed by {@link fileIdentityKey} of the declaring directory, so one base
    * directory can never be keyed two ways.
@@ -320,7 +322,12 @@ type GitignoreIndex = {
   byBaseDir: Map<string, GitignoreRuleGroup>;
 };
 
-const EMPTY_GITIGNORE_INDEX: GitignoreIndex = { hasRules: false, repositoryRoots: [], byBaseDir: new Map() };
+const EMPTY_GITIGNORE_INDEX: GitignoreIndex = {
+  hasRules: false,
+  repositoryRoots: [],
+  repositoryAliases: [],
+  byBaseDir: new Map(),
+};
 
 /**
  * A file of ignore patterns plus the directory its patterns resolve against.
@@ -342,6 +349,7 @@ export type GitignoreSource = { file: string; baseDir: string; repositoryRoot?: 
 async function buildGitignoreIndex(
   sources: readonly GitignoreSource[],
   repositoryRoots: readonly string[] = [],
+  repositoryAliases: readonly GitIgnoreSourceRoot[] = [],
 ): Promise<GitignoreIndex> {
   const sorted = [...sources]
     .map(({ file, baseDir, repositoryRoot, priority }) => ({
@@ -363,6 +371,14 @@ async function buildGitignoreIndex(
     repositoryRoots: Array.from(new Set(repositoryRoots.map(normalizePath))).sort(
       (left, right) => right.length - left.length,
     ),
+    repositoryAliases: Array.from(
+      new Map(
+        repositoryAliases.map(({ path: aliasPath, repositoryRoot }) => [
+          fileIdentityKey(aliasPath),
+          { path: normalizePath(aliasPath), repositoryRoot: normalizePath(repositoryRoot) },
+        ]),
+      ).values(),
+    ).sort((left, right) => right.path.length - left.path.length),
     byBaseDir: new Map(),
   };
   for (const { file, baseDir, repositoryRoot } of sorted) {
@@ -431,7 +447,10 @@ async function loadGitignoreIndexForRootAliases(projectRoot: string): Promise<Gi
  */
 function isIgnoredByGitignore(absolutePath: string, gitignoreIndex: GitignoreIndex, isDirectory = false): boolean {
   if (!gitignoreIndex.hasRules) return false;
-  const owningRepositoryRoot = gitignoreIndex.repositoryRoots.find((root) => isFilePathWithinRoot(root, absolutePath));
+  const owningRepositoryRoot =
+    gitignoreIndex.repositoryRoots.find((root) => isFilePathWithinRoot(root, absolutePath)) ??
+    gitignoreIndex.repositoryAliases.find(({ path: aliasPath }) => isFilePathWithinRoot(aliasPath, absolutePath))
+      ?.repositoryRoot;
   const chain: GitignoreRuleGroup[] = [];
   let current = normalizePath(path.dirname(absolutePath));
   for (;;) {
@@ -590,10 +609,11 @@ async function listGitCandidateFiles(root: string, logLevel: LogLevel | undefine
       ),
     );
     const rawFiles = Array.from(new Set([...tracked, ...untracked, ...submoduleUntracked.flat()])).sort();
+    const needsLogicalRemap = normalizePath(gitRoot) !== normalizePath(root);
     const files = Array.from(
       new Set(
         rawFiles.map((file) =>
-          isFilePathWithinRoot(realRoot, file)
+          needsLogicalRemap && isFilePathWithinRoot(realRoot, file)
             ? normalizePath(path.resolve(root, path.relative(realRoot, file)))
             : normalizePath(file),
         ),
@@ -627,6 +647,7 @@ async function listGitCandidateFiles(root: string, logLevel: LogLevel | undefine
       files,
       gitignoreFiles: await findGitIgnoreSources(sourceRoots, [...rawFiles, ...files, ...physicalFiles]),
       gitignoreRoots,
+      gitignoreAliases: sourceRoots,
     };
   } catch (error) {
     logWithLevel(logLevel, "debug", `Git discovery unavailable for ${root}: ${stringifyUnknown(error)}`);
@@ -703,7 +724,11 @@ async function listProjectFilesInternal(
     }
     let gitignoreIndex = EMPTY_GITIGNORE_INDEX;
     if (useGitignore && gitCandidates) {
-      gitignoreIndex = await buildGitignoreIndex(gitCandidates.gitignoreFiles, gitCandidates.gitignoreRoots);
+      gitignoreIndex = await buildGitignoreIndex(
+        gitCandidates.gitignoreFiles,
+        gitCandidates.gitignoreRoots,
+        gitCandidates.gitignoreAliases,
+      );
     } else if (useGitignore) {
       const gitignoreRoot = options?.gitignoreRoot
         ? await ensureDirectoryReadable(options.gitignoreRoot, "Gitignore root")
@@ -1070,7 +1095,11 @@ async function discoverProjectFilesInternal(
     options?.onGitCandidatesDiscovered?.(gitCandidates);
     let rootSafeMatches: string[];
     if (gitCandidates) {
-      const gitignoreIndex = await buildGitignoreIndex(gitCandidates.gitignoreFiles, gitCandidates.gitignoreRoots);
+      const gitignoreIndex = await buildGitignoreIndex(
+        gitCandidates.gitignoreFiles,
+        gitCandidates.gitignoreRoots,
+        gitCandidates.gitignoreAliases,
+      );
       const defaultIgnoreMatchers = DEFAULT_PROJECT_FILE_IGNORES.map((globPattern) =>
         picomatch(globPattern, { dot: true }),
       );

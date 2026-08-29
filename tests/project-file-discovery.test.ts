@@ -1387,6 +1387,32 @@ describe("git-native project file discovery", () => {
     expect(paths.has(normalize(path.join(root, "plugins", "example", "package.json")))).toBe(true);
   });
 
+  it("does not apply superproject ignore rules inside aliased initialized submodules", async () => {
+    const submodule = await makeRepo("codegraph-discovery-meta-aliased-submodule-boundary-src-");
+    await createFile(path.join(submodule, "package.json"), JSON.stringify({ name: "aliased-submodule-pkg" }, null, 2));
+    git(submodule, ["add", "package.json"]);
+    git(submodule, ["commit", "-m", "package"]);
+
+    const root = await makeRepo("codegraph-discovery-meta-aliased-submodule-boundary-super-");
+    await createFile(path.join(root, ".gitignore"), "package.json\n");
+    git(root, ["add", ".gitignore"]);
+    git(root, ["commit", "-m", "app"]);
+    git(root, ["-c", "protocol.file.allow=always", "submodule", "add", normalize(submodule), "plugins/example"]);
+    const parent = await fs.mkdtemp(
+      path.join(os.tmpdir(), "codegraph-discovery-meta-aliased-submodule-boundary-parent-"),
+    );
+    gitTempDirs.push(parent);
+    const alias = path.join(parent, "repo-link");
+    try {
+      await fs.symlink(root, alias, "dir");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+    const paths = new Set((await discoverProjectFiles(alias)).map((item) => normalize(item.path)));
+    expect(paths.has(normalize(path.join(alias, "plugins", "example", "package.json")))).toBe(true);
+  });
+
   it("honors ancestor gitignore rules when discovery starts in a repository subdirectory", async () => {
     const root = await makeRepo("codegraph-discovery-meta-subdirectory-ignore-");
     const child = path.join(root, "child");
