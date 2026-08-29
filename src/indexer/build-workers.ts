@@ -11,6 +11,7 @@ import {
   isNativeTreeSitterAvailable,
 } from "../native/treeSitterNative.js";
 import type {
+  NativeBloomFilterPayload,
   NativeExtractBatchResult,
   NativeExtractResult,
   NativeExtractTask,
@@ -95,11 +96,17 @@ export function countNativeWorkerEligibleFiles(
   return count;
 }
 
-function buildWorkerTask(filePath: string, sup: LanguageSupport, source?: string): NativeExtractTask {
+function buildWorkerTask(
+  filePath: string,
+  sup: LanguageSupport,
+  source?: string,
+  includeBloomFilter = false,
+): NativeExtractTask {
   return {
     filePath,
     languageId: sup.id,
     ...(source !== undefined ? { source, includeSourceInResult: false } : {}),
+    ...(includeBloomFilter ? { includeBloomFilter: true } : {}),
     importsQuery: getCachedNormalizedQuery(sup, "imports"),
     exportsQuery: getCachedNormalizedQuery(sup, "exports"),
     localsQuery: getCachedNormalizedQuery(sup, "locals"),
@@ -107,12 +114,16 @@ function buildWorkerTask(filePath: string, sup: LanguageSupport, source?: string
   };
 }
 
+type PreparedFileContextWithWorkerBloomFilter = PreparedFileContext & {
+  workerBloomFilter?: NativeBloomFilterPayload;
+};
+
 function workerResultToPrepared(
   result: NativeExtractResult,
   sup: LanguageSupport,
   filePath: string,
   ownedSource?: string,
-): PreparedFileContext {
+): PreparedFileContextWithWorkerBloomFilter {
   const source = result.source ?? ownedSource;
   if (source === undefined) {
     throw new Error(`Native worker omitted source for ${filePath} without caller-owned content.`);
@@ -125,6 +136,7 @@ function workerResultToPrepared(
     syntaxTree: result.syntaxTree,
     ...(result.fallbackReason ? { nativeFallbackReason: result.fallbackReason } : {}),
     ...(result.error ? { nativeError: result.error } : {}),
+    ...(result.bloomFilter ? { workerBloomFilter: result.bloomFilter } : {}),
   };
 }
 
@@ -233,7 +245,8 @@ export async function prepareFileContextForBuild(
   confinedRoot?: string,
   lexicalRoot?: string,
   trustedSource?: string,
-): Promise<PreparedFileContext> {
+  includeBloomFilter = false,
+): Promise<PreparedFileContextWithWorkerBloomFilter> {
   const source =
     trustedSource ??
     (confinedRoot ? await readConfinedUtf8File(confinedRoot, lexicalRoot ?? confinedRoot, file) : undefined);
@@ -246,7 +259,9 @@ export async function prepareFileContextForBuild(
   if (workerSetup.pool && isNativeWorkerEligibleFile(file, support)) {
     if (workerSetup.report) workerSetup.report.tasksSubmitted++;
     try {
-      const workerResult = (await workerSetup.pool.run(buildWorkerTask(file, support, source))) as NativeExtractResult;
+      const workerResult = (await workerSetup.pool.run(
+        buildWorkerTask(file, support, source, includeBloomFilter),
+      )) as NativeExtractResult;
       prepared = workerResultToPrepared(workerResult, support, file, source);
     } catch (error) {
       if (isNativeRequiredUnavailableError(error) && error instanceof Error) throw error;

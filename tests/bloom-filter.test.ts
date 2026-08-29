@@ -36,11 +36,12 @@ describe("BloomFilter", () => {
     const buffer = filter.toBuffer();
     const metadata = filter.getMetadata();
 
-    const restored = BloomFilter.fromBuffer(buffer, metadata.size, metadata.hashCount);
+    const restored = BloomFilter.fromBuffer(buffer, metadata.size, metadata.hashCount, filter.getItemCount());
 
     expect(restored.mightContain("hello")).toBe(true);
     expect(restored.mightContain("world")).toBe(true);
     expect(restored.mightContain("foo")).toBe(true);
+    expect(restored.getItemCount()).toBe(filter.getItemCount());
   });
 
   test("should calculate approximate false positive rate", () => {

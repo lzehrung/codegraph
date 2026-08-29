@@ -150,9 +150,10 @@ export class BloomFilter {
   /**
    * Deserialize from buffer
    */
-  static fromBuffer(buffer: Buffer, size: number, hashCount: number): BloomFilter {
+  static fromBuffer(buffer: Buffer, size: number, hashCount: number, itemCount = 0): BloomFilter {
     const filter = new BloomFilter(size, hashCount);
     filter.bits = new Uint8Array(buffer);
+    filter.itemCount = itemCount;
     return filter;
   }
 

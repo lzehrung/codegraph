@@ -40,7 +40,7 @@ import { ProjectedSyntaxTree } from "../native/projectedTree.js";
 import { collectImportsForFile } from "./imports.js";
 import { collectLocalsAndExportsFromSource } from "./locals-and-exports.js";
 import { compareEdges, edgeKey, toRelativeEdge } from "./shared.js";
-import { buildBloomFilterFromSource } from "../util/bloomFilter.js";
+import { BloomFilter, buildBloomFilterFromSource } from "../util/bloomFilter.js";
 import { initNativeBackendReport } from "../native/nativeBackendReport.js";
 import { closeDuplicateUnitCacheDatabase } from "../duplicates.js";
 import { isNativeRequiredUnavailableError } from "../native/treeSitterNative.js";
@@ -259,6 +259,7 @@ async function buildIndexedModuleForFile(args: {
     args.confinedRoot,
     args.projectRoot,
     args.trustedSource,
+    !!args.bloomFilterCache,
   );
   const { source, sup, nativeQueries, embeddedBlocks } = prepared;
   let tree: SyntaxTreeLike | undefined;
@@ -309,7 +310,14 @@ async function buildIndexedModuleForFile(args: {
   const lacksParserContext = !nativeQueries && !tree;
 
   if (args.bloomFilterCache && !nativeSourceLimitFallback) {
-    const filter = buildBloomFilterFromSource(source, sup);
+    const filter = prepared.workerBloomFilter
+      ? BloomFilter.fromBuffer(
+          Buffer.from(prepared.workerBloomFilter.bits),
+          prepared.workerBloomFilter.size,
+          prepared.workerBloomFilter.hashCount,
+          prepared.workerBloomFilter.itemCount,
+        )
+      : buildBloomFilterFromSource(source, sup);
     args.bloomFilterCache.set(args.file, filter);
   }
 

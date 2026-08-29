@@ -17,6 +17,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
   preserving per-file miss accounting.
 - Disk cache writes copy only module fields whose paths change; cache reads transform their
   private parsed payload in place instead of deep-cloning every module.
+- Worker-eligible cold builds now construct reference bloom filters in native extraction workers,
+  parallelizing identifier hashing instead of doing it on the main thread.
 
 ### Fixed
 

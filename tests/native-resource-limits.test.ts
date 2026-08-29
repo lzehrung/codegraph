@@ -15,6 +15,9 @@ import { buildProjectIndex, buildProjectIndexFromFiles } from "../src/indexer/bu
 import { cacheSignatureForFile, fileSignature, writeToCache } from "../src/indexer/build-cache/module-cache.js";
 import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
+import { TS_SUPPORT } from "../src/languages.js";
+import { BloomFilter, buildBloomFilterFromSource } from "../src/util/bloomFilter.js";
+
 import type { NativeBinding, NativeSyntaxTree } from "../src/native/contracts.js";
 import { createStubNativeSyntaxTree } from "./helpers/native.js";
 import type { BuildReport } from "../src/indexer/types.js";
@@ -87,6 +90,7 @@ describe("native extraction resource limits", () => {
       filePath: "huge.ts",
       languageId: "ts",
       source: oversized,
+      includeBloomFilter: true,
       importsQuery: "",
       exportsQuery: "",
       localsQuery: "",
@@ -101,6 +105,67 @@ describe("native extraction resource limits", () => {
     expect(result.error).toContain(String(DEFAULT_NATIVE_SOURCE_MAX_BYTES));
     expect(extractLanguage).not.toHaveBeenCalled();
     expect(result.source).toBe(oversized);
+    expect(result.bloomFilter).toBeUndefined();
+  });
+
+  it("returns a bloom filter equivalent to main-thread construction when requested", async () => {
+    const source = "export const workerBloomIdentifier = 1;\n";
+    const extractor = createNativeExtractor({
+      loadBinding: () => ({
+        binding: {
+          supportedLanguageIds: () => ["ts"],
+          runLanguageQueries: () => emptyResults(),
+          extractLanguage: () => ({ results: emptyResults(), syntaxTree: createStubNativeSyntaxTree() }),
+        } satisfies NativeBinding,
+        origin: { mode: "workspace" as const, packageName: "@lzehrung/codegraph-native" },
+      }),
+      readFile: async () => source,
+    });
+
+    const result = await extractor({
+      filePath: "worker-bloom.ts",
+      languageId: "ts",
+      includeBloomFilter: true,
+      importsQuery: "",
+      exportsQuery: "",
+      localsQuery: "",
+      importBindingsQuery: "",
+    });
+    expect(result.bloomFilter).toBeDefined();
+    if (!result.bloomFilter) throw new Error("Expected worker bloom filter.");
+
+    const workerFilter = BloomFilter.fromBuffer(
+      Buffer.from(result.bloomFilter.bits),
+      result.bloomFilter.size,
+      result.bloomFilter.hashCount,
+      result.bloomFilter.itemCount,
+    );
+    const mainFilter = buildBloomFilterFromSource(source, TS_SUPPORT);
+
+    expect(workerFilter.toBuffer()).toEqual(mainFilter.toBuffer());
+    expect(workerFilter.getMetadata()).toEqual(mainFilter.getMetadata());
+    expect(workerFilter.getItemCount()).toBe(mainFilter.getItemCount());
+    expect(workerFilter.mightContain("workerBloomIdentifier")).toBe(mainFilter.mightContain("workerBloomIdentifier"));
+    expect(workerFilter.mightContain("notInWorkerBloomSource")).toBe(mainFilter.mightContain("notInWorkerBloomSource"));
+  });
+
+  it("uses the main-thread bloom path when native workers are disabled", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-main-thread-bloom-"));
+    const file = path.join(root, "main-thread.ts");
+    await fsp.writeFile(file, "export const mainThreadBloomIdentifier = 1;\n", "utf8");
+
+    try {
+      const index = await buildProjectIndexFromFiles(root, [file], {
+        native: "off",
+        useNativeWorkers: false,
+      });
+      const filter = index.bloomFilters?.get(fileIdentityKey(normalizePath(file)));
+
+      expect(filter).toBeDefined();
+      expect(filter?.mightContain("mainThreadBloomIdentifier")).toBe(true);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("stats the file before reading when the on-disk size exceeds the configurable cap", async () => {
@@ -136,6 +201,7 @@ describe("native extraction resource limits", () => {
   });
 
   it("surfaces native projection depth/node limit errors as structured fallbacks", async () => {
+    const source = "export const projectionFallbackBloom = 1;\n";
     const extractor = createNativeExtractor({
       loadBinding: () => ({
         binding: {
@@ -147,12 +213,13 @@ describe("native extraction resource limits", () => {
         } satisfies NativeBinding,
         origin: { mode: "workspace" as const, packageName: "@lzehrung/codegraph-native" },
       }),
-      readFile: async () => "export const value = 1;\n",
+      readFile: async () => source,
     });
 
     const result = await extractor({
       filePath: "deep.ts",
       languageId: "ts",
+      includeBloomFilter: true,
       importsQuery: "",
       exportsQuery: "",
       localsQuery: "",
@@ -163,6 +230,17 @@ describe("native extraction resource limits", () => {
     expect(result.nativeResults).toBeNull();
     expect(result.syntaxTree).toBeNull();
     expect(result.error).toMatch(/max depth limit/i);
+    expect(result.bloomFilter).toBeDefined();
+    if (!result.bloomFilter) throw new Error("Expected a projection-fallback bloom filter.");
+    const expectedFilter = buildBloomFilterFromSource(source, TS_SUPPORT);
+    expect(
+      BloomFilter.fromBuffer(
+        Buffer.from(result.bloomFilter.bits),
+        result.bloomFilter.size,
+        result.bloomFilter.hashCount,
+        result.bloomFilter.itemCount,
+      ).toBuffer(),
+    ).toEqual(expectedFilter.toBuffer());
   });
 
   it("keeps ordinary in-budget extraction successful", async () => {
@@ -214,6 +292,7 @@ describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache beh
       });
       expect(first.byFile.get(fileIdentityKey(normalizedFile))?.locals).toEqual([]);
       expect(firstReport.backend?.native.filesFellBack).toBe(1);
+      expect(first.bloomFilters?.get(fileIdentityKey(normalizedFile))).toBeUndefined();
       expect(firstReport.backend?.native.errors[0]?.file).toBe(normalizedFile);
       expect(firstReport.workerPool?.tasksSubmitted).toBe(1);
 
@@ -231,6 +310,37 @@ describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache beh
       expect(secondReport.cache?.hits).toBe(0);
       expect(secondReport.workerPool?.tasksSubmitted).toBe(1);
       await expect(fsp.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("hydrates a worker-built bloom filter through Piscina", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-worker-bloom-"));
+    const file = path.join(root, "worker-bloom.ts");
+    const source = "export const workerPiscinaBloom = 1;\n";
+    await fsp.writeFile(file, source, "utf8");
+
+    try {
+      const report: BuildReport = { timings: {} };
+      const index = await buildProjectIndexFromFiles(root, [file], {
+        cache: "off",
+        native: "on",
+        nativeThreads: 1,
+        useNativeWorkers: true,
+        report,
+      });
+      const filter = index.bloomFilters?.get(fileIdentityKey(normalizePath(file)));
+      if (!filter) throw new Error("Expected a worker-built bloom filter.");
+      const expected = buildBloomFilterFromSource(source, TS_SUPPORT);
+
+      expect(report.workerPool?.enabled).toBe(true);
+      expect(report.workerPool?.tasksSubmitted).toBe(1);
+      expect(filter.toBuffer()).toEqual(expected.toBuffer());
+      expect(filter.getMetadata()).toEqual(expected.getMetadata());
+      expect(filter.getItemCount()).toBe(expected.getItemCount());
+      expect(filter.mightContain("workerPiscinaBloom")).toBe(expected.mightContain("workerPiscinaBloom"));
+      expect(filter.mightContain("notInWorkerPiscinaBloom")).toBe(expected.mightContain("notInWorkerPiscinaBloom"));
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

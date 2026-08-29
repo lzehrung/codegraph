@@ -19,6 +19,28 @@ import {
   REQUIRED_NATIVE_EXTRACTION_VERSION,
 } from "../native/treeShape.js";
 import type { NativeBindingLoadResult } from "../native/bindingLoader.js";
+import { supportById } from "../languages.js";
+import { buildBloomFilterFromSource } from "../util/bloomFilter.js";
+
+export type NativeBloomFilterPayload = {
+  bits: Uint8Array;
+  size: number;
+  hashCount: number;
+  itemCount: number;
+};
+
+function buildBloomFilterPayload(source: string, languageId: string): NativeBloomFilterPayload | undefined {
+  const support = supportById(languageId);
+  if (!support) return undefined;
+  const filter = buildBloomFilterFromSource(source, support);
+  const { size, hashCount } = filter.getMetadata();
+  return {
+    bits: filter.toBuffer(),
+    size,
+    hashCount,
+    itemCount: filter.getItemCount(),
+  };
+}
 
 export type NativeExtractLimits = {
   /** Maximum UTF-8 source bytes accepted before native parsing. Default: 8 MiB. */
@@ -31,6 +53,8 @@ export type NativeExtractTask = {
   source?: string | undefined;
   /** Omit the source from the result only when the caller supplied the exact source above. */
   includeSourceInResult?: boolean | undefined;
+  includeBloomFilter?: boolean | undefined;
+
   importsQuery: string;
   exportsQuery: string;
   localsQuery: string;
@@ -46,6 +70,7 @@ export type NativeExtractResult = {
   nativeResults: NativeQueryResults | null;
   compactResults: CompactQueryResults | null;
   syntaxTree: NativeSyntaxTree | null;
+  bloomFilter?: NativeBloomFilterPayload;
   fallbackReason?: NativeFallbackReason;
   error?: string;
 };
@@ -137,7 +162,12 @@ function resolveSourceMaxBytes(task: NativeExtractTask): number {
   return DEFAULT_NATIVE_SOURCE_MAX_BYTES;
 }
 
-function resourceLimitFallback(task: NativeExtractTask, source: string, error: string): NativeExtractResult {
+function resourceLimitFallback(
+  task: NativeExtractTask,
+  source: string,
+  error: string,
+  bloomFilter?: NativeBloomFilterPayload,
+): NativeExtractResult {
   const includeSource = task.includeSourceInResult ?? true;
   return {
     filePath: task.filePath,
@@ -146,6 +176,7 @@ function resourceLimitFallback(task: NativeExtractTask, source: string, error: s
     nativeResults: null,
     compactResults: null,
     syntaxTree: null,
+    ...(bloomFilter ? { bloomFilter } : {}),
     fallbackReason: "queryFailure",
     error,
   };
@@ -223,6 +254,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
     }
     const includeSource = task.includeSourceInResult ?? true;
     const source = loaded.source;
+    const bloomFilter = task.includeBloomFilter ? buildBloomFilterPayload(source, task.languageId) : undefined;
 
     if (!binding || !supportedIds) {
       return {
@@ -232,6 +264,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
         nativeResults: null,
         compactResults: null,
         syntaxTree: null,
+        ...(bloomFilter ? { bloomFilter } : {}),
         fallbackReason: "unavailable",
         ...(loadError ? { error: loadError } : {}),
       };
@@ -245,6 +278,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
         nativeResults: null,
         compactResults: null,
         syntaxTree: null,
+        ...(bloomFilter ? { bloomFilter } : {}),
         fallbackReason: "unsupportedLanguage",
       };
     }
@@ -259,6 +293,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
           nativeResults: null,
           compactResults,
           syntaxTree: null,
+          ...(bloomFilter ? { bloomFilter } : {}),
         };
       }
 
@@ -285,6 +320,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
           nativeResults: extraction.results,
           compactResults: null,
           syntaxTree: null,
+          ...(bloomFilter ? { bloomFilter } : {}),
           fallbackReason: "unavailable",
           error: loadError,
         };
@@ -296,11 +332,12 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
         nativeResults: extraction.results,
         compactResults: null,
         syntaxTree,
+        ...(bloomFilter ? { bloomFilter } : {}),
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (/max (node|depth) limit/i.test(message)) {
-        return resourceLimitFallback(task, source, message);
+        return resourceLimitFallback(task, source, message, bloomFilter);
       }
       return {
         filePath: task.filePath,
@@ -309,6 +346,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
         nativeResults: null,
         compactResults: null,
         syntaxTree: null,
+        ...(bloomFilter ? { bloomFilter } : {}),
         fallbackReason: "queryFailure",
         error: message,
       };
