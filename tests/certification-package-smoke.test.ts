@@ -295,6 +295,32 @@ describe("package smoke modes", () => {
     expect(commandRunner.calls.every((call) => call[0] === "tar" && ["-tzf", "-xzf"].includes(call[1]!))).toBe(true);
   });
 
+  it("accepts package directory entries while inspecting archives", async () => {
+    const target = "win32-arm64-msvc";
+    const candidates = await createCandidateSet(target);
+    const commandRunner = createMockCommandRunner(candidates.packages, {
+      archiveEntries: ["package/", "package/dist/", "package/package.json"],
+    });
+
+    const report = await runPackageSmoke({
+      manifestPath: candidates.manifestPath,
+      target,
+      mode: "structural",
+      expectedTargets: [target],
+      structuralException: {
+        target,
+        certificationClass: "structural",
+        owner: "@release-owner",
+        expires: "2027-01-31",
+        reason: "No matching runtime host is available.",
+      },
+      commandRunner: commandRunner.run,
+    });
+
+    expect(report.status).toBe("pass");
+    expect(commandRunner.calls.filter((call) => call[1] === "-tzf")).toHaveLength(4);
+  });
+
   it("runs install, identity, native parse, and MCP checks for runtime targets", async () => {
     const target = "win32-x64-msvc";
     const candidates = await createCandidateSet(target);

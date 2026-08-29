@@ -144,6 +144,8 @@ function requiredArchiveFile(entry) {
 
 function validateArchiveEntryPath(archiveFile, archivePath) {
   const relativePath = archivePath.slice("package/".length);
+  const pathSegments = relativePath.split("/");
+  if (relativePath.endsWith("/")) pathSegments.pop();
   const unsafe =
     !archivePath.startsWith("package/") ||
     archivePath.includes("\0") ||
@@ -152,7 +154,7 @@ function validateArchiveEntryPath(archiveFile, archivePath) {
     path.win32.isAbsolute(archivePath) ||
     path.posix.isAbsolute(relativePath) ||
     path.win32.isAbsolute(relativePath) ||
-    (relativePath !== "" && relativePath.split("/").some((part) => !part || part === "." || part === ".."));
+    (relativePath !== "" && pathSegments.some((part) => !part || part === "." || part === ".."));
   if (unsafe) {
     throw new PackageCertificationError("archive-invalid", `Archive ${archiveFile} has an unsafe entry path.`, {
       file: archiveFile,
@@ -184,7 +186,9 @@ export async function inspectPackageTarball({ manifest, entry, manifestDirectory
     const extractionResult = await commandRunner("tar", ["-xzf", tarballPath, "-C", extractionDirectory], {
       cwd: manifestDirectory,
     });
-    requireSuccessfulCommand(extractionResult, "archive-invalid", `Extracting archive ${entry.file} failed.`);
+    requireSuccessfulCommand(extractionResult, "archive-invalid", `Extracting archive ${entry.file} failed.`, {
+      file: entry.file,
+    });
     const packageDirectory = path.join(extractionDirectory, "package");
     let packageManifest;
     try {
