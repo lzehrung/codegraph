@@ -115,6 +115,16 @@ function requireSuccessfulCommand(result, code, message, context = {}) {
   }
 }
 
+function requireTarCommand(result, entry, message) {
+  const unavailable = /\bENOENT\b/.test(result.error ?? "");
+  requireSuccessfulCommand(
+    result,
+    unavailable ? "subprocess-unavailable" : "archive-invalid",
+    unavailable ? "Could not run tar for package certification." : message,
+    { file: entry.file },
+  );
+}
+
 function parseJsonOutput(result, code, description) {
   requireSuccessfulCommand(result, code, `${description} failed.`);
   try {
@@ -142,61 +152,142 @@ function requiredArchiveFile(entry) {
   return "dist/bin/cli.js";
 }
 
-export async function inspectPackageTarball({ manifest, entry, manifestDirectory, commandRunner = runPackageCommand }) {
-  const tarballPath = path.resolve(manifestDirectory, entry.file);
-  const result = await commandRunner(
-    npmExecutable(),
-    ["pack", tarballPath, "--json", "--dry-run", "--ignore-scripts"],
-    { cwd: manifestDirectory },
-  );
-  const parsed = parseJsonOutput(result, "archive-invalid", `Archive inspection for ${entry.file}`);
-  const pack = Array.isArray(parsed) ? parsed[0] : null;
-  if (!pack || typeof pack.name !== "string" || typeof pack.version !== "string" || !Array.isArray(pack.files)) {
+function validateArchiveEntryPath(archiveFile, archivePath) {
+  const relativePath = archivePath.slice("package/".length);
+  const pathSegments = relativePath.split("/");
+  if (relativePath.endsWith("/")) pathSegments.pop();
+  const unsafe =
+    !archivePath.startsWith("package/") ||
+    archivePath.includes("\0") ||
+    archivePath.includes("\\") ||
+    path.posix.isAbsolute(archivePath) ||
+    path.win32.isAbsolute(archivePath) ||
+    path.posix.isAbsolute(relativePath) ||
+    path.win32.isAbsolute(relativePath) ||
+    (relativePath !== "" && pathSegments.some((part) => !part || part === "." || part === ".."));
+  if (unsafe) {
+    throw new PackageCertificationError("archive-invalid", `Archive ${archiveFile} has an unsafe entry path.`, {
+      file: archiveFile,
+      path: archivePath,
+    });
+  }
+}
+
+function validateArchiveEntryTypes(archiveFile, output) {
+  const entryTypes = String(output ?? "")
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => line[0]);
+  if (entryTypes.some((entryType) => entryType !== "-" && entryType !== "d")) {
     throw new PackageCertificationError(
       "archive-invalid",
-      `Archive inspection omitted package identity for ${entry.file}.`,
+      `Archive ${archiveFile} contains an unsupported entry type.`,
       {
-        file: entry.file,
+        file: archiveFile,
+        entryTypes,
       },
     );
   }
-  if (pack.name !== entry.package) {
-    const code = entry.target ? "target-mismatch" : "package-identity-mismatch";
-    throw new PackageCertificationError(code, `Archive package name does not match the candidate manifest.`, {
-      file: entry.file,
-      target: entry.target,
-      expected: entry.package,
-      actual: pack.name,
-    });
-  }
-  const expectedVersion = expectedVersionForEntry(manifest, entry);
-  if (pack.version !== expectedVersion) {
-    throw new PackageCertificationError(
-      "package-identity-mismatch",
-      `Archive package version does not match the candidate manifest.`,
-      {
-        file: entry.file,
-        package: entry.package,
-        expected: expectedVersion,
-        actual: pack.version,
-      },
-    );
-  }
-  const archivePaths = pack.files
-    .map((file) => (file && typeof file.path === "string" ? file.path.replaceAll("\\", "/") : ""))
+}
+
+async function validateArchiveEntries({ entry, tarballPath, manifestDirectory, commandRunner }) {
+  const pathResult = await commandRunner("tar", ["-tzf", tarballPath], { cwd: manifestDirectory });
+  requireTarCommand(pathResult, entry, `Listing archive ${entry.file} failed.`);
+  const archivePaths = String(pathResult.rawStdout ?? "")
+    .split(/\r?\n/)
     .filter(Boolean);
-  const requiredFile = requiredArchiveFile(entry);
-  if (!archivePaths.includes("package.json") || !archivePaths.includes(requiredFile)) {
-    throw new PackageCertificationError("archive-invalid", `Archive ${entry.file} is missing required package files.`, {
+  if (!archivePaths.length) {
+    throw new PackageCertificationError("archive-invalid", `Archive ${entry.file} has no entries.`, {
       file: entry.file,
-      requiredFiles: ["package.json", requiredFile],
-      archivePaths,
     });
   }
-  return {
-    identity: { package: pack.name, version: pack.version, file: entry.file, sha256: entry.sha256 },
-    result,
-  };
+  for (const archivePath of archivePaths) validateArchiveEntryPath(entry.file, archivePath);
+
+  const typeResult = await commandRunner("tar", ["-tvzf", tarballPath], { cwd: manifestDirectory });
+  requireTarCommand(typeResult, entry, `Listing archive ${entry.file} types failed.`);
+  validateArchiveEntryTypes(entry.file, typeResult.rawStdout);
+  return [pathResult, typeResult];
+}
+
+export async function inspectPackageTarball({ manifest, entry, manifestDirectory, commandRunner = runPackageCommand }) {
+  const extractionDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-package-inspection-"));
+  try {
+    const tarballPath = path
+      .resolve(entry.absolutePath ?? path.join(manifestDirectory, entry.file))
+      .replaceAll("\\", "/");
+    const [pathResult, typeResult] = await validateArchiveEntries({
+      entry,
+      tarballPath,
+      manifestDirectory,
+      commandRunner,
+    });
+    const extractionResult = await commandRunner("tar", ["-xzf", tarballPath, "-C", extractionDirectory], {
+      cwd: manifestDirectory,
+    });
+    requireTarCommand(extractionResult, entry, `Extracting archive ${entry.file} failed.`);
+    const packageDirectory = path.join(extractionDirectory, "package");
+    let packageManifest;
+    try {
+      packageManifest = JSON.parse(fs.readFileSync(path.join(packageDirectory, "package.json"), "utf8"));
+    } catch (error) {
+      throw new PackageCertificationError("archive-invalid", `Archive ${entry.file} has no valid package.json.`, {
+        file: entry.file,
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (packageManifest.name !== entry.package) {
+      const code = entry.target ? "target-mismatch" : "package-identity-mismatch";
+      throw new PackageCertificationError(code, "Archive package name does not match the candidate manifest.", {
+        file: entry.file,
+        target: entry.target,
+        expected: entry.package,
+        actual: packageManifest.name,
+      });
+    }
+    const expectedVersion = expectedVersionForEntry(manifest, entry);
+    if (packageManifest.version !== expectedVersion) {
+      throw new PackageCertificationError(
+        "package-identity-mismatch",
+        "Archive package version does not match the candidate manifest.",
+        {
+          file: entry.file,
+          package: entry.package,
+          expected: expectedVersion,
+          actual: packageManifest.version,
+        },
+      );
+    }
+    const files = await collectPackageFileRecords(packageDirectory, "archive-invalid");
+    const archivePaths = files.map((file) => file.path);
+    const requiredFile = requiredArchiveFile(entry);
+    if (!archivePaths.includes("package.json") || !archivePaths.includes(requiredFile)) {
+      throw new PackageCertificationError(
+        "archive-invalid",
+        `Archive ${entry.file} is missing required package files.`,
+        {
+          file: entry.file,
+          requiredFiles: ["package.json", requiredFile],
+          archivePaths,
+        },
+      );
+    }
+    return {
+      identity: {
+        package: packageManifest.name,
+        version: packageManifest.version,
+        file: entry.file,
+        sha256: entry.sha256,
+      },
+      files,
+      result: {
+        ...extractionResult,
+        command: `${pathResult.command} && ${typeResult.command} && ${extractionResult.command}`,
+        durationMs: pathResult.durationMs + typeResult.durationMs + extractionResult.durationMs,
+      },
+    };
+  } finally {
+    fs.rmSync(extractionDirectory, { recursive: true, force: true });
+  }
 }
 
 function packageInstallPath(installDirectory, packageName) {
@@ -252,6 +343,7 @@ async function installPackages({ entries, manifestDirectory, installDirectory, r
     "--ignore-scripts",
     "--package-lock=false",
     "--no-audit",
+    "--prefer-offline",
     "--no-fund",
     "--no-save",
     ...(reduced ? ["--omit=optional"] : []),
@@ -292,43 +384,33 @@ function readInstalledIdentity(installDirectory, entry, expectedVersion) {
   return { package: manifest.name, version: manifest.version, packageDirectory };
 }
 
-async function verifyInstalledPackageBytes({ installDirectory, manifestDirectory, entry, commandRunner }) {
+async function verifyInstalledPackageBytes({ installDirectory, entry, expected }) {
+  const startedAt = performance.now();
   const packageDirectory = packageInstallPath(installDirectory, entry.package);
-  const extractionDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-package-contents-"));
-  try {
-    const tarballPath = entry.file.replaceAll("\\", "/");
-    const result = await commandRunner("tar", ["-xzf", tarballPath, "-C", extractionDirectory], {
-      cwd: manifestDirectory,
-    });
-    requireSuccessfulCommand(result, "installed-bytes-mismatch", `Extracting certified tarball ${entry.file} failed.`);
-    const expected = await collectPackageFileRecords(path.join(extractionDirectory, "package"));
-    const actual = await collectPackageFileRecords(packageDirectory);
-    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-      const mismatchedPath = [...new Set([...expected.map((file) => file.path), ...actual.map((file) => file.path)])]
-        .sort()
-        .find((filePath) => {
-          const expectedFile = expected.find((file) => file.path === filePath);
-          const actualFile = actual.find((file) => file.path === filePath);
-          return JSON.stringify(actualFile) !== JSON.stringify(expectedFile);
-        });
-      throw new PackageCertificationError(
-        "installed-bytes-mismatch",
-        `Installed package files differ from certified tarball ${entry.file}.`,
-        {
-          package: entry.package,
-          path: mismatchedPath,
-          expected: expected.find((file) => file.path === mismatchedPath),
-          actual: actual.find((file) => file.path === mismatchedPath),
-        },
-      );
-    }
-    return result;
-  } finally {
-    fs.rmSync(extractionDirectory, { recursive: true, force: true });
+  const actual = await collectPackageFileRecords(packageDirectory);
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    const mismatchedPath = [...new Set([...expected.map((file) => file.path), ...actual.map((file) => file.path)])]
+      .sort()
+      .find((filePath) => {
+        const expectedFile = expected.find((file) => file.path === filePath);
+        const actualFile = actual.find((file) => file.path === filePath);
+        return JSON.stringify(actualFile) !== JSON.stringify(expectedFile);
+      });
+    throw new PackageCertificationError(
+      "installed-bytes-mismatch",
+      `Installed package files differ from certified tarball ${entry.file}.`,
+      {
+        package: entry.package,
+        path: mismatchedPath,
+        expected: expected.find((file) => file.path === mismatchedPath),
+        actual: actual.find((file) => file.path === mismatchedPath),
+      },
+    );
   }
+  return { durationMs: Math.round(performance.now() - startedAt) };
 }
 
-async function collectPackageFileRecords(rootDirectory) {
+async function collectPackageFileRecords(rootDirectory, errorCode = "installed-bytes-mismatch") {
   const records = [];
   const pending = [rootDirectory];
   while (pending.length) {
@@ -343,10 +425,7 @@ async function collectPackageFileRecords(rootDirectory) {
         continue;
       }
       if (!entry.isFile()) {
-        throw new PackageCertificationError(
-          "installed-bytes-mismatch",
-          `Package contents include unsupported entry type: ${filePath}.`,
-        );
+        throw new PackageCertificationError(errorCode, `Package contents include unsupported entry type: ${filePath}.`);
       }
       const stats = fs.statSync(filePath);
       records.push({
@@ -886,10 +965,12 @@ export async function runPackageSmoke(options) {
   }
 
   const packageIdentities = [];
+  const archiveFiles = new Map();
   for (const entry of entries) {
     const inspected = await inspectPackageTarball({ manifest, entry, manifestDirectory, commandRunner });
     checks.push(commandCheck(`archive:${entry.package}`, inspected.result));
     packageIdentities.push(inspected.identity);
+    archiveFiles.set(entry.package, inspected.files);
   }
 
   if (mode === "structural") {
@@ -919,13 +1000,16 @@ export async function runPackageSmoke(options) {
 
     for (const entry of entries) {
       const identity = readInstalledIdentity(install.installDirectory, entry, expectedVersionForEntry(manifest, entry));
-      const repackResult = await verifyInstalledPackageBytes({
+      const expected = archiveFiles.get(entry.package);
+      if (!expected) {
+        throw new PackageCertificationError("archive-invalid", `Missing inspected files for ${entry.package}.`);
+      }
+      const verification = await verifyInstalledPackageBytes({
         installDirectory: install.installDirectory,
-        manifestDirectory,
         entry,
-        commandRunner,
+        expected,
       });
-      checks.push(commandCheck(`installed-bytes:${entry.package}`, repackResult));
+      checks.push(manualCheck(`installed-bytes:${entry.package}`, verification));
       const packageIdentity = packageIdentities.find((candidate) => candidate.package === entry.package);
       if (packageIdentity) packageIdentity.installedPath = identity.packageDirectory;
     }

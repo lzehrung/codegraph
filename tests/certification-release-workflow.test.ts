@@ -27,6 +27,7 @@ describe("certified release workflows", () => {
     const buildNative = jobBlock(releaseWorkflow, "build-native-artifacts");
     const security = jobBlock(releaseWorkflow, "security-production");
     const smoke = jobBlock(releaseWorkflow, "package-smoke");
+    const reducedSmoke = jobBlock(releaseWorkflow, "package-smoke-reduced");
     const packageFunnel = jobBlock(releaseWorkflow, "package-funnel");
     const report = jobBlock(releaseWorkflow, "certification-report");
     expect(releaseWorkflow).toContain("id-token: write");
@@ -58,6 +59,11 @@ describe("certified release workflows", () => {
     expect(report).toContain("- tests-release");
     expect(report).toContain("- fixture-hermeticity");
     expect(publish).toContain("- certification-report");
+    expect(smoke).toContain("cache: npm");
+    expect(packageFunnel).toContain("cache: npm");
+    expect(reducedSmoke).toContain("cache: npm");
+    expect(smoke).toContain('--install-dir "${{ runner.temp }}/codegraph-package-smoke"');
+    expect(reducedSmoke).toContain('--install-dir "${{ runner.temp }}/codegraph-package-smoke"');
     expect(releaseWorkflow).not.toContain("build-standalone-archives");
     expect(releaseWorkflow).not.toContain("standalone-funnel");
     expect(releaseWorkflow).not.toContain("standalone-release-assets");

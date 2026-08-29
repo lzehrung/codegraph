@@ -354,6 +354,7 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 24.10.0
+          cache: npm
 
       - name: Download release candidates
         uses: actions/download-artifact@v8
@@ -369,6 +370,7 @@ jobs:
           --manifest temp/release-candidates/release-candidate-manifest.json
           --target ${{ matrix.target }}
           --mode ${{ matrix.mode }}
+          --install-dir "${{ runner.temp }}/codegraph-package-smoke"
           --output temp/certification/package-smoke-${{ matrix.target }}.json
 
       - name: Run matching Alpine package smoke
@@ -439,6 +441,7 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 24.10.0
+          cache: npm
 
       - name: Download immutable release candidates
         uses: actions/download-artifact@v8
@@ -495,6 +498,7 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 24.10.0
+          cache: npm
 
       - name: Download release candidates
         uses: actions/download-artifact@v8
@@ -507,6 +511,7 @@ jobs:
           node ./scripts/certification/run-package-smoke.mjs
           --manifest temp/release-candidates/release-candidate-manifest.json
           --mode reduced
+          --install-dir "${{ runner.temp }}/codegraph-package-smoke"
           --output temp/certification/package-smoke-reduced.json
 
       - name: Upload reduced package smoke report
