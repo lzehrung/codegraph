@@ -154,12 +154,16 @@ export type ProjectFileDiscoveryOptions = {
    */
   knownSymlinkDirectories?: readonly string[];
   onSymlinkDirectoriesDiscovered?: (directories: readonly string[], mode: SymlinkProbeMode) => void;
-  /**
-   * Git candidate set already enumerated for this root. When provided (including `null`),
-   * metadata discovery reuses it and does not spawn Git. Omit it to enumerate through Git
-   * when available. Pair with `onGitCandidatesDiscovered` the same way symlink hints pair
-   * with `onSymlinkDirectoriesDiscovered`.
-   */
+};
+
+type InternalProjectFileDiscoveryOptions = ProjectFileDiscoveryOptions & {
+  onGitCandidatesDiscovered?: (candidates: GitCandidateSet | null) => void;
+};
+
+type ProjectMetadataDiscoveryOptions = Pick<
+  ProjectFileDiscoveryOptions,
+  "logLevel" | "knownSymlinkDirectories" | "onSymlinkDirectoriesDiscovered"
+> & {
   knownGitCandidates?: GitCandidateSet | null;
   onGitCandidatesDiscovered?: (candidates: GitCandidateSet | null) => void;
 };
@@ -549,6 +553,22 @@ export async function listProjectFiles(
   patterns = DEFAULT_PROJECT_PATTERNS,
   options?: ProjectFileDiscoveryOptions,
 ): Promise<string[]> {
+  return await listProjectFilesInternal(projectRoot, patterns, options);
+}
+
+export async function listProjectFilesWithGitCandidates(
+  projectRoot: string,
+  patterns = DEFAULT_PROJECT_PATTERNS,
+  options?: InternalProjectFileDiscoveryOptions,
+): Promise<string[]> {
+  return await listProjectFilesInternal(projectRoot, patterns, options);
+}
+
+async function listProjectFilesInternal(
+  projectRoot: string,
+  patterns = DEFAULT_PROJECT_PATTERNS,
+  options?: InternalProjectFileDiscoveryOptions,
+): Promise<string[]> {
   const root = await ensureDirectoryReadable(projectRoot, "Project root");
   const globRoot = options?.globRoot ? await ensureDirectoryReadable(options.globRoot, "Glob root") : root;
   const includeGlobs = (options?.includeGlobs ?? []).map(normalizeGlobPattern).filter(Boolean);
@@ -922,13 +942,7 @@ async function buildProjectFileInfo(def: ProjectFileDefinition, filePath: string
 
 export async function discoverProjectFiles(
   projectRoot: string,
-  options?: {
-    logLevel?: LogLevel;
-    knownSymlinkDirectories?: readonly string[];
-    onSymlinkDirectoriesDiscovered?: (directories: readonly string[], mode: SymlinkProbeMode) => void;
-    knownGitCandidates?: GitCandidateSet | null;
-    onGitCandidatesDiscovered?: (candidates: GitCandidateSet | null) => void;
-  },
+  options?: ProjectMetadataDiscoveryOptions,
 ): Promise<ProjectFileInfo[]> {
   const root = await ensureDirectoryReadable(projectRoot, "Project root");
   try {
@@ -1012,18 +1026,25 @@ export async function discoverProjectFiles(
           resolvedSafeSymlinkDirectories: safeSymlinkDirectories,
         },
       );
-      const filteredFiles = filterGitIgnoredEntries(
-        await filterRealPathsWithinRootEntries(gitCandidates.files, realRoot),
-      );
+      const rootSafeCandidateEntries = await filterRealPathsWithinRootEntries(gitCandidates.files, realRoot);
+      const filteredFiles = filterGitIgnoredEntries(rootSafeCandidateEntries);
       const fileMatches = filteredFiles.filter((file) =>
         PROJECT_FILE_DEFINITIONS.some(
           (definition, definitionIndex) =>
             definition.kind === "file" && matchesDefinition(path.basename(file), definitionIndex),
         ),
       );
+      const rawCandidateDirectories = collectCandidateAncestorDirectories(
+        root,
+        rootSafeCandidateEntries.map(({ path: filePath }) => filePath),
+      );
+      const candidateDirectoryKeys = new Set(rawCandidateDirectories.map(fileIdentityKey));
       const safeSymlinkDirectoryKeys = new Set(safeSymlinkDirectories.map(fileIdentityKey));
       const directoryMatches = [
-        ...collectCandidateAncestorDirectories(root, filteredFiles),
+        ...filterGitIgnoredEntries(
+          await filterRealPathsWithinRootEntries(rawCandidateDirectories, realRoot),
+          candidateDirectoryKeys,
+        ),
         ...filterGitIgnoredEntries(
           await filterRealPathsWithinRootEntries(safeSymlinkDirectories, realRoot),
           safeSymlinkDirectoryKeys,

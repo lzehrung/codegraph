@@ -9,7 +9,7 @@ import { loadWorkspaceConfig, resolveWorkspacePackage, type WorkspaceConfig } fr
 import {
   DEFAULT_PROJECT_PATTERNS,
   discoverProjectFiles,
-  listProjectFiles,
+  listProjectFilesWithGitCandidates,
   type GitCandidateSet,
   type ProjectFileInfo,
 } from "../util/projectFiles.js";
@@ -1127,13 +1127,17 @@ async function buildProjectIndexWithManifestOptions(
     // sequentially rather than in Promise.all to avoid duplicate full-tree probes. The Git
     // candidate callback below reuses that same listing so metadata discovery does not spawn
     // Git a second time.
-    const discoveredFiles = await listProjectFiles(projectRoot, projectPatternsForLanguageExtensions(opts), {
-      ...opts?.discovery,
-      ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-      ...(knownSymlinkDirectories !== undefined ? { knownSymlinkDirectories } : {}),
-      onSymlinkDirectoriesDiscovered,
-      onGitCandidatesDiscovered,
-    });
+    const discoveredFiles = await listProjectFilesWithGitCandidates(
+      projectRoot,
+      projectPatternsForLanguageExtensions(opts),
+      {
+        ...opts?.discovery,
+        ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+        ...(knownSymlinkDirectories !== undefined ? { knownSymlinkDirectories } : {}),
+        onSymlinkDirectoriesDiscovered,
+        onGitCandidatesDiscovered,
+      },
+    );
     const additionalFileCandidates = await normalizeIndexedFileInputsWithinRoot(
       projectRoot,
       opts?.additionalFiles ?? [],
@@ -1463,16 +1467,20 @@ export async function buildProjectIndexIncremental(
         return await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
       }
     } else if (!opts?.filesAreProjectScope) {
-      rediscoveredFiles = await listProjectFiles(projectRoot, projectPatternsForLanguageExtensions(opts), {
-        ...opts?.discovery,
-        ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-        ...(!opts?.cacheStrict && manifest.symlinkDirectories !== undefined
-          ? { knownSymlinkDirectories: manifest.symlinkDirectories }
-          : {}),
-        onGitCandidatesDiscovered: (candidates) => {
-          discoveredGitCandidates = candidates;
+      rediscoveredFiles = await listProjectFilesWithGitCandidates(
+        projectRoot,
+        projectPatternsForLanguageExtensions(opts),
+        {
+          ...opts?.discovery,
+          ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+          ...(!opts?.cacheStrict && manifest.symlinkDirectories !== undefined
+            ? { knownSymlinkDirectories: manifest.symlinkDirectories }
+            : {}),
+          onGitCandidatesDiscovered: (candidates) => {
+            discoveredGitCandidates = candidates;
+          },
         },
-      });
+      );
     }
     const candidateFiles = [
       ...explicitFiles,

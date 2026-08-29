@@ -7,6 +7,7 @@ import { DEFAULT_PROJECT_MANIFESTS } from "../src/util.js";
 import {
   createDiscoveredFileMatcher,
   isRelativePathInside,
+  listProjectFilesWithGitCandidates,
   translateGlobRootIgnoreGlobsForScanRoot,
   type GitCandidateSet,
 } from "../src/util/projectFiles.js";
@@ -1248,6 +1249,19 @@ describe("git-native project file discovery", () => {
     expect(paths.has(normalize(path.join(linkedPackage, "package.json")))).toBe(false);
   });
 
+  it("keeps an unignored directory marker whose tracked descendants are ignored", async () => {
+    const root = await makeRepo("codegraph-discovery-meta-ignored-descendants-");
+    const ideaDirectory = path.join(root, ".idea");
+    await createFile(path.join(root, ".gitignore"), ".idea/*\n");
+    await createFile(path.join(ideaDirectory, "workspace.xml"), "<project />\n");
+    git(root, ["add", ".gitignore"]);
+    git(root, ["add", "-f", ".idea/workspace.xml"]);
+    git(root, ["commit", "-m", "ignored descendants"]);
+
+    const entry = (await discoverProjectFiles(root)).find((item) => normalize(item.path) === normalize(ideaDirectory));
+    expect(entry).toMatchObject({ kind: "dir" });
+  });
+
   it("discovers a safe directory symlink that is itself a metadata marker", async () => {
     const root = await makeRepo("codegraph-discovery-meta-symlink-marker-");
     const target = path.join(root, "packages", "app");
@@ -1419,7 +1433,7 @@ describe("git-native project file discovery", () => {
     git(root, ["commit", "-m", "fixtures"]);
 
     let known: GitCandidateSet | null | undefined;
-    await listProjectFiles(root, undefined, {
+    await listProjectFilesWithGitCandidates(root, undefined, {
       onGitCandidatesDiscovered: (candidates) => {
         known = candidates;
       },
