@@ -203,11 +203,20 @@ function createMockCommandRunner(
       }
       return success("installed local tarballs");
     }
-    if (command === "tar" && args[0] === "-tzf") {
+    if (command === "tar" && (args[0] === "-tzf" || args[0] === "-tvzf")) {
       const pkg = byTarball.get(path.resolve(commandOptions.cwd ?? "", args[1] ?? ""));
       if (!pkg) throw new Error(`Unexpected archive listing ${String(args[1])}`);
       const entries = options.archiveEntries ?? pkg.pack.files.map((file) => `package/${file.path}`);
-      return success(entries.join("\n"));
+      if (args[0] === "-tzf") return success(entries.join("\n"));
+      return success(
+        entries
+          .map((entry, index) => {
+            let entryType = entry.endsWith("/") ? "d" : "-";
+            if (options.unsupportedArchiveEntry && index === 0) entryType = "l";
+            return `${entryType}rw-r--r-- package package 0 2026-01-01 00:00 ${entry}`;
+          })
+          .join("\n"),
+      );
     }
     if (command === "tar" && args[0] === "-xzf") {
       const pkg = byTarball.get(path.resolve(commandOptions.cwd ?? "", args[1] ?? ""));
@@ -215,9 +224,6 @@ function createMockCommandRunner(
       const destination = args[args.indexOf("-C") + 1];
       if (!destination) throw new Error("Mocked archive extraction omitted destination");
       fs.cpSync(pkg.sourceDirectory, path.join(destination, "package"), { recursive: true });
-      if (options.unsupportedArchiveEntry) {
-        fs.symlinkSync("package.json", path.join(destination, "package", "unsupported-link"), "file");
-      }
       if (options.wrongTargetPackage && pkg.name.includes("native-win32")) {
         const manifestPath = path.join(destination, "package", "package.json");
         const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
@@ -291,8 +297,10 @@ describe("package smoke modes", () => {
 
     expect(report.status).toBe("pass");
     expect(report.mode).toBe("structural");
-    expect(commandRunner.calls).toHaveLength(8);
-    expect(commandRunner.calls.every((call) => call[0] === "tar" && ["-tzf", "-xzf"].includes(call[1]!))).toBe(true);
+    expect(commandRunner.calls).toHaveLength(12);
+    expect(commandRunner.calls.every((call) => call[0] === "tar" && ["-tzf", "-tvzf", "-xzf"].includes(call[1]!))).toBe(
+      true,
+    );
   });
 
   it("accepts package directory entries while inspecting archives", async () => {
@@ -319,6 +327,7 @@ describe("package smoke modes", () => {
 
     expect(report.status).toBe("pass");
     expect(commandRunner.calls.filter((call) => call[1] === "-tzf")).toHaveLength(4);
+    expect(commandRunner.calls.filter((call) => call[1] === "-tvzf")).toHaveLength(4);
   });
 
   it("runs install, identity, native parse, and MCP checks for runtime targets", async () => {
@@ -349,7 +358,7 @@ describe("package smoke modes", () => {
     expect(mcpCalls).toEqual(["initialize", "tools/list", "tools/call:search"]);
     expect(commandRunner.calls.some((call) => call[1] === "install")).toBe(true);
     expect(commandRunner.calls.find((call) => call[1] === "install")).toContain("--prefer-offline");
-    expect(commandRunner.calls.filter((call) => call[0] === "tar")).toHaveLength(8);
+    expect(commandRunner.calls.filter((call) => call[0] === "tar")).toHaveLength(12);
     expect(commandRunner.calls.some((call) => call.includes("--pack-destination"))).toBe(false);
   });
 
@@ -429,5 +438,6 @@ describe("package smoke modes", () => {
         commandRunner: commandRunner.run,
       }),
     ).rejects.toMatchObject({ code: "archive-invalid" });
+    expect(commandRunner.calls.some((call) => call[1] === "-xzf")).toBe(false);
   });
 });

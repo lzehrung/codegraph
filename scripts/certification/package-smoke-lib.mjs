@@ -163,10 +163,29 @@ function validateArchiveEntryPath(archiveFile, archivePath) {
   }
 }
 
+function validateArchiveEntryTypes(archiveFile, output) {
+  const entryTypes = String(output ?? "")
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => line[0]);
+  if (entryTypes.some((entryType) => entryType !== "-" && entryType !== "d")) {
+    throw new PackageCertificationError(
+      "archive-invalid",
+      `Archive ${archiveFile} contains an unsupported entry type.`,
+      {
+        file: archiveFile,
+        entryTypes,
+      },
+    );
+  }
+}
+
 async function validateArchiveEntries({ entry, tarballPath, manifestDirectory, commandRunner }) {
-  const result = await commandRunner("tar", ["-tzf", tarballPath], { cwd: manifestDirectory });
-  requireSuccessfulCommand(result, "archive-invalid", `Listing archive ${entry.file} failed.`, { file: entry.file });
-  const archivePaths = String(result.rawStdout ?? "")
+  const pathResult = await commandRunner("tar", ["-tzf", tarballPath], { cwd: manifestDirectory });
+  requireSuccessfulCommand(pathResult, "archive-invalid", `Listing archive ${entry.file} failed.`, {
+    file: entry.file,
+  });
+  const archivePaths = String(pathResult.rawStdout ?? "")
     .split(/\r?\n/)
     .filter(Boolean);
   if (!archivePaths.length) {
@@ -175,14 +194,25 @@ async function validateArchiveEntries({ entry, tarballPath, manifestDirectory, c
     });
   }
   for (const archivePath of archivePaths) validateArchiveEntryPath(entry.file, archivePath);
-  return result;
+
+  const typeResult = await commandRunner("tar", ["-tvzf", tarballPath], { cwd: manifestDirectory });
+  requireSuccessfulCommand(typeResult, "archive-invalid", `Listing archive ${entry.file} types failed.`, {
+    file: entry.file,
+  });
+  validateArchiveEntryTypes(entry.file, typeResult.rawStdout);
+  return [pathResult, typeResult];
 }
 
 export async function inspectPackageTarball({ manifest, entry, manifestDirectory, commandRunner = runPackageCommand }) {
   const extractionDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-package-inspection-"));
   try {
     const tarballPath = entry.file.replaceAll("\\", "/");
-    const listingResult = await validateArchiveEntries({ entry, tarballPath, manifestDirectory, commandRunner });
+    const [pathResult, typeResult] = await validateArchiveEntries({
+      entry,
+      tarballPath,
+      manifestDirectory,
+      commandRunner,
+    });
     const extractionResult = await commandRunner("tar", ["-xzf", tarballPath, "-C", extractionDirectory], {
       cwd: manifestDirectory,
     });
@@ -245,8 +275,8 @@ export async function inspectPackageTarball({ manifest, entry, manifestDirectory
       files,
       result: {
         ...extractionResult,
-        command: `${listingResult.command} && ${extractionResult.command}`,
-        durationMs: listingResult.durationMs + extractionResult.durationMs,
+        command: `${pathResult.command} && ${typeResult.command} && ${extractionResult.command}`,
+        durationMs: pathResult.durationMs + typeResult.durationMs + extractionResult.durationMs,
       },
     };
   } finally {
