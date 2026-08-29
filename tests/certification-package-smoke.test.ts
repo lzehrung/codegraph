@@ -306,6 +306,7 @@ describe("package smoke modes", () => {
     expect(commandRunner.calls.every((call) => call[0] === "tar" && ["-tzf", "-tvzf", "-xzf"].includes(call[1]!))).toBe(
       true,
     );
+    expect(commandRunner.calls.every((call) => path.isAbsolute(call[2]!))).toBe(true);
   });
 
   it("accepts package directory entries while inspecting archives", async () => {

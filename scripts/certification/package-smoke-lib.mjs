@@ -212,7 +212,9 @@ async function validateArchiveEntries({ entry, tarballPath, manifestDirectory, c
 export async function inspectPackageTarball({ manifest, entry, manifestDirectory, commandRunner = runPackageCommand }) {
   const extractionDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-package-inspection-"));
   try {
-    const tarballPath = entry.file.replaceAll("\\", "/");
+    const tarballPath = path
+      .resolve(entry.absolutePath ?? path.join(manifestDirectory, entry.file))
+      .replaceAll("\\", "/");
     const [pathResult, typeResult] = await validateArchiveEntries({
       entry,
       tarballPath,
