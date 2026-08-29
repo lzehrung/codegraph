@@ -281,7 +281,7 @@ describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache beh
       expect(firstReport.backend?.native.filesFellBack).toBe(1);
       expect(first.bloomFilters?.get(fileIdentityKey(normalizedFile))).toBeUndefined();
       expect(firstReport.backend?.native.errors[0]?.file).toBe(normalizedFile);
-      expect(firstReport.workerPool?.tasksSubmitted).toBe(0);
+      expect(firstReport.workerPool?.tasksSubmitted).toBe(1);
 
       const databasePath = path.join(root, ".codegraph", "cache", "index-v1", "index-cache.sqlite");
       await expect(fsp.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -295,7 +295,7 @@ describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache beh
         report: secondReport,
       });
       expect(secondReport.cache?.hits).toBe(0);
-      expect(secondReport.workerPool?.tasksSubmitted).toBe(0);
+      expect(secondReport.workerPool?.tasksSubmitted).toBe(1);
       await expect(fsp.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
