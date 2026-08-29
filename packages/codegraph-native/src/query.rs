@@ -229,6 +229,24 @@ pub(crate) fn execute_language_queries_separately(
 }
 
 #[cfg(test)]
+pub(crate) fn try_execute_merged_language_queries(
+    source: &str,
+    root: tree_sitter::Node<'_>,
+    language: &Language,
+    language_id: &str,
+    queries: LanguageQueryTexts<'_>,
+) -> Result<Option<NativeQueryResults>> {
+    try_execute_merged_language_queries_with_limit(
+        source,
+        root,
+        language,
+        language_id,
+        queries,
+        None,
+    )
+}
+
+#[cfg(test)]
 pub(crate) fn try_execute_merged_language_queries_with_match_limit(
     source: &str,
     root: tree_sitter::Node<'_>,

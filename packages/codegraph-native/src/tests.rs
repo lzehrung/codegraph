@@ -7,7 +7,7 @@ use crate::languages::language_for_id;
 use crate::parser_pool::{parse_invocations_for_tests, reset_parse_invocations_for_tests};
 use crate::query::{
     execute_language_queries_cached_with_match_limit, execute_language_queries_separately, execute_query,
-    try_execute_merged_language_queries_with_match_limit, LanguageQueryTexts,
+    try_execute_merged_language_queries, try_execute_merged_language_queries_with_match_limit, LanguageQueryTexts,
 };
 use crate::types::NativeMatch;
 use std::collections::HashSet;
@@ -249,31 +249,34 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
                 .expect("supported language should resolve to a parser language");
             let tree = parse_root(source, language_id.as_str());
             let two_patterns = format!("{query}\n{query}");
+            let queries = LanguageQueryTexts {
+                imports: query,
+                exports: two_patterns.as_str(),
+                locals: "",
+                import_bindings: query,
+            };
             let separate = execute_language_queries_separately(
                 source,
                 tree.root_node(),
                 &language,
                 language_id.as_str(),
-                LanguageQueryTexts {
-                    imports: query,
-                    exports: two_patterns.as_str(),
-                    locals: "",
-                    import_bindings: query,
-                },
+                queries,
             )
             .unwrap_or_else(|error| {
                 panic!("separate query execution failed for {language_id}: {error}")
             });
-            let merged = run_language_queries(
-                source.to_string(),
-                language_id.clone(),
-                query.to_string(),
-                two_patterns,
-                "".to_string(),
-                query.to_string(),
+            let merged = try_execute_merged_language_queries(
+                source,
+                tree.root_node(),
+                &language,
+                language_id.as_str(),
+                queries,
             )
             .unwrap_or_else(|error| {
                 panic!("merged query execution failed for {language_id}: {error}")
+            })
+            .unwrap_or_else(|| {
+                panic!("merged query should compile for {language_id}");
             });
 
             assert_eq!(
