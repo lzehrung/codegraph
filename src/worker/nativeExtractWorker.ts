@@ -162,7 +162,12 @@ function resolveSourceMaxBytes(task: NativeExtractTask): number {
   return DEFAULT_NATIVE_SOURCE_MAX_BYTES;
 }
 
-function resourceLimitFallback(task: NativeExtractTask, source: string, error: string): NativeExtractResult {
+function resourceLimitFallback(
+  task: NativeExtractTask,
+  source: string,
+  error: string,
+  bloomFilter?: NativeBloomFilterPayload,
+): NativeExtractResult {
   const includeSource = task.includeSourceInResult ?? true;
   return {
     filePath: task.filePath,
@@ -171,6 +176,7 @@ function resourceLimitFallback(task: NativeExtractTask, source: string, error: s
     nativeResults: null,
     compactResults: null,
     syntaxTree: null,
+    ...(bloomFilter ? { bloomFilter } : {}),
     fallbackReason: "queryFailure",
     error,
   };
@@ -331,7 +337,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (/max (node|depth) limit/i.test(message)) {
-        return resourceLimitFallback(task, source, message);
+        return resourceLimitFallback(task, source, message, bloomFilter);
       }
       return {
         filePath: task.filePath,

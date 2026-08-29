@@ -201,6 +201,7 @@ describe("native extraction resource limits", () => {
   });
 
   it("surfaces native projection depth/node limit errors as structured fallbacks", async () => {
+    const source = "export const projectionFallbackBloom = 1;\n";
     const extractor = createNativeExtractor({
       loadBinding: () => ({
         binding: {
@@ -212,12 +213,13 @@ describe("native extraction resource limits", () => {
         } satisfies NativeBinding,
         origin: { mode: "workspace" as const, packageName: "@lzehrung/codegraph-native" },
       }),
-      readFile: async () => "export const value = 1;\n",
+      readFile: async () => source,
     });
 
     const result = await extractor({
       filePath: "deep.ts",
       languageId: "ts",
+      includeBloomFilter: true,
       importsQuery: "",
       exportsQuery: "",
       localsQuery: "",
@@ -228,6 +230,17 @@ describe("native extraction resource limits", () => {
     expect(result.nativeResults).toBeNull();
     expect(result.syntaxTree).toBeNull();
     expect(result.error).toMatch(/max depth limit/i);
+    expect(result.bloomFilter).toBeDefined();
+    if (!result.bloomFilter) throw new Error("Expected a projection-fallback bloom filter.");
+    const expectedFilter = buildBloomFilterFromSource(source, TS_SUPPORT);
+    expect(
+      BloomFilter.fromBuffer(
+        Buffer.from(result.bloomFilter.bits),
+        result.bloomFilter.size,
+        result.bloomFilter.hashCount,
+        result.bloomFilter.itemCount,
+      ).toBuffer(),
+    ).toEqual(expectedFilter.toBuffer());
   });
 
   it("keeps ordinary in-budget extraction successful", async () => {
@@ -297,6 +310,37 @@ describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache beh
       expect(secondReport.cache?.hits).toBe(0);
       expect(secondReport.workerPool?.tasksSubmitted).toBe(1);
       await expect(fsp.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("hydrates a worker-built bloom filter through Piscina", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-worker-bloom-"));
+    const file = path.join(root, "worker-bloom.ts");
+    const source = "export const workerPiscinaBloom = 1;\n";
+    await fsp.writeFile(file, source, "utf8");
+
+    try {
+      const report: BuildReport = { timings: {} };
+      const index = await buildProjectIndexFromFiles(root, [file], {
+        cache: "off",
+        native: "on",
+        nativeThreads: 1,
+        useNativeWorkers: true,
+        report,
+      });
+      const filter = index.bloomFilters?.get(fileIdentityKey(normalizePath(file)));
+      if (!filter) throw new Error("Expected a worker-built bloom filter.");
+      const expected = buildBloomFilterFromSource(source, TS_SUPPORT);
+
+      expect(report.workerPool?.enabled).toBe(true);
+      expect(report.workerPool?.tasksSubmitted).toBe(1);
+      expect(filter.toBuffer()).toEqual(expected.toBuffer());
+      expect(filter.getMetadata()).toEqual(expected.getMetadata());
+      expect(filter.getItemCount()).toBe(expected.getItemCount());
+      expect(filter.mightContain("workerPiscinaBloom")).toBe(expected.mightContain("workerPiscinaBloom"));
+      expect(filter.mightContain("notInWorkerPiscinaBloom")).toBe(expected.mightContain("notInWorkerPiscinaBloom"));
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
