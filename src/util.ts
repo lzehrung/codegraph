@@ -36,8 +36,6 @@ export {
   listProjectFiles,
 } from "./util/projectFiles.js";
 export type {
-  GitCandidateSet,
-  GitignoreSource,
   ProjectFileDiscoveryOptions,
   ProjectFileInfo,
   ProjectFileKind,

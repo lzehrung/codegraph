@@ -41,8 +41,6 @@ export {
 
 /** Project file discovery option and result shapes. */
 export type {
-  GitCandidateSet,
-  GitignoreSource,
   ProjectFileDiscoveryOptions,
   ProjectFileInfo,
   ProjectFileKind,

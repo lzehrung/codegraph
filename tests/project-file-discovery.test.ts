@@ -2,12 +2,13 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
-import { buildProjectIndex, listProjectFiles, discoverProjectFiles, type GitCandidateSet } from "../src/index.js";
+import { buildProjectIndex, listProjectFiles, discoverProjectFiles } from "../src/index.js";
 import { DEFAULT_PROJECT_MANIFESTS } from "../src/util.js";
 import {
   createDiscoveredFileMatcher,
   isRelativePathInside,
   translateGlobRootIgnoreGlobsForScanRoot,
+  type GitCandidateSet,
 } from "../src/util/projectFiles.js";
 import { parseDotnetName, parseGoModuleName, parsePomName, parseTomlName } from "../src/util/projectFiles/parsers.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
