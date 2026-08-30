@@ -334,6 +334,7 @@ async function preparePackageRuntime(context) {
     "npm",
     [
       "install",
+      "--ignore-scripts",
       "--prefix",
       context.isolation.paths.npmPrefix,
       "--no-save",
