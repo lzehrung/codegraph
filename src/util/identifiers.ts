@@ -17,13 +17,6 @@ export function hasNonAsciiCodePoint(value: string, includeC0Controls = false): 
 export const ECMASCRIPT_IDENTIFIER_SOURCE = String.raw`[$_\p{ID_Start}](?:[$_\p{ID_Continue}]|\u200c|\u200d)*`;
 
 /**
- * Duplicate-tokenizer identifiers intentionally mirror the native `unicode_ident` grammar:
- * XID properties plus `$`, `_`, `Other_ID_*`, and ZWNJ/ZWJ. Fingerprints require
- * cross-implementation determinism rather than ECMAScript conformance.
- */
-export const DUPLICATE_TOKENIZER_IDENTIFIER_SOURCE = String.raw`[$_\p{XID_Start}\u1885\u1886\u2118\u212E\u309B\u309C](?:[$_\p{XID_Continue}\u00B7\u0387\u1369-\u1371\u19DA\u200C\u200D\u1885\u1886\u2118\u212E\u309B\u309C])*`;
-
-/**
  * Bloom-filter tokenization deliberately accepts a superset of every supported identifier
  * grammar: false positives only add verification work, while false negatives can hide a
  * reference. It includes all non-ASCII code points for PHP's unrestricted high bytes; Java's

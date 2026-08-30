@@ -26,6 +26,16 @@ GitHub Releases remain the certified publish record. This file summarizes produc
   once a batch is large enough to amortize thread startup, so incremental updates and small
   projects no longer pay for spawning and tearing down worker threads.
 
+### Fixed
+
+- Duplicate fingerprints no longer depend on the host Node build's Unicode version. The
+  TypeScript tokenizer read Unicode property escapes while the native tokenizer is pinned to
+  Unicode 16, so on Node builds carrying newer Unicode data the two disagreed on characters such
+  as U+088F and the same file fingerprinted differently with and without the native addon. The
+  TypeScript grammar now comes from generated ranges pinned to the native tokenizer's version.
+- `packages/codegraph-native/Cargo.lock` is committed instead of ignored, so the published native
+  binaries build from a reproducible dependency graph.
+
 ## [2.3.2] - 2026-08-28
 
 ### Changed

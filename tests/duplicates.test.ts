@@ -15,6 +15,10 @@ import {
 } from "../src/native/treeSitterNative.js";
 import { DUPLICATE_IDENTIFIER_KEYWORDS } from "../src/duplicate-keywords.js";
 import { normalizeDuplicateSourceTokens } from "../src/duplicate-token-normalization.js";
+import {
+  DUPLICATE_IDENTIFIER_CONTINUE_RANGES,
+  DUPLICATE_IDENTIFIER_START_RANGES,
+} from "../src/duplicate-identifier-ranges.js";
 import { getDuplicateAstContext } from "../src/duplicates/units.js";
 import {
   DUPLICATE_UNIT_CACHE_VERSION,
@@ -603,6 +607,48 @@ export function normalizeSecondRows(rows: Array<{ count: number; price: number }
     expect(ascii).toEqual(unicodeGreek);
     expect(unicodeNfc.join(" ")).not.toMatch(/café|cafe|αβγ/i);
     expect(otherIdStart.join(" ")).not.toMatch(/\u2118/);
+  });
+
+  test("pins the duplicate identifier grammar instead of the host Unicode version", async () => {
+    // U+088F is XID_Start from Unicode 17 onward and is not one in the Unicode 16 tables the
+    // native tokenizer is pinned to. Reading \p{XID_Start} at runtime would make this answer
+    // depend on the host Node build's ICU, so the same file would fingerprint differently on
+    // different Node versions. Update this case only alongside a deliberate grammar change.
+    expect(normalizeDuplicateSourceTokens("\u088F")).toEqual(["\u088F"]);
+    expect(normalizeDuplicateSourceTokens("caf\u00E9")).toEqual(["<identifier>"]);
+
+    const tokenizerSource = await fsp.readFile(
+      path.resolve(process.cwd(), "src", "duplicate-token-normalization.ts"),
+      "utf8",
+    );
+    expect(tokenizerSource).not.toContain("p{XID_");
+  });
+
+  test("keeps the generated duplicate identifier ranges canonical", () => {
+    for (const ranges of [DUPLICATE_IDENTIFIER_START_RANGES, DUPLICATE_IDENTIFIER_CONTINUE_RANGES]) {
+      expect(ranges.length).toBeGreaterThan(0);
+      let previousEnd = -2;
+      for (const [from, to] of ranges) {
+        expect(from).toBeLessThanOrEqual(to);
+        expect(to).toBeLessThanOrEqual(0x10ffff);
+        // Sorted, non-overlapping, and never adjacent: adjacent ranges would mean the generator
+        // emitted a split that a regenerated table would merge, so `--check` would flap.
+        expect(from).toBeGreaterThan(previousEnd + 1);
+        previousEnd = to;
+      }
+    }
+
+    const startCodePoints = new Set<number>();
+    for (const [from, to] of DUPLICATE_IDENTIFIER_START_RANGES) {
+      for (let codePoint = from; codePoint <= to; codePoint += 1) startCodePoints.add(codePoint);
+    }
+    // Every start character must also be a continuation character; the reverse does not hold.
+    for (const codePoint of startCodePoints) {
+      const isContinue = DUPLICATE_IDENTIFIER_CONTINUE_RANGES.some(
+        ([from, to]) => codePoint >= from && codePoint <= to,
+      );
+      expect(isContinue, `U+${codePoint.toString(16)} starts an identifier but cannot continue one`).toBe(true);
+    }
   });
 
   duplicateTokenizerParityTest(
