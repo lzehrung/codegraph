@@ -51,14 +51,11 @@ Use `--root` to define the boundary for config lookup, path confinement, and out
 
 ### Understand
 
-- answer a question with bounded evidence: `codegraph explore "how does auth reach db?" --root .`
-- find a ranked anchor: `codegraph search "auth user" --json`
-- resolve a known symbol identity: `codegraph symbols "CodeReviewSession" --root .`
-- explain a known target: `codegraph explain <file|symbol|sql-object|handle>`
-- retrieve bounded indexed context: `codegraph packet get <file|symbol|sql-object|handle>`
-- read current disk content: `codegraph file <path> --offset 1 --limit 200`
-
-`explore` makes one default hybrid retrieval pass across symbols, paths, indexed text chunks, and graph evidence, then derives ranked anchors, bounded packets, dependency paths, blast radius, candidate tests, explicit limits, omission counts, and copyable follow-ups from those anchors. It does not decompose a compound question, plan more searches, infer unstated relations, or prove runtime behavior. `analysis.mode: "semantic"` identifies parser-backend quality, not semantic or agentic query reasoning. For a compound question, search concrete names and terms separately, then explain or retrieve packets for the strongest handles. CLI `explore` includes source packets and exact-path `fileView` by default because people read its inline output; use `--no-source` when anchors, paths, and follow-up commands are enough. JSON keeps the stable `schemaVersion: 1` fields and `followUps` array as tool-call descriptors (`{tool, arguments, label?}`), not CLI strings. Hybrid search is code-first by default, and search, explain, explore, and review preserve analysis labels so reduced or mixed runs remain visible.
+- map a repo: `codegraph orient --root . --budget small`
+- find a target: `codegraph symbols "CodeReviewSession"` / `codegraph search "auth user"` / `codegraph grep "spawn|timeout"`
+- navigate a symbol: `codegraph refs <handle>` → `codegraph callers <handle>` → `codegraph rdeps <file|handle>`
+- explain or retrieve a target: `codegraph explain <handle>` or `codegraph packet get <handle>`
+- use `codegraph explore` only for one hybrid search plus context from top results
 
 Use `search --no-snippets` when handles and paths are sufficient and source text will be fetched separately with `file`. Use `explain --changed-context` for bounded source context around changed ranges in changed-file or review workflows.
 

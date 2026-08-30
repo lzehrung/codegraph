@@ -9,11 +9,7 @@ export type CliCommandMetadata = {
 
 export const CLI_COMMAND_CATALOG: readonly CliCommandMetadata[] = [
   { name: "orient", summary: "Build a compact first-turn packet for agent repo context", family: "start" },
-  {
-    name: "explore",
-    summary: "Answer a broad repo question with search, packets, paths, and blast radius",
-    family: "start",
-  },
+  { name: "explore", summary: "Derive context from one hybrid search", family: "search" },
   { name: "file", summary: "Read a live project file with bounded line pagination", family: "navigate" },
   { name: "review", summary: "Generate code review report", family: "review" },
   { name: "packet", summary: "Retrieve bounded evidence packets by file path or stable target", family: "navigate" },

@@ -43,6 +43,13 @@ describe("MCP / SKILL inventory parity", () => {
     }
   });
 
+  it("does not present explore as the first-step tool", () => {
+    const explore = listCodegraphMcpTools().find((tool) => tool.name === "explore");
+
+    expect(explore?.description).toContain("One hybrid search plus context from top results.");
+    expect(explore?.description).not.toContain("Recommended first tool");
+  });
+
   it("keeps exact CLI examples synchronized with the supported command inventory", async () => {
     const [cli, skill] = await Promise.all([
       fsp.readFile(path.join(rootDir, "docs", "cli.md"), "utf8"),

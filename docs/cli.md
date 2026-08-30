@@ -229,7 +229,7 @@ codegraph affected --base HEAD --head WORKTREE --filter "tests/**/*.test.ts" --q
 
 ### Symbols, navigation, grep, and chunking
 
-````bash
+```bash
 # Build the full project index
 codegraph index
 
@@ -279,18 +279,6 @@ codegraph search "public users" --mode sql --json
 codegraph search "handle login" --from src/auth.ts --mode graph --depth 1 --json
 codegraph search --help
 
-### Explore query scope
-
-`explore` makes one default hybrid search pass over symbol names, paths, indexed text chunks, and graph evidence. It then derives packets, dependency paths, reverse dependencies, and candidate tests from the highest-ranked anchors. It does not split a natural-language question into subqueries, plan more searches, infer unstated relations, or prove runtime behavior. The `analysis.mode: "semantic"` result describes parser-backend quality, not semantic or agentic query reasoning.
-
-For a compound question, first search concrete names and terms separately, then inspect the strongest targets:
-
-```sh
-codegraph search "Bridge invoke adapter" --json
-codegraph grep "spawn|timeout|cancel|environment" --glob "src/**/*.ts"
-codegraph explain <handle>
-codegraph packet get <handle>
-````
 
 `symbols` performs deterministic symbol-identity lookup, unlike hybrid `search`, which also ranks paths, prose, SQL, snippets, and graph evidence. Exact qualified names such as `src/session.ts::CodeReviewSession` rank before exact local/export names, prefixes, identifier tokens, and substrings.
 
@@ -403,9 +391,17 @@ codegraph grep --query '(function_declaration name: (identifier) @name)'
 
 codegraph grep 'eval\(' --ignore-case
 
-````
+```
 
 `grep --json` does not return a bare hit array; it returns an envelope `{ items, limit, totalSeen, truncated, omitted }` so callers can tell a complete result from a capped prefix. `limit` always means the effective cap that was applied: for text greps it is the effective `--max-hits` value (default 5000, capped at 200000), and for uncapped `--query` AST greps it is `null`. `truncated` is exact for text greps (the scan probes one hit past the effective limit, so a true count equal to the limit still reports `truncated: false`, including at the 200000 ceiling) and is always `false` for AST greps today. When text results are truncated, `totalSeen` and `omitted` are lower bounds from the bounded probe, not full corpus-wide counts. Human-readable grep output stays a plain streamed hit list.
+
+### Symbol commands
+
+Known symbol: `codegraph symbols`/`codegraph search` → `codegraph refs` → `codegraph callers`/`codegraph callees` → `codegraph deps`/`codegraph rdeps`/`codegraph path` → `codegraph explain` or `codegraph packet get`.
+
+### Explore query scope
+
+Use `codegraph explore` only after `codegraph orient`, `codegraph search`/`codegraph grep`, and `codegraph refs`/`codegraph callers`. It is one hybrid search plus context from top results, not a plan or runtime proof. `analysis.mode: "semantic"` is parser-backend quality, not query reasoning.
 
 ### MCP protocol and network boundary
 
@@ -423,7 +419,7 @@ HTTP enforces Host and Origin policies. A missing `Origin` is accepted for non-b
 codegraph viewer --root . --open
 codegraph viewer --root . --graph codegraph-out/graph.json --open
 codegraph viewer --root . --port 4173 --print-url
-````
+```
 
 Without `--graph`, each UI load or reload builds the current project graph through the automatically validated `.codegraph/cache/index-v1` index; `init`, `index`, and exported JSON are not prerequisites. An explicit `--graph` is served through the same `/graph.json` route, and manual upload remains available. The viewer loads Sigma, Graphology, and ForceAtlas2 from bundled `docs/graph-visualization/vendor/` assets, so the UI stays offline and self-contained once codegraph is installed.
 

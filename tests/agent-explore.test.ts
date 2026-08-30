@@ -701,7 +701,7 @@ describe("agent explore", () => {
     expect(result.stdout).toContain("codegraph explore -");
     expect(result.stdout).toContain('Usage: codegraph explore "<query>"');
     expect(result.stdout).toContain("--max-packets");
-    expect(result.stdout).toContain("It does not decompose a compound question");
+    expect(result.stdout).toContain("Not a first step:");
     expect(result.stdout).not.toContain("Commands:");
   });
 
