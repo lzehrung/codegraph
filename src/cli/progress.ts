@@ -169,7 +169,8 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
     write(`[Progress] ${activity}.\n`);
     heartbeat = setInterval(() => {
       if (!active) return;
-      write(`[Progress] ${activity}:${formatProgressCount(current, total)}.\n`);
+      const count = mode === "check" && current === 0 && total === 0 ? "" : `:${formatProgressCount(current, total)}`;
+      write(`[Progress] ${activity}${count}.\n`);
     }, 1_000);
     heartbeat.unref();
   };

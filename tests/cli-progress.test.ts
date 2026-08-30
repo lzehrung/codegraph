@@ -113,6 +113,39 @@ describe("CLI index progress", () => {
     expect(chunks.join("")).not.toContain("secret.ts");
   });
 
+  it("omits unknown counts from discovery activity heartbeats", async () => {
+    const chunks: string[] = [];
+    vi.useFakeTimers();
+
+    try {
+      const display = createCliProgressDisplay({ presentation: "log", write: (chunk) => chunks.push(chunk) });
+      display.update({
+        type: "progress",
+        phase: "start",
+        mode: "check",
+        message: "Checking project index",
+        current: 0,
+        total: 0,
+      });
+      display.update({
+        type: "progress",
+        phase: "update",
+        mode: "check",
+        message: "Discovering source files",
+        activity: "Discovering source files",
+        current: 0,
+        total: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(chunks.join("")).toBe(
+        "[Progress] Checking project index.\n[Progress] Discovering source files.\n[Progress] Discovering source files.\n",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     ["a single file", 1, "0/1 file", "1 file"],
     ["multiple files", 2, "0/2 files", "2 files"],
