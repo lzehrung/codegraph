@@ -554,6 +554,7 @@ type BuildIndexHelperOptions = {
   manifestMode?: ManifestMode;
   warnNoFilesMessage?: string;
   ignoreExistingManifest?: boolean;
+  reportDiscoveryProgress?: boolean;
   projectFiles?: ProjectFileInfo[] | Promise<ProjectFileInfo[]>;
   transientFiles?: string[];
   symlinkDirectories?: string[];
@@ -615,6 +616,18 @@ function emitIndexLifecycleProgress(
   });
 }
 
+function emitIndexCheckActivity(opts: BuildOptions | undefined, activity: string): void {
+  opts?.onProgress?.({
+    type: "progress",
+    phase: "update",
+    mode: "check",
+    message: activity,
+    activity,
+    current: 0,
+    total: 0,
+  });
+}
+
 function buildConcurrency(opts: BuildOptions | undefined): number {
   return resolveWorkerThreadCount({ requested: Number(opts?.threads || 0), defaultCount: 8, max: 64 });
 }
@@ -651,7 +664,7 @@ type FullDiscoveryBuildOptions = BuildOptions & Pick<IncrementalBuildOptions, "a
 async function buildProjectIndexFromExport(
   projectRoot: string,
   opts?: FullDiscoveryBuildOptions,
-  helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest">,
+  helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest" | "reportDiscoveryProgress">,
 ): Promise<ProjectIndex> {
   return buildProjectIndexWithManifestOptions(projectRoot, opts, helperOpts);
 }
@@ -1093,7 +1106,7 @@ async function buildIndexFromFileListShared(
 async function buildProjectIndexWithManifestOptions(
   projectRoot: string,
   opts?: FullDiscoveryBuildOptions,
-  helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest">,
+  helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest" | "reportDiscoveryProgress">,
 ): Promise<ProjectIndex> {
   await initializeFileIdentityCaseSensitivity(projectRoot);
   try {
@@ -1127,6 +1140,7 @@ async function buildProjectIndexWithManifestOptions(
     // sequentially rather than in Promise.all to avoid duplicate full-tree probes. The Git
     // candidate callback below reuses that same listing so metadata discovery does not spawn
     // Git a second time.
+    if (helperOpts?.reportDiscoveryProgress) emitIndexCheckActivity(opts, "Discovering source files");
     const discoveredFiles = await listProjectFilesWithGitCandidates(
       projectRoot,
       projectPatternsForLanguageExtensions(opts),
@@ -1148,6 +1162,7 @@ async function buildProjectIndexWithManifestOptions(
     const discoveredFileSet = new Set(discoveredFiles);
     const files = Array.from(new Set([...discoveredFiles, ...additionalFiles]));
     const transientFiles = additionalFiles.filter((file) => !discoveredFileSet.has(file));
+    if (helperOpts?.reportDiscoveryProgress) emitIndexCheckActivity(opts, "Discovering project metadata");
     const projectFiles = await discoverProjectFilesWithGitCandidates(projectRoot, {
       ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
       ...(discoveredSymlinkDirectories !== undefined ? { knownSymlinkDirectories: discoveredSymlinkDirectories } : {}),
@@ -1355,7 +1370,10 @@ export async function buildProjectIndexIncremental(
         manifestReport.reason = reason;
         manifestReport.reused = false;
       }
-      return await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
+      return await buildProjectIndexFromExport(projectRoot, opts, {
+        ignoreExistingManifest: true,
+        reportDiscoveryProgress: true,
+      });
     }
     const gitAvailable = await isGitRepo(projectRoot);
     const hasExplicitGitRange = !!opts?.gitBase || !!opts?.gitHead;
@@ -1383,7 +1401,10 @@ export async function buildProjectIndexIncremental(
           manifestReport.reused = false;
         }
         logWithLevel(opts?.logLevel, "warn", "Warning: Manifest commit is no longer available; rebuilding full index.");
-        const rebuiltIndex = await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
+        const rebuiltIndex = await buildProjectIndexFromExport(projectRoot, opts, {
+          ignoreExistingManifest: true,
+          reportDiscoveryProgress: true,
+        });
         if (manifestReport) {
           manifestReport.reason = "staleGitCommit";
           manifestReport.reused = false;
@@ -1404,7 +1425,10 @@ export async function buildProjectIndexIncremental(
           "warn",
           `Warning: Manifest verification failed (mismatches: ${mismatches}, missing: ${missing}). Rebuilding full index.`,
         );
-        return await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
+        return await buildProjectIndexFromExport(projectRoot, opts, {
+          ignoreExistingManifest: true,
+          reportDiscoveryProgress: true,
+        });
       }
     }
     const trackedEntries = sanitizeManifestEntriesForRoot(projectRoot, manifest.files);
@@ -1464,7 +1488,10 @@ export async function buildProjectIndexIncremental(
           "Warning: Failed to list untracked project files via Git; rebuilding full index.",
           error,
         );
-        return await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
+        return await buildProjectIndexFromExport(projectRoot, opts, {
+          ignoreExistingManifest: true,
+          reportDiscoveryProgress: true,
+        });
       }
     } else if (!opts?.filesAreProjectScope) {
       rediscoveredFiles = await listProjectFilesWithGitCandidates(

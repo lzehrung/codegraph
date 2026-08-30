@@ -69,6 +69,40 @@ describe("CLI index progress", () => {
     }
   });
 
+  it("renders stable discovery activity without rendering file messages", () => {
+    const chunks: string[] = [];
+    const display = createCliProgressDisplay({ presentation: "log", write: (chunk) => chunks.push(chunk) });
+    display.update({
+      type: "progress",
+      phase: "start",
+      mode: "check",
+      message: "Checking project index",
+      current: 0,
+      total: 0,
+    });
+    display.update({
+      type: "progress",
+      phase: "update",
+      mode: "check",
+      message: "Discovering source files",
+      activity: "Discovering source files",
+      current: 0,
+      total: 0,
+    });
+    display.update({
+      type: "progress",
+      phase: "update",
+      mode: "build",
+      message: "Indexed /private/project/secret.ts",
+      current: 1,
+      total: 1,
+    });
+
+    expect(chunks.join("")).toContain("[Progress] Discovering source files.\n");
+    expect(chunks.join("")).not.toContain("0 files processed.\n");
+    expect(chunks.join("")).not.toContain("secret.ts");
+  });
+
   it.each([
     ["a single file", 1, "0/1 file", "1 file"],
     ["multiple files", 2, "0/2 files", "2 files"],

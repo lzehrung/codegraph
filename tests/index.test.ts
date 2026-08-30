@@ -75,6 +75,31 @@ describe("Project Indexing", () => {
     }
   });
 
+  it("reports source and metadata discovery during a cold incremental build", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cold-index-progress-"));
+    const file = path.join(root, "main.ts");
+    const updates: ProgressUpdate[] = [];
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+
+    try {
+      await buildProjectIndexIncremental(root, {
+        cache: "disk",
+        onProgress: (update) => updates.push(update),
+      });
+
+      const discoveryActivities = updates
+        .filter((update) => update.phase === "update" && update.mode === "check")
+        .map((update) => update.activity);
+      expect(discoveryActivities).toEqual(["Discovering source files", "Discovering project metadata"]);
+      expect(updates.findIndex((update) => update.activity === "Discovering source files")).toBeGreaterThan(0);
+      expect(updates.findIndex((update) => update.phase === "start" && update.mode === "build")).toBeGreaterThan(
+        updates.findIndex((update) => update.activity === "Discovering project metadata"),
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reports snapshot checks and stale-index updates", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-incremental-progress-"));
     const file = path.join(root, "main.ts");

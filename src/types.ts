@@ -16,6 +16,11 @@ export type Edge = {
 export type ProgressUpdate = {
   type: "progress";
   message: string;
+  /**
+   * Stable human-readable activity for display while the count is not meaningful.
+   * `message` can identify a file and therefore is not safe to render as a status line.
+   */
+  activity?: string;
   current: number;
   total: number;
   phase?: "start" | "update" | "complete";

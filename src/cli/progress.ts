@@ -43,6 +43,7 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
   let current = 0;
   let total = 0;
   let mode: NonNullable<ProgressUpdate["mode"]> = "build";
+  let activity = progressAction(mode);
   let interval: NodeJS.Timeout | undefined;
   let delay: NodeJS.Timeout | undefined;
   const clear = (): void => {
@@ -53,11 +54,10 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
 
   const render = (): void => {
     if (!active) return;
-    const action = progressAction(mode);
     const frame = SPINNER_FRAMES[frameIndex % SPINNER_FRAMES.length]!;
     frameIndex += 1;
     const count = formatProgressCount(current, total);
-    write(`${CLEAR_LINE}${action} project index... ${frame}${count}`);
+    write(`${CLEAR_LINE}${activity}... ${frame}${count}`);
     rendered = true;
   };
   const stopInterval = (): void => {
@@ -79,6 +79,7 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
     current = update.current;
     total = update.total;
     mode = update.mode ?? "build";
+    activity = update.activity ?? `${progressAction(mode)} project index`;
     const beginRendering = (): void => {
       if (!active) return;
       render();
@@ -121,6 +122,7 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
       current = update.current;
       total = update.total;
       mode = update.mode ?? mode;
+      if (update.activity !== undefined) activity = update.activity;
     },
     clear,
     dispose: () => {
@@ -147,6 +149,7 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
   let current = 0;
   let total = 0;
   let mode: NonNullable<ProgressUpdate["mode"]> = "build";
+  let activity = progressAction(mode);
   let delay: NodeJS.Timeout | undefined;
   let heartbeat: NodeJS.Timeout | undefined;
 
@@ -163,10 +166,10 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
   const renderStart = (): void => {
     if (!active || rendered) return;
     rendered = true;
-    write(`[Progress] ${progressAction(mode)} project index.\n`);
+    write(`[Progress] ${activity}.\n`);
     heartbeat = setInterval(() => {
       if (!active) return;
-      write(`[Progress] ${progressAction(mode)} project index:${formatProgressCount(current, total)}.\n`);
+      write(`[Progress] ${activity}:${formatProgressCount(current, total)}.\n`);
     }, 1_000);
     heartbeat.unref();
   };
@@ -177,6 +180,7 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
     current = update.current;
     total = update.total;
     mode = update.mode ?? "build";
+    activity = update.activity ?? `${progressAction(mode)} project index`;
     if (delayMs) {
       delay = setTimeout(renderStart, delayMs);
       delay.unref();
@@ -205,11 +209,16 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
         if (update.phase === "update") return;
         start(update);
       }
+      const previousActivity = activity;
       current = update.current;
       total = update.total;
       mode = update.mode ?? mode;
+      if (update.activity !== undefined) activity = update.activity;
+      if (rendered && activity !== previousActivity) {
+        write(`[Progress] ${activity}.\n`);
+      }
       const isComplete = update.total > 0 && update.current >= update.total;
-      if (rendered && (update.current === 1 || isComplete || update.current % 100 === 0)) {
+      if (rendered && (update.current === 1 || isComplete || (update.current > 0 && update.current % 100 === 0))) {
         write(`[Progress] ${formatFileCount(update.current)} processed.\n`);
       }
     },
