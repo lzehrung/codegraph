@@ -13,14 +13,20 @@ const QUERY_INDEX_MAX_THREADS = 4;
 /**
  * Every worker thread imports the language registry before it can prepare its first file, so a
  * pool costs a fixed few hundred milliseconds of startup no matter how small the batch is.
- * Measured on a four-core runner, in-process preparation stays ahead of the pool until roughly
- * this many files; below it the pool only adds latency and worker-thread churn.
+ * Measured against in-process preparation, the pool only pulls ahead from around this many
+ * files; below it the pool adds latency and worker-thread churn and nothing else.
  */
-export const QUERY_INDEX_WORKER_MIN_FILES = 256;
+export const QUERY_INDEX_WORKER_MIN_FILES = 512;
 
-/** Batches at or above {@link QUERY_INDEX_WORKER_MIN_FILES} amortize worker-thread startup. */
-export function shouldPrepareQueryIndexFilesInWorker(fileCount: number): boolean {
-  return fileCount >= QUERY_INDEX_WORKER_MIN_FILES;
+/**
+ * A batch is worth a pool only when it is large enough to amortize thread startup and there is
+ * more than one worker to spread it across. A single worker cannot parallelize anything, so it
+ * pays the startup cost and the per-task structured clone to run the same work serially:
+ * measured at roughly 1.5x the in-process time at every batch size. Hosts with one or two
+ * available CPUs resolve to exactly one worker, so they always prepare in-process.
+ */
+export function shouldPrepareQueryIndexFilesInWorker(fileCount: number, threadCount = resolveWorkerThreads()): boolean {
+  return threadCount > 1 && fileCount >= QUERY_INDEX_WORKER_MIN_FILES;
 }
 
 function resolveWorkerThreads(): number {

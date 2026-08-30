@@ -583,9 +583,18 @@ describe("persistent query index", () => {
     const { shouldPrepareQueryIndexFilesInWorker: shouldUseWorker, QUERY_INDEX_WORKER_MIN_FILES: minFiles } =
       queryIndexWorkerPool;
 
-    expect(shouldUseWorker(1)).toBe(false);
-    expect(shouldUseWorker(minFiles - 1)).toBe(false);
-    expect(shouldUseWorker(minFiles)).toBe(true);
+    // The thread count is passed explicitly so the routing contract does not depend on how many
+    // CPUs the host running the suite happens to expose.
+    expect(shouldUseWorker(1, 4)).toBe(false);
+    expect(shouldUseWorker(minFiles - 1, 4)).toBe(false);
+    expect(shouldUseWorker(minFiles, 4)).toBe(true);
+    expect(shouldUseWorker(minFiles, 2)).toBe(true);
+
+    // One worker runs the batch serially behind pool startup and a structured clone per task, so
+    // it never beats preparing in-process no matter how large the batch is. Hosts reporting one
+    // or two available CPUs resolve to exactly one worker.
+    expect(shouldUseWorker(minFiles, 1)).toBe(false);
+    expect(shouldUseWorker(minFiles * 100, 1)).toBe(false);
   });
 
   it("prepares an identical batch in-process and in the worker pool", async () => {
