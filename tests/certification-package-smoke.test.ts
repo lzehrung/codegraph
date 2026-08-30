@@ -95,6 +95,17 @@ function success(stdout: unknown = ""): CommandResult {
   };
 }
 
+const TAR_OPERATIONS = ["-tzf", "-tvzf", "-xzf"];
+
+function tarOperation(args: string[]): string | undefined {
+  return args.find((argument) => TAR_OPERATIONS.includes(argument));
+}
+
+function tarballArgument(args: string[]): string | undefined {
+  const operationIndex = args.findIndex((argument) => TAR_OPERATIONS.includes(argument));
+  return operationIndex < 0 ? undefined : args[operationIndex + 1];
+}
+
 async function createCandidateSet(target: string): Promise<{
   root: string;
   manifestPath: string;
@@ -196,6 +207,7 @@ function createMockCommandRunner(
 
   async function run(command: string, args: string[], commandOptions: CommandOptions = {}): Promise<CommandResult> {
     calls.push([command, ...args]);
+    const operation = command === "tar" ? tarOperation(args) : undefined;
     if (command === "tar" && options.tarUnavailable) {
       return { ...success(), exitCode: null, error: "spawnSync tar ENOENT" };
     }
@@ -208,11 +220,12 @@ function createMockCommandRunner(
       }
       return success("installed local tarballs");
     }
-    if (command === "tar" && (args[0] === "-tzf" || args[0] === "-tvzf")) {
-      const pkg = byTarball.get(path.resolve(commandOptions.cwd ?? "", args[1] ?? ""));
-      if (!pkg) throw new Error(`Unexpected archive listing ${String(args[1])}`);
+    if (command === "tar" && (operation === "-tzf" || operation === "-tvzf")) {
+      const archivePath = tarballArgument(args);
+      const pkg = byTarball.get(path.resolve(commandOptions.cwd ?? "", archivePath ?? ""));
+      if (!pkg) throw new Error(`Unexpected archive listing ${String(archivePath)}`);
       const entries = options.archiveEntries ?? pkg.pack.files.map((file) => `package/${file.path}`);
-      if (args[0] === "-tzf") return success(entries.join("\n"));
+      if (operation === "-tzf") return success(entries.join("\n"));
       return success(
         entries
           .map((entry, index) => {
@@ -223,9 +236,10 @@ function createMockCommandRunner(
           .join("\n"),
       );
     }
-    if (command === "tar" && args[0] === "-xzf") {
-      const pkg = byTarball.get(path.resolve(commandOptions.cwd ?? "", args[1] ?? ""));
-      if (!pkg) throw new Error(`Unexpected archive extraction ${String(args[1])}`);
+    if (command === "tar" && operation === "-xzf") {
+      const archivePath = tarballArgument(args);
+      const pkg = byTarball.get(path.resolve(commandOptions.cwd ?? "", archivePath ?? ""));
+      if (!pkg) throw new Error(`Unexpected archive extraction ${String(archivePath)}`);
       const destination = args[args.indexOf("-C") + 1];
       if (!destination) throw new Error("Mocked archive extraction omitted destination");
       fs.cpSync(pkg.sourceDirectory, path.join(destination, "package"), { recursive: true });
@@ -302,11 +316,15 @@ describe("package smoke modes", () => {
 
     expect(report.status).toBe("pass");
     expect(report.mode).toBe("structural");
-    expect(commandRunner.calls).toHaveLength(12);
-    expect(commandRunner.calls.every((call) => call[0] === "tar" && ["-tzf", "-tvzf", "-xzf"].includes(call[1]!))).toBe(
-      true,
-    );
-    expect(commandRunner.calls.every((call) => path.isAbsolute(call[2]!))).toBe(true);
+    expect(
+      commandRunner.calls.every((call) => call[0] === "tar" && TAR_OPERATIONS.includes(tarOperation(call) ?? "")),
+    ).toBe(true);
+    expect(commandRunner.calls.every((call) => path.isAbsolute(tarballArgument(call) ?? ""))).toBe(true);
+    expect(
+      commandRunner.calls.every((call) =>
+        process.platform === "win32" ? call[1] === "--force-local" : call[1] !== "--force-local",
+      ),
+    ).toBe(true);
   });
 
   it("accepts package directory entries while inspecting archives", async () => {
@@ -332,8 +350,8 @@ describe("package smoke modes", () => {
     });
 
     expect(report.status).toBe("pass");
-    expect(commandRunner.calls.filter((call) => call[1] === "-tzf")).toHaveLength(4);
-    expect(commandRunner.calls.filter((call) => call[1] === "-tvzf")).toHaveLength(4);
+    expect(commandRunner.calls.filter((call) => tarOperation(call) === "-tzf")).toHaveLength(4);
+    expect(commandRunner.calls.filter((call) => tarOperation(call) === "-tvzf")).toHaveLength(4);
   });
 
   it("runs install, identity, native parse, and MCP checks for runtime targets", async () => {
@@ -418,8 +436,7 @@ describe("package smoke modes", () => {
           commandRunner: commandRunner.run,
         }),
       ).rejects.toMatchObject({ code: "archive-invalid" });
-      expect(commandRunner.calls).toHaveLength(1);
-      expect(commandRunner.calls[0]?.[1]).toBe("-tzf");
+      expect(tarOperation(commandRunner.calls[0] ?? [])).toBe("-tzf");
     }
   });
 
@@ -444,7 +461,7 @@ describe("package smoke modes", () => {
         commandRunner: commandRunner.run,
       }),
     ).rejects.toMatchObject({ code: "archive-invalid" });
-    expect(commandRunner.calls.some((call) => call[1] === "-xzf")).toBe(false);
+    expect(commandRunner.calls.some((call) => tarOperation(call) === "-xzf")).toBe(false);
   });
 
   it("reports an unavailable tar executable separately from an invalid archive", async () => {
@@ -468,7 +485,6 @@ describe("package smoke modes", () => {
         commandRunner: commandRunner.run,
       }),
     ).rejects.toMatchObject({ code: "subprocess-unavailable", context: { file: expect.any(String) } });
-    expect(commandRunner.calls).toHaveLength(1);
-    expect(commandRunner.calls[0]?.[1]).toBe("-tzf");
+    expect(tarOperation(commandRunner.calls[0] ?? [])).toBe("-tzf");
   });
 });
