@@ -9,6 +9,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [2.3.3] - 2026-08-30
+
 ### Changed
 
 - Release package smoke now inspects certified tarballs directly, reuses extracted file records,
@@ -16,7 +18,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - Disk cache writes copy only module fields whose paths change; cache reads transform their
   private parsed payload in place instead of deep-cloning every module.
 - Worker-eligible cold builds now construct reference bloom filters in native extraction workers,
-  parallelizing identifier hashing instead of doing it on the main thread.
+  parallelizing identifier hashing instead of doing it on the main thread. Automatic native worker
+  sizing now caps at eight threads and preserves system capacity by default.
 - Native language extraction now attempts one parsed-tree traversal for imports, exports, locals,
   and import bindings. It keeps independent traversals when the combined query cannot safely run.
 - Project metadata discovery now reuses the Git file listing that source discovery already
@@ -39,6 +42,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
   are recomputed rather than reused.
 - `packages/codegraph-native/Cargo.lock` is committed instead of ignored, so the published native
   binaries build from a reproducible dependency graph.
+- Windows package smoke forces drive-qualified tarball paths to be local archives, preventing
+  Git for Windows tar from treating the drive letter as a remote archive host.
 
 ## [2.3.2] - 2026-08-28
 
