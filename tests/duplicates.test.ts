@@ -21,6 +21,7 @@ import {
 } from "../src/duplicate-identifier-ranges.js";
 import { getDuplicateAstContext } from "../src/duplicates/units.js";
 import {
+  DUPLICATE_TOKENIZER_REVISION,
   DUPLICATE_UNIT_CACHE_VERSION,
   closeDuplicateUnitCacheForIndex,
   duplicateUnitCacheSignature,
@@ -28,6 +29,8 @@ import {
   duplicateUnitDiskCache,
   tryLoadDuplicateUnitsFromCache,
 } from "../src/duplicates/unitCache.js";
+import { cacheRelativePath } from "../src/indexer/build-cache/module-cache.js";
+import { brotliCompressSync } from "node:zlib";
 import {
   fileIdentityKey,
   isFileIdentityCaseInsensitive,
@@ -2724,6 +2727,47 @@ export function processInvoiceItems(items: Array<{ price: number; qty: number }>
     // tryLoadDuplicateUnitsFromCache must return null because version does not match
     const loaded = tryLoadDuplicateUnitsFromCache(index, file, variant);
     expect(loaded).toBeNull();
+  } finally {
+    if (index) {
+      closeDuplicateUnitCacheForIndex(index);
+    }
+  }
+});
+
+test("C5: duplicate units cached under a previous tokenizer revision are not reused", async () => {
+  const root = await makeTempProject();
+  let index;
+  try {
+    const file = await writeProjectFile(root, "src/invoice.ts", "export const total = 1;\n");
+    index = await buildProjectIndex(root, { cache: "disk" });
+
+    const variant = duplicateUnitCacheVariant(index, 10, 1000, 5, 20);
+    // A cached unit carries the tokens the identifier grammar produced, so the grammar's revision
+    // has to key the variant. Without it, DUPLICATE_UNIT_CACHE_MAX_AGE_MS would let units
+    // tokenized by a superseded grammar survive an upgrade for thirty days.
+    expect(JSON.parse(variant)).toMatchObject({ tokenizerRevision: DUPLICATE_TOKENIZER_REVISION });
+    const legacyVariant = JSON.stringify({
+      ...(JSON.parse(variant) as Record<string, unknown>),
+      tokenizerRevision: DUPLICATE_TOKENIZER_REVISION - 1,
+    });
+
+    const diskDb = duplicateUnitDiskCache(index);
+    if (!diskDb?.statements) throw new Error("expected an open duplicate-unit cache database");
+    const sig = duplicateUnitCacheSignature(index, file);
+    if (!sig) throw new Error("expected a duplicate-unit cache signature");
+    diskDb.statements.write.run(
+      cacheRelativePath(root, file),
+      legacyVariant,
+      sig,
+      DUPLICATE_UNIT_CACHE_VERSION,
+      brotliCompressSync(Buffer.from("[]", "utf8")),
+      Date.now(),
+    );
+
+    // The seeded entry is intact and loadable under the revision that wrote it, so the miss below
+    // is the revision keying the variant rather than a malformed row.
+    expect(tryLoadDuplicateUnitsFromCache(index, file, legacyVariant)).toEqual([]);
+    expect(tryLoadDuplicateUnitsFromCache(index, file, variant)).toBeNull();
   } finally {
     if (index) {
       closeDuplicateUnitCacheForIndex(index);

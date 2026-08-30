@@ -34,7 +34,9 @@
   `unicode-ident` pin in `packages/codegraph-native/Cargo.toml`, the TypeScript side through the
   generated `src/duplicate-identifier-ranges.ts`. Never resolve that grammar with a Unicode
   property escape, which follows the host Node build's Unicode version. Changing the crate pin
-  means rerunning `npm run generate:duplicate-identifier-ranges` in the same change.
+  means rerunning `npm run generate:duplicate-identifier-ranges` and bumping
+  `DUPLICATE_TOKENIZER_REVISION` in the same change, so cached duplicate units tokenized by the
+  previous grammar are recomputed instead of surviving `DUPLICATE_UNIT_CACHE_MAX_AGE_MS`.
 - `packages/codegraph-native/Cargo.lock` is committed because the crate ships prebuilt binaries.
   Update it in the same change as any `Cargo.toml` dependency edit.
 

@@ -34,7 +34,9 @@ GitHub Releases remain the certified publish record. This file summarizes produc
   TypeScript tokenizer read Unicode property escapes while the native tokenizer is pinned to
   Unicode 16, so on Node builds carrying newer Unicode data the two disagreed on characters such
   as U+088F and the same file fingerprinted differently with and without the native addon. The
-  TypeScript grammar now comes from generated ranges pinned to the native tokenizer's version.
+  TypeScript grammar now comes from generated ranges pinned to the native tokenizer's version,
+  and the duplicate-unit cache revision moves with it so units tokenized by the previous grammar
+  are recomputed rather than reused.
 - `packages/codegraph-native/Cargo.lock` is committed instead of ignored, so the published native
   binaries build from a reproducible dependency graph.
 
