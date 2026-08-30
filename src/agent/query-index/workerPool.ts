@@ -10,6 +10,19 @@ import type { QueryIndexWorkerTask } from "./queryIndexWorker.js";
 
 const QUERY_INDEX_MAX_THREADS = 4;
 
+/**
+ * Every worker thread imports the language registry before it can prepare its first file, so a
+ * pool costs a fixed few hundred milliseconds of startup no matter how small the batch is.
+ * Measured on a four-core runner, in-process preparation stays ahead of the pool until roughly
+ * this many files; below it the pool only adds latency and worker-thread churn.
+ */
+export const QUERY_INDEX_WORKER_MIN_FILES = 256;
+
+/** Batches at or above {@link QUERY_INDEX_WORKER_MIN_FILES} amortize worker-thread startup. */
+export function shouldPrepareQueryIndexFilesInWorker(fileCount: number): boolean {
+  return fileCount >= QUERY_INDEX_WORKER_MIN_FILES;
+}
+
 function resolveWorkerThreads(): number {
   return resolveWorkerThreadCount({ max: QUERY_INDEX_MAX_THREADS });
 }
@@ -25,7 +38,7 @@ export function resolveQueryIndexWorkerPath(): string {
   if (fs.existsSync(bundled)) return bundled;
   throw new Error(`Query index worker file not found: ${bundled}`);
 }
-async function prepareQueryIndexFilesInProcess(
+export async function prepareQueryIndexFilesInProcess(
   projectRoot: string,
   files: readonly Pick<QueryIndexWorkerTask, "relativePath" | "sourceIdentity">[],
 ): Promise<PreparedQueryIndexFile[] | null> {
@@ -89,4 +102,20 @@ export async function prepareQueryIndexFilesInWorker(
   } finally {
     await pool.destroy();
   }
+}
+
+/**
+ * Prepares an indexing batch on whichever path is cheaper for its size. Both paths share the
+ * partial-batch contract: files that cannot be prepared are dropped, and only a batch that
+ * produced nothing at all reports a preparation failure.
+ */
+export async function prepareQueryIndexFiles(
+  projectRoot: string,
+  files: readonly Pick<QueryIndexWorkerTask, "relativePath" | "sourceIdentity">[],
+): Promise<PreparedQueryIndexFile[] | null> {
+  if (!files.length) return [];
+  if (!shouldPrepareQueryIndexFilesInWorker(files.length)) {
+    return await prepareQueryIndexFilesInProcess(projectRoot, files);
+  }
+  return await prepareQueryIndexFilesInWorker(projectRoot, files);
 }

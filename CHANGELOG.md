@@ -22,6 +22,9 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - Project metadata discovery now reuses the Git file listing that source discovery already
   produced and omits Git-ignored manifests. An explicitly requested Git-ignored root keeps the
   filesystem fallback and can return ignored metadata.
+- Query index preparation now runs in-process for small batches and only starts a worker pool
+  once a batch is large enough to amortize thread startup, so incremental updates and small
+  projects no longer pay for spawning and tearing down worker threads.
 
 ## [2.3.2] - 2026-08-28
 

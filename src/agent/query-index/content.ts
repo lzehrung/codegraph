@@ -13,9 +13,12 @@ const CHUNK_LANGUAGE_ALIASES: Record<string, string> = {
   ts: "typescript",
 };
 function compressQueryText(text: string): Uint8Array {
-  return brotliCompressSync(text, {
+  const compressed = brotliCompressSync(text, {
     params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
   });
+  // Worker results cross a structured clone, which drops the Buffer prototype. Normalize the
+  // in-process result too so a batch prepared either way produces identical rows.
+  return new Uint8Array(compressed.buffer, compressed.byteOffset, compressed.byteLength);
 }
 
 export type QueryTextChunk = {
