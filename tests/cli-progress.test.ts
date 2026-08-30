@@ -69,6 +69,83 @@ describe("CLI index progress", () => {
     }
   });
 
+  it("renders stable discovery activity without rendering file messages", () => {
+    const chunks: string[] = [];
+    const display = createCliProgressDisplay({ presentation: "log", write: (chunk) => chunks.push(chunk) });
+    display.update({
+      type: "progress",
+      phase: "start",
+      mode: "check",
+      message: "Checking project index",
+      current: 0,
+      total: 0,
+    });
+    display.update({
+      type: "progress",
+      phase: "update",
+      mode: "check",
+      message: "Discovering source files",
+      activity: "Discovering source files",
+      current: 0,
+      total: 0,
+    });
+    display.update({
+      type: "progress",
+      phase: "update",
+      mode: "check",
+      message: "Checking source file paths",
+      activity: "Checking source file paths",
+      current: 100,
+      total: 200,
+    });
+    display.update({
+      type: "progress",
+      phase: "update",
+      mode: "build",
+      message: "Indexed /private/project/secret.ts",
+      current: 1,
+      total: 1,
+    });
+
+    expect(chunks.join("")).toContain("[Progress] Discovering source files.\n");
+    expect(chunks.join("")).toContain("[Progress] Checking source file paths: 100/200 files.\n");
+    expect(chunks.join("")).not.toContain("0 files processed.\n");
+    expect(chunks.join("")).not.toContain("secret.ts");
+  });
+
+  it("omits unknown counts from discovery activity heartbeats", async () => {
+    const chunks: string[] = [];
+    vi.useFakeTimers();
+
+    try {
+      const display = createCliProgressDisplay({ presentation: "log", write: (chunk) => chunks.push(chunk) });
+      display.update({
+        type: "progress",
+        phase: "start",
+        mode: "check",
+        message: "Checking project index",
+        current: 0,
+        total: 0,
+      });
+      display.update({
+        type: "progress",
+        phase: "update",
+        mode: "check",
+        message: "Discovering source files",
+        activity: "Discovering source files",
+        current: 0,
+        total: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(chunks.join("")).toBe(
+        "[Progress] Checking project index.\n[Progress] Discovering source files.\n[Progress] Discovering source files.\n",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     ["a single file", 1, "0/1 file", "1 file"],
     ["multiple files", 2, "0/2 files", "2 files"],
@@ -142,6 +219,38 @@ describe("CLI index progress", () => {
       `\r\u001b[2KBuilding project index... - ${progressCount}\r\u001b[2KBuilt project index: ${completionCount}.\n`,
     );
     if (!total) expect(output).not.toContain("0/0");
+  });
+
+  it("omits unknown counts from interactive discovery activity", async () => {
+    const chunks: string[] = [];
+    vi.useFakeTimers();
+
+    try {
+      const display = createCliProgressDisplay({ presentation: "interactive", write: (chunk) => chunks.push(chunk) });
+      display.update({
+        type: "progress",
+        phase: "start",
+        mode: "check",
+        message: "Checking project index",
+        current: 0,
+        total: 0,
+      });
+      display.update({
+        type: "progress",
+        phase: "update",
+        mode: "check",
+        message: "Discovering source files",
+        activity: "Discovering source files",
+        current: 0,
+        total: 0,
+      });
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(chunks.join("")).toContain("\r\u001b[2KDiscovering source files... \\");
+      expect(chunks.join("")).not.toContain("0 files processed");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not write file paths in interactive mode", () => {

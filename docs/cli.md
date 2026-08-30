@@ -51,7 +51,7 @@ Reduced-accuracy runs are never silent: `graph` and `index` print a one-line `Ba
 
 ## Index and cache guidance
 
-Current-state, index-backed commands validate freshness automatically and default to the on-disk cache. The first query for a project may build the index; after one second, progress is written to stderr with a continuing heartbeat, leaving JSON stdout parseable. Later commands with the same `--root`, discovery configuration, graph options, and compatible build options reuse disk state under `.codegraph/cache/index-v1`, updating incrementally when files changed and rebuilding when compatibility cannot be established.
+Current-state, index-backed commands validate freshness automatically and default to the on-disk cache. The first query for a project may build the index; after one second, progress is written to stderr with a continuing heartbeat, leaving JSON stdout parseable. A cold or incompatible rebuild advances through source and metadata discovery before it starts build progress; path checks show completed and total counts when a total is known. Later commands with the same `--root`, discovery configuration, graph options, and compatible build options reuse disk state under `.codegraph/cache/index-v1`, updating incrementally when files changed and rebuilding when compatibility cannot be proven.
 
 `codegraph index` and `codegraph sync` prewarm or repair that state; they are not prerequisites for `deps`, `refs`, `inspect`, `impact`, `review`, or any other current-state query. Artifact production (`graph`, `artifact`), lifecycle commands, and historical comparisons (`drift`, `graph-delta`) keep explicit build and range semantics instead.
 
@@ -455,7 +455,7 @@ Short JSON shape:
 - Small orientation budgets default to `--health skip`. Medium and large default to `--health summary`, which counts cycles and unresolved imports while omitting duplicate health; use `--health full` when exhaustive duplicate counts matter.
 - Use `packet get` with file paths, symbol names, SQL object names, file/symbol/chunk/SQL/graph handles, or review handles to retrieve bounded evidence plus follow-up commands.
 - Agent commands and every current-state query default to disk cache and validate automatically; a whole-project `graph` or `index` run performs its explicit build. Use shared index flags such as `--cache`, `--cache-strict`, `--cache-verify`, `--threads`, `--native`, `--workers`, `--include-glob`, `--ignore-glob`, and `--no-gitignore` when the packet should match a specific scan mode.
-- Commands that load the project index first report cache validation as `Checking project index`, then report build or update progress only when index work is required. Warm cache hits complete as `Checked project index` without claiming a rebuild. Use `--progress` for redirected progress logs or `--no-progress` to suppress feedback.
+- Commands that load the project index first report cache validation as `Checking project index`. A cold or incompatible rebuild then reports source and metadata discovery, followed by counted path checks when available, before build or update progress. Warm cache hits complete as `Checked project index` without claiming a rebuild. Use `--progress` for redirected progress logs or `--no-progress` to suppress feedback.
 
 #### Live file views
 
