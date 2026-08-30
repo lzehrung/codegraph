@@ -152,6 +152,10 @@ function requiredArchiveFile(entry) {
   return "dist/bin/cli.js";
 }
 
+function tarArguments(operation, ...args) {
+  return process.platform === "win32" ? ["--force-local", operation, ...args] : [operation, ...args];
+}
+
 function validateArchiveEntryPath(archiveFile, archivePath) {
   const relativePath = archivePath.slice("package/".length);
   const pathSegments = relativePath.split("/");
@@ -191,7 +195,7 @@ function validateArchiveEntryTypes(archiveFile, output) {
 }
 
 async function validateArchiveEntries({ entry, tarballPath, manifestDirectory, commandRunner }) {
-  const pathResult = await commandRunner("tar", ["-tzf", tarballPath], { cwd: manifestDirectory });
+  const pathResult = await commandRunner("tar", tarArguments("-tzf", tarballPath), { cwd: manifestDirectory });
   requireTarCommand(pathResult, entry, `Listing archive ${entry.file} failed.`);
   const archivePaths = String(pathResult.rawStdout ?? "")
     .split(/\r?\n/)
@@ -203,7 +207,7 @@ async function validateArchiveEntries({ entry, tarballPath, manifestDirectory, c
   }
   for (const archivePath of archivePaths) validateArchiveEntryPath(entry.file, archivePath);
 
-  const typeResult = await commandRunner("tar", ["-tvzf", tarballPath], { cwd: manifestDirectory });
+  const typeResult = await commandRunner("tar", tarArguments("-tvzf", tarballPath), { cwd: manifestDirectory });
   requireTarCommand(typeResult, entry, `Listing archive ${entry.file} types failed.`);
   validateArchiveEntryTypes(entry.file, typeResult.rawStdout);
   return [pathResult, typeResult];
@@ -221,7 +225,7 @@ export async function inspectPackageTarball({ manifest, entry, manifestDirectory
       manifestDirectory,
       commandRunner,
     });
-    const extractionResult = await commandRunner("tar", ["-xzf", tarballPath, "-C", extractionDirectory], {
+    const extractionResult = await commandRunner("tar", tarArguments("-xzf", tarballPath, "-C", extractionDirectory), {
       cwd: manifestDirectory,
     });
     requireTarCommand(extractionResult, entry, `Extracting archive ${entry.file} failed.`);
