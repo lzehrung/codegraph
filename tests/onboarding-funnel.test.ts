@@ -506,6 +506,7 @@ describe("onboarding funnel smoke", () => {
       );
       expect(npmInstall?.args).toEqual([
         "install",
+        "--ignore-scripts",
         "--prefix",
         path.join(workspace, "npm-prefix"),
         "--no-save",
