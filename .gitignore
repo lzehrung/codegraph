@@ -9,7 +9,6 @@ target/
 release/
 packages/codegraph-core/dist/
 packages/codegraph-native/*.node
-packages/codegraph-native/Cargo.lock
 packages/codegraph-native/npm/
 packages/codegraph-native/artifacts/
 .bench-baselines/

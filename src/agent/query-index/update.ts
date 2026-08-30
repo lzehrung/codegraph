@@ -138,8 +138,8 @@ async function prepareFiles(
   try {
     // Loaded lazily on purpose: importing the worker pool pulls in Piscina, and CLI startup
     // time is asserted by tests/cli-startup-eager-modules.test.ts.
-    const { prepareQueryIndexFilesInWorker } = await import("./workerPool.js");
-    const prepared = await prepareQueryIndexFilesInWorker(
+    const { prepareQueryIndexFiles } = await import("./workerPool.js");
+    const prepared = await prepareQueryIndexFiles(
       projectRoot,
       files.map((file) => ({
         relativePath: file.path,

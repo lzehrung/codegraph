@@ -545,9 +545,7 @@ describe("persistent query index", () => {
 
   it("falls back to memory when worker preparation rejects", async () => {
     const root = await createRepo();
-    vi.spyOn(queryIndexWorkerPool, "prepareQueryIndexFilesInWorker").mockRejectedValue(
-      new Error("forced worker failure"),
-    );
+    vi.spyOn(queryIndexWorkerPool, "prepareQueryIndexFiles").mockRejectedValue(new Error("forced worker failure"));
 
     const session = createSession(root);
     const response = await search(session, root, "validate user");
@@ -581,10 +579,49 @@ describe("persistent query index", () => {
     expect(prepared).toBeNull();
   });
 
+  it("routes batches to the worker pool only once they amortize thread startup", () => {
+    const { shouldPrepareQueryIndexFilesInWorker: shouldUseWorker, QUERY_INDEX_WORKER_MIN_FILES: minFiles } =
+      queryIndexWorkerPool;
+
+    // The thread count is passed explicitly so the routing contract does not depend on how many
+    // CPUs the host running the suite happens to expose.
+    expect(shouldUseWorker(1, 4)).toBe(false);
+    expect(shouldUseWorker(minFiles - 1, 4)).toBe(false);
+    expect(shouldUseWorker(minFiles, 4)).toBe(true);
+    expect(shouldUseWorker(minFiles, 2)).toBe(true);
+
+    // One worker runs the batch serially behind pool startup and a structured clone per task, so
+    // it never beats preparing in-process no matter how large the batch is. Hosts reporting one
+    // or two available CPUs resolve to exactly one worker.
+    expect(shouldUseWorker(minFiles, 1)).toBe(false);
+    expect(shouldUseWorker(minFiles * 100, 1)).toBe(false);
+  });
+
+  it("prepares an identical batch in-process and in the worker pool", async () => {
+    const root = await createRepo();
+    const batch = [
+      { relativePath: "src/auth.ts", sourceIdentity: "identity-auth" },
+      { relativePath: "src/other.ts", sourceIdentity: "identity-other" },
+      { relativePath: "docs/guide.md", sourceIdentity: "identity-guide" },
+      { relativePath: "src/vanished.ts", sourceIdentity: "identity-vanished" },
+    ];
+
+    // Without a compiled worker the pool degrades to the in-process path, which would make the
+    // comparison below vacuous.
+    const workerPath = queryIndexWorkerPool.resolveQueryIndexWorkerPath();
+    expect((await fs.stat(workerPath)).isFile()).toBe(true);
+
+    const inProcess = await queryIndexWorkerPool.prepareQueryIndexFilesInProcess(root, batch);
+    const inWorker = await queryIndexWorkerPool.prepareQueryIndexFilesInWorker(root, batch);
+
+    expect(inProcess).toEqual(inWorker);
+    expect(inProcess?.map((file) => file.path)).toEqual(["src/auth.ts", "src/other.ts", "docs/guide.md"]);
+  });
+
   it("keeps the sidecar usable and records the omission when a file is skipped", async () => {
     const root = await createRepo();
-    const realPrepare = queryIndexWorkerPool.prepareQueryIndexFilesInWorker;
-    vi.spyOn(queryIndexWorkerPool, "prepareQueryIndexFilesInWorker").mockImplementation(
+    const realPrepare = queryIndexWorkerPool.prepareQueryIndexFiles;
+    vi.spyOn(queryIndexWorkerPool, "prepareQueryIndexFiles").mockImplementation(
       async (projectRoot, files) => await realPrepare(projectRoot, files.slice(1)),
     );
 

@@ -15,8 +15,13 @@ import {
 } from "../src/native/treeSitterNative.js";
 import { DUPLICATE_IDENTIFIER_KEYWORDS } from "../src/duplicate-keywords.js";
 import { normalizeDuplicateSourceTokens } from "../src/duplicate-token-normalization.js";
+import {
+  DUPLICATE_IDENTIFIER_CONTINUE_RANGES,
+  DUPLICATE_IDENTIFIER_START_RANGES,
+} from "../src/duplicate-identifier-ranges.js";
 import { getDuplicateAstContext } from "../src/duplicates/units.js";
 import {
+  DUPLICATE_TOKENIZER_REVISION,
   DUPLICATE_UNIT_CACHE_VERSION,
   closeDuplicateUnitCacheForIndex,
   duplicateUnitCacheSignature,
@@ -24,6 +29,8 @@ import {
   duplicateUnitDiskCache,
   tryLoadDuplicateUnitsFromCache,
 } from "../src/duplicates/unitCache.js";
+import { cacheRelativePath } from "../src/indexer/build-cache/module-cache.js";
+import { brotliCompressSync } from "node:zlib";
 import {
   fileIdentityKey,
   isFileIdentityCaseInsensitive,
@@ -603,6 +610,55 @@ export function normalizeSecondRows(rows: Array<{ count: number; price: number }
     expect(ascii).toEqual(unicodeGreek);
     expect(unicodeNfc.join(" ")).not.toMatch(/café|cafe|αβγ/i);
     expect(otherIdStart.join(" ")).not.toMatch(/\u2118/);
+  });
+
+  test("pins the duplicate identifier grammar instead of the host Unicode version", async () => {
+    // U+088F is XID_Start from Unicode 17 onward and is not one in the Unicode 16 tables the
+    // native tokenizer is pinned to. Reading \p{XID_Start} at runtime would make this answer
+    // depend on the host Node build's ICU, so the same file would fingerprint differently on
+    // different Node versions. Update this case only alongside a deliberate grammar change.
+    expect(normalizeDuplicateSourceTokens("\u088F")).toEqual(["\u088F"]);
+    expect(normalizeDuplicateSourceTokens("caf\u00E9")).toEqual(["<identifier>"]);
+
+    const tokenizerSource = await fsp.readFile(
+      path.resolve(process.cwd(), "src", "duplicate-token-normalization.ts"),
+      "utf8",
+    );
+    expect(tokenizerSource).not.toContain("p{XID_");
+  });
+
+  test("keeps the generated duplicate identifier ranges canonical", () => {
+    for (const ranges of [DUPLICATE_IDENTIFIER_START_RANGES, DUPLICATE_IDENTIFIER_CONTINUE_RANGES]) {
+      expect(ranges.length).toBeGreaterThan(0);
+      let previousEnd = -2;
+      for (const [from, to] of ranges) {
+        expect(from).toBeLessThanOrEqual(to);
+        expect(to).toBeLessThanOrEqual(0x10ffff);
+        // Sorted, non-overlapping, and never adjacent: adjacent ranges would mean the generator
+        // emitted a split that a regenerated table would merge, so `--check` would flap.
+        expect(from).toBeGreaterThan(previousEnd + 1);
+        previousEnd = to;
+      }
+    }
+
+    // Every start character must also be a continuation character; the reverse does not hold.
+    // Both lists are sorted and the continuation ranges are canonical, so a fully covered start
+    // range must sit inside one continuation range: spanning two would require a gap between
+    // them, and every code point in that gap would start an identifier without continuing one.
+    // Comparing ranges keeps this proportional to the range count rather than to the ~141k
+    // individual start code points.
+    let continueIndex = 0;
+    for (const [startFrom, startTo] of DUPLICATE_IDENTIFIER_START_RANGES) {
+      let covering = DUPLICATE_IDENTIFIER_CONTINUE_RANGES[continueIndex];
+      while (covering && covering[1] < startFrom) {
+        continueIndex += 1;
+        covering = DUPLICATE_IDENTIFIER_CONTINUE_RANGES[continueIndex];
+      }
+      const label = `U+${startFrom.toString(16)}-U+${startTo.toString(16)}`;
+      expect(covering, `${label} starts identifiers but has no continuation range`).toBeDefined();
+      expect(covering?.[0], `${label} starts identifiers below its continuation range`).toBeLessThanOrEqual(startFrom);
+      expect(covering?.[1], `${label} starts identifiers above its continuation range`).toBeGreaterThanOrEqual(startTo);
+    }
   });
 
   duplicateTokenizerParityTest(
@@ -2671,6 +2727,47 @@ export function processInvoiceItems(items: Array<{ price: number; qty: number }>
     // tryLoadDuplicateUnitsFromCache must return null because version does not match
     const loaded = tryLoadDuplicateUnitsFromCache(index, file, variant);
     expect(loaded).toBeNull();
+  } finally {
+    if (index) {
+      closeDuplicateUnitCacheForIndex(index);
+    }
+  }
+});
+
+test("C5: duplicate units cached under a previous tokenizer revision are not reused", async () => {
+  const root = await makeTempProject();
+  let index;
+  try {
+    const file = await writeProjectFile(root, "src/invoice.ts", "export const total = 1;\n");
+    index = await buildProjectIndex(root, { cache: "disk" });
+
+    const variant = duplicateUnitCacheVariant(index, 10, 1000, 5, 20);
+    // A cached unit carries the tokens the identifier grammar produced, so the grammar's revision
+    // has to key the variant. Without it, DUPLICATE_UNIT_CACHE_MAX_AGE_MS would let units
+    // tokenized by a superseded grammar survive an upgrade for thirty days.
+    expect(JSON.parse(variant)).toMatchObject({ tokenizerRevision: DUPLICATE_TOKENIZER_REVISION });
+    const legacyVariant = JSON.stringify({
+      ...(JSON.parse(variant) as Record<string, unknown>),
+      tokenizerRevision: DUPLICATE_TOKENIZER_REVISION - 1,
+    });
+
+    const diskDb = duplicateUnitDiskCache(index);
+    if (!diskDb?.statements) throw new Error("expected an open duplicate-unit cache database");
+    const sig = duplicateUnitCacheSignature(index, file);
+    if (!sig) throw new Error("expected a duplicate-unit cache signature");
+    diskDb.statements.write.run(
+      cacheRelativePath(root, file),
+      legacyVariant,
+      sig,
+      DUPLICATE_UNIT_CACHE_VERSION,
+      brotliCompressSync(Buffer.from("[]", "utf8")),
+      Date.now(),
+    );
+
+    // The seeded entry is intact and loadable under the revision that wrote it, so the miss below
+    // is the revision keying the variant rather than a malformed row.
+    expect(tryLoadDuplicateUnitsFromCache(index, file, legacyVariant)).toEqual([]);
+    expect(tryLoadDuplicateUnitsFromCache(index, file, variant)).toBeNull();
   } finally {
     if (index) {
       closeDuplicateUnitCacheForIndex(index);

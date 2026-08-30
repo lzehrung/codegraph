@@ -29,6 +29,16 @@
 - Installation guidance must use `@lzehrung/codegraph` and the `@lzehrung` GitHub Packages registry. Keep detailed install docs in `docs/installation.md`.
 - Any persistent storage schema change (e.g. SQLite tables/columns/indexes) MUST include a migration path for existing on-disk data. If using `CREATE TABLE IF NOT EXISTS`, you must also `ALTER TABLE` / backfill as needed (or introduce explicit schema versioning) and add a regression test that starts from an older schema to prove upgrades work.
 - DO NOT use curly quote variants or other non-standard characters humans would not type with a standard QWERTY keyboard.
+- Duplicate-tokenizer fingerprints must not shift with the toolchain. The TypeScript and native
+  identifier grammars are pinned to one Unicode version: the native side through the exact
+  `unicode-ident` pin in `packages/codegraph-native/Cargo.toml`, the TypeScript side through the
+  generated `src/duplicate-identifier-ranges.ts`. Never resolve that grammar with a Unicode
+  property escape, which follows the host Node build's Unicode version. Changing the crate pin
+  means rerunning `npm run generate:duplicate-identifier-ranges` and bumping
+  `DUPLICATE_TOKENIZER_REVISION` in the same change, so cached duplicate units tokenized by the
+  previous grammar are recomputed instead of surviving `DUPLICATE_UNIT_CACHE_MAX_AGE_MS`.
+- `packages/codegraph-native/Cargo.lock` is committed because the crate ships prebuilt binaries.
+  Update it in the same change as any `Cargo.toml` dependency edit.
 
 ## Path, Cache, and Review Safety
 

@@ -22,6 +22,23 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - Project metadata discovery now reuses the Git file listing that source discovery already
   produced and omits Git-ignored manifests. An explicitly requested Git-ignored root keeps the
   filesystem fallback and can return ignored metadata.
+- Query index preparation now runs in-process for small batches and only starts a worker pool
+  once a batch is large enough to amortize thread startup, so incremental updates and small
+  projects no longer pay for spawning and tearing down worker threads. Hosts that resolve to a
+  single worker always prepare in-process, since one worker pays the startup cost without
+  parallelizing anything.
+
+### Fixed
+
+- Duplicate fingerprints no longer depend on the host Node build's Unicode version. The
+  TypeScript tokenizer read Unicode property escapes while the native tokenizer is pinned to
+  Unicode 16, so on Node builds carrying newer Unicode data the two disagreed on characters such
+  as U+088F and the same file fingerprinted differently with and without the native addon. The
+  TypeScript grammar now comes from generated ranges pinned to the native tokenizer's version,
+  and the duplicate-unit cache revision moves with it so units tokenized by the previous grammar
+  are recomputed rather than reused.
+- `packages/codegraph-native/Cargo.lock` is committed instead of ignored, so the published native
+  binaries build from a reproducible dependency graph.
 
 ## [2.3.2] - 2026-08-28
 

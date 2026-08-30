@@ -56,6 +56,8 @@
     "check": "npm run security:production && npm run typecheck && npm run lint && npm run format:check && npm run build && npm run test:native && npm run test:coverage && npm run fixtures:check-clean",
     "build": "npm run clean && tsc -p tsconfig.json && node ./scripts/bundle-cli.mjs && node ./scripts/stage-core-package.mjs && node ./scripts/build-native-if-available.mjs",
     "generate:duplicate-keywords": "node ./scripts/generate-duplicate-keywords.mjs",
+    "generate:duplicate-identifier-ranges": "node ./scripts/generate-duplicate-identifier-ranges.mjs",
+    "generate:duplicate-identifier-ranges:check": "node ./scripts/generate-duplicate-identifier-ranges.mjs --check",
     "format": "prettier --write . --ignore-unknown",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.tests.json --noEmit",
     "lint": "npx eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
