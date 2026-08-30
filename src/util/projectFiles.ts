@@ -159,8 +159,15 @@ export type ProjectFileDiscoveryOptions = {
   onSymlinkDirectoriesDiscovered?: (directories: readonly string[], mode: SymlinkProbeMode) => void;
 };
 
+type DiscoveryWorkProgress = {
+  activity: string;
+  current: number;
+  total: number;
+};
+
 type InternalProjectFileDiscoveryOptions = ProjectFileDiscoveryOptions & {
   onGitCandidatesDiscovered?: (candidates: GitCandidateSet | null) => void;
+  onDiscoveryProgress?: (progress: DiscoveryWorkProgress) => void;
 };
 
 type ProjectMetadataPublicOptions = Pick<
@@ -171,6 +178,7 @@ type ProjectMetadataPublicOptions = Pick<
 type ProjectMetadataDiscoveryOptions = ProjectMetadataPublicOptions & {
   knownGitCandidates?: GitCandidateSet | null;
   onGitCandidatesDiscovered?: (candidates: GitCandidateSet | null) => void;
+  onDiscoveryProgress?: (progress: DiscoveryWorkProgress) => void;
 };
 
 type GitignoreRule = {
@@ -196,12 +204,25 @@ type SafeSymlinkDirectoryCrawlOptions = {
   candidatePaths?: readonly string[];
   resolvedSafeSymlinkDirectories?: readonly string[];
   onSymlinkDirectoriesDiscovered?: (directories: readonly string[], mode: SymlinkProbeMode) => void;
+  onPathCheckProgress?: (current: number, total: number) => void;
 };
 
 type RootSafePath = {
   path: string;
   realPath: string;
 };
+
+function createPathCheckProgressReporter(
+  total: number,
+  onProgress: ((current: number, total: number) => void) | undefined,
+): () => void {
+  onProgress?.(0, total);
+  let completed = 0;
+  return () => {
+    completed += 1;
+    if (completed === total || completed % 100 === 0) onProgress?.(completed, total);
+  };
+}
 
 function isPresent(value: string | undefined): value is string {
   return value !== undefined;
@@ -764,6 +785,14 @@ async function listProjectFilesInternal(
             ignore: translatedUserIgnoreGlobs,
           })
         : [];
+    const reportSourceSymlinkChecks = options?.onDiscoveryProgress
+      ? (current: number, total: number) =>
+          options.onDiscoveryProgress?.({ activity: "Checking source symlinks", current, total })
+      : undefined;
+    const reportSourcePathChecks = options?.onDiscoveryProgress
+      ? (current: number, total: number) =>
+          options.onDiscoveryProgress?.({ activity: "Checking source file paths", current, total })
+      : undefined;
     const symlinkOptions = {
       globRoot,
       ...(gitCandidates ? { candidatePaths: gitCandidates.files } : {}),
@@ -773,6 +802,7 @@ async function listProjectFilesInternal(
       ...(options?.onSymlinkDirectoriesDiscovered
         ? { onSymlinkDirectoriesDiscovered: options.onSymlinkDirectoriesDiscovered }
         : {}),
+      ...(reportSourceSymlinkChecks ? { onPathCheckProgress: reportSourceSymlinkChecks } : {}),
     };
     const safeSymlinkDirectories = await resolveSafeSymlinkDirectories(
       root,
@@ -796,6 +826,7 @@ async function listProjectFilesInternal(
     const rootSafeFiles = await filterRealPathsWithinRootEntries(
       [...files, ...includedOverrideFiles, ...linkedFiles, ...linkedOverrideFiles],
       realRoot,
+      reportSourcePathChecks,
     );
     const seen = new Set<string>();
     return rootSafeFiles
@@ -894,6 +925,23 @@ async function isSafeSymlinkDirectory(root: string, linkPath: string, realRoot: 
   }
 }
 
+async function verifySafeSymlinkDirectories(
+  root: string,
+  realRoot: string,
+  paths: readonly string[],
+  onPathCheckProgress: ((current: number, total: number) => void) | undefined,
+): Promise<string[]> {
+  const reportPathCheck = createPathCheckProgressReporter(paths.length, onPathCheckProgress);
+  const verified = await mapLimitSemaphore(Array.from(paths), REALPATH_FILTER_CONCURRENCY, async (linkPath) => {
+    try {
+      return (await isSafeSymlinkDirectory(root, linkPath, realRoot)) ? linkPath : null;
+    } finally {
+      reportPathCheck();
+    }
+  });
+  return verified.filter((entry): entry is string => entry !== null);
+}
+
 /**
  * Resolve the symlinked directories under `root` that are safe to crawl.
  *
@@ -911,12 +959,12 @@ async function resolveSafeSymlinkDirectories(
   options: SafeSymlinkDirectoryCrawlOptions,
 ): Promise<string[]> {
   if (options.knownSymlinkDirectories !== undefined) {
-    const verified = await mapLimitSemaphore(
+    const resolved = await verifySafeSymlinkDirectories(
+      root,
+      realRoot,
       Array.from(new Set(options.knownSymlinkDirectories)),
-      REALPATH_FILTER_CONCURRENCY,
-      async (linkPath) => ((await isSafeSymlinkDirectory(root, linkPath, realRoot)) ? linkPath : null),
+      options.onPathCheckProgress,
     );
-    const resolved = verified.filter((entry): entry is string => entry !== null);
     options.onSymlinkDirectoriesDiscovered?.(resolved, "known");
     return resolved;
   }
@@ -930,10 +978,7 @@ async function resolveSafeSymlinkDirectories(
       if (!isRelativePathInside(relativePath)) return false;
       return !ignoreMatchers.some((matcher) => matcher(relativePath));
     });
-    const verified = await mapLimitSemaphore(candidatePaths, REALPATH_FILTER_CONCURRENCY, async (linkPath) =>
-      (await isSafeSymlinkDirectory(root, linkPath, realRoot)) ? linkPath : null,
-    );
-    const discovered = verified.filter((entry): entry is string => entry !== null);
+    const discovered = await verifySafeSymlinkDirectories(root, realRoot, candidatePaths, options.onPathCheckProgress);
     options.onSymlinkDirectoriesDiscovered?.(discovered, "git-candidates");
     return discovered;
   }
@@ -946,12 +991,12 @@ async function resolveSafeSymlinkDirectories(
     objectMode: true,
     ignore,
   })) as FastGlobEntry[];
-  const candidates = await mapLimitSemaphore(
+  const discovered = await verifySafeSymlinkDirectories(
+    root,
+    realRoot,
     entries.filter((entry) => entry.dirent.isSymbolicLink()).map((entry) => entry.path),
-    REALPATH_FILTER_CONCURRENCY,
-    async (linkPath) => ((await isSafeSymlinkDirectory(root, linkPath, realRoot)) ? linkPath : null),
+    options.onPathCheckProgress,
   );
-  const discovered = candidates.filter((entry): entry is string => entry !== null);
   options.onSymlinkDirectoriesDiscovered?.(discovered, "filesystem");
   return discovered;
 }
@@ -1001,20 +1046,31 @@ async function listEntriesFromSafeSymlinkDirectories(
   return [...filesByPath.values()];
 }
 
-async function filterRealPathsWithinRootEntries(paths: string[], realRoot: string): Promise<RootSafePath[]> {
+async function filterRealPathsWithinRootEntries(
+  paths: string[],
+  realRoot: string,
+  onPathCheckProgress?: (current: number, total: number) => void,
+): Promise<RootSafePath[]> {
+  const reportPathCheck = createPathCheckProgressReporter(paths.length, onPathCheckProgress);
   const filtered = await mapLimitSemaphore(paths, REALPATH_FILTER_CONCURRENCY, async (filePath) => {
     try {
       const realPath = await fsp.realpath(filePath);
       return isFilePathWithinRoot(realRoot, realPath) ? { path: filePath, realPath } : null;
     } catch {
       return null;
+    } finally {
+      reportPathCheck();
     }
   });
   return filtered.filter((entry): entry is RootSafePath => entry !== null);
 }
 
-export async function filterRealPathsWithinRoot(paths: string[], realRoot: string): Promise<string[]> {
-  const entries = await filterRealPathsWithinRootEntries(paths, realRoot);
+export async function filterRealPathsWithinRoot(
+  paths: string[],
+  realRoot: string,
+  onPathCheckProgress?: (current: number, total: number) => void,
+): Promise<string[]> {
+  const entries = await filterRealPathsWithinRootEntries(paths, realRoot, onPathCheckProgress);
   return entries.map((entry) => entry.path);
 }
 
@@ -1093,6 +1149,18 @@ async function discoverProjectFilesInternal(
       gitCandidates = await listGitCandidateFiles(root, options?.logLevel);
     }
     options?.onGitCandidatesDiscovered?.(gitCandidates);
+    const reportMetadataSymlinkChecks = options?.onDiscoveryProgress
+      ? (current: number, total: number) =>
+          options.onDiscoveryProgress?.({ activity: "Checking project metadata symlinks", current, total })
+      : undefined;
+    const reportMetadataFileChecks = options?.onDiscoveryProgress
+      ? (current: number, total: number) =>
+          options.onDiscoveryProgress?.({ activity: "Checking project metadata files", current, total })
+      : undefined;
+    const reportMetadataDirectoryChecks = options?.onDiscoveryProgress
+      ? (current: number, total: number) =>
+          options.onDiscoveryProgress?.({ activity: "Checking project metadata directories", current, total })
+      : undefined;
     let rootSafeMatches: string[];
     if (gitCandidates) {
       const gitignoreIndex = await buildGitignoreIndex(
@@ -1126,6 +1194,7 @@ async function discoverProjectFilesInternal(
         ...(options?.onSymlinkDirectoriesDiscovered
           ? { onSymlinkDirectoriesDiscovered: options.onSymlinkDirectoriesDiscovered }
           : {}),
+        ...(reportMetadataSymlinkChecks ? { onPathCheckProgress: reportMetadataSymlinkChecks } : {}),
       };
       const safeSymlinkDirectories = await resolveSafeSymlinkDirectories(
         root,
@@ -1145,7 +1214,11 @@ async function discoverProjectFilesInternal(
           resolvedSafeSymlinkDirectories: safeSymlinkDirectories,
         },
       );
-      const rootSafeCandidateEntries = await filterRealPathsWithinRootEntries(gitCandidates.files, realRoot);
+      const rootSafeCandidateEntries = await filterRealPathsWithinRootEntries(
+        gitCandidates.files,
+        realRoot,
+        reportMetadataFileChecks,
+      );
       const filteredFiles = filterGitIgnoredEntries(rootSafeCandidateEntries);
       const fileMatches = filteredFiles.filter((file) =>
         PROJECT_FILE_DEFINITIONS.some(
@@ -1161,11 +1234,11 @@ async function discoverProjectFilesInternal(
       const safeSymlinkDirectoryKeys = new Set(safeSymlinkDirectories.map(fileIdentityKey));
       const directoryMatches = [
         ...filterGitIgnoredEntries(
-          await filterRealPathsWithinRootEntries(rawCandidateDirectories, realRoot),
+          await filterRealPathsWithinRootEntries(rawCandidateDirectories, realRoot, reportMetadataDirectoryChecks),
           candidateDirectoryKeys,
         ),
         ...filterGitIgnoredEntries(
-          await filterRealPathsWithinRootEntries(safeSymlinkDirectories, realRoot),
+          await filterRealPathsWithinRootEntries(safeSymlinkDirectories, realRoot, reportMetadataDirectoryChecks),
           safeSymlinkDirectoryKeys,
         ),
       ].filter((directory) =>
@@ -1181,6 +1254,7 @@ async function discoverProjectFilesInternal(
         await filterRealPathsWithinRootEntries(
           linkedMatches.map((match) => (match.endsWith("/") ? match.slice(0, -1) : match)),
           realRoot,
+          reportMetadataFileChecks,
         ),
         linkedDirectoryKeys,
       );
@@ -1210,11 +1284,13 @@ async function discoverProjectFilesInternal(
           ...(options?.onSymlinkDirectoriesDiscovered
             ? { onSymlinkDirectoriesDiscovered: options.onSymlinkDirectoriesDiscovered }
             : {}),
+          ...(reportMetadataSymlinkChecks ? { onPathCheckProgress: reportMetadataSymlinkChecks } : {}),
         },
       );
       rootSafeMatches = await filterRealPathsWithinRoot(
         [...matches, ...linkedMatches].map((match) => (match.endsWith("/") ? match.slice(0, -1) : match)),
         realRoot,
+        reportMetadataFileChecks,
       );
     }
     const entries: ProjectFileInfo[] = [];

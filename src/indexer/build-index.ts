@@ -616,15 +616,20 @@ function emitIndexLifecycleProgress(
   });
 }
 
-function emitIndexCheckActivity(opts: BuildOptions | undefined, activity: string): void {
+function emitIndexCheckActivity(
+  opts: BuildOptions | undefined,
+  activity: string,
+  current: number = 0,
+  total: number = 0,
+): void {
   opts?.onProgress?.({
     type: "progress",
     phase: "update",
     mode: "check",
     message: activity,
     activity,
-    current: 0,
-    total: 0,
+    current,
+    total,
   });
 }
 
@@ -1136,6 +1141,10 @@ async function buildProjectIndexWithManifestOptions(
     const onGitCandidatesDiscovered = (candidates: GitCandidateSet | null) => {
       discoveredGitCandidates = candidates;
     };
+    const onDiscoveryProgress = helperOpts?.reportDiscoveryProgress
+      ? (progress: { activity: string; current: number; total: number }) =>
+          emitIndexCheckActivity(opts, progress.activity, progress.current, progress.total)
+      : undefined;
     // When the hint is unknown, listProjectFiles() and discoverProjectFiles() must run
     // sequentially rather than in Promise.all to avoid duplicate full-tree probes. The Git
     // candidate callback below reuses that same listing so metadata discovery does not spawn
@@ -1150,6 +1159,7 @@ async function buildProjectIndexWithManifestOptions(
         ...(knownSymlinkDirectories !== undefined ? { knownSymlinkDirectories } : {}),
         onSymlinkDirectoriesDiscovered,
         onGitCandidatesDiscovered,
+        ...(onDiscoveryProgress ? { onDiscoveryProgress } : {}),
       },
     );
     const additionalFileCandidates = await normalizeIndexedFileInputsWithinRoot(
@@ -1167,6 +1177,7 @@ async function buildProjectIndexWithManifestOptions(
       ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
       ...(discoveredSymlinkDirectories !== undefined ? { knownSymlinkDirectories: discoveredSymlinkDirectories } : {}),
       ...(discoveredGitCandidates !== undefined ? { knownGitCandidates: discoveredGitCandidates } : {}),
+      ...(onDiscoveryProgress ? { onDiscoveryProgress } : {}),
     });
     return await buildIndexFromFileListShared(projectRoot, files, opts, {
       manifestMode: useDiskCache ? "read-write" : "off",

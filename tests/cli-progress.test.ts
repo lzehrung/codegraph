@@ -92,6 +92,15 @@ describe("CLI index progress", () => {
     display.update({
       type: "progress",
       phase: "update",
+      mode: "check",
+      message: "Checking source file paths",
+      activity: "Checking source file paths",
+      current: 100,
+      total: 200,
+    });
+    display.update({
+      type: "progress",
+      phase: "update",
       mode: "build",
       message: "Indexed /private/project/secret.ts",
       current: 1,
@@ -99,6 +108,7 @@ describe("CLI index progress", () => {
     });
 
     expect(chunks.join("")).toContain("[Progress] Discovering source files.\n");
+    expect(chunks.join("")).toContain("[Progress] Checking source file paths: 100/200 files.\n");
     expect(chunks.join("")).not.toContain("0 files processed.\n");
     expect(chunks.join("")).not.toContain("secret.ts");
   });

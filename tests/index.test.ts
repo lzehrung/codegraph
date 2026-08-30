@@ -80,6 +80,7 @@ describe("Project Indexing", () => {
     const file = path.join(root, "main.ts");
     const updates: ProgressUpdate[] = [];
     await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+    await fsp.writeFile(path.join(root, "package.json"), '{"name":"progress-test"}\n', "utf8");
 
     try {
       await buildProjectIndexIncremental(root, {
@@ -87,10 +88,23 @@ describe("Project Indexing", () => {
         onProgress: (update) => updates.push(update),
       });
 
-      const discoveryActivities = updates
-        .filter((update) => update.phase === "update" && update.mode === "check")
-        .map((update) => update.activity);
-      expect(discoveryActivities).toEqual(["Discovering source files", "Discovering project metadata"]);
+      const discoveryUpdates = updates.filter((update) => update.phase === "update" && update.mode === "check");
+      expect(discoveryUpdates.map((update) => update.activity)).toEqual(
+        expect.arrayContaining([
+          "Discovering source files",
+          "Checking source file paths",
+          "Discovering project metadata",
+          "Checking project metadata files",
+        ]),
+      );
+      expect(discoveryUpdates).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ activity: "Checking source file paths", current: 0, total: 2 }),
+          expect.objectContaining({ activity: "Checking source file paths", current: 2, total: 2 }),
+          expect.objectContaining({ activity: "Checking project metadata files", current: 0, total: 1 }),
+          expect.objectContaining({ activity: "Checking project metadata files", current: 1, total: 1 }),
+        ]),
+      );
       expect(updates.findIndex((update) => update.activity === "Discovering source files")).toBeGreaterThan(0);
       expect(updates.findIndex((update) => update.phase === "start" && update.mode === "build")).toBeGreaterThan(
         updates.findIndex((update) => update.activity === "Discovering project metadata"),

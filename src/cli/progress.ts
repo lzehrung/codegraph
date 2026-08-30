@@ -219,7 +219,11 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
       }
       const isComplete = update.total > 0 && update.current >= update.total;
       if (rendered && (update.current === 1 || isComplete || (update.current > 0 && update.current % 100 === 0))) {
-        write(`[Progress] ${formatFileCount(update.current)} processed.\n`);
+        if (update.activity !== undefined) {
+          write(`[Progress] ${activity}:${formatProgressCount(update.current, update.total)}.\n`);
+        } else {
+          write(`[Progress] ${formatFileCount(update.current)} processed.\n`);
+        }
       }
     },
     clear: () => {},
