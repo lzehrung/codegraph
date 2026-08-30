@@ -638,16 +638,23 @@ export function normalizeSecondRows(rows: Array<{ count: number; price: number }
       }
     }
 
-    const startCodePoints = new Set<number>();
-    for (const [from, to] of DUPLICATE_IDENTIFIER_START_RANGES) {
-      for (let codePoint = from; codePoint <= to; codePoint += 1) startCodePoints.add(codePoint);
-    }
     // Every start character must also be a continuation character; the reverse does not hold.
-    for (const codePoint of startCodePoints) {
-      const isContinue = DUPLICATE_IDENTIFIER_CONTINUE_RANGES.some(
-        ([from, to]) => codePoint >= from && codePoint <= to,
-      );
-      expect(isContinue, `U+${codePoint.toString(16)} starts an identifier but cannot continue one`).toBe(true);
+    // Both lists are sorted and the continuation ranges are canonical, so a fully covered start
+    // range must sit inside one continuation range: spanning two would require a gap between
+    // them, and every code point in that gap would start an identifier without continuing one.
+    // Comparing ranges keeps this proportional to the range count rather than to the ~141k
+    // individual start code points.
+    let continueIndex = 0;
+    for (const [startFrom, startTo] of DUPLICATE_IDENTIFIER_START_RANGES) {
+      let covering = DUPLICATE_IDENTIFIER_CONTINUE_RANGES[continueIndex];
+      while (covering && covering[1] < startFrom) {
+        continueIndex += 1;
+        covering = DUPLICATE_IDENTIFIER_CONTINUE_RANGES[continueIndex];
+      }
+      const label = `U+${startFrom.toString(16)}-U+${startTo.toString(16)}`;
+      expect(covering, `${label} starts identifiers but has no continuation range`).toBeDefined();
+      expect(covering?.[0], `${label} starts identifiers below its continuation range`).toBeLessThanOrEqual(startFrom);
+      expect(covering?.[1], `${label} starts identifiers above its continuation range`).toBeGreaterThanOrEqual(startTo);
     }
   });
 
