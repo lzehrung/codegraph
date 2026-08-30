@@ -56,7 +56,7 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
     if (!active) return;
     const frame = SPINNER_FRAMES[frameIndex % SPINNER_FRAMES.length]!;
     frameIndex += 1;
-    const count = formatProgressCount(current, total);
+    const count = hasProgressCount(mode, current, total) ? formatProgressCount(current, total) : "";
     write(`${CLEAR_LINE}${activity}... ${frame}${count}`);
     rendered = true;
   };
@@ -143,6 +143,10 @@ function formatProgressCount(current: number, total: number): string {
   return ` ${formatFileCount(current)} processed`;
 }
 
+function hasProgressCount(mode: NonNullable<ProgressUpdate["mode"]>, current: number, total: number): boolean {
+  return mode !== "check" || current > 0 || total > 0;
+}
+
 function createLogProgressDisplay(write: (chunk: string) => void, delayMs: number = 0): CliProgressDisplay {
   let active = false;
   let rendered = false;
@@ -169,7 +173,7 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
     write(`[Progress] ${activity}.\n`);
     heartbeat = setInterval(() => {
       if (!active) return;
-      const count = mode === "check" && current === 0 && total === 0 ? "" : `:${formatProgressCount(current, total)}`;
+      const count = hasProgressCount(mode, current, total) ? `:${formatProgressCount(current, total)}` : "";
       write(`[Progress] ${activity}${count}.\n`);
     }, 1_000);
     heartbeat.unref();

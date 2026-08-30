@@ -45,7 +45,7 @@ Use `--root` to define the boundary for config lookup, path confinement, and out
 - `languages.extensions` maps literal suffixes such as `.tpl` to supported language IDs; longest suffix wins, while `.vue` and `.svelte` cannot be remapped.
 - CLI `--include-glob` and `--ignore-glob` values are one-off filters relative to each active scan root.
 - Use `--no-gitignore` only when ignored files are intentionally in scope.
-- Index-backed commands stay quiet for their first second, then write progress and a heartbeat to stderr. Use `--progress` for immediate logs or `--no-progress` to suppress feedback; JSON stdout remains unchanged.
+- Index-backed commands stay quiet for their first second, then write progress and a heartbeat to stderr. Cold or incompatible rebuilds report source and metadata discovery before build progress; path checks include completed and total counts when known. Use `--progress` for immediate logs or `--no-progress` to suppress feedback; JSON stdout remains unchanged.
 
 ## Choose the Smallest Follow-up
 

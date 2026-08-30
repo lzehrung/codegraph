@@ -221,6 +221,38 @@ describe("CLI index progress", () => {
     if (!total) expect(output).not.toContain("0/0");
   });
 
+  it("omits unknown counts from interactive discovery activity", async () => {
+    const chunks: string[] = [];
+    vi.useFakeTimers();
+
+    try {
+      const display = createCliProgressDisplay({ presentation: "interactive", write: (chunk) => chunks.push(chunk) });
+      display.update({
+        type: "progress",
+        phase: "start",
+        mode: "check",
+        message: "Checking project index",
+        current: 0,
+        total: 0,
+      });
+      display.update({
+        type: "progress",
+        phase: "update",
+        mode: "check",
+        message: "Discovering source files",
+        activity: "Discovering source files",
+        current: 0,
+        total: 0,
+      });
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(chunks.join("")).toContain("\r\u001b[2KDiscovering source files... \\");
+      expect(chunks.join("")).not.toContain("0 files processed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not write file paths in interactive mode", () => {
     const chunks: string[] = [];
     const display = createCliProgressDisplay({ presentation: "interactive", write: (chunk) => chunks.push(chunk) });
