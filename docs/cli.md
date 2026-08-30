@@ -229,7 +229,7 @@ codegraph affected --base HEAD --head WORKTREE --filter "tests/**/*.test.ts" --q
 
 ### Symbols, navigation, grep, and chunking
 
-```bash
+````bash
 # Build the full project index
 codegraph index
 
@@ -279,6 +279,19 @@ codegraph search "public users" --mode sql --json
 codegraph search "handle login" --from src/auth.ts --mode graph --depth 1 --json
 codegraph search --help
 
+### Explore query scope
+
+`explore` makes one default hybrid search pass over symbol names, paths, indexed text chunks, and graph evidence. It then derives packets, dependency paths, reverse dependencies, and candidate tests from the highest-ranked anchors. It does not split a natural-language question into subqueries, plan more searches, infer unstated relations, or prove runtime behavior. The `analysis.mode: "semantic"` result describes parser-backend quality, not semantic or agentic query reasoning.
+
+For a compound question, first search concrete names and terms separately, then inspect the strongest targets:
+
+```sh
+codegraph search "Bridge invoke adapter" --json
+codegraph grep "spawn|timeout|cancel|environment" --glob "src/**/*.ts"
+codegraph explain <handle>
+codegraph packet get <handle>
+````
+
 `symbols` performs deterministic symbol-identity lookup, unlike hybrid `search`, which also ranks paths, prose, SQL, snippets, and graph evidence. Exact qualified names such as `src/session.ts::CodeReviewSession` rank before exact local/export names, prefixes, identifier tokens, and substrings.
 
 Use `--kind <kind,...>`, `--exported`, `--include-imports`, `--file-glob <project-relative-glob>`, and `--limit <0-500>` to compose filters. Imports are excluded by default, the default limit is 50, and an empty query requires `--kind` or `--file-glob`; concise pretty output is the default and `--json` returns the structured envelope.
@@ -306,6 +319,7 @@ Pretty rename summaries are the default. `--json` reports exact project-relative
 Use optional `--rename <new-name>` to include the authoritative nested rename preview. `--max-references`, `--max-callers`, and `--max-hierarchy` are independent `0-500` bounds; pretty output summarizes counts, safety, and section issues by default; `--json` returns the complete structured packet, and neither mode changes source or exposes an apply command.
 
 # Explain a file, symbol, SQL object, or search result handle
+
 codegraph explain src/auth.ts --json
 codegraph explain validateUser --json
 codegraph explain public.users --json
@@ -315,12 +329,13 @@ codegraph explain --help
 Use `explain --changed-context` when the target comes from a changed-file or review workflow and you need bounded source context around changed ranges in the structured response.
 
 # Build an agent-ready artifact bundle
+
 codegraph artifact --root . --out codegraph-out --json
 codegraph artifact --sqlite --root . --out codegraph-out --json
 codegraph artifact --root . --out codegraph-out --sqlite --graph-json --report --questions --force --json
 
-
 # Serve MCP tools over the same search, navigation, artifact, and review layer
+
 codegraph mcp --root . --stdio
 codegraph mcp --root . --artifact codegraph-out --stdio
 codegraph mcp --root . --stdio --allow-build
@@ -330,6 +345,7 @@ codegraph mcp --root . --stdio --warmup
 codegraph mcp --root . --port 7331 --warmup-symbols
 
 # Install or preview agent client integration
+
 codegraph install --target codex,claude --dry-run
 codegraph install --target codex,claude --yes
 codegraph install --target codex --yes --force
@@ -340,44 +356,54 @@ codegraph uninstall --target codex --yes
 codegraph install --help
 
 # Chunk a file for LLM processing
+
 codegraph chunk src/utils.js
 
 # Output text chunks as JSON
+
 codegraph chunk package.json --text --max-tokens 200
 
 # Override language detection and token limits
+
 codegraph chunk config.yaml --language yaml --min-tokens 100 --max-tokens 300
 
 # Detect duplicate and near-duplicate code units
+
 codegraph duplicates --root . ./src --profile cleanup
 codegraph duplicates --root . ./src ./packages/app --include-same-file
 codegraph duplicates --root . ./src --ignore-glob "tests/**" --ignore-glob "docs/**"
-codegraph duplicates --root . ./tests --ignore-root-glob "tests/languages/**"
+codegraph duplicates --root . ./tests --ignore-root-glob "tests/languages/\*\*"
 codegraph duplicates ./src --json --sort reduced-lines
 codegraph duplicates ./src --json --raw-pairs
 codegraph duplicates --help
 
 # Compare architecture drift between git refs
+
 codegraph drift ./src --base origin/main --head HEAD --graph-edges summary --public-api removals
 codegraph drift ./src --base origin/main --head HEAD --json
 codegraph drift ./src --base origin/main --head HEAD --fail-on new-cycle,public-api-removal
 codegraph drift --base-artifact ./baseline/codegraph-out --head . --json
 
 # Go to definition
+
 codegraph goto <file>::<symbol>
 codegraph goto <file>:<line>:<column>
 
 # Find references
+
 codegraph refs <file>::<symbol>
-codegraph refs <file>  # all symbols in the file
+codegraph refs <file> # all symbols in the file
 codegraph refs <file>:<line>:<column>
 
 # Run a Tree-sitter query across the repo
+
 codegraph grep --query '(function_declaration name: (identifier) @name)'
 
 # Run a plain-text regex grep across the repo
+
 codegraph grep 'eval\(' --ignore-case
-```
+
+````
 
 `grep --json` does not return a bare hit array; it returns an envelope `{ items, limit, totalSeen, truncated, omitted }` so callers can tell a complete result from a capped prefix. `limit` always means the effective cap that was applied: for text greps it is the effective `--max-hits` value (default 5000, capped at 200000), and for uncapped `--query` AST greps it is `null`. `truncated` is exact for text greps (the scan probes one hit past the effective limit, so a true count equal to the limit still reports `truncated: false`, including at the 200000 ceiling) and is always `false` for AST greps today. When text results are truncated, `totalSeen` and `omitted` are lower bounds from the bounded probe, not full corpus-wide counts. Human-readable grep output stays a plain streamed hit list.
 
@@ -397,7 +423,7 @@ HTTP enforces Host and Origin policies. A missing `Origin` is accepted for non-b
 codegraph viewer --root . --open
 codegraph viewer --root . --graph codegraph-out/graph.json --open
 codegraph viewer --root . --port 4173 --print-url
-```
+````
 
 Without `--graph`, each UI load or reload builds the current project graph through the automatically validated `.codegraph/cache/index-v1` index; `init`, `index`, and exported JSON are not prerequisites. An explicit `--graph` is served through the same `/graph.json` route, and manual upload remains available. The viewer loads Sigma, Graphology, and ForceAtlas2 from bundled `docs/graph-visualization/vendor/` assets, so the UI stays offline and self-contained once codegraph is installed.
 

@@ -196,7 +196,8 @@ export const EXPLORE_HELP_TEXT = `codegraph explore - Answer a broad repo questi
 Usage: codegraph explore "<query>" [--root <path>] [--limit <n>] [--max-packets <n>] [--max-paths <n>] [--no-source] [--include-graph-context] [--allow-sensitive] [--json | --pretty]
 
 Output:
-  Explore orchestrates search, packet retrieval, dependency paths, reverse dependencies, candidate tests, and follow-up commands. An exact file-path query also includes the live bounded file view.
+  Explore makes one hybrid retrieval pass, then derives bounded packets, dependency paths, reverse dependencies, candidate tests, and follow-up commands from its top anchors. An exact file-path query also includes the live bounded file view.
+  It does not decompose a compound question, plan more searches, or prove runtime behavior. \`analysis\` reports parser-backend quality, not query reasoning. For compound questions, search concrete terms separately, then explain or retrieve packets for the strongest handles.
   Pretty model-readable sections are the default. Use --json for structured fields. Graph context and raw sensitive values require explicit flags.
 
 ${SHARED_INDEX_OPTIONS_HELP}
