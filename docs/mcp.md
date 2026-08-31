@@ -73,10 +73,10 @@ Run `codegraph doctor` in the installed release to inspect `native.origin`, `nat
 
 The server exposes the same bounded primitives as the CLI and library session layer:
 
-- `explore`: recommended first tool for broad repo questions; returns bounded anchors, paths, blast radius, candidate tests, and follow-ups. Set `includeSource: true` when source packets or an exact-path `fileView` are needed.
 - `orient`: compact first-turn repo context.
-- `packet_get`: bounded evidence packet by file path, symbol name, SQL object name, or stable target.
 - `search`: deterministic ranked search across paths, symbols, chunks, SQL objects, and graph context.
+- `explore`: one hybrid search plus context from top results; not a first-step planner.
+- `packet_get`: bounded evidence packet by file path, symbol name, SQL object name, or stable target.
 - `workspace_symbols`: deterministic symbol-identity lookup with exact locations and composable filters; use `search` for hybrid path, prose, SQL, snippet, or graph evidence.
 - `rename_preview`: read-only semantic rename planning by portable symbol handle; filename results are suggestions only and no apply tool exists.
 - `refactor_plan`: one-snapshot refactor evidence packet by search, workspace-symbol, review, or impact handle; optional rename evidence stays read-only and authoritative.

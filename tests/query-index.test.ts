@@ -78,7 +78,7 @@ function comparable(response: AgentSearchResponse): object {
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const session of sessions.splice(0)) disposeSessionQueryIndex(session);
+  for (const session of sessions.splice(0)) session.invalidate();
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 

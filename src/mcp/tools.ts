@@ -271,7 +271,7 @@ export const MCP_TOOL_REGISTRY: McpToolDefinition[] = [
   {
     name: "explore",
     description:
-      "Recommended first tool for broad repo questions; returns bounded anchors, source packets, paths, blast radius, tests, and follow-ups.",
+      "One hybrid search plus context from top results. Not a first step; use refs or calls for known symbols.",
     inputSchema: objectSchema(
       {
         query: stringProperty,

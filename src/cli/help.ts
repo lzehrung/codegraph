@@ -191,13 +191,14 @@ const SHARED_INDEX_OPTIONS_HELP = `Index options:
   Cache precedence is --cache-dir, then CODEGRAPH_CACHE_DIR, then cache.location from project/user config, then repository metadata, then the project root. Use cache.location "project", "repo", "user", or an absolute path. A configured anchor that resolves to the home directory or a filesystem root is rejected with an error.
   Index builds report progress automatically on an interactive stderr terminal. Use --progress to force redirected progress logs or --no-progress to suppress feedback.`;
 
-export const EXPLORE_HELP_TEXT = `codegraph explore - Answer a broad repo question with bounded repo context
+export const EXPLORE_HELP_TEXT = `codegraph explore - Derive context from one hybrid search
 
 Usage: codegraph explore "<query>" [--root <path>] [--limit <n>] [--max-packets <n>] [--max-paths <n>] [--no-source] [--include-graph-context] [--allow-sensitive] [--json | --pretty]
 
 Output:
-  Explore orchestrates search, packet retrieval, dependency paths, reverse dependencies, candidate tests, and follow-up commands. An exact file-path query also includes the live bounded file view.
-  Pretty model-readable sections are the default. Use --json for structured fields. Graph context and raw sensitive values require explicit flags.
+  One hybrid search plus context from top results.
+  Not a first step: \`codegraph orient\`, \`codegraph search\`/\`codegraph grep\`, then \`codegraph refs\`/\`codegraph callers\`. Use explore only for context from a narrow query.
+  \`analysis\` is parser backend quality, not query reasoning.
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
