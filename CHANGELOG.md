@@ -9,6 +9,31 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [2.3.6] - 2026-08-31
+
+### Changed
+
+- `orient` now lists each focus path once and gives one `codegraph packet get <path>` example.
+- `explore` no longer repeats its first follow-up as `Recommended next:`.
+- Top-level CLI help and agent guidance start with `orient`, then direct search and navigation commands.
+
+## [2.3.5] - 2026-08-31
+
+### Changed
+
+- Clarified `explore` as one hybrid search plus context from top results, not a planner or runtime proof.
+- Agent, CLI, MCP, and library guidance now prefer `orient`, search, references, and call hierarchy before `explore`.
+
+## [2.3.4] - 2026-08-30
+
+### Changed
+
+- Cold index progress now identifies source and metadata discovery, with completed path-check counts when available.
+
+### Fixed
+
+- Release-candidate package funnels now skip lifecycle scripts while installing certified tarballs, avoiding Windows install timeouts.
+
 ## [2.3.3] - 2026-08-30
 
 ### Changed
