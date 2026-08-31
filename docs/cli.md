@@ -470,10 +470,10 @@ Short JSON shape:
 
 #### Agent orientation and packets
 
-- Use `explore` first for a concrete repository question. It combines search anchors, bounded packets, dependency paths, reverse dependencies, candidate tests, limits, omissions, and follow-ups; use `--limit`, `--max-packets`, `--max-paths`, or `--no-source` to keep output small.
-- Human-readable `explore` output ends with `Recommended next: <command>`, selected from the first bounded follow-up. JSON keeps the existing `schemaVersion: 1` response and `followUps` array without adding display prose.
-- Use `orient` as the compact first-turn reading surface when no concrete question is available; it prints ranked `focus` targets and their follow-up commands before the scope sketch.
-- Use `orient --json` when follow-up tools need exact focus reasons, limits, and omitted counts. Index feedback is stderr-only, so stdout remains parseable.
+- Start with `codegraph orient` for a repository map. Pretty output lists each focus path once; inspect one with `codegraph packet get <path>`.
+- Use `codegraph explore` only after a narrow `codegraph search` or `codegraph grep` query needs extra context. It makes one hybrid search plus context from top results.
+- Pretty `codegraph explore` output lists follow-ups once. JSON keeps `schemaVersion: 1` and concrete `followUps`.
+- Use `codegraph orient --json` when a tool needs concrete focus follow-ups, reasons, limits, or omissions. Index feedback is stderr-only, so stdout remains parseable.
 - Small orientation budgets default to `--health skip`. Medium and large default to `--health summary`, which counts cycles and unresolved imports while omitting duplicate health; use `--health full` when exhaustive duplicate counts matter.
 - Use `packet get` with file paths, symbol names, SQL object names, file/symbol/chunk/SQL/graph handles, or review handles to retrieve bounded evidence plus follow-up commands.
 - Agent commands and every current-state query default to disk cache and validate automatically; a whole-project `graph` or `index` run performs its explicit build. Use shared index flags such as `--cache`, `--cache-strict`, `--cache-verify`, `--threads`, `--native`, `--workers`, `--include-glob`, `--ignore-glob`, and `--no-gitignore` when the packet should match a specific scan mode.

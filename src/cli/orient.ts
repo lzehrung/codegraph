@@ -4,7 +4,7 @@ import {
   type AgentOrientHealthMode,
   type AgentOrientResponse,
 } from "../agent/orient.js";
-import { formatAgentFollowUpAsCli } from "../agent/followUps.js";
+
 import type { BuildOptions } from "../indexer/types.js";
 import type { CliAgentCommandContext } from "./context.js";
 
@@ -52,17 +52,15 @@ export function formatAgentOrientation(response: AgentOrientResponse): string {
     lines.push("", "Start here");
     for (const focus of response.focus) {
       lines.push(`- ${focus.file ?? focus.label}: ${focus.why}`);
-      for (const followUp of focus.followUps) {
-        lines.push(`  - ${formatAgentFollowUpAsCli(followUp)}`);
-      }
+    }
+    if (response.focus.some((focus) => focus.file)) {
+      lines.push("Inspect a listed path: codegraph packet get <path>");
     }
   }
 
-  const focusFollowUps = new Set(response.focus.flatMap((focus) => focus.followUps.map(formatAgentFollowUpAsCli)));
-  const remainingRecommendations = response.recommendedNext.filter((next) => !focusFollowUps.has(next.command));
-  if (remainingRecommendations.length) {
+  if (response.recommendedNext.length) {
     lines.push("", "Recommended next");
-    for (const next of remainingRecommendations) {
+    for (const next of response.recommendedNext) {
       lines.push(`- ${next.command}`);
     }
   }

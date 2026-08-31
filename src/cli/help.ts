@@ -6,9 +6,9 @@ export const CLI_TASK_HELP_TEXT = `codegraph - Ask structural questions about a 
 
 Start here:
   Configure every supported agent  codegraph install --all --dry-run
-  Understand a repository          codegraph explore "how does auth reach the database?" --root .
-  Review local changes             codegraph review
+  Map a repository                 codegraph orient --root . --budget small
   Find a symbol or file            codegraph search "SessionManager" --json
+  Review local changes             codegraph review
   Check runtime health             codegraph doctor
 
 Run codegraph --help for all commands.`;
@@ -17,9 +17,9 @@ export const CLI_HELP_TEXT = `codegraph - Code analysis and dependency graph too
 
 Start here:
   Configure every supported agent  codegraph install --all --dry-run
-  Understand a repository          codegraph explore "how does auth reach the database?" --root .
-  Review local changes             codegraph review
+  Map a repository                 codegraph orient --root . --budget small
   Find a symbol or file            codegraph search "SessionManager" --json
+  Review local changes             codegraph review
   Check runtime health             codegraph doctor
 
 Usage: codegraph <command> [options] [path]

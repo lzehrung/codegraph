@@ -15,7 +15,7 @@ describe("lightweight CLI entrance", () => {
 
     expect(result).toMatchObject({ stderr: "", exitCode: undefined });
     expect(result.stdout).toContain("Start here:");
-    expect(result.stdout).toContain('codegraph explore "how does auth reach the database?" --root .');
+    expect(result.stdout).toContain("codegraph orient --root . --budget small");
     expect(result.stdout).not.toContain("Commands:");
     expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThan(1024);
     expect(result.stdout.trimEnd().split("\n").length).toBeLessThanOrEqual(15);

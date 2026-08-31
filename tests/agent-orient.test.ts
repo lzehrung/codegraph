@@ -39,6 +39,7 @@ describe("agent orient", () => {
     expect(response.tree.some((entry) => entry.path === "src/index.ts")).toBe(true);
     expect(response.focus.some((focus) => focus.file === "src/index.ts")).toBe(true);
     expect(response.recommendedNext.length).toBeGreaterThan(0);
+    expect(response.recommendedNext.some((next) => next.command.startsWith("codegraph packet get "))).toBe(false);
   });
   it("emits byte-identical JSON for repeated orientations", async () => {
     const root = await mkTmpDir("cg-agent-orient-repeat-");
