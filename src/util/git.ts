@@ -631,21 +631,23 @@ export async function listGitIgnoreFiles(projectRoot: string, opts?: { gitAvaila
     ["ls-files", "--others", "--exclude-standard", "-z", "--", ...pathspec],
     ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ...pathspec],
   ];
-  try {
-    const results = await Promise.all(
-      commands.map(async (args) => await runGit(projectRoot, args, { maxBuffer: 64 * 1024 * 1024 })),
-    );
-    const out: string[] = [];
-    for (const { stdout } of results) {
-      for (const rel of stdout.split("\0").filter(Boolean)) {
-        const abs = resolveGitListedPath(projectRoot, rel);
-        if (abs) out.push(abs);
+  const results = await Promise.all(
+    commands.map(async (args) => {
+      try {
+        return await runGit(projectRoot, args, { maxBuffer: 64 * 1024 * 1024 });
+      } catch (error) {
+        throw createGitError(projectRoot, args, error);
       }
+    }),
+  );
+  const out: string[] = [];
+  for (const { stdout } of results) {
+    for (const rel of stdout.split("\0").filter(Boolean)) {
+      const abs = resolveGitListedPath(projectRoot, rel);
+      if (abs) out.push(abs);
     }
-    return Array.from(new Set(out));
-  } catch (error) {
-    throw createGitError(projectRoot, commands.flat(), error);
   }
+  return Array.from(new Set(out));
 }
 
 /**

@@ -18,6 +18,7 @@ import { runGit as git } from "./helpers/git.js";
 import {
   clearGitDiscoveryCacheForTests,
   clearGitRepositoryCheckCacheForTests,
+  listGitIgnoreFiles,
   listGitSubmoduleDirectories,
   setGitExecutableForTests,
 } from "../src/util/git.js";
@@ -1208,6 +1209,15 @@ describe("git-native project file discovery", () => {
     } finally {
       statSpy.mockRestore();
     }
+  });
+
+  it("reports the failing Git ignore listing command", async () => {
+    const root = await makeRepo("codegraph-discovery-gitignore-command-");
+    setGitExecutableForTests(process.execPath);
+
+    await expect(listGitIgnoreFiles(root)).rejects.toThrow(
+      /^git ls-files (?:--cached|--others --exclude-standard(?: --ignored)?) -z -- \.gitignore :\(glob\)\*\*\/\.gitignore failed in /,
+    );
   });
 
   it("applies rules from .git/info/exclude to tracked candidates", async () => {
