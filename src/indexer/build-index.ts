@@ -1491,9 +1491,16 @@ export async function buildProjectIndexIncremental(
     let discoveredGitCandidates: GitCandidateSet | null | undefined;
     if (canUseIncrementalDiscoveryFastPath(gitAvailable, opts?.cacheStrict)) {
       try {
-        untrackedFiles =
-          (canReuseReconciliation ? opts?.reconciledUntrackedFiles : undefined) ??
-          (await listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable));
+        const reconciledUntrackedFiles = canReuseReconciliation ? opts?.reconciledUntrackedFiles : undefined;
+        if (reconciledUntrackedFiles !== undefined) {
+          untrackedFiles = reconciledUntrackedFiles;
+        } else {
+          const sourceDiscoveryStart = performance.now();
+          untrackedFiles = await listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable);
+          if (discoveryTimings) {
+            discoveryTimings.sourceDiscoveryMs = Math.round(performance.now() - sourceDiscoveryStart);
+          }
+        }
       } catch (error) {
         if (manifestReport) {
           manifestReport.reason = "gitUntrackedScanFailed";
