@@ -1950,6 +1950,19 @@ export async function buildProjectIndexIncremental(
           edges: [],
         });
       }
+      // A Git blob match proves source bytes, not mtime. Refresh every retained
+      // entry from the stat signatures computed above before declaring lifecycle
+      // signatures fresh.
+      for (const [file, entry] of manifestEntries) {
+        const signature = fileSignatures.get(file);
+        if (!signature) continue;
+        const { gitSig: _previousGitSig, ...entryWithoutGitSig } = entry;
+        manifestEntries.set(file, {
+          ...entryWithoutGitSig,
+          sig: signature.sig,
+          ...(signature.gitSig ? { gitSig: signature.gitSig } : {}),
+        });
+      }
       await writeIndexManifestSnapshot({
         projectRoot,
         opts,

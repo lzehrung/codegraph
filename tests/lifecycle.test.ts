@@ -755,6 +755,28 @@ describe("project lifecycle commands", () => {
     expect((await getCodegraphLifecycleStatus(root)).filesChanged).toBeFalsy();
   });
 
+  it("sync refreshes retained lifecycle signatures after a mixed Git update", async () => {
+    const root = await mkTmpDir("cg-life-sync-mixed-signatures-");
+    const retainedPath = "src/retained.ts";
+    const updatedPath = "src/updated.ts";
+    const retainedFile = path.join(root, retainedPath);
+    await initializeGitRepository(root);
+    await writeFile(root, ".gitignore", ".codegraph/\n");
+    await writeFile(root, retainedPath, "export const retained = 1;\n");
+    await writeFile(root, updatedPath, "export const updated = 1;\n");
+    await execFileAsync("git", ["add", ".gitignore", retainedPath, updatedPath], { cwd: root });
+    await execFileAsync("git", ["commit", "--quiet", "-m", "initial source"], { cwd: root });
+    await initCodegraphLifecycle(root);
+
+    const before = await fsp.stat(retainedFile);
+    const rewrittenAt = new Date(before.mtimeMs + 5_000);
+    await fsp.utimes(retainedFile, rewrittenAt, rewrittenAt);
+    await writeFile(root, updatedPath, "export const updated = 2;\n");
+    await syncCodegraphLifecycle(root);
+
+    expect((await getCodegraphLifecycleStatus(root)).filesChanged).toBeFalsy();
+  });
+
   it("sync independently tracks added and removed files when one is added and a different one is removed", async () => {
     const root = await mkTmpDir("cg-life-sync-add-remove-");
     await writeFile(root, "src/a.ts", "export const a = 1;\n");

@@ -30,11 +30,16 @@ export async function finalizeProjectIndex(args: {
   buildReport?: BuildReport | undefined;
 }): Promise<ProjectIndex> {
   if (args.timings) args.timings.totalMs = Math.round(performance.now() - args.totalStart);
+  const discoveryTimings = args.opts?.report ? (args.opts.report.timings ??= {}) : undefined;
+  const metadataDiscoveryStart = args.projectFiles === undefined ? performance.now() : undefined;
   const projectFiles = await (args.projectFiles ??
     discoverProjectFilesWithGitCandidates(args.projectRoot, {
       ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
       ...(args.knownGitCandidates !== undefined ? { knownGitCandidates: args.knownGitCandidates } : {}),
     }));
+  if (metadataDiscoveryStart !== undefined && discoveryTimings) {
+    discoveryTimings.metadataDiscoveryMs = Math.round(performance.now() - metadataDiscoveryStart);
+  }
   const languageExtensions = normalizeLanguageExtensions(args.opts?.languageExtensions);
   const parsed = retainedParsedCache(args.parsedMap, args.opts);
   return {

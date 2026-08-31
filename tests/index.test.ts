@@ -98,7 +98,41 @@ describe("Project Indexing", () => {
     }
   });
 
-  it("omits discovery timings for an explicit incremental project scope", async () => {
+  it("reports metadata discovery for an incremental update", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-incremental-metadata-timing-"));
+    await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
+
+    try {
+      await buildProjectIndexIncremental(root, { cache: "disk", native: "off" });
+      await fsp.writeFile(path.join(root, "extra.ts"), "export const extra = 2;\n", "utf8");
+      const report: BuildReport = { timings: {} };
+
+      await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+
+      expect(report.timings.sourceDiscoveryMs).toBeTypeOf("number");
+      expect(report.timings.metadataDiscoveryMs).toBeTypeOf("number");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports finalization metadata discovery for explicit files", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-explicit-metadata-timing-"));
+    const file = path.join(root, "main.ts");
+    const report: BuildReport = { timings: {} };
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+
+    try {
+      await buildProjectIndexFromFiles(root, [file], { native: "off", report });
+
+      expect(report.timings.sourceDiscoveryMs).toBeUndefined();
+      expect(report.timings.metadataDiscoveryMs).toBeTypeOf("number");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("omits source discovery timing for an explicit incremental project scope", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-no-discovery-timing-"));
     const file = path.join(root, "main.ts");
     const report: BuildReport = { timings: {} };
@@ -114,7 +148,7 @@ describe("Project Indexing", () => {
       });
 
       expect(report.timings.sourceDiscoveryMs).toBeUndefined();
-      expect(report.timings.metadataDiscoveryMs).toBeUndefined();
+      expect(report.timings.metadataDiscoveryMs).toBeTypeOf("number");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
