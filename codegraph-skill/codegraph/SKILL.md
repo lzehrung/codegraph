@@ -30,11 +30,12 @@ Exit `2` means invalid usage or input, including malformed options and unsupport
 | Review a branch against main                              | `codegraph review --base origin/main --head HEAD`        |
 | Map the wider blast radius of a change                    | `codegraph impact --base HEAD --head WORKTREE`           |
 | Select deterministic test paths for changed files         | `codegraph affected --base HEAD --head WORKTREE --quiet` |
-| Answer a concrete question about an unfamiliar repo       | `codegraph explore "how does auth reach db?" --root .`   |
-| Map a repo before you know the question                   | `codegraph orient --root . --budget small`               |
+| Find a concrete term                                      | `codegraph search "auth user" --json`                    |
+| Map a repo before selecting a target                      | `codegraph orient --root . --budget small`               |
+| Build context from one narrow query                       | `codegraph explore "how does auth reach db?" --root .`   |
 | Diagnose installation, native runtime, or artifact health | `codegraph doctor`                                       |
 
-Prefer `review` before `impact`: review is the compact reviewer handoff; impact is the broader "what could this break?" map. Both are safe bounded accelerants for another agent's own review workflow (human-readable `impact`, `review --duplicates off`); they do not own reviewer lanes, packets, or finding ledgers. Prefer `explore` before `orient` when you already have a concrete question.
+Prefer `review` before `impact`: review is the compact reviewer handoff; impact is the broader "what could this break?" map. Start with `orient`, then use `search` or `grep` for concrete terms and `refs` or `callers` for known symbols. Use `explore` only for one narrow query that needs context from top results.
 
 ## Keep the Project Boundary Explicit
 

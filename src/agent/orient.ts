@@ -366,7 +366,7 @@ function buildRecommendedNext(
 ): AgentPacketCommand[] {
   const commands: AgentPacketCommand[] = [];
   const firstFocus = focus[0];
-  if (firstFocus) {
+  if (firstFocus?.kind === "review") {
     for (const followUp of firstFocus.followUps) {
       commands.push({
         label: labelForFollowUp(firstFocus, followUp),

@@ -262,8 +262,6 @@ export function formatAgentExploreResponse(response: AgentExploreResponse): stri
   for (const [name, value] of Object.entries(response.limits)) {
     lines.push(`- ${name}: ${value}`);
   }
-  const recommended = formatAgentFollowUpAsCli(response.followUps[0] ?? toolFollowUp("orient", { budget: "small" }));
-  lines.push("", `Recommended next: ${recommended}`);
   return lines.join("\n");
 }
 

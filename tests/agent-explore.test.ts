@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
 import { createAgentSession, exploreCodegraph, formatAgentExploreResponse } from "../src/agent.js";
 import * as impactContext from "../src/impact/context.js";
 import { createCodegraphMcpHandlers, listCodegraphMcpTools } from "../src/mcp/server.js";
@@ -473,16 +472,14 @@ describe("agent explore", () => {
     }
   });
 
-  it("ends human-readable output with one recommended next command", async () => {
+  it("lists human-readable follow-ups once", async () => {
     const root = await mkExploreRepo();
     const response = await exploreCodegraph({ root, query: "validateUser" });
     const pretty = formatAgentExploreResponse(response);
 
     expect(response.followUps.length).toBeGreaterThan(0);
-    expect(pretty.trimEnd().split("\n").at(-1)).toBe(
-      `Recommended next: ${formatAgentFollowUpAsCli(response.followUps[0]!)}`,
-    );
-    expect(pretty.match(/^Recommended next:/gmu)).toHaveLength(1);
+    expect(pretty).toContain("Follow-ups");
+    expect(pretty).not.toContain("Recommended next:");
   });
 
   it("uses default-format refs commands in explore follow-ups", async () => {
