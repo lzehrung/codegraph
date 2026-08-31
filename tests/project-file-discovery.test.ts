@@ -1216,7 +1216,7 @@ describe("git-native project file discovery", () => {
     setGitExecutableForTests(process.execPath);
 
     await expect(listGitIgnoreFiles(root)).rejects.toThrow(
-      /^git ls-files (?:--cached|--others --exclude-standard(?: --ignored)?) -z -- \.gitignore :\(glob\)\*\*\/\.gitignore failed in /,
+      /^git ls-files (?:--cached|--others(?: --ignored)? --exclude-standard) -z -- \.gitignore :\(glob\)\*\*\/\.gitignore failed in /,
     );
   });
 
