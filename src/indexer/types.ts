@@ -213,6 +213,8 @@ export type CacheReport = {
 export type BuildTimingReport = {
   totalMs?: number;
   manifestMs?: number;
+  sourceDiscoveryMs?: number;
+  metadataDiscoveryMs?: number;
   parseMs?: number;
   graphMs?: number;
   writeManifestMs?: number;

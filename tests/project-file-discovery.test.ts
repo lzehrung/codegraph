@@ -1154,6 +1154,62 @@ describe("git-native project file discovery", () => {
     expect(files.some((file) => file.endsWith("/drop.ts"))).toBe(false);
   });
 
+  it("loads an ignored nested .gitignore through Git", async () => {
+    const root = await makeRepo("codegraph-discovery-ignored-nested-gitignore-");
+    const nestedIgnore = path.join(root, "rules", ".gitignore");
+    const keptFile = path.join(root, "rules", "keep.ts");
+    const ignoredFile = path.join(root, "rules", "drop.ts");
+    await createFile(path.join(root, ".gitignore"), "rules/.gitignore\n");
+    await createFile(nestedIgnore, "drop.ts\n");
+    await createFile(keptFile, "export const keep = 1;\n");
+    await createFile(ignoredFile, "export const drop = 1;\n");
+    git(root, ["add", ".gitignore"]);
+    git(root, ["add", "-f", "rules/keep.ts", "rules/drop.ts"]);
+    git(root, ["commit", "-m", "tracked sources"]);
+
+    const files = new Set((await listProjectFiles(root)).map(normalize));
+    expect(files.has(normalize(keptFile))).toBe(true);
+    expect(files.has(normalize(ignoredFile))).toBe(false);
+  });
+
+  it("loads an untracked nested .gitignore through Git", async () => {
+    const root = await makeRepo("codegraph-discovery-untracked-nested-gitignore-");
+    const nestedIgnore = path.join(root, "rules", ".gitignore");
+    const keptFile = path.join(root, "rules", "keep.ts");
+    const ignoredFile = path.join(root, "rules", "drop.ts");
+    await createFile(nestedIgnore, "drop.ts\n");
+    await createFile(keptFile, "export const keep = 1;\n");
+    await createFile(ignoredFile, "export const drop = 1;\n");
+    git(root, ["add", "-f", "rules/keep.ts", "rules/drop.ts"]);
+    git(root, ["commit", "-m", "tracked sources"]);
+
+    const files = new Set((await listProjectFiles(root)).map(normalize));
+    expect(files.has(normalize(keptFile))).toBe(true);
+    expect(files.has(normalize(ignoredFile))).toBe(false);
+  });
+
+  it("does not stat candidate ancestors to locate Gitignore sources", async () => {
+    const root = await makeRepo("codegraph-discovery-gitignore-stat-seam-");
+    const keptFile = path.join(root, "deep", "nested", "keep.ts");
+    const ignoredFile = path.join(root, "deep", "nested", "drop.ts");
+    await createFile(path.join(root, ".gitignore"), "deep/nested/drop.ts\n");
+    await createFile(keptFile, "export const keep = 1;\n");
+    await createFile(ignoredFile, "export const drop = 1;\n");
+    git(root, ["add", "-f", ".gitignore", "deep/nested/keep.ts", "deep/nested/drop.ts"]);
+    git(root, ["commit", "-m", "tracked sources"]);
+
+    const statSpy = vi.spyOn(fs, "stat");
+    try {
+      const files = new Set((await listProjectFiles(root)).map(normalize));
+      const gitignoreStats = statSpy.mock.calls.filter(([file]) => normalize(String(file)).endsWith("/.gitignore"));
+      expect(files.has(normalize(keptFile))).toBe(true);
+      expect(files.has(normalize(ignoredFile))).toBe(false);
+      expect(gitignoreStats).toHaveLength(0);
+    } finally {
+      statSpy.mockRestore();
+    }
+  });
+
   it("applies rules from .git/info/exclude to tracked candidates", async () => {
     // The per-repository exclude file is a rule source Git consults but no `.gitignore`
     // walk would ever find, so paths Git never listed could otherwise bypass it.
@@ -1414,6 +1470,7 @@ describe("git-native project file discovery", () => {
     const parent = await fs.mkdtemp(
       path.join(os.tmpdir(), "codegraph-discovery-meta-aliased-submodule-boundary-parent-"),
     );
+
     gitTempDirs.push(parent);
     const alias = path.join(parent, "repo-link");
     try {
@@ -1424,6 +1481,41 @@ describe("git-native project file discovery", () => {
     }
     const paths = new Set((await discoverProjectFiles(alias)).map((item) => normalize(item.path)));
     expect(paths.has(normalize(path.join(alias, "plugins", "example", "package.json")))).toBe(true);
+  });
+
+  it("keeps aliased submodule ignore ownership independent", async () => {
+    const submodule = await makeRepo("codegraph-discovery-meta-aliased-submodule-ignore-src-");
+    await createFile(path.join(submodule, "package.json"), JSON.stringify({ name: "ignored-submodule-pkg" }, null, 2));
+    await createFile(
+      path.join(submodule, "nested", "package.json"),
+      JSON.stringify({ name: "kept-submodule-pkg" }, null, 2),
+    );
+    git(submodule, ["add", "package.json", "nested/package.json"]);
+    git(submodule, ["commit", "-m", "packages"]);
+
+    const root = await makeRepo("codegraph-discovery-meta-aliased-submodule-ignore-super-");
+    await createFile(path.join(root, ".gitignore"), "package.json\n");
+    git(root, ["add", ".gitignore"]);
+    git(root, ["commit", "-m", "superproject rules"]);
+    git(root, ["-c", "protocol.file.allow=always", "submodule", "add", normalize(submodule), "plugins/example"]);
+    const initializedSubmodule = path.join(root, "plugins", "example");
+    await createFile(path.join(initializedSubmodule, ".gitignore"), "package.json\n!nested/package.json\n");
+
+    const parent = await fs.mkdtemp(
+      path.join(os.tmpdir(), "codegraph-discovery-meta-aliased-submodule-ignore-parent-"),
+    );
+    gitTempDirs.push(parent);
+    const alias = path.join(parent, "repo-link");
+    try {
+      await fs.symlink(root, alias, "dir");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const paths = new Set((await discoverProjectFiles(alias)).map((item) => normalize(item.path)));
+    expect(paths.has(normalize(path.join(alias, "plugins", "example", "package.json")))).toBe(false);
+    expect(paths.has(normalize(path.join(alias, "plugins", "example", "nested", "package.json")))).toBe(true);
   });
 
   it("honors ancestor gitignore rules when discovery starts in a repository subdirectory", async () => {

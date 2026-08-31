@@ -256,7 +256,13 @@ async function buildLifecycleManifest(
     configHash: await hashConfig(root, buildOptions?.logLevel),
     buildOptionsHash: hashBuildOptions(buildOptions),
     fileCount: snapshot.files.length,
-    fileSignatureHash: await hashDiscoveredFiles(snapshot.files, root),
+    fileSignatureHash:
+      hashManifestEntries(
+        snapshot.files,
+        root,
+        snapshot.index.manifestEntries,
+        snapshot.index.manifestSignaturesFresh,
+      ) ?? (await hashDiscoveredFiles(snapshot.files, root)),
     files: discoveredFileRelativePaths(snapshot.files, root),
     analysis: snapshot.analysis,
   };
@@ -354,6 +360,51 @@ function isMissingStatRace(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   if (!("code" in error)) return false;
   return error.code === "ENOENT" || error.code === "ENOTDIR";
+}
+
+function hashManifestEntries(
+  files: readonly string[],
+  root: string,
+  entries: ReadonlyMap<string, { sig: string }> | undefined,
+  signaturesFresh: boolean | undefined,
+): string | undefined {
+  if (!signaturesFresh || !entries || entries.size !== files.length) return undefined;
+  const sorted = [...files].sort((left, right) => left.localeCompare(right));
+  const signatures = new Map<string, { size: string; mtimeMs: string }>();
+  for (const file of sorted) {
+    const entry = entries.get(file);
+    const signature = parseLifecycleFileSignature(entry?.sig);
+    if (!signature) return undefined;
+    signatures.set(file, signature);
+  }
+  const hash = createHash("sha256");
+  for (const file of sorted) {
+    const signature = signatures.get(file);
+    if (!signature) return undefined;
+    const relative = path.relative(root, file).replace(/\\/g, "/");
+    hash.update(relative);
+    hash.update("\0");
+    hash.update(signature.size);
+    hash.update("\0");
+    hash.update(signature.mtimeMs);
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
+
+function parseLifecycleFileSignature(value: unknown): { size: string; mtimeMs: string } | undefined {
+  if (typeof value !== "string") return undefined;
+  const parts = value.split(":");
+  if (parts.length !== 2) return undefined;
+  const [mtimeMs, size] = parts;
+  if (!mtimeMs || !size) return undefined;
+  if (!/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(mtimeMs)) return undefined;
+  if (!/^(?:0|[1-9]\d*)$/.test(size)) return undefined;
+  const numericMtimeMs = Number(mtimeMs);
+  const numericSize = Number(size);
+  if (!Number.isFinite(numericMtimeMs) || String(numericMtimeMs) !== mtimeMs) return undefined;
+  if (!Number.isSafeInteger(numericSize) || String(numericSize) !== size) return undefined;
+  return { size, mtimeMs };
 }
 
 async function hashDiscoveredFiles(files: readonly string[], root: string): Promise<string> {

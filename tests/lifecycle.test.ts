@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -18,6 +19,7 @@ import {
 } from "../src/lifecycle/manifest.js";
 import * as indexerManifest from "../src/indexer/build-cache/manifest.js";
 import * as agentSession from "../src/agent/session.js";
+import type { AgentProjectSnapshot, AgentSession } from "../src/agent/session.js";
 import type { BuildOptions } from "../src/indexer/types.js";
 import { captureCli } from "./helpers/cli.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
@@ -55,6 +57,47 @@ async function expectDiskIndexCacheHasArtifacts(root: string): Promise<void> {
   expect(entries.length).toBeGreaterThan(0);
 }
 
+function lifecycleSnapshot(
+  root: string,
+  files: string[],
+  manifestEntries: Map<string, { sig: string }>,
+  manifestSignaturesFresh?: boolean,
+): AgentProjectSnapshot {
+  const index = {
+    graph: { nodes: new Set(files), edges: [] },
+    modules: new Map(),
+    byFile: new Map(),
+    exportCache: new Map(),
+    scopeCache: new Map(),
+    manifestEntries,
+  } as AgentProjectSnapshot["index"];
+  if (manifestSignaturesFresh !== undefined) index.manifestSignaturesFresh = manifestSignaturesFresh;
+  return {
+    root,
+    files,
+    index,
+    fileGraph: index.graph,
+    symbolGraph: { nodes: new Map(), edges: [] },
+    analysis: {
+      mode: "reduced",
+      backend: "graph-only",
+      parserDegradedFiles: 0,
+      fallbackImportExtractionFiles: 0,
+      nativeFilesUsed: 0,
+      nativeFilesFellBack: 0,
+      label: "reduced graph-only",
+    },
+  };
+}
+
+function lifecycleSession(snapshot: AgentProjectSnapshot): AgentSession {
+  return {
+    root: snapshot.root,
+    loadProject: async () => snapshot,
+    invalidate: () => undefined,
+  };
+}
+
 describe("project lifecycle commands", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -71,6 +114,55 @@ describe("project lifecycle commands", () => {
     expect(second.changedFiles.totalDelta).toBe(0);
     expect(await readManifest(root)).toEqual(first.manifest);
     expect(await readCodegraphEntries(root)).toEqual(["manifest.json"]);
+  });
+  it("init reuses fresh index mtime and size signatures without statting each file", async () => {
+    const root = await mkTmpDir("cg-life-index-signatures-");
+    const file = path.join(root, "src/main.ts");
+    await writeFile(root, "src/main.ts", "ignored\n");
+    const snapshot = lifecycleSnapshot(root, [file], new Map([[file, { sig: "123.5:7" }]]), true);
+    const sessionSpy = vi.spyOn(agentSession, "createAgentSession").mockReturnValue(lifecycleSession(snapshot));
+    const statSpy = vi.spyOn(fsp, "stat");
+
+    const result = await initCodegraphLifecycle(root, { updateGitignore: false });
+
+    const expectedHash = createHash("sha256")
+      .update("src/main.ts\0".concat("7", "\0", "123.5", "\0"))
+      .digest("hex");
+    expect(result.manifest.fileSignatureHash).toBe(expectedHash);
+    expect(sessionSpy).toHaveBeenCalledOnce();
+    expect(
+      statSpy.mock.calls.some(([candidate]) => path.resolve(String(candidate)) === path.resolve(file)),
+    ).toBeFalsy();
+  });
+
+  it("init falls back to file stats when an index signature is incomplete and status detects edits", async () => {
+    const root = await mkTmpDir("cg-life-index-signature-fallback-");
+    const file = path.join(root, "src/main.ts");
+    await writeFile(root, "src/main.ts", "export const value = 1;\n");
+    const snapshot = lifecycleSnapshot(root, [file], new Map(), true);
+    vi.spyOn(agentSession, "createAgentSession").mockReturnValue(lifecycleSession(snapshot));
+
+    await initCodegraphLifecycle(root, { updateGitignore: false });
+    await writeFile(root, "src/main.ts", "export const value = 2;\n");
+
+    const status = await getCodegraphLifecycleStatus(root);
+
+    expect(status.filesChanged).toBeTruthy();
+  });
+
+  it("init uses file stats for an old index without fresh manifest signatures", async () => {
+    const root = await mkTmpDir("cg-life-old-index-signatures-");
+    const file = path.join(root, "src/main.ts");
+    await writeFile(root, "src/main.ts", "ignored\n");
+    const snapshot = lifecycleSnapshot(root, [file], new Map([[file, { sig: "123.5:7" }]]));
+    vi.spyOn(agentSession, "createAgentSession").mockReturnValue(lifecycleSession(snapshot));
+    const statSpy = vi.spyOn(fsp, "stat");
+
+    await initCodegraphLifecycle(root, { updateGitignore: false });
+
+    expect(
+      statSpy.mock.calls.some(([candidate]) => path.resolve(String(candidate)) === path.resolve(file)),
+    ).toBeTruthy();
   });
 
   it("init appends only the consolidated Codegraph ignore rule while preserving file bytes, newline style, and permissions", async () => {

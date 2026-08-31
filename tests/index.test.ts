@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { buildProjectIndex, buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../src/index.js";
 import { findReferences } from "../src/indexer/navigation.js";
+import type { BuildReport } from "../src/indexer/types.js";
 import type { ProgressUpdate } from "../src/types.js";
 import {
   fileIdentityKey,
@@ -70,6 +71,50 @@ describe("Project Indexing", () => {
       expect(updates[1]).toMatchObject({ mode: "build", current: 1, total: 1 });
       expect(updates[2]).toMatchObject({ mode: "build", current: 1, total: 1 });
       expect(updates[2]?.elapsedMs).toBeTypeOf("number");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports source and metadata discovery timings for a cold full incremental build", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-discovery-timing-"));
+    const file = path.join(root, "main.ts");
+    const report: BuildReport = { timings: {} };
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+
+    try {
+      await buildProjectIndexIncremental(root, {
+        cache: "disk",
+        native: "off",
+        report,
+      });
+
+      expect(report.timings.sourceDiscoveryMs).toBeTypeOf("number");
+      expect(report.timings.sourceDiscoveryMs).toBeGreaterThanOrEqual(0);
+      expect(report.timings.metadataDiscoveryMs).toBeTypeOf("number");
+      expect(report.timings.metadataDiscoveryMs).toBeGreaterThanOrEqual(0);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("omits discovery timings for an explicit incremental project scope", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-no-discovery-timing-"));
+    const file = path.join(root, "main.ts");
+    const report: BuildReport = { timings: {} };
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+
+    try {
+      await buildProjectIndexIncremental(root, {
+        cache: "off",
+        files: [file],
+        filesAreProjectScope: true,
+        native: "off",
+        report,
+      });
+
+      expect(report.timings.sourceDiscoveryMs).toBeUndefined();
+      expect(report.timings.metadataDiscoveryMs).toBeUndefined();
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

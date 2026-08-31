@@ -1113,6 +1113,7 @@ async function buildProjectIndexWithManifestOptions(
   opts?: FullDiscoveryBuildOptions,
   helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest" | "reportDiscoveryProgress">,
 ): Promise<ProjectIndex> {
+  const timings = opts?.report ? (opts.report.timings ??= {}) : undefined;
   await initializeFileIdentityCaseSensitivity(projectRoot);
   try {
     const useDiskCache = (opts?.cache ?? "off") === "disk";
@@ -1150,6 +1151,7 @@ async function buildProjectIndexWithManifestOptions(
     // candidate callback below reuses that same listing so metadata discovery does not spawn
     // Git a second time.
     if (helperOpts?.reportDiscoveryProgress) emitIndexCheckActivity(opts, "Discovering source files");
+    const sourceDiscoveryStart = performance.now();
     const discoveredFiles = await listProjectFilesWithGitCandidates(
       projectRoot,
       projectPatternsForLanguageExtensions(opts),
@@ -1162,6 +1164,7 @@ async function buildProjectIndexWithManifestOptions(
         ...(onDiscoveryProgress ? { onDiscoveryProgress } : {}),
       },
     );
+    if (timings) timings.sourceDiscoveryMs = Math.round(performance.now() - sourceDiscoveryStart);
     const additionalFileCandidates = await normalizeIndexedFileInputsWithinRoot(
       projectRoot,
       opts?.additionalFiles ?? [],
@@ -1173,12 +1176,14 @@ async function buildProjectIndexWithManifestOptions(
     const files = Array.from(new Set([...discoveredFiles, ...additionalFiles]));
     const transientFiles = additionalFiles.filter((file) => !discoveredFileSet.has(file));
     if (helperOpts?.reportDiscoveryProgress) emitIndexCheckActivity(opts, "Discovering project metadata");
+    const metadataDiscoveryStart = performance.now();
     const projectFiles = await discoverProjectFilesWithGitCandidates(projectRoot, {
       ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
       ...(discoveredSymlinkDirectories !== undefined ? { knownSymlinkDirectories: discoveredSymlinkDirectories } : {}),
       ...(discoveredGitCandidates !== undefined ? { knownGitCandidates: discoveredGitCandidates } : {}),
       ...(onDiscoveryProgress ? { onDiscoveryProgress } : {}),
     });
+    if (timings) timings.metadataDiscoveryMs = Math.round(performance.now() - metadataDiscoveryStart);
     return await buildIndexFromFileListShared(projectRoot, files, opts, {
       manifestMode: useDiskCache ? "read-write" : "off",
       warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}. Check codegraph.config.json globs and CLI --include-glob/--ignore-glob filters. Diagnostic: codegraph doctor`,
@@ -1505,6 +1510,7 @@ export async function buildProjectIndexIncremental(
         });
       }
     } else if (!opts?.filesAreProjectScope) {
+      const sourceDiscoveryStart = performance.now();
       rediscoveredFiles = await listProjectFilesWithGitCandidates(
         projectRoot,
         projectPatternsForLanguageExtensions(opts),
@@ -1519,6 +1525,7 @@ export async function buildProjectIndexIncremental(
           },
         },
       );
+      if (timings) timings.sourceDiscoveryMs = Math.round(performance.now() - sourceDiscoveryStart);
     }
     const candidateFiles = [
       ...explicitFiles,
@@ -1618,10 +1625,14 @@ export async function buildProjectIndexIncremental(
       if (!snapshotLoad) return null;
 
       const snapshot = snapshotLoad.index;
-      snapshot.projectFiles ??= await discoverProjectFilesWithGitCandidates(projectRoot, {
-        ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-        ...(discoveredGitCandidates !== undefined ? { knownGitCandidates: discoveredGitCandidates } : {}),
-      });
+      if (snapshot.projectFiles === undefined) {
+        const metadataDiscoveryStart = performance.now();
+        snapshot.projectFiles = await discoverProjectFilesWithGitCandidates(projectRoot, {
+          ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+          ...(discoveredGitCandidates !== undefined ? { knownGitCandidates: discoveredGitCandidates } : {}),
+        });
+        if (timings) timings.metadataDiscoveryMs = Math.round(performance.now() - metadataDiscoveryStart);
+      }
       if (opts?.cache) {
         snapshot.cacheMode = opts.cache;
         snapshot.cacheRootDir = cacheRoot(projectRoot, opts);
