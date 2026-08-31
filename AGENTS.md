@@ -11,6 +11,7 @@
 - Keep paragraphs to no more than 4 concise sentences. Prefer bullets for dense details.
 - Keep `README.md` as the landing page and docs index. Do not turn it back into the only canonical reference for every example and workflow.
 - When public-facing install, runtime, CLI, library API, MCP, agent workflow, or release guidance changes, update the relevant canonical docs in the same change: `README.md`, `docs/installation.md`, `docs/cli.md`, `docs/library-api.md`, `docs/mcp.md`, `docs/agent-workflows.md`, `docs/how-it-works.md`, and `PUBLISHING.md` as applicable.
+- Public PR titles, bodies, comments, and release notes MUST NOT include local paths, machine names, usernames, shell prompts, worktree details, or session details. Describe portable commands and observed behavior instead.
 - For repo-understanding flows, start with `node ./dist/cli.js doctor` and `node ./dist/cli.js orient --root . --budget small --json` when `dist` is built; build first if validating the working tree from a fresh checkout.
 - For source-checkout validation and contributor examples, prefer `node ./dist/cli.js ...`; reserve bare `codegraph ...` for published/global install guidance.
 - When package metadata, install scripts, optional native dependencies, or the resolved npm graph changes, update `package-lock.json` in the same change and verify with `npm ci --ignore-scripts --dry-run` unless lifecycle scripts are part of the behavior under test. Release-candidate package installs MUST also disable lifecycle scripts unless those scripts are under test.
