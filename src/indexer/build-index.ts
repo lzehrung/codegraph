@@ -616,6 +616,18 @@ function emitIndexLifecycleProgress(
   });
 }
 
+function emitIndexCheckStart(opts: BuildOptions | undefined, activity: string = "Checking project index"): void {
+  opts?.onProgress?.({
+    type: "progress",
+    phase: "start",
+    mode: "check",
+    message: activity,
+    activity,
+    current: 0,
+    total: 0,
+  });
+}
+
 function emitIndexCheckActivity(
   opts: BuildOptions | undefined,
   activity: string,
@@ -1125,10 +1137,13 @@ async function buildProjectIndexWithManifestOptions(
     // The manifest records the project-root directory mtime alongside symlink hints. A changed
     // root mtime triggers the cheap full-tree probe, while strict modes always probe.
     const wantsMaxSymlinkCorrectness = !!opts?.cacheStrict || !!opts?.cacheVerify;
+    const existingManifest =
+      useDiskCache && !helperOpts?.ignoreExistingManifest ? await loadManifest(projectRoot, opts) : null;
     const symlinkHintManifest =
-      helperOpts?.ignoreExistingManifest || wantsMaxSymlinkCorrectness || !useDiskCache
-        ? null
-        : await loadManifest(projectRoot, opts);
+      helperOpts?.ignoreExistingManifest || wantsMaxSymlinkCorrectness ? null : existingManifest;
+    if (!helperOpts?.reportDiscoveryProgress && (!existingManifest || helperOpts?.ignoreExistingManifest)) {
+      emitIndexCheckStart(opts, "Discovering source files");
+    }
     const rootMtime = symlinkHintManifest ? (await fsp.stat(projectRoot)).mtimeMs : undefined;
     const symlinkHintIsFresh =
       symlinkHintManifest?.symlinkDirectoriesRootMtimeMs !== undefined &&

@@ -143,7 +143,20 @@ async function resolveAgentDiscoverySettings(options: AgentSessionOptions): Prom
   };
 }
 
+function emitAgentFilePlanProgress(options: AgentSessionOptions): void {
+  options.buildOptions?.onProgress?.({
+    type: "progress",
+    phase: "start",
+    mode: "check",
+    message: "Discovering source files",
+    activity: "Discovering source files",
+    current: 0,
+    total: 0,
+  });
+}
+
 async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promise<AgentSessionFilePlan> {
+  emitAgentFilePlanProgress(options);
   const { discoveryOptions, graphOptions, languageExtensions, cacheLocation } =
     await resolveAgentDiscoverySettings(options);
   // Prefer the manifest-plus-Git reconciliation over a full recursive scan whenever it

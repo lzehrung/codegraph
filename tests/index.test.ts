@@ -77,6 +77,28 @@ describe("Project Indexing", () => {
     }
   });
 
+  it("starts full discovery progress before listing source files", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-full-discovery-progress-"));
+    const file = path.join(root, "main.ts");
+    const updates: ProgressUpdate[] = [];
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+
+    try {
+      await buildProjectIndex(root, { cache: "off", native: "off", onProgress: (update) => updates.push(update) });
+
+      expect(updates[0]).toMatchObject({
+        phase: "start",
+        mode: "check",
+        activity: "Discovering source files",
+        current: 0,
+        total: 0,
+      });
+      expect(updates.some((update) => update.phase === "start" && update.mode === "build")).toBeTruthy();
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reports source and metadata discovery timings for a cold full incremental build", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-discovery-timing-"));
     const file = path.join(root, "main.ts");

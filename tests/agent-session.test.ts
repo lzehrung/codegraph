@@ -13,6 +13,7 @@ import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import { createProjectSnapshotIdentity } from "../src/indexer/build-cache.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
+import type { ProgressUpdate } from "../src/types.js";
 import * as projectFilesModule from "../src/util/projectFiles.js";
 import * as gitModule from "../src/util/git.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
@@ -115,6 +116,24 @@ describe("agent session", () => {
     expect(first.fileGraph.nodes.size).toBeGreaterThan(0);
     expect(first.fileGraph).toBe(first.index.graph);
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts progress before cold agent file-plan discovery", async () => {
+    const root = await mkRepo();
+    const updates: ProgressUpdate[] = [];
+
+    await createAgentSession({
+      root,
+      buildOptions: { cache: "off", native: "off", onProgress: (update) => updates.push(update) },
+    }).loadProject({ symbolGraph: "skip" });
+
+    expect(updates[0]).toMatchObject({
+      phase: "start",
+      mode: "check",
+      activity: "Discovering source files",
+      current: 0,
+      total: 0,
+    });
   });
 
   it("reuses current build signatures and stats only files missing from the manifest", async () => {
