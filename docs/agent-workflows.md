@@ -59,18 +59,15 @@ codegraph viewer --root . --port 4173 --print-url
 
 ## Explore facade
 
-Start with `explore` when an agent can ask a concrete repo question:
+Start with `codegraph orient` for a repo map, then use `codegraph search` or `codegraph grep` for concrete terms. For a known symbol, use `codegraph refs` or `codegraph callers`.
+
+Use `codegraph explore` only when one narrow query needs context from its top hybrid-search results:
 
 ```bash
 codegraph explore "how does auth reach db?" --root .
-codegraph explore src/auth.ts --json --limit 5 --max-packets 3
 ```
 
-Explore orchestrates existing search, packet, path, reverse-dependency, and candidate-test surfaces. It returns `schemaVersion: 1`, the query, analysis metadata, summary bullets, anchors, bounded packets, dependency paths, blast radius, candidate tests, follow-ups, flat limits, and omission counts.
-
-Human-readable output ends with one `Recommended next:` command selected from the first bounded follow-up. Use `--no-source` when the caller only needs anchors, paths, and follow-up commands.
-
-CLI `explore` includes source packets and exact-path `fileView` by default because people read its inline output; use `--no-source` to omit them. MCP `explore` instead defaults `includeSource` to `false` so source-bearing packets do not dominate an agent response; anchors and follow-ups identify the focused source request to make next.
+Explore returns anchors, packets, paths, reverse dependencies, candidate tests, limits, omissions, and follow-ups. Human-readable output lists follow-ups once. Use `--no-source` when source packets are not needed.
 
 ## Live file reads
 
