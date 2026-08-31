@@ -1402,12 +1402,17 @@ export async function buildProjectIndexIncremental(
     // covers ordinary new-commit history when the working tree is clean at the new HEAD.
     const shouldDiffAgainstWorkingTree = !hasExplicitGitRange && gitAvailable && !!manifest.lastCommit;
     const canReuseReconciliation = opts?.reconciledManifestUpdatedAt === manifest.updatedAt;
-    let sourceDiscoveryStart: number | undefined;
+    let sourceDiscoveryMs = 0;
     let sourceDiscoveryPerformed = false;
-    const beginSourceDiscovery = () => {
-      if (!discoveryTimings || opts?.filesAreProjectScope) return;
+    const measureSourceDiscovery = async <T>(operation: () => Promise<T>): Promise<T> => {
+      if (!discoveryTimings || opts?.filesAreProjectScope) return await operation();
       sourceDiscoveryPerformed = true;
-      sourceDiscoveryStart ??= performance.now();
+      const start = performance.now();
+      try {
+        return await operation();
+      } finally {
+        sourceDiscoveryMs += performance.now() - start;
+      }
     };
     let manifestDiffFiles: string[] = [];
     if (shouldDiffAgainstWorkingTree) {
@@ -1418,11 +1423,12 @@ export async function buildProjectIndexIncremental(
         if (reconciledWorkingTreeDiffFiles !== undefined) {
           manifestDiffFiles = reconciledWorkingTreeDiffFiles;
         } else {
-          beginSourceDiscovery();
-          manifestDiffFiles = await listChangedFiles(projectRoot, {
-            base: manifest.lastCommit,
-            head: "WORKTREE",
-          });
+          manifestDiffFiles = await measureSourceDiscovery(() =>
+            listChangedFiles(projectRoot, {
+              base: manifest.lastCommit,
+              head: "WORKTREE",
+            }),
+          );
         }
       } catch (error) {
         if (!isMissingGitRevisionError(error)) throw error;
@@ -1486,8 +1492,9 @@ export async function buildProjectIndexIncremental(
     const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
     let gitFiles: string[] = [];
     if (needsGitScan) {
-      beginSourceDiscovery();
-      gitFiles = await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts));
+      gitFiles = await measureSourceDiscovery(() =>
+        listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)),
+      );
     }
     // New files that were never committed, staged, or passed explicitly have no tracked
     // manifest entry and no working-tree-diff record, so they would otherwise stay
@@ -1512,8 +1519,9 @@ export async function buildProjectIndexIncremental(
         if (reconciledUntrackedFiles !== undefined) {
           untrackedFiles = reconciledUntrackedFiles;
         } else {
-          beginSourceDiscovery();
-          untrackedFiles = await listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable);
+          untrackedFiles = await measureSourceDiscovery(() =>
+            listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable),
+          );
         }
       } catch (error) {
         if (manifestReport) {
@@ -1532,11 +1540,8 @@ export async function buildProjectIndexIncremental(
         });
       }
     } else if (!opts?.filesAreProjectScope) {
-      beginSourceDiscovery();
-      rediscoveredFiles = await listProjectFilesWithGitCandidates(
-        projectRoot,
-        projectPatternsForLanguageExtensions(opts),
-        {
+      rediscoveredFiles = await measureSourceDiscovery(() =>
+        listProjectFilesWithGitCandidates(projectRoot, projectPatternsForLanguageExtensions(opts), {
           ...opts?.discovery,
           ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
           ...(!opts?.cacheStrict && manifest.symlinkDirectories !== undefined
@@ -1545,11 +1550,11 @@ export async function buildProjectIndexIncremental(
           onGitCandidatesDiscovered: (candidates) => {
             discoveredGitCandidates = candidates;
           },
-        },
+        }),
       );
     }
-    if (discoveryTimings && sourceDiscoveryPerformed && sourceDiscoveryStart !== undefined) {
-      discoveryTimings.sourceDiscoveryMs = Math.round(performance.now() - sourceDiscoveryStart);
+    if (discoveryTimings && sourceDiscoveryPerformed) {
+      discoveryTimings.sourceDiscoveryMs = Math.round(sourceDiscoveryMs);
     }
     const candidateFiles = [
       ...explicitFiles,

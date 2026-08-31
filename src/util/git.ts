@@ -617,11 +617,11 @@ export async function listTrackedFiles(
  * List `.gitignore` files Git knows about under `projectRoot`, including tracked,
  * untracked, and ignored files.
  *
- * `--ignored` is intentionally paired with both `--cached` and `--others`: a
- * `.gitignore` can itself be ignored, but Git still reads it when evaluating
- * paths beneath it. NUL-delimited output keeps legal whitespace and quoting in
- * pathnames intact. The caller supplies each repository or alias root separately,
- * so paths remain relative to the same logical root used to invoke Git.
+ * Separate `--cached`, unignored `--others`, and ignored `--others` listings
+ * include every rule source Git evaluates. An ignored `.gitignore` can itself
+ * affect paths beneath it. NUL-delimited output keeps legal whitespace and
+ * quoting in pathnames intact. The caller supplies each repository or alias root
+ * separately, so paths remain relative to the same logical root used to invoke Git.
  */
 export async function listGitIgnoreFiles(projectRoot: string, opts?: { gitAvailable?: boolean }): Promise<string[]> {
   if (!(opts?.gitAvailable ?? true)) return [];
