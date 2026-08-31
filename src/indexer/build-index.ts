@@ -1402,15 +1402,28 @@ export async function buildProjectIndexIncremental(
     // covers ordinary new-commit history when the working tree is clean at the new HEAD.
     const shouldDiffAgainstWorkingTree = !hasExplicitGitRange && gitAvailable && !!manifest.lastCommit;
     const canReuseReconciliation = opts?.reconciledManifestUpdatedAt === manifest.updatedAt;
+    let sourceDiscoveryStart: number | undefined;
+    let sourceDiscoveryPerformed = false;
+    const beginSourceDiscovery = () => {
+      if (!discoveryTimings || opts?.filesAreProjectScope) return;
+      sourceDiscoveryPerformed = true;
+      sourceDiscoveryStart ??= performance.now();
+    };
     let manifestDiffFiles: string[] = [];
     if (shouldDiffAgainstWorkingTree) {
       try {
-        manifestDiffFiles =
-          (canReuseReconciliation ? opts?.reconciledWorkingTreeDiffFiles : undefined) ??
-          (await listChangedFiles(projectRoot, {
+        const reconciledWorkingTreeDiffFiles = canReuseReconciliation
+          ? opts?.reconciledWorkingTreeDiffFiles
+          : undefined;
+        if (reconciledWorkingTreeDiffFiles !== undefined) {
+          manifestDiffFiles = reconciledWorkingTreeDiffFiles;
+        } else {
+          beginSourceDiscovery();
+          manifestDiffFiles = await listChangedFiles(projectRoot, {
             base: manifest.lastCommit,
             head: "WORKTREE",
-          }));
+          });
+        }
       } catch (error) {
         if (!isMissingGitRevisionError(error)) throw error;
         if (manifestReport) {
@@ -1471,7 +1484,11 @@ export async function buildProjectIndexIncremental(
     ).filter((file) => Object.hasOwn(trackedEntries, file));
     const previousTransientFileSet = new Set(previousTransientFiles);
     const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
-    const gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];
+    let gitFiles: string[] = [];
+    if (needsGitScan) {
+      beginSourceDiscovery();
+      gitFiles = await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts));
+    }
     // New files that were never committed, staged, or passed explicitly have no tracked
     // manifest entry and no working-tree-diff record, so they would otherwise stay
     // invisible to an incremental build until the next full rebuild. Detecting them via
@@ -1495,11 +1512,8 @@ export async function buildProjectIndexIncremental(
         if (reconciledUntrackedFiles !== undefined) {
           untrackedFiles = reconciledUntrackedFiles;
         } else {
-          const sourceDiscoveryStart = performance.now();
+          beginSourceDiscovery();
           untrackedFiles = await listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable);
-          if (discoveryTimings) {
-            discoveryTimings.sourceDiscoveryMs = Math.round(performance.now() - sourceDiscoveryStart);
-          }
         }
       } catch (error) {
         if (manifestReport) {
@@ -1518,7 +1532,7 @@ export async function buildProjectIndexIncremental(
         });
       }
     } else if (!opts?.filesAreProjectScope) {
-      const sourceDiscoveryStart = performance.now();
+      beginSourceDiscovery();
       rediscoveredFiles = await listProjectFilesWithGitCandidates(
         projectRoot,
         projectPatternsForLanguageExtensions(opts),
@@ -1533,7 +1547,9 @@ export async function buildProjectIndexIncremental(
           },
         },
       );
-      if (discoveryTimings) discoveryTimings.sourceDiscoveryMs = Math.round(performance.now() - sourceDiscoveryStart);
+    }
+    if (discoveryTimings && sourceDiscoveryPerformed && sourceDiscoveryStart !== undefined) {
+      discoveryTimings.sourceDiscoveryMs = Math.round(performance.now() - sourceDiscoveryStart);
     }
     const candidateFiles = [
       ...explicitFiles,

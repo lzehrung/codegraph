@@ -394,6 +394,7 @@ function hashManifestEntries(
 
 function parseLifecycleFileSignature(value: unknown): { size: string; mtimeMs: string } | undefined {
   if (typeof value !== "string") return undefined;
+  if (value === "0:0") return undefined;
   const parts = value.split(":");
   if (parts.length !== 2) return undefined;
   const [mtimeMs, size] = parts;

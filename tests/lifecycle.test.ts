@@ -135,6 +135,21 @@ describe("project lifecycle commands", () => {
     ).toBeFalsy();
   });
 
+  it("init falls back to file stats for the index signature failure sentinel", async () => {
+    const root = await mkTmpDir("cg-life-index-signature-sentinel-");
+    const file = path.join(root, "src/main.ts");
+    await writeFile(root, "src/main.ts", "ignored\n");
+    const snapshot = lifecycleSnapshot(root, [file], new Map([[file, { sig: "0:0" }]]), true);
+    vi.spyOn(agentSession, "createAgentSession").mockReturnValue(lifecycleSession(snapshot));
+    const statSpy = vi.spyOn(fsp, "stat");
+
+    await initCodegraphLifecycle(root, { updateGitignore: false });
+
+    expect(
+      statSpy.mock.calls.some(([candidate]) => path.resolve(String(candidate)) === path.resolve(file)),
+    ).toBeTruthy();
+  });
+
   it("init falls back to file stats when an index signature is incomplete and status detects edits", async () => {
     const root = await mkTmpDir("cg-life-index-signature-fallback-");
     const file = path.join(root, "src/main.ts");
