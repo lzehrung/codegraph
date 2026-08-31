@@ -1285,6 +1285,7 @@ export async function buildProjectIndexIncremental(
   if (strictIncremental && graphOptions.fast) graphOptions.fast = false;
   const { normalizedProjectRoot, report, timings, totalStart, cacheMode, cacheEnabled, onFallbackImportExtraction } =
     createIndexBuildRunState(projectRoot, opts, graphOptions);
+  const discoveryTimings = opts?.report ? (opts.report.timings ??= {}) : undefined;
   let checkProgressActive = false;
   const startCheckProgress = (): void => {
     if (checkProgressActive) return;
@@ -1525,7 +1526,7 @@ export async function buildProjectIndexIncremental(
           },
         },
       );
-      if (timings) timings.sourceDiscoveryMs = Math.round(performance.now() - sourceDiscoveryStart);
+      if (discoveryTimings) discoveryTimings.sourceDiscoveryMs = Math.round(performance.now() - sourceDiscoveryStart);
     }
     const candidateFiles = [
       ...explicitFiles,
@@ -1625,13 +1626,18 @@ export async function buildProjectIndexIncremental(
       if (!snapshotLoad) return null;
 
       const snapshot = snapshotLoad.index;
+      // The early Git fast path does not stat tracked files. Its persisted mtime:size
+      // values can therefore be stale after a byte-identical rewrite; lifecycle must
+      // re-stat until the validated path below replaces every signature.
+      snapshot.manifestSignaturesFresh = false;
       if (snapshot.projectFiles === undefined) {
         const metadataDiscoveryStart = performance.now();
         snapshot.projectFiles = await discoverProjectFilesWithGitCandidates(projectRoot, {
           ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
           ...(discoveredGitCandidates !== undefined ? { knownGitCandidates: discoveredGitCandidates } : {}),
         });
-        if (timings) timings.metadataDiscoveryMs = Math.round(performance.now() - metadataDiscoveryStart);
+        if (discoveryTimings)
+          discoveryTimings.metadataDiscoveryMs = Math.round(performance.now() - metadataDiscoveryStart);
       }
       if (opts?.cache) {
         snapshot.cacheMode = opts.cache;

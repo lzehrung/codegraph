@@ -736,6 +736,25 @@ describe("project lifecycle commands", () => {
     expect(await readCodegraphEntries(root)).toEqual(["manifest.json"]);
   });
 
+  it("sync refreshes lifecycle state after a Git-ignored mtime-only rewrite", async () => {
+    const root = await mkTmpDir("cg-life-sync-mtime-");
+    const relativePath = "src/main.ts";
+    const file = path.join(root, relativePath);
+    await initializeGitRepository(root);
+    await writeFile(root, ".gitignore", ".codegraph/\n");
+    await writeFile(root, relativePath, "export const main = 1;\n");
+    await execFileAsync("git", ["add", ".gitignore", relativePath], { cwd: root });
+    await execFileAsync("git", ["commit", "--quiet", "-m", "initial source"], { cwd: root });
+    await initCodegraphLifecycle(root);
+
+    const before = await fsp.stat(file);
+    const rewrittenAt = new Date(before.mtimeMs + 5_000);
+    await fsp.utimes(file, rewrittenAt, rewrittenAt);
+    await syncCodegraphLifecycle(root);
+
+    expect((await getCodegraphLifecycleStatus(root)).filesChanged).toBeFalsy();
+  });
+
   it("sync independently tracks added and removed files when one is added and a different one is removed", async () => {
     const root = await mkTmpDir("cg-life-sync-add-remove-");
     await writeFile(root, "src/a.ts", "export const a = 1;\n");

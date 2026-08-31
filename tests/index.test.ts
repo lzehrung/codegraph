@@ -120,6 +120,22 @@ describe("Project Indexing", () => {
     }
   });
 
+  it("keeps discovery timings private when an incremental caller omits a report", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-private-discovery-timing-"));
+    const file = path.join(root, "main.ts");
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+
+    try {
+      await buildProjectIndexIncremental(root, { cache: "disk", native: "off" });
+      const index = await buildProjectIndexIncremental(root, { cache: "disk", native: "off" });
+
+      expect(index.buildReport?.timings.sourceDiscoveryMs).toBeUndefined();
+      expect(index.buildReport?.timings.metadataDiscoveryMs).toBeUndefined();
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reports source and metadata discovery during a cold incremental build", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cold-index-progress-"));
     const file = path.join(root, "main.ts");
