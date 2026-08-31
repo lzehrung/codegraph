@@ -1113,6 +1113,7 @@ async function buildProjectIndexWithManifestOptions(
   opts?: FullDiscoveryBuildOptions,
   helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest" | "reportDiscoveryProgress">,
 ): Promise<ProjectIndex> {
+  const timings = opts?.report ? (opts.report.timings ??= {}) : undefined;
   await initializeFileIdentityCaseSensitivity(projectRoot);
   try {
     const useDiskCache = (opts?.cache ?? "off") === "disk";
@@ -1150,6 +1151,7 @@ async function buildProjectIndexWithManifestOptions(
     // candidate callback below reuses that same listing so metadata discovery does not spawn
     // Git a second time.
     if (helperOpts?.reportDiscoveryProgress) emitIndexCheckActivity(opts, "Discovering source files");
+    const sourceDiscoveryStart = performance.now();
     const discoveredFiles = await listProjectFilesWithGitCandidates(
       projectRoot,
       projectPatternsForLanguageExtensions(opts),
@@ -1162,6 +1164,7 @@ async function buildProjectIndexWithManifestOptions(
         ...(onDiscoveryProgress ? { onDiscoveryProgress } : {}),
       },
     );
+    if (timings) timings.sourceDiscoveryMs = Math.round(performance.now() - sourceDiscoveryStart);
     const additionalFileCandidates = await normalizeIndexedFileInputsWithinRoot(
       projectRoot,
       opts?.additionalFiles ?? [],
@@ -1173,12 +1176,14 @@ async function buildProjectIndexWithManifestOptions(
     const files = Array.from(new Set([...discoveredFiles, ...additionalFiles]));
     const transientFiles = additionalFiles.filter((file) => !discoveredFileSet.has(file));
     if (helperOpts?.reportDiscoveryProgress) emitIndexCheckActivity(opts, "Discovering project metadata");
+    const metadataDiscoveryStart = performance.now();
     const projectFiles = await discoverProjectFilesWithGitCandidates(projectRoot, {
       ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
       ...(discoveredSymlinkDirectories !== undefined ? { knownSymlinkDirectories: discoveredSymlinkDirectories } : {}),
       ...(discoveredGitCandidates !== undefined ? { knownGitCandidates: discoveredGitCandidates } : {}),
       ...(onDiscoveryProgress ? { onDiscoveryProgress } : {}),
     });
+    if (timings) timings.metadataDiscoveryMs = Math.round(performance.now() - metadataDiscoveryStart);
     return await buildIndexFromFileListShared(projectRoot, files, opts, {
       manifestMode: useDiskCache ? "read-write" : "off",
       warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}. Check codegraph.config.json globs and CLI --include-glob/--ignore-glob filters. Diagnostic: codegraph doctor`,
@@ -1280,6 +1285,7 @@ export async function buildProjectIndexIncremental(
   if (strictIncremental && graphOptions.fast) graphOptions.fast = false;
   const { normalizedProjectRoot, report, timings, totalStart, cacheMode, cacheEnabled, onFallbackImportExtraction } =
     createIndexBuildRunState(projectRoot, opts, graphOptions);
+  const discoveryTimings = opts?.report ? (opts.report.timings ??= {}) : undefined;
   let checkProgressActive = false;
   const startCheckProgress = (): void => {
     if (checkProgressActive) return;
@@ -1396,15 +1402,34 @@ export async function buildProjectIndexIncremental(
     // covers ordinary new-commit history when the working tree is clean at the new HEAD.
     const shouldDiffAgainstWorkingTree = !hasExplicitGitRange && gitAvailable && !!manifest.lastCommit;
     const canReuseReconciliation = opts?.reconciledManifestUpdatedAt === manifest.updatedAt;
+    let sourceDiscoveryMs = 0;
+    let sourceDiscoveryPerformed = false;
+    const measureSourceDiscovery = async <T>(operation: () => Promise<T>): Promise<T> => {
+      if (!discoveryTimings || opts?.filesAreProjectScope) return await operation();
+      sourceDiscoveryPerformed = true;
+      const start = performance.now();
+      try {
+        return await operation();
+      } finally {
+        sourceDiscoveryMs += performance.now() - start;
+      }
+    };
     let manifestDiffFiles: string[] = [];
     if (shouldDiffAgainstWorkingTree) {
       try {
-        manifestDiffFiles =
-          (canReuseReconciliation ? opts?.reconciledWorkingTreeDiffFiles : undefined) ??
-          (await listChangedFiles(projectRoot, {
-            base: manifest.lastCommit,
-            head: "WORKTREE",
-          }));
+        const reconciledWorkingTreeDiffFiles = canReuseReconciliation
+          ? opts?.reconciledWorkingTreeDiffFiles
+          : undefined;
+        if (reconciledWorkingTreeDiffFiles !== undefined) {
+          manifestDiffFiles = reconciledWorkingTreeDiffFiles;
+        } else {
+          manifestDiffFiles = await measureSourceDiscovery(() =>
+            listChangedFiles(projectRoot, {
+              base: manifest.lastCommit,
+              head: "WORKTREE",
+            }),
+          );
+        }
       } catch (error) {
         if (!isMissingGitRevisionError(error)) throw error;
         if (manifestReport) {
@@ -1465,7 +1490,12 @@ export async function buildProjectIndexIncremental(
     ).filter((file) => Object.hasOwn(trackedEntries, file));
     const previousTransientFileSet = new Set(previousTransientFiles);
     const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
-    const gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];
+    let gitFiles: string[] = [];
+    if (needsGitScan) {
+      gitFiles = await measureSourceDiscovery(() =>
+        listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)),
+      );
+    }
     // New files that were never committed, staged, or passed explicitly have no tracked
     // manifest entry and no working-tree-diff record, so they would otherwise stay
     // invisible to an incremental build until the next full rebuild. Detecting them via
@@ -1485,9 +1515,14 @@ export async function buildProjectIndexIncremental(
     let discoveredGitCandidates: GitCandidateSet | null | undefined;
     if (canUseIncrementalDiscoveryFastPath(gitAvailable, opts?.cacheStrict)) {
       try {
-        untrackedFiles =
-          (canReuseReconciliation ? opts?.reconciledUntrackedFiles : undefined) ??
-          (await listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable));
+        const reconciledUntrackedFiles = canReuseReconciliation ? opts?.reconciledUntrackedFiles : undefined;
+        if (reconciledUntrackedFiles !== undefined) {
+          untrackedFiles = reconciledUntrackedFiles;
+        } else {
+          untrackedFiles = await measureSourceDiscovery(() =>
+            listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable),
+          );
+        }
       } catch (error) {
         if (manifestReport) {
           manifestReport.reason = "gitUntrackedScanFailed";
@@ -1505,10 +1540,8 @@ export async function buildProjectIndexIncremental(
         });
       }
     } else if (!opts?.filesAreProjectScope) {
-      rediscoveredFiles = await listProjectFilesWithGitCandidates(
-        projectRoot,
-        projectPatternsForLanguageExtensions(opts),
-        {
+      rediscoveredFiles = await measureSourceDiscovery(() =>
+        listProjectFilesWithGitCandidates(projectRoot, projectPatternsForLanguageExtensions(opts), {
           ...opts?.discovery,
           ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
           ...(!opts?.cacheStrict && manifest.symlinkDirectories !== undefined
@@ -1517,8 +1550,11 @@ export async function buildProjectIndexIncremental(
           onGitCandidatesDiscovered: (candidates) => {
             discoveredGitCandidates = candidates;
           },
-        },
+        }),
       );
+    }
+    if (discoveryTimings && sourceDiscoveryPerformed) {
+      discoveryTimings.sourceDiscoveryMs = Math.round(sourceDiscoveryMs);
     }
     const candidateFiles = [
       ...explicitFiles,
@@ -1618,10 +1654,19 @@ export async function buildProjectIndexIncremental(
       if (!snapshotLoad) return null;
 
       const snapshot = snapshotLoad.index;
-      snapshot.projectFiles ??= await discoverProjectFilesWithGitCandidates(projectRoot, {
-        ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-        ...(discoveredGitCandidates !== undefined ? { knownGitCandidates: discoveredGitCandidates } : {}),
-      });
+      // The early Git fast path does not stat tracked files. Its persisted mtime:size
+      // values can therefore be stale after a byte-identical rewrite; lifecycle must
+      // re-stat until the validated path below replaces every signature.
+      snapshot.manifestSignaturesFresh = false;
+      if (snapshot.projectFiles === undefined) {
+        const metadataDiscoveryStart = performance.now();
+        snapshot.projectFiles = await discoverProjectFilesWithGitCandidates(projectRoot, {
+          ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+          ...(discoveredGitCandidates !== undefined ? { knownGitCandidates: discoveredGitCandidates } : {}),
+        });
+        if (discoveryTimings)
+          discoveryTimings.metadataDiscoveryMs = Math.round(performance.now() - metadataDiscoveryStart);
+      }
       if (opts?.cache) {
         snapshot.cacheMode = opts.cache;
         snapshot.cacheRootDir = cacheRoot(projectRoot, opts);
@@ -1931,6 +1976,19 @@ export async function buildProjectIndexIncremental(
           sig: signature.sig,
           ...(signature.gitSig ? { gitSig: signature.gitSig } : {}),
           edges: [],
+        });
+      }
+      // A Git blob match proves source bytes, not mtime. Refresh every retained
+      // entry from the stat signatures computed above before declaring lifecycle
+      // signatures fresh.
+      for (const [file, entry] of manifestEntries) {
+        const signature = fileSignatures.get(file);
+        if (!signature) continue;
+        const { gitSig: _previousGitSig, ...entryWithoutGitSig } = entry;
+        manifestEntries.set(file, {
+          ...entryWithoutGitSig,
+          sig: signature.sig,
+          ...(signature.gitSig ? { gitSig: signature.gitSig } : {}),
         });
       }
       await writeIndexManifestSnapshot({

@@ -613,6 +613,42 @@ export async function listTrackedFiles(
     throw createGitError(projectRoot, args, error);
   }
 }
+/**
+ * List `.gitignore` files Git knows about under `projectRoot`, including tracked,
+ * untracked, and ignored files.
+ *
+ * Separate `--cached`, unignored `--others`, and ignored `--others` listings
+ * include every rule source Git evaluates. An ignored `.gitignore` can itself
+ * affect paths beneath it. NUL-delimited output keeps legal whitespace and
+ * quoting in pathnames intact. The caller supplies each repository or alias root
+ * separately, so paths remain relative to the same logical root used to invoke Git.
+ */
+export async function listGitIgnoreFiles(projectRoot: string, opts?: { gitAvailable?: boolean }): Promise<string[]> {
+  if (!(opts?.gitAvailable ?? true)) return [];
+  const pathspec = [".gitignore", ":(glob)**/.gitignore"];
+  const commands = [
+    ["ls-files", "--cached", "-z", "--", ...pathspec],
+    ["ls-files", "--others", "--exclude-standard", "-z", "--", ...pathspec],
+    ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ...pathspec],
+  ];
+  const results = await Promise.all(
+    commands.map(async (args) => {
+      try {
+        return await runGit(projectRoot, args, { maxBuffer: 64 * 1024 * 1024 });
+      } catch (error) {
+        throw createGitError(projectRoot, args, error);
+      }
+    }),
+  );
+  const out: string[] = [];
+  for (const { stdout } of results) {
+    for (const rel of stdout.split("\0").filter(Boolean)) {
+      const abs = resolveGitListedPath(projectRoot, rel);
+      if (abs) out.push(abs);
+    }
+  }
+  return Array.from(new Set(out));
+}
 
 /**
  * Directories of initialized submodules under `projectRoot`, as absolute paths.

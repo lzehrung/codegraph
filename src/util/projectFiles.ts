@@ -21,6 +21,7 @@ import {
   isGitProjectRootIgnored,
   isGitRepo,
   listGitExcludeFiles,
+  listGitIgnoreFiles,
   listGitSubmoduleDirectories,
   listTrackedFiles,
   listUntrackedFiles,
@@ -549,17 +550,17 @@ function collectCandidateAncestorDirectories(root: string, files: readonly strin
 }
 
 /**
- * Locate the `.gitignore` files that can affect `files`, plus Git's other ignore sources.
+ * Locate the `.gitignore` files that can affect the Git candidates, plus Git's
+ * other ignore sources.
  *
- * Each source retains its owning repository root. That boundary prevents superproject rules
- * from filtering paths Git evaluates inside initialized submodules.
+ * Git lists tracked, untracked, and ignored `.gitignore` files directly. This
+ * avoids probing every candidate ancestor with `stat`, while retaining each
+ * source's owning repository boundary so superproject rules cannot filter paths
+ * Git evaluates inside initialized submodules.
  */
 type GitIgnoreSourceRoot = { path: string; repositoryRoot: string };
 
-async function findGitIgnoreSources(
-  sourceRoots: readonly GitIgnoreSourceRoot[],
-  files: readonly string[],
-): Promise<GitignoreSource[]> {
+async function findGitIgnoreSources(sourceRoots: readonly GitIgnoreSourceRoot[]): Promise<GitignoreSource[]> {
   const roots = Array.from(
     new Map(
       sourceRoots.map(({ path: sourceRoot, repositoryRoot }) => [
@@ -570,27 +571,20 @@ async function findGitIgnoreSources(
   );
   const sources: GitignoreSource[] = [];
   for (const { path: sourceRoot, repositoryRoot } of roots) {
-    const directories = collectCandidateAncestorDirectories(
-      sourceRoot,
-      files.filter((file) => isFilePathWithinRoot(sourceRoot, file)),
-    );
-    const present = await mapLimitSemaphore(directories, REALPATH_FILTER_CONCURRENCY, async (directory) => {
-      const candidate = normalizePath(path.join(directory, ".gitignore"));
-      try {
-        return (await fsp.stat(candidate)).isFile()
-          ? { file: candidate, baseDir: directory, repositoryRoot, priority: 2 }
-          : null;
-      } catch {
-        return null;
-      }
-    });
+    const [gitignoreFiles, excludeFiles] = await Promise.all([
+      listGitIgnoreFiles(sourceRoot),
+      listGitExcludeFiles(sourceRoot),
+    ]);
     sources.push(
-      ...present.filter(
-        (entry): entry is { file: string; baseDir: string; repositoryRoot: string; priority: number } => entry !== null,
-      ),
+      ...gitignoreFiles.map((file) => ({
+        file,
+        baseDir: path.dirname(file),
+        repositoryRoot,
+        priority: 2,
+      })),
     );
     sources.push(
-      ...(await listGitExcludeFiles(sourceRoot)).map((source) => ({
+      ...excludeFiles.map((source) => ({
         ...source,
         repositoryRoot: source.baseDir,
       })),
@@ -640,18 +634,6 @@ async function listGitCandidateFiles(root: string, logLevel: LogLevel | undefine
         ),
       ),
     ).sort();
-    const physicalFiles =
-      normalizePath(root) === realRoot
-        ? []
-        : (
-            await mapLimitSemaphore(files, REALPATH_FILTER_CONCURRENCY, async (file) => {
-              try {
-                return normalizePath(await fsp.realpath(file));
-              } catch {
-                return null;
-              }
-            })
-          ).filter((file): file is string => file !== null);
     const gitignoreRoots = [gitRepositoryRoot, ...submoduleRoots.map(({ physicalPath }) => physicalPath)].map(
       normalizePath,
     );
@@ -666,7 +648,7 @@ async function listGitCandidateFiles(root: string, logLevel: LogLevel | undefine
     ];
     return {
       files,
-      gitignoreFiles: await findGitIgnoreSources(sourceRoots, [...rawFiles, ...files, ...physicalFiles]),
+      gitignoreFiles: await findGitIgnoreSources(sourceRoots),
       gitignoreRoots,
       gitignoreAliases: sourceRoots,
     };

@@ -880,7 +880,9 @@ nativeDescribe("native semantic coverage", () => {
     for (const testCase of cases) {
       await expectNativeSemantics(testCase);
     }
-  }, 60_000);
+    // This serial fixture matrix is CPU-bound. Under parallel native CI on Windows,
+    // deterministic assertions can exceed 60 seconds, so retain headroom for host variance.
+  }, 120_000);
 
   it("keeps native semantics stable for normalization-sensitive TypeScript export assignment", async () => {
     const testCase = await createTypeScriptNormalizationCase();

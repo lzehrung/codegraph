@@ -681,6 +681,8 @@ const incremental = await buildProjectIndexIncremental(root, {
 
 `buildProjectIndexIncremental` loads the cached manifest, reuses unchanged modules and edges, and reparses only the files reported as changed by Git flags or an explicit `files` list.
 
+Pass `report: { timings: {} }` to receive optional build timing fields. `sourceDiscoveryMs` measures source-file discovery and `metadataDiscoveryMs` measures project-metadata discovery. Each field is present only when the caller supplied `report` and that discovery step ran.
+
 `changedSince` follows `git diff <rev>` semantics, while `gitBase` and `gitHead` use an explicit `<base>..<head>` range for normal revisions. `gitHead` also accepts `WORKTREE` for staged and unstaged tracked-file changes, or `STAGED`/`INDEX` for the current index.
 
 `BuildOptions.onProgress` reports index lifecycle, check, and file progress. A rebuild emits `phase: "start"` with `mode: "build"` or `"update"`, zero or more `phase: "update"` events, and `phase: "complete"` with `elapsedMs`; a reusable snapshot emits no progress events. An incremental full rebuild first emits check-mode activity. Its `activity` field is a stable display label, such as `"Discovering source files"` or `"Checking project metadata files"`; `current` and `total` report completed path checks when that work has a known total. Do not render `message` as a status line because file progress messages can contain a path.

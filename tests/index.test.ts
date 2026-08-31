@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { buildProjectIndex, buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../src/index.js";
 import { findReferences } from "../src/indexer/navigation.js";
+import type { BuildReport } from "../src/indexer/types.js";
 import type { ProgressUpdate } from "../src/types.js";
 import {
   fileIdentityKey,
@@ -13,6 +14,7 @@ import {
   setFileIdentityCaseInsensitive,
 } from "../src/util/paths.js";
 import { setAfterConfinedPathVerifiedForTests } from "../src/util/confinedFile.js";
+import { runGit as git } from "./helpers/git.js";
 import { createTestIndex, expectFileInIndex, expectModuleCount } from "./test-utils.js";
 
 describe("Project Indexing", () => {
@@ -70,6 +72,126 @@ describe("Project Indexing", () => {
       expect(updates[1]).toMatchObject({ mode: "build", current: 1, total: 1 });
       expect(updates[2]).toMatchObject({ mode: "build", current: 1, total: 1 });
       expect(updates[2]?.elapsedMs).toBeTypeOf("number");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports source and metadata discovery timings for a cold full incremental build", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-discovery-timing-"));
+    const file = path.join(root, "main.ts");
+    const report: BuildReport = { timings: {} };
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+
+    try {
+      await buildProjectIndexIncremental(root, {
+        cache: "disk",
+        native: "off",
+        report,
+      });
+
+      expect(report.timings.sourceDiscoveryMs).toBeTypeOf("number");
+      expect(report.timings.sourceDiscoveryMs).toBeGreaterThanOrEqual(0);
+      expect(report.timings.metadataDiscoveryMs).toBeTypeOf("number");
+      expect(report.timings.metadataDiscoveryMs).toBeGreaterThanOrEqual(0);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports metadata discovery for an incremental update", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-incremental-metadata-timing-"));
+    await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
+
+    try {
+      await buildProjectIndexIncremental(root, { cache: "disk", native: "off" });
+      await fsp.writeFile(path.join(root, "extra.ts"), "export const extra = 2;\n", "utf8");
+      const report: BuildReport = { timings: {} };
+
+      await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+
+      expect(report.timings.sourceDiscoveryMs).toBeTypeOf("number");
+      expect(report.timings.metadataDiscoveryMs).toBeTypeOf("number");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports Git-backed untracked source discovery for an incremental update", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-git-discovery-timing-"));
+    const main = path.join(root, "main.ts");
+    const extra = path.join(root, "extra.ts");
+    await fsp.writeFile(path.join(root, ".gitignore"), ".codegraph/\n", "utf8");
+    await fsp.writeFile(main, "export const value = 1;\n", "utf8");
+    git(root, ["init"]);
+    git(root, ["config", "user.email", "tests@example.com"]);
+    git(root, ["config", "user.name", "Tests"]);
+    git(root, ["add", ".gitignore", "main.ts"]);
+    git(root, ["commit", "-m", "initial source"]);
+
+    try {
+      await buildProjectIndexIncremental(root, { cache: "disk", native: "off" });
+      await fsp.writeFile(extra, "export const extra = 2;\n", "utf8");
+      const report: BuildReport = { timings: {} };
+
+      await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+
+      expect(report.timings.sourceDiscoveryMs).toBeTypeOf("number");
+      expect(report.timings.metadataDiscoveryMs).toBeTypeOf("number");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports finalization metadata discovery for explicit files", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-explicit-metadata-timing-"));
+    const file = path.join(root, "main.ts");
+    const report: BuildReport = { timings: {} };
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+
+    try {
+      await buildProjectIndexFromFiles(root, [file], { native: "off", report });
+
+      expect(report.timings.sourceDiscoveryMs).toBeUndefined();
+      expect(report.timings.metadataDiscoveryMs).toBeTypeOf("number");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("omits source discovery timing for an explicit incremental project scope", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-no-discovery-timing-"));
+    const file = path.join(root, "main.ts");
+    const report: BuildReport = { timings: {} };
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+
+    try {
+      await buildProjectIndexIncremental(root, {
+        cache: "off",
+        files: [file],
+        filesAreProjectScope: true,
+        native: "off",
+        report,
+      });
+
+      expect(report.timings.sourceDiscoveryMs).toBeUndefined();
+      expect(report.timings.metadataDiscoveryMs).toBeTypeOf("number");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps discovery timings private when an incremental caller omits a report", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-private-discovery-timing-"));
+    const file = path.join(root, "main.ts");
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+
+    try {
+      await buildProjectIndexIncremental(root, { cache: "disk", native: "off" });
+      const index = await buildProjectIndexIncremental(root, { cache: "disk", native: "off" });
+
+      expect(index.buildReport?.timings.sourceDiscoveryMs).toBeUndefined();
+      expect(index.buildReport?.timings.metadataDiscoveryMs).toBeUndefined();
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
