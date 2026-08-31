@@ -397,7 +397,7 @@ codegraph grep 'eval\(' --ignore-case
 
 ### Symbol commands
 
-Known symbol: `codegraph symbols`/`codegraph search` → `codegraph refs` → `codegraph callers`/`codegraph callees` → `codegraph deps`/`codegraph rdeps`/`codegraph path` → `codegraph explain` or `codegraph packet get`.
+Known symbol: `codegraph symbols`/`codegraph search` -> `codegraph refs` -> `codegraph callers`/`codegraph callees` -> `codegraph deps`/`codegraph rdeps`/`codegraph path` -> `codegraph explain` or `codegraph packet get`.
 
 ### Explore query scope
 

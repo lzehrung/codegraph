@@ -53,7 +53,7 @@ Use `--root` to define the boundary for config lookup, path confinement, and out
 
 - map a repo: `codegraph orient --root . --budget small`
 - find a target: `codegraph symbols "CodeReviewSession"` / `codegraph search "auth user"` / `codegraph grep "spawn|timeout"`
-- navigate a symbol: `codegraph refs <handle>` → `codegraph callers <handle>` → `codegraph rdeps <file|handle>`
+- navigate a symbol: `codegraph refs <handle>` -> `codegraph callers <handle>` -> `codegraph rdeps <file|handle>`
 - explain or retrieve a target: `codegraph explain <handle>` or `codegraph packet get <handle>`
 - use `codegraph explore` only for one hybrid search plus context from top results
 
