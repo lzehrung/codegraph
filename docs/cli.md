@@ -360,7 +360,7 @@ codegraph chunk config.yaml --language yaml --min-tokens 100 --max-tokens 300
 codegraph duplicates --root . ./src --profile cleanup
 codegraph duplicates --root . ./src ./packages/app --include-same-file
 codegraph duplicates --root . ./src --ignore-glob "tests/**" --ignore-glob "docs/**"
-codegraph duplicates --root . ./tests --ignore-root-glob "tests/languages/\*\*"
+codegraph duplicates --root . ./tests --ignore-root-glob "tests/languages/**"
 codegraph duplicates ./src --json --sort reduced-lines
 codegraph duplicates ./src --json --raw-pairs
 codegraph duplicates --help
