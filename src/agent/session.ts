@@ -156,7 +156,6 @@ function emitAgentFilePlanProgress(options: AgentSessionOptions): void {
 }
 
 async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promise<AgentSessionFilePlan> {
-  emitAgentFilePlanProgress(options);
   const { discoveryOptions, graphOptions, languageExtensions, cacheLocation } =
     await resolveAgentDiscoverySettings(options);
   // Prefer the manifest-plus-Git reconciliation over a full recursive scan whenever it
@@ -183,6 +182,7 @@ async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promis
   const { DEFAULT_PROJECT_PATTERNS } = await import("../util/projectFiles.js");
   const customPatterns = languageExtensionPatterns(languageExtensions);
   const patterns = customPatterns.length ? [...DEFAULT_PROJECT_PATTERNS, ...customPatterns] : undefined;
+  emitAgentFilePlanProgress(options);
   const files = await listProjectFiles(options.root, patterns, discoveryOptions);
   return {
     files,

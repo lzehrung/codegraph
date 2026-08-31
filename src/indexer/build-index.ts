@@ -1141,13 +1141,13 @@ async function buildProjectIndexWithManifestOptions(
       !helperOpts?.ignoreExistingManifest && !wantsMaxSymlinkCorrectness && useDiskCache
         ? await loadManifest(projectRoot, opts)
         : null;
-    if (!helperOpts?.reportDiscoveryProgress && !symlinkHintManifest) {
-      emitIndexCheckStart(opts, "Discovering source files");
-    }
     const rootMtime = symlinkHintManifest ? (await fsp.stat(projectRoot)).mtimeMs : undefined;
     const symlinkHintIsFresh =
       symlinkHintManifest?.symlinkDirectoriesRootMtimeMs !== undefined &&
       rootMtime === symlinkHintManifest.symlinkDirectoriesRootMtimeMs;
+    if (!helperOpts?.reportDiscoveryProgress && !symlinkHintIsFresh) {
+      emitIndexCheckStart(opts, "Discovering source files");
+    }
     const knownSymlinkDirectories = symlinkHintIsFresh ? symlinkHintManifest?.symlinkDirectories : undefined;
     let discoveredSymlinkDirectories = knownSymlinkDirectories;
     const onSymlinkDirectoriesDiscovered = (directories: readonly string[]) => {

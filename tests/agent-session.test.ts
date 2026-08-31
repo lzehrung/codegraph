@@ -136,6 +136,19 @@ describe("agent session", () => {
     });
   });
 
+  it("keeps warm agent session reconciliation quiet during file planning", async () => {
+    const root = await mkGitRepo();
+    await createAgentSession({ root }).loadProject({ symbolGraph: "skip" });
+    const updates: ProgressUpdate[] = [];
+
+    await createAgentSession({
+      root,
+      buildOptions: { onProgress: (update) => updates.push(update) },
+    }).loadProject({ symbolGraph: "skip" });
+
+    expect(updates.filter((update) => update.activity === "Discovering source files")).toEqual([]);
+  });
+
   it("reuses current build signatures and stats only files missing from the manifest", async () => {
     const root = await mkGitRepo();
     const missingFile = path.resolve(root, "util.ts");
