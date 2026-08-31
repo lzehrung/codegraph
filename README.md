@@ -18,8 +18,6 @@ codegraph is a local CLI **and TypeScript library** that turns a source tree int
 
 Without structural context, an agent burns early turns listing directories, guessing search terms, opening candidate files, and reconstructing relationships. codegraph does that discovery once so the context window can stay focused on the problem.
 
-Warm-cache timings for `codegraph orient --root . --budget small --json` on this repository have ranged from about **0.6s** (Windows 11, Node 24) to about **2.5s** (a 4-core Linux container, Node 22), so treat them as machine-dependent rather than a headline figure; the matching MCP `orient` call returned in about **100ms** on the faster of the two. [The performance program index](docs/plans/2026-07-25-performance-program-index.md) records the current measurements and the conditions behind them.
-
 With Node.js 22.16 or newer, install from npm:
 
 ```bash
@@ -132,13 +130,16 @@ Do not begin by generating every possible report. Start with the question you ac
 ### Understand an unfamiliar repo
 
 ```bash
-# Ask one concrete architecture question
-codegraph explore "how does the CLI reach review analysis?" --root .
-
-# If you do not know the question yet, get a bounded map
+# Map the repository before selecting a target
 codegraph orient --root . --budget small
 
-# Follow an anchor returned by either command
+# Search a concrete term
+codegraph search "review analysis CLI" --json
+
+# Use explore only when those results need packets and dependency paths
+codegraph explore "review analysis CLI" --root .
+
+# Follow a returned target
 codegraph explain src/review.ts
 codegraph deps src/review.ts --json
 codegraph refs src/review.ts:215:23
