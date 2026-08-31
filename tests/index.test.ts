@@ -267,12 +267,23 @@ describe("Project Indexing", () => {
     try {
       await buildProjectIndex(root, buildOptions);
 
-      const fullCacheUpdates: ProgressUpdate[] = [];
+      const warmCacheUpdates: ProgressUpdate[] = [];
+      await buildProjectIndex(root, {
+        cache: "disk",
+        onProgress: (update) => warmCacheUpdates.push(update),
+      });
+      expect(warmCacheUpdates).toEqual([]);
+
+      const strictFullCacheUpdates: ProgressUpdate[] = [];
       await buildProjectIndex(root, {
         ...buildOptions,
-        onProgress: (update) => fullCacheUpdates.push(update),
+        onProgress: (update) => strictFullCacheUpdates.push(update),
       });
-      expect(fullCacheUpdates).toEqual([]);
+      expect(strictFullCacheUpdates[0]).toMatchObject({
+        phase: "start",
+        mode: "check",
+        activity: "Discovering source files",
+      });
 
       const cachedUpdates: ProgressUpdate[] = [];
       await buildProjectIndexIncremental(root, {
