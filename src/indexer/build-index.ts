@@ -616,6 +616,18 @@ function emitIndexLifecycleProgress(
   });
 }
 
+function emitIndexCheckStart(opts: BuildOptions | undefined, activity: string = "Checking project index"): void {
+  opts?.onProgress?.({
+    type: "progress",
+    phase: "start",
+    mode: "check",
+    message: activity,
+    activity,
+    current: 0,
+    total: 0,
+  });
+}
+
 function emitIndexCheckActivity(
   opts: BuildOptions | undefined,
   activity: string,
@@ -1126,13 +1138,16 @@ async function buildProjectIndexWithManifestOptions(
     // root mtime triggers the cheap full-tree probe, while strict modes always probe.
     const wantsMaxSymlinkCorrectness = !!opts?.cacheStrict || !!opts?.cacheVerify;
     const symlinkHintManifest =
-      helperOpts?.ignoreExistingManifest || wantsMaxSymlinkCorrectness || !useDiskCache
-        ? null
-        : await loadManifest(projectRoot, opts);
+      !helperOpts?.ignoreExistingManifest && !wantsMaxSymlinkCorrectness && useDiskCache
+        ? await loadManifest(projectRoot, opts)
+        : null;
     const rootMtime = symlinkHintManifest ? (await fsp.stat(projectRoot)).mtimeMs : undefined;
     const symlinkHintIsFresh =
       symlinkHintManifest?.symlinkDirectoriesRootMtimeMs !== undefined &&
       rootMtime === symlinkHintManifest.symlinkDirectoriesRootMtimeMs;
+    if (!helperOpts?.reportDiscoveryProgress && !symlinkHintIsFresh) {
+      emitIndexCheckStart(opts, "Discovering source files");
+    }
     const knownSymlinkDirectories = symlinkHintIsFresh ? symlinkHintManifest?.symlinkDirectories : undefined;
     let discoveredSymlinkDirectories = knownSymlinkDirectories;
     const onSymlinkDirectoriesDiscovered = (directories: readonly string[]) => {

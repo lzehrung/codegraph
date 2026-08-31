@@ -143,6 +143,18 @@ async function resolveAgentDiscoverySettings(options: AgentSessionOptions): Prom
   };
 }
 
+function emitAgentFilePlanProgress(options: AgentSessionOptions): void {
+  options.buildOptions?.onProgress?.({
+    type: "progress",
+    phase: "start",
+    mode: "check",
+    message: "Discovering source files",
+    activity: "Discovering source files",
+    current: 0,
+    total: 0,
+  });
+}
+
 async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promise<AgentSessionFilePlan> {
   const { discoveryOptions, graphOptions, languageExtensions, cacheLocation } =
     await resolveAgentDiscoverySettings(options);
@@ -170,6 +182,7 @@ async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promis
   const { DEFAULT_PROJECT_PATTERNS } = await import("../util/projectFiles.js");
   const customPatterns = languageExtensionPatterns(languageExtensions);
   const patterns = customPatterns.length ? [...DEFAULT_PROJECT_PATTERNS, ...customPatterns] : undefined;
+  emitAgentFilePlanProgress(options);
   const files = await listProjectFiles(options.root, patterns, discoveryOptions);
   return {
     files,
