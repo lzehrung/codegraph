@@ -805,37 +805,43 @@ async function listProjectFilesInternal(
             filterIgnoreGlobs: userIgnoreGlobs,
             resolvedSafeSymlinkDirectories: safeSymlinkDirectories,
           });
-    const rootSafeFiles = await filterRealPathsWithinRootEntries(
-      [...files, ...includedOverrideFiles, ...linkedFiles, ...linkedOverrideFiles],
-      realRoot,
-      reportSourcePathChecks,
-    );
+    // Cheap path predicates run before the realpath confinement probe. Git enumerates
+    // every tracked and untracked file it knows about, including trees this project
+    // always ignores (virtualenvs, build output, caches), so probing first spent one
+    // realpath syscall per ignored candidate: a Python project with a 20k-file untracked
+    // virtualenv took 1.0s of syscalls to return 7 files. Only candidates that can still
+    // become project files need their physical path resolved.
+    const candidatePaths = [...files, ...includedOverrideFiles, ...linkedFiles, ...linkedOverrideFiles];
     const seen = new Set<string>();
+    const indexableCandidates: string[] = [];
+    for (const candidatePath of candidatePaths) {
+      const filePath = normalizePath(candidatePath);
+      if (seen.has(filePath)) continue;
+      seen.add(filePath);
+      const rootRelative = normalizePath(path.relative(root, filePath));
+      if (!isRelativePathInside(rootRelative)) continue;
+      if (!patternMatchers.some((matcher) => matcher(rootRelative))) continue;
+      if (
+        includeMatchers.length &&
+        !includeMatchers.some((matcher) => matchesDiscoveryGlob(filePath, globRoot, matcher))
+      ) {
+        continue;
+      }
+      if (userIgnoreMatchers.some((matcher) => matchesDiscoveryGlob(filePath, globRoot, matcher))) continue;
+      // Explicit include globs are a deliberate request to re-open default-ignored trees.
+      if (!includeMatchers.length && defaultIgnoreMatchers.some((matcher) => matcher(rootRelative))) continue;
+      if (isIgnoredByGitignore(filePath, gitignoreIndex)) continue;
+      indexableCandidates.push(filePath);
+    }
+    const rootSafeFiles = await filterRealPathsWithinRootEntries(indexableCandidates, realRoot, reportSourcePathChecks);
     return rootSafeFiles
-      .map(({ path: filePath, realPath }) => ({ filePath: normalizePath(filePath), realPath }))
-      .filter(({ filePath, realPath }) => {
-        if (seen.has(filePath)) return false;
-        seen.add(filePath);
-        const rootRelative = normalizePath(path.relative(root, filePath));
-        if (!isRelativePathInside(rootRelative)) return false;
-        if (!patternMatchers.some((matcher) => matcher(rootRelative))) return false;
-        const matchesInclude =
-          !includeMatchers.length ||
-          includeMatchers.some((matcher) => matchesDiscoveryGlob(filePath, globRoot, matcher));
-        if (!matchesInclude) return false;
-        if (userIgnoreMatchers.some((matcher) => matchesDiscoveryGlob(filePath, globRoot, matcher))) {
-          return false;
-        }
-        const ignoredByDefault = defaultIgnoreMatchers.some((matcher) => matcher(rootRelative));
-        if (ignoredByDefault && !(includeMatchers.length > 0 && matchesInclude)) {
-          return false;
-        }
-        if (isIgnoredByGitignore(filePath, gitignoreIndex)) return false;
-        // The real path only differs when the entry was reached through a symlink, so
-        // testing it again for every ordinary file doubled the matcher work for nothing.
-        return normalizePath(realPath) === filePath || !isIgnoredByGitignore(realPath, gitignoreIndex);
-      })
-      .map(({ filePath }) => filePath);
+      .filter(
+        ({ path: filePath, realPath }) =>
+          // The real path only differs when the entry was reached through a symlink, so
+          // testing it again for every ordinary file doubled the matcher work for nothing.
+          normalizePath(realPath) === filePath || !isIgnoredByGitignore(realPath, gitignoreIndex),
+      )
+      .map(({ path: filePath }) => filePath);
   } catch (error) {
     logWithLevel(options?.logLevel, "debug", `listProjectFiles failed for ${root}: ${stringifyUnknown(error)}`);
     throw new Error(`Failed to list files in ${root}: ${stringifyUnknown(error)}`);
@@ -1196,22 +1202,22 @@ async function discoverProjectFilesInternal(
           resolvedSafeSymlinkDirectories: safeSymlinkDirectories,
         },
       );
-      const rootSafeCandidateEntries = await filterRealPathsWithinRootEntries(
-        gitCandidates.files,
-        realRoot,
-        reportMetadataFileChecks,
-      );
-      const filteredFiles = filterGitIgnoredEntries(rootSafeCandidateEntries);
-      const fileMatches = filteredFiles.filter((file) =>
+      const candidateFiles = Array.from(new Set(gitCandidates.files.map(normalizePath)));
+      // Only a candidate whose basename can name a manifest becomes a metadata entry, so
+      // resolve physical paths for those alone. Probing every Git candidate first cost a
+      // realpath syscall per ignored file: the same 20k-file untracked virtualenv spent
+      // 0.6s here. Ancestor directories come from the candidate paths themselves and are
+      // confined by their own realpath check below.
+      const metadataCandidates = candidateFiles.filter((file) =>
         PROJECT_FILE_DEFINITIONS.some(
           (definition, definitionIndex) =>
             definition.kind === "file" && matchesDefinition(path.basename(file), definitionIndex),
         ),
       );
-      const rawCandidateDirectories = collectCandidateAncestorDirectories(
-        root,
-        rootSafeCandidateEntries.map(({ path: filePath }) => filePath),
+      const fileMatches = filterGitIgnoredEntries(
+        await filterRealPathsWithinRootEntries(metadataCandidates, realRoot, reportMetadataFileChecks),
       );
+      const rawCandidateDirectories = collectCandidateAncestorDirectories(root, candidateFiles);
       const candidateDirectoryKeys = new Set(rawCandidateDirectories.map(fileIdentityKey));
       const safeSymlinkDirectoryKeys = new Set(safeSymlinkDirectories.map(fileIdentityKey));
       const directoryMatches = [

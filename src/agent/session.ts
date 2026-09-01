@@ -115,6 +115,8 @@ type AgentDiscoverySettings = {
 type AgentSessionFilePlan = AgentDiscoverySettings & {
   files: string[];
   incrementalPlan?: IncrementalFilePlan;
+  /** When file planning began, so the build reports the wait including discovery. */
+  startedAt: number;
 };
 
 type AgentFreshnessDiff = {
@@ -155,7 +157,32 @@ function emitAgentFilePlanProgress(options: AgentSessionOptions): void {
   });
 }
 
+/**
+ * Report discovery work while it runs. Discovery walks or Git-lists the whole project
+ * before any file is parsed, and on a project holding a large ignored tree that phase can
+ * dominate the command. Without these updates the only output is the one "Discovering
+ * source files" line, which is indistinguishable from a hang.
+ */
+function agentDiscoveryProgressReporter(
+  options: AgentSessionOptions,
+): ((progress: { activity: string; current: number; total: number }) => void) | undefined {
+  const onProgress = options.buildOptions?.onProgress;
+  if (!onProgress) return undefined;
+  return ({ activity, current, total }) => {
+    onProgress({
+      type: "progress",
+      phase: "update",
+      mode: "check",
+      message: activity,
+      activity,
+      current,
+      total,
+    });
+  };
+}
+
 async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promise<AgentSessionFilePlan> {
+  const startedAt = performance.now();
   const { discoveryOptions, graphOptions, languageExtensions, cacheLocation } =
     await resolveAgentDiscoverySettings(options);
   // Prefer the manifest-plus-Git reconciliation over a full recursive scan whenever it
@@ -173,6 +200,7 @@ async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promis
     return {
       files: incrementalPlan.files,
       incrementalPlan,
+      startedAt,
       ...(discoveryOptions ? { discoveryOptions } : {}),
       ...(graphOptions ? { graphOptions } : {}),
       ...(languageExtensions ? { languageExtensions } : {}),
@@ -183,9 +211,14 @@ async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promis
   const customPatterns = languageExtensionPatterns(languageExtensions);
   const patterns = customPatterns.length ? [...DEFAULT_PROJECT_PATTERNS, ...customPatterns] : undefined;
   emitAgentFilePlanProgress(options);
-  const files = await listProjectFiles(options.root, patterns, discoveryOptions);
+  const onDiscoveryProgress = agentDiscoveryProgressReporter(options);
+  const files = await listProjectFiles(options.root, patterns, {
+    ...discoveryOptions,
+    ...(onDiscoveryProgress ? { onDiscoveryProgress } : {}),
+  });
   return {
     files,
+    startedAt,
     ...(discoveryOptions ? { discoveryOptions } : {}),
     ...(graphOptions ? { graphOptions } : {}),
     ...(languageExtensions ? { languageExtensions } : {}),
@@ -354,7 +387,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   const loadBase = async (): Promise<AgentProjectBaseSnapshot> => {
     if (cachedBase) return cachedBase;
     const loadPromise = (async () => {
-      const { files, discoveryOptions, graphOptions, languageExtensions, cacheLocation, incrementalPlan } =
+      const { files, discoveryOptions, graphOptions, languageExtensions, cacheLocation, incrementalPlan, startedAt } =
         await loadFilePlan();
       const buildOptions: IncrementalBuildOptions = {
         ...options.buildOptions,
@@ -363,6 +396,8 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         keepParsed: options.buildOptions?.keepParsed ?? true,
         files,
         filesAreProjectScope: true,
+        // Discovery ran before this build, so the completion event must measure from there.
+        progressStartedAt: options.buildOptions?.progressStartedAt ?? startedAt,
         ...(incrementalPlan
           ? {
               reconciledManifestUpdatedAt: incrementalPlan.manifestUpdatedAt,

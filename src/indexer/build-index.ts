@@ -596,6 +596,7 @@ function createIndexBuildRunState(
     onFallbackImportExtraction: createFallbackImportExtractionHandler(report, opts),
   };
 }
+
 type IndexProgressMode = "build" | "update";
 
 function emitIndexLifecycleProgress(
@@ -1117,7 +1118,12 @@ async function buildIndexFromFileListShared(
       );
     }
     if (buildStartedAt !== undefined) {
-      emitIndexLifecycleProgress(opts, "complete", "build", index.byFile.size, performance.now() - buildStartedAt);
+      // Report the whole operation the caller waited on. Discovery runs before the first
+      // file is processed - inside this build for full discovery, and in the agent session
+      // for lifecycle and agent commands - so timing from `buildStartedAt` alone reported a
+      // fraction of the elapsed time and made a slow discovery look free.
+      const progressStartedAt = opts?.progressStartedAt ?? buildStartedAt;
+      emitIndexLifecycleProgress(opts, "complete", "build", index.byFile.size, performance.now() - progressStartedAt);
     }
     return index;
   } finally {
@@ -1227,9 +1233,15 @@ async function buildProjectIndexWithManifestOptions(
  * symbol definitions, imports, exports, and project-file metadata. Build it once
  * and pass it to navigation, review, impact, or agent-tool APIs when composing
  * deterministic packets from the same repo snapshot.
+ *
+ * Progress `complete` events report elapsed time from the start of this call, including
+ * discovery, so a caller rendering progress reports the wait the user observed.
  */
 export async function buildProjectIndex(projectRoot: string, opts?: BuildOptions): Promise<ProjectIndex> {
-  return buildProjectIndexWithManifestOptions(projectRoot, opts);
+  return buildProjectIndexWithManifestOptions(projectRoot, {
+    ...opts,
+    progressStartedAt: opts?.progressStartedAt ?? performance.now(),
+  });
 }
 
 /**
@@ -1242,8 +1254,11 @@ export async function buildProjectIndex(projectRoot: string, opts?: BuildOptions
 export async function buildProjectIndexFromFiles(
   projectRoot: string,
   inputFiles: string[],
-  opts?: BuildOptions,
+  rawOpts?: BuildOptions,
 ): Promise<ProjectIndex> {
+  // Discovery, manifest loading, and cache checks all precede file processing, so stamp the
+  // operation origin here and let the completion event report the caller's whole wait.
+  const opts: BuildOptions = { ...rawOpts, progressStartedAt: rawOpts?.progressStartedAt ?? performance.now() };
   try {
     const useDiskCache = (opts?.cache ?? "off") === "disk";
     const normalizedInputFiles = await normalizeIndexedFileInputsWithinRoot(projectRoot, inputFiles, "Index file");
@@ -1296,8 +1311,12 @@ async function buildDeclaredScopeIndex(
  */
 export async function buildProjectIndexIncremental(
   projectRoot: string,
-  opts?: IncrementalBuildOptions,
+  rawOpts?: IncrementalBuildOptions,
 ): Promise<ProjectIndex> {
+  const opts: IncrementalBuildOptions = {
+    ...rawOpts,
+    progressStartedAt: rawOpts?.progressStartedAt ?? performance.now(),
+  };
   await initializeFileIdentityCaseSensitivity(projectRoot);
   clearResolutionCaches();
   const graphOptions = normalizeGraphOptions(opts?.graph);

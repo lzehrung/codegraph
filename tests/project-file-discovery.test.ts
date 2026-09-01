@@ -1211,6 +1211,60 @@ describe("git-native project file discovery", () => {
     }
   });
 
+  it("does not resolve physical paths for Git candidates the project excludes", async () => {
+    // Git enumerates untracked and force-added trees this project always drops, so
+    // resolving each candidate's physical path first spent one realpath syscall per
+    // excluded file. A Python project with a virtualenv pays that per virtualenv file
+    // while discovery returns only its own sources.
+    const root = await makeRepo("codegraph-discovery-excluded-candidate-realpath-");
+    const keptFile = path.join(root, "src", "app.py");
+    const vendoredFile = path.join(root, ".venv", "Lib", "site-packages", "dep", "mod.py");
+    const gitignoredFile = path.join(root, "generated", "out.py");
+    await createFile(path.join(root, ".gitignore"), "generated/\n");
+    await createFile(keptFile, "value = 1\n");
+    await createFile(vendoredFile, "value = 2\n");
+    await createFile(gitignoredFile, "value = 3\n");
+    git(root, ["add", "-f", ".gitignore", "src/app.py", "generated/out.py"]);
+    git(root, ["commit", "-m", "tracked sources"]);
+
+    const realpathSpy = vi.spyOn(fs, "realpath");
+    try {
+      const files = new Set((await listProjectFiles(root)).map(normalize));
+      const probed = new Set(realpathSpy.mock.calls.map(([file]) => normalize(String(file))));
+
+      expect(files.has(normalize(keptFile))).toBe(true);
+      expect(files.has(normalize(vendoredFile))).toBe(false);
+      expect(files.has(normalize(gitignoredFile))).toBe(false);
+      expect(probed.has(normalize(keptFile))).toBe(true);
+      expect(probed.has(normalize(vendoredFile))).toBe(false);
+      expect(probed.has(normalize(gitignoredFile))).toBe(false);
+    } finally {
+      realpathSpy.mockRestore();
+    }
+  });
+
+  it("does not resolve physical paths for Git candidates that cannot be metadata", async () => {
+    const root = await makeRepo("codegraph-discovery-meta-candidate-realpath-");
+    const manifest = path.join(root, "package.json");
+    const sourceFile = path.join(root, "src", "app.ts");
+    await createFile(manifest, JSON.stringify({ name: "meta-app" }, null, 2));
+    await createFile(sourceFile, "export const app = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "fixtures"]);
+
+    const realpathSpy = vi.spyOn(fs, "realpath");
+    try {
+      const paths = new Set((await discoverProjectFiles(root)).map((item) => normalize(item.path)));
+      const probed = new Set(realpathSpy.mock.calls.map(([file]) => normalize(String(file))));
+
+      expect(paths.has(normalize(manifest))).toBe(true);
+      expect(probed.has(normalize(manifest))).toBe(true);
+      expect(probed.has(normalize(sourceFile))).toBe(false);
+    } finally {
+      realpathSpy.mockRestore();
+    }
+  });
+
   it("reports the failing Git ignore listing command", async () => {
     const root = await makeRepo("codegraph-discovery-gitignore-command-");
     setGitExecutableForTests(process.execPath);

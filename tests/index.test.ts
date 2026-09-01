@@ -77,6 +77,30 @@ describe("Project Indexing", () => {
     }
   });
 
+  it("reports build completion elapsed from the caller's discovery start", async () => {
+    // Lifecycle and agent commands discover files before the build. Timing from the first
+    // parsed file reported a fraction of the wait, so a multi-minute discovery followed by a
+    // short parse looked like a fast build.
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-progress-origin-"));
+    const file = path.join(root, "main.ts");
+    const updates: ProgressUpdate[] = [];
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+    const discoveryMs = 5_000;
+
+    try {
+      await buildProjectIndexFromFiles(root, [file], {
+        cache: "off",
+        progressStartedAt: performance.now() - discoveryMs,
+        onProgress: (update) => updates.push(update),
+      });
+
+      const completion = updates.find((update) => update.phase === "complete");
+      expect(completion?.elapsedMs).toBeGreaterThanOrEqual(discoveryMs);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("starts full discovery progress before listing source files", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-full-discovery-progress-"));
     const file = path.join(root, "main.ts");
