@@ -851,6 +851,7 @@ describe("package metadata", () => {
           "summarizePartialResult",
           "supportById",
           "supportForFile",
+          "supportForFileWithoutHeaderSample",
           "symbolId",
           "symbolIdentifier",
           "textGrep",
@@ -1214,6 +1215,7 @@ describe("package metadata", () => {
           "normalizeLanguageExtensions",
           "supportById",
           "supportForFile",
+          "supportForFileWithoutHeaderSample",
         ],
         "./mcp": [
           "CodegraphMcpHandlers",

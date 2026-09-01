@@ -7,7 +7,7 @@ import { SymbolKind } from "../indexer/types.js";
 import type { Edge, Range } from "../types.js";
 import { normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
-import { supportForFile, type LanguageExtensionMap } from "../languages.js";
+import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../languages.js";
 import { extractSqlFactsFromSource, sqlObjectBaseName } from "./extractFacts.js";
 import { pushSqlLookupValue } from "./lookup.js";
 import type { SqlFactKind, SqlStatementFact } from "./types.js";
@@ -50,7 +50,7 @@ type SqlDefinitionCandidateMatch = {
 };
 
 function isSqlFile(filePath: string, languageExtensions?: LanguageExtensionMap): boolean {
-  return supportForFile(filePath, languageExtensions)?.id === "sql";
+  return supportForFileWithoutHeaderSample(filePath, languageExtensions)?.id === "sql";
 }
 
 export function sqlCorpusSignature(
