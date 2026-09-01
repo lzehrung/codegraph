@@ -9,7 +9,7 @@ import {
   hasUnterminatedQuotedLiteral,
   normalizeDuplicateSourceTokens,
 } from "../duplicate-token-normalization.js";
-import { supportForFile } from "../languages.js";
+import { supportForFileWithSource, supportForFileWithoutHeaderSample } from "../languages.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
 import { attemptParsePreparedFileContext } from "../indexer/parse-context.js";
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "../indexer/types.js";
@@ -107,8 +107,19 @@ function winnowShingles(shingles: readonly string[], windowSize: number, maxFing
   return fingerprints;
 }
 
-function languageForFile(filePath: string): LanguageForFileResult | undefined {
-  const support = supportForFile(filePath);
+/**
+ * Decides whether a file can produce duplicate units at all, from its path alone. It agrees with
+ * `languageForFile` because exact classification only ever picks between C and C++ for an unmapped
+ * `.h` header, and both are supported, so the source is never needed to answer this.
+ */
+function isDuplicateCandidateFile(filePath: string): boolean {
+  if (supportForFileWithoutHeaderSample(filePath)) return true;
+  return !!textLanguageByExtension[path.extname(filePath).toLowerCase()];
+}
+
+/** Classifies from source the caller already holds, so a `.h` header never costs a sample read. */
+function languageForFile(filePath: string, source: string): LanguageForFileResult | undefined {
+  const support = supportForFileWithSource(filePath, source);
   if (support) {
     return { id: support.id, textOnly: false };
   }
@@ -362,7 +373,8 @@ export async function getDuplicateAstContext(
   }
 
   try {
-    const prepared = await prepareSourceInput(file, { source });
+    // `source` is what will be parsed, so let it decide a `.h` header instead of a sample read.
+    const prepared = await prepareSourceInput(file, { source, support: supportForFileWithSource(file, source) });
     const attempt = attemptParsePreparedFileContext({
       file,
       source: prepared.source,
@@ -589,11 +601,11 @@ export async function buildDuplicateUnitsForFile(
   windowSize: number,
   astContextCache: DuplicateAstContextCache,
 ): Promise<DuplicateInternalUnit[]> {
-  const moduleIndex = index.byFile.get(fileIdentityKey(file));
-  const language = languageForFile(file);
-  if (!language) return [];
+  const fileKey = fileIdentityKey(file);
+  const moduleIndex = index.byFile.get(fileKey);
+  if (!isDuplicateCandidateFile(file)) return [];
 
-  let source = index.parsed?.get(fileIdentityKey(file))?.source;
+  let source = index.parsed?.get(fileKey)?.source;
   if (source === undefined) {
     try {
       source = await fsp.readFile(file, "utf8");
@@ -601,6 +613,8 @@ export async function buildDuplicateUnitsForFile(
       return [];
     }
   }
+  const language = languageForFile(file, source);
+  if (!language) return [];
 
   const astContext = language.textOnly ? undefined : await getDuplicateAstContext(index, file, source, astContextCache);
   const { chunks, symbolChunks } = makeDuplicateChunksWithSymbols(

@@ -47,6 +47,8 @@ const index = await buildProjectIndex(root, {
 
 `supportForFile(filePath, languageExtensions?)` resolves the `LanguageSupport` for a path: a mapping wins first, then the extension, and an unmapped `.h` is sampled (first 8 KB) to tell a C++ header from a C one. `supportForFileWithoutHeaderSample` performs the same resolution without that read, so an unmapped `.h` always reports `c`; reach for it only where C and C++ give the same answer, and keep `supportForFile` wherever the choice selects a parser or extractor.
 
+`supportForFileWithSource(filePath, source, languageExtensions?)` resolves the same way but reads the header sample from `source` instead of the disk. Use it whenever the text is already in hand, and for a path missing from the worktree, such as a deleted file rebuilt from a diff, where a sample read would silently report `c`.
+
 ## Public API Boundary
 
 The published packages expose these documented entry points:

@@ -164,6 +164,28 @@ export function supportForFile(
   if (sample && isLikelyCppHeader(sample)) return CPP_SUPPORT;
   return C_SUPPORT;
 }
+
+/**
+ * Classifies a file exactly as `supportForFile` does, except that an unmapped `.h` header is
+ * separated from C++ using `source` instead of a fresh sample read. The mapping still resolves
+ * first and the same leading bytes decide the header, so the answer matches `supportForFile`
+ * whenever `source` holds the file's contents. Use it wherever the caller already has the text,
+ * and for a file missing from the worktree, where a sample read would silently report C.
+ */
+export function supportForFileWithSource(
+  filename: string,
+  source: string,
+  extensionMap?: LanguageExtensionMap | undefined,
+): LanguageSupport | undefined {
+  if (path.extname(filename).toLowerCase() !== ".h") {
+    return supportForFileWithoutHeaderSample(filename, extensionMap);
+  }
+  const mapped = mappedSupportForFile(filename, extensionMap);
+  if (mapped) return mapped;
+  if (isLikelyCppHeader(source.slice(0, HEADER_SAMPLE_SIZE))) return CPP_SUPPORT;
+  return C_SUPPORT;
+}
+
 export function supportById(id: string): LanguageSupport | undefined {
   return LANGUAGE_SUPPORTS.find((s) => s.id === id);
 }

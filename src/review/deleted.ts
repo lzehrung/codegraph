@@ -7,7 +7,7 @@ import type { FileChange } from "../impact/types.js";
 import { collectImportsForFile } from "../indexer/imports.js";
 import { collectLocalsAndExportsFromSource } from "../indexer/locals-and-exports.js";
 import { type ExportEntry, type ImportBinding, type ModuleIndex, type ProjectIndex } from "../indexer/types.js";
-import { supportForFile } from "../languages.js";
+import { supportForFileWithSource } from "../languages.js";
 import type { Edge, FileId } from "../types.js";
 import { edgeKey } from "../util/graphEdges.js";
 import { listResolutionCandidates, loadNearestTsconfigFor } from "../util/resolution.js";
@@ -291,12 +291,14 @@ export async function buildDeletedFileSnapshots(
     : new Map<string, string>();
 
   for (const file of deletedFiles) {
-    const support = supportForFile(file);
-    if (!support) continue;
     const source =
       revisionSources.get(file) ??
       reconstructDeletedSourceFromDiff(findDiffChangeForDeletedPath(file, opts.diffChangesByFile));
     if (source === null) continue;
+    // The file is gone from the worktree, so sampling it would fail and report every `.h` header
+    // as C. The snapshot source is the same text the revision held, so classify from it instead.
+    const support = supportForFileWithSource(file, source);
+    if (!support) continue;
     const normalizedFile = normalizePath(file);
     const imports = await collectImportsForFile(normalizedFile, projectRoot, {
       source,

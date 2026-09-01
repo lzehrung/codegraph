@@ -4,9 +4,14 @@ import fsp from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildProjectIndex } from "../src/index.js";
+import { prepareQueryIndexFile, MAX_QUERY_INDEX_TEXT_BYTES } from "../src/agent/query-index/content.js";
+import { buildDuplicateUnitsForFile } from "../src/duplicates/units.js";
 import { countNativeWorkerEligibleFiles } from "../src/indexer/build-workers.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
-import { supportForFile, supportForFileWithoutHeaderSample } from "../src/languages.js";
+import type { FileChange } from "../src/impact/types.js";
+import { supportForFile, supportForFileWithSource, supportForFileWithoutHeaderSample } from "../src/languages.js";
+import { buildDeletedFileSnapshots } from "../src/review/deleted.js";
+import { normalizePath } from "../src/util/paths.js";
 import { createTempProjectRoot } from "./helpers/filesystem.js";
 
 const CPP_HEADER = "namespace widgets {\nclass Widget {\npublic:\n  int value;\n};\n}\n";
@@ -59,6 +64,24 @@ function exportedNames(index: ProjectIndex, suffix: string): string[] {
   throw new Error(`No indexed module ended with ${suffix}`);
 }
 
+function moduleFileEndingWith(index: ProjectIndex, suffix: string): string {
+  for (const module of index.byFile.values()) {
+    if (module.file.endsWith(suffix)) return module.file;
+  }
+  throw new Error(`No indexed module ended with ${suffix}`);
+}
+
+/** A single-hunk deletion whose old side is exactly `contents`. */
+function deletionChange(file: string, contents: string): FileChange {
+  const lines = contents.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  return {
+    path: file,
+    kind: "deleted",
+    hunks: [{ oldStart: 1, newStart: 0, lines: lines.map((line) => `-${line}`) }],
+  };
+}
+
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => fsp.rm(root, { recursive: true, force: true })));
 });
@@ -107,6 +130,51 @@ describe("header language classification", () => {
     expect(supportForFile(header, { ".hpp": "c" })?.id).toBe("cpp");
   });
 
+  it("classifies a header from source the caller already holds", async () => {
+    const root = await createTempProjectRoot("cg-header-sampling-source-", [
+      { path: "widget.h", contents: CPP_HEADER },
+      { path: "plain.h", contents: C_HEADER },
+    ]);
+    tempRoots.push(root);
+    const cppHeader = `${root}/widget.h`;
+    const cHeader = `${root}/plain.h`;
+
+    const classified = await withHeaderSampleReads(() => [
+      supportForFileWithSource(cppHeader, CPP_HEADER)?.id,
+      supportForFileWithSource(cHeader, C_HEADER)?.id,
+      // Mapping precedence is the same as `supportForFile`: the mapping wins over the source.
+      supportForFileWithSource(cppHeader, CPP_HEADER, { ".h": "c" })?.id,
+      supportForFileWithSource(`${root}/legacy.inc`, C_HEADER, { ".inc": "cpp" })?.id,
+      // A non-header extension is decided by the extension alone, whatever the source looks like.
+      supportForFileWithSource(`${root}/widget.cpp`, C_HEADER)?.id,
+    ]);
+
+    expect(classified.value).toEqual(["cpp", "c", "c", "cpp", "cpp"]);
+    expect(classified.reads).toBe(0);
+  });
+
+  it("keeps a C++ header exact when the path is missing from the worktree", async () => {
+    const root = await createTempProjectRoot("cg-header-sampling-missing-");
+    tempRoots.push(root);
+    const missingHeader = `${root}/widget.h`;
+
+    // A sample read of a path that does not exist sees nothing and falls back to C.
+    expect(supportForFile(missingHeader)?.id).toBe("c");
+    expect(supportForFileWithSource(missingHeader, CPP_HEADER)?.id).toBe("cpp");
+  });
+
+  it("decides a header from the same leading bytes a sample read would take", async () => {
+    const padded = `${"// filler\n".repeat(1200)}${CPP_HEADER}`;
+    const root = await createTempProjectRoot("cg-header-sampling-window-", [{ path: "padded.h", contents: padded }]);
+    tempRoots.push(root);
+    const header = `${root}/padded.h`;
+
+    // The only C++ hint sits past the sample window, so both resolvers still answer C.
+    expect(padded.indexOf("namespace")).toBeGreaterThan(8000);
+    expect(supportForFile(header)?.id).toBe("c");
+    expect(supportForFileWithSource(header, padded)?.id).toBe("c");
+  });
+
   it("counts headers as native worker eligible without reading them", async () => {
     const root = await createTempProjectRoot("cg-header-sampling-eligible-", [
       { path: "widget.h", contents: CPP_HEADER },
@@ -148,5 +216,70 @@ describe("header language classification", () => {
     // Parsed as C, so the C++ namespace and class never become symbols.
     expect(exportedNames(built.value, "widget0.h")).toEqual(["value"]);
     expect(exportedNames(built.value, "schema.sql")).toEqual(["widgets"]);
+  });
+});
+
+describe("header classification for callers that already hold the source", () => {
+  it("prepares a query index entry for a header without sampling it", async () => {
+    const root = await createTempProjectRoot("cg-header-query-index-", [{ path: "widget.h", contents: CPP_HEADER }]);
+    tempRoots.push(root);
+
+    const task = { absolutePath: `${root}/widget.h`, path: "widget.h", sourceIdentity: "widget" };
+    const prepared = await withHeaderSampleReads(() => prepareQueryIndexFile(task));
+
+    // The text read for indexing also decides the chunk language, so nothing is sampled twice.
+    expect(prepared.value?.language).toBe("cpp");
+    expect(prepared.value?.sourceRead).toBe(true);
+    expect(prepared.value?.chunks.length).toBeGreaterThan(0);
+    expect(prepared.reads).toBe(0);
+  });
+
+  it("still samples an oversize header, whose source is deliberately never read", async () => {
+    const oversize = CPP_HEADER + " ".repeat(MAX_QUERY_INDEX_TEXT_BYTES);
+    const root = await createTempProjectRoot("cg-header-query-index-oversize-", [
+      { path: "widget.h", contents: oversize },
+    ]);
+    tempRoots.push(root);
+
+    const task = { absolutePath: `${root}/widget.h`, path: "widget.h", sourceIdentity: "widget" };
+    const prepared = await withHeaderSampleReads(() => prepareQueryIndexFile(task));
+
+    expect(prepared.value?.language).toBe("cpp");
+    expect(prepared.value?.sourceRead).toBe(false);
+    expect(prepared.value?.chunks).toEqual([]);
+    expect(prepared.reads).toBe(1);
+  });
+
+  it("builds duplicate units for a header as C++ without sampling it", async () => {
+    const root = await createTempProjectRoot("cg-header-duplicates-", [{ path: "widget.h", contents: CPP_HEADER }]);
+    tempRoots.push(root);
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const header = moduleFileEndingWith(index, "widget.h");
+
+    const projectRoot = normalizePath(root);
+    const buildUnits = () => buildDuplicateUnitsForFile(index, header, projectRoot, 1, 120, 3, 4, new Map());
+    const built = await withHeaderSampleReads(buildUnits);
+
+    // Chunk units carry the grammar that produced them, so `cpp` proves the exact classification.
+    expect(built.value.map((unit) => unit.languageId)).toContain("cpp");
+    expect(built.reads).toBe(0);
+  });
+
+  it("parses a deleted C++ header as C++ from the reconstructed source", async () => {
+    const root = await createTempProjectRoot("cg-header-deleted-");
+    tempRoots.push(root);
+    const deletedHeader = normalizePath(`${root}/widget.h`);
+
+    // The old worktree file is gone, so only the diff still holds the C++ syntax.
+    expect(supportForFile(deletedHeader)?.id).toBe("c");
+
+    const diffChangesByFile = new Map([[deletedHeader, deletionChange(deletedHeader, CPP_HEADER)]]);
+    const snapshots = await buildDeletedFileSnapshots(normalizePath(root), [deletedHeader], { diffChangesByFile });
+    const snapshot = snapshots.get(deletedHeader);
+
+    expect(snapshot).toBeDefined();
+    expect(
+      snapshot?.module.exports.map((entry) => (entry.type === "local" ? entry.exportedAs : entry.type)).sort(),
+    ).toEqual(["Widget", "widgets"]);
   });
 });

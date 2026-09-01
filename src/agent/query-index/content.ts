@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
 import { LANG_CONFIGS } from "../../bootstrap/treeSitterLanguages.js";
 import { chunkFile } from "../../chunking/chunkFile.js";
-import { supportForFile } from "../../languages.js";
+import { supportForFile, supportForFileWithSource, type LanguageSupport } from "../../languages.js";
 
 export const MAX_QUERY_INDEX_TEXT_BYTES = 300_000;
 export const QUERY_INDEX_NORMALIZER_VERSION = 2;
@@ -91,7 +91,10 @@ export function detectQueryIndexSurface(relativePath: string): "code" | "docs" |
 }
 
 export function buildQueryTextChunks(file: string, text: string): QueryTextChunk[] {
-  const support = supportForFile(file);
+  return chunkQueryText(file, text, supportForFileWithSource(file, text));
+}
+
+function chunkQueryText(file: string, text: string, support: LanguageSupport | undefined): QueryTextChunk[] {
   const languageId = support ? (CHUNK_LANGUAGE_ALIASES[support.id] ?? support.id) : undefined;
   const language = languageId ? LANG_CONFIGS[languageId] : undefined;
   if (language) {
@@ -132,8 +135,9 @@ export function buildQueryTextChunks(file: string, text: string): QueryTextChunk
 export async function prepareQueryIndexFile(input: QueryIndexFileInput): Promise<PreparedQueryIndexFile | null> {
   try {
     const stat = await fs.stat(input.absolutePath);
-    const support = supportForFile(input.absolutePath);
     if (stat.size > MAX_QUERY_INDEX_TEXT_BYTES) {
+      // Nothing was read, so an unmapped `.h` header still needs its own sample to report `cpp`.
+      const support = supportForFile(input.absolutePath);
       return {
         path: input.path,
         sourceIdentity: input.sourceIdentity,
@@ -148,6 +152,7 @@ export async function prepareQueryIndexFile(input: QueryIndexFileInput): Promise
     }
 
     const text = await fs.readFile(input.absolutePath, "utf8");
+    const support = supportForFileWithSource(input.absolutePath, text);
     return {
       path: input.path,
       sourceIdentity: input.sourceIdentity,
@@ -156,7 +161,7 @@ export async function prepareQueryIndexFile(input: QueryIndexFileInput): Promise
       byteLength: stat.size,
       lineCount: text ? text.split(/\r?\n/).length : 0,
       normalizedText: compressQueryText(normalizeQuerySearchText(text)),
-      chunks: buildQueryTextChunks(input.absolutePath, text).map((chunk) => ({
+      chunks: chunkQueryText(input.absolutePath, text, support).map((chunk) => ({
         ...chunk,
         text: compressQueryText(chunk.text),
       })),
