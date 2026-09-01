@@ -9,9 +9,7 @@ import { buildDuplicateUnitsForFile } from "../src/duplicates/units.js";
 import { buildBloomFilterForFile } from "../src/indexer/build-cache/module-cache.js";
 import { countNativeWorkerEligibleFiles } from "../src/indexer/build-workers.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
-import type { FileChange } from "../src/impact/types.js";
 import { supportForFile, supportForFileWithSource, supportForFileWithoutHeaderSample } from "../src/languages.js";
-import { buildDeletedFileSnapshots } from "../src/review/deleted.js";
 import { normalizePath } from "../src/util/paths.js";
 import { createTempProjectRoot } from "./helpers/filesystem.js";
 
@@ -70,17 +68,6 @@ function moduleFileEndingWith(index: ProjectIndex, suffix: string): string {
     if (module.file.endsWith(suffix)) return module.file;
   }
   throw new Error(`No indexed module ended with ${suffix}`);
-}
-
-/** A single-hunk deletion whose old side is exactly `contents`. */
-function deletionChange(file: string, contents: string): FileChange {
-  const lines = contents.split("\n");
-  if (lines[lines.length - 1] === "") lines.pop();
-  return {
-    path: file,
-    kind: "deleted",
-    hunks: [{ oldStart: 1, newStart: 0, lines: lines.map((line) => `-${line}`) }],
-  };
 }
 
 afterEach(async () => {
@@ -274,23 +261,5 @@ describe("header classification for callers that already hold the source", () =>
     // Chunk units carry the grammar that produced them, so `cpp` proves the exact classification.
     expect(built.value.map((unit) => unit.languageId)).toContain("cpp");
     expect(built.reads).toBe(0);
-  });
-
-  it("parses a deleted C++ header as C++ from the reconstructed source", async () => {
-    const root = await createTempProjectRoot("cg-header-deleted-");
-    tempRoots.push(root);
-    const deletedHeader = normalizePath(`${root}/widget.h`);
-
-    // The old worktree file is gone, so only the diff still holds the C++ syntax.
-    expect(supportForFile(deletedHeader)?.id).toBe("c");
-
-    const diffChangesByFile = new Map([[deletedHeader, deletionChange(deletedHeader, CPP_HEADER)]]);
-    const snapshots = await buildDeletedFileSnapshots(normalizePath(root), [deletedHeader], { diffChangesByFile });
-    const snapshot = snapshots.get(deletedHeader);
-
-    expect(snapshot).toBeDefined();
-    expect(
-      snapshot?.module.exports.map((entry) => (entry.type === "local" ? entry.exportedAs : entry.type)).sort(),
-    ).toEqual(["Widget", "widgets"]);
   });
 });

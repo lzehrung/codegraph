@@ -168,7 +168,7 @@ describe("call compatibility fallback budget", () => {
     await fsp.writeFile(headerFile, "namespace api { int helper(int value) { return value; } }\n", "utf8");
     await fsp.writeFile(callerFile, '#include "api.h"\nint main() { return api::helper(); }\n', "utf8");
     try {
-      const index = await buildProjectIndex(root, { cache: "memory" });
+      const index = await buildProjectIndex(root, { cache: "memory", keepParsed: true });
       const indexedHeader = [...index.byFile.values()].find((module) => module.file.endsWith("/api.h"));
       const helper = indexedHeader?.locals.find((local) => local.localName === "helper");
       if (!indexedHeader || !helper) throw new Error("Expected C++ header helper definition");
