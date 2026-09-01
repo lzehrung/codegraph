@@ -254,6 +254,280 @@ export function extractJsTsDynamicSpecifiers(source: string, fromFile: string, p
 // a digit from matching directly after a `.` separator.
 const PYTHON_DOTTED_NAME_SOURCE = String.raw`${PYTHON_IDENTIFIER_SOURCE}(?:\.${PYTHON_IDENTIFIER_SOURCE})*`;
 
+function maskPythonString(source: string, mask: Uint8Array, start: number): number {
+  const quote = source[start]!;
+  const triple = source[start + 1] === quote && source[start + 2] === quote;
+  const delimiterLength = triple ? 3 : 1;
+  for (let offset = 0; offset < delimiterLength; offset += 1) {
+    mask[start + offset] = 1;
+  }
+
+  let index = start + delimiterLength;
+  while (index < source.length) {
+    const ch = source[index]!;
+    if (!triple && (ch === "\n" || ch === "\r")) return index;
+    mask[index] = 1;
+    if (ch === "\\") {
+      const nextIndex = index + 1;
+      if (nextIndex < source.length) mask[nextIndex] = 1;
+      index += 2;
+      continue;
+    }
+    if (ch === quote) {
+      if (!triple) return index + 1;
+      if (source[index + 1] === quote && source[index + 2] === quote) {
+        mask[index + 1] = 1;
+        mask[index + 2] = 1;
+        return index + delimiterLength;
+      }
+    }
+    index += 1;
+  }
+  return source.length;
+}
+
+function buildPythonNonCodeMask(source: string): Uint8Array | undefined {
+  if (!source.includes("#") && !source.includes("'") && !source.includes('"')) return undefined;
+  const mask = new Uint8Array(source.length);
+  for (let index = 0; index < source.length; index += 1) {
+    const ch = source[index]!;
+    if (ch === "#") {
+      while (index < source.length && source[index] !== "\n" && source[index] !== "\r") {
+        mask[index] = 1;
+        index += 1;
+      }
+      index -= 1;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      index = maskPythonString(source, mask, index) - 1;
+    }
+  }
+  return mask;
+}
+
+const PYTHON_IMPORTLIB_ALIAS_PATTERN = new RegExp(
+  String.raw`^importlib(?:\s+as\s+(${PYTHON_IDENTIFIER_SOURCE}))?$`,
+  "u",
+);
+const PYTHON_IMPORT_MODULE_ALIAS_PATTERN = new RegExp(
+  String.raw`^import_module(?:\s+as\s+(${PYTHON_IDENTIFIER_SOURCE}))?$`,
+  "u",
+);
+const PYTHON_DYNAMIC_CALL_PREFIX_PATTERN = new RegExp(
+  String.raw`(?<![._\p{XID_Continue}])(${PYTHON_IDENTIFIER_SOURCE})(?:\s*\.\s*(${PYTHON_IDENTIFIER_SOURCE}))?\s*\(\s*(?:name\s*=\s*)?`,
+  "gmu",
+);
+const PYTHON_DYNAMIC_MODULE_PATTERN = new RegExp(String.raw`^\.*${PYTHON_DOTTED_NAME_SOURCE}$`, "u");
+const PYTHON_FROM_IMPORTLIB_PATTERN = /^\s*from\s+importlib\s+import\s+(?:\(([\s\S]*?)\)|([^\r\n;]+))/gmu;
+
+type ParsedPythonStaticStringLiteral = {
+  value: string;
+  end: number;
+};
+
+const PYTHON_SIMPLE_STRING_ESCAPES: Readonly<Record<string, string>> = {
+  "\\": "\\",
+  "'": "'",
+  '"': '"',
+  a: "\x07",
+  b: "\b",
+  f: "\f",
+  n: "\n",
+  r: "\r",
+  t: "\t",
+  v: "\v",
+};
+
+function decodePythonStringContent(content: string, prefix: string): string | null {
+  if (prefix.includes("r")) return content;
+  let decoded = "";
+  for (let index = 0; index < content.length; index += 1) {
+    const ch = content[index]!;
+    if (ch !== "\\") {
+      decoded += ch;
+      continue;
+    }
+    index += 1;
+    const escape = content[index];
+    if (escape === undefined) return null;
+    const simpleEscape = PYTHON_SIMPLE_STRING_ESCAPES[escape];
+    if (simpleEscape !== undefined) {
+      decoded += simpleEscape;
+      continue;
+    }
+    if (escape === "\n") continue;
+    if (escape === "\r") {
+      if (content[index + 1] === "\n") index += 1;
+      continue;
+    }
+    let hexLength = 0;
+    if (escape === "x") hexLength = 2;
+    else if (escape === "u") hexLength = 4;
+    else if (escape === "U") hexLength = 8;
+    if (hexLength) {
+      const digits = content.slice(index + 1, index + 1 + hexLength);
+      if (digits.length !== hexLength || !/^[0-9a-fA-F]+$/.test(digits)) return null;
+      const codePoint = Number.parseInt(digits, 16);
+      if (codePoint > 0x10ffff) return null;
+      decoded += String.fromCodePoint(codePoint);
+      index += hexLength;
+      continue;
+    }
+    if (escape >= "0" && escape <= "7") {
+      let end = index + 1;
+      while (end < content.length && end - index < 3) {
+        const digit = content[end]!;
+        if (digit < "0" || digit > "7") break;
+        end += 1;
+      }
+      decoded += String.fromCodePoint(Number.parseInt(content.slice(index, end), 8));
+      index = end - 1;
+      continue;
+    }
+    decoded += `\\${escape}`;
+  }
+  return decoded;
+}
+
+function parsePythonStaticStringLiteral(source: string, start: number): ParsedPythonStaticStringLiteral | null {
+  let quoteIndex = start;
+  let prefixLength = 0;
+  while (prefixLength < 2) {
+    const prefixCharacter = source[quoteIndex];
+    if (!prefixCharacter || !"rRuUfF".includes(prefixCharacter)) break;
+    quoteIndex += 1;
+    prefixLength += 1;
+  }
+  const prefix = source.slice(start, quoteIndex).toLowerCase();
+  if (!["", "r", "u", "f", "fr", "rf"].includes(prefix)) return null;
+  const quote = source[quoteIndex];
+  if (quote !== "'" && quote !== '"') return null;
+  const triple = source[quoteIndex + 1] === quote && source[quoteIndex + 2] === quote;
+  const delimiterLength = triple ? 3 : 1;
+  const contentStart = quoteIndex + delimiterLength;
+  for (let index = contentStart; index < source.length; index += 1) {
+    const ch = source[index]!;
+    if (!triple && (ch === "\n" || ch === "\r")) return null;
+    if (ch === "\\") {
+      index += 1;
+      continue;
+    }
+    if (ch !== quote) continue;
+    if (triple && (source[index + 1] !== quote || source[index + 2] !== quote)) continue;
+    const value = decodePythonStringContent(source.slice(contentStart, index), prefix);
+    if (value === null) return null;
+    return { value, end: index + delimiterLength };
+  }
+  return null;
+}
+
+function skipPythonExpressionTrivia(source: string, start: number): number {
+  let index = start;
+  while (index < source.length) {
+    while (index < source.length && /\s/.test(source[index]!)) index += 1;
+    if (source[index] !== "#") break;
+    while (index < source.length && source[index] !== "\n" && source[index] !== "\r") index += 1;
+  }
+  return index;
+}
+
+function parsePythonStaticStringExpression(source: string, start: number): string | null {
+  let index = skipPythonExpressionTrivia(source, start);
+  let value = "";
+  let literalCount = 0;
+  while (true) {
+    const literal = parsePythonStaticStringLiteral(source, index);
+    if (!literal) break;
+    value += literal.value;
+    literalCount += 1;
+    index = skipPythonExpressionTrivia(source, literal.end);
+  }
+  if (!literalCount || (source[index] !== "," && source[index] !== ")")) return null;
+  return value;
+}
+
+function collectPythonDynamicImportAliases(source: string): {
+  importlibAliases: Set<string>;
+  importModuleAliases: Set<string>;
+} {
+  const importlibAliases = new Set(["importlib"]);
+  const importModuleAliases = new Set<string>();
+  const cleaned = stripPythonCommentsAndStrings(source);
+  for (const match of cleaned.matchAll(/^\s*import\s+([^\r\n;]+)/gmu)) {
+    for (const rawClause of (match[1] ?? "").split(",")) {
+      const clause = rawClause.trim();
+      const parsed = PYTHON_IMPORTLIB_ALIAS_PATTERN.exec(clause);
+      if (parsed) importlibAliases.add(parsed[1] ?? "importlib");
+    }
+  }
+  for (const match of cleaned.matchAll(PYTHON_FROM_IMPORTLIB_PATTERN)) {
+    const importList = match[1] ?? match[2] ?? "";
+    for (const rawClause of importList.split(",")) {
+      const clause = rawClause.trim();
+      const parsed = PYTHON_IMPORT_MODULE_ALIAS_PATTERN.exec(clause);
+      if (parsed) importModuleAliases.add(parsed[1] ?? "import_module");
+    }
+  }
+  return { importlibAliases, importModuleAliases };
+}
+
+/**
+ * Extracts best-effort Python dynamic imports whose first argument is a static module
+ * string. Alias recognition is intentionally limited to direct `importlib` imports;
+ * assignment flow and computed module names remain outside graph construction.
+ */
+export function extractPythonDynamicSpecifiers(source: string): ModuleSpecifier[] {
+  const out: ModuleSpecifier[] = [];
+  try {
+    const mask = buildPythonNonCodeMask(source);
+    const { importlibAliases, importModuleAliases } = collectPythonDynamicImportAliases(source);
+    const seen = new Set<string>();
+    for (const match of source.matchAll(PYTHON_DYNAMIC_CALL_PREFIX_PATTERN)) {
+      if (!matchStartsInCode(mask, match)) continue;
+      const receiver = match[1] ?? "";
+      const member = match[2];
+      const isBuiltinImport = !member && receiver === "__import__";
+      const isImportlibCall = member === "import_module" && importlibAliases.has(receiver);
+      const isImportedFunctionCall = !member && importModuleAliases.has(receiver);
+      if (!isBuiltinImport && !isImportlibCall && !isImportedFunctionCall) continue;
+      const argumentStart = (match.index ?? 0) + (match[0]?.length ?? 0);
+      const spec = parsePythonStaticStringExpression(source, argumentStart);
+      if (!spec || !PYTHON_DYNAMIC_MODULE_PATTERN.test(spec) || seen.has(spec)) continue;
+      if (isBuiltinImport && spec.startsWith(".")) continue;
+      seen.add(spec);
+      out.push({ spec, resolved: "heuristic", confidence: 0.7 });
+    }
+  } catch {
+    /* parse fallback: ignore */
+  }
+  return out;
+}
+
+type DynamicImportSpecifierExtractor = (source: string, fromFile: string, projectRoot: string) => ModuleSpecifier[];
+
+const DYNAMIC_IMPORT_SPECIFIER_EXTRACTORS: Readonly<Record<string, DynamicImportSpecifierExtractor>> = {
+  js: extractJsTsDynamicSpecifiers,
+  ts: extractJsTsDynamicSpecifiers,
+  python: extractPythonDynamicSpecifiers,
+};
+
+/**
+ * Shared adapter boundary for opt-in dynamic import heuristics. A language adapter
+ * extracts only non-executed module candidates and leaves target resolution, provenance
+ * merging, and graph construction to the common pipeline.
+ */
+export function extractDynamicImportSpecifiers(
+  languageId: string,
+  source: string,
+  fromFile: string,
+  projectRoot: string,
+): ModuleSpecifier[] {
+  const extractor = DYNAMIC_IMPORT_SPECIFIER_EXTRACTORS[languageId];
+  if (!extractor) return [];
+  return extractor(source, fromFile, projectRoot);
+}
+
 export function extractPythonSpecifiers(source: string): string[] {
   const out: string[] = [];
   try {

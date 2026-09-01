@@ -110,6 +110,7 @@ Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `ar
 - embedding-ready file chunks: `codegraph chunk src/auth.ts --json` (explicit `--language` must be supported; unknown extensions use text)
 - one indexed module: `codegraph dumpmod src/auth.ts --json`
 - prewarm or repair disk state: `codegraph index --root .`
+- include static-string Python `importlib.import_module(...)` and `__import__(...)` edges: `codegraph graph --root . --dynamic-import-heuristics`
 - inspect complex files: `codegraph hotspots --root . --limit 20`
 - list unresolved source imports: `codegraph unresolved --root . --json`
 - search text with a regex: `codegraph grep "TODO|FIXME" --glob "src/**/*.ts"`
@@ -117,6 +118,8 @@ Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `ar
 - compare graph changes across revisions: `codegraph graph-delta --git-base origin/main --git-head HEAD --json`
 - create a durable artifact: `codegraph artifact --root . --out codegraph-out --sqlite --graph-json`
 - start a warm local tool server: `codegraph mcp --root . --stdio`
+
+Dynamic import heuristics use shared language adapters, including JS and TypeScript embedded script blocks. The Python adapter recognizes direct `importlib.import_module(...)`, direct `__import__(...)`, and direct import aliases when the module argument is a static string. It does not evaluate computed names, assignment-based aliases, name reassignment, the `package=` argument, or `__import__` relative `level=` semantics; leading-dot `importlib.import_module(...)` strings use the importing file's package-relative resolution.
 
 `links` checks root-confined local Markdown links and GitHub-style heading fragments, including raw HTML `a[href]` in `.md` files. It skips external URLs and unsupported formats; exit 1 reports broken links. Discovery honors `codegraph.config.json` discovery globs plus CLI `--include-glob` / `--ignore-glob` / `--no-gitignore`. `review` and non-empty `impact` include the same `markdownLinks` findings; `unresolved` excludes document edges.
 

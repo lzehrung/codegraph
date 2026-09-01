@@ -130,6 +130,9 @@ codegraph graph ./ --json
 # Opt-in text specifier shortcut for plain .js and .ts files
 codegraph graph ./src --fast-graph
 
+# Add best-effort Python importlib and __import__ edges
+codegraph graph ./src --dynamic-import-heuristics
+
 # Default extraction (Tree-sitter for supported source languages)
 codegraph graph ./src
 
@@ -180,6 +183,8 @@ codegraph review --report --report-file review.report.json
 codegraph search "query" --report --report-file search.report.json
 codegraph inspect ./src --report --report-file inspect.report.json
 ```
+
+`--dynamic-import-heuristics` runs shared language adapters and adds heuristic dependency edges for statically reducible loader calls. For Python, it recognizes module strings passed to `importlib.import_module(...)`, direct `__import__(...)`, and aliases declared by `import importlib as ...` or `from importlib import import_module as ...`; the JS and TypeScript adapters also run inside embedded script blocks. These edges report heuristic resolution with confidence `0.7`. Computed module names, alias assignment flow, name reassignment, Python's `package=` argument, and `__import__` relative `level=` semantics are not modeled; a leading-dot `importlib.import_module(...)` string uses the importing file's existing package-relative resolution.
 
 `inspect` emits bounded hotspots, unresolved imports, and cycles. Add `--duplicates` to include a bounded high-confidence duplicate summary; run the recommended `duplicates` command for full grouped JSON.
 
