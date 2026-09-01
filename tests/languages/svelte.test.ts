@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import { chunkSFCFile } from "../../src/chunking/chunkSFC.js";
@@ -146,6 +147,38 @@ it("deduplicates and filters Svelte external script src dependencies", async () 
   expect(
     graph.edges.some((edge) => edge.from === sourceFile && edge.to.type === "external" && edge.to.name === ""),
   ).toBe(false);
+});
+
+it("applies dynamic import heuristic adapters inside Svelte script blocks", async () => {
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "cg-svelte-dynamic-import-"));
+  const sourceFile = path.join(root, "Loader.svelte");
+  const targetFile = path.join(root, "target.ts");
+  await Promise.all([
+    fs.promises.writeFile(
+      sourceFile,
+      '<script>\nconst target = import(path.join(__dirname, "target"));\n</script>\n',
+      "utf8",
+    ),
+    fs.promises.writeFile(targetFile, "export const value = 1;\n", "utf8"),
+  ]);
+
+  try {
+    const normalizedSource = sourceFile.replace(/\\/g, "/");
+    const normalizedTarget = targetFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [sourceFile, targetFile], {
+      dynamicImportHeuristics: true,
+    });
+
+    expect(graph.edges).toContainEqual({
+      from: normalizedSource,
+      to: { type: "file", path: normalizedTarget },
+      raw: "./target",
+      resolved: "heuristic",
+      confidence: 0.7,
+    });
+  } finally {
+    await fs.promises.rm(root, { recursive: true, force: true });
+  }
 });
 
 it("preserves Svelte block content and original coordinates while extracting embedded dependencies", async () => {

@@ -254,6 +254,150 @@ export function extractJsTsDynamicSpecifiers(source: string, fromFile: string, p
 // a digit from matching directly after a `.` separator.
 const PYTHON_DOTTED_NAME_SOURCE = String.raw`${PYTHON_IDENTIFIER_SOURCE}(?:\.${PYTHON_IDENTIFIER_SOURCE})*`;
 
+function maskPythonString(source: string, mask: Uint8Array, start: number): number {
+  const quote = source[start]!;
+  const triple = source[start + 1] === quote && source[start + 2] === quote;
+  const delimiterLength = triple ? 3 : 1;
+  for (let offset = 0; offset < delimiterLength; offset += 1) {
+    mask[start + offset] = 1;
+  }
+
+  let index = start + delimiterLength;
+  while (index < source.length) {
+    const ch = source[index]!;
+    if (!triple && (ch === "\n" || ch === "\r")) return index;
+    mask[index] = 1;
+    if (ch === "\\") {
+      const nextIndex = index + 1;
+      if (nextIndex < source.length) mask[nextIndex] = 1;
+      index += 2;
+      continue;
+    }
+    if (ch === quote) {
+      if (!triple) return index + 1;
+      if (source[index + 1] === quote && source[index + 2] === quote) {
+        mask[index + 1] = 1;
+        mask[index + 2] = 1;
+        return index + delimiterLength;
+      }
+    }
+    index += 1;
+  }
+  return source.length;
+}
+
+function buildPythonNonCodeMask(source: string): Uint8Array | undefined {
+  if (!source.includes("#") && !source.includes("'") && !source.includes('"')) return undefined;
+  const mask = new Uint8Array(source.length);
+  for (let index = 0; index < source.length; index += 1) {
+    const ch = source[index]!;
+    if (ch === "#") {
+      while (index < source.length && source[index] !== "\n" && source[index] !== "\r") {
+        mask[index] = 1;
+        index += 1;
+      }
+      index -= 1;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      index = maskPythonString(source, mask, index) - 1;
+    }
+  }
+  return mask;
+}
+
+const PYTHON_IMPORTLIB_ALIAS_PATTERN = new RegExp(
+  String.raw`^importlib(?:\s+as\s+(${PYTHON_IDENTIFIER_SOURCE}))?$`,
+  "u",
+);
+const PYTHON_IMPORT_MODULE_ALIAS_PATTERN = new RegExp(
+  String.raw`^import_module(?:\s+as\s+(${PYTHON_IDENTIFIER_SOURCE}))?$`,
+  "u",
+);
+const PYTHON_DYNAMIC_CALL_PATTERN = new RegExp(
+  String.raw`(?<![._\p{XID_Continue}])(${PYTHON_IDENTIFIER_SOURCE})(?:\s*\.\s*(${PYTHON_IDENTIFIER_SOURCE}))?\s*\(\s*(?:name\s*=\s*)?(?:[rRuUfF]{0,2})(["'])([^"'\\\r\n]+)\3`,
+  "gmu",
+);
+const PYTHON_DYNAMIC_MODULE_PATTERN = new RegExp(String.raw`^\.*${PYTHON_DOTTED_NAME_SOURCE}$`, "u");
+
+function collectPythonDynamicImportAliases(source: string): {
+  importlibAliases: Set<string>;
+  importModuleAliases: Set<string>;
+} {
+  const importlibAliases = new Set(["importlib"]);
+  const importModuleAliases = new Set<string>();
+  const cleaned = stripPythonCommentsAndStrings(source);
+  for (const match of cleaned.matchAll(/^\s*import\s+([^\r\n;]+)/gmu)) {
+    for (const rawClause of (match[1] ?? "").split(",")) {
+      const clause = rawClause.trim();
+      const parsed = PYTHON_IMPORTLIB_ALIAS_PATTERN.exec(clause);
+      if (parsed) importlibAliases.add(parsed[1] ?? "importlib");
+    }
+  }
+  for (const match of cleaned.matchAll(/^\s*from\s+importlib\s+import\s+([^\r\n;]+)/gmu)) {
+    for (const rawClause of (match[1] ?? "").split(",")) {
+      const clause = rawClause.trim().replace(/^\(\s*|\s*\)$/g, "");
+      const parsed = PYTHON_IMPORT_MODULE_ALIAS_PATTERN.exec(clause);
+      if (parsed) importModuleAliases.add(parsed[1] ?? "import_module");
+    }
+  }
+  return { importlibAliases, importModuleAliases };
+}
+
+/**
+ * Extracts best-effort Python dynamic imports whose first argument is a static module
+ * string. Alias recognition is intentionally limited to direct `importlib` imports;
+ * assignment flow and computed module names remain outside graph construction.
+ */
+export function extractPythonDynamicSpecifiers(source: string): ModuleSpecifier[] {
+  const out: ModuleSpecifier[] = [];
+  try {
+    const mask = buildPythonNonCodeMask(source);
+    const { importlibAliases, importModuleAliases } = collectPythonDynamicImportAliases(source);
+    const seen = new Set<string>();
+    for (const match of source.matchAll(PYTHON_DYNAMIC_CALL_PATTERN)) {
+      if (!matchStartsInCode(mask, match)) continue;
+      const receiver = match[1] ?? "";
+      const member = match[2];
+      const isBuiltinImport = !member && receiver === "__import__";
+      const isImportlibCall = member === "import_module" && importlibAliases.has(receiver);
+      const isImportedFunctionCall = !member && importModuleAliases.has(receiver);
+      if (!isBuiltinImport && !isImportlibCall && !isImportedFunctionCall) continue;
+      const spec = match[4] ?? "";
+      if (!PYTHON_DYNAMIC_MODULE_PATTERN.test(spec) || seen.has(spec)) continue;
+      seen.add(spec);
+      out.push({ spec, resolved: "heuristic", confidence: 0.7 });
+    }
+  } catch {
+    /* parse fallback: ignore */
+  }
+  return out;
+}
+
+type DynamicImportSpecifierExtractor = (source: string, fromFile: string, projectRoot: string) => ModuleSpecifier[];
+
+const DYNAMIC_IMPORT_SPECIFIER_EXTRACTORS: Readonly<Record<string, DynamicImportSpecifierExtractor>> = {
+  js: extractJsTsDynamicSpecifiers,
+  ts: extractJsTsDynamicSpecifiers,
+  python: (source) => extractPythonDynamicSpecifiers(source),
+};
+
+/**
+ * Shared adapter boundary for opt-in dynamic import heuristics. A language adapter
+ * extracts only non-executed module candidates and leaves target resolution, provenance
+ * merging, and graph construction to the common pipeline.
+ */
+export function extractDynamicImportSpecifiers(
+  languageId: string,
+  source: string,
+  fromFile: string,
+  projectRoot: string,
+): ModuleSpecifier[] {
+  const extractor = DYNAMIC_IMPORT_SPECIFIER_EXTRACTORS[languageId];
+  if (!extractor) return [];
+  return extractor(source, fromFile, projectRoot);
+}
+
 export function extractPythonSpecifiers(source: string): string[] {
   const out: string[] = [];
   try {

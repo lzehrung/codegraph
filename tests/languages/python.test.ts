@@ -6,7 +6,7 @@ import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { buildProjectIndex, collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
 import { expectFileInIndex, findSymbolsByName } from "../test-utils.js";
-import { findReferences, goToDefinition } from "../../src/index.js";
+import { collectGraph, findReferences, goToDefinition } from "../../src/index.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 
@@ -229,5 +229,51 @@ description = "This module uses private_func internally"
     const exportedNames = mod.exports.map((e) => exportedNameOf(e)).sort();
     // It should NOT contain private_func
     expect(exportedNames).toEqual(["foo"]);
+  });
+});
+
+describe("Python dynamic imports", () => {
+  it("adds heuristic edges for static importlib and __import__ module strings when enabled", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-dynamic-import-"));
+    const packageDir = path.join(root, "pkg");
+    const sourceFile = path.join(packageDir, "loader.py");
+    const targetNames = ["direct.py", "alias.py", "builtin.py", "relative.py"];
+    const ignoredNames = ["string_only.py", "comment_only.py", "computed.py"];
+    await fsp.mkdir(packageDir, { recursive: true });
+    const source = [
+      "import importlib as module_loader",
+      "from importlib import import_module as load_module",
+      "",
+      'module_loader.import_module("pkg.direct")',
+      'load_module(name="pkg.alias")',
+      '__import__(r"pkg.builtin")',
+      'importlib.import_module(".relative", package="pkg")',
+      'description = "module_loader.import_module(\\"pkg.string_only\\")"',
+      '# __import__("pkg.comment_only")',
+      'module_name = "pkg.computed"',
+      "module_loader.import_module(module_name)",
+      "",
+    ].join("\n");
+    const files = [
+      path.join(packageDir, "__init__.py"),
+      sourceFile,
+      ...[...targetNames, ...ignoredNames].map((name) => path.join(packageDir, name)),
+    ];
+    await Promise.all(files.map((file) => fsp.writeFile(file, file === sourceFile ? source : "", "utf8")));
+
+    try {
+      const normalizedSource = sourceFile.replace(/\\/g, "/");
+      const disabled = await collectGraph(root, files);
+      expect(disabled.edges.filter((edge) => edge.from === normalizedSource && edge.to.type === "file")).toEqual([]);
+
+      const enabled = await collectGraph(root, files, { dynamicImportHeuristics: true });
+      const localEdges = enabled.edges.filter((edge) => edge.from === normalizedSource && edge.to.type === "file");
+      expect(localEdges.map((edge) => (edge.to.type === "file" ? path.basename(edge.to.path) : "")).sort()).toEqual(
+        targetNames.sort(),
+      );
+      expect(localEdges.every((edge) => edge.resolved === "heuristic" && edge.confidence === 0.7)).toBe(true);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });

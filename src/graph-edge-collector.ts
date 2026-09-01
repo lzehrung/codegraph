@@ -3,7 +3,7 @@ import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type Lang
 import type { Edge } from "./types.js";
 import { loadNearestTsconfigFor } from "./util/resolution.js";
 import type { WorkspaceConfig } from "./util/workspace.js";
-import { extractJsTsDynamicSpecifiers } from "./util/specifiers.js";
+import { extractDynamicImportSpecifiers, type ModuleSpecifier } from "./util/specifiers.js";
 import { fileIdentityKey } from "./util/paths.js";
 import type { LogLevel } from "./logging.js";
 import {
@@ -27,6 +27,16 @@ const cloneEdge = (edge: Edge): Edge => ({
   ...edge,
   to: edge.to.type === "file" ? { type: "file", path: edge.to.path } : { type: "external", name: edge.to.name },
 });
+
+function appendMissingSpecifiers(target: ModuleSpecifier[], incoming: readonly ModuleSpecifier[]): void {
+  if (!incoming.length) return;
+  const existing = new Set(target.map((entry) => entry.spec));
+  for (const entry of incoming) {
+    if (existing.has(entry.spec)) continue;
+    existing.add(entry.spec);
+    target.push(entry);
+  }
+}
 
 /**
  * Collapses duplicate edges.
@@ -183,16 +193,8 @@ export async function collectEdgesForFile(
     ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
   });
 
-  if ((sup.id === "ts" || sup.id === "js") && opts.dynamicImportHeuristics) {
-    const dynamicSpecs = extractJsTsDynamicSpecifiers(src, normalizedFile, projectRoot);
-    if (dynamicSpecs.length) {
-      const existing = new Set(specs.map((entry) => entry.spec));
-      for (const entry of dynamicSpecs) {
-        if (existing.has(entry.spec)) continue;
-        existing.add(entry.spec);
-        specs.push(entry);
-      }
-    }
+  if (opts.dynamicImportHeuristics) {
+    appendMissingSpecifiers(specs, extractDynamicImportSpecifiers(sup.id, src, normalizedFile, projectRoot));
   }
 
   const specSources = specs.map((entry) => ({ entry, support: sup }));
@@ -205,6 +207,12 @@ export async function collectEdgesForFile(
       ...(opts.native ? { native: opts.native } : {}),
       ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
     });
+    if (opts.dynamicImportHeuristics) {
+      appendMissingSpecifiers(
+        blockSpecs,
+        extractDynamicImportSpecifiers(block.sup.id, block.source, normalizedFile, projectRoot),
+      );
+    }
     for (const entry of blockSpecs) {
       specSources.push({ entry, support: block.sup });
     }

@@ -39,6 +39,7 @@ Checklist for landing a new first-class source language without drifting from re
 - Extend `src/graphs.ts` only where graph and specifier extraction need language-specific recovery.
 - Extend `src/util.ts` for language-specific module resolution, package metadata parsing, and caches.
 - Keep dynamic or ambiguous cases conservative. Prefer `external` or `not_found` over false-positive navigation.
+- When a runtime loader call can be statically mapped through the existing source module resolver, add a bounded adapter to `DYNAMIC_IMPORT_SPECIFIER_EXTRACTORS` in `src/util/specifiers.ts`. The adapter must avoid executing source, mask comments and strings, mark candidates as heuristic, and ignore computed values it cannot prove. Do not route reflection or runtime plugin APIs through this path unless they have a proven source-file mapping.
 - If the language allows more than one package or namespace surface in a single file, model the symbol index per package/namespace entry instead of assuming one file maps to one package.
 
 ### Sort vs expand
@@ -53,6 +54,7 @@ Checklist for landing a new first-class source language without drifting from re
 - Add or extend `tests/languages/<language>.test.ts`.
 - Add realistic fixtures under `tests/samples/<language>/`.
 - Cover syntax permutations in focused tests such as `tests/import-binding-regressions.test.ts` or `tests/resolution.test.ts` when shared suites would hide the exact regression.
+- For a dynamic import adapter, cover enabled and disabled graph builds, direct and aliased forms, comments and strings, computed values, heuristic provenance, and any embedded script format that reuses the adapter.
 - Update `tests/project-file-discovery.test.ts` if project-file discovery changes.
 
 ## 7. Update shared semantic and native suites
