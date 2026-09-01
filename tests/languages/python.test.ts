@@ -243,11 +243,20 @@ describe("Python dynamic imports", () => {
       "function.py",
       "builtin.py",
       "canonical.py",
+      "escaped.py",
+      "joined.py",
       "relative.py",
       "triple.py",
       "créer.py",
     ];
-    const ignoredNames = ["string_only.py", "comment_only.py", "computed.py", "2invalid.py", "builtin_relative.py"];
+    const ignoredNames = [
+      "string_only.py",
+      "comment_only.py",
+      "computed.py",
+      "computed_expression.py",
+      "2invalid.py",
+      "builtin_relative.py",
+    ];
     await fsp.mkdir(packageDir, { recursive: true });
     const source = [
       "import importlib, importlib as module_loader",
@@ -262,6 +271,8 @@ describe("Python dynamic imports", () => {
       'import_module("pkg.function")',
       '__import__(r"pkg.builtin")',
       'importlib.import_module(f"pkg.canonical")',
+      'importlib.import_module("pkg.\\u0065scaped")',
+      'importlib.import_module("pkg." "joined")',
       'importlib.import_module(".relative", package="pkg")',
       'importlib.import_module("""pkg.triple""")',
       'importlib.import_module("pkg.créer")',
@@ -271,6 +282,8 @@ describe("Python dynamic imports", () => {
       '# __import__("pkg.comment_only")',
       'module_name = "pkg.computed"',
       "module_loader.import_module(module_name)",
+      'suffix = ""',
+      'module_loader.import_module("pkg.computed_expression" + suffix)',
       'module_loader.import_module("pkg.2invalid")',
       '__import__("optional_plugin")',
       "",
