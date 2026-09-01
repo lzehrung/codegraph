@@ -233,45 +233,92 @@ description = "This module uses private_func internally"
 });
 
 describe("Python dynamic imports", () => {
-  it("adds heuristic edges for static importlib and __import__ module strings when enabled", async () => {
+  it("maps supported static forms, preserves precise edges, and rejects unsafe guesses", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-dynamic-import-"));
     const packageDir = path.join(root, "pkg");
     const sourceFile = path.join(packageDir, "loader.py");
-    const targetNames = ["direct.py", "alias.py", "builtin.py", "relative.py"];
-    const ignoredNames = ["string_only.py", "comment_only.py", "computed.py"];
+    const dynamicTargetNames = [
+      "direct.py",
+      "alias.py",
+      "function.py",
+      "builtin.py",
+      "canonical.py",
+      "relative.py",
+      "triple.py",
+      "créer.py",
+    ];
+    const ignoredNames = ["string_only.py", "comment_only.py", "computed.py", "2invalid.py", "builtin_relative.py"];
     await fsp.mkdir(packageDir, { recursive: true });
     const source = [
-      "import importlib as module_loader",
-      "from importlib import import_module as load_module",
+      "import importlib, importlib as module_loader",
+      "import pkg.precise",
+      "from importlib import (",
+      "    import_module,",
+      "    import_module as load_module,",
+      ")",
       "",
       'module_loader.import_module("pkg.direct")',
       'load_module(name="pkg.alias")',
+      'import_module("pkg.function")',
       '__import__(r"pkg.builtin")',
+      'importlib.import_module(f"pkg.canonical")',
       'importlib.import_module(".relative", package="pkg")',
-      'description = "module_loader.import_module(\\"pkg.string_only\\")"',
+      'importlib.import_module("""pkg.triple""")',
+      'importlib.import_module("pkg.créer")',
+      'importlib.import_module("pkg.precise")',
+      '__import__(".builtin_relative")',
+      'description = """module_loader.import_module("pkg.string_only")"""',
       '# __import__("pkg.comment_only")',
       'module_name = "pkg.computed"',
       "module_loader.import_module(module_name)",
+      'module_loader.import_module("pkg.2invalid")',
+      '__import__("optional_plugin")',
       "",
     ].join("\n");
     const files = [
       path.join(packageDir, "__init__.py"),
       sourceFile,
-      ...[...targetNames, ...ignoredNames].map((name) => path.join(packageDir, name)),
+      path.join(packageDir, "precise.py"),
+      ...[...dynamicTargetNames, ...ignoredNames].map((name) => path.join(packageDir, name)),
     ];
     await Promise.all(files.map((file) => fsp.writeFile(file, file === sourceFile ? source : "", "utf8")));
 
     try {
       const normalizedSource = sourceFile.replace(/\\/g, "/");
       const disabled = await collectGraph(root, files);
-      expect(disabled.edges.filter((edge) => edge.from === normalizedSource && edge.to.type === "file")).toEqual([]);
+      const disabledLocalNames = disabled.edges
+        .filter((edge) => edge.from === normalizedSource && edge.to.type === "file")
+        .map((edge) => (edge.to.type === "file" ? path.basename(edge.to.path) : ""));
+      expect(disabledLocalNames).toEqual(["precise.py"]);
 
       const enabled = await collectGraph(root, files, { dynamicImportHeuristics: true });
       const localEdges = enabled.edges.filter((edge) => edge.from === normalizedSource && edge.to.type === "file");
-      expect(localEdges.map((edge) => (edge.to.type === "file" ? path.basename(edge.to.path) : "")).sort()).toEqual(
-        targetNames.sort(),
+      const heuristicLocalNames = localEdges
+        .filter((edge) => edge.resolved === "heuristic" && edge.confidence === 0.7)
+        .map((edge) => (edge.to.type === "file" ? path.basename(edge.to.path) : ""))
+        .sort();
+      expect(heuristicLocalNames).toEqual([...dynamicTargetNames].sort());
+
+      const preciseEdge = localEdges.find(
+        (edge) => edge.to.type === "file" && path.basename(edge.to.path) === "precise.py",
       );
-      expect(localEdges.every((edge) => edge.resolved === "heuristic" && edge.confidence === 0.7)).toBe(true);
+      expect(preciseEdge).toMatchObject({ raw: "pkg.precise" });
+      expect(preciseEdge?.resolved).toBeUndefined();
+      expect(preciseEdge?.confidence).toBeUndefined();
+
+      expect(enabled.edges).toContainEqual({
+        from: normalizedSource,
+        to: { type: "external", name: "optional_plugin" },
+        raw: "optional_plugin",
+        resolved: "heuristic",
+        confidence: 0.7,
+      });
+      const localNames = new Set(
+        localEdges.map((edge) => (edge.to.type === "file" ? path.basename(edge.to.path) : "")),
+      );
+      for (const ignoredName of ignoredNames) {
+        expect(localNames.has(ignoredName)).toBe(false);
+      }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

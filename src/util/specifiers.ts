@@ -314,11 +314,39 @@ const PYTHON_IMPORT_MODULE_ALIAS_PATTERN = new RegExp(
   String.raw`^import_module(?:\s+as\s+(${PYTHON_IDENTIFIER_SOURCE}))?$`,
   "u",
 );
-const PYTHON_DYNAMIC_CALL_PATTERN = new RegExp(
-  String.raw`(?<![._\p{XID_Continue}])(${PYTHON_IDENTIFIER_SOURCE})(?:\s*\.\s*(${PYTHON_IDENTIFIER_SOURCE}))?\s*\(\s*(?:name\s*=\s*)?(?:[rRuUfF]{0,2})(["'])([^"'\\\r\n]+)\3`,
+const PYTHON_DYNAMIC_CALL_PREFIX_PATTERN = new RegExp(
+  String.raw`(?<![._\p{XID_Continue}])(${PYTHON_IDENTIFIER_SOURCE})(?:\s*\.\s*(${PYTHON_IDENTIFIER_SOURCE}))?\s*\(\s*(?:name\s*=\s*)?`,
   "gmu",
 );
 const PYTHON_DYNAMIC_MODULE_PATTERN = new RegExp(String.raw`^\.*${PYTHON_DOTTED_NAME_SOURCE}$`, "u");
+const PYTHON_FROM_IMPORTLIB_PATTERN = /^\s*from\s+importlib\s+import\s+(?:\(([\s\S]*?)\)|([^\r\n;]+))/gmu;
+
+function parsePythonStaticStringLiteral(source: string, start: number): string | null {
+  let quoteIndex = start;
+  let prefixLength = 0;
+  while (prefixLength < 2) {
+    const prefixCharacter = source[quoteIndex];
+    if (!prefixCharacter || !"rRuUfF".includes(prefixCharacter)) break;
+    quoteIndex += 1;
+    prefixLength += 1;
+  }
+  const quote = source[quoteIndex];
+  if (quote !== "'" && quote !== '"') return null;
+  const triple = source[quoteIndex + 1] === quote && source[quoteIndex + 2] === quote;
+  const delimiterLength = triple ? 3 : 1;
+  const contentStart = quoteIndex + delimiterLength;
+  for (let index = contentStart; index < source.length; index += 1) {
+    const ch = source[index]!;
+    if (!triple && (ch === "\n" || ch === "\r")) return null;
+    if (ch === "\\") return null;
+    if (ch !== quote) continue;
+    if (!triple) return source.slice(contentStart, index);
+    if (source[index + 1] === quote && source[index + 2] === quote) {
+      return source.slice(contentStart, index);
+    }
+  }
+  return null;
+}
 
 function collectPythonDynamicImportAliases(source: string): {
   importlibAliases: Set<string>;
@@ -334,9 +362,10 @@ function collectPythonDynamicImportAliases(source: string): {
       if (parsed) importlibAliases.add(parsed[1] ?? "importlib");
     }
   }
-  for (const match of cleaned.matchAll(/^\s*from\s+importlib\s+import\s+([^\r\n;]+)/gmu)) {
-    for (const rawClause of (match[1] ?? "").split(",")) {
-      const clause = rawClause.trim().replace(/^\(\s*|\s*\)$/g, "");
+  for (const match of cleaned.matchAll(PYTHON_FROM_IMPORTLIB_PATTERN)) {
+    const importList = match[1] ?? match[2] ?? "";
+    for (const rawClause of importList.split(",")) {
+      const clause = rawClause.trim();
       const parsed = PYTHON_IMPORT_MODULE_ALIAS_PATTERN.exec(clause);
       if (parsed) importModuleAliases.add(parsed[1] ?? "import_module");
     }
@@ -355,7 +384,7 @@ export function extractPythonDynamicSpecifiers(source: string): ModuleSpecifier[
     const mask = buildPythonNonCodeMask(source);
     const { importlibAliases, importModuleAliases } = collectPythonDynamicImportAliases(source);
     const seen = new Set<string>();
-    for (const match of source.matchAll(PYTHON_DYNAMIC_CALL_PATTERN)) {
+    for (const match of source.matchAll(PYTHON_DYNAMIC_CALL_PREFIX_PATTERN)) {
       if (!matchStartsInCode(mask, match)) continue;
       const receiver = match[1] ?? "";
       const member = match[2];
@@ -363,8 +392,10 @@ export function extractPythonDynamicSpecifiers(source: string): ModuleSpecifier[
       const isImportlibCall = member === "import_module" && importlibAliases.has(receiver);
       const isImportedFunctionCall = !member && importModuleAliases.has(receiver);
       if (!isBuiltinImport && !isImportlibCall && !isImportedFunctionCall) continue;
-      const spec = match[4] ?? "";
-      if (!PYTHON_DYNAMIC_MODULE_PATTERN.test(spec) || seen.has(spec)) continue;
+      const argumentStart = (match.index ?? 0) + (match[0]?.length ?? 0);
+      const spec = parsePythonStaticStringLiteral(source, argumentStart);
+      if (!spec || !PYTHON_DYNAMIC_MODULE_PATTERN.test(spec) || seen.has(spec)) continue;
+      if (isBuiltinImport && spec.startsWith(".")) continue;
       seen.add(spec);
       out.push({ spec, resolved: "heuristic", confidence: 0.7 });
     }
@@ -379,7 +410,7 @@ type DynamicImportSpecifierExtractor = (source: string, fromFile: string, projec
 const DYNAMIC_IMPORT_SPECIFIER_EXTRACTORS: Readonly<Record<string, DynamicImportSpecifierExtractor>> = {
   js: extractJsTsDynamicSpecifiers,
   ts: extractJsTsDynamicSpecifiers,
-  python: (source) => extractPythonDynamicSpecifiers(source),
+  python: extractPythonDynamicSpecifiers,
 };
 
 /**
