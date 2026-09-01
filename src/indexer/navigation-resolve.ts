@@ -29,10 +29,10 @@ const KOTLIN_PACKAGE_NAME_PATTERN = new RegExp(
  * stay one group because they share a JVM package namespace and each pattern already accepts the
  * other's declaration; every other language is skipped instead of read for a keyword it never uses.
  */
-const PACKAGE_DECLARING_LANGUAGES: Record<"go" | "java" | "kotlin", Record<string, true>> = {
-  go: { go: true },
-  java: { java: true, kotlin: true },
-  kotlin: { java: true, kotlin: true },
+const PACKAGE_DECLARING_LANGUAGE_IDS: Record<"go" | "java" | "kotlin", ReadonlySet<string>> = {
+  go: new Set(["go"]),
+  java: new Set(["java", "kotlin"]),
+  kotlin: new Set(["java", "kotlin"]),
 };
 
 function cacheKey(file: FileId, canonicalName: string): string {
@@ -251,7 +251,7 @@ function packageDirectoryLookup(
     }
     directory.all.push(moduleEntry);
     const moduleLanguageId = supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions)?.id;
-    if (!moduleLanguageId || !PACKAGE_DECLARING_LANGUAGES[languageId][moduleLanguageId]) continue;
+    if (!moduleLanguageId || !PACKAGE_DECLARING_LANGUAGE_IDS[languageId].has(moduleLanguageId)) continue;
     const packageName =
       languageId === "go"
         ? readGoPackageName(index, moduleEntry.file)
@@ -524,7 +524,7 @@ export function resolveImported(
   if (hit?.kind === "namespace") return { namespace: hit.file };
 
   // Only Java, Kotlin, and Python matter below, so a `.h` target never needs its sample read.
-  const support = supportForFileWithoutHeaderSample(targetFile);
+  const support = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions);
   if (support?.id === "java" || support?.id === "kotlin") {
     const siblingHit = resolveSiblingPackageExport(index, targetFile, exportedName, support.id);
     if (siblingHit?.kind === "resolved") return siblingHit.def;

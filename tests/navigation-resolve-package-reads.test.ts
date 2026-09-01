@@ -119,4 +119,29 @@ describe("package export resolution", () => {
     expect(hit && "file" in hit ? hit.file : null).toBe(alphaJava);
     expect(readsWithExtension(resolved.paths, ".go")).toEqual([]);
   });
+
+  it("uses custom language extensions for JVM sibling package resolution", async () => {
+    const root = await createTempProjectRoot("cg-package-jvm-mapped-", [
+      { path: "app/Beta.jvm", contents: KOTLIN_BETA },
+      { path: "app/Alpha.java", contents: JAVA_ALPHA },
+    ]);
+    tempRoots.push(root);
+    const index = await buildProjectIndex(root, {
+      cache: "off",
+      languageExtensions: { ".jvm": "kotlin" },
+    });
+    const betaJvm = moduleFileEndingWith(index, "Beta.jvm");
+    const alphaJava = moduleFileEndingWith(index, "Alpha.java");
+
+    const binding: ImportBinding = {
+      kind: "named",
+      local: "Alpha",
+      imported: "Alpha",
+      from: "./Alpha",
+      resolved: betaJvm,
+    };
+    const resolved = resolveImported(index, binding, "Alpha");
+
+    expect(resolved && "file" in resolved ? resolved.file : null).toBe(alphaJava);
+  });
 });
