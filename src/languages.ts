@@ -136,10 +136,10 @@ function mappedSupportForFile(
 
 /**
  * Classifies a file from the configured extension mapping and its extension alone, never reading
- * it. A `.h` header therefore resolves to C, because separating C from C++ needs a content
- * sample. Use this only where C and C++ lead to the same answer, such as a `sql` check or
- * native-worker eligibility; anything that selects the parser or extractor for a header must use
- * `supportForFile`.
+ * it. A mapping still resolves first, exactly as in `supportForFile`; only an unmapped `.h` header
+ * differs, falling back to C because separating C from C++ needs a content sample. Use this only
+ * where C and C++ lead to the same answer, such as a `sql` check or native-worker eligibility;
+ * anything that selects the parser or extractor for a header must use `supportForFile`.
  */
 export function supportForFileWithoutHeaderSample(
   filename: string,
