@@ -45,6 +45,8 @@ const index = await buildProjectIndex(root, {
 
 `languageExtensions` uses normalized literal suffixes beginning with `.`, supported language IDs, and longest-suffix matching. Suffixes may contain letters, digits, `.`, `_`, `+`, and `-`; `.vue` and `.svelte` remain single-file components and cannot be remapped.
 
+`supportForFile(filePath, languageExtensions?)` resolves the `LanguageSupport` for a path: a mapping wins first, then the extension, and an unmapped `.h` is sampled (first 8 KB) to tell a C++ header from a C one. `supportForFileWithoutHeaderSample` performs the same resolution without that read, so an unmapped `.h` always reports `c`; reach for it only where C and C++ give the same answer, and keep `supportForFile` wherever the choice selects a parser or extractor.
+
 ## Public API Boundary
 
 The published packages expose these documented entry points:
