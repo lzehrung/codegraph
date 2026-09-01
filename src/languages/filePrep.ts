@@ -46,27 +46,33 @@ const SCRIPT_SUPPORT_MAP: Record<string, LanguageSupport> = {
   tsx: TSX_SUPPORT,
 };
 
-export async function prepareParserInput(
-  file: string,
-  opts?: { source?: string | undefined; languageExtensions?: LanguageExtensionMap | undefined },
-): Promise<ParserInput> {
+export interface SourceInputOptions {
+  source?: string | undefined;
+  languageExtensions?: LanguageExtensionMap | undefined;
+  /**
+   * Language the caller already resolved for `file`, with `languageExtensions` applied. Supplying
+   * it skips re-resolution, which for a `.h` header also skips the synchronous sample read that
+   * separates C from C++. Single-file component sources ignore it: their language comes from the
+   * script block.
+   */
+  support?: LanguageSupport | undefined;
+}
+
+export async function prepareParserInput(file: string, opts?: SourceInputOptions): Promise<ParserInput> {
   const prepared = await prepareSourceInput(file, opts);
   return {
     ...prepared,
   };
 }
 
-export async function prepareSourceInput(
-  file: string,
-  opts?: { source?: string | undefined; languageExtensions?: LanguageExtensionMap | undefined },
-): Promise<SourceInput> {
+export async function prepareSourceInput(file: string, opts?: SourceInputOptions): Promise<SourceInput> {
   const framework = detectSFCFramework(file);
   if (framework) {
     const rawSource = opts?.source ?? (await fsp.readFile(file, "utf8"));
     return prepareSFCSourceInput(rawSource, framework);
   }
 
-  const sup = supportForFile(file, opts?.languageExtensions);
+  const sup = opts?.support ?? supportForFile(file, opts?.languageExtensions);
   if (!sup) throw new UnsupportedParserInputError(file);
   const rawSource = opts?.source ?? (await fsp.readFile(file, "utf8"));
   return {

@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
-import { supportForFile, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
+import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import { stringifyUnknown } from "../util/ast.js";
 import { readConfinedUtf8File } from "../util/confinedFile.js";
 import { recordNativeExecutionOutcome } from "../native/nativeBackendReport.js";
@@ -85,13 +85,17 @@ export function isNativeWorkerEligibleFile(
   return !!support && !isSFCFile(filePath) && !isGraphOnlyLanguage(support.id);
 }
 
+/**
+ * Eligibility never separates C from C++, so this classifies by extension and skips the header
+ * sample read that `supportForFile` would perform for every `.h` file in the project.
+ */
 export function countNativeWorkerEligibleFiles(
   files: readonly string[],
   languageExtensions: LanguageExtensionMap | undefined,
 ): number {
   let count = 0;
   for (const file of files) {
-    if (isNativeWorkerEligibleFile(file, supportForFile(file, languageExtensions))) count++;
+    if (isNativeWorkerEligibleFile(file, supportForFileWithoutHeaderSample(file, languageExtensions))) count++;
   }
   return count;
 }
@@ -272,10 +276,10 @@ export async function prepareFileContextForBuild(
           workerSetup.report.errors.push({ file, message: stringifyUnknown(error) });
         }
       }
-      prepared = await prepareFileForIndexing(file, opts?.native, opts?.languageExtensions, source);
+      prepared = await prepareFileForIndexing(file, opts?.native, opts?.languageExtensions, source, support);
     }
   } else {
-    prepared = await prepareFileForIndexing(file, opts?.native, opts?.languageExtensions, source);
+    prepared = await prepareFileForIndexing(file, opts?.native, opts?.languageExtensions, source, support);
   }
   recordPreparedNativeExecutionOutcome(report, prepared);
   return prepared;
@@ -334,7 +338,13 @@ export async function prepareFileContextsForBuildBatch(
             workerSetup.report.errors.push({ file: entry.file, message: stringifyUnknown(error) });
           }
         }
-        const prepared = await prepareFileForIndexing(entry.file, opts?.native, opts?.languageExtensions);
+        const prepared = await prepareFileForIndexing(
+          entry.file,
+          opts?.native,
+          opts?.languageExtensions,
+          undefined,
+          entry.support,
+        );
         recordPreparedNativeExecutionOutcome(report, prepared);
         results[entry.index] = prepared;
         continue;

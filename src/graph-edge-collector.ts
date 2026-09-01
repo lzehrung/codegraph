@@ -1,5 +1,5 @@
 import { prepareSourceInput, type PreparedSFCEmbeddedBlock } from "./languages/filePrep.js";
-import { supportForFile, type LanguageExtensionMap, type LanguageSupport } from "./languages.js";
+import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "./languages.js";
 import type { Edge } from "./types.js";
 import { loadNearestTsconfigFor } from "./util/resolution.js";
 import type { WorkspaceConfig } from "./util/workspace.js";
@@ -106,7 +106,7 @@ export async function collectEdgesForFile(
   const sigEntry = opts.fileSignature;
   const sig = sigEntry?.sig;
   const gitSig = sigEntry?.gitSig;
-  const sqlFile = supportForFile(normalizedFile, opts.languageExtensions)?.id === "sql";
+  const sqlFile = supportForFileWithoutHeaderSample(normalizedFile, opts.languageExtensions)?.id === "sql";
   const emitCacheEntry = (edges: Edge[]) => {
     if (!sig || !opts.onFileEdges) return;
     opts.onFileEdges(normalizedFile, {

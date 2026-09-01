@@ -3,7 +3,12 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { languageExtensionPatterns, supportForFile, type LanguageSupport } from "../languages.js";
+import {
+  languageExtensionPatterns,
+  supportForFile,
+  supportForFileWithoutHeaderSample,
+  type LanguageSupport,
+} from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { loadWorkspaceConfig, resolveWorkspacePackage, type WorkspaceConfig } from "../util/workspace.js";
 import {
@@ -780,7 +785,7 @@ async function buildIndexFromFileListShared(
   const sqlFiles = normalizedFiles
     .filter((file) => {
       if (!languageExtensions) return path.extname(file).toLowerCase() === ".sql";
-      return supportForFile(file, languageExtensions)?.id === "sql";
+      return supportForFileWithoutHeaderSample(file, languageExtensions)?.id === "sql";
     })
     .sort((left, right) => left.localeCompare(right));
   const fileSignatures = await prepareFileSignatures({
@@ -803,7 +808,7 @@ async function buildIndexFromFileListShared(
     sigInfo: FileSignature,
     cachedEdgesEntry: ManifestFileEntry | undefined,
   ): boolean => {
-    if (supportForFile(file, opts?.languageExtensions)?.id !== "sql") return false;
+    if (supportForFileWithoutHeaderSample(file, opts?.languageExtensions)?.id !== "sql") return false;
     if (!cachedEdgesEntry || !sqlCorpusSig || cachedEdgesEntry.sqlCorpusSig !== sqlCorpusSig) return true;
     const matchesGitSig = !!sigInfo.gitSig && !!cachedEdgesEntry.gitSig && cachedEdgesEntry.gitSig === sigInfo.gitSig;
     return !(matchesGitSig || cachedEdgesEntry.sig === sigInfo.sig);

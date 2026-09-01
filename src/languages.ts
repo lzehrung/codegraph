@@ -122,6 +122,7 @@ function mappedSupportForFile(
   filename: string,
   extensionMap: LanguageExtensionMap | undefined,
 ): LanguageSupport | undefined {
+  if (!extensionMap) return undefined;
   const mappings = Object.entries(normalizeLanguageExtensions(extensionMap) ?? {}).sort(
     (left, right) => right[0].length - left[0].length || left[0].localeCompare(right[0]),
   );
@@ -133,19 +134,35 @@ function mappedSupportForFile(
   return undefined;
 }
 
+/**
+ * Classifies a file from the configured extension mapping and its extension alone, never reading
+ * it. A `.h` header therefore resolves to C, because separating C from C++ needs a content
+ * sample. Use this only where C and C++ lead to the same answer, such as a `sql` check or
+ * native-worker eligibility; anything that selects the parser or extractor for a header must use
+ * `supportForFile`.
+ */
+export function supportForFileWithoutHeaderSample(
+  filename: string,
+  extensionMap?: LanguageExtensionMap | undefined,
+): LanguageSupport | undefined {
+  const mapped = mappedSupportForFile(filename, extensionMap);
+  if (mapped) return mapped;
+  const ext = path.extname(filename).toLowerCase();
+  return LANGUAGE_SUPPORTS.find((s) => s.matchExts.includes(ext));
+}
+
 export function supportForFile(
   filename: string,
   extensionMap?: LanguageExtensionMap | undefined,
 ): LanguageSupport | undefined {
-  const mapped = extensionMap ? mappedSupportForFile(filename, extensionMap) : undefined;
-  if (mapped) return mapped;
-  const ext = path.extname(filename).toLowerCase();
-  if (ext === ".h") {
-    const sample = readFileSample(filename);
-    if (sample && isLikelyCppHeader(sample)) return CPP_SUPPORT;
-    return C_SUPPORT;
+  if (path.extname(filename).toLowerCase() !== ".h") {
+    return supportForFileWithoutHeaderSample(filename, extensionMap);
   }
-  return LANGUAGE_SUPPORTS.find((s) => s.matchExts.includes(ext));
+  const mapped = mappedSupportForFile(filename, extensionMap);
+  if (mapped) return mapped;
+  const sample = readFileSample(filename);
+  if (sample && isLikelyCppHeader(sample)) return CPP_SUPPORT;
+  return C_SUPPORT;
 }
 export function supportById(id: string): LanguageSupport | undefined {
   return LANGUAGE_SUPPORTS.find((s) => s.id === id);
