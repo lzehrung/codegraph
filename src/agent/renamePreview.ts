@@ -9,7 +9,7 @@ import { resolveExport } from "../indexer/navigation-resolve.js";
 import { getCachedScope } from "../indexer/navigation-references.js";
 import { findImplementations as queryImplementations } from "../indexer/type-hierarchy.js";
 import { SymbolKind, type BuildOptions, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
-import { supportForFile } from "../languages.js";
+import { supportForFile, supportForFileWithoutHeaderSample } from "../languages.js";
 import type { Range } from "../types.js";
 import { ensureParsedContext } from "../indexer/parse-context.js";
 import { openConfinedReadableFile } from "../util/confinedFile.js";
@@ -527,17 +527,18 @@ function validateNewName(snapshot: AgentProjectSnapshot, def: SymbolDef, newName
   const file = normalizeAgentFilePath(snapshot.root, def.file);
   const conflicts: RenameConflict[] = [];
   const invalidPathCharacters = newName.includes("/") || newName.includes("\\") || newName.includes("\0");
-  const support = supportForFile(def.file, snapshot.index.languageExtensions);
+  const support = supportForFileWithoutHeaderSample(def.file, snapshot.index.languageExtensions);
   const allowsDollar = support?.id === "js" || support?.id === "ts" || support?.id === "tsx";
   const identifierPattern = allowsDollar
     ? /^[$_\p{ID_Start}](?:[$_\p{ID_Continue}]|\u200c|\u200d)*$/u
     : /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u;
   if (!newName || invalidPathCharacters || !identifierPattern.test(newName)) {
+    const displaySupport = supportForFile(def.file, snapshot.index.languageExtensions);
     conflicts.push({
       file,
       location: { file, range: def.range },
       reason: "invalid_identifier",
-      message: `"${newName}" is not a valid ${support?.id ?? "conservative"} identifier.`,
+      message: `"${newName}" is not a valid ${displaySupport?.id ?? "conservative"} identifier.`,
     });
   }
   if (newName !== def.localName && newName.toLocaleLowerCase() === def.localName.toLocaleLowerCase()) {

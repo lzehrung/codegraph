@@ -9,7 +9,7 @@ import {
   symbolHandleFromLocal,
 } from "../indexer/declarations.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
-import { supportForFile } from "../languages.js";
+import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../languages.js";
 import type { LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
@@ -43,7 +43,7 @@ export async function locateChangedSymbolsWithLines(
   parseFailed: boolean;
 }> {
   const changedLines = collectChangedLines(hunks);
-  if (isGraphOnlyFile(file)) {
+  if (isGraphOnlyFile(file, index.languageExtensions)) {
     return { changedSymbols: [], changedLines, parseFailed: false };
   }
 
@@ -280,7 +280,7 @@ export async function mapChangedLinesToSymbols(
   hunks: FileChange["hunks"],
   changedLinesOverride?: Set<number>,
 ): Promise<Map<SymbolHandle, Set<number>>> {
-  if (isGraphOnlyFile(file)) {
+  if (isGraphOnlyFile(file, index.languageExtensions)) {
     return new Map();
   }
 
@@ -321,8 +321,8 @@ export async function mapChangedLinesToSymbols(
   return linesByHandle;
 }
 
-function isGraphOnlyFile(file: FileId): boolean {
-  const support = supportForFile(file);
+function isGraphOnlyFile(file: FileId, languageExtensions?: LanguageExtensionMap): boolean {
+  const support = supportForFileWithoutHeaderSample(file, languageExtensions);
   return support ? isGraphOnlyLanguage(support.id) : false;
 }
 

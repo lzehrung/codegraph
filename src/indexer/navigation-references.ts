@@ -1,4 +1,4 @@
-import { supportForFile, type LanguageSupport } from "../languages.js";
+import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { fileIdentityKey } from "../util/paths.js";
@@ -283,7 +283,7 @@ const referenceCandidateCache = new WeakMap<ProjectIndex, Map<string, string[]>>
 
 function referenceCandidateCacheKey(index: ProjectIndex, def: SymbolDef, exportedNames: readonly string[]): string {
   const normalizeIdentifier =
-    supportForFile(def.file, index.languageExtensions)?.normalizeIdentifier ?? ((name) => name);
+    supportForFileWithoutHeaderSample(def.file, index.languageExtensions)?.normalizeIdentifier ?? ((name) => name);
   const sortedNames = exportedNames.map(normalizeIdentifier).sort();
   return `${fileIdentityKey(def.file)}::${def.range.start.index ?? 0}::canonical::${sortedNames.join("\0")}`;
 }

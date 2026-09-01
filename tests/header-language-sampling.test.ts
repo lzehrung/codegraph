@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildProjectIndex } from "../src/index.js";
 import { prepareQueryIndexFile, MAX_QUERY_INDEX_TEXT_BYTES } from "../src/agent/query-index/content.js";
 import { buildDuplicateUnitsForFile } from "../src/duplicates/units.js";
+import { buildBloomFilterForFile } from "../src/indexer/build-cache/module-cache.js";
 import { countNativeWorkerEligibleFiles } from "../src/indexer/build-workers.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
 import type { FileChange } from "../src/impact/types.js";
@@ -216,6 +217,18 @@ describe("header language classification", () => {
     // Parsed as C, so the C++ namespace and class never become symbols.
     expect(exportedNames(built.value, "widget0.h")).toEqual(["value"]);
     expect(exportedNames(built.value, "schema.sql")).toEqual(["widgets"]);
+  });
+  it("builds a header bloom filter without a second synchronous sample", async () => {
+    const root = await createTempProjectRoot("cg-header-sampling-bloom-", [
+      { path: "widget.h", contents: CPP_HEADER },
+    ]);
+    tempRoots.push(root);
+    const header = `${root}/widget.h`;
+
+    const built = await withHeaderSampleReads(() => buildBloomFilterForFile(header));
+
+    expect(built.value).not.toBeNull();
+    expect(built.reads).toBe(0);
   });
 });
 

@@ -1,4 +1,4 @@
-import { supportForFile, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
+import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { resolveMemberAccessDefinition, supportsReceiverMemberResolution } from "./navigation-goto.js";
@@ -334,7 +334,8 @@ export async function findReferences(
 
       // Bloom filters contain names normalized by the candidate file's language, so probes must use that rule.
       const normalizeIdentifier =
-        supportForFile(candidateFile, index.languageExtensions)?.normalizeIdentifier ?? ((name) => name);
+        supportForFileWithoutHeaderSample(candidateFile, index.languageExtensions)?.normalizeIdentifier ??
+        ((name) => name);
       const aliases = getCandidateReferenceNames(module, definitionFile, exportedNameSet);
       if (!aliases.length) {
         return [...exportedNames, ...phpQualifiedNames].some((candidateName) =>
@@ -367,7 +368,7 @@ export async function findReferences(
       return scopeIndex;
     };
 
-    if (supportForFile(fileId, index.languageExtensions)?.supportsExportFromReferences) {
+    if (supportForFileWithoutHeaderSample(fileId, index.languageExtensions)?.supportsExportFromReferences) {
       for (const entry of module.exports) {
         if (hasReachedMaxReferences()) break;
         if (entry.type !== "reexport") continue;
@@ -523,7 +524,8 @@ export async function findReferences(
       const filter = index.bloomFilters?.get(fileIdentityKey(fileId));
       // Bloom filters contain names normalized by the candidate file's language, so probes must use that rule.
       const canonicalName =
-        supportForFile(fileId, index.languageExtensions)?.normalizeIdentifier(def.localName) ?? def.localName;
+        supportForFileWithoutHeaderSample(fileId, index.languageExtensions)?.normalizeIdentifier(def.localName) ??
+        def.localName;
       if (filter && !filter.mightContain(canonicalName)) continue;
       const remainingReferences = maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
       const ranges = await collectVerifiedNamedNodeReferences(
