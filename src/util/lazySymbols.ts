@@ -7,7 +7,7 @@
  */
 
 import picomatch from "picomatch";
-import { supportForFile } from "../languages.js";
+import { supportForFileWithSource } from "../languages.js";
 import { type ImportBinding, type ModuleIndex, type SymbolDef } from "../indexer/types.js";
 import type { FileId } from "../types.js";
 import { collectLocalsAndExportsFromSource } from "../indexer/locals-and-exports.js";
@@ -422,7 +422,7 @@ export class LazyProjectIndex {
  */
 export function createSymbolLoader(file: FileId, source: string, imports: ImportBinding[]): () => Promise<SymbolDef[]> {
   return () => {
-    const sup = supportForFile(file);
+    const sup = supportForFileWithSource(file, source);
     if (!sup) {
       throw new Error(`Unsupported file extension: ${file}`);
     }

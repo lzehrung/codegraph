@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -157,6 +158,45 @@ describe("call compatibility fallback budget", () => {
       vi.mocked(findReferences).mockReset();
       vi.mocked(goToDefinition).mockReset();
       await fsp.rm(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("gates verified C++ callsite scans without sampling headers", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-call-compat-cpp-header-"));
+    const headerFile = path.join(root, "api.h");
+    const callerFile = path.join(root, "main.cpp");
+    await fsp.writeFile(headerFile, "namespace api { int helper(int value) { return value; } }\n", "utf8");
+    await fsp.writeFile(callerFile, '#include "api.h"\nint main() { return api::helper(); }\n', "utf8");
+    try {
+      const index = await buildProjectIndex(root, { cache: "memory", keepParsed: true });
+      const indexedHeader = [...index.byFile.values()].find((module) => module.file.endsWith("/api.h"));
+      const helper = indexedHeader?.locals.find((local) => local.localName === "helper");
+      if (!indexedHeader || !helper) throw new Error("Expected C++ header helper definition");
+
+      const changedSymbol: ChangedSymbol = {
+        id: `${indexedHeader.file}#helper`,
+        file: indexedHeader.file,
+        name: "helper",
+        kind: helper.kind,
+        exported: true,
+        range: helper.range,
+        signatureChanged: true,
+      };
+      vi.mocked(findReferences).mockResolvedValue({ status: "not_found", reason: "test" });
+      vi.mocked(goToDefinition).mockResolvedValue({ status: "not_found", reason: "test" });
+      const readFileSync = vi.spyOn(fs, "readFileSync");
+      try {
+        await attachCallCompatibilityHints(index, [changedSymbol], { maxRefs: 10, projectRoot: root });
+        expect(
+          readFileSync.mock.calls.filter(([target]) => typeof target === "string" && target.endsWith(".h")),
+        ).toHaveLength(0);
+      } finally {
+        readFileSync.mockRestore();
+      }
+    } finally {
+      vi.mocked(findReferences).mockReset();
+      vi.mocked(goToDefinition).mockReset();
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });

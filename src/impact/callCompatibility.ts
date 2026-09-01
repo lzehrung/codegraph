@@ -2,7 +2,7 @@ import path from "node:path";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { ensureParsedContext, type ParsedFileContext } from "../indexer/parse-context.js";
 import { SymbolKind, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
-import { supportForFile } from "../languages.js";
+import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
@@ -960,7 +960,7 @@ async function collectVerifiedCallsiteReferences(
     if (!shouldIncludeReference(file)) {
       continue;
     }
-    const support = supportForFile(file);
+    const support = supportForFileWithoutHeaderSample(file, index.languageExtensions);
     if (!support || !supportsCallCompatibilityLanguage(support.id)) {
       continue;
     }

@@ -851,6 +851,7 @@ describe("package metadata", () => {
           "summarizePartialResult",
           "supportById",
           "supportForFile",
+          "supportForFileWithSource",
           "supportForFileWithoutHeaderSample",
           "symbolId",
           "symbolIdentifier",
@@ -1215,6 +1216,7 @@ describe("package metadata", () => {
           "normalizeLanguageExtensions",
           "supportById",
           "supportForFile",
+          "supportForFileWithSource",
           "supportForFileWithoutHeaderSample",
         ],
         "./mcp": [

@@ -1,4 +1,4 @@
-import { supportForFile } from "../languages.js";
+import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { ReviewDiagnostics, ReviewRiskLevel, ReviewRiskSummary, ReviewTask } from "./types.js";
 
 export function computeRiskSummary(input: {
@@ -125,5 +125,5 @@ export function hasDiagnostics(diagnostics: ReviewDiagnostics): boolean {
 }
 
 export function isRiskRelevantSymbolMappingFile(file: string): boolean {
-  return supportForFile(file)?.supportsCrossModuleSymbols ?? false;
+  return supportForFileWithoutHeaderSample(file)?.supportsCrossModuleSymbols ?? false;
 }

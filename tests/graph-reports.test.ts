@@ -1,4 +1,4 @@
-import { afterEach, describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +7,7 @@ import { getExternalClassifierCacheStats, resetExternalClassifierCaches } from "
 import { findDetailedCycles } from "../src/graphs/queries.js";
 import { resolveRustImportPath } from "../src/util/resolution.js";
 import { isRustCfgTestStatement } from "../src/util/rustTestModules.js";
+import * as languages from "../src/languages.js";
 import { makeTestProjectIndex } from "./helpers/narrow.js";
 import type { ModuleIndex } from "../src/indexer/types.js";
 
@@ -83,6 +84,24 @@ describe("graph reports", () => {
     expect(getUnresolvedImports(graphWithDocumentLinks, { includeGraphOnly: true }).map((entry) => entry.name)).toEqual(
       ["./missing-source", "./missing-doc.md"],
     );
+  });
+  it("memoizes graph-only classification for external edges from one importer", () => {
+    const root = makeTempRoot("cg-unresolved-graph-only-cache-");
+    const sourceFile = path.join(root, "header.h");
+    const graph = {
+      nodes: new Set([sourceFile]),
+      edges: [
+        { from: sourceFile, to: { type: "external" as const, name: "missing-a" }, raw: "missing-a" },
+        { from: sourceFile, to: { type: "external" as const, name: "missing-b" }, raw: "missing-b" },
+      ],
+    };
+    const supportSpy = vi.spyOn(languages, "supportForFileWithoutHeaderSample");
+    try {
+      expect(getUnresolvedImports(graph).map((entry) => entry.name)).toEqual(["missing-a", "missing-b"]);
+      expect(supportSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      supportSpy.mockRestore();
+    }
   });
 
   it("does not count declared JS package dependencies as unresolved imports", () => {

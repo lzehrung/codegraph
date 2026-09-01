@@ -4,7 +4,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 
 import path from "node:path";
-import { supportForFile } from "../../languages.js";
+import { supportForFileWithoutHeaderSample } from "../../languages.js";
 import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
 import { logWithLevel } from "../../logging.js";
 import { SqliteDatabase, type SqliteStatement, isNodeSqliteUnavailableError } from "../../sqlite-driver.js";
@@ -329,7 +329,7 @@ export async function buildBloomFilterForFile(
 ): Promise<import("../../util/bloomFilter.js").BloomFilter | null> {
   try {
     const source = await fsp.readFile(file, "utf8");
-    const support = supportForFile(file, opts?.languageExtensions);
+    const support = supportForFileWithoutHeaderSample(file, opts?.languageExtensions);
     if (!support) return null;
     return buildBloomFilterFromSource(source, support);
   } catch {

@@ -1,6 +1,6 @@
 import { builtinModules } from "node:module";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
-import { supportForFile } from "../languages.js";
+import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { FileId, Graph } from "../types.js";
 import {
   classifyExternalSpecifier,
@@ -22,7 +22,7 @@ export type UnresolvedImportOptions = ExternalSpecifierClassificationOptions & {
 };
 
 function isGraphOnlyImporter(file: FileId): boolean {
-  const support = supportForFile(file);
+  const support = supportForFileWithoutHeaderSample(file);
   return support ? isGraphOnlyLanguage(support.id) : false;
 }
 
@@ -35,9 +35,17 @@ export function getUnresolvedImports(
 }> {
   const unresolved = new Map<string, Array<{ file: FileId; raw: string }>>();
   const classificationCache = new Map<string, ExternalSpecifierClassification>();
+  const graphOnlyImporterCache = new Map<FileId, boolean>();
   for (const edge of graph.edges) {
     if (edge.to.type !== "external") continue;
-    if (!opts.includeGraphOnly && isGraphOnlyImporter(edge.from)) continue;
+    if (!opts.includeGraphOnly) {
+      let graphOnly = graphOnlyImporterCache.get(edge.from);
+      if (graphOnly === undefined) {
+        graphOnly = isGraphOnlyImporter(edge.from);
+        graphOnlyImporterCache.set(edge.from, graphOnly);
+      }
+      if (graphOnly) continue;
+    }
     if (isNodeBuiltinSpecifier(edge.to.name) || isNodeBuiltinSpecifier(edge.raw)) continue;
     const classificationKey = `${edge.from}\0${edge.to.name}\0${edge.raw}\0${opts.projectRoot ?? ""}`;
     let classification = classificationCache.get(classificationKey);

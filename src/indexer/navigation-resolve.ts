@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { supportForFile } from "../languages.js";
+import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { FileId } from "../types.js";
 import { GO_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
@@ -23,6 +23,17 @@ const KOTLIN_PACKAGE_NAME_PATTERN = new RegExp(
   String.raw`^\s*package\s+(${KOTLIN_IDENTIFIER_SOURCE}(?:\.${KOTLIN_IDENTIFIER_SOURCE})*)`,
   "mu",
 );
+
+/**
+ * Files that can carry the package declaration each lookup language searches for. Java and Kotlin
+ * stay one group because they share a JVM package namespace and each pattern already accepts the
+ * other's declaration; every other language is skipped instead of read for a keyword it never uses.
+ */
+const PACKAGE_DECLARING_LANGUAGE_IDS: Record<"go" | "java" | "kotlin", ReadonlySet<string>> = {
+  go: new Set(["go"]),
+  java: new Set(["java", "kotlin"]),
+  kotlin: new Set(["java", "kotlin"]),
+};
 
 function cacheKey(file: FileId, canonicalName: string): string {
   return `${fileIdentityKey(file)}::canonical::${canonicalName}`;
@@ -62,8 +73,11 @@ function moduleNameLookup(index: ProjectIndex, file: FileId): ModuleNameLookup |
   if (!lookups) {
     lookups = new Map<string, ModuleNameLookup>();
     for (const moduleEntry of index.byFile.values()) {
+      // Only the normalizer is needed, and C and C++ share the default one, so a `.h` header
+      // never has to be sampled here.
       const normalizeIdentifier =
-        supportForFile(moduleEntry.file, index.languageExtensions)?.normalizeIdentifier ?? ((name) => name);
+        supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions)?.normalizeIdentifier ??
+        ((name) => name);
       const localExports = new Map<string, SymbolDef[]>();
       const namespaceReexports = new Map<string, Extract<ExportEntry, { type: "namespaceReexport" }>[]>();
       const reexports = new Map<string, Extract<ExportEntry, { type: "reexport" }>[]>();
@@ -109,8 +123,9 @@ function sameSymbolDef(index: ProjectIndex, left: SymbolDef, right: SymbolDef): 
   if (fileIdentityKey(left.file) !== fileIdentityKey(right.file) || left.kind !== right.kind) {
     return false;
   }
+  // Same reasoning as `moduleNameLookup`: the normalizer is identical for C and C++.
   const normalizeIdentifier =
-    supportForFile(left.file, index.languageExtensions)?.normalizeIdentifier ?? ((name) => name);
+    supportForFileWithoutHeaderSample(left.file, index.languageExtensions)?.normalizeIdentifier ?? ((name) => name);
   if (normalizeIdentifier(left.localName) !== normalizeIdentifier(right.localName)) {
     return false;
   }
@@ -144,46 +159,53 @@ function packageNameCacheFor(index: ProjectIndex): PackageNameCaches {
   return caches;
 }
 
+/**
+ * Source to read a package declaration from: the text the index already parsed when it retained
+ * one, and otherwise the file itself. Reusing the retained text keeps the package name consistent
+ * with the symbols resolved from that same snapshot.
+ */
+function packageDeclarationSource(index: ProjectIndex, filePath: string, fileKey: string): string | null {
+  const retained = index.parsed?.get(fileKey)?.source;
+  if (retained !== undefined) return retained;
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
 function readGoPackageName(index: ProjectIndex, filePath: string): string | null {
   const cache = packageNameCacheFor(index).go;
   const key = fileIdentityKey(filePath);
   const cached = cache.get(key);
   if (cached !== undefined) return cached;
-  try {
-    const source = fs.readFileSync(filePath, "utf8");
-    const match = GO_PACKAGE_PATTERN.exec(source);
-    const packageName = match?.[1] ?? null;
-    cache.set(key, packageName);
-    return packageName;
-  } catch {
+  const source = packageDeclarationSource(index, filePath, key);
+  if (source === null) {
     cache.set(key, null);
     return null;
   }
+  const packageName = GO_PACKAGE_PATTERN.exec(source)?.[1] ?? null;
+  cache.set(key, packageName);
+  return packageName;
 }
 
 function resolveGoPackageExport(index: ProjectIndex, file: FileId, exportedName: string): SymbolDef | null {
-  try {
-    const support = supportForFile(file, index.languageExtensions);
-    if (!support || support.id !== "go") return null;
-    const directory = packageDirectoryLookup(index, "go").get(fileIdentityKey(path.dirname(file)));
-    if (!directory) return null;
-    const sourcePackage = readGoPackageName(index, file);
-    const candidates = sourcePackage ? (directory.byName.get(sourcePackage) ?? []) : directory.all;
-    const matches: SymbolDef[] = [];
-    for (const moduleEntry of candidates) {
-      const names = moduleNameLookup(index, moduleEntry.file);
-      if (!names) continue;
-      for (const target of names.localExports.get(names.normalizeIdentifier(exportedName)) ?? []) {
-        if (!matches.some((candidate) => sameSymbolDef(index, candidate, target))) {
-          matches.push(target);
-        }
+  if (supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id !== "go") return null;
+  const directory = packageDirectoryLookup(index, "go").get(fileIdentityKey(path.dirname(file)));
+  if (!directory) return null;
+  const sourcePackage = readGoPackageName(index, file);
+  const candidates = sourcePackage ? (directory.byName.get(sourcePackage) ?? []) : directory.all;
+  const matches: SymbolDef[] = [];
+  for (const moduleEntry of candidates) {
+    const names = moduleNameLookup(index, moduleEntry.file);
+    if (!names) continue;
+    for (const target of names.localExports.get(names.normalizeIdentifier(exportedName)) ?? []) {
+      if (!matches.some((candidate) => sameSymbolDef(index, candidate, target))) {
+        matches.push(target);
       }
     }
-    return matches.length === 1 ? (matches[0] ?? null) : null;
-  } catch {
-    // supportForFile throws on unsupported files (for example .json)
   }
-  return null;
+  return matches.length === 1 ? (matches[0] ?? null) : null;
 }
 
 function readPackageNameForLanguage(
@@ -192,21 +214,19 @@ function readPackageNameForLanguage(
   languageId: "java" | "kotlin",
 ): string | null {
   const cache = packageNameCacheFor(index).jvm;
-  const key = `${languageId}::${fileIdentityKey(filePath)}`;
+  const fileKey = fileIdentityKey(filePath);
+  const key = `${languageId}::${fileKey}`;
   const cached = cache.get(key);
   if (cached !== undefined) return cached;
-  try {
-    const source = fs.readFileSync(filePath, "utf8");
-    const packageName =
-      languageId === "kotlin"
-        ? (KOTLIN_PACKAGE_NAME_PATTERN.exec(source)?.[1] ?? null)
-        : (JAVA_PACKAGE_NAME_PATTERN.exec(source)?.[1] ?? null);
-    cache.set(key, packageName);
-    return packageName;
-  } catch {
+  const source = packageDeclarationSource(index, filePath, fileKey);
+  if (source === null) {
     cache.set(key, null);
     return null;
   }
+  const pattern = languageId === "kotlin" ? KOTLIN_PACKAGE_NAME_PATTERN : JAVA_PACKAGE_NAME_PATTERN;
+  const packageName = pattern.exec(source)?.[1] ?? null;
+  cache.set(key, packageName);
+  return packageName;
 }
 
 function packageDirectoryLookup(
@@ -230,6 +250,8 @@ function packageDirectoryLookup(
       directories.set(directoryKey, directory);
     }
     directory.all.push(moduleEntry);
+    const moduleLanguageId = supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions)?.id;
+    if (!moduleLanguageId || !PACKAGE_DECLARING_LANGUAGE_IDS[languageId].has(moduleLanguageId)) continue;
     const packageName =
       languageId === "go"
         ? readGoPackageName(index, moduleEntry.file)
@@ -501,27 +523,19 @@ export function resolveImported(
   if (hit?.kind === "resolved") return hit.def;
   if (hit?.kind === "namespace") return { namespace: hit.file };
 
-  try {
-    const support = supportForFile(targetFile);
-    if (support?.id === "java" || support?.id === "kotlin") {
-      const siblingHit = resolveSiblingPackageExport(index, targetFile, exportedName, support.id);
-      if (siblingHit?.kind === "resolved") return siblingHit.def;
-      if (siblingHit?.kind === "namespace") {
-        return { namespace: siblingHit.file };
-      }
+  // Only Java, Kotlin, and Python matter below, so a `.h` target never needs its sample read.
+  const support = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions);
+  if (support?.id === "java" || support?.id === "kotlin") {
+    const siblingHit = resolveSiblingPackageExport(index, targetFile, exportedName, support.id);
+    if (siblingHit?.kind === "resolved") return siblingHit.def;
+    if (siblingHit?.kind === "namespace") {
+      return { namespace: siblingHit.file };
     }
-  } catch {
-    // Unsupported file extension, cannot resolve sibling package exports.
   }
 
-  try {
-    const support = supportForFile(targetFile);
-    if (support?.id === "python") {
-      const submodule = resolvePythonSubmodule(targetFile, exportedName);
-      if (submodule) return { namespace: submodule };
-    }
-  } catch {
-    // Unsupported file extension, cannot resolve a Python submodule.
+  if (support?.id === "python") {
+    const submodule = resolvePythonSubmodule(targetFile, exportedName);
+    if (submodule) return { namespace: submodule };
   }
 
   return null;

@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { extractMarkdownLinkOccurrences, type MarkdownLinkOccurrence } from "./markdown.js";
-import { supportForFile } from "../languages.js";
+import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { isFilePathWithinRoot, normalizePath, toProjectDisplayPath, toProjectRelativePath } from "../util/paths.js";
 import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 
@@ -75,7 +75,7 @@ export async function checkMarkdownLinksInFiles(
   );
   const markdownFiles = Array.from(new Set(markdownFileCandidates))
     .filter((file) => isFilePathWithinRoot(realRoot, file))
-    .filter((file) => supportForFile(file)?.id === "markdown");
+    .filter((file) => supportForFileWithoutHeaderSample(file)?.id === "markdown");
   const targetStatusByPath = new Map<string, Promise<TargetStatus>>();
   const anchorsByPath = new Map<string, Promise<Set<string>>>();
   const failures: MarkdownLinkCheckFailure[] = [];
@@ -118,7 +118,12 @@ export async function checkMarkdownLinksInFiles(
         failures.push(toFailure(realRoot, displayFile, occurrence, "outside_root", resolvedTarget));
         continue;
       }
-      if (!target.fragment || targetStatus.isDirectory || supportForFile(resolvedTarget)?.id !== "markdown") continue;
+      if (
+        !target.fragment ||
+        targetStatus.isDirectory ||
+        supportForFileWithoutHeaderSample(resolvedTarget)?.id !== "markdown"
+      )
+        continue;
 
       const anchors = await cachedMarkdownAnchors(targetStatus.realPath, anchorsByPath);
       if (!anchors.has(target.fragment)) {
