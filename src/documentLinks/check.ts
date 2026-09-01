@@ -118,7 +118,12 @@ export async function checkMarkdownLinksInFiles(
         failures.push(toFailure(realRoot, displayFile, occurrence, "outside_root", resolvedTarget));
         continue;
       }
-      if (!target.fragment || targetStatus.isDirectory || supportForFileWithoutHeaderSample(resolvedTarget)?.id !== "markdown") continue;
+      if (
+        !target.fragment ||
+        targetStatus.isDirectory ||
+        supportForFileWithoutHeaderSample(resolvedTarget)?.id !== "markdown"
+      )
+        continue;
 
       const anchors = await cachedMarkdownAnchors(targetStatus.realPath, anchorsByPath);
       if (!anchors.has(target.fragment)) {

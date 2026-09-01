@@ -219,9 +219,7 @@ describe("header language classification", () => {
     expect(exportedNames(built.value, "schema.sql")).toEqual(["widgets"]);
   });
   it("builds a header bloom filter without a second synchronous sample", async () => {
-    const root = await createTempProjectRoot("cg-header-sampling-bloom-", [
-      { path: "widget.h", contents: CPP_HEADER },
-    ]);
+    const root = await createTempProjectRoot("cg-header-sampling-bloom-", [{ path: "widget.h", contents: CPP_HEADER }]);
     tempRoots.push(root);
     const header = `${root}/widget.h`;
 

@@ -165,11 +165,7 @@ describe("call compatibility fallback budget", () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-call-compat-cpp-header-"));
     const headerFile = path.join(root, "api.h");
     const callerFile = path.join(root, "main.cpp");
-    await fsp.writeFile(
-      headerFile,
-      "namespace api { int helper(int value) { return value; } }\n",
-      "utf8",
-    );
+    await fsp.writeFile(headerFile, "namespace api { int helper(int value) { return value; } }\n", "utf8");
     await fsp.writeFile(callerFile, '#include "api.h"\nint main() { return api::helper(); }\n', "utf8");
     try {
       const index = await buildProjectIndex(root, { cache: "memory" });
@@ -192,9 +188,7 @@ describe("call compatibility fallback budget", () => {
       try {
         await attachCallCompatibilityHints(index, [changedSymbol], { maxRefs: 10, projectRoot: root });
         expect(
-          readFileSync.mock.calls.filter(
-            ([target]) => typeof target === "string" && target.endsWith(".h"),
-          ),
+          readFileSync.mock.calls.filter(([target]) => typeof target === "string" && target.endsWith(".h")),
         ).toHaveLength(0);
       } finally {
         readFileSync.mockRestore();
