@@ -178,6 +178,12 @@ export type BuildOptions = {
   /** Override native extraction worker count. Automatic sizing reserves capacity and caps at 8. */
   nativeThreads?: number;
   discovery?: ProjectFileDiscoveryOptions;
+  /**
+   * @internal Origin, from `performance.now()`, for progress elapsed reporting. Callers that
+   * discover files before the build set it so the completion event measures the whole
+   * operation the user waited on rather than file processing alone.
+   */
+  progressStartedAt?: number;
   languageExtensions?: LanguageExtensionMap;
 };
 

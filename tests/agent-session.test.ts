@@ -136,6 +136,42 @@ describe("agent session", () => {
     });
   });
 
+  it("reports counted discovery work during cold agent file planning", async () => {
+    // Discovery walks the whole project before a single file is parsed. Without counted
+    // updates the only output is one "Discovering source files" line, so a slow project
+    // is indistinguishable from a hang.
+    const root = await mkRepo();
+    const updates: ProgressUpdate[] = [];
+
+    await createAgentSession({
+      root,
+      buildOptions: { cache: "off", native: "off", onProgress: (update) => updates.push(update) },
+    }).loadProject({ symbolGraph: "skip" });
+
+    const pathChecks = updates.filter((update) => update.activity === "Checking source file paths");
+    expect(pathChecks.length).toBeGreaterThan(0);
+    expect(pathChecks.at(-1)).toMatchObject({ phase: "update", mode: "check" });
+    expect(pathChecks.at(-1)?.total).toBeGreaterThan(0);
+  });
+
+  it("gives the build a progress origin from the start of agent-session file planning", async () => {
+    // The build reports elapsed from this origin, so discovery time that runs before the
+    // build is part of the duration the user sees rather than invisible.
+    const root = await mkRepo();
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+    const beforeLoad = performance.now();
+
+    await createAgentSession({
+      root,
+      buildOptions: { cache: "off", native: "off" },
+    }).loadProject({ symbolGraph: "skip" });
+
+    const progressStartedAt = buildSpy.mock.calls[0]?.[1]?.progressStartedAt;
+    expect(progressStartedAt).toBeTypeOf("number");
+    expect(progressStartedAt).toBeGreaterThanOrEqual(beforeLoad);
+    expect(progressStartedAt).toBeLessThan(performance.now());
+  });
+
   it("keeps warm agent session reconciliation quiet during file planning", async () => {
     const root = await mkGitRepo();
     await createAgentSession({ root }).loadProject({ symbolGraph: "skip" });
