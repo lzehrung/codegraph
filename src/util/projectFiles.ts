@@ -687,6 +687,7 @@ async function findGitIgnoreSources(
     ).values(),
   );
   const directories = new Map<string, { dir: string; repositoryRoot: string }>();
+  const walkedDirectoryKeys = new Set<string>();
   const addDirectory = (directory: string, repositoryRoot: string): void => {
     const dir = normalizePath(directory);
     const key = fileIdentityKey(dir);
@@ -701,8 +702,12 @@ async function findGitIgnoreSources(
     let dir = normalizePath(path.dirname(file));
     const stopKey = fileIdentityKey(owning.repositoryRoot);
     for (;;) {
+      const dirKey = fileIdentityKey(dir);
+      const walkKey = `${dirKey}\0${stopKey}`;
+      if (walkedDirectoryKeys.has(walkKey)) break;
       addDirectory(dir, owning.repositoryRoot);
-      if (fileIdentityKey(dir) === stopKey) break;
+      walkedDirectoryKeys.add(walkKey);
+      if (dirKey === stopKey) break;
       const parent = normalizePath(path.dirname(dir));
       if (
         parent === dir ||
