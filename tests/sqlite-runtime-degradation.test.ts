@@ -57,6 +57,17 @@ describe("unsupported node:sqlite runtime", () => {
     expect(isNodeSqliteUnavailableError(new TypeError("columns is not a function"))).toBe(true);
   });
 
+  it("warns that node:sqlite is unavailable when the module itself is missing", async () => {
+    const root = await tempRoots.create("cg-sqlite-missing-module-");
+    markNodeSqliteUnavailable(new Error("No such built-in module: node:sqlite"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(diskModuleCacheExists(root, { cache: "disk" })).toBe(false);
+    const warnings = warn.mock.calls.filter((args) => String(args[0]).includes("Disk cache disabled for this run"));
+    expect(warnings).toHaveLength(1);
+    expect(String(warnings[0]?.[0])).toMatch(/node:sqlite module is unavailable/);
+    expect(String(warnings[0]?.[0])).not.toMatch(/statement APIs|TypeError/);
+  });
+
   it("warns once when cache-read gating checks existence on an unusable runtime", async () => {
     const root = await tempRoots.create("cg-sqlite-exists-");
     markNodeSqliteUnavailable(new TypeError("this.statement.setReturnArrays is not a function"));

@@ -7,6 +7,7 @@ import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../../languages.js";
 import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
 import { logWithLevel, type LogLevel } from "../../logging.js";
+import { errorMessage } from "../../util/errors.js";
 import {
   SqliteDatabase,
   type SqliteStatement,
@@ -88,10 +89,15 @@ export function reportMissingNodeSqlite(logLevel: LogLevel | undefined, error: u
   markNodeSqliteUnavailable(error);
   if (warnedMissingNodeSqlite) return;
   warnedMissingNodeSqlite = true;
+  const missingStatementApi = /setReturnArrays is not a function|columns is not a function/i.test(errorMessage(error));
+  let detail = "The built-in node:sqlite module is unavailable (requires Node.js >= 22.16).";
+  if (missingStatementApi) {
+    detail = "The built-in node:sqlite module is missing statement APIs Codegraph needs (requires Node.js >= 22.16).";
+  }
   logWithLevel(
     logLevel,
     "warn",
-    "Warning: Disk cache disabled for this run. The built-in node:sqlite module is missing statement APIs Codegraph needs (requires Node.js >= 22.16). Pass --cache memory or --cache off to skip this check.",
+    `Warning: Disk cache disabled for this run. ${detail} Pass --cache memory or --cache off to skip this check.`,
   );
 }
 
