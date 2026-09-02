@@ -622,10 +622,15 @@ export async function listTrackedFiles(
  * affect paths beneath it. NUL-delimited output keeps legal whitespace and
  * quoting in pathnames intact. The caller supplies each repository or alias root
  * separately, so paths remain relative to the same logical root used to invoke Git.
+ * `excludePathspecs` are extra Git pathspecs appended after the `.gitignore` matchers
+ * so callers can skip trees they never index, such as virtualenvs, without walking them.
  */
-export async function listGitIgnoreFiles(projectRoot: string, opts?: { gitAvailable?: boolean }): Promise<string[]> {
+export async function listGitIgnoreFiles(
+  projectRoot: string,
+  opts?: { gitAvailable?: boolean; excludePathspecs?: readonly string[] },
+): Promise<string[]> {
   if (!(opts?.gitAvailable ?? true)) return [];
-  const pathspec = [".gitignore", ":(glob)**/.gitignore"];
+  const pathspec = [".gitignore", ":(glob)**/.gitignore", ...(opts?.excludePathspecs ?? [])];
   const commands = [
     ["ls-files", "--cached", "-z", "--", ...pathspec],
     ["ls-files", "--others", "--exclude-standard", "-z", "--", ...pathspec],
@@ -650,6 +655,60 @@ export async function listGitIgnoreFiles(projectRoot: string, opts?: { gitAvaila
   return Array.from(new Set(out));
 }
 
+type GitStageSpecialPaths = {
+  gitlinks: string[];
+  symlinks: string[];
+};
+
+function parseGitStageSpecialPaths(projectRoot: string, stdout: string): GitStageSpecialPaths {
+  const gitlinks: string[] = [];
+  const symlinks: string[] = [];
+  for (const record of stdout.split("\0").filter(Boolean)) {
+    // Each record is `<mode> <object> <stage>\t<path>`.
+    const tabIndex = record.indexOf("\t");
+    if (tabIndex < 0) continue;
+    const rel = record.slice(tabIndex + 1);
+    if (!rel) continue;
+    const abs = normalizePath(path.resolve(projectRoot, rel));
+    if (record.startsWith("160000 ")) gitlinks.push(abs);
+    else if (record.startsWith("120000 ")) symlinks.push(abs);
+  }
+  return { gitlinks, symlinks };
+}
+
+/**
+ * Index paths Git records as gitlinks (160000) or symlinks (120000).
+ *
+ * One `--stage` listing per repository. `recurse` walks gitlink directories as nested
+ * repositories; symlink paths are never treated as gitlinks.
+ */
+export async function listGitStageSpecialPaths(
+  projectRoot: string,
+  opts?: { gitAvailable?: boolean; recurse?: boolean },
+): Promise<GitStageSpecialPaths> {
+  if (!(opts?.gitAvailable ?? true)) return { gitlinks: [], symlinks: [] };
+  const args = ["ls-files", "--stage", "-z"];
+  try {
+    const { stdout } = await runGit(projectRoot, args, { maxBuffer: 64 * 1024 * 1024 });
+    const direct = parseGitStageSpecialPaths(projectRoot, stdout);
+    if (!opts?.recurse || !direct.gitlinks.length) {
+      return {
+        gitlinks: Array.from(new Set(direct.gitlinks)),
+        symlinks: Array.from(new Set(direct.symlinks)),
+      };
+    }
+    const nested = await Promise.all(
+      direct.gitlinks.map(async (directory) => await listGitStageSpecialPaths(directory, opts)),
+    );
+    return {
+      gitlinks: Array.from(new Set([...direct.gitlinks, ...nested.flatMap((entry) => entry.gitlinks)])),
+      symlinks: Array.from(new Set([...direct.symlinks, ...nested.flatMap((entry) => entry.symlinks)])),
+    };
+  } catch (error) {
+    throw createGitError(projectRoot, args, error);
+  }
+}
+
 /**
  * Directories of initialized submodules under `projectRoot`, as absolute paths.
  *
@@ -667,27 +726,7 @@ export async function listGitSubmoduleDirectories(
   projectRoot: string,
   opts?: { gitAvailable?: boolean; recurse?: boolean },
 ): Promise<string[]> {
-  if (!(opts?.gitAvailable ?? true)) return [];
-  const args = ["ls-files", "--stage", "-z"];
-  try {
-    const { stdout } = await runGit(projectRoot, args, { maxBuffer: 64 * 1024 * 1024 });
-    const direct: string[] = [];
-    for (const record of stdout.split("\0").filter(Boolean)) {
-      // Each record is `<mode> <object> <stage>\t<path>`; 160000 marks a gitlink.
-      if (!record.startsWith("160000 ")) continue;
-      const tabIndex = record.indexOf("\t");
-      if (tabIndex < 0) continue;
-      const rel = record.slice(tabIndex + 1);
-      if (rel) direct.push(normalizePath(path.resolve(projectRoot, rel)));
-    }
-    if (!opts?.recurse || !direct.length) return Array.from(new Set(direct));
-    const nested = await Promise.all(
-      direct.map(async (directory) => await listGitSubmoduleDirectories(directory, opts)),
-    );
-    return Array.from(new Set([...direct, ...nested.flat()]));
-  } catch (error) {
-    throw createGitError(projectRoot, args, error);
-  }
+  return (await listGitStageSpecialPaths(projectRoot, opts)).gitlinks;
 }
 
 /**
