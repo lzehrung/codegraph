@@ -12,7 +12,6 @@ import {
 import { SymbolKind, type ModuleIndex } from "../src/indexer/types.js";
 import {
   SqliteDatabase,
-  clearNodeSqliteUnavailableForTests,
   isNodeSqliteUnavailableError,
   isNodeSqliteUsable,
   markNodeSqliteUnavailable,
@@ -44,7 +43,6 @@ function diskWrite(file: string): PendingModuleCacheWrite {
 describe("unsupported node:sqlite runtime", () => {
   afterEach(async () => {
     resetDiskModuleCacheSqliteStateForTests();
-    clearNodeSqliteUnavailableForTests();
     vi.restoreAllMocks();
     await tempRoots.cleanup();
   });

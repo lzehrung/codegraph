@@ -99,7 +99,11 @@ export function nodeSqliteUnavailableError(): Error | undefined {
   return nodeSqliteUnsupportedError ?? sqliteLoadError;
 }
 
-/** Test seam: forget the latched failure so a suite can exercise both runtimes. */
+/**
+ * Test seam: forget the unsupported-API latch and usability probe so a suite can mark
+ * the runtime unusable and then exercise a usable runtime. A failed `require("node:sqlite")`
+ * stays latched because the module is absent for the process.
+ */
 export function clearNodeSqliteUnavailableForTests(): void {
   nodeSqliteUnsupportedError = undefined;
   nodeSqliteUsable = undefined;
