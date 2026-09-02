@@ -244,9 +244,14 @@ function defaultIgnoreGitExcludePathspecs(includeGlobs: readonly string[] = []):
 }
 
 const DIRECTORY_METADATA_EXTENSIONS = new Set<string>();
+const DIRECTORY_METADATA_BASENAMES = new Set<string>();
 for (const definition of PROJECT_FILE_DEFINITIONS) {
   if (definition.kind !== "dir") continue;
   for (const pattern of definition.patterns) {
+    if (!pattern.includes("*") && !pattern.includes("?")) {
+      DIRECTORY_METADATA_BASENAMES.add(pattern.toLowerCase());
+      continue;
+    }
     const trimmed = pattern.replaceAll("*", "").replaceAll("?", "");
     const lastDot = trimmed.lastIndexOf(".");
     if (lastDot < 0) continue;
@@ -259,26 +264,49 @@ for (const definition of PROJECT_FILE_DEFINITIONS) {
  * Ordinary data files (`row.json`) are not directory links, so probing every Git
  * candidate spent one lstat per JSON/CSV. Tracked symlinks are identified by Git
  * mode 120000 regardless of extension. Untracked paths and Windows checkouts that
- * do not record 120000 still need this name heuristic: no extension, or a bundle
- * directory marker such as `App.xcodeproj`.
+ * do not record 120000 still need this name heuristic: no extension, a bundle
+ * directory marker such as `App.xcodeproj`, or a literal directory name such as `.idea`.
  */
 function couldBeDirectorySymlink(filePath: string): boolean {
-  const extension = path.posix.extname(path.posix.basename(normalizePath(filePath)));
+  const basename = path.posix.basename(normalizePath(filePath));
+  if (DIRECTORY_METADATA_BASENAMES.has(basename.toLowerCase())) return true;
+  const extension = path.posix.extname(basename);
   if (!extension) return true;
   return DIRECTORY_METADATA_EXTENSIONS.has(extension.toLowerCase());
 }
 
+function globLiteralPrefix(globPattern: string): string[] {
+  const prefix: string[] = [];
+  let seenLiteral = false;
+  for (const segment of globPattern.split("/")) {
+    if (!segment) continue;
+    if (!seenLiteral && segment === "**") continue;
+    if (segment.includes("*") || segment.includes("?")) break;
+    seenLiteral = true;
+    prefix.push(segment);
+  }
+  return prefix;
+}
+
+function isSegmentPrefix(prefix: readonly string[], pathSegments: readonly string[]): boolean {
+  if (!prefix.length || prefix.length > pathSegments.length) return false;
+  return prefix.every((segment, index) => pathSegments[index] === segment);
+}
+
 /**
  * Whether an include glob explicitly re-opens a default-ignored root, so a default ignore
- * should stay active for every OTHER root the includes never mention. Compares literal
- * (non-wildcard) path segments rather than attempting general glob-vs-glob intersection.
+ * should stay active for every OTHER root the includes never mention. A parent include
+ * such as vendor/ re-opens a nested ignore such as vendor/bundle. Compares
+ * literal path segments rather than attempting general glob-vs-glob intersection.
  */
 function isIgnoreGlobReopenedByIncludes(ignoreGlob: string, includeGlobs: readonly string[]): boolean {
-  const literalSegments = ignoreGlob.split("/").filter((segment) => segment && !segment.includes("*"));
-  if (!literalSegments.length) return false;
+  const ignoreLiterals = ignoreGlob.split("/").filter((segment) => segment && !segment.includes("*"));
+  if (!ignoreLiterals.length) return false;
   return includeGlobs.some((includeGlob) => {
     const includeSegments = includeGlob.split("/");
-    return literalSegments.every((segment) => includeSegments.includes(segment));
+    if (ignoreLiterals.every((segment) => includeSegments.includes(segment))) return true;
+    const includePrefix = globLiteralPrefix(includeGlob);
+    return isSegmentPrefix(includePrefix, ignoreLiterals) || isSegmentPrefix(ignoreLiterals, includePrefix);
   });
 }
 

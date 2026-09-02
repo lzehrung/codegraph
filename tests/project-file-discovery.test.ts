@@ -1267,6 +1267,27 @@ describe("git-native project file discovery", () => {
     }
   });
 
+  it("does not lstat files that only share an IDE directory suffix", async () => {
+    const root = await makeRepo("codegraph-discovery-idea-suffix-");
+    const keptFile = path.join(root, "src", "app.py");
+    const ideaFile = path.join(root, "notes.idea");
+    await createFile(keptFile, "value = 1\n");
+    await createFile(ideaFile, "notes\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "fixtures"]);
+
+    const lstatSpy = vi.spyOn(fs, "lstat");
+    try {
+      const files = new Set((await listProjectFiles(root)).map(normalize));
+      const probed = new Set(lstatSpy.mock.calls.map(([file]) => normalize(String(file))));
+
+      expect(files.has(normalize(keptFile))).toBe(true);
+      expect(probed.has(normalize(ideaFile))).toBe(false);
+    } finally {
+      lstatSpy.mockRestore();
+    }
+  });
+
   it("screens a tracked directory symlink whose name has an extension", async () => {
     const root = await makeRepo("codegraph-discovery-symlink-extension-");
     const packageDir = path.join(root, "packages", "core");
@@ -1329,6 +1350,35 @@ describe("git-native project file discovery", () => {
       (
         await listProjectFiles(root, undefined, {
           includeGlobs: ["vendor/bundle/**"],
+        })
+      ).map(normalize),
+    );
+
+    expect(files.has(normalize(keepFile))).toBe(true);
+    expect(files.has(normalize(dropFile))).toBe(false);
+  });
+
+  it("collects nested .gitignore files when a parent include glob reopens the tree", async () => {
+    const root = await makeRepo("codegraph-discovery-parent-include-gitignore-");
+    const keepFile = path.join(root, "vendor", "bundle", "gems", "example", "keep.rb");
+    const dropFile = path.join(root, "vendor", "bundle", "gems", "example", "drop.rb");
+    const nestedIgnore = path.join(root, "vendor", "bundle", "gems", "example", ".gitignore");
+    await createFile(keepFile, "puts 1\n");
+    await createFile(dropFile, "puts 2\n");
+    await createFile(nestedIgnore, "drop.rb\n");
+    git(root, [
+      "add",
+      "-f",
+      "vendor/bundle/gems/example/keep.rb",
+      "vendor/bundle/gems/example/drop.rb",
+      "vendor/bundle/gems/example/.gitignore",
+    ]);
+    git(root, ["commit", "-m", "tracked vendored sources"]);
+
+    const files = new Set(
+      (
+        await listProjectFiles(root, undefined, {
+          includeGlobs: ["vendor/**"],
         })
       ).map(normalize),
     );
@@ -1502,6 +1552,24 @@ describe("git-native project file discovery", () => {
       throw error;
     }
     git(root, ["add", "App.xcodeproj"]);
+    git(root, ["commit", "-m", "marker"]);
+
+    const entry = (await discoverProjectFiles(root)).find((item) => normalize(item.path) === normalize(marker));
+    expect(entry).toMatchObject({ kind: "dir" });
+  });
+
+  it("discovers a directory symlink named for a literal metadata marker", async () => {
+    const root = await makeRepo("codegraph-discovery-meta-idea-symlink-");
+    const target = path.join(root, "packages", "ide");
+    const marker = path.join(root, ".idea");
+    await createFile(path.join(target, "workspace.xml"), "<project />\n");
+    try {
+      await fs.symlink(target, marker, "dir");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+    git(root, ["add", ".idea"]);
     git(root, ["commit", "-m", "marker"]);
 
     const entry = (await discoverProjectFiles(root)).find((item) => normalize(item.path) === normalize(marker));
