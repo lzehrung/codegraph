@@ -1267,6 +1267,29 @@ describe("git-native project file discovery", () => {
     }
   });
 
+  it("screens a tracked directory symlink whose name has an extension", async () => {
+    const root = await makeRepo("codegraph-discovery-symlink-extension-");
+    const packageDir = path.join(root, "packages", "core");
+    const linkedPackage = path.join(root, "linked-core.v1");
+    await createFile(path.join(packageDir, "index.ts"), "export const core = 1;\n");
+    try {
+      await fs.symlink(packageDir, linkedPackage, "dir");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+    git(root, ["add", "packages/core/index.ts", "linked-core.v1"]);
+    git(root, ["commit", "-m", "tracked symlink"]);
+    const discoveredCallback = vi.fn();
+
+    const files = await listProjectFiles(root, undefined, {
+      onSymlinkDirectoriesDiscovered: discoveredCallback,
+    });
+
+    expect(files.map(normalize)).toContain(normalize(path.join(linkedPackage, "index.ts")));
+    expect(discoveredCallback).toHaveBeenCalledWith([normalize(linkedPackage)], "git-candidates");
+  });
+
   it("does not collect ignored .gitignore files under default-ignored trees", async () => {
     const root = await makeRepo("codegraph-discovery-venv-gitignore-");
     const rootIgnore = path.join(root, ".gitignore");
@@ -1283,6 +1306,35 @@ describe("git-native project file discovery", () => {
     expect(withExcludes.some((file) => file.includes("/.venv/"))).toBe(false);
     expect(withExcludes.some((file) => file === normalize(rootIgnore))).toBe(true);
     expect(withoutExcludes.some((file) => file === normalize(venvIgnore))).toBe(true);
+  });
+
+  it("collects .gitignore files under a default-ignored tree reopened by includeGlobs", async () => {
+    const root = await makeRepo("codegraph-discovery-reopened-gitignore-");
+    const keepFile = path.join(root, "vendor", "bundle", "gems", "example", "keep.rb");
+    const dropFile = path.join(root, "vendor", "bundle", "gems", "example", "drop.rb");
+    const nestedIgnore = path.join(root, "vendor", "bundle", "gems", "example", ".gitignore");
+    await createFile(keepFile, "puts 1\n");
+    await createFile(dropFile, "puts 2\n");
+    await createFile(nestedIgnore, "drop.rb\n");
+    git(root, [
+      "add",
+      "-f",
+      "vendor/bundle/gems/example/keep.rb",
+      "vendor/bundle/gems/example/drop.rb",
+      "vendor/bundle/gems/example/.gitignore",
+    ]);
+    git(root, ["commit", "-m", "tracked vendored sources"]);
+
+    const files = new Set(
+      (
+        await listProjectFiles(root, undefined, {
+          includeGlobs: ["vendor/bundle/**"],
+        })
+      ).map(normalize),
+    );
+
+    expect(files.has(normalize(keepFile))).toBe(true);
+    expect(files.has(normalize(dropFile))).toBe(false);
   });
 
   it("does not resolve physical paths for Git candidates that cannot be metadata", async () => {
