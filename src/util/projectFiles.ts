@@ -23,7 +23,6 @@ import {
   isGitRepo,
   isGitTimeoutError,
   listGitExcludeFiles,
-  listGitIgnoreFiles,
   listGitStageSpecialPaths,
   listTrackedFiles,
   listUntrackedFiles,
@@ -263,13 +262,6 @@ function isPresent(value: string | undefined): value is string {
 
 function normalizeGlobPattern(globPattern: string): string {
   return globPattern.trim().replace(/\\/g, "/");
-}
-
-function defaultIgnoreGitExcludePathspecs(includeGlobs: readonly string[] = []): string[] {
-  const activeIgnores = includeGlobs.length
-    ? DEFAULT_PROJECT_FILE_IGNORES.filter((ignoreGlob) => !isIgnoreGlobReopenedByIncludes(ignoreGlob, includeGlobs))
-    : DEFAULT_PROJECT_FILE_IGNORES;
-  return activeIgnores.map((globPattern) => `:(exclude,glob)${normalizeGlobPattern(globPattern)}`);
 }
 
 const DIRECTORY_METADATA_EXTENSIONS = new Set<string>();
@@ -641,20 +633,50 @@ function collectCandidateAncestorDirectories(root: string, files: readonly strin
   return directories;
 }
 
+type GitIgnoreSourceRoot = { path: string; repositoryRoot: string };
+
+function owningGitIgnoreSourceRoot(
+  file: string,
+  roots: readonly GitIgnoreSourceRoot[],
+): GitIgnoreSourceRoot | undefined {
+  const normalized = normalizePath(file);
+  let owning: GitIgnoreSourceRoot | undefined;
+  for (const root of roots) {
+    if (!isFilePathWithinRoot(root.path, normalized) && !isFilePathWithinRoot(root.repositoryRoot, normalized)) {
+      continue;
+    }
+    if (!owning || root.repositoryRoot.length > owning.repositoryRoot.length) {
+      owning = root;
+    }
+  }
+  return owning;
+}
+
+async function gitignoreFileIfPresent(directory: string): Promise<string | undefined> {
+  const file = normalizePath(path.join(directory, ".gitignore"));
+  try {
+    const stat = await fsp.stat(file);
+    return stat.isFile() ? file : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Locate the `.gitignore` files that can affect the Git candidates, plus Git's
  * other ignore sources.
  *
- * Git lists tracked, untracked, and ignored `.gitignore` files directly. This
- * avoids probing every candidate ancestor with `stat`, while retaining each
- * source's owning repository boundary so superproject rules cannot filter paths
- * Git evaluates inside initialized submodules.
+ * A `.gitignore` only applies beneath its directory. After Git has listed tracked
+ * and untracked candidates, the ignore files that can affect those paths live on
+ * their ancestor chains up to the owning repository root, including parents of a
+ * nested scan root, and at each source root. Stopping at the scan root would miss
+ * `packages/.gitignore` when listing `packages/app`. Asking Git for ignored
+ * `.gitignore` files walks every gitignored tree looking for them, which times
+ * out on a large ignored data directory even after file listing already finished.
  */
-type GitIgnoreSourceRoot = { path: string; repositoryRoot: string };
-
 async function findGitIgnoreSources(
   sourceRoots: readonly GitIgnoreSourceRoot[],
-  excludePathspecs: readonly string[] = defaultIgnoreGitExcludePathspecs(),
+  candidateFiles: readonly string[],
 ): Promise<GitignoreSource[]> {
   const roots = Array.from(
     new Map(
@@ -664,28 +686,57 @@ async function findGitIgnoreSources(
       ]),
     ).values(),
   );
-  const sources: GitignoreSource[] = [];
+  const directories = new Map<string, { dir: string; repositoryRoot: string }>();
+  const walkedDirectoryKeys = new Set<string>();
+  const addDirectory = (directory: string, repositoryRoot: string): void => {
+    const dir = normalizePath(directory);
+    const key = fileIdentityKey(dir);
+    if (!directories.has(key)) directories.set(key, { dir, repositoryRoot: normalizePath(repositoryRoot) });
+  };
   for (const { path: sourceRoot, repositoryRoot } of roots) {
-    const [gitignoreFiles, excludeFiles] = await Promise.all([
-      listGitIgnoreFiles(sourceRoot, { excludePathspecs }),
-      listGitExcludeFiles(sourceRoot),
-    ]);
-    sources.push(
-      ...gitignoreFiles.map((file) => ({
-        file,
-        baseDir: path.dirname(file),
-        repositoryRoot,
-        priority: 2,
-      })),
-    );
-    sources.push(
-      ...excludeFiles.map((source) => ({
-        ...source,
-        repositoryRoot: source.baseDir,
-      })),
-    );
+    addDirectory(sourceRoot, repositoryRoot);
   }
-  return sources;
+  for (const file of candidateFiles) {
+    const owning = owningGitIgnoreSourceRoot(file, roots);
+    if (!owning) continue;
+    let dir = normalizePath(path.dirname(file));
+    const stopKey = fileIdentityKey(owning.repositoryRoot);
+    for (;;) {
+      const dirKey = fileIdentityKey(dir);
+      const walkKey = `${dirKey}\0${stopKey}`;
+      if (walkedDirectoryKeys.has(walkKey)) break;
+      addDirectory(dir, owning.repositoryRoot);
+      walkedDirectoryKeys.add(walkKey);
+      if (dirKey === stopKey) break;
+      const parent = normalizePath(path.dirname(dir));
+      if (
+        parent === dir ||
+        (!isFilePathWithinRoot(owning.path, parent) && !isFilePathWithinRoot(owning.repositoryRoot, parent))
+      ) {
+        break;
+      }
+      dir = parent;
+    }
+  }
+  const uniqueRepositoryRoots = Array.from(new Set(roots.map((root) => root.repositoryRoot)));
+  const [gitignoreHits, excludeLists] = await Promise.all([
+    mapLimitSemaphore(
+      Array.from(directories.values()),
+      REALPATH_FILTER_CONCURRENCY,
+      async ({ dir, repositoryRoot }) => {
+        const file = await gitignoreFileIfPresent(dir);
+        return file ? [{ file, baseDir: dir, repositoryRoot, priority: 2 }] : [];
+      },
+    ),
+    Promise.all(uniqueRepositoryRoots.map((repositoryRoot) => listGitExcludeFiles(repositoryRoot))),
+  ]);
+  return [
+    ...gitignoreHits.flat(),
+    ...excludeLists.flat().map((source) => ({
+      ...source,
+      repositoryRoot: source.baseDir,
+    })),
+  ];
 }
 
 /**
@@ -697,7 +748,7 @@ async function findGitIgnoreSources(
 async function listGitCandidateFiles(
   root: string,
   logLevel: LogLevel | undefined,
-  opts?: { includeGlobs?: readonly string[] } & DiscoveryWorkCallbacks,
+  opts?: DiscoveryWorkCallbacks,
 ): Promise<GitCandidateSet | null> {
   let gitListStart: number | undefined;
   let gitIgnoreStart: number | undefined;
@@ -764,10 +815,7 @@ async function listGitCandidateFiles(
     emitDiscoveryActivity(opts?.onDiscoveryProgress, "Listing Git ignore files");
     const ignoreStartedAt = performance.now();
     gitIgnoreStart = ignoreStartedAt;
-    const gitignoreFiles = await findGitIgnoreSources(
-      sourceRoots,
-      defaultIgnoreGitExcludePathspecs(opts?.includeGlobs ?? []),
-    );
+    const gitignoreFiles = await findGitIgnoreSources(sourceRoots, files);
     emitDiscoveryTiming(opts?.onDiscoveryTiming, "git-ignore", ignoreStartedAt);
     gitIgnoreStart = undefined;
     emitDiscoveryActivity(
@@ -868,7 +916,7 @@ async function listProjectFilesInternal(
       ...(options?.onDiscoveryTiming ? { onDiscoveryTiming: options.onDiscoveryTiming } : {}),
     };
     const gitCandidates = attemptedGitCandidates
-      ? await listGitCandidateFiles(root, options?.logLevel, { includeGlobs, ...gitDiscoveryCallbacks })
+      ? await listGitCandidateFiles(root, options?.logLevel, gitDiscoveryCallbacks)
       : null;
     // Report only when this call actually asked Git, including a null result. Callers that
     // already enumerated candidates (build-index) can hand the same set to metadata discovery
