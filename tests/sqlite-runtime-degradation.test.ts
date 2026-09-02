@@ -17,7 +17,9 @@ import {
   isNodeSqliteUsable,
   markNodeSqliteUnavailable,
 } from "../src/sqlite-driver.js";
-import { mkTmpDir } from "./helpers/filesystem.js";
+import { createTempRootRegistry } from "./helpers/filesystem.js";
+
+const tempRoots = createTempRootRegistry();
 
 function moduleFor(file: string): ModuleIndex {
   return {
@@ -40,10 +42,11 @@ function diskWrite(file: string): PendingModuleCacheWrite {
 }
 
 describe("unsupported node:sqlite runtime", () => {
-  afterEach(() => {
+  afterEach(async () => {
     resetDiskModuleCacheSqliteStateForTests();
     clearNodeSqliteUnavailableForTests();
     vi.restoreAllMocks();
+    await tempRoots.cleanup();
   });
 
   it("accepts the current Node build's node:sqlite statement API", () => {
@@ -56,7 +59,7 @@ describe("unsupported node:sqlite runtime", () => {
   });
 
   it("disables disk cache after one warning and does not create a cache database", async () => {
-    const root = await mkTmpDir("cg-sqlite-runtime-");
+    const root = await tempRoots.create("cg-sqlite-runtime-");
     markNodeSqliteUnavailable(new TypeError("this.statement.setReturnArrays is not a function"));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const mkdir = vi.spyOn(fs, "mkdirSync");
