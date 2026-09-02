@@ -1100,8 +1100,8 @@ function isDetailedSymbolGraphSnapshotPayload(value: unknown): value is Detailed
   // below) already rules out a torn/partial write, and
   // `isDetailedSymbolGraphCompatibleWithProject` independently re-derives the basic symbol
   // graph and checks that this sidecar is a superset of it: every basic node and edge is
-  // present, extra detailed call/member edges between valid nodes are kept, and extra nodes
-  // must still be symbols from the current index.
+  // present, extra edges between valid nodes are kept, and extra nodes must still be
+  // symbols from the current index.
   return new Set(payload.graph.nodes.map((node) => node.id)).size === payload.graph.nodes.length;
 }
 
