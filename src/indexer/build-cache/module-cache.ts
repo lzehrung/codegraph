@@ -84,7 +84,7 @@ function clearMemoryCacheForProject(projectRoot: string): void {
 const diskModuleCaches = new Map<string, DiskModuleCache>();
 let warnedMissingNodeSqlite = false;
 
-function reportMissingNodeSqlite(logLevel: LogLevel | undefined, error: unknown): void {
+export function reportMissingNodeSqlite(logLevel: LogLevel | undefined, error: unknown): void {
   markNodeSqliteUnavailable(error);
   if (warnedMissingNodeSqlite) return;
   warnedMissingNodeSqlite = true;
@@ -121,7 +121,11 @@ function diskCacheDatabasePath(projectRoot: string, opts?: BuildOptions): string
 
 export function diskModuleCacheExists(projectRoot: string, opts?: BuildOptions): boolean {
   if ((opts?.cache ?? "off") !== "disk") return false;
-  if (!isNodeSqliteUsable()) return false;
+  if (!isNodeSqliteUsable()) {
+    const error = nodeSqliteUnavailableError() ?? new Error("node:sqlite is unavailable");
+    reportMissingNodeSqlite(opts?.logLevel, error);
+    return false;
+  }
   return fs.existsSync(diskCacheDatabasePath(projectRoot, opts));
 }
 

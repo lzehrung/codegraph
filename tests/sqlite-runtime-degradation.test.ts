@@ -4,6 +4,7 @@ import path from "node:path";
 
 import {
   cacheDatabasePath,
+  diskModuleCacheExists,
   pruneDiskModuleCache,
   resetDiskModuleCacheSqliteStateForTests,
   writeModulesToCache,
@@ -54,6 +55,19 @@ describe("unsupported node:sqlite runtime", () => {
   it("classifies missing setReturnArrays and columns as unsupported node:sqlite", () => {
     expect(isNodeSqliteUnavailableError(new TypeError("setReturnArrays is not a function"))).toBe(true);
     expect(isNodeSqliteUnavailableError(new TypeError("columns is not a function"))).toBe(true);
+  });
+
+  it("warns once when cache-read gating checks existence on an unusable runtime", async () => {
+    const root = await tempRoots.create("cg-sqlite-exists-");
+    markNodeSqliteUnavailable(new TypeError("this.statement.setReturnArrays is not a function"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const opts = { cache: "disk" as const };
+
+    expect(diskModuleCacheExists(root, opts)).toBe(false);
+    expect(diskModuleCacheExists(root, opts)).toBe(false);
+
+    const warnings = warn.mock.calls.filter((args) => String(args[0]).includes("Disk cache disabled for this run"));
+    expect(warnings).toHaveLength(1);
   });
 
   it("disables disk cache after one warning and does not create a cache database", async () => {
