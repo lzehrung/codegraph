@@ -9,6 +9,7 @@ import {
   DEFAULT_GIT_TIMEOUT_MS,
   getGitHead,
   isGitRepo,
+  isGitTimeoutError,
   runGit,
   setGitExecutableForTests,
 } from "../src/util/git.js";
@@ -41,6 +42,11 @@ afterEach(() => {
 describe("bounded Git execution", () => {
   it("documents the default timeout used to unbound hung helpers", () => {
     expect(DEFAULT_GIT_TIMEOUT_MS).toBe(30_000);
+  });
+
+  it("classifies Git timeout errors without treating ordinary Git failures as timeouts", () => {
+    expect(isGitTimeoutError(new Error("git ls-files -z failed in /repo: timed out after 30000ms"))).toBe(true);
+    expect(isGitTimeoutError(new Error("git ls-files -z failed in /repo: not a git repository"))).toBe(false);
   });
 
   it("terminates a hung fake Git child and rejects within the controlled timeout", async () => {

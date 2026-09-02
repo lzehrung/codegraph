@@ -22,6 +22,7 @@ const gitExcludeFileChecks = new Map<string, Promise<GitExcludeFile[]>>();
 const MAX_GIT_HASH_OBJECT_ARGUMENT_BYTES = 24 * 1024;
 
 let gitExecutableForTests: string | null = null;
+let gitExecutablePrefixArgsForTests: string[] = [];
 
 /** Git's C-style path quoting single-character escapes for otherwise-unrepresentable control bytes. */
 const GIT_QUOTED_PATH_SINGLE_BYTE_ESCAPES: Record<string, number> = {
@@ -74,9 +75,14 @@ export function decodeGitPath(rawPath: string): string {
   return Buffer.from(bytes).toString("utf8");
 }
 
-/** Test-only override of the Git executable path. Pass null to restore. */
-export function setGitExecutableForTests(executable: string | null): void {
+/**
+ * Test-only override of the Git executable. Pass null to restore.
+ * `prefixArgs` are prepended so tests can run `node fake-git.cjs <git-args>` on Windows,
+ * where spawning a `.cmd` wrapper is EINVAL.
+ */
+export function setGitExecutableForTests(executable: string | null, prefixArgs: readonly string[] = []): void {
   gitExecutableForTests = executable;
+  gitExecutablePrefixArgsForTests = executable ? [...prefixArgs] : [];
 }
 
 export type RunGitOptions = {
@@ -168,6 +174,7 @@ export async function runGit(
   const timeoutMs = resolveGitTimeoutMs(options?.timeoutMs);
   const maxBuffer = options?.maxBuffer ?? 64 * 1024 * 1024;
   const executable = gitExecutableForTests ?? "git";
+  const childArgs = gitExecutablePrefixArgsForTests.length ? [...gitExecutablePrefixArgsForTests, ...args] : args;
   const signal = options?.signal;
 
   if (signal?.aborted) {
@@ -175,7 +182,7 @@ export async function runGit(
   }
 
   return await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn(executable, args, {
+    const child = spawn(executable, childArgs, {
       cwd: projectRoot,
       env: process.env,
       stdio: [options?.input !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
@@ -874,6 +881,11 @@ export async function getUnifiedDiff(
   } catch (error) {
     throw createGitError(projectRoot, args, error);
   }
+}
+
+export function isGitTimeoutError(error: unknown): boolean {
+  const detail = error instanceof Error ? error.message : stringifyUnknown(error);
+  return /timed out after \d+ms/i.test(detail);
 }
 
 function createGitError(projectRoot: string, args: string[], error: unknown): Error {
