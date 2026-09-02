@@ -19,6 +19,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - `orient`, `explore`, `search`, and other agent-session commands now report counted discovery work. Cold discovery previously printed one `Discovering source files` line and no further output until it finished, which was indistinguishable from a hang.
 - `Built project index: N files in X` now measures the whole index operation, including discovery. It previously started timing at the first parsed file, so a build that spent minutes discovering files and seconds parsing them reported only the seconds.
 - Disk cache no longer retries an unsupported `node:sqlite` runtime. Node builds below 22.16 load the module but omit statement APIs Codegraph needs, so a default-on disk cache previously reopened the database and printed a stack on every cache access. The run now disables disk cache after one in-memory probe and prints one warning.
+- Package funnel install no longer hangs on Windows GitHub runners. Isolated npm used to install drive-qualified tarballs from a different volume through an empty cache, so Git tar treated the drive letter as a remote host and npm fetched every native platform packument until the 300s budget killed the job. The funnel now copies candidates onto the isolation volume, prefers the local cache, and restricts optional natives to the host OS and CPU.
 
 ## [2.3.6] - 2026-08-31
 
