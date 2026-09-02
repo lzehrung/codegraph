@@ -1204,15 +1204,12 @@ describe("git-native project file discovery", () => {
     const statSpy = vi.spyOn(fs, "stat");
     try {
       const files = new Set((await listProjectFiles(root)).map(normalize));
-      const gitignoreStats = statSpy.mock.calls
-        .map(([file]) => normalize(String(file)))
-        .filter((file) => file.endsWith("/.gitignore"));
+      const statCalls = statSpy.mock.calls.map(([file]) => normalize(String(file)));
       expect(files.has(normalize(keptFile))).toBe(true);
       expect(files.has(normalize(ignoredFile))).toBe(false);
-      expect(gitignoreStats).toContain(normalize(rootIgnore));
-      expect(gitignoreStats.every((file) => file.endsWith("/.gitignore"))).toBe(true);
-      expect(gitignoreStats).not.toContain(normalize(keptFile));
-      expect(gitignoreStats).not.toContain(normalize(ignoredFile));
+      expect(statCalls).toContain(normalize(rootIgnore));
+      expect(statCalls).not.toContain(normalize(keptFile));
+      expect(statCalls).not.toContain(normalize(ignoredFile));
     } finally {
       statSpy.mockRestore();
     }

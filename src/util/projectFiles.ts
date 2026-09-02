@@ -715,11 +715,13 @@ async function findGitIgnoreSources(
   }
   const uniqueRepositoryRoots = Array.from(new Set(roots.map((root) => root.repositoryRoot)));
   const [gitignoreHits, excludeLists] = await Promise.all([
-    Promise.all(
-      Array.from(directories.values()).map(async ({ dir, repositoryRoot }) => {
+    mapLimitSemaphore(
+      Array.from(directories.values()),
+      REALPATH_FILTER_CONCURRENCY,
+      async ({ dir, repositoryRoot }) => {
         const file = await gitignoreFileIfPresent(dir);
         return file ? [{ file, baseDir: dir, repositoryRoot, priority: 2 }] : [];
-      }),
+      },
     ),
     Promise.all(uniqueRepositoryRoots.map((repositoryRoot) => listGitExcludeFiles(repositoryRoot))),
   ]);
