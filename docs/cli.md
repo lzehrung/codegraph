@@ -190,7 +190,7 @@ codegraph inspect ./src --report --report-file inspect.report.json
 
 Graph, index, search, inspect, and review reports include `backend.native.byLanguage` so native usage and fallback remain visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Reports also include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Search and inspect timing reports contain command totals and the underlying index build report without changing normal stdout. Review JSON reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, `changedFiles[].status` as `updated`, `deleted`, or `missing`, and `sqlContext` when changed SQL files or changed SQL literals make SQL artifact facts relevant.
 
-When a command builds an index with `--report`, its timing payload can include `sourceDiscoveryMs` for source-file discovery, `metadataDiscoveryMs` for project-metadata discovery, `gitListMs` for Git candidate listing, `filesystemScanMs` when discovery falls back to a glob scan, and `steps` for named discovery durations. These optional fields are absent when their step does not run.
+When a command builds an index with `--report`, its timing payload can include `sourceDiscoveryMs` for source-file discovery, `metadataDiscoveryMs` for project-metadata discovery, `gitListMs` for Git candidate listing, `filesystemScanMs` when discovery falls back to a glob scan, and `steps` for named discovery durations. These optional fields are absent when their step does not run. Reusing the same report object replaces the discovery fields for the current build.
 
 ### Project lifecycle
 

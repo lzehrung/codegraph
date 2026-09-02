@@ -222,6 +222,30 @@ describe("Project Indexing", () => {
     }
   });
 
+  it("replaces discovery steps when the same report object is reused", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-reused-report-steps-"));
+    const file = path.join(root, "main.ts");
+    const extra = path.join(root, "extra.ts");
+    const report: BuildReport = { timings: {} };
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+
+    try {
+      await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+      expect(report.timings.steps?.filter((step) => step.name === "filesystem-scan")).toHaveLength(1);
+      report.timings.gitListMs = 9999;
+      (report.timings.steps ??= []).push({ name: "git-list", ms: 9999 });
+
+      await fsp.writeFile(extra, "export const extra = 2;\n", "utf8");
+      await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+
+      expect(report.timings.gitListMs).toBeUndefined();
+      expect(report.timings.steps?.some((step) => step.name === "git-list")).toBe(false);
+      expect(report.timings.steps?.filter((step) => step.name === "filesystem-scan")).toHaveLength(1);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reports finalization metadata discovery for explicit files", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-explicit-metadata-timing-"));
     const file = path.join(root, "main.ts");

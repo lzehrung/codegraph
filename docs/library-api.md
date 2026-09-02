@@ -685,7 +685,7 @@ const incremental = await buildProjectIndexIncremental(root, {
 
 `buildProjectIndexIncremental` loads the cached manifest, reuses unchanged modules and edges, and reparses only the files reported as changed by Git flags or an explicit `files` list.
 
-Pass `report: { timings: {} }` to receive optional build timing fields. `sourceDiscoveryMs` measures source-file discovery, `metadataDiscoveryMs` measures project-metadata discovery, `gitListMs` measures Git candidate listing, and `filesystemScanMs` measures the glob scan used when Git listing is unavailable. `steps` lists named discovery durations for finer diagnosis. Each field is present only when the caller supplied `report` and that discovery step ran.
+Pass `report: { timings: {} }` to receive optional build timing fields. `sourceDiscoveryMs` measures source-file discovery, `metadataDiscoveryMs` measures project-metadata discovery, `gitListMs` measures Git candidate listing, and `filesystemScanMs` measures the glob scan used when Git listing is unavailable. `steps` lists named discovery durations for finer diagnosis. Each field is present only when the caller supplied `report` and that discovery step ran. Reusing the same report object replaces those discovery fields for the current build.
 
 `changedSince` follows `git diff <rev>` semantics, while `gitBase` and `gitHead` use an explicit `<base>..<head>` range for normal revisions. `gitHead` also accepts `WORKTREE` for staged and unstaged tracked-file changes, or `STAGED`/`INDEX` for the current index.
 

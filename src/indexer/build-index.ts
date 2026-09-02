@@ -652,6 +652,20 @@ function emitIndexCheckActivity(
   });
 }
 
+const DISCOVERY_TIMING_STEP_NAMES = new Set(["git-list", "git-ignore", "filesystem-scan"]);
+
+function resetDiscoveryTimingSteps(timings: BuildTimingReport | undefined): void {
+  if (!timings) return;
+  delete timings.gitListMs;
+  delete timings.filesystemScanMs;
+  const remaining = (timings.steps ?? []).filter((step) => !DISCOVERY_TIMING_STEP_NAMES.has(step.name));
+  if (remaining.length) {
+    timings.steps = remaining;
+    return;
+  }
+  delete timings.steps;
+}
+
 function recordBuildTimingStep(timings: BuildTimingReport | undefined, step: { name: string; ms: number }): void {
   if (!timings) return;
   (timings.steps ??= []).push(step);
@@ -1148,6 +1162,7 @@ async function buildProjectIndexWithManifestOptions(
   helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest" | "reportDiscoveryProgress">,
 ): Promise<ProjectIndex> {
   const timings = opts?.report ? (opts.report.timings ??= {}) : undefined;
+  resetDiscoveryTimingSteps(timings);
   await initializeFileIdentityCaseSensitivity(projectRoot);
   try {
     const useDiskCache = (opts?.cache ?? "off") === "disk";
@@ -1341,6 +1356,7 @@ export async function buildProjectIndexIncremental(
   const { normalizedProjectRoot, report, timings, totalStart, cacheMode, cacheEnabled, onFallbackImportExtraction } =
     createIndexBuildRunState(projectRoot, opts, graphOptions);
   const discoveryTimings = opts?.report ? (opts.report.timings ??= {}) : undefined;
+  resetDiscoveryTimingSteps(discoveryTimings);
   let checkProgressActive = false;
   const startCheckProgress = (): void => {
     if (checkProgressActive) return;
