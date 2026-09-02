@@ -233,6 +233,33 @@ function normalizeGlobPattern(globPattern: string): string {
   return globPattern.trim().replace(/\\/g, "/");
 }
 
+function defaultIgnoreGitExcludePathspecs(): string[] {
+  return DEFAULT_PROJECT_FILE_IGNORES.map((globPattern) => `:(exclude,glob)${normalizeGlobPattern(globPattern)}`);
+}
+
+const DIRECTORY_METADATA_EXTENSIONS = new Set<string>();
+for (const definition of PROJECT_FILE_DEFINITIONS) {
+  if (definition.kind !== "dir") continue;
+  for (const pattern of definition.patterns) {
+    const trimmed = pattern.replaceAll("*", "").replaceAll("?", "");
+    const lastDot = trimmed.lastIndexOf(".");
+    if (lastDot < 0) continue;
+    DIRECTORY_METADATA_EXTENSIONS.add(trimmed.slice(lastDot).toLowerCase());
+  }
+}
+
+/**
+ * Git lists files, not directories. A directory symlink still appears as one path.
+ * Data files have ordinary extensions (`row.json`) and cannot be those links, so
+ * probing every Git candidate spent one lstat per JSON/CSV. Directory metadata
+ * markers such as `App.xcodeproj` keep a bundle extension and must still be probed.
+ */
+function couldBeDirectorySymlink(filePath: string): boolean {
+  const extension = path.posix.extname(path.posix.basename(normalizePath(filePath)));
+  if (!extension) return true;
+  return DIRECTORY_METADATA_EXTENSIONS.has(extension.toLowerCase());
+}
+
 /**
  * Whether an include glob explicitly re-opens a default-ignored root, so a default ignore
  * should stay active for every OTHER root the includes never mention. Compares literal
@@ -572,7 +599,7 @@ async function findGitIgnoreSources(sourceRoots: readonly GitIgnoreSourceRoot[])
   const sources: GitignoreSource[] = [];
   for (const { path: sourceRoot, repositoryRoot } of roots) {
     const [gitignoreFiles, excludeFiles] = await Promise.all([
-      listGitIgnoreFiles(sourceRoot),
+      listGitIgnoreFiles(sourceRoot, { excludePathspecs: defaultIgnoreGitExcludePathspecs() }),
       listGitExcludeFiles(sourceRoot),
     ]);
     sources.push(
@@ -936,7 +963,8 @@ async function verifySafeSymlinkDirectories(
  * When `knownSymlinkDirectories` is provided, this re-verifies each previously
  * discovered path directly. Otherwise a Git-derived `candidatePaths` list avoids a
  * separate full-tree scan: Git already enumerated every tracked and non-ignored
- * untracked entry, including symlinks. Non-Git discovery retains the existing
+ * untracked entry, including symlinks. Git-candidate screening then skips paths
+ * with a file extension so data files are not lstat'd. Non-Git discovery retains the existing
  * `fg(["**\/*"])` fallback. Every path still passes the same lstat, target-directory,
  * and realpath-confinement checks before it can be crawled.
  */
@@ -964,7 +992,8 @@ async function resolveSafeSymlinkDirectories(
     const candidatePaths = Array.from(new Set(options.candidatePaths)).filter((candidatePath) => {
       const relativePath = normalizePath(path.relative(root, candidatePath));
       if (!isRelativePathInside(relativePath)) return false;
-      return !ignoreMatchers.some((matcher) => matcher(relativePath));
+      if (ignoreMatchers.some((matcher) => matcher(relativePath))) return false;
+      return couldBeDirectorySymlink(candidatePath);
     });
     const discovered = await verifySafeSymlinkDirectories(root, realRoot, candidatePaths, options.onPathCheckProgress);
     options.onSymlinkDirectoriesDiscovered?.(discovered, "git-candidates");

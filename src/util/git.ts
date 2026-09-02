@@ -622,10 +622,15 @@ export async function listTrackedFiles(
  * affect paths beneath it. NUL-delimited output keeps legal whitespace and
  * quoting in pathnames intact. The caller supplies each repository or alias root
  * separately, so paths remain relative to the same logical root used to invoke Git.
+ * `excludePathspecs` are extra Git pathspecs appended after the `.gitignore` matchers
+ * so callers can skip trees they never index, such as virtualenvs, without walking them.
  */
-export async function listGitIgnoreFiles(projectRoot: string, opts?: { gitAvailable?: boolean }): Promise<string[]> {
+export async function listGitIgnoreFiles(
+  projectRoot: string,
+  opts?: { gitAvailable?: boolean; excludePathspecs?: readonly string[] },
+): Promise<string[]> {
   if (!(opts?.gitAvailable ?? true)) return [];
-  const pathspec = [".gitignore", ":(glob)**/.gitignore"];
+  const pathspec = [".gitignore", ":(glob)**/.gitignore", ...(opts?.excludePathspecs ?? [])];
   const commands = [
     ["ls-files", "--cached", "-z", "--", ...pathspec],
     ["ls-files", "--others", "--exclude-standard", "-z", "--", ...pathspec],

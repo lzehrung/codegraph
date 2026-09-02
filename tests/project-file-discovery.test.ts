@@ -6,6 +6,7 @@ import { buildProjectIndex, listProjectFiles, discoverProjectFiles } from "../sr
 import { DEFAULT_PROJECT_MANIFESTS } from "../src/util.js";
 import {
   createDiscoveredFileMatcher,
+  DEFAULT_PROJECT_FILE_IGNORES,
   discoverProjectFilesWithGitCandidates,
   isRelativePathInside,
   listProjectFilesWithGitCandidates,
@@ -1241,6 +1242,47 @@ describe("git-native project file discovery", () => {
     } finally {
       realpathSpy.mockRestore();
     }
+  });
+
+  it("does not lstat Git-listed data files when screening symlink directories", async () => {
+    const root = await makeRepo("codegraph-discovery-data-file-lstat-");
+    const keptFile = path.join(root, "src", "app.py");
+    const dataFile = path.join(root, "data", "batch", "row.json");
+    await createFile(keptFile, "value = 1\n");
+    await createFile(dataFile, "{}\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "fixtures"]);
+
+    const lstatSpy = vi.spyOn(fs, "lstat");
+    try {
+      const files = new Set((await listProjectFiles(root)).map(normalize));
+      const probed = new Set(lstatSpy.mock.calls.map(([file]) => normalize(String(file))));
+
+      expect(files.has(normalize(keptFile))).toBe(true);
+      expect(files.has(normalize(dataFile))).toBe(false);
+      expect(probed.has(normalize(dataFile))).toBe(false);
+      expect(probed.has(normalize(keptFile))).toBe(false);
+    } finally {
+      lstatSpy.mockRestore();
+    }
+  });
+
+  it("does not collect ignored .gitignore files under default-ignored trees", async () => {
+    const root = await makeRepo("codegraph-discovery-venv-gitignore-");
+    const rootIgnore = path.join(root, ".gitignore");
+    const venvIgnore = path.join(root, ".venv", "Lib", "site-packages", "pkg", ".gitignore");
+    await createFile(rootIgnore, ".venv/\n");
+    await createFile(venvIgnore, "*\n");
+    git(root, ["add", ".gitignore"]);
+    git(root, ["commit", "-m", "ignore venv"]);
+
+    const excludePathspecs = DEFAULT_PROJECT_FILE_IGNORES.map((globPattern) => `:(exclude,glob)${globPattern}`);
+    const withExcludes = (await listGitIgnoreFiles(root, { excludePathspecs })).map(normalize);
+    const withoutExcludes = (await listGitIgnoreFiles(root)).map(normalize);
+
+    expect(withExcludes.some((file) => file.includes("/.venv/"))).toBe(false);
+    expect(withExcludes.some((file) => file === normalize(rootIgnore))).toBe(true);
+    expect(withoutExcludes.some((file) => file === normalize(venvIgnore))).toBe(true);
   });
 
   it("does not resolve physical paths for Git candidates that cannot be metadata", async () => {
