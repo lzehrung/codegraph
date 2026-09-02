@@ -389,7 +389,7 @@ function standaloneArchiveRunner(
       const operation = args[0] === "--force-local" ? args[1] : args[0];
       if (operation === "-tzf") return { exitCode: 0, stderr: "", stdout: `${fixture.archiveEntries.join("\n")}\n` };
       const destinationIndex = args.indexOf("-C");
-      const destination = args[destinationIndex + 1];
+      const destination = destinationIndex >= 0 ? args[destinationIndex + 1] : undefined;
       if (operation !== "-xzf" || !destination) throw new Error("Expected standalone archive extraction.");
       await fsp.cp(fixture.bundleRoot, path.join(destination, path.basename(fixture.bundleRoot)), { recursive: true });
       return { exitCode: 0, stderr: "", stdout: "" };
@@ -531,9 +531,9 @@ describe("onboarding funnel smoke", () => {
       ]);
       for (const spec of tarballArgs) {
         const original = byFileName.get(path.basename(spec));
-        expect(original).toBeDefined();
+        if (!original) throw new Error(`Missing original candidate for ${spec}`);
         expect((await fsp.stat(path.resolve(cwd, spec))).isFile()).toBe(true);
-        expect(await fsp.readFile(path.resolve(cwd, spec), "utf8")).toBe(await fsp.readFile(original ?? "", "utf8"));
+        expect(await fsp.readFile(path.resolve(cwd, spec))).toEqual(await fsp.readFile(original));
       }
       expect(npmInstall?.options.timeoutMs).toBe(FUNNEL_PACKAGE_SETUP_TIMEOUT_MS);
       expect(result.checks).toContainEqual(expect.objectContaining({ name: "package-candidate", status: "pass" }));
