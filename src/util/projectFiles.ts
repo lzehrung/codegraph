@@ -699,7 +699,11 @@ async function listGitCandidateFiles(
   logLevel: LogLevel | undefined,
   opts?: { includeGlobs?: readonly string[] } & DiscoveryWorkCallbacks,
 ): Promise<GitCandidateSet | null> {
+  let gitAttemptStart: number | undefined;
+  let gitListStart: number | undefined;
+  let gitIgnoreStart: number | undefined;
   try {
+    gitAttemptStart = performance.now();
     const realRoot = normalizePath(await fsp.realpath(root));
     const gitRoot = (await isGitRepo(root)) ? root : realRoot;
     if (!(await isGitRepo(gitRoot))) return null;
@@ -707,7 +711,8 @@ async function listGitCandidateFiles(
     const gitRepositoryRoot = await getGitRepositoryRoot(gitRoot);
     if (!gitRepositoryRoot) return null;
     emitDiscoveryActivity(opts?.onDiscoveryProgress, "Listing Git files");
-    const gitListStart = performance.now();
+    const listStartedAt = performance.now();
+    gitListStart = listStartedAt;
     const [tracked, untracked, stageSpecial] = await Promise.all([
       listTrackedFiles(gitRoot, { recurseSubmodules: true, ...(logLevel === undefined ? {} : { logLevel }) }),
       listUntrackedFiles(gitRoot, { respectGitignore: true }),
@@ -755,15 +760,18 @@ async function listGitCandidateFiles(
         { path: physicalPath, repositoryRoot: physicalPath },
       ]),
     ];
-    emitDiscoveryTiming(opts?.onDiscoveryTiming, "git-list", gitListStart);
+    emitDiscoveryTiming(opts?.onDiscoveryTiming, "git-list", listStartedAt);
+    gitListStart = undefined;
     emitDiscoveryActivity(opts?.onDiscoveryProgress, "Listing Git files", files.length, files.length);
     emitDiscoveryActivity(opts?.onDiscoveryProgress, "Listing Git ignore files");
-    const gitIgnoreStart = performance.now();
+    const ignoreStartedAt = performance.now();
+    gitIgnoreStart = ignoreStartedAt;
     const gitignoreFiles = await findGitIgnoreSources(
       sourceRoots,
       defaultIgnoreGitExcludePathspecs(opts?.includeGlobs ?? []),
     );
-    emitDiscoveryTiming(opts?.onDiscoveryTiming, "git-ignore", gitIgnoreStart);
+    emitDiscoveryTiming(opts?.onDiscoveryTiming, "git-ignore", ignoreStartedAt);
+    gitIgnoreStart = undefined;
     emitDiscoveryActivity(
       opts?.onDiscoveryProgress,
       "Listing Git ignore files",
@@ -778,11 +786,18 @@ async function listGitCandidateFiles(
       gitignoreAliases: sourceRoots,
     };
   } catch (error) {
+    if (gitIgnoreStart !== undefined) {
+      emitDiscoveryTiming(opts?.onDiscoveryTiming, "git-ignore", gitIgnoreStart);
+    } else if (gitListStart !== undefined) {
+      emitDiscoveryTiming(opts?.onDiscoveryTiming, "git-list", gitListStart);
+    } else if (gitAttemptStart !== undefined) {
+      emitDiscoveryTiming(opts?.onDiscoveryTiming, "git-list", gitAttemptStart);
+    }
     if (isGitTimeoutError(error)) {
       logWithLevel(
         logLevel,
         "warn",
-        "Warning: Git file listing timed out; scanning the filesystem instead. Ignore large untracked trees in .gitignore to keep discovery fast.",
+        "Warning: Git listing timed out; scanning the filesystem instead. Ignore large untracked trees in .gitignore to keep discovery fast.",
       );
     } else {
       logWithLevel(logLevel, "debug", `Git discovery unavailable for ${root}: ${stringifyUnknown(error)}`);

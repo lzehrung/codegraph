@@ -16,7 +16,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Changed
 
-- Cold discovery progress now names Git listing, ignore-file listing, and filesystem scan fallback. A long sit used to stay on `Discovering source files` until Git returned; the spinner now says which listing is running, and a Git timeout warns before the filesystem scan.
+- Cold discovery progress now names Git listing, ignore-file listing, and filesystem scan fallback. A long sit used to stay on `Discovering source files` until Git returned; the spinner now says which listing is running. A Git timeout warns before the filesystem scan and still records the unfinished listing in `--report` `steps`.
 
 ### Fixed
 
