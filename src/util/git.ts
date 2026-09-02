@@ -42,7 +42,7 @@ export function decodeGitPath(rawPath: string): string {
 
   const inner = rawPath.slice(1, -1);
   const bytes: number[] = [];
-  for (let index = 0; index < inner.length;) {
+  for (let index = 0; index < inner.length; ) {
     const char = inner[index]!;
     if (char !== "\\") {
       const codePoint = inner.codePointAt(index)!;
