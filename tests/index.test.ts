@@ -246,6 +246,61 @@ describe("Project Indexing", () => {
     }
   });
 
+  it("drops unused source discovery timing when a reused report skips discovery", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-reused-report-skip-source-"));
+    const file = path.join(root, "main.ts");
+    const report: BuildReport = { timings: {} };
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+
+    try {
+      await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+      expect(report.timings.sourceDiscoveryMs).toBeTypeOf("number");
+      expect(report.timings.metadataDiscoveryMs).toBeTypeOf("number");
+
+      await buildProjectIndexIncremental(root, {
+        cache: "disk",
+        native: "off",
+        report,
+        files: [file],
+        filesAreProjectScope: true,
+      });
+
+      expect(report.timings.sourceDiscoveryMs).toBeUndefined();
+      expect(report.timings.metadataDiscoveryMs).toBeUndefined();
+      expect(report.timings.filesystemScanMs).toBeUndefined();
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("drops leftover metadata discovery timing when a reused report hits a warm snapshot", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-reused-report-warm-snapshot-"));
+    const file = path.join(root, "main.ts");
+    const report: BuildReport = { timings: {} };
+    await fsp.writeFile(path.join(root, ".gitignore"), ".codegraph/\n", "utf8");
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+    git(root, ["init"]);
+    git(root, ["config", "user.email", "tests@example.com"]);
+    git(root, ["config", "user.name", "Tests"]);
+    git(root, ["add", ".gitignore", "main.ts"]);
+    git(root, ["commit", "-m", "initial source"]);
+
+    try {
+      await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+      expect(report.timings.metadataDiscoveryMs).toBeTypeOf("number");
+      expect(report.timings.gitListMs).toBeTypeOf("number");
+
+      await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+
+      expect(report.timings.gitListMs).toBeUndefined();
+      expect(report.timings.filesystemScanMs).toBeUndefined();
+      expect(report.timings.metadataDiscoveryMs).toBeUndefined();
+      expect(report.timings.sourceDiscoveryMs).toBeTypeOf("number");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reports finalization metadata discovery for explicit files", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-explicit-metadata-timing-"));
     const file = path.join(root, "main.ts");

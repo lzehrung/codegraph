@@ -699,11 +699,9 @@ async function listGitCandidateFiles(
   logLevel: LogLevel | undefined,
   opts?: { includeGlobs?: readonly string[] } & DiscoveryWorkCallbacks,
 ): Promise<GitCandidateSet | null> {
-  let gitAttemptStart: number | undefined;
   let gitListStart: number | undefined;
   let gitIgnoreStart: number | undefined;
   try {
-    gitAttemptStart = performance.now();
     const realRoot = normalizePath(await fsp.realpath(root));
     const gitRoot = (await isGitRepo(root)) ? root : realRoot;
     if (!(await isGitRepo(gitRoot))) return null;
@@ -786,14 +784,13 @@ async function listGitCandidateFiles(
       gitignoreAliases: sourceRoots,
     };
   } catch (error) {
+    const listingTimedOut = isGitTimeoutError(error) && (gitIgnoreStart !== undefined || gitListStart !== undefined);
     if (gitIgnoreStart !== undefined) {
       emitDiscoveryTiming(opts?.onDiscoveryTiming, "git-ignore", gitIgnoreStart);
     } else if (gitListStart !== undefined) {
       emitDiscoveryTiming(opts?.onDiscoveryTiming, "git-list", gitListStart);
-    } else if (gitAttemptStart !== undefined) {
-      emitDiscoveryTiming(opts?.onDiscoveryTiming, "git-list", gitAttemptStart);
     }
-    if (isGitTimeoutError(error)) {
+    if (listingTimedOut) {
       logWithLevel(
         logLevel,
         "warn",

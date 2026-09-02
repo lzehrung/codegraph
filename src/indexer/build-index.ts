@@ -658,6 +658,8 @@ function resetDiscoveryTimingSteps(timings: BuildTimingReport | undefined): void
   if (!timings) return;
   delete timings.gitListMs;
   delete timings.filesystemScanMs;
+  delete timings.sourceDiscoveryMs;
+  delete timings.metadataDiscoveryMs;
   const remaining = (timings.steps ?? []).filter((step) => !DISCOVERY_TIMING_STEP_NAMES.has(step.name));
   if (remaining.length) {
     timings.steps = remaining;

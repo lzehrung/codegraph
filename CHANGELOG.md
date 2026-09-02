@@ -12,11 +12,11 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 ### Added
 
 - `--dynamic-import-heuristics` now uses shared language adapters for top-level and embedded code, and Python dependency graphs can add heuristic edges for static-string `importlib.import_module(...)` and `__import__(...)` calls.
-- `--report` index timings now include optional `gitListMs`, `filesystemScanMs`, and a `steps` list of named discovery durations so a slow cold init can be diagnosed without guessing which listing hung. Reusing the same report object replaces those discovery fields for the current build instead of appending leftover listings.
+- `--report` index timings now include optional `gitListMs`, `filesystemScanMs`, and a `steps` list of named discovery durations so a slow cold init can be diagnosed without guessing which listing hung. Reusing the same report object replaces `sourceDiscoveryMs`, `metadataDiscoveryMs`, and those listing fields for the current build instead of keeping leftover values from a step that did not run.
 
 ### Changed
 
-- Cold discovery progress now names Git listing, ignore-file listing, and filesystem scan fallback. A long sit used to stay on `Discovering source files` until Git returned; the spinner now says which listing is running. A Git timeout warns before the filesystem scan and still records the unfinished listing in `--report` `steps`.
+- Cold discovery progress now names Git listing, ignore-file listing, and filesystem scan fallback. A long sit used to stay on `Discovering source files` until Git returned; the spinner now says which listing is running. A timeout during file or ignore listing warns before the filesystem scan and records that unfinished listing in `--report` `steps`. Timeouts from earlier Git probes do not record a `git-list` step.
 
 ### Fixed
 
