@@ -13,6 +13,7 @@ import { SymbolKind, type ModuleIndex } from "../src/indexer/types.js";
 import {
   SqliteDatabase,
   clearNodeSqliteUnavailableForTests,
+  isNodeSqliteUnavailableError,
   isNodeSqliteUsable,
   markNodeSqliteUnavailable,
 } from "../src/sqlite-driver.js";
@@ -47,6 +48,11 @@ describe("unsupported node:sqlite runtime", () => {
 
   it("accepts the current Node build's node:sqlite statement API", () => {
     expect(isNodeSqliteUsable()).toBe(true);
+  });
+
+  it("classifies missing setReturnArrays and columns as unsupported node:sqlite", () => {
+    expect(isNodeSqliteUnavailableError(new TypeError("setReturnArrays is not a function"))).toBe(true);
+    expect(isNodeSqliteUnavailableError(new TypeError("columns is not a function"))).toBe(true);
   });
 
   it("disables disk cache after one warning and does not create a cache database", async () => {

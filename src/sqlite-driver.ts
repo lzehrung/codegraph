@@ -107,9 +107,11 @@ export function clearNodeSqliteUnavailableForTests(): void {
 
 let nodeSqliteUsable: boolean | undefined;
 
-function statementHasRequiredApis(statement: StatementSync): statement is NodeSqliteStatement {
+function missingNodeSqliteStatementApi(statement: StatementSync): string | undefined {
   const candidate = statement as NodeSqliteStatement;
-  return typeof candidate.setReturnArrays === "function" && typeof candidate.columns === "function";
+  if (typeof candidate.setReturnArrays !== "function") return "setReturnArrays is not a function";
+  if (typeof candidate.columns !== "function") return "columns is not a function";
+  return undefined;
 }
 
 /**
@@ -132,9 +134,8 @@ export function isNodeSqliteUsable(): boolean {
     const probe = new sqlite.DatabaseSync(":memory:");
     try {
       const statement = probe.prepare("SELECT 1");
-      if (!statementHasRequiredApis(statement)) {
-        throw new TypeError("setReturnArrays is not a function");
-      }
+      const missingApi = missingNodeSqliteStatementApi(statement);
+      if (missingApi) throw new TypeError(missingApi);
       statement.setReturnArrays(false);
       statement.columns();
       nodeSqliteUsable = true;
