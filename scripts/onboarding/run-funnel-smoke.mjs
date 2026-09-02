@@ -103,7 +103,9 @@ export async function runFunnelSmoke(options = {}) {
   const result = createFunnelResultV1({ channel, target });
   const startedAt = now();
   const ownsWorkspace = options.workspace === undefined;
-  const workspace = path.resolve(options.workspace ?? (await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-funnel-"))));
+  const workspace = path.resolve(
+    options.workspace ?? (await fsp.mkdtemp(path.join(funnelWorkspaceParent(), "codegraph-funnel-"))),
+  );
   const context = {
     artifact: options.artifact ? path.resolve(options.artifact) : undefined,
     channel,
@@ -254,6 +256,7 @@ export async function createFunnelIsolation(workspace, baseEnv = process.env) {
     npm_config_prefix: paths.npmPrefix,
     npm_config_userconfig: npmUserConfig,
   };
+  if (process.platform === "win32") env.TAR_OPTIONS = "--force-local";
   return { cursorConfig, cursorConfigPath, env, npmUserConfig, paths };
 }
 
@@ -328,21 +331,12 @@ async function prepareSourceRuntime(context) {
 async function preparePackageRuntime(context) {
   const artifact = await requireArtifact(context, "package");
   const packageArtifacts = await resolvePackageArtifacts(context, artifact);
+  const tarballSpecs = await stagePackageInstallTarballs(context, packageArtifacts.paths);
   await runCommandCheck(
     context,
     "package-install",
     "npm",
-    [
-      "install",
-      "--ignore-scripts",
-      "--prefix",
-      context.isolation.paths.npmPrefix,
-      "--no-save",
-      "--audit=false",
-      "--fund=false",
-      "--loglevel=verbose",
-      ...packageArtifacts.paths,
-    ],
+    packageInstallArgs(context.isolation.paths.npmPrefix, context.target, tarballSpecs),
     { timeoutMs: FUNNEL_PACKAGE_SETUP_TIMEOUT_MS },
   );
   const packageRoot = path.join(context.isolation.paths.npmPrefix, "node_modules", "@lzehrung", "codegraph");
@@ -916,6 +910,49 @@ function prependEnvironmentPath(env, entry) {
   env.PATH = previous ? `${entry}${path.delimiter}${previous}` : entry;
 }
 
+function funnelWorkspaceParent() {
+  const runnerTemp = process.env.RUNNER_TEMP;
+  if (typeof runnerTemp === "string" && runnerTemp.trim()) return runnerTemp;
+  return os.tmpdir();
+}
+
+function packageInstallArgs(prefix, target, tarballSpecs) {
+  const [os, cpu] = target.split("-");
+  return [
+    "install",
+    "--ignore-scripts",
+    "--package-lock=false",
+    "--no-audit",
+    "--prefer-offline",
+    "--no-fund",
+    "--no-save",
+    "--prefix",
+    prefix,
+    `--os=${os}`,
+    `--cpu=${cpu}`,
+    ...tarballSpecs,
+  ];
+}
+
+async function stagePackageInstallTarballs(context, tarballPaths) {
+  const stagedDirectory = path.join(context.workspace, "package-candidates");
+  await fsp.mkdir(stagedDirectory, { recursive: true });
+  const specs = [];
+  for (const tarballPath of tarballPaths) {
+    const destination = path.join(stagedDirectory, path.basename(tarballPath));
+    await fsp.copyFile(tarballPath, destination);
+    specs.push(npmLocalTarballSpec(destination, context.isolation.paths.runner));
+  }
+  return specs;
+}
+
+function npmLocalTarballSpec(tarballPath, cwd) {
+  const resolved = path.resolve(tarballPath);
+  const relative = path.relative(path.resolve(cwd), resolved);
+  if (relative && !path.isAbsolute(relative)) return relative.split(path.sep).join("/");
+  return pathToFileURL(resolved).href;
+}
+
 function nativeTargetForFunnelTarget(target) {
   const nativeTarget = currentNativeTargetSuffix();
   if (!nativeTarget) throw new Error(`No native package target is available for funnel target ${target}.`);
@@ -1210,13 +1247,17 @@ function resolveArchiveCommand(artifact) {
 }
 
 function archiveListArgs(artifact) {
-  if (isGzipArchive(artifact)) return ["-tzf", artifact];
+  if (isGzipArchive(artifact)) return gzipTarArgs("-tzf", artifact);
   return ["-tf", artifact];
 }
 
 function archiveExtractArgs(artifact, extractRoot) {
-  if (isGzipArchive(artifact)) return ["-xzf", artifact, "-C", extractRoot];
+  if (isGzipArchive(artifact)) return gzipTarArgs("-xzf", artifact, "-C", extractRoot);
   return ["-xf", artifact, "-C", extractRoot];
+}
+
+function gzipTarArgs(operation, ...args) {
+  return process.platform === "win32" ? ["--force-local", operation, ...args] : [operation, ...args];
 }
 
 function isGzipArchive(artifact) {

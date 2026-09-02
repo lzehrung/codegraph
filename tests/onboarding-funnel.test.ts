@@ -386,10 +386,11 @@ function standaloneArchiveRunner(
   return async (command: string, args: string[], options: CommandOptions): Promise<CommandResult> => {
     if (command === "tar") {
       calls.push({ command, args, options });
-      if (args[0] === "-tzf") return { exitCode: 0, stderr: "", stdout: `${fixture.archiveEntries.join("\n")}\n` };
+      const operation = args[0] === "--force-local" ? args[1] : args[0];
+      if (operation === "-tzf") return { exitCode: 0, stderr: "", stdout: `${fixture.archiveEntries.join("\n")}\n` };
       const destinationIndex = args.indexOf("-C");
       const destination = args[destinationIndex + 1];
-      if (args[0] !== "-xzf" || !destination) throw new Error("Expected standalone archive extraction.");
+      if (operation !== "-xzf" || !destination) throw new Error("Expected standalone archive extraction.");
       await fsp.cp(fixture.bundleRoot, path.join(destination, path.basename(fixture.bundleRoot)), { recursive: true });
       return { exitCode: 0, stderr: "", stdout: "" };
     }
@@ -504,20 +505,36 @@ describe("onboarding funnel smoke", () => {
       const byFileName = new Map(
         candidates.paths.map((candidatePath) => [path.basename(candidatePath), candidatePath]),
       );
+      const funnelTarget = currentFunnelTarget();
+      const [os, cpu] = funnelTarget.split("-");
+      const cwd = path.join(workspace, "runner");
+      const tarballArgs = [
+        "../package-candidates/core.tgz",
+        "../package-candidates/root.tgz",
+        "../package-candidates/native-meta.tgz",
+        "../package-candidates/native-target.tgz",
+      ];
+      expect(npmInstall?.options.cwd).toBe(cwd);
       expect(npmInstall?.args).toEqual([
         "install",
         "--ignore-scripts",
+        "--package-lock=false",
+        "--no-audit",
+        "--prefer-offline",
+        "--no-fund",
+        "--no-save",
         "--prefix",
         path.join(workspace, "npm-prefix"),
-        "--no-save",
-        "--audit=false",
-        "--fund=false",
-        "--loglevel=verbose",
-        byFileName.get("core.tgz"),
-        byFileName.get("root.tgz"),
-        byFileName.get("native-meta.tgz"),
-        byFileName.get("native-target.tgz"),
+        `--os=${os}`,
+        `--cpu=${cpu}`,
+        ...tarballArgs,
       ]);
+      for (const spec of tarballArgs) {
+        const original = byFileName.get(path.basename(spec));
+        expect(original).toBeDefined();
+        expect((await fsp.stat(path.resolve(cwd, spec))).isFile()).toBe(true);
+        expect(await fsp.readFile(path.resolve(cwd, spec), "utf8")).toBe(await fsp.readFile(original ?? "", "utf8"));
+      }
       expect(npmInstall?.options.timeoutMs).toBe(FUNNEL_PACKAGE_SETUP_TIMEOUT_MS);
       expect(result.checks).toContainEqual(expect.objectContaining({ name: "package-candidate", status: "pass" }));
       const packageLauncher = path.join(
@@ -596,6 +613,13 @@ describe("onboarding funnel smoke", () => {
       });
 
       expect(result.status).toBe("pass");
+      const tarCalls = calls.filter((call) => call.command === "tar");
+      expect(tarCalls.length).toBeGreaterThan(0);
+      if (process.platform === "win32") {
+        for (const call of tarCalls) expect(call.args[0]).toBe("--force-local");
+      } else {
+        for (const call of tarCalls) expect(call.args[0]).not.toBe("--force-local");
+      }
       const standaloneLauncher = path.join(
         workspace,
         "standalone-bin",
@@ -681,6 +705,8 @@ describe("onboarding funnel smoke", () => {
       expect(env?.NODE_COMPILE_CACHE).toBe(path.join(workspace, "node-compile-cache"));
       expect(env?.HOME).not.toBe("C:/real-home");
       expect(env?.PATH?.split(path.delimiter)[0]).toBe(path.join(workspace, "runner"));
+      if (process.platform === "win32") expect(env?.TAR_OPTIONS).toBe("--force-local");
+      else expect(env?.TAR_OPTIONS).toBeUndefined();
       const npmUserConfig = await fsp.readFile(path.join(workspace, "config", "npmrc"), "utf8");
       expect(npmUserConfig).toBe("audit=false\nfund=false\nupdate-notifier=false\n");
       expect(npmUserConfig).not.toContain("@lzehrung:registry");
