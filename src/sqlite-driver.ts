@@ -79,6 +79,75 @@ export function isNodeSqliteUnavailableError(error: unknown): boolean {
   );
 }
 
+let nodeSqliteUnsupportedError: Error | undefined;
+
+/**
+ * Record the first proof that this runtime cannot serve Codegraph's SQLite work.
+ *
+ * A Node build below the supported floor loads `node:sqlite` but omits statement APIs
+ * Codegraph needs, so the failure appears while preparing statements rather than while
+ * opening the database. Without this latch every later cache access reopened the database,
+ * re-ran its pragmas, and threw again: a 500-file project paid that cost per file.
+ */
+export function markNodeSqliteUnavailable(error: unknown): void {
+  if (nodeSqliteUnsupportedError) return;
+  nodeSqliteUnsupportedError = error instanceof Error ? error : new Error(String(error));
+}
+
+/** The latched failure, when this runtime has already proven it cannot serve SQLite work. */
+export function nodeSqliteUnavailableError(): Error | undefined {
+  return nodeSqliteUnsupportedError ?? sqliteLoadError;
+}
+
+/** Test seam: forget the latched failure so a suite can exercise both runtimes. */
+export function clearNodeSqliteUnavailableForTests(): void {
+  nodeSqliteUnsupportedError = undefined;
+  nodeSqliteUsable = undefined;
+}
+
+let nodeSqliteUsable: boolean | undefined;
+
+function statementHasRequiredApis(statement: StatementSync): statement is NodeSqliteStatement {
+  const candidate = statement as NodeSqliteStatement;
+  return typeof candidate.setReturnArrays === "function" && typeof candidate.columns === "function";
+}
+
+/**
+ * Whether this runtime's `node:sqlite` can serve Codegraph's statement use.
+ *
+ * Codegraph depends on the standard-library module, not a compiled driver, so support is a
+ * property of the running Node build. Builds below the supported floor export `node:sqlite`
+ * but omit `StatementSync` methods Codegraph needs. That only surfaces when a statement is
+ * prepared, so this probes an in-memory database once and latches the result. Callers then skip
+ * creating on-disk cache files that can never be used.
+ */
+export function isNodeSqliteUsable(): boolean {
+  if (nodeSqliteUnavailableError()) {
+    nodeSqliteUsable = false;
+    return false;
+  }
+  if (nodeSqliteUsable !== undefined) return nodeSqliteUsable;
+  try {
+    const sqlite = loadNodeSqlite();
+    const probe = new sqlite.DatabaseSync(":memory:");
+    try {
+      const statement = probe.prepare("SELECT 1");
+      if (!statementHasRequiredApis(statement)) {
+        throw new TypeError("setReturnArrays is not a function");
+      }
+      statement.setReturnArrays(false);
+      statement.columns();
+      nodeSqliteUsable = true;
+    } finally {
+      probe.close();
+    }
+  } catch (error) {
+    markNodeSqliteUnavailable(error);
+    nodeSqliteUsable = false;
+  }
+  return nodeSqliteUsable;
+}
+
 const READONLY_AUTHORIZER_CONSTANTS = [
   "SQLITE_DENY",
   "SQLITE_FUNCTION",
@@ -160,6 +229,9 @@ export class SqliteDatabase {
   private readonly statements = new Map<string, SqliteStatement>();
 
   constructor(filePath: PathLike, options?: { readonly?: boolean; timeout?: number }) {
+    if (!isNodeSqliteUsable()) {
+      throw nodeSqliteUnavailableError() ?? new Error("node:sqlite is unavailable");
+    }
     const sqlite = loadNodeSqlite();
     this.db = new sqlite.DatabaseSync(filePath, {
       readOnly: options?.readonly,
@@ -190,9 +262,14 @@ export class SqliteDatabase {
   prepare(sql: string): SqliteStatement {
     const cached = this.statements.get(sql);
     if (cached) return cached;
-    const statement = new SqliteStatement(this.db.prepare(sql) as NodeSqliteStatement);
-    this.statements.set(sql, statement);
-    return statement;
+    try {
+      const statement = new SqliteStatement(this.db.prepare(sql) as NodeSqliteStatement);
+      this.statements.set(sql, statement);
+      return statement;
+    } catch (error) {
+      if (isNodeSqliteUnavailableError(error)) markNodeSqliteUnavailable(error);
+      throw error;
+    }
   }
 
   transaction<T>(fn: () => T): () => T {

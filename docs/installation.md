@@ -4,7 +4,7 @@ Install `@lzehrung/codegraph` for the CLI, MCP server, viewer, and agent-client 
 
 ## Requirements
 
-- npm and source installs require Node.js 22.16 or newer. Published installs need neither Rust nor a separate native-runtime step.
+- npm and source installs require Node.js 22.16 or newer. Published installs need neither Rust nor a separate native-runtime step. Disk cache uses the Node.js standard-library `node:sqlite` module; builds below 22.16 may load it but omit statement APIs Codegraph needs, and those runs disable disk cache after one warning.
 - The matching native runtime installs automatically when an artifact is available. Other hosts use reduced graph-only and regex recovery mode; see [CLI runtime selection](./cli.md#runtime-selection).
 - Standalone archives bundle Node.js and support Windows, macOS, and glibc Linux on x64 and ARM64. Use npm or a source checkout on musl Linux. Windows ARM64 is structurally checked but not runtime-tested on matching hardware.
 

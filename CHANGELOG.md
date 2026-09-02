@@ -18,6 +18,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - Source and metadata discovery no longer resolve a physical path for Git candidates the project excludes. A project holding a large untracked or ignored tree, such as a Python virtualenv, paid one filesystem syscall per excluded file: a 20,000-file virtualenv spent 1.68s in discovery to return 7 source files, and now spends 0.48s.
 - `orient`, `explore`, `search`, and other agent-session commands now report counted discovery work. Cold discovery previously printed one `Discovering source files` line and no further output until it finished, which was indistinguishable from a hang.
 - `Built project index: N files in X` now measures the whole index operation, including discovery. It previously started timing at the first parsed file, so a build that spent minutes discovering files and seconds parsing them reported only the seconds.
+- Disk cache no longer retries an unsupported `node:sqlite` runtime. Node builds below 22.16 load the module but omit statement APIs Codegraph needs, so a default-on disk cache previously reopened the database and printed a stack on every cache access. The run now disables disk cache after one in-memory probe and prints one warning.
 
 ## [2.3.6] - 2026-08-31
 

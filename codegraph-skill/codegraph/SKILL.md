@@ -255,7 +255,7 @@ Lifecycle commands accept either one positional project path or `--root <path>`,
 
 ## Installation
 
-For normal CLI and MCP use, install from public npm with Node.js 22.16 or newer:
+For normal CLI and MCP use, install from public npm with Node.js 22.16 or newer. Disk cache uses Node's standard-library `node:sqlite` module; builds below 22.16 may load it without the statement APIs Codegraph needs and then disable disk cache after one warning.
 
 ```bash
 npm install -g @lzehrung/codegraph

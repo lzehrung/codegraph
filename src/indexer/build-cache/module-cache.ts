@@ -6,8 +6,16 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../../languages.js";
 import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
-import { logWithLevel } from "../../logging.js";
-import { SqliteDatabase, type SqliteStatement, isNodeSqliteUnavailableError } from "../../sqlite-driver.js";
+import { logWithLevel, type LogLevel } from "../../logging.js";
+import {
+  SqliteDatabase,
+  type SqliteStatement,
+  clearNodeSqliteUnavailableForTests,
+  isNodeSqliteUnavailableError,
+  isNodeSqliteUsable,
+  markNodeSqliteUnavailable,
+  nodeSqliteUnavailableError,
+} from "../../sqlite-driver.js";
 import { buildBloomFilterFromSource } from "../../util/bloomFilter.js";
 import {
   createSqliteTableIfMissing,
@@ -76,15 +84,21 @@ function clearMemoryCacheForProject(projectRoot: string): void {
 const diskModuleCaches = new Map<string, DiskModuleCache>();
 let warnedMissingNodeSqlite = false;
 
-function reportMissingNodeSqlite(logLevel: import("../../logging.js").LogLevel | undefined, error: unknown): void {
+function reportMissingNodeSqlite(logLevel: LogLevel | undefined, error: unknown): void {
+  markNodeSqliteUnavailable(error);
   if (warnedMissingNodeSqlite) return;
   warnedMissingNodeSqlite = true;
   logWithLevel(
     logLevel,
-    "error",
-    "Disk cache requires the Node.js built-in node:sqlite module. Use Node.js >= 22.16, or set --cache off/memory.",
-    error,
+    "warn",
+    "Warning: Disk cache disabled for this run. The built-in node:sqlite module is missing statement APIs Codegraph needs (requires Node.js >= 22.16). Pass --cache memory or --cache off to skip this check.",
   );
+}
+
+/** Test seam: forget the one-shot disk-cache warning and sqlite latch. */
+export function resetDiskModuleCacheSqliteStateForTests(): void {
+  warnedMissingNodeSqlite = false;
+  clearNodeSqliteUnavailableForTests();
 }
 
 export function cacheRelativePath(projectRoot: string, file: string): string {
@@ -107,6 +121,7 @@ function diskCacheDatabasePath(projectRoot: string, opts?: BuildOptions): string
 
 export function diskModuleCacheExists(projectRoot: string, opts?: BuildOptions): boolean {
   if ((opts?.cache ?? "off") !== "disk") return false;
+  if (!isNodeSqliteUsable()) return false;
   return fs.existsSync(diskCacheDatabasePath(projectRoot, opts));
 }
 
@@ -156,6 +171,11 @@ export function getDiskModuleCache(projectRoot: string, opts?: BuildOptions): Di
   const dbPath = diskCacheDatabasePath(projectRoot, opts);
   const existing = diskModuleCaches.get(dbPath);
   if (existing) return existing;
+  if (!isNodeSqliteUsable()) {
+    const error = nodeSqliteUnavailableError() ?? new Error("node:sqlite is unavailable");
+    reportMissingNodeSqlite(opts?.logLevel, error);
+    throw error;
+  }
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   let db: SqliteDatabase;
   try {
@@ -166,30 +186,42 @@ export function getDiskModuleCache(projectRoot: string, opts?: BuildOptions): Di
     }
     throw error;
   }
-  db.pragma("journal_mode = WAL");
-  db.pragma("synchronous = NORMAL");
-  ensureModuleCacheSchema(db, projectRoot);
-  db.exec("CREATE TEMP TABLE IF NOT EXISTS live_module_cache_files(file TEXT PRIMARY KEY) WITHOUT ROWID;");
-  const cache: DiskModuleCache = {
-    db,
-    load: db.prepare("SELECT sig, version, payload FROM module_cache WHERE file = ?"),
-    write: db.prepare(
-      `INSERT INTO module_cache (file, sig, version, payload, updated_at)
+  try {
+    db.pragma("journal_mode = WAL");
+    db.pragma("synchronous = NORMAL");
+    ensureModuleCacheSchema(db, projectRoot);
+    db.exec("CREATE TEMP TABLE IF NOT EXISTS live_module_cache_files(file TEXT PRIMARY KEY) WITHOUT ROWID;");
+    const cache: DiskModuleCache = {
+      db,
+      load: db.prepare("SELECT sig, version, payload FROM module_cache WHERE file = ?"),
+      write: db.prepare(
+        `INSERT INTO module_cache (file, sig, version, payload, updated_at)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(file) DO UPDATE SET
          sig = excluded.sig,
          version = excluded.version,
          payload = excluded.payload,
          updated_at = excluded.updated_at`,
-    ),
-    clearLiveFiles: db.prepare("DELETE FROM live_module_cache_files"),
-    insertLiveFile: db.prepare("INSERT OR IGNORE INTO live_module_cache_files(file) VALUES (?)"),
-    pruneStaleFiles: db.prepare(
-      "DELETE FROM module_cache WHERE NOT EXISTS (SELECT 1 FROM live_module_cache_files WHERE file = module_cache.file)",
-    ),
-  };
-  diskModuleCaches.set(dbPath, cache);
-  return cache;
+      ),
+      clearLiveFiles: db.prepare("DELETE FROM live_module_cache_files"),
+      insertLiveFile: db.prepare("INSERT OR IGNORE INTO live_module_cache_files(file) VALUES (?)"),
+      pruneStaleFiles: db.prepare(
+        "DELETE FROM module_cache WHERE NOT EXISTS (SELECT 1 FROM live_module_cache_files WHERE file = module_cache.file)",
+      ),
+    };
+    diskModuleCaches.set(dbPath, cache);
+    return cache;
+  } catch (error) {
+    try {
+      db.close();
+    } catch {
+      // close best-effort
+    }
+    if (isNodeSqliteUnavailableError(error)) {
+      reportMissingNodeSqlite(opts?.logLevel, error);
+    }
+    throw error;
+  }
 }
 
 export function closeDiskCacheDatabase(projectRoot: string, opts?: BuildOptions): void {
@@ -212,6 +244,11 @@ export function closeDiskCacheDatabase(projectRoot: string, opts?: BuildOptions)
 
 export function pruneDiskModuleCache(projectRoot: string, liveFiles: Iterable<string>, opts?: BuildOptions): number {
   if ((opts?.cache ?? "off") !== "disk") return 0;
+  if (!isNodeSqliteUsable()) {
+    const error = nodeSqliteUnavailableError() ?? new Error("node:sqlite is unavailable");
+    reportMissingNodeSqlite(opts?.logLevel, error);
+    return 0;
+  }
   if (!diskModuleCacheExists(projectRoot, opts)) return 0;
   try {
     const cache = getDiskModuleCache(projectRoot, opts);
@@ -227,6 +264,10 @@ export function pruneDiskModuleCache(projectRoot: string, liveFiles: Iterable<st
     }
     return deleted;
   } catch (error) {
+    if (isNodeSqliteUnavailableError(error)) {
+      reportMissingNodeSqlite(opts?.logLevel, error);
+      return 0;
+    }
     logWithLevel(opts?.logLevel, "warn", "Warning: Failed to prune module cache:", error);
     return 0;
   }
@@ -448,6 +489,12 @@ export function tryLoadFromCache(
       if (cacheEnabled && cacheReport) cacheReport.misses += 1;
       return null;
     }
+    if (!isNodeSqliteUsable()) {
+      const error = nodeSqliteUnavailableError() ?? new Error("node:sqlite is unavailable");
+      reportMissingNodeSqlite(opts?.logLevel, error);
+      if (cacheEnabled && cacheReport) cacheReport.misses += 1;
+      return null;
+    }
     try {
       const cache = getDiskModuleCache(projectRoot, opts);
       const row = cache.load.get(cacheRelativePath(projectRoot, file)) as
@@ -495,6 +542,11 @@ export function writeModulesToCache(
       );
     }
   } else if (mode === "disk") {
+    if (!isNodeSqliteUsable()) {
+      const error = nodeSqliteUnavailableError() ?? new Error("node:sqlite is unavailable");
+      reportMissingNodeSqlite(opts?.logLevel, error);
+      return;
+    }
     try {
       const cache = getDiskModuleCache(projectRoot, opts);
       const now = Date.now();

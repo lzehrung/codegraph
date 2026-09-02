@@ -7,7 +7,7 @@ import {
   isNativeDuplicateTokenizationAvailable,
   isNativeTreeSitterDisabledByEnv,
 } from "../native/treeSitterNative.js";
-import { SqliteDatabase } from "../sqlite-driver.js";
+import { SqliteDatabase, isNodeSqliteUsable } from "../sqlite-driver.js";
 import { logWithLevel } from "../logging.js";
 import { cacheDatabasePath } from "../indexer/build-cache/module-cache.js";
 import {
@@ -268,6 +268,7 @@ export function maintainDuplicateUnitDiskCache(index: ProjectIndex): void {
 
 export function duplicateUnitDiskCache(index: ProjectIndex): DuplicateUnitDiskDatabaseEntry | null {
   if (index.cacheMode !== "disk" || !index.cacheRootDir) return null;
+  if (!isNodeSqliteUsable()) return null;
   const dbPath = duplicateUnitCacheDatabasePathForRoot(index.cacheRootDir);
   let entry = duplicateUnitDiskDatabases.get(dbPath);
   if (!entry) {
