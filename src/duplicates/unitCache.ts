@@ -7,9 +7,9 @@ import {
   isNativeDuplicateTokenizationAvailable,
   isNativeTreeSitterDisabledByEnv,
 } from "../native/treeSitterNative.js";
-import { SqliteDatabase } from "../sqlite-driver.js";
+import { SqliteDatabase, isNodeSqliteUsable, nodeSqliteUnavailableError } from "../sqlite-driver.js";
 import { logWithLevel } from "../logging.js";
-import { cacheDatabasePath } from "../indexer/build-cache/module-cache.js";
+import { cacheDatabasePath, reportMissingNodeSqlite } from "../indexer/build-cache/module-cache.js";
 import {
   createSqliteTableIfMissing,
   ensureSqliteVersionedTableSchema,
@@ -268,6 +268,11 @@ export function maintainDuplicateUnitDiskCache(index: ProjectIndex): void {
 
 export function duplicateUnitDiskCache(index: ProjectIndex): DuplicateUnitDiskDatabaseEntry | null {
   if (index.cacheMode !== "disk" || !index.cacheRootDir) return null;
+  if (!isNodeSqliteUsable()) {
+    const error = nodeSqliteUnavailableError() ?? new Error("node:sqlite is unavailable");
+    reportMissingNodeSqlite(undefined, error);
+    return null;
+  }
   const dbPath = duplicateUnitCacheDatabasePathForRoot(index.cacheRootDir);
   let entry = duplicateUnitDiskDatabases.get(dbPath);
   if (!entry) {

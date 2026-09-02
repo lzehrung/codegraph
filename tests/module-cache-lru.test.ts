@@ -10,6 +10,7 @@ import {
   clearMemoryCache,
   closeDiskCacheDatabase,
   diskModuleCacheExists,
+  resetDiskModuleCacheSqliteStateForTests,
   transformPersistedExportFromModule,
   tryLoadFromCache,
   writeToCache,
@@ -278,6 +279,7 @@ it("degrades disk cache cleanly when node:sqlite lacks setReturnArrays", () => {
     expect(tryLoadFromCache(root, "/files/disk.ts", sig, { cache: "disk" })).toBeNull();
   } finally {
     prepare.mockRestore();
+    resetDiskModuleCacheSqliteStateForTests();
     closeDiskCacheDatabase(root, { cache: "disk" });
     clearMemoryCache();
   }
