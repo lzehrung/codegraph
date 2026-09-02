@@ -631,6 +631,10 @@ export async function listTrackedFiles(
  * separately, so paths remain relative to the same logical root used to invoke Git.
  * `excludePathspecs` are extra Git pathspecs appended after the `.gitignore` matchers
  * so callers can skip trees they never index, such as virtualenvs, without walking them.
+ * Project discovery does not use this ignored listing: `git ls-files --others --ignored`
+ * still descends into every gitignored tree, which times out on a large ignored data
+ * directory. Discovery instead stats `.gitignore` files on ancestor directories of the
+ * files Git already listed.
  */
 export async function listGitIgnoreFiles(
   projectRoot: string,

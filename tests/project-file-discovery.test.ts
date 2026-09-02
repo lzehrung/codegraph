@@ -1190,11 +1190,12 @@ describe("git-native project file discovery", () => {
     expect(files.has(normalize(ignoredFile))).toBe(false);
   });
 
-  it("does not stat candidate ancestors to locate Gitignore sources", async () => {
+  it("stats only ancestor .gitignore files to locate Git ignore sources", async () => {
     const root = await makeRepo("codegraph-discovery-gitignore-stat-seam-");
     const keptFile = path.join(root, "deep", "nested", "keep.ts");
     const ignoredFile = path.join(root, "deep", "nested", "drop.ts");
-    await createFile(path.join(root, ".gitignore"), "deep/nested/drop.ts\n");
+    const rootIgnore = path.join(root, ".gitignore");
+    await createFile(rootIgnore, "deep/nested/drop.ts\n");
     await createFile(keptFile, "export const keep = 1;\n");
     await createFile(ignoredFile, "export const drop = 1;\n");
     git(root, ["add", "-f", ".gitignore", "deep/nested/keep.ts", "deep/nested/drop.ts"]);
@@ -1203,10 +1204,15 @@ describe("git-native project file discovery", () => {
     const statSpy = vi.spyOn(fs, "stat");
     try {
       const files = new Set((await listProjectFiles(root)).map(normalize));
-      const gitignoreStats = statSpy.mock.calls.filter(([file]) => normalize(String(file)).endsWith("/.gitignore"));
+      const gitignoreStats = statSpy.mock.calls
+        .map(([file]) => normalize(String(file)))
+        .filter((file) => file.endsWith("/.gitignore"));
       expect(files.has(normalize(keptFile))).toBe(true);
       expect(files.has(normalize(ignoredFile))).toBe(false);
-      expect(gitignoreStats).toHaveLength(0);
+      expect(gitignoreStats).toContain(normalize(rootIgnore));
+      expect(gitignoreStats.every((file) => file.endsWith("/.gitignore"))).toBe(true);
+      expect(gitignoreStats).not.toContain(normalize(keptFile));
+      expect(gitignoreStats).not.toContain(normalize(ignoredFile));
     } finally {
       statSpy.mockRestore();
     }
@@ -1455,6 +1461,55 @@ describe("git-native project file discovery", () => {
       expect(steps.some((step) => step.name === "git-list")).toBe(true);
       expect(steps.some((step) => step.name === "filesystem-scan")).toBe(true);
       expect(warn.mock.calls.some((call) => String(call[0]).includes("Git listing timed out"))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("does not walk gitignored trees to collect .gitignore files", async () => {
+    const root = await makeRepo("codegraph-discovery-ignored-tree-gitignore-");
+    await createFile(path.join(root, ".gitignore"), "data/\n");
+    await createFile(path.join(root, "main.ts"), "export const value = 1;\n");
+    await createFile(path.join(root, "data", "blob.bin"), "ignored\n");
+    await createFile(path.join(root, "data", ".gitignore"), "*\n");
+    git(root, ["add", ".gitignore", "main.ts"]);
+    git(root, ["commit", "-m", "source"]);
+
+    const script = path.join(root, "fake-git.cjs");
+    await fs.writeFile(
+      script,
+      [
+        'const { spawnSync } = require("node:child_process");',
+        "const args = process.argv.slice(2);",
+        'if (args[0] === "ls-files" && args.includes("--ignored")) {',
+        '  process.stderr.write("timed out after 1ms\\n");',
+        "  process.exit(1);",
+        "}",
+        'const result = spawnSync("git", args, { cwd: process.cwd() });',
+        "if (result.stdout) process.stdout.write(result.stdout);",
+        "if (result.stderr) process.stderr.write(result.stderr);",
+        "process.exit(result.status === null ? 1 : result.status);",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    setGitExecutableForTests(process.execPath, [script]);
+    clearGitDiscoveryCacheForTests();
+    clearGitRepositoryCheckCacheForTests();
+
+    const steps: Array<{ name: string; ms: number }> = [];
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const files = (
+        await listProjectFilesWithGitCandidates(root, undefined, {
+          onDiscoveryTiming: (step) => steps.push(step),
+        })
+      ).map(normalize);
+      expect(files.some((file) => file.endsWith("/main.ts"))).toBe(true);
+      expect(files.some((file) => file.includes("/data/"))).toBe(false);
+      expect(steps.some((step) => step.name === "git-ignore")).toBe(true);
+      expect(steps.some((step) => step.name === "filesystem-scan")).toBe(false);
+      expect(warn.mock.calls.some((call) => String(call[0]).includes("Git listing timed out"))).toBe(false);
     } finally {
       warn.mockRestore();
     }
