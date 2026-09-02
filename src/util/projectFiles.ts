@@ -668,7 +668,9 @@ async function gitignoreFileIfPresent(directory: string): Promise<string | undef
  *
  * A `.gitignore` only applies beneath its directory. After Git has listed tracked
  * and untracked candidates, the ignore files that can affect those paths live on
- * their ancestor chains and at each source root. Asking Git for ignored
+ * their ancestor chains up to the owning repository root, including parents of a
+ * nested scan root, and at each source root. Stopping at the scan root would miss
+ * `packages/.gitignore` when listing `packages/app`. Asking Git for ignored
  * `.gitignore` files walks every gitignored tree looking for them, which times
  * out on a large ignored data directory even after file listing already finished.
  */
@@ -697,10 +699,10 @@ async function findGitIgnoreSources(
     const owning = owningGitIgnoreSourceRoot(file, roots);
     if (!owning) continue;
     let dir = normalizePath(path.dirname(file));
-    const stopKeys = new Set([fileIdentityKey(owning.path), fileIdentityKey(owning.repositoryRoot)]);
+    const stopKey = fileIdentityKey(owning.repositoryRoot);
     for (;;) {
       addDirectory(dir, owning.repositoryRoot);
-      if (stopKeys.has(fileIdentityKey(dir))) break;
+      if (fileIdentityKey(dir) === stopKey) break;
       const parent = normalizePath(path.dirname(dir));
       if (
         parent === dir ||

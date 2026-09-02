@@ -1218,6 +1218,22 @@ describe("git-native project file discovery", () => {
     }
   });
 
+  it("loads ancestor .gitignore files above a nested scan root", async () => {
+    const root = await makeRepo("codegraph-discovery-nested-root-gitignore-");
+    const scanRoot = path.join(root, "packages", "app");
+    const keepFile = path.join(scanRoot, "keep.ts");
+    const dropFile = path.join(scanRoot, "drop.ts");
+    await createFile(path.join(root, "packages", ".gitignore"), "drop.ts\n");
+    await createFile(keepFile, "export const keep = 1;\n");
+    await createFile(dropFile, "export const drop = 1;\n");
+    git(root, ["add", "-f", "packages/.gitignore", "packages/app/keep.ts", "packages/app/drop.ts"]);
+    git(root, ["commit", "-m", "nested sources"]);
+
+    const files = new Set((await listProjectFiles(scanRoot)).map(normalize));
+    expect(files.has(normalize(keepFile))).toBe(true);
+    expect(files.has(normalize(dropFile))).toBe(false);
+  });
+
   it("does not resolve physical paths for Git candidates the project excludes", async () => {
     // Git enumerates untracked and force-added trees this project always drops, so
     // resolving each candidate's physical path first spent one realpath syscall per
