@@ -96,6 +96,18 @@ function refreshDetailedSidecarHash(sidecar: MutableDetailedSymbolGraphSidecar):
   sidecar.graphHash = hash.digest("hex");
 }
 
+function firstSidecarEdge(
+  sidecar: MutableDetailedSymbolGraphSidecar,
+): MutableDetailedSymbolGraphSidecar["graph"]["edges"][number] {
+  const existing = sidecar.graph.edges[0];
+  if (existing) return existing;
+  const [from, to] = sidecar.graph.nodes;
+  if (!from || !to) throw new Error("expected at least two persisted symbol nodes");
+  const edge = { from: from.id, to: to.id, label: "tamper-edge" };
+  sidecar.graph.edges.push(edge);
+  return edge;
+}
+
 describe("agent session", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -422,24 +434,31 @@ describe("agent session", () => {
     expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
   });
 
-  it("rejects a detailed sidecar with an extra edge between valid nodes", async () => {
+  it("loads a detailed sidecar that includes extra edges between valid nodes", async () => {
     const root = await mkGitRepo();
     const cold = await createAgentSession({ root }).loadProject();
     const sidecarPath = detailedSymbolGraphSnapshotPath(root);
     const sidecar = (await readDetailedSidecar(sidecarPath)) as MutableDetailedSymbolGraphSidecar;
     const [from, to] = sidecar.graph.nodes;
     if (!from || !to) throw new Error("expected at least two persisted symbol nodes");
-    sidecar.graph.edges.push({ from: from.id, to: to.id, label: "tampered-extra-edge" });
+    sidecar.graph.edges.push({ from: from.id, to: to.id, label: "detailed-extra-edge" });
     refreshDetailedSidecarHash(sidecar);
     await writeDetailedSidecar(sidecarPath, sidecar);
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const warm = await createAgentSession({ root }).loadProject();
 
-    const rebuilt = await createAgentSession({ root }).loadProject();
-
-    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
-    expect(rebuilt.symbolGraph.edges).toEqual(cold.symbolGraph.edges);
-    expect(rebuilt.symbolGraph.edges.some((edge) => edge.label === "tampered-extra-edge")).toBe(false);
+      expect(symbolGraphSpy).toHaveBeenCalledTimes(0);
+      expect(warn.mock.calls.flat().join(" ")).not.toContain("detailed symbol graph does not match project");
+      expect(warm.symbolGraph.edges.some((edge) => edge.label === "detailed-extra-edge")).toBe(true);
+      expect(warm.symbolGraph.nodes.size).toBe(cold.symbolGraph.nodes.size);
+    } finally {
+      symbolGraphSpy.mockRestore();
+      warn.mockRestore();
+    }
   });
+
   it("rejects well-typed sidecar tampering against the current project index", async () => {
     const root = await mkGitRepo();
     await createAgentSession({ root }).loadProject();
@@ -447,7 +466,7 @@ describe("agent session", () => {
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
     const tamperers: Array<(sidecar: MutableDetailedSymbolGraphSidecar) => void> = [
       (sidecar) => {
-        sidecar.graph.edges[0]!.to = "missing-node";
+        firstSidecarEdge(sidecar).to = "missing-node";
       },
       (sidecar) => {
         const node = sidecar.graph.nodes[0]!;
@@ -471,7 +490,7 @@ describe("agent session", () => {
         });
       },
       (sidecar) => {
-        sidecar.graph.edges[0]!.site = {
+        firstSidecarEdge(sidecar).site = {
           file: sidecar.graph.nodes[0]!.file,
           range: {
             start: { line: -1, column: 0, index: 0 },

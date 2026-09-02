@@ -26,6 +26,7 @@ import type {
 } from "../types.js";
 import {
   buildSymbolGraph,
+  defNodeId,
   type SymbolEdge,
   type SymbolGraph,
   type SymbolNode,
@@ -1097,10 +1098,10 @@ function isDetailedSymbolGraphSnapshotPayload(value: unknown): value is Detailed
   // self-consistency check on this file's own bytes, not a check against the current
   // project. The atomic temp-file-then-rename write (`writeDetailedSymbolGraphSnapshot`
   // below) already rules out a torn/partial write, and
-  // `isDetailedSymbolGraphCompatibleWithProject` independently re-derives and compares
-  // every node's semantic fields (name, kind, complexity, docstring, lineSpan) against the
-  // current index, which catches tampered or corrupted graph content this hash would have
-  // caught too -- so the hash added no protection the other checks do not already provide.
+  // `isDetailedSymbolGraphCompatibleWithProject` independently re-derives the basic symbol
+  // graph and checks that this sidecar is a superset of it: every basic node and edge is
+  // present, extra detailed call/member edges between valid nodes are kept, and extra nodes
+  // must still be symbols from the current index.
   return new Set(payload.graph.nodes.map((node) => node.id)).size === payload.graph.nodes.length;
 }
 
@@ -1195,6 +1196,30 @@ function isSymbolEdge(value: unknown): value is SymbolEdge {
         isDetailedRange(edge.site.range)))
   );
 }
+
+function sameSymbolNodeSemantics(actual: SymbolNode, expected: SymbolNode): boolean {
+  return (
+    actual.file === expected.file &&
+    actual.name === expected.name &&
+    actual.kind === expected.kind &&
+    actual.docstring === expected.docstring &&
+    actual.lineSpan === expected.lineSpan &&
+    actual.complexity === expected.complexity
+  );
+}
+
+function indexDefinesSymbolNode(index: ProjectIndex, node: SymbolNode): boolean {
+  const moduleEntry = index.byFile.get(fileIdentityKey(node.file));
+  if (!moduleEntry) return false;
+  if (moduleEntry.locals.some((local) => defNodeId(local) === node.id)) return true;
+  const filePrefix = `${normalizePath(moduleEntry.file)}::`;
+  return moduleEntry.imports.some((imp) => {
+    if (imp.kind === "star") return false;
+    const local = imp.kind === "namespace" ? imp.localNS : imp.local;
+    return node.id === `${filePrefix}${local}::import`;
+  });
+}
+
 async function isDetailedSymbolGraphCompatibleWithProject(
   projectRoot: string,
   index: ProjectIndex,
@@ -1226,39 +1251,31 @@ async function isDetailedSymbolGraphCompatibleWithProject(
   }
 
   const base = await buildSymbolGraph(index);
-  if (graph.nodes.size !== base.nodes.size) return false;
   for (const [id, expected] of base.nodes) {
     const actual = graph.nodes.get(id);
-    if (
-      !actual ||
-      actual.file !== expected.file ||
-      actual.name !== expected.name ||
-      actual.kind !== expected.kind ||
-      actual.docstring !== expected.docstring ||
-      actual.lineSpan !== expected.lineSpan ||
-      actual.complexity !== expected.complexity
-    ) {
-      return false;
-    }
+    if (!actual || !sameSymbolNodeSemantics(actual, expected)) return false;
   }
-  return sameSymbolEdgeMultiset(base.edges, graph.edges);
+  for (const node of graph.nodes.values()) {
+    if (base.nodes.has(node.id)) continue;
+    if (!indexDefinesSymbolNode(index, node)) return false;
+  }
+  return symbolEdgeMultisetContains(graph.edges, base.edges);
 }
 
-function sameSymbolEdgeMultiset(expected: readonly SymbolEdge[], actual: readonly SymbolEdge[]): boolean {
-  if (expected.length !== actual.length) return false;
+function symbolEdgeMultisetContains(haystack: readonly SymbolEdge[], needles: readonly SymbolEdge[]): boolean {
   const counts = new Map<string, number>();
-  for (const edge of expected) {
+  for (const edge of haystack) {
     const key = symbolEdgeKey(edge);
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
-  for (const edge of actual) {
+  for (const edge of needles) {
     const key = symbolEdgeKey(edge);
     const remaining = counts.get(key);
     if (remaining === undefined) return false;
     if (remaining === 1) counts.delete(key);
     else counts.set(key, remaining - 1);
   }
-  return !counts.size;
+  return true;
 }
 
 function symbolEdgeKey(edge: SymbolEdge): string {
