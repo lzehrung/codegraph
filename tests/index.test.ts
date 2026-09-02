@@ -140,6 +140,8 @@ describe("Project Indexing", () => {
       expect(report.timings.sourceDiscoveryMs).toBeGreaterThanOrEqual(0);
       expect(report.timings.metadataDiscoveryMs).toBeTypeOf("number");
       expect(report.timings.metadataDiscoveryMs).toBeGreaterThanOrEqual(0);
+      expect(report.timings.filesystemScanMs).toBeTypeOf("number");
+      expect(report.timings.steps?.some((step) => step.name === "filesystem-scan")).toBe(true);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -184,6 +186,37 @@ describe("Project Indexing", () => {
 
       expect(report.timings.sourceDiscoveryMs).toBeTypeOf("number");
       expect(report.timings.metadataDiscoveryMs).toBeTypeOf("number");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports Git listing progress and gitListMs for a cold Git-backed build", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-git-list-progress-"));
+    const file = path.join(root, "main.ts");
+    const updates: ProgressUpdate[] = [];
+    const report: BuildReport = { timings: {} };
+    await fsp.writeFile(path.join(root, ".gitignore"), ".codegraph/\n", "utf8");
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+    git(root, ["init"]);
+    git(root, ["config", "user.email", "tests@example.com"]);
+    git(root, ["config", "user.name", "Tests"]);
+    git(root, ["add", ".gitignore", "main.ts"]);
+    git(root, ["commit", "-m", "initial source"]);
+
+    try {
+      await buildProjectIndexIncremental(root, {
+        cache: "disk",
+        native: "off",
+        report,
+        onProgress: (update) => updates.push(update),
+      });
+
+      expect(updates.some((update) => update.activity === "Listing Git files")).toBe(true);
+      expect(updates.some((update) => update.activity === "Listing Git ignore files")).toBe(true);
+      expect(report.timings.gitListMs).toBeTypeOf("number");
+      expect(report.timings.steps?.some((step) => step.name === "git-list")).toBe(true);
+      expect(report.timings.filesystemScanMs).toBeUndefined();
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -260,6 +293,7 @@ describe("Project Indexing", () => {
       expect(discoveryUpdates.map((update) => update.activity)).toEqual(
         expect.arrayContaining([
           "Discovering source files",
+          "Scanning project files",
           "Checking source file paths",
           "Discovering project metadata",
           "Checking project metadata files",

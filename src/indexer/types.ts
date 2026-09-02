@@ -216,14 +216,25 @@ export type CacheReport = {
   misses: number;
 };
 
+export type BuildTimingStep = {
+  name: string;
+  ms: number;
+};
+
 export type BuildTimingReport = {
   totalMs?: number;
   manifestMs?: number;
   sourceDiscoveryMs?: number;
   metadataDiscoveryMs?: number;
+  /** Git candidate listing; absent when discovery did not ask Git. */
+  gitListMs?: number;
+  /** Filesystem glob scan used when Git listing is unavailable. */
+  filesystemScanMs?: number;
   parseMs?: number;
   graphMs?: number;
   writeManifestMs?: number;
+  /** Named step durations for diagnosis. Coarse fields above remain the stable summary. */
+  steps?: BuildTimingStep[];
 };
 
 export type BuildFileReport = {

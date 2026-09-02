@@ -12,6 +12,11 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 ### Added
 
 - `--dynamic-import-heuristics` now uses shared language adapters for top-level and embedded code, and Python dependency graphs can add heuristic edges for static-string `importlib.import_module(...)` and `__import__(...)` calls.
+- `--report` index timings now include optional `gitListMs`, `filesystemScanMs`, and a `steps` list of named discovery durations so a slow cold init can be diagnosed without guessing which listing hung.
+
+### Changed
+
+- Cold discovery progress now names Git listing, ignore-file listing, and filesystem scan fallback. A long sit used to stay on `Discovering source files` until Git returned; the spinner now says which listing is running, and a Git timeout warns before the filesystem scan.
 
 ### Fixed
 

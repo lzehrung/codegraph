@@ -42,7 +42,7 @@ export function decodeGitPath(rawPath: string): string {
 
   const inner = rawPath.slice(1, -1);
   const bytes: number[] = [];
-  for (let index = 0; index < inner.length; ) {
+  for (let index = 0; index < inner.length;) {
     const char = inner[index]!;
     if (char !== "\\") {
       const codePoint = inner.codePointAt(index)!;
@@ -874,6 +874,11 @@ export async function getUnifiedDiff(
   } catch (error) {
     throw createGitError(projectRoot, args, error);
   }
+}
+
+export function isGitTimeoutError(error: unknown): boolean {
+  const detail = error instanceof Error ? error.message : stringifyUnknown(error);
+  return /timed out after \d+ms/i.test(detail);
 }
 
 function createGitError(projectRoot: string, args: string[], error: unknown): Error {

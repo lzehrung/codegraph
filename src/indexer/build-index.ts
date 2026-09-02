@@ -93,6 +93,7 @@ import { cacheRoot } from "./build-cache/location.js";
 import {
   type BuildOptions,
   type BuildReport,
+  type BuildTimingReport,
   type GraphDeltaReport,
   type ImportBinding,
   type IncrementalBuildOptions,
@@ -651,6 +652,16 @@ function emitIndexCheckActivity(
   });
 }
 
+function recordBuildTimingStep(timings: BuildTimingReport | undefined, step: { name: string; ms: number }): void {
+  if (!timings) return;
+  (timings.steps ??= []).push(step);
+  if (step.name === "git-list") {
+    timings.gitListMs = step.ms;
+    return;
+  }
+  if (step.name === "filesystem-scan") timings.filesystemScanMs = step.ms;
+}
+
 function buildConcurrency(opts: BuildOptions | undefined): number {
   return resolveWorkerThreadCount({ requested: Number(opts?.threads || 0), defaultCount: 8, max: 64 });
 }
@@ -1172,6 +1183,9 @@ async function buildProjectIndexWithManifestOptions(
       ? (progress: { activity: string; current: number; total: number }) =>
           emitIndexCheckActivity(opts, progress.activity, progress.current, progress.total)
       : undefined;
+    const onDiscoveryTiming = timings
+      ? (step: { name: string; ms: number }) => recordBuildTimingStep(timings, step)
+      : undefined;
     // When the hint is unknown, listProjectFiles() and discoverProjectFiles() must run
     // sequentially rather than in Promise.all to avoid duplicate full-tree probes. The Git
     // candidate callback below reuses that same listing so metadata discovery does not spawn
@@ -1188,6 +1202,7 @@ async function buildProjectIndexWithManifestOptions(
         onSymlinkDirectoriesDiscovered,
         onGitCandidatesDiscovered,
         ...(onDiscoveryProgress ? { onDiscoveryProgress } : {}),
+        ...(onDiscoveryTiming ? { onDiscoveryTiming } : {}),
       },
     );
     if (timings) timings.sourceDiscoveryMs = Math.round(performance.now() - sourceDiscoveryStart);
@@ -1208,6 +1223,7 @@ async function buildProjectIndexWithManifestOptions(
       ...(discoveredSymlinkDirectories !== undefined ? { knownSymlinkDirectories: discoveredSymlinkDirectories } : {}),
       ...(discoveredGitCandidates !== undefined ? { knownGitCandidates: discoveredGitCandidates } : {}),
       ...(onDiscoveryProgress ? { onDiscoveryProgress } : {}),
+      ...(onDiscoveryTiming ? { onDiscoveryTiming } : {}),
     });
     if (timings) timings.metadataDiscoveryMs = Math.round(performance.now() - metadataDiscoveryStart);
     return await buildIndexFromFileListShared(projectRoot, files, opts, {
@@ -1589,6 +1605,12 @@ export async function buildProjectIndexIncremental(
           onGitCandidatesDiscovered: (candidates) => {
             discoveredGitCandidates = candidates;
           },
+          ...(discoveryTimings
+            ? {
+                onDiscoveryTiming: (step: { name: string; ms: number }) =>
+                  recordBuildTimingStep(discoveryTimings, step),
+              }
+            : {}),
         }),
       );
     }

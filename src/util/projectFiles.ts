@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import picomatch from "picomatch";
+import { performance } from "node:perf_hooks";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { stringifyUnknown } from "./ast.js";
 import { fileIdentityKey, isFilePathWithinRoot, normalizePath } from "./paths.js";
@@ -20,6 +21,7 @@ import {
   getGitRepositoryRoot,
   isGitProjectRootIgnored,
   isGitRepo,
+  isGitTimeoutError,
   listGitExcludeFiles,
   listGitIgnoreFiles,
   listGitStageSpecialPaths,
@@ -169,21 +171,48 @@ type DiscoveryWorkProgress = {
   total: number;
 };
 
-type InternalProjectFileDiscoveryOptions = ProjectFileDiscoveryOptions & {
-  onGitCandidatesDiscovered?: (candidates: GitCandidateSet | null) => void;
-  onDiscoveryProgress?: (progress: DiscoveryWorkProgress) => void;
+type DiscoveryTimingStep = {
+  name: string;
+  ms: number;
 };
+
+type DiscoveryWorkCallbacks = {
+  onDiscoveryProgress?: (progress: DiscoveryWorkProgress) => void;
+  onDiscoveryTiming?: (step: DiscoveryTimingStep) => void;
+};
+
+function emitDiscoveryActivity(
+  report: ((progress: DiscoveryWorkProgress) => void) | undefined,
+  activity: string,
+  current = 0,
+  total = 0,
+): void {
+  report?.({ activity, current, total });
+}
+
+function emitDiscoveryTiming(
+  record: ((step: DiscoveryTimingStep) => void) | undefined,
+  name: string,
+  startedAt: number,
+): void {
+  record?.({ name, ms: Math.round(performance.now() - startedAt) });
+}
+
+type InternalProjectFileDiscoveryOptions = ProjectFileDiscoveryOptions &
+  DiscoveryWorkCallbacks & {
+    onGitCandidatesDiscovered?: (candidates: GitCandidateSet | null) => void;
+  };
 
 type ProjectMetadataPublicOptions = Pick<
   ProjectFileDiscoveryOptions,
   "logLevel" | "knownSymlinkDirectories" | "onSymlinkDirectoriesDiscovered"
 >;
 
-type ProjectMetadataDiscoveryOptions = ProjectMetadataPublicOptions & {
-  knownGitCandidates?: GitCandidateSet | null;
-  onGitCandidatesDiscovered?: (candidates: GitCandidateSet | null) => void;
-  onDiscoveryProgress?: (progress: DiscoveryWorkProgress) => void;
-};
+type ProjectMetadataDiscoveryOptions = ProjectMetadataPublicOptions &
+  DiscoveryWorkCallbacks & {
+    knownGitCandidates?: GitCandidateSet | null;
+    onGitCandidatesDiscovered?: (candidates: GitCandidateSet | null) => void;
+  };
 
 type GitignoreRule = {
   baseDir: string;
@@ -668,7 +697,7 @@ async function findGitIgnoreSources(
 async function listGitCandidateFiles(
   root: string,
   logLevel: LogLevel | undefined,
-  opts?: { includeGlobs?: readonly string[] },
+  opts?: { includeGlobs?: readonly string[] } & DiscoveryWorkCallbacks,
 ): Promise<GitCandidateSet | null> {
   try {
     const realRoot = normalizePath(await fsp.realpath(root));
@@ -677,6 +706,8 @@ async function listGitCandidateFiles(
     if (await isGitProjectRootIgnored(realRoot)) return null;
     const gitRepositoryRoot = await getGitRepositoryRoot(gitRoot);
     if (!gitRepositoryRoot) return null;
+    emitDiscoveryActivity(opts?.onDiscoveryProgress, "Listing Git files");
+    const gitListStart = performance.now();
     const [tracked, untracked, stageSpecial] = await Promise.all([
       listTrackedFiles(gitRoot, { recurseSubmodules: true, ...(logLevel === undefined ? {} : { logLevel }) }),
       listUntrackedFiles(gitRoot, { respectGitignore: true }),
@@ -724,18 +755,38 @@ async function listGitCandidateFiles(
         { path: physicalPath, repositoryRoot: physicalPath },
       ]),
     ];
+    emitDiscoveryTiming(opts?.onDiscoveryTiming, "git-list", gitListStart);
+    emitDiscoveryActivity(opts?.onDiscoveryProgress, "Listing Git files", files.length, files.length);
+    emitDiscoveryActivity(opts?.onDiscoveryProgress, "Listing Git ignore files");
+    const gitIgnoreStart = performance.now();
+    const gitignoreFiles = await findGitIgnoreSources(
+      sourceRoots,
+      defaultIgnoreGitExcludePathspecs(opts?.includeGlobs ?? []),
+    );
+    emitDiscoveryTiming(opts?.onDiscoveryTiming, "git-ignore", gitIgnoreStart);
+    emitDiscoveryActivity(
+      opts?.onDiscoveryProgress,
+      "Listing Git ignore files",
+      gitignoreFiles.length,
+      gitignoreFiles.length,
+    );
     return {
       files,
       symlinkCandidatePaths,
-      gitignoreFiles: await findGitIgnoreSources(
-        sourceRoots,
-        defaultIgnoreGitExcludePathspecs(opts?.includeGlobs ?? []),
-      ),
+      gitignoreFiles,
       gitignoreRoots,
       gitignoreAliases: sourceRoots,
     };
   } catch (error) {
-    logWithLevel(logLevel, "debug", `Git discovery unavailable for ${root}: ${stringifyUnknown(error)}`);
+    if (isGitTimeoutError(error)) {
+      logWithLevel(
+        logLevel,
+        "warn",
+        "Warning: Git file listing timed out; scanning the filesystem instead. Ignore large untracked trees in .gitignore to keep discovery fast.",
+      );
+    } else {
+      logWithLevel(logLevel, "debug", `Git discovery unavailable for ${root}: ${stringifyUnknown(error)}`);
+    }
     return null;
   }
 }
@@ -800,8 +851,12 @@ async function listProjectFilesInternal(
     // not this call's, so those fall back to the scan.
     const attemptedGitCandidates =
       useGitignore && options?.gitignoreRoot === undefined && normalizePath(realRoot) === normalizePath(root);
+    const gitDiscoveryCallbacks: DiscoveryWorkCallbacks = {
+      ...(options?.onDiscoveryProgress ? { onDiscoveryProgress: options.onDiscoveryProgress } : {}),
+      ...(options?.onDiscoveryTiming ? { onDiscoveryTiming: options.onDiscoveryTiming } : {}),
+    };
     const gitCandidates = attemptedGitCandidates
-      ? await listGitCandidateFiles(root, options?.logLevel, { includeGlobs })
+      ? await listGitCandidateFiles(root, options?.logLevel, { includeGlobs, ...gitDiscoveryCallbacks })
       : null;
     // Report only when this call actually asked Git, including a null result. Callers that
     // already enumerated candidates (build-index) can hand the same set to metadata discovery
@@ -824,15 +879,22 @@ async function listProjectFilesInternal(
     }
     // Git returns a candidate set, not a filtered result: the pattern, include,
     // default-ignore, and gitignore checks below still decide what is indexable.
-    const files = gitCandidates
-      ? gitCandidates.files
-      : await fg(patterns, {
-          cwd: root,
-          absolute: true,
-          dot: true,
-          followSymbolicLinks: false,
-          ignore: fastGlobIgnoreGlobs,
-        });
+    let files: string[];
+    if (gitCandidates) {
+      files = gitCandidates.files;
+    } else {
+      emitDiscoveryActivity(options?.onDiscoveryProgress, "Scanning project files");
+      const scanStart = performance.now();
+      files = await fg(patterns, {
+        cwd: root,
+        absolute: true,
+        dot: true,
+        followSymbolicLinks: false,
+        ignore: fastGlobIgnoreGlobs,
+      });
+      emitDiscoveryTiming(options?.onDiscoveryTiming, "filesystem-scan", scanStart);
+      emitDiscoveryActivity(options?.onDiscoveryProgress, "Scanning project files", files.length, files.length);
+    }
     // Explicit includeGlobs may re-open default-ignored trees (for example vendored
     // dependency dirs). Scan those include patterns without default ignores, then keep
     // only paths that still match the project patterns and include globs below.
@@ -1221,7 +1283,10 @@ async function discoverProjectFilesInternal(
     if (options?.knownGitCandidates !== undefined) {
       gitCandidates = options.knownGitCandidates;
     } else {
-      gitCandidates = await listGitCandidateFiles(root, options?.logLevel);
+      gitCandidates = await listGitCandidateFiles(root, options?.logLevel, {
+        ...(options?.onDiscoveryProgress ? { onDiscoveryProgress: options.onDiscoveryProgress } : {}),
+        ...(options?.onDiscoveryTiming ? { onDiscoveryTiming: options.onDiscoveryTiming } : {}),
+      });
     }
     options?.onGitCandidatesDiscovered?.(gitCandidates);
     const reportMetadataSymlinkChecks = options?.onDiscoveryProgress

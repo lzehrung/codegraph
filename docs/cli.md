@@ -51,7 +51,7 @@ Reduced-accuracy runs are never silent: `graph` and `index` print a one-line `Ba
 
 ## Index and cache guidance
 
-Current-state, index-backed commands validate freshness automatically and default to the on-disk cache. The first query for a project may build the index; after one second, progress is written to stderr with a continuing heartbeat, leaving JSON stdout parseable. A cold or incompatible rebuild advances through source and metadata discovery before it starts build progress; path checks show completed and total counts when a total is known. Later commands with the same `--root`, discovery configuration, graph options, and compatible build options reuse disk state under `.codegraph/cache/index-v1`, updating incrementally when files changed and rebuilding when compatibility cannot be proven.
+Current-state, index-backed commands validate freshness automatically and default to the on-disk cache. The first query for a project may build the index; after one second, progress is written to stderr with a continuing heartbeat, leaving JSON stdout parseable. A cold or incompatible rebuild advances through source discovery, Git listing or filesystem scan, ignore-file listing, metadata discovery, and counted path checks when a total is known, then starts build progress. Later commands with the same `--root`, discovery configuration, graph options, and compatible build options reuse disk state under `.codegraph/cache/index-v1`, updating incrementally when files changed and rebuilding when compatibility cannot be proven.
 
 `codegraph index` and `codegraph sync` prewarm or repair that state; they are not prerequisites for `deps`, `refs`, `inspect`, `impact`, `review`, or any other current-state query. Artifact production (`graph`, `artifact`), lifecycle commands, and historical comparisons (`drift`, `graph-delta`) keep explicit build and range semantics instead.
 
@@ -190,7 +190,7 @@ codegraph inspect ./src --report --report-file inspect.report.json
 
 Graph, index, search, inspect, and review reports include `backend.native.byLanguage` so native usage and fallback remain visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Reports also include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Search and inspect timing reports contain command totals and the underlying index build report without changing normal stdout. Review JSON reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, `changedFiles[].status` as `updated`, `deleted`, or `missing`, and `sqlContext` when changed SQL files or changed SQL literals make SQL artifact facts relevant.
 
-When a command builds an index with `--report`, its timing payload can include `sourceDiscoveryMs` for source-file discovery and `metadataDiscoveryMs` for project-metadata discovery. These optional fields are absent when their step does not run.
+When a command builds an index with `--report`, its timing payload can include `sourceDiscoveryMs` for source-file discovery, `metadataDiscoveryMs` for project-metadata discovery, `gitListMs` for Git candidate listing, `filesystemScanMs` when discovery falls back to a glob scan, and `steps` for named discovery durations. These optional fields are absent when their step does not run.
 
 ### Project lifecycle
 
@@ -484,7 +484,7 @@ Short JSON shape:
 - Small orientation budgets default to `--health skip`. Medium and large default to `--health summary`, which counts cycles and unresolved imports while omitting duplicate health; use `--health full` when exhaustive duplicate counts matter.
 - Use `packet get` with file paths, symbol names, SQL object names, file/symbol/chunk/SQL/graph handles, or review handles to retrieve bounded evidence plus follow-up commands.
 - Agent commands and every current-state query default to disk cache and validate automatically; a whole-project `graph` or `index` run performs its explicit build. Use shared index flags such as `--cache`, `--cache-strict`, `--cache-verify`, `--threads`, `--native`, `--workers`, `--include-glob`, `--ignore-glob`, and `--no-gitignore` when the packet should match a specific scan mode.
-- Commands that load the project index first report cache validation as `Checking project index`. A cold or incompatible rebuild then reports source and metadata discovery, followed by counted path checks when available, before build or update progress. Warm cache hits complete as `Checked project index` without claiming a rebuild. Use `--progress` for redirected progress logs or `--no-progress` to suppress feedback.
+- Commands that load the project index first report cache validation as `Checking project index`. A cold or incompatible rebuild then reports source discovery, Git listing or filesystem scan, ignore-file listing, metadata discovery, and counted path checks when available, before build or update progress. Warm cache hits complete as `Checked project index` without claiming a rebuild. Use `--progress` for redirected progress logs or `--no-progress` to suppress feedback.
 
 #### Live file views
 
