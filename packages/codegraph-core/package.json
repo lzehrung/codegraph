@@ -1,6 +1,6 @@
 {
   "name": "@lzehrung/codegraph-core",
-  "version": "2.3.10",
+  "version": "2.3.11",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -63,6 +63,6 @@
     "zod": "^4.4.3"
   },
   "optionalDependencies": {
-    "@lzehrung/codegraph-native": "^1.12.10"
+    "@lzehrung/codegraph-native": "^1.12.11"
   }
 }
