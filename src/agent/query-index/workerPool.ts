@@ -6,6 +6,7 @@ import { findPackageRoot } from "../../util/packageInfo.js";
 import { prepareQueryIndexFile, type PreparedQueryIndexFile } from "./content.js";
 import { resolveQueryIndexSourcePath } from "./paths.js";
 import { resolveWorkerThreadCount } from "../../util/workerThreads.js";
+import { markWindowsProcessDrainRequired } from "../../util/windowsProcessDrain.js";
 import type { QueryIndexWorkerTask } from "./queryIndexWorker.js";
 
 const QUERY_INDEX_MAX_THREADS = 4;
@@ -77,6 +78,7 @@ export async function prepareQueryIndexFilesInWorker(
     return await prepareQueryIndexFilesInProcess(projectRoot, files);
   }
 
+  markWindowsProcessDrainRequired();
   const pool = new Piscina({
     filename: workerPath,
     minThreads: 1,

@@ -11,6 +11,7 @@ import {
   readPlatformPackage,
 } from "./bindingLoader.js";
 import { lookupNativeRuntimeCacheEntry, recordNativeRuntimeCacheIdentity } from "./runtimeCache.js";
+import { markWindowsProcessDrainRequired } from "../util/windowsProcessDrain.js";
 import type {
   NativeBinding,
   NativeBindingOrigin,
@@ -85,6 +86,7 @@ export function loadBinding(): NativeBindingState {
   });
   if (loaded.binding) {
     const supportedLanguageIds = new Set(loaded.binding.supportedLanguageIds());
+    markWindowsProcessDrainRequired();
     bindingState = {
       loaded: true,
       binding: loaded.binding,
