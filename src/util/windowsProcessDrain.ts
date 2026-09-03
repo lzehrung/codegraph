@@ -8,8 +8,8 @@
  *
  * Keeping the event loop alive briefly after that work lets libuv finish
  * closing handles before Node destroys the loop. Off Windows this is a no-op.
- * The hook is registered from sqlite/native/worker use so `version`, `help`,
- * and `doctor` do not load this module.
+ * The hook is registered from sqlite/native/worker use so `version` and `help`
+ * do not load this module. `doctor` inspects the native addon, so it can.
  */
 
 export const WINDOWS_LIBUV_EXIT_DRAIN_MS = 100;
