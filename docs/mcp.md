@@ -279,7 +279,7 @@ Use `command: "codegraph"` when the CLI is on `PATH`. Use the full executable pa
 Start one codegraph process per repository:
 
 ```bash
-codegraph mcp serve --root /path/to/repo --port 7331 --warmup
+codegraph mcp serve --root /path/to/repo --port 7331
 ```
 
 Point each MCP client at the shared endpoint:

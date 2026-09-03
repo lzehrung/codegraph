@@ -303,7 +303,7 @@ codegraph skill install --agent claude
 codegraph skill install --agent cursor
 ```
 
-See [Agent workflows](./docs/agent-workflows.md) for exploration strategy, warm sessions, streaming, review loops, and tool wrappers. Use `codegraph server start --root . --warmup` to share one local MCP HTTP server, then inspect or stop it with `codegraph server status --root . --json` and `codegraph server stop --root .`; lifecycle verification keeps its secret outside the project. See [MCP](./docs/mcp.md) for server and client configuration.
+See [Agent workflows](./docs/agent-workflows.md) for exploration strategy, warm sessions, streaming, review loops, and tool wrappers. Use `codegraph server start --root .` to share one local MCP HTTP server, then inspect or stop it with `codegraph server status --root . --json` and `codegraph server stop --root .`; lifecycle verification keeps its secret outside the project. See [MCP](./docs/mcp.md) for server and client configuration.
 
 ## Language support
 
