@@ -350,6 +350,26 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.14...HEAD
+[2.3.14]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.14
+[2.3.13]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.13
+[2.3.12]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.12
+[2.3.11]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.11
+[2.3.10]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.10
+[2.3.9]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.9
+[2.3.8]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.8
+[2.3.7]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.7
+[2.3.6]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.6
+[2.3.5]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.5
+[2.3.4]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.4
+[2.3.3]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.3
+[2.3.2]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.2
+[2.3.1]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.1
+[2.3.0]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.0
+[2.2.3]: https://github.com/lzehrung/codegraph/releases/tag/v2.2.3
+[2.2.2]: https://github.com/lzehrung/codegraph/releases/tag/v2.2.2
+[2.2.1]: https://github.com/lzehrung/codegraph/releases/tag/v2.2.1
+[2.2.0]: https://github.com/lzehrung/codegraph/releases/tag/v2.2.0
 [2.1.2]: https://github.com/lzehrung/codegraph/releases/tag/v2.1.2
 [2.1.1]: https://github.com/lzehrung/codegraph/releases/tag/v2.1.1
 [2.1.0]: https://github.com/lzehrung/codegraph/releases/tag/v2.1.0
