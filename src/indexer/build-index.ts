@@ -45,6 +45,7 @@ import { attemptParsePreparedFileContext, type ParsedFileContext } from "./parse
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
 import { collectImportsForFile } from "./imports.js";
 import { collectLocalsAndExportsFromSource } from "./locals-and-exports.js";
+import { expandStarImports } from "./expand-star-imports.js";
 import { compareEdges, edgeKey, toRelativeEdge } from "./shared.js";
 import { BloomFilter, buildBloomFilterFromSource } from "../util/bloomFilter.js";
 import { initNativeBackendReport } from "../native/nativeBackendReport.js";
@@ -474,64 +475,6 @@ function projectPatternsForLanguageExtensions(opts?: BuildOptions): string[] | u
   const customPatterns = languageExtensionPatterns(opts?.languageExtensions);
   if (!customPatterns.length) return undefined;
   return [...DEFAULT_PROJECT_PATTERNS, ...customPatterns];
-}
-
-function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: BuildOptions): void {
-  const expandedImportKey = (binding: ImportBinding): string | null => {
-    const typeOnly = binding.typeOnly ?? false;
-    if (binding.kind === "named") {
-      return JSON.stringify(["named", binding.from, binding.resolved, typeOnly, binding.local, binding.imported]);
-    }
-    if (binding.kind === "namespace") {
-      return JSON.stringify(["namespace", binding.from, binding.resolved, typeOnly, binding.localNS]);
-    }
-    return null;
-  };
-
-  for (const mod of modules.values()) {
-    const expandedImportKeys = new Set<string>();
-    for (const existing of mod.imports) {
-      const key = expandedImportKey(existing);
-      if (key) expandedImportKeys.add(key);
-    }
-    for (const imp of [...mod.imports]) {
-      if (imp.kind !== "star" || typeof imp.resolved !== "string") continue;
-      const target = modules.get(fileIdentityKey(imp.resolved));
-      if (!target) continue;
-      const targetSupport = supportForFile(imp.resolved, opts?.languageExtensions);
-      const exportedSymbols = target.exports.filter((entry) => entry.type === "local").length
-        ? target.exports
-            .filter((entry): entry is Extract<typeof entry, { type: "local" }> => entry.type === "local")
-            .map((entry) => entry.target)
-        : target.locals.filter((local) => !local.localName.startsWith("_"));
-      const seen = new Set<string>();
-      for (const symbol of exportedSymbols) {
-        if (!symbol.localName || seen.has(symbol.localName)) continue;
-        seen.add(symbol.localName);
-        const treatAsNamespace = targetSupport?.id === "ruby" && symbol.kind === SymbolKind.Class;
-        const expandedImport: ImportBinding = treatAsNamespace
-          ? {
-              kind: "namespace",
-              localNS: symbol.localName,
-              from: imp.from,
-              resolved: imp.resolved,
-              ...(imp.typeOnly !== undefined ? { typeOnly: imp.typeOnly } : {}),
-            }
-          : {
-              kind: "named",
-              local: symbol.localName,
-              imported: symbol.localName,
-              from: imp.from,
-              resolved: imp.resolved,
-              ...(imp.typeOnly !== undefined ? { typeOnly: imp.typeOnly } : {}),
-            };
-        const expandedImportKeyValue = expandedImportKey(expandedImport);
-        if (!expandedImportKeyValue || expandedImportKeys.has(expandedImportKeyValue)) continue;
-        expandedImportKeys.add(expandedImportKeyValue);
-        mod.imports.push(expandedImport);
-      }
-    }
-  }
 }
 
 function toProjectIndexManifestEntry(
