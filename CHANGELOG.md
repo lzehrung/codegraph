@@ -15,6 +15,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Changed
 
+- `codegraph mcp serve` (and `codegraph server start`, which spawns it) now warms the base session cache at startup by default, matching the old `--warmup` behavior. Previously startup was lazy by default, so an agent's first MCP tool call paid for cold discovery and building; on a large project that could exceed a client's tool-call timeout before the server ever produced a result. Pass `--no-warmup` for the old lazy startup, or `--warmup-symbols` to also warm the detailed symbol graph. Programmatic callers that supply their own `session` to `serveCodegraphMcp`/`startCodegraphMcpHttpServer` keep the previous lazy default unless they pass `warmup` explicitly.
+
 - Index builds now name each post-parse persistence phase (`Writing disk cache`, `Resolving workspace manifests`, `Writing index manifest`, `Finalizing project graph`, `Writing project snapshot`) instead of leaving progress frozen at the last file count once parsing finishes. `--report` timings now include a `steps` array covering `persist-cache`, `workspace-manifests`, `finalize`, and `snapshot-write` durations.
 - Progress lines that carry a file count now show elapsed time for the current phase, for example `[Progress] Resolving workspace manifests: 41/41 files. (5s)`. Applies to both the interactive spinner and redirected log output.
 - Cold index progress now names file-cache checks after discovery. The spinner used to stay on `Checking project metadata files` while Git signatures, SQLite cache probes, and worker startup ran, so a cold init looked stuck on metadata after file listing had already finished. `--report` timings now include `cacheProbeMs` and a `cache-probe` step.

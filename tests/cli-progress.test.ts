@@ -562,7 +562,7 @@ describe("CLI index progress", () => {
     }
   });
 
-  it("keeps MCP startup quiet unless warmup performs real index work", async () => {
+  it("defaults MCP startup to base warmup and forwards explicit warmup modes", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-mcp-preparation-"));
     const serveSpy = vi.spyOn(mcpServer, "serveCodegraphMcp").mockResolvedValue();
 
@@ -572,7 +572,8 @@ describe("CLI index progress", () => {
         terminalSupportsControlSequences: true,
         progressPreparationDelayMs: 0,
       };
-      const lazy = await captureCli(["mcp", "serve", "--root", root], captureOptions);
+      const defaultCall = await captureCli(["mcp", "serve", "--root", root], captureOptions);
+      const noWarmup = await captureCli(["mcp", "serve", "--root", root, "--no-warmup"], captureOptions);
       const baseWarmup = await captureCli(["mcp", "serve", "--root", root, "--warmup"], captureOptions);
       const symbolWarmup = await captureCli(["mcp", "serve", "--root", root, "--warmup-symbols"], captureOptions);
       const normalizedRoot = normalizePath(root);
@@ -581,16 +582,20 @@ describe("CLI index progress", () => {
         onProgress: expect.any(Function),
       });
 
-      expect(lazy.stderr).not.toContain("project index");
+      expect(defaultCall.stderr).not.toContain("project index");
+      expect(noWarmup.stderr).not.toContain("project index");
       expect(baseWarmup.stderr).not.toContain("Preparing project index");
       expect(symbolWarmup.stderr).not.toContain("Preparing project index");
       expect(serveSpy).toHaveBeenNthCalledWith(
         1,
-        expect.objectContaining({ root: normalizedRoot, buildOptions: expectedBuildOptions }),
+        expect.objectContaining({ root: normalizedRoot, warmup: "base", buildOptions: expectedBuildOptions }),
       );
-      expect(serveSpy.mock.calls[0]?.[0].warmup).toBeUndefined();
       expect(serveSpy).toHaveBeenNthCalledWith(
         2,
+        expect.objectContaining({ root: normalizedRoot, warmup: "off", buildOptions: expectedBuildOptions }),
+      );
+      expect(serveSpy).toHaveBeenNthCalledWith(
+        3,
         expect.objectContaining({
           root: normalizedRoot,
           warmup: "base",
@@ -598,7 +603,7 @@ describe("CLI index progress", () => {
         }),
       );
       expect(serveSpy).toHaveBeenNthCalledWith(
-        3,
+        4,
         expect.objectContaining({
           root: normalizedRoot,
           warmup: "symbols",

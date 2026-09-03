@@ -1339,6 +1339,11 @@ describe("codegraph MCP handlers", () => {
       root,
       host: "127.0.0.1",
       port: 0,
+      // Warmup would perform this test's first freshness check before `late.ts` exists,
+      // and that check sets the 5s throttle (AGENT_FRESHNESS_CHECK_INTERVAL_MS) - the
+      // second call below would then read the stale cached result instead of detecting
+      // the edit. This test is about refresh detection, not warmup, so keep it lazy.
+      warmup: "off",
     });
 
     try {
@@ -3402,6 +3407,58 @@ describe("codegraph MCP handlers", () => {
       expect(counted.loads()).toBe(1);
       await counted.session.loadProject();
       expect(counted.loads()).toBe(1);
+    } finally {
+      await httpServer.close();
+    }
+  });
+
+  it("warms an auto-created MCP session by default", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-warmup-default-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const onProgress = vi.fn();
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      port: 0,
+      buildOptions: { onProgress },
+    });
+
+    try {
+      expect(onProgress).toHaveBeenCalled();
+    } finally {
+      await httpServer.close();
+    }
+  });
+
+  it("keeps an auto-created MCP session lazy when warmup is off", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-warmup-explicit-off-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const onProgress = vi.fn();
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      port: 0,
+      warmup: "off",
+      buildOptions: { onProgress },
+    });
+
+    try {
+      expect(onProgress).not.toHaveBeenCalled();
+    } finally {
+      await httpServer.close();
+    }
+  });
+
+  it("keeps an explicitly supplied MCP session lazy by default", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-warmup-explicit-session-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const counted = countingSession(createAgentSession({ root }));
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      port: 0,
+      session: counted.session,
+    });
+
+    try {
+      expect(counted.loads()).toBe(0);
     } finally {
       await httpServer.close();
     }

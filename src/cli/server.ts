@@ -49,6 +49,7 @@ const SERVER_COMMAND_FLAGS: Record<ServerCommand, readonly string[]> = {
     "--replace",
     "--warmup",
     "--warmup-symbols",
+    "--no-warmup",
     "--workers",
     "--json",
     "--pretty",
@@ -231,8 +232,11 @@ async function startServerForRoot(
   root: string,
   options: ServerStartOptions,
 ): Promise<void> {
-  if (context.hasFlag("--warmup") && context.hasFlag("--warmup-symbols")) {
-    throw new ServerUsageError("Choose either --warmup or --warmup-symbols for server start.");
+  if (
+    [context.hasFlag("--warmup"), context.hasFlag("--warmup-symbols"), context.hasFlag("--no-warmup")].filter(Boolean)
+      .length > 1
+  ) {
+    throw new ServerUsageError("Choose only one of --warmup, --warmup-symbols, or --no-warmup for server start.");
   }
 
   const existingStatus = await readServerStatus(root);
@@ -547,6 +551,7 @@ async function spawnServerProcess(
   const args = [entryPath, "mcp", "serve", "--root", root, "--host", host, "--port", String(port)];
   if (context.hasFlag("--warmup")) args.push("--warmup");
   if (context.hasFlag("--warmup-symbols")) args.push("--warmup-symbols");
+  if (context.hasFlag("--no-warmup")) args.push("--no-warmup");
   for (const flag of FORWARDED_FLAGS) {
     if (context.hasFlag(flag)) args.push(flag);
   }

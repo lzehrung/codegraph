@@ -61,6 +61,7 @@ import {
 import { type CodegraphRuntimeIdentity } from "../runtimeIdentity.js";
 import { assertWritableDirectoryRealPathWithinRoot, resolveArtifactSqlitePathCandidate } from "./security.js";
 
+/** `"off"` skips warmup, leaving the first tool call to pay for discovery and building. */
 export type CodegraphMcpWarmupMode = "off" | "base" | "symbols";
 
 export type CodegraphMcpHandlerOptions = {
@@ -72,6 +73,10 @@ export type CodegraphMcpHandlerOptions = {
 };
 
 export type CodegraphMcpServerOptions = CodegraphMcpHandlerOptions & {
+  /**
+   * Defaults to `"base"` when Codegraph creates the session itself; defaults to `"off"`
+   * when `session` is supplied explicitly. Pass `"off"` to always warm lazily.
+   */
   warmup?: CodegraphMcpWarmupMode;
   host?: string;
   port?: number;
@@ -332,14 +337,16 @@ function createCodegraphMcpSession(options: CodegraphMcpHandlerOptions, root: st
 function startCodegraphMcpWarmup(
   session: AgentSession,
   warmup: CodegraphMcpWarmupMode | undefined,
+  sessionProvidedExplicitly: boolean,
 ): Promise<AgentProjectSnapshot> | undefined {
-  if (warmup === "base") {
-    return session.loadProject({ symbolGraph: "skip" });
-  }
-  if (warmup === "symbols") {
-    return session.loadProject();
-  }
-  return undefined;
+  // An explicitly supplied session signals the caller already manages its lifecycle (tests,
+  // multi-server sharing); only warm it when they ask. A session Codegraph creates itself -
+  // the plain `codegraph mcp serve` / library-default path - warms by default so the first
+  // real tool call is not the one paying for cold discovery and building.
+  const mode = warmup ?? (sessionProvidedExplicitly ? "off" : "base");
+  if (mode === "off") return undefined;
+  if (mode === "symbols") return session.loadProject();
+  return session.loadProject({ symbolGraph: "skip" });
 }
 
 type WarmedCodegraphMcpResources = {
@@ -351,8 +358,9 @@ export async function createWarmedCodegraphMcpResources(
   options: CodegraphMcpServerOptions,
 ): Promise<WarmedCodegraphMcpResources> {
   const root = path.resolve(options.root);
+  const sessionProvidedExplicitly = options.session !== undefined;
   const session = createCodegraphMcpSession(options, root);
-  await startCodegraphMcpWarmup(session, options.warmup);
+  await startCodegraphMcpWarmup(session, options.warmup, sessionProvidedExplicitly);
   const { warmup, host, port, onHttpListen, ...handlerOptions } = options;
   void warmup;
   void host;
@@ -1001,7 +1009,7 @@ function createCodegraphMcpHandlersForSession(
           sqlitePath = configuredSqlitePath;
           sqliteOutDir = configuredSqliteOutDir;
           sqliteCanRefresh = configuredSqliteCanRefresh;
-          await startCodegraphMcpWarmup(session, warmup);
+          await startCodegraphMcpWarmup(session, warmup, true);
         })();
         refreshPromise = refresh;
         try {
