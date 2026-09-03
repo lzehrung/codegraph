@@ -106,11 +106,11 @@ describe("CLI index progress", () => {
       current: 1,
       total: 1,
     });
-
-    expect(chunks.join("")).toContain("[Progress] Discovering source files.\n");
-    expect(chunks.join("")).toContain("[Progress] Checking source file paths: 100/200 files.\n");
-    expect(chunks.join("")).not.toContain("0 files processed.\n");
-    expect(chunks.join("")).not.toContain("secret.ts");
+    const output = chunks.join("");
+    expect(output).toContain("[Progress] Discovering source files.\n");
+    expect(output).toMatch(/\[Progress\] Checking source file paths: 100\/200 files\. \(\d+(\.\d+)?(ms|s)\)\n/);
+    expect(output).not.toContain("0 files processed.\n");
+    expect(output).not.toContain("secret.ts");
   });
 
   it("omits unknown counts from discovery activity heartbeats", async () => {
@@ -138,8 +138,9 @@ describe("CLI index progress", () => {
       });
       await vi.advanceTimersByTimeAsync(1_000);
 
-      expect(chunks.join("")).toBe(
-        "[Progress] Checking project index.\n[Progress] Discovering source files.\n[Progress] Discovering source files.\n",
+      const output = chunks.join("");
+      expect(output).toMatch(
+        /^\[Progress\] Checking project index\.\n\[Progress\] Discovering source files\.\n\[Progress\] Discovering source files\. \(\d+(\.\d+)?(ms|s)\)\n$/,
       );
     } finally {
       vi.useRealTimers();
@@ -177,10 +178,13 @@ describe("CLI index progress", () => {
         total,
       });
 
-      expect(chunks.join("")).toBe(
-        `[Progress] Building project index.\n[Progress] Building project index: ${progressCount}.\n[Progress] Built project index: ${completionCount}.\n`,
-      );
-      if (!total) expect(chunks.join("")).not.toContain("0/0");
+      const output = chunks.join("");
+      const prefix = `[Progress] Building project index.\n[Progress] Building project index: ${progressCount}. (`;
+      const suffix = `)\n[Progress] Built project index: ${completionCount}.\n`;
+      expect(output.startsWith(prefix)).toBe(true);
+      expect(output.endsWith(suffix)).toBe(true);
+      expect(output.slice(prefix.length, output.length - suffix.length)).toMatch(/^\d+(\.\d+)?(ms|s)$/);
+      if (!total) expect(output).not.toContain("0/0");
     } finally {
       vi.useRealTimers();
     }
@@ -215,9 +219,11 @@ describe("CLI index progress", () => {
     });
 
     const output = chunks.join("");
-    expect(output).toBe(
-      `\r\u001b[2KBuilding project index... - ${progressCount}\r\u001b[2KBuilt project index: ${completionCount}.\n`,
-    );
+    const prefix = `\r\u001b[2KBuilding project index... - ${progressCount} (`;
+    const suffix = `)\r\u001b[2KBuilt project index: ${completionCount}.\n`;
+    expect(output.startsWith(prefix)).toBe(true);
+    expect(output.endsWith(suffix)).toBe(true);
+    expect(output.slice(prefix.length, output.length - suffix.length)).toMatch(/^\d+(\.\d+)?(ms|s)$/);
     if (!total) expect(output).not.toContain("0/0");
   });
 
@@ -347,7 +353,7 @@ describe("CLI index progress", () => {
 
     const output = chunks.join("");
     expect(output).toContain("[Progress] Updating project index.\n");
-    expect(output).toContain("[Progress] 1 file processed.\n");
+    expect(output).toMatch(/\[Progress\] 1 file processed\. \(\d+(\.\d+)?(ms|s)\)\n/);
     expect(output).toContain("[Progress] Updated project index: 3 files in 25ms.\n");
     expect(output).not.toContain("\u001b[");
     expect(output).not.toContain("\r");
@@ -556,7 +562,7 @@ describe("CLI index progress", () => {
     }
   });
 
-  it("keeps MCP startup quiet unless warmup performs real index work", async () => {
+  it("defaults MCP startup to base warmup and forwards explicit warmup modes", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-mcp-preparation-"));
     const serveSpy = vi.spyOn(mcpServer, "serveCodegraphMcp").mockResolvedValue();
 
@@ -566,7 +572,8 @@ describe("CLI index progress", () => {
         terminalSupportsControlSequences: true,
         progressPreparationDelayMs: 0,
       };
-      const lazy = await captureCli(["mcp", "serve", "--root", root], captureOptions);
+      const defaultCall = await captureCli(["mcp", "serve", "--root", root], captureOptions);
+      const noWarmup = await captureCli(["mcp", "serve", "--root", root, "--no-warmup"], captureOptions);
       const baseWarmup = await captureCli(["mcp", "serve", "--root", root, "--warmup"], captureOptions);
       const symbolWarmup = await captureCli(["mcp", "serve", "--root", root, "--warmup-symbols"], captureOptions);
       const normalizedRoot = normalizePath(root);
@@ -575,16 +582,20 @@ describe("CLI index progress", () => {
         onProgress: expect.any(Function),
       });
 
-      expect(lazy.stderr).not.toContain("project index");
+      expect(defaultCall.stderr).not.toContain("project index");
+      expect(noWarmup.stderr).not.toContain("project index");
       expect(baseWarmup.stderr).not.toContain("Preparing project index");
       expect(symbolWarmup.stderr).not.toContain("Preparing project index");
       expect(serveSpy).toHaveBeenNthCalledWith(
         1,
-        expect.objectContaining({ root: normalizedRoot, buildOptions: expectedBuildOptions }),
+        expect.objectContaining({ root: normalizedRoot, warmup: "base", buildOptions: expectedBuildOptions }),
       );
-      expect(serveSpy.mock.calls[0]?.[0].warmup).toBeUndefined();
       expect(serveSpy).toHaveBeenNthCalledWith(
         2,
+        expect.objectContaining({ root: normalizedRoot, warmup: "off", buildOptions: expectedBuildOptions }),
+      );
+      expect(serveSpy).toHaveBeenNthCalledWith(
+        3,
         expect.objectContaining({
           root: normalizedRoot,
           warmup: "base",
@@ -592,7 +603,7 @@ describe("CLI index progress", () => {
         }),
       );
       expect(serveSpy).toHaveBeenNthCalledWith(
-        3,
+        4,
         expect.objectContaining({
           root: normalizedRoot,
           warmup: "symbols",

@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import {
   orientCodegraph,
   type AgentOrientBudget,
@@ -5,10 +6,14 @@ import {
   type AgentOrientResponse,
 } from "../agent/orient.js";
 
-import type { BuildOptions } from "../indexer/types.js";
-import type { CliAgentCommandContext } from "./context.js";
+import type { BuildOptions, BuildReport } from "../indexer/types.js";
+import type { CliAgentCommandContext, CommandReport } from "./context.js";
 
-export type OrientCommandContext = CliAgentCommandContext;
+export type OrientCommandContext = CliAgentCommandContext & {
+  reportFile?: string | undefined;
+  commandReport?: CommandReport | undefined;
+  writeCommandReport?: (report: CommandReport, reportFile: string | undefined) => Promise<void>;
+};
 
 function parseAgentOrientBudget(rawValue: string | undefined): AgentOrientBudget {
   if (rawValue === undefined) return "small";
@@ -27,9 +32,15 @@ function parseAgentOrientHealthMode(rawValue: string | undefined): AgentOrientHe
 }
 
 export async function handleOrientCommand(context: OrientCommandContext): Promise<void> {
+  const commandStart = performance.now();
   const healthMode = parseAgentOrientHealthMode(context.getOpt("--health"));
   const writesJson = context.hasFlag("--json");
-  const buildOptions: BuildOptions = { ...(context.buildOptions ?? {}), logLevel: "silent" };
+  const indexReport: BuildReport | undefined = context.commandReport?.index;
+  const buildOptions: BuildOptions = {
+    ...(context.buildOptions ?? {}),
+    logLevel: "silent",
+    ...(indexReport ? { report: indexReport } : {}),
+  };
   const response = await orientCodegraph({
     root: context.root,
     includeRoots: context.positionals,
@@ -42,6 +53,11 @@ export async function handleOrientCommand(context: OrientCommandContext): Promis
     context.writeJSONLine(response);
   } else {
     context.writeStdoutLine(formatAgentOrientation(response));
+  }
+  if (context.commandReport && context.writeCommandReport) {
+    context.commandReport.timings.commandMs = Math.round(performance.now() - commandStart);
+    context.commandReport.timings.totalMs = context.commandReport.timings.commandMs;
+    await context.writeCommandReport(context.commandReport, context.reportFile);
   }
 }
 

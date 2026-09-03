@@ -182,15 +182,16 @@ codegraph index --report
 codegraph review --report --report-file review.report.json
 codegraph search "query" --report --report-file search.report.json
 codegraph inspect ./src --report --report-file inspect.report.json
+codegraph orient --report --report-file orient.report.json
 ```
 
 `--dynamic-import-heuristics` runs shared language adapters and adds heuristic dependency edges for statically reducible loader calls. For Python, it recognizes module strings passed to `importlib.import_module(...)`, direct `__import__(...)`, and aliases declared by `import importlib as ...` or `from importlib import import_module as ...`; the JS and TypeScript adapters also run inside embedded script blocks. These edges report heuristic resolution with confidence `0.7`. Computed module names, alias assignment flow, name reassignment, Python's `package=` argument, and `__import__` relative `level=` semantics are not modeled; a leading-dot `importlib.import_module(...)` string uses the importing file's existing package-relative resolution.
 
 `inspect` emits bounded hotspots, unresolved imports, and cycles. Add `--duplicates` to include a bounded high-confidence duplicate summary; run the recommended `duplicates` command for full grouped JSON.
 
-Graph, index, search, inspect, and review reports include `backend.native.byLanguage` so native usage and fallback remain visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Reports also include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Search and inspect timing reports contain command totals and the underlying index build report without changing normal stdout. Review JSON reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, `changedFiles[].status` as `updated`, `deleted`, or `missing`, and `sqlContext` when changed SQL files or changed SQL literals make SQL artifact facts relevant.
+Graph, index, search, inspect, orient, and review reports include `backend.native.byLanguage` so native usage and fallback remain visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Reports also include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Search and inspect timing reports contain command totals and the underlying index build report without changing normal stdout. Review JSON reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, `changedFiles[].status` as `updated`, `deleted`, or `missing`, and `sqlContext` when changed SQL files or changed SQL literals make SQL artifact facts relevant.
 
-When a command builds an index with `--report`, its timing payload can include `sourceDiscoveryMs` for source-file discovery, `metadataDiscoveryMs` for project-metadata discovery, `gitListMs` for Git candidate listing, `filesystemScanMs` when discovery falls back to a glob scan, `cacheProbeMs` for Git signatures and per-file cache probes before parse, and `steps` for named discovery durations. These optional fields are absent when their step does not run. Reusing the same report object replaces the discovery fields for the current build.
+When a command builds an index with `--report`, its timing payload can include `sourceDiscoveryMs` for source-file discovery, `metadataDiscoveryMs` for project-metadata discovery, `gitListMs` for Git candidate listing, `filesystemScanMs` when discovery falls back to a glob scan, `cacheProbeMs` for Git signatures and per-file cache probes before parse, and `steps` for named discovery and post-parse persistence durations (for example `cache-probe`, `persist-cache`, `workspace-manifests`, `index-manifest`, `finalize`, and `snapshot-write`). These optional fields are absent when their step does not run. Reusing the same report object replaces the discovery fields for the current build.
 
 ### Project lifecycle
 
@@ -208,7 +209,7 @@ When a command builds an index with `--report`, its timing payload can include `
 ### Shared MCP HTTP server
 
 ```bash
-codegraph server start --root . --warmup
+codegraph server start --root .
 codegraph server status --root . --json
 codegraph server stop --root .
 ```
@@ -219,7 +220,7 @@ codegraph server stop --root .
 
 The v2 registry stores only `schemaVersion`, `pid`, `url`, `root`, `startedAt`, `version`, and a non-secret `credentialId`; its credential remains in the per-user Codegraph state directory, outside the project and separate from package files and compiler cache data. A v1 registry with a live process is never signaled; stop that old process manually, then start it again.
 
-`server start` forwards `--warmup`, `--warmup-symbols`, cache, native, worker, and discovery options to `mcp serve`; each start truncates `.codegraph/server.log` for server stderr and startup diagnostics. `status` accepts only `--json` or `--pretty`, and `stop` accepts no output or startup options. The commands do not start implicitly from unrelated commands or manage a general background daemon.
+`server start` forwards `--warmup`, `--warmup-symbols`, `--no-warmup`, cache, native, worker, and discovery options to `mcp serve`; each start truncates `.codegraph/server.log` for server stderr and startup diagnostics. `status` accepts only `--json` or `--pretty`, and `stop` accepts no output or startup options. The commands do not start implicitly from unrelated commands or manage a general background daemon.
 
 ### Affected tests
 
@@ -336,7 +337,7 @@ codegraph mcp --root . --artifact codegraph-out --stdio
 codegraph mcp --root . --stdio --allow-build
 codegraph mcp --root . --stdio --idle-timeout-ms 1800000
 codegraph mcp --root . --port 7331
-codegraph mcp --root . --stdio --warmup
+codegraph mcp --root . --stdio --no-warmup
 codegraph mcp --root . --port 7331 --warmup-symbols
 
 # Install or preview agent client integration
@@ -550,7 +551,7 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 - `mcp serve` exposes explore, navigation, search, read-only rename preview, impact, review, SQLite query, session refresh, and artifact-build tools.
 - MCP uses stdio by default or Streamable HTTP with `--port <number>`. HTTP protocol sessions are activity-tracked, count-bounded, and idle-evicted; tool schemas reject unknown fields.
 - `mcp` and `viewer` reject `--json`/`--pretty` because they do not emit structured command output.
-- Startup is lazy by default; `--warmup` builds the base session cache before serving requests, and `--warmup-symbols` also builds the detailed symbol graph.
+- Startup warms the base session cache by default; `--no-warmup` starts lazily instead, and `--warmup-symbols` also builds the detailed symbol graph before serving.
 - Index-backed responses include `freshness`; small file changes auto-refresh, while stale responses include a reason, total changed-file count, and a bounded changed-file sample.
 - Use `refresh_index` to force a rebuild, reset SQLite artifact state, or recover after stale change bursts.
 - HTTP serves `/mcp`, validates Host headers, and binds to `127.0.0.1` unless `--host <host>` is passed.

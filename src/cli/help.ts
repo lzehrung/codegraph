@@ -354,7 +354,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const ORIENT_HELP_TEXT = `codegraph orient - Build a compact first-turn packet for agent repo context
 
-Usage: codegraph orient [roots...] [--root <path>] [--budget small|medium|large] [--health skip|summary|full] [--json | --pretty]
+Usage: codegraph orient [roots...] [--root <path>] [--budget small|medium|large] [--health skip|summary|full] [--report [--report-file <path>]] [--json | --pretty]
 
 Output:
   Orientation includes summary bullets, ranked focus targets with follow-up commands, a bounded project tree, budgeted health counts, and omission counts.
@@ -415,13 +415,13 @@ ${SHARED_INDEX_OPTIONS_HELP}
 export const SERVER_HELP_TEXT = `codegraph server - Manage a shared project-local MCP HTTP server
 
 Usage:
-  codegraph server start [--root <path>] [--host <host>] [--port <1-65535>] [--startup-timeout-ms <1-86400000>] [--json] [--replace] [--warmup | --warmup-symbols]
+  codegraph server start [--root <path>] [--host <host>] [--port <1-65535>] [--startup-timeout-ms <1-86400000>] [--json] [--replace] [--warmup | --warmup-symbols | --no-warmup]
   codegraph server status [--root <path>] [--json | --pretty]
   codegraph server stop [--root <path>]
 
 Behavior:
   start runs codegraph mcp serve in a separate process, waits for a challenged /health proof, then writes .codegraph/server.json. --json emits the started registry with status and update fields; startup diagnostics go to .codegraph/server.log.
-  The default server listens on 127.0.0.1:7331. A public bind requires an explicit --host. --startup-timeout-ms defaults to 15000 and allows up to 86400000 for long warmups.
+  The default server listens on 127.0.0.1:7331. A public bind requires an explicit --host. --startup-timeout-ms defaults to 15000 and allows up to 86400000 for long warmups. Startup warms the base session cache by default; --no-warmup starts lazily instead, and --warmup-symbols also warms the detailed symbol graph.
   status retries proven health checks and reports a verification remedy for an unreachable or mismatched server. stop removes only confirmed stale registries or signals a Codegraph server whose root, process, and startup time match the registry.
 
 Forwarded startup options:
@@ -434,13 +434,14 @@ Safety:
 
 export const MCP_HELP_TEXT = `codegraph mcp - Serve MCP tools for agent graph navigation
 
-Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--idle-timeout-ms <ms>] [--allow-build] [--warmup | --warmup-symbols]
+Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--idle-timeout-ms <ms>] [--allow-build] [--warmup | --warmup-symbols | --no-warmup]
 
 Transports:
   --stdio          Serve MCP over stdio (default)
   --port <number> Serve Streamable HTTP at /mcp
-  --warmup        Build the base session cache at startup
+  --warmup        Build the base session cache at startup (default)
   --warmup-symbols Build the base cache and detailed symbol graph at startup
+  --no-warmup     Skip startup warmup; the first tool call pays for discovery and building
 
 Index Options:
   --cache <mode>     Session cache mode: disk, memory, off
@@ -460,7 +461,7 @@ Tools are read-only unless --allow-build is passed.
 
 export const MCP_SERVE_HELP_TEXT = `codegraph mcp serve - MCP server for agent graph navigation
 
-Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--idle-timeout-ms <ms>] [--allow-build] [--warmup | --warmup-symbols]
+Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--idle-timeout-ms <ms>] [--allow-build] [--warmup | --warmup-symbols | --no-warmup]
 
 Tools:
   orient          Build a compact first-turn repo packet
@@ -495,7 +496,7 @@ Index Options:
 Defaults:
   Transport defaults to stdio.
   HTTP transport binds to 127.0.0.1 unless --host is passed and serves /mcp.
-  Startup is lazy unless --warmup or --warmup-symbols is passed.
+  Startup warms the base session cache by default. --warmup-symbols also warms the detailed symbol graph. --no-warmup starts lazily instead, leaving the first tool call to pay for discovery and building.
   Warmup uses the configured session cache and shared index flags.
   Tools are read-only unless --allow-build is passed.
 `;

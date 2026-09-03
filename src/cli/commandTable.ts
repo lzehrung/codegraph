@@ -279,8 +279,20 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
   orient: {
     stage: "project",
     run: async (ctx) => {
+      const commandReport: CommandReport | undefined = ctx.reportEnabled
+        ? { command: "orient", timings: {} }
+        : undefined;
+      const indexReport: BuildReport | undefined = ctx.reportEnabled ? { timings: {} } : undefined;
+      if (commandReport && indexReport) commandReport.index = indexReport;
       const { handleOrientCommand } = await import("./orient.js");
-      await handleOrientCommand({ ...agentIo(ctx), positionals: ctx.includeRoots, ...agentIoWriters });
+      await handleOrientCommand({
+        ...agentIo(ctx),
+        positionals: ctx.includeRoots,
+        reportFile: ctx.reportFile,
+        commandReport,
+        writeCommandReport,
+        ...agentIoWriters,
+      });
     },
   },
   packet: {

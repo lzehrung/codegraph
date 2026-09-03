@@ -60,7 +60,7 @@ export async function handleMcpServeCommand(context: McpServeCommandContext): Pr
     ...(host !== undefined ? { host } : {}),
     ...(artifactPath !== undefined ? { artifactPath } : {}),
     ...(context.buildOptions !== undefined ? { buildOptions: context.buildOptions } : {}),
-    ...(warmup !== undefined ? { warmup } : {}),
+    warmup,
     ...(idleTimeoutMs !== undefined ? { idleTimeoutMs } : {}),
     onHttpListen: (info) => {
       context.writeStderrLine(`Codegraph MCP HTTP server listening at ${info.url}`);
@@ -68,12 +68,17 @@ export async function handleMcpServeCommand(context: McpServeCommandContext): Pr
   });
 }
 
-function parseMcpWarmupMode(context: McpServeCommandContext): CodegraphMcpWarmupMode | undefined {
-  if (context.hasFlag("--warmup") && context.hasFlag("--warmup-symbols")) {
-    context.writeStderrLine("Choose either --warmup or --warmup-symbols for mcp serve startup.");
+function parseMcpWarmupMode(context: McpServeCommandContext): CodegraphMcpWarmupMode {
+  const explicit = [
+    context.hasFlag("--warmup"),
+    context.hasFlag("--warmup-symbols"),
+    context.hasFlag("--no-warmup"),
+  ].filter(Boolean).length;
+  if (explicit > 1) {
+    context.writeStderrLine("Choose only one of --warmup, --warmup-symbols, or --no-warmup for mcp serve startup.");
     context.exit(2);
   }
   if (context.hasFlag("--warmup-symbols")) return "symbols";
-  if (context.hasFlag("--warmup")) return "base";
-  return undefined;
+  if (context.hasFlag("--no-warmup")) return "off";
+  return "base";
 }

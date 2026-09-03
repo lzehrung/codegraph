@@ -67,11 +67,18 @@ describe("Project Indexing", () => {
         onProgress: (update) => updates.push(update),
       });
 
-      expect(updates.map((update) => update.phase)).toEqual(["start", "update", "complete"]);
+      expect(updates.map((update) => update.phase)).toEqual(["start", "update", "update", "update", "complete"]);
       expect(updates[0]).toMatchObject({ mode: "build", current: 0, total: 1 });
       expect(updates[1]).toMatchObject({ mode: "build", current: 1, total: 1 });
-      expect(updates[2]).toMatchObject({ mode: "build", current: 1, total: 1 });
-      expect(updates[2]?.elapsedMs).toBeTypeOf("number");
+      expect(updates[2]).toMatchObject({
+        mode: "build",
+        activity: "Resolving workspace manifests",
+        current: 1,
+        total: 1,
+      });
+      expect(updates[3]).toMatchObject({ mode: "build", activity: "Finalizing project graph", current: 1, total: 1 });
+      expect(updates[4]).toMatchObject({ mode: "build", current: 1, total: 1 });
+      expect(updates[4]?.elapsedMs).toBeTypeOf("number");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
