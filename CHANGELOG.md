@@ -340,4 +340,26 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 - Migrated the MCP server runtime to the Model Context Protocol TypeScript SDK v2 ([#208](https://github.com/lzehrung/codegraph/pull/208)).
 
-[Showing lines 1-300 of 325. Use :301 to continue]
+## [1.8.109] - 2026-08-04
+
+### Changed
+
+- Improved graph viewer selection usability ([#206](https://github.com/lzehrung/codegraph/pull/206)).
+
+## Earlier releases
+
+See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
+
+[2.1.2]: https://github.com/lzehrung/codegraph/releases/tag/v2.1.2
+[2.1.1]: https://github.com/lzehrung/codegraph/releases/tag/v2.1.1
+[2.1.0]: https://github.com/lzehrung/codegraph/releases/tag/v2.1.0
+[2.0.6]: https://github.com/lzehrung/codegraph/releases/tag/v2.0.6
+[2.0.5]: https://github.com/lzehrung/codegraph/releases/tag/v2.0.5
+[2.0.4]: https://github.com/lzehrung/codegraph/releases/tag/v2.0.4
+[2.0.3]: https://github.com/lzehrung/codegraph/releases/tag/v2.0.3
+[2.0.2]: https://github.com/lzehrung/codegraph/releases/tag/v2.0.2
+[2.0.1]: https://github.com/lzehrung/codegraph/releases/tag/v2.0.1
+[2.0.0]: https://github.com/lzehrung/codegraph/releases/tag/v2.0.0
+[1.8.111]: https://github.com/lzehrung/codegraph/releases/tag/v1.8.111
+[1.8.110]: https://github.com/lzehrung/codegraph/releases/tag/v1.8.110
+[1.8.109]: https://github.com/lzehrung/codegraph/releases/tag/v1.8.109
