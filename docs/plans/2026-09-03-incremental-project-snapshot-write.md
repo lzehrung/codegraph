@@ -1,6 +1,6 @@
 # Incremental project snapshot write
 
-Status: Destination **C** chosen (2026-09-03). Measurement gate **passed** on this repo (1263 modules) and on Gunship (3848 modules). Implement C alone next; keep non-SQLite modules in the thin snapshot.
+Status: Destination **C** implemented (2026-09-03). Snapshot version 11 is thin: SQLite-backed module bodies hydrate on load; JSON stubs and other non-cache rows stay in the snapshot. Version 10 blobs still load.
 
 ## Goal
 

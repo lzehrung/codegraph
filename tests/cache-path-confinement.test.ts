@@ -301,6 +301,24 @@ describe("persisted cache rehydration is confined to the project root", () => {
     const payload = JSON.parse(brotliDecompressSync(raw).toString("utf8")) as {
       modules?: Array<{ file?: string; exports?: Array<Record<string, unknown>> }>;
     };
+    const db = new DatabaseSync(path.join(root, ".codegraph", "cache", "index-v1", "index-cache.sqlite"));
+    try {
+      const rows = db.prepare("SELECT payload FROM module_cache").all() as Array<{ payload: Uint8Array }>;
+      const byFile = new Map<string, { file?: string; exports?: Array<Record<string, unknown>> }>();
+      for (const row of rows) {
+        const parsed = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as {
+          file?: string;
+          exports?: Array<Record<string, unknown>>;
+        };
+        if (typeof parsed.file === "string") byFile.set(parsed.file, parsed);
+      }
+      for (const module of payload.modules ?? []) {
+        if (typeof module.file === "string") byFile.set(module.file, module);
+      }
+      payload.modules = [...byFile.values()];
+    } finally {
+      db.close();
+    }
     const barrel = payload.modules?.find((module) => module.file === "barrel.ts");
     const reexport = barrel?.exports?.find((entry) => entry.type === "reexport");
     if (!reexport) throw new Error("Expected the persisted barrel reexport.");

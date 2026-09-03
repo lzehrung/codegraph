@@ -265,9 +265,12 @@ describe("disk cache multi-process concurrency", () => {
       const snap = snapshotPath(projectRoot);
       expect(fs.existsSync(snap)).toBe(true);
       const snapshotJson = brotliDecompressSync(await fsp.readFile(snap)).toString("utf8");
-      const parsed = JSON.parse(snapshotJson) as { modules?: unknown[] };
+      const parsed = JSON.parse(snapshotJson) as {
+        modules?: unknown[];
+        fileSignatures?: Record<string, unknown>;
+      };
       expect(Array.isArray(parsed.modules)).toBe(true);
-      expect((parsed.modules ?? []).length).toBeGreaterThanOrEqual(writerCount + 1);
+      expect(Object.keys(parsed.fileSignatures ?? {}).length).toBeGreaterThanOrEqual(writerCount + 1);
 
       const finalPass = await spawnWorker(workerPath, { role: "reader", id: 99, projectRoot });
       expect(finalPass.status, finalPass.stderr || finalPass.stdout).toBe(0);

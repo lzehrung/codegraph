@@ -32,6 +32,7 @@ export { cacheRoot, resolveCacheLocation } from "./build-cache/location.js";
 export {
   BLOOM_FILTER_SNAPSHOT_FILENAME,
   BLOOM_FILTER_SNAPSHOT_VERSION,
+  PROJECT_SNAPSHOT_VERSION,
   createProjectSnapshotIdentity,
   projectSnapshotFilesSignature,
   tryLoadDetailedSymbolGraphSnapshot,
