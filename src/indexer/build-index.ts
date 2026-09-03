@@ -1187,19 +1187,28 @@ async function buildIndexFromFileListShared(
       }
     }
     if (manifestEntries) {
-      if (buildStartedAt !== undefined) {
-        emitIndexBuildActivity(opts, "Writing index manifest", totalFiles, totalFiles);
-      }
-      await writeIndexManifestSnapshot({
-        projectRoot,
+      await timeIndexBuildPhase({
         opts,
-        graphOptions,
-        ...(resolverEnvironmentFingerprint ? { resolverEnvironmentFingerprint } : {}),
-        files: manifestEntries,
         timings,
-        manifestReport: report?.manifest,
-        ...(helperOpts?.transientFiles !== undefined ? { transientFiles: helperOpts.transientFiles } : {}),
-        ...(helperOpts?.symlinkDirectories !== undefined ? { symlinkDirectories: helperOpts.symlinkDirectories } : {}),
+        buildStartedAt,
+        stepName: "index-manifest",
+        activity: "Writing index manifest",
+        current: totalFiles,
+        total: totalFiles,
+        fn: () =>
+          writeIndexManifestSnapshot({
+            projectRoot,
+            opts,
+            graphOptions,
+            ...(resolverEnvironmentFingerprint ? { resolverEnvironmentFingerprint } : {}),
+            files: manifestEntries,
+            timings,
+            manifestReport: report?.manifest,
+            ...(helperOpts?.transientFiles !== undefined ? { transientFiles: helperOpts.transientFiles } : {}),
+            ...(helperOpts?.symlinkDirectories !== undefined
+              ? { symlinkDirectories: helperOpts.symlinkDirectories }
+              : {}),
+          }),
       });
     }
     const indexManifestEntries = manifestEntries

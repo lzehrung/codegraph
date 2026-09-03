@@ -15,7 +15,7 @@ codegraph mcp serve --root . --stdio
 For one reusable repo-local HTTP server, use the lifecycle wrapper:
 
 ```bash
-codegraph server start --root /path/to/repo --warmup
+codegraph server start --root /path/to/repo
 codegraph server status --root /path/to/repo --json
 codegraph server stop --root /path/to/repo
 ```
@@ -29,17 +29,17 @@ The v2 registry contains process metadata and a non-secret credential ID; the se
 Use `mcp serve` directly when another process manager owns the server:
 
 ```bash
-codegraph mcp serve --root /path/to/repo --port 7331 --warmup
+codegraph mcp serve --root /path/to/repo --port 7331
 ```
 
-Warm the server session when first-request latency matters:
+Startup warms the base session cache by default now, matching the commands above. Pass `--no-warmup` for the old lazy startup, or `--warmup-symbols` to also build the detailed symbol graph before serving:
 
 ```bash
-codegraph mcp serve --root . --stdio --warmup
+codegraph mcp serve --root . --stdio --no-warmup
 codegraph mcp serve --root . --port 7331 --warmup-symbols
 ```
 
-`--warmup` builds the base session cache before serving requests. `--warmup-symbols` also builds the detailed symbol graph before serving requests.
+`--warmup` builds the base session cache before serving requests (the default). `--warmup-symbols` also builds the detailed symbol graph before serving requests. `--no-warmup` skips both and starts lazily.
 
 The shared HTTP endpoint is `http://127.0.0.1:7331/mcp`. HTTP binds to `127.0.0.1` by default; pass `--host <host>` only when another machine or container must reach it.
 
@@ -113,10 +113,10 @@ For MCP `explore`, `includeSource` defaults to `false`: source-bearing packets d
 
 ## Session lifecycle
 
-MCP keeps one codegraph session warm for the configured root. That makes follow-up calls cheaper than separate CLI invocations. Startup is lazy unless `--warmup` or `--warmup-symbols` is passed.
+MCP keeps one codegraph session warm for the configured root. That makes follow-up calls cheaper than separate CLI invocations. `mcp serve` warms the base session cache during startup by default (matching the old `--warmup` flag), so a cold discovery-and-build cost lands on process startup rather than the first `tools/call`. Pass `--no-warmup` to start lazily instead, or `--warmup-symbols` to also build the detailed symbol graph before serving.
 On the first `tools/call`, codegraph can emit `notifications/message` and, when the request includes `_meta.progressToken`, `notifications/progress` before the final result. Stdio carries them inline, and modern Streamable HTTP clients that accept `text/event-stream` receive them as a stream.
 
-Because startup is lazy, client startup timeouts only cover process boot and `initialize`, so the `startup_timeout_ms = 20000` examples below are sufficient even on large repositories. A cold full index runs inside the first `tools/call` and can exceed 20 seconds on a large tree; clients that enforce per-request timeouts should send `_meta.progressToken` (clients that observe progress notifications can keep the request alive) or allow a longer timeout for the first call after a fresh install or cache clear.
+Because startup now warms by default, a client's startup/readiness timeout - not just its per-request timeout - needs to cover a cold build on a large repository; the `startup_timeout_ms = 20000` Codex example below can be too short for a first run against a large tree. Raise `startup_timeout_ms` for large repositories, or pass `--no-warmup` to keep process startup instant and shift that cost back to the first `tools/call` (clients that enforce per-request timeouts should then send `_meta.progressToken` so they can keep a slow first request alive instead of timing it out).
 
 Text and hybrid searches reuse a prepared handle for `.codegraph/cache/index-v1/search-v1.sqlite` and cache identical responses by snapshot identity and request options. A detected refresh or explicit `refresh_index` closes the handle and clears cached responses before the next snapshot.
 

@@ -69,9 +69,11 @@ export async function handleMcpServeCommand(context: McpServeCommandContext): Pr
 }
 
 function parseMcpWarmupMode(context: McpServeCommandContext): CodegraphMcpWarmupMode {
-  const explicit = [context.hasFlag("--warmup"), context.hasFlag("--warmup-symbols"), context.hasFlag("--no-warmup")].filter(
-    Boolean,
-  ).length;
+  const explicit = [
+    context.hasFlag("--warmup"),
+    context.hasFlag("--warmup-symbols"),
+    context.hasFlag("--no-warmup"),
+  ].filter(Boolean).length;
   if (explicit > 1) {
     context.writeStderrLine("Choose only one of --warmup, --warmup-symbols, or --no-warmup for mcp serve startup.");
     context.exit(2);

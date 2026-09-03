@@ -75,7 +75,7 @@ export type CodegraphMcpHandlerOptions = {
 export type CodegraphMcpServerOptions = CodegraphMcpHandlerOptions & {
   /**
    * Defaults to `"base"` when Codegraph creates the session itself; defaults to `"off"`
-   * when `session` is supplied explicitly. Pass `"off"` to always warm lazily.
+   * when `session` is supplied explicitly. Pass `"off"` to always start lazily.
    */
   warmup?: CodegraphMcpWarmupMode;
   host?: string;
