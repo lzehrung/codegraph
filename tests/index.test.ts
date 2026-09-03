@@ -233,13 +233,16 @@ describe("Project Indexing", () => {
       await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
       expect(report.timings.steps?.filter((step) => step.name === "filesystem-scan")).toHaveLength(1);
       report.timings.gitListMs = 9999;
-      (report.timings.steps ??= []).push({ name: "git-list", ms: 9999 });
+      report.timings.cacheProbeMs = 9999;
+      (report.timings.steps ??= []).push({ name: "git-list", ms: 9999 }, { name: "cache-probe", ms: 9999 });
 
       await fsp.writeFile(extra, "export const extra = 2;\n", "utf8");
       await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
 
       expect(report.timings.gitListMs).toBeUndefined();
+      expect(report.timings.cacheProbeMs).not.toBe(9999);
       expect(report.timings.steps?.some((step) => step.name === "git-list")).toBe(false);
+      expect(report.timings.steps?.some((step) => step.name === "cache-probe" && step.ms === 9999)).toBe(false);
       expect(report.timings.steps?.filter((step) => step.name === "filesystem-scan")).toHaveLength(1);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
@@ -295,6 +298,8 @@ describe("Project Indexing", () => {
       expect(report.timings.gitListMs).toBeUndefined();
       expect(report.timings.filesystemScanMs).toBeUndefined();
       expect(report.timings.metadataDiscoveryMs).toBeUndefined();
+      expect(report.timings.cacheProbeMs).toBeUndefined();
+      expect((report.timings.steps ?? []).some((step) => step.name === "cache-probe")).toBe(false);
       expect(report.timings.sourceDiscoveryMs).toBeTypeOf("number");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
@@ -363,7 +368,7 @@ describe("Project Indexing", () => {
     await fsp.writeFile(path.join(root, "package.json"), '{"name":"progress-test"}\n', "utf8");
 
     try {
-      await buildProjectIndexIncremental(root, {
+      const index = await buildProjectIndexIncremental(root, {
         cache: "disk",
         onProgress: (update) => updates.push(update),
       });
@@ -376,6 +381,7 @@ describe("Project Indexing", () => {
           "Checking source file paths",
           "Discovering project metadata",
           "Checking project metadata files",
+          "Checking file cache",
         ]),
       );
       expect(discoveryUpdates).toEqual(
@@ -387,9 +393,13 @@ describe("Project Indexing", () => {
         ]),
       );
       expect(updates.findIndex((update) => update.activity === "Discovering source files")).toBeGreaterThan(0);
-      expect(updates.findIndex((update) => update.phase === "start" && update.mode === "build")).toBeGreaterThan(
+      expect(updates.findIndex((update) => update.activity === "Checking file cache")).toBeGreaterThan(
         updates.findIndex((update) => update.activity === "Discovering project metadata"),
       );
+      expect(updates.findIndex((update) => update.phase === "start" && update.mode === "build")).toBeGreaterThan(
+        updates.findIndex((update) => update.activity === "Checking file cache"),
+      );
+      expect(index.buildReport?.timings.cacheProbeMs).toEqual(expect.any(Number));
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

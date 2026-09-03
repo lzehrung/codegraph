@@ -134,7 +134,7 @@ Current-state commands validate the on-disk index automatically and default to t
 - Repeated agent queries over one repo snapshot: prefer MCP so the index stays warm. MCP inputs are flat JSON objects and the server root is fixed at startup; send only fields in the mounted tool schema, never CLI flags such as `--root` or `--json`. Unknown tool fields are rejected as invalid parameters. If the first MCP call fails at startup or loses its transport, do not retry the same server; run `codegraph doctor`, use the equivalent CLI command for this session, and restart the agent client after package upgrades.
 - Durable graph handoff: use `codegraph graph --root . ./src --json --output codegraph.json` rather than parsing display text. `graph --json` and `index --json` payloads include an `analysis` object (`mode`, `backend`, `label`, fallback counts); when `mode` is `mixed` or `reduced` the run used regex/graph-only extraction for some or all files, so treat symbol accuracy accordingly. Degraded runs also print a `Backend:` warning on stderr even without `--progress`.
 - Search and inspect performance diagnosis: add `--report` for JSON on stderr or `--report-file <path>` for a file while keeping normal command output unchanged.
-- Index discovery diagnosis: `--report` timing JSON can include `sourceDiscoveryMs` and `metadataDiscoveryMs` when those discovery steps run.
+- Index discovery diagnosis: `--report` timing JSON can include `sourceDiscoveryMs`, `metadataDiscoveryMs`, `gitListMs`, `filesystemScanMs`, and `cacheProbeMs` when those steps run.
 
 ### Human Graph Viewer
 

@@ -9,6 +9,15 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Changed
+
+- Cold index progress now names file-cache checks after discovery. The spinner used to stay on `Checking project metadata files` while Git signatures, SQLite cache probes, and worker startup ran, so a cold init looked stuck on metadata after file listing had already finished. `--report` timings now include `cacheProbeMs` and a `cache-probe` step.
+
+### Fixed
+
+- Project metadata discovery no longer realpaths every ancestor directory of Git-listed data files. Only directories whose names can be project metadata (`.idea`, `App.xcodeproj`) are probed.
+- Reused `--report` objects no longer keep leftover `cacheProbeMs` after a later build skips cache probes.
+
 ## [2.3.14] - 2026-09-03
 
 ### Fixed

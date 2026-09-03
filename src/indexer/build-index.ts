@@ -652,7 +652,18 @@ function emitIndexCheckActivity(
   });
 }
 
-const DISCOVERY_TIMING_STEP_NAMES = new Set(["git-list", "git-ignore", "filesystem-scan"]);
+function createCountedCheckProgress(opts: BuildOptions | undefined, activity: string, total: number): () => void {
+  emitIndexCheckActivity(opts, activity, 0, total);
+  let completed = 0;
+  return () => {
+    completed += 1;
+    if (completed === total || completed % 100 === 0) {
+      emitIndexCheckActivity(opts, activity, completed, total);
+    }
+  };
+}
+
+const DISCOVERY_TIMING_STEP_NAMES = new Set(["git-list", "git-ignore", "filesystem-scan", "cache-probe"]);
 
 function resetDiscoveryTimingSteps(timings: BuildTimingReport | undefined): void {
   if (!timings) return;
@@ -660,6 +671,7 @@ function resetDiscoveryTimingSteps(timings: BuildTimingReport | undefined): void
   delete timings.filesystemScanMs;
   delete timings.sourceDiscoveryMs;
   delete timings.metadataDiscoveryMs;
+  delete timings.cacheProbeMs;
   const remaining = (timings.steps ?? []).filter((step) => !DISCOVERY_TIMING_STEP_NAMES.has(step.name));
   if (remaining.length) {
     timings.steps = remaining;
@@ -798,6 +810,12 @@ async function buildIndexFromFileListShared(
     ? projectIndexManifestEntries(cachedGraphEntries ?? [])
     : new Map<string, ProjectIndexManifestEntry>();
   const modules = new Map<FileId, ModuleIndex>();
+  const moduleCacheAvailable = opts?.cache !== "disk" || diskModuleCacheExists(projectRoot, opts);
+  const shouldReportFileCacheCheck = Boolean(helperOpts?.reportDiscoveryProgress);
+  const reportFileCacheCheck = shouldReportFileCacheCheck
+    ? createCountedCheckProgress(opts, "Checking file cache", normalizedFiles.length)
+    : () => undefined;
+  const cacheProbeStart = performance.now();
   const gitAvailable = await isGitRepo(projectRoot);
   const needsPersistentSignatures = cacheEnabled || useManifest;
   const useGitSignatures = gitAvailable && needsPersistentSignatures;
@@ -846,7 +864,6 @@ async function buildIndexFromFileListShared(
   // Cache lookup determines the work a full build will actually parse. Complete that cheap phase
   // before starting Piscina, so a warm build does not bootstrap workers and partial hits bound
   // the pool to real parse misses rather than the input file list.
-  const moduleCacheAvailable = opts?.cache !== "disk" || diskModuleCacheExists(projectRoot, opts);
   const cacheProbes = new Map<string, ModuleCacheProbe>(
     await mapLimit(normalizedFiles, conc, async (file) => {
       try {
@@ -880,9 +897,16 @@ async function buildIndexFromFileListShared(
         return [file, { sigInfo, mod }] as const;
       } catch (error) {
         return [file, { error }] as const;
+      } finally {
+        reportFileCacheCheck();
       }
     }),
   );
+  if (timings) {
+    const cacheProbeMs = Math.round(performance.now() - cacheProbeStart);
+    timings.cacheProbeMs = cacheProbeMs;
+    recordBuildTimingStep(timings, { name: "cache-probe", ms: cacheProbeMs });
+  }
   const cacheMisses = Array.from(cacheProbes, ([file, probe]) =>
     !("error" in probe) && !probe.mod ? file : null,
   ).filter((file): file is string => file !== null);
@@ -927,6 +951,7 @@ async function buildIndexFromFileListShared(
       buildStartedAt = performance.now();
       emitIndexLifecycleProgress(opts, "start", "build", totalFiles);
     };
+    if (cacheMisses.length) ensureBuildProgressStarted();
     const fileResults = await mapLimit(normalizedFiles, conc, async (file) => {
       try {
         const cacheProbe = cacheProbes.get(file);
@@ -1247,6 +1272,7 @@ async function buildProjectIndexWithManifestOptions(
       manifestMode: useDiskCache ? "read-write" : "off",
       warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}. Check codegraph.config.json globs and CLI --include-glob/--ignore-glob filters. Diagnostic: codegraph doctor`,
       ...(helperOpts?.ignoreExistingManifest ? { ignoreExistingManifest: true } : {}),
+      ...(helperOpts?.reportDiscoveryProgress ? { reportDiscoveryProgress: true } : {}),
       projectFiles,
       transientFiles,
       ...(discoveredSymlinkDirectories !== undefined ? { symlinkDirectories: discoveredSymlinkDirectories } : {}),
