@@ -9,25 +9,66 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [2.3.14] - 2026-09-03
+
+### Fixed
+
+- A persisted detailed symbol graph is no longer treated as corrupt because it contains extra edges beyond the basic graph. The second `explore` in the Windows package funnel rebuilt that sidecar, printed a valid result, then aborted during process teardown (`UV_HANDLE_CLOSING`).
+- Git ignore-file listing no longer walks gitignored trees looking for nested `.gitignore` files. After Git lists tracked and untracked candidates, discovery stats `.gitignore` only on those files' ancestor directories. A Python repo with a large gitignored data tree timed out on `Listing Git ignore files` even though file listing had already finished, because `git ls-files --others --ignored` descended into that tree.
+
+## [2.3.13] - 2026-09-02
+
 ### Added
 
-- `--dynamic-import-heuristics` now uses shared language adapters for top-level and embedded code, and Python dependency graphs can add heuristic edges for static-string `importlib.import_module(...)` and `__import__(...)` calls.
 - `--report` index timings now include optional `gitListMs`, `filesystemScanMs`, and a `steps` list of named discovery durations so a slow cold init can be diagnosed without guessing which listing hung. Reusing the same report object replaces `sourceDiscoveryMs`, `metadataDiscoveryMs`, and those listing fields for the current build instead of keeping leftover values from a step that did not run.
 
 ### Changed
 
 - Cold discovery progress now names Git listing, ignore-file listing, and filesystem scan fallback. A long sit used to stay on `Discovering source files` until Git returned; the spinner now says which listing is running. A timeout during file or ignore listing warns before the filesystem scan and records that unfinished listing in `--report` `steps`. Timeouts from earlier Git probes do not record a `git-list` step.
 
+## [2.3.12] - 2026-09-02
+
 ### Fixed
 
-- A persisted detailed symbol graph is no longer treated as corrupt because it contains extra edges beyond the basic graph. The second `explore` in the Windows package funnel rebuilt that sidecar, printed a valid result, then aborted during process teardown (`UV_HANDLE_CLOSING`).
-- Git ignore-file listing no longer walks gitignored trees looking for nested `.gitignore` files. After Git lists tracked and untracked candidates, discovery stats `.gitignore` only on those files' ancestor directories. A Python repo with a large gitignored data tree timed out on `Listing Git ignore files` even though file listing had already finished, because `git ls-files --others --ignored` descended into that tree.
 - Source discovery no longer stats every Git-listed file when looking for directory symlinks. A Python repo with thousands of JSON or CSV files paid one `lstat` per data file during the symlink probe; those files are skipped, while Git mode 120000 still screens extension-bearing directory links.
+
+## [2.3.11] - 2026-09-02
+
+### Fixed
+
+- Disk cache no longer retries an unsupported `node:sqlite` runtime. Node builds below 22.16 load the module but omit statement APIs Codegraph needs, so a default-on disk cache previously reopened the database and printed a stack on every cache access. The run now disables disk cache after one in-memory probe and prints one warning.
+- Package funnel install no longer hangs on Windows GitHub runners. Isolated npm used to install drive-qualified tarballs from a different volume through an empty cache, so Git tar treated the drive letter as a remote host and npm fetched every native platform packument until the 300s budget killed the job. The funnel now copies candidates onto the isolation volume, prefers the local cache, and restricts optional natives to the host OS and CPU.
+
+## [2.3.10] - 2026-09-01
+
+### Fixed
+
 - Source and metadata discovery no longer resolve a physical path for Git candidates the project excludes. A project holding a large untracked or ignored tree, such as a Python virtualenv, paid one filesystem syscall per excluded file: a 20,000-file virtualenv spent 1.68s in discovery to return 7 source files, and now spends 0.48s.
 - `orient`, `explore`, `search`, and other agent-session commands now report counted discovery work. Cold discovery previously printed one `Discovering source files` line and no further output until it finished, which was indistinguishable from a hang.
 - `Built project index: N files in X` now measures the whole index operation, including discovery. It previously started timing at the first parsed file, so a build that spent minutes discovering files and seconds parsing them reported only the seconds.
-- Disk cache no longer retries an unsupported `node:sqlite` runtime. Node builds below 22.16 load the module but omit statement APIs Codegraph needs, so a default-on disk cache previously reopened the database and printed a stack on every cache access. The run now disables disk cache after one in-memory probe and prints one warning.
-- Package funnel install no longer hangs on Windows GitHub runners. Isolated npm used to install drive-qualified tarballs from a different volume through an empty cache, so Git tar treated the drive letter as a remote host and npm fetched every native platform packument until the 300s budget killed the job. The funnel now copies candidates onto the isolation volume, prefers the local cache, and restricts optional natives to the host OS and CPU.
+
+## [2.3.9] - 2026-09-01
+
+### Added
+
+- `--dynamic-import-heuristics` now uses shared language adapters for top-level and embedded code, and Python dependency graphs can add heuristic edges for static-string `importlib.import_module(...)` and `__import__(...)` calls.
+
+### Changed
+
+- Header language classification no longer samples `.h` bytes when C and C++ would produce the same result, so native-worker eligibility and SQL corpus filters skip those reads.
+- Query indexing, duplicate analysis, lazy symbols, and package-resolution paths classify from source text they already hold. Go, Java, and Kotlin package names reuse retained parsed source.
+
+## [2.3.8] - 2026-08-31
+
+### Changed
+
+- Cold discovery progress starts before agent-session file planning, so `Discovering source files` appears before symlink and source-path checks. Warm full-cache checks stay quiet.
+
+## [2.3.7] - 2026-08-31
+
+### Changed
+
+- Cold discovery lists `.gitignore` sources through Git instead of statting every candidate ancestor, and reports source and metadata discovery time when a caller supplies a build report.
 
 ## [2.3.6] - 2026-08-31
 
@@ -309,6 +350,26 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.14...HEAD
+[2.3.14]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.14
+[2.3.13]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.13
+[2.3.12]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.12
+[2.3.11]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.11
+[2.3.10]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.10
+[2.3.9]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.9
+[2.3.8]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.8
+[2.3.7]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.7
+[2.3.6]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.6
+[2.3.5]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.5
+[2.3.4]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.4
+[2.3.3]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.3
+[2.3.2]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.2
+[2.3.1]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.1
+[2.3.0]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.0
+[2.2.3]: https://github.com/lzehrung/codegraph/releases/tag/v2.2.3
+[2.2.2]: https://github.com/lzehrung/codegraph/releases/tag/v2.2.2
+[2.2.1]: https://github.com/lzehrung/codegraph/releases/tag/v2.2.1
+[2.2.0]: https://github.com/lzehrung/codegraph/releases/tag/v2.2.0
 [2.1.2]: https://github.com/lzehrung/codegraph/releases/tag/v2.1.2
 [2.1.1]: https://github.com/lzehrung/codegraph/releases/tag/v2.1.1
 [2.1.0]: https://github.com/lzehrung/codegraph/releases/tag/v2.1.0
