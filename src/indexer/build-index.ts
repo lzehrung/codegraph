@@ -2246,12 +2246,22 @@ export async function buildProjectIndexIncremental(
         ),
         buildReport: report,
       });
-      await writeProjectIndexSnapshot(
-        projectRoot,
+      await timeIndexBuildPhase({
         opts,
-        index,
-        projectSnapshotFilesSignature(manifestEntries, projectRoot),
-      );
+        timings,
+        buildStartedAt: updateStartedAt,
+        stepName: "snapshot-write",
+        activity: "Writing project snapshot",
+        current: allFiles.size,
+        total: allFiles.size,
+        fn: () =>
+          writeProjectIndexSnapshot(
+            projectRoot,
+            opts,
+            index,
+            projectSnapshotFilesSignature(manifestEntries, projectRoot),
+          ),
+      });
       if (updateStartedAt !== undefined) {
         emitIndexLifecycleProgress(opts, "complete", "update", index.byFile.size, performance.now() - updateStartedAt);
       } else {
