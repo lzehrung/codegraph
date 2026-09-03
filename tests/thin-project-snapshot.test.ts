@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { brotliDecompressSync } from "node:zlib";
 import { DatabaseSync } from "node:sqlite";
 import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
-import { PROJECT_SNAPSHOT_VERSION, tryLoadProjectIndexSnapshot } from "../src/indexer/build-cache.js";
+import { PROJECT_SNAPSHOT_VERSION, tryLoadProjectIndexSnapshot } from "../src/indexer/build-cache/project-snapshot.js";
+import { loadManifest } from "../src/indexer/build-cache/manifest.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
 
@@ -152,10 +153,9 @@ describe("thin project snapshot", () => {
       brotliCompressSync(JSON.stringify(v10), { params: { [constants.BROTLI_PARAM_QUALITY]: 4 } }),
     );
 
-    const manifestRaw = await fsp.readFile(path.join(cacheDir(root), "manifest.json"), "utf8");
-    const manifest = JSON.parse(manifestRaw) as { files: Record<string, { sig: string; gitSig?: string }> };
-    const entries = new Map(Object.entries(manifest.files).map(([file, entry]) => [path.join(root, file), entry]));
-    const loaded = await tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries);
+    const manifest = await loadManifest(root, { cache: "disk" });
+    if (!manifest) throw new Error("Expected manifest for v10 snapshot load.");
+    const loaded = await tryLoadProjectIndexSnapshot(root, { cache: "disk" }, new Map(Object.entries(manifest.files)));
     expect(loaded).not.toBeNull();
     expect(loaded?.index.byFile.size).toBe(index.byFile.size);
     expect(
