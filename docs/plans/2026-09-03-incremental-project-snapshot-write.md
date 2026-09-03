@@ -1,6 +1,6 @@
 # Incremental project snapshot write
 
-Status: Destination **C** chosen (2026-09-03). Measurement gate **passed** on a 1263-module Windows tree. Implement C alone next; keep non-SQLite modules in the thin snapshot.
+Status: Destination **C** chosen (2026-09-03). Measurement gate **passed** on this repo (1263 modules) and on Gunship (3848 modules). Implement C alone next; keep non-SQLite modules in the thin snapshot.
 
 ## Goal
 
@@ -19,7 +19,7 @@ This is cache-identity work. It lands alone, not bundled with visibility, teardo
 Call sites:
 
 - Full file-list build: `src/indexer/build-index.ts` (`snapshot-write` step around the `writeProjectIndexSnapshot` call after finalize).
-- Incremental update: `src/indexer/build-index.ts` (bare `await writeProjectIndexSnapshot(...)` after incremental finalize). This path is **not** wrapped in `timeIndexBuildPhase`, so `--report` currently under-counts incremental snapshot cost.
+- Incremental update: the same `snapshot-write` `timeIndexBuildPhase` wrap (measurement PR). `--report` now times that rewrite.
 
 The unchanged fast path already skips the write. `reuseUnchangedSnapshot()` returns before parse/graph/snapshot when `changedFiles` and deletes are empty and `tryLoadProjectIndexSnapshot` matches. The expensive write fires only on a real change or a full rebuild, and then rewrites the whole corpus.
 
@@ -183,19 +183,36 @@ Fallback remains **B** only if the measurement gate shows N SQLite hydrates much
 
 ## Measurement results
 
-Recorded 2026-09-03 on Windows, Node 22.16.0, this repository, isolated disk cache. 1263 in-memory modules. Cold build 9.6s.
+Recorded 2026-09-03 on Windows, Node 22.16.0, isolated disk cache. Fresh-process blob vs SQLite hydrate (not same-process memo).
 
-| Cost                                                               | ms    |
-| ------------------------------------------------------------------ | ----- |
-| Cold `snapshot-write`                                              | 409   |
-| One-file incremental `snapshot-write`                              | 321   |
-| Incremental update wall (includes that write)                      | 1319  |
-| Blob `tryLoadProjectIndexSnapshot` first load                      | 340   |
-| Blob load, same process (parse memo)                               | 33    |
-| SQLite `SELECT` all + Brotli decompress + `JSON.parse` (1166 rows) | 76-82 |
+This repository (1263 in-memory modules, 1166 SQLite rows):
 
-Gate: hydrate is **faster** than a cold blob load (the CLI/new-process case). Same-process blob memo at 33ms is an in-memory cache C can match with its own payload memo. Edit-path savings are real: 321ms of a 1319ms one-file refresh is the full-corpus snapshot rewrite.
+| Cost                                                         | ms    |
+| ------------------------------------------------------------ | ----- |
+| Cold `snapshot-write`                                        | 409   |
+| One-file incremental `snapshot-write`                        | 321   |
+| Incremental update wall                                      | 1319  |
+| Blob `tryLoadProjectIndexSnapshot` first load (same process) | 340   |
+| Blob load, same process (parse memo)                         | 33    |
+| SQLite `SELECT` all + Brotli + `JSON.parse`                  | 76-82 |
 
-**C constraint:** SQLite held 1166 module rows vs 1263 index modules. About 100 modules (JSON stubs, empty parse results, or other non-cache writes) live only in the snapshot today. Thin snapshot must keep those bodies, or those files must start writing SQLite rows. Do not drop them on hydrate.
+Gunship (3848 in-memory modules, 3785 SQLite rows). Cold wall 74.3s.
 
-A 200-file synthetic tree was too small to trust (write 23ms, blob 17ms, sqlite 4ms). Use the 1263-module numbers.
+| Cost                                                      | ms      |
+| --------------------------------------------------------- | ------- |
+| Cold `snapshot-write`                                     | 1246    |
+| One-file incremental `snapshot-write`                     | 1116    |
+| Incremental update wall                                   | 11314   |
+| Fresh-process blob load                                   | 1454    |
+| Blob load, same process (parse memo)                      | 55-60   |
+| Fresh-process SQLite hydrate                              | 274-289 |
+| Cold `index-manifest` (pretty JSON of every file's edges) | 40977   |
+| Cold `cache-probe`                                        | 13834   |
+| Cold `git-ignore`                                         | 8977    |
+| Cold `persist-cache`                                      | 1131    |
+
+Gate: hydrate is **faster** than a cold/fresh-process blob load. Gunship hydrate is ~5x faster (289ms vs 1454ms). Edit-path savings are real: ~1.1s of an 11.3s one-file refresh is the full-corpus snapshot rewrite. Incremental `--report` currently names only `snapshot-write`; the other ~10s is untimed (signatures, full-blob module load, manifest rewrite).
+
+**C constraint:** SQLite rows are fewer than in-memory modules (1166/1263 here, 3785/3848 on Gunship). JSON stubs, empty parse results, and other non-cache writes live only in the snapshot. Thin snapshot must keep those bodies, or those files must start writing SQLite rows. Do not drop them on hydrate.
+
+**Out of scope for C:** Gunship cold time is dominated by `index-manifest` (41s of 74s), a pretty-printed `JSON.stringify(manifest, null, 2)` of every file's edges. That is a separate plan. Do not mix it into the thin-snapshot PR.
