@@ -363,7 +363,7 @@ describe("Project Indexing", () => {
     await fsp.writeFile(path.join(root, "package.json"), '{"name":"progress-test"}\n', "utf8");
 
     try {
-      await buildProjectIndexIncremental(root, {
+      const index = await buildProjectIndexIncremental(root, {
         cache: "disk",
         onProgress: (update) => updates.push(update),
       });
@@ -376,6 +376,7 @@ describe("Project Indexing", () => {
           "Checking source file paths",
           "Discovering project metadata",
           "Checking project metadata files",
+          "Checking file cache",
         ]),
       );
       expect(discoveryUpdates).toEqual(
@@ -387,9 +388,13 @@ describe("Project Indexing", () => {
         ]),
       );
       expect(updates.findIndex((update) => update.activity === "Discovering source files")).toBeGreaterThan(0);
-      expect(updates.findIndex((update) => update.phase === "start" && update.mode === "build")).toBeGreaterThan(
+      expect(updates.findIndex((update) => update.activity === "Checking file cache")).toBeGreaterThan(
         updates.findIndex((update) => update.activity === "Discovering project metadata"),
       );
+      expect(updates.findIndex((update) => update.phase === "start" && update.mode === "build")).toBeGreaterThan(
+        updates.findIndex((update) => update.activity === "Checking file cache"),
+      );
+      expect(index.buildReport?.timings.cacheProbeMs).toEqual(expect.any(Number));
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

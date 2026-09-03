@@ -1406,6 +1406,36 @@ describe("git-native project file discovery", () => {
     expect(files.has(normalize(dropFile))).toBe(false);
   });
 
+  it("does not realpath ancestor directories of Git-listed data files when collecting project metadata", async () => {
+    const root = await makeRepo("codegraph-discovery-data-ancestor-realpath-");
+    const manifest = path.join(root, "package.json");
+    const sourceFile = path.join(root, "src", "app.py");
+    const dataFile = path.join(root, "data", "batch", "row.json");
+    const ideaDir = path.join(root, ".idea");
+    await createFile(manifest, JSON.stringify({ name: "meta-data-app" }, null, 2));
+    await createFile(sourceFile, "value = 1\n");
+    await createFile(dataFile, "{}\n");
+    await createFile(path.join(ideaDir, "workspace.xml"), "<project />\n");
+    git(root, ["add", "-f", "."]);
+    git(root, ["commit", "-m", "fixtures"]);
+
+    const realpathSpy = vi.spyOn(fs, "realpath");
+    try {
+      const paths = new Set((await discoverProjectFiles(root)).map((item) => normalize(item.path)));
+      const probed = new Set(realpathSpy.mock.calls.map(([file]) => normalize(String(file))));
+
+      expect(paths.has(normalize(manifest))).toBe(true);
+      expect(paths.has(normalize(ideaDir))).toBe(true);
+      expect(probed.has(normalize(manifest))).toBe(true);
+      expect(probed.has(normalize(ideaDir))).toBe(true);
+      expect(probed.has(normalize(dataFile))).toBe(false);
+      expect(probed.has(normalize(path.join(root, "data", "batch")))).toBe(false);
+      expect(probed.has(normalize(path.join(root, "data")))).toBe(false);
+    } finally {
+      realpathSpy.mockRestore();
+    }
+  });
+
   it("does not resolve physical paths for Git candidates that cannot be metadata", async () => {
     const root = await makeRepo("codegraph-discovery-meta-candidate-realpath-");
     const manifest = path.join(root, "package.json");

@@ -296,6 +296,13 @@ function couldBeDirectorySymlink(filePath: string): boolean {
   return DIRECTORY_METADATA_EXTENSIONS.has(extension.toLowerCase());
 }
 
+function isProjectMetadataDirectoryName(dirPath: string): boolean {
+  const basename = path.posix.basename(normalizePath(dirPath));
+  if (DIRECTORY_METADATA_BASENAMES.has(basename.toLowerCase())) return true;
+  const extension = path.posix.extname(basename);
+  return Boolean(extension) && DIRECTORY_METADATA_EXTENSIONS.has(extension.toLowerCase());
+}
+
 function globLiteralPrefix(globPattern: string): string[] {
   const prefix: string[] = [];
   let seenLiteral = false;
@@ -1429,7 +1436,11 @@ async function discoverProjectFilesInternal(
       const fileMatches = filterGitIgnoredEntries(
         await filterRealPathsWithinRootEntries(metadataCandidates, realRoot, reportMetadataFileChecks),
       );
-      const rawCandidateDirectories = collectCandidateAncestorDirectories(root, candidateFiles);
+      // Directory metadata is identified by the directory name (.idea, App.xcodeproj).
+      // Walking every Git-listed JSON or CSV still produced one realpath per data folder.
+      const rawCandidateDirectories = collectCandidateAncestorDirectories(root, candidateFiles).filter(
+        isProjectMetadataDirectoryName,
+      );
       const candidateDirectoryKeys = new Set(rawCandidateDirectories.map(fileIdentityKey));
       const safeSymlinkDirectoryKeys = new Set(safeSymlinkDirectories.map(fileIdentityKey));
       const directoryMatches = [

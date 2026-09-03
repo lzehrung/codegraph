@@ -230,6 +230,8 @@ export type BuildTimingReport = {
   gitListMs?: number;
   /** Filesystem glob scan used when Git listing is unavailable. */
   filesystemScanMs?: number;
+  /** Git signatures plus per-file cache probes before parse. */
+  cacheProbeMs?: number;
   parseMs?: number;
   graphMs?: number;
   writeManifestMs?: number;
