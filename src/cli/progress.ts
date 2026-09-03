@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import type { ProgressUpdate } from "../types.js";
 
 export type CliProgressPolicy = "auto" | "always" | "never";
@@ -46,6 +47,7 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
   let activity = progressAction(mode);
   let interval: NodeJS.Timeout | undefined;
   let delay: NodeJS.Timeout | undefined;
+  let phaseStartedAt = performance.now();
   const clear = (): void => {
     if (!rendered) return;
     write(CLEAR_LINE);
@@ -57,7 +59,8 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
     const frame = SPINNER_FRAMES[frameIndex % SPINNER_FRAMES.length]!;
     frameIndex += 1;
     const count = hasProgressCount(mode, current, total) ? formatProgressCount(current, total) : "";
-    write(`${CLEAR_LINE}${activity}... ${frame}${count}`);
+    const elapsed = ` (${formatDuration(performance.now() - phaseStartedAt)})`;
+    write(`${CLEAR_LINE}${activity}... ${frame}${count}${elapsed}`);
     rendered = true;
   };
   const stopInterval = (): void => {
@@ -80,6 +83,7 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
     total = update.total;
     mode = update.mode ?? "build";
     activity = update.activity ?? `${progressAction(mode)} project index`;
+    phaseStartedAt = performance.now();
     const beginRendering = (): void => {
       if (!active) return;
       render();
@@ -122,6 +126,7 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
       current = update.current;
       total = update.total;
       mode = update.mode ?? mode;
+      if (update.activity !== undefined && update.activity !== activity) phaseStartedAt = performance.now();
       if (update.activity !== undefined) activity = update.activity;
     },
     clear,
@@ -156,6 +161,7 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
   let activity = progressAction(mode);
   let delay: NodeJS.Timeout | undefined;
   let heartbeat: NodeJS.Timeout | undefined;
+  let phaseStartedAt = performance.now();
 
   const stopTimers = (): void => {
     if (delay !== undefined) {
@@ -174,7 +180,8 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
     heartbeat = setInterval(() => {
       if (!active) return;
       const count = hasProgressCount(mode, current, total) ? `:${formatProgressCount(current, total)}` : "";
-      write(`[Progress] ${activity}${count}.\n`);
+      const elapsed = formatDuration(performance.now() - phaseStartedAt);
+      write(`[Progress] ${activity}${count}. (${elapsed})\n`);
     }, 1_000);
     heartbeat.unref();
   };
@@ -186,6 +193,7 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
     total = update.total;
     mode = update.mode ?? "build";
     activity = update.activity ?? `${progressAction(mode)} project index`;
+    phaseStartedAt = performance.now();
     if (delayMs) {
       delay = setTimeout(renderStart, delayMs);
       delay.unref();
@@ -220,14 +228,16 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
       mode = update.mode ?? mode;
       if (update.activity !== undefined) activity = update.activity;
       if (rendered && activity !== previousActivity) {
+        phaseStartedAt = performance.now();
         write(`[Progress] ${activity}.\n`);
       }
       const isComplete = update.total > 0 && update.current >= update.total;
       if (rendered && (update.current === 1 || isComplete || (update.current > 0 && update.current % 100 === 0))) {
+        const elapsed = formatDuration(performance.now() - phaseStartedAt);
         if (update.activity !== undefined) {
-          write(`[Progress] ${activity}:${formatProgressCount(update.current, update.total)}.\n`);
+          write(`[Progress] ${activity}:${formatProgressCount(update.current, update.total)}. (${elapsed})\n`);
         } else {
-          write(`[Progress] ${formatFileCount(update.current)} processed.\n`);
+          write(`[Progress] ${formatFileCount(update.current)} processed. (${elapsed})\n`);
         }
       }
     },
