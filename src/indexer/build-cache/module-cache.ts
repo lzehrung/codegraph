@@ -212,7 +212,7 @@ export function getDiskModuleCache(projectRoot: string, opts?: BuildOptions): Di
     const cache: DiskModuleCache = {
       db,
       load: db.prepare("SELECT sig, version, payload FROM module_cache WHERE file = ?"),
-      loadAll: db.prepare("SELECT file, sig, version, payload FROM module_cache"),
+      loadAll: db.prepare("SELECT file, sig, version, payload FROM module_cache WHERE version = ?"),
       listFiles: db.prepare("SELECT file FROM module_cache WHERE version = ?"),
       write: db.prepare(
         `INSERT INTO module_cache (file, sig, version, payload, updated_at)
@@ -520,7 +520,7 @@ export function loadAllCachedModules(
   try {
     const cache = getDiskModuleCache(projectRoot, opts);
     return cache.db.transaction(() => {
-      const rows = cache.loadAll.all() as Array<{
+      const rows = cache.loadAll.all(PARSED_CACHE_VERSION) as Array<{
         file: string;
         sig: string;
         version: number;
@@ -528,7 +528,6 @@ export function loadAllCachedModules(
       }>;
       const modules = new Map<string, CachedModuleRecord>();
       for (const row of rows) {
-        if (row.version !== PARSED_CACHE_VERSION) continue;
         const parsed: unknown = JSON.parse(brotliDecompressSync(row.payload).toString("utf8"));
         if (!isModuleIndex(parsed)) continue;
         const rehydrated = transformModulePaths(projectRoot, parsed, false);
