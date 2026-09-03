@@ -657,11 +657,12 @@ function emitIndexBuildActivity(
   activity: string,
   current: number,
   total: number,
+  mode: IndexProgressMode = "build",
 ): void {
   opts?.onProgress?.({
     type: "progress",
     phase: "update",
-    mode: "build",
+    mode,
     message: activity,
     activity,
     current,
@@ -682,10 +683,11 @@ async function timeIndexBuildPhase<T>(args: {
   activity: string;
   current: number;
   total: number;
+  mode?: IndexProgressMode;
   fn: () => Promise<T> | T;
 }): Promise<T> {
   if (args.buildStartedAt !== undefined) {
-    emitIndexBuildActivity(args.opts, args.activity, args.current, args.total);
+    emitIndexBuildActivity(args.opts, args.activity, args.current, args.total, args.mode ?? "build");
   }
   const startedAt = performance.now();
   const result = await args.fn();
@@ -2254,6 +2256,7 @@ export async function buildProjectIndexIncremental(
         activity: "Writing project snapshot",
         current: allFiles.size,
         total: allFiles.size,
+        mode: "update",
         fn: () =>
           writeProjectIndexSnapshot(
             projectRoot,

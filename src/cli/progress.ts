@@ -103,7 +103,7 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
     stopInterval();
     if (!rendered) return;
     clear();
-    const verb = progressCompleteVerb(mode);
+    const verb = progressCompleteVerb(update.mode ?? mode);
     const fileCount = formatFileCount(update.total, "words");
     const elapsed = update.elapsedMs === undefined ? "" : ` in ${formatDuration(update.elapsedMs)}`;
     write(`${verb} project index: ${fileCount}${elapsed}.\n`);
@@ -213,7 +213,7 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
         active = false;
         stopTimers();
         if (!rendered) return;
-        const verb = progressCompleteVerb(mode);
+        const verb = progressCompleteVerb(update.mode ?? mode);
         const elapsed = update.elapsedMs === undefined ? "" : ` in ${formatDuration(update.elapsedMs)}`;
         write(`[Progress] ${verb} project index: ${formatFileCount(update.total, "words")}${elapsed}.\n`);
         return;
