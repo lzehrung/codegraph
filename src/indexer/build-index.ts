@@ -663,7 +663,7 @@ function createCountedCheckProgress(opts: BuildOptions | undefined, activity: st
   };
 }
 
-const DISCOVERY_TIMING_STEP_NAMES = new Set(["git-list", "git-ignore", "filesystem-scan"]);
+const DISCOVERY_TIMING_STEP_NAMES = new Set(["git-list", "git-ignore", "filesystem-scan", "cache-probe"]);
 
 function resetDiscoveryTimingSteps(timings: BuildTimingReport | undefined): void {
   if (!timings) return;
@@ -671,6 +671,7 @@ function resetDiscoveryTimingSteps(timings: BuildTimingReport | undefined): void
   delete timings.filesystemScanMs;
   delete timings.sourceDiscoveryMs;
   delete timings.metadataDiscoveryMs;
+  delete timings.cacheProbeMs;
   const remaining = (timings.steps ?? []).filter((step) => !DISCOVERY_TIMING_STEP_NAMES.has(step.name));
   if (remaining.length) {
     timings.steps = remaining;

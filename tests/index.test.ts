@@ -233,13 +233,16 @@ describe("Project Indexing", () => {
       await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
       expect(report.timings.steps?.filter((step) => step.name === "filesystem-scan")).toHaveLength(1);
       report.timings.gitListMs = 9999;
-      (report.timings.steps ??= []).push({ name: "git-list", ms: 9999 });
+      report.timings.cacheProbeMs = 9999;
+      (report.timings.steps ??= []).push({ name: "git-list", ms: 9999 }, { name: "cache-probe", ms: 9999 });
 
       await fsp.writeFile(extra, "export const extra = 2;\n", "utf8");
       await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
 
       expect(report.timings.gitListMs).toBeUndefined();
+      expect(report.timings.cacheProbeMs).not.toBe(9999);
       expect(report.timings.steps?.some((step) => step.name === "git-list")).toBe(false);
+      expect(report.timings.steps?.some((step) => step.name === "cache-probe" && step.ms === 9999)).toBe(false);
       expect(report.timings.steps?.filter((step) => step.name === "filesystem-scan")).toHaveLength(1);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
@@ -295,6 +298,8 @@ describe("Project Indexing", () => {
       expect(report.timings.gitListMs).toBeUndefined();
       expect(report.timings.filesystemScanMs).toBeUndefined();
       expect(report.timings.metadataDiscoveryMs).toBeUndefined();
+      expect(report.timings.cacheProbeMs).toBeUndefined();
+      expect((report.timings.steps ?? []).some((step) => step.name === "cache-probe")).toBe(false);
       expect(report.timings.sourceDiscoveryMs).toBeTypeOf("number");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
