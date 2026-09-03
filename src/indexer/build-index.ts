@@ -729,7 +729,9 @@ function resetTransientBuildTimings(timings: BuildTimingReport | undefined): voi
   delete timings.sourceDiscoveryMs;
   delete timings.metadataDiscoveryMs;
   delete timings.cacheProbeMs;
-  const remaining = (timings.steps ?? []).filter((step) => !TRANSIENT_BUILD_TIMING_STEP_NAMES[step.name]);
+  const remaining = (timings.steps ?? []).filter(
+    (step) => !Object.hasOwn(TRANSIENT_BUILD_TIMING_STEP_NAMES, step.name),
+  );
   if (remaining.length) {
     timings.steps = remaining;
     return;
