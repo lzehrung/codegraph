@@ -704,16 +704,32 @@ function createCountedCheckProgress(opts: BuildOptions | undefined, activity: st
   };
 }
 
-const DISCOVERY_TIMING_STEP_NAMES = new Set(["git-list", "git-ignore", "filesystem-scan", "cache-probe"]);
+const TRANSIENT_BUILD_TIMING_STEP_NAMES: Record<string, true> = {
+  "git-list": true,
+  "git-ignore": true,
+  "filesystem-scan": true,
+  "cache-probe": true,
+  "persist-cache": true,
+  "workspace-manifests": true,
+  "index-manifest": true,
+  finalize: true,
+  "snapshot-write": true,
+};
 
-function resetDiscoveryTimingSteps(timings: BuildTimingReport | undefined): void {
+/**
+ * Clears named step timings and coarse discovery fields left over from a prior build that
+ * reused the same `BuildReport` object (for example an MCP session's `buildOptions.report`
+ * across `refresh_index` calls), so a reused report never mixes this build's steps with a
+ * previous one's.
+ */
+function resetTransientBuildTimings(timings: BuildTimingReport | undefined): void {
   if (!timings) return;
   delete timings.gitListMs;
   delete timings.filesystemScanMs;
   delete timings.sourceDiscoveryMs;
   delete timings.metadataDiscoveryMs;
   delete timings.cacheProbeMs;
-  const remaining = (timings.steps ?? []).filter((step) => !DISCOVERY_TIMING_STEP_NAMES.has(step.name));
+  const remaining = (timings.steps ?? []).filter((step) => !TRANSIENT_BUILD_TIMING_STEP_NAMES[step.name]);
   if (remaining.length) {
     timings.steps = remaining;
     return;
@@ -1143,16 +1159,20 @@ async function buildIndexFromFileListShared(
       if (cacheWrite) pendingCacheWrites.push(cacheWrite);
     }
     if (pendingCacheWrites.length) {
-      await timeIndexBuildPhase({
-        opts,
-        timings,
-        buildStartedAt,
-        stepName: "persist-cache",
-        activity: "Writing disk cache",
-        current: totalFiles,
-        total: totalFiles,
-        fn: () => writeModulesToCache(projectRoot, pendingCacheWrites, opts),
-      });
+      if (opts?.cache === "disk") {
+        await timeIndexBuildPhase({
+          opts,
+          timings,
+          buildStartedAt,
+          stepName: "persist-cache",
+          activity: "Writing disk cache",
+          current: totalFiles,
+          total: totalFiles,
+          fn: () => writeModulesToCache(projectRoot, pendingCacheWrites, opts),
+        });
+      } else {
+        writeModulesToCache(projectRoot, pendingCacheWrites, opts);
+      }
     }
     const workspaceManifestEdges = await timeIndexBuildPhase({
       opts,
@@ -1281,7 +1301,7 @@ async function buildProjectIndexWithManifestOptions(
   helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest" | "reportDiscoveryProgress">,
 ): Promise<ProjectIndex> {
   const timings = opts?.report ? (opts.report.timings ??= {}) : undefined;
-  resetDiscoveryTimingSteps(timings);
+  resetTransientBuildTimings(timings);
   await initializeFileIdentityCaseSensitivity(projectRoot);
   try {
     const useDiskCache = (opts?.cache ?? "off") === "disk";
@@ -1476,7 +1496,7 @@ export async function buildProjectIndexIncremental(
   const { normalizedProjectRoot, report, timings, totalStart, cacheMode, cacheEnabled, onFallbackImportExtraction } =
     createIndexBuildRunState(projectRoot, opts, graphOptions);
   const discoveryTimings = opts?.report ? (opts.report.timings ??= {}) : undefined;
-  resetDiscoveryTimingSteps(discoveryTimings);
+  resetTransientBuildTimings(discoveryTimings);
   let checkProgressActive = false;
   const startCheckProgress = (): void => {
     if (checkProgressActive) return;

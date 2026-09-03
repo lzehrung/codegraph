@@ -227,12 +227,15 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
       total = update.total;
       mode = update.mode ?? mode;
       if (update.activity !== undefined) activity = update.activity;
-      if (rendered && activity !== previousActivity) {
-        phaseStartedAt = performance.now();
+      const activityChanged = activity !== previousActivity;
+      if (activityChanged) phaseStartedAt = performance.now();
+      const isComplete = update.total > 0 && update.current >= update.total;
+      const shouldPrintCount =
+        rendered && (update.current === 1 || isComplete || (update.current > 0 && update.current % 100 === 0));
+      if (rendered && activityChanged && !shouldPrintCount) {
         write(`[Progress] ${activity}.\n`);
       }
-      const isComplete = update.total > 0 && update.current >= update.total;
-      if (rendered && (update.current === 1 || isComplete || (update.current > 0 && update.current % 100 === 0))) {
+      if (shouldPrintCount) {
         const elapsed = formatDuration(performance.now() - phaseStartedAt);
         if (update.activity !== undefined) {
           write(`[Progress] ${activity}:${formatProgressCount(update.current, update.total)}. (${elapsed})\n`);

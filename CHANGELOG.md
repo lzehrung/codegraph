@@ -25,6 +25,9 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 ### Fixed
 
 - Project metadata discovery no longer realpaths every ancestor directory of Git-listed data files. Only directories whose names can be project metadata (`.idea`, `App.xcodeproj`) are probed.
+- The `Writing disk cache` post-parse phase no longer reports or times a persistence step when the cache mode is not `disk`. Every cacheable file still produces a pending cache-write entry regardless of mode, so this phase previously fired (and misleadingly named itself "disk") even with `--cache off` or `--cache memory`.
+- Reused `--report` objects no longer accumulate stale post-parse persistence steps (`persist-cache`, `workspace-manifests`, `index-manifest`, `finalize`, `snapshot-write`) from a prior build. A caller that reuses one `BuildReport` object across builds - for example an MCP session's `buildOptions.report` across `refresh_index` calls - previously saw these steps pile up in `timings.steps`.
+- Redirected log progress no longer prints a duplicate line when a phase change and a milestone count land on the same update, for example printing only `[Progress] Writing disk cache: 41/41 files. (0ms)` instead of that line preceded by a separate `[Progress] Writing disk cache.` line.
 - Reused `--report` objects no longer keep leftover `cacheProbeMs` after a later build skips cache probes.
 - Windows CLI processes no longer abort after a successful warm `explore` on Node 24. The second query printed a valid result, then libuv asserted `UV_HANDLE_CLOSING` while sqlite, native, or worker handles were still closing and the process exited `3221226505`. The CLI now lets those handles finish closing before the process exits.
 
