@@ -26,7 +26,7 @@ import {
 import type { CodegraphMcpHandlers, McpTruncationMeta } from "./handlers.js";
 import { getLegacyRequestAbortSignal } from "./legacySessions.js";
 
-export const DEFAULT_MCP_TOOL_TIMEOUT_MS = 30 * 60 * 1000;
+export const DEFAULT_MCP_TOOL_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_MCP_TOOL_TIMEOUT_MS = 2_147_483_647;
 const MAX_MCP_STDIO_FRAME_BYTES = 10 * 1024 * 1024;
 export const DEFAULT_MCP_TOOL_CONCURRENCY = 4;

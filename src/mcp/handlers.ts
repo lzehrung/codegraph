@@ -92,7 +92,7 @@ export type CodegraphMcpServerOptions = CodegraphMcpHandlerOptions & {
   mcpToolConcurrency?: number;
   /** Maximum time to receive an HTTP MCP request body in ms. Defaults to 30 seconds. */
   httpBodyTimeoutMs?: number;
-  /** Maximum time to execute one MCP tool call in ms. Use 0 to disable. Defaults to 30 minutes. */
+  /** Maximum time to execute one MCP tool call in ms. Use 0 to disable. Defaults to 5 minutes. */
   mcpToolTimeoutMs?: number;
   onHttpListen?: ((info: CodegraphMcpHttpServerInfo) => void) | undefined;
   runtimeIdentity?: CodegraphRuntimeIdentity;
