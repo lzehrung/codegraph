@@ -26,7 +26,13 @@ import {
   type SqliteTableColumn,
 } from "../../util/sqliteSchema.js";
 import type { BuildOptions, BuildReport, ExportEntry, ModuleIndex } from "../types.js";
-import { assertFilePathWithinRoot, isAbsoluteFilePath, isFilePathWithinRoot, normalizePath } from "../../util/paths.js";
+import {
+  assertFilePathWithinRoot,
+  fileIdentityKey,
+  isAbsoluteFilePath,
+  isFilePathWithinRoot,
+  normalizePath,
+} from "../../util/paths.js";
 import { lruMapGet, lruMapSet } from "../../util/lruMap.js";
 import { initCacheReport } from "./reports.js";
 import { cacheRoot } from "./location.js";
@@ -60,6 +66,8 @@ let cachedExecutionHash: string | undefined;
 type DiskModuleCache = {
   db: SqliteDatabase;
   load: SqliteStatement;
+  loadAll: SqliteStatement;
+  listFiles: SqliteStatement;
   write: SqliteStatement;
   clearLiveFiles: SqliteStatement;
   insertLiveFile: SqliteStatement;
@@ -204,6 +212,8 @@ export function getDiskModuleCache(projectRoot: string, opts?: BuildOptions): Di
     const cache: DiskModuleCache = {
       db,
       load: db.prepare("SELECT sig, version, payload FROM module_cache WHERE file = ?"),
+      loadAll: db.prepare("SELECT file, sig, version, payload FROM module_cache"),
+      listFiles: db.prepare("SELECT file FROM module_cache WHERE version = ?"),
       write: db.prepare(
         `INSERT INTO module_cache (file, sig, version, payload, updated_at)
        VALUES (?, ?, ?, ?, ?)
@@ -467,6 +477,72 @@ function transformModulePaths(projectRoot: string, module: ModuleIndex, toRelati
       typeof binding.resolved === "string" ? { ...binding, resolved: transform(binding.resolved) } : binding,
     ),
   };
+}
+
+export type CachedModuleRecord = {
+  sig: string;
+  mod: ModuleIndex;
+};
+
+/**
+ * Relative paths currently stored in the disk module cache at the parsed-cache
+ * version. `null` means the cache could not be opened; an empty set means it
+ * opened and has no current-version rows.
+ */
+export function listDiskCachedModuleFiles(projectRoot: string, opts: BuildOptions | undefined): Set<string> | null {
+  if ((opts?.cache ?? "off") !== "disk") return null;
+  if (!isNodeSqliteUsable()) return null;
+  if (!diskModuleCacheExists(projectRoot, opts)) return new Set();
+  try {
+    const cache = getDiskModuleCache(projectRoot, opts);
+    const rows = cache.listFiles.all(PARSED_CACHE_VERSION) as Array<{ file: string }>;
+    return new Set(rows.map((row) => row.file));
+  } catch (error) {
+    if (isNodeSqliteUnavailableError(error)) {
+      reportMissingNodeSqlite(opts?.logLevel, error);
+      return null;
+    }
+    return null;
+  }
+}
+
+/**
+ * Hydrate every current-version module row in one transaction. Keys are
+ * fileIdentityKey of the rehydrated absolute path.
+ */
+export function loadAllCachedModules(
+  projectRoot: string,
+  opts: BuildOptions | undefined,
+): Map<string, CachedModuleRecord> | null {
+  if ((opts?.cache ?? "off") !== "disk") return null;
+  if (!isNodeSqliteUsable()) return null;
+  if (!diskModuleCacheExists(projectRoot, opts)) return new Map();
+  try {
+    const cache = getDiskModuleCache(projectRoot, opts);
+    return cache.db.transaction(() => {
+      const rows = cache.loadAll.all() as Array<{
+        file: string;
+        sig: string;
+        version: number;
+        payload: Uint8Array;
+      }>;
+      const modules = new Map<string, CachedModuleRecord>();
+      for (const row of rows) {
+        if (row.version !== PARSED_CACHE_VERSION) continue;
+        const parsed: unknown = JSON.parse(brotliDecompressSync(row.payload).toString("utf8"));
+        if (!isModuleIndex(parsed)) continue;
+        const rehydrated = transformModulePaths(projectRoot, parsed, false);
+        modules.set(fileIdentityKey(rehydrated.file), { sig: row.sig, mod: rehydrated });
+      }
+      return modules;
+    })();
+  } catch (error) {
+    if (isNodeSqliteUnavailableError(error)) {
+      reportMissingNodeSqlite(opts?.logLevel, error);
+      return null;
+    }
+    return null;
+  }
 }
 
 export function tryLoadFromCache(

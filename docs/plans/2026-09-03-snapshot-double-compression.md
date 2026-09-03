@@ -1,6 +1,6 @@
 # Snapshot and disk-cache double compression
 
-Status: Destination **C** recorded on the snapshot-scope plan (2026-09-03). Still blocked until that thin snapshot ships: C removes the duplicate module corpus. Do not start a separate SQLite-into-blob adapter.
+Status: Thin snapshot (C) is implemented. This companion stays blocked until that ships on main; do not start a separate SQLite-into-blob adapter.
 
 ## Goal
 

@@ -37,6 +37,8 @@ import { getImplementationFingerprint, normalizeGraphOptions } from "./options.j
 import {
   cacheAbsolutePath,
   cacheRelativePath,
+  listDiskCachedModuleFiles,
+  loadAllCachedModules,
   transformPersistedExportFromModule,
   type FileSignature,
 } from "./module-cache.js";
@@ -44,7 +46,8 @@ import { cacheRoot } from "./location.js";
 import type { ManifestFileEntry } from "./manifest.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
-const PROJECT_SNAPSHOT_VERSION = 10;
+export const PROJECT_SNAPSHOT_VERSION = 11;
+const LEGACY_EMBEDDED_MODULE_SNAPSHOT_VERSION = 10;
 export const BLOOM_FILTER_SNAPSHOT_VERSION = 4;
 export const BLOOM_FILTER_SNAPSHOT_FILENAME = "bloom-filters.json";
 
@@ -97,7 +100,14 @@ type DetailedSymbolGraphCacheEntry = {
 const parsedSnapshotCache = new Map<string, ParsedSnapshotCacheEntry>();
 const transformedSnapshotCache = new Map<string, TransformedSnapshotCacheEntry>();
 const transformedSnapshotModulesCache = new Map<string, TransformedSnapshotModulesCacheEntry>();
+const hydratedSnapshotModulesCache = new Map<string, HydratedSnapshotModulesCacheEntry>();
 const detailedSymbolGraphCache = new Map<string, DetailedSymbolGraphCacheEntry>();
+
+type HydratedSnapshotModulesCacheEntry = {
+  identity: SnapshotFileIdentity;
+  root: string;
+  modules: Map<string, ModuleIndex>;
+};
 
 type DetailedSymbolGraphSnapshotPayload = {
   version: number;
@@ -566,9 +576,10 @@ export async function tryLoadProjectIndexSnapshot(
   const filesSignature = projectSnapshotFilesSignature(manifestEntries, projectRoot);
   if ((opts?.cache ?? "off") !== "disk") return null;
   try {
-    const parsedSnapshot = await readParsedSnapshot(projectSnapshotPath(projectRoot, opts));
+    const snapshotPath = projectSnapshotPath(projectRoot, opts);
+    const parsedSnapshot = await readParsedSnapshot(snapshotPath);
     const payload = transformCachedProjectSnapshot(
-      projectSnapshotPath(projectRoot, opts),
+      snapshotPath,
       parsedSnapshot.identity,
       parsedSnapshot.payload,
       projectRoot,
@@ -601,7 +612,11 @@ export async function tryLoadProjectIndexSnapshot(
       nodes: new Set(payload.graph.nodes),
       edges: payload.graph.edges,
     };
-    const modules = new Map(payload.modules.map((moduleIndex) => [fileIdentityKey(moduleIndex.file), moduleIndex]));
+    const modules = collectSnapshotModules(projectRoot, opts, payload, snapshotPath, parsedSnapshot.identity);
+    if (!modules || !thinSnapshotModulesComplete(payload, modules)) {
+      recordSnapshotInvalidation(snapshotPath, "thin snapshot missing disk-cached modules", opts?.logLevel);
+      return null;
+    }
     const shouldHydrateBloomFilters = opts?.useBloomFilters ?? true;
     const index: ProjectIndex = {
       graph,
@@ -691,9 +706,11 @@ export async function tryLoadProjectSnapshotModules(
     const normalizedCurrentSignatures = new Map(
       Array.from(fileSignatures, ([file, signature]) => [fileIdentityKey(file), signature]),
     );
+    const snapshotPath = projectSnapshotPath(projectRoot, opts);
+    const candidates = collectSnapshotModules(projectRoot, opts, payload, snapshotPath, parsedSnapshot.identity);
+    if (!candidates) return new Map();
     const modules = new Map<string, ModuleIndex>();
-    for (const mod of payload.modules) {
-      const moduleKey = fileIdentityKey(mod.file);
+    for (const [moduleKey, mod] of candidates) {
       const signature = normalizedCurrentSignatures.get(moduleKey);
       const snapshotSignature = normalizedFileSignatures.get(moduleKey);
       if (!signature || !snapshotSignature || !snapshotSignatureMatches(snapshotSignature, signature)) continue;
@@ -787,7 +804,7 @@ function persistedBloomFiltersFromSnapshot(
   if (!migrated || typeof migrated !== "object") return null;
   const payload = migrated as Partial<ProjectIndexSnapshotPayload>;
   if (
-    payload.version !== PROJECT_SNAPSHOT_VERSION ||
+    !isSupportedProjectSnapshotVersion(payload.version) ||
     typeof payload.projectRoot !== "string" ||
     payload.implementationFingerprint !== getImplementationFingerprint()
   ) {
@@ -820,6 +837,67 @@ function createPersistedBloomFilters(
       return filters.get(file);
     },
   };
+}
+
+function isSupportedProjectSnapshotVersion(version: unknown): boolean {
+  return version === PROJECT_SNAPSHOT_VERSION || version === LEGACY_EMBEDDED_MODULE_SNAPSHOT_VERSION;
+}
+
+function snapshotHydratesModulesFromDisk(version: number): boolean {
+  return version === PROJECT_SNAPSHOT_VERSION;
+}
+
+function modulesForThinSnapshot(
+  index: ProjectIndex,
+  projectRoot: string,
+  opts: BuildOptions | undefined,
+): ModuleIndex[] {
+  const modules = [...index.byFile.values()];
+  const cachedFiles = listDiskCachedModuleFiles(projectRoot, opts);
+  if (!cachedFiles) return modules;
+  return modules.filter((module) => !cachedFiles.has(cacheRelativePath(projectRoot, module.file)));
+}
+
+function collectSnapshotModules(
+  projectRoot: string,
+  opts: BuildOptions | undefined,
+  payload: ProjectSnapshotModulesPayload,
+  snapshotPath: string,
+  identity: SnapshotFileIdentity,
+): Map<string, ModuleIndex> | null {
+  const cached = hydratedSnapshotModulesCache.get(snapshotPath);
+  if (cached && cached.root === projectRoot && sameSnapshotFileIdentity(cached.identity, identity)) {
+    setBoundedSnapshotCache(hydratedSnapshotModulesCache, snapshotPath, cached);
+    return cached.modules;
+  }
+  const modules = new Map<string, ModuleIndex>();
+  for (const mod of payload.modules) {
+    modules.set(fileIdentityKey(mod.file), mod);
+  }
+  if (snapshotHydratesModulesFromDisk(payload.version)) {
+    const cachedModules = loadAllCachedModules(projectRoot, opts);
+    if (!cachedModules && modules.size === 0) return null;
+    if (cachedModules) {
+      for (const [key, row] of cachedModules) {
+        if (modules.has(key)) continue;
+        modules.set(key, freezeSnapshotPayload(row.mod));
+      }
+    }
+  }
+  const entry = { identity, root: projectRoot, modules };
+  setBoundedSnapshotCache(hydratedSnapshotModulesCache, snapshotPath, entry);
+  return modules;
+}
+
+function thinSnapshotModulesComplete(
+  payload: ProjectSnapshotModulesPayload,
+  modules: Map<string, ModuleIndex>,
+): boolean {
+  if (!snapshotHydratesModulesFromDisk(payload.version)) return true;
+  for (const file of Object.keys(payload.fileSignatures)) {
+    if (!modules.has(fileIdentityKey(file))) return false;
+  }
+  return true;
 }
 
 function snapshotSignatureMatches(
@@ -867,7 +945,7 @@ export async function writeProjectIndexSnapshot(
         nodes: [...index.graph.nodes],
         edges: index.graph.edges,
       },
-      modules: [...index.byFile.values()],
+      modules: modulesForThinSnapshot(index, projectRoot, opts),
       fileSignatures,
       ...(index.languageExtensions ? { languageExtensions: index.languageExtensions } : {}),
       ...(normalizedSnapshotNativeMode(index.nativeMode)
@@ -890,6 +968,7 @@ export async function writeProjectIndexSnapshot(
     const identity = await snapshotFileIdentity(snapshotPath);
     transformedSnapshotCache.delete(snapshotPath);
     transformedSnapshotModulesCache.delete(snapshotPath);
+    hydratedSnapshotModulesCache.delete(snapshotPath);
     setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, compressed, payload });
     index.projectSnapshotIdentity = projectSnapshotIdentity;
     if (serializedBloomFilters) {
@@ -1355,7 +1434,7 @@ function isProjectSnapshotModulesPayload(value: unknown): value is ProjectSnapsh
   if (!value || typeof value !== "object") return false;
   const payload = value as Partial<ProjectSnapshotModulesPayload>;
   return (
-    payload.version === PROJECT_SNAPSHOT_VERSION &&
+    isSupportedProjectSnapshotVersion(payload.version) &&
     typeof payload.filesSignature === "string" &&
     typeof payload.projectRoot === "string" &&
     typeof payload.nativeRuntimeFingerprint === "string" &&
@@ -1372,7 +1451,7 @@ function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSna
   if (!value || typeof value !== "object") return false;
   const payload = value as Partial<ProjectIndexSnapshotPayload>;
   return (
-    payload.version === PROJECT_SNAPSHOT_VERSION &&
+    isSupportedProjectSnapshotVersion(payload.version) &&
     typeof payload.filesSignature === "string" &&
     typeof payload.projectRoot === "string" &&
     typeof payload.nativeRuntimeFingerprint === "string" &&

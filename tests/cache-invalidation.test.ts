@@ -232,6 +232,24 @@ function projectSnapshotPathFor(root: string): string {
   return path.join(root, ".codegraph", "cache", "index-v1", "project-index-snapshot.json");
 }
 
+function embedSqliteModulesInSnapshot(root: string, snapshot: { modules?: Array<Record<string, unknown>> }): void {
+  const db = new DatabaseSync(diskCacheDbPathFor(root));
+  try {
+    const rows = db.prepare("SELECT payload FROM module_cache").all() as Array<{ payload: Uint8Array }>;
+    const byFile = new Map<string, Record<string, unknown>>();
+    for (const row of rows) {
+      const parsed = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as Record<string, unknown>;
+      if (typeof parsed.file === "string") byFile.set(parsed.file, parsed);
+    }
+    for (const module of snapshot.modules ?? []) {
+      if (typeof module.file === "string") byFile.set(module.file, module);
+    }
+    snapshot.modules = [...byFile.values()];
+  } finally {
+    db.close();
+  }
+}
+
 async function readProjectSnapshot(snapshotPath: string): Promise<Record<string, unknown>> {
   const raw = await fsp.readFile(snapshotPath);
   return JSON.parse(brotliDecompressSync(raw).toString("utf8")) as Record<string, unknown>;
@@ -1616,13 +1634,6 @@ describe("Cache invalidation and strict hashing", () => {
       }),
     });
 
-    const db = new DatabaseSync(diskCacheDbPathFor(root));
-    try {
-      db.prepare("UPDATE module_cache SET payload = ?").run("{bad json");
-    } finally {
-      db.close();
-    }
-
     const manifestBefore = await fsp.readFile(manifestPathFor(root), "utf8");
     const prepSpy = vi.spyOn(filePrep, "prepareSourceInput");
     const signatureSpy = vi.spyOn(buildCache, "fileSignature");
@@ -1674,13 +1685,6 @@ describe("Cache invalidation and strict hashing", () => {
     expect(typeof snapshot.analysis?.label).toBe("string");
     expect(snapshot.analysisReport?.backend).toBeDefined();
     expect(snapshot.analysisReport?.graph).toBeDefined();
-
-    const db = new DatabaseSync(diskCacheDbPathFor(root));
-    try {
-      db.prepare("UPDATE module_cache SET payload = ?").run("{bad json");
-    } finally {
-      db.close();
-    }
 
     const report: BuildReport = { timings: {} };
     const prepSpy = vi.spyOn(filePrep, "prepareSourceInput");
@@ -1951,8 +1955,9 @@ describe("Cache invalidation and strict hashing", () => {
     await buildProjectIndex(root, { threads: 2, cache: "disk" });
     const snapshotPath = projectSnapshotPathFor(root);
     const snapshot = (await readProjectSnapshot(snapshotPath)) as {
-      modules?: Array<{ locals?: unknown[] }>;
+      modules?: Array<{ locals?: unknown[]; file?: string }>;
     };
+    embedSqliteModulesInSnapshot(root, snapshot);
     if (snapshot.modules?.[0]) snapshot.modules[0].locals = [{}];
     await writeProjectSnapshot(snapshotPath, snapshot);
 
@@ -1977,7 +1982,8 @@ describe("Cache invalidation and strict hashing", () => {
     const snapshot = (await readProjectSnapshot(snapshotPath)) as {
       modules?: Array<{ file?: string; imports?: unknown[]; exports?: unknown[] }>;
     };
-    const moduleSnapshot = snapshot.modules?.find((moduleIndex) => moduleIndex.file === normalize(filePath));
+    embedSqliteModulesInSnapshot(root, snapshot);
+    const moduleSnapshot = snapshot.modules?.find((moduleIndex) => moduleIndex.file === "foo.ts");
     if (moduleSnapshot) {
       moduleSnapshot.imports = [{}];
       moduleSnapshot.exports = [{}];
@@ -2300,12 +2306,14 @@ describe("Cache invalidation and strict hashing", () => {
       expect(() => {
         first?.get(fileIdentityKey(filePath))?.locals.splice(0);
       }).toThrow(TypeError);
+      const decompressCallsAfterFirst = decompressSpy.mock.calls.length;
+      expect(decompressCallsAfterFirst).toBeGreaterThan(0);
       const second = await buildCache.tryLoadProjectSnapshotModules(root, { cache: "disk" }, signatures);
 
       expect(second?.get(fileIdentityKey(filePath))?.locals.some((local) => local.localName === "moduleMemo")).toBe(
         true,
       );
-      expect(decompressSpy).toHaveBeenCalledTimes(1);
+      expect(decompressSpy.mock.calls.length).toBe(decompressCallsAfterFirst);
       expect(cloneSpy).not.toHaveBeenCalled();
     } finally {
       cloneSpy.mockRestore();
@@ -2756,7 +2764,7 @@ describe("Cache invalidation and strict hashing", () => {
       nativeRuntimeFingerprint?: string;
       implementationFingerprint?: string;
     };
-    expect(rewrittenSnapshot.version).toBe(10);
+    expect(rewrittenSnapshot.version).toBe(buildCache.PROJECT_SNAPSHOT_VERSION);
     expect(initial.byFile.has(fileIdentityKey(normalize(entryPath)))).toBe(true);
     expect(rebuilt.byFile.has(fileIdentityKey(normalize(entryPath)))).toBe(true);
     expect(rebuilt.bloomFilters?.get(normalize(entryPath))?.mightContain("versioned")).toBe(true);
@@ -3362,6 +3370,7 @@ describe("Cache invalidation and strict hashing", () => {
       version?: number;
       modules?: Array<{ file?: string; exports?: Array<{ type?: string; fromModule?: string }> }>;
     };
+    embedSqliteModulesInSnapshot(sourceRoot, snapshot);
     const entryModule = snapshot.modules?.find((module) => module.file === "entry.ts");
     const reexport = entryModule?.exports?.find((entry) => entry.type === "reexport");
     if (!reexport) throw new Error("expected persisted reexport");
