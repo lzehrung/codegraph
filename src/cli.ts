@@ -27,7 +27,6 @@ import { createCliBaseContext, createCliOptionAccessors, loadCliProjectContext }
 import { validateCliArgs, type ParsedCliArgs } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./util/packageInfo.js";
 import { errorMessage } from "./util/errors.js";
-import { drainWindowsProcessHandles } from "./util/windowsProcessDrain.js";
 
 export { isRelativePathInside as isCliDiscoveryRelativePathInside } from "./util/discoveryPath.js";
 export const CLI_DISPATCHABLE_COMMANDS = [
@@ -228,9 +227,6 @@ export async function main(rawArgs: string[] = process.argv.slice(2)): Promise<v
       exitCli(1);
     }
   });
-  // Natural process exit after sqlite/native/worker work can abort on Windows
-  // Node 24 (`UV_HANDLE_CLOSING`). Drain only when those handles were used.
-  await drainWindowsProcessHandles();
 }
 
 if (!isCliBootstrapActive() && isDirectCliExecution(import.meta.url)) {

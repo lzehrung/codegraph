@@ -8,14 +8,18 @@
  *
  * Keeping the event loop alive briefly after that work lets libuv finish
  * closing handles before Node destroys the loop. Off Windows this is a no-op.
+ * The hook is registered from sqlite/native/worker use so `version`, `help`,
+ * and `doctor` do not load this module.
  */
 
 export const WINDOWS_LIBUV_EXIT_DRAIN_MS = 100;
 
 let drainRequired = false;
+let beforeExitListener: (() => void) | undefined;
 
 export function markWindowsProcessDrainRequired(): void {
   drainRequired = true;
+  ensureWindowsProcessDrainHook();
 }
 
 export function windowsProcessDrainIsRequired(): boolean {
@@ -24,12 +28,24 @@ export function windowsProcessDrainIsRequired(): boolean {
 
 export function resetWindowsProcessDrainForTests(): void {
   drainRequired = false;
+  if (beforeExitListener) {
+    process.removeListener("beforeExit", beforeExitListener);
+    beforeExitListener = undefined;
+  }
 }
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function ensureWindowsProcessDrainHook(): void {
+  if (process.platform !== "win32" || beforeExitListener) return;
+  beforeExitListener = () => {
+    void drainWindowsProcessHandles();
+  };
+  process.once("beforeExit", beforeExitListener);
 }
 
 export async function drainWindowsProcessHandles(options?: {

@@ -48,4 +48,17 @@ describe("Windows process-handle drain", () => {
     });
     expect(waits).toEqual([WINDOWS_LIBUV_EXIT_DRAIN_MS]);
   });
+
+  it("registers a one-shot beforeExit hook only on Windows", () => {
+    const before = process.listeners("beforeExit").length;
+    markWindowsProcessDrainRequired();
+    const after = process.listeners("beforeExit").length;
+    if (process.platform === "win32") {
+      expect(after).toBe(before + 1);
+      markWindowsProcessDrainRequired();
+      expect(process.listeners("beforeExit").length).toBe(before + 1);
+      return;
+    }
+    expect(after).toBe(before);
+  });
 });
