@@ -652,6 +652,47 @@ function emitIndexCheckActivity(
   });
 }
 
+function emitIndexBuildActivity(
+  opts: BuildOptions | undefined,
+  activity: string,
+  current: number,
+  total: number,
+): void {
+  opts?.onProgress?.({
+    type: "progress",
+    phase: "update",
+    mode: "build",
+    message: activity,
+    activity,
+    current,
+    total,
+  });
+}
+
+/**
+ * Names and times a post-parse persistence phase (cache write, manifest, graph finalize,
+ * snapshot write) so the interactive spinner shows what is happening instead of freezing at
+ * the last "Indexed N/N files" count, and so `--report` exposes each phase's cost.
+ */
+async function timeIndexBuildPhase<T>(args: {
+  opts: BuildOptions | undefined;
+  timings: BuildTimingReport | undefined;
+  buildStartedAt: number | undefined;
+  stepName: string;
+  activity: string;
+  current: number;
+  total: number;
+  fn: () => Promise<T> | T;
+}): Promise<T> {
+  if (args.buildStartedAt !== undefined) {
+    emitIndexBuildActivity(args.opts, args.activity, args.current, args.total);
+  }
+  const startedAt = performance.now();
+  const result = await args.fn();
+  recordBuildTimingStep(args.timings, { name: args.stepName, ms: Math.round(performance.now() - startedAt) });
+  return result;
+}
+
 function createCountedCheckProgress(opts: BuildOptions | undefined, activity: string, total: number): () => void {
   emitIndexCheckActivity(opts, activity, 0, total);
   let completed = 0;
@@ -1102,14 +1143,33 @@ async function buildIndexFromFileListShared(
       if (cacheWrite) pendingCacheWrites.push(cacheWrite);
     }
     if (pendingCacheWrites.length) {
-      writeModulesToCache(projectRoot, pendingCacheWrites, opts);
+      await timeIndexBuildPhase({
+        opts,
+        timings,
+        buildStartedAt,
+        stepName: "persist-cache",
+        activity: "Writing disk cache",
+        current: totalFiles,
+        total: totalFiles,
+        fn: () => writeModulesToCache(projectRoot, pendingCacheWrites, opts),
+      });
     }
-    const workspaceManifestEdges = await collectWorkspaceManifestDependencyEdges(
-      projectRoot,
-      normalizedFiles.filter((file) => path.basename(file) === "package.json"),
-      opts?.discovery,
-      opts?.logLevel,
-    );
+    const workspaceManifestEdges = await timeIndexBuildPhase({
+      opts,
+      timings,
+      buildStartedAt,
+      stepName: "workspace-manifests",
+      activity: "Resolving workspace manifests",
+      current: totalFiles,
+      total: totalFiles,
+      fn: () =>
+        collectWorkspaceManifestDependencyEdges(
+          projectRoot,
+          normalizedFiles.filter((file) => path.basename(file) === "package.json"),
+          opts?.discovery,
+          opts?.logLevel,
+        ),
+    });
     appendUniqueGraphEdges(workspaceManifestEdges);
     if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
     for (const jsonPath of jsonDependencies.values()) {
@@ -1127,6 +1187,9 @@ async function buildIndexFromFileListShared(
       }
     }
     if (manifestEntries) {
+      if (buildStartedAt !== undefined) {
+        emitIndexBuildActivity(opts, "Writing index manifest", totalFiles, totalFiles);
+      }
       await writeIndexManifestSnapshot({
         projectRoot,
         opts,
@@ -1147,27 +1210,47 @@ async function buildIndexFromFileListShared(
           }),
         )
       : manifestEntriesForIndex;
-    const index = await finalizeProjectIndex({
-      projectRoot,
-      normalizedProjectRoot,
+    const index = await timeIndexBuildPhase({
       opts,
       timings,
-      totalStart,
-      graph,
-      modules,
-      parsedMap,
-      bloomFilterCache,
-      ...(projectFiles !== undefined ? { projectFiles } : {}),
-      buildReport: report,
-      manifestEntries: indexManifestEntries,
+      buildStartedAt,
+      stepName: "finalize",
+      activity: "Finalizing project graph",
+      current: totalFiles,
+      total: totalFiles,
+      fn: () =>
+        finalizeProjectIndex({
+          projectRoot,
+          normalizedProjectRoot,
+          opts,
+          timings,
+          totalStart,
+          graph,
+          modules,
+          parsedMap,
+          bloomFilterCache,
+          ...(projectFiles !== undefined ? { projectFiles } : {}),
+          buildReport: report,
+          manifestEntries: indexManifestEntries,
+        }),
     });
     if (manifestEntries) {
-      await writeProjectIndexSnapshot(
-        projectRoot,
+      await timeIndexBuildPhase({
         opts,
-        index,
-        projectSnapshotFilesSignature(manifestEntries, projectRoot),
-      );
+        timings,
+        buildStartedAt,
+        stepName: "snapshot-write",
+        activity: "Writing project snapshot",
+        current: totalFiles,
+        total: totalFiles,
+        fn: () =>
+          writeProjectIndexSnapshot(
+            projectRoot,
+            opts,
+            index,
+            projectSnapshotFilesSignature(manifestEntries, projectRoot),
+          ),
+      });
     }
     if (buildStartedAt !== undefined) {
       // Report the whole operation the caller waited on. Discovery runs before the first

@@ -354,7 +354,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const ORIENT_HELP_TEXT = `codegraph orient - Build a compact first-turn packet for agent repo context
 
-Usage: codegraph orient [roots...] [--root <path>] [--budget small|medium|large] [--health skip|summary|full] [--json | --pretty]
+Usage: codegraph orient [roots...] [--root <path>] [--budget small|medium|large] [--health skip|summary|full] [--report [--report-file <path>]] [--json | --pretty]
 
 Output:
   Orientation includes summary bullets, ranked focus targets with follow-up commands, a bounded project tree, budgeted health counts, and omission counts.

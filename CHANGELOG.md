@@ -9,8 +9,13 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Added
+
+- `codegraph orient` now supports `--report` and `--report-file`, matching other agent commands.
+
 ### Changed
 
+- Index builds now name each post-parse persistence phase (`Writing disk cache`, `Resolving workspace manifests`, `Writing index manifest`, `Finalizing project graph`, `Writing project snapshot`) instead of leaving progress frozen at the last file count once parsing finishes. `--report` timings now include a `steps` array covering `persist-cache`, `workspace-manifests`, `finalize`, and `snapshot-write` durations.
 - Cold index progress now names file-cache checks after discovery. The spinner used to stay on `Checking project metadata files` while Git signatures, SQLite cache probes, and worker startup ran, so a cold init looked stuck on metadata after file listing had already finished. `--report` timings now include `cacheProbeMs` and a `cache-probe` step.
 
 ### Fixed

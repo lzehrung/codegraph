@@ -538,9 +538,13 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "orient",
-    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], [...SHARED_BUILD_OPTIONS, "--budget", "--health"], {
-      kind: "any",
-    }),
+    commandSchema(
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, ...REPORT_FLAGS],
+      [...SHARED_BUILD_OPTIONS, ...REPORT_OPTIONS, "--budget", "--health"],
+      {
+        kind: "any",
+      },
+    ),
   ],
   [
     "packet",
