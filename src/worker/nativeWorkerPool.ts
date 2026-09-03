@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { Piscina } from "piscina";
 import { resolveWorkerThreadCount } from "../util/workerThreads.js";
+import { markWindowsProcessDrainRequired } from "../util/windowsProcessDrain.js";
 
 import type { NativeExtractTask, NativeExtractResult } from "./nativeExtractWorker.js";
 
@@ -63,6 +64,7 @@ export function createNativeWorkerPool(opts?: NativeWorkerPoolOptions): Piscina 
       : HARD_MAX_THREADS;
   const threads = Math.min(resolveThreadCount(opts?.threads), bounded);
   const workerPath = resolveNativeWorkerPath();
+  markWindowsProcessDrainRequired();
   return new Piscina({
     filename: workerPath,
     minThreads: 1,

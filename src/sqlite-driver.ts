@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import type { PathLike } from "node:fs";
 import type { DatabaseSync, StatementColumnMetadata, StatementResultingChanges, StatementSync } from "node:sqlite";
 import { errorMessage } from "./util/errors.js";
+import { markWindowsProcessDrainRequired } from "./util/windowsProcessDrain.js";
 
 export type SqliteValue = null | number | bigint | string | NodeJS.ArrayBufferView;
 export type SqliteRow = Record<string, unknown>;
@@ -234,6 +235,7 @@ export class SqliteStatement {
 export class SqliteDatabase {
   private readonly db: ReadonlyAuthorizerDatabase;
   private readonly statements = new Map<string, SqliteStatement>();
+  private closed = false;
 
   constructor(filePath: PathLike, options?: { readonly?: boolean; timeout?: number }) {
     if (!isNodeSqliteUsable()) {
@@ -244,6 +246,7 @@ export class SqliteDatabase {
       readOnly: options?.readonly,
       timeout: options?.timeout ?? 5000,
     });
+    markWindowsProcessDrainRequired();
     if (options?.readonly) {
       const { constants } = sqlite;
       if (this.db.setAuthorizer && canInstallReadonlyAuthorizer(constants)) {
@@ -294,8 +297,10 @@ export class SqliteDatabase {
   }
 
   close(): void {
+    if (this.closed) return;
     this.statements.clear();
     this.db.close();
+    this.closed = true;
   }
 }
 

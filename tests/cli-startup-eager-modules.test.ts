@@ -107,6 +107,7 @@ describe("CLI startup eager module loading", () => {
       "sql.js",
       "symbols.js",
       "typeHierarchy.js",
+      "windowsProcessDrain.js",
     ];
 
     for (const source of [cliSource, commandTableSource, invocationContextSource]) {
@@ -144,6 +145,7 @@ describe("CLI startup eager module loading", () => {
     expect(noArgs.count).toBeLessThan(30);
     expect(noArgs.modules.some((url) => modulePathEndsWith(url, "/projectFiles.js"))).toBe(false);
     expect(noArgs.modules.some((url) => modulePathEndsWith(url, "/config.js"))).toBe(false);
+    expect(noArgs.modules.some((url) => modulePathEndsWith(url, "/windowsProcessDrain.js"))).toBe(false);
 
     const version = countDistModulesLoaded(["--version"]);
     expect(version.status).toBe(0);
@@ -153,6 +155,7 @@ describe("CLI startup eager module loading", () => {
     expect(version.modules.some((url) => modulePathEndsWith(url, "/projectFiles.js"))).toBe(false);
     expect(version.modules.some((url) => modulePathEndsWith(url, "/config.js"))).toBe(false);
     expect(version.modules.some((url) => modulePathEndsWith(url, "/git.js"))).toBe(false);
+    expect(version.modules.some((url) => modulePathEndsWith(url, "/windowsProcessDrain.js"))).toBe(false);
 
     const help = countDistModulesLoaded(["--help"]);
     expect(help.status).toBe(0);
@@ -160,11 +163,13 @@ describe("CLI startup eager module loading", () => {
     expect(help.count).toBeLessThan(30);
     expect(help.modules.some((url) => modulePathEndsWith(url, "/duplicates.js"))).toBe(false);
     expect(help.modules.some((url) => modulePathEndsWith(url, "/projectFiles.js"))).toBe(false);
+    expect(help.modules.some((url) => modulePathEndsWith(url, "/windowsProcessDrain.js"))).toBe(false);
 
     const doctor = countDistModulesLoaded(["doctor", "--json"]);
     expect(doctor.status).toBe(0);
     expect(doctor.stdout).toContain('"package"');
-    expect(doctor.count).toBeLessThan(30);
+    // doctor inspects the native addon, which registers the Windows teardown drain.
+    expect(doctor.count).toBeLessThan(31);
     expect(doctor.modules.some((url) => modulePathEndsWith(url, "/duplicates.js"))).toBe(false);
     expect(doctor.modules.some((url) => modulePathEndsWith(url, "/projectFiles.js"))).toBe(false);
     expect(doctor.modules.some((url) => modulePathEndsWith(url, "/config.js"))).toBe(false);

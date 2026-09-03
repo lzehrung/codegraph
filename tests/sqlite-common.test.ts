@@ -38,6 +38,18 @@ describe("SQLite common helpers", () => {
     }
   });
 
+  it("ignores a second close on the same database handle", async () => {
+    const root = await mkTmpDir("dg-sqlite-close-twice-");
+    const db = new SqliteDatabase(path.join(root, "graph.sqlite"));
+    try {
+      db.exec("CREATE TABLE entries (name TEXT NOT NULL);");
+      db.close();
+      expect(() => db.close()).not.toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
   it("migrates older versioned SQLite table schemas without dropping compatible rows", async () => {
     const root = await mkTmpDir("dg-sqlite-versioned-older-");
     const db = new SqliteDatabase(path.join(root, "cache.sqlite"));

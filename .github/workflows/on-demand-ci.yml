@@ -152,3 +152,28 @@ jobs:
           tests/cache-modes.test.ts
           tests/disk-cache-sqlite.test.ts
           tests/disk-cache-concurrency.test.ts
+
+  windows-node24-cli-teardown:
+    name: Windows Node 24 CLI teardown
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.10.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build
+        run: npm run build
+
+      - name: First and warm explore process exit
+        run: npx vitest run tests/cli-process-teardown.test.ts tests/windows-process-drain.test.ts
