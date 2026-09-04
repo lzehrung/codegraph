@@ -44,6 +44,7 @@ import {
 } from "./module-cache.js";
 import { cacheRoot } from "./location.js";
 import type { ManifestFileEntry } from "./manifest.js";
+import { expandStarImports } from "../expand-star-imports.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
 export const PROJECT_SNAPSHOT_VERSION = 11;
@@ -847,6 +848,23 @@ function snapshotHydratesModulesFromDisk(version: number): boolean {
   return version === PROJECT_SNAPSHOT_VERSION;
 }
 
+function mutableModuleIndex(mod: ModuleIndex): ModuleIndex {
+  if (
+    !Object.isFrozen(mod) &&
+    !Object.isFrozen(mod.imports) &&
+    !Object.isFrozen(mod.exports) &&
+    !Object.isFrozen(mod.locals)
+  ) {
+    return mod;
+  }
+  return {
+    file: mod.file,
+    exports: [...mod.exports],
+    imports: [...mod.imports],
+    locals: [...mod.locals],
+  };
+}
+
 function modulesForThinSnapshot(
   index: ProjectIndex,
   projectRoot: string,
@@ -880,8 +898,20 @@ function collectSnapshotModules(
     if (cachedModules) {
       for (const [key, row] of cachedModules) {
         if (modules.has(key)) continue;
-        modules.set(key, freezeSnapshotPayload(row.mod));
+        modules.set(key, row.mod);
       }
+    }
+    // expandStarImports only pushes onto star-import arrays. Snapshot-embedded
+    // bodies are frozen; SQLite rows are not. Clone only the frozen star
+    // importers, keep targets shared, then freeze whatever is still mutable.
+    for (const [key, mod] of modules) {
+      if (!mod.imports.some((binding) => binding.kind === "star")) continue;
+      modules.set(key, mutableModuleIndex(mod));
+    }
+    expandStarImports(modules, opts);
+    for (const [key, mod] of modules) {
+      if (Object.isFrozen(mod)) continue;
+      modules.set(key, freezeSnapshotPayload(mod));
     }
   }
   const entry = { identity, root: projectRoot, modules };

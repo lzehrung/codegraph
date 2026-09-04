@@ -5,7 +5,10 @@ import { brotliDecompressSync } from "node:zlib";
 import { DatabaseSync } from "node:sqlite";
 import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import { PROJECT_SNAPSHOT_VERSION, tryLoadProjectIndexSnapshot } from "../src/indexer/build-cache/project-snapshot.js";
+import { closeDiskCacheDatabase } from "../src/indexer/build-cache/module-cache.js";
 import { loadManifest } from "../src/indexer/build-cache/manifest.js";
+import { expandStarImports } from "../src/indexer/expand-star-imports.js";
+import { SymbolKind, type ModuleIndex } from "../src/indexer/types.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
 
@@ -181,5 +184,88 @@ describe("thin project snapshot", () => {
         .get(fileIdentityKey(normalizePath(path.join(root, "alpha.ts"))))
         ?.locals.some((local) => local.localName === "alpha"),
     ).toBe(true);
+  });
+
+  it("copies frozen modules before expanding star imports", () => {
+    const libFile = normalizePath("/tmp/cg-star-lib.ts");
+    const consumerFile = normalizePath("/tmp/cg-star-consumer.ts");
+    const range = { start: { line: 1, column: 0 }, end: { line: 1, column: 3 } };
+    const lib: ModuleIndex = {
+      file: libFile,
+      exports: [
+        {
+          type: "local",
+          exportedAs: "foo",
+          target: { file: libFile, localName: "foo", kind: SymbolKind.Function, range },
+        },
+      ],
+      imports: [],
+      locals: [{ file: libFile, localName: "foo", kind: SymbolKind.Function, range }],
+    };
+    const consumer: ModuleIndex = {
+      file: consumerFile,
+      exports: [],
+      imports: [{ kind: "star", from: "./lib", resolved: libFile }],
+      locals: [],
+    };
+    Object.freeze(lib);
+    Object.freeze(lib.exports);
+    Object.freeze(lib.locals);
+    Object.freeze(consumer);
+    Object.freeze(consumer.imports);
+    const frozen = new Map<string, ModuleIndex>([
+      [fileIdentityKey(libFile), lib],
+      [fileIdentityKey(consumerFile), consumer],
+    ]);
+    expect(() => expandStarImports(frozen)).toThrow(TypeError);
+
+    const owned = new Map<string, ModuleIndex>([
+      [fileIdentityKey(libFile), lib],
+      [
+        fileIdentityKey(consumerFile),
+        { ...consumer, exports: [...consumer.exports], imports: [...consumer.imports], locals: [...consumer.locals] },
+      ],
+    ]);
+    expandStarImports(owned);
+    expect(owned.get(fileIdentityKey(libFile))).toBe(lib);
+    expect(
+      owned
+        .get(fileIdentityKey(consumerFile))
+        ?.imports.some((binding) => binding.kind === "named" && binding.local === "foo"),
+    ).toBe(true);
+  });
+
+  it("expands star imports after hydrating SQLite module bodies", async () => {
+    const root = await roots.create("cg-thin-snapshot-star-");
+    await fsp.writeFile(
+      path.join(root, "Shared.cs"),
+      "namespace Shared { public class Widget { public static int Value = 1; } }\n",
+      "utf8",
+    );
+    await fsp.writeFile(path.join(root, "Consumer.cs"), "using Shared;\n", "utf8");
+    await fsp.writeFile(path.join(root, "Other.cs"), "public class Other {}\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+
+    const consumerKey = fileIdentityKey(normalizePath(path.join(root, "Consumer.cs")));
+    const hasWidget = (index: {
+      byFile: Map<string, { imports: Array<{ kind: string; imported?: string; local?: string }> }>;
+    }): boolean =>
+      Boolean(
+        index.byFile
+          .get(consumerKey)
+          ?.imports.some((binding) => binding.kind === "named" && binding.local === "Widget"),
+      );
+
+    await fsp.writeFile(path.join(root, "Other.cs"), "public class Other { public static int Value = 2; }\n", "utf8");
+    const updated = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1 });
+    expect(hasWidget(updated)).toBe(true);
+
+    const manifest = await loadManifest(root, { cache: "disk" });
+    if (!manifest) throw new Error("Expected manifest after star-import hydrate.");
+    const loaded = await tryLoadProjectIndexSnapshot(root, { cache: "disk" }, new Map(Object.entries(manifest.files)));
+    closeDiskCacheDatabase(root, { cache: "disk" });
+    expect(loaded).not.toBeNull();
+    if (!loaded) return;
+    expect(hasWidget(loaded.index)).toBe(true);
   });
 });
