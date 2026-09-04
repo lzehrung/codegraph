@@ -689,7 +689,10 @@ class Example {
       expect(runEntry).toBeDefined();
       expect(runEntry?.callsites.map((site) => site.range.start.line)).toEqual([7, 8, 9]);
       const importedHelper = [...graph.nodes.values()].find(
-        (node) => node.name === "helper" && node.file.replace(/\\/g, "/") === helperFile.replace(/\\/g, "/"),
+        (node) =>
+          node.name === "helper" &&
+          node.kind === "function" &&
+          node.file.replace(/\\/g, "/") === helperFile.replace(/\\/g, "/"),
       );
       expect(importedHelper).toBeDefined();
       const importedCallers = importedHelper
