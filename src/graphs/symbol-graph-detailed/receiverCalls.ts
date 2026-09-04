@@ -285,11 +285,16 @@ function bindsLocalValue(
     if (PARAMETER_LIST_TYPES[node.type]) {
       for (const child of node.namedChildren) {
         if (child.startIndex >= receiver.startIndex) continue;
-        if (
-          (isIdentifierType(sup, child.type) || child.type === "identifier") &&
-          sliceText(child, source) === receiverName
-        ) {
-          return true;
+        // Ruby `def run(Lib)` is invalid; tree-sitter wraps the capitalized
+        // name in ERROR. Treat recovered parameter names as value bindings.
+        const names = child.type === "ERROR" ? child.namedChildren : [child];
+        for (const name of names) {
+          if (
+            (isIdentifierType(sup, name.type) || name.type === "identifier" || name.type === "constant") &&
+            sliceText(name, source) === receiverName
+          ) {
+            return true;
+          }
         }
       }
     }
