@@ -583,36 +583,37 @@ export function runProductionAudit({
   };
 
   let lastReport = failureReport("NPM_AUDIT_EXECUTION_FAILED", "npm audit did not produce a report.");
-  const attempts = Number.isInteger(maxAttempts) && maxAttempts > 0 ? maxAttempts : DEFAULT_AUDIT_ATTEMPTS;
+  let attempts = DEFAULT_AUDIT_ATTEMPTS;
+  if (Number.isInteger(maxAttempts) && maxAttempts > 0) {
+    attempts = maxAttempts;
+  }
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     let result;
     try {
       result = spawnSyncImpl(command, commandArguments, spawnOptions);
     } catch (error) {
       lastReport = failureReport("NPM_AUDIT_EXECUTION_FAILED", `Could not execute npm audit: ${stringifyError(error)}`);
-      if (attempt === attempts) {
-        return lastReport;
-      }
-      sleepImpl(retryDelayMs * attempt);
-      continue;
     }
-    if (result.error) {
-      lastReport = failureReport(
-        "NPM_AUDIT_EXECUTION_FAILED",
-        `Could not execute npm audit: ${stringifyError(result.error)}`,
-        result.status,
-      );
-    } else {
-      lastReport = createProductionAuditReport({
-        auditOutput: collectAuditOutput(result),
-        auditExitCode: result.status,
-        allowlistInput,
-        now,
-      });
+
+    if (result) {
+      if (result.error) {
+        lastReport = failureReport(
+          "NPM_AUDIT_EXECUTION_FAILED",
+          `Could not execute npm audit: ${stringifyError(result.error)}`,
+          result.status,
+        );
+      } else {
+        lastReport = createProductionAuditReport({
+          auditOutput: collectAuditOutput(result),
+          auditExitCode: result.status,
+          allowlistInput,
+          now,
+        });
+      }
     }
 
     if (!isRetryableAuditReport(lastReport) || attempt === attempts) {
-      return lastReport;
+      break;
     }
     sleepImpl(retryDelayMs * attempt);
   }
