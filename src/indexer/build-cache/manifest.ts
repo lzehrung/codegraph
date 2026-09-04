@@ -490,7 +490,7 @@ export async function loadManifest(
 }
 
 /**
- * Index manifests are compact JSON. Pretty-print only added indent bytes.
+ * Index manifests are compact JSON. Pretty-print only added formatting whitespace.
  * `loadManifest` uses `JSON.parse`, so pretty files from earlier versions still load.
  */
 function serializeIndexManifest(manifest: IndexManifest): string {
