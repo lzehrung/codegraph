@@ -272,7 +272,12 @@ async function resolveReceiverDefinition(
   return null;
 }
 
-function receiverConstructorExpression(
+/**
+ * Resolves the node naming the type a receiver expression was constructed from, or
+ * null when no constructor is proven for it. Shared with detailed symbol-graph call
+ * extraction so `goto` and resolved `calls` edges accept the same receiver forms.
+ */
+export function receiverConstructorExpression(
   obj: SyntaxNodeLike,
   source: string,
   sup: LanguageSupport,

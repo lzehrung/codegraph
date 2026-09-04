@@ -65,6 +65,8 @@ Use the portable callable handle from `symbols` with `codegraph callers <handle>
 
 Call hierarchy contains resolved semantic `calls` edges only. `--include-heuristic` is accepted but currently adds no guessed dynamic calls; use `refs` for all references and `deps` or `rdeps` for file relationships.
 
+Receiver method calls (`this.m()`, `$this->m()`, `self::m()`, `Cls::m()`, `const l = new Lib(); l.target()`) are resolved call edges, so `callers` works for methods, including members inherited through declared `extends`, `implements`, `trait`, or `mixin` edges. An unproven receiver yields no edge rather than a name-only guess, and Go receiver method calls are a documented gap because Go declares methods outside the receiver type.
+
 Use a portable handle, unique exact symbol name, single-definition file, or source location with `codegraph supertypes <target>`, `codegraph subtypes <target>`, or `codegraph implementations <target>`. Hierarchy depth defaults to 1 and caps at 10; all result limits default to 100 and cap at 500, and the default output is the concise human-readable form.
 
 Hierarchy results contain only proven indexed `extends` and `implements` relationships. Implementation targets are interfaces, traits, abstract types, and members with proven implementation or override relationships; exact declarations are returned, while overloads, dynamic or structural conformance, unrelated same-name methods, and unresolved external bases are not guessed.

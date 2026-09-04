@@ -7,6 +7,16 @@ import { fileIdentityKey } from "../../util/paths.js";
 import { defNodeId, nodeForDef, type SymbolGraph } from "../symbol-graph.js";
 import type { DetailedClassNode, DetailedFunctionNode } from "./ast.js";
 import { collectIdentifiers, collectNodesByType, findFirstNodeByType, isIdentifierType } from "./ast.js";
+import {
+  CALL_ARGUMENT_NODE_TYPES,
+  callArgumentCount,
+  classifyReceiver,
+  declaresMembers,
+  nearestMemberContainer,
+  receiverCallAccess,
+  type ReceiverCallAccess,
+  type ReceiverCallCandidate,
+} from "./receiverCalls.js";
 
 type EdgePassContext = {
   index: ProjectIndex;
@@ -24,6 +34,10 @@ type EdgePassContext = {
   resolveExportFrom: (file: string, exportedName: string) => SymbolDef | null;
   resolveMemberChainTarget: (chainNode: SyntaxNodeLike) => SymbolDef | null;
   recordEdge: (fromId: string, toId: string, label?: string, site?: SymbolGraph["edges"][number]["site"]) => boolean;
+  /** Receiver calls whose target needs the completed graph; resolved after every module. */
+  receiverCalls: ReceiverCallCandidate[];
+  /** Whether any indexed project file declares a callable with this name. */
+  hasCallableNamed: (name: string) => boolean;
 };
 
 function ensureNode(context: EdgePassContext, def: SymbolDef): string {
@@ -89,18 +103,20 @@ function tryResolveChain(context: EdgePassContext, node: SyntaxNodeLike, fromId?
   return !!targetDef;
 }
 
-function tryResolveNode(context: EdgePassContext, node: SyntaxNodeLike, fromId: string, label: string): void {
+/** Records an edge for a resolvable target node. Returns whether a target was resolved. */
+function tryResolveNode(context: EdgePassContext, node: SyntaxNodeLike, fromId: string, label: string): boolean {
   if (isIdentifierType(context.sup, node.type) || node.type === "type_identifier") {
     const name = sliceText(node, context.source);
     const target = context.resolveIdentifier(name);
     if (target) {
       recordDefEdge(context, fromId, target, label, node);
-      return;
+      return true;
     }
   }
   if (context.optionalMemberTypes.has(node.type)) {
-    tryResolveChain(context, node, fromId, label);
+    return tryResolveChain(context, node, fromId, label);
   }
+  return false;
 }
 
 function getCallTarget(node: SyntaxNodeLike): SyntaxNodeLike | null {
@@ -112,7 +128,8 @@ function getCallTarget(node: SyntaxNodeLike): SyntaxNodeLike | null {
     node.childForFieldName("member") ??
     node.childForFieldName("expression");
   if (explicitTarget) return explicitTarget;
-  const nonArgumentChildren = node.namedChildren.filter((child) => child.type !== "argument_list");
+  // Kotlin and Swift calls name no callee field, so the sole non-argument child is it.
+  const nonArgumentChildren = node.namedChildren.filter((child) => !CALL_ARGUMENT_NODE_TYPES[child.type]);
   return nonArgumentChildren.length === 1 ? (nonArgumentChildren[0] ?? null) : null;
 }
 
@@ -202,13 +219,40 @@ export function emitMemberOwnershipEdges(
 }
 
 export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: DetailedFunctionNode[]): void {
-  const callNodeTypes = new Set<string>(["call_expression", "call", "method_invocation", "invocation_expression"]);
+  const callNodeTypes = new Set<string>([
+    "call_expression",
+    "call",
+    "method_invocation",
+    "invocation_expression",
+    // PHP models plain calls and receiver calls as three distinct call nodes.
+    "function_call_expression",
+    "member_call_expression",
+    "nullsafe_member_call_expression",
+    "scoped_call_expression",
+  ]);
   const newNodeTypes = new Set<string>([
     "new_expression",
     "object_creation_expression",
     "struct_expression",
     "composite_literal",
   ]);
+  // Receiver typing and lexical member lookup are only needed once a receiver call
+  // fails the cheaper identifier and import-chain resolution, so both are lazy.
+  let membersByContainer: Map<number, DetailedFunctionNode[]> | undefined;
+  const lexicalMembers = (container: SyntaxNodeLike): DetailedFunctionNode[] => {
+    if (!membersByContainer) {
+      membersByContainer = new Map();
+      for (const candidate of functionNodes) {
+        const owner = nearestMemberContainer(candidate.node);
+        if (!owner) continue;
+        const members = membersByContainer.get(owner.startIndex);
+        if (members) members.push(candidate);
+        else membersByContainer.set(owner.startIndex, [candidate]);
+      }
+    }
+    return membersByContainer.get(container.startIndex) ?? [];
+  };
+  const constructorTypeNames = new Map<string, SyntaxNodeLike | null>();
 
   for (const fn of functionNodes) {
     const fromId = ensureNode(context, fn.def);
@@ -265,6 +309,74 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
       }
     };
 
+    /**
+     * Resolves a receiver method call against the receiver's type. Members declared
+     * alongside the caller resolve here; anything needing another module's members
+     * becomes a deferred candidate.
+     */
+    const recordReceiverCall = (node: SyntaxNodeLike, access: ReceiverCallAccess): void => {
+      const memberName = sliceText(access.property, context.source);
+      if (!memberName || !context.hasCallableNamed(memberName)) return;
+      const binding = classifyReceiver(
+        context.sup,
+        access.receiver,
+        context.source,
+        constructorTypeNames,
+        fn.node.startIndex,
+      );
+      if (!binding) return;
+
+      const site = { file: context.moduleEntry.file, range: toRange(access.property) };
+      const argumentCount = callArgumentCount(node);
+      if (binding.kind === "named-type") {
+        const typeDef = context.resolveIdentifier(binding.typeName);
+        if (!typeDef || !declaresMembers(typeDef)) return;
+        context.receiverCalls.push({
+          callerId: fromId,
+          ownerId: ensureNode(context, typeDef),
+          viaSupertypes: false,
+          memberName,
+          argumentCount,
+          site,
+        });
+        return;
+      }
+
+      if (binding.kind === "own-type") {
+        const container = nearestMemberContainer(fn.node);
+        const declared = container
+          ? lexicalMembers(container).filter((candidate) => candidate.def.localName === memberName)
+          : [];
+        if (declared.length === 1) {
+          recordDefEdge(context, fromId, declared[0]!.def, "calls", access.property);
+          return;
+        }
+      }
+      context.receiverCalls.push({
+        callerId: fromId,
+        ownerId: null,
+        viaSupertypes: binding.kind === "supertype",
+        memberName,
+        argumentCount,
+        site,
+      });
+    };
+
+    /**
+     * Records the `calls` edge for one call node. A call with a receiver is resolved
+     * only through its import chain or its receiver's type: matching the bare member
+     * name against module locals and import aliases would attribute `$this->helper()`
+     * to an unrelated imported `helper`.
+     */
+    const resolveCallTarget = (node: SyntaxNodeLike, callee: SyntaxNodeLike | null): void => {
+      const access = receiverCallAccess(context.sup, node, callee);
+      if (access) {
+        if (!tryResolveChain(context, access.accessNode, fromId, "calls")) recordReceiverCall(node, access);
+        return;
+      }
+      if (callee) tryResolveNode(context, callee, fromId, "calls");
+    };
+
     const recordCallOrInstantiation = (node: SyntaxNodeLike): boolean => {
       if (callNodeTypes.has(node.type)) {
         if (context.sup.id === "go") {
@@ -289,12 +401,11 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
             return false;
           }
           if (methodNode) {
-            tryResolveNode(context, methodNode, fromId, "calls");
+            resolveCallTarget(node, methodNode);
             return false;
           }
         }
-        const callee = getCallTarget(node);
-        if (callee) tryResolveNode(context, callee, fromId, "calls");
+        resolveCallTarget(node, getCallTarget(node));
       }
       if (newNodeTypes.has(node.type)) {
         const target = getNewTarget(node);

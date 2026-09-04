@@ -23,6 +23,7 @@ import {
 } from "./symbol-graph-detailed/edgePasses.js";
 import { buildImportAliasMaps } from "./symbol-graph-detailed/importAliases.js";
 import { createMemberChainResolver } from "./symbol-graph-detailed/memberChains.js";
+import { emitReceiverCallEdges, type ReceiverCallCandidate } from "./symbol-graph-detailed/receiverCalls.js";
 
 type BuildDetailedSymbolGraphOptions = {
   scope?: "all" | "imported";
@@ -131,6 +132,24 @@ export async function buildSymbolGraphDetailed(
   const resolveExportFrom = (file: string, exportedName: string): SymbolDef | null =>
     resolveExportDef(file, exportedName);
 
+  const receiverCalls: ReceiverCallCandidate[] = [];
+  // Every receiver call resolves to a callable declared somewhere in the project, so
+  // this set short-circuits receiver typing for calls into runtime and dependency
+  // APIs, which dominate real call sites. Built on first use because a scoped graph
+  // may never reach a receiver call.
+  let callableNames: Set<string> | undefined;
+  const hasCallableNamed = (name: string): boolean => {
+    if (!callableNames) {
+      callableNames = new Set<string>();
+      for (const entry of index.byFile.values()) {
+        for (const local of entry.locals) {
+          if (local.kind === SymbolKind.Function) callableNames.add(local.localName);
+        }
+      }
+    }
+    return callableNames.has(name);
+  };
+
   const optionFileKeys = opts?.files ? new Set(Array.from(opts.files, fileIdentityKey)) : undefined;
   for (const moduleEntry of index.byFile.values()) {
     const file = moduleEntry.file;
@@ -216,6 +235,8 @@ export async function buildSymbolGraphDetailed(
         resolveExportFrom,
         resolveMemberChainTarget,
         recordEdge,
+        receiverCalls,
+        hasCallableNamed,
       };
       emitPythonDecoratorEdges(edgePassContext, tree.rootNode);
       emitFunctionBodyEdges(edgePassContext, functionNodes);
@@ -232,6 +253,7 @@ export async function buildSymbolGraphDetailed(
       logWithLevel(opts?.logLevel, "warn", `Warning: Failed to build detailed symbol edges for ${file}:`, error);
     }
   }
+  emitReceiverCallEdges({ nodes, edges }, receiverCalls, recordEdge);
   emitMemberImplementationEdges({ nodes, edges }, recordEdge);
 
   if (skippedSyntaxTreeFiles > 0) {
