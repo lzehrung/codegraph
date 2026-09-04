@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { buildSymbolGraphDetailed, type DetailedSymbolGraph } from "../src/graphs/symbol-graph-detailed.js";
-import { emitReceiverCallEdges, type ReceiverCallCandidate } from "../src/graphs/symbol-graph-detailed/receiverCalls.js";
+import {
+  emitReceiverCallEdges,
+  type ReceiverCallCandidate,
+} from "../src/graphs/symbol-graph-detailed/receiverCalls.js";
 import type { SymbolGraph, SymbolNode } from "../src/graphs/symbol-graph.js";
 import { findCallHierarchy } from "../src/indexer/call-hierarchy.js";
 import { buildProjectIndex } from "../src/indexer/build-index.js";
@@ -24,6 +27,8 @@ async function buildFixture(prefix: string, files: Record<string, string>): Prom
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, source);
   }
+  // Detailed graphs require native Tree-sitter. This helper is only called from
+  // nativeDescribe suites, so it does not run when that runtime is unavailable.
   const index = await buildProjectIndex(root, { cache: "off", native: "on" });
   return await buildSymbolGraphDetailed(index);
 }
@@ -87,7 +92,7 @@ const TS_REPORTER_FIXTURE: Record<string, string> = {
   ),
 };
 
-describe("receiver method call edges", () => {
+nativeDescribe("receiver method call edges", () => {
   it("records a calls edge for a TypeScript instance method invoked on a constructed receiver", async () => {
     const graph = await buildFixture("cg-receiver-ts-", TS_REPORTER_FIXTURE);
     const target = nodeIn(graph, "lib.ts", "target");
@@ -134,9 +139,9 @@ describe("receiver method call edges", () => {
   it("leaves a structurally typed receiver unresolved instead of guessing by name", async () => {
     const files: Record<string, string> = {
       "svc.ts": "export class Svc { run(): number { return 1; } }\n",
-      "dynamic.ts": [
-        "export function callDynamic(value: { run(): number }): number { return value.run(); }",
-      ].join("\n"),
+      "dynamic.ts": ["export function callDynamic(value: { run(): number }): number { return value.run(); }"].join(
+        "\n",
+      ),
     };
     const graph = await buildFixture("cg-receiver-ts-dynamic-", files);
     const svcRun = nodeIn(graph, "svc.ts", "run");

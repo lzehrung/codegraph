@@ -150,10 +150,7 @@ export function receiverCallAccess(
   return { accessNode, receiver, property };
 }
 
-export type ReceiverBinding =
-  | { kind: "own-type" }
-  | { kind: "supertype" }
-  | { kind: "named-type"; typeName: string };
+export type ReceiverBinding = { kind: "own-type" } | { kind: "supertype" } | { kind: "named-type"; typeName: string };
 
 /**
  * Classifies what a receiver expression denotes: the type declaring the call, one of
@@ -293,17 +290,20 @@ function provenMemberTarget(
   owners: readonly string[],
   candidate: ReceiverCallCandidate,
 ): MemberTargetLookup {
-  const matches: string[] = [];
+  const matches = new Set<string>();
   for (const ownerId of owners) {
     for (const memberId of membersByOwner.get(ownerId) ?? []) {
       const node = graph.nodes.get(memberId);
       if (!node || node.kind !== "function" || node.name !== candidate.memberName) continue;
-      if (!matches.includes(memberId)) matches.push(memberId);
+      matches.add(memberId);
     }
   }
-  if (!matches.length) return { status: "none" };
-  if (matches.length === 1) return { status: "unique", memberId: matches[0]! };
-  const byArity = matches.filter((memberId) => graph.nodes.get(memberId)?.memberArity === candidate.argumentCount);
+  if (!matches.size) return { status: "none" };
+  if (matches.size === 1) {
+    const [memberId] = matches;
+    return { status: "unique", memberId: memberId! };
+  }
+  const byArity = [...matches].filter((memberId) => graph.nodes.get(memberId)?.memberArity === candidate.argumentCount);
   if (byArity.length === 1) return { status: "unique", memberId: byArity[0]! };
   return { status: "ambiguous" };
 }
