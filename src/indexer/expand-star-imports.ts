@@ -1,15 +1,30 @@
 import { supportForFile } from "../languages.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { FileId } from "../types.js";
-import { SymbolKind, type BuildOptions, type ModuleIndex } from "./types.js";
+import { SymbolKind, type BuildOptions, type ModuleIndex, type SymbolDef } from "./types.js";
 import type { ImportBinding } from "./import-types.js";
+
+/**
+ * Prefer explicit local exports when the target has any. Otherwise fall back
+ * to non-private locals. Collect local export targets in one pass so star
+ * expansion does not filter `target.exports` twice.
+ */
+function symbolsForStarImport(target: ModuleIndex): SymbolDef[] {
+  const localExports: SymbolDef[] = [];
+  for (const entry of target.exports) {
+    if (entry.type === "local") localExports.push(entry.target);
+  }
+  if (localExports.length) return localExports;
+  return target.locals.filter((local) => !local.localName.startsWith("_"));
+}
 
 /**
  * Expand `kind: "star"` import bindings into named or namespace imports so
  * later resolution can see the target's locals without re-parsing.
  *
- * This rewrites `mod.imports` only. It does not inspect `mod.exports` or
- * `exportStar` entries (TypeScript `export *`).
+ * This rewrites `mod.imports` only. It reads the resolved target's local
+ * exports (or non-private locals) to choose names. It does not rewrite
+ * `mod.exports` or `exportStar` entries (TypeScript `export *`).
  *
  * Disk-cached module rows are stored before this expansion. Snapshot hydrate
  * must run it before freezing the in-memory index.
@@ -37,11 +52,7 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
       const target = modules.get(fileIdentityKey(imp.resolved));
       if (!target) continue;
       const targetSupport = supportForFile(imp.resolved, opts?.languageExtensions);
-      const exportedSymbols = target.exports.filter((entry) => entry.type === "local").length
-        ? target.exports
-            .filter((entry): entry is Extract<typeof entry, { type: "local" }> => entry.type === "local")
-            .map((entry) => entry.target)
-        : target.locals.filter((local) => !local.localName.startsWith("_"));
+      const exportedSymbols = symbolsForStarImport(target);
       const seen = new Set<string>();
       for (const symbol of exportedSymbols) {
         if (!symbol.localName || seen.has(symbol.localName)) continue;
