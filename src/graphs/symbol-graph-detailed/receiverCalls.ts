@@ -153,13 +153,9 @@ export function receiverCallAccess(
 export type ReceiverBinding = { kind: "own-type" } | { kind: "supertype" } | { kind: "named-type"; typeName: string };
 
 /**
- * Classifies what a receiver expression denotes: the type declaring the call, one of
- * its supertypes, or a named type proven by a constructor or a type reference.
- * Returns null for receivers Codegraph cannot prove, so no edge is invented for them.
- *
- * Proving a named local receiver scans the enclosing binding containers, so results
- * are memoized in `constructorCache` under `cacheScope` (the enclosing function's
- * start index) plus the receiver text.
+ * Classifies a receiver as the declaring type, a supertype, or a named/constructed type.
+ * Returns null when the receiver cannot be proven.
+ * Named-local constructor lookup is memoized per enclosing function and receiver text.
  */
 export function classifyReceiver(
   sup: LanguageSupport,
@@ -215,15 +211,9 @@ export function callArgumentCount(callNode: SyntaxNodeLike): number {
 }
 
 /**
- * Records a resolved `calls` edge for every receiver call whose target is proven by
- * the completed graph: the member is declared by the receiver's type, or by exactly
- * one type in its declared supertype chain.
- *
- * Ambiguous matches are dropped rather than guessed, so call hierarchy keeps
- * reporting only proven edges. A level with several same-named members stops the
- * walk even when a deeper supertype has a unique member of the same name.
- * Explicit `super`/`base`/`parent` receivers walk only class-kind ancestors so an
- * implemented interface cannot make a superclass call ambiguous.
+ * Records proven `calls` edges for deferred receiver invocations.
+ * Ambiguous names at a level stop the walk.
+ * `super`/`base`/`parent` follow class `extends` ancestors only.
  */
 export function emitReceiverCallEdges(
   graph: SymbolGraph,
@@ -235,33 +225,33 @@ export function emitReceiverCallEdges(
   const membersByOwner = new Map<string, string[]>();
   const ownerByMember = new Map<string, string>();
   const supertypesByOwner = new Map<string, string[]>();
+  const classAncestorsByOwner = new Map<string, string[]>();
+  const pushUnique = (map: Map<string, string[]>, from: string, to: string): void => {
+    const list = map.get(from);
+    if (!list) map.set(from, [to]);
+    else if (!list.includes(to)) list.push(to);
+  };
   for (const edge of graph.edges) {
     const label = edge.label;
     if (label === "member_of") {
-      const members = membersByOwner.get(edge.to);
-      if (members) members.push(edge.from);
-      else membersByOwner.set(edge.to, [edge.from]);
+      pushUnique(membersByOwner, edge.to, edge.from);
       ownerByMember.set(edge.from, edge.to);
       continue;
     }
     if (!label || !HIERARCHY_LABELS[label]) continue;
-    const supertypes = supertypesByOwner.get(edge.from);
-    if (!supertypes) {
-      supertypesByOwner.set(edge.from, [edge.to]);
-    } else if (!supertypes.includes(edge.to)) {
-      supertypes.push(edge.to);
-    }
+    pushUnique(supertypesByOwner, edge.from, edge.to);
+    if (label === "extends") pushUnique(classAncestorsByOwner, edge.from, edge.to);
   }
 
-  const ancestors = (ownerId: string, viaSupertypes: boolean): string[] => {
-    const next = supertypesByOwner.get(ownerId) ?? [];
-    return viaSupertypes ? next.filter((id) => graph.nodes.get(id)?.kind === "class") : next;
+  const nextOwners = (ownerId: string, viaSupertypes: boolean): string[] => {
+    if (!viaSupertypes) return supertypesByOwner.get(ownerId) ?? [];
+    return (classAncestorsByOwner.get(ownerId) ?? []).filter((id) => graph.nodes.get(id)?.kind === "class");
   };
 
   for (const candidate of candidates) {
     const owner = candidate.ownerId ?? ownerByMember.get(candidate.callerId);
     if (!owner) continue;
-    let level = candidate.viaSupertypes ? ancestors(owner, true) : [owner];
+    let level = candidate.viaSupertypes ? nextOwners(owner, true) : [owner];
     const visited = new Set<string>(level);
     for (let depth = 0; depth < MAX_SUPERTYPE_DEPTH && level.length; depth += 1) {
       const lookup = provenMemberTarget(graph, membersByOwner, level, candidate);
@@ -272,7 +262,7 @@ export function emitReceiverCallEdges(
       if (lookup.status === "ambiguous") break;
       const next: string[] = [];
       for (const ownerId of level) {
-        for (const supertype of ancestors(ownerId, candidate.viaSupertypes)) {
+        for (const supertype of nextOwners(ownerId, candidate.viaSupertypes)) {
           if (visited.has(supertype)) continue;
           visited.add(supertype);
           next.push(supertype);

@@ -35,9 +35,7 @@ async function buildFixture(prefix: string, files: Record<string, string>): Prom
 
 /** Function members named `memberName` owned by the type named `ownerName`. */
 function membersOwnedBy(graph: DetailedSymbolGraph, ownerName: string, memberName: string): string[] {
-  const owners = [...graph.nodes.values()].filter(
-    (node) => node.name === ownerName && (node.kind === "class" || node.kind === "interface"),
-  );
+  const owners = [...graph.nodes.values()].filter((node) => node.name === ownerName && node.kind !== "function");
   expect(owners, `expected exactly one ${ownerName} type`).toHaveLength(1);
   const ownerId = owners[0]!.id;
   return graph.edges
@@ -149,6 +147,23 @@ nativeDescribe("receiver method call edges", () => {
     expect(callsiteTexts(graph, svcRun, callDynamic, files)).toBeNull();
   });
 
+  it("leaves a factory-assigned receiver unresolved instead of guessing by name", async () => {
+    const files: Record<string, string> = {
+      "svc.ts": [
+        "export class Svc { run(): number { return 1; } }",
+        "export function getSvc(): Svc { return new Svc(); }",
+      ].join("\n"),
+      "dyn.ts": [
+        'import { getSvc } from "./svc";',
+        "export function callIt(): number { const value = getSvc(); return value.run(); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-ts-factory-", files);
+    const svcRun = nodeIn(graph, "svc.ts", "run");
+    const callIt = nodeIn(graph, "dyn.ts", "callIt");
+    expect(callsiteTexts(graph, svcRun, callIt, files)).toBeNull();
+  });
+
   it("records calls edges for PHP instance, self, static, class-qualified, and free calls", async () => {
     const files: Record<string, string> = {
       "example.php": [
@@ -197,6 +212,48 @@ nativeDescribe("receiver method call edges", () => {
     const run = nodeIn(graph, "inherit.php", "run");
     expect(callsiteTexts(graph, shared, run, files)).toEqual(["shared", "shared"]);
   });
+
+  it("records a PHP trait method invoked on $this", async () => {
+    const files: Record<string, string> = {
+      "trait.php": [
+        "<?php",
+        "trait Greeter { function greet() {} }",
+        "class Host {",
+        "    use Greeter;",
+        "    function run() { $this->greet(); }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-php-trait-", files);
+    const greet = nodeIn(graph, "trait.php", "greet");
+    const run = nodeIn(graph, "trait.php", "run");
+    expect(callsiteTexts(graph, greet, run, files)).toEqual(["greet"]);
+  });
+
+  it("records PHP parent:: on the class ancestor when a trait declares the same name", async () => {
+    const files: Record<string, string> = {
+      "parent.php": [
+        "<?php",
+        "trait Greeter { function shared() {} }",
+        "class Base { function shared() {} }",
+        "class Child extends Base {",
+        "    use Greeter;",
+        "    function run() {",
+        "        $this->shared();",
+        "        parent::shared();",
+        "    }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-php-parent-trait-", files);
+    const run = nodeIn(graph, "parent.php", "run");
+    const baseShared = membersOwnedBy(graph, "Base", "shared");
+    const traitShared = membersOwnedBy(graph, "Greeter", "shared");
+    expect(baseShared).toHaveLength(1);
+    expect(traitShared).toHaveLength(1);
+    expect(callsiteTexts(graph, baseShared[0]!, run, files)).toEqual(["shared"]);
+    expect(callsiteTexts(graph, traitShared[0]!, run, files)).toBeNull();
+  });
 });
 
 nativeDescribe("receiver method call edge language parity", () => {
@@ -224,6 +281,24 @@ nativeDescribe("receiver method call edge language parity", () => {
     const helper = nodeIn(graph, "Csx.cs", "CsHelper");
     const run = nodeIn(graph, "Csx.cs", "CsRun");
     expect(callsiteTexts(graph, helper, run, files)).toEqual(["CsHelper"]);
+  });
+
+  it("records a C# base call on the class ancestor when an interface declares the same name", async () => {
+    const files: Record<string, string> = {
+      "CsBase.cs": [
+        "interface CsFace { void Shared(); }",
+        "class CsBase { public void Shared() {} }",
+        "class CsLeaf : CsBase, CsFace { public void Go() { base.Shared(); } }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cs-base-", files);
+    const go = nodeIn(graph, "CsBase.cs", "Go");
+    const baseShared = membersOwnedBy(graph, "CsBase", "Shared");
+    const faceShared = membersOwnedBy(graph, "CsFace", "Shared");
+    expect(baseShared).toHaveLength(1);
+    expect(faceShared).toHaveLength(1);
+    expect(callsiteTexts(graph, baseShared[0]!, go, files)).toEqual(["Shared"]);
+    expect(callsiteTexts(graph, faceShared[0]!, go, files)).toBeNull();
   });
 
   // Documented limitation (docs/language-parity.md): Go declares methods outside the
@@ -348,6 +423,20 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(callsiteTexts(graph, baseShared[0]!, go, files)).toEqual(["shared"]);
     expect(callsiteTexts(graph, faceShared[0]!, go, files)).toBeNull();
   });
+
+  it("records this through an implemented interface but not super when there is no class ancestor", async () => {
+    const files: Record<string, string> = {
+      "only.java": [
+        "interface OnlyFace { void shared(); }",
+        "class OnlyLeaf implements OnlyFace { void go() { super.shared(); this.shared(); } }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-java-iface-only-", files);
+    const go = nodeIn(graph, "only.java", "go");
+    const faceShared = membersOwnedBy(graph, "OnlyFace", "shared");
+    expect(faceShared).toHaveLength(1);
+    expect(callsiteTexts(graph, faceShared[0]!, go, files)).toEqual(["shared"]);
+  });
 });
 
 describe("emitReceiverCallEdges hierarchy walk", () => {
@@ -367,6 +456,26 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
       return true;
     });
     return recorded;
+  }
+
+  function childExtendsBaseImplementsIface(): SymbolGraph {
+    return {
+      nodes: new Map([
+        ["Child", node("Child", "Child", { kind: "class" })],
+        ["Base", node("Base", "Base", { kind: "class" })],
+        ["Iface", node("Iface", "Iface", { kind: "interface" })],
+        ["leaf.go", node("leaf.go", "go")],
+        ["base.run", node("base.run", "run", { memberArity: 0 })],
+        ["iface.run", node("iface.run", "run", { memberArity: 0 })],
+      ]),
+      edges: [
+        { from: "leaf.go", to: "Child", label: "member_of" },
+        { from: "base.run", to: "Base", label: "member_of" },
+        { from: "iface.run", to: "Iface", label: "member_of" },
+        { from: "Child", to: "Base", label: "extends" },
+        { from: "Child", to: "Iface", label: "implements" },
+      ],
+    };
   }
 
   function candidate(overrides: Partial<ReceiverCallCandidate> = {}): ReceiverCallCandidate {
@@ -504,21 +613,35 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
   });
 
   it("records super/base/parent calls on the class ancestor when an interface declares the same name", () => {
+    expect(
+      recordedCalls(childExtendsBaseImplementsIface(), candidate({ ownerId: "Child", viaSupertypes: true })),
+    ).toEqual([{ from: "leaf.go", to: "base.run" }]);
+  });
+
+  it("still treats this-receiver inheritance as ambiguous when a class and interface both match", () => {
+    expect(recordedCalls(childExtendsBaseImplementsIface(), candidate({ ownerId: "Child" }))).toEqual([]);
+  });
+
+  it("ignores implements, trait, and mixin targets for super/base/parent even when those nodes are classes", () => {
     const graph: SymbolGraph = {
       nodes: new Map([
         ["Child", node("Child", "Child", { kind: "class" })],
         ["Base", node("Base", "Base", { kind: "class" })],
-        ["Iface", node("Iface", "Iface", { kind: "interface" })],
+        ["Iface", node("Iface", "Iface", { kind: "class" })],
+        ["Mixin", node("Mixin", "Mixin", { kind: "class" })],
         ["leaf.go", node("leaf.go", "go")],
         ["base.run", node("base.run", "run", { memberArity: 0 })],
         ["iface.run", node("iface.run", "run", { memberArity: 0 })],
+        ["mixin.run", node("mixin.run", "run", { memberArity: 0 })],
       ]),
       edges: [
         { from: "leaf.go", to: "Child", label: "member_of" },
         { from: "base.run", to: "Base", label: "member_of" },
         { from: "iface.run", to: "Iface", label: "member_of" },
+        { from: "mixin.run", to: "Mixin", label: "member_of" },
         { from: "Child", to: "Base", label: "extends" },
         { from: "Child", to: "Iface", label: "implements" },
+        { from: "Child", to: "Mixin", label: "trait" },
       ],
     };
     expect(recordedCalls(graph, candidate({ ownerId: "Child", viaSupertypes: true }))).toEqual([
@@ -526,10 +649,28 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
     ]);
   });
 
-  it("still treats this-receiver inheritance as ambiguous when a class and interface both match", () => {
+  it("does not record super/base/parent calls when only a non-extends hierarchy exists", () => {
     const graph: SymbolGraph = {
       nodes: new Map([
         ["Child", node("Child", "Child", { kind: "class" })],
+        ["Iface", node("Iface", "Iface", { kind: "interface" })],
+        ["leaf.go", node("leaf.go", "go")],
+        ["iface.run", node("iface.run", "run", { memberArity: 0 })],
+      ]),
+      edges: [
+        { from: "leaf.go", to: "Child", label: "member_of" },
+        { from: "iface.run", to: "Iface", label: "member_of" },
+        { from: "Child", to: "Iface", label: "implements" },
+      ],
+    };
+    expect(recordedCalls(graph, candidate({ ownerId: "Child", viaSupertypes: true }))).toEqual([]);
+  });
+
+  it("continues a super walk to a class ancestor past an implemented interface", () => {
+    const graph: SymbolGraph = {
+      nodes: new Map([
+        ["Child", node("Child", "Child", { kind: "class" })],
+        ["Mid", node("Mid", "Mid", { kind: "class" })],
         ["Base", node("Base", "Base", { kind: "class" })],
         ["Iface", node("Iface", "Iface", { kind: "interface" })],
         ["leaf.go", node("leaf.go", "go")],
@@ -540,10 +681,13 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
         { from: "leaf.go", to: "Child", label: "member_of" },
         { from: "base.run", to: "Base", label: "member_of" },
         { from: "iface.run", to: "Iface", label: "member_of" },
-        { from: "Child", to: "Base", label: "extends" },
+        { from: "Child", to: "Mid", label: "extends" },
         { from: "Child", to: "Iface", label: "implements" },
+        { from: "Mid", to: "Base", label: "extends" },
       ],
     };
-    expect(recordedCalls(graph, candidate({ ownerId: "Child" }))).toEqual([]);
+    expect(recordedCalls(graph, candidate({ ownerId: "Child", viaSupertypes: true }))).toEqual([
+      { from: "leaf.go", to: "base.run" },
+    ]);
   });
 });

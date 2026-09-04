@@ -302,9 +302,7 @@ Line-and-column navigation remains primary: use `<file>:<line>:<column>` with `g
 
 Pretty symbol and callsite rows are the default. `--json` reports exact project-relative callsites, provenance, freshness, and separate symbol, callsite, and unresolved-site omissions; `--include-heuristic` is accepted, but current results remain limited to resolved semantic `calls` edges rather than guessed dynamic calls, file dependencies, imports, or references.
 
-Method invocations on a receiver are reported the same way as free-function calls. `callers` resolves a method call when the receiver is the type declaring the call (`this`, `$this`, `self`, `static`, `Self`, `cls`), one of its declared class ancestors (`super`, `base`, `parent`), a named indexed type used as a static or class-qualified receiver, or a local whose constructor is proven (`const l = new Lib(); l.target()`). Inherited `this`/`$this`/`self` members resolve through declared `extends`, `implements`, `trait`, and `mixin` edges; `super`/`base`/`parent` walk only class-kind ancestors.
-
-A receiver call is never matched by bare member name against module locals or import aliases, so an unproven receiver reports no caller rather than a guess. Go receiver method calls are a documented gap because Go declares methods outside the receiver type; see [language parity](./language-parity.md).
+Receiver method calls are reported like free-function calls when the receiver is proven (`this`, `$this`, `self`, a class-qualified name, a constructed local, or `super`/`base`/`parent` on a class `extends` ancestor). Unproven receivers and Go methods declared outside the type emit no edge. See [language parity](./language-parity.md).
 
 `supertypes` and `subtypes` accept one portable symbol handle from `symbols`, default to depth 1 and 100 results, cap depth at 10 and results at 500, and return only proven indexed `extends` and `implements` relationships. `implementations` uses the same 100/500 result bounds without `--depth`; supported targets are interfaces, traits, abstract types, and members with proven implementation or override relationships.
 

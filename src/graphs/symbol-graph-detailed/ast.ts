@@ -62,6 +62,7 @@ export function collectDetailedDeclarations(
     "interface_declaration",
     "protocol_declaration",
     "trait_item",
+    "trait_declaration",
     "struct_item",
     "struct_declaration",
     "class_specifier",
