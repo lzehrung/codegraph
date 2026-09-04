@@ -631,9 +631,10 @@ describe("project lifecycle commands", () => {
     try {
       const result = await initCodegraphLifecycle(root);
 
-      // computeConfigHash is also consulted by the indexer's own disk-cache build/manifest layers
-      // (each logging their own generic "Warning: ..." message), so assert on the lifecycle-specific
-      // wording rather than an exact call count.
+      // Init reuses the index manifest hash, so hashConfig (and this lifecycle-specific warning)
+      // runs on status, which must still recompute to detect drift.
+      await getCodegraphLifecycleStatus(root);
+
       expect(warnSpy).toHaveBeenCalled();
       const lifecycleWarnCall = warnSpy.mock.calls.find(
         (call) => typeof call[0] === "string" && call[0].includes("Codegraph lifecycle config drift check"),

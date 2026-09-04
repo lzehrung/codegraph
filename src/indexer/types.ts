@@ -235,7 +235,13 @@ export type BuildTimingReport = {
   parseMs?: number;
   graphMs?: number;
   writeManifestMs?: number;
-  /** Named step durations for diagnosis. Coarse fields above remain the stable summary. */
+  /**
+   * Named step durations for diagnosis. Coarse fields above remain the stable summary.
+   * Manifest writes keep `index-manifest` as the overall total and also emit `git-head`,
+   * `config-hash`, `manifest-transform`, `manifest-write`, and `cache-prune`.
+   * Incremental preambles emit `file-identity`, `clear-resolution-caches`, `load-manifest`,
+   * and `diff-build-options` so work before a delegated rebuild is attributable.
+   */
   steps?: BuildTimingStep[];
 };
 

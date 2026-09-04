@@ -914,10 +914,17 @@ async function listProjectFilesInternal(
     // disk): on an Unreal project holding 100,168 files (818 tracked) the scan produced
     // 55,983 pattern-matching candidates, nearly all generated sources under a gitignored
     // `Intermediate/` tree, and discovery took 26.1s. Git lists 4,010 in about 111ms.
-    // An aliased root or a gitignore-root override means Git's notion of the project is
-    // not this call's, so those fall back to the scan.
+    // An aliased root or a gitignore-root override that points elsewhere means Git's notion
+    // of the project is not this call's, so those fall back to the scan. Passing
+    // `gitignoreRoot` equal to the scan root (the CLI's historical whole-project form) still
+    // wants this repository's ignore rules, so keep the Git candidate path. On a 501-file
+    // Git repo with a 20,000-file gitignored tree, `gitignoreRoot: scanRoot` otherwise
+    // forced a filesystem scan plus a full-tree symlink probe (~403ms) instead of Git
+    // listing (~66ms) of the 502 tracked paths.
+    const gitignoreRootMatchesScanRoot =
+      options?.gitignoreRoot === undefined || normalizePath(options.gitignoreRoot) === normalizePath(root);
     const attemptedGitCandidates =
-      useGitignore && options?.gitignoreRoot === undefined && normalizePath(realRoot) === normalizePath(root);
+      useGitignore && gitignoreRootMatchesScanRoot && normalizePath(realRoot) === normalizePath(root);
     const gitDiscoveryCallbacks: DiscoveryWorkCallbacks = {
       ...(options?.onDiscoveryProgress ? { onDiscoveryProgress: options.onDiscoveryProgress } : {}),
       ...(options?.onDiscoveryTiming ? { onDiscoveryTiming: options.onDiscoveryTiming } : {}),

@@ -26,6 +26,11 @@ export function toManifestFileEntry(entry: GraphCacheEntry): ManifestFileEntry |
   };
 }
 
+function recordManifestTimingStep(timings: BuildReport["timings"] | undefined, name: string, startedAt: number): void {
+  if (!timings) return;
+  (timings.steps ??= []).push({ name, ms: Math.round(performance.now() - startedAt) });
+}
+
 export async function writeIndexManifestSnapshot(args: {
   projectRoot: string;
   opts: BuildOptions | undefined;
@@ -37,15 +42,22 @@ export async function writeIndexManifestSnapshot(args: {
   transientFiles?: string[];
   symlinkDirectories?: string[];
   resolverEnvironmentFingerprint?: string;
+  /** When present, used verbatim instead of hashing config files again. */
+  configHash?: { hash: string; error?: string };
 }): Promise<void> {
   const files = args.files instanceof Map ? Object.fromEntries(args.files) : args.files;
   if (!Object.keys(files).length && !args.allowEmpty) return;
   const writeManifestStart = performance.now();
+  const gitHeadStartedAt = performance.now();
   const lastCommit = await getGitHead(args.projectRoot);
-  const configHashResult = await computeConfigHash(args.projectRoot, args.opts?.logLevel);
+  recordManifestTimingStep(args.timings, "git-head", gitHeadStartedAt);
+  const configHashStartedAt = performance.now();
+  const configHashResult = args.configHash ?? (await computeConfigHash(args.projectRoot, args.opts?.logLevel));
+  recordManifestTimingStep(args.timings, "config-hash", configHashStartedAt);
   const projectRootMtimeMs =
     args.symlinkDirectories !== undefined ? (await fsp.stat(args.projectRoot)).mtimeMs : undefined;
   const configHash = recordConfigHashResult(args.manifestReport, configHashResult, args.opts?.logLevel);
+  const transformStartedAt = performance.now();
   const manifestData: IndexManifest = {
     version: MANIFEST_VERSION,
     projectRoot: path.resolve(args.projectRoot).replace(/\\/g, "/"),
@@ -70,8 +82,13 @@ export async function writeIndexManifestSnapshot(args: {
         }
       : {}),
   };
+  recordManifestTimingStep(args.timings, "manifest-transform", transformStartedAt);
+  const manifestWriteStartedAt = performance.now();
   const manifestWritten = await writeManifest(args.projectRoot, args.opts, manifestData);
+  recordManifestTimingStep(args.timings, "manifest-write", manifestWriteStartedAt);
+  const cachePruneStartedAt = performance.now();
   if (manifestWritten) pruneDiskModuleCache(args.projectRoot, Object.keys(files), args.opts);
+  recordManifestTimingStep(args.timings, "cache-prune", cachePruneStartedAt);
   if (args.timings) {
     args.timings.writeManifestMs = Math.round(performance.now() - writeManifestStart);
   }

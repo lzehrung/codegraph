@@ -60,7 +60,10 @@ export async function bundleCli({ rootDir = defaultRootDir, logLevel = "warning"
     splitting: false,
     outdir: paths.outdir,
     entryNames: "[name]",
-    external: ["node:*", "@lzehrung/codegraph-native", "jsonc-parser"],
+    // Keep piscina external: its constructor does resolve(__dirname, "worker.js"), and an
+    // import.meta.url banner __dirname would point at dist/bin where that sibling file is not
+    // shipped. Leaving the package on disk (as with jsonc-parser) preserves real CJS __dirname.
+    external: ["node:*", "@lzehrung/codegraph-native", "jsonc-parser", "piscina"],
     banner: {
       js: createRequireBanner(),
     },
