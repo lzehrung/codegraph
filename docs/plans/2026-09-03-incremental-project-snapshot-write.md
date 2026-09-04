@@ -215,4 +215,13 @@ Gate: hydrate is **faster** than a cold/fresh-process blob load. Gunship hydrate
 
 **C constraint:** SQLite rows are fewer than in-memory modules (1166/1263 here, 3785/3848 on Gunship). JSON stubs, empty parse results, and other non-cache writes live only in the snapshot. Thin snapshot must keep those bodies, or those files must start writing SQLite rows. Do not drop them on hydrate.
 
-**Out of scope for C:** Gunship cold time is dominated by `index-manifest` (41s of 74s), a pretty-printed `JSON.stringify(manifest, null, 2)` of every file's edges. That is a separate plan. Do not mix it into the thin-snapshot PR.
+**Out of scope for C:** Gunship cold time is dominated by `index-manifest` (41s of 74s). That step is `writeIndexManifestSnapshot` (git HEAD, config hash, path transform, stringify, atomic write, SQLite prune), not stringify alone. Compact JSON is a follow-up; do not mix it into the thin-snapshot PR.
+
+Compact follow-up measurement (2026-09-04, same Gunship on-disk manifest, 3843 files, isolated stringify/write, not a full index):
+
+| Cost              | pretty       | compact      |
+| ----------------- | ------------ | ------------ |
+| `JSON.stringify`  | 4ms / 6.6 MB | 3ms / 4.7 MB |
+| writeFile + fsync | ~6ms         | ~5ms         |
+
+Pretty-print is ~1.4x bytes. It is not the 41s. Remaining `index-manifest` work after compact is still transform + prune + whatever made that step 41s on the original cold run.
