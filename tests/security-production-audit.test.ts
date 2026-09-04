@@ -402,6 +402,33 @@ describe("production audit command", () => {
     expect(sleepImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("does not retry when a non-retryable allowlist error is also present", () => {
+    const spawnSyncImpl = vi.fn().mockReturnValue({
+      status: 1,
+      stdout: JSON.stringify({
+        message: "request to the audit endpoint failed, reason: timeout",
+        method: "POST",
+        uri: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+        statusCode: 504,
+      }),
+      stderr: "",
+    });
+    const sleepImpl = vi.fn();
+
+    const report = runProductionAudit({
+      platform: "linux",
+      spawnSyncImpl,
+      readFileSyncImpl: vi.fn().mockReturnValue("{"),
+      sleepImpl,
+      now: NOW,
+    });
+
+    expect(report.status).toBe("fail");
+    expect(report.errors.some((error) => error.code === "MALFORMED_ALLOWLIST_JSON")).toBe(true);
+    expect(spawnSyncImpl).toHaveBeenCalledTimes(1);
+    expect(sleepImpl).not.toHaveBeenCalled();
+  });
+
   it("does not retry an unexcepted production advisory", () => {
     const spawnSyncImpl = vi.fn().mockReturnValue({
       status: 1,

@@ -525,10 +525,10 @@ function isRetryableAuditReport(report) {
   if (report.status === "pass") {
     return false;
   }
-  if (report.rejectedVulnerabilities.length) {
+  if (report.rejectedVulnerabilities.length || !report.errors.length) {
     return false;
   }
-  return report.errors.some((error) => RETRYABLE_AUDIT_ERROR_CODES.has(error.code));
+  return report.errors.every((error) => RETRYABLE_AUDIT_ERROR_CODES.has(error.code));
 }
 
 function collectAuditOutput(result) {
