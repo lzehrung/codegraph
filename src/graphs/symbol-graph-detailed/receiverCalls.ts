@@ -44,7 +44,7 @@ const RECEIVER_KEYWORDS: Record<string, ReceiverKeywords> = {
   kotlin: THIS_SUPER_RECEIVERS,
   php: { own: ["$this", "self", "static"], supertype: ["parent"] },
   python: { own: ["self", "cls"], supertype: [] },
-  ruby: SELF_RECEIVERS,
+  ruby: { own: ["self"], supertype: [] },
   rust: { own: ["self", "Self"], supertype: [] },
   svelte: THIS_SUPER_RECEIVERS,
   swift: SELF_RECEIVERS,

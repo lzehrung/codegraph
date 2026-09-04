@@ -582,30 +582,17 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(callsiteTexts(graph, greet, run, files)).toEqual(["greet"]);
   });
 
-  it("records a Ruby super call on the class ancestor", async () => {
+  it("leaves Ruby super unresolved because it is a same-name keyword, not a receiver", async () => {
     const files: Record<string, string> = {
-      "super.rb": [
-        "class RbBase",
-        "  def shared",
-        "  end",
-        "end",
-        "class RbChild < RbBase",
-        "  def helper",
-        "  end",
-        "  def run",
-        "    self.helper",
-        "    super.shared",
-        "  end",
-        "end",
-      ].join("\n"),
+      "base.rb": ["class RbBase", "  def helper", "  end", "end"].join("\n"),
+      "child.rb": ["class RbChild < RbBase", "  def helper", "    super", "  end", "end"].join("\n"),
     };
     const graph = await buildFixture("cg-receiver-rb-super-", files);
-    const run = nodeIn(graph, "super.rb", "run");
-    const helper = nodeIn(graph, "super.rb", "helper");
-    const baseShared = membersOwnedBy(graph, "RbBase", "shared");
-    expect(baseShared).toHaveLength(1);
-    expect(callsiteTexts(graph, helper, run, files)).toEqual(["helper"]);
-    expect(callsiteTexts(graph, baseShared[0]!, run, files)).toEqual(["shared"]);
+    const childHelper = membersOwnedBy(graph, "RbChild", "helper");
+    const baseHelper = membersOwnedBy(graph, "RbBase", "helper");
+    expect(childHelper).toHaveLength(1);
+    expect(baseHelper).toHaveLength(1);
+    expect(callsiteTexts(graph, baseHelper[0]!, childHelper[0]!, files)).toBeNull();
   });
 
   it("records a Kotlin super call on the class ancestor when an interface declares the same name", async () => {

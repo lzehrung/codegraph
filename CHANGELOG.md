@@ -11,7 +11,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Fixed
 
-- `callers` now reports method invocations on a proven receiver (`this.m()`, `$this->m()`, `self::m()`, `const l = new Lib(); l.target()`), including inherited members. `this`/`$this`/`self` walk `extends`, `implements`, `trait`, and `mixin`; `super`/`base`/`parent` follow class `extends` ancestors only. Those sites previously resolved through `goto` but stored no `calls` edge. An unproven receiver still emits no edge. Go receiver methods remain a documented gap because Go declares methods outside the receiver type.
+- `callers` now reports method invocations on a proven receiver (`this.m()`, `$this->m()`, `self::m()`, `const l = new Lib(); l.target()`), including inherited members. `this`/`$this`/`self` walk `extends`, `implements`, `trait`, and `mixin`; `super`/`base`/`parent` follow class `extends` ancestors only. Those sites previously resolved through `goto` but stored no `calls` edge. An unproven receiver still emits no edge. Ruby `super` is a same-name keyword, not a receiver. Go receiver methods remain a documented gap because Go declares methods outside the receiver type.
 
 ## [2.3.18] - 2026-09-04
 
