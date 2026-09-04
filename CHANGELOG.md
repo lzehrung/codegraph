@@ -50,6 +50,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Fixed
 
+- `callers` now reports method invocations on a proven receiver (`this.m()`, `$this->m()`, `self::m()`, `const l = new Lib(); l.target()`), including inherited members through declared `extends`, `implements`, `trait`, and `mixin` edges. Those sites previously resolved through `goto` but stored no `calls` edge, so call hierarchy and impact were empty for methods. An unproven receiver still emits no edge. Go receiver methods remain a documented gap because Go declares methods outside the receiver type.
 - Project metadata discovery no longer realpaths every ancestor directory of Git-listed data files. Only directories whose names can be project metadata (`.idea`, `App.xcodeproj`) are probed.
 - Reused `--report` objects no longer keep leftover `cacheProbeMs` after a later build skips cache probes.
 - Windows CLI processes no longer abort after a successful warm `explore` on Node 24. The second query printed a valid result, then libuv asserted `UV_HANDLE_CLOSING` while sqlite, native, or worker handles were still closing and the process exited `3221226505`. The CLI now lets those handles finish closing before the process exits.
