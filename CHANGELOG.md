@@ -9,9 +9,11 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [2.3.19] - 2026-09-04
+
 ### Fixed
 
-- `callers` now reports method invocations on a proven receiver (`this.m()`, `$this->m()`, `self::m()`, `const l = new Lib(); l.target()`), including inherited members. `this`/`$this`/`self` walk `extends`, `implements`, `trait`, and `mixin`; `super`/`base`/`parent` follow class `extends` ancestors only. Those sites previously resolved through `goto` but stored no `calls` edge. An unproven receiver still emits no edge. Ruby `super` is a same-name keyword, not a receiver. Go receiver methods remain a documented gap because Go declares methods outside the receiver type.
+- `callers` now reports method invocations on a proven receiver (`this.m()`, `$this->m()`, `self::m()`, `const l = new Lib(); l.target()`), including inherited members. `this`/`$this`/`self` walk `extends`, `implements`, `trait`, and `mixin`; `super`/`base`/`parent` follow class `extends` ancestors only. Those sites previously resolved through `goto` but stored no `calls` edge. An unproven receiver still emits no edge. Ruby `super` is a same-name keyword, not a receiver. Go receiver methods remain a documented gap because Go declares methods outside the receiver type ([#341](https://github.com/lzehrung/codegraph/pull/341)).
 
 ## [2.3.18] - 2026-09-04
 
@@ -399,7 +401,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.18...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.19...HEAD
+[2.3.19]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.19
 [2.3.18]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.18
 [2.3.17]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.17
 [2.3.16]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.16
