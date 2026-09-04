@@ -218,6 +218,13 @@ export function emitMemberOwnershipEdges(
   }
 }
 
+/** Type-like defs only, so a PHP `use function` alias cannot steal `Example::m()`. */
+function resolveNamedType(context: EdgePassContext, name: string): SymbolDef | null {
+  const fromAlias = context.aliasToTargetDef.get(name);
+  if (fromAlias && declaresMembers(fromAlias)) return fromAlias;
+  return context.moduleEntry.locals.find((local) => local.localName === name && declaresMembers(local)) ?? null;
+}
+
 export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: DetailedFunctionNode[]): void {
   const callNodeTypes = new Set<string>([
     "call_expression",
@@ -329,8 +336,8 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
       const site = { file: context.moduleEntry.file, range: toRange(access.property) };
       const argumentCount = callArgumentCount(node);
       if (binding.kind === "named-type") {
-        const typeDef = context.resolveIdentifier(binding.typeName);
-        if (!typeDef || !declaresMembers(typeDef)) return;
+        const typeDef = resolveNamedType(context, binding.typeName);
+        if (!typeDef) return;
         context.receiverCalls.push({
           callerId: fromId,
           ownerId: ensureNode(context, typeDef),

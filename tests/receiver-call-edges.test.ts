@@ -192,6 +192,40 @@ nativeDescribe("receiver method call edges", () => {
     expect(callsiteTexts(graph, free, run, files)).toEqual(["php_free"]);
   });
 
+  it("records PHP nullsafe receiver calls", async () => {
+    const files: Record<string, string> = {
+      "ns.php": [
+        "<?php",
+        "class Box {",
+        "    function helper() {}",
+        "    function run() { $this?->helper(); }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-php-nullsafe-", files);
+    const helper = nodeIn(graph, "ns.php", "helper");
+    const run = nodeIn(graph, "ns.php", "run");
+    expect(callsiteTexts(graph, helper, run, files)).toEqual(["helper"]);
+  });
+
+  it("records a PHP class-qualified call when a function import uses the same name", async () => {
+    const files: Record<string, string> = {
+      "lib.php": ["<?php", "namespace Imported;", "function Example() {}"].join("\n"),
+      "host.php": [
+        "<?php",
+        "use function Imported\\Example;",
+        "class Example {",
+        "    static function shared() {}",
+        "    function run() { Example::shared(); }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-php-type-ns-", files);
+    const shared = nodeIn(graph, "host.php", "shared");
+    const run = nodeIn(graph, "host.php", "run");
+    expect(callsiteTexts(graph, shared, run, files)).toEqual(["shared"]);
+  });
+
   it("resolves PHP inherited and parent-qualified receiver calls to the base declaration", async () => {
     const files: Record<string, string> = {
       "inherit.php": [
