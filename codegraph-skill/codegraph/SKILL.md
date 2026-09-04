@@ -65,7 +65,7 @@ Use the portable callable handle from `symbols` with `codegraph callers <handle>
 
 Call hierarchy contains resolved semantic `calls` edges only. `--include-heuristic` is accepted but currently adds no guessed dynamic calls; use `refs` for all references and `deps` or `rdeps` for file relationships.
 
-Receiver method calls (`this.m()`, `$this->m()`, `self::m()`, `Cls::m()`, `const l = new Lib(); l.target()`) are resolved call edges, so `callers` works for methods, including members inherited through declared `extends`, `implements`, `trait`, or `mixin` edges. An unproven receiver yields no edge rather than a name-only guess, and Go receiver method calls are a documented gap because Go declares methods outside the receiver type.
+Receiver method calls (`this.m()`, `$this->m()`, `self::m()`, `Cls::m()`, `const l = new Lib(); l.target()`) are resolved call edges, so `callers` works for methods, including members inherited through declared `extends`, `implements`, `trait`, or `mixin` edges. `super.m()` / `base.m()` / `parent::m()` walk only class ancestors, so an implemented interface with the same member name does not drop the superclass edge. An unproven receiver yields no edge rather than a name-only guess, and Go receiver method calls are a documented gap because Go declares methods outside the receiver type.
 
 Use a portable handle, unique exact symbol name, single-definition file, or source location with `codegraph supertypes <target>`, `codegraph subtypes <target>`, or `codegraph implementations <target>`. Hierarchy depth defaults to 1 and caps at 10; all result limits default to 100 and cap at 500, and the default output is the concise human-readable form.
 
@@ -299,4 +299,4 @@ The standalone Linux archives require glibc. On musl Linux, use the package or s
 
 On Windows, installed releases load native code from `%LOCALAPPDATA%\codegraph\native-cache\v1`. The first upgrade from an older direct-loading release requires closing codegraph MCP clients once, running `npm install -g @lzehrung/codegraph@latest`, and restarting the clients.
 
-Use `codegraph doctor` to inspect `native.origin`, cache fallback errors, stale `.codegraph-*` npm retirement siblings, and installed-versus-running version drift. Do not delete reported paths or kill Node/IDE processes automatically; restart the owning client explicitly, and only clean obsolete cache entries after every process using them has stopped.
+[Showing lines 1-300 of 303. Use :301 to continue]

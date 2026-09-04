@@ -222,6 +222,8 @@ export function callArgumentCount(callNode: SyntaxNodeLike): number {
  * Ambiguous matches are dropped rather than guessed, so call hierarchy keeps
  * reporting only proven edges. A level with several same-named members stops the
  * walk even when a deeper supertype has a unique member of the same name.
+ * Explicit `super`/`base`/`parent` receivers walk only class-kind ancestors so an
+ * implemented interface cannot make a superclass call ambiguous.
  */
 export function emitReceiverCallEdges(
   graph: SymbolGraph,
@@ -251,10 +253,15 @@ export function emitReceiverCallEdges(
     }
   }
 
+  const ancestors = (ownerId: string, viaSupertypes: boolean): string[] => {
+    const next = supertypesByOwner.get(ownerId) ?? [];
+    return viaSupertypes ? next.filter((id) => graph.nodes.get(id)?.kind === "class") : next;
+  };
+
   for (const candidate of candidates) {
     const owner = candidate.ownerId ?? ownerByMember.get(candidate.callerId);
     if (!owner) continue;
-    let level = candidate.viaSupertypes ? (supertypesByOwner.get(owner) ?? []) : [owner];
+    let level = candidate.viaSupertypes ? ancestors(owner, true) : [owner];
     const visited = new Set<string>(level);
     for (let depth = 0; depth < MAX_SUPERTYPE_DEPTH && level.length; depth += 1) {
       const lookup = provenMemberTarget(graph, membersByOwner, level, candidate);
@@ -265,7 +272,7 @@ export function emitReceiverCallEdges(
       if (lookup.status === "ambiguous") break;
       const next: string[] = [];
       for (const ownerId of level) {
-        for (const supertype of supertypesByOwner.get(ownerId) ?? []) {
+        for (const supertype of ancestors(ownerId, candidate.viaSupertypes)) {
           if (visited.has(supertype)) continue;
           visited.add(supertype);
           next.push(supertype);
