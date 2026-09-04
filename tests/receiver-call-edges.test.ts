@@ -164,6 +164,46 @@ nativeDescribe("receiver method call edges", () => {
     expect(callsiteTexts(graph, svcRun, callIt, files)).toBeNull();
   });
 
+  it("leaves a local whose name collides with a class in the same module unresolved", async () => {
+    const files: Record<string, string> = {
+      "collide.ts": [
+        "export class Lib { libTarget(): number { return 1; } }",
+        "export class Other { otherTarget(): number { return 2; } }",
+        "export function makeOther(): Other { return new Other(); }",
+        "export function run(): number { const Lib = makeOther(); return Lib.libTarget(); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-ts-name-collision-", files);
+    const run = nodeIn(graph, "collide.ts", "run");
+    const libTarget = nodeIn(graph, "collide.ts", "libTarget");
+    expect(callsiteTexts(graph, libTarget, run, files)).toBeNull();
+  });
+
+  it("leaves a parameter whose name collides with a class in the same module unresolved", async () => {
+    const files: Record<string, string> = {
+      "param.ts": [
+        "export class Lib { libTarget(): number { return 1; } }",
+        "export class Registry { registryTarget(): number { return 2; } }",
+        "export function run(Lib: Registry): number { return Lib.libTarget(); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-ts-param-collision-", files);
+    const run = nodeIn(graph, "param.ts", "run");
+    const libTarget = nodeIn(graph, "param.ts", "libTarget");
+    expect(callsiteTexts(graph, libTarget, run, files)).toBeNull();
+  });
+
+  it("records a class-qualified static call when nothing local binds the type name", async () => {
+    const files: Record<string, string> = {
+      "cfg.ts": "export class Cfg { static load(): number { return 1; } }\n",
+      "boot.ts": ['import { Cfg } from "./cfg";', "export function boot(): number { return Cfg.load(); }"].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-ts-static-", files);
+    const load = nodeIn(graph, "cfg.ts", "load");
+    const boot = nodeIn(graph, "boot.ts", "boot");
+    expect(callsiteTexts(graph, load, boot, files)).toEqual(["load"]);
+  });
+
   it("records calls edges for PHP instance, self, static, class-qualified, and free calls", async () => {
     const files: Record<string, string> = {
       "example.php": [

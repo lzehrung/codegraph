@@ -297,6 +297,29 @@ export function receiverConstructorExpression(
   return findVisiblePriorNewConstructor(obj, receiverName, source, sup);
 }
 
+/**
+ * Whether an enclosing scope binds `receiverName` as a value: a variable, a
+ * parameter, or an assignment target. Shared with detailed symbol-graph call
+ * extraction so an identifier receiver counts as a type only when nothing local
+ * binds that name.
+ */
+export function receiverHasLocalBinding(
+  receiver: SyntaxNodeLike,
+  receiverName: string,
+  source: string,
+  sup: LanguageSupport,
+): boolean {
+  for (let current: SyntaxNodeLike | null = receiver; current; current = current.parent) {
+    if (
+      BINDING_CONTAINER_TYPES.has(current.type) &&
+      bindingContainerDeclaresNameBefore(current, receiver, receiverName, source, sup)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function constructorNameNode(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
   const constructor = node.childForFieldName("constructor") ?? node.child(0);
   if (constructor && sup.nodeTypes.identifier.includes(constructor.type)) {

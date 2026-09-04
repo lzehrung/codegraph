@@ -1,4 +1,4 @@
-import { receiverConstructorExpression } from "../../indexer/navigation-goto.js";
+import { receiverConstructorExpression, receiverHasLocalBinding } from "../../indexer/navigation-goto.js";
 import { SymbolKind, type SymbolDef } from "../../indexer/types.js";
 import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
@@ -178,7 +178,12 @@ export function classifyReceiver(
 
   const receiverIsName =
     isIdentifierType(sup, receiver.type) || receiver.type === "type_identifier" || receiver.type === "constant";
-  return receiverIsName ? { kind: "named-type", typeName: text } : null;
+  if (!receiverIsName) return null;
+  // A name a local variable or parameter binds is a value, not a type. Without this
+  // guard `const Lib = makeOther(); Lib.target()` would be attributed to a same-named
+  // class by textual collision, which invents an edge instead of proving one.
+  if (receiverHasLocalBinding(receiver, text, source, sup)) return null;
+  return { kind: "named-type", typeName: text };
 }
 
 /** Whether a resolved definition can declare callable members. */
