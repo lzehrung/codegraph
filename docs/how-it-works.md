@@ -78,7 +78,7 @@ Caching avoids repeated work; it does not change extraction or resolution semant
 
 - `off` runs cold.
 - `memory` reuses parsed work in one process.
-- `disk` persists parsed files and an incremental graph under `.codegraph/cache/index-v1`.
+- `disk` persists parsed files and an incremental graph under `.codegraph/cache/index-v1`. The index `manifest.json` is compact JSON; pretty-printed files from earlier versions still load.
 
 Disk loads reuse unchanged files and update changed ones. Codegraph validates file, configuration, build, and available Git state before reuse; incompatible or corrupt data is rebuilt. Strict mode hashes content, while non-strict mode accepts the documented metadata speed tradeoff.
 

@@ -489,6 +489,14 @@ export async function loadManifest(
   }
 }
 
+/**
+ * Index manifests are compact JSON. Pretty-print only added indent bytes.
+ * `loadManifest` uses `JSON.parse`, so pretty files from earlier versions still load.
+ */
+function serializeIndexManifest(manifest: IndexManifest): string {
+  return JSON.stringify(manifest);
+}
+
 export async function writeManifest(
   projectRoot: string,
   opts: BuildOptions | undefined,
@@ -497,7 +505,7 @@ export async function writeManifest(
   try {
     const manifestPath = manifestFilePath(projectRoot, opts);
     await fsp.mkdir(path.dirname(manifestPath), { recursive: true });
-    await writeManifestAtomically(manifestPath, JSON.stringify(manifest, null, 2));
+    await writeManifestAtomically(manifestPath, serializeIndexManifest(manifest));
     return true;
   } catch (error) {
     logWithLevel(opts?.logLevel, "warn", "Warning: Failed to write manifest:", error);
