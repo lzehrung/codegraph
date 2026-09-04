@@ -448,7 +448,9 @@ describe("production audit command", () => {
     });
 
     expect(report.status).toBe("fail");
-    expect(report.errors.some((error) => error.code === "MALFORMED_ALLOWLIST_JSON")).toBe(true);
+    expect(report.errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "MALFORMED_ALLOWLIST_JSON" })]),
+    );
     expect(spawnSyncImpl).toHaveBeenCalledTimes(1);
     expect(sleepImpl).not.toHaveBeenCalled();
   });
