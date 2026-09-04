@@ -15,6 +15,7 @@ import {
   nearestMemberContainer,
   receiverCallAccess,
   type ReceiverCallAccess,
+  type ReceiverProof,
   type ReceiverCallCandidate,
 } from "./receiverCalls.js";
 
@@ -259,7 +260,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
     }
     return membersByContainer.get(container.startIndex) ?? [];
   };
-  const constructorTypeNames = new Map<string, SyntaxNodeLike | null>();
+  const receiverProofs = new Map<string, ReceiverProof>();
 
   for (const fn of functionNodes) {
     const fromId = ensureNode(context, fn.def);
@@ -328,7 +329,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
         context.sup,
         access.receiver,
         context.source,
-        constructorTypeNames,
+        receiverProofs,
         fn.node.startIndex,
       );
       if (!binding) return;

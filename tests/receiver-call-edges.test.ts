@@ -677,6 +677,101 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(callsiteTexts(graph, faceShared[0]!, go, files)).toBeNull();
   });
 
+  it("leaves colliding local and parameter receivers unresolved in every language with methods", async () => {
+    const cases: { prefix: string; file: string; source: string; member: string }[] = [
+      {
+        prefix: "cg-collide-cs-",
+        file: "Host.cs",
+        member: "LibTarget",
+        source: [
+          "class Lib { public void LibTarget() {} }",
+          "class Registry { public void RegistryTarget() {} }",
+          "class Host { void Run(Registry Lib) { Lib.LibTarget(); } }",
+        ].join("\n"),
+      },
+      {
+        prefix: "cg-collide-kt-",
+        file: "host.kt",
+        member: "libTarget",
+        source: [
+          "class Lib {",
+          "  fun libTarget() {}",
+          "}",
+          "class Registry {",
+          "  fun registryTarget() {}",
+          "}",
+          "fun run(Lib: Registry) {",
+          "  Lib.libTarget()",
+          "}",
+        ].join("\n"),
+      },
+      {
+        prefix: "cg-collide-sw-",
+        file: "host.swift",
+        member: "libTarget",
+        source: [
+          "class Lib { func libTarget() {} }",
+          "class Registry { func registryTarget() {} }",
+          "func run(Lib: Registry) { Lib.libTarget() }",
+        ].join("\n"),
+      },
+      {
+        prefix: "cg-collide-rs-",
+        file: "host.rs",
+        member: "lib_target",
+        source: [
+          "struct Lib;",
+          "impl Lib { fn lib_target(&self) {} }",
+          "struct Registry;",
+          "impl Registry { fn registry_target(&self) {} }",
+          "fn run(Lib: Registry) { Lib.lib_target(); }",
+        ].join("\n"),
+      },
+      {
+        prefix: "cg-collide-py-",
+        file: "host.py",
+        member: "lib_target",
+        source: [
+          "class Lib:",
+          "    def lib_target(self):",
+          "        return 1",
+          "class Registry:",
+          "    def registry_target(self):",
+          "        return 2",
+          "def run():",
+          "    Lib = Registry()",
+          "    return Lib.lib_target()",
+        ].join("\n"),
+      },
+      {
+        prefix: "cg-collide-go-",
+        file: "host.go",
+        member: "LibTarget",
+        source: [
+          "package main",
+          "type Lib struct{}",
+          "func (l Lib) LibTarget() int { return 1 }",
+          "type Registry struct{}",
+          "func (r Registry) RegistryTarget() int { return 2 }",
+          "func run() int {",
+          "\tLib := Registry{}",
+          "\treturn Lib.LibTarget()",
+          "}",
+        ].join("\n"),
+      },
+    ];
+
+    const invented: string[] = [];
+    for (const testCase of cases) {
+      const files: Record<string, string> = { [testCase.file]: testCase.source };
+      const graph = await buildFixture(testCase.prefix, files);
+      const caller = nodeIn(graph, testCase.file, testCase.file.endsWith(".cs") ? "Run" : "run");
+      const member = nodeIn(graph, testCase.file, testCase.member);
+      if (callsiteTexts(graph, member, caller, files)) invented.push(testCase.file);
+    }
+    expect(invented, "a colliding receiver name must never resolve to the same-named type").toEqual([]);
+  });
+
   it("records calls edges for Zig self receivers", async () => {
     const files: Record<string, string> = {
       "box.zig": [
