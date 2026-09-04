@@ -45,13 +45,17 @@ export function isMemberAccessNode(sup: LanguageSupport, node: SyntaxNodeLike): 
   return (
     node.type === memberExpressionType ||
     (sup.id === "go" && node.type === "qualified_type") ||
-    (sup.id === "php" && (node.type === "member_call_expression" || node.type === "scoped_call_expression")) ||
+    (sup.id === "php" &&
+      (node.type === "member_call_expression" ||
+        node.type === "nullsafe_member_call_expression" ||
+        node.type === "scoped_call_expression")) ||
     node.type === "member_access_expression" ||
     node.type === "qualified_name" ||
     node.type === "field_access" ||
     node.type === "method_invocation" ||
     node.type === "scoped_identifier" ||
     node.type === "scoped_type_identifier" ||
+    node.type === "qualified_identifier" ||
     node.type === "call" ||
     node.type === "scope_resolution" ||
     node.type === "field_expression" ||
@@ -98,6 +102,10 @@ function fieldParts(node: SyntaxNodeLike, objectField: string, propertyField: st
 }
 
 export function getMemberAccessParts(sup: LanguageSupport, memberNode: SyntaxNodeLike): MemberAccessParts {
+  if (sup.id === "c" || sup.id === "cpp") {
+    if (memberNode.type === "field_expression") return fieldParts(memberNode, "argument", "field");
+    if (memberNode.type === "qualified_identifier") return fieldParts(memberNode, "scope", "name");
+  }
   if (sup.id === "python") {
     return fieldParts(memberNode, "object", "attribute");
   }
@@ -122,7 +130,7 @@ export function getMemberAccessParts(sup: LanguageSupport, memberNode: SyntaxNod
     return fieldParts(memberNode, "receiver", "method");
   }
   if (sup.id === "php") {
-    if (memberNode.type === "member_call_expression") {
+    if (memberNode.type === "member_call_expression" || memberNode.type === "nullsafe_member_call_expression") {
       return fieldParts(memberNode, "object", "name");
     }
     if (memberNode.type === "scoped_call_expression") {

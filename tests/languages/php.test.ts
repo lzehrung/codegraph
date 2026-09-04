@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
 import { buildProjectIndex, goToDefinition } from "../../src/index.js";
+import { findCallHierarchy } from "../../src/indexer/call-hierarchy.js";
 import { findImplementations } from "../../src/indexer/type-hierarchy.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { runLanguageTests } from "./runner.js";
@@ -666,6 +667,40 @@ class Example {
         expect(imported.definition.file.replace(/\\/g, "/")).toBe(helperFile.replace(/\\/g, "/"));
         expect(imported.definition.range.start.line).toBe(1);
       }
+
+      // The receiver calls above must also be recorded as resolved `calls` edges, so
+      // `codegraph callers` reports them instead of reporting an empty caller set.
+      const graph = await buildSymbolGraphDetailed(index);
+      const classPath = classFile.replace(/\\/g, "/");
+      const methodNode = (name: string) =>
+        [...graph.nodes.values()].find(
+          (node) => node.name === name && node.kind === "function" && node.file.replace(/\\/g, "/") === classPath,
+        );
+      const helperMethod = methodNode("helper");
+      const runMethod = methodNode("run");
+      expect(helperMethod).toBeDefined();
+      expect(runMethod).toBeDefined();
+      if (!helperMethod || !runMethod) return;
+
+      const callers = findCallHierarchy(graph, helperMethod.id, "incoming");
+      expect(callers.status).toBe("ok");
+      if (callers.status !== "ok") return;
+      const runEntry = callers.entries.find((entry) => entry.symbolId === runMethod.id);
+      expect(runEntry).toBeDefined();
+      expect(runEntry?.callsites.map((site) => site.range.start.line)).toEqual([7, 8, 9]);
+      const importedHelper = [...graph.nodes.values()].find(
+        (node) =>
+          node.name === "helper" &&
+          node.kind === "function" &&
+          node.file.replace(/\\/g, "/") === helperFile.replace(/\\/g, "/"),
+      );
+      expect(importedHelper).toBeDefined();
+      const importedCallers = importedHelper
+        ? findCallHierarchy(graph, importedHelper.id, "incoming")
+        : { status: "not_found" as const, reason: "missing" };
+      expect(importedCallers.status).toBe("ok");
+      if (importedCallers.status !== "ok") return;
+      expect(importedCallers.entries.map((entry) => entry.symbolId)).toEqual([runMethod.id]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

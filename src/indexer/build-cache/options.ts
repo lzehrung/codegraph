@@ -11,7 +11,13 @@ import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
 import type { BuildOptions } from "../types.js";
 export { normalizeLanguageExtensions } from "../../languages.js";
 
-export const CORE_ALGORITHM_EPOCH = 2;
+/**
+ * Bump whenever indexing or graph construction changes what a cached artifact would
+ * contain. Epoch 3 records resolved `calls` edges for receiver method invocations, so
+ * a detailed symbol-graph snapshot written before it is missing those edges even
+ * though it still validates as a superset of the basic graph.
+ */
+export const CORE_ALGORITHM_EPOCH = 3;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

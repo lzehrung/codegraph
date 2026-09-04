@@ -147,3 +147,44 @@ describe("call hierarchy CLI", () => {
     expect(parsed.references).toHaveLength(3);
   });
 });
+
+describe("call hierarchy CLI receiver method calls", () => {
+  let methodRoot = "";
+
+  beforeAll(async () => {
+    methodRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-receiver-calls-"));
+    await fs.writeFile(path.join(methodRoot, "lib.ts"), "export class Lib { target(): number { return 1; } }\n");
+    await fs.writeFile(
+      path.join(methodRoot, "caller.ts"),
+      [
+        'import { Lib } from "./lib";',
+        "export class Caller {",
+        "  plain(): number { const l = new Lib(); return l.target(); }",
+        "}",
+      ].join("\n"),
+    );
+  });
+
+  afterAll(async () => {
+    await fs.rm(methodRoot, { recursive: true, force: true });
+  });
+
+  it("reports the calling method for an instance method invoked on a constructed receiver", async () => {
+    const result = await captureCli(["callers", "lib.ts::target", "--root", methodRoot, "--cache", "off", "--json"]);
+    const parsed: unknown = JSON.parse(result.stdout);
+
+    expect(result.exitCode).toBeUndefined();
+    expect(stripCliProgressLines(result.stderr)).toBe("");
+    expect(parsed).toMatchObject({
+      direction: "incoming",
+      target: { name: "target", location: { file: "lib.ts" } },
+      entries: [
+        {
+          symbol: { name: "plain", location: { file: "caller.ts" } },
+          depth: 1,
+          callsites: [{ file: "caller.ts", range: { start: { line: 3 } } }],
+        },
+      ],
+    });
+  });
+});
