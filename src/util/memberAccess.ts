@@ -55,6 +55,7 @@ export function isMemberAccessNode(sup: LanguageSupport, node: SyntaxNodeLike): 
     node.type === "method_invocation" ||
     node.type === "scoped_identifier" ||
     node.type === "scoped_type_identifier" ||
+    node.type === "qualified_identifier" ||
     node.type === "call" ||
     node.type === "scope_resolution" ||
     node.type === "field_expression" ||
@@ -103,6 +104,7 @@ function fieldParts(node: SyntaxNodeLike, objectField: string, propertyField: st
 export function getMemberAccessParts(sup: LanguageSupport, memberNode: SyntaxNodeLike): MemberAccessParts {
   if (sup.id === "c" || sup.id === "cpp") {
     if (memberNode.type === "field_expression") return fieldParts(memberNode, "argument", "field");
+    if (memberNode.type === "qualified_identifier") return fieldParts(memberNode, "scope", "name");
   }
   if (sup.id === "python") {
     return fieldParts(memberNode, "object", "attribute");

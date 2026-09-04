@@ -109,6 +109,8 @@ const HIERARCHY_LABELS: Record<string, true> = {
  */
 const VALUE_BINDING_TYPES: Record<string, true> = {
   assignment: true,
+  assignment_expression: true,
+  assignment_statement: true,
   class_parameter: true,
   formal_parameter: true,
   init_declarator: true,
@@ -123,6 +125,30 @@ const VALUE_BINDING_TYPES: Record<string, true> = {
   typed_parameter: true,
   variable_declaration: true,
   variable_declarator: true,
+};
+
+/** Parameter lists whose identifier children are value bindings (Ruby has no wrapping param node). */
+const PARAMETER_LIST_TYPES: Record<string, true> = {
+  block_parameters: true,
+  formal_parameters: true,
+  function_parameter_clause: true,
+  lambda_parameters: true,
+  method_parameters: true,
+  parameter_list: true,
+  parameters: true,
+};
+
+/**
+ * Access nodes whose syntax is type-scoped (`::`), not dotted member access.
+ * A dotted identifier is never itself proof of a type.
+ */
+const TYPE_SCOPED_ACCESS_TYPES: Record<string, true> = {
+  qualified_identifier: true,
+  qualified_name: true,
+  scope_resolution: true,
+  scoped_call_expression: true,
+  scoped_identifier: true,
+  scoped_type_identifier: true,
 };
 
 /** Nodes that scope value bindings, including each grammar's file root. */
@@ -143,6 +169,9 @@ const BINDING_SCOPE_TYPES: Record<string, true> = {
   program: true,
   source_file: true,
   statement_block: true,
+  compound_statement: true,
+  do_block: true,
+  impl_item: true,
   translation_unit: true,
 };
 
@@ -202,6 +231,44 @@ export type ReceiverProof = {
 };
 
 /**
+ * Identifier a binding node declares: a `name` field, a nested C/C++ declarator,
+ * an assignment left-hand side, or the last identifier child (C++ parameters hide
+ * the name after the type).
+ */
+function bindingIdentifier(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
+  const named = node.childForFieldName("name");
+  if (
+    named &&
+    (isIdentifierType(sup, named.type) || named.type === "identifier" || named.type === "field_identifier")
+  ) {
+    return named;
+  }
+  if (node.type === "assignment" || node.type === "assignment_expression" || node.type === "assignment_statement") {
+    const left = node.childForFieldName("left") ?? node.child(0);
+    if (left && (isIdentifierType(sup, left.type) || left.type === "identifier")) return left;
+    return null;
+  }
+  let current = node.childForFieldName("declarator");
+  while (current) {
+    if (current.type === "identifier" || current.type === "field_identifier" || isIdentifierType(sup, current.type)) {
+      return current;
+    }
+    const nested = current.childForFieldName("declarator");
+    if (nested) {
+      current = nested;
+      continue;
+    }
+    return (
+      current.namedChildren.find((child) => child.type === "identifier" || child.type === "field_identifier") ?? null
+    );
+  }
+  const identifiers = node.namedChildren.filter(
+    (child) => child.type === "identifier" || child.type === "field_identifier",
+  );
+  return identifiers.length > 0 ? identifiers[identifiers.length - 1]! : null;
+}
+
+/**
  * Whether a scope encloses `receiver` and binds `receiverName` as a value before it.
  * Nested scopes that do not contain the receiver are skipped, so an unrelated
  * function's local never shadows a type name.
@@ -215,9 +282,20 @@ function bindsLocalValue(
   const declaresName = (node: SyntaxNodeLike): boolean => {
     if (node.startIndex >= receiver.startIndex) return false;
     if (node !== receiver && BINDING_SCOPE_TYPES[node.type] && !containsIndex(node, receiver.startIndex)) return false;
+    if (PARAMETER_LIST_TYPES[node.type]) {
+      for (const child of node.namedChildren) {
+        if (child.startIndex >= receiver.startIndex) continue;
+        if (
+          (isIdentifierType(sup, child.type) || child.type === "identifier") &&
+          sliceText(child, source) === receiverName
+        ) {
+          return true;
+        }
+      }
+    }
     if (VALUE_BINDING_TYPES[node.type]) {
-      const name = node.childForFieldName("name") ?? node.child(0);
-      if (name && isIdentifierType(sup, name.type) && sliceText(name, source) === receiverName) return true;
+      const name = bindingIdentifier(node, sup);
+      if (name && sliceText(name, source) === receiverName) return true;
     }
     return node.namedChildren.some(declaresName);
   };
@@ -243,6 +321,7 @@ export function classifyReceiver(
   source: string,
   proofCache: Map<string, ReceiverProof>,
   cacheScope: number,
+  accessNode: SyntaxNodeLike,
 ): ReceiverBinding | null {
   const keywords = RECEIVER_KEYWORDS[sup.id];
   const text = sliceText(receiver, source).trim();
@@ -266,9 +345,15 @@ export function classifyReceiver(
   if (proof.constructed) return { kind: "named-type", typeName: sliceText(proof.constructed, source) };
   if (!receiverIsName) return null;
   // A name bound by a local or parameter is a value, not a type. Without this guard
-  // `const Lib = makeOther(); Lib.target()` is attributed to a same-named class by
-  // textual collision, which invents an edge instead of proving one.
+  // `Example::shared()` would still be attributed to a colliding parameter named Example.
   if (proof.locallyBound) return null;
+  // Dotted `Cfg.load()` is not proof: the identifier may be a value. Type-scoped `::`
+  // is the remaining named-type proof. Ruby capitalized names are `constant` tokens
+  // even when they name a parameter, so `constant` is not itself type proof.
+  const property = getMemberAccessParts(sup, accessNode).property;
+  const between = property ? source.slice(receiver.endIndex, property.startIndex) : "";
+  const typeScoped = TYPE_SCOPED_ACCESS_TYPES[accessNode.type] === true || between.includes("::");
+  if (receiver.type !== "type_identifier" && !typeScoped) return null;
   return { kind: "named-type", typeName: text };
 }
 

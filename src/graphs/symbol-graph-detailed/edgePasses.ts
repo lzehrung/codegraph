@@ -331,6 +331,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
         context.source,
         receiverProofs,
         fn.node.startIndex,
+        access.accessNode,
       );
       if (!binding) return;
 

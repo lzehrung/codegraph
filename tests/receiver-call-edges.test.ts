@@ -193,7 +193,7 @@ nativeDescribe("receiver method call edges", () => {
     expect(callsiteTexts(graph, libTarget, run, files)).toBeNull();
   });
 
-  it("records a class-qualified static call when nothing local binds the type name", async () => {
+  it("leaves a TypeScript dotted static call unresolved because a dotted identifier is not type proof", async () => {
     const files: Record<string, string> = {
       "cfg.ts": "export class Cfg { static load(): number { return 1; } }\n",
       "boot.ts": ['import { Cfg } from "./cfg";', "export function boot(): number { return Cfg.load(); }"].join("\n"),
@@ -201,7 +201,39 @@ nativeDescribe("receiver method call edges", () => {
     const graph = await buildFixture("cg-receiver-ts-static-", files);
     const load = nodeIn(graph, "cfg.ts", "load");
     const boot = nodeIn(graph, "boot.ts", "boot");
-    expect(callsiteTexts(graph, load, boot, files)).toEqual(["load"]);
+    expect(callsiteTexts(graph, load, boot, files)).toBeNull();
+  });
+
+  it("records type-scoped static calls that use :: syntax", async () => {
+    const cases: { prefix: string; file: string; source: string; member: string; caller: string }[] = [
+      {
+        prefix: "cg-static-cpp-",
+        file: "boot.cpp",
+        member: "load",
+        caller: "boot",
+        source: ["class Cfg { public: static int load() { return 1; } };", "int boot() { return Cfg::load(); }"].join(
+          "\n",
+        ),
+      },
+      {
+        prefix: "cg-static-rb-",
+        file: "boot.rb",
+        member: "load",
+        caller: "boot",
+        source: ["class Cfg", "  def self.load", "    1", "  end", "end", "def boot", "  Cfg::load()", "end"].join(
+          "\n",
+        ),
+      },
+    ];
+    const missing: string[] = [];
+    for (const testCase of cases) {
+      const files: Record<string, string> = { [testCase.file]: testCase.source };
+      const graph = await buildFixture(testCase.prefix, files);
+      const caller = nodeIn(graph, testCase.file, testCase.caller);
+      const member = nodeIn(graph, testCase.file, testCase.member);
+      if (!callsiteTexts(graph, member, caller, files)) missing.push(testCase.file);
+    }
+    expect(missing, "type-scoped :: static calls must resolve").toEqual([]);
   });
 
   it("records calls edges for PHP instance, self, static, class-qualified, and free calls", async () => {
@@ -678,11 +710,12 @@ nativeDescribe("receiver method call edge language parity", () => {
   });
 
   it("leaves colliding local and parameter receivers unresolved in every language with methods", async () => {
-    const cases: { prefix: string; file: string; source: string; member: string }[] = [
+    const cases: { prefix: string; file: string; source: string; member: string; caller: string }[] = [
       {
         prefix: "cg-collide-cs-",
         file: "Host.cs",
         member: "LibTarget",
+        caller: "Run",
         source: [
           "class Lib { public void LibTarget() {} }",
           "class Registry { public void RegistryTarget() {} }",
@@ -693,6 +726,7 @@ nativeDescribe("receiver method call edge language parity", () => {
         prefix: "cg-collide-kt-",
         file: "host.kt",
         member: "libTarget",
+        caller: "run",
         source: [
           "class Lib {",
           "  fun libTarget() {}",
@@ -709,6 +743,7 @@ nativeDescribe("receiver method call edge language parity", () => {
         prefix: "cg-collide-sw-",
         file: "host.swift",
         member: "libTarget",
+        caller: "run",
         source: [
           "class Lib { func libTarget() {} }",
           "class Registry { func registryTarget() {} }",
@@ -719,6 +754,7 @@ nativeDescribe("receiver method call edge language parity", () => {
         prefix: "cg-collide-rs-",
         file: "host.rs",
         member: "lib_target",
+        caller: "run",
         source: [
           "struct Lib;",
           "impl Lib { fn lib_target(&self) {} }",
@@ -731,6 +767,7 @@ nativeDescribe("receiver method call edge language parity", () => {
         prefix: "cg-collide-py-",
         file: "host.py",
         member: "lib_target",
+        caller: "run",
         source: [
           "class Lib:",
           "    def lib_target(self):",
@@ -747,6 +784,7 @@ nativeDescribe("receiver method call edge language parity", () => {
         prefix: "cg-collide-go-",
         file: "host.go",
         member: "LibTarget",
+        caller: "run",
         source: [
           "package main",
           "type Lib struct{}",
@@ -759,13 +797,77 @@ nativeDescribe("receiver method call edge language parity", () => {
           "}",
         ].join("\n"),
       },
+      {
+        prefix: "cg-collide-cpp-",
+        file: "host.cpp",
+        member: "libTarget",
+        caller: "run",
+        source: [
+          "class Lib { public: void libTarget() {} };",
+          "class Registry { public: void registryTarget() {} };",
+          "void run(Registry Lib) { Lib.libTarget(); }",
+        ].join("\n"),
+      },
+      {
+        prefix: "cg-collide-cpp-scope-",
+        file: "scoped.cpp",
+        member: "libTarget",
+        caller: "run",
+        source: [
+          "class Lib { public: static void libTarget() {} };",
+          "class Registry { public: static void registryTarget() {} };",
+          "void run(Registry Lib) { Lib::libTarget(); }",
+        ].join("\n"),
+      },
+      {
+        prefix: "cg-collide-rb-",
+        file: "host.rb",
+        member: "lib_target",
+        caller: "run",
+        source: [
+          "class Lib",
+          "  def lib_target",
+          "  end",
+          "end",
+          "class Registry",
+          "  def registry_target",
+          "  end",
+          "end",
+          "def run(Lib)",
+          "  Lib.lib_target",
+          "end",
+        ].join("\n"),
+      },
+      {
+        prefix: "cg-collide-java-",
+        file: "Host.java",
+        member: "libTarget",
+        caller: "run",
+        source: [
+          "class Lib { void libTarget() {} }",
+          "class Registry { void registryTarget() {} }",
+          "class Host { void run(Registry Lib) { Lib.libTarget(); } }",
+        ].join("\n"),
+      },
+      {
+        prefix: "cg-collide-js-",
+        file: "host.js",
+        member: "target",
+        caller: "run",
+        source: [
+          "class Lib { target() { return 1; } }",
+          "class Registry { registryTarget() { return 2; } }",
+          "function makeRegistry() { return new Registry(); }",
+          "function run() { Lib = makeRegistry(); return Lib.target(); }",
+        ].join("\n"),
+      },
     ];
 
     const invented: string[] = [];
     for (const testCase of cases) {
       const files: Record<string, string> = { [testCase.file]: testCase.source };
       const graph = await buildFixture(testCase.prefix, files);
-      const caller = nodeIn(graph, testCase.file, testCase.file.endsWith(".cs") ? "Run" : "run");
+      const caller = nodeIn(graph, testCase.file, testCase.caller);
       const member = nodeIn(graph, testCase.file, testCase.member);
       if (callsiteTexts(graph, member, caller, files)) invented.push(testCase.file);
     }
