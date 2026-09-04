@@ -72,4 +72,34 @@ describe("expandStarImports", () => {
 
     expect(namedLocals(consumer)).toEqual(["visible"]);
   });
+
+  it("uses exportedAs when a local export is renamed", () => {
+    const libFile = normalizePath("/tmp/cg-star-renamed.ts");
+    const consumerFile = normalizePath("/tmp/cg-star-renamed-consumer.ts");
+    const lib: ModuleIndex = {
+      file: libFile,
+      exports: [{ type: "local", exportedAs: "bar", target: symbol(libFile, "foo") }],
+      imports: [],
+      locals: [symbol(libFile, "foo")],
+    };
+    const consumer: ModuleIndex = {
+      file: consumerFile,
+      exports: [],
+      imports: [{ kind: "star", from: "./lib", resolved: libFile }],
+      locals: [],
+    };
+
+    expandStarImports(
+      new Map([
+        [fileIdentityKey(libFile), lib],
+        [fileIdentityKey(consumerFile), consumer],
+      ]),
+    );
+
+    const named = consumer.imports.filter(
+      (binding): binding is typeof binding & { kind: "named"; local: string; imported: string } =>
+        binding.kind === "named",
+    );
+    expect(named).toEqual([expect.objectContaining({ kind: "named", local: "bar", imported: "bar" })]);
+  });
 });
