@@ -402,6 +402,30 @@ describe("production audit command", () => {
     expect(sleepImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("does not retry a deterministic npm audit schema error", () => {
+    const spawnSyncImpl = vi.fn().mockReturnValue({
+      status: 0,
+      stdout: JSON.stringify({ auditReportVersion: 3, vulnerabilities: {}, metadata: {} }),
+      stderr: "",
+    });
+    const sleepImpl = vi.fn();
+
+    const report = runProductionAudit({
+      platform: "linux",
+      spawnSyncImpl,
+      readFileSyncImpl: vi.fn().mockReturnValue(EMPTY_ALLOWLIST),
+      sleepImpl,
+      now: NOW,
+    });
+
+    expect(report.status).toBe("fail");
+    expect(report.errors).toEqual([
+      expect.objectContaining({ code: "INVALID_AUDIT_REPORT", message: expect.stringContaining("got 3") }),
+    ]);
+    expect(spawnSyncImpl).toHaveBeenCalledTimes(1);
+    expect(sleepImpl).not.toHaveBeenCalled();
+  });
+
   it("does not retry when a non-retryable allowlist error is also present", () => {
     const spawnSyncImpl = vi.fn().mockReturnValue({
       status: 1,
