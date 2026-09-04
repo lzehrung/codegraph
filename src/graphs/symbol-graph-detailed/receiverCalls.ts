@@ -223,7 +223,8 @@ export function callArgumentCount(callNode: SyntaxNodeLike): number {
  * one type in its declared supertype chain.
  *
  * Ambiguous matches are dropped rather than guessed, so call hierarchy keeps
- * reporting only proven edges.
+ * reporting only proven edges. A level with several same-named members stops the
+ * walk even when a deeper supertype has a unique member of the same name.
  */
 export function emitReceiverCallEdges(
   graph: SymbolGraph,
@@ -259,11 +260,12 @@ export function emitReceiverCallEdges(
     let level = candidate.viaSupertypes ? (supertypesByOwner.get(owner) ?? []) : [owner];
     const visited = new Set<string>(level);
     for (let depth = 0; depth < MAX_SUPERTYPE_DEPTH && level.length; depth += 1) {
-      const target = provenMemberTarget(graph, membersByOwner, level, candidate);
-      if (target) {
-        recordEdge(candidate.callerId, target, "calls", candidate.site);
+      const lookup = provenMemberTarget(graph, membersByOwner, level, candidate);
+      if (lookup.status === "unique") {
+        recordEdge(candidate.callerId, lookup.memberId, "calls", candidate.site);
         break;
       }
+      if (lookup.status === "ambiguous") break;
       const next: string[] = [];
       for (const ownerId of level) {
         for (const supertype of supertypesByOwner.get(ownerId) ?? []) {
@@ -277,13 +279,20 @@ export function emitReceiverCallEdges(
   }
 }
 
-/** The single callable member named by `candidate` across `owners`, or null when unproven. */
+type MemberTargetLookup = { status: "none" } | { status: "unique"; memberId: string } | { status: "ambiguous" };
+
+/**
+ * The single callable member named by `candidate` across `owners`.
+ * `none` means this depth has no name match and the walk may continue.
+ * `ambiguous` means this depth matched the name but could not prove one member,
+ * including arity ambiguity, and the walk must stop.
+ */
 function provenMemberTarget(
   graph: SymbolGraph,
   membersByOwner: ReadonlyMap<string, string[]>,
   owners: readonly string[],
   candidate: ReceiverCallCandidate,
-): string | null {
+): MemberTargetLookup {
   const matches: string[] = [];
   for (const ownerId of owners) {
     for (const memberId of membersByOwner.get(ownerId) ?? []) {
@@ -292,8 +301,9 @@ function provenMemberTarget(
       if (!matches.includes(memberId)) matches.push(memberId);
     }
   }
-  if (matches.length === 1) return matches[0] ?? null;
-  if (!matches.length) return null;
+  if (!matches.length) return { status: "none" };
+  if (matches.length === 1) return { status: "unique", memberId: matches[0]! };
   const byArity = matches.filter((memberId) => graph.nodes.get(memberId)?.memberArity === candidate.argumentCount);
-  return byArity.length === 1 ? (byArity[0] ?? null) : null;
+  if (byArity.length === 1) return { status: "unique", memberId: byArity[0]! };
+  return { status: "ambiguous" };
 }

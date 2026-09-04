@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { buildSymbolGraphDetailed, type DetailedSymbolGraph } from "../src/graphs/symbol-graph-detailed.js";
+import { emitReceiverCallEdges, type ReceiverCallCandidate } from "../src/graphs/symbol-graph-detailed/receiverCalls.js";
+import type { SymbolGraph, SymbolNode } from "../src/graphs/symbol-graph.js";
 import { findCallHierarchy } from "../src/indexer/call-hierarchy.js";
 import { buildProjectIndex } from "../src/indexer/build-index.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
@@ -24,6 +26,22 @@ async function buildFixture(prefix: string, files: Record<string, string>): Prom
   }
   const index = await buildProjectIndex(root, { cache: "off", native: "on" });
   return await buildSymbolGraphDetailed(index);
+}
+
+/** Function members named `memberName` owned by the type named `ownerName`. */
+function membersOwnedBy(graph: DetailedSymbolGraph, ownerName: string, memberName: string): string[] {
+  const owners = [...graph.nodes.values()].filter(
+    (node) => node.name === ownerName && (node.kind === "class" || node.kind === "interface"),
+  );
+  expect(owners, `expected exactly one ${ownerName} type`).toHaveLength(1);
+  const ownerId = owners[0]!.id;
+  return graph.edges
+    .filter((edge) => edge.label === "member_of" && edge.to === ownerId)
+    .map((edge) => edge.from)
+    .filter((id) => {
+      const node = graph.nodes.get(id);
+      return node?.kind === "function" && node.name === memberName;
+    });
 }
 
 /** Resolves the graph node for a declaration by name and declaring file basename. */
@@ -268,5 +286,197 @@ nativeDescribe("receiver method call edge language parity", () => {
     const helper = nodeIn(graph, "swx.swift", "swHelper");
     const run = nodeIn(graph, "swx.swift", "swRun");
     expect(callsiteTexts(graph, helper, run, files)).toEqual(["swHelper"]);
+  });
+
+  it("does not record a deeper unique member when the shallowest overloads stay ambiguous", async () => {
+    const files: Record<string, string> = {
+      "amb.java": [
+        "class GrandAmb { void shared() {} }",
+        "class MidAmb extends GrandAmb { void shared(String value) {} void shared(int value) {} }",
+        "class LeafAmb extends MidAmb { void go() { this.shared(); } }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-java-amb-", files);
+    const go = nodeIn(graph, "amb.java", "go");
+    const midShared = membersOwnedBy(graph, "MidAmb", "shared");
+    const grandShared = membersOwnedBy(graph, "GrandAmb", "shared");
+    expect(midShared.length).toBeGreaterThan(1);
+    expect(grandShared).toHaveLength(1);
+    for (const memberId of [...midShared, ...grandShared]) {
+      expect(callsiteTexts(graph, memberId, go, files)).toBeNull();
+    }
+  });
+
+  it("records the arity-unique overload at the shallowest type instead of a deeper unique member", async () => {
+    const files: Record<string, string> = {
+      "uni.java": [
+        "class GrandUni { void shared() {} }",
+        "class MidUni extends GrandUni { void shared() {} void shared(int value) {} }",
+        "class LeafUni extends MidUni { void go() { this.shared(); } }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-java-uni-", files);
+    const go = nodeIn(graph, "uni.java", "go");
+    const midShared = membersOwnedBy(graph, "MidUni", "shared");
+    const grandShared = membersOwnedBy(graph, "GrandUni", "shared");
+    const zeroArity = midShared.filter((id) => graph.nodes.get(id)?.memberArity === 0);
+    expect(zeroArity).toHaveLength(1);
+    expect(grandShared).toHaveLength(1);
+    expect(callsiteTexts(graph, zeroArity[0]!, go, files)).toEqual(["shared"]);
+    expect(callsiteTexts(graph, grandShared[0]!, go, files)).toBeNull();
+  });
+});
+
+describe("emitReceiverCallEdges hierarchy walk", () => {
+  const site = {
+    file: "leaf.ts",
+    range: { start: { line: 1, column: 1, index: 0 }, end: { line: 1, column: 4, index: 3 } },
+  };
+
+  function node(id: string, name: string, extra: Partial<SymbolNode> = {}): SymbolNode {
+    return { id, file: "leaf.ts", name, kind: extra.kind ?? "function", ...extra };
+  }
+
+  function recordedCalls(graph: SymbolGraph, candidate: ReceiverCallCandidate): Array<{ from: string; to: string }> {
+    const recorded: Array<{ from: string; to: string }> = [];
+    emitReceiverCallEdges(graph, [candidate], (from, to, label) => {
+      if (label === "calls") recorded.push({ from, to });
+      return true;
+    });
+    return recorded;
+  }
+
+  function candidate(overrides: Partial<ReceiverCallCandidate> = {}): ReceiverCallCandidate {
+    return {
+      callerId: "leaf.go",
+      ownerId: "Mid",
+      viaSupertypes: false,
+      memberName: "run",
+      argumentCount: 0,
+      site,
+      ...overrides,
+    };
+  }
+
+  it("does not record a deeper unique member when the shallowest level is ambiguous", () => {
+    const graph: SymbolGraph = {
+      nodes: new Map([
+        ["Mid", node("Mid", "Mid", { kind: "class" })],
+        ["Base", node("Base", "Base", { kind: "class" })],
+        ["leaf.go", node("leaf.go", "go")],
+        ["mid.run.a", node("mid.run.a", "run", { memberArity: 0 })],
+        ["mid.run.b", node("mid.run.b", "run", { memberArity: 0 })],
+        ["base.run", node("base.run", "run", { memberArity: 0 })],
+      ]),
+      edges: [
+        { from: "leaf.go", to: "Mid", label: "member_of" },
+        { from: "mid.run.a", to: "Mid", label: "member_of" },
+        { from: "mid.run.b", to: "Mid", label: "member_of" },
+        { from: "base.run", to: "Base", label: "member_of" },
+        { from: "Mid", to: "Base", label: "extends" },
+      ],
+    };
+    expect(recordedCalls(graph, candidate())).toEqual([]);
+  });
+
+  it("does not walk past same-named members whose arity does not single one out", () => {
+    const graph: SymbolGraph = {
+      nodes: new Map([
+        ["Mid", node("Mid", "Mid", { kind: "class" })],
+        ["Base", node("Base", "Base", { kind: "class" })],
+        ["leaf.go", node("leaf.go", "go")],
+        ["mid.run.1", node("mid.run.1", "run", { memberArity: 1 })],
+        ["mid.run.2", node("mid.run.2", "run", { memberArity: 2 })],
+        ["base.run", node("base.run", "run", { memberArity: 0 })],
+      ]),
+      edges: [
+        { from: "leaf.go", to: "Mid", label: "member_of" },
+        { from: "mid.run.1", to: "Mid", label: "member_of" },
+        { from: "mid.run.2", to: "Mid", label: "member_of" },
+        { from: "base.run", to: "Base", label: "member_of" },
+        { from: "Mid", to: "Base", label: "extends" },
+      ],
+    };
+    expect(recordedCalls(graph, candidate())).toEqual([]);
+  });
+
+  it("records the arity-unique member at the shallowest level instead of a deeper unique member", () => {
+    const graph: SymbolGraph = {
+      nodes: new Map([
+        ["Mid", node("Mid", "Mid", { kind: "class" })],
+        ["Base", node("Base", "Base", { kind: "class" })],
+        ["leaf.go", node("leaf.go", "go")],
+        ["mid.run.0", node("mid.run.0", "run", { memberArity: 0 })],
+        ["mid.run.1", node("mid.run.1", "run", { memberArity: 1 })],
+        ["base.run", node("base.run", "run", { memberArity: 0 })],
+      ]),
+      edges: [
+        { from: "leaf.go", to: "Mid", label: "member_of" },
+        { from: "mid.run.0", to: "Mid", label: "member_of" },
+        { from: "mid.run.1", to: "Mid", label: "member_of" },
+        { from: "base.run", to: "Base", label: "member_of" },
+        { from: "Mid", to: "Base", label: "extends" },
+      ],
+    };
+    expect(recordedCalls(graph, candidate())).toEqual([{ from: "leaf.go", to: "mid.run.0" }]);
+  });
+
+  it("still records a unique inherited member when the declaring type has no match", () => {
+    const graph: SymbolGraph = {
+      nodes: new Map([
+        ["Mid", node("Mid", "Mid", { kind: "class" })],
+        ["Base", node("Base", "Base", { kind: "class" })],
+        ["leaf.go", node("leaf.go", "go")],
+        ["base.run", node("base.run", "run", { memberArity: 0 })],
+      ]),
+      edges: [
+        { from: "leaf.go", to: "Mid", label: "member_of" },
+        { from: "base.run", to: "Base", label: "member_of" },
+        { from: "Mid", to: "Base", label: "extends" },
+      ],
+    };
+    expect(recordedCalls(graph, candidate())).toEqual([{ from: "leaf.go", to: "base.run" }]);
+  });
+
+  it("leaves a diamond of same-named members unresolved", () => {
+    const graph: SymbolGraph = {
+      nodes: new Map([
+        ["Child", node("Child", "Child", { kind: "class" })],
+        ["Left", node("Left", "Left", { kind: "interface" })],
+        ["Right", node("Right", "Right", { kind: "interface" })],
+        ["leaf.go", node("leaf.go", "go")],
+        ["left.run", node("left.run", "run", { memberArity: 0 })],
+        ["right.run", node("right.run", "run", { memberArity: 0 })],
+      ]),
+      edges: [
+        { from: "leaf.go", to: "Child", label: "member_of" },
+        { from: "left.run", to: "Left", label: "member_of" },
+        { from: "right.run", to: "Right", label: "member_of" },
+        { from: "Child", to: "Left", label: "implements" },
+        { from: "Child", to: "Right", label: "implements" },
+      ],
+    };
+    expect(recordedCalls(graph, candidate({ ownerId: "Child" }))).toEqual([]);
+  });
+
+  it("starts a parent-qualified call at the supertype and ignores own-type members", () => {
+    const graph: SymbolGraph = {
+      nodes: new Map([
+        ["Child", node("Child", "Child", { kind: "class" })],
+        ["Base", node("Base", "Base", { kind: "class" })],
+        ["leaf.go", node("leaf.go", "go")],
+        ["child.run", node("child.run", "run", { memberArity: 0 })],
+        ["base.run", node("base.run", "run", { memberArity: 0 })],
+      ]),
+      edges: [
+        { from: "leaf.go", to: "Child", label: "member_of" },
+        { from: "child.run", to: "Child", label: "member_of" },
+        { from: "base.run", to: "Base", label: "member_of" },
+        { from: "Child", to: "Base", label: "extends" },
+      ],
+    };
+    expect(recordedCalls(graph, candidate({ ownerId: "Child", viaSupertypes: true }))).toEqual([
+      { from: "leaf.go", to: "base.run" },
+    ]);
   });
 });
