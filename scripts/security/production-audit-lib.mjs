@@ -5,6 +5,15 @@ import { fileURLToPath } from "node:url";
 const AUDIT_REPORT_VERSION = 2;
 const REPORT_SCHEMA_VERSION = 1;
 const ALLOWLIST_SCHEMA_VERSION = 1;
+const DEFAULT_AUDIT_ATTEMPTS = 3;
+const DEFAULT_AUDIT_RETRY_DELAY_MS = 2000;
+const DEFAULT_AUDIT_TIMEOUT_MS = 120_000;
+const RETRYABLE_AUDIT_ERROR_CODES = new Set([
+  "INVALID_AUDIT_REPORT",
+  "MALFORMED_AUDIT_JSON",
+  "NPM_AUDIT_COMMAND_FAILED",
+  "NPM_AUDIT_EXECUTION_FAILED",
+]);
 const DEFAULT_ALLOWLIST_PATH = fileURLToPath(new URL("./production-audit-allowlist.json", import.meta.url));
 const NPM_SEVERITIES = Object.freeze(["info", "low", "moderate", "high", "critical"]);
 const SEVERITY_RANK = new Map(NPM_SEVERITIES.map((severity, index) => [severity, index]));
@@ -33,6 +42,40 @@ function stringifyError(error) {
     return error;
   }
   return String(error);
+}
+
+function defaultSleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function firstNonEmptyString(...values) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function npmAuditEndpointError(document) {
+  if (!isRecord(document) || document.auditReportVersion === AUDIT_REPORT_VERSION) {
+    return null;
+  }
+
+  if (isRecord(document.error)) {
+    const code = firstNonEmptyString(document.error.code) ?? "NPM_AUDIT_ERROR";
+    const summary =
+      firstNonEmptyString(document.error.summary, document.error.message) ?? "npm audit returned an error object.";
+    return `${code}: ${summary}`;
+  }
+
+  const hasEndpointShape = "statusCode" in document || "uri" in document || "method" in document;
+  if (!hasEndpointShape || typeof document.message !== "string" || !document.message.trim()) {
+    return null;
+  }
+
+  const status = Number.isInteger(document.statusCode) ? `HTTP ${document.statusCode}` : "audit endpoint error";
+  return `${status}: ${document.message}`;
 }
 
 function parseJsonText(text, code, label) {
@@ -177,10 +220,14 @@ export function parseNpmAuditOutput(auditOutput) {
   if (!isRecord(document)) {
     throw new ProductionAuditInputError("INVALID_AUDIT_REPORT", "npm audit output must be a JSON object.");
   }
+  const endpointError = npmAuditEndpointError(document);
+  if (endpointError) {
+    throw new ProductionAuditInputError("NPM_AUDIT_COMMAND_FAILED", endpointError);
+  }
   if (document.auditReportVersion !== AUDIT_REPORT_VERSION) {
     throw new ProductionAuditInputError(
       "INVALID_AUDIT_REPORT",
-      `npm audit report version must be ${AUDIT_REPORT_VERSION}.`,
+      `npm audit report version must be ${AUDIT_REPORT_VERSION}, got ${JSON.stringify(document.auditReportVersion)}.`,
     );
   }
   if (!isRecord(document.vulnerabilities)) {
@@ -474,6 +521,24 @@ function childOutputText(output) {
   return "";
 }
 
+function isRetryableAuditReport(report) {
+  if (report.status === "pass") {
+    return false;
+  }
+  if (report.rejectedVulnerabilities.length) {
+    return false;
+  }
+  return report.errors.some((error) => RETRYABLE_AUDIT_ERROR_CODES.has(error.code));
+}
+
+function collectAuditOutput(result) {
+  const stdout = childOutputText(result.stdout);
+  if (stdout.trim()) {
+    return stdout;
+  }
+  return childOutputText(result.stderr);
+}
+
 export function runProductionAudit({
   cwd = process.cwd(),
   allowlistPath = DEFAULT_ALLOWLIST_PATH,
@@ -481,6 +546,10 @@ export function runProductionAudit({
   platform = process.platform,
   spawnSyncImpl = spawnSync,
   readFileSyncImpl = readFileSync,
+  sleepImpl = defaultSleep,
+  maxAttempts = DEFAULT_AUDIT_ATTEMPTS,
+  retryDelayMs = DEFAULT_AUDIT_RETRY_DELAY_MS,
+  timeoutMs = DEFAULT_AUDIT_TIMEOUT_MS,
 } = {}) {
   let allowlistInput;
   try {
@@ -498,29 +567,55 @@ export function runProductionAudit({
     command = process.env.ComSpec || "cmd.exe";
     commandArguments = ["/d", "/s", "/c", "npm audit --omit=dev --json"];
   }
-  let result;
-  try {
-    result = spawnSyncImpl(command, commandArguments, {
-      cwd,
-      encoding: "utf8",
-      maxBuffer: 16 * 1024 * 1024,
-      shell: false,
-    });
-  } catch (error) {
-    return failureReport("NPM_AUDIT_EXECUTION_FAILED", `Could not execute npm audit: ${stringifyError(error)}`);
-  }
-  if (result.error) {
-    return failureReport(
-      "NPM_AUDIT_EXECUTION_FAILED",
-      `Could not execute npm audit: ${stringifyError(result.error)}`,
-      result.status,
-    );
+
+  const spawnOptions = {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+    shell: false,
+    timeout: timeoutMs,
+    env: {
+      ...process.env,
+      npm_config_fetch_retries: "5",
+      npm_config_fetch_retry_mintimeout: "10000",
+      npm_config_fetch_retry_maxtimeout: "60000",
+    },
+  };
+
+  let lastReport = failureReport("NPM_AUDIT_EXECUTION_FAILED", "npm audit did not produce a report.");
+  const attempts = Number.isInteger(maxAttempts) && maxAttempts > 0 ? maxAttempts : DEFAULT_AUDIT_ATTEMPTS;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    let result;
+    try {
+      result = spawnSyncImpl(command, commandArguments, spawnOptions);
+    } catch (error) {
+      lastReport = failureReport("NPM_AUDIT_EXECUTION_FAILED", `Could not execute npm audit: ${stringifyError(error)}`);
+      if (attempt === attempts) {
+        return lastReport;
+      }
+      sleepImpl(retryDelayMs * attempt);
+      continue;
+    }
+    if (result.error) {
+      lastReport = failureReport(
+        "NPM_AUDIT_EXECUTION_FAILED",
+        `Could not execute npm audit: ${stringifyError(result.error)}`,
+        result.status,
+      );
+    } else {
+      lastReport = createProductionAuditReport({
+        auditOutput: collectAuditOutput(result),
+        auditExitCode: result.status,
+        allowlistInput,
+        now,
+      });
+    }
+
+    if (!isRetryableAuditReport(lastReport) || attempt === attempts) {
+      return lastReport;
+    }
+    sleepImpl(retryDelayMs * attempt);
   }
 
-  return createProductionAuditReport({
-    auditOutput: childOutputText(result.stdout),
-    auditExitCode: result.status,
-    allowlistInput,
-    now,
-  });
+  return lastReport;
 }
