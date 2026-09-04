@@ -7,7 +7,9 @@ const REPORT_SCHEMA_VERSION = 1;
 const ALLOWLIST_SCHEMA_VERSION = 1;
 const DEFAULT_AUDIT_ATTEMPTS = 3;
 const DEFAULT_AUDIT_RETRY_DELAY_MS = 2000;
-const DEFAULT_AUDIT_TIMEOUT_MS = 120_000;
+// Hosted npm audit can take a few minutes. A 120s spawn timeout killed live
+// reports with ETIMEDOUT before npm returned a v2 document.
+const DEFAULT_AUDIT_TIMEOUT_MS = 240_000;
 const RETRYABLE_AUDIT_ERROR_CODES = new Set([
   "MALFORMED_AUDIT_JSON",
   "NPM_AUDIT_COMMAND_FAILED",
