@@ -40,9 +40,7 @@ const RECEIVER_KEYWORDS: Record<string, ReceiverKeywords> = {
   cpp: { own: ["this"], supertype: [] },
   csharp: { own: ["this"], supertype: ["base"] },
   java: THIS_SUPER_RECEIVERS,
-  javascript: THIS_SUPER_RECEIVERS,
   js: THIS_SUPER_RECEIVERS,
-  jsx: THIS_SUPER_RECEIVERS,
   kotlin: THIS_SUPER_RECEIVERS,
   php: { own: ["$this", "self", "static"], supertype: ["parent"] },
   python: { own: ["self", "cls"], supertype: [] },
@@ -52,7 +50,7 @@ const RECEIVER_KEYWORDS: Record<string, ReceiverKeywords> = {
   swift: SELF_RECEIVERS,
   ts: THIS_SUPER_RECEIVERS,
   tsx: THIS_SUPER_RECEIVERS,
-  typescript: THIS_SUPER_RECEIVERS,
+  zig: { own: ["self"], supertype: [] },
 };
 
 /**

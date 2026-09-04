@@ -437,6 +437,199 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(faceShared).toHaveLength(1);
     expect(callsiteTexts(graph, faceShared[0]!, go, files)).toEqual(["shared"]);
   });
+
+  it("records calls edges for JavaScript this receivers", async () => {
+    const files: Record<string, string> = {
+      "box.js": ["class JsBox {", "  helper() {}", "  run() { this.helper(); }", "}"].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-js-", files);
+    const helper = nodeIn(graph, "box.js", "helper");
+    const run = nodeIn(graph, "box.js", "run");
+    expect(callsiteTexts(graph, helper, run, files)).toEqual(["helper"]);
+  });
+
+  it("records a TypeScript super call on the class ancestor when an interface declares the same name", async () => {
+    const files: Record<string, string> = {
+      "sup.ts": [
+        "interface SupFace { shared(): void }",
+        "class SupBase { shared(): void {} }",
+        "class SupLeaf extends SupBase implements SupFace { go(): void { super.shared(); } }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-ts-super-", files);
+    const go = nodeIn(graph, "sup.ts", "go");
+    const baseShared = membersOwnedBy(graph, "SupBase", "shared");
+    const faceShared = membersOwnedBy(graph, "SupFace", "shared");
+    expect(baseShared).toHaveLength(1);
+    expect(faceShared).toHaveLength(1);
+    expect(callsiteTexts(graph, baseShared[0]!, go, files)).toEqual(["shared"]);
+    expect(callsiteTexts(graph, faceShared[0]!, go, files)).toBeNull();
+  });
+
+  it("records Python inherited self and cls receivers", async () => {
+    const files: Record<string, string> = {
+      "pyinherit.py": [
+        "class PyBase:",
+        "    def py_helper(self):",
+        "        return 1",
+        "    @classmethod",
+        "    def py_shared(cls):",
+        "        return 2",
+        "class PyChild(PyBase):",
+        "    def py_run(self):",
+        "        return self.py_helper()",
+        "    @classmethod",
+        "    def py_cls_run(cls):",
+        "        return cls.py_shared()",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-py-inherit-", files);
+    const helper = nodeIn(graph, "pyinherit.py", "py_helper");
+    const shared = nodeIn(graph, "pyinherit.py", "py_shared");
+    const run = nodeIn(graph, "pyinherit.py", "py_run");
+    const clsRun = nodeIn(graph, "pyinherit.py", "py_cls_run");
+    expect(callsiteTexts(graph, helper, run, files)).toEqual(["py_helper"]);
+    expect(callsiteTexts(graph, shared, clsRun, files)).toEqual(["py_shared"]);
+  });
+
+  it("leaves Python super() receivers unresolved", async () => {
+    const files: Record<string, string> = {
+      "pysuper.py": [
+        "class PyBase:",
+        "    def py_helper(self):",
+        "        return 1",
+        "class PyChild(PyBase):",
+        "    def py_run(self):",
+        "        return super().py_helper()",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-py-super-", files);
+    const helper = nodeIn(graph, "pysuper.py", "py_helper");
+    const run = nodeIn(graph, "pysuper.py", "py_run");
+    expect(callsiteTexts(graph, helper, run, files)).toBeNull();
+  });
+
+  it("records calls edges for C++ this receivers, including inherited members", async () => {
+    const files: Record<string, string> = {
+      "box.cpp": [
+        "class CppBase { public: void cpp_helper() {} };",
+        "class CppChild : public CppBase { public: void cpp_run() { this->cpp_helper(); } };",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cpp-", files);
+    const helper = nodeIn(graph, "box.cpp", "cpp_helper");
+    const run = nodeIn(graph, "box.cpp", "cpp_run");
+    expect(callsiteTexts(graph, helper, run, files)).toEqual(["cpp_helper"]);
+  });
+
+  it("records calls edges for Ruby self receivers, including unique mixins", async () => {
+    const files: Record<string, string> = {
+      "box.rb": [
+        "module RbGreets",
+        "  def greet",
+        "  end",
+        "end",
+        "class RbHost",
+        "  include RbGreets",
+        "  def helper",
+        "  end",
+        "  def run",
+        "    self.helper",
+        "    self.greet",
+        "  end",
+        "end",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-rb-", files);
+    const helper = nodeIn(graph, "box.rb", "helper");
+    const greet = nodeIn(graph, "box.rb", "greet");
+    const run = nodeIn(graph, "box.rb", "run");
+    expect(callsiteTexts(graph, helper, run, files)).toEqual(["helper"]);
+    expect(callsiteTexts(graph, greet, run, files)).toEqual(["greet"]);
+  });
+
+  it("records a Ruby super call on the class ancestor", async () => {
+    const files: Record<string, string> = {
+      "super.rb": [
+        "class RbBase",
+        "  def shared",
+        "  end",
+        "end",
+        "class RbChild < RbBase",
+        "  def helper",
+        "  end",
+        "  def run",
+        "    self.helper",
+        "    super.shared",
+        "  end",
+        "end",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-rb-super-", files);
+    const run = nodeIn(graph, "super.rb", "run");
+    const helper = nodeIn(graph, "super.rb", "helper");
+    const baseShared = membersOwnedBy(graph, "RbBase", "shared");
+    expect(baseShared).toHaveLength(1);
+    expect(callsiteTexts(graph, helper, run, files)).toEqual(["helper"]);
+    expect(callsiteTexts(graph, baseShared[0]!, run, files)).toEqual(["shared"]);
+  });
+
+  it("records a Kotlin super call on the class ancestor when an interface declares the same name", async () => {
+    const files: Record<string, string> = {
+      "sup.kt": [
+        "interface KtFace {",
+        "  fun shared()",
+        "}",
+        "open class KtBase {",
+        "  open fun shared() {}",
+        "}",
+        "class KtLeaf : KtBase(), KtFace {",
+        "  fun go() { super.shared() }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-kt-super-", files);
+    const go = nodeIn(graph, "sup.kt", "go");
+    const baseShared = membersOwnedBy(graph, "KtBase", "shared");
+    const faceShared = membersOwnedBy(graph, "KtFace", "shared");
+    expect(baseShared).toHaveLength(1);
+    expect(faceShared).toHaveLength(1);
+    expect(callsiteTexts(graph, baseShared[0]!, go, files)).toEqual(["shared"]);
+    expect(callsiteTexts(graph, faceShared[0]!, go, files)).toBeNull();
+  });
+
+  it("records a Swift super call on the class ancestor when a protocol declares the same name", async () => {
+    const files: Record<string, string> = {
+      "sup.swift": [
+        "protocol SwFace { func shared() }",
+        "class SwBase { func shared() {} }",
+        "class SwLeaf: SwBase, SwFace { func go() { super.shared() } }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-sw-super-", files);
+    const go = nodeIn(graph, "sup.swift", "go");
+    const baseShared = membersOwnedBy(graph, "SwBase", "shared");
+    const faceShared = membersOwnedBy(graph, "SwFace", "shared");
+    expect(baseShared).toHaveLength(1);
+    expect(faceShared).toHaveLength(1);
+    expect(callsiteTexts(graph, baseShared[0]!, go, files)).toEqual(["shared"]);
+    expect(callsiteTexts(graph, faceShared[0]!, go, files)).toBeNull();
+  });
+
+  it("records calls edges for Zig self receivers", async () => {
+    const files: Record<string, string> = {
+      "box.zig": [
+        "const Box = struct {",
+        "    fn helper(self: Box) void {}",
+        "    fn run(self: Box) void { self.helper(); }",
+        "};",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-zig-", files);
+    const helper = nodeIn(graph, "box.zig", "helper");
+    const run = nodeIn(graph, "box.zig", "run");
+    expect(callsiteTexts(graph, helper, run, files)).toEqual(["helper"]);
+  });
 });
 
 describe("emitReceiverCallEdges hierarchy walk", () => {

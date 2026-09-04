@@ -29,6 +29,25 @@ export type DetailedDeclarationPassResult = {
 export const isIdentifierType = (sup: LanguageSupport, type: string): boolean =>
   Array.isArray(sup.nodeTypes?.identifier) && sup.nodeTypes.identifier.includes(type);
 
+/** C and C++ put the function name in a nested declarator, not a `name` field. */
+function functionNameNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  const named = node.childForFieldName("name");
+  if (named) return named;
+  let current = node.childForFieldName("declarator");
+  while (current) {
+    if (current.type === "identifier" || current.type === "field_identifier") return current;
+    const nested = current.childForFieldName("declarator");
+    if (nested) {
+      current = nested;
+      continue;
+    }
+    return (
+      current.namedChildren.find((child) => child.type === "identifier" || child.type === "field_identifier") ?? null
+    );
+  }
+  return node.childForFieldName("type");
+}
+
 export function collectDetailedDeclarations(
   rootNode: SyntaxNodeLike,
   sup: LanguageSupport,
@@ -51,6 +70,7 @@ export function collectDetailedDeclarations(
     "function_item",
     "function_signature_item",
     "method",
+    "protocol_function_declaration",
     "singleton_method",
   ]);
   const typeNodeTypes = new Set([
@@ -60,6 +80,7 @@ export function collectDetailedDeclarations(
     "class_definition",
     "class",
     "interface_declaration",
+    "module",
     "protocol_declaration",
     "trait_item",
     "trait_declaration",
@@ -94,7 +115,7 @@ export function collectDetailedDeclarations(
 
   const walk = (node: SyntaxNodeLike): void => {
     if (functionNodeTypes.has(node.type)) {
-      const nameNode = node.childForFieldName("name") ?? node.childForFieldName("type");
+      const nameNode = functionNameNode(node);
       const name = nameNode ? sliceText(nameNode, source) : undefined;
       if (name) {
         const def = findDefinition(name, nameNode!);

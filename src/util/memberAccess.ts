@@ -98,6 +98,9 @@ function fieldParts(node: SyntaxNodeLike, objectField: string, propertyField: st
 }
 
 export function getMemberAccessParts(sup: LanguageSupport, memberNode: SyntaxNodeLike): MemberAccessParts {
+  if (sup.id === "c" || sup.id === "cpp") {
+    if (memberNode.type === "field_expression") return fieldParts(memberNode, "argument", "field");
+  }
   if (sup.id === "python") {
     return fieldParts(memberNode, "object", "attribute");
   }
