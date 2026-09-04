@@ -901,13 +901,16 @@ function collectSnapshotModules(
         modules.set(key, row.mod);
       }
     }
-    const owned = new Map<string, ModuleIndex>();
+    // expandStarImports only pushes onto star-import arrays. Snapshot-embedded
+    // bodies are frozen; SQLite rows are not. Clone only the frozen star
+    // importers, keep targets shared, then freeze whatever is still mutable.
     for (const [key, mod] of modules) {
-      owned.set(key, mutableModuleIndex(mod));
+      if (!mod.imports.some((binding) => binding.kind === "star")) continue;
+      modules.set(key, mutableModuleIndex(mod));
     }
-    expandStarImports(owned, opts);
-    modules.clear();
-    for (const [key, mod] of owned) {
+    expandStarImports(modules, opts);
+    for (const [key, mod] of modules) {
+      if (Object.isFrozen(mod)) continue;
       modules.set(key, freezeSnapshotPayload(mod));
     }
   }

@@ -208,6 +208,9 @@ describe("thin project snapshot", () => {
       imports: [{ kind: "star", from: "./lib", resolved: libFile }],
       locals: [],
     };
+    Object.freeze(lib);
+    Object.freeze(lib.exports);
+    Object.freeze(lib.locals);
     Object.freeze(consumer);
     Object.freeze(consumer.imports);
     const frozen = new Map<string, ModuleIndex>([
@@ -217,16 +220,14 @@ describe("thin project snapshot", () => {
     expect(() => expandStarImports(frozen)).toThrow(TypeError);
 
     const owned = new Map<string, ModuleIndex>([
-      [
-        fileIdentityKey(libFile),
-        { ...lib, exports: [...lib.exports], imports: [...lib.imports], locals: [...lib.locals] },
-      ],
+      [fileIdentityKey(libFile), lib],
       [
         fileIdentityKey(consumerFile),
         { ...consumer, exports: [...consumer.exports], imports: [...consumer.imports], locals: [...consumer.locals] },
       ],
     ]);
     expandStarImports(owned);
+    expect(owned.get(fileIdentityKey(libFile))).toBe(lib);
     expect(
       owned
         .get(fileIdentityKey(consumerFile))
