@@ -5,8 +5,11 @@ import { SymbolKind, type BuildOptions, type ModuleIndex } from "./types.js";
 import type { ImportBinding } from "./import-types.js";
 
 /**
- * Expand `import *` / `export *` bindings into named or namespace imports so
+ * Expand `kind: "star"` import bindings into named or namespace imports so
  * later resolution can see the target's locals without re-parsing.
+ *
+ * This rewrites `mod.imports` only. It does not inspect `mod.exports` or
+ * `exportStar` entries (TypeScript `export *`).
  *
  * Disk-cached module rows are stored before this expansion. Snapshot hydrate
  * must run it before freezing the in-memory index.
