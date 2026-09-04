@@ -162,6 +162,48 @@ describe("production audit parser", () => {
     expect(report.rejectedVulnerabilities).toEqual([]);
   });
 
+  it("classifies npm audit endpoint error JSON as a command failure", () => {
+    const report = createProductionAuditReport({
+      auditOutput: JSON.stringify({
+        message: "request to the audit endpoint failed, reason: timeout",
+        method: "POST",
+        uri: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+        headers: {},
+        statusCode: 504,
+        body: "",
+      }),
+      auditExitCode: 1,
+      allowlistInput: EMPTY_ALLOWLIST,
+      now: NOW,
+    });
+
+    expect(report.status).toBe("fail");
+    expect(report.errors).toEqual([
+      expect.objectContaining({
+        code: "NPM_AUDIT_COMMAND_FAILED",
+        message: "HTTP 504: request to the audit endpoint failed, reason: timeout",
+      }),
+    ]);
+    expect(report.rejectedVulnerabilities).toEqual([]);
+  });
+
+  it("includes the received npm audit report version in schema errors", () => {
+    const report = createProductionAuditReport({
+      auditOutput: JSON.stringify({ auditReportVersion: 3, vulnerabilities: {}, metadata: {} }),
+      auditExitCode: 0,
+      allowlistInput: EMPTY_ALLOWLIST,
+      now: NOW,
+    });
+
+    expect(report.status).toBe("fail");
+    expect(report.errors).toEqual([
+      expect.objectContaining({
+        code: "INVALID_AUDIT_REPORT",
+        message: expect.stringContaining("got 3"),
+      }),
+    ]);
+  });
+
   it("normalizes npm exit 1 when every reported advisory has an active exception", () => {
     const report = createProductionAuditReport({
       auditOutput: vulnerableAuditOutput(),
@@ -325,6 +367,114 @@ describe("production audit command", () => {
       ["/d", "/s", "/c", "npm audit --omit=dev --json"],
       expect.objectContaining({ shell: false }),
     );
+  });
+
+  it("retries a transient npm audit endpoint error and then passes", () => {
+    const spawnSyncImpl = vi
+      .fn()
+      .mockReturnValueOnce({
+        status: 1,
+        stdout: JSON.stringify({
+          message: "request to the audit endpoint failed, reason: timeout",
+          method: "POST",
+          uri: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+          statusCode: 504,
+        }),
+        stderr: "",
+      })
+      .mockReturnValueOnce({
+        status: 0,
+        stdout: cleanAuditOutput(),
+        stderr: "",
+      });
+    const sleepImpl = vi.fn();
+
+    const report = runProductionAudit({
+      platform: "linux",
+      spawnSyncImpl,
+      readFileSyncImpl: vi.fn().mockReturnValue(EMPTY_ALLOWLIST),
+      sleepImpl,
+      now: NOW,
+    });
+
+    expect(report.status).toBe("pass");
+    expect(spawnSyncImpl).toHaveBeenCalledTimes(2);
+    expect(sleepImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a deterministic npm audit schema error", () => {
+    const spawnSyncImpl = vi.fn().mockReturnValue({
+      status: 0,
+      stdout: JSON.stringify({ auditReportVersion: 3, vulnerabilities: {}, metadata: {} }),
+      stderr: "",
+    });
+    const sleepImpl = vi.fn();
+
+    const report = runProductionAudit({
+      platform: "linux",
+      spawnSyncImpl,
+      readFileSyncImpl: vi.fn().mockReturnValue(EMPTY_ALLOWLIST),
+      sleepImpl,
+      now: NOW,
+    });
+
+    expect(report.status).toBe("fail");
+    expect(report.errors).toEqual([
+      expect.objectContaining({ code: "INVALID_AUDIT_REPORT", message: expect.stringContaining("got 3") }),
+    ]);
+    expect(spawnSyncImpl).toHaveBeenCalledTimes(1);
+    expect(sleepImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not retry when a non-retryable allowlist error is also present", () => {
+    const spawnSyncImpl = vi.fn().mockReturnValue({
+      status: 1,
+      stdout: JSON.stringify({
+        message: "request to the audit endpoint failed, reason: timeout",
+        method: "POST",
+        uri: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+        statusCode: 504,
+      }),
+      stderr: "",
+    });
+    const sleepImpl = vi.fn();
+
+    const report = runProductionAudit({
+      platform: "linux",
+      spawnSyncImpl,
+      readFileSyncImpl: vi.fn().mockReturnValue("{"),
+      sleepImpl,
+      now: NOW,
+    });
+
+    expect(report.status).toBe("fail");
+    expect(report.errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "MALFORMED_ALLOWLIST_JSON" })]),
+    );
+    expect(spawnSyncImpl).toHaveBeenCalledTimes(1);
+    expect(sleepImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not retry an unexcepted production advisory", () => {
+    const spawnSyncImpl = vi.fn().mockReturnValue({
+      status: 1,
+      stdout: vulnerableAuditOutput(),
+      stderr: "",
+    });
+    const sleepImpl = vi.fn();
+
+    const report = runProductionAudit({
+      platform: "linux",
+      spawnSyncImpl,
+      readFileSyncImpl: vi.fn().mockReturnValue(EMPTY_ALLOWLIST),
+      sleepImpl,
+      now: NOW,
+    });
+
+    expect(report.status).toBe("fail");
+    expect(report.rejectedVulnerabilities).toHaveLength(1);
+    expect(spawnSyncImpl).toHaveBeenCalledTimes(1);
+    expect(sleepImpl).not.toHaveBeenCalled();
   });
 
   it("prints machine-readable JSON and returns the report status", () => {
