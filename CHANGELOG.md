@@ -9,6 +9,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [2.3.18] - 2026-09-04
+
 ### Changed
 
 - Thin snapshot hydrate now expands star-kind imports after loading SQLite module bodies, then freezes the in-memory index. Disk cache rows are stored before that expansion, so skipping it made incremental updates throw when they tried to mutate frozen imports.
@@ -393,7 +395,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.17...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.18...HEAD
+[2.3.18]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.18
 [2.3.17]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.17
 [2.3.16]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.16
 [2.3.15]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.15
