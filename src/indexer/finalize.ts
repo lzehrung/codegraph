@@ -30,14 +30,20 @@ export async function finalizeProjectIndex(args: {
   buildReport?: BuildReport | undefined;
 }): Promise<ProjectIndex> {
   const discoveryTimings = args.opts?.report ? (args.opts.report.timings ??= {}) : undefined;
-  const metadataDiscoveryStart = args.projectFiles === undefined ? performance.now() : undefined;
-  const projectFiles = await (args.projectFiles ??
-    discoverProjectFilesWithGitCandidates(args.projectRoot, {
+  let projectFiles: ProjectFileInfo[];
+  if (args.projectFiles !== undefined) {
+    projectFiles = await args.projectFiles;
+  } else {
+    const metadataDiscoveryStart = performance.now();
+    projectFiles = await discoverProjectFilesWithGitCandidates(args.projectRoot, {
       ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
       ...(args.knownGitCandidates !== undefined ? { knownGitCandidates: args.knownGitCandidates } : {}),
-    }));
-  if (metadataDiscoveryStart !== undefined && discoveryTimings) {
-    discoveryTimings.metadataDiscoveryMs = Math.round(performance.now() - metadataDiscoveryStart);
+    });
+    if (discoveryTimings) {
+      const metadataDiscoveryMs = Math.round(performance.now() - metadataDiscoveryStart);
+      discoveryTimings.metadataDiscoveryMs = metadataDiscoveryMs;
+      (discoveryTimings.steps ??= []).push({ name: "metadata-discovery", ms: metadataDiscoveryMs });
+    }
   }
   if (args.timings) args.timings.totalMs = Math.round(performance.now() - args.totalStart);
   const languageExtensions = normalizeLanguageExtensions(args.opts?.languageExtensions);

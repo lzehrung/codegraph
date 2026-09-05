@@ -241,6 +241,8 @@ export type BuildTimingReport = {
    * `config-hash`, `manifest-transform`, `manifest-write`, and `cache-prune`.
    * Incremental preambles emit `file-identity`, `clear-resolution-caches`, `load-manifest`,
    * and `diff-build-options` so work before a delegated rebuild is attributable.
+   * Metadata discovery emits `metadata-discovery` when finalize has to discover project
+   * files itself; that step is recorded beside, not inside, `finalize`.
    */
   steps?: BuildTimingStep[];
 };

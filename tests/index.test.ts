@@ -307,6 +307,7 @@ describe("Project Indexing", () => {
       expect(report.timings.metadataDiscoveryMs).toBeUndefined();
       expect(report.timings.cacheProbeMs).toBeUndefined();
       expect((report.timings.steps ?? []).some((step) => step.name === "cache-probe")).toBe(false);
+      expect((report.timings.steps ?? []).some((step) => step.name === "metadata-discovery")).toBe(false);
       expect(report.timings.sourceDiscoveryMs).toBeTypeOf("number");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
@@ -324,6 +325,26 @@ describe("Project Indexing", () => {
 
       expect(report.timings.sourceDiscoveryMs).toBeUndefined();
       expect(report.timings.metadataDiscoveryMs).toBeTypeOf("number");
+      expect((report.timings.steps ?? []).some((step) => step.name === "metadata-discovery")).toBe(true);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not accumulate metadata-discovery when the same report is reused", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-metadata-discovery-reuse-"));
+    const file = path.join(root, "main.ts");
+    const report: BuildReport = { timings: {} };
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+
+    try {
+      await buildProjectIndexFromFiles(root, [file], { native: "off", report });
+      (report.timings.steps ??= []).push({ name: "metadata-discovery", ms: 9999 });
+      await buildProjectIndexFromFiles(root, [file], { native: "off", report });
+
+      const discoverySteps = (report.timings.steps ?? []).filter((step) => step.name === "metadata-discovery");
+      expect(discoverySteps).toHaveLength(1);
+      expect(discoverySteps[0]?.ms).not.toBe(9999);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

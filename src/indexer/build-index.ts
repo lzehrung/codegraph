@@ -669,6 +669,7 @@ const TRANSIENT_BUILD_TIMING_STEP_NAMES: Record<string, true> = {
   "manifest-transform": true,
   "manifest-write": true,
   "cache-prune": true,
+  "metadata-discovery": true,
   finalize: true,
   "snapshot-write": true,
 };
@@ -1210,30 +1211,31 @@ async function buildIndexFromFileListShared(
           }),
         )
       : manifestEntriesForIndex;
-    const index = await timeIndexBuildPhase({
+    const discoveredInsideFinalize = projectFiles === undefined;
+    const finalizeStartedAt = performance.now();
+    if (buildStartedAt !== undefined) {
+      emitIndexBuildActivity(opts, "Finalizing project graph", totalFiles, totalFiles);
+    }
+    const index = await finalizeProjectIndex({
+      projectRoot,
+      normalizedProjectRoot,
       opts,
       timings,
-      buildStartedAt,
-      stepName: "finalize",
-      activity: "Finalizing project graph",
-      current: totalFiles,
-      total: totalFiles,
-      fn: () =>
-        finalizeProjectIndex({
-          projectRoot,
-          normalizedProjectRoot,
-          opts,
-          timings,
-          totalStart,
-          graph,
-          modules,
-          parsedMap,
-          bloomFilterCache,
-          ...(projectFiles !== undefined ? { projectFiles } : {}),
-          buildReport: report,
-          manifestEntries: indexManifestEntries,
-        }),
+      totalStart,
+      graph,
+      modules,
+      parsedMap,
+      bloomFilterCache,
+      ...(projectFiles !== undefined ? { projectFiles } : {}),
+      buildReport: report,
+      manifestEntries: indexManifestEntries,
     });
+    if (timings) {
+      const elapsed = Math.round(performance.now() - finalizeStartedAt);
+      const discoveryMs = discoveredInsideFinalize ? (timings.metadataDiscoveryMs ?? 0) : 0;
+      const finalizeMs = discoveredInsideFinalize ? Math.max(0, elapsed - discoveryMs) : elapsed;
+      recordBuildTimingStep(timings, { name: "finalize", ms: finalizeMs });
+    }
     if (manifestEntries) {
       await timeIndexBuildPhase({
         opts,

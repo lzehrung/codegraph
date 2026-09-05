@@ -6,7 +6,7 @@ import picomatch from "picomatch";
 import { performance } from "node:perf_hooks";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { stringifyUnknown } from "./ast.js";
-import { fileIdentityKey, isFilePathWithinRoot, normalizePath } from "./paths.js";
+import { fileIdentityKey, isFilePathWithinRoot, normalizePath, runWithWindowsRealpathMemo } from "./paths.js";
 import { isRelativePathInside, matchesDiscoveryGlob } from "./discoveryPath.js";
 
 export { isRelativePathInside, matchesDiscoveryGlob } from "./discoveryPath.js";
@@ -640,9 +640,9 @@ function collectCandidateAncestorDirectories(root: string, files: readonly strin
   return directories;
 }
 
-type GitIgnoreSourceRoot = { path: string; repositoryRoot: string };
+export type GitIgnoreSourceRoot = { path: string; repositoryRoot: string };
 
-function owningGitIgnoreSourceRoot(
+export function owningGitIgnoreSourceRoot(
   file: string,
   roots: readonly GitIgnoreSourceRoot[],
 ): GitIgnoreSourceRoot | undefined {
@@ -657,6 +657,27 @@ function owningGitIgnoreSourceRoot(
     }
   }
   return owning;
+}
+
+/**
+ * Ownership is pure path containment, so every candidate in the same parent directory
+ * shares one answer. The map lives on this closure only: a long-lived process must not
+ * reuse a stale owner after the tree changes.
+ */
+export function createGitIgnoreSourceOwnershipLookup(
+  roots: readonly GitIgnoreSourceRoot[],
+): (file: string) => GitIgnoreSourceRoot | undefined {
+  const ownershipByDirectory = new Map<string, GitIgnoreSourceRoot | undefined>();
+  return (file: string): GitIgnoreSourceRoot | undefined => {
+    const directory = normalizePath(path.dirname(file));
+    const key = fileIdentityKey(directory);
+    if (ownershipByDirectory.has(key)) {
+      return ownershipByDirectory.get(key);
+    }
+    const owning = owningGitIgnoreSourceRoot(directory, roots);
+    ownershipByDirectory.set(key, owning);
+    return owning;
+  };
 }
 
 async function gitignoreFileIfPresent(directory: string): Promise<string | undefined> {
@@ -703,28 +724,31 @@ async function findGitIgnoreSources(
   for (const { path: sourceRoot, repositoryRoot } of roots) {
     addDirectory(sourceRoot, repositoryRoot);
   }
-  for (const file of candidateFiles) {
-    const owning = owningGitIgnoreSourceRoot(file, roots);
-    if (!owning) continue;
-    let dir = normalizePath(path.dirname(file));
-    const stopKey = fileIdentityKey(owning.repositoryRoot);
-    for (;;) {
-      const dirKey = fileIdentityKey(dir);
-      const walkKey = `${dirKey}\0${stopKey}`;
-      if (walkedDirectoryKeys.has(walkKey)) break;
-      addDirectory(dir, owning.repositoryRoot);
-      walkedDirectoryKeys.add(walkKey);
-      if (dirKey === stopKey) break;
-      const parent = normalizePath(path.dirname(dir));
-      if (
-        parent === dir ||
-        (!isFilePathWithinRoot(owning.path, parent) && !isFilePathWithinRoot(owning.repositoryRoot, parent))
-      ) {
-        break;
+  const owningOf = createGitIgnoreSourceOwnershipLookup(roots);
+  runWithWindowsRealpathMemo(() => {
+    for (const file of candidateFiles) {
+      const owning = owningOf(file);
+      if (!owning) continue;
+      let dir = normalizePath(path.dirname(file));
+      const stopKey = fileIdentityKey(owning.repositoryRoot);
+      for (;;) {
+        const dirKey = fileIdentityKey(dir);
+        const walkKey = `${dirKey}\0${stopKey}`;
+        if (walkedDirectoryKeys.has(walkKey)) break;
+        addDirectory(dir, owning.repositoryRoot);
+        walkedDirectoryKeys.add(walkKey);
+        if (dirKey === stopKey) break;
+        const parent = normalizePath(path.dirname(dir));
+        if (
+          parent === dir ||
+          (!isFilePathWithinRoot(owning.path, parent) && !isFilePathWithinRoot(owning.repositoryRoot, parent))
+        ) {
+          break;
+        }
+        dir = parent;
       }
-      dir = parent;
     }
-  }
+  });
   const uniqueRepositoryRoots = Array.from(new Set(roots.map((root) => root.repositoryRoot)));
   const [gitignoreHits, excludeLists] = await Promise.all([
     mapLimitSemaphore(
