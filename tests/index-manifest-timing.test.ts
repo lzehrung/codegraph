@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import * as buildCache from "../src/indexer/build-cache.js";
-import { buildProjectIndexIncremental } from "../src/indexer/build-index.js";
+import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../src/indexer/build-index.js";
 import type { BuildReport, BuildTimingStep } from "../src/indexer/types.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
 
@@ -157,5 +157,22 @@ describe("index manifest config-hash reuse and timing", () => {
         "index-manifest",
       ]),
     );
+  });
+
+  it("clears a reused report's transient steps on an explicit file-list build", async () => {
+    const root = await temps.create("cg-from-files-report-reuse-");
+    const entry = await writeEntry(root, "export const value = 1;\n");
+    // Mimic a caller that hands the same BuildReport to consecutive builds, which is how
+    // an MCP session reuses `buildOptions.report`. The prior run's steps must not survive.
+    const report: BuildReport = {
+      timings: { steps: [{ name: "cache-probe", ms: 999 }], cacheProbeMs: 999, sourceDiscoveryMs: 999 },
+    };
+
+    await buildProjectIndexFromFiles(root, [entry], { cache: "off", native: "off", report });
+
+    const stale = (report.timings?.steps ?? []).filter((step) => step.name === "cache-probe" && step.ms === 999);
+    expect(stale).toEqual([]);
+    expect(report.timings?.sourceDiscoveryMs).toBeUndefined();
+    expect(report.timings?.cacheProbeMs).not.toBe(999);
   });
 });

@@ -1404,6 +1404,10 @@ export async function buildProjectIndexFromFiles(
   // Discovery, manifest loading, and cache checks all precede file processing, so stamp the
   // operation origin here and let the completion event report the caller's whole wait.
   const opts: BuildOptions = { ...rawOpts, progressStartedAt: rawOpts?.progressStartedAt ?? performance.now() };
+  // A caller can reuse one BuildReport across repeated calls here, the same way an MCP
+  // session reuses `buildOptions.report`, so clear the prior call's transient steps.
+  const timings = opts.report ? (opts.report.timings ??= {}) : undefined;
+  resetTransientBuildTimings(timings);
   try {
     const useDiskCache = (opts?.cache ?? "off") === "disk";
     const normalizedInputFiles = await normalizeIndexedFileInputsWithinRoot(projectRoot, inputFiles, "Index file");
