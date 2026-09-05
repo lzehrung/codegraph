@@ -81,10 +81,19 @@ export async function handleIndexCommand(context: IndexCommandContext): Promise<
     ? { command: "index", timings: {} }
     : undefined;
   const commandStart = performance.now();
-  const resolveStart = performance.now();
-  const files = await context.resolveFiles();
-  if (commandReport) {
-    commandReport.timings.resolveFilesMs = Math.round(performance.now() - resolveStart);
+  const shouldWriteManifest = !context.includeRootsAbs.length && !context.gitBase && !context.changedSince;
+  // Keep resolve when CLI discovery globs were supplied so --include-glob/--ignore-glob
+  // "matched no files" warnings still emit on whole-project index runs.
+  const hasCliDiscoveryGlob =
+    context.getOpt("--include-glob") !== undefined || context.getOpt("--ignore-glob") !== undefined;
+  const needsResolvedFiles = !shouldWriteManifest || hasCliDiscoveryGlob;
+  let files: string[] = [];
+  if (needsResolvedFiles) {
+    const resolveStart = performance.now();
+    files = await context.resolveFiles();
+    if (commandReport) {
+      commandReport.timings.resolveFilesMs = Math.round(performance.now() - resolveStart);
+    }
   }
   const threads = parseNonNegativeIntegerOption(context.getOpt("--threads"), "--threads", 0);
   const cache = parseCacheModeOption(context.getOpt("--cache"));
@@ -92,7 +101,7 @@ export async function handleIndexCommand(context: IndexCommandContext): Promise<
   const cacheStrict = context.hasFlag("--cache-strict");
   const full = context.hasFlag("--json") || context.hasFlag("--full");
   const cacheVerify = context.hasFlag("--cache-verify");
-  const shouldWriteManifest = !context.includeRootsAbs.length && !context.gitBase && !context.changedSince;
+
   // Always populated (not gated behind --report/--verbose) so a plain `index`
   // run can detect and surface reduced-accuracy analysis (native tree-sitter
   // unavailable or per-file fallback) via both the stderr warning and the

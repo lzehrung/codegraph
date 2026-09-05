@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { NATIVE_WORKER_AUTO_FILE_THRESHOLD } from "../src/indexer/build-workers.js";
+import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bundledCli = path.join(rootDir, "dist", "bin", "cli.js");
@@ -93,4 +95,55 @@ describe("bundled CLI entry", () => {
     const firstLine = fs.readFileSync(bundledCli, "utf8").split(/\r?\n/, 1)[0] ?? "";
     expect(firstLine).toBe("#!/usr/bin/env node");
   });
+  // Dist must exist before worker-pool assertions are trusted: resolveNativeWorkerPath falls
+  // back to dist/worker/nativeExtractWorker.js, and a bare vitest run does not build it.
+  it.runIf(isNativeTreeSitterAvailable() && fs.existsSync(bundledCli))(
+    "starts a Piscina pool from the built bundle and submits native extract work",
+    () => {
+      expect(fs.existsSync(path.join(rootDir, "dist", "worker", "nativeExtractWorker.js"))).toBe(true);
+
+      const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-bundle-workers-"));
+      const reportFile = path.join(fixtureRoot, "report.json");
+      try {
+        fs.writeFileSync(
+          path.join(fixtureRoot, "package.json"),
+          JSON.stringify({ name: "bundle-workers", type: "module" }),
+        );
+        for (let index = 0; index < NATIVE_WORKER_AUTO_FILE_THRESHOLD; index += 1) {
+          fs.writeFileSync(path.join(fixtureRoot, `file-${index}.ts`), `export const value${index} = ${index};\n`);
+        }
+
+        const bundled = run(bundledCli, [
+          "index",
+          "--root",
+          fixtureRoot,
+          "--cache",
+          "off",
+          "--report-file",
+          reportFile,
+        ]);
+        expect(bundled.status, bundled.stderr || bundled.stdout).toBe(0);
+
+        const report = JSON.parse(fs.readFileSync(reportFile, "utf8")) as {
+          index?: {
+            workerPool?: {
+              enabled?: boolean;
+              threads?: number;
+              tasksSubmitted?: number;
+              startupError?: string;
+            };
+            timings?: { parseMs?: number };
+          };
+        };
+        const workerPool = report.index?.workerPool;
+        expect(workerPool?.startupError).toBeUndefined();
+        expect(workerPool?.enabled).toBe(true);
+        expect(workerPool?.threads ?? 0).toBeGreaterThanOrEqual(1);
+        expect(workerPool?.tasksSubmitted ?? 0).toBeGreaterThan(0);
+      } finally {
+        fs.rmSync(fixtureRoot, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
 });

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import type { CodegraphConfig } from "../config.js";
@@ -223,6 +224,7 @@ export async function loadCliProjectContext(base: CliBaseContext): Promise<CliPr
     cliGlobDiscoveryOptions,
     activeCliRootGlobDiscoveryOptions,
     cliGitignoreDiscoveryOptions,
+    hasCliDiscoveryGlobs,
     gitBase,
     gitHead,
     changedSince,
@@ -314,53 +316,130 @@ export async function loadCliProjectContext(base: CliBaseContext): Promise<CliPr
     return rootFilteredFiles.filter((filePath) => matchedFiles.has(filePath));
   };
 
-  const resolveFilesFromRoots = async (): Promise<string[]> => {
-    const { listProjectFiles } = await loadProjectFilesHelpers();
+  // Per-invocation discovery memo only. Never lift this Map to module scope: a long-lived
+  // process (MCP/server/watch) must not reuse a prior invocation's file list after the tree
+  // changes. One CliProjectContext equals one CLI command invocation.
+  const discoveryWalkCache = new Map<string, Promise<string[]>>();
+  let knownSymlinkDirectories: readonly string[] | undefined;
+  let symlinkHintResolved = false;
+
+  const resolveKnownSymlinkDirectories = async (): Promise<readonly string[] | undefined> => {
+    if (symlinkHintResolved) return knownSymlinkDirectories;
+    symlinkHintResolved = true;
+    try {
+      const { loadManifest } = await import("../indexer/build-cache.js");
+      const symlinkHintManifest = await loadManifest(projectRootFs, {
+        ...(config.cache?.location ? { cacheLocation: config.cache.location } : {}),
+      });
+      if (
+        symlinkHintManifest?.symlinkDirectories !== undefined &&
+        symlinkHintManifest.symlinkDirectoriesRootMtimeMs !== undefined
+      ) {
+        const rootMtime = (await fsp.stat(projectRootFs)).mtimeMs;
+        if (rootMtime === symlinkHintManifest.symlinkDirectoriesRootMtimeMs) {
+          knownSymlinkDirectories = symlinkHintManifest.symlinkDirectories;
+        }
+      }
+    } catch {
+      knownSymlinkDirectories = undefined;
+    }
+    return knownSymlinkDirectories;
+  };
+
+  const discoveryWalkCacheKey = (
+    scanRoot: string,
+    patterns: string[] | undefined,
+    options: ProjectFileDiscoveryOptions,
+  ): string =>
+    JSON.stringify({
+      scanRoot: normalizePath(scanRoot),
+      patterns: patterns ?? null,
+      includeGlobs: options.includeGlobs ?? null,
+      ignoreGlobs: options.ignoreGlobs ?? null,
+      globRoot: options.globRoot ? normalizePath(options.globRoot) : null,
+      useGitignore: options.useGitignore ?? null,
+      gitignoreRoot: options.gitignoreRoot ? normalizePath(options.gitignoreRoot) : null,
+      logLevel: options.logLevel ?? null,
+    });
+
+  const listDiscoveredProjectFiles = async (
+    scanRoot: string,
+    patterns: string[] | undefined,
+    options: ProjectFileDiscoveryOptions,
+  ): Promise<string[]> => {
+    const symlinkDirectories = await resolveKnownSymlinkDirectories();
+    const walkOptions: ProjectFileDiscoveryOptions = {
+      ...options,
+      ...(symlinkDirectories !== undefined ? { knownSymlinkDirectories: symlinkDirectories } : {}),
+    };
+    const key = discoveryWalkCacheKey(scanRoot, patterns, walkOptions);
+    let pending = discoveryWalkCache.get(key);
+    if (!pending) {
+      pending = (async () => {
+        const { listProjectFilesWithGitCandidates } = await loadProjectFilesHelpers();
+        return await listProjectFilesWithGitCandidates(scanRoot, patterns, walkOptions);
+      })();
+      discoveryWalkCache.set(key, pending);
+    }
+    return await pending;
+  };
+
+  const resolveDiscoveryPatterns = async (): Promise<string[] | undefined> => {
     const basePatterns = command === "duplicates" ? await getDuplicateProjectPatterns() : undefined;
     const [{ languageExtensionPatterns }, { DEFAULT_PROJECT_PATTERNS }] = await Promise.all([
       import("../languages.js"),
       loadProjectFilesHelpers(),
     ]);
     const customPatterns = languageExtensionPatterns(config.languages?.extensions);
-    const patterns = customPatterns.length
-      ? [...(basePatterns ?? DEFAULT_PROJECT_PATTERNS), ...customPatterns]
-      : basePatterns;
+    return customPatterns.length ? [...(basePatterns ?? DEFAULT_PROJECT_PATTERNS), ...customPatterns] : basePatterns;
+  };
+
+  const resolveFilesFromRoots = async (): Promise<string[]> => {
+    const patterns = await resolveDiscoveryPatterns();
+    // When no CLI globs were supplied, diagnoseCliDiscoveryGlobs is a no-op, so skip the
+    // historical diagnostic-only walk and list once. When globs are present, walk once
+    // without baking CLI scan globs into the walker, then diagnose and filter from that list.
+    const walkDiscoveryOptions = hasCliDiscoveryGlobs ? diagnosticDiscoveryOptions : discoveryOptions;
+    const walkOptions: ProjectFileDiscoveryOptions = {
+      ...walkDiscoveryOptions,
+      gitignoreRoot: projectRootFs,
+    };
     if (!includeRootsAbs.length) {
-      const diagnosticFiles = await listProjectFiles(projectRootFs, patterns, {
-        ...diagnosticDiscoveryOptions,
-        gitignoreRoot: projectRootFs,
-      });
-      recordCliGlobDiagnostics(diagnosticFiles, projectRootFs);
-      flushCliGlobDiagnostics();
-      if (!hasDiscoveryOptions(activeCliRootGlobDiscoveryOptions)) {
-        return await listProjectFiles(projectRootFs, patterns, {
-          ...discoveryOptions,
-          gitignoreRoot: projectRootFs,
-        });
+      const files = await listDiscoveredProjectFiles(projectRootFs, patterns, walkOptions);
+      if (hasCliDiscoveryGlobs) {
+        recordCliGlobDiagnostics(files, projectRootFs);
+        flushCliGlobDiagnostics();
+        return applyCliDiscoveryFilters(files);
       }
-      return applyCliDiscoveryFilters(diagnosticFiles);
+      return files;
     }
-    const normalizedRoots = includeRootsAbs;
     const all: string[][] = await Promise.all(
-      normalizedRoots.map(async (r) => {
-        const files = await listProjectFiles(r, patterns, {
-          ...diagnosticDiscoveryOptions,
-          gitignoreRoot: projectRootFs,
-        });
-        recordCliGlobDiagnostics(files, r);
+      includeRootsAbs.map(async (scanRoot) => {
+        const files = await listDiscoveredProjectFiles(scanRoot, patterns, walkOptions);
+        if (hasCliDiscoveryGlobs) {
+          recordCliGlobDiagnostics(files, scanRoot);
+        }
         return files;
       }),
     );
-    flushCliGlobDiagnostics();
+    if (hasCliDiscoveryGlobs) {
+      flushCliGlobDiagnostics();
+    }
     return applyCliDiscoveryFilters(Array.from(new Set(all.flat())));
   };
 
   const listProjectFilesForScan = async (scanRoot: string): Promise<string[]> => {
-    const { listProjectFiles } = await loadProjectFilesHelpers();
     if (scanRoot === projectRootFs) {
-      return await listProjectFiles(scanRoot, undefined, discoveryOptions);
+      // Whole-project scans historically used DEFAULT_PROJECT_PATTERNS (`undefined`) and
+      // walker-baked `discoveryOptions`, including CLI globs. `resolveFilesFromRoots`
+      // may use a different pattern set (duplicates) or a diagnostic walk plus post-filter,
+      // so this branch keeps its own cache entry when those differ.
+      return await listDiscoveredProjectFiles(scanRoot, undefined, {
+        ...discoveryOptions,
+        gitignoreRoot: projectRootFs,
+      });
     }
-    const files = await listProjectFiles(scanRoot, undefined, {
+    const files = await listDiscoveredProjectFiles(scanRoot, undefined, {
       ...includeRootDiscoveryOptions,
       gitignoreRoot: projectRootFs,
     });
@@ -391,9 +470,8 @@ export async function loadCliProjectContext(base: CliBaseContext): Promise<CliPr
     const scanRoots = includeRootsAbs.length ? includeRootsAbs : [projectRootFs];
     await Promise.all(
       scanRoots.map(async (scanRoot) => {
-        const { listProjectFiles } = await loadProjectFilesHelpers();
         const currentFiles = fs.existsSync(scanRoot)
-          ? await listProjectFiles(scanRoot, patterns, {
+          ? await listDiscoveredProjectFiles(scanRoot, patterns, {
               ...diagnosticDiscoveryOptions,
               gitignoreRoot: projectRootFs,
             })

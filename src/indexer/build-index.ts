@@ -508,6 +508,7 @@ type BuildIndexHelperOptions = {
   transientFiles?: string[];
   symlinkDirectories?: string[];
   confineReads?: boolean;
+  configHash?: { hash: string; error?: string };
 };
 
 type IndexBuildRunState = {
@@ -533,7 +534,9 @@ function createIndexBuildRunState(
     normalizedProjectRoot: normalizePath(path.resolve(projectRoot)),
     report,
     timings: report?.timings,
-    totalStart: performance.now(),
+    // Delegated rebuilds mint a fresh run state after the preamble; reuse the caller's
+    // origin so totalMs covers the whole wait, matching progress completion.
+    totalStart: opts?.progressStartedAt ?? performance.now(),
     cacheMode,
     cacheEnabled: cacheMode !== "off",
     graphOptions,
@@ -657,6 +660,15 @@ const TRANSIENT_BUILD_TIMING_STEP_NAMES: Record<string, true> = {
   "persist-cache": true,
   "workspace-manifests": true,
   "index-manifest": true,
+  "file-identity": true,
+  "clear-resolution-caches": true,
+  "load-manifest": true,
+  "diff-build-options": true,
+  "git-head": true,
+  "config-hash": true,
+  "manifest-transform": true,
+  "manifest-write": true,
+  "cache-prune": true,
   finalize: true,
   "snapshot-write": true,
 };
@@ -692,6 +704,17 @@ function recordBuildTimingStep(timings: BuildTimingReport | undefined, step: { n
     return;
   }
   if (step.name === "filesystem-scan") timings.filesystemScanMs = step.ms;
+}
+
+async function recordTimedBuildStep<T>(
+  timings: BuildTimingReport | undefined,
+  name: string,
+  fn: () => Promise<T> | T,
+): Promise<T> {
+  const startedAt = performance.now();
+  const result = await fn();
+  recordBuildTimingStep(timings, { name, ms: Math.round(performance.now() - startedAt) });
+  return result;
 }
 
 function buildConcurrency(opts: BuildOptions | undefined): number {
@@ -730,7 +753,7 @@ type FullDiscoveryBuildOptions = BuildOptions & Pick<IncrementalBuildOptions, "a
 async function buildProjectIndexFromExport(
   projectRoot: string,
   opts?: FullDiscoveryBuildOptions,
-  helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest" | "reportDiscoveryProgress">,
+  helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest" | "reportDiscoveryProgress" | "configHash">,
 ): Promise<ProjectIndex> {
   return buildProjectIndexWithManifestOptions(projectRoot, opts, helperOpts);
 }
@@ -1171,6 +1194,7 @@ async function buildIndexFromFileListShared(
             files: manifestEntries,
             timings,
             manifestReport: report?.manifest,
+            ...(helperOpts?.configHash ? { configHash: helperOpts.configHash } : {}),
             ...(helperOpts?.transientFiles !== undefined ? { transientFiles: helperOpts.transientFiles } : {}),
             ...(helperOpts?.symlinkDirectories !== undefined
               ? { symlinkDirectories: helperOpts.symlinkDirectories }
@@ -1245,10 +1269,9 @@ async function buildIndexFromFileListShared(
 async function buildProjectIndexWithManifestOptions(
   projectRoot: string,
   opts?: FullDiscoveryBuildOptions,
-  helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest" | "reportDiscoveryProgress">,
+  helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest" | "reportDiscoveryProgress" | "configHash">,
 ): Promise<ProjectIndex> {
   const timings = opts?.report ? (opts.report.timings ??= {}) : undefined;
-  resetTransientBuildTimings(timings);
   await initializeFileIdentityCaseSensitivity(projectRoot);
   try {
     const useDiskCache = (opts?.cache ?? "off") === "disk";
@@ -1332,6 +1355,7 @@ async function buildProjectIndexWithManifestOptions(
       warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}. Check codegraph.config.json globs and CLI --include-glob/--ignore-glob filters. Diagnostic: codegraph doctor`,
       ...(helperOpts?.ignoreExistingManifest ? { ignoreExistingManifest: true } : {}),
       ...(helperOpts?.reportDiscoveryProgress ? { reportDiscoveryProgress: true } : {}),
+      ...(helperOpts?.configHash ? { configHash: helperOpts.configHash } : {}),
       projectFiles,
       transientFiles,
       ...(discoveredSymlinkDirectories !== undefined ? { symlinkDirectories: discoveredSymlinkDirectories } : {}),
@@ -1356,9 +1380,12 @@ async function buildProjectIndexWithManifestOptions(
  * discovery, so a caller rendering progress reports the wait the user observed.
  */
 export async function buildProjectIndex(projectRoot: string, opts?: BuildOptions): Promise<ProjectIndex> {
+  const progressStartedAt = opts?.progressStartedAt ?? performance.now();
+  const timings = opts?.report ? (opts.report.timings ??= {}) : undefined;
+  resetTransientBuildTimings(timings);
   return buildProjectIndexWithManifestOptions(projectRoot, {
     ...opts,
-    progressStartedAt: opts?.progressStartedAt ?? performance.now(),
+    progressStartedAt,
   });
 }
 
@@ -1377,6 +1404,10 @@ export async function buildProjectIndexFromFiles(
   // Discovery, manifest loading, and cache checks all precede file processing, so stamp the
   // operation origin here and let the completion event report the caller's whole wait.
   const opts: BuildOptions = { ...rawOpts, progressStartedAt: rawOpts?.progressStartedAt ?? performance.now() };
+  // A caller can reuse one BuildReport across repeated calls here, the same way an MCP
+  // session reuses `buildOptions.report`, so clear the prior call's transient steps.
+  const timings = opts.report ? (opts.report.timings ??= {}) : undefined;
+  resetTransientBuildTimings(timings);
   try {
     const useDiskCache = (opts?.cache ?? "off") === "disk";
     const normalizedInputFiles = await normalizeIndexedFileInputsWithinRoot(projectRoot, inputFiles, "Index file");
@@ -1435,15 +1466,19 @@ export async function buildProjectIndexIncremental(
     ...rawOpts,
     progressStartedAt: rawOpts?.progressStartedAt ?? performance.now(),
   };
-  await initializeFileIdentityCaseSensitivity(projectRoot);
-  clearResolutionCaches();
+  const discoveryTimings = opts.report ? (opts.report.timings ??= {}) : undefined;
+  resetTransientBuildTimings(discoveryTimings);
+  await recordTimedBuildStep(discoveryTimings, "file-identity", () =>
+    initializeFileIdentityCaseSensitivity(projectRoot),
+  );
+  await recordTimedBuildStep(discoveryTimings, "clear-resolution-caches", () => {
+    clearResolutionCaches();
+  });
   const graphOptions = normalizeGraphOptions(opts?.graph);
   const strictIncremental = opts?.incrementalStrict ?? false;
   if (strictIncremental && graphOptions.fast) graphOptions.fast = false;
   const { normalizedProjectRoot, report, timings, totalStart, cacheMode, cacheEnabled, onFallbackImportExtraction } =
     createIndexBuildRunState(projectRoot, opts, graphOptions);
-  const discoveryTimings = opts?.report ? (opts.report.timings ??= {}) : undefined;
-  resetTransientBuildTimings(discoveryTimings);
   let checkProgressActive = false;
   const startCheckProgress = (): void => {
     if (checkProgressActive) return;
@@ -1487,12 +1522,16 @@ export async function buildProjectIndexIncremental(
     }
     startCheckProgress();
     const manifestStart = performance.now();
-    const manifest = await loadManifest(projectRoot, opts, report);
+    const manifest = await recordTimedBuildStep(timings, "load-manifest", () =>
+      loadManifest(projectRoot, opts, report),
+    );
     if (timings) timings.manifestMs = Math.round(performance.now() - manifestStart);
     const manifestUsed = !!manifest;
     const manifestReport = initManifestReport(report, manifestUsed, false);
     if (manifestReport && !manifestUsed) manifestReport.reason = "missing";
-    const optionDiffs = diffBuildOptions(manifest?.buildOptions, opts);
+    const optionDiffs = await recordTimedBuildStep(timings, "diff-build-options", () =>
+      diffBuildOptions(manifest?.buildOptions, opts),
+    );
     const warningOptionDiffs = optionDiffs.filter((diff) => diff !== "cache");
     if (manifest && warningOptionDiffs.length) {
       logWithLevel(
@@ -1504,7 +1543,9 @@ export async function buildProjectIndexIncremental(
     if (manifestReport && optionDiffs.length) {
       manifestReport.optionsMismatch = optionDiffs;
     }
-    const currentConfigHashResult = await computeConfigHash(projectRoot, opts?.logLevel);
+    const currentConfigHashResult = await recordTimedBuildStep(timings, "config-hash", () =>
+      computeConfigHash(projectRoot, opts?.logLevel),
+    );
     const currentConfigHash = recordConfigHashResult(manifestReport, currentConfigHashResult, opts?.logLevel);
     const configChanged =
       !!currentConfigHashResult.error || !manifest?.configHash || currentConfigHash !== manifest.configHash;
@@ -1548,6 +1589,7 @@ export async function buildProjectIndexIncremental(
       return await buildProjectIndexFromExport(projectRoot, opts, {
         ignoreExistingManifest: true,
         reportDiscoveryProgress: true,
+        configHash: currentConfigHashResult,
       });
     }
     const gitAvailable = await isGitRepo(projectRoot);
@@ -1598,6 +1640,7 @@ export async function buildProjectIndexIncremental(
         const rebuiltIndex = await buildProjectIndexFromExport(projectRoot, opts, {
           ignoreExistingManifest: true,
           reportDiscoveryProgress: true,
+          configHash: currentConfigHashResult,
         });
         if (manifestReport) {
           manifestReport.reason = "staleGitCommit";
@@ -1622,6 +1665,7 @@ export async function buildProjectIndexIncremental(
         return await buildProjectIndexFromExport(projectRoot, opts, {
           ignoreExistingManifest: true,
           reportDiscoveryProgress: true,
+          configHash: currentConfigHashResult,
         });
       }
     }
@@ -1695,6 +1739,7 @@ export async function buildProjectIndexIncremental(
         return await buildProjectIndexFromExport(projectRoot, opts, {
           ignoreExistingManifest: true,
           reportDiscoveryProgress: true,
+          configHash: currentConfigHashResult,
         });
       }
     } else if (!opts?.filesAreProjectScope) {
@@ -1757,17 +1802,28 @@ export async function buildProjectIndexIncremental(
     const dependentFilesOfDeletedTracked = collectDeletedTrackedFileDependents(trackedEntries, deletedTrackedFiles);
     if (allFiles.size === 0) {
       completeCheckProgress(0);
-      await writeIndexManifestSnapshot({
-        projectRoot,
+      await timeIndexBuildPhase({
         opts,
-        graphOptions,
-        ...(resolverEnvironmentFingerprint ? { resolverEnvironmentFingerprint } : {}),
-        files: {},
         timings,
-        manifestReport,
-        allowEmpty: true,
-        transientFiles,
-        ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
+        buildStartedAt: undefined,
+        stepName: "index-manifest",
+        activity: "Writing index manifest",
+        current: 0,
+        total: 0,
+        fn: () =>
+          writeIndexManifestSnapshot({
+            projectRoot,
+            opts,
+            graphOptions,
+            ...(resolverEnvironmentFingerprint ? { resolverEnvironmentFingerprint } : {}),
+            files: {},
+            timings,
+            manifestReport,
+            allowEmpty: true,
+            transientFiles,
+            configHash: currentConfigHashResult,
+            ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
+          }),
       });
       return {
         graph: { nodes: new Set(), edges: [] },
@@ -2155,16 +2211,28 @@ export async function buildProjectIndexIncremental(
           ...(signature.gitSig ? { gitSig: signature.gitSig } : {}),
         });
       }
-      await writeIndexManifestSnapshot({
-        projectRoot,
+      await timeIndexBuildPhase({
         opts,
-        graphOptions,
-        ...(resolverEnvironmentFingerprint ? { resolverEnvironmentFingerprint } : {}),
-        files: manifestEntries,
         timings,
-        manifestReport,
-        transientFiles,
-        ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
+        buildStartedAt: updateStartedAt,
+        stepName: "index-manifest",
+        activity: "Writing index manifest",
+        current: allFiles.size,
+        total: allFiles.size,
+        mode: "update",
+        fn: () =>
+          writeIndexManifestSnapshot({
+            projectRoot,
+            opts,
+            graphOptions,
+            ...(resolverEnvironmentFingerprint ? { resolverEnvironmentFingerprint } : {}),
+            files: manifestEntries,
+            timings,
+            manifestReport,
+            transientFiles,
+            configHash: currentConfigHashResult,
+            ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
+          }),
       });
       const index = await finalizeProjectIndex({
         projectRoot,
