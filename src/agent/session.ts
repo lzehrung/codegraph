@@ -10,7 +10,7 @@ import { buildSymbolGraph, type SymbolGraph } from "../graphs/symbol-graph.js";
 import type { Graph } from "../types.js";
 import {
   createProjectDiscoveryContext,
-  listProjectFiles,
+  listProjectFilesWithGitCandidates,
   type ProjectDiscoveryContext,
   type ProjectFileDiscoveryOptions,
 } from "../util/projectFiles.js";
@@ -220,12 +220,11 @@ async function resolveAgentSessionFilePlan(
   const patterns = customPatterns.length ? [...DEFAULT_PROJECT_PATTERNS, ...customPatterns] : undefined;
   emitAgentFilePlanProgress(options);
   const onDiscoveryProgress = agentDiscoveryProgressReporter(options);
-  const discovery = {
+  const files = await listProjectFilesWithGitCandidates(options.root, patterns, {
     ...discoveryOptions,
     discoveryContext,
     ...(onDiscoveryProgress ? { onDiscoveryProgress } : {}),
-  };
-  const files = await listProjectFiles(options.root, patterns, discovery);
+  });
   return {
     files,
     startedAt,
@@ -400,6 +399,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   const loadBase = async (): Promise<AgentProjectBaseSnapshot> => {
     if (cachedBase) return cachedBase;
     const loadPromise = (async () => {
+      // A cached file plan can outlive one operation; its discovery facts must not.
       const discoveryContext = createProjectDiscoveryContext(options.root);
       const { files, discoveryOptions, graphOptions, languageExtensions, cacheLocation, incrementalPlan, startedAt } =
         await loadFilePlan(discoveryContext);
