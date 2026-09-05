@@ -6,7 +6,11 @@ import * as gitModule from "../src/util/git.js";
 import { isGitRepo } from "../src/util/git.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import * as projectFilesModule from "../src/util/projectFiles.js";
-import { createProjectDiscoveryContext, listProjectFilesWithGitCandidates } from "../src/util/projectFiles.js";
+import {
+  createProjectDiscoveryContext,
+  listProjectFilesWithGitCandidates,
+  readProjectDiscoveryFileText,
+} from "../src/util/projectFiles.js";
 import { computeConfigHash } from "../src/indexer/build-cache.js";
 import { buildProjectIndex, buildProjectIndexIncremental } from "../src/indexer/build-index.js";
 import type { BuildReport } from "../src/indexer/types.js";
@@ -52,6 +56,14 @@ describe("ProjectDiscoveryContext factory", () => {
     expect(trackedSpy).not.toHaveBeenCalled();
     expect(await isGitRepo(root, context.git)).toBe(true);
   });
+});
+
+it("names the file when a discovery read rejects a non-Error value", async () => {
+  const root = await temps.create("cg-discovery-read-error-");
+  const file = path.join(root, "package.json");
+  vi.spyOn(fsp, "readFile").mockRejectedValueOnce("unreadable");
+
+  await expect(readProjectDiscoveryFileText(createProjectDiscoveryContext(root), file)).rejects.toThrow(file);
 });
 
 describe("computeConfigHash shared discovery", () => {

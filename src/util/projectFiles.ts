@@ -551,7 +551,7 @@ async function readDirectoryWithFileTypes(
   state: DiscoveryContext | undefined,
 ): Promise<fs.Dirent[]> {
   if (!state) return fsp.readdir(directory, { withFileTypes: true });
-  const key = normalizePath(directory);
+  const key = fileIdentityKey(directory);
   const cached = state.readdirCache.get(key);
   if (cached) return cached;
   const pending = fsp.readdir(directory, { withFileTypes: true });
@@ -588,7 +588,7 @@ export async function readProjectDiscoveryFileText(
   const result = await readDiscoveryFileResult(discoveryContext, filePath);
   if (result.ok) return result.text;
   if (result.error instanceof Error) throw result.error;
-  throw new Error(stringifyUnknown(result.error));
+  throw new Error(`Failed to read ${filePath}: ${stringifyUnknown(result.error)}`);
 }
 
 async function sharedGitignoreIndex(
