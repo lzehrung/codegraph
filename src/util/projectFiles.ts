@@ -6,7 +6,7 @@ import picomatch from "picomatch";
 import { performance } from "node:perf_hooks";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { stringifyUnknown } from "./ast.js";
-import { fileIdentityKey, isFilePathWithinRoot, normalizePath, runWithWindowsRealpathMemo } from "./paths.js";
+import { fileIdentityKey, isFilePathWithinRoot, normalizePath } from "./paths.js";
 import { isRelativePathInside, matchesDiscoveryGlob } from "./discoveryPath.js";
 
 export { isRelativePathInside, matchesDiscoveryGlob } from "./discoveryPath.js";
@@ -645,11 +645,15 @@ export type GitIgnoreSourceRoot = { path: string; repositoryRoot: string };
 export function owningGitIgnoreSourceRoot(
   file: string,
   roots: readonly GitIgnoreSourceRoot[],
+  realpathMemo?: Map<string, string>,
 ): GitIgnoreSourceRoot | undefined {
   const normalized = normalizePath(file);
   let owning: GitIgnoreSourceRoot | undefined;
   for (const root of roots) {
-    if (!isFilePathWithinRoot(root.path, normalized) && !isFilePathWithinRoot(root.repositoryRoot, normalized)) {
+    if (
+      !isFilePathWithinRoot(root.path, normalized, realpathMemo) &&
+      !isFilePathWithinRoot(root.repositoryRoot, normalized, realpathMemo)
+    ) {
       continue;
     }
     if (!owning || root.repositoryRoot.length > owning.repositoryRoot.length) {
@@ -661,11 +665,12 @@ export function owningGitIgnoreSourceRoot(
 
 /**
  * Ownership is pure path containment, so every candidate in the same parent directory
- * shares one answer. The map lives on this closure only: a long-lived process must not
- * reuse a stale owner after the tree changes.
+ * shares one answer. The lookup and its realpath memo live only for this discovery pass,
+ * so a long-lived process cannot serve a stale owner after the tree changes.
  */
 export function createGitIgnoreSourceOwnershipLookup(
   roots: readonly GitIgnoreSourceRoot[],
+  realpathMemo: Map<string, string>,
 ): (file: string) => GitIgnoreSourceRoot | undefined {
   const ownershipByDirectory = new Map<string, GitIgnoreSourceRoot | undefined>();
   return (file: string): GitIgnoreSourceRoot | undefined => {
@@ -674,7 +679,7 @@ export function createGitIgnoreSourceOwnershipLookup(
     if (ownershipByDirectory.has(key)) {
       return ownershipByDirectory.get(key);
     }
-    const owning = owningGitIgnoreSourceRoot(directory, roots);
+    const owning = owningGitIgnoreSourceRoot(directory, roots, realpathMemo);
     ownershipByDirectory.set(key, owning);
     return owning;
   };
@@ -724,31 +729,31 @@ async function findGitIgnoreSources(
   for (const { path: sourceRoot, repositoryRoot } of roots) {
     addDirectory(sourceRoot, repositoryRoot);
   }
-  const owningOf = createGitIgnoreSourceOwnershipLookup(roots);
-  runWithWindowsRealpathMemo(() => {
-    for (const file of candidateFiles) {
-      const owning = owningOf(file);
-      if (!owning) continue;
-      let dir = normalizePath(path.dirname(file));
-      const stopKey = fileIdentityKey(owning.repositoryRoot);
-      for (;;) {
-        const dirKey = fileIdentityKey(dir);
-        const walkKey = `${dirKey}\0${stopKey}`;
-        if (walkedDirectoryKeys.has(walkKey)) break;
-        addDirectory(dir, owning.repositoryRoot);
-        walkedDirectoryKeys.add(walkKey);
-        if (dirKey === stopKey) break;
-        const parent = normalizePath(path.dirname(dir));
-        if (
-          parent === dir ||
-          (!isFilePathWithinRoot(owning.path, parent) && !isFilePathWithinRoot(owning.repositoryRoot, parent))
-        ) {
-          break;
-        }
-        dir = parent;
+  const realpathMemo = new Map<string, string>();
+  const owningOf = createGitIgnoreSourceOwnershipLookup(roots, realpathMemo);
+  for (const file of candidateFiles) {
+    const owning = owningOf(file);
+    if (!owning) continue;
+    let dir = normalizePath(path.dirname(file));
+    const stopKey = fileIdentityKey(owning.repositoryRoot);
+    while (true) {
+      const dirKey = fileIdentityKey(dir);
+      const walkKey = `${dirKey}\0${stopKey}`;
+      if (walkedDirectoryKeys.has(walkKey)) break;
+      addDirectory(dir, owning.repositoryRoot);
+      walkedDirectoryKeys.add(walkKey);
+      if (dirKey === stopKey) break;
+      const parent = normalizePath(path.dirname(dir));
+      if (
+        parent === dir ||
+        (!isFilePathWithinRoot(owning.path, parent, realpathMemo) &&
+          !isFilePathWithinRoot(owning.repositoryRoot, parent, realpathMemo))
+      ) {
+        break;
       }
+      dir = parent;
     }
-  });
+  }
   const uniqueRepositoryRoots = Array.from(new Set(roots.map((root) => root.repositoryRoot)));
   const [gitignoreHits, excludeLists] = await Promise.all([
     mapLimitSemaphore(

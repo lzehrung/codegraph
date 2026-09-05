@@ -204,11 +204,15 @@ function isRelativeToRoot(normalizedRoot: string, normalizedFile: string): boole
   return !!relativePath.length && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
 }
 
-export function isFilePathWithinRoot(projectRoot: string, filePath: string): boolean {
+export function isFilePathWithinRoot(
+  projectRoot: string,
+  filePath: string,
+  realpathMemo?: Map<string, string>,
+): boolean {
   const normalizedRoot = normalizePath(resolveComparableProjectRoot(projectRoot));
   const normalizedFile = normalizePath(resolveFilePathFromRoot(normalizedRoot, filePath));
   if (isRelativeToRoot(normalizedRoot, normalizedFile)) return true;
-  return windowsAliasRelativePath(normalizedRoot, normalizedFile) !== null;
+  return windowsAliasRelativePath(normalizedRoot, normalizedFile, realpathMemo) !== null;
 }
 
 export function assertFilePathWithinRoot(projectRoot: string, filePath: string, label: string = "File"): string {
@@ -240,7 +244,11 @@ export function resolveFilePathWithinRoot(
   }
 }
 
-export function toProjectRelativePath(projectRoot: string, filePath: string): string | null {
+export function toProjectRelativePath(
+  projectRoot: string,
+  filePath: string,
+  realpathMemo?: Map<string, string>,
+): string | null {
   const normalizedRoot = normalizePath(resolveComparableProjectRoot(projectRoot));
   const normalizedFile = normalizePath(resolveFilePathFromRoot(normalizedRoot, filePath));
   if (isRelativeToRoot(normalizedRoot, normalizedFile)) {
@@ -254,62 +262,44 @@ export function toProjectRelativePath(projectRoot: string, filePath: string): st
     }
     return normalizePath(path.relative(normalizedRoot, normalizedFile));
   }
-  return windowsAliasRelativePath(normalizedRoot, normalizedFile);
+  return windowsAliasRelativePath(normalizedRoot, normalizedFile, realpathMemo);
 }
 
-/**
- * Optional realpath memo for one discovery pass. Nested callbacks restore the previous
- * map so concurrent passes cannot share answers. Cleared on return so a long-lived
- * process cannot reuse a stale realpath after the tree changes.
- */
-let windowsRealpathMemo: Map<string, string> | undefined;
-
-export function runWithWindowsRealpathMemo<T>(fn: () => T): T {
-  const previous = windowsRealpathMemo;
-  windowsRealpathMemo = new Map();
-  try {
-    return fn();
-  } finally {
-    windowsRealpathMemo = previous;
-  }
-}
-
-function resolveWindowsRealpath(filePath: string): string {
-  const cache = windowsRealpathMemo;
-  if (!cache) return fs.realpathSync.native(filePath);
+function resolveWindowsRealpath(filePath: string, realpathMemo?: Map<string, string>): string {
+  if (!realpathMemo) return fs.realpathSync.native(filePath);
   const key = fileIdentityKey(filePath);
-  const cached = cache.get(key);
+  const cached = realpathMemo.get(key);
   if (cached !== undefined) return cached;
   const resolved = fs.realpathSync.native(filePath);
-  cache.set(key, resolved);
+  realpathMemo.set(key, resolved);
   return resolved;
 }
 
-function windowsPathsAreComparableEqual(left: string, right: string): boolean {
-  return normalizeWindowsComparablePath(left) === normalizeWindowsComparablePath(right);
-}
-
-function windowsAliasRelativePath(normalizedRoot: string, normalizedFile: string): string | null {
+function windowsAliasRelativePath(
+  normalizedRoot: string,
+  normalizedFile: string,
+  realpathMemo?: Map<string, string>,
+): string | null {
   if (process.platform !== "win32") return null;
   if (!isWindowsQualifiedAbsolutePath(normalizedRoot) || !isWindowsQualifiedAbsolutePath(normalizedFile)) {
     return null;
   }
   try {
-    const realRoot = resolveWindowsRealpath(normalizedRoot);
-    const realFile = resolveWindowsRealpath(normalizedFile);
-    // realpathSync.native resolves every path component. When both realpaths match the
-    // already-normalized inputs, neither path contains a reparse point, so the lexical
-    // non-membership that brought us here is authoritative and the ancestor stat walk
-    // cannot discover a hidden containment.
-    const realRootHasNoReparsePoint = windowsPathsAreComparableEqual(normalizePath(realRoot), normalizedRoot);
-    const realFileHasNoReparsePoint = windowsPathsAreComparableEqual(normalizePath(realFile), normalizedFile);
-    if (realRootHasNoReparsePoint && realFileHasNoReparsePoint) {
-      return null;
-    }
-
+    const realRoot = resolveWindowsRealpath(normalizedRoot, realpathMemo);
+    const realFile = resolveWindowsRealpath(normalizedFile, realpathMemo);
     const directRelativePath = path.win32.relative(realRoot, realFile);
     if (!directRelativePath.startsWith("..") && !path.win32.isAbsolute(directRelativePath)) {
       return normalizePath(directRelativePath);
+    }
+
+    // realpathSync.native resolves every path component. When both realpaths have the
+    // same filesystem identity as the inputs, neither path contains a reparse point.
+    // The lexical non-membership that reached this code is then authoritative, so the
+    // ancestor stat walk cannot discover a hidden containment.
+    const rootHasNoReparsePoint = fileIdentityKey(realRoot) === fileIdentityKey(normalizedRoot);
+    const fileHasNoReparsePoint = fileIdentityKey(realFile) === fileIdentityKey(normalizedFile);
+    if (rootHasNoReparsePoint && fileHasNoReparsePoint) {
+      return null;
     }
 
     const rootStat = fs.statSync(realRoot, { bigint: true });

@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isFilePathWithinRoot, toProjectRelativePath } from "../src/util.js";
+import { resetFileIdentityCaseSensitivityForTests } from "../src/util/paths.js";
 import { createTempRootRegistry, tryCreateDirectorySymlink } from "./helpers/filesystem.js";
 
 const roots = createTempRootRegistry();
@@ -40,6 +41,30 @@ describe("Windows alias containment", () => {
     expect(isFilePathWithinRoot(root, file)).toBe(false);
     expect(toProjectRelativePath(root, file)).toBeNull();
     expect(statSpy).not.toHaveBeenCalled();
+  });
+
+  it("skips ancestor stats when realpath only normalizes directory casing for an outside file", () => {
+    const restorePlatform = useWindowsPlatform();
+    resetFileIdentityCaseSensitivityForTests(true);
+    const nativeSpy = vi.spyOn(fs.realpathSync, "native").mockImplementation((input) => {
+      const filePath = typeof input === "string" ? input : String(input);
+      const normalized = filePath.replace(/\\/g, "/");
+      if (normalized === "C:/Repo") return "C:\\repo";
+      if (normalized === "C:/Other/outside.ts") return "C:\\other\\outside.ts";
+      return filePath.replace(/\//g, "\\");
+    });
+    const statSpy = vi.spyOn(fs, "statSync");
+
+    try {
+      expect(isFilePathWithinRoot("C:/Repo", "C:/Other/outside.ts")).toBe(false);
+      expect(toProjectRelativePath("C:/Repo", "C:/Other/outside.ts")).toBeNull();
+      expect(statSpy).not.toHaveBeenCalled();
+    } finally {
+      statSpy.mockRestore();
+      nativeSpy.mockRestore();
+      resetFileIdentityCaseSensitivityForTests();
+      restorePlatform();
+    }
   });
 
   it("treats a nested submodule path as inside both the superproject and the submodule", () => {
@@ -88,6 +113,24 @@ describe("Windows alias containment", () => {
     try {
       expect(isFilePathWithinRoot("C:/Repo", "C:/Alias/src/main.ts")).toBe(true);
       expect(toProjectRelativePath("C:/Repo", "C:/Alias/src/main.ts")).toBe("src/main.ts");
+    } finally {
+      nativeSpy.mockRestore();
+      restorePlatform();
+    }
+  });
+
+  it("treats a physical file as inside when the root itself is a realpath alias", () => {
+    const restorePlatform = useWindowsPlatform();
+    const nativeSpy = vi.spyOn(fs.realpathSync, "native").mockImplementation((input) => {
+      const filePath = typeof input === "string" ? input : String(input);
+      const normalized = filePath.replace(/\\/g, "/");
+      if (normalized === "C:/Alias") return "C:\\Repo";
+      return filePath.replace(/\//g, "\\");
+    });
+
+    try {
+      expect(isFilePathWithinRoot("C:/Alias", "C:/Repo/src/main.ts")).toBe(true);
+      expect(toProjectRelativePath("C:/Alias", "C:/Repo/src/main.ts")).toBe("src/main.ts");
     } finally {
       nativeSpy.mockRestore();
       restorePlatform();
