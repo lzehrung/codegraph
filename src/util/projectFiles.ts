@@ -14,18 +14,24 @@ import {
   PROJECT_FILE_DEFINITIONS,
   type ProjectFileDefinition,
   type ProjectFileInfo,
+  type ProjectFileDiscoveryOptions,
+  type SymlinkProbeMode,
 } from "./projectFiles/definitions.js";
 import { trimToNull } from "./projectFiles/parsers.js";
 import { mapLimitSemaphore } from "./concurrency.js";
+import { CODEGRAPH_CONFIG_FILE } from "../config.js";
 import {
+  createGitDiscoveryCache,
   getGitRepositoryRoot,
   isGitProjectRootIgnored,
   isGitRepo,
   isGitTimeoutError,
   listGitExcludeFiles,
   listGitStageSpecialPaths,
+  listGitSubmoduleDirectories,
   listTrackedFiles,
   listUntrackedFiles,
+  type GitDiscoveryCache,
 } from "./git.js";
 
 export type {
@@ -34,6 +40,8 @@ export type {
   ProjectFileKind,
   ProjectFileRole,
   ProjectFileType,
+  ProjectFileDiscoveryOptions,
+  SymlinkProbeMode,
 } from "./projectFiles/definitions.js";
 
 export const DEFAULT_PROJECT_FILE_IGNORES = [
@@ -127,8 +135,6 @@ export const DEFAULT_PROJECT_PATTERNS = [
 
 const REALPATH_FILTER_CONCURRENCY = 64;
 
-export type SymlinkProbeMode = "known" | "git-candidates" | "filesystem";
-
 /**
  * Working-tree candidate listing shared by `listProjectFiles` and `discoverProjectFiles`.
  *
@@ -146,23 +152,16 @@ export type GitCandidateSet = {
   gitignoreAliases: GitIgnoreSourceRoot[];
 };
 
-export type ProjectFileDiscoveryOptions = {
-  includeGlobs?: string[];
-  ignoreGlobs?: string[];
-  globRoot?: string;
-  useGitignore?: boolean;
-  gitignoreRoot?: string;
-  logLevel?: LogLevel;
-  /**
-   * Previously discovered symlinked directories under the project root. When provided
-   * (including an empty array), discovery re-verifies each entry directly and skips the
-   * probe on warm runs. Omit it to probe once and report the result through
-   * `onSymlinkDirectoriesDiscovered`. The callback mode distinguishes persisted hints,
-   * Git candidate screening, and the non-Git filesystem fallback.
-   */
-  knownSymlinkDirectories?: readonly string[];
-  onSymlinkDirectoriesDiscovered?: (directories: readonly string[], mode: SymlinkProbeMode) => void;
-};
+/**
+ * Per-operation discovery cache. {@link createProjectDiscoveryContext} allocates empty
+ * maps only; the first caller to need a fact fills it. Distinct contexts never share
+ * filesystem or Git work, so successive operations stay fresh without invalidation.
+ */
+export type ProjectDiscoveryContext = DiscoveryContext;
+
+export function createProjectDiscoveryContext(projectRoot: string): ProjectDiscoveryContext {
+  return new DiscoveryContext(projectRoot);
+}
 
 type DiscoveryWorkProgress = {
   activity: string;
@@ -175,7 +174,7 @@ type DiscoveryTimingStep = {
   ms: number;
 };
 
-type DiscoveryWorkCallbacks = {
+export type DiscoveryWorkCallbacks = {
   onDiscoveryProgress?: (progress: DiscoveryWorkProgress) => void;
   onDiscoveryTiming?: (step: DiscoveryTimingStep) => void;
 };
@@ -200,6 +199,7 @@ function emitDiscoveryTiming(
 type InternalProjectFileDiscoveryOptions = ProjectFileDiscoveryOptions &
   DiscoveryWorkCallbacks & {
     onGitCandidatesDiscovered?: (candidates: GitCandidateSet | null) => void;
+    discoveryContext?: ProjectDiscoveryContext;
   };
 
 type ProjectMetadataPublicOptions = Pick<
@@ -211,6 +211,7 @@ type ProjectMetadataDiscoveryOptions = ProjectMetadataPublicOptions &
   DiscoveryWorkCallbacks & {
     knownGitCandidates?: GitCandidateSet | null;
     onGitCandidatesDiscovered?: (candidates: GitCandidateSet | null) => void;
+    discoveryContext?: ProjectDiscoveryContext;
   };
 
 type GitignoreRule = {
@@ -227,6 +228,19 @@ type FastGlobEntry = {
   };
 };
 
+type SharedGlobReaddir = {
+  (
+    directory: string,
+    options: { withFileTypes: true },
+    callback: (error: NodeJS.ErrnoException | null, files: fs.Dirent[]) => void,
+  ): void;
+  (directory: string, callback: (error: NodeJS.ErrnoException | null, files: string[]) => void): void;
+};
+
+type SharedGlobFilesystem = {
+  readdir: SharedGlobReaddir;
+};
+
 type SafeSymlinkDirectoryCrawlOptions = {
   globRoot?: string;
   filterIgnoreGlobs?: string[];
@@ -237,6 +251,7 @@ type SafeSymlinkDirectoryCrawlOptions = {
   resolvedSafeSymlinkDirectories?: readonly string[];
   onSymlinkDirectoriesDiscovered?: (directories: readonly string[], mode: SymlinkProbeMode) => void;
   onPathCheckProgress?: (current: number, total: number) => void;
+  globFilesystem?: SharedGlobFilesystem;
 };
 
 type RootSafePath = {
@@ -262,6 +277,35 @@ function isPresent(value: string | undefined): value is string {
 
 function normalizeGlobPattern(globPattern: string): string {
   return globPattern.trim().replace(/\\/g, "/");
+}
+
+const ROOT_CONFIG_NAME_MATCHERS = [...DEFAULT_PROJECT_MANIFESTS, CODEGRAPH_CONFIG_FILE].map((pattern) =>
+  picomatch(normalizeGlobPattern(pattern), { dot: true }),
+);
+
+function isRootConfigFileName(fileName: string): boolean {
+  return ROOT_CONFIG_NAME_MATCHERS.some((matcher) => matcher(fileName));
+}
+
+async function listRootConfigFiles(root: string, state: DiscoveryContext | undefined): Promise<string[]> {
+  const entries = await readDirectoryWithFileTypes(root, state);
+  const files: string[] = [];
+  for (const entry of entries) {
+    if (!isRootConfigFileName(entry.name)) continue;
+    const file = normalizePath(path.join(root, entry.name));
+    if (!entry.isFile()) {
+      if (!entry.isSymbolicLink()) continue;
+      try {
+        if (!(await fsp.stat(file)).isFile()) continue;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "ENOTDIR") continue;
+        throw error;
+      }
+    }
+    files.push(file);
+  }
+  return files;
 }
 
 const DIRECTORY_METADATA_EXTENSIONS = new Set<string>();
@@ -442,6 +486,167 @@ const EMPTY_GITIGNORE_INDEX: GitignoreIndex = {
   byBaseDir: new Map(),
 };
 
+type FileTextResult = { ok: true; text: string } | { ok: false; error: unknown };
+
+class DiscoveryContext {
+  readonly projectRoot: string;
+  readonly git: GitDiscoveryCache;
+  readonly gitCandidatesByRoot = new Map<string, Promise<GitCandidateSet | null>>();
+  readonly ignoreIndexByKey = new Map<string, Promise<GitignoreIndex>>();
+  readonly fileTextByPath = new Map<string, Promise<FileTextResult>>();
+  readonly readdirCache = new Map<string, Promise<fs.Dirent[]>>();
+  readonly globFilesystem: SharedGlobFilesystem;
+
+  constructor(projectRoot: string) {
+    this.projectRoot = projectRoot;
+    this.git = createGitDiscoveryCache();
+    this.globFilesystem = { readdir: createSharedReaddir(this) };
+  }
+}
+
+function createSharedReaddir(state: DiscoveryContext): SharedGlobReaddir {
+  function readdir(
+    directory: string,
+    options: { withFileTypes: true },
+    callback: (error: NodeJS.ErrnoException | null, files: fs.Dirent[]) => void,
+  ): void;
+  function readdir(directory: string, callback: (error: NodeJS.ErrnoException | null, files: string[]) => void): void;
+  function readdir(
+    directory: string,
+    optionsOrCallback: { withFileTypes: true } | ((error: NodeJS.ErrnoException | null, files: string[]) => void),
+    callback?: (error: NodeJS.ErrnoException | null, files: fs.Dirent[]) => void,
+  ): void {
+    const listing = readDirectoryWithFileTypes(directory, state);
+    if (typeof optionsOrCallback === "function") {
+      listing.then(
+        (entries) =>
+          optionsOrCallback(
+            null,
+            entries.map((entry) => entry.name),
+          ),
+        (error: NodeJS.ErrnoException) => optionsOrCallback(error, []),
+      );
+    } else if (callback) {
+      listing.then(
+        (entries) => callback(null, entries),
+        (error: NodeJS.ErrnoException) => callback(error, []),
+      );
+    }
+  }
+  return readdir;
+}
+
+function globFilesystemOption(state: DiscoveryContext | undefined): { fs?: SharedGlobFilesystem } {
+  if (!state) return {};
+  return { fs: state.globFilesystem };
+}
+
+function globFilesystemField(state: DiscoveryContext | undefined): { globFilesystem?: SharedGlobFilesystem } {
+  if (!state) return {};
+  return { globFilesystem: state.globFilesystem };
+}
+
+async function readDirectoryWithFileTypes(
+  directory: string,
+  state: DiscoveryContext | undefined,
+): Promise<fs.Dirent[]> {
+  if (!state) return fsp.readdir(directory, { withFileTypes: true });
+  const key = normalizePath(directory);
+  const cached = state.readdirCache.get(key);
+  if (cached) return cached;
+  const pending = fsp.readdir(directory, { withFileTypes: true });
+  state.readdirCache.set(key, pending);
+  return pending;
+}
+
+async function readDiscoveryFileResult(state: DiscoveryContext | undefined, filePath: string): Promise<FileTextResult> {
+  if (!state) {
+    try {
+      return { ok: true, text: await fsp.readFile(filePath, "utf8") };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+  const key = fileIdentityKey(filePath);
+  const cached = state.fileTextByPath.get(key);
+  if (cached) return await cached;
+  const pending = (async (): Promise<FileTextResult> => {
+    try {
+      return { ok: true, text: await fsp.readFile(filePath, "utf8") };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  })();
+  state.fileTextByPath.set(key, pending);
+  return await pending;
+}
+
+export async function readProjectDiscoveryFileText(
+  discoveryContext: ProjectDiscoveryContext | undefined,
+  filePath: string,
+): Promise<string> {
+  const result = await readDiscoveryFileResult(discoveryContext, filePath);
+  if (result.ok) return result.text;
+  if (result.error instanceof Error) throw result.error;
+  throw new Error(stringifyUnknown(result.error));
+}
+
+async function sharedGitignoreIndex(
+  state: DiscoveryContext | undefined,
+  cacheKey: string,
+  load: () => Promise<GitignoreIndex>,
+): Promise<GitignoreIndex> {
+  if (!state) return await load();
+  const cached = state.ignoreIndexByKey.get(cacheKey);
+  if (cached) return await cached;
+  const pending = load();
+  state.ignoreIndexByKey.set(cacheKey, pending);
+  return await pending;
+}
+
+function rememberGitCandidates(
+  state: DiscoveryContext | undefined,
+  root: string,
+  candidates: GitCandidateSet | null,
+): void {
+  if (!state) return;
+  const key = fileIdentityKey(root);
+  if (state.gitCandidatesByRoot.has(key)) return;
+  state.gitCandidatesByRoot.set(key, Promise.resolve(candidates));
+}
+
+async function getSharedGitCandidates(
+  context: ProjectDiscoveryContext | undefined,
+  root: string,
+  logLevel: LogLevel | undefined,
+  callbacks?: DiscoveryWorkCallbacks,
+): Promise<GitCandidateSet | null> {
+  const state = context;
+  const gitCache = context?.git;
+  if (!state) return await listGitCandidateFiles(root, logLevel, callbacks, gitCache);
+  const key = fileIdentityKey(root);
+  const cached = state.gitCandidatesByRoot.get(key);
+  if (cached) return await cached;
+  const pending = listGitCandidateFiles(root, logLevel, callbacks, gitCache);
+  state.gitCandidatesByRoot.set(key, pending);
+  return await pending;
+}
+
+function gitExcludeListOptions(
+  gitCache: GitDiscoveryCache | undefined,
+): { discoveryCache: GitDiscoveryCache } | undefined {
+  if (!gitCache) return undefined;
+  return { discoveryCache: gitCache };
+}
+
+function gitUntrackedListOptions(gitCache: GitDiscoveryCache | undefined): {
+  respectGitignore: true;
+  discoveryCache?: GitDiscoveryCache;
+} {
+  if (!gitCache) return { respectGitignore: true };
+  return { respectGitignore: true, discoveryCache: gitCache };
+}
+
 /**
  * A file of ignore patterns plus the directory its patterns resolve against.
  *
@@ -463,6 +668,7 @@ async function buildGitignoreIndex(
   sources: readonly GitignoreSource[],
   repositoryRoots: readonly string[] = [],
   repositoryAliases: readonly GitIgnoreSourceRoot[] = [],
+  state?: DiscoveryContext,
 ): Promise<GitignoreIndex> {
   const sorted = [...sources]
     .map(({ file, baseDir, repositoryRoot, priority }) => ({
@@ -498,12 +704,9 @@ async function buildGitignoreIndex(
     if (isIgnoredByGitignore(path.dirname(file), gitignoreIndex, true)) {
       continue;
     }
-    let raw: string;
-    try {
-      raw = await fsp.readFile(file, "utf8");
-    } catch {
-      continue;
-    }
+    const fileText = await readDiscoveryFileResult(state, file);
+    if (!fileText.ok) continue;
+    const raw = fileText.text;
     const baseKey = fileIdentityKey(baseDir);
     for (const line of raw.split(/\r?\n/)) {
       const rule = parseGitignoreRule(baseDir, line);
@@ -517,17 +720,21 @@ async function buildGitignoreIndex(
   return gitignoreIndex;
 }
 
-async function findGitignoreFiles(projectRoot: string): Promise<string[]> {
+async function findGitignoreFiles(projectRoot: string, state?: DiscoveryContext): Promise<string[]> {
   return await fg(["**/.gitignore"], {
     cwd: projectRoot,
     absolute: true,
     dot: true,
     followSymbolicLinks: false,
     ignore: DEFAULT_PROJECT_FILE_IGNORES,
+    ...globFilesystemOption(state),
   });
 }
 
-async function loadGitignoreIndexForRootAliases(projectRoot: string): Promise<GitignoreIndex> {
+async function loadGitignoreIndexForRootAliases(
+  projectRoot: string,
+  state?: DiscoveryContext,
+): Promise<GitignoreIndex> {
   const roots = [projectRoot];
   const realRoot = await fsp.realpath(projectRoot);
   if (normalizePath(realRoot) !== normalizePath(projectRoot)) {
@@ -535,11 +742,11 @@ async function loadGitignoreIndexForRootAliases(projectRoot: string): Promise<Gi
   }
   const sources: GitignoreSource[] = [];
   for (const root of roots) {
-    for (const file of await findGitignoreFiles(root)) {
+    for (const file of await findGitignoreFiles(root, state)) {
       sources.push({ file, baseDir: path.dirname(file) });
     }
   }
-  return await buildGitignoreIndex(sources);
+  return await buildGitignoreIndex(sources, [], [], state);
 }
 
 /**
@@ -710,6 +917,7 @@ async function gitignoreFileIfPresent(directory: string): Promise<string | undef
 async function findGitIgnoreSources(
   sourceRoots: readonly GitIgnoreSourceRoot[],
   candidateFiles: readonly string[],
+  gitCache?: GitDiscoveryCache,
 ): Promise<GitignoreSource[]> {
   const roots = Array.from(
     new Map(
@@ -764,7 +972,11 @@ async function findGitIgnoreSources(
         return file ? [{ file, baseDir: dir, repositoryRoot, priority: 2 }] : [];
       },
     ),
-    Promise.all(uniqueRepositoryRoots.map((repositoryRoot) => listGitExcludeFiles(repositoryRoot))),
+    Promise.all(
+      uniqueRepositoryRoots.map((repositoryRoot) =>
+        listGitExcludeFiles(repositoryRoot, gitExcludeListOptions(gitCache)),
+      ),
+    ),
   ]);
   return [
     ...gitignoreHits.flat(),
@@ -785,22 +997,24 @@ async function listGitCandidateFiles(
   root: string,
   logLevel: LogLevel | undefined,
   opts?: DiscoveryWorkCallbacks,
+  gitCache?: GitDiscoveryCache,
 ): Promise<GitCandidateSet | null> {
   let gitListStart: number | undefined;
   let gitIgnoreStart: number | undefined;
   try {
     const realRoot = normalizePath(await fsp.realpath(root));
-    const gitRoot = (await isGitRepo(root)) ? root : realRoot;
-    if (!(await isGitRepo(gitRoot))) return null;
-    if (await isGitProjectRootIgnored(realRoot)) return null;
+    const gitRoot = (await isGitRepo(root, gitCache)) ? root : realRoot;
+    if (!(await isGitRepo(gitRoot, gitCache))) return null;
+    if (await isGitProjectRootIgnored(realRoot, gitCache)) return null;
     const gitRepositoryRoot = await getGitRepositoryRoot(gitRoot);
     if (!gitRepositoryRoot) return null;
     emitDiscoveryActivity(opts?.onDiscoveryProgress, "Listing Git files");
     const listStartedAt = performance.now();
     gitListStart = listStartedAt;
+    const untrackedOptions = gitUntrackedListOptions(gitCache);
     const [tracked, untracked, stageSpecial] = await Promise.all([
       listTrackedFiles(gitRoot, { recurseSubmodules: true, ...(logLevel === undefined ? {} : { logLevel }) }),
-      listUntrackedFiles(gitRoot, { respectGitignore: true }),
+      listUntrackedFiles(gitRoot, untrackedOptions),
       listGitStageSpecialPaths(gitRoot, { recurse: true }),
     ]);
     const submoduleDirectories = stageSpecial.gitlinks;
@@ -811,9 +1025,7 @@ async function listGitCandidateFiles(
       })),
     );
     const submoduleUntracked = await Promise.all(
-      submoduleRoots.map(
-        async ({ physicalPath }) => await listUntrackedFiles(physicalPath, { respectGitignore: true }),
-      ),
+      submoduleRoots.map(async ({ physicalPath }) => await listUntrackedFiles(physicalPath, untrackedOptions)),
     );
     const rawFiles = Array.from(new Set([...tracked, ...untracked, ...submoduleUntracked.flat()])).sort();
     const needsLogicalRemap = normalizePath(gitRoot) !== normalizePath(root);
@@ -851,7 +1063,7 @@ async function listGitCandidateFiles(
     emitDiscoveryActivity(opts?.onDiscoveryProgress, "Listing Git ignore files");
     const ignoreStartedAt = performance.now();
     gitIgnoreStart = ignoreStartedAt;
-    const gitignoreFiles = await findGitIgnoreSources(sourceRoots, files);
+    const gitignoreFiles = await findGitIgnoreSources(sourceRoots, files, gitCache);
     emitDiscoveryTiming(opts?.onDiscoveryTiming, "git-ignore", ignoreStartedAt);
     gitIgnoreStart = undefined;
     emitDiscoveryActivity(
@@ -962,8 +1174,9 @@ async function listProjectFilesInternal(
       ...(options?.onDiscoveryProgress ? { onDiscoveryProgress: options.onDiscoveryProgress } : {}),
       ...(options?.onDiscoveryTiming ? { onDiscoveryTiming: options.onDiscoveryTiming } : {}),
     };
+    const discovery = options?.discoveryContext ?? createProjectDiscoveryContext(root);
     const gitCandidates = attemptedGitCandidates
-      ? await listGitCandidateFiles(root, options?.logLevel, gitDiscoveryCallbacks)
+      ? await getSharedGitCandidates(discovery, root, options?.logLevel, gitDiscoveryCallbacks)
       : null;
     // Report only when this call actually asked Git, including a null result. Callers that
     // already enumerated candidates (build-index) can hand the same set to metadata discovery
@@ -973,16 +1186,21 @@ async function listProjectFilesInternal(
     }
     let gitignoreIndex = EMPTY_GITIGNORE_INDEX;
     if (useGitignore && gitCandidates) {
-      gitignoreIndex = await buildGitignoreIndex(
-        gitCandidates.gitignoreFiles,
-        gitCandidates.gitignoreRoots,
-        gitCandidates.gitignoreAliases,
+      gitignoreIndex = await sharedGitignoreIndex(discovery, `git:${fileIdentityKey(root)}`, () =>
+        buildGitignoreIndex(
+          gitCandidates.gitignoreFiles,
+          gitCandidates.gitignoreRoots,
+          gitCandidates.gitignoreAliases,
+          discovery,
+        ),
       );
     } else if (useGitignore) {
       const gitignoreRoot = options?.gitignoreRoot
         ? await ensureDirectoryReadable(options.gitignoreRoot, "Gitignore root")
         : root;
-      gitignoreIndex = await loadGitignoreIndexForRootAliases(gitignoreRoot);
+      gitignoreIndex = await sharedGitignoreIndex(discovery, `fs:${fileIdentityKey(gitignoreRoot)}`, () =>
+        loadGitignoreIndexForRootAliases(gitignoreRoot, discovery),
+      );
     }
     // Git returns a candidate set, not a filtered result: the pattern, include,
     // default-ignore, and gitignore checks below still decide what is indexable.
@@ -998,6 +1216,7 @@ async function listProjectFilesInternal(
         dot: true,
         followSymbolicLinks: false,
         ignore: fastGlobIgnoreGlobs,
+        ...globFilesystemOption(discovery),
       });
       emitDiscoveryTiming(options?.onDiscoveryTiming, "filesystem-scan", scanStart);
       emitDiscoveryActivity(options?.onDiscoveryProgress, "Scanning project files", files.length, files.length);
@@ -1018,6 +1237,7 @@ async function listProjectFilesInternal(
             dot: true,
             followSymbolicLinks: false,
             ignore: translatedUserIgnoreGlobs,
+            ...globFilesystemOption(discovery),
           })
         : [];
     const reportSourceSymlinkChecks = options?.onDiscoveryProgress
@@ -1038,6 +1258,7 @@ async function listProjectFilesInternal(
         ? { onSymlinkDirectoriesDiscovered: options.onSymlinkDirectoriesDiscovered }
         : {}),
       ...(reportSourceSymlinkChecks ? { onPathCheckProgress: reportSourceSymlinkChecks } : {}),
+      ...globFilesystemField(discovery),
     };
     const safeSymlinkDirectories = await resolveSafeSymlinkDirectories(
       root,
@@ -1057,6 +1278,7 @@ async function listProjectFilesInternal(
             globRoot,
             filterIgnoreGlobs: userIgnoreGlobs,
             resolvedSafeSymlinkDirectories: safeSymlinkDirectories,
+            ...globFilesystemField(discovery),
           });
     // Cheap path predicates run before the realpath confinement probe. Git enumerates
     // every tracked and untracked file it knows about, including trees this project
@@ -1234,6 +1456,7 @@ async function resolveSafeSymlinkDirectories(
     followSymbolicLinks: false,
     objectMode: true,
     ignore,
+    ...(options.globFilesystem ? { fs: options.globFilesystem } : {}),
   })) as FastGlobEntry[];
   const discovered = await verifySafeSymlinkDirectories(
     root,
@@ -1276,6 +1499,7 @@ async function listEntriesFromSafeSymlinkDirectories(
           ignore: locationIndependentIgnores,
           ...(options.onlyFiles !== undefined ? { onlyFiles: options.onlyFiles } : {}),
           ...(options.markDirectories !== undefined ? { markDirectories: options.markDirectories } : {}),
+          ...(options.globFilesystem ? { fs: options.globFilesystem } : {}),
         })) as string[]
       ).filter((filePath) => {
         const cleanPath = filePath.endsWith("/") ? filePath.slice(0, -1) : filePath;
@@ -1322,14 +1546,18 @@ function toProjectGlob(pattern: string): string {
   return pattern.startsWith("**/") ? pattern : `**/${pattern}`;
 }
 
-async function buildProjectFileInfo(def: ProjectFileDefinition, filePath: string): Promise<ProjectFileInfo> {
+async function buildProjectFileInfo(
+  def: ProjectFileDefinition,
+  filePath: string,
+  state?: DiscoveryContext,
+): Promise<ProjectFileInfo> {
   const normalizedPath = normalizePath(filePath);
   const projectRoot = normalizePath(path.dirname(filePath));
   let name: string | null = null;
   if (def.parseName && def.kind === "file") {
     try {
-      const raw = await fsp.readFile(filePath, "utf8");
-      name = def.parseName(raw, filePath);
+      const text = await readProjectDiscoveryFileText(state, filePath);
+      name = def.parseName(text, filePath);
     } catch {
       name = null;
     }
@@ -1386,11 +1614,13 @@ async function discoverProjectFilesInternal(
         return matcher ? matcher.test(fileName) : pattern === fileName;
       });
     };
+    const discovery = options?.discoveryContext ?? createProjectDiscoveryContext(root);
     let gitCandidates: GitCandidateSet | null;
     if (options?.knownGitCandidates !== undefined) {
       gitCandidates = options.knownGitCandidates;
+      rememberGitCandidates(discovery, root, gitCandidates);
     } else {
-      gitCandidates = await listGitCandidateFiles(root, options?.logLevel, {
+      gitCandidates = await getSharedGitCandidates(discovery, root, options?.logLevel, {
         ...(options?.onDiscoveryProgress ? { onDiscoveryProgress: options.onDiscoveryProgress } : {}),
         ...(options?.onDiscoveryTiming ? { onDiscoveryTiming: options.onDiscoveryTiming } : {}),
       });
@@ -1410,10 +1640,13 @@ async function discoverProjectFilesInternal(
       : undefined;
     let rootSafeMatches: string[];
     if (gitCandidates) {
-      const gitignoreIndex = await buildGitignoreIndex(
-        gitCandidates.gitignoreFiles,
-        gitCandidates.gitignoreRoots,
-        gitCandidates.gitignoreAliases,
+      const gitignoreIndex = await sharedGitignoreIndex(discovery, `git:${fileIdentityKey(root)}`, () =>
+        buildGitignoreIndex(
+          gitCandidates.gitignoreFiles,
+          gitCandidates.gitignoreRoots,
+          gitCandidates.gitignoreAliases,
+          discovery,
+        ),
       );
       const defaultIgnoreMatchers = DEFAULT_PROJECT_FILE_IGNORES.map((globPattern) =>
         picomatch(globPattern, { dot: true }),
@@ -1442,6 +1675,7 @@ async function discoverProjectFilesInternal(
           ? { onSymlinkDirectoriesDiscovered: options.onSymlinkDirectoriesDiscovered }
           : {}),
         ...(reportMetadataSymlinkChecks ? { onPathCheckProgress: reportMetadataSymlinkChecks } : {}),
+        ...globFilesystemField(discovery),
       };
       const safeSymlinkDirectories = await resolveSafeSymlinkDirectories(
         root,
@@ -1459,6 +1693,7 @@ async function discoverProjectFilesInternal(
           markDirectories: true,
           onlyFiles: false,
           resolvedSafeSymlinkDirectories: safeSymlinkDirectories,
+          ...globFilesystemField(discovery),
         },
       );
       const candidateFiles = Array.from(new Set(gitCandidates.files.map(normalizePath)));
@@ -1520,6 +1755,7 @@ async function discoverProjectFilesInternal(
         ignore: DEFAULT_PROJECT_FILE_IGNORES,
         markDirectories: true,
         onlyFiles: false,
+        ...globFilesystemOption(discovery),
       });
       const linkedMatches = await listEntriesFromSafeSymlinkDirectories(
         root,
@@ -1536,6 +1772,7 @@ async function discoverProjectFilesInternal(
             ? { onSymlinkDirectoriesDiscovered: options.onSymlinkDirectoriesDiscovered }
             : {}),
           ...(reportMetadataSymlinkChecks ? { onPathCheckProgress: reportMetadataSymlinkChecks } : {}),
+          ...globFilesystemField(discovery),
         },
       );
       rootSafeMatches = await filterRealPathsWithinRoot(
@@ -1558,7 +1795,7 @@ async function discoverProjectFilesInternal(
         const matchesPattern = matchesDefinition(fileName, definitionIndex);
 
         if (matchesPattern) {
-          entries.push(await buildProjectFileInfo(def, cleanMatch));
+          entries.push(await buildProjectFileInfo(def, cleanMatch, discovery));
         }
       }
     });
@@ -1581,4 +1818,104 @@ async function discoverProjectFilesInternal(
     logWithLevel(options?.logLevel, "debug", `discoverProjectFiles failed for ${root}: ${stringifyUnknown(error)}`);
     throw new Error(`Failed to discover project files in ${root}: ${stringifyUnknown(error)}`);
   }
+}
+
+async function addGitExcludeFiles(
+  files: Set<string>,
+  repositoryRoot: string,
+  gitCache?: GitDiscoveryCache,
+): Promise<void> {
+  const excludes = await listGitExcludeFiles(repositoryRoot, gitExcludeListOptions(gitCache));
+  for (const source of excludes) {
+    files.add(normalizePath(source.file));
+  }
+}
+
+async function collectAncestorGitignoreFiles(fromDir: string, stopDir: string): Promise<string[]> {
+  const files: string[] = [];
+  let current = normalizePath(fromDir);
+  const stopKey = fileIdentityKey(stopDir);
+  while (true) {
+    const hit = await gitignoreFileIfPresent(current);
+    if (hit) files.push(hit);
+    if (fileIdentityKey(current) === stopKey) break;
+    const parent = normalizePath(path.dirname(current));
+    if (parent === current) break;
+    if (!isFilePathWithinRoot(stopDir, parent) && fileIdentityKey(parent) !== stopKey) break;
+    current = parent;
+  }
+  return files;
+}
+
+async function addGitignoreFilesForRoots(
+  files: Set<string>,
+  roots: readonly string[],
+  state: DiscoveryContext | undefined,
+  scanned: Set<string>,
+): Promise<void> {
+  for (const ignoreRoot of roots) {
+    const key = fileIdentityKey(ignoreRoot);
+    if (scanned.has(key)) continue;
+    scanned.add(key);
+    for (const file of await findGitignoreFiles(ignoreRoot, state)) {
+      files.add(normalizePath(file));
+    }
+  }
+}
+
+export async function collectConfigHashInputFiles(
+  projectRoot: string,
+  discoveryContext: ProjectDiscoveryContext,
+  logLevel?: LogLevel,
+  callbacks?: DiscoveryWorkCallbacks,
+): Promise<{ files: string[]; error?: string }> {
+  const root = await ensureDirectoryReadable(projectRoot, "Project root");
+  const state = discoveryContext;
+  const files = new Set<string>(await listRootConfigFiles(root, state));
+  const gitCache = discoveryContext.git;
+  const gitCandidates = await getSharedGitCandidates(discoveryContext, root, logLevel, callbacks);
+  if (gitCandidates) {
+    for (const source of gitCandidates.gitignoreFiles) {
+      files.add(normalizePath(source.file));
+    }
+    return { files: Array.from(files).sort() };
+  }
+
+  const realRoot = normalizePath(await fsp.realpath(root));
+  const gitRootCandidate = (await isGitRepo(root, gitCache)) ? root : realRoot;
+  if (!(await isGitRepo(gitRootCandidate, gitCache))) {
+    await addGitignoreFilesForRoots(files, [root], state, new Set());
+    return { files: Array.from(files).sort() };
+  }
+
+  if (await isGitProjectRootIgnored(realRoot, gitCache)) {
+    const scanned = new Set<string>();
+    await addGitignoreFilesForRoots(files, [root], state, scanned);
+    const gitRoot = await getGitRepositoryRoot(gitRootCandidate);
+    if (gitRoot) {
+      await addGitExcludeFiles(files, gitRoot, gitCache);
+      const submoduleDirectories = await listGitSubmoduleDirectories(gitRoot, { recurse: true });
+      await addGitignoreFilesForRoots(files, [gitRoot, ...submoduleDirectories], state, scanned);
+      for (const submodule of submoduleDirectories) {
+        await addGitExcludeFiles(files, submodule, gitCache);
+      }
+    }
+    return { files: Array.from(files).sort() };
+  }
+
+  const gitRoot = await getGitRepositoryRoot(gitRootCandidate);
+  if (gitRoot) {
+    for (const file of await collectAncestorGitignoreFiles(root, gitRoot)) {
+      files.add(normalizePath(file));
+    }
+    await addGitExcludeFiles(files, gitRoot, gitCache);
+    const submoduleDirectories = await listGitSubmoduleDirectories(gitRoot, { recurse: true });
+    for (const submodule of submoduleDirectories) {
+      await addGitExcludeFiles(files, submodule, gitCache);
+    }
+  }
+  return {
+    files: Array.from(files).sort(),
+    error: "Failed to enumerate config files: Git listing unavailable",
+  };
 }

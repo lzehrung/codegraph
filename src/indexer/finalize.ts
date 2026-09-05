@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import {
   discoverProjectFilesWithGitCandidates,
   type GitCandidateSet,
+  type ProjectDiscoveryContext,
   type ProjectFileInfo,
 } from "../util/projectFiles.js";
 import type { FileId, Graph } from "../types.js";
@@ -26,6 +27,7 @@ export async function finalizeProjectIndex(args: {
   bloomFilterCache: BloomFilterCache | undefined;
   projectFiles?: ProjectFileInfo[] | Promise<ProjectFileInfo[]>;
   knownGitCandidates?: GitCandidateSet | null;
+  discoveryContext?: ProjectDiscoveryContext;
   manifestEntries?: Map<FileId, ProjectIndexManifestEntry>;
   buildReport?: BuildReport | undefined;
 }): Promise<ProjectIndex> {
@@ -38,6 +40,7 @@ export async function finalizeProjectIndex(args: {
     projectFiles = await discoverProjectFilesWithGitCandidates(args.projectRoot, {
       ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
       ...(args.knownGitCandidates !== undefined ? { knownGitCandidates: args.knownGitCandidates } : {}),
+      ...(args.discoveryContext ? { discoveryContext: args.discoveryContext } : {}),
     });
     if (discoveryTimings) {
       const metadataDiscoveryMs = Math.round(performance.now() - metadataDiscoveryStart);

@@ -1,3 +1,4 @@
+import type { LogLevel } from "../../logging.js";
 import {
   parseDotnetName,
   parseGemspecName,
@@ -11,6 +12,8 @@ import {
   parseSwiftPackageName,
   parseTomlName,
 } from "./parsers.js";
+
+export type SymlinkProbeMode = "known" | "git-candidates" | "filesystem";
 
 export type ProjectFileKind = "file" | "dir";
 export type ProjectFileRole = "manifest" | "lockfile" | "config" | "solution" | "ide";
@@ -36,6 +39,24 @@ export type ProjectFileInfo = {
   role: ProjectFileRole;
   projectRoot: string;
   name?: string;
+};
+
+export type ProjectFileDiscoveryOptions = {
+  includeGlobs?: string[];
+  ignoreGlobs?: string[];
+  globRoot?: string;
+  useGitignore?: boolean;
+  gitignoreRoot?: string;
+  logLevel?: LogLevel;
+  /**
+   * Previously discovered symlinked directories under the project root. When provided
+   * (including an empty array), discovery re-verifies each entry directly and skips the
+   * probe on warm runs. Omit it to probe once and report the result through
+   * `onSymlinkDirectoriesDiscovered`. The callback mode distinguishes persisted hints,
+   * Git candidate screening, and the non-Git filesystem fallback.
+   */
+  knownSymlinkDirectories?: readonly string[];
+  onSymlinkDirectoriesDiscovered?: (directories: readonly string[], mode: SymlinkProbeMode) => void;
 };
 
 export type ProjectFileDefinition = {

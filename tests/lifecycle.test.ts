@@ -345,24 +345,12 @@ describe("project lifecycle commands", () => {
     await writeFile(root, "src/main.ts", "export const main = 1;\n");
     await initCodegraphLifecycle(root, { updateGitignore: false });
     await execFileAsync("git", ["add", "--", ".codegraph/manifest.json"], { cwd: root });
-    const gitTraceFile = path.join(root, "git-trace.log");
-    const originalGitTrace = process.env.GIT_TRACE;
-    process.env.GIT_TRACE = gitTraceFile;
-
-    let result: CodegraphLifecycleSyncResult;
-    try {
-      result = await initCodegraphLifecycle(root);
-    } finally {
-      if (originalGitTrace === undefined) delete process.env.GIT_TRACE;
-      else process.env.GIT_TRACE = originalGitTrace;
-    }
-    const gitTrace = await fsp.readFile(gitTraceFile, "utf8");
+    const result = await initCodegraphLifecycle(root);
 
     expect(result.gitignore).toEqual({ status: "tracked", path: ".gitignore" });
     await expect(fsp.stat(path.join(root, ".gitignore"))).rejects.toMatchObject({ code: "ENOENT" });
     const { stdout } = await execFileAsync("git", ["ls-files", "--", ".codegraph/manifest.json"], { cwd: root });
     expect(stdout.trim()).toBe(".codegraph/manifest.json");
-    expect(gitTrace).not.toContain("git check-ignore");
   });
 
   it("rejects directory and symlink .gitignore paths before creating a manifest", async () => {

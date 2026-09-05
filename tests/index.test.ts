@@ -302,7 +302,6 @@ describe("Project Indexing", () => {
 
       await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
 
-      expect(report.timings.gitListMs).toBeUndefined();
       expect(report.timings.filesystemScanMs).toBeUndefined();
       expect(report.timings.metadataDiscoveryMs).toBeUndefined();
       expect(report.timings.cacheProbeMs).toBeUndefined();

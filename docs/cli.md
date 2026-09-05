@@ -193,6 +193,8 @@ Graph, index, search, inspect, orient, and review reports include `backend.nativ
 
 When a command builds an index with `--report`, its timing payload can include `sourceDiscoveryMs` for source-file discovery, `metadataDiscoveryMs` for project-metadata discovery, `gitListMs` for Git candidate listing, `filesystemScanMs` when discovery falls back to a glob scan, `cacheProbeMs` for Git signatures and per-file cache probes before parse, and `steps` for named durations. Discovery steps are `git-list`, `git-ignore`, `filesystem-scan`, `cache-probe`, and `metadata-discovery`. An incremental build also names its manifest-reuse preamble with `file-identity`, `clear-resolution-caches`, `load-manifest`, `diff-build-options`, and `config-hash`. Post-parse persistence names `persist-cache`, `workspace-manifests`, `index-manifest`, `finalize`, and `snapshot-write`, and `index-manifest` is the total of its own sub-steps `git-head`, `config-hash`, `manifest-transform`, `manifest-write`, and `cache-prune`. These optional fields are absent when their step does not run. Reusing the same report object replaces the discovery fields and clears the previous build's steps.
 
+Config validation can perform Git discovery first and share its results with later phases. Its `git-list` and `git-ignore` steps are included in `config-hash`; do not add these sub-steps to the parent total.
+
 ### Project lifecycle
 
 - `init` creates `.codegraph/manifest.json`, warms the existing disk cache through the index build path, and is idempotent when the manifest is current. Use `--force` to rebuild and overwrite the manifest metadata.

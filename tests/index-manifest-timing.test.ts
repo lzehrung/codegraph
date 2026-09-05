@@ -34,7 +34,10 @@ function stepNames(report: BuildReport): string[] {
 function topLevelStepSum(steps: BuildTimingStep[] | undefined): number {
   // Sub-steps sit inside `index-manifest`. `snapshot-write` is recorded after
   // finalize assigns `totalMs`, so neither belongs in this coverage check.
+  // Git discovery also runs inside the incremental preamble's config-hash step.
   const excluded = new Set([
+    "git-list",
+    "git-ignore",
     "git-head",
     "config-hash",
     "manifest-transform",

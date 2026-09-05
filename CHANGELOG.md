@@ -21,6 +21,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 - `--report` index timings now name the incremental preamble (`file-identity`, `clear-resolution-caches`, `load-manifest`, `diff-build-options`, `config-hash`) and split the former single `index-manifest` step into `git-head`, `config-hash`, `manifest-transform`, `manifest-write`, and `cache-prune`. `index-manifest` remains that phase's total and `writeManifestMs` keeps its meaning. A delegated cold rebuild's `totalMs` now covers the caller's whole wait instead of restarting at the inner build, so reported time matches observed time.
 - `codegraph init` and `codegraph sync` reuse the config hash the index build just persisted instead of hashing project config a third time in the same run. `codegraph status` still recomputes it, because comparing a fresh hash against the stored one is how it detects config drift.
+- Index builds share config, source, and metadata discovery. Git-backed config hashing reads root manifests and applicable ignore files without recursive config scans. Fallback scans share directory listings within the build; later builds start fresh, and file and symlink checks remain unchanged.
 
 ## [2.3.19] - 2026-09-04
 

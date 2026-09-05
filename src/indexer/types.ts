@@ -7,7 +7,7 @@ import type { ScopeIndex } from "./scope-types.js";
 import type { ReferenceCandidateIndex } from "./reference-candidate-types.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import type { Edge, FileId, Graph, ProgressUpdate, Range } from "../types.js";
-import type { ProjectFileDiscoveryOptions, ProjectFileInfo } from "../util/projectFiles.js";
+import type { ProjectDiscoveryContext, ProjectFileDiscoveryOptions, ProjectFileInfo } from "../util/projectFiles.js";
 import type { ImportBinding } from "./import-types.js";
 
 export type { ImportBinding } from "./import-types.js";
@@ -199,6 +199,8 @@ export type IncrementalBuildOptions = BuildOptions & {
   additionalFiles?: string[];
   /** @internal Treat `files` as the current project scope, not as caller-selected changed files. */
   filesAreProjectScope?: boolean;
+  /** @internal Share facts with file planning in the same operation; never retain across calls. */
+  discoveryContext?: ProjectDiscoveryContext;
   /** @internal Manifest identity associated with precomputed reconciliation. */
   reconciledManifestUpdatedAt?: number;
   /** @internal Reuse working-tree reconciliation already performed for `files`. */
