@@ -640,16 +640,20 @@ function collectCandidateAncestorDirectories(root: string, files: readonly strin
   return directories;
 }
 
-type GitIgnoreSourceRoot = { path: string; repositoryRoot: string };
+export type GitIgnoreSourceRoot = { path: string; repositoryRoot: string };
 
-function owningGitIgnoreSourceRoot(
+export function owningGitIgnoreSourceRoot(
   file: string,
   roots: readonly GitIgnoreSourceRoot[],
+  realpathMemo?: Map<string, string>,
 ): GitIgnoreSourceRoot | undefined {
   const normalized = normalizePath(file);
   let owning: GitIgnoreSourceRoot | undefined;
   for (const root of roots) {
-    if (!isFilePathWithinRoot(root.path, normalized) && !isFilePathWithinRoot(root.repositoryRoot, normalized)) {
+    if (
+      !isFilePathWithinRoot(root.path, normalized, realpathMemo) &&
+      !isFilePathWithinRoot(root.repositoryRoot, normalized, realpathMemo)
+    ) {
       continue;
     }
     if (!owning || root.repositoryRoot.length > owning.repositoryRoot.length) {
@@ -657,6 +661,28 @@ function owningGitIgnoreSourceRoot(
     }
   }
   return owning;
+}
+
+/**
+ * Ownership is pure path containment, so every candidate in the same parent directory
+ * shares one answer. The lookup and its realpath memo live only for this discovery pass,
+ * so a long-lived process cannot serve a stale owner after the tree changes.
+ */
+export function createGitIgnoreSourceOwnershipLookup(
+  roots: readonly GitIgnoreSourceRoot[],
+  realpathMemo: Map<string, string>,
+): (file: string) => GitIgnoreSourceRoot | undefined {
+  const ownershipByDirectory = new Map<string, GitIgnoreSourceRoot | undefined>();
+  return (file: string): GitIgnoreSourceRoot | undefined => {
+    const directory = normalizePath(path.dirname(file));
+    const key = fileIdentityKey(directory);
+    if (ownershipByDirectory.has(key)) {
+      return ownershipByDirectory.get(key);
+    }
+    const owning = owningGitIgnoreSourceRoot(directory, roots, realpathMemo);
+    ownershipByDirectory.set(key, owning);
+    return owning;
+  };
 }
 
 async function gitignoreFileIfPresent(directory: string): Promise<string | undefined> {
@@ -703,12 +729,14 @@ async function findGitIgnoreSources(
   for (const { path: sourceRoot, repositoryRoot } of roots) {
     addDirectory(sourceRoot, repositoryRoot);
   }
+  const realpathMemo = new Map<string, string>();
+  const owningOf = createGitIgnoreSourceOwnershipLookup(roots, realpathMemo);
   for (const file of candidateFiles) {
-    const owning = owningGitIgnoreSourceRoot(file, roots);
+    const owning = owningOf(file);
     if (!owning) continue;
     let dir = normalizePath(path.dirname(file));
     const stopKey = fileIdentityKey(owning.repositoryRoot);
-    for (;;) {
+    while (true) {
       const dirKey = fileIdentityKey(dir);
       const walkKey = `${dirKey}\0${stopKey}`;
       if (walkedDirectoryKeys.has(walkKey)) break;
@@ -718,7 +746,8 @@ async function findGitIgnoreSources(
       const parent = normalizePath(path.dirname(dir));
       if (
         parent === dir ||
-        (!isFilePathWithinRoot(owning.path, parent) && !isFilePathWithinRoot(owning.repositoryRoot, parent))
+        (!isFilePathWithinRoot(owning.path, parent, realpathMemo) &&
+          !isFilePathWithinRoot(owning.repositoryRoot, parent, realpathMemo))
       ) {
         break;
       }
