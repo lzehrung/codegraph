@@ -16,13 +16,7 @@ import {
 import { parseDotnetName, parseGoModuleName, parsePomName, parseTomlName } from "../src/util/projectFiles/parsers.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
 import { runGit as git } from "./helpers/git.js";
-import {
-  clearGitDiscoveryCacheForTests,
-  clearGitRepositoryCheckCacheForTests,
-  listGitIgnoreFiles,
-  listGitSubmoduleDirectories,
-  setGitExecutableForTests,
-} from "../src/util/git.js";
+import { listGitIgnoreFiles, listGitSubmoduleDirectories, setGitExecutableForTests } from "../src/util/git.js";
 
 const normalize = (value: string) => value.replace(/\\/g, "/");
 
@@ -1015,8 +1009,6 @@ describe("git-native project file discovery", () => {
       await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
     setGitExecutableForTests(null);
-    clearGitDiscoveryCacheForTests();
-    clearGitRepositoryCheckCacheForTests();
   });
 
   it("discovers sources tracked inside a submodule", async () => {
@@ -1492,8 +1484,6 @@ describe("git-native project file discovery", () => {
       "utf8",
     );
     setGitExecutableForTests(process.execPath, [script]);
-    clearGitDiscoveryCacheForTests();
-    clearGitRepositoryCheckCacheForTests();
 
     const steps: Array<{ name: string; ms: number }> = [];
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -1537,8 +1527,6 @@ describe("git-native project file discovery", () => {
       "utf8",
     );
     setGitExecutableForTests(process.execPath, [script]);
-    clearGitDiscoveryCacheForTests();
-    clearGitRepositoryCheckCacheForTests();
 
     const steps: Array<{ name: string; ms: number }> = [];
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -1583,8 +1571,6 @@ describe("git-native project file discovery", () => {
       "utf8",
     );
     setGitExecutableForTests(process.execPath, [script]);
-    clearGitDiscoveryCacheForTests();
-    clearGitRepositoryCheckCacheForTests();
 
     const steps: Array<{ name: string; ms: number }> = [];
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -2081,8 +2067,6 @@ describe("git-native project file discovery", () => {
     // to the filesystem scan (which includes the gitignored manifest). Equality with the
     // Git-aware baseline therefore proves the known-candidate path spawned no Git at all.
     setGitExecutableForTests(path.join(root, "not-a-git-executable"));
-    clearGitDiscoveryCacheForTests();
-    clearGitRepositoryCheckCacheForTests();
     try {
       const withKnown = await discoverProjectFilesWithGitCandidates(root, { knownGitCandidates: known! });
       expect(withKnown).toEqual(baseline);
@@ -2105,8 +2089,6 @@ describe("git-native project file discovery", () => {
       expect(fallback.some((entry) => normalize(entry.path) === normalize(ignoredPackageJson))).toBe(true);
     } finally {
       setGitExecutableForTests(null);
-      clearGitDiscoveryCacheForTests();
-      clearGitRepositoryCheckCacheForTests();
     }
   });
 

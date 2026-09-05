@@ -14,6 +14,7 @@ import {
 } from "./build-cache.js";
 import { cacheRelativePath, pruneDiskModuleCache } from "./build-cache/module-cache.js";
 import type { GraphCacheEntry, GraphBuildOptions } from "../graphs/types.js";
+import type { ProjectDiscoveryContext } from "../util/projectFiles.js";
 import type { BuildOptions, BuildReport, ManifestReport } from "./types.js";
 
 export function toManifestFileEntry(entry: GraphCacheEntry): ManifestFileEntry | undefined {
@@ -44,6 +45,8 @@ export async function writeIndexManifestSnapshot(args: {
   resolverEnvironmentFingerprint?: string;
   /** When present, used verbatim instead of hashing config files again. */
   configHash?: { hash: string; error?: string };
+  /** When present, used for hashing instead of creating a standalone discovery context. */
+  discoveryContext?: ProjectDiscoveryContext;
 }): Promise<void> {
   const files = args.files instanceof Map ? Object.fromEntries(args.files) : args.files;
   if (!Object.keys(files).length && !args.allowEmpty) return;
@@ -52,7 +55,8 @@ export async function writeIndexManifestSnapshot(args: {
   const lastCommit = await getGitHead(args.projectRoot);
   recordManifestTimingStep(args.timings, "git-head", gitHeadStartedAt);
   const configHashStartedAt = performance.now();
-  const configHashResult = args.configHash ?? (await computeConfigHash(args.projectRoot, args.opts?.logLevel));
+  const configHashResult =
+    args.configHash ?? (await computeConfigHash(args.projectRoot, args.opts?.logLevel, args.discoveryContext));
   recordManifestTimingStep(args.timings, "config-hash", configHashStartedAt);
   const projectRootMtimeMs =
     args.symlinkDirectories !== undefined ? (await fsp.stat(args.projectRoot)).mtimeMs : undefined;

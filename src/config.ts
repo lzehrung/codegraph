@@ -12,7 +12,7 @@ import type { LanguageExtensionMap } from "./languages.js";
 import type { GraphBuildOptions } from "./graphs/types.js";
 import { normalizeResolutionHints } from "./util/paths.js";
 import { errorMessage } from "./util/errors.js";
-import { type ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
+import type { ProjectFileDiscoveryOptions } from "./util/projectFiles/definitions.js";
 
 export const CODEGRAPH_CONFIG_FILE = "codegraph.config.json";
 

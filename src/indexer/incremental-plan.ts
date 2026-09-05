@@ -7,7 +7,7 @@ import {
   type ManifestFileEntry,
 } from "./build-cache.js";
 import type { BuildOptions, IncrementalBuildOptions } from "./types.js";
-import { listChangedFiles, listUntrackedFiles } from "../util/git.js";
+import { listChangedFiles, listUntrackedFiles, type GitDiscoveryCache } from "../util/git.js";
 import { errorMessage } from "../util/errors.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
@@ -180,10 +180,15 @@ export async function listUntrackedProjectFiles(
   projectRoot: string,
   discovery: ProjectFileDiscoveryOptions | undefined,
   gitAvailable: boolean,
+  discoveryCache?: GitDiscoveryCache,
 ): Promise<string[]> {
   if (!gitAvailable) return [];
   const respectGitignore = discovery?.useGitignore !== false;
-  const candidates = await listUntrackedFiles(projectRoot, { gitAvailable, respectGitignore });
+  const candidates = await listUntrackedFiles(projectRoot, {
+    gitAvailable,
+    respectGitignore,
+    ...(discoveryCache ? { discoveryCache } : {}),
+  });
   if (!candidates.length) return [];
   const globRoot = discovery?.globRoot ?? projectRoot;
   const isDiscoveredFile = createDiscoveredFileMatcher(projectRoot, globRoot, DEFAULT_PROJECT_PATTERNS, discovery);
@@ -224,6 +229,7 @@ export type IncrementalFilePlan = {
 export async function resolveIncrementalFilePlan(
   projectRoot: string,
   opts: BuildOptions | undefined,
+  discoveryCache?: GitDiscoveryCache,
 ): Promise<IncrementalFilePlan | null> {
   const manifest = await loadManifest(projectRoot, opts);
   if (!manifest) return null;
@@ -245,7 +251,7 @@ export async function resolveIncrementalFilePlan(
     // too when clean), so this replaces the narrower commit-to-commit comparison.
     const [workingTreeDiffFiles, untrackedFiles] = await Promise.all([
       manifest.lastCommit ? listChangedFiles(projectRoot, { base: manifest.lastCommit, head: "WORKTREE" }) : [],
-      listUntrackedProjectFiles(projectRoot, opts?.discovery, true),
+      listUntrackedProjectFiles(projectRoot, opts?.discovery, true, discoveryCache),
     ]);
 
     const candidatePaths = [...workingTreeDiffFiles, ...untrackedFiles];

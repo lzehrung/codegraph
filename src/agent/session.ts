@@ -8,7 +8,12 @@ import { tryLoadDetailedSymbolGraphSnapshot, writeDetailedSymbolGraphSnapshot } 
 import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
 import { buildSymbolGraph, type SymbolGraph } from "../graphs/symbol-graph.js";
 import type { Graph } from "../types.js";
-import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+import {
+  createProjectDiscoveryContext,
+  listProjectFilesWithGitCandidates,
+  type ProjectDiscoveryContext,
+  type ProjectFileDiscoveryOptions,
+} from "../util/projectFiles.js";
 import { mapLimit } from "../util/concurrency.js";
 import { normalizePath, toProjectDisplayPath } from "../util/paths.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions, mergeGraphOptions } from "../config.js";
@@ -181,7 +186,10 @@ function agentDiscoveryProgressReporter(
   };
 }
 
-async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promise<AgentSessionFilePlan> {
+async function resolveAgentSessionFilePlan(
+  options: AgentSessionOptions,
+  discoveryContext = createProjectDiscoveryContext(options.root),
+): Promise<AgentSessionFilePlan> {
   const startedAt = performance.now();
   const { discoveryOptions, graphOptions, languageExtensions, cacheLocation } =
     await resolveAgentDiscoverySettings(options);
@@ -195,7 +203,7 @@ async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promis
     ...(languageExtensions ? { languageExtensions } : {}),
     ...(cacheLocation ? { cacheLocation } : {}),
   };
-  const incrementalPlan = await resolveIncrementalFilePlan(options.root, incrementalOptions);
+  const incrementalPlan = await resolveIncrementalFilePlan(options.root, incrementalOptions, discoveryContext.git);
   if (incrementalPlan) {
     return {
       files: incrementalPlan.files,
@@ -212,8 +220,9 @@ async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promis
   const patterns = customPatterns.length ? [...DEFAULT_PROJECT_PATTERNS, ...customPatterns] : undefined;
   emitAgentFilePlanProgress(options);
   const onDiscoveryProgress = agentDiscoveryProgressReporter(options);
-  const files = await listProjectFiles(options.root, patterns, {
+  const files = await listProjectFilesWithGitCandidates(options.root, patterns, {
     ...discoveryOptions,
+    discoveryContext,
     ...(onDiscoveryProgress ? { onDiscoveryProgress } : {}),
   });
   return {
@@ -226,8 +235,11 @@ async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promis
   };
 }
 
-export async function listAgentSessionFiles(options: AgentSessionOptions): Promise<string[]> {
-  return (await resolveAgentSessionFilePlan(options)).files;
+export async function listAgentSessionFiles(
+  options: AgentSessionOptions,
+  discoveryContext?: ProjectDiscoveryContext,
+): Promise<string[]> {
+  return (await resolveAgentSessionFilePlan(options, discoveryContext)).files;
 }
 
 function isMissingStatRace(error: unknown): boolean {
@@ -364,9 +376,9 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     freshnessInFlight = undefined;
   };
 
-  const loadFilePlan = async (): Promise<AgentSessionFilePlan> => {
+  const loadFilePlan = async (discoveryContext?: ProjectDiscoveryContext): Promise<AgentSessionFilePlan> => {
     if (cachedFilePlan) return cachedFilePlan;
-    const loadPromise = resolveAgentSessionFilePlan(options);
+    const loadPromise = resolveAgentSessionFilePlan(options, discoveryContext);
     cachedFilePlan = loadPromise;
     loadPromise.catch(() => {
       if (cachedFilePlan === loadPromise) cachedFilePlan = undefined;
@@ -387,8 +399,10 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   const loadBase = async (): Promise<AgentProjectBaseSnapshot> => {
     if (cachedBase) return cachedBase;
     const loadPromise = (async () => {
+      // A cached file plan can outlive one operation; its discovery facts must not.
+      const discoveryContext = createProjectDiscoveryContext(options.root);
       const { files, discoveryOptions, graphOptions, languageExtensions, cacheLocation, incrementalPlan, startedAt } =
-        await loadFilePlan();
+        await loadFilePlan(discoveryContext);
       const buildOptions: IncrementalBuildOptions = {
         ...options.buildOptions,
         ...(graphOptions ? { graph: graphOptions } : {}),
@@ -396,6 +410,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         keepParsed: options.buildOptions?.keepParsed ?? true,
         files,
         filesAreProjectScope: true,
+        discoveryContext,
         // Discovery ran before this build, so the completion event must measure from there.
         progressStartedAt: options.buildOptions?.progressStartedAt ?? startedAt,
         ...(incrementalPlan

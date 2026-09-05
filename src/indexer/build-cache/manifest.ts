@@ -2,15 +2,16 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
-import fg from "fast-glob";
 import type { GraphCacheEntry, GraphBuildOptions } from "../../graphs/types.js";
-import { CODEGRAPH_CONFIG_FILE } from "../../config.js";
 import { logWithLevel, type LogLevel } from "../../logging.js";
 import type { Edge } from "../../types.js";
 import {
-  DEFAULT_PROJECT_FILE_IGNORES,
-  DEFAULT_PROJECT_MANIFESTS,
+  collectConfigHashInputFiles,
+  createProjectDiscoveryContext,
   listProjectFiles,
+  readProjectDiscoveryFileText,
+  type DiscoveryWorkCallbacks,
+  type ProjectDiscoveryContext,
   type ProjectFileDiscoveryOptions,
 } from "../../util/projectFiles.js";
 import {
@@ -21,12 +22,7 @@ import {
   toProjectRelativePath,
 } from "../../util/paths.js";
 import { assertRealPathCandidateWithinRoot } from "../../util/confinedFile.js";
-import {
-  getGitRepositoryRoot,
-  getGitBlobHashes,
-  listGitExcludeFiles,
-  listGitSubmoduleDirectories,
-} from "../../util/git.js";
+import { getGitBlobHashes } from "../../util/git.js";
 import { stringifyUnknown } from "../../util/ast.js";
 
 import { cacheAbsolutePath, cacheRelativePath, fileSignature } from "./module-cache.js";
@@ -265,47 +261,20 @@ function resolveManifestSymlinkDirectories(
   return [...resolvedDirectories];
 }
 
-async function gitIgnoreConfigFiles(projectRoot: string): Promise<string[]> {
-  const gitRoot = await getGitRepositoryRoot(projectRoot);
-  if (!gitRoot) return [];
-  const submoduleDirectories = await listGitSubmoduleDirectories(gitRoot, { recurse: true });
-  const sourceRoots = [projectRoot, gitRoot, ...submoduleDirectories];
-  const gitignoreFiles = await Promise.all(
-    sourceRoots.map(
-      async (root) =>
-        await fg(["**/.gitignore"], {
-          cwd: root,
-          absolute: true,
-          dot: true,
-          ignore: DEFAULT_PROJECT_FILE_IGNORES,
-        }),
-    ),
-  );
-  const excludeFiles = await Promise.all(
-    [gitRoot, ...submoduleDirectories].map(async (root) => await listGitExcludeFiles(root)),
-  );
-  return Array.from(new Set([...gitignoreFiles.flat(), ...excludeFiles.flat().map(({ file }) => file)])).sort();
-}
-
-export async function computeConfigHash(projectRoot: string, logLevel?: LogLevel): Promise<ConfigHashResult> {
+export async function computeConfigHash(
+  projectRoot: string,
+  logLevel?: LogLevel,
+  discoveryContext?: ProjectDiscoveryContext,
+  callbacks?: DiscoveryWorkCallbacks,
+): Promise<ConfigHashResult> {
+  const context = discoveryContext ?? createProjectDiscoveryContext(projectRoot);
   try {
-    const configFiles = Array.from(
-      new Set([
-        ...(await fg([...DEFAULT_PROJECT_MANIFESTS, CODEGRAPH_CONFIG_FILE, "**/.gitignore"], {
-          cwd: projectRoot,
-          absolute: true,
-          dot: true,
-          ignore: DEFAULT_PROJECT_FILE_IGNORES,
-        })),
-        ...(await gitIgnoreConfigFiles(projectRoot)),
-      ]),
-    );
-    configFiles.sort();
+    const collected = await collectConfigHashInputFiles(projectRoot, context, logLevel, callbacks);
     const hash = crypto.createHash("sha1");
-    let firstError: string | undefined;
-    for (const file of configFiles) {
+    let firstError = collected.error;
+    for (const file of collected.files) {
       try {
-        const content = await fsp.readFile(file, "utf8");
+        const content = await readProjectDiscoveryFileText(context, file);
         const relative = path.relative(projectRoot, file).replace(/\\/g, "/");
         hash.update(relative);
         hash.update(content);

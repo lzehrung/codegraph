@@ -13,9 +13,11 @@ import { isJsTsLanguage } from "../languages/js-family.js";
 import { loadWorkspaceConfig, resolveWorkspacePackage, type WorkspaceConfig } from "../util/workspace.js";
 import {
   DEFAULT_PROJECT_PATTERNS,
+  createProjectDiscoveryContext,
   discoverProjectFilesWithGitCandidates,
   listProjectFilesWithGitCandidates,
   type GitCandidateSet,
+  type ProjectDiscoveryContext,
   type ProjectFileInfo,
 } from "../util/projectFiles.js";
 import { getGitHead, isGitRepo, getGitBlobHashes, listChangedFiles } from "../util/git.js";
@@ -509,6 +511,7 @@ type BuildIndexHelperOptions = {
   symlinkDirectories?: string[];
   confineReads?: boolean;
   configHash?: { hash: string; error?: string };
+  discoveryContext?: ProjectDiscoveryContext;
 };
 
 type IndexBuildRunState = {
@@ -754,7 +757,10 @@ type FullDiscoveryBuildOptions = BuildOptions & Pick<IncrementalBuildOptions, "a
 async function buildProjectIndexFromExport(
   projectRoot: string,
   opts?: FullDiscoveryBuildOptions,
-  helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest" | "reportDiscoveryProgress" | "configHash">,
+  helperOpts?: Pick<
+    BuildIndexHelperOptions,
+    "ignoreExistingManifest" | "reportDiscoveryProgress" | "configHash" | "discoveryContext"
+  >,
 ): Promise<ProjectIndex> {
   return buildProjectIndexWithManifestOptions(projectRoot, opts, helperOpts);
 }
@@ -844,7 +850,7 @@ async function buildIndexFromFileListShared(
     ? createCountedCheckProgress(opts, "Checking file cache", normalizedFiles.length)
     : () => undefined;
   const cacheProbeStart = performance.now();
-  const gitAvailable = await isGitRepo(projectRoot);
+  const gitAvailable = await isGitRepo(projectRoot, helperOpts?.discoveryContext?.git);
   const needsPersistentSignatures = cacheEnabled || useManifest;
   const useGitSignatures = gitAvailable && needsPersistentSignatures;
   const gitSigMap = useGitSignatures
@@ -1196,6 +1202,7 @@ async function buildIndexFromFileListShared(
             timings,
             manifestReport: report?.manifest,
             ...(helperOpts?.configHash ? { configHash: helperOpts.configHash } : {}),
+            ...(helperOpts?.discoveryContext ? { discoveryContext: helperOpts.discoveryContext } : {}),
             ...(helperOpts?.transientFiles !== undefined ? { transientFiles: helperOpts.transientFiles } : {}),
             ...(helperOpts?.symlinkDirectories !== undefined
               ? { symlinkDirectories: helperOpts.symlinkDirectories }
@@ -1227,6 +1234,7 @@ async function buildIndexFromFileListShared(
       parsedMap,
       bloomFilterCache,
       ...(projectFiles !== undefined ? { projectFiles } : {}),
+      ...(helperOpts?.discoveryContext ? { discoveryContext: helperOpts.discoveryContext } : {}),
       buildReport: report,
       manifestEntries: indexManifestEntries,
     });
@@ -1271,9 +1279,13 @@ async function buildIndexFromFileListShared(
 async function buildProjectIndexWithManifestOptions(
   projectRoot: string,
   opts?: FullDiscoveryBuildOptions,
-  helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest" | "reportDiscoveryProgress" | "configHash">,
+  helperOpts?: Pick<
+    BuildIndexHelperOptions,
+    "ignoreExistingManifest" | "reportDiscoveryProgress" | "configHash" | "discoveryContext"
+  >,
 ): Promise<ProjectIndex> {
   const timings = opts?.report ? (opts.report.timings ??= {}) : undefined;
+  const discoveryContext = helperOpts?.discoveryContext;
   await initializeFileIdentityCaseSensitivity(projectRoot);
   try {
     const useDiskCache = (opts?.cache ?? "off") === "disk";
@@ -1329,6 +1341,7 @@ async function buildProjectIndexWithManifestOptions(
         onGitCandidatesDiscovered,
         ...(onDiscoveryProgress ? { onDiscoveryProgress } : {}),
         ...(onDiscoveryTiming ? { onDiscoveryTiming } : {}),
+        ...(discoveryContext ? { discoveryContext } : {}),
       },
     );
     if (timings) timings.sourceDiscoveryMs = Math.round(performance.now() - sourceDiscoveryStart);
@@ -1350,6 +1363,7 @@ async function buildProjectIndexWithManifestOptions(
       ...(discoveredGitCandidates !== undefined ? { knownGitCandidates: discoveredGitCandidates } : {}),
       ...(onDiscoveryProgress ? { onDiscoveryProgress } : {}),
       ...(onDiscoveryTiming ? { onDiscoveryTiming } : {}),
+      ...(discoveryContext ? { discoveryContext } : {}),
     });
     if (timings) timings.metadataDiscoveryMs = Math.round(performance.now() - metadataDiscoveryStart);
     return await buildIndexFromFileListShared(projectRoot, files, opts, {
@@ -1358,6 +1372,7 @@ async function buildProjectIndexWithManifestOptions(
       ...(helperOpts?.ignoreExistingManifest ? { ignoreExistingManifest: true } : {}),
       ...(helperOpts?.reportDiscoveryProgress ? { reportDiscoveryProgress: true } : {}),
       ...(helperOpts?.configHash ? { configHash: helperOpts.configHash } : {}),
+      ...(discoveryContext ? { discoveryContext } : {}),
       projectFiles,
       transientFiles,
       ...(discoveredSymlinkDirectories !== undefined ? { symlinkDirectories: discoveredSymlinkDirectories } : {}),
@@ -1385,10 +1400,14 @@ export async function buildProjectIndex(projectRoot: string, opts?: BuildOptions
   const progressStartedAt = opts?.progressStartedAt ?? performance.now();
   const timings = opts?.report ? (opts.report.timings ??= {}) : undefined;
   resetTransientBuildTimings(timings);
-  return buildProjectIndexWithManifestOptions(projectRoot, {
-    ...opts,
-    progressStartedAt,
-  });
+  return buildProjectIndexWithManifestOptions(
+    projectRoot,
+    {
+      ...opts,
+      progressStartedAt,
+    },
+    { discoveryContext: createProjectDiscoveryContext(projectRoot) },
+  );
 }
 
 /**
@@ -1418,6 +1437,7 @@ export async function buildProjectIndexFromFiles(
       manifestMode: useDiskCache ? "read-only" : "off",
       warnNoFilesMessage: `Warning: No files provided for indexing in ${projectRoot}. Check the explicit file list and include/ignore filters. Diagnostic: codegraph doctor`,
       confineReads: true,
+      discoveryContext: createProjectDiscoveryContext(projectRoot),
     });
   } finally {
     if ((opts?.cache ?? "off") === "disk") {
@@ -1439,11 +1459,13 @@ async function buildDeclaredScopeIndex(
   projectRoot: string,
   scopeFiles: readonly string[],
   opts?: BuildOptions,
+  helperOpts?: Pick<BuildIndexHelperOptions, "discoveryContext">,
 ): Promise<ProjectIndex> {
   try {
     const useDiskCache = (opts?.cache ?? "off") === "disk";
     return await buildIndexFromFileListShared(projectRoot, [...scopeFiles], opts, {
       manifestMode: useDiskCache ? "read-only" : "off",
+      ...(helperOpts?.discoveryContext ? { discoveryContext: helperOpts.discoveryContext } : {}),
     });
   } finally {
     if ((opts?.cache ?? "off") === "disk") {
@@ -1468,6 +1490,7 @@ export async function buildProjectIndexIncremental(
     ...rawOpts,
     progressStartedAt: rawOpts?.progressStartedAt ?? performance.now(),
   };
+  const discoveryContext = opts.discoveryContext ?? createProjectDiscoveryContext(projectRoot);
   const discoveryTimings = opts.report ? (opts.report.timings ??= {}) : undefined;
   resetTransientBuildTimings(discoveryTimings);
   await recordTimedBuildStep(discoveryTimings, "file-identity", () =>
@@ -1514,13 +1537,13 @@ export async function buildProjectIndexIncremental(
     // the shared finalization path with a read-only manifest, so they never rewrite
     // project-wide state.
     if (declaredScope && !declaredScope.length) {
-      return await buildDeclaredScopeIndex(projectRoot, declaredScope, opts);
+      return await buildDeclaredScopeIndex(projectRoot, declaredScope, opts, { discoveryContext });
     }
     if (cacheMode !== "disk") {
       if (declaredScope) {
-        return await buildDeclaredScopeIndex(projectRoot, declaredScope, opts);
+        return await buildDeclaredScopeIndex(projectRoot, declaredScope, opts, { discoveryContext });
       }
-      return await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
+      return await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true, discoveryContext });
     }
     startCheckProgress();
     const manifestStart = performance.now();
@@ -1546,7 +1569,13 @@ export async function buildProjectIndexIncremental(
       manifestReport.optionsMismatch = optionDiffs;
     }
     const currentConfigHashResult = await recordTimedBuildStep(timings, "config-hash", () =>
-      computeConfigHash(projectRoot, opts?.logLevel),
+      computeConfigHash(projectRoot, opts?.logLevel, discoveryContext, {
+        onDiscoveryProgress: (progress) =>
+          emitIndexCheckActivity(opts, progress.activity, progress.current, progress.total),
+        ...(timings
+          ? { onDiscoveryTiming: (step: { name: string; ms: number }) => recordBuildTimingStep(timings, step) }
+          : {}),
+      }),
     );
     const currentConfigHash = recordConfigHashResult(manifestReport, currentConfigHashResult, opts?.logLevel);
     const configChanged =
@@ -1592,9 +1621,10 @@ export async function buildProjectIndexIncremental(
         ignoreExistingManifest: true,
         reportDiscoveryProgress: true,
         configHash: currentConfigHashResult,
+        discoveryContext,
       });
     }
-    const gitAvailable = await isGitRepo(projectRoot);
+    const gitAvailable = await isGitRepo(projectRoot, discoveryContext.git);
     const hasExplicitGitRange = !!opts?.gitBase || !!opts?.gitHead;
     // Diff against the working tree, not just the last-indexed commit: a file that was
     // `git add`ed but never committed is neither a tracked manifest entry nor reported
@@ -1643,6 +1673,7 @@ export async function buildProjectIndexIncremental(
           ignoreExistingManifest: true,
           reportDiscoveryProgress: true,
           configHash: currentConfigHashResult,
+          discoveryContext,
         });
         if (manifestReport) {
           manifestReport.reason = "staleGitCommit";
@@ -1668,6 +1699,7 @@ export async function buildProjectIndexIncremental(
           ignoreExistingManifest: true,
           reportDiscoveryProgress: true,
           configHash: currentConfigHashResult,
+          discoveryContext,
         });
       }
     }
@@ -1724,7 +1756,7 @@ export async function buildProjectIndexIncremental(
           untrackedFiles = reconciledUntrackedFiles;
         } else {
           untrackedFiles = await measureSourceDiscovery(() =>
-            listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable),
+            listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable, discoveryContext.git),
           );
         }
       } catch (error) {
@@ -1742,6 +1774,7 @@ export async function buildProjectIndexIncremental(
           ignoreExistingManifest: true,
           reportDiscoveryProgress: true,
           configHash: currentConfigHashResult,
+          discoveryContext,
         });
       }
     } else if (!opts?.filesAreProjectScope) {
@@ -1761,6 +1794,7 @@ export async function buildProjectIndexIncremental(
                   recordBuildTimingStep(discoveryTimings, step),
               }
             : {}),
+          ...(discoveryContext ? { discoveryContext } : {}),
         }),
       );
     }
@@ -1824,6 +1858,7 @@ export async function buildProjectIndexIncremental(
             allowEmpty: true,
             transientFiles,
             configHash: currentConfigHashResult,
+            discoveryContext,
             ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
           }),
       });
@@ -1885,6 +1920,7 @@ export async function buildProjectIndexIncremental(
         snapshot.projectFiles = await discoverProjectFilesWithGitCandidates(projectRoot, {
           ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
           ...(discoveredGitCandidates !== undefined ? { knownGitCandidates: discoveredGitCandidates } : {}),
+          ...(discoveryContext ? { discoveryContext } : {}),
         });
         if (discoveryTimings)
           discoveryTimings.metadataDiscoveryMs = Math.round(performance.now() - metadataDiscoveryStart);
@@ -2233,6 +2269,7 @@ export async function buildProjectIndexIncremental(
             manifestReport,
             transientFiles,
             configHash: currentConfigHashResult,
+            discoveryContext,
             ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
           }),
       });
@@ -2247,6 +2284,7 @@ export async function buildProjectIndexIncremental(
         parsedMap,
         bloomFilterCache,
         ...(discoveredGitCandidates !== undefined ? { knownGitCandidates: discoveredGitCandidates } : {}),
+        ...(discoveryContext ? { discoveryContext } : {}),
         manifestEntries: projectIndexManifestEntries(
           // `manifestEntries` (a `ManifestFileEntry`) never carries `cacheSig` -- that field
           // only lives on `FileSignature`. Overlay each entry with the `cacheSig` this build

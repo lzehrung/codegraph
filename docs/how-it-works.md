@@ -16,7 +16,9 @@ The first index-backed question, such as `codegraph explore "..." --root .`, may
 
 ## Discovery
 
-Commands start from the project root and any selected scan roots. codegraph walks those roots, applies supported-extension filtering, honors `.gitignore` by default, and then applies configured and command-line include or ignore globs. Excluding generated, vendored, and fixture trees here avoids reading or parsing them later.
+Commands start from the project root and any selected scan roots. Git repositories normally use tracked and non-ignored untracked paths; other modes scan the filesystem. Discovery applies supported-extension filtering, honors `.gitignore` by default, and applies configured and command-line include or ignore globs. Excluding generated, vendored, and fixture trees here avoids reading or parsing them later.
+
+Each index build shares config inputs, Git paths, directory listings, and ignore rules across config, source, and metadata discovery. Root config files are checked even when Git ignores them. Ignore files inside excluded trees are not hashed on the Git path; changes to parent rules that expose those trees are detected. The context is discarded after the build; source-file signatures and symlink checks stay fresh.
 
 Each discovered file is mapped to a language definition. First-class source languages feed the shared Tree-sitter pipeline. Graph-first formats such as documentation and templates use their dedicated link or specifier extractors where the [language parity matrix](./language-parity.md) says graph support is available.
 

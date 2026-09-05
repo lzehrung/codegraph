@@ -16,9 +16,23 @@ export const DEFAULT_GIT_TIMEOUT_MS = 30_000;
 
 type GitExcludeFile = { file: string; baseDir: string; priority: number };
 
-const gitRepositoryChecks = new Map<string, Promise<boolean>>();
-const gitDiscoveryRootIgnoredChecks = new Map<string, Promise<boolean>>();
-const gitExcludeFileChecks = new Map<string, Promise<GitExcludeFile[]>>();
+/** Git facts shared only by callers in the same discovery operation. */
+export type GitDiscoveryCache = {
+  repositories: Map<string, Promise<boolean>>;
+  ignoredRoots: Map<string, Promise<boolean>>;
+  excludeFiles: Map<string, Promise<GitExcludeFile[]>>;
+  untrackedFiles: Map<string, Promise<string[]>>;
+};
+
+export function createGitDiscoveryCache(): GitDiscoveryCache {
+  return {
+    repositories: new Map(),
+    ignoredRoots: new Map(),
+    excludeFiles: new Map(),
+    untrackedFiles: new Map(),
+  };
+}
+
 const MAX_GIT_HASH_OBJECT_ARGUMENT_BYTES = 24 * 1024;
 
 let gitExecutableForTests: string | null = null;
@@ -93,17 +107,6 @@ export type RunGitOptions = {
   /** Test hook: observe the spawned child (e.g. to assert timeout kill). */
   onSpawn?: ((child: { pid?: number }) => void) | undefined;
 };
-
-/** Test-only: drop memoized Git repository checks. */
-export function clearGitRepositoryCheckCacheForTests(): void {
-  gitRepositoryChecks.clear();
-}
-
-/** Test-only: drop memoized Git discovery facts. */
-export function clearGitDiscoveryCacheForTests(): void {
-  gitDiscoveryRootIgnoredChecks.clear();
-  gitExcludeFileChecks.clear();
-}
 
 function resolveGitTimeoutMs(timeoutMs: number | undefined): number {
   if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0) {
@@ -368,9 +371,9 @@ export async function getGitHead(projectRoot: string): Promise<string | null> {
   }
 }
 
-export async function isGitRepo(projectRoot: string): Promise<boolean> {
+export async function isGitRepo(projectRoot: string, cache?: GitDiscoveryCache): Promise<boolean> {
   const resolvedRoot = path.resolve(projectRoot);
-  const cached = gitRepositoryChecks.get(resolvedRoot);
+  const cached = cache?.repositories.get(resolvedRoot);
   if (cached) return await cached;
   const check = (async () => {
     try {
@@ -380,7 +383,7 @@ export async function isGitRepo(projectRoot: string): Promise<boolean> {
       return false;
     }
   })();
-  gitRepositoryChecks.set(resolvedRoot, check);
+  cache?.repositories.set(resolvedRoot, check);
   return await check;
 }
 
@@ -402,16 +405,13 @@ export async function isGitPathIgnored(projectRoot: string, file: string): Promi
   return await runGitPathPredicate(projectRoot, ["check-ignore", "--quiet", "--no-index", "--", normalizePath(file)]);
 }
 
-/**
- * Whether Git ignores the requested project root. This value is static for a root during
- * process lifetime and lets repeated discovery avoid spawning `git check-ignore`.
- */
-export async function isGitProjectRootIgnored(projectRoot: string): Promise<boolean> {
+/** Whether Git ignores the requested root in this discovery operation. */
+export async function isGitProjectRootIgnored(projectRoot: string, cache?: GitDiscoveryCache): Promise<boolean> {
   const resolvedRoot = path.resolve(projectRoot);
-  const cached = gitDiscoveryRootIgnoredChecks.get(resolvedRoot);
+  const cached = cache?.ignoredRoots.get(resolvedRoot);
   if (cached) return await cached;
   const check = isGitPathIgnored(resolvedRoot, resolvedRoot);
-  gitDiscoveryRootIgnoredChecks.set(resolvedRoot, check);
+  cache?.ignoredRoots.set(resolvedRoot, check);
   return await check;
 }
 
@@ -752,14 +752,14 @@ export async function listGitSubmoduleDirectories(
  */
 export async function listGitExcludeFiles(
   projectRoot: string,
-  opts?: { gitAvailable?: boolean },
+  opts?: { gitAvailable?: boolean; discoveryCache?: GitDiscoveryCache },
 ): Promise<GitExcludeFile[]> {
   if (!(opts?.gitAvailable ?? true)) return [];
   const resolvedRoot = path.resolve(projectRoot);
-  const cached = gitExcludeFileChecks.get(resolvedRoot);
+  const cached = opts?.discoveryCache?.excludeFiles.get(resolvedRoot);
   if (cached) return await cached;
   const check = listGitExcludeFilesUncached(resolvedRoot);
-  gitExcludeFileChecks.set(resolvedRoot, check);
+  opts?.discoveryCache?.excludeFiles.set(resolvedRoot, check);
   return await check;
 }
 
@@ -825,12 +825,23 @@ async function listGitExcludeFilesUncached(projectRoot: string): Promise<GitExcl
  */
 export async function listUntrackedFiles(
   projectRoot: string,
-  opts?: { gitAvailable?: boolean; respectGitignore?: boolean },
+  opts?: { gitAvailable?: boolean; respectGitignore?: boolean; discoveryCache?: GitDiscoveryCache },
 ): Promise<string[]> {
   const gitAvailable = opts?.gitAvailable ?? true;
   if (!gitAvailable) return [];
+  const respectGitignore = opts?.respectGitignore ?? true;
+  const cache = opts?.discoveryCache?.untrackedFiles;
+  const cacheKey = `${path.resolve(projectRoot)}\0${respectGitignore ? 1 : 0}`;
+  const cached = cache?.get(cacheKey);
+  if (cached) return cached;
+  const listing = listUntrackedFilesUncached(projectRoot, respectGitignore);
+  cache?.set(cacheKey, listing);
+  return listing;
+}
+
+async function listUntrackedFilesUncached(projectRoot: string, respectGitignore: boolean): Promise<string[]> {
   const args = ["ls-files", "--others", "-z"];
-  if (opts?.respectGitignore ?? true) args.push("--exclude-standard");
+  if (respectGitignore) args.push("--exclude-standard");
   try {
     const stdout = await runGitCollectStdout(projectRoot, args);
     // git ls-files -z NUL-delimits entries; the trailing split segment is always an

@@ -5,6 +5,7 @@ import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
 import { computeConfigHash, loadManifest } from "../indexer/build-cache/manifest.js";
 import { logWithLevel } from "../logging.js";
 import { mapLimit } from "../util/concurrency.js";
+import { createProjectDiscoveryContext, type ProjectDiscoveryContext } from "../util/projectFiles.js";
 import { normalizeGraphOptions, summarizeBuildOptions } from "../indexer/build-cache/options.js";
 import type { BuildOptions } from "../indexer/types.js";
 import type { AnalysisSummary } from "../analysisSummary.js";
@@ -176,12 +177,16 @@ export async function getCodegraphLifecycleStatus(
   }
   // Status must recompute the current config hash and compare it to the value stored at
   // last sync. Reusing a persisted hash here would make configChanged permanently false.
-  const configHash = await hashConfig(root, options.buildOptions?.logLevel);
+  const discoveryContext = createProjectDiscoveryContext(root);
+  const configHash = await hashConfig(root, options.buildOptions?.logLevel, discoveryContext);
   const buildOptionsHash = hashBuildOptions(options.buildOptions);
-  const files = await listAgentSessionFiles({
-    root,
-    ...(options.buildOptions ? { buildOptions: options.buildOptions } : {}),
-  });
+  const files = await listAgentSessionFiles(
+    {
+      root,
+      ...(options.buildOptions ? { buildOptions: options.buildOptions } : {}),
+    },
+    discoveryContext,
+  );
   const fileSignatureHash = await hashDiscoveredFiles(files, root);
   const configChanged = manifest.configHash !== configHash;
   const buildOptionsChanged = manifest.buildOptionsHash !== buildOptionsHash;
@@ -387,8 +392,12 @@ async function resolveLifecycleConfigHash(
   return await hashConfig(root, buildOptions?.logLevel);
 }
 
-async function hashConfig(root: string, logLevel: BuildOptions["logLevel"]): Promise<string> {
-  const result = await computeConfigHash(root, logLevel);
+async function hashConfig(
+  root: string,
+  logLevel: BuildOptions["logLevel"],
+  discoveryContext?: ProjectDiscoveryContext,
+): Promise<string> {
+  const result = await computeConfigHash(root, logLevel, discoveryContext);
   if (result.error) {
     logWithLevel(logLevel, "warn", `Warning: Codegraph lifecycle config drift check: ${result.error}`);
   }

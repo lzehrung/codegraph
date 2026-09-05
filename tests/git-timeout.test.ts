@@ -4,8 +4,6 @@ import path from "node:path";
 import fsp from "node:fs/promises";
 
 import {
-  clearGitDiscoveryCacheForTests,
-  clearGitRepositoryCheckCacheForTests,
   DEFAULT_GIT_TIMEOUT_MS,
   getGitHead,
   isGitRepo,
@@ -35,8 +33,6 @@ async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> 
 
 afterEach(() => {
   setGitExecutableForTests(null);
-  clearGitRepositoryCheckCacheForTests();
-  clearGitDiscoveryCacheForTests();
 });
 
 describe("bounded Git execution", () => {

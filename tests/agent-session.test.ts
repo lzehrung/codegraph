@@ -15,7 +15,6 @@ import { createProjectSnapshotIdentity } from "../src/indexer/build-cache.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
 import type { ProgressUpdate } from "../src/types.js";
 import * as projectFilesModule from "../src/util/projectFiles.js";
-import * as gitModule from "../src/util/git.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { runGit as git } from "./helpers/git.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
@@ -914,7 +913,7 @@ describe("agent session", () => {
     // Prime the manifest via a real build, matching how loadProject() itself would.
     await createAgentSession({ root }).loadProject({ symbolGraph: "skip" });
 
-    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFilesWithGitCandidates");
     const files = (await listAgentSessionFiles({ root })).map((file) => file.replace(/\\/g, "/"));
 
     expect(files.some((file) => file.endsWith("/main.ts"))).toBe(true);
@@ -926,7 +925,7 @@ describe("agent session", () => {
     await createAgentSession({ root }).loadProject({ symbolGraph: "skip" });
 
     await fs.writeFile(path.join(root, "fresh.ts"), "export const fresh = 1;\n", "utf8");
-    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFilesWithGitCandidates");
     const files = (await listAgentSessionFiles({ root })).map((file) => file.replace(/\\/g, "/"));
 
     expect(files.some((file) => file.endsWith("/fresh.ts"))).toBe(true);
@@ -937,7 +936,7 @@ describe("agent session", () => {
     const root = await mkRepo();
     await createAgentSession({ root }).loadProject({ symbolGraph: "skip" });
 
-    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFilesWithGitCandidates");
     const files = await listAgentSessionFiles({ root });
 
     expect(files.some((file) => file.endsWith("main.ts"))).toBe(true);
@@ -948,7 +947,7 @@ describe("agent session", () => {
     const root = await mkGitRepo();
     await createAgentSession({ root }).loadProject({ symbolGraph: "skip" });
 
-    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFilesWithGitCandidates");
     const files = await listAgentSessionFiles({ root, buildOptions: { cacheStrict: true } });
 
     expect(files.some((file) => file.endsWith("main.ts"))).toBe(true);
@@ -959,7 +958,7 @@ describe("agent session", () => {
     const root = await mkGitRepo();
     await createAgentSession({ root }).loadProject({ symbolGraph: "skip" });
 
-    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFilesWithGitCandidates");
     const files = await listAgentSessionFiles({
       root,
       useConfig: false,
@@ -974,13 +973,19 @@ describe("agent session", () => {
     const root = await mkGitRepo();
     await createAgentSession({ root, freshness: { policy: "manual" } }).loadProject({ symbolGraph: "skip" });
 
-    const diffSpy = vi.spyOn(gitModule, "listChangedFiles");
-    const untrackedSpy = vi.spyOn(gitModule, "listUntrackedFiles");
-    const session = createAgentSession({ root, freshness: { policy: "manual" } });
-    await session.loadProject({ symbolGraph: "skip" });
-
-    expect(diffSpy).toHaveBeenCalledTimes(1);
-    expect(untrackedSpy).toHaveBeenCalledTimes(1);
+    const traceFile = path.join(root, "git-trace.log");
+    const previousTrace = process.env.GIT_TRACE;
+    process.env.GIT_TRACE = traceFile;
+    try {
+      const session = createAgentSession({ root, freshness: { policy: "manual" } });
+      await session.loadProject({ symbolGraph: "skip" });
+    } finally {
+      if (previousTrace === undefined) delete process.env.GIT_TRACE;
+      else process.env.GIT_TRACE = previousTrace;
+    }
+    const trace = await fs.readFile(traceFile, "utf8");
+    expect(trace.match(/git diff [^\r\n]*--name-only/g)).toHaveLength(1);
+    expect(trace.match(/git ls-files --others -z --exclude-standard/g)).toHaveLength(1);
   });
 
   it("reuses the fast discovery path for checkFreshness on an unchanged Git-backed project", async () => {
@@ -991,7 +996,7 @@ describe("agent session", () => {
       throw new Error("agent session should expose freshness checks");
     }
 
-    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFilesWithGitCandidates");
     const freshness = await session.checkFreshness();
 
     expect(freshness).toEqual({ state: "fresh" });

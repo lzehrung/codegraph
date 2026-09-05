@@ -3083,6 +3083,82 @@ describe("Cache invalidation and strict hashing", () => {
     expect(report.manifest?.reused).toBe(false);
   });
 
+  it("rebuilds and indexes a file exposed by removing an ignore rule", async () => {
+    // The inverse of "rebuilds when .gitignore files change": a rule edit that widens
+    // the visible file set, not narrows it, must still be recognized as a config change.
+    const root = await mkTmpDir("dg-gitignore-unignore-config-");
+    const trackedPath = path.join(root, "src", "main.ts");
+    const formerlyHiddenPath = path.join(root, "src", "generated.ts");
+
+    await fsp.mkdir(path.dirname(trackedPath), { recursive: true });
+    await fsp.writeFile(trackedPath, "export const main = 1;\n", "utf8");
+    await fsp.writeFile(formerlyHiddenPath, "export const generated = 1;\n", "utf8");
+    await fsp.writeFile(path.join(root, ".gitignore"), "src/generated.ts\n", "utf8");
+
+    const initial = await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    expect(initial.byFile.has(fileIdentityKey(normalize(formerlyHiddenPath)))).toBe(false);
+
+    await fsp.writeFile(path.join(root, ".gitignore"), "\n", "utf8");
+
+    const rebuilt = await buildProjectIndexIncremental(root, { threads: 2, cache: "disk" });
+
+    expect(rebuilt.byFile.has(fileIdentityKey(normalize(trackedPath)))).toBe(true);
+    expect(rebuilt.byFile.has(fileIdentityKey(normalize(formerlyHiddenPath)))).toBe(true);
+  });
+
+  it("rebuilds when the configured core.excludesFile changes", async () => {
+    const root = await mkTmpDir("dg-global-excludes-config-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "tests@example.com"]);
+    runGit(root, ["config", "user.name", "Tests"]);
+    const entryPath = path.join(root, "entry.ts");
+    await fsp.writeFile(entryPath, "export const entry = 1;\n", "utf8");
+    runGit(root, ["add", "entry.ts"]);
+    runGit(root, ["commit", "-m", "base"]);
+    await buildProjectIndex(root, { cache: "disk" });
+
+    const excludesFile = path.join(root, "global-excludes.txt");
+    await fsp.writeFile(excludesFile, "entry.ts\n", "utf8");
+    runGit(root, ["config", "core.excludesFile", excludesFile]);
+
+    const report: BuildReport = { timings: {} };
+    await buildProjectIndexIncremental(root, { cache: "disk", report });
+
+    expect(report.manifest?.used).toBe(true);
+    expect(report.manifest?.reused).toBe(false);
+  });
+
+  it("rebuilds when a submodule's .gitignore changes", async () => {
+    const submodule = await mkTmpDir("dg-submodule-gitignore-src-");
+    runGit(submodule, ["init"]);
+    runGit(submodule, ["config", "user.email", "tests@example.com"]);
+    runGit(submodule, ["config", "user.name", "Tests"]);
+    await fsp.writeFile(path.join(submodule, "plugin.ts"), "export const plugin = 1;\n", "utf8");
+    runGit(submodule, ["add", "."]);
+    runGit(submodule, ["commit", "-m", "plugin"]);
+
+    const root = await mkTmpDir("dg-submodule-gitignore-super-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "tests@example.com"]);
+    runGit(root, ["config", "user.name", "Tests"]);
+    await fsp.writeFile(path.join(root, "app.ts"), "export const app = 1;\n", "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "app"]);
+    runGit(root, ["-c", "protocol.file.allow=always", "submodule", "add", normalize(submodule), "plugins/example"]);
+    const initializedSubmodule = path.join(root, "plugins", "example");
+
+    await buildProjectIndex(root, { cache: "disk" });
+
+    await fsp.writeFile(path.join(initializedSubmodule, ".gitignore"), "plugin.ts\n", "utf8");
+
+    const report: BuildReport = { timings: {} };
+    const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk", report });
+
+    expect(report.manifest?.used).toBe(true);
+    expect(report.manifest?.reused).toBe(false);
+    expect(rebuilt.byFile.has(fileIdentityKey(normalize(path.join(initializedSubmodule, "plugin.ts"))))).toBe(false);
+  });
+
   it("picks up a newly created untracked file on an incremental build without an explicit file list", async () => {
     const root = await mkTmpDir("dg-incremental-untracked-");
     runGit(root, ["init"]);
