@@ -86,9 +86,13 @@ export async function writeIndexManifestSnapshot(args: {
   const manifestWriteStartedAt = performance.now();
   const manifestWritten = await writeManifest(args.projectRoot, args.opts, manifestData);
   recordManifestTimingStep(args.timings, "manifest-write", manifestWriteStartedAt);
-  const cachePruneStartedAt = performance.now();
-  if (manifestWritten) pruneDiskModuleCache(args.projectRoot, Object.keys(files), args.opts);
-  recordManifestTimingStep(args.timings, "cache-prune", cachePruneStartedAt);
+  if (manifestWritten) {
+    // Time this only when pruning actually runs. A failed manifest write skips it, and a
+    // recorded step would report work that never happened.
+    const cachePruneStartedAt = performance.now();
+    pruneDiskModuleCache(args.projectRoot, Object.keys(files), args.opts);
+    recordManifestTimingStep(args.timings, "cache-prune", cachePruneStartedAt);
+  }
   if (args.timings) {
     args.timings.writeManifestMs = Math.round(performance.now() - writeManifestStart);
   }

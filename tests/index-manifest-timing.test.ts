@@ -175,4 +175,20 @@ describe("index manifest config-hash reuse and timing", () => {
     expect(report.timings?.sourceDiscoveryMs).toBeUndefined();
     expect(report.timings?.cacheProbeMs).not.toBe(999);
   });
+
+  it("omits the cache-prune step when the manifest write fails", async () => {
+    const root = await temps.create("cg-prune-step-skip-");
+    await writeEntry(root, "export const value = 1;\n");
+    const report: BuildReport = { timings: {} };
+    // A failed manifest write skips pruning, so reporting the step would contradict the
+    // documented contract that a step is absent when it does not run.
+    const writeSpy = vi.spyOn(buildCache, "writeManifest").mockResolvedValue(false);
+
+    await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+
+    expect(writeSpy).toHaveBeenCalled();
+    const names = stepNames(report);
+    expect(names).toContain("manifest-write");
+    expect(names).not.toContain("cache-prune");
+  });
 });
