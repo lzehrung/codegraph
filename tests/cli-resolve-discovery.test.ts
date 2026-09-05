@@ -26,7 +26,7 @@ vi.mock("../src/util/projectFiles.js", async (importOriginal) => {
 import { parseCliArgs } from "../src/cli/context.js";
 import * as cliContext from "../src/cli/context.js";
 import { createCliBaseContext, loadCliProjectContext } from "../src/cli/invocationContext.js";
-import { normalizePath } from "../src/util/paths.js";
+import { normalizePath, resetFileIdentityCaseSensitivityForTests } from "../src/util/paths.js";
 import * as projectFilesModule from "../src/util/projectFiles.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
 import { runGit } from "./helpers/git.js";
@@ -135,6 +135,31 @@ describe("CLI resolve discovery", () => {
     });
     expect(steps.some((step) => step.name === "git-list")).toBe(true);
     expect(steps.some((step) => step.name === "filesystem-scan")).toBe(false);
+  });
+
+  test("gitignoreRoot differing only by case still uses Git candidates when identity is case-insensitive", async () => {
+    const root = await createGitFixture();
+    // A drive-letter or casing difference names the same directory on a case-insensitive
+    // filesystem. Comparing with slash normalization alone called that a mismatch and fell
+    // back to the full filesystem scan, which is the cost this fast path exists to avoid.
+    const directory = path.dirname(root);
+    const base = path.basename(root);
+    const flippedBase = base === base.toLowerCase() ? base.toUpperCase() : base.toLowerCase();
+    const caseVariantRoot = path.join(directory, flippedBase);
+    resetFileIdentityCaseSensitivityForTests(true);
+    try {
+      const steps: Array<{ name: string }> = [];
+      await projectFilesModule.listProjectFilesWithGitCandidates(root, undefined, {
+        gitignoreRoot: caseVariantRoot,
+        onDiscoveryTiming: (step) => {
+          steps.push(step);
+        },
+      });
+      expect(steps.some((step) => step.name === "git-list")).toBe(true);
+      expect(steps.some((step) => step.name === "filesystem-scan")).toBe(false);
+    } finally {
+      resetFileIdentityCaseSensitivityForTests();
+    }
   });
 
   test("include-root resolution stays scoped and CLI globs apply per scan root", async () => {

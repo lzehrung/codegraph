@@ -921,10 +921,14 @@ async function listProjectFilesInternal(
     // Git repo with a 20,000-file gitignored tree, `gitignoreRoot: scanRoot` otherwise
     // forced a filesystem scan plus a full-tree symlink probe (~403ms) instead of Git
     // listing (~66ms) of the 502 tracked paths.
+    // Compare by identity key, not slash normalization: on a case-insensitive filesystem a
+    // casing or drive-letter difference still names the same directory, and calling that a
+    // mismatch would silently drop back to the slow scan this fast path exists to avoid.
+    const scanRootKey = fileIdentityKey(root);
     const gitignoreRootMatchesScanRoot =
-      options?.gitignoreRoot === undefined || normalizePath(options.gitignoreRoot) === normalizePath(root);
+      options?.gitignoreRoot === undefined || fileIdentityKey(options.gitignoreRoot) === scanRootKey;
     const attemptedGitCandidates =
-      useGitignore && gitignoreRootMatchesScanRoot && normalizePath(realRoot) === normalizePath(root);
+      useGitignore && gitignoreRootMatchesScanRoot && fileIdentityKey(realRoot) === scanRootKey;
     const gitDiscoveryCallbacks: DiscoveryWorkCallbacks = {
       ...(options?.onDiscoveryProgress ? { onDiscoveryProgress: options.onDiscoveryProgress } : {}),
       ...(options?.onDiscoveryTiming ? { onDiscoveryTiming: options.onDiscoveryTiming } : {}),
