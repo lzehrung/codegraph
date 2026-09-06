@@ -9,10 +9,12 @@ import {
 } from "../scripts/native-targets-lib.mjs";
 import { nativeTargetPackageIdentity } from "../scripts/publish-native-targets.mjs";
 import {
+  assertChangelogPreparedForRelease,
   bumpVersion,
   computePublishPlan,
   computePublishExecutionSteps,
   detectChangedReleasePackages,
+  finalizeChangelogForRelease,
   getReleasePackage,
   hasTagForPackageVersion,
   isAllowedResumePath,
@@ -199,6 +201,111 @@ describe("release script helpers", () => {
     expect(bumpVersion("1.8.37", "major")).toBe("2.0.0");
   });
 
+  it("moves Unreleased entries into the release section and advances its links", () => {
+    const changelog = [
+      "# Changelog",
+      "",
+      "## [Unreleased]",
+      "",
+      "### Changed",
+      "",
+      "- Faster indexes.",
+      "",
+      "## [2.3.20] - 2026-09-04",
+      "",
+      "### Fixed",
+      "",
+      "- Earlier fix.",
+      "",
+      "[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.20...HEAD",
+      "[2.3.20]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.20",
+      "",
+    ].join("\n");
+
+    expect(finalizeChangelogForRelease(changelog, "2.3.21", "2026-09-05")).toBe(
+      changelog
+        .replace(
+          "## [Unreleased]\n\n### Changed\n\n- Faster indexes.\n",
+          "## [Unreleased]\n\n## [2.3.21] - 2026-09-05\n\n### Changed\n\n- Faster indexes.\n",
+        )
+        .replace(
+          "[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.20...HEAD",
+          "[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.21...HEAD\n" +
+            "[2.3.21]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.21",
+        ),
+    );
+  });
+
+  it("requires a prepared release section with no Unreleased entries", () => {
+    const changelog = [
+      "# Changelog",
+      "",
+      "## [Unreleased]",
+      "",
+      "### Fixed",
+      "",
+      "- Repair.",
+      "",
+      "## [2.3.20] - 2026-09-04",
+      "",
+      "[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.20...HEAD",
+      "[2.3.20]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.20",
+      "",
+    ].join("\n");
+    const prepared = finalizeChangelogForRelease(changelog, "2.3.21", "2026-09-05");
+
+    expect(() => assertChangelogPreparedForRelease(prepared, "2.3.21")).not.toThrow();
+    expect(() => assertChangelogPreparedForRelease(changelog, "2.3.21")).toThrow("Unreleased entries");
+    expect(() => assertChangelogPreparedForRelease(prepared, "2.3.22")).toThrow("not prepared");
+  });
+
+  it("prepares the next release changelog from the root package version", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-prepare-changelog-"));
+    const scriptPath = path.resolve(process.cwd(), "scripts/prepare-release-changelog.mjs");
+    fs.writeFileSync(path.join(tempDir, "package.json"), '{"version":"2.3.20"}\n');
+    fs.writeFileSync(
+      path.join(tempDir, "CHANGELOG.md"),
+      [
+        "# Changelog",
+        "",
+        "## [Unreleased]",
+        "",
+        "### Fixed",
+        "",
+        "- Repair.",
+        "",
+        "## [2.3.20] - 2026-09-04",
+        "",
+        "[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.20...HEAD",
+        "[2.3.20]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.20",
+        "",
+      ].join("\n"),
+    );
+
+    try {
+      const result = spawnSync(process.execPath, [scriptPath, "patch"], {
+        cwd: tempDir,
+        encoding: "utf8",
+      });
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toBe("Prepared CHANGELOG.md for 2.3.21.\n");
+      assertChangelogPreparedForRelease(fs.readFileSync(path.join(tempDir, "CHANGELOG.md"), "utf8"), "2.3.21");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a release without Unreleased entries", () => {
+    expect(() =>
+      finalizeChangelogForRelease(
+        "# Changelog\n\n## [Unreleased]\n\n## [2.3.20] - 2026-09-04\n",
+        "2.3.21",
+        "2026-09-05",
+      ),
+    ).toThrow("CHANGELOG.md has no Unreleased entries.");
+  });
+
   it("updates only the native package version for pre-build release artifacts", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-native-version-"));
     const nativePackageDir = path.join(tempDir, "packages", "codegraph-native");
@@ -313,17 +420,24 @@ describe("release script helpers", () => {
 
   it("allows resume only for managed release files", () => {
     expect(isAllowedResumePath("package.json")).toBe(true);
+    expect(isAllowedResumePath("CHANGELOG.md")).toBe(true);
     expect(isAllowedResumePath("scripts/check-native-artifacts.mjs")).toBe(true);
+
     expect(isAllowedResumePath("scripts/native-targets-lib.mjs")).toBe(true);
     expect(isAllowedResumePath("scripts/publish-native-targets.mjs")).toBe(true);
     expect(isAllowedResumePath("scripts/release-lib.mjs")).toBe(true);
     expect(isAllowedResumePath("scripts/release.mjs")).toBe(true);
+    expect(isAllowedResumePath("scripts/prepare-release-changelog.mjs")).toBe(true);
     expect(isAllowedResumePath("scripts/set-native-package-version.mjs")).toBe(true);
     expect(isAllowedResumePath("scripts/stage-native-package.mjs")).toBe(true);
     expect(isAllowedResumePath("scripts/sync-native-meta.mjs")).toBe(true);
     expect(isAllowedResumePath("tests/release-script.test.ts")).toBe(true);
     expect(isAllowedResumePath("packages/codegraph-js-fallback/package.json")).toBe(false);
     expect(isAllowedResumePath("src/indexer.ts")).toBe(false);
+  });
+
+  it("treats changelog changes as root package changes", () => {
+    expect(detectChangedReleasePackages(["CHANGELOG.md"])).toEqual(["root", "core"]);
   });
 
   it("recognizes generated native target artifacts separately from managed release files", () => {

@@ -9,19 +9,20 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [2.3.21] - 2026-09-05
+
 ### Fixed
 
-- Whole-project `codegraph index` no longer discovers the project file list and then discards it. The command resolved files before choosing a build path, but whole-project runs use Git-aware incremental discovery and never consumed that list. One reported cold run spent 53.1s of its 82.9s there. Scoped include-root runs, Git-range runs, and runs that pass a CLI discovery glob still resolve.
-- CLI file discovery no longer disables Git candidate listing when `gitignoreRoot` names the scan root itself. That gate forced a full filesystem scan plus a whole-tree directory-symlink probe, which costs one syscall per file on disk instead of listing tracked files. On a 501-file repository with a 20,000-file gitignored tree, whole-project resolution fell from 705ms to 88ms. An include-root scan that must apply the project root's ignore rules still falls back to the scan.
-- CLI discovery now walks at most once per invocation for each scan root and option set. A second whole-project walk previously ran only to produce `--include-glob` and `--ignore-glob` diagnostics, which are a no-op when neither flag is supplied, and repeat callers inside one command each triggered their own walk. The memo is per invocation, so a long-lived process never serves a stale list.
-- The native worker pool now starts in published builds. Piscina locates its own worker through `__dirname`, which esbuild does not define in ESM output, so the bundled CLI failed pool startup with `__dirname is not defined`, parsed on a single thread, and left `--workers` a silent no-op. Piscina is now an esbuild external and keeps a real CommonJS `__dirname` on disk.
-- `codegraph init` and `codegraph sync` no longer fall silent after printing `Built project index`. Progress now names `Closing disk cache`, `Reading index config hash`, `Hashing file signatures`, and `Writing lifecycle manifest`, so post-build work identifies itself instead of looking like a hang.
+- Whole-project `codegraph index` now reuses Git-aware incremental discovery instead of resolving and discarding a separate CLI file list.
+- Git candidate discovery now remains enabled when the project root is also the gitignore root, avoiding a full filesystem walk for ordinary whole-project indexes.
+- Published builds now start the configured native worker pool. The bundled CLI previously left `--workers` ineffective because Piscina could not locate its worker from esbuild's ESM output.
+- `codegraph init` and `codegraph sync` name post-index work in progress output instead of appearing to hang after the build completes.
 
 ### Changed
 
-- `--report` index timings now name the incremental preamble (`file-identity`, `clear-resolution-caches`, `load-manifest`, `diff-build-options`, `config-hash`) and split the former single `index-manifest` step into `git-head`, `config-hash`, `manifest-transform`, `manifest-write`, and `cache-prune`. `index-manifest` remains that phase's total and `writeManifestMs` keeps its meaning. A delegated cold rebuild's `totalMs` now covers the caller's whole wait instead of restarting at the inner build, so reported time matches observed time.
-- `codegraph init` and `codegraph sync` reuse the config hash the index build just persisted instead of hashing project config a third time in the same run. `codegraph status` still recomputes it, because comparing a fresh hash against the stored one is how it detects config drift.
-- Index builds share config, source, and metadata discovery. Git-backed config hashing reads root manifests and applicable ignore files without recursive config scans. Fallback scans share directory listings within the build; later builds start fresh, and file and symlink checks remain unchanged.
+- `--report` names incremental preamble and manifest substeps so cold-index time is attributable to file identity, config hashing, Git, cache, and manifest work.
+- `codegraph init` and `codegraph sync` reuse the config hash that their index build persisted, avoiding a redundant hash within the same command.
+- Index builds share config, source, and metadata discovery within one operation. Git-backed config hashing reads root manifests and applicable ignore files without a recursive config scan.
 
 ## [2.3.19] - 2026-09-04
 
@@ -415,7 +416,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.19...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.21...HEAD
+[2.3.21]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.21
 [2.3.19]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.19
 [2.3.18]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.18
 [2.3.17]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.17

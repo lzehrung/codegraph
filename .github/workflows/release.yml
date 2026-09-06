@@ -55,6 +55,20 @@ jobs:
           )
           echo "$version" >> "$GITHUB_OUTPUT"
 
+      - name: Require prepared changelog release entry
+        env:
+          ROOT_VERSION: ${{ steps.version.outputs.root_version }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import { assertChangelogPreparedForRelease } from "./scripts/release-lib.mjs";
+
+          assertChangelogPreparedForRelease(
+            fs.readFileSync("CHANGELOG.md", "utf8"),
+            process.env.ROOT_VERSION,
+          );
+          NODE
+
   build-native-artifacts:
     name: Build ${{ matrix.suffix }}
     needs:

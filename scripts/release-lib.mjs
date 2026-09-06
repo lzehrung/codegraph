@@ -10,6 +10,7 @@ export const releasePackages = [
     publishWorkspace: null,
     ownedFiles: new Set([
       "package.json",
+      "CHANGELOG.md",
       ".github/workflows/release.yml",
       "README.md",
       "PUBLISHING.md",
@@ -18,6 +19,7 @@ export const releasePackages = [
       "scripts/native-targets-lib.mjs",
       "scripts/release-lib.mjs",
       "scripts/release.mjs",
+      "scripts/prepare-release-changelog.mjs",
       "scripts/set-native-package-version.mjs",
       "scripts/stage-native-package.mjs",
       "scripts/publish-native-targets.mjs",
@@ -50,12 +52,14 @@ export const releasePackages = [
 ];
 
 export const managedReleasePaths = new Set([
+  "CHANGELOG.md",
   "package-lock.json",
   "scripts/check-native-artifacts.mjs",
   "scripts/native-targets-lib.mjs",
   "scripts/publish-native-targets.mjs",
   "scripts/release-lib.mjs",
   "scripts/release.mjs",
+  "scripts/prepare-release-changelog.mjs",
   "scripts/set-native-package-version.mjs",
   "scripts/stage-native-package.mjs",
   "scripts/sync-native-meta.mjs",
@@ -114,6 +118,82 @@ export function bumpVersion(version, releaseType) {
   if (releaseType === "patch") return `${major}.${minor}.${patch + 1}`;
   if (releaseType === "minor") return `${major}.${minor + 1}.0`;
   return `${major + 1}.0.0`;
+}
+
+export function finalizeChangelogForRelease(changelog, version, date) {
+  if (!isSemverLike(version)) {
+    throw new Error(`Unsupported release version: ${version}`);
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error(`Unsupported release date: ${date}`);
+  }
+  const unreleasedHeading = "## [Unreleased]";
+  const unreleasedStart = changelog.indexOf(`${unreleasedHeading}\n`);
+  if (unreleasedStart < 0) {
+    throw new Error("CHANGELOG.md is missing the Unreleased section.");
+  }
+  const contentStart = unreleasedStart + unreleasedHeading.length + 1;
+  const nextReleaseStart = changelog.indexOf("\n## [", contentStart);
+  if (nextReleaseStart < 0) {
+    throw new Error("CHANGELOG.md is missing a released version section.");
+  }
+  const unreleasedContent = changelog.slice(contentStart, nextReleaseStart);
+  if (!/^\s*-\s+\S/m.test(unreleasedContent)) {
+    throw new Error("CHANGELOG.md has no Unreleased entries.");
+  }
+  if (new RegExp(`^## \\[${version.replaceAll(".", "\\.")}\\]`, "m").test(changelog)) {
+    throw new Error(`CHANGELOG.md already records version ${version}.`);
+  }
+  const referencePattern = /^\[Unreleased\]: (https:\/\/github\.com\/lzehrung\/codegraph\/compare\/v[^\s]+)$/m;
+  const reference = referencePattern.exec(changelog);
+  if (!reference || !reference[1].endsWith("...HEAD")) {
+    throw new Error("CHANGELOG.md is missing the Unreleased comparison link.");
+  }
+  const releaseReference = `[${version}]: https://github.com/lzehrung/codegraph/releases/tag/v${version}`;
+  if (changelog.includes(releaseReference)) {
+    throw new Error(`CHANGELOG.md already has a release link for ${version}.`);
+  }
+  const releaseHeading = `## [${version}] - ${date}`;
+  const withReleasedSection =
+    `${changelog.slice(0, unreleasedStart)}${unreleasedHeading}\n\n${releaseHeading}\n` +
+    `${unreleasedContent}${changelog.slice(nextReleaseStart)}`;
+  return withReleasedSection.replace(
+    reference[0],
+    `[Unreleased]: https://github.com/lzehrung/codegraph/compare/v${version}...HEAD\n${releaseReference}`,
+  );
+}
+
+export function assertChangelogPreparedForRelease(changelog, version) {
+  if (!isSemverLike(version)) {
+    throw new Error(`Unsupported release version: ${version}`);
+  }
+  const unreleasedHeading = "## [Unreleased]";
+  const unreleasedStart = changelog.indexOf(`${unreleasedHeading}\n`);
+  if (unreleasedStart < 0) {
+    throw new Error("CHANGELOG.md is missing the Unreleased section.");
+  }
+  const contentStart = unreleasedStart + unreleasedHeading.length + 1;
+  const nextReleaseStart = changelog.indexOf("\n## [", contentStart);
+  if (nextReleaseStart < 0) {
+    throw new Error("CHANGELOG.md is missing a released version section.");
+  }
+  const unreleasedContent = changelog.slice(contentStart, nextReleaseStart);
+  if (/^\s*-\s+\S/m.test(unreleasedContent)) {
+    throw new Error("CHANGELOG.md has Unreleased entries. Run npm run release:prepare-changelog -- <release-type>.");
+  }
+  const releaseHeading = `## [${version}] - `;
+  if (!changelog.startsWith(releaseHeading, nextReleaseStart + 1)) {
+    throw new Error(
+      `CHANGELOG.md is not prepared for version ${version}. Run npm run release:prepare-changelog -- <release-type>.`,
+    );
+  }
+  const releaseReference = `[${version}]: https://github.com/lzehrung/codegraph/releases/tag/v${version}`;
+  if (
+    !changelog.includes(`[Unreleased]: https://github.com/lzehrung/codegraph/compare/v${version}...HEAD`) ||
+    !changelog.includes(releaseReference)
+  ) {
+    throw new Error(`CHANGELOG.md is missing release links for ${version}.`);
+  }
 }
 
 export function isAllowedResumePath(filePath) {

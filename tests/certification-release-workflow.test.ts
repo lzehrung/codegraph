@@ -30,9 +30,16 @@ describe("certified release workflows", () => {
     const reducedSmoke = jobBlock(releaseWorkflow, "package-smoke-reduced");
     const packageFunnel = jobBlock(releaseWorkflow, "package-funnel");
     const report = jobBlock(releaseWorkflow, "certification-report");
+    const plan = jobBlock(releaseWorkflow, "plan-release");
     expect(releaseWorkflow).toContain("id-token: write");
     expect(releaseWorkflow).toContain("bootstrap_public_npm:");
     expect(releaseWorkflow).toContain("default: false");
+    expect(plan).toContain("Require prepared changelog release entry");
+    expect(plan).toContain("assertChangelogPreparedForRelease");
+    expect(plan).toContain("ROOT_VERSION: ${{ steps.version.outputs.root_version }}");
+    expect(releaseWorkflow.indexOf("Require prepared changelog release entry")).toBeLessThan(
+      releaseWorkflow.indexOf("build-native-artifacts:"),
+    );
     expect(releaseWorkflow).not.toContain("registry-auth-preflight:");
     expect(releaseWorkflow).not.toContain("PACKAGE_PUBLISH_TOKEN");
     expect(releaseWorkflow).not.toContain("npm.pkg.github.com");
@@ -188,6 +195,10 @@ describe("certified release workflows", () => {
     expect(publish).toContain("node-version: 22.16.0");
     expect(publish).toContain("npx --yes npm@10.9.2 install --package-lock-only --ignore-scripts");
     expect(publish).toContain("npx --yes npm@10.9.2 ci --ignore-scripts --dry-run");
+    expect(publish).not.toContain("finalizeChangelogForRelease");
+    expect(publish).not.toContain('const changelogPath = "CHANGELOG.md"');
+    expect(publish).toContain("git add package.json package-lock.json");
+    expect(publish).not.toContain("git add CHANGELOG.md");
     expect(publish).not.toContain("\n          npm install --package-lock-only --ignore-scripts");
   });
 

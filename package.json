@@ -101,6 +101,7 @@
     "release:minor": "node ./scripts/release.mjs minor",
     "release:major": "node ./scripts/release.mjs major",
     "release:resume": "node ./scripts/release.mjs resume",
+    "release:prepare-changelog": "node ./scripts/prepare-release-changelog.mjs",
     "publish:patch": "node ./scripts/release.mjs patch --publish",
     "publish:minor": "node ./scripts/release.mjs minor --publish",
     "publish:major": "node ./scripts/release.mjs major --publish",

@@ -39,6 +39,14 @@ npm run release:minor -- --package @lzehrung/codegraph-native
 
 Use the manually triggered `release` GitHub Actions workflow for a complete certified release. Select `release_type=patch|minor|major`; the workflow publishes the certified packages, then builds, smokes, and attaches the standalone preview assets.
 
+Before dispatch, have the release agent prepare and commit the next changelog section:
+
+```powershell
+npm run release:prepare-changelog -- patch
+```
+
+Replace `patch` with `minor` or `major` when needed. This changes only `CHANGELOG.md`; commit and push it before starting the workflow. The plan job verifies the prepared version before build jobs start.
+
 The workflow uses this immutable byte flow:
 
 1. Plan the source revision and root/native versions.
