@@ -96,7 +96,7 @@ The checked result document records Node, platform, architecture, CPU, logical C
 
 The checked artifact was produced from a Windows checkout. Its environment metadata is recorded in `results.example.json`, and the generated table above is the source of its measured values.
 
-The comparison is intentionally end-to-end but not process-symmetric. Baseline reads execute inside the already-running harness; cold CLI launches a fresh Node process, discovers files, builds a cold index, searches, constructs evidence packets, and serializes JSON. Warm CLI reuses the disk cache but does not remove client-process startup, so it measures warm-project latency with cold process startup.
+The comparison is intentionally end-to-end but not process-symmetric. Baseline reads execute inside the already-running harness; cold CLI launches a fresh Node process, discovers files, builds a cold index, searches, constructs evidence packets, and serializes JSON. Warm CLI reuses the disk cache but does not remove client-process startup, so it measures warm-project latency with fresh-process startup.
 
 Warm MCP reuses one in-process handler session. Its rows isolate session reuse from client-process startup. The table measures workflow latency and call count, not equivalent-operation throughput or native parser speed.
 
