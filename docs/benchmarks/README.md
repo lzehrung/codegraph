@@ -6,7 +6,7 @@ On these tiny local fixtures:
 
 - The preselected-read baseline completes in the low single-digit milliseconds. It is a filesystem floor with known paths, not a competing repository-discovery workflow.
 - Each codegraph variant uses one declared `explore` step while the baseline uses three declared read steps. This count does not represent equivalent work, agent round trips, or tool quality.
-- Cold CLI starts a fresh process with caching disabled. Warm CLI starts a fresh process for each measured sample after an unmeasured disk-cache warmup. Warm MCP reuses one handler session after an unmeasured first request.
+- Cold CLI starts a fresh process with caching disabled. Warm CLI also starts a fresh process after an unmeasured disk-cache warmup. On tiny fixtures, its fixed startup and cache-validation cost can dominate saved indexing work. Warm MCP reuses one handler session after an unmeasured first request.
 - Every expected evidence anchor is present in every checked run.
 - The installer-preservation corpus keeps reviewed installer anchors ahead of generic MCP and benchmark decoys, recommends the installer source first, and returns its direct test.
 
@@ -50,7 +50,7 @@ Each checked scenario in [`scenarios.json`](./scenarios.json) defines a local fi
 
 - **Baseline workflow:** three declared direct UTF-8 file reads from preselected files.
 - **Cold CLI workflow (`codegraph`):** one local `codegraph explore <query> --root <fixture> --cache off --json` call in a new process for every sample.
-- **Warm CLI workflow (`warm-cli`):** one local `explore` call in a new process for every measured sample, using an isolated disk cache populated by the same unmeasured query.
+- **Warm CLI workflow (`warm-cli`):** one local `explore` call in a new process for every measured sample, using an isolated disk cache populated by the same unmeasured query. On tiny fixtures, saved index work can be smaller than its fresh-process startup and cache-validation cost.
 - **Warm MCP workflow (`warm-mcp`):** one `explore` call through one in-process MCP handler session after the same unmeasured first request. It uses a separate isolated disk cache.
 - **Tool calls:** declared measured workflow steps only. Warmup calls are excluded.
 - **File reads:** baseline read steps, or unique source paths codegraph returns in `packets` or `fileView`.
@@ -96,9 +96,9 @@ The checked result document records Node, platform, architecture, CPU, logical C
 
 The checked artifact was produced from a Windows checkout. Its environment metadata is recorded in `results.example.json`, and the generated table above is the source of its measured values.
 
-The comparison is intentionally end-to-end but not process-symmetric. Baseline reads execute inside the already-running harness and read three preselected files; cold CLI launches a fresh Node process, discovers files, builds a cold index, searches, constructs evidence packets, and serializes JSON. Warm CLI separates cache reuse from process startup.
+The comparison is intentionally end-to-end but not process-symmetric. Baseline reads execute inside the already-running harness; cold CLI launches a fresh Node process, discovers files, builds a cold index, searches, constructs evidence packets, and serializes JSON. Warm CLI reuses the disk cache but does not remove client-process startup, so it measures warm-project latency with cold process startup.
 
-Warm MCP also reuses an in-process handler session. The table measures workflow latency and call count, not equivalent-operation throughput or native parser speed.
+Warm MCP reuses one in-process handler session. Its rows isolate session reuse from client-process startup. The table measures workflow latency and call count, not equivalent-operation throughput or native parser speed.
 
 Read each wall-time row only as the named workflow latency. Do not divide any codegraph row by the baseline row to estimate a slowdown; use an equal-work engine benchmark for parser or index throughput comparisons. Compare query benchmarks only when root, revision, query, Node version, and machine state are the same.
 
