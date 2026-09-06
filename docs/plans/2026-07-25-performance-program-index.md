@@ -26,14 +26,14 @@ Warm, this repository:
 
 Where a warm command spends time:
 
-| Layer                                         | Measured cost             | Plan                                           |
-| --------------------------------------------- | ------------------------- | ---------------------------------------------- |
-| Process start + ESM module graph              | 262 ms                    | Implemented                                    |
-| Git subprocesses (7 spawns, serialized)       | ~200 ms                   | Safe reductions implemented                    |
-| Bloom filter rebuild over 668 unchanged files | 404 ms                    | Implemented                                    |
-| Detailed symbol-graph sidecar validation      | 215-240 ms                | Implemented                                    |
-| Native fingerprint (forces addon load)        | 35 ms warm / ~300 ms cold | [native](2026-07-25-native-runtime-startup.md) |
-| Project snapshot read + parse (8.97 MB)       | 42 ms, sometimes twice    | Implemented                                    |
+| Layer                                         | Measured cost             | Plan                        |
+| --------------------------------------------- | ------------------------- | --------------------------- |
+| Process start + ESM module graph              | 262 ms                    | Implemented                 |
+| Git subprocesses (7 spawns, serialized)       | ~200 ms                   | Safe reductions implemented |
+| Bloom filter rebuild over 668 unchanged files | 404 ms                    | Implemented                 |
+| Detailed symbol-graph sidecar validation      | 215-240 ms                | Implemented                 |
+| Native fingerprint (forces addon load)        | 35 ms warm / ~300 ms cold | Implemented                 |
+| Project snapshot read + parse (8.97 MB)       | 42 ms, sometimes twice    | Implemented                 |
 
 Cold start, measured once on first touch after a build:
 
@@ -44,7 +44,7 @@ Cold start, measured once on first touch after a build:
 The cold penalty is per-file overhead multiplied across the module graph (open, stat, resolve,
 read, and on Windows antivirus inspection). It is the single largest cold-start term.
 
-## Remaining plan and completed work
+## Completed work and follow-up measurement
 
 The startup work shipped lazy dispatch, a bundled CLI entry, the V8 compile cache, and
 eager-import trimming. Warm hydration now reuses persisted bloom filters and build signatures,
@@ -58,12 +58,11 @@ The proposed mtime-only zero-Git pre-gate was rejected: tracked-file mtimes cann
 new file was created, while reusing a cached discovery plan in MCP freshness checks would miss
 additions.
 
-The remaining implementation plan is [native runtime and worker startup](2026-07-25-native-runtime-startup.md).
-It avoids loading and hashing a 29 MB addon for commands that never parse a file.
+Native runtime and worker startup are implemented. Commands that never parse a file do not load or hash the addon.
 
-## Recommended implementation order
+## Follow-up measurement
 
-1. Validate installed-user impact, then finish the remaining native runtime startup work.
+1. Validate installed-user impact before more startup or hydration work.
 2. Re-measure before adding more startup or hydration work.
 
 ## Program-level acceptance
@@ -106,12 +105,7 @@ mistake recorded in the F10 correction: measuring two configurations that were n
 were labelled. Establishing it needs a profile on the current machine, which belongs to its own
 change rather than being asserted here.
 
-Priorities P0, P1, and P4 of the native runtime startup plan save work that only exists on the
-Windows runtime cache path: the addon load inside the fingerprint, the two 29 MB SHA-256 passes,
-and the entries that accumulated across versions. On Linux the addon is resolved directly with
-no cache, so those savings are structurally invisible in the table above and cannot be
-demonstrated from this machine at all. P2 and P3 are platform-independent and were each measured
-where they apply - see their sections in the native plan.
+Native runtime startup work targets Windows runtime-cache cost: fingerprint addon load, 29 MB SHA-256 passes, and stale per-version files. Linux direct loading cannot demonstrate those savings; assess them on Windows.
 
 ## Non-goals
 

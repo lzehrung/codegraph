@@ -67,26 +67,26 @@ Medians are calculated independently for each scenario and variant.
 
 | Scenario                         | Variant   | Samples | Median tool calls | Median file reads | Median wall time (ms) | Complete runs | Minimum completeness | Reviewed relationships                              |
 | -------------------------------- | --------- | ------: | ----------------: | ----------------: | --------------------: | ------------: | -------------------: | --------------------------------------------------- |
-| repo-orientation-small-ts        | baseline  |       3 |                 3 |                 3 |                 2.237 |             3 |                 100% | -                                                   |
-| repo-orientation-small-ts        | codegraph |       3 |                 1 |                 3 |               442.139 |             3 |                 100% | -                                                   |
-| repo-orientation-small-ts        | warm-cli  |       3 |                 1 |                 3 |               464.708 |             3 |                 100% | -                                                   |
-| repo-orientation-small-ts        | warm-mcp  |       3 |                 1 |                 3 |                   7.8 |             3 |                 100% | -                                                   |
-| python-import-reference          | baseline  |       3 |                 3 |                 3 |                 1.439 |             3 |                 100% | -                                                   |
-| python-import-reference          | codegraph |       3 |                 1 |                 3 |               456.742 |             3 |                 100% | -                                                   |
-| python-import-reference          | warm-cli  |       3 |                 1 |                 3 |               493.102 |             3 |                 100% | -                                                   |
-| python-import-reference          | warm-mcp  |       3 |                 1 |                 3 |                25.613 |             3 |                 100% | -                                                   |
-| sql-migration-application-review | baseline  |       3 |                 3 |                 3 |                 4.592 |             3 |                 100% | -                                                   |
-| sql-migration-application-review | codegraph |       3 |                 1 |                 3 |               514.837 |             3 |                 100% | -                                                   |
-| sql-migration-application-review | warm-cli  |       3 |                 1 |                 3 |               473.824 |             3 |                 100% | -                                                   |
-| sql-migration-application-review | warm-mcp  |       3 |                 1 |                 3 |                 8.482 |             3 |                 100% | -                                                   |
-| mixed-docs-source-graph          | baseline  |       3 |                 3 |                 3 |                 5.054 |             3 |                 100% | -                                                   |
-| mixed-docs-source-graph          | codegraph |       3 |                 1 |                 3 |               431.391 |             3 |                 100% | -                                                   |
-| mixed-docs-source-graph          | warm-cli  |       3 |                 1 |                 3 |               463.947 |             3 |                 100% | -                                                   |
-| mixed-docs-source-graph          | warm-mcp  |       3 |                 1 |                 3 |                 7.462 |             3 |                 100% | -                                                   |
-| installer-preservation-ranking   | baseline  |       3 |                 3 |                 3 |                 1.713 |             3 |                 100% | -                                                   |
-| installer-preservation-ranking   | codegraph |       3 |                 1 |                 3 |               463.728 |             3 |                 100% | 4 exact observations; ranks in results.example.json |
-| installer-preservation-ranking   | warm-cli  |       3 |                 1 |                 3 |               470.833 |             3 |                 100% | 4 exact observations; ranks in results.example.json |
-| installer-preservation-ranking   | warm-mcp  |       3 |                 1 |                 3 |                10.964 |             3 |                 100% | 4 exact observations; ranks in results.example.json |
+| repo-orientation-small-ts        | baseline  |       3 |                 3 |                 3 |                 2.528 |             3 |                 100% | -                                                   |
+| repo-orientation-small-ts        | codegraph |       3 |                 1 |                 3 |               750.271 |             3 |                 100% | -                                                   |
+| repo-orientation-small-ts        | warm-cli  |       3 |                 1 |                 3 |               761.233 |             3 |                 100% | -                                                   |
+| repo-orientation-small-ts        | warm-mcp  |       3 |                 1 |                 0 |                 0.899 |             3 |                 100% | -                                                   |
+| python-import-reference          | baseline  |       3 |                 3 |                 3 |                 2.113 |             3 |                 100% | -                                                   |
+| python-import-reference          | codegraph |       3 |                 1 |                 3 |               762.438 |             3 |                 100% | -                                                   |
+| python-import-reference          | warm-cli  |       3 |                 1 |                 3 |               768.556 |             3 |                 100% | -                                                   |
+| python-import-reference          | warm-mcp  |       3 |                 1 |                 0 |                 0.618 |             3 |                 100% | -                                                   |
+| sql-migration-application-review | baseline  |       3 |                 3 |                 3 |                 2.381 |             3 |                 100% | -                                                   |
+| sql-migration-application-review | codegraph |       3 |                 1 |                 3 |               809.596 |             3 |                 100% | -                                                   |
+| sql-migration-application-review | warm-cli  |       3 |                 1 |                 3 |                749.54 |             3 |                 100% | -                                                   |
+| sql-migration-application-review | warm-mcp  |       3 |                 1 |                 0 |                 0.478 |             3 |                 100% | -                                                   |
+| mixed-docs-source-graph          | baseline  |       3 |                 3 |                 3 |                 1.884 |             3 |                 100% | -                                                   |
+| mixed-docs-source-graph          | codegraph |       3 |                 1 |                 3 |               746.868 |             3 |                 100% | -                                                   |
+| mixed-docs-source-graph          | warm-cli  |       3 |                 1 |                 3 |               744.929 |             3 |                 100% | -                                                   |
+| mixed-docs-source-graph          | warm-mcp  |       3 |                 1 |                 0 |                 0.856 |             3 |                 100% | -                                                   |
+| installer-preservation-ranking   | baseline  |       3 |                 3 |                 3 |                 2.066 |             3 |                 100% | -                                                   |
+| installer-preservation-ranking   | codegraph |       3 |                 1 |                 3 |               760.986 |             3 |                 100% | 4 exact observations; ranks in results.example.json |
+| installer-preservation-ranking   | warm-cli  |       3 |                 1 |                 3 |               762.427 |             3 |                 100% | 4 exact observations; ranks in results.example.json |
+| installer-preservation-ranking   | warm-mcp  |       3 |                 1 |                 0 |                 0.284 |             3 |                 100% | 4 exact observations; ranks in results.example.json |
 
 <!-- benchmark-results:end -->
 
