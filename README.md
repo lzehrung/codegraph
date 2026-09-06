@@ -5,6 +5,7 @@
 </p>
 
 <p align="center">
+  <a href="https://www.npmjs.com/package/@lzehrung/codegraph"><img src="https://img.shields.io/npm/v/%40lzehrung%2Fcodegraph?logo=npm&amp;label=npm" alt="npm version"></a>
   <a href="https://github.com/lzehrung/codegraph/releases/latest"><img src="https://img.shields.io/github/v/release/lzehrung/codegraph?display_name=tag&amp;sort=semver" alt="Release"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <a href="./package.json"><img src="https://img.shields.io/badge/node-%3E%3D22.16-brightgreen.svg" alt="Node.js"></a>
