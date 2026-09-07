@@ -134,11 +134,11 @@ Do not begin by generating every possible report. Start with the question you ac
 # Map the repository before selecting a target
 codegraph orient --root . --budget small
 
-# Search a concrete term
-codegraph search "review analysis CLI" --json
+# Search a concrete term (the query is lexical: use the words that appear in code)
+codegraph search "build review report" --json
 
 # Use explore only when those results need packets and dependency paths
-codegraph explore "review analysis CLI" --root .
+codegraph explore "build review report" --root .
 
 # Follow a returned target
 codegraph explain src/review.ts
