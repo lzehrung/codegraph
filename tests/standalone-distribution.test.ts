@@ -125,13 +125,13 @@ async function createFakePackageRoot(root: string, target: string): Promise<{ pa
   const packageRoot = path.join(root, "package");
   await fsp.mkdir(path.join(packageRoot, "dist"), { recursive: true });
   await fsp.mkdir(path.join(packageRoot, "codegraph-skill", "codegraph"), { recursive: true });
-  await fsp.mkdir(path.join(packageRoot, "docs", "graph-visualization"), { recursive: true });
+  await fsp.mkdir(path.join(packageRoot, "src", "viewer"), { recursive: true });
   await fsp.mkdir(path.join(packageRoot, "node_modules", "@lzehrung", "codegraph-native"), { recursive: true });
   await fsp.writeFile(path.join(packageRoot, "dist", "cli.js"), "console.log('fake');\n", "utf8");
   await fsp.writeFile(path.join(packageRoot, "codegraph-skill", "codegraph", "SKILL.md"), "# Skill\n", "utf8");
   await Promise.all(
     VIEWER_ASSETS.map(async (asset) => {
-      await fsp.writeFile(path.join(packageRoot, "docs", "graph-visualization", asset), `${asset}\n`, "utf8");
+      await fsp.writeFile(path.join(packageRoot, "src", "viewer", asset), `${asset}\n`, "utf8");
     }),
   );
   await fsp.writeFile(
@@ -282,9 +282,7 @@ describe("standalone distribution", () => {
     expect(entries).toContain(`codegraph-${target}/bin/codegraph`);
     expect(entries).toContain(`codegraph-${target}/bin/codegraph.cmd`);
     expect(entries).toContain(`codegraph-${target}/codegraph-skill/codegraph/SKILL.md`);
-    expect(
-      VIEWER_ASSETS.every((asset) => entries.includes(`codegraph-${target}/docs/graph-visualization/${asset}`)),
-    ).toBe(true);
+    expect(VIEWER_ASSETS.every((asset) => entries.includes(`codegraph-${target}/src/viewer/${asset}`))).toBe(true);
     expect(entries).toContain(`codegraph-${target}/THIRD_PARTY_NOTICES`);
     expect(entries).toContain(
       `codegraph-${target}/node_modules/@lzehrung/codegraph-native-${result.manifest.nativeSuffix}/`,

@@ -188,7 +188,7 @@ codegraph graph --root . ./src --sqlite codegraph.sqlite
 
 The packaged viewer is a human-facing graph UI; agents should use graph JSON, SQLite, MCP, or `--json` instead. Its command is `codegraph viewer [--root <root>] [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]`; the root defaults to the current directory.
 
-![codegraph graph viewer with `src/cli.ts` selected and its immediate dependencies labeled](docs/graph-visualization/viewer-selected-node.webp)
+![codegraph graph viewer with `src/cli.ts` selected and its immediate dependencies labeled](assets/viewer-selected-node.webp)
 
 ```bash
 codegraph viewer --root . --open
@@ -198,7 +198,7 @@ codegraph viewer --root . --port 4173 --print-url
 
 The default host is `127.0.0.1` and the default port is `4173`. Without `--graph`, each UI load or reload builds a current graph projection through the automatically validated `.codegraph/cache/index-v1` index; `init`, `index`, and an exported JSON file are not prerequisites. An explicit `--graph` serves that root-confined snapshot through the same `/graph.json` route, while `--print-url` only prints the deterministic URL and exits.
 
-The UI loads Sigma, Graphology, and ForceAtlas2 from bundled `docs/graph-visualization/vendor/` assets, so the viewer stays offline and self-contained once codegraph is installed.
+The UI loads Sigma, Graphology, and ForceAtlas2 from bundled `src/viewer/vendor/` assets, so the viewer stays offline and self-contained once codegraph is installed.
 
 ## What the output looks like
 

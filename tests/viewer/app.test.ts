@@ -61,7 +61,7 @@ describe("packaged viewer graph loading", () => {
     const fetchMock = successfulFetch();
     vi.stubGlobal("fetch", fetchMock);
 
-    await import("../../docs/graph-visualization/app.js");
+    await import("../../src/viewer/app.js");
     await vi.waitFor(() =>
       expect(document.getElementById("status")?.textContent).toBe("Rendered 4 nodes and 4 edges."),
     );
@@ -82,7 +82,7 @@ describe("packaged viewer graph loading", () => {
       })),
     );
 
-    await import("../../docs/graph-visualization/app.js");
+    await import("../../src/viewer/app.js");
 
     await vi.waitFor(() =>
       expect(document.getElementById("status")?.textContent).toBe(
@@ -95,7 +95,7 @@ describe("packaged viewer graph loading", () => {
     const fetchMock = successfulFetch();
     vi.stubGlobal("fetch", fetchMock);
 
-    await import("../../docs/graph-visualization/app.js");
+    await import("../../src/viewer/app.js");
     await vi.waitFor(() =>
       expect(document.getElementById("status")?.textContent).toBe("Rendered 4 nodes and 4 edges."),
     );
@@ -121,7 +121,7 @@ describe("packaged viewer graph loading", () => {
   it("retains manual file upload after automatically loading the default graph", async () => {
     const fetchMock = successfulFetch();
     vi.stubGlobal("fetch", fetchMock);
-    await import("../../docs/graph-visualization/app.js");
+    await import("../../src/viewer/app.js");
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/graph.json"));
 
     const fileInput = document.getElementById("graph-file");

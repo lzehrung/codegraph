@@ -49,7 +49,7 @@
     "codegraph-skill",
     "THIRD_PARTY_NOTICES",
     "docs/mcp.md",
-    "docs/graph-visualization"
+    "src/viewer"
   ],
   "scripts": {
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\"",
@@ -112,7 +112,7 @@
     "graph:json": "node ./dist/cli.js graph --json --symbols-detailed --progress --output codegraph.json",
     "graph:mermaid": "node ./dist/cli.js graph --mermaid --progress --symbols-detailed --output graph.mermaid.mmd",
     "graph:dot": "node ./dist/cli.js graph --dot --progress --symbols-detailed --output graph.dot",
-    "visualizer:start": "http-server ./docs/graph-visualization -p 4173 -c-1",
+    "visualizer:start": "http-server ./src/viewer -p 4173 -c-1",
     "build:native": "npm run build --workspace=@lzehrung/codegraph-native",
     "native:create-npm-dirs": "npm run create-npm-dirs --workspace=@lzehrung/codegraph-native",
     "native:artifacts": "npm run artifacts --workspace=@lzehrung/codegraph-native",
