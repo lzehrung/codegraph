@@ -375,11 +375,9 @@ function readNativeArtifactPackages(baseDir: string): Record<string, unknown>[] 
 
 describe("package metadata", () => {
   it("parses npm pack JSON after lifecycle output", () => {
-    const stdout = `[codegraph] Bundled CLI smoke ok\n${JSON.stringify([
-      { files: [{ path: "docs/graph-visualization/app.js" }] },
-    ])}`;
+    const stdout = `[codegraph] Bundled CLI smoke ok\n${JSON.stringify([{ files: [{ path: "src/viewer/app.js" }] }])}`;
 
-    expect(parsePackedPaths(stdout)).toEqual(new Set(["docs/graph-visualization/app.js"]));
+    expect(parsePackedPaths(stdout)).toEqual(new Set(["src/viewer/app.js"]));
   });
 
   it("treats a missing native artifact staging directory as no staged artifact packages", () => {
@@ -456,10 +454,10 @@ describe("package metadata", () => {
       "vendor/sigma.js",
     ];
 
-    expect(files).toContain("docs/graph-visualization");
+    expect(files).toContain("src/viewer");
     const packedPaths = readPackedPaths();
 
-    expect(viewerAssets.every((asset) => packedPaths.has(`docs/graph-visualization/${asset}`))).toBe(true);
+    expect(viewerAssets.every((asset) => packedPaths.has(`src/viewer/${asset}`))).toBe(true);
   });
 
   it("keeps bundled skill frontmatter safe for Codex YAML parsing", () => {

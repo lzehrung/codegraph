@@ -4,9 +4,9 @@
     "this file only relaxes options whose value is specific to shipped code:",
     "- noUncheckedIndexedAccess: tests index fixtures and arrays whose shape they have",
     "  just asserted, so requiring a guard on every index adds noise without catching bugs.",
-    "- allowJs/checkJs: tests import plain-JS helpers under scripts/ and docs/ that have",
-    "  no type declarations and are not shipped.",
-    "- lib adds dom because the graph-visualization tests exercise browser-side viewer code.",
+    "- allowJs/checkJs: tests import plain-JS helpers under scripts/ (not shipped) and",
+    "  src/viewer/ (shipped as the packaged viewer's browser assets, not compiled by tsc).",
+    "- lib adds dom because the viewer tests exercise browser-side viewer code.",
     "- types adds vitest/globals because vitest.config.ts sets globals: true, so some suites",
     "  use describe/it/expect without importing them.",
     "Everything else, including strict and exactOptionalPropertyTypes, stays on."

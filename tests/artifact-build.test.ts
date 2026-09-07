@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { buildCodegraphArtifact, buildCodegraphArtifactWithSession } from "../src/agent/artifact.js";
 import { createAgentSession, type AgentSession } from "../src/agent/session.js";
 import { quoteShellArg } from "../src/agent/shell.js";
-import { buildGraph } from "../docs/graph-visualization/graph-builder.js";
+import { buildGraph } from "../src/viewer/graph-builder.js";
 import { countingSession } from "./helpers/agent.js";
 import { createArtifactOutputWithStaleFile, mkTmpDir, tryCreateDirectorySymlink } from "./helpers/filesystem.js";
 

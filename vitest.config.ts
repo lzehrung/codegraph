@@ -45,11 +45,8 @@ export default defineConfig({
       "@lzehrung/codegraph": path.resolve(rootDir, "src/index.ts"),
       "./vendor/graphology.js": "graphology",
       "./vendor/graphology-layout-forceatlas2.js": "graphology-layout-forceatlas2",
-      "./vendor/sigma.js": path.resolve(rootDir, "tests/graph-visualization/__mocks__/sigma.ts"),
-      [path.resolve(rootDir, "docs/graph-visualization/vendor/sigma.js")]: path.resolve(
-        rootDir,
-        "tests/graph-visualization/__mocks__/sigma.ts",
-      ),
+      "./vendor/sigma.js": path.resolve(rootDir, "tests/viewer/__mocks__/sigma.ts"),
+      [path.resolve(rootDir, "src/viewer/vendor/sigma.js")]: path.resolve(rootDir, "tests/viewer/__mocks__/sigma.ts"),
     },
   },
 });

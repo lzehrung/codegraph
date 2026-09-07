@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const root = process.cwd();
-const outDir = path.join(root, "docs", "graph-visualization", "vendor");
+const outDir = path.join(root, "src", "viewer", "vendor");
 const esbuildBin = path.join(
   root,
   "node_modules",

@@ -5,7 +5,7 @@ import {
   sortTree,
   autoExpandSingleChildren,
   buildEdgeIndexes,
-} from "../../docs/graph-visualization/file-tree-model.js";
+} from "../../src/viewer/file-tree-model.js";
 import compactPayload from "./fixtures/compact-payload.json" with { type: "json" };
 
 /** The viewer module is plain JS, so name the shape its tree nodes actually have. */

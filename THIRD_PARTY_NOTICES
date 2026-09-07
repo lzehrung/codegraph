@@ -7,11 +7,11 @@ Production npm package license files and package metadata remain in node_modules
 
 Bundled graph viewer libraries
 
-The packaged graph viewer vendors browser builds of graphology, graphology-layout-forceatlas2, and sigma under docs/graph-visualization/vendor/. Full MIT license texts for those bundles are also shipped alongside the assets:
+The packaged graph viewer vendors browser builds of graphology, graphology-layout-forceatlas2, and sigma under src/viewer/vendor/. Full MIT license texts for those bundles are also shipped alongside the assets:
 
-- docs/graph-visualization/vendor/LICENSE.graphology.txt
-- docs/graph-visualization/vendor/LICENSE.graphology-layout-forceatlas2.txt
-- docs/graph-visualization/vendor/LICENSE.sigma.txt
+- src/viewer/vendor/LICENSE.graphology.txt
+- src/viewer/vendor/LICENSE.graphology-layout-forceatlas2.txt
+- src/viewer/vendor/LICENSE.sigma.txt
 
 ### graphology (MIT)
 

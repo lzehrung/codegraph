@@ -7,7 +7,7 @@ import {
   buildGraph,
   EXTERNAL_NODE_COLOR,
   SYMBOL_NODE_COLOR,
-} from "../../docs/graph-visualization/graph-builder.js";
+} from "../../src/viewer/graph-builder.js";
 import compactPayload from "./fixtures/compact-payload.json" with { type: "json" };
 import legacyPayload from "./fixtures/legacy-payload.json" with { type: "json" };
 

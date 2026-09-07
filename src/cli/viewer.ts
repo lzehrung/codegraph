@@ -117,7 +117,7 @@ function resolveViewerOptions(options: ViewerServerOptions): ResolvedViewerOptio
   }
 
   const packageRoot = getCodegraphPackageRoot();
-  const assetRoot = fs.realpathSync.native(path.join(packageRoot, "docs", "graph-visualization"));
+  const assetRoot = fs.realpathSync.native(path.join(packageRoot, "src", "viewer"));
   if (!fs.statSync(assetRoot).isDirectory()) {
     throw new Error(`Viewer assets directory is not a directory: ${assetRoot}`);
   }
