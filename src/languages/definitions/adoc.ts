@@ -1,5 +1,5 @@
 import { registerLanguage } from "../registry.js";
-import { htmlStubLanguage } from "./htmlStub.js";
+import { htmlStubLanguage } from "./html-stub.js";
 
 export const ADOC_DEF = htmlStubLanguage("adoc", [".adoc", ".asciidoc"]);
 

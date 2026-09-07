@@ -1,11 +1,11 @@
 import { performance } from "node:perf_hooks";
 import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../indexer/build-index.js";
 import { type BuildOptions, type BuildReport, type CacheLocation } from "../indexer/types.js";
-import { summarizeAnalysis, type AnalysisSummary } from "../analysisSummary.js";
+import { summarizeAnalysis, type AnalysisSummary } from "../analysis-summary.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
-import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
+import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import type { LanguageExtensionMap } from "../languages.js";
-import type { ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+import type { ProjectFileDiscoveryOptions } from "../util/project-files.js";
 import { parseCacheModeOption, parseNonNegativeIntegerOption } from "./options.js";
 import { writeCliOutput } from "./pretty.js";
 

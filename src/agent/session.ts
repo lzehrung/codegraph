@@ -13,14 +13,14 @@ import {
   listProjectFilesWithGitCandidates,
   type ProjectDiscoveryContext,
   type ProjectFileDiscoveryOptions,
-} from "../util/projectFiles.js";
+} from "../util/project-files.js";
 import { mapLimit } from "../util/concurrency.js";
 import { normalizePath, toProjectDisplayPath } from "../util/paths.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions, mergeGraphOptions } from "../config.js";
 import { languageExtensionPatterns, normalizeLanguageExtensions } from "../languages.js";
 import { createAgentFileLookup } from "./normalize.js";
-import { summarizeAnalysis, type AnalysisSummary } from "../analysisSummary.js";
-import { runSessionInvalidationHooks } from "./sessionLifecycle.js";
+import { summarizeAnalysis, type AnalysisSummary } from "../analysis-summary.js";
+import { runSessionInvalidationHooks } from "./session-lifecycle.js";
 import { prepareDuplicateAnalysis, type DuplicatePreparedAnalysis } from "../duplicates.js";
 
 export type AgentProjectSnapshot = {
@@ -215,7 +215,7 @@ async function resolveAgentSessionFilePlan(
       ...(cacheLocation ? { cacheLocation } : {}),
     };
   }
-  const { DEFAULT_PROJECT_PATTERNS } = await import("../util/projectFiles.js");
+  const { DEFAULT_PROJECT_PATTERNS } = await import("../util/project-files.js");
   const customPatterns = languageExtensionPatterns(languageExtensions);
   const patterns = customPatterns.length ? [...DEFAULT_PROJECT_PATTERNS, ...customPatterns] : undefined;
   emitAgentFilePlanProgress(options);

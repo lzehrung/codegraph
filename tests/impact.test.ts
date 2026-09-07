@@ -9,7 +9,7 @@ import { analyzeImpactFromDiff, listCandidateTestFiles } from "../src/impact/ind
 import { analyzeImpact } from "../src/impact/analyzer.js";
 import { createImpactDiagnostics } from "../src/impact/collect.js";
 import { buildImpactReport } from "../src/impact/report.js";
-import { summarizeAnalysis } from "../src/analysisSummary.js";
+import { summarizeAnalysis } from "../src/analysis-summary.js";
 import { type CompactImpactReport, type ChangedSymbol, type FileChange, type ImpactItem } from "../src/impact/types.js";
 import type { BuildReport, ProjectIndex, SymbolHandle } from "../src/indexer/types.js";
 import type { Range } from "../src/types.js";

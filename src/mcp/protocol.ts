@@ -3,8 +3,8 @@ import { Transform, type Readable, type Writable } from "node:stream";
 import { ProtocolError, ProtocolErrorCode, Server, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { AgentExplanationReference } from "../agent/explain.js";
-import type { AgentFollowUp } from "../agent/followUps.js";
-import { MAX_FILE_VIEW_BYTES, MAX_FILE_VIEW_LINES } from "../agent/fileView.js";
+import type { AgentFollowUp } from "../agent/follow-ups.js";
+import { MAX_FILE_VIEW_BYTES, MAX_FILE_VIEW_LINES } from "../agent/file-view.js";
 import { MAX_GRAPH_DEPTH } from "../agent/search.js";
 import { errorMessage } from "../util/errors.js";
 import { SymbolKind } from "../indexer/types.js";
@@ -22,9 +22,9 @@ import {
   createInstalledVersionChecker,
   type CodegraphRuntimeIdentity,
   type InstalledVersionChecker,
-} from "../runtimeIdentity.js";
+} from "../runtime-identity.js";
 import type { CodegraphMcpHandlers, McpTruncationMeta } from "./handlers.js";
-import { getLegacyRequestAbortSignal } from "./legacySessions.js";
+import { getLegacyRequestAbortSignal } from "./legacy-sessions.js";
 
 export const DEFAULT_MCP_TOOL_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_MCP_TOOL_TIMEOUT_MS = 2_147_483_647;

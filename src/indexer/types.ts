@@ -7,7 +7,7 @@ import type { ScopeIndex } from "./scope-types.js";
 import type { ReferenceCandidateIndex } from "./reference-candidate-types.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import type { Edge, FileId, Graph, ProgressUpdate, Range } from "../types.js";
-import type { ProjectDiscoveryContext, ProjectFileDiscoveryOptions, ProjectFileInfo } from "../util/projectFiles.js";
+import type { ProjectDiscoveryContext, ProjectFileDiscoveryOptions, ProjectFileInfo } from "../util/project-files.js";
 import type { ImportBinding } from "./import-types.js";
 
 export type { ImportBinding } from "./import-types.js";
@@ -119,7 +119,7 @@ export type ProjectIndex = {
   exportCache: Map<string, ResolvedExport | null>;
   scopeCache: Map<string, ScopeIndex>;
   parsed?: Map<string, ParsedFileContext> | undefined;
-  bloomFilters?: import("../util/bloomFilter.js").BloomFilterCache;
+  bloomFilters?: import("../util/bloom-filter.js").BloomFilterCache;
   projectFiles?: ProjectFileInfo[];
   referenceCandidates?: ReferenceCandidateIndex;
   sqlNavigation?: SqlNavigationCache;

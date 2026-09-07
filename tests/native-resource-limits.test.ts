@@ -10,13 +10,13 @@ import {
   DEFAULT_NATIVE_MAX_PROJECTED_NODES,
   DEFAULT_NATIVE_SOURCE_MAX_BYTES,
   runExtractionBatch,
-} from "../src/worker/nativeExtractWorker.js";
+} from "../src/worker/native-extract-worker.js";
 import { buildProjectIndex, buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { cacheSignatureForFile, fileSignature, writeToCache } from "../src/indexer/build-cache/module-cache.js";
-import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
+import { isNativeTreeSitterAvailable } from "../src/native/tree-sitter-native.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { TS_SUPPORT } from "../src/languages.js";
-import { BloomFilter, buildBloomFilterFromSource } from "../src/util/bloomFilter.js";
+import { BloomFilter, buildBloomFilterFromSource } from "../src/util/bloom-filter.js";
 
 import type { NativeBinding, NativeSyntaxTree } from "../src/native/contracts.js";
 import { createStubNativeSyntaxTree } from "./helpers/native.js";

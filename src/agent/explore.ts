@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { AnalysisSummary } from "../analysisSummary.js";
+import type { AnalysisSummary } from "../analysis-summary.js";
 import { getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/traversal.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import { boundList, countOmitted } from "../presentation/bounds.js";
@@ -11,9 +11,9 @@ import {
   formatAgentFileViewResponse,
   getCodegraphFileViewWithSession,
   type AgentFileViewResponse,
-} from "./fileView.js";
+} from "./file-view.js";
 import { getCodegraphPacketWithSession, type AgentPacketResponse } from "./packet.js";
-import { formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./followUps.js";
+import { formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./follow-ups.js";
 import { searchCodegraphWithSession, type AgentSearchResponse, type AgentSearchResult } from "./search.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
 

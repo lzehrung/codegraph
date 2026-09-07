@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import prepareQueryIndexWorkerTask from "../src/agent/query-index/queryIndexWorker.js";
+import prepareQueryIndexWorkerTask from "../src/agent/query-index/query-index-worker.js";
 import { MAX_QUERY_INDEX_TEXT_BYTES, prepareQueryIndexFile } from "../src/agent/query-index/content.js";
 
 const roots: string[] = [];
@@ -87,7 +87,7 @@ describe("prepareQueryIndexFile branches", () => {
     const root = await createRoot({
       "src/fallback.ts": "const a = 1;\nconst b = 2;\n",
     });
-    const chunking = await import("../src/chunking/chunkFile.js");
+    const chunking = await import("../src/chunking/chunk-file.js");
     vi.spyOn(chunking, "chunkFile").mockImplementation(() => {
       throw new Error("semantic chunk boom");
     });

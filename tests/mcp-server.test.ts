@@ -1,5 +1,5 @@
-import { registerSessionInvalidationHook } from "../src/agent/sessionLifecycle.js";
-import { ensureSessionQueryIndex } from "../src/agent/query-index/sessionStore.js";
+import { registerSessionInvalidationHook } from "../src/agent/session-lifecycle.js";
+import { ensureSessionQueryIndex } from "../src/agent/query-index/session-store.js";
 import fs from "node:fs/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
@@ -32,8 +32,8 @@ import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY } from "../src/sqlite.js";
 import { countingSession } from "./helpers/agent.js";
 import { createArtifactOutputWithStaleFile, createLinkedTempRoot, isSymlinkUnavailable } from "./helpers/filesystem.js";
-import type { CodegraphRuntimeIdentity, InstalledVersionChecker } from "../src/runtimeIdentity.js";
-import { getCodegraphVersion } from "../src/util/packageInfo.js";
+import type { CodegraphRuntimeIdentity, InstalledVersionChecker } from "../src/runtime-identity.js";
+import { getCodegraphVersion } from "../src/util/package-info.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { runGit } from "./helpers/git.js";
 

@@ -36,10 +36,10 @@ import {
   clearImportResolutionCaches,
   clearResolutionCaches,
 } from "../src/util.js";
-import * as projectFilesModule from "../src/util/projectFiles.js";
+import * as projectFilesModule from "../src/util/project-files.js";
 import * as gitModule from "../src/util/git.js";
 import * as incrementalPlan from "../src/indexer/incremental-plan.js";
-import * as filePrep from "../src/languages/filePrep.js";
+import * as filePrep from "../src/languages/file-prep.js";
 import { getAllLanguages, getLanguageById } from "../src/languages/registry.js";
 import type { LanguageDefinition } from "../src/languages/types.js";
 import {
@@ -3172,7 +3172,7 @@ describe("Cache invalidation and strict hashing", () => {
 
     const freshPath = path.join(root, "fresh.ts");
     await fsp.writeFile(freshPath, "export const fresh = 1;\n", "utf8");
-    // build-index.ts imports listProjectFiles directly from util/projectFiles.js, not
+    // build-index.ts imports listProjectFiles directly from util/project-files.js, not
     // through the src/util.js barrel, so the spy must target that module to actually
     // intercept the call this test is asserting against.
     const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");

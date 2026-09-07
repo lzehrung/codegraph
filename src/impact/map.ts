@@ -8,7 +8,7 @@ import {
   isProjectSymbolExported,
   symbolHandleFromLocal,
 } from "../indexer/declarations.js";
-import { isGraphOnlyLanguage } from "../documentLinks.js";
+import { isGraphOnlyLanguage } from "../document-links.js";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../languages.js";
 import type { LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";

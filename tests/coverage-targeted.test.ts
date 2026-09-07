@@ -5,17 +5,17 @@ import {
   detectSymbolChanges,
   symbolIdentifier,
   type SymbolHash,
-} from "../src/util/symbolHash.js";
+} from "../src/util/symbol-hash.js";
 import { getIOSemaphore, mapLimitSemaphore, resetIOSemaphore, Semaphore } from "../src/util/concurrency.js";
 import { sliceText, stringifyUnknown, toRange, unquote } from "../src/util/ast.js";
 import { graphToTriples, type SymbolGraph, type SymbolNode } from "../src/index.js";
 import { SymbolKind, type ExportEntry, type SymbolDef } from "../src/indexer.js";
 import type { Graph } from "../src/types.js";
-import runNativeExtraction, { createNativeExtractor } from "../src/worker/nativeExtractWorker.js";
+import runNativeExtraction, { createNativeExtractor } from "../src/worker/native-extract-worker.js";
 import { compareEdges, edgeKey, parseGoImportAlias, toRelativeEdge } from "../src/indexer/shared.js";
 import { collectImportsForFile } from "../src/indexer.js";
 import { TS_SUPPORT } from "../src/languages.js";
-import type { NativeCapture, NativeQueryResults } from "../src/native/treeSitterNative.js";
+import type { NativeCapture, NativeQueryResults } from "../src/native/tree-sitter-native.js";
 import { createStubNativeSyntaxTree } from "./helpers/native.js";
 
 const makeRange = (start: number, end: number) => ({

@@ -90,7 +90,7 @@ The server exposes the same bounded primitives as the CLI and library session la
 - `file_deps`, `path`: dependency navigation; pass `direction: "deps"` or `"rdeps"` to `file_deps`. `file_deps` uses the same collection `limit` default 25 / max 500 as `refs`. `file_deps.file` accepts a portable symbol handle or qualified symbol path and traverses its declaring file. `dependencies`/`reverseDependencies` carry the same `limit`/`totalSeen`/`truncated`/`omitted` metadata as `refs`, so a capped prefix is always distinguishable from a complete result; when truncated, `totalSeen` and `omitted` are lower bounds from the bounded probe, not full graph-wide counts.
 - `impact`: compact git-range impact analysis (`format: "compact"`, `impacted`, diagnostics). Bounded by default.
 - `review`: git-range review report (`riskSummary`, `reviewTasks`, candidate tests). MCP is a bounded transport: `projectFiles`, `changedFiles` (including per-file `symbols`), `graphDelta`, and `candidateTests` are capped at the response's `limits` with exact per-collection `omittedCounts`, and `summary` totals stay accurate for the full report. Library callers that need the complete unbounded report call `buildReviewReport` directly instead of going through MCP.
-- `query_sqlite`: bounded read-only SQLite artifact query with freshness metadata. Row `limit` defaults to 100 and caps at 500 (`src/sqlite/rowBounds.ts`).
+- `query_sqlite`: bounded read-only SQLite artifact query with freshness metadata. Row `limit` defaults to 100 and caps at 500 (`src/sqlite/row-bounds.ts`).
 - `refresh_index`: invalidate the in-memory session and optionally rebuild the base or symbol snapshot.
 - `artifact_build`: artifact creation, available only with write access enabled.
 

@@ -28,7 +28,7 @@ import { analyzeImpactStreaming, type ImpactStreamChunk } from "./impact/streami
 import { getSessionPreset, mergePreset, type PresetName } from "./presets.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions, mergeGraphOptions } from "./config.js";
 import { normalizePath, resolveFilePathWithinRoot } from "./util/paths.js";
-import { listProjectFiles } from "./util/projectFiles.js";
+import { listProjectFiles } from "./util/project-files.js";
 
 export type SessionOptions = {
   /** Project root directory */

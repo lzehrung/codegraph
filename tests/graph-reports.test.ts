@@ -6,7 +6,7 @@ import { collectGraph, getUnresolvedImports, getHotspots, getApiSurface, SymbolK
 import { getExternalClassifierCacheStats, resetExternalClassifierCaches } from "../src/graphs/external-classifier.js";
 import { findDetailedCycles } from "../src/graphs/queries.js";
 import { resolveRustImportPath } from "../src/util/resolution.js";
-import { isRustCfgTestStatement } from "../src/util/rustTestModules.js";
+import { isRustCfgTestStatement } from "../src/util/rust-test-modules.js";
 import * as languages from "../src/languages.js";
 import { makeTestProjectIndex } from "./helpers/narrow.js";
 import type { ModuleIndex } from "../src/indexer/types.js";

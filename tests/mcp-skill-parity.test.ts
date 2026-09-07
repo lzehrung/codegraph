@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { CLI_COMMAND_CATALOG } from "../src/cli/commandCatalog.js";
+import { CLI_COMMAND_CATALOG } from "../src/cli/command-catalog.js";
 import { listCodegraphMcpTools } from "../src/mcp/tools.js";
 
 const LEGACY_ALIAS_NAMES = new Set(["callers", "callees", "supertypes", "subtypes", "deps", "rdeps"]);

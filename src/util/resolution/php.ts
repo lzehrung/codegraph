@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { mapLimitSemaphore } from "../concurrency.js";
-import { findFirstExistingResolutionCandidate } from "./findFirstExisting.js";
+import { findFirstExistingResolutionCandidate } from "./find-first-existing.js";
 import {
   clearPhpComposerResolutionCaches,
   findPhpComposerPath,
@@ -9,15 +9,15 @@ import {
   loadPhpComposerConfig,
   resolvePhpPsr0MappedPath,
   resolvePhpPsr4MappedPath,
-} from "./phpComposer.js";
-export { getPhpComposerImplicitFiles } from "./phpComposer.js";
+} from "./php-composer.js";
+export { getPhpComposerImplicitFiles } from "./php-composer.js";
 import {
   addProjectSymbolFile,
   getOrCreateProjectSymbolIndex,
   listProjectLanguageFiles,
   sortProjectSymbolIndex,
   type LanguageProjectSymbolIndex,
-} from "./projectSymbols.js";
+} from "./project-symbols.js";
 import { PHP_IDENTIFIER_SOURCE } from "../identifiers.js";
 
 const PHP_IDENTIFIER_PATTERN = new RegExp(PHP_IDENTIFIER_SOURCE, "uy");

@@ -5,7 +5,7 @@ import fsp from "node:fs/promises";
 
 import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../../languages.js";
-import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
+import { getNativeRuntimeFingerprint } from "../../native/tree-sitter-native.js";
 import { logWithLevel, type LogLevel } from "../../logging.js";
 import { errorMessage } from "../../util/errors.js";
 import {
@@ -17,14 +17,14 @@ import {
   markNodeSqliteUnavailable,
   nodeSqliteUnavailableError,
 } from "../../sqlite-driver.js";
-import { buildBloomFilterFromSource } from "../../util/bloomFilter.js";
+import { buildBloomFilterFromSource } from "../../util/bloom-filter.js";
 import {
   createSqliteTableIfMissing,
   ensureSqliteVersionedTableSchema,
   recreateSqliteTable,
   sqliteTableColumns,
   type SqliteTableColumn,
-} from "../../util/sqliteSchema.js";
+} from "../../util/sqlite-schema.js";
 import type { BuildOptions, BuildReport, ExportEntry, ModuleIndex } from "../types.js";
 import {
   assertFilePathWithinRoot,
@@ -33,7 +33,7 @@ import {
   isFilePathWithinRoot,
   normalizePath,
 } from "../../util/paths.js";
-import { lruMapGet, lruMapSet } from "../../util/lruMap.js";
+import { lruMapGet, lruMapSet } from "../../util/lru-map.js";
 import { initCacheReport } from "./reports.js";
 import { cacheRoot } from "./location.js";
 
@@ -387,7 +387,7 @@ export async function cacheSignatureForFile(
 export async function buildBloomFilterForFile(
   file: string,
   opts?: Pick<BuildOptions, "languageExtensions">,
-): Promise<import("../../util/bloomFilter.js").BloomFilter | null> {
+): Promise<import("../../util/bloom-filter.js").BloomFilter | null> {
   try {
     const source = await fsp.readFile(file, "utf8");
     const support = supportForFileWithoutHeaderSample(file, opts?.languageExtensions);

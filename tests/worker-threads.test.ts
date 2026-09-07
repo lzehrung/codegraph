@@ -1,6 +1,6 @@
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveWorkerThreadCount } from "../src/util/workerThreads.js";
+import { resolveWorkerThreadCount } from "../src/util/worker-threads.js";
 
 afterEach(() => {
   vi.restoreAllMocks();

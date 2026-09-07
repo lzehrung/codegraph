@@ -1,5 +1,5 @@
 import { parseAgentSymbolHandle } from "../agent/handles.js";
-import { parseSourceLocationInput, type SourceLocationInput } from "../util/sourceLocation.js";
+import { parseSourceLocationInput, type SourceLocationInput } from "../util/source-location.js";
 
 export type CliSourceLocation = SourceLocationInput;
 

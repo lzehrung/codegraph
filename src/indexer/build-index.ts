@@ -19,7 +19,7 @@ import {
   type GitCandidateSet,
   type ProjectDiscoveryContext,
   type ProjectFileInfo,
-} from "../util/projectFiles.js";
+} from "../util/project-files.js";
 import { getGitHead, isGitRepo, getGitBlobHashes, listChangedFiles } from "../util/git.js";
 import {
   clearResolutionCaches,
@@ -34,25 +34,25 @@ import {
   normalizePath,
 } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
-import { readConfinedUtf8File } from "../util/confinedFile.js";
-import { resolveWorkerThreadCount } from "../util/workerThreads.js";
+import { readConfinedUtf8File } from "../util/confined-file.js";
+import { resolveWorkerThreadCount } from "../util/worker-threads.js";
 import { logWithLevel } from "../logging.js";
 import { collectGraph } from "../graph-builder.js";
 import { collectEdgesForFile } from "../graph-edge-collector.js";
 import { buildGraphAdjacency } from "../graphs/adjacency.js";
 import type { FallbackImportExtractionEvent } from "../graphs/specifiers.js";
 import type { GraphBuildOptions, GraphCacheEntry } from "../graphs/types.js";
-import { isGraphOnlyLanguage } from "../documentLinks.js";
+import { isGraphOnlyLanguage } from "../document-links.js";
 import { attemptParsePreparedFileContext, type ParsedFileContext } from "./parse-context.js";
-import { ProjectedSyntaxTree } from "../native/projectedTree.js";
+import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import { collectImportsForFile } from "./imports.js";
 import { collectLocalsAndExportsFromSource } from "./locals-and-exports.js";
 import { expandStarImports } from "./expand-star-imports.js";
 import { compareEdges, edgeKey, toRelativeEdge } from "./shared.js";
-import { BloomFilter, buildBloomFilterFromSource } from "../util/bloomFilter.js";
-import { initNativeBackendReport } from "../native/nativeBackendReport.js";
+import { BloomFilter, buildBloomFilterFromSource } from "../util/bloom-filter.js";
+import { initNativeBackendReport } from "../native/native-backend-report.js";
 import { closeDuplicateUnitCacheDatabase } from "../duplicates.js";
-import { isNativeRequiredUnavailableError } from "../native/treeSitterNative.js";
+import { isNativeRequiredUnavailableError } from "../native/tree-sitter-native.js";
 import { isNodeSqliteUnavailableError } from "../sqlite-driver.js";
 import type { SyntaxTreeLike } from "../languages/types.js";
 import type { Edge, FileId, Graph } from "../types.js";
@@ -108,9 +108,9 @@ import {
   type SymbolDef,
   SymbolKind,
 } from "./types.js";
-import { isUnsupportedParserInputError, type PreparedSFCEmbeddedBlock } from "../languages/filePrep.js";
+import { isUnsupportedParserInputError, type PreparedSFCEmbeddedBlock } from "../languages/file-prep.js";
 
-import { buildSqlFactCache, buildSqlModuleIndex, sqlCorpusSignature, type SqlFactCache } from "../sql/sourceGraph.js";
+import { buildSqlFactCache, buildSqlModuleIndex, sqlCorpusSignature, type SqlFactCache } from "../sql/source-graph.js";
 import { finalizeProjectIndex } from "./finalize.js";
 import { toManifestFileEntry, writeIndexManifestSnapshot } from "./build-manifest.js";
 import {
@@ -137,7 +137,7 @@ import { parsedCacheMaxEntries, setParsedCacheEntry } from "./parsed-cache.js";
 type IndexedFileGraphContext = {
   source: string;
   sup: LanguageSupport;
-  nativeQueries?: import("../native/treeSitterNative.js").NativeQueryResults | null;
+  nativeQueries?: import("../native/tree-sitter-native.js").NativeQueryResults | null;
   tree?: SyntaxTreeLike;
   embeddedBlocks?: PreparedSFCEmbeddedBlock[];
 };
@@ -252,7 +252,7 @@ async function buildIndexedModuleForFile(args: {
   parsedMap: Map<string, ParsedFileContext>;
   parsedCacheMaxEntries: number;
   jsonDependencies: Map<string, string>;
-  bloomFilterCache: import("../util/bloomFilter.js").BloomFilterCache | undefined;
+  bloomFilterCache: import("../util/bloom-filter.js").BloomFilterCache | undefined;
   onFallbackImportExtraction: ((event: FallbackImportExtractionEvent) => void) | undefined;
   fileSignatures: Map<string, FileSignature>;
   cacheEnabled: boolean;
@@ -951,7 +951,7 @@ async function buildIndexFromFileListShared(
   try {
     const useBloomFilters = opts?.useBloomFilters ?? true;
     const bloomFilterCache = useBloomFilters
-      ? new (await import("../util/bloomFilter.js")).BloomFilterCache()
+      ? new (await import("../util/bloom-filter.js")).BloomFilterCache()
       : undefined;
     const persistedBloomFilters = bloomFilterCache
       ? await tryLoadPersistedBloomFilters(projectRoot, opts, report)
@@ -2022,7 +2022,7 @@ export async function buildProjectIndexIncremental(
       const jsonDependencies = new Map<string, string>();
       const useBloomFilters = opts?.useBloomFilters ?? true;
       const bloomFilterCache = useBloomFilters
-        ? new (await import("../util/bloomFilter.js")).BloomFilterCache()
+        ? new (await import("../util/bloom-filter.js")).BloomFilterCache()
         : undefined;
       for (const file of allFiles) {
         const sigInfo = fileSignatures.get(file);

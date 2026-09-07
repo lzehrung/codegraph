@@ -6,9 +6,9 @@ import {
   type GitCandidateSet,
   type ProjectDiscoveryContext,
   type ProjectFileInfo,
-} from "../util/projectFiles.js";
+} from "../util/project-files.js";
 import type { FileId, Graph } from "../types.js";
-import type { BloomFilterCache } from "../util/bloomFilter.js";
+import type { BloomFilterCache } from "../util/bloom-filter.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import { retainedParsedCache } from "./parsed-cache.js";
 import { buildReferenceCandidateIndex } from "./reference-candidates.js";

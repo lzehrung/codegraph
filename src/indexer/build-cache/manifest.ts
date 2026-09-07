@@ -13,7 +13,7 @@ import {
   type DiscoveryWorkCallbacks,
   type ProjectDiscoveryContext,
   type ProjectFileDiscoveryOptions,
-} from "../../util/projectFiles.js";
+} from "../../util/project-files.js";
 import {
   assertFilePathWithinRoot,
   fileIdentityKey,
@@ -21,7 +21,7 @@ import {
   normalizePath,
   toProjectRelativePath,
 } from "../../util/paths.js";
-import { assertRealPathCandidateWithinRoot } from "../../util/confinedFile.js";
+import { assertRealPathCandidateWithinRoot } from "../../util/confined-file.js";
 import { getGitBlobHashes } from "../../util/git.js";
 import { stringifyUnknown } from "../../util/ast.js";
 

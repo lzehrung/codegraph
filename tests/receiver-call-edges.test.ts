@@ -5,11 +5,11 @@ import { buildSymbolGraphDetailed, type DetailedSymbolGraph } from "../src/graph
 import {
   emitReceiverCallEdges,
   type ReceiverCallCandidate,
-} from "../src/graphs/symbol-graph-detailed/receiverCalls.js";
+} from "../src/graphs/symbol-graph-detailed/receiver-calls.js";
 import type { SymbolGraph, SymbolNode } from "../src/graphs/symbol-graph.js";
 import { findCallHierarchy } from "../src/indexer/call-hierarchy.js";
 import { buildProjectIndex } from "../src/indexer/build-index.js";
-import * as nativeRuntime from "../src/native/treeSitterNative.js";
+import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;

@@ -6,7 +6,7 @@ import {
   getMemberAccessParts,
   memberExpressionTypeFor,
   memberPropertyIdentifierTypes,
-} from "../../util/memberAccess.js";
+} from "../../util/member-access.js";
 
 export type DetailedFunctionNode = {
   name: string;

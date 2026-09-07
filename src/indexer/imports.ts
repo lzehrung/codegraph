@@ -1,4 +1,4 @@
-import { prepareSourceInput } from "../languages/filePrep.js";
+import { prepareSourceInput } from "../languages/file-prep.js";
 import { loadNearestTsconfigFor, resolveImportSpecifier, type MatchPathFn } from "../util/resolution.js";
 import { loadWorkspaceConfig, type WorkspaceConfig } from "../util/workspace.js";
 import type { LogLevel } from "../logging.js";
@@ -9,7 +9,7 @@ import {
 } from "../graphs/specifiers.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import type { LanguageExtensionMap } from "../languages.js";
-import { isGraphOnlyLanguage } from "../documentLinks.js";
+import { isGraphOnlyLanguage } from "../document-links.js";
 import { stripJsLikeComments } from "../util/comments.js";
 import {
   assertNativeRequiredAvailable,
@@ -17,17 +17,17 @@ import {
   isNativeBindingLoadedForLanguage,
   isNativeRequiredUnavailableError,
   isNativeQueryAuthoritative,
-} from "../native/treeSitterNative.js";
-import type { NativeQueryExecution, NativeQueryResults, NativeRuntimeMode } from "../native/treeSitterNative.js";
+} from "../native/tree-sitter-native.js";
+import type { NativeQueryExecution, NativeQueryResults, NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import type { ResolvedImportTarget } from "./imports/context.js";
-import { collectGraphOnlyImports } from "./imports/graphOnly.js";
-import { collectJsTextImports, collectJsTextValueRequireImports } from "./imports/jsTextImports.js";
+import { collectGraphOnlyImports } from "./imports/graph-only.js";
+import { collectJsTextImports, collectJsTextValueRequireImports } from "./imports/js-text-imports.js";
 import {
   applyStatementImportOverride,
   createStatementImportOverrideState,
   finalizeLanguageSpecificImports,
-} from "./imports/languageSpecific.js";
-import { collectNativeCaptureImportBindings } from "./imports/nativeCaptures.js";
+} from "./imports/language-specific.js";
+import { collectNativeCaptureImportBindings } from "./imports/native-captures.js";
 import { collectPythonImportsFromSource } from "./imports/python.js";
 import type { LanguageSupport } from "../languages.js";
 import type { ImportBinding } from "./types.js";

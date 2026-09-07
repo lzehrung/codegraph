@@ -19,8 +19,8 @@ describe("codegraph-core package surface", () => {
     const files = collectCorePackageFiles(distRoot);
     expect(files.length).toBeGreaterThan(100);
     expect(files.some(isForbiddenCorePackagePath)).toBe(false);
-    expect(files).toContain("agent/query-index/queryIndexWorker.js");
-    expect(files).toContain("sqlite/rawQueryWorker.js");
+    expect(files).toContain("agent/query-index/query-index-worker.js");
+    expect(files).toContain("sqlite/raw-query-worker.js");
     expect(files).toContain("graphs/types.d.ts");
     expect(files).toContain("agent/semantic.d.ts");
     expect(files).toContain("chunking/types.d.ts");
@@ -37,7 +37,7 @@ describe("codegraph-core package surface", () => {
         "indexer.d.ts",
         "agent.d.ts",
         "indexer/symbols.d.ts",
-        "agent/semanticSymbols.d.ts",
+        "agent/semantic-symbols.d.ts",
       ]),
     );
     expect(declaration("index.d.ts")).toContain("resolveSymbolTarget");

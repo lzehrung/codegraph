@@ -1,6 +1,6 @@
 import type { ModuleIndex } from "../../src/index.js";
 import type { NativeSyntaxTree } from "../../src/native/contracts.js";
-import { __resetNativeTreeSitterBindingForTests } from "../../src/native/treeSitterNative.js";
+import { __resetNativeTreeSitterBindingForTests } from "../../src/native/tree-sitter-native.js";
 import { normalizeTestPath } from "./filesystem.js";
 
 /**

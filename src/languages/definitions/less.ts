@@ -1,6 +1,6 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
-import { cssLikeGraph, cssLikeNodeTypes, cssLikeStructure } from "./cssLike.js";
+import { cssLikeGraph, cssLikeNodeTypes, cssLikeStructure } from "./css-like.js";
 
 export const LESS_DEF: LanguageDefinition = {
   id: "less",

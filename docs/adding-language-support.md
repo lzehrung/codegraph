@@ -13,8 +13,8 @@ Checklist for landing a new first-class source language without drifting from re
 - Add the language definition in `src/languages/definitions/<language>.ts`.
 - Register it from `src/languages/all.ts`.
 - Export support from `src/languages.ts` when the public support surface expects it.
-- Confirm `src/bootstrap/treeSitterLanguages.ts` derives the intended chunking config for the new language.
-- Add the file extension to discovery patterns in `src/util/projectFiles.ts` (`DEFAULT_PROJECT_PATTERNS`) and any language-specific resolution helpers under `src/util/`.
+- Confirm `src/bootstrap/tree-sitter-languages.ts` derives the intended chunking config for the new language.
+- Add the file extension to discovery patterns in `src/util/project-files.ts` (`DEFAULT_PROJECT_PATTERNS`) and any language-specific resolution helpers under `src/util/`.
 - Update CLI help in `src/cli.ts` when a command accepts a language override and cannot derive it from the registered chunking configs.
 
 ## 3. Wire the native runtime path
@@ -34,7 +34,7 @@ Checklist for landing a new first-class source language without drifting from re
 
 ## 5. Implement import binding and resolution
 
-- Add statement-level parsing helpers in `src/languages/importStatementParsers.ts` when the query captures a whole statement instead of normalized binding captures.
+- Add statement-level parsing helpers in `src/languages/import-statement-parsers.ts` when the query captures a whole statement instead of normalized binding captures.
 - Extend the relevant `src/indexer/` module behind the `src/indexer.ts` facade so import bindings normalize into the shared `ImportBinding` model.
 - Extend `src/graphs.ts` only where graph and specifier extraction need language-specific recovery.
 - Extend `src/util.ts` for language-specific module resolution, package metadata parsing, and caches.

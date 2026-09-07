@@ -5,10 +5,10 @@ import {
   parsePhpImportStatement,
   parseRustImportStatement,
   type ParsedRustImportStatement,
-} from "../languages/importStatementParsers.js";
+} from "../languages/import-statement-parsers.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
-import { ProjectedSyntaxTree } from "../native/projectedTree.js";
+import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import {
   getCompactImportsExecution,
   getNativeSyntaxTreeExecution,
@@ -19,17 +19,17 @@ import {
   type NativeCapture,
   type NativeQueryResults,
   type NativeRuntimeMode,
-} from "../native/treeSitterNative.js";
+} from "../native/tree-sitter-native.js";
 import {
   extractGraphOnlyModuleSpecifiers,
   extractHtmlAttributeSpecifiers,
   extractHtmlInlineScriptSpecifiers,
   extractHtmlStyleSpecifiers,
   isGraphOnlyLanguage,
-} from "../documentLinks.js";
+} from "../document-links.js";
 import { sliceText, unquote } from "../util/ast.js";
 import { PYTHON_IDENTIFIER_SOURCE } from "../util/identifiers.js";
-import { isRustCfgTestStatement, utf8ByteOffsetToStringIndex } from "../util/rustTestModules.js";
+import { isRustCfgTestStatement, utf8ByteOffsetToStringIndex } from "../util/rust-test-modules.js";
 import { extractJsTsSpecifiers, extractPythonSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
 
 export type FallbackImportExtractionReason = "fast" | "reduced-mode" | "query-error" | "query-empty";

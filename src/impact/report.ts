@@ -1,8 +1,8 @@
-import { checkMarkdownLinksInFiles } from "../documentLinks/check.js";
+import { checkMarkdownLinksInFiles } from "../document-links/check.js";
 import type { FileId } from "../types.js";
 import path from "node:path";
 import { type ProjectIndex, type BuildReport } from "../indexer/types.js";
-import { summarizeAnalysis } from "../analysisSummary.js";
+import { summarizeAnalysis } from "../analysis-summary.js";
 import type {
   FileChange,
   ChangedSymbol,
@@ -21,12 +21,12 @@ import type {
 } from "./types.js";
 import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
 import { findDetailedCycles } from "../graphs/queries.js";
-import { discoverProjectFiles } from "../util/projectFiles.js";
+import { discoverProjectFiles } from "../util/project-files.js";
 import { fileIdentityKey, normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { newFileRangeForHunk } from "./hunks.js";
 import { createGraphFileResolver, normalizeImpactFileChange, toImpactReportFilePath } from "./path.js";
-import { buildCompactImpactReport } from "./reportCompact.js";
-import { buildFullImpactReport } from "./reportFull.js";
+import { buildCompactImpactReport } from "./report-compact.js";
+import { buildFullImpactReport } from "./report-full.js";
 export { newFileRangeForHunk } from "./hunks.js";
 
 export async function buildImpactReport(

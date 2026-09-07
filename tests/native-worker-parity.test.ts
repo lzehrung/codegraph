@@ -1,8 +1,8 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { buildProjectIndexFromFiles, listProjectFiles, type ProjectIndex, type BuildReport } from "../src/index.js";
-import * as nativeRuntime from "../src/native/treeSitterNative.js";
-import * as nativeWorkerPool from "../src/worker/nativeWorkerPool.js";
+import * as nativeRuntime from "../src/native/tree-sitter-native.js";
+import * as nativeWorkerPool from "../src/worker/native-worker-pool.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 

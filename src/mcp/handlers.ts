@@ -4,25 +4,25 @@ import { buildCodegraphArtifactWithSession } from "../agent/artifact.js";
 import type { CodegraphArtifactBuildResult } from "../agent/artifact.js";
 import { explainCodegraphTargetWithSession } from "../agent/explain.js";
 import type { AgentExplanation, AgentExplanationReference } from "../agent/explain.js";
-import { getCodegraphFileViewWithSession, type AgentFileViewResponse } from "../agent/fileView.js";
+import { getCodegraphFileViewWithSession, type AgentFileViewResponse } from "../agent/file-view.js";
 import { exploreCodegraphWithSession, type AgentExploreResponse } from "../agent/explore.js";
 import { orientCodegraphWithSession, type AgentOrientBudget, type AgentOrientResponse } from "../agent/orient.js";
 import { getCodegraphPacketWithSession, type AgentPacketResponse } from "../agent/packet.js";
 import { searchCodegraphWithSession } from "../agent/search.js";
 import type { AgentSearchMode, AgentSearchResponse } from "../agent/search.js";
-import { workspaceSymbolsWithSession, type WorkspaceSymbolsResponse } from "../agent/workspaceSymbols.js";
+import { workspaceSymbolsWithSession, type WorkspaceSymbolsResponse } from "../agent/workspace-symbols.js";
 import {
   findImplementationsWithSession,
   findSubtypesWithSession,
   findSupertypesWithSession,
   type ImplementationsResponse,
   type TypeHierarchyResponse,
-} from "../agent/typeHierarchy.js";
-import { findCalleesWithSession, findCallersWithSession, type CallHierarchyResponse } from "../agent/callHierarchy.js";
-import { previewRenameWithSession, type RenamePreviewResponse } from "../agent/renamePreview.js";
-import { buildRefactorPlanWithSession, type RefactorPlanResponse } from "../agent/refactorPlan.js";
+} from "../agent/type-hierarchy.js";
+import { findCalleesWithSession, findCallersWithSession, type CallHierarchyResponse } from "../agent/call-hierarchy.js";
+import { previewRenameWithSession, type RenamePreviewResponse } from "../agent/rename-preview.js";
+import { buildRefactorPlanWithSession, type RefactorPlanResponse } from "../agent/refactor-plan.js";
 import { parseAgentSymbolHandle } from "../agent/handles.js";
-import { requireSemanticSymbol, resolveSemanticSymbol } from "../agent/semanticSymbols.js";
+import { requireSemanticSymbol, resolveSemanticSymbol } from "../agent/semantic-symbols.js";
 import { getDependencies, getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/queries.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { parseQualifiedSymbolPath } from "../indexer/symbols.js";
@@ -40,7 +40,7 @@ import {
   listAgentSessionFiles,
 } from "../agent/session.js";
 import { mapLimit } from "../util/concurrency.js";
-import { assertRealPathCandidateWithinRoot, resolveProjectFile } from "../util/confinedFile.js";
+import { assertRealPathCandidateWithinRoot, resolveProjectFile } from "../util/confined-file.js";
 import type { AgentFreshnessResult, AgentProjectSnapshot, AgentSession } from "../agent/session.js";
 import { SymbolKind } from "../indexer/types.js";
 import { DEFAULT_WORKSPACE_SYMBOL_LIMIT, MAX_WORKSPACE_SYMBOL_LIMIT } from "../indexer/workspace-symbols.js";
@@ -49,7 +49,7 @@ import {
   assertMcpSqliteQueryResourceBounded,
   DEFAULT_SQLITE_BYTE_LIMIT,
   normalizeSqliteRowLimit,
-} from "./sqliteGuard.js";
+} from "./sqlite-guard.js";
 import {
   DEFAULT_CALL_HIERARCHY_LIMIT,
   MAX_CALL_HIERARCHY_LIMIT,
@@ -58,7 +58,7 @@ import {
   MAX_TYPE_HIERARCHY_LIMIT,
   MAX_MCP_COLLECTION_LIMIT,
 } from "./tools.js";
-import { type CodegraphRuntimeIdentity } from "../runtimeIdentity.js";
+import { type CodegraphRuntimeIdentity } from "../runtime-identity.js";
 import { assertWritableDirectoryRealPathWithinRoot, resolveArtifactSqlitePathCandidate } from "./security.js";
 
 /** `"off"` skips warmup, leaving the first tool call to pay for discovery and building. */

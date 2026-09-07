@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isColumnarSyntaxTree } from "../src/native/treeShape.js";
+import { isColumnarSyntaxTree } from "../src/native/tree-shape.js";
 import { createStubNativeSyntaxTree } from "./helpers/native.js";
 
 describe("isColumnarSyntaxTree", () => {

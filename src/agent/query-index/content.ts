@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
-import { LANG_CONFIGS } from "../../bootstrap/treeSitterLanguages.js";
-import { chunkFile } from "../../chunking/chunkFile.js";
+import { LANG_CONFIGS } from "../../bootstrap/tree-sitter-languages.js";
+import { chunkFile } from "../../chunking/chunk-file.js";
 import { supportForFile, supportForFileWithSource, type LanguageSupport } from "../../languages.js";
 
 export const MAX_QUERY_INDEX_TEXT_BYTES = 300_000;

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAgentSession } from "../src/agent/session.js";
-import { workspaceSymbolsWithSession } from "../src/agent/workspaceSymbols.js";
+import { workspaceSymbolsWithSession } from "../src/agent/workspace-symbols.js";
 import { isPlainRecord } from "../src/util/guards.js";
 import { captureCli, stripCliProgressLines } from "./helpers/cli.js";
 

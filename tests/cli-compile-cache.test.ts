@@ -8,11 +8,11 @@ import {
   resolveCliCompileCacheDirectory,
   resolveCodegraphUserCacheRoot,
   resolveCodegraphUserStateRoot,
-} from "../src/cli/compileCache.js";
+} from "../src/cli/compile-cache.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bundledCli = path.join(rootDir, "dist", "bin", "cli.js");
-const bootstrapSource = path.join(rootDir, "src", "cliBootstrap.ts");
+const bootstrapSource = path.join(rootDir, "src", "cli-bootstrap.ts");
 
 function envWithoutDisableCompileCache(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env = { ...process.env, ...overrides };
@@ -72,7 +72,7 @@ describe("CLI compile cache", () => {
     const probe = path.join(dir, "probe.mjs");
     fs.writeFileSync(
       probe,
-      `import { enableCliCompileCache } from ${JSON.stringify(pathToFileURL(path.join(rootDir, "dist/cli/compileCache.js")).href)};
+      `import { enableCliCompileCache } from ${JSON.stringify(pathToFileURL(path.join(rootDir, "dist/cli/compile-cache.js")).href)};
 import module from "node:module";
 const result = enableCliCompileCache({ NODE_DISABLE_COMPILE_CACHE: "1", NODE_COMPILE_CACHE: process.env.NODE_COMPILE_CACHE });
 if (result !== null) {
@@ -103,7 +103,7 @@ console.log(JSON.stringify({ result, dirAfter: dirAfter ?? null }));
     const probe = path.join(dir, "probe.mjs");
     fs.writeFileSync(
       probe,
-      `import { enableCliCompileCache } from ${JSON.stringify(pathToFileURL(path.join(rootDir, "dist/cli/compileCache.js")).href)};
+      `import { enableCliCompileCache } from ${JSON.stringify(pathToFileURL(path.join(rootDir, "dist/cli/compile-cache.js")).href)};
 const result = enableCliCompileCache({ NODE_COMPILE_CACHE: process.env.NODE_COMPILE_CACHE });
 if (!result) {
   console.error("ENABLE_FAILED");

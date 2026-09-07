@@ -1,18 +1,18 @@
-import { isGraphOnlyLanguage } from "../documentLinks.js";
+import { isGraphOnlyLanguage } from "../document-links.js";
 import type { LanguageExtensionMap } from "../languages.js";
-import { prepareSourceInput, type PreparedSFCEmbeddedBlock } from "../languages/filePrep.js";
+import { prepareSourceInput, type PreparedSFCEmbeddedBlock } from "../languages/file-prep.js";
 import {
   getNativeExtractionExecution,
   getNativeSyntaxTreeExecution,
   type NativeQueryResults,
   type NativeRuntimeMode,
   type NativeSyntaxTree,
-} from "../native/treeSitterNative.js";
+} from "../native/tree-sitter-native.js";
 import type { NativeFallbackReason } from "../native/contracts.js";
-import { ProjectedSyntaxTree } from "../native/projectedTree.js";
+import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxTreeLike } from "../languages/types.js";
-import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../worker/nativeExtractWorker.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../worker/native-extract-worker.js";
 
 export type ParsedFileContext = {
   source: string;

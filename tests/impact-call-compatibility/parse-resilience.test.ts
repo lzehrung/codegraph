@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { buildProjectIndex } from "../../src/indexer.js";
 import { findReferences } from "../../src/indexer/navigation.js";
-import { attachCallCompatibilityHints } from "../../src/impact/callCompatibility.js";
+import { attachCallCompatibilityHints } from "../../src/impact/call-compatibility.js";
 import type { ChangedSymbol, ImpactDiagnostics } from "../../src/impact/types.js";
 import type { Range } from "../../src/types.js";
 import { SymbolKind } from "../../src/indexer/types.js";

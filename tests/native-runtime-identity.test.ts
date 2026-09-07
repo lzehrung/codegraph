@@ -7,19 +7,19 @@ import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 import type { NativeBindingOrigin } from "../src/native/contracts.js";
-import * as runtimeCache from "../src/native/runtimeCache.js";
+import * as runtimeCache from "../src/native/runtime-cache.js";
 import {
   lookupNativeRuntimeCacheEntry,
   prepareNativeRuntimeCache,
   recordNativeRuntimeCacheIdentity,
-} from "../src/native/runtimeCache.js";
+} from "../src/native/runtime-cache.js";
 import {
   __resetNativeTreeSitterBindingForTests,
   getNativeRuntimeFingerprint,
   resolveCachedRuntimeIdentity,
   serializeNativeRuntimeFingerprint,
 } from "../src/native/runtime.js";
-import * as bindingLoader from "../src/native/bindingLoader.js";
+import * as bindingLoader from "../src/native/binding-loader.js";
 
 const tempDirs: string[] = [];
 const TARGET = "win32-x64-msvc";

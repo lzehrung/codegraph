@@ -8,7 +8,7 @@ import {
   type GrepResultEnvelope,
   type TextGrepHit,
 } from "../graphs/grep.js";
-import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+import { type ProjectFileDiscoveryOptions } from "../util/project-files.js";
 import {
   exitWithError,
   type CliJsonWriterContext,

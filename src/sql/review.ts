@@ -1,9 +1,9 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { listProjectFiles } from "../util/projectFiles.js";
+import { listProjectFiles } from "../util/project-files.js";
 import { normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
-import { extractSqlFactsFromSource } from "./extractFacts.js";
+import { extractSqlFactsFromSource } from "./extract-facts.js";
 import { normalizeSqlObjectName, sqlObjectLookupKey } from "./lex.js";
 import { sqlObjectLookupKeys } from "./lookup.js";
 import type { SqlBridgeReason, SqlStatementFact } from "./types.js";

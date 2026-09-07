@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { findNearestExistingPath } from "../util/confinedFile.js";
+import { findNearestExistingPath } from "../util/confined-file.js";
 import { isFilePathWithinRoot, normalizePath } from "../util/paths.js";
 
 export function resolveArtifactSqlitePathCandidate(root: string, artifactPath: string): string {

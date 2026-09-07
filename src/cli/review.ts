@@ -3,7 +3,7 @@ import path from "node:path";
 import { formatMarkdownLinkCheckResult } from "./links.js";
 import { buildReviewReport, type ReviewBuildReport, type ReviewDepth, type ReviewReport } from "../review.js";
 import type { CandidateTestFile } from "../impact/context.js";
-import { formatRequiredArgumentCount } from "../impact/reportShared.js";
+import { formatRequiredArgumentCount } from "../impact/report-shared.js";
 import type { BuildOptions, BuildReport, CacheLocation, ProjectIndex } from "../indexer/types.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import {
@@ -12,17 +12,17 @@ import {
   parseDuplicateLeadScope,
   type DuplicateLeadScope,
   type DuplicateLeadSummary,
-} from "../duplicatesLeads.js";
-import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
+} from "../duplicates-leads.js";
+import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import {
   REVIEW_SUMMARY_CANDIDATES_PER_CONFIDENCE_LIMIT,
   REVIEW_SUMMARY_CHANGED_FILE_LIMIT,
   REVIEW_SUMMARY_SYMBOLS_PER_FILE_LIMIT,
   REVIEW_SUMMARY_TASK_LIMIT,
 } from "../presentation/bounds.js";
-import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+import { type ProjectFileDiscoveryOptions } from "../util/project-files.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
-import { duplicateSimilarityHintsFromChanges } from "./duplicateSimilarity.js";
+import { duplicateSimilarityHintsFromChanges } from "./duplicate-similarity.js";
 import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption } from "./options.js";
 
 type CommandTimingReport = {

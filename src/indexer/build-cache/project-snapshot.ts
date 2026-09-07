@@ -5,12 +5,12 @@ import path from "node:path";
 import type { Edge, EdgeTo, Graph, Pos, Range } from "../../types.js";
 import { buildGraphAdjacency } from "../../graphs/adjacency.js";
 import { buildReferenceCandidateIndex } from "../reference-candidates.js";
-import type { ProjectFileInfo } from "../../util/projectFiles.js";
-import { BloomFilter, BloomFilterCache } from "../../util/bloomFilter.js";
-import { summarizeAnalysis } from "../../analysisSummary.js";
-import type { AnalysisSummary } from "../../analysisSummary.js";
+import type { ProjectFileInfo } from "../../util/project-files.js";
+import { BloomFilter, BloomFilterCache } from "../../util/bloom-filter.js";
+import { summarizeAnalysis } from "../../analysis-summary.js";
+import type { AnalysisSummary } from "../../analysis-summary.js";
 import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot, normalizePath } from "../../util/paths.js";
-import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
+import { getNativeRuntimeFingerprint } from "../../native/tree-sitter-native.js";
 import { logWithLevel } from "../../logging.js";
 import { SymbolKind } from "../types.js";
 import type {

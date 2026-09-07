@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveQueryIndexWorkerPath } from "../src/agent/query-index/workerPool.js";
-import { resolveRawSqlQueryWorkerPath } from "../src/sqlite/rawQueryWorkerPool.js";
+import { resolveQueryIndexWorkerPath } from "../src/agent/query-index/worker-pool.js";
+import { resolveRawSqlQueryWorkerPath } from "../src/sqlite/raw-query-worker-pool.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -10,7 +10,7 @@ afterEach(() => {
 
 describe("resolveRawSqlQueryWorkerPath", () => {
   it("falls back to the bundled worker when the compiled dist worker is missing", () => {
-    const bundledSuffix = path.normalize(path.join("dist", "bin", "rawQueryWorker.js"));
+    const bundledSuffix = path.normalize(path.join("dist", "bin", "raw-query-worker.js"));
     vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
       const filePath = path.normalize(typeof candidate === "string" ? candidate : String(candidate));
       return filePath.endsWith(bundledSuffix);
@@ -22,7 +22,7 @@ describe("resolveRawSqlQueryWorkerPath", () => {
 
 describe("resolveQueryIndexWorkerPath", () => {
   it("falls back to the bundled worker when the compiled dist worker is missing", () => {
-    const bundledSuffix = path.normalize(path.join("dist", "bin", "queryIndexWorker.js"));
+    const bundledSuffix = path.normalize(path.join("dist", "bin", "query-index-worker.js"));
     vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
       const filePath = path.normalize(typeof candidate === "string" ? candidate : String(candidate));
       return filePath.endsWith(bundledSuffix);

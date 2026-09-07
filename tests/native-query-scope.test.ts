@@ -9,8 +9,8 @@ import {
   type NativeCapture,
   type NativeMatch,
   type NativeQueryResults,
-} from "../src/native/treeSitterNative.js";
-import * as nativeRuntime from "../src/native/treeSitterNative.js";
+} from "../src/native/tree-sitter-native.js";
+import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 import type { NativeCompatibilityQueryKind } from "../src/languages/types.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;

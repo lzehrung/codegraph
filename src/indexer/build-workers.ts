@@ -1,22 +1,22 @@
 import { performance } from "node:perf_hooks";
-import { isGraphOnlyLanguage } from "../documentLinks.js";
+import { isGraphOnlyLanguage } from "../document-links.js";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import { stringifyUnknown } from "../util/ast.js";
-import { readConfinedUtf8File } from "../util/confinedFile.js";
-import { recordNativeExecutionOutcome } from "../native/nativeBackendReport.js";
+import { readConfinedUtf8File } from "../util/confined-file.js";
+import { recordNativeExecutionOutcome } from "../native/native-backend-report.js";
 import {
   getCachedNormalizedQuery,
   getNativeWorkerBindingHandoff,
   isNativeRequiredUnavailableError,
   isNativeTreeSitterAvailable,
-} from "../native/treeSitterNative.js";
+} from "../native/tree-sitter-native.js";
 import type {
   NativeBloomFilterPayload,
   NativeExtractBatchResult,
   NativeExtractResult,
   NativeExtractTask,
-} from "../worker/nativeExtractWorker.js";
-import { DEFAULT_NATIVE_SOURCE_MAX_BYTES, NATIVE_WORKER_BATCH_SIZE } from "../worker/nativeExtractWorker.js";
+} from "../worker/native-extract-worker.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES, NATIVE_WORKER_BATCH_SIZE } from "../worker/native-extract-worker.js";
 import { prepareFileForIndexing, type PreparedFileContext } from "./parse-context.js";
 import type { BuildOptions, BuildReport, WorkerPoolReport } from "./types.js";
 
@@ -161,7 +161,7 @@ export async function setupWorkerPool(
   let pool: import("piscina").Piscina | null = null;
   if (shouldUseWorkers) {
     try {
-      const { createNativeWorkerPool } = await import("../worker/nativeWorkerPool.js");
+      const { createNativeWorkerPool } = await import("../worker/native-worker-pool.js");
       // shouldEnableNativeWorkers has already resolved the binding on this thread, so the
       // handoff is available here and saves every worker from repeating that resolution.
       const handoff = getNativeWorkerBindingHandoff();

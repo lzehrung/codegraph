@@ -7,11 +7,11 @@ import { getUnresolvedImports } from "../graphs/unresolved.js";
 import type { BuildOptions } from "../indexer/types.js";
 import type { Graph } from "../types.js";
 import { isGitRepo } from "../util/git.js";
-import { isPathUnderIncludeRoots, normalizeIncludeRootsRelative } from "../util/includeRoots.js";
+import { isPathUnderIncludeRoots, normalizeIncludeRootsRelative } from "../util/include-roots.js";
 import { normalizePath } from "../util/paths.js";
 import { createAgentSession, type AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
-import { dedupeAgentFollowUps, formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./followUps.js";
+import { dedupeAgentFollowUps, formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./follow-ups.js";
 
 export type AgentOrientBudget = "small" | "medium" | "large";
 export type AgentOrientHealthMode = "skip" | "summary" | "full";

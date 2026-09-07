@@ -10,14 +10,14 @@ const defaultRootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 export function getBundlePaths(rootDir = defaultRootDir) {
   return {
     rootDir,
-    entryPoint: path.join(rootDir, "dist", "cliBootstrap.js"),
-    workerEntryPoint: path.join(rootDir, "dist", "agent", "query-index", "queryIndexWorker.js"),
-    rawQueryWorkerEntryPoint: path.join(rootDir, "dist", "sqlite", "rawQueryWorker.js"),
+    entryPoint: path.join(rootDir, "dist", "cli-bootstrap.js"),
+    workerEntryPoint: path.join(rootDir, "dist", "agent", "query-index", "query-index-worker.js"),
+    rawQueryWorkerEntryPoint: path.join(rootDir, "dist", "sqlite", "raw-query-worker.js"),
     unbundledCli: path.join(rootDir, "dist", "cli.js"),
     outdir: path.join(rootDir, "dist", "bin"),
     bundledEntry: path.join(rootDir, "dist", "bin", "cli.js"),
-    bundledWorker: path.join(rootDir, "dist", "bin", "queryIndexWorker.js"),
-    bundledRawQueryWorker: path.join(rootDir, "dist", "bin", "rawQueryWorker.js"),
+    bundledWorker: path.join(rootDir, "dist", "bin", "query-index-worker.js"),
+    bundledRawQueryWorker: path.join(rootDir, "dist", "bin", "raw-query-worker.js"),
   };
 }
 
@@ -51,8 +51,8 @@ export async function bundleCli({ rootDir = defaultRootDir, logLevel = "warning"
   const result = await esbuild.build({
     entryPoints: {
       cli: paths.entryPoint,
-      queryIndexWorker: paths.workerEntryPoint,
-      rawQueryWorker: paths.rawQueryWorkerEntryPoint,
+      "query-index-worker": paths.workerEntryPoint,
+      "raw-query-worker": paths.rawQueryWorkerEntryPoint,
     },
     bundle: true,
     platform: "node",

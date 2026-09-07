@@ -5,7 +5,7 @@ import {
   collectDuplicateIdentifierRanges,
   renderDuplicateIdentifierRanges,
 } from "../scripts/generate-duplicate-identifier-ranges-lib.mjs";
-import { getNativeDuplicateTokens, isNativeDuplicateTokenizationAvailable } from "../src/native/treeSitterNative.js";
+import { getNativeDuplicateTokens, isNativeDuplicateTokenizationAvailable } from "../src/native/tree-sitter-native.js";
 
 const nativeAvailable = isNativeDuplicateTokenizationAvailable();
 const generatorTest = nativeAvailable ? test : test.skip;

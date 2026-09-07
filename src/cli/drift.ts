@@ -10,7 +10,7 @@ import type {
 } from "../drift/types.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import type { BuildOptions } from "../indexer/types.js";
-import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
+import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import { parseNonNegativeIntegerOption, parseOptionalNonNegativeIntegerOption } from "./options.js";
 import { exitWithError } from "./context.js";
 

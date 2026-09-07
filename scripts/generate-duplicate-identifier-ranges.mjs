@@ -9,7 +9,7 @@ import {
 
 const CHECK_ONLY = process.argv.includes("--check");
 
-const { getNativeDuplicateTokens } = await import(path.resolve("dist/native/treeSitterNative.js"));
+const { getNativeDuplicateTokens } = await import(path.resolve("dist/native/tree-sitter-native.js"));
 
 function tokenize(source) {
   const native = getNativeDuplicateTokens(source, "on");

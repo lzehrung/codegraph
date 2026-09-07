@@ -3,7 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isCliBootstrapActive } from "./cli/bootstrap.js";
-import { CLI_COMMAND_TABLE } from "./cli/commandTable.js";
+import { CLI_COMMAND_TABLE } from "./cli/command-table.js";
 import {
   exitCli,
   getCwd,
@@ -22,13 +22,13 @@ import {
   helpTextForCommand,
   isKnownCliCommand,
 } from "./cli/help.js";
-import { routeForCliIntent, suggestCliCommands } from "./cli/commandCatalog.js";
-import { createCliBaseContext, createCliOptionAccessors, loadCliProjectContext } from "./cli/invocationContext.js";
+import { routeForCliIntent, suggestCliCommands } from "./cli/command-catalog.js";
+import { createCliBaseContext, createCliOptionAccessors, loadCliProjectContext } from "./cli/invocation-context.js";
 import { validateCliArgs, type ParsedCliArgs } from "./cli/options.js";
-import { getCodegraphPackageIdentity, getCodegraphVersion } from "./util/packageInfo.js";
+import { getCodegraphPackageIdentity, getCodegraphVersion } from "./util/package-info.js";
 import { errorMessage } from "./util/errors.js";
 
-export { isRelativePathInside as isCliDiscoveryRelativePathInside } from "./util/discoveryPath.js";
+export { isRelativePathInside as isCliDiscoveryRelativePathInside } from "./util/discovery-path.js";
 export const CLI_DISPATCHABLE_COMMANDS = [
   "apisurface",
   "affected",

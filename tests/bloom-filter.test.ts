@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { BloomFilter, buildBloomFilterFromSource, BloomFilterCache } from "../src/util/bloomFilter.js";
+import { BloomFilter, buildBloomFilterFromSource, BloomFilterCache } from "../src/util/bloom-filter.js";
 import { CSHARP_SUPPORT, JAVA_SUPPORT, JS_SUPPORT, PHP_SUPPORT, PY_SUPPORT, TS_SUPPORT } from "../src/languages.js";
 describe("BloomFilter", () => {
   test("should detect items that were added", () => {

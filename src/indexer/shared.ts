@@ -1,6 +1,6 @@
 import { GO_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 
-export { compareEdges, edgeKey, toRelativeEdge } from "../util/graphEdges.js";
+export { compareEdges, edgeKey, toRelativeEdge } from "../util/graph-edges.js";
 
 export const DEFAULT_REF_CONTEXT_LINES = 5;
 

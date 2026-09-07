@@ -11,8 +11,8 @@ import {
   findLocalNativeBinary,
   loadNativeBinding,
   nativeTargetSuffixFor,
-} from "../src/native/bindingLoader.js";
-import { hashFileStreaming, prepareNativeRuntimeCache } from "../src/native/runtimeCache.js";
+} from "../src/native/binding-loader.js";
+import { hashFileStreaming, prepareNativeRuntimeCache } from "../src/native/runtime-cache.js";
 
 const tempDirs: string[] = [];
 const execFile = promisify(execFileCallback);
@@ -359,7 +359,7 @@ describe("native binding loader", () => {
 
   it("converges concurrent processes on one verified final path", async () => {
     const fixture = await makeInstalledNativeFixture();
-    const moduleUrl = pathToFileURL(path.resolve("src/native/runtimeCache.ts")).href;
+    const moduleUrl = pathToFileURL(path.resolve("src/native/runtime-cache.ts")).href;
     const childSource = `
         import { prepareNativeRuntimeCache } from ${JSON.stringify(moduleUrl)};
         const [sourcePath, cacheRoot] = process.argv.slice(1);

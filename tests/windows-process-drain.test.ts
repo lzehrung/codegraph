@@ -5,7 +5,7 @@ import {
   resetWindowsProcessDrainForTests,
   WINDOWS_LIBUV_EXIT_DRAIN_MS,
   windowsProcessDrainIsRequired,
-} from "../src/util/windowsProcessDrain.js";
+} from "../src/util/windows-process-drain.js";
 
 describe("Windows process-handle drain", () => {
   afterEach(() => {

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { CLI_COMMAND_CATALOG, suggestCliCommands } from "../src/cli/commandCatalog.js";
+import { CLI_COMMAND_CATALOG, suggestCliCommands } from "../src/cli/command-catalog.js";
 import { CLI_DISPATCHABLE_COMMANDS } from "../src/cli.js";
 import { captureCli } from "./helpers/cli.js";
 

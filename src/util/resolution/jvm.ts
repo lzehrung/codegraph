@@ -4,7 +4,7 @@ import {
   buildProjectSymbolIndex,
   getOrCreateProjectSymbolIndex,
   type LanguageProjectSymbolIndex,
-} from "./projectSymbols.js";
+} from "./project-symbols.js";
 import { JAVA_IDENTIFIER_IGNORABLE_SOURCE, JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../identifiers.js";
 
 const KOTLIN_PACKAGE_PATTERN = new RegExp(

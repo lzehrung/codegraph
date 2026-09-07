@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { CLI_COMMAND_CATALOG } from "../src/cli/commandCatalog.js";
+import { CLI_COMMAND_CATALOG } from "../src/cli/command-catalog.js";
 import {
   CLI_INDEX_POLICY,
   catalogCommandNames,
   currentQueryCommandsByFamily,
   indexPolicyForCommand,
-} from "../src/cli/indexPolicy.js";
-import { CURRENT_QUERY_FAMILY_CASES } from "./helpers/currentQueryFamilies.js";
+} from "../src/cli/index-policy.js";
+import { CURRENT_QUERY_FAMILY_CASES } from "./helpers/current-query-families.js";
 
 describe("CLI index policy completeness", () => {
   it("classifies every catalog command exactly once", () => {

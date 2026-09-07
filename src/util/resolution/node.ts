@@ -1,6 +1,6 @@
 import path from "node:path";
-import { findFirstExistingResolutionCandidate } from "./findFirstExisting.js";
-import { resolvePackageExportTargets, type PackageExportConditionMode } from "../packageExports.js";
+import { findFirstExistingResolutionCandidate } from "./find-first-existing.js";
+import { resolvePackageExportTargets, type PackageExportConditionMode } from "../package-exports.js";
 import { fileIdentityKey, isFilePathWithinRoot } from "../paths.js";
 import { directoryExists, loadJSON, type MinimalPackageJson } from "../workspace.js";
 

@@ -6,12 +6,12 @@ import { describe, expect, it } from "vitest";
 
 import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../src/index.js";
 import { NATIVE_WORKER_AUTO_FILE_THRESHOLD, shouldEnableNativeWorkers } from "../src/indexer/build-workers.js";
-import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
+import { isNativeTreeSitterAvailable } from "../src/native/tree-sitter-native.js";
 import {
   createNativeWorkerPool,
   defaultNativeWorkerThreadCount,
   resolveNativeWorkerThreadCount,
-} from "../src/worker/nativeWorkerPool.js";
+} from "../src/worker/native-worker-pool.js";
 import type { BuildReport } from "../src/indexer/types.js";
 
 async function makeProject(fileCount: number, extension = ".ts"): Promise<string> {

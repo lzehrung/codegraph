@@ -208,5 +208,5 @@ Do not claim updates are universally lock-free. The supported claim is that code
 ## Release Notes
 
 - `@lzehrung/codegraph` and `@lzehrung/codegraph-native` version independently.
-- `src/native/bindingLoader.ts` loads a local workspace binary directly, caches installed Windows binaries, and uses the installed native package directly on other platforms or as a safe fallback.
+- `src/native/binding-loader.ts` loads a local workspace binary directly, caches installed Windows binaries, and uses the installed native package directly on other platforms or as a safe fallback.
 - If the cache is unavailable, codegraph records the cache error and preserves the existing native package fallback; if native loading or a query remains unavailable, it degrades to reduced graph-only and regex recovery mode.

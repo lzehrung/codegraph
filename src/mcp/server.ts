@@ -1,6 +1,6 @@
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { getCurrentNativeBindingOrigin } from "../native/runtime.js";
-import { captureCodegraphRuntimeIdentity } from "../runtimeIdentity.js";
+import { captureCodegraphRuntimeIdentity } from "../runtime-identity.js";
 import { createWarmedCodegraphMcpResources, type CodegraphMcpServerOptions } from "./handlers.js";
 import {
   assertMcpToolTimeout,
@@ -9,9 +9,9 @@ import {
   DEFAULT_MCP_TOOL_CONCURRENCY,
   DEFAULT_MCP_TOOL_TIMEOUT_MS,
 } from "./protocol.js";
-import { startCodegraphMcpHttpServer } from "./httpTransport.js";
+import { startCodegraphMcpHttpServer } from "./http-transport.js";
 import { waitForHttpServerClose } from "./http.js";
-import { awaitStdioMcpLifecycle, DEFAULT_MCP_STDIO_IDLE_TIMEOUT_MS } from "./stdioLifecycle.js";
+import { awaitStdioMcpLifecycle, DEFAULT_MCP_STDIO_IDLE_TIMEOUT_MS } from "./stdio-lifecycle.js";
 
 export { listCodegraphMcpTools } from "./tools.js";
 export { createCodegraphMcpHandlers } from "./handlers.js";
@@ -34,15 +34,15 @@ export {
   DEFAULT_MCP_TOOL_TIMEOUT_MS,
 } from "./protocol.js";
 export type { McpToolConcurrencyTracker, McpToolOperationTracker } from "./protocol.js";
-export { startCodegraphMcpHttpServer } from "./httpTransport.js";
-export type { CodegraphMcpHttpServer } from "./httpTransport.js";
+export { startCodegraphMcpHttpServer } from "./http-transport.js";
+export type { CodegraphMcpHttpServer } from "./http-transport.js";
 export {
   DEFAULT_MCP_HTTP_BODY_TIMEOUT_MS,
   DEFAULT_MCP_HTTP_SESSION_EVICTION_INTERVAL_MS,
   DEFAULT_MCP_HTTP_SESSION_IDLE_MS,
   DEFAULT_MCP_HTTP_SESSION_MAX_COUNT,
-} from "./httpTransport.js";
-export { runWithLegacyRequestAbortSignal } from "./legacySessions.js";
+} from "./http-transport.js";
+export { runWithLegacyRequestAbortSignal } from "./legacy-sessions.js";
 
 export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Promise<void> {
   const configuredMcpToolTimeout =

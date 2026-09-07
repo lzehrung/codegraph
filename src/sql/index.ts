@@ -1,5 +1,5 @@
-export { classifySqlFile } from "./classifySqlFile.js";
-export { extractSqlFactsFromSource } from "./extractFacts.js";
+export { classifySqlFile } from "./classify-sql-file.js";
+export { extractSqlFactsFromSource } from "./extract-facts.js";
 export { buildSqlArtifactGraphFromFiles, projectSqlFactsToGraph } from "./graph.js";
 export { collectSqlReviewContext } from "./review.js";
 export type { SqlArtifactEdge, SqlArtifactGraph, SqlArtifactNode } from "./graph.js";

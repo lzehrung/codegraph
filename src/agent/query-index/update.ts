@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { AgentProjectSnapshot } from "../session.js";
 import type { ProjectIndexManifestEntry, QueryIndexDiagnostics } from "../../indexer/types.js";
-import { getCodegraphVersion } from "../../util/packageInfo.js";
+import { getCodegraphVersion } from "../../util/package-info.js";
 import { fileIdentityKey, normalizePath } from "../../util/paths.js";
 import { errorMessage } from "../../util/errors.js";
 import type { PreparedQueryIndexFile } from "./content.js";
@@ -14,7 +14,7 @@ import {
   resolveQueryIndexSourcePath,
   type QueryIndexPaths,
 } from "./paths.js";
-import { createQuerySourceIdentity } from "./sourceIdentity.js";
+import { createQuerySourceIdentity } from "./source-identity.js";
 import {
   expectedQueryIndexVersionMetadata,
   QueryIndexFutureSchemaError,
@@ -138,7 +138,7 @@ async function prepareFiles(
   try {
     // Loaded lazily on purpose: importing the worker pool pulls in Piscina, and CLI startup
     // time is asserted by tests/cli-startup-eager-modules.test.ts.
-    const { prepareQueryIndexFiles } = await import("./workerPool.js");
+    const { prepareQueryIndexFiles } = await import("./worker-pool.js");
     const prepared = await prepareQueryIndexFiles(
       projectRoot,
       files.map((file) => ({

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as nativeRuntime from "../src/native/treeSitterNative.js";
+import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 

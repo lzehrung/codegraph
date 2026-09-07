@@ -10,7 +10,7 @@ import {
   resolveSpecifier,
   resolveWorkspacePackage,
 } from "../src/util.js";
-import { loadPhpComposerConfig } from "../src/util/resolution/phpComposer.js";
+import { loadPhpComposerConfig } from "../src/util/resolution/php-composer.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { resolveExport } from "../src/indexer/navigation-resolve.js";
 import { createTestIndexFromFiles } from "./test-utils.js";

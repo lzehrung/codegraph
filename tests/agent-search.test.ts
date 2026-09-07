@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import { searchCodegraph, searchCodegraphWithSession } from "../src/agent/search.js";
-import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
+import { formatAgentFollowUpAsCli } from "../src/agent/follow-ups.js";
 import { formatAgentSymbolHandle } from "../src/agent/handles.js";
 import type { SymbolEdge, SymbolGraph, SymbolNode } from "../src/graphs.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";

@@ -9,7 +9,7 @@ import {
   getNativeTreeSitterLoadError,
   isNativeTreeSitterAvailable,
   isNativeTreeSitterDisabledByEnv,
-} from "../src/native/treeSitterNative.js";
+} from "../src/native/tree-sitter-native.js";
 
 const slowNativeIntegrationTimeoutMs = 30000;
 const nativeIt = isNativeTreeSitterAvailable() ? it : it.skip;
@@ -152,9 +152,9 @@ describe("native fallback reporting", () => {
         }));
 
         vi.resetModules();
-        vi.doMock("../src/native/treeSitterNative.js", async () => {
-          const actual = await vi.importActual<typeof import("../src/native/treeSitterNative.js")>(
-            "../src/native/treeSitterNative.js",
+        vi.doMock("../src/native/tree-sitter-native.js", async () => {
+          const actual = await vi.importActual<typeof import("../src/native/tree-sitter-native.js")>(
+            "../src/native/tree-sitter-native.js",
           );
           return {
             ...actual,
@@ -176,7 +176,7 @@ describe("native fallback reporting", () => {
           }),
         ]);
       } finally {
-        vi.doUnmock("../src/native/treeSitterNative.js");
+        vi.doUnmock("../src/native/tree-sitter-native.js");
         await fsp.rm(root, { recursive: true, force: true });
       }
     },

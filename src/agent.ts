@@ -1,5 +1,5 @@
-export { toolFollowUp } from "./agent/followUps.js";
-export type { AgentFollowUp } from "./agent/followUps.js";
+export { toolFollowUp } from "./agent/follow-ups.js";
+export type { AgentFollowUp } from "./agent/follow-ups.js";
 export {
   DEFAULT_FILE_VIEW_BYTES,
   DEFAULT_FILE_VIEW_LINES,
@@ -9,14 +9,14 @@ export {
   getCodegraphFileViewWithSession,
   MAX_FILE_VIEW_BYTES,
   MAX_FILE_VIEW_LINES,
-} from "./agent/fileView.js";
+} from "./agent/file-view.js";
 export type {
   AgentFileGraphContext,
   AgentFileViewRequest,
   AgentFileViewResponse,
   AgentFileViewSensitiveInfo,
   AgentFileViewSensitiveKind,
-} from "./agent/fileView.js";
+} from "./agent/file-view.js";
 export { createAgentSession } from "./agent/session.js";
 export type {
   AgentFreshnessPolicy,
@@ -78,8 +78,8 @@ export {
   workspaceSymbols,
   workspaceSymbolsInSnapshot,
   workspaceSymbolsWithSession,
-} from "./agent/workspaceSymbols.js";
-export type { AgentWorkspaceSymbolsRequest, WorkspaceSymbolsResponse } from "./agent/workspaceSymbols.js";
+} from "./agent/workspace-symbols.js";
+export type { AgentWorkspaceSymbolsRequest, WorkspaceSymbolsResponse } from "./agent/workspace-symbols.js";
 export {
   findImplementations,
   findImplementationsWithSession,
@@ -87,17 +87,17 @@ export {
   findSubtypesWithSession,
   findSupertypes,
   findSupertypesWithSession,
-} from "./agent/typeHierarchy.js";
+} from "./agent/type-hierarchy.js";
 export type {
   ImplementationEntry,
   ImplementationsResponse,
   TypeHierarchyRelation,
   TypeHierarchyRequest,
   TypeHierarchyResponse,
-} from "./agent/typeHierarchy.js";
-export { findCallees, findCalleesWithSession, findCallers, findCallersWithSession } from "./agent/callHierarchy.js";
-export type { CallHierarchyEntry, CallHierarchyRequest, CallHierarchyResponse } from "./agent/callHierarchy.js";
-export { previewRename, previewRenameInSnapshot, previewRenameWithSession } from "./agent/renamePreview.js";
+} from "./agent/type-hierarchy.js";
+export { findCallees, findCalleesWithSession, findCallers, findCallersWithSession } from "./agent/call-hierarchy.js";
+export type { CallHierarchyEntry, CallHierarchyRequest, CallHierarchyResponse } from "./agent/call-hierarchy.js";
+export { previewRename, previewRenameInSnapshot, previewRenameWithSession } from "./agent/rename-preview.js";
 export type {
   RenameCandidateTest,
   RenameConflict,
@@ -107,13 +107,13 @@ export type {
   RenamePreviewRequest,
   RenamePreviewResponse,
   RenameUnsafeSite,
-} from "./agent/renamePreview.js";
-export { buildRefactorPlan, buildRefactorPlanInSnapshot, buildRefactorPlanWithSession } from "./agent/refactorPlan.js";
-export type { RefactorPlanRequest, RefactorPlanResponse, RefactorPlanSectionIssue } from "./agent/refactorPlan.js";
+} from "./agent/rename-preview.js";
+export { buildRefactorPlan, buildRefactorPlanInSnapshot, buildRefactorPlanWithSession } from "./agent/refactor-plan.js";
+export type { RefactorPlanRequest, RefactorPlanResponse, RefactorPlanSectionIssue } from "./agent/refactor-plan.js";
 
 /** Resolve a portable handle, qualified path, location, or exact name for semantic agent queries. */
-export { requireSemanticSymbol } from "./agent/semanticSymbols.js";
-export type { ResolvedSemanticSymbol } from "./agent/semanticSymbols.js";
+export { requireSemanticSymbol } from "./agent/semantic-symbols.js";
+export type { ResolvedSemanticSymbol } from "./agent/semantic-symbols.js";
 
 export type {
   SemanticLocation,

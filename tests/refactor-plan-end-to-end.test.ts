@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildRefactorPlanWithSession } from "../src/agent/refactorPlan.js";
+import { buildRefactorPlanWithSession } from "../src/agent/refactor-plan.js";
 import { searchCodegraphWithSession } from "../src/agent/search.js";
 import { createAgentSession } from "../src/agent/session.js";
 import { buildReviewReport } from "../src/review.js";

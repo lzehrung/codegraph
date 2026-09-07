@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { supportForFile } from "../../src/languages.js";
-import { ProjectedSyntaxTree } from "../../src/native/projectedTree.js";
-import { getNativeSyntaxTreeExecution } from "../../src/native/treeSitterNative.js";
-import { extractCallableSignature, extractCallsiteArguments } from "../../src/impact/callCompatibility.js";
+import { ProjectedSyntaxTree } from "../../src/native/projected-tree.js";
+import { getNativeSyntaxTreeExecution } from "../../src/native/tree-sitter-native.js";
+import { extractCallableSignature, extractCallsiteArguments } from "../../src/impact/call-compatibility.js";
 import type { SyntaxTreeLike } from "../../src/languages/types.js";
 
 function parseFixture(fileName: string, source: string): { languageId: string; tree: SyntaxTreeLike } {

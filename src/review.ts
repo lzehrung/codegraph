@@ -1,4 +1,4 @@
-import { checkMarkdownLinksInFiles } from "./documentLinks/check.js";
+import { checkMarkdownLinksInFiles } from "./document-links/check.js";
 import { performance } from "node:perf_hooks";
 import {
   findDuplicateContextsWithPreparedAnalysis,
@@ -9,14 +9,14 @@ import {
 } from "./duplicates.js";
 import type { FileId } from "./types.js";
 import { loadCurrentProjectIndex } from "./indexer/load-current-index.js";
-import { summarizeAnalysis } from "./analysisSummary.js";
+import { summarizeAnalysis } from "./analysis-summary.js";
 import { type ProjectIndex, type SymbolDef } from "./indexer/types.js";
 import { symbolId } from "./indexer/symbols.js";
 import type { GraphBuildOptions } from "./graphs/types.js";
 import type { FileChange, Hunk } from "./impact/types.js";
 import { normalizePath, toProjectDisplayPath } from "./util/paths.js";
 import { fileExists } from "./util/workspace.js";
-import { discoverProjectFiles } from "./util/projectFiles.js";
+import { discoverProjectFiles } from "./util/project-files.js";
 import { mapLimit } from "./util/concurrency.js";
 import { collectReviewCandidateTests } from "./review/candidates.js";
 import { collectReviewChanges, deletedPathsForChange } from "./review/changes.js";

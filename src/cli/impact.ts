@@ -9,7 +9,7 @@ import {
   type ImpactOptions,
   type ImpactReport,
 } from "../impact/index.js";
-import { formatRequiredArgumentCount, mapSuggestions, mapSurfaceArea } from "../impact/reportShared.js";
+import { formatRequiredArgumentCount, mapSuggestions, mapSurfaceArea } from "../impact/report-shared.js";
 import { formatMarkdownLinkCheckResult } from "./links.js";
 import { graphToMermaidSymbolsWithFiles } from "../graphs/symbol-render.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
@@ -20,10 +20,10 @@ import {
   collectDuplicateLeadSummary,
   parseDuplicateLeadScope,
   type DuplicateLeadSummary,
-} from "../duplicatesLeads.js";
-import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
+} from "../duplicates-leads.js";
+import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import type { Graph } from "../types.js";
-import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+import { type ProjectFileDiscoveryOptions } from "../util/project-files.js";
 import {
   parseImpactScopeOption,
   parseRefContextOption,
@@ -33,7 +33,7 @@ import {
   parsePositiveIntegerOption,
 } from "./options.js";
 import { exitWithError } from "./context.js";
-import { changedFilesWithSimilaritySources, duplicateSimilarityHintsFromChanges } from "./duplicateSimilarity.js";
+import { changedFilesWithSimilaritySources, duplicateSimilarityHintsFromChanges } from "./duplicate-similarity.js";
 import { DEFAULT_BOUNDED_IMPACT_BUDGETS } from "../impact/budgets.js";
 
 type ImpactOptionsBuilder = Partial<ImpactOptions> & {

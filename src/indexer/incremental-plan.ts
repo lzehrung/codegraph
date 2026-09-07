@@ -16,7 +16,7 @@ import {
   DEFAULT_PROJECT_PATTERNS,
   filterRealPathsWithinRoot,
   type ProjectFileDiscoveryOptions,
-} from "../util/projectFiles.js";
+} from "../util/project-files.js";
 
 export type IncrementalGitDiffOptions = {
   base?: string;

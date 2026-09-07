@@ -4,7 +4,7 @@ import type { BuildOptions, ProjectIndex } from "../indexer/types.js";
 import { getReverseNeighbors, graphAdjacencyFor } from "../graphs/adjacency.js";
 import { createGraphFileResolver, normalizeImpactFileChange } from "../impact/path.js";
 import { getDiff } from "../impact/providers/base.js";
-import { compileTestPatterns, createIndexTestFileMatcher, isTestFilePath } from "../impact/testPatterns.js";
+import { compileTestPatterns, createIndexTestFileMatcher, isTestFilePath } from "../impact/test-patterns.js";
 import type { FileChange } from "../impact/types.js";
 import { listDirectDeletedFileImporters } from "../review/deleted.js";
 import type { FileId } from "../types.js";

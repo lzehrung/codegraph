@@ -6,13 +6,13 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, test } from "vitest";
 import { captureCli, runCliOrThrow, stripCliProgressLines } from "./helpers/cli.js";
 import { runCli } from "../src/cli.js";
-import { appendDuplicateLeadSummary, collectDuplicateLeadSummary } from "../src/duplicatesLeads.js";
+import { appendDuplicateLeadSummary, collectDuplicateLeadSummary } from "../src/duplicates-leads.js";
 import { buildProjectIndex, findDuplicateContext, findDuplicateContexts, findDuplicates } from "../src/index.js";
 import {
   getNativeDuplicateTokens,
   isNativeDuplicateTokenizationAvailable,
   isNativeTreeSitterAvailable,
-} from "../src/native/treeSitterNative.js";
+} from "../src/native/tree-sitter-native.js";
 import { DUPLICATE_IDENTIFIER_KEYWORDS } from "../src/duplicate-keywords.js";
 import { normalizeDuplicateSourceTokens } from "../src/duplicate-token-normalization.js";
 import {
@@ -28,7 +28,7 @@ import {
   duplicateUnitCacheVariant,
   duplicateUnitDiskCache,
   tryLoadDuplicateUnitsFromCache,
-} from "../src/duplicates/unitCache.js";
+} from "../src/duplicates/unit-cache.js";
 import { cacheRelativePath } from "../src/indexer/build-cache/module-cache.js";
 import { brotliCompressSync } from "node:zlib";
 import {

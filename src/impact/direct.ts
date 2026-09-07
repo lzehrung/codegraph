@@ -3,7 +3,7 @@ import { type ProjectIndex, type SymbolDef } from "../indexer/types.js";
 import { findReferences } from "../indexer/navigation.js";
 import { Semaphore } from "../util/concurrency.js";
 import type { ChangedSymbol, ImpactItem, ImpactOptions, ImpactReason } from "./types.js";
-import type { ReferenceLookupCache } from "./referenceCache.js";
+import type { ReferenceLookupCache } from "./reference-cache.js";
 import { calculateSeverity, selectStrongerImpactReason } from "./severity.js";
 import {
   canStartReferenceLookup,

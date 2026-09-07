@@ -4,7 +4,7 @@ import path from "node:path";
 import { captureCli, runCliOrThrow } from "./helpers/cli.js";
 import { createTempProjectRoot } from "./helpers/filesystem.js";
 import { runGit } from "./helpers/git.js";
-import { CURRENT_QUERY_FAMILY_CASES } from "./helpers/currentQueryFamilies.js";
+import { CURRENT_QUERY_FAMILY_CASES } from "./helpers/current-query-families.js";
 
 const CHECK_START = "Checking project index";
 const CHECK_COMPLETE = "Checked project index";

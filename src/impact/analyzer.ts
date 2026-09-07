@@ -1,14 +1,14 @@
 import type { FileId } from "../types.js";
 import { type ProjectIndex } from "../indexer/types.js";
-import { compileTestPatterns, createIndexTestFileMatcher } from "./testPatterns.js";
+import { compileTestPatterns, createIndexTestFileMatcher } from "./test-patterns.js";
 import type { ChangedSymbol, ImpactItem, ImpactOptions, FileChange } from "./types.js";
 import { createImpactIgnoreMatcher } from "./path.js";
 import { analyzeDirectReferences } from "./direct.js";
 import { analyzeTransitiveImpact, seedTransitiveFromFiles } from "./transitive.js";
 import { buildDependencyStats, normalizeSeverityWeights } from "./severity.js";
-import { attachCallCompatibilityHints } from "./callCompatibility.js";
-import { computeMemberResolutionCoverage } from "./memberResolutionCoverage.js";
-import { createReferenceLookupCache } from "./referenceCache.js";
+import { attachCallCompatibilityHints } from "./call-compatibility.js";
+import { computeMemberResolutionCoverage } from "./member-resolution-coverage.js";
+import { createReferenceLookupCache } from "./reference-cache.js";
 import {
   createImpactWorkBudget,
   IMPACT_SYMBOL_BATCH_SIZE,

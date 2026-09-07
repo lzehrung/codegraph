@@ -1,4 +1,4 @@
-import { supportsReducedModeRegexRecovery } from "../../native/treeSitterNative.js";
+import { supportsReducedModeRegexRecovery } from "../../native/tree-sitter-native.js";
 import type { FallbackImportExtractionEvent } from "../../graphs/specifiers.js";
 import { logWithLevel, type LogLevel } from "../../logging.js";
 import { stringifyUnknown } from "../../util/ast.js";

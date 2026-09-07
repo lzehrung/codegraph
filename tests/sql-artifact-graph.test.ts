@@ -3,9 +3,9 @@ import fsp from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { collectGraph } from "../src/index.js";
 import { buildSqlArtifactGraphFromFiles } from "../src/sql/index.js";
-import { buildSqlFactCache, buildSqlModuleIndex, collectSqlEdgesForFile } from "../src/sql/sourceGraph.js";
+import { buildSqlFactCache, buildSqlModuleIndex, collectSqlEdgesForFile } from "../src/sql/source-graph.js";
 import { SymbolKind } from "../src/indexer/types.js";
-import { computeFileSymbolHashes } from "../src/util/symbolHash.js";
+import { computeFileSymbolHashes } from "../src/util/symbol-hash.js";
 import type { GraphCacheEntry } from "../src/graphs/types.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 

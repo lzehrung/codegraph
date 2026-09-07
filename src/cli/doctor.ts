@@ -7,16 +7,16 @@ import {
   getNativeBindingOrigin,
   getNativeTreeSitterLoadError,
   getNativeTreeSitterSupportedLanguageIds,
-} from "../native/treeSitterNative.js";
+} from "../native/tree-sitter-native.js";
 import {
   getCodegraphPackageIdentity,
   normalizePathForDisplay,
   pathExists,
   type CodegraphPackageIdentity,
-} from "../util/packageInfo.js";
+} from "../util/package-info.js";
 import { isPlainRecord } from "../util/guards.js";
 import type { NativeBindingOrigin } from "../native/contracts.js";
-import { captureCodegraphRuntimeIdentity, createInstalledVersionChecker } from "../runtimeIdentity.js";
+import { captureCodegraphRuntimeIdentity, createInstalledVersionChecker } from "../runtime-identity.js";
 
 type IndexedArtifactReport = {
   type: "jsonGraph" | "sqliteGraph" | "diskCache" | "artifactBundle" | "unknown";

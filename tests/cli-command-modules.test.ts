@@ -3,14 +3,14 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
-import { MAX_FILE_VIEW_BYTES, MAX_FILE_VIEW_LINES } from "../src/agent/fileView.js";
+import { MAX_FILE_VIEW_BYTES, MAX_FILE_VIEW_LINES } from "../src/agent/file-view.js";
 import { handleChunkCommand, type ChunkCommandContext } from "../src/cli/chunk.js";
 import type { CliAgentCommandContext } from "../src/cli/context.js";
 import { maybeWriteNativeBackendStatus, runWithCliRuntime } from "../src/cli/context.js";
 import { buildDoctorReport, findStaleNpmRetirementPaths } from "../src/cli/doctor.js";
 import { handleGraphCommand, type GraphCommandContext } from "../src/cli/graph.js";
-import { handleGraphDeltaCommand } from "../src/cli/graphDelta.js";
-import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/cli/graphQueries.js";
+import { handleGraphDeltaCommand } from "../src/cli/graph-delta.js";
+import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/cli/graph-queries.js";
 import {
   ADVANCED_HELP_TEXT,
   CLI_HELP_TEXT,
@@ -29,7 +29,7 @@ import {
   handleRefsCommand,
   type NavigationCommandContext,
 } from "../src/cli/navigation.js";
-import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/util/packageInfo.js";
+import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/util/package-info.js";
 import { handlePacketCommand } from "../src/cli/packet.js";
 import { handleGrepCommand } from "../src/cli/grep.js";
 import { TEXT_GREP_MAX_HITS, textGrepBounded } from "../src/graphs/grep.js";
@@ -42,13 +42,13 @@ import * as indexerBuild from "../src/indexer/build-index.js";
 import { diffBuildOptions, summarizeBuildOptions } from "../src/indexer/build-cache.js";
 import type { ProjectIndex } from "../src/indexer.js";
 import type { BuildOptions, BuildReport, NativeBackendReport } from "../src/indexer/types.js";
-import { getNativeRuntimeFingerprint } from "../src/native/treeSitterNative.js";
+import { getNativeRuntimeFingerprint } from "../src/native/tree-sitter-native.js";
 import type { Graph } from "../src/types.js";
 import { runGit } from "./helpers/git.js";
 import { createTwoCommitCycleProject, mkTmpDir } from "./helpers/filesystem.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import * as mcpServer from "../src/mcp/server.js";
-import * as projectFilesModule from "../src/util/projectFiles.js";
+import * as projectFilesModule from "../src/util/project-files.js";
 
 function readJsonRecord(value: unknown): Record<string, unknown> {
   expect(value).toBeTypeOf("object");

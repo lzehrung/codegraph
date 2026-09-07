@@ -15,7 +15,7 @@ import {
   createNativeExtractor,
   DEFAULT_NATIVE_SOURCE_MAX_BYTES,
   type NativeExtractTask,
-} from "../src/worker/nativeExtractWorker.js";
+} from "../src/worker/native-extract-worker.js";
 
 const tempDirs: string[] = [];
 

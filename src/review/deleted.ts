@@ -2,14 +2,14 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { CandidateTestFile } from "../impact/context.js";
-import { compileTestPatterns, createIndexTestFileMatcher } from "../impact/testPatterns.js";
+import { compileTestPatterns, createIndexTestFileMatcher } from "../impact/test-patterns.js";
 import type { FileChange } from "../impact/types.js";
 import { collectImportsForFile } from "../indexer/imports.js";
 import { collectLocalsAndExportsFromSource } from "../indexer/locals-and-exports.js";
 import { type ExportEntry, type ImportBinding, type ModuleIndex, type ProjectIndex } from "../indexer/types.js";
 import { supportForFile } from "../languages.js";
 import type { Edge, FileId } from "../types.js";
-import { edgeKey } from "../util/graphEdges.js";
+import { edgeKey } from "../util/graph-edges.js";
 import { listResolutionCandidates, loadNearestTsconfigFor } from "../util/resolution.js";
 import {
   listWorkspacePackageResolutionCandidates,

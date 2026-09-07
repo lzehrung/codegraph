@@ -7,7 +7,7 @@ import { type ImportBinding, type ModuleIndex } from "./indexer/types.js";
 import { buildScopeIndexFromSource as buildScopeIndexFromSourceFromModule, type ScopeIndex } from "./indexer/scope.js";
 import type { LanguageSupport } from "./languages.js";
 import type { SyntaxTreeLike } from "./languages/types.js";
-import type { NativeQueryResults, NativeRuntimeMode } from "./native/treeSitterNative.js";
+import type { NativeQueryResults, NativeRuntimeMode } from "./native/tree-sitter-native.js";
 
 export { SymbolKind } from "./indexer/types.js";
 export type {
@@ -115,7 +115,7 @@ export async function collectImportsForFile(
     sup?: LanguageSupport;
     nativeQueries?: NativeQueryResults | null;
     graphOptions?: GraphBuildOptions;
-    native?: import("./native/treeSitterNative.js").NativeRuntimeMode;
+    native?: import("./native/tree-sitter-native.js").NativeRuntimeMode;
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
     logLevel?: import("./logging.js").LogLevel;
   },

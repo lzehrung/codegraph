@@ -1,6 +1,6 @@
-import { disposeSessionQueryIndex, ensureSessionQueryIndex } from "../src/agent/query-index/sessionStore.js";
+import { disposeSessionQueryIndex, ensureSessionQueryIndex } from "../src/agent/query-index/session-store.js";
 import * as updateModule from "../src/agent/query-index/update.js";
-import * as sessionLifecycleModule from "../src/agent/sessionLifecycle.js";
+import * as sessionLifecycleModule from "../src/agent/session-lifecycle.js";
 import fs from "node:fs/promises";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import { createHash } from "node:crypto";
@@ -14,7 +14,7 @@ import * as indexerBuild from "../src/indexer/build-index.js";
 import { createProjectSnapshotIdentity } from "../src/indexer/build-cache.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
 import type { ProgressUpdate } from "../src/types.js";
-import * as projectFilesModule from "../src/util/projectFiles.js";
+import * as projectFilesModule from "../src/util/project-files.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { runGit as git } from "./helpers/git.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";

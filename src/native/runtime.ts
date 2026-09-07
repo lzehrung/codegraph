@@ -9,9 +9,9 @@ import {
   loadNativeBinding,
   nativeTargetSuffixFor,
   readPlatformPackage,
-} from "./bindingLoader.js";
-import { lookupNativeRuntimeCacheEntry, recordNativeRuntimeCacheIdentity } from "./runtimeCache.js";
-import { markWindowsProcessDrainRequired } from "../util/windowsProcessDrain.js";
+} from "./binding-loader.js";
+import { lookupNativeRuntimeCacheEntry, recordNativeRuntimeCacheIdentity } from "./runtime-cache.js";
+import { markWindowsProcessDrainRequired } from "../util/windows-process-drain.js";
 import type {
   NativeBinding,
   NativeBindingOrigin,

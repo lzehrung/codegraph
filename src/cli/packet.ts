@@ -1,6 +1,6 @@
 import { formatAgentExplanation, type AgentExplanation } from "../agent/explain.js";
 import { getCodegraphPacket } from "../agent/packet.js";
-import { formatAgentFollowUpsAsCli } from "../agent/followUps.js";
+import { formatAgentFollowUpsAsCli } from "../agent/follow-ups.js";
 import type { CliAgentCommandContext } from "./context.js";
 import { errorMessage } from "../util/errors.js";
 import { PACKET_HELP_TEXT } from "./help.js";

@@ -1,10 +1,10 @@
 import fsp from "node:fs/promises";
-import { prepareSourceInput } from "../languages/filePrep.js";
+import { prepareSourceInput } from "../languages/file-prep.js";
 import { logWithLevel } from "../logging.js";
-import { buildByteToStringIndexMap, stringPositionForBytePoint } from "../native/byteIndex.js";
-import { getUnifiedQueryExecution } from "../native/treeSitterNative.js";
+import { buildByteToStringIndexMap, stringPositionForBytePoint } from "../native/byte-index.js";
+import { getUnifiedQueryExecution } from "../native/tree-sitter-native.js";
 import { toProjectDisplayPath } from "../util/paths.js";
-import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/project-files.js";
 
 export type AstGrepHit = {
   file: string;

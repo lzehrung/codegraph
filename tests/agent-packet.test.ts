@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { getCodegraphPacket, orientCodegraph } from "../src/agent.js";
 import { DEFAULT_REVIEW_TRANSPORT_LIMITS } from "../src/review/types.js";
-import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
+import { formatAgentFollowUpAsCli } from "../src/agent/follow-ups.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
 import { runGit } from "./helpers/git.js";
 

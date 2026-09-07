@@ -11,7 +11,7 @@ import {
   type ProjectIndex,
   type SqlFactKind,
 } from "../src/index.js";
-import * as nativeRuntime from "../src/native/treeSitterNative.js";
+import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 import { withNativeRuntimeModeAsync } from "./helpers/native.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;

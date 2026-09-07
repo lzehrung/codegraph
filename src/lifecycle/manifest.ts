@@ -5,10 +5,10 @@ import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
 import { computeConfigHash, loadManifest } from "../indexer/build-cache/manifest.js";
 import { logWithLevel } from "../logging.js";
 import { mapLimit } from "../util/concurrency.js";
-import { createProjectDiscoveryContext, type ProjectDiscoveryContext } from "../util/projectFiles.js";
+import { createProjectDiscoveryContext, type ProjectDiscoveryContext } from "../util/project-files.js";
 import { normalizeGraphOptions, summarizeBuildOptions } from "../indexer/build-cache/options.js";
 import type { BuildOptions } from "../indexer/types.js";
-import type { AnalysisSummary } from "../analysisSummary.js";
+import type { AnalysisSummary } from "../analysis-summary.js";
 import { CodegraphLifecycleUserError } from "./errors.js";
 import { prepareCodegraphLifecycleGitignore, type CodegraphLifecycleGitignoreResult } from "./gitignore.js";
 

@@ -12,7 +12,7 @@ import type {
 } from "../indexer/types.js";
 import type { Range } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
-import { extractSqlFactsFromSource } from "./extractFacts.js";
+import { extractSqlFactsFromSource } from "./extract-facts.js";
 import { pushSqlLookupValue } from "./lookup.js";
 import {
   maskSqlStringsAndComments,

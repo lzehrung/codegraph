@@ -2,10 +2,10 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { NativeExtractBatchResult } from "../src/worker/nativeExtractWorker.js";
-import { loadProductionBinding, readWorkerBindingHandoff } from "../src/worker/nativeExtractWorker.js";
-import { createNativeWorkerPool } from "../src/worker/nativeWorkerPool.js";
-import { getCachedNormalizedQuery } from "../src/native/treeSitterNative.js";
+import type { NativeExtractBatchResult } from "../src/worker/native-extract-worker.js";
+import { loadProductionBinding, readWorkerBindingHandoff } from "../src/worker/native-extract-worker.js";
+import { createNativeWorkerPool } from "../src/worker/native-worker-pool.js";
+import { getCachedNormalizedQuery } from "../src/native/tree-sitter-native.js";
 import { getNativeWorkerBindingHandoff, loadBinding } from "../src/native/runtime.js";
 import { supportForFile } from "../src/languages.js";
 

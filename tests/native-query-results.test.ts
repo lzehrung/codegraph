@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import * as byteIndexModule from "../src/native/byteIndex.js";
-import { rangeFromNativeCapture } from "../src/native/queryResults.js";
+import * as byteIndexModule from "../src/native/byte-index.js";
+import { rangeFromNativeCapture } from "../src/native/query-results.js";
 import { collectLocalsAndExportsFromSource } from "../src/indexer.js";
 import { supportForFile } from "../src/languages.js";
-import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
+import { isNativeTreeSitterAvailable } from "../src/native/tree-sitter-native.js";
 
 describe("rangeFromNativeCapture", () => {
   it("converts UTF-8 byte indexes and point columns to UTF-16 range boundaries", () => {

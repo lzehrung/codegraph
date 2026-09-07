@@ -1,5 +1,5 @@
 import type { Edge } from "../types.js";
-import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
+import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 
 export type GraphBuildOptions = {
   fast?: boolean;

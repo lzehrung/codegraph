@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as agentFacade from "../src/agent.js";
 import { type AgentSession } from "../src/agent/session.js";
-import { setAfterConfinedPathVerifiedForTests } from "../src/util/confinedFile.js";
+import { setAfterConfinedPathVerifiedForTests } from "../src/util/confined-file.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
 
 const { createAgentSession, formatAgentFileViewResponse, getCodegraphFileView, getCodegraphFileViewWithSession } =

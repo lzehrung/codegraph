@@ -5,9 +5,9 @@ import { getAllLanguages } from "../../languages/registry.js";
 import type { LanguageDefinition } from "../../languages/types.js";
 import type { GraphBuildOptions } from "../../graphs/types.js";
 import { normalizePath, normalizeResolutionHints } from "../../util/paths.js";
-import { getCodegraphVersion } from "../../util/packageInfo.js";
-import { type ProjectFileDiscoveryOptions } from "../../util/projectFiles.js";
-import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
+import { getCodegraphVersion } from "../../util/package-info.js";
+import { type ProjectFileDiscoveryOptions } from "../../util/project-files.js";
+import { getNativeRuntimeFingerprint } from "../../native/tree-sitter-native.js";
 import type { BuildOptions } from "../types.js";
 export { normalizeLanguageExtensions } from "../../languages.js";
 

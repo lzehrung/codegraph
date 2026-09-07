@@ -11,7 +11,7 @@ import {
   isInAncestorDeclarator,
   isInField,
   isInParameterList,
-} from "./cFamily.js";
+} from "./c-family.js";
 
 export const CPP_DEF = createCFamilyLanguageDefinition({
   id: "cpp",

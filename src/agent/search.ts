@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
-import { type AnalysisBackend, type AnalysisMode, type AnalysisSummary } from "../analysisSummary.js";
+import { type AnalysisBackend, type AnalysisMode, type AnalysisSummary } from "../analysis-summary.js";
 import { SymbolKind, type BuildOptions, type SymbolDef } from "../indexer/types.js";
 import type { Range } from "../types.js";
 import { type SymbolNode } from "../graphs/symbol-graph.js";
-import { buildSymbolLookup, type SymbolLookup as SymbolDefLookup } from "./symbolLookup.js";
+import { buildSymbolLookup, type SymbolLookup as SymbolDefLookup } from "./symbol-lookup.js";
 import {
   AGENT_SEARCH_EVIDENCE_PER_RESULT_LIMIT,
   AGENT_SEARCH_FOLLOWUPS_PER_RESULT_LIMIT,
@@ -42,7 +42,7 @@ import {
   type AgentProjectSnapshot,
   type AgentSession,
 } from "./session.js";
-import { formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./followUps.js";
+import { formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./follow-ups.js";
 import {
   buildQueryTextChunks,
   detectQueryIndexSurface,
@@ -55,7 +55,7 @@ import {
   QUERY_INDEX_CANDIDATE_VERSION,
   type QueryIndexCandidate,
 } from "./query-index/candidates.js";
-import { registerSessionInvalidationHook } from "./sessionLifecycle.js";
+import { registerSessionInvalidationHook } from "./session-lifecycle.js";
 import type { QueryIndexHandle } from "./query-index/update.js";
 
 export type AgentSearchMode = "hybrid" | "symbol" | "path" | "text" | "graph" | "sql";
@@ -282,7 +282,7 @@ export async function searchCodegraphWithSession(
   const mode = request.mode ?? "hybrid";
   let queryIndex: QueryIndexHandle | undefined;
   if (mode === "hybrid" || mode === "text") {
-    const { ensureSessionQueryIndex } = await import("./query-index/sessionStore.js");
+    const { ensureSessionQueryIndex } = await import("./query-index/session-store.js");
     queryIndex = await ensureSessionQueryIndex(session, snapshot);
   }
   const search = searchSnapshot(snapshot, request, freshness, queryIndex);

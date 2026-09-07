@@ -5,12 +5,12 @@ import {
   DEFAULT_FILE_VIEW_LINES,
   MAX_FILE_VIEW_BYTES,
   MAX_FILE_VIEW_LINES,
-} from "../agent/fileView.js";
+} from "../agent/file-view.js";
 import { MAX_GRAPH_DEPTH } from "../agent/search.js";
 import { DEFAULT_WORKSPACE_SYMBOL_LIMIT, MAX_WORKSPACE_SYMBOL_LIMIT } from "../indexer/workspace-symbols.js";
 import { SymbolKind } from "../indexer/types.js";
 
-import { DEFAULT_SQLITE_ROW_LIMIT, MAX_SQLITE_ROW_LIMIT } from "./sqliteGuard.js";
+import { DEFAULT_SQLITE_ROW_LIMIT, MAX_SQLITE_ROW_LIMIT } from "./sqlite-guard.js";
 
 export const DEFAULT_MCP_COLLECTION_LIMIT = 25;
 export const DEFAULT_RENAME_PREVIEW_EDITS = 5_000;

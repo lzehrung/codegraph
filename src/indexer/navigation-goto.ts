@@ -8,7 +8,7 @@ import {
   getNavigationExpressionProperty,
   isMemberAccessNode,
   memberAccessTraversalTypes,
-} from "../util/memberAccess.js";
+} from "../util/member-access.js";
 import { CSHARP_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { okGoToResult } from "./navigation-provenance.js";
