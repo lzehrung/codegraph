@@ -586,7 +586,13 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         result = { state: "fresh" };
       } else {
         const changedFiles = diff.changedFiles.map((file) => toProjectDisplayPath(options.root, file));
-        if (policy === "check") {
+        if (currentConfigurationIdentity.error) {
+          result = {
+            state: "stale",
+            ...summarizeChangedFiles(changedFiles),
+            reason: `session configuration could not be checked: ${currentConfigurationIdentity.error}`,
+          };
+        } else if (policy === "check") {
           result = {
             state: "stale",
             ...summarizeChangedFiles(changedFiles),

@@ -11,7 +11,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Fixed
 
-- Long-lived agent sessions now detect configuration-only changes before reusing a snapshot. Resolution, language, discovery, and ignore-rule changes now report stale state or refresh automatically according to the session freshness policy.
+- Long-lived agent sessions now detect configuration-only changes before reusing a snapshot. Resolution, language, discovery, and ignore-rule changes now report stale state or refresh automatically according to the session freshness policy. Failed configuration checks report stale state without repeated automatic rebuilds.
 
 ### Changed
 

@@ -989,6 +989,44 @@ describe("agent session", () => {
     );
   });
 
+  it("retains an auto session while config reads fail and refreshes after recovery", async () => {
+    const root = await mkRepo();
+    const configPath = path.join(root, "tsconfig.json");
+    await fs.writeFile(configPath, "{}\n");
+    const originalReadFile = fs.readFile.bind(fs);
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+      if (path.resolve(String(args[0])) === configPath) {
+        throw Object.assign(new Error("config read denied"), { code: "EACCES" });
+      }
+      return await originalReadFile(...args);
+    });
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const session = createAgentSession({
+      root,
+      buildOptions: { cache: "off", native: "off" },
+      freshness: { policy: "auto" },
+    });
+    try {
+      const snapshot = await session.loadProject({ symbolGraph: "skip" });
+      for (let check = 0; check < 2; check++) {
+        expect(await session.checkFreshness?.()).toMatchObject({ state: "stale", changedFiles: [] });
+        expect(await session.loadProject({ symbolGraph: "skip" })).toBe(snapshot);
+        now += AGENT_FRESHNESS_CHECK_INTERVAL_MS + 1;
+      }
+
+      readSpy.mockRestore();
+      expect(await session.checkFreshness?.()).toEqual({ state: "refreshed", changedFiles: [] });
+      const recovered = await session.loadProject({ symbolGraph: "skip" });
+      expect(recovered).not.toBe(snapshot);
+      now += AGENT_FRESHNESS_CHECK_INTERVAL_MS + 1;
+      expect(await session.checkFreshness?.()).toEqual({ state: "fresh" });
+      expect(await session.loadProject({ symbolGraph: "skip" })).toBe(recovered);
+    } finally {
+      session.invalidate();
+    }
+  });
+
   it("leaves configuration freshness under explicit manual caller control", async () => {
     const { root, main, firstHeader } = await createConfigurationFreshnessFixture();
     const session = createAgentSession({

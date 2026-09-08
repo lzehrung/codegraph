@@ -218,6 +218,8 @@ The local review session refreshes manually with `refresh()` and records stale-s
 
 `createAgentSession()` freshness checks also compare the configuration and discovery identity used by indexing. Its `check` policy reports configuration drift while retaining the snapshot, `auto` refreshes within its normal bounds, and `manual` leaves refresh timing to the caller. This detects resolution, language, discovery, and ignore-rule changes even when source paths and bytes are unchanged.
 
+If a configuration check fails, `check` and `auto` report stale state and retain the snapshot rather than repeatedly rebuilding it. Normal freshness checks resume when configuration can be read again.
+
 For library callers performing repeated navigation or impact work, use sessions like this:
 
 ```ts
