@@ -266,10 +266,11 @@ export async function computeConfigHash(
   logLevel?: LogLevel,
   discoveryContext?: ProjectDiscoveryContext,
   callbacks?: DiscoveryWorkCallbacks,
+  includeCodegraphConfig = true,
 ): Promise<ConfigHashResult> {
   const context = discoveryContext ?? createProjectDiscoveryContext(projectRoot);
   try {
-    const collected = await collectConfigHashInputFiles(projectRoot, context, logLevel, callbacks);
+    const collected = await collectConfigHashInputFiles(projectRoot, context, logLevel, callbacks, includeCodegraphConfig);
     const hash = crypto.createHash("sha1");
     let firstError = collected.error;
     for (const file of collected.files) {

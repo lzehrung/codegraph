@@ -411,7 +411,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
       const configurationIdentity =
         options.freshness?.policy === "manual"
           ? undefined
-          : await computeConfigHash(options.root, options.buildOptions?.logLevel, discoveryContext);
+          : await computeConfigHash(options.root, options.buildOptions?.logLevel, discoveryContext, undefined, options.useConfig);
       const { files, discoveryOptions, graphOptions, languageExtensions, cacheLocation, incrementalPlan, startedAt } =
         await loadFilePlan(discoveryContext);
       const buildOptions: IncrementalBuildOptions = {
@@ -569,7 +569,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
       // across operations, so unchanged sessions do not repeat discovery traversal.
       const discoveryContext = createProjectDiscoveryContext(options.root);
       const [currentConfigurationIdentity, currentFilePlan] = await Promise.all([
-        computeConfigHash(options.root, options.buildOptions?.logLevel, discoveryContext),
+        computeConfigHash(options.root, options.buildOptions?.logLevel, discoveryContext, undefined, options.useConfig),
         resolveAgentSessionFilePlan(options, discoveryContext),
       ]);
       const currentSignatures = await collectAgentFileSignatures(currentFilePlan.files);

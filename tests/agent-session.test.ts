@@ -7,7 +7,12 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
-import { AGENT_FRESHNESS_CHECK_INTERVAL_MS, createAgentSession, listAgentSessionFiles } from "../src/agent/session.js";
+import {
+  AGENT_FRESHNESS_CHECK_INTERVAL_MS,
+  createAgentSession,
+  listAgentSessionFiles,
+  type AgentProjectSnapshot,
+} from "../src/agent/session.js";
 import type { QueryIndexHandle } from "../src/agent/query-index/update.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
@@ -1025,6 +1030,47 @@ describe("agent session", () => {
       now += AGENT_FRESHNESS_CHECK_INTERVAL_MS + 1;
       expect(await session.checkFreshness?.()).toEqual({ state: "fresh" });
       expect(await session.loadProject({ symbolGraph: "skip" })).toBe(recovered);
+    } finally {
+      session.invalidate();
+    }
+  });
+
+  it("ignores unused Codegraph settings while retaining language configuration freshness", async () => {
+    const root = await mkTmpDir("cg-agent-session-disabled-config-");
+    const main = path.join(root, "main.ts");
+    const config = path.join(root, "codegraph.config.json");
+    const tsconfig = path.join(root, "tsconfig.json");
+    await fs.writeFile(main, 'import { value } from "dep";\nexport { value };\n');
+    await fs.writeFile(path.join(root, "one.ts"), "export const value = 1;\n");
+    await fs.writeFile(path.join(root, "second.ts"), "export const value = 2;\n");
+    await fs.writeFile(config, "{}");
+    const writeTsconfig = (target: string) =>
+      fs.writeFile(tsconfig, JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { dep: [target] } } }));
+    await writeTsconfig("one.ts");
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const session = createAgentSession({
+      root,
+      useConfig: false,
+      discovery: { ignoreGlobs: ["tsconfig.json"] },
+      buildOptions: { cache: "off", native: "off" },
+      freshness: { policy: "auto" },
+    });
+    const targets = (snapshot: AgentProjectSnapshot) =>
+      snapshot.fileGraph.edges.filter((edge) => edge.from === normalizePath(main)).map((edge) => edge.to);
+    try {
+      const snapshot = await session.loadProject({ symbolGraph: "skip" });
+      expect(targets(snapshot)).toEqual([{ type: "file", path: normalizePath(path.join(root, "one.ts")) }]);
+
+      await fs.writeFile(config, JSON.stringify({ discovery: { ignoreGlobs: ["main.ts"] } }));
+      expect(await session.checkFreshness!()).toEqual({ state: "fresh" });
+      expect(await session.loadProject({ symbolGraph: "skip" })).toBe(snapshot);
+
+      await writeTsconfig("second.ts");
+      now += AGENT_FRESHNESS_CHECK_INTERVAL_MS + 1;
+      expect(await session.checkFreshness!()).toEqual({ state: "refreshed", changedFiles: [] });
+      const refreshed = await session.loadProject({ symbolGraph: "skip" });
+      expect(targets(refreshed)).toEqual([{ type: "file", path: normalizePath(path.join(root, "second.ts")) }]);
     } finally {
       session.invalidate();
     }
