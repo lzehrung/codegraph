@@ -9,6 +9,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Added
+
+- Exported `orientCodegraphWithSession` and `getCodegraphPacketWithSession` from the public agent entrypoint (`@lzehrung/codegraph-core/agent` and `@lzehrung/codegraph/agent`) for shared-session orientation and packet retrieval.
+
 ### Changed
 
 - Shortened the bundled Codegraph skill around agent tool choice, task order, and safety checks. Detailed command and server contracts remain in the CLI and MCP references.

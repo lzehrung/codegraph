@@ -36,7 +36,7 @@ export type {
   AgentExploreRequest,
   AgentExploreResponse,
 } from "./agent/explore.js";
-export { orientCodegraph } from "./agent/orient.js";
+export { orientCodegraph, orientCodegraphWithSession } from "./agent/orient.js";
 export type {
   AgentOrientBudget,
   AgentOrientHealthMode,
@@ -46,7 +46,7 @@ export type {
   AgentPacketCommand,
   AgentTreeEntry,
 } from "./agent/orient.js";
-export { getCodegraphPacket } from "./agent/packet.js";
+export { getCodegraphPacket, getCodegraphPacketWithSession } from "./agent/packet.js";
 export type { AgentPacketKind, AgentPacketPayload, AgentPacketRequest, AgentPacketResponse } from "./agent/packet.js";
 export { formatAgentSearchResponse, searchCodegraph, searchCodegraphWithSession } from "./agent/search.js";
 export type {

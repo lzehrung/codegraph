@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { orientCodegraph, orientCodegraphWithSession } from "../src/agent/orient.js";
-import { createAgentSession } from "../src/agent/session.js";
+import { createAgentSession, orientCodegraph, orientCodegraphWithSession } from "../src/agent.js";
 import { dedupeAgentFollowUps, formatAgentFollowUpAsCli } from "../src/agent/follow-ups.js";
 import * as duplicates from "../src/duplicates.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
