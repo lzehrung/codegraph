@@ -77,7 +77,7 @@ Filename results are suggestions only.
 - Use readable CLI output for direct reading; `--json` for exact fields, ranges, handles, or tool chaining. Do not parse display text.
 - Use narrow queries and small limits. `codegraph search --no-snippets` avoids source you will read separately.
 - Check `truncated`, `omitted`, and `omittedCounts`. A capped result is incomplete; narrow the query or raise its limit.
-- For indexed text search, inspect `candidateCounts.indexedTextChunks` and `omittedCounts.indexedTextChunks` separately from final `omittedCounts.results`; a true `indexedTextChunksLowerBound` means the candidate counts are incomplete.
+- For indexed text search, inspect `candidateCounts.indexedTextChunks` and `omittedCounts.indexedTextChunks` separately from final `omittedCounts.results`; a true `candidateCounts.indexedTextChunksLowerBound` means the candidate counts are incomplete.
 - Dependency, call, and type hierarchy queries default to depth 1. Increase depth for transitive results.
 - For `file` / `get_file`, offsets are 1-based; continue at `page.nextOffset`. Request indexed context with `--include-graph-context` / `includeGraphContext: true`.
 - Calls and type relationships are proven indexed edges, not complete runtime coverage. Missing edges do not prove absence.
