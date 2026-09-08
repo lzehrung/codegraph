@@ -6,7 +6,7 @@ Use codegraph for structural repo questions: architecture, dependency direction,
 
 ## Start here
 
-At a terminal, bare `codegraph` shows the five task-first routes without scanning the project. Use `codegraph --help` for the full catalog.
+At a terminal, bare `codegraph` shows five task-first routes without scanning the project. Use `codegraph --help` for Core commands and `codegraph help advanced` for the full catalog.
 
 For code reviews, start with `review`; it is the compact handoff with changed files, changed symbols, candidate tests, risks, duplicate leads, and analysis labels.
 
@@ -23,7 +23,6 @@ codegraph impact --base HEAD --head WORKTREE
 For an unfamiliar repo, keep the first loop bounded and actionable:
 
 ```bash
-codegraph explore "how does auth reach db?" --root .
 codegraph orient --root . --budget small
 codegraph search "auth user" --json
 codegraph explain <file-from-search-or-orient> --json
@@ -32,7 +31,7 @@ codegraph explain <file-from-search-or-orient> --json
 For PR, worktree, or sweeping review tasks, prefer `review` first; use `impact` when you need the broader blast radius map instead of the reviewer handoff.
 
 Use `doctor` only when package/runtime state or an existing artifact path is the question.
-Use `explore` when the agent has a broad question and needs search anchors, packets, paths, blast radius, candidate tests, and follow-ups in one bounded response. Use `search` when it only needs anchors, `explain` when it already knows a file/symbol/SQL object/handle, and `inspect` for a human-readable architecture summary.
+Use `explore` only when one search plus context from its top results is useful; it does not plan subqueries or prove behavior. Use `search` to find targets, `explain` for a known file/symbol/SQL object/handle, and `inspect` for a readable architecture summary. For a known symbol, start with `refs` or `callers` instead.
 Use `artifact` for durable handoff directories and `mcp` when repeated follow-up calls should share one warm repo session; `build` and `serve` remain accepted but are optional. If an MCP transport or startup call fails, do not retry the same broken server: run `codegraph doctor`, use the equivalent CLI command for the current session, and restart the agent client after package upgrades. Search locations can be pasted directly into `goto`, `refs`, `file`, `packet`, or `explain`, and semantic commands accept unique exact names when an agent does not yet have a portable handle.
 
 Choose output by the next consumer:
