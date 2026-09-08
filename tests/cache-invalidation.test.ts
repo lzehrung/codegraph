@@ -2236,11 +2236,9 @@ describe("Cache invalidation and strict hashing", () => {
     const mainModule = moduleForPath(refreshed, mainPath);
     const resolvedImport = mainModule?.imports.find((imp) => imp.from === "foo")?.resolved;
     expect(resolvedImport).toBe(normalize(twoFoo));
-    expect(
-      refreshed.graph.edges.some(
-        (edge) => edge.from === normalize(mainPath) && edge.to.type === "file" && edge.to.path === normalize(twoFoo),
-      ),
-    ).toBe(true);
+    expect(refreshed.graph.edges.filter((edge) => edge.from === normalize(mainPath)).map((edge) => edge.to)).toEqual([
+      { type: "file", path: normalize(twoFoo) },
+    ]);
   });
 
   it("reuses cached module state when resolutionHints are unchanged after normalization", async () => {
