@@ -1934,6 +1934,37 @@ describe("codegraph MCP handlers", () => {
     expect(refs.references.some((ref) => ref.file === "api.ts")).toBeTruthy();
   });
 
+  it("resolves SQL object and not_found get_symbol targets on a warm session without re-reading SQL sources", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-get-symbol-sql-"));
+    await fs.writeFile(
+      path.join(root, "tables.sql"),
+      "CREATE TABLE public.users (id int primary key);\nCREATE TABLE public.audit_log (user_id int);\n",
+    );
+    await fs.writeFile(path.join(root, "views.sql"), "CREATE VIEW active_users AS SELECT id FROM public.users;\n");
+
+    const session = createAgentSession({ root });
+    const handlers = createCodegraphMcpHandlers({ root, session });
+    const readSpy = vi.spyOn(fs, "readFile");
+
+    try {
+      await session.loadProject();
+      readSpy.mockClear();
+      const symbol = await handlers.get_symbol({ handle: "public.users" });
+      expect(symbol.kind).toBe("sql_object");
+      expect(symbol.label).toBe("public.users");
+      expect(readSpy.mock.calls.some((call) => String(call[0]).toLowerCase().endsWith(".sql"))).toBe(false);
+
+      const notFound = await handlers.get_symbol({ handle: "does-not-exist" });
+      expect(notFound.kind).toBe("not_found");
+      expect(notFound.label).toBe("does-not-exist");
+    } finally {
+      readSpy.mockRestore();
+      handlers.dispose();
+      session.invalidate();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves qualified symbol paths for goto, refs, and file dependencies", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-qualified-symbol-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");

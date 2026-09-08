@@ -12,6 +12,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 ### Changed
 
 - Shortened the bundled Codegraph skill around agent tool choice, task order, and safety checks. Detailed command and server contracts remain in the CLI and MCP references.
+- MCP `get_symbol` now resolves its target without computing discarded explanation context or re-reading SQL sources. Target matching and ambiguity handling are unchanged.
 
 ## [2.3.21] - 2026-09-05
 

@@ -218,6 +218,24 @@ export async function explainCodegraphTargetWithSession(
   return await buildExplanation(snapshot, lookup, resolved, request);
 }
 
+/**
+ * Resolve the same target as explain without collecting references, duplicates, or related SQL.
+ */
+export async function resolveCodegraphTargetWithSession(
+  session: AgentSession,
+  request: { target: string },
+): Promise<AgentExplanationTarget> {
+  const snapshot = await session.loadProject();
+  const lookup = buildSymbolLookup(snapshot);
+  const resolved = resolveTarget(snapshot, lookup, request.target);
+  if (resolved.kind === "not_found") {
+    return { kind: "not_found", label: resolved.label };
+  }
+  const file = resolved.kind === "file" ? resolved.file : normalizePath(resolved.def.file);
+  const relFile = normalizeAgentFilePath(snapshot.root, file);
+  return explainTarget(snapshot, resolved, relFile);
+}
+
 export function formatAgentExplanation(explanation: AgentExplanation): string {
   const lines = [
     `${explanation.target.kind}: ${explanation.target.label}`,
