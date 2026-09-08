@@ -13,6 +13,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 - Shortened the bundled Codegraph skill around agent tool choice, task order, and safety checks. Detailed command and server contracts remain in the CLI and MCP references.
 
+### Fixed
+
+- Detailed call hierarchy edges now resolve direct identifiers through lexical scope at the callsite. Nested declarations and local bindings no longer incorrectly target same-named module locals or imports.
+
 ## [2.3.21] - 2026-09-05
 
 ### Fixed

@@ -23,7 +23,6 @@ import { MANIFEST_VERSION, type IndexManifest } from "../src/indexer/build-cache
 import { SqliteDatabase, SqliteStatement } from "../src/sqlite-driver.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
-import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 
 function cacheDir(root: string): string {
   return path.join(root, ".codegraph", "cache", "index-v1");
@@ -1098,8 +1097,8 @@ describe("disk cache uses sqlite backend", () => {
     expect(((rewritten.graph as { nodes: string[] }).nodes ?? []).every((node) => !path.isAbsolute(node))).toBe(true);
   });
 
-  it("migrates a legacy v2 absolute-path detailed symbol sidecar and reuses it", async () => {
-    const root = await mkTmpDir("dg-disk-cache-detailed-v2-migrate-");
+  it("invalidates a legacy v2 absolute-path detailed symbol sidecar", async () => {
+    const root = await mkTmpDir("dg-disk-cache-detailed-v2-invalidate-");
     await fsp.writeFile(
       path.join(root, "util.ts"),
       "export function add(a: number, b: number) { return a + b; }\n",
@@ -1110,17 +1109,8 @@ describe("disk cache uses sqlite backend", () => {
     await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, graph);
     await seedAbsoluteDetailedSymbolGraphV2(root);
 
-    const seeded = await readBrotliJson(detailedSymbolGraphPath(root));
-    expect(seeded.version).toBe(2);
-    expect(
-      ((seeded.graph as { nodes: Array<{ file: string }> }).nodes ?? []).every((node) => path.isAbsolute(node.file)),
-    ).toBe(true);
-
-    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
     const loaded = await buildCache.tryLoadDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index);
-    expect(loaded).not.toBeNull();
-    expect([...loaded!.nodes.values()].some((node) => node.name === "add")).toBe(true);
-    expect(symbolGraphSpy).not.toHaveBeenCalled();
-    symbolGraphSpy.mockRestore();
+
+    expect(loaded).toBeNull();
   });
 });
