@@ -9,6 +9,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Fixed
+
+- Path-only search and session file discovery now track lightweight file signatures before full project loading, allowing file additions, deletions, and renames to refresh automatically without forcing semantic indexing.
+
 ### Changed
 
 - Shortened the bundled Codegraph skill around agent tool choice, task order, and safety checks. Detailed command and server contracts remain in the CLI and MCP references.

@@ -378,7 +378,13 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
 
   const loadFilePlan = async (discoveryContext?: ProjectDiscoveryContext): Promise<AgentSessionFilePlan> => {
     if (cachedFilePlan) return cachedFilePlan;
-    const loadPromise = resolveAgentSessionFilePlan(options, discoveryContext);
+    const loadPromise = (async () => {
+      const plan = await resolveAgentSessionFilePlan(options, discoveryContext);
+      if (options.freshness?.policy !== "manual" && !cachedFileSignatures) {
+        cachedFileSignatures = await collectAgentFileSignatures(plan.files);
+      }
+      return plan;
+    })();
     cachedFilePlan = loadPromise;
     loadPromise.catch(() => {
       if (cachedFilePlan === loadPromise) cachedFilePlan = undefined;
@@ -542,7 +548,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   const checkFreshness = async (): Promise<AgentFreshnessResult> => {
     const policy = options.freshness?.policy ?? "check";
     if (policy === "manual") return { state: "fresh" };
-    if (!cachedBase || !cachedFileSignatures) return { state: "fresh" };
+    if (!cachedBase && !cachedFilePlan && !cachedFiles && !cachedFileSignatures) return { state: "fresh" };
 
     const now = Date.now();
     if (lastFreshnessResult && now - lastFreshnessCheckedAt < AGENT_FRESHNESS_CHECK_INTERVAL_MS) {
@@ -551,7 +557,8 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     if (freshnessInFlight) return freshnessInFlight;
 
     freshnessInFlight = (async (): Promise<AgentFreshnessResult> => {
-      await cachedBase;
+      if (cachedBase) await cachedBase;
+      else if (cachedFilePlan) await cachedFilePlan;
       // Reuse the same fast-path-aware resolution loadFiles()/discoverFiles() use, instead
       // of an independent full scan, so freshness checks stay cheap on unchanged repos too.
       const currentFiles = await listAgentSessionFiles(options);
