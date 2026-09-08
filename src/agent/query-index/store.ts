@@ -447,17 +447,13 @@ export class QueryIndexStore {
 
     const phrase = normalizedRankPhrase;
     if (terms.length > 1) {
-      const phraseCondition = terms.every((term) => codePointLength(term) >= 3 && isAscii(term))
-        ? "chunks.chunk_id IN (SELECT rowid FROM chunk_search WHERE chunk_search MATCH ?)"
-        : "instr(chunks.normalized_text, ?) > 0";
-      const phraseParameters = terms.every((term) => codePointLength(term) >= 3 && isAscii(term))
-        ? [escapeFtsTrigramTerm(phrase)]
-        : [phrase];
-      collect(
-        [phraseCondition, "instr(chunks.normalized_text, ?) > 0"],
-        [...phraseParameters, phrase],
-        normalizedLimit,
-      );
+      const conditions = ["instr(chunks.normalized_text, ?) > 0"];
+      const parameters = [phrase];
+      if (terms.every((term) => codePointLength(term) >= 3 && isAscii(term))) {
+        conditions.unshift("chunks.chunk_id IN (SELECT rowid FROM chunk_search WHERE chunk_search MATCH ?)");
+        parameters.unshift(escapeFtsTrigramTerm(phrase));
+      }
+      collect(conditions, parameters, normalizedLimit);
     }
 
     if (terms.length > 1) {
