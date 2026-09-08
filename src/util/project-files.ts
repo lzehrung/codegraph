@@ -287,11 +287,16 @@ function isRootConfigFileName(fileName: string): boolean {
   return ROOT_CONFIG_NAME_MATCHERS.some((matcher) => matcher(fileName));
 }
 
-async function listRootConfigFiles(root: string, state: DiscoveryContext | undefined): Promise<string[]> {
+async function listRootConfigFiles(
+  root: string,
+  state: DiscoveryContext | undefined,
+  includeCodegraphConfig: boolean,
+): Promise<string[]> {
   const entries = await readDirectoryWithFileTypes(root, state);
   const files: string[] = [];
   for (const entry of entries) {
     if (!isRootConfigFileName(entry.name)) continue;
+    if (!includeCodegraphConfig && entry.name === CODEGRAPH_CONFIG_FILE) continue;
     const file = normalizePath(path.join(root, entry.name));
     if (!entry.isFile()) {
       if (!entry.isSymbolicLink()) continue;
@@ -1868,10 +1873,11 @@ export async function collectConfigHashInputFiles(
   discoveryContext: ProjectDiscoveryContext,
   logLevel?: LogLevel,
   callbacks?: DiscoveryWorkCallbacks,
+  includeCodegraphConfig = true,
 ): Promise<{ files: string[]; error?: string }> {
   const root = await ensureDirectoryReadable(projectRoot, "Project root");
   const state = discoveryContext;
-  const files = new Set<string>(await listRootConfigFiles(root, state));
+  const files = new Set<string>(await listRootConfigFiles(root, state, includeCodegraphConfig));
   const gitCache = discoveryContext.git;
   const gitCandidates = await getSharedGitCandidates(discoveryContext, root, logLevel, callbacks);
   if (gitCandidates) {

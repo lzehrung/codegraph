@@ -480,17 +480,19 @@ function narrowBaseSpecifierNode(node: SyntaxNodeLike): SyntaxNodeLike {
       continue;
     }
     if (current.type === "scoped_type_identifier") {
-      let last: SyntaxNodeLike | undefined;
-      const parts = current.namedChildren ?? [];
-      for (let index = parts.length - 1; index >= 0; index -= 1) {
-        const part = parts[index]!;
-        if (part.type !== "annotation" && part.type !== "marker_annotation") {
-          last = part;
-          break;
+      let named = current.childForFieldName("name");
+      if (!named) {
+        const parts = current.namedChildren ?? [];
+        for (let index = parts.length - 1; index >= 0; index -= 1) {
+          const part = parts[index]!;
+          if (part.type !== "annotation" && part.type !== "marker_annotation") {
+            named = part;
+            break;
+          }
         }
       }
-      if (!last) return current;
-      current = last;
+      if (!named || named === current) return current;
+      current = named;
       continue;
     }
     if (GENERIC_WRAPPER_TYPES[current.type]) {
