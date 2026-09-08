@@ -64,7 +64,7 @@ const BLOOM_FILTER_MIN_SIZE = 1_000;
 const BLOOM_FILTER_MAX_SIZE = 1_000_000;
 const BLOOM_FILTER_MIN_HASH_COUNT = 1;
 const BLOOM_FILTER_MAX_HASH_COUNT = 10;
-const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 3;
+const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 4;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";
@@ -329,18 +329,6 @@ function transformDetailedGraph(
   };
 }
 
-function migrateDetailedSymbolGraphPayload(value: unknown, currentRoot: string): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-  const payload = value as Partial<DetailedSymbolGraphSnapshotPayload>;
-  if (payload.version !== 2 || typeof payload.projectRoot !== "string" || !payload.graph) return value;
-  const relativeGraph = transformDetailedGraph(payload.graph, payload.projectRoot, true);
-  return {
-    ...payload,
-    version: DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION,
-    projectRoot: serializedProjectRoot(currentRoot),
-    graph: transformDetailedGraph(relativeGraph, currentRoot, false),
-  };
-}
 function compareSnapshotPath(left: string, right: string): number {
   if (left < right) return -1;
   if (left > right) return 1;
@@ -1120,7 +1108,19 @@ export async function tryLoadDetailedSymbolGraphSnapshot(
       return materializeDetailedSymbolGraph(cached.graph);
     }
     const parsed = await readParsedSnapshot(snapshotPath);
-    const migratedPayload = migrateDetailedSymbolGraphPayload(parsed.payload, projectRoot);
+    const migratedPayload = parsed.payload;
+    const serializedVersion =
+      migratedPayload &&
+      typeof migratedPayload === "object" &&
+      !Array.isArray(migratedPayload) &&
+      "version" in migratedPayload &&
+      typeof migratedPayload.version === "number"
+        ? migratedPayload.version
+        : null;
+    if (serializedVersion !== null && serializedVersion < DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION) {
+      recordSnapshotInvalidation(snapshotPath, "detailed symbol graph derivation version mismatch", opts?.logLevel);
+      return null;
+    }
     const payload =
       migratedPayload && typeof migratedPayload === "object" && !Array.isArray(migratedPayload)
         ? {
