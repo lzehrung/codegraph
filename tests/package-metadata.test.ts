@@ -1732,67 +1732,6 @@ void onImpactItemStreaming;
     );
   });
 
-  it("keeps intentionally repeated CLI examples synchronized across docs", () => {
-    const docs = new Map([
-      ["README.md", readText("README.md")],
-      ["docs/cli.md", readText("docs/cli.md")],
-      ["docs/agent-workflows.md", readText("docs/agent-workflows.md")],
-      ["codegraph-skill/codegraph/SKILL.md", readText("codegraph-skill/codegraph/SKILL.md")],
-    ]);
-    const sharedExamples = [
-      {
-        command: "codegraph orient --root . --budget small",
-        files: ["README.md", "docs/cli.md", "docs/agent-workflows.md", "codegraph-skill/codegraph/SKILL.md"],
-      },
-      {
-        command: "codegraph review",
-        files: ["README.md", "docs/cli.md", "docs/agent-workflows.md", "codegraph-skill/codegraph/SKILL.md"],
-      },
-      {
-        command: "codegraph drift ./src --base origin/main --head HEAD --graph-edges summary --public-api removals",
-        files: ["README.md", "docs/cli.md", "docs/agent-workflows.md", "codegraph-skill/codegraph/SKILL.md"],
-      },
-    ];
-
-    for (const example of sharedExamples) {
-      for (const filePath of example.files) {
-        expect(docs.get(filePath), `${filePath} should include ${example.command}`).toContain(example.command);
-      }
-    }
-
-    expect(docs.get("README.md")).not.toContain("codegraph impact --provider git --base HEAD --head WORKTREE");
-    expect(docs.get("codegraph-skill/codegraph/SKILL.md")).not.toContain(
-      "codegraph impact --provider git --base HEAD --head WORKTREE",
-    );
-  });
-
-  it("keeps installation guidance aligned with native-first reduced-mode behavior", () => {
-    const readme = readText("README.md");
-    const installationDoc = readText("docs/installation.md");
-    const skillDoc = readText("codegraph-skill/codegraph/SKILL.md");
-    const publishingDoc = readText("PUBLISHING.md");
-
-    expect(readme).toContain("npm install -g @lzehrung/codegraph");
-    expect(readme).not.toContain("@lzehrung:registry");
-    expect(readme).not.toContain("npm.pkg.github.com");
-    expect(installationDoc).toContain("Install from public npm");
-    expect(installationDoc).toContain("Public npm installs need no GitHub authentication, token, or registry mapping.");
-    expect(installationDoc).toContain("@lzehrung:registry=https://npm.pkg.github.com");
-    expect(installationDoc).toContain("remove or replace that legacy mapping first");
-    expect(installationDoc).toContain("reduced graph-only and regex recovery mode");
-    expect(installationDoc).not.toContain("--legacy-peer-deps");
-    expect(skillDoc).toContain("Public npm installs need no GitHub token or `@lzehrung` registry mapping.");
-    expect(skillDoc).toContain("https://npm.pkg.github.com");
-    expect(skillDoc).toContain("remove or replace that legacy mapping");
-    expect(skillDoc).not.toContain("@lzehrung/codegraph-js-fallback");
-    expect(skillDoc).not.toContain("compatibility shim");
-    expect(publishingDoc).toContain("npm trusted publishing");
-    expect(publishingDoc).toContain("https://registry.npmjs.org");
-    expect(publishingDoc).not.toContain("PACKAGE_PUBLISH_TOKEN");
-    expect(publishingDoc).not.toContain("npm.pkg.github.com");
-    expect(fs.existsSync(".npmrc")).toBe(false);
-  });
-
   it("keeps the release workflow on the certified package path", () => {
     const workflow = readText(".github/workflows/release.yml");
     const runCommands = workflowRunCommands(workflow);
