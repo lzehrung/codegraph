@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
+import {
+  AGENT_FRESHNESS_CHECK_INTERVAL_MS,
+  createAgentSession,
+  type AgentProjectSnapshot,
+  type AgentSession,
+} from "../src/agent/session.js";
 import { searchCodegraph, searchCodegraphWithSession } from "../src/agent/search.js";
 import { formatAgentFollowUpAsCli } from "../src/agent/follow-ups.js";
 import { formatAgentSymbolHandle } from "../src/agent/handles.js";
@@ -183,6 +188,133 @@ describe("agent search", () => {
       backend: "unknown",
     });
     expect(buildSpy).not.toHaveBeenCalled();
+  });
+
+  it("reflects file additions, deletions, and renames in auto-refresh path search without full indexing", async () => {
+    const root = await mkTmpDir("cg-agent-search-path-auto-");
+    const beforeFile = path.join(root, "before.ts");
+    const afterFile = path.join(root, "after.ts");
+    const extraFile = path.join(root, "extra.ts");
+    await fs.writeFile(beforeFile, "export const value = 1;\n", "utf8");
+
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+    const session = createAgentSession({ root, freshness: { policy: "auto" } });
+
+    const initial = await searchCodegraphWithSession(session, {
+      root,
+      query: "before",
+      mode: "path",
+      limit: 5,
+    });
+    expect(initial.results.some((result) => result.file === "before.ts")).toBe(true);
+    expect(initial.freshness).toEqual({ state: "fresh" });
+    expect(buildSpy).not.toHaveBeenCalled();
+
+    // Rename before.ts -> after.ts
+    await fs.rename(beforeFile, afterFile);
+
+    let nowMs = Date.now();
+    const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    try {
+      nowMs += AGENT_FRESHNESS_CHECK_INTERVAL_MS + 1;
+      const renamedSearch = await searchCodegraphWithSession(session, {
+        root,
+        query: "after",
+        mode: "path",
+        limit: 5,
+      });
+      expect(renamedSearch.results.some((result) => result.file === "after.ts")).toBe(true);
+      expect(renamedSearch.freshness).toEqual({
+        state: "refreshed",
+        changedFiles: ["after.ts", "before.ts"],
+      });
+
+      const oldSearch = await searchCodegraphWithSession(session, {
+        root,
+        query: "before",
+        mode: "path",
+        limit: 5,
+      });
+      expect(oldSearch.results.some((result) => result.file === "before.ts")).toBe(false);
+
+      // Add extra.ts
+      await fs.writeFile(extraFile, "export const extra = 2;\n", "utf8");
+      nowMs += AGENT_FRESHNESS_CHECK_INTERVAL_MS + 1;
+
+      const addedSearch = await searchCodegraphWithSession(session, {
+        root,
+        query: "extra",
+        mode: "path",
+        limit: 5,
+      });
+      expect(addedSearch.results.some((result) => result.file === "extra.ts")).toBe(true);
+      expect(addedSearch.freshness).toEqual({
+        state: "refreshed",
+        changedFiles: ["extra.ts"],
+      });
+
+      // Delete extra.ts
+      await fs.unlink(extraFile);
+      nowMs += AGENT_FRESHNESS_CHECK_INTERVAL_MS + 1;
+
+      const deletedSearch = await searchCodegraphWithSession(session, {
+        root,
+        query: "extra",
+        mode: "path",
+        limit: 5,
+      });
+      expect(deletedSearch.results.some((result) => result.file === "extra.ts")).toBe(false);
+      expect(deletedSearch.freshness).toEqual({
+        state: "refreshed",
+        changedFiles: ["extra.ts"],
+      });
+
+      expect(buildSpy).not.toHaveBeenCalled();
+    } finally {
+      dateSpy.mockRestore();
+      session.invalidate();
+    }
+  });
+
+  it("reports stale file state in path search under check policy when files are renamed", async () => {
+    const root = await mkTmpDir("cg-agent-search-path-check-");
+    const beforeFile = path.join(root, "before.ts");
+    const afterFile = path.join(root, "after.ts");
+    await fs.writeFile(beforeFile, "export const value = 1;\n", "utf8");
+
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const initial = await searchCodegraphWithSession(session, {
+      root,
+      query: "before",
+      mode: "path",
+      limit: 5,
+    });
+    expect(initial.results.some((result) => result.file === "before.ts")).toBe(true);
+
+    await fs.rename(beforeFile, afterFile);
+
+    let nowMs = Date.now();
+    const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    try {
+      nowMs += AGENT_FRESHNESS_CHECK_INTERVAL_MS + 1;
+      const response = await searchCodegraphWithSession(session, {
+        root,
+        query: "before",
+        mode: "path",
+        limit: 5,
+      });
+
+      expect(response.freshness).toMatchObject({
+        state: "stale",
+        changedFiles: ["after.ts", "before.ts"],
+        changedFileCount: 2,
+        omittedChangedFileCount: 0,
+      });
+      expect(response.results.some((result) => result.file === "before.ts")).toBe(true);
+    } finally {
+      dateSpy.mockRestore();
+      session.invalidate();
+    }
   });
 
   it("normalizes path fast-path results against the session root", async () => {

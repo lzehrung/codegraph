@@ -882,6 +882,120 @@ describe("agent session", () => {
     expect(buildSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("validates discovery freshness and auto-refreshes path-only session file lists after file rename without full indexing", async () => {
+    const root = await mkTmpDir("cg-agent-session-path-freshness-");
+    const beforeFile = path.join(root, "before.ts");
+    const afterFile = path.join(root, "after.ts");
+    await fs.writeFile(beforeFile, "export const value = 1;\n", "utf8");
+
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+    const session = createAgentSession({ root, freshness: { policy: "auto" } });
+
+    const initialFiles = await session.listFiles!();
+    expect(initialFiles.map((file) => path.basename(file))).toEqual(["before.ts"]);
+    expect(buildSpy).not.toHaveBeenCalled();
+
+    await fs.rename(beforeFile, afterFile);
+
+    let nowMs = Date.now();
+    const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    try {
+      nowMs += AGENT_FRESHNESS_CHECK_INTERVAL_MS + 1;
+      const freshness = await session.checkFreshness!();
+      expect(freshness).toEqual({
+        state: "refreshed",
+        changedFiles: ["after.ts", "before.ts"],
+      });
+
+      const updatedFiles = await session.listFiles!();
+      expect(updatedFiles.map((file) => path.basename(file))).toEqual(["after.ts"]);
+      expect(buildSpy).not.toHaveBeenCalled();
+    } finally {
+      dateSpy.mockRestore();
+    }
+  });
+
+  it("refreshes a path-only list when a discovered file disappears before baseline capture", async () => {
+    const root = await mkTmpDir("cg-agent-session-baseline-race-");
+    const removedFile = path.join(root, "removed.ts");
+    await fs.writeFile(removedFile, "export const value = 1;\n");
+    const discover = projectFilesModule.listProjectFilesWithGitCandidates;
+    vi.spyOn(projectFilesModule, "listProjectFilesWithGitCandidates").mockImplementationOnce(async (...args) => {
+      const files = await discover(...args);
+      await fs.unlink(removedFile);
+      return files;
+    });
+    const session = createAgentSession({ root, freshness: { policy: "auto" } });
+    try {
+      expect((await session.listFiles!()).map((file) => path.basename(file))).toEqual(["removed.ts"]);
+      expect(await session.checkFreshness!()).toEqual({ state: "refreshed", changedFiles: ["removed.ts"] });
+      expect(await session.listFiles!()).toEqual([]);
+    } finally {
+      session.invalidate();
+    }
+  });
+
+  it("reports stale discovery state for path-only session file lists under check policy", async () => {
+    const root = await mkTmpDir("cg-agent-session-path-check-");
+    const beforeFile = path.join(root, "before.ts");
+    const afterFile = path.join(root, "after.ts");
+    await fs.writeFile(beforeFile, "export const value = 1;\n", "utf8");
+
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const initialFiles = await session.listFiles!();
+    expect(initialFiles.map((file) => path.basename(file))).toEqual(["before.ts"]);
+
+    await fs.rename(beforeFile, afterFile);
+
+    let nowMs = Date.now();
+    const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    try {
+      nowMs += AGENT_FRESHNESS_CHECK_INTERVAL_MS + 1;
+      const freshness = await session.checkFreshness!();
+      expect(freshness).toEqual({
+        state: "stale",
+        changedFiles: ["after.ts", "before.ts"],
+        changedFileCount: 2,
+        omittedChangedFileCount: 0,
+        reason: "session snapshot is older than files on disk",
+      });
+
+      const cachedFiles = await session.listFiles!();
+      expect(cachedFiles.map((file) => path.basename(file))).toEqual(["before.ts"]);
+    } finally {
+      dateSpy.mockRestore();
+    }
+  });
+
+  it("preserves manual freshness policy for path-only sessions", async () => {
+    const root = await mkTmpDir("cg-agent-session-path-manual-");
+    const beforeFile = path.join(root, "before.ts");
+    const afterFile = path.join(root, "after.ts");
+    await fs.writeFile(beforeFile, "export const value = 1;\n", "utf8");
+
+    const session = createAgentSession({ root, freshness: { policy: "manual" } });
+    await session.listFiles!();
+
+    await fs.rename(beforeFile, afterFile);
+
+    let nowMs = Date.now();
+    const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    try {
+      nowMs += AGENT_FRESHNESS_CHECK_INTERVAL_MS + 1;
+      const freshness = await session.checkFreshness!();
+      expect(freshness).toEqual({ state: "fresh" });
+
+      const cachedFiles = await session.listFiles!();
+      expect(cachedFiles.map((file) => path.basename(file))).toEqual(["before.ts"]);
+
+      session.invalidate();
+      const refreshedFiles = await session.listFiles!();
+      expect(refreshedFiles.map((file) => path.basename(file))).toEqual(["after.ts"]);
+    } finally {
+      dateSpy.mockRestore();
+    }
+  });
+
   it("counts deleted file bytes against auto-refresh limits", async () => {
     const root = await mkTmpDir("cg-agent-session-delete-bytes-");
     const removedFile = path.join(root, "large.ts");
