@@ -161,4 +161,97 @@ nativeDescribe("type hierarchy language parity", () => {
       ).toEqual([implementationName]);
     }
   });
+
+  it("excludes generic type arguments and namespace/enclosing-type qualifiers from base-specifier extraction", async () => {
+    const root = await mkTmpDir("cg-hierarchy-generic-qualifier-");
+    roots.push(root);
+    const fixtures: Record<string, string> = {
+      "types2.ts": [
+        "class TsPayload {}",
+        "interface TsGenericService<T> {}",
+        "class TsGenericWorker implements TsGenericService<TsPayload> {}",
+      ].join("\n"),
+      "Types2.java": [
+        "class JavaPayload {}",
+        "interface JavaGenericService<T> { void run(); }",
+        "class JavaGenericWorker implements JavaGenericService<JavaPayload> { public void run() {} }",
+        "class JavaQualifierHost { static class JavaQualifiedBase {} }",
+        "class JavaQualifiedDerived extends JavaQualifierHost.JavaQualifiedBase {}",
+      ].join("\n"),
+      "Types2.cs": [
+        "public class CsPayload {}",
+        "public class CsGenericBase<T> {}",
+        "public class CsGenericDerived : CsGenericBase<CsPayload> {}",
+        "public class CsQualifierHost { public class CsQualifiedBase {} }",
+        "public class CsQualifiedDerived : CsQualifierHost.CsQualifiedBase {}",
+      ].join("\n"),
+      "Types2.swift": [
+        "class SwiftPayload {}",
+        "protocol SwiftGenericService {}",
+        "class SwiftGenericBase<T> {}",
+        "class SwiftGenericDerived: SwiftGenericBase<SwiftPayload>, SwiftGenericService {}",
+      ].join("\n"),
+      "types2.cpp": [
+        "class CppPayload {};",
+        "template<typename T> class CppGenericBase {};",
+        "class CppGenericDerived : public CppGenericBase<CppPayload> {};",
+      ].join("\n"),
+      "types2.py": [
+        "class PyPayload:",
+        "    pass",
+        "class PyGenericBase:",
+        "    pass",
+        "class PyGenericDerived(PyGenericBase[PyPayload]):",
+        "    pass",
+      ].join("\n"),
+      "Types2.kt": [
+        "class KotlinPayload",
+        "interface KotlinGenericService<T> {",
+        "  fun run()",
+        "}",
+        "open class KotlinGenericWorker : KotlinGenericService<KotlinPayload> {",
+        "  override fun run() {}",
+        "}",
+        "class KotlinArgPayload",
+        "open class KotlinArgBase(value: KotlinArgPayload)",
+        "class KotlinArgDerived : KotlinArgBase(KotlinArgPayload())",
+      ].join("\n"),
+      "types2.rb": [
+        "module RubyQualifierHost",
+        "  class RubyQualifiedBase",
+        "  end",
+        "end",
+        "",
+        "class RubyQualifiedDerived < RubyQualifierHost::RubyQualifiedBase",
+        "end",
+      ].join("\n"),
+    };
+    for (const [file, source] of Object.entries(fixtures)) await fs.writeFile(path.join(root, file), source);
+
+    const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+    const graph = await buildSymbolGraphDetailed(index);
+    const actualRelations = new Set(
+      graph.edges
+        .filter((edge) => edge.label && ["extends", "implements", "trait", "mixin"].includes(edge.label))
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}:${edge.label}:${graph.nodes.get(edge.to)?.name}`),
+    );
+
+    const expectedRelations: ProvenRelation[] = [
+      { from: "TsGenericWorker", to: "TsGenericService", relation: "implements" },
+      { from: "JavaGenericWorker", to: "JavaGenericService", relation: "implements" },
+      { from: "JavaQualifiedDerived", to: "JavaQualifiedBase", relation: "extends" },
+      { from: "CsGenericDerived", to: "CsGenericBase", relation: "extends" },
+      { from: "CsQualifiedDerived", to: "CsQualifiedBase", relation: "extends" },
+      { from: "SwiftGenericDerived", to: "SwiftGenericBase", relation: "extends" },
+      { from: "SwiftGenericDerived", to: "SwiftGenericService", relation: "implements" },
+      { from: "CppGenericDerived", to: "CppGenericBase", relation: "extends" },
+      { from: "PyGenericDerived", to: "PyGenericBase", relation: "extends" },
+      { from: "KotlinGenericWorker", to: "KotlinGenericService", relation: "implements" },
+      { from: "KotlinArgDerived", to: "KotlinArgBase", relation: "extends" },
+      { from: "RubyQualifiedDerived", to: "RubyQualifiedBase", relation: "extends" },
+    ];
+    expect(actualRelations).toEqual(
+      new Set(expectedRelations.map((expected) => `${expected.from}:${expected.relation}:${expected.to}`)),
+    );
+  });
 });

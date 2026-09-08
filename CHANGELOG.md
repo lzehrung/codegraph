@@ -9,6 +9,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Fixed
+
+- Type hierarchy now excludes generic arguments and enclosing-type qualifiers from inheritance edges. Generic and qualified Java superclasses now retain their `extends` edge.
+
 ### Changed
 
 - Shortened the bundled Codegraph skill around agent tool choice, task order, and safety checks. Detailed command and server contracts remain in the CLI and MCP references.
