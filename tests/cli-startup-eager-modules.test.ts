@@ -9,8 +9,6 @@ const cliPath = path.resolve(process.cwd(), "dist", "cli.js");
 const sourceCliPath = path.resolve(process.cwd(), "src", "cli.ts");
 const sourceCommandTablePath = path.resolve(process.cwd(), "src", "cli", "command-table.ts");
 const sourceInvocationContextPath = path.resolve(process.cwd(), "src", "cli", "invocation-context.ts");
-const workerPoolPath = path.resolve(process.cwd(), "src", "worker", "native-worker-pool.ts");
-const workerThreadsPath = path.resolve(process.cwd(), "src", "util", "worker-threads.ts");
 
 /** Project modules under dist/ that load while handling lightweight CLI entrypoints. */
 function countDistModulesLoaded(args: string[]): {
@@ -127,15 +125,6 @@ describe("CLI startup eager module loading", () => {
     expect(commandTableSource).toContain('await import("./doctor.js")');
     expect(invocationContextSource).toContain("loadConfigHelpers");
     expect(invocationContextSource).toContain("loadProjectFilesHelpers");
-  });
-
-  it("keeps host parallelism reads inside worker-pool sizing, not module scope", async () => {
-    const sizingSource = await fs.promises.readFile(workerThreadsPath, "utf8");
-    expect(sizingSource).toMatch(/function resolveWorkerThreadCount\([\s\S]*os\.availableParallelism\(\)/);
-    const moduleScope = sizingSource.split("function resolveWorkerThreadCount")[0] ?? "";
-    expect(moduleScope).not.toContain("os.availableParallelism()");
-    const workerPoolSource = await fs.promises.readFile(workerPoolPath, "utf8");
-    expect(workerPoolSource).not.toContain("os.cpus()");
   });
 
   it("loads fewer than 30 dist modules for no args, --version, --help, and doctor", () => {

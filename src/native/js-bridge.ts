@@ -2,14 +2,8 @@ import type { LanguageSupport } from "../languages.js";
 import type { NativeRuntimeMode, UnifiedQueryExecution } from "./contracts.js";
 import { getNativeSingleQueryExecution } from "./execution.js";
 
-const REDUCED_MODE_REGEX_LANGUAGES: Record<string, true> = {
-  js: true,
-  ts: true,
-  tsx: true,
-};
-
 export function supportsReducedModeRegexRecovery(languageId: string): boolean {
-  return REDUCED_MODE_REGEX_LANGUAGES[languageId] === true;
+  return languageId === "js" || languageId === "ts" || languageId === "tsx";
 }
 
 export function getUnifiedQueryExecution(

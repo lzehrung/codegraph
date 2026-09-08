@@ -32,9 +32,6 @@ import {
   splitTopLevelCommaGroups,
 } from "./call-compatibility/text-scanner.js";
 
-function supportsCallCompatibilityLanguage(languageId: string): boolean {
-  return getCallCompatibilityProvider(languageId) !== null;
-}
 import type { ReferenceLookupCache } from "./reference-cache.js";
 import {
   directSignatureParameterNode,
@@ -48,6 +45,9 @@ import {
   recordReferenceLookupStarted,
   type ImpactWorkBudget,
 } from "./budgets.js";
+function supportsCallCompatibilityLanguage(languageId: string): boolean {
+  return getCallCompatibilityProvider(languageId) !== null;
+}
 
 export type {
   CallableSignature,
