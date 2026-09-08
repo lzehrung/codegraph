@@ -299,7 +299,7 @@ describe("agent session", () => {
     };
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
-    expect(sidecar.version).toBe(3);
+    expect(sidecar.version).toBe(4);
     expect(sidecar.projectRoot).toBe(normalizePath(root));
     expect(sidecar.implementationFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(sidecar.projectSnapshotIdentity).toBe(cold.index.projectSnapshotIdentity);
@@ -393,7 +393,7 @@ describe("agent session", () => {
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
     expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
-    expect(refreshed.version).toBe(3);
+    expect(refreshed.version).toBe(4);
   });
 
   it("does not publish an identity or sidecar when the project snapshot write fails", async () => {
@@ -555,7 +555,7 @@ describe("agent session", () => {
     const refreshed = (await readDetailedSidecar(sidecarPath)) as { version: number };
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
-    expect(refreshed.version).toBe(3);
+    expect(refreshed.version).toBe(4);
   });
 
   it("invalidates module, project snapshot, and detailed sidecar on core epoch drift", async () => {

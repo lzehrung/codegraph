@@ -31,7 +31,7 @@ type EdgePassContext = {
   optionalMemberTypes: Set<string>;
   aliasToTargetDef: Map<string, SymbolDef>;
   aliasToTargetModule: Map<string, string>;
-  resolveIdentifier: (name: string) => SymbolDef | null;
+  resolveIdentifier: (name: string, node: SyntaxNodeLike) => SymbolDef | null;
   resolveExportFrom: (file: string, exportedName: string) => SymbolDef | null;
   resolveMemberChainTarget: (chainNode: SyntaxNodeLike) => SymbolDef | null;
   recordEdge: (fromId: string, toId: string, label?: string, site?: SymbolGraph["edges"][number]["site"]) => boolean;
@@ -108,7 +108,7 @@ function tryResolveChain(context: EdgePassContext, node: SyntaxNodeLike, fromId?
 function tryResolveNode(context: EdgePassContext, node: SyntaxNodeLike, fromId: string, label: string): boolean {
   if (isIdentifierType(context.sup, node.type) || node.type === "type_identifier") {
     const name = sliceText(node, context.source);
-    const target = context.resolveIdentifier(name);
+    const target = context.resolveIdentifier(name, node);
     if (target) {
       recordDefEdge(context, fromId, target, label, node);
       return true;
@@ -220,10 +220,9 @@ export function emitMemberOwnershipEdges(
 }
 
 /** Type-like defs only, so a PHP `use function` alias cannot steal `Example::m()`. */
-function resolveNamedType(context: EdgePassContext, name: string): SymbolDef | null {
-  const fromAlias = context.aliasToTargetDef.get(name);
-  if (fromAlias && declaresMembers(fromAlias)) return fromAlias;
-  return context.moduleEntry.locals.find((local) => local.localName === name && declaresMembers(local)) ?? null;
+function resolveNamedType(context: EdgePassContext, name: string, node: SyntaxNodeLike): SymbolDef | null {
+  const target = context.resolveIdentifier(name, node);
+  return target && declaresMembers(target) ? target : null;
 }
 
 export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: DetailedFunctionNode[]): void {
@@ -338,7 +337,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
       const site = { file: context.moduleEntry.file, range: toRange(access.property) };
       const argumentCount = callArgumentCount(node);
       if (binding.kind === "named-type") {
-        const typeDef = resolveNamedType(context, binding.typeName);
+        const typeDef = resolveNamedType(context, binding.typeName, access.receiver);
         if (!typeDef) return;
         context.receiverCalls.push({
           callerId: fromId,
@@ -541,7 +540,7 @@ function recordIdentifierRelations(
   collectBaseSpecifierIdentifiers(container, context.sup, identifiers);
   const seen = new Set<string>();
   for (const [index, identifier] of identifiers.entries()) {
-    const target = context.resolveIdentifier(sliceText(identifier, context.source));
+    const target = context.resolveIdentifier(sliceText(identifier, context.source), identifier);
     if (!target) continue;
     const targetId = defNodeId(target);
     if (seen.has(targetId)) continue;
@@ -588,7 +587,7 @@ export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: 
         const interfaceIdentifiers: SyntaxNodeLike[] = [];
         collectBaseSpecifierIdentifiers(interfaces, context.sup, interfaceIdentifiers);
         for (const identifier of interfaceIdentifiers) {
-          const target = context.resolveIdentifier(sliceText(identifier, context.source));
+          const target = context.resolveIdentifier(sliceText(identifier, context.source), identifier);
           if (target) recordDefEdge(context, fromId, target, "implements", interfaces);
         }
       }
@@ -679,7 +678,7 @@ export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: 
       const interfaceIdentifiers: SyntaxNodeLike[] = [];
       collectBaseSpecifierIdentifiers(clause, context.sup, interfaceIdentifiers);
       for (const identifier of interfaceIdentifiers) {
-        const target = context.resolveIdentifier(sliceText(identifier, context.source));
+        const target = context.resolveIdentifier(sliceText(identifier, context.source), identifier);
         if (target) recordDefEdge(context, fromId, target, "implements", clause);
       }
     }
@@ -695,8 +694,8 @@ export function emitRustImplEdges(context: EdgePassContext, rootNode: SyntaxNode
       if (typeIdentifiers.length >= 2) {
         const traitName = sliceText(typeIdentifiers[0], context.source);
         const typeName = sliceText(typeIdentifiers[1], context.source);
-        const typeDef = context.resolveIdentifier(typeName);
-        const traitDef = context.resolveIdentifier(traitName);
+        const typeDef = context.resolveIdentifier(typeName, typeIdentifiers[1]!);
+        const traitDef = context.resolveIdentifier(traitName, typeIdentifiers[0]!);
         if (typeDef && traitDef) {
           const fromId = ensureNode(context, typeDef);
           recordDefEdge(context, fromId, traitDef, "implements", node);
