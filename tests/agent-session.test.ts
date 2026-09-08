@@ -7,7 +7,12 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
-import { AGENT_FRESHNESS_CHECK_INTERVAL_MS, createAgentSession, listAgentSessionFiles } from "../src/agent/session.js";
+import {
+  AGENT_FRESHNESS_CHECK_INTERVAL_MS,
+  createAgentSession,
+  listAgentSessionFiles,
+  type AgentProjectSnapshot,
+} from "../src/agent/session.js";
 import type { QueryIndexHandle } from "../src/agent/query-index/update.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
@@ -40,6 +45,33 @@ async function mkGitRepo(): Promise<string> {
   git(root, ["add", "."]);
   git(root, ["commit", "-m", "base"]);
   return root;
+}
+
+async function writeResolutionHint(root: string, resolutionHint: string): Promise<void> {
+  await fs.writeFile(
+    path.join(root, "codegraph.config.json"),
+    JSON.stringify({ graph: { resolutionHints: [resolutionHint] } }),
+    "utf8",
+  );
+}
+
+async function createConfigurationFreshnessFixture(): Promise<{
+  root: string;
+  main: string;
+  firstHeader: string;
+  secondHeader: string;
+}> {
+  const root = await mkTmpDir("cg-agent-session-config-freshness-");
+  const main = path.join(root, "main.cpp");
+  const firstHeader = path.join(root, "A", "Thing.h");
+  const secondHeader = path.join(root, "B", "Thing.h");
+  await fs.mkdir(path.dirname(firstHeader), { recursive: true });
+  await fs.mkdir(path.dirname(secondHeader), { recursive: true });
+  await fs.writeFile(main, '#include "Thing.h"\nint main() { return 0; }\n', "utf8");
+  await fs.writeFile(firstHeader, "class FirstThing {};\n", "utf8");
+  await fs.writeFile(secondHeader, "class SecondThing {};\n", "utf8");
+  await writeResolutionHint(root, "A");
+  return { root, main, firstHeader, secondHeader };
 }
 function detailedSymbolGraphSnapshotPath(root: string): string {
   return path.join(root, ".codegraph", "cache", "index-v1", "detailed-symbol-graph.json");
@@ -882,6 +914,127 @@ describe("agent session", () => {
     expect(buildSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("reports configuration-only resolution changes as stale without replacing a check snapshot", async () => {
+    const { root, main, firstHeader, secondHeader } = await createConfigurationFreshnessFixture();
+    const session = createAgentSession({
+      root,
+      buildOptions: { cache: "off", native: "on" },
+      freshness: { policy: "check" },
+    });
+    const snapshot = await session.loadProject({ symbolGraph: "skip" });
+    if (!session.checkFreshness) {
+      throw new Error("agent session should expose freshness checks");
+    }
+
+    expect(snapshot.fileGraph.edges).toContainEqual(
+      expect.objectContaining({
+        from: normalizePath(main),
+        to: { type: "file", path: normalizePath(firstHeader) },
+      }),
+    );
+    await writeResolutionHint(root, "B");
+
+    const freshness = await session.checkFreshness();
+    const retained = await session.loadProject({ symbolGraph: "skip" });
+    const control = await createAgentSession({
+      root,
+      buildOptions: { cache: "off", native: "on" },
+    }).loadProject({ symbolGraph: "skip" });
+
+    expect(freshness).toMatchObject({
+      state: "stale",
+      changedFiles: [],
+      changedFileCount: 0,
+      omittedChangedFileCount: 0,
+    });
+    expect(retained).toBe(snapshot);
+    expect(retained.fileGraph.edges).toContainEqual(
+      expect.objectContaining({
+        from: normalizePath(main),
+        to: { type: "file", path: normalizePath(firstHeader) },
+      }),
+    );
+    expect(control.files).toEqual(snapshot.files);
+    expect(control.fileGraph.edges).toContainEqual(
+      expect.objectContaining({
+        from: normalizePath(main),
+        to: { type: "file", path: normalizePath(secondHeader) },
+      }),
+    );
+  });
+
+  it("auto-refreshes a session when configuration-only resolution changes", async () => {
+    const { root, main, firstHeader, secondHeader } = await createConfigurationFreshnessFixture();
+    const session = createAgentSession({
+      root,
+      buildOptions: { cache: "off", native: "on" },
+      freshness: { policy: "auto" },
+    });
+    const snapshot = await session.loadProject({ symbolGraph: "skip" });
+    if (!session.checkFreshness) {
+      throw new Error("agent session should expose freshness checks");
+    }
+
+    await writeResolutionHint(root, "B");
+
+    expect(await session.checkFreshness()).toEqual({ state: "refreshed", changedFiles: [] });
+    const refreshed = await session.loadProject({ symbolGraph: "skip" });
+
+    expect(snapshot.fileGraph.edges).toContainEqual(
+      expect.objectContaining({
+        from: normalizePath(main),
+        to: { type: "file", path: normalizePath(firstHeader) },
+      }),
+    );
+    expect(refreshed.fileGraph.edges).toContainEqual(
+      expect.objectContaining({
+        from: normalizePath(main),
+        to: { type: "file", path: normalizePath(secondHeader) },
+      }),
+    );
+  });
+
+  it("retains an auto session while config reads fail and refreshes after recovery", async () => {
+    const root = await mkRepo();
+    const configPath = path.join(root, "tsconfig.json");
+    await fs.writeFile(configPath, "{}\n");
+    const originalReadFile = fs.readFile.bind(fs);
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+      if (path.resolve(String(args[0])) === configPath) {
+        throw Object.assign(new Error("config read denied"), { code: "EACCES" });
+      }
+      return await originalReadFile(...args);
+    });
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const session = createAgentSession({
+      root,
+      buildOptions: { cache: "off", native: "off" },
+      freshness: { policy: "auto" },
+    });
+    try {
+      const snapshot = await session.loadProject({ symbolGraph: "skip" });
+      for (let check = 0; check < 2; check++) {
+        const freshness = await session.checkFreshness!();
+        expect(freshness).toMatchObject({ state: "stale", changedFiles: [] });
+        if (freshness.state !== "stale") throw new Error("failed configuration checks must report stale state");
+        expect(normalizePath(freshness.reason)).not.toContain(normalizePath(root));
+        expect(await session.loadProject({ symbolGraph: "skip" })).toBe(snapshot);
+        now += AGENT_FRESHNESS_CHECK_INTERVAL_MS + 1;
+      }
+
+      readSpy.mockRestore();
+      expect(await session.checkFreshness?.()).toEqual({ state: "refreshed", changedFiles: [] });
+      const recovered = await session.loadProject({ symbolGraph: "skip" });
+      expect(recovered).not.toBe(snapshot);
+      now += AGENT_FRESHNESS_CHECK_INTERVAL_MS + 1;
+      expect(await session.checkFreshness?.()).toEqual({ state: "fresh" });
+      expect(await session.loadProject({ symbolGraph: "skip" })).toBe(recovered);
+    } finally {
+      session.invalidate();
+    }
+  });
+
   it("validates discovery freshness and auto-refreshes path-only session file lists after file rename without full indexing", async () => {
     const root = await mkTmpDir("cg-agent-session-path-freshness-");
     const beforeFile = path.join(root, "before.ts");
@@ -933,6 +1086,71 @@ describe("agent session", () => {
     } finally {
       session.invalidate();
     }
+  });
+
+  it("ignores unused Codegraph settings while retaining language configuration freshness", async () => {
+    const root = await mkTmpDir("cg-agent-session-disabled-config-");
+    const main = path.join(root, "main.ts");
+    const config = path.join(root, "codegraph.config.json");
+    const tsconfig = path.join(root, "tsconfig.json");
+    await fs.writeFile(main, 'import { value } from "dep";\nexport { value };\n');
+    await fs.writeFile(path.join(root, "one.ts"), "export const value = 1;\n");
+    await fs.writeFile(path.join(root, "second.ts"), "export const value = 2;\n");
+    await fs.writeFile(config, "{}");
+    const writeTsconfig = (target: string) =>
+      fs.writeFile(tsconfig, JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { dep: [target] } } }));
+    await writeTsconfig("one.ts");
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const session = createAgentSession({
+      root,
+      useConfig: false,
+      discovery: { ignoreGlobs: ["tsconfig.json"] },
+      buildOptions: { cache: "off", native: "off" },
+      freshness: { policy: "auto" },
+    });
+    const targets = (snapshot: AgentProjectSnapshot) =>
+      snapshot.fileGraph.edges.filter((edge) => edge.from === normalizePath(main)).map((edge) => edge.to);
+    try {
+      const snapshot = await session.loadProject({ symbolGraph: "skip" });
+      expect(targets(snapshot)).toEqual([{ type: "file", path: normalizePath(path.join(root, "one.ts")) }]);
+
+      await fs.writeFile(config, JSON.stringify({ discovery: { ignoreGlobs: ["main.ts"] } }));
+      expect(await session.checkFreshness!()).toEqual({ state: "fresh" });
+      expect(await session.loadProject({ symbolGraph: "skip" })).toBe(snapshot);
+
+      await writeTsconfig("second.ts");
+      now += AGENT_FRESHNESS_CHECK_INTERVAL_MS + 1;
+      expect(await session.checkFreshness!()).toEqual({ state: "refreshed", changedFiles: [] });
+      const refreshed = await session.loadProject({ symbolGraph: "skip" });
+      expect(targets(refreshed)).toEqual([{ type: "file", path: normalizePath(path.join(root, "second.ts")) }]);
+    } finally {
+      session.invalidate();
+    }
+  });
+
+  it("leaves configuration freshness under explicit manual caller control", async () => {
+    const { root, main, firstHeader } = await createConfigurationFreshnessFixture();
+    const session = createAgentSession({
+      root,
+      buildOptions: { cache: "off", native: "on" },
+      freshness: { policy: "manual" },
+    });
+    const snapshot = await session.loadProject({ symbolGraph: "skip" });
+    if (!session.checkFreshness) {
+      throw new Error("agent session should expose freshness checks");
+    }
+
+    await writeResolutionHint(root, "B");
+
+    expect(await session.checkFreshness()).toEqual({ state: "fresh" });
+    expect(await session.loadProject({ symbolGraph: "skip" })).toBe(snapshot);
+    expect(snapshot.fileGraph.edges).toContainEqual(
+      expect.objectContaining({
+        from: normalizePath(main),
+        to: { type: "file", path: normalizePath(firstHeader) },
+      }),
+    );
   });
 
   it("reports stale discovery state for path-only session file lists under check policy", async () => {
