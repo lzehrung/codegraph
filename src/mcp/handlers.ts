@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { buildCodegraphArtifactWithSession } from "../agent/artifact.js";
 import type { CodegraphArtifactBuildResult } from "../agent/artifact.js";
-import { explainCodegraphTargetWithSession } from "../agent/explain.js";
+import { explainCodegraphTargetWithSession, resolveCodegraphTargetWithSession } from "../agent/explain.js";
 import type { AgentExplanation, AgentExplanationReference } from "../agent/explain.js";
 import { getCodegraphFileViewWithSession, type AgentFileViewResponse } from "../agent/file-view.js";
 import { exploreCodegraphWithSession, type AgentExploreResponse } from "../agent/explore.js";
@@ -827,10 +827,7 @@ function createCodegraphMcpHandlersForSession(
       }),
 
     get_symbol: async (request) =>
-      await withFreshness(async () => {
-        const explanation = await explainCodegraphTargetWithSession(session, { root, target: request.handle });
-        return explanation.target;
-      }),
+      await withFreshness(async () => await resolveCodegraphTargetWithSession(session, { target: request.handle })),
 
     goto: async (request) =>
       await withFreshness(async () => {

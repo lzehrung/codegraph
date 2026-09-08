@@ -9,13 +9,19 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
-### Fixed
+### Added
 
-- Changing or reordering resolution hints now keeps cached import targets consistent with graph edges. Existing index caches rebuild once to remove stale bindings.
+- Exported `orientCodegraphWithSession` and `getCodegraphPacketWithSession` from the public agent entrypoint (`@lzehrung/codegraph-core/agent` and `@lzehrung/codegraph/agent`) for shared-session orientation and packet retrieval.
 
 ### Changed
 
 - Shortened the bundled Codegraph skill around agent tool choice, task order, and safety checks. Detailed command and server contracts remain in the CLI and MCP references.
+- MCP `get_symbol` now resolves its target without computing discarded explanation context or re-reading SQL sources. Target matching and ambiguity handling are unchanged.
+
+### Fixed
+
+- Detailed call hierarchy edges now resolve direct identifiers through lexical scope at the callsite. Nested declarations and local bindings no longer incorrectly target same-named module locals or imports.
+- Changing or reordering resolution hints now keeps cached import targets consistent with graph edges. Existing index caches rebuild once to remove stale bindings.
 
 ## [2.3.21] - 2026-09-05
 
