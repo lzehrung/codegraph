@@ -9,6 +9,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Fixed
+
+- Long-lived agent sessions now detect configuration-only changes before reusing a snapshot. Resolution, language, discovery, and ignore-rule changes now report stale state or refresh automatically according to the session freshness policy.
+
 ### Changed
 
 - Shortened the bundled Codegraph skill around agent tool choice, task order, and safety checks. Detailed command and server contracts remain in the CLI and MCP references.

@@ -41,6 +41,33 @@ async function mkGitRepo(): Promise<string> {
   git(root, ["commit", "-m", "base"]);
   return root;
 }
+
+async function writeResolutionHint(root: string, resolutionHint: string): Promise<void> {
+  await fs.writeFile(
+    path.join(root, "codegraph.config.json"),
+    JSON.stringify({ graph: { resolutionHints: [resolutionHint] } }),
+    "utf8",
+  );
+}
+
+async function createConfigurationFreshnessFixture(): Promise<{
+  root: string;
+  main: string;
+  firstHeader: string;
+  secondHeader: string;
+}> {
+  const root = await mkTmpDir("cg-agent-session-config-freshness-");
+  const main = path.join(root, "main.cpp");
+  const firstHeader = path.join(root, "A", "Thing.h");
+  const secondHeader = path.join(root, "B", "Thing.h");
+  await fs.mkdir(path.dirname(firstHeader), { recursive: true });
+  await fs.mkdir(path.dirname(secondHeader), { recursive: true });
+  await fs.writeFile(main, '#include "Thing.h"\nint main() { return 0; }\n', "utf8");
+  await fs.writeFile(firstHeader, "class FirstThing {};\n", "utf8");
+  await fs.writeFile(secondHeader, "class SecondThing {};\n", "utf8");
+  await writeResolutionHint(root, "A");
+  return { root, main, firstHeader, secondHeader };
+}
 function detailedSymbolGraphSnapshotPath(root: string): string {
   return path.join(root, ".codegraph", "cache", "index-v1", "detailed-symbol-graph.json");
 }
@@ -880,6 +907,110 @@ describe("agent session", () => {
     });
     expect(afterCheck).toBe(cached);
     expect(buildSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports configuration-only resolution changes as stale without replacing a check snapshot", async () => {
+    const { root, main, firstHeader, secondHeader } = await createConfigurationFreshnessFixture();
+    const session = createAgentSession({
+      root,
+      buildOptions: { cache: "off", native: "on" },
+      freshness: { policy: "check" },
+    });
+    const snapshot = await session.loadProject({ symbolGraph: "skip" });
+    if (!session.checkFreshness) {
+      throw new Error("agent session should expose freshness checks");
+    }
+
+    expect(snapshot.fileGraph.edges).toContainEqual(
+      expect.objectContaining({
+        from: normalizePath(main),
+        to: { type: "file", path: normalizePath(firstHeader) },
+      }),
+    );
+    await writeResolutionHint(root, "B");
+
+    const freshness = await session.checkFreshness();
+    const retained = await session.loadProject({ symbolGraph: "skip" });
+    const control = await createAgentSession({
+      root,
+      buildOptions: { cache: "off", native: "on" },
+    }).loadProject({ symbolGraph: "skip" });
+
+    expect(freshness).toMatchObject({
+      state: "stale",
+      changedFiles: [],
+      changedFileCount: 0,
+      omittedChangedFileCount: 0,
+    });
+    expect(retained).toBe(snapshot);
+    expect(retained.fileGraph.edges).toContainEqual(
+      expect.objectContaining({
+        from: normalizePath(main),
+        to: { type: "file", path: normalizePath(firstHeader) },
+      }),
+    );
+    expect(control.files).toEqual(snapshot.files);
+    expect(control.fileGraph.edges).toContainEqual(
+      expect.objectContaining({
+        from: normalizePath(main),
+        to: { type: "file", path: normalizePath(secondHeader) },
+      }),
+    );
+  });
+
+  it("auto-refreshes a session when configuration-only resolution changes", async () => {
+    const { root, main, firstHeader, secondHeader } = await createConfigurationFreshnessFixture();
+    const session = createAgentSession({
+      root,
+      buildOptions: { cache: "off", native: "on" },
+      freshness: { policy: "auto" },
+    });
+    const snapshot = await session.loadProject({ symbolGraph: "skip" });
+    if (!session.checkFreshness) {
+      throw new Error("agent session should expose freshness checks");
+    }
+
+    await writeResolutionHint(root, "B");
+
+    expect(await session.checkFreshness()).toEqual({ state: "refreshed", changedFiles: [] });
+    const refreshed = await session.loadProject({ symbolGraph: "skip" });
+
+    expect(snapshot.fileGraph.edges).toContainEqual(
+      expect.objectContaining({
+        from: normalizePath(main),
+        to: { type: "file", path: normalizePath(firstHeader) },
+      }),
+    );
+    expect(refreshed.fileGraph.edges).toContainEqual(
+      expect.objectContaining({
+        from: normalizePath(main),
+        to: { type: "file", path: normalizePath(secondHeader) },
+      }),
+    );
+  });
+
+  it("leaves configuration freshness under explicit manual caller control", async () => {
+    const { root, main, firstHeader } = await createConfigurationFreshnessFixture();
+    const session = createAgentSession({
+      root,
+      buildOptions: { cache: "off", native: "on" },
+      freshness: { policy: "manual" },
+    });
+    const snapshot = await session.loadProject({ symbolGraph: "skip" });
+    if (!session.checkFreshness) {
+      throw new Error("agent session should expose freshness checks");
+    }
+
+    await writeResolutionHint(root, "B");
+
+    expect(await session.checkFreshness()).toEqual({ state: "fresh" });
+    expect(await session.loadProject({ symbolGraph: "skip" })).toBe(snapshot);
+    expect(snapshot.fileGraph.edges).toContainEqual(
+      expect.objectContaining({
+        from: normalizePath(main),
+        to: { type: "file", path: normalizePath(firstHeader) },
+      }),
+    );
   });
 
   it("counts deleted file bytes against auto-refresh limits", async () => {

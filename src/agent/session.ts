@@ -3,6 +3,7 @@ import path from "node:path";
 import { boundList } from "../presentation/bounds.js";
 import { buildProjectIndexIncremental } from "../indexer/build-index.js";
 import { resolveIncrementalFilePlan, type IncrementalFilePlan } from "../indexer/incremental-plan.js";
+import { computeConfigHash } from "../indexer/build-cache/manifest.js";
 import type { BuildOptions, BuildReport, IncrementalBuildOptions, ProjectIndex } from "../indexer/types.js";
 import { tryLoadDetailedSymbolGraphSnapshot, writeDetailedSymbolGraphSnapshot } from "../indexer/build-cache.js";
 import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
@@ -127,6 +128,11 @@ type AgentSessionFilePlan = AgentDiscoverySettings & {
 type AgentFreshnessDiff = {
   changedFiles: string[];
   changedBytes: number;
+};
+
+type AgentConfigurationIdentity = {
+  hash: string;
+  error?: string;
 };
 
 async function resolveAgentDiscoverySettings(options: AgentSessionOptions): Promise<AgentDiscoverySettings> {
@@ -353,6 +359,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   let cachedBasicSnapshot: Promise<AgentProjectSnapshot> | undefined;
   let cachedSkippedSnapshot: Promise<AgentProjectSnapshot> | undefined;
   let cachedFileSignatures: Map<string, AgentFileSignature> | undefined;
+  let cachedConfigurationIdentity: AgentConfigurationIdentity | undefined;
   let cachedDuplicateAnalysis: Promise<DuplicatePreparedAnalysis> | undefined;
 
   let lastFreshnessCheckedAt = 0;
@@ -370,6 +377,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     cachedBasicSnapshot = undefined;
     cachedSkippedSnapshot = undefined;
     cachedFileSignatures = undefined;
+    cachedConfigurationIdentity = undefined;
     cachedDuplicateAnalysis = undefined;
     lastFreshnessCheckedAt = 0;
     lastFreshnessResult = undefined;
@@ -399,8 +407,11 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   const loadBase = async (): Promise<AgentProjectBaseSnapshot> => {
     if (cachedBase) return cachedBase;
     const loadPromise = (async () => {
-      // A cached file plan can outlive one operation; its discovery facts must not.
       const discoveryContext = createProjectDiscoveryContext(options.root);
+      const configurationIdentity =
+        options.freshness?.policy === "manual"
+          ? undefined
+          : await computeConfigHash(options.root, options.buildOptions?.logLevel, discoveryContext);
       const { files, discoveryOptions, graphOptions, languageExtensions, cacheLocation, incrementalPlan, startedAt } =
         await loadFilePlan(discoveryContext);
       const buildOptions: IncrementalBuildOptions = {
@@ -432,6 +443,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
       const index = await buildProjectIndexIncremental(options.root, buildOptions);
       if (options.freshness?.policy !== "manual") {
         cachedFileSignatures = await collectBuiltAgentFileSignatures(files, index);
+        cachedConfigurationIdentity = configurationIdentity;
       }
       const fileGraph = index.graph;
 
@@ -542,7 +554,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   const checkFreshness = async (): Promise<AgentFreshnessResult> => {
     const policy = options.freshness?.policy ?? "check";
     if (policy === "manual") return { state: "fresh" };
-    if (!cachedBase || !cachedFileSignatures) return { state: "fresh" };
+    if (!cachedBase || !cachedFileSignatures || !cachedConfigurationIdentity) return { state: "fresh" };
 
     const now = Date.now();
     if (lastFreshnessResult && now - lastFreshnessCheckedAt < AGENT_FRESHNESS_CHECK_INTERVAL_MS) {
@@ -552,15 +564,25 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
 
     freshnessInFlight = (async (): Promise<AgentFreshnessResult> => {
       await cachedBase;
-      // Reuse the same fast-path-aware resolution loadFiles()/discoverFiles() use, instead
-      // of an independent full scan, so freshness checks stay cheap on unchanged repos too.
-      const currentFiles = await listAgentSessionFiles(options);
-      const currentSignatures = await collectAgentFileSignatures(currentFiles);
+      // Resolve file and configuration identity through one fresh discovery context. The
+      // context shares Git and ignore-file facts within this check without retaining them
+      // across operations, so unchanged sessions do not repeat discovery traversal.
+      const discoveryContext = createProjectDiscoveryContext(options.root);
+      const [currentConfigurationIdentity, currentFilePlan] = await Promise.all([
+        computeConfigHash(options.root, options.buildOptions?.logLevel, discoveryContext),
+        resolveAgentSessionFilePlan(options, discoveryContext),
+      ]);
+      const currentSignatures = await collectAgentFileSignatures(currentFilePlan.files);
       const signatures = cachedFileSignatures;
-      if (!signatures) return { state: "fresh" };
+      const configurationIdentity = cachedConfigurationIdentity;
+      if (!signatures || !configurationIdentity) return { state: "fresh" };
       const diff = diffAgentFileSignatures(signatures, currentSignatures);
+      const configurationChanged =
+        !!configurationIdentity.error ||
+        !!currentConfigurationIdentity.error ||
+        configurationIdentity.hash !== currentConfigurationIdentity.hash;
       let result: AgentFreshnessResult;
-      if (!diff.changedFiles.length) {
+      if (!diff.changedFiles.length && !configurationChanged) {
         result = { state: "fresh" };
       } else {
         const changedFiles = diff.changedFiles.map((file) => toProjectDisplayPath(options.root, file));
@@ -568,7 +590,9 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
           result = {
             state: "stale",
             ...summarizeChangedFiles(changedFiles),
-            reason: "session snapshot is older than files on disk",
+            reason: configurationChanged
+              ? "session snapshot configuration is older than configuration on disk"
+              : "session snapshot is older than files on disk",
           };
         } else {
           const maxFiles = options.freshness?.maxAutoRefreshFiles ?? DEFAULT_MAX_AUTO_REFRESH_FILES;
