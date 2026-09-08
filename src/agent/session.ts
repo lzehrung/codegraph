@@ -324,7 +324,7 @@ async function collectBuiltAgentFileSignatures(
 }
 
 function diffAgentFileSignatures(
-  previous: ReadonlyMap<string, AgentFileSignature>,
+  previous: ReadonlyMap<string, AgentFileSignature | undefined>,
   current: ReadonlyMap<string, AgentFileSignature>,
 ): AgentFreshnessDiff {
   const changedFiles: string[] = [];
@@ -343,7 +343,7 @@ function diffAgentFileSignatures(
   for (const [file, previousSignature] of previous.entries()) {
     if (current.has(file)) continue;
     changedFiles.push(file);
-    changedBytes += previousSignature.size;
+    changedBytes += previousSignature?.size ?? 0;
   }
   changedFiles.sort();
   return { changedFiles, changedBytes };
@@ -358,7 +358,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   let cachedEagerSnapshot: Promise<AgentProjectSnapshot> | undefined;
   let cachedBasicSnapshot: Promise<AgentProjectSnapshot> | undefined;
   let cachedSkippedSnapshot: Promise<AgentProjectSnapshot> | undefined;
-  let cachedFileSignatures: Map<string, AgentFileSignature> | undefined;
+  let cachedFileSignatures: Map<string, AgentFileSignature | undefined> | undefined;
   let cachedConfigurationIdentity: AgentConfigurationIdentity | undefined;
   let cachedDuplicateAnalysis: Promise<DuplicatePreparedAnalysis> | undefined;
 
@@ -386,7 +386,19 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
 
   const loadFilePlan = async (discoveryContext?: ProjectDiscoveryContext): Promise<AgentSessionFilePlan> => {
     if (cachedFilePlan) return cachedFilePlan;
-    const loadPromise = resolveAgentSessionFilePlan(options, discoveryContext);
+    const loadPromise = (async () => {
+      const plan = await resolveAgentSessionFilePlan(options, discoveryContext);
+      if (options.freshness?.policy !== "manual" && !cachedFileSignatures) {
+        const signatures: Map<string, AgentFileSignature | undefined> = await collectAgentFileSignatures(plan.files);
+        // Keep discovered paths even when they vanish before stat, so deletion remains detectable.
+        for (const file of plan.files) {
+          const resolvedFile = normalizePath(path.resolve(file));
+          if (!signatures.has(resolvedFile)) signatures.set(resolvedFile, undefined);
+        }
+        cachedFileSignatures = signatures;
+      }
+      return plan;
+    })();
     cachedFilePlan = loadPromise;
     loadPromise.catch(() => {
       if (cachedFilePlan === loadPromise) cachedFilePlan = undefined;
@@ -411,7 +423,13 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
       const configurationIdentity =
         options.freshness?.policy === "manual"
           ? undefined
-          : await computeConfigHash(options.root, options.buildOptions?.logLevel, discoveryContext, undefined, options.useConfig);
+          : await computeConfigHash(
+              options.root,
+              options.buildOptions?.logLevel,
+              discoveryContext,
+              undefined,
+              options.useConfig,
+            );
       const { files, discoveryOptions, graphOptions, languageExtensions, cacheLocation, incrementalPlan, startedAt } =
         await loadFilePlan(discoveryContext);
       const buildOptions: IncrementalBuildOptions = {
@@ -441,10 +459,10 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
       const buildReport: BuildReport = options.buildOptions?.report ?? { timings: {} };
       buildOptions.report = buildReport;
       const index = await buildProjectIndexIncremental(options.root, buildOptions);
-      if (options.freshness?.policy !== "manual") {
-        cachedFileSignatures = await collectBuiltAgentFileSignatures(files, index);
-        cachedConfigurationIdentity = configurationIdentity;
-      }
+      const fileSignatures =
+        options.freshness?.policy === "manual" ? undefined : await collectBuiltAgentFileSignatures(files, index);
+      cachedFileSignatures = fileSignatures;
+      cachedConfigurationIdentity = configurationIdentity;
       const fileGraph = index.graph;
 
       return {
@@ -453,7 +471,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         fileLookup: createAgentFileLookup(files),
         index,
         fileGraph,
-        ...(cachedFileSignatures ? { fileSignatures: cachedFileSignatures } : {}),
+        ...(fileSignatures ? { fileSignatures } : {}),
         buildReport,
         analysis: summarizeAnalysis({ index, report: buildReport }),
       };
@@ -554,7 +572,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   const checkFreshness = async (): Promise<AgentFreshnessResult> => {
     const policy = options.freshness?.policy ?? "check";
     if (policy === "manual") return { state: "fresh" };
-    if (!cachedBase || !cachedFileSignatures || !cachedConfigurationIdentity) return { state: "fresh" };
+    if (!cachedBase && !cachedFilePlan && !cachedFiles && !cachedFileSignatures) return { state: "fresh" };
 
     const now = Date.now();
     if (lastFreshnessResult && now - lastFreshnessCheckedAt < AGENT_FRESHNESS_CHECK_INTERVAL_MS) {
@@ -563,30 +581,40 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     if (freshnessInFlight) return freshnessInFlight;
 
     freshnessInFlight = (async (): Promise<AgentFreshnessResult> => {
-      await cachedBase;
-      // Resolve file and configuration identity through one fresh discovery context. The
-      // context shares Git and ignore-file facts within this check without retaining them
-      // across operations, so unchanged sessions do not repeat discovery traversal.
+      if (cachedBase) await cachedBase;
+      else if (cachedFilePlan) await cachedFilePlan;
+      if (!cachedFileSignatures) return { state: "fresh" };
+      // Share discovery work within this check. File-only sessions have no indexed
+      // configuration baseline, so they only need to compare discovery signatures.
       const discoveryContext = createProjectDiscoveryContext(options.root);
       const [currentConfigurationIdentity, currentFilePlan] = await Promise.all([
-        computeConfigHash(options.root, options.buildOptions?.logLevel, discoveryContext, undefined, options.useConfig),
+        cachedConfigurationIdentity
+          ? computeConfigHash(
+              options.root,
+              options.buildOptions?.logLevel,
+              discoveryContext,
+              undefined,
+              options.useConfig,
+            )
+          : undefined,
         resolveAgentSessionFilePlan(options, discoveryContext),
       ]);
       const currentSignatures = await collectAgentFileSignatures(currentFilePlan.files);
       const signatures = cachedFileSignatures;
       const configurationIdentity = cachedConfigurationIdentity;
-      if (!signatures || !configurationIdentity) return { state: "fresh" };
+      if (!signatures) return { state: "fresh" };
       const diff = diffAgentFileSignatures(signatures, currentSignatures);
       const configurationChanged =
-        !!configurationIdentity.error ||
-        !!currentConfigurationIdentity.error ||
-        configurationIdentity.hash !== currentConfigurationIdentity.hash;
+        !!currentConfigurationIdentity &&
+        (!!configurationIdentity?.error ||
+          !!currentConfigurationIdentity.error ||
+          configurationIdentity?.hash !== currentConfigurationIdentity.hash);
       let result: AgentFreshnessResult;
       if (!diff.changedFiles.length && !configurationChanged) {
         result = { state: "fresh" };
       } else {
         const changedFiles = diff.changedFiles.map((file) => toProjectDisplayPath(options.root, file));
-        if (currentConfigurationIdentity.error) {
+        if (currentConfigurationIdentity?.error) {
           result = {
             state: "stale",
             ...summarizeChangedFiles(changedFiles),
