@@ -2,12 +2,12 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { LANG_CONFIGS } from "../../src/bootstrap/treeSitterLanguages.js";
-import { chunkFile } from "../../src/chunking/chunkFile.js";
+import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
+import { chunkFile } from "../../src/chunking/chunk-file.js";
 import { buildProjectIndex, goToDefinition } from "../../src/index.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
-import { expectUnicodeSymbolRangeIdentity } from "./unicodeSymbolRange.js";
+import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 
 const definition: LanguageTestDefinition = {
   id: "rust",

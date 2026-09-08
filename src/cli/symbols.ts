@@ -1,4 +1,4 @@
-import { formatWorkspaceSymbolsResponse, workspaceSymbols } from "../agent/workspaceSymbols.js";
+import { formatWorkspaceSymbolsResponse, workspaceSymbols } from "../agent/workspace-symbols.js";
 import { SymbolKind } from "../indexer/types.js";
 import { exitWithError, type CliAgentCommandContext } from "./context.js";
 import { SYMBOLS_HELP_TEXT } from "./help.js";

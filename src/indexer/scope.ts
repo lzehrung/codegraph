@@ -1,6 +1,6 @@
 import { sliceText, toRange } from "../util/ast.js";
-import { getNativeSyntaxTreeExecution, type NativeRuntimeMode } from "../native/treeSitterNative.js";
-import { ProjectedSyntaxTree } from "../native/projectedTree.js";
+import { getNativeSyntaxTreeExecution, type NativeRuntimeMode } from "../native/tree-sitter-native.js";
+import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import { declarationKindToBindingKind } from "./declarations.js";
 import type { LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";

@@ -7,14 +7,14 @@ import {
   MAX_SQLITE_CELL_BYTES,
   MAX_SQLITE_ROW_LIMIT,
   normalizeSqliteRowLimit,
-} from "./rowBounds.js";
+} from "./row-bounds.js";
 import {
   resolveRawSqlQueryWorkerPath,
   runRawSqlQueryInWorker,
   SqliteQueryCancelledError,
   SqliteQueryDeadlineExceededError,
   SqliteQueryWorkerCleanupCapacityExceededError,
-} from "./rawQueryWorkerPool.js";
+} from "./raw-query-worker-pool.js";
 
 export { queryGraphSqlite } from "./canned-query.js";
 export { SqliteQueryCancelledError, SqliteQueryDeadlineExceededError, SqliteQueryWorkerCleanupCapacityExceededError };
@@ -48,7 +48,7 @@ let loggedInProcessDeadlineFallback = false;
  * Runs a bounded read-only raw SQL query.
  *
  * Preferred path: the query executes in a dedicated worker thread with a hard
- * `deadlineMs` budget (`rawQueryWorkerPool.ts`). At expiry the caller receives a
+ * `deadlineMs` budget (`raw-query-worker-pool.ts`). At expiry the caller receives a
  * deadline error and the pool requests worker termination. A synchronous
  * `DatabaseSync` call already inside SQLite may continue until that native step returns,
  * but the lifecycle retains a bounded cleanup slot and the host event loop stays free.

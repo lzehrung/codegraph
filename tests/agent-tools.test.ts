@@ -17,7 +17,7 @@ import {
   tool_impactFromDiffText,
 } from "../src/agent-tools.js";
 import { copyFixtureSubset, readOnlySamplePath } from "./helpers/filesystem.js";
-import * as projectFilesModule from "../src/util/projectFiles.js";
+import * as projectFilesModule from "../src/util/project-files.js";
 import * as loadCurrentIndexModule from "../src/indexer/load-current-index.js";
 import * as navigationModule from "../src/indexer/navigation.js";
 

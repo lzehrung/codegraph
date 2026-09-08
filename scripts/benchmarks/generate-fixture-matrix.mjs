@@ -45,7 +45,7 @@ const LANGUAGE_NAMES = {
 
 // Files under tests/languages that cover more than one language, or are not
 // test files at all, and so cannot be attributed to a single matrix row.
-const EXCLUDED_STEMS = new Set(["types", "runner", "parity", "chunkSFC"]);
+const EXCLUDED_STEMS = new Set(["types", "runner", "parity", "chunk-sfc"]);
 
 function usage() {
   return [

@@ -11,7 +11,7 @@ import { cacheRoot, projectCacheNamespace } from "../src/indexer/build-cache/loc
 import { normalizeLanguageExtensions, supportForFile } from "../src/languages.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { runTsxScriptOrThrow } from "./helpers/cli.js";
-import { decompactFileGraph, type CompactFileGraphPayload } from "./helpers/compactGraph.js";
+import { decompactFileGraph, type CompactFileGraphPayload } from "./helpers/compact-graph.js";
 
 async function mkRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-config-"));

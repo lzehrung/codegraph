@@ -2,7 +2,7 @@ import { buildReviewReport, type ReviewReport } from "../review.js";
 import { boundReviewReportForTransport } from "../review/types.js";
 import type { BuildOptions } from "../indexer/types.js";
 import { explainCodegraphTargetWithSession, type AgentExplainTarget, type AgentExplanation } from "./explain.js";
-import { type AgentFollowUp, toolFollowUp } from "./followUps.js";
+import { type AgentFollowUp, toolFollowUp } from "./follow-ups.js";
 import { createAgentSession, type AgentSession } from "./session.js";
 
 export type AgentPacketKind = "file" | "symbol" | "chunk" | "sql_object" | "graph" | "review";

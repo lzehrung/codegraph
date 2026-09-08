@@ -5,7 +5,7 @@ import { type SymbolEdge } from "../graphs/symbol-graph.js";
 import { buildGraphAdjacency, getForwardNeighbors, getReverseNeighbors } from "../graphs/adjacency.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { createGraphFileResolver } from "./path.js";
-import { compileTestPatterns, createIndexTestFileMatcher } from "./testPatterns.js";
+import { compileTestPatterns, createIndexTestFileMatcher } from "./test-patterns.js";
 
 export interface CandidateTestFile {
   file: FileId;

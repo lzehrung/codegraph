@@ -1,4 +1,4 @@
-import { prepareSourceInput, type PreparedSFCEmbeddedBlock } from "./languages/filePrep.js";
+import { prepareSourceInput, type PreparedSFCEmbeddedBlock } from "./languages/file-prep.js";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "./languages.js";
 import type { Edge } from "./types.js";
 import { loadNearestTsconfigFor } from "./util/resolution.js";
@@ -10,18 +10,18 @@ import {
   graphOnlyLanguageSupportsImportAliases,
   graphOnlySpecifierNeedsResolutionConfig,
   isGraphOnlyLanguage,
-} from "./documentLinks.js";
-import { getCompactImportsExecution } from "./native/treeSitterNative.js";
-import type { NativeRuntimeMode, CompactQueryResults, NativeQueryResults } from "./native/treeSitterNative.js";
-import { recordNativeExecutionOutcome } from "./native/nativeBackendReport.js";
+} from "./document-links.js";
+import { getCompactImportsExecution } from "./native/tree-sitter-native.js";
+import type { NativeRuntimeMode, CompactQueryResults, NativeQueryResults } from "./native/tree-sitter-native.js";
+import { recordNativeExecutionOutcome } from "./native/native-backend-report.js";
 import { collectModuleSpecifiersFromSource } from "./graphs/specifiers.js";
 import type { FallbackImportExtractionEvent } from "./graphs/specifiers.js";
-import { resolveModuleSpecifierEdges } from "./graphs/edgeResolution.js";
+import { resolveModuleSpecifierEdges } from "./graphs/edge-resolution.js";
 import type { GraphCacheEntry } from "./graphs/types.js";
 import type { BuildReport } from "./indexer/types.js";
 import type { SyntaxTreeLike } from "./languages/types.js";
-import { collectSqlEdgesForFile } from "./sql/sourceGraph.js";
-import type { SqlFactCache } from "./sql/sourceGraph.js";
+import { collectSqlEdgesForFile } from "./sql/source-graph.js";
+import type { SqlFactCache } from "./sql/source-graph.js";
 
 const cloneEdge = (edge: Edge): Edge => ({
   ...edge,

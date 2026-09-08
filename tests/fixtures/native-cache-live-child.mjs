@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadNativeBinding } from "../../dist/native/bindingLoader.js";
+import { loadNativeBinding } from "../../dist/native/binding-loader.js";
 
 const require = createRequire(import.meta.url);
 const request = JSON.parse(process.argv[2]);

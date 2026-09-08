@@ -34,14 +34,14 @@ export {
   DEFAULT_PROJECT_PATTERNS,
   discoverProjectFiles,
   listProjectFiles,
-} from "./util/projectFiles.js";
+} from "./util/project-files.js";
 export type {
   ProjectFileDiscoveryOptions,
   ProjectFileInfo,
   ProjectFileKind,
   ProjectFileRole,
   ProjectFileType,
-} from "./util/projectFiles.js";
+} from "./util/project-files.js";
 export { extractJsTsDynamicSpecifiers, extractJsTsSpecifiers, extractPythonSpecifiers } from "./util/specifiers.js";
 export type { ModuleSpecifier } from "./util/specifiers.js";
 export {

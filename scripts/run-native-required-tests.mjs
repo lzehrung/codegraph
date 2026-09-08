@@ -42,7 +42,7 @@ if (distState.needsBuild) {
   }
 }
 
-const availability = await import("../dist/native/treeSitterNative.js");
+const availability = await import("../dist/native/tree-sitter-native.js");
 if (!availability.isNativeTreeSitterAvailable("on")) {
   const loadError = availability.getNativeTreeSitterLoadError("on");
   console.error("[codegraph] Native-required tests need @lzehrung/codegraph-native to load successfully.");

@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { GRAPH_ONLY_RESOLUTION_EXTENSIONS } from "./graphOnlyExtensions.js";
+import { GRAPH_ONLY_RESOLUTION_EXTENSIONS } from "./graph-only-extensions.js";
 import { fileIdentityKey, isFilePathWithinRoot, normalizeResolutionHints } from "./paths.js";
 import {
   DEFAULT_RESOLUTION_EXTENSIONS,
   STYLESHEET_RESOLUTION_EXTENSIONS,
   getResolutionExtensions,
-} from "./resolutionCandidates.js";
+} from "./resolution-candidates.js";
 import {
   clearWorkspaceCaches,
   clearFileExistsCache,
@@ -16,7 +16,7 @@ import {
   type WorkspaceConfig,
 } from "./workspace.js";
 import { clearJvmResolutionCaches, resolveJavaImportPath, resolveKotlinImportPath } from "./resolution/jvm.js";
-import { findFirstExistingResolutionCandidate } from "./resolution/findFirstExisting.js";
+import { findFirstExistingResolutionCandidate } from "./resolution/find-first-existing.js";
 import { resolveGoImportPath } from "./resolution/go.js";
 import { resolveFromNodeModules } from "./resolution/node.js";
 import { clearPhpResolutionCaches, resolvePhpImportPath } from "./resolution/php.js";
@@ -24,8 +24,8 @@ import { clearPythonResolutionCache } from "./resolution/python.js";
 import { resolveRustImportPath } from "./resolution/rust.js";
 import { clearTsconfigCache, type MatchPathFn } from "./resolution/tsconfig.js";
 import type { ModuleSpecifierExportCondition, ModuleSpecifierResolutionKind } from "./specifiers.js";
-import type { PackageExportConditionMode } from "./packageExports.js";
-import { lruMapGet, lruMapSet } from "./lruMap.js";
+import type { PackageExportConditionMode } from "./package-exports.js";
+import { lruMapGet, lruMapSet } from "./lru-map.js";
 export { resolveGoImportPath } from "./resolution/go.js";
 export { resolveJvmPackageImportPaths } from "./resolution/jvm.js";
 export { getPhpComposerImplicitFiles } from "./resolution/php.js";
@@ -33,7 +33,7 @@ export { resolvePythonModule } from "./resolution/python.js";
 export { resolveRustImportPath } from "./resolution/rust.js";
 export { loadNearestTsconfigFor, type MatchPathFn } from "./resolution/tsconfig.js";
 export { mapLimit } from "./concurrency.js";
-export { listResolutionCandidates } from "./resolutionCandidates.js";
+export { listResolutionCandidates } from "./resolution-candidates.js";
 
 const MAX_RESOLVE_SPECIFIER_CACHE_ENTRIES = 10_000;
 const resolveSpecifierCache = new Map<string, FileId | { external: string }>();
@@ -52,7 +52,7 @@ export {
   GRAPH_ONLY_RESOLUTION_EXTENSIONS,
   type GraphOnlyDocumentExtension,
   type GraphOnlyResolutionExtension,
-} from "./graphOnlyExtensions.js";
+} from "./graph-only-extensions.js";
 
 const GRAPH_ONLY_LANGUAGE_DOCUMENT_RESOLUTION_EXTENSIONS: Record<string, readonly string[]> = {
   markdown: [".md", ".mdx"],

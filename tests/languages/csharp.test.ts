@@ -4,7 +4,7 @@ import { runLanguageTests } from "./runner.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import type { LanguageTestDefinition } from "./types.js";
-import { expectUnicodeSymbolRangeIdentity } from "./unicodeSymbolRange.js";
+import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 
 const definition: LanguageTestDefinition = {
   id: "csharp",

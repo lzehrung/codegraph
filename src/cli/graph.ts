@@ -14,13 +14,13 @@ import {
 } from "../graphs/symbol-render.js";
 import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../indexer/build-index.js";
 import { type BuildOptions, type BuildReport, type CacheLocation } from "../indexer/types.js";
-import { summarizeAnalysis } from "../analysisSummary.js";
-import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
+import { summarizeAnalysis } from "../analysis-summary.js";
+import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import { updateGraphSqlite, writeGraphSqlite } from "../sqlite.js";
 import { buildSqlArtifactGraphFromFiles } from "../sql/index.js";
 import type { Edge, Graph } from "../types.js";
 import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
-import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+import { type ProjectFileDiscoveryOptions } from "../util/project-files.js";
 import {
   parseCacheModeOption,
   parseNonNegativeIntegerOption,

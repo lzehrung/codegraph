@@ -16,11 +16,11 @@ import type { Edge, Range } from "./types.js";
 import { collectGraph } from "./graph-builder.js";
 import { getDependencies, getReverseDependencies, type DependencyNode } from "./graphs/queries.js";
 import { getHotspots } from "./graphs/hotspots.js";
-import type { NativeRuntimeMode } from "./native/treeSitterNative.js";
+import type { NativeRuntimeMode } from "./native/tree-sitter-native.js";
 import { fileExists } from "./util/workspace.js";
 import { fileIdentityKey, isFilePathWithinRoot, normalizePath, resolveFilePathFromRoot } from "./util/paths.js";
 import { errorMessage } from "./util/errors.js";
-import { listProjectFiles } from "./util/projectFiles.js";
+import { listProjectFiles } from "./util/project-files.js";
 import { boundAgentList, defaultAgentLimit, normalizeAgentLimit } from "./agent/bounds.js";
 import { normalizeAgentOutputPath } from "./agent/normalize.js";
 import { assertNoPrebuiltSessionWithBuildOptions, type AgentSession } from "./agent/session.js";
@@ -28,7 +28,7 @@ import {
   workspaceSymbols,
   workspaceSymbolsWithSession,
   type WorkspaceSymbolsResponse,
-} from "./agent/workspaceSymbols.js";
+} from "./agent/workspace-symbols.js";
 import type { WorkspaceSymbolsRequest } from "./indexer/workspace-symbols.js";
 import {
   findImplementations as findAgentImplementations,
@@ -40,7 +40,7 @@ import {
   type ImplementationsResponse,
   type TypeHierarchyRequest,
   type TypeHierarchyResponse,
-} from "./agent/typeHierarchy.js";
+} from "./agent/type-hierarchy.js";
 import {
   findCallees,
   findCalleesWithSession,
@@ -48,19 +48,19 @@ import {
   findCallersWithSession,
   type CallHierarchyRequest,
   type CallHierarchyResponse,
-} from "./agent/callHierarchy.js";
+} from "./agent/call-hierarchy.js";
 import {
   previewRename,
   previewRenameWithSession,
   type RenamePreviewRequest,
   type RenamePreviewResponse,
-} from "./agent/renamePreview.js";
+} from "./agent/rename-preview.js";
 import {
   buildRefactorPlan,
   buildRefactorPlanWithSession,
   type RefactorPlanRequest,
   type RefactorPlanResponse,
-} from "./agent/refactorPlan.js";
+} from "./agent/refactor-plan.js";
 
 type ToolRuntimeOptions = {
   index?: ProjectIndex;

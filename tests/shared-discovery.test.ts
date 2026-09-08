@@ -5,12 +5,12 @@ import path from "node:path";
 import * as gitModule from "../src/util/git.js";
 import { isGitRepo } from "../src/util/git.js";
 import { fileIdentityKey } from "../src/util/paths.js";
-import * as projectFilesModule from "../src/util/projectFiles.js";
+import * as projectFilesModule from "../src/util/project-files.js";
 import {
   createProjectDiscoveryContext,
   listProjectFilesWithGitCandidates,
   readProjectDiscoveryFileText,
-} from "../src/util/projectFiles.js";
+} from "../src/util/project-files.js";
 import { computeConfigHash } from "../src/indexer/build-cache.js";
 import { buildProjectIndex, buildProjectIndexIncremental } from "../src/indexer/build-index.js";
 import type { BuildReport } from "../src/indexer/types.js";

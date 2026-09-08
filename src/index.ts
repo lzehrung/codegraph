@@ -85,7 +85,7 @@ export {
   type MarkdownLinkCheckFailure,
   type MarkdownLinkCheckFailureReason,
   type MarkdownLinkCheckResult,
-} from "./documentLinks/check.js";
+} from "./document-links/check.js";
 
 /** Symbol query parser and graph-neighborhood query helpers. */
 export {
@@ -102,7 +102,7 @@ export { graphToTriples, type Triple, type TripleNode } from "./triples.js";
 
 /** Core graph primitives shared across index, graph, and tool APIs. */
 export type { Pos, Range, FileId, EdgeTo, Edge, Graph } from "./types.js";
-export type { AnalysisBackend, AnalysisMode, AnalysisSummary } from "./analysisSummary.js";
+export type { AnalysisBackend, AnalysisMode, AnalysisSummary } from "./analysis-summary.js";
 
 /** Project indexing, navigation, reference search, and API-surface analysis. */
 export {
@@ -227,7 +227,7 @@ export {
   mapPartialResult,
   filterErrorsBySeverity,
   summarizePartialResult,
-} from "./util/partialResults.js";
+} from "./util/partial-results.js";
 
 /** Lazy project-index wrappers for deferred symbol materialization. */
 export {
@@ -236,7 +236,7 @@ export {
   createSymbolLoader,
   type LazyModuleIndex,
   type LazyLoadOptions,
-} from "./util/lazySymbols.js";
+} from "./util/lazy-symbols.js";
 
 /** Stable symbol hashing helpers used by manifests and change detection. */
 export {
@@ -246,7 +246,7 @@ export {
   computeFileSymbolHashes,
   type SymbolHash,
   type SymbolManifestEntry,
-} from "./util/symbolHash.js";
+} from "./util/symbol-hash.js";
 
 /** SQLite graph persistence and query helpers. */
 export {
@@ -284,9 +284,9 @@ export {
 } from "./sql/index.js";
 
 /** Source and text chunking helpers. */
-export { chunkFile, type Chunk, type ChunkFileOptions } from "./chunking/chunkFile.js";
-export { chunkTextFile, type TextChunkOptions } from "./chunking/chunkTextFile.js";
-export { chunkSFCFile, type ChunkSFCOptions } from "./chunking/chunkSFC.js";
+export { chunkFile, type Chunk, type ChunkFileOptions } from "./chunking/chunk-file.js";
+export { chunkTextFile, type TextChunkOptions } from "./chunking/chunk-text-file.js";
+export { chunkSFCFile, type ChunkSFCOptions } from "./chunking/chunk-sfc.js";
 
 /** In-memory duplicate and near-duplicate code detection. */
 export {
@@ -342,7 +342,7 @@ export {
 } from "./drift/index.js";
 
 /** Tree-sitter language configuration registry. */
-export { LANG_CONFIGS, type LanguageConfig } from "./bootstrap/treeSitterLanguages.js";
+export { LANG_CONFIGS, type LanguageConfig } from "./bootstrap/tree-sitter-languages.js";
 
 /** Review report generation and review result types. */
 export {
@@ -365,4 +365,4 @@ export {
   isNativeTreeSitterAvailable,
   getNativeTreeSitterLoadError,
   getNativeTreeSitterSupportedLanguageIds,
-} from "./native/treeSitterNative.js";
+} from "./native/tree-sitter-native.js";

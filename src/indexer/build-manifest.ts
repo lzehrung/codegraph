@@ -14,7 +14,7 @@ import {
 } from "./build-cache.js";
 import { cacheRelativePath, pruneDiskModuleCache } from "./build-cache/module-cache.js";
 import type { GraphCacheEntry, GraphBuildOptions } from "../graphs/types.js";
-import type { ProjectDiscoveryContext } from "../util/projectFiles.js";
+import type { ProjectDiscoveryContext } from "../util/project-files.js";
 import type { BuildOptions, BuildReport, ManifestReport } from "./types.js";
 
 export function toManifestFileEntry(entry: GraphCacheEntry): ManifestFileEntry | undefined {

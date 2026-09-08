@@ -8,8 +8,8 @@ import { describe, expect, it, vi } from "vitest";
 // worker asset were missing) so its deadline behavior -- and its documented
 // limitation -- can be exercised directly, without disturbing the worker-backed
 // deadline tests in sqlite-query-bounds.test.ts.
-vi.mock("../src/sqlite/rawQueryWorkerPool.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/sqlite/rawQueryWorkerPool.js")>();
+vi.mock("../src/sqlite/raw-query-worker-pool.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/sqlite/raw-query-worker-pool.js")>();
   return {
     ...actual,
     resolveRawSqlQueryWorkerPath: () => {

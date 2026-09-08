@@ -6,8 +6,8 @@ const requiredDistEntries = [
   "dist/index.js",
   "dist/cli.js",
   "dist/bin/cli.js",
-  "dist/bin/queryIndexWorker.js",
-  "dist/bin/rawQueryWorker.js",
+  "dist/bin/query-index-worker.js",
+  "dist/bin/raw-query-worker.js",
 ];
 const freshnessInputs = [
   "package.json",

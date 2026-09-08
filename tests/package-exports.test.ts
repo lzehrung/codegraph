@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolvePackageExportTargets } from "../src/util/packageExports.js";
+import { resolvePackageExportTargets } from "../src/util/package-exports.js";
 
 describe("package export target selection", () => {
   it("picks string targets directly", () => {

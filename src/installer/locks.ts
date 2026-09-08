@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fsp, { type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { normalizePathForDisplay } from "../util/packageInfo.js";
+import { normalizePathForDisplay } from "../util/package-info.js";
 import { isFileSystemErrorCode } from "../util/errors.js";
 
 type InstallerLockSettings = {

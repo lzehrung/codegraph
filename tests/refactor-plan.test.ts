@@ -2,9 +2,9 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { defNodeId } from "../src/graphs/symbol-graph.js";
-import { buildRefactorPlanWithSession } from "../src/agent/refactorPlan.js";
-import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
-import { resolveSemanticSymbol, semanticSymbolFromDef } from "../src/agent/semanticSymbols.js";
+import { buildRefactorPlanWithSession } from "../src/agent/refactor-plan.js";
+import { formatAgentFollowUpAsCli } from "../src/agent/follow-ups.js";
+import { resolveSemanticSymbol, semanticSymbolFromDef } from "../src/agent/semantic-symbols.js";
 import { createAgentSession, type AgentSession } from "../src/agent/session.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 

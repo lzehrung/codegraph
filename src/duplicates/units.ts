@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { LANG_CONFIGS } from "../bootstrap/treeSitterLanguages.js";
-import { chunkFile, chunkFileWithSymbols, type Chunk } from "../chunking/chunkFile.js";
-import { chunkTextFile } from "../chunking/chunkTextFile.js";
+import { LANG_CONFIGS } from "../bootstrap/tree-sitter-languages.js";
+import { chunkFile, chunkFileWithSymbols, type Chunk } from "../chunking/chunk-file.js";
+import { chunkTextFile } from "../chunking/chunk-text-file.js";
 import {
   countDuplicateTokens,
   hasUnterminatedQuotedLiteral,
@@ -13,8 +13,8 @@ import { supportForFileWithSource, supportForFileWithoutHeaderSample } from "../
 import type { ParsedFileContext } from "../indexer/parse-context.js";
 import { attemptParsePreparedFileContext } from "../indexer/parse-context.js";
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "../indexer/types.js";
-import { prepareSourceInput } from "../languages/filePrep.js";
-import { getNativeDuplicateTokens } from "../native/treeSitterNative.js";
+import { prepareSourceInput } from "../languages/file-prep.js";
+import { getNativeDuplicateTokens } from "../native/tree-sitter-native.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { collectLineStartOffsets } from "../util/lines.js";
@@ -30,7 +30,7 @@ import {
   tryLoadDuplicateUnitsFromCache,
   writeDuplicateUnitsBatchToCache,
   type PendingDuplicateUnitCacheWrite,
-} from "./unitCache.js";
+} from "./unit-cache.js";
 import type {
   CollectedDuplicateUnits,
   DuplicateAstContext,

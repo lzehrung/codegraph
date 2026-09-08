@@ -8,17 +8,17 @@ import {
   parseKotlinImportStatement,
   parsePhpImportStatement,
   parseRustImportStatement,
-} from "../src/languages/importStatementParsers.js";
+} from "../src/languages/import-statement-parsers.js";
 import { extractJsTsSpecifiers, extractPythonSpecifiers } from "../src/util.js";
 import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
 import { supportById } from "../src/languages.js";
 import { buildProjectIndex } from "../src/index.js";
-import { collectJsTextImports } from "../src/indexer/imports/jsTextImports.js";
-import { collectNativeCaptureImportBindings } from "../src/indexer/imports/nativeCaptures.js";
-import { finalizeLanguageSpecificImports } from "../src/indexer/imports/languageSpecific.js";
+import { collectJsTextImports } from "../src/indexer/imports/js-text-imports.js";
+import { collectNativeCaptureImportBindings } from "../src/indexer/imports/native-captures.js";
+import { finalizeLanguageSpecificImports } from "../src/indexer/imports/language-specific.js";
 import { collectPythonImportsFromSource } from "../src/indexer/imports/python.js";
 import type { ImportBinding } from "../src/indexer/types.js";
-import type { NativeMatch } from "../src/native/treeSitterNative.js";
+import type { NativeMatch } from "../src/native/tree-sitter-native.js";
 
 // C11-adjacent finding: several import/alias extractors used an ASCII-only [A-Za-z_][\w]*
 // character class, which silently drops the binding (or the whole statement) for any

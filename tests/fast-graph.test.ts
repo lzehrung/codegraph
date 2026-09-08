@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { collectGraph, type Edge } from "../src/index.js";
-import * as nativeRuntime from "../src/native/treeSitterNative.js";
+import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 import { graphEdgeKey } from "./helpers/graph.js";
 import { getSamplePath } from "./test-utils.js";

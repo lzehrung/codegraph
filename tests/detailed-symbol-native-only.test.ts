@@ -16,7 +16,7 @@ describe("detailed symbol graph in native-only installs", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.resetModules();
-    vi.doUnmock("../src/native/treeSitterNative.js");
+    vi.doUnmock("../src/native/tree-sitter-native.js");
   });
 
   it("skips files cleanly when syntax-tree fallback is unavailable", async () => {
@@ -34,9 +34,9 @@ describe("detailed symbol graph in native-only installs", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     vi.resetModules();
-    vi.doMock("../src/native/treeSitterNative.js", async () => {
-      const actual = await vi.importActual<typeof import("../src/native/treeSitterNative.js")>(
-        "../src/native/treeSitterNative.js",
+    vi.doMock("../src/native/tree-sitter-native.js", async () => {
+      const actual = await vi.importActual<typeof import("../src/native/tree-sitter-native.js")>(
+        "../src/native/tree-sitter-native.js",
       );
       return {
         ...actual,
@@ -69,9 +69,9 @@ describe("detailed symbol graph in native-only installs", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     vi.resetModules();
-    vi.doMock("../src/native/treeSitterNative.js", async () => {
-      const actual = await vi.importActual<typeof import("../src/native/treeSitterNative.js")>(
-        "../src/native/treeSitterNative.js",
+    vi.doMock("../src/native/tree-sitter-native.js", async () => {
+      const actual = await vi.importActual<typeof import("../src/native/tree-sitter-native.js")>(
+        "../src/native/tree-sitter-native.js",
       );
       return {
         ...actual,

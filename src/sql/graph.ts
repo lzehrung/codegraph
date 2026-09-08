@@ -1,6 +1,6 @@
 import fsp from "node:fs/promises";
 import type { SqlFactKind, SqlStatementFact, SqlTruthTier } from "./types.js";
-import { extractSqlFactsFromSource } from "./extractFacts.js";
+import { extractSqlFactsFromSource } from "./extract-facts.js";
 
 export type SqlArtifactNodeKind =
   | "sql_file"

@@ -1,7 +1,7 @@
 import type { FileId, Edge } from "../types.js";
 import { type ProjectIndex } from "../indexer/types.js";
 import { fileIdentityKey } from "../util/paths.js";
-import { compileTestPatterns, createIndexTestFileMatcher } from "./testPatterns.js";
+import { compileTestPatterns, createIndexTestFileMatcher } from "./test-patterns.js";
 import type { FileChange, ImpactItem, ImpactOptions, ImpactReason } from "./types.js";
 import { createImpactIgnoreMatcher } from "./path.js";
 import { calculateTransitiveSeverity, selectStrongerImpactReason } from "./severity.js";

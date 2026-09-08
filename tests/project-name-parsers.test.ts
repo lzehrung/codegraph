@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { parseGradlePropertiesName, parseIniName, parseSetupPyName } from "../src/util/projectFiles/parsers.js";
-import { discoverProjectFiles } from "../src/util/projectFiles.js";
+import { parseGradlePropertiesName, parseIniName, parseSetupPyName } from "../src/util/project-files/parsers.js";
+import { discoverProjectFiles } from "../src/util/project-files.js";
 
 const roots: string[] = [];
 afterEach(async () => {

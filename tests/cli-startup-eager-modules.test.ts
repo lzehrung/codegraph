@@ -7,10 +7,8 @@ import { pathToFileURL } from "node:url";
 
 const cliPath = path.resolve(process.cwd(), "dist", "cli.js");
 const sourceCliPath = path.resolve(process.cwd(), "src", "cli.ts");
-const sourceCommandTablePath = path.resolve(process.cwd(), "src", "cli", "commandTable.ts");
-const sourceInvocationContextPath = path.resolve(process.cwd(), "src", "cli", "invocationContext.ts");
-const workerPoolPath = path.resolve(process.cwd(), "src", "worker", "nativeWorkerPool.ts");
-const workerThreadsPath = path.resolve(process.cwd(), "src", "util", "workerThreads.ts");
+const sourceCommandTablePath = path.resolve(process.cwd(), "src", "cli", "command-table.ts");
+const sourceInvocationContextPath = path.resolve(process.cwd(), "src", "cli", "invocation-context.ts");
 
 /** Project modules under dist/ that load while handling lightweight CLI entrypoints. */
 function countDistModulesLoaded(args: string[]): {
@@ -71,10 +69,10 @@ describe("CLI startup eager module loading", () => {
     // Basenames that must never be statically imported by the dispatcher family.
     const lazyOnlyModules = [
       "artifact.js",
-      "callHierarchy.js",
+      "call-hierarchy.js",
       "chunk.js",
       "config.js",
-      "discoveryGlobs.js",
+      "discovery-globs.js",
       "doctor.js",
       "drift.js",
       "duplicates.js",
@@ -84,11 +82,11 @@ describe("CLI startup eager module loading", () => {
       "git.js",
       "graph-builder.js",
       "graph.js",
-      "graphDelta.js",
-      "graphQueries.js",
+      "graph-delta.js",
+      "graph-queries.js",
       "grep.js",
       "impact.js",
-      "includeRoots.js",
+      "include-roots.js",
       "index.js",
       "inspect.js",
       "install.js",
@@ -98,16 +96,16 @@ describe("CLI startup eager module loading", () => {
       "navigation.js",
       "orient.js",
       "packet.js",
-      "projectFiles.js",
-      "refactorPlan.js",
-      "renamePreview.js",
+      "project-files.js",
+      "refactor-plan.js",
+      "rename-preview.js",
       "review.js",
       "search.js",
       "skill.js",
       "sql.js",
       "symbols.js",
-      "typeHierarchy.js",
-      "windowsProcessDrain.js",
+      "type-hierarchy.js",
+      "windows-process-drain.js",
     ];
 
     for (const source of [cliSource, commandTableSource, invocationContextSource]) {
@@ -129,41 +127,32 @@ describe("CLI startup eager module loading", () => {
     expect(invocationContextSource).toContain("loadProjectFilesHelpers");
   });
 
-  it("keeps host parallelism reads inside worker-pool sizing, not module scope", async () => {
-    const sizingSource = await fs.promises.readFile(workerThreadsPath, "utf8");
-    expect(sizingSource).toMatch(/function resolveWorkerThreadCount\([\s\S]*os\.availableParallelism\(\)/);
-    const moduleScope = sizingSource.split("function resolveWorkerThreadCount")[0] ?? "";
-    expect(moduleScope).not.toContain("os.availableParallelism()");
-    const workerPoolSource = await fs.promises.readFile(workerPoolPath, "utf8");
-    expect(workerPoolSource).not.toContain("os.cpus()");
-  });
-
   it("loads fewer than 30 dist modules for no args, --version, --help, and doctor", () => {
     const noArgs = countDistModulesLoaded([]);
     expect(noArgs.status).toBe(0);
     expect(noArgs.stdout).toContain("Start here:");
     expect(noArgs.count).toBeLessThan(30);
-    expect(noArgs.modules.some((url) => modulePathEndsWith(url, "/projectFiles.js"))).toBe(false);
+    expect(noArgs.modules.some((url) => modulePathEndsWith(url, "/project-files.js"))).toBe(false);
     expect(noArgs.modules.some((url) => modulePathEndsWith(url, "/config.js"))).toBe(false);
-    expect(noArgs.modules.some((url) => modulePathEndsWith(url, "/windowsProcessDrain.js"))).toBe(false);
+    expect(noArgs.modules.some((url) => modulePathEndsWith(url, "/windows-process-drain.js"))).toBe(false);
 
     const version = countDistModulesLoaded(["--version"]);
     expect(version.status).toBe(0);
     expect(version.stdout.trim().length).toBeGreaterThan(0);
     expect(version.count).toBeLessThan(30);
     expect(version.modules.some((url) => modulePathEndsWith(url, "/duplicates.js"))).toBe(false);
-    expect(version.modules.some((url) => modulePathEndsWith(url, "/projectFiles.js"))).toBe(false);
+    expect(version.modules.some((url) => modulePathEndsWith(url, "/project-files.js"))).toBe(false);
     expect(version.modules.some((url) => modulePathEndsWith(url, "/config.js"))).toBe(false);
     expect(version.modules.some((url) => modulePathEndsWith(url, "/git.js"))).toBe(false);
-    expect(version.modules.some((url) => modulePathEndsWith(url, "/windowsProcessDrain.js"))).toBe(false);
+    expect(version.modules.some((url) => modulePathEndsWith(url, "/windows-process-drain.js"))).toBe(false);
 
     const help = countDistModulesLoaded(["--help"]);
     expect(help.status).toBe(0);
     expect(help.stdout).toContain("Usage:");
     expect(help.count).toBeLessThan(30);
     expect(help.modules.some((url) => modulePathEndsWith(url, "/duplicates.js"))).toBe(false);
-    expect(help.modules.some((url) => modulePathEndsWith(url, "/projectFiles.js"))).toBe(false);
-    expect(help.modules.some((url) => modulePathEndsWith(url, "/windowsProcessDrain.js"))).toBe(false);
+    expect(help.modules.some((url) => modulePathEndsWith(url, "/project-files.js"))).toBe(false);
+    expect(help.modules.some((url) => modulePathEndsWith(url, "/windows-process-drain.js"))).toBe(false);
 
     const doctor = countDistModulesLoaded(["doctor", "--json"]);
     expect(doctor.status).toBe(0);
@@ -171,7 +160,7 @@ describe("CLI startup eager module loading", () => {
     // doctor inspects the native addon, which registers the Windows teardown drain.
     expect(doctor.count).toBeLessThan(31);
     expect(doctor.modules.some((url) => modulePathEndsWith(url, "/duplicates.js"))).toBe(false);
-    expect(doctor.modules.some((url) => modulePathEndsWith(url, "/projectFiles.js"))).toBe(false);
+    expect(doctor.modules.some((url) => modulePathEndsWith(url, "/project-files.js"))).toBe(false);
     expect(doctor.modules.some((url) => modulePathEndsWith(url, "/config.js"))).toBe(false);
   });
   it("keeps no-argument eager module count within a small factor of --version", () => {

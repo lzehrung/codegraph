@@ -12,9 +12,9 @@ import {
   type ProjectIndex,
   type SymbolDef,
 } from "../indexer/types.js";
-import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
+import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import { fileIdentityKey, toProjectDisplayPath } from "../util/paths.js";
-import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+import { type ProjectFileDiscoveryOptions } from "../util/project-files.js";
 import {
   getCliCommandUsage,
   parseCacheModeOption,
@@ -22,7 +22,7 @@ import {
   parsePositiveIntegerOption,
 } from "./options.js";
 import { parseCliSourceLocation } from "./location.js";
-import { resolveCliProjectFile, writeCliProjectFileError } from "./projectFile.js";
+import { resolveCliProjectFile, writeCliProjectFileError } from "./project-file.js";
 import { writeCliOutput } from "./pretty.js";
 import { exitWithError } from "./context.js";
 

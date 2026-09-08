@@ -1,13 +1,13 @@
-import { isUnsupportedParserInputError } from "./languages/filePrep.js";
+import { isUnsupportedParserInputError } from "./languages/file-prep.js";
 import type { Edge, Graph } from "./types.js";
 import { loadWorkspaceConfig } from "./util/workspace.js";
 import { fileIdentityKey, normalizePath, normalizeResolutionHints } from "./util/paths.js";
 import { mapLimit } from "./util/concurrency.js";
 import { logWithLevel } from "./logging.js";
 import type { LogLevel } from "./logging.js";
-import { isNativeRequiredUnavailableError } from "./native/treeSitterNative.js";
-import type { NativeRuntimeMode } from "./native/treeSitterNative.js";
-import { initNativeBackendReport } from "./native/nativeBackendReport.js";
+import { isNativeRequiredUnavailableError } from "./native/tree-sitter-native.js";
+import type { NativeRuntimeMode } from "./native/tree-sitter-native.js";
+import { initNativeBackendReport } from "./native/native-backend-report.js";
 import { collectAngularJsFrameworkEdges } from "./graphs/angularjs.js";
 import type { FallbackImportExtractionEvent } from "./graphs/specifiers.js";
 import type { GraphCacheEntry } from "./graphs/types.js";
@@ -15,7 +15,7 @@ import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "./
 import type { BuildReport } from "./indexer/types.js";
 import type { ParsedFileContext } from "./indexer/parse-context.js";
 import { collectEdgesForFile, hasBetterProvenance } from "./graph-edge-collector.js";
-import { buildSqlFactCache, sqlCorpusSignature } from "./sql/sourceGraph.js";
+import { buildSqlFactCache, sqlCorpusSignature } from "./sql/source-graph.js";
 
 type GraphFileSignature = { sig: string; gitSig?: string; cacheSig?: string };
 

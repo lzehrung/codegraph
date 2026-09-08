@@ -1,12 +1,12 @@
-import type { MarkdownLinkCheckResult } from "../documentLinks/check.js";
+import type { MarkdownLinkCheckResult } from "../document-links/check.js";
 import type { CandidateTestFile } from "../impact/context.js";
 import type { CallCompatibilityHint, FileChange, MemberResolutionCoverage } from "../impact/types.js";
-import type { AnalysisSummary } from "../analysisSummary.js";
+import type { AnalysisSummary } from "../analysis-summary.js";
 import type { BuildReport, IncrementalBuildOptions, ProjectIndex } from "../indexer/types.js";
 import type { DuplicatePreparedAnalysis } from "../duplicates.js";
 import type { SqlReviewContext } from "../sql/review.js";
 import type { Edge, Range } from "../types.js";
-import type { ProjectFileInfo } from "../util/projectFiles.js";
+import type { ProjectFileInfo } from "../util/project-files.js";
 
 export type ReviewFileSummary = {
   file: string;

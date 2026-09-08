@@ -3,8 +3,8 @@ import {
   RawSqlQueryWorkerLifecycle,
   SqliteQueryCancelledError,
   type RawSqlQueryWorkerPool,
-} from "../src/sqlite/rawQueryWorkerPool.js";
-import type { RawQueryWorkerTask } from "../src/sqlite/rawQueryWorker.js";
+} from "../src/sqlite/raw-query-worker-pool.js";
+import type { RawQueryWorkerTask } from "../src/sqlite/raw-query-worker.js";
 
 const task: RawQueryWorkerTask = {
   outputPath: "fixture.sqlite",

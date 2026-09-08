@@ -11,8 +11,8 @@ export const CORE_PACKAGE_ENTRIES = Object.freeze([
 ]);
 
 export const CORE_PACKAGE_EXTRA_FILES = Object.freeze([
-  "agent/query-index/queryIndexWorker.js",
-  "sqlite/rawQueryWorker.js",
+  "agent/query-index/query-index-worker.js",
+  "sqlite/raw-query-worker.js",
 ]);
 
 const IMPORT_PATTERN =

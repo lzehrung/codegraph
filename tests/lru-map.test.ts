@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lruMapGet, lruMapSet } from "../src/util/lruMap.js";
+import { lruMapGet, lruMapSet } from "../src/util/lru-map.js";
 
 describe("lruMap", () => {
   it("evicts the oldest entry when the cap is exceeded", () => {

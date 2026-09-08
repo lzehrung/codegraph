@@ -2,11 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { LANG_CONFIGS } from "../src/bootstrap/treeSitterLanguages.js";
-import { chunkFile, type Chunk } from "../src/chunking/chunkFile.js";
-import { chunkSFCFile } from "../src/chunking/chunkSFC.js";
+import { LANG_CONFIGS } from "../src/bootstrap/tree-sitter-languages.js";
+import { chunkFile, type Chunk } from "../src/chunking/chunk-file.js";
+import { chunkSFCFile } from "../src/chunking/chunk-sfc.js";
 import { astGrep } from "../src/index.js";
-import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
+import { isNativeTreeSitterAvailable } from "../src/native/tree-sitter-native.js";
 import { resetNativeRuntimeModeForTests, withNativeRuntimeMode, withNativeRuntimeModeAsync } from "./helpers/native.js";
 
 function normalizeChunks(chunks: Chunk[]) {

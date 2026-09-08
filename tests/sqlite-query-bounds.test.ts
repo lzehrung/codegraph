@@ -9,12 +9,12 @@ import {
   MAX_SQLITE_CELL_BYTES,
   MAX_SQLITE_ROW_LIMIT,
   SQLITE_TRUNCATED_MARKER,
-} from "../src/mcp/sqliteGuard.js";
+} from "../src/mcp/sqlite-guard.js";
 import { queryGraphSqliteRaw, SqliteQueryDeadlineExceededError } from "../src/sqlite/query.js";
 
 // A deadline-exceeded query requests worker termination but, if it was blocked
 // inside a single synchronous native SQLite call, keeps running that call in the
-// background until it returns naturally (see rawQueryWorkerPool.ts). On Windows this can
+// background until it returns naturally (see raw-query-worker-pool.ts). On Windows this can
 // hold the temp db file open for a short window after the deadline test's assertions
 // already ran. This is a real platform race (an actual lingering OS file lock, not
 // simulated timing logic), so it is retried against the real clock instead of being
@@ -153,7 +153,7 @@ describe("SQLite raw query execution deadline", () => {
       db.close();
 
       // The whole cost of this query is inside one synchronous native step (see
-      // rawQueryWorkerPool.ts): SQLite must finish counting before it can return the
+      // raw-query-worker-pool.ts): SQLite must finish counting before it can return the
       // single aggregate row, so this reliably runs well past a short deadline without
       // depending on machine speed for a *count* of loop iterations.
       const slowSql =

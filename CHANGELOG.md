@@ -389,7 +389,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - Moved agent-shaped APIs (`createAgentSession`, explore/orient/search/explain/packet/file-view helpers, semantic hierarchy/rename/refactor helpers, and `tool_*` wrappers) to `@lzehrung/codegraph/agent`.
 - Moved MCP handlers/server (`createCodegraphMcpHandlers`, `listCodegraphMcpTools`, `serveCodegraphMcp`) to `@lzehrung/codegraph/mcp`.
 - Stopped exporting `formatAgentFollowUpAsCli` / `formatAgentFollowUpsAsCli` from public package entry points.
-- Relocated package identity helpers from `src/cli/packageInfo.ts` to `src/util/packageInfo.ts` (internal path only).
+- Relocated package identity helpers from `src/cli/package-info.ts` to `src/util/package-info.ts` (internal path only).
 
 ### Migration
 

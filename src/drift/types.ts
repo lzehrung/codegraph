@@ -1,7 +1,7 @@
 import type { BuildOptions } from "../indexer/types.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
-import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
-import type { ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
+import type { ProjectFileDiscoveryOptions } from "../util/project-files.js";
 
 export type ArchitectureDriftFindingKind =
   | "new-cycle"

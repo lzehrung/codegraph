@@ -1,5 +1,5 @@
 import type { FileId, Graph } from "../types.js";
-import { GRAPH_ONLY_DOCUMENT_EXTENSIONS } from "../util/graphOnlyExtensions.js";
+import { GRAPH_ONLY_DOCUMENT_EXTENSIONS } from "../util/graph-only-extensions.js";
 
 export type CycleInternalEdge = {
   from: FileId;

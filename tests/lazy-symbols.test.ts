@@ -2,7 +2,7 @@ import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import { describe, test, expect } from "vitest";
-import { LazyArray, LazyProjectIndex, createSymbolLoader } from "../src/util/lazySymbols.js";
+import { LazyArray, LazyProjectIndex, createSymbolLoader } from "../src/util/lazy-symbols.js";
 import { SymbolKind } from "../src/indexer/types.js";
 
 describe("LazyArray", () => {

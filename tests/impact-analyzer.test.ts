@@ -5,12 +5,12 @@ import fsp from "node:fs/promises";
 import { analyzeImpactFromDiff } from "../src/index.js";
 import { analyzeImpact, seedTransitiveFromFiles, calculateSeverity } from "../src/impact/analyzer.js";
 import { DEFAULT_SEVERITY_WEIGHTS } from "../src/impact/types.js";
-import { createReferenceLookupCache } from "../src/impact/referenceCache.js";
+import { createReferenceLookupCache } from "../src/impact/reference-cache.js";
 import { createImpactDiagnostics, listFileLevelFallbackPaths } from "../src/impact/collect.js";
 import { rankChangedSymbolsForBudget } from "../src/impact/budgets.js";
 import { buildProjectIndex, buildProjectIndexFromFiles, SymbolKind } from "../src/indexer.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
-import { compileTestPatterns, createIndexTestFileMatcher } from "../src/impact/testPatterns.js";
+import { compileTestPatterns, createIndexTestFileMatcher } from "../src/impact/test-patterns.js";
 import {
   fileIdentityKey,
   isFileIdentityCaseInsensitive,
@@ -2480,7 +2480,7 @@ describe("path identity silent lookup regressions", () => {
       expect(fileIdentityKey("src/main.ts")).toBe(fileIdentityKey("src/Main.ts"));
 
       const jsonLines: unknown[] = [];
-      const { handleGraphQueryCommand } = await import("../src/cli/graphQueries.js");
+      const { handleGraphQueryCommand } = await import("../src/cli/graph-queries.js");
       await handleGraphQueryCommand({
         command: "deps",
         positionals: ["src/main.ts"],

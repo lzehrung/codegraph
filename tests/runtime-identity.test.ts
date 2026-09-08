@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createInstalledVersionChecker, type CodegraphRuntimeIdentity } from "../src/runtimeIdentity.js";
+import { createInstalledVersionChecker, type CodegraphRuntimeIdentity } from "../src/runtime-identity.js";
 
 function runtimeIdentity(): CodegraphRuntimeIdentity {
   return {

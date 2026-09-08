@@ -8,7 +8,7 @@ import {
   mapPartialResult,
   filterErrorsBySeverity,
   summarizePartialResult,
-} from "../src/util/partialResults.js";
+} from "../src/util/partial-results.js";
 
 describe("Partial Results", () => {
   describe("success", () => {

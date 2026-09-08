@@ -1,4 +1,4 @@
-import type { AnalysisBackend, AnalysisSummary } from "../analysisSummary.js";
+import type { AnalysisBackend, AnalysisSummary } from "../analysis-summary.js";
 import type { SymbolKind } from "../indexer/types.js";
 import type { Range } from "../types.js";
 import type { AgentFreshnessResult } from "./session.js";

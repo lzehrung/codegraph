@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect, beforeAll } from "vitest";
-import { chunkFile } from "../../src/chunking/chunkFile.js";
-import { LANG_CONFIGS } from "../../src/bootstrap/treeSitterLanguages.js";
+import { chunkFile } from "../../src/chunking/chunk-file.js";
+import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
 import type {
   ChunkExpectation,
   DependencyGraphExpectation,

@@ -1,12 +1,12 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { LANG_CONFIGS } from "../bootstrap/treeSitterLanguages.js";
-import { chunkFile } from "../chunking/chunkFile.js";
-import { chunkSFCFile } from "../chunking/chunkSFC.js";
-import { chunkTextFile } from "../chunking/chunkTextFile.js";
+import { LANG_CONFIGS } from "../bootstrap/tree-sitter-languages.js";
+import { chunkFile } from "../chunking/chunk-file.js";
+import { chunkSFCFile } from "../chunking/chunk-sfc.js";
+import { chunkTextFile } from "../chunking/chunk-text-file.js";
 import type { Chunk } from "../chunking/types.js";
 import { supportForFile } from "../languages.js";
-import { parseSourceLocationInput } from "../util/sourceLocation.js";
+import { parseSourceLocationInput } from "../util/source-location.js";
 import {
   exitWithError,
   type CliCwdContext,

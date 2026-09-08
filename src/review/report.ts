@@ -1,13 +1,13 @@
-import type { MarkdownLinkCheckResult } from "../documentLinks/check.js";
+import type { MarkdownLinkCheckResult } from "../document-links/check.js";
 import path from "node:path";
-import type { AnalysisSummary } from "../analysisSummary.js";
+import type { AnalysisSummary } from "../analysis-summary.js";
 import type { CandidateTestFile } from "../impact/context.js";
 import { type ProjectIndex } from "../indexer/types.js";
 import { collectSqlReviewContext, type SqlReviewContext } from "../sql/review.js";
 import type { Edge, FileId } from "../types.js";
-import { compareEdges, edgeKey, toRelativeEdge } from "../util/graphEdges.js";
+import { compareEdges, edgeKey, toRelativeEdge } from "../util/graph-edges.js";
 import { normalizePath } from "../util/paths.js";
-import { type ProjectFileInfo } from "../util/projectFiles.js";
+import { type ProjectFileInfo } from "../util/project-files.js";
 import { collectDeletedImporterEdges, collectDeletedSnapshotEdges, type DeletedFileSnapshot } from "./deleted.js";
 import { buildReviewTasks, computeRiskSummary, hasDiagnostics } from "./risk.js";
 import type { ReviewDiagnostics, ReviewFileSummary, ReviewOptions, ReviewReport } from "./types.js";

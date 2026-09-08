@@ -1,6 +1,6 @@
-import { checkMarkdownLinks } from "../documentLinks/check.js";
-import type { MarkdownLinkCheckResult } from "../documentLinks/check.js";
-import type { ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+import { checkMarkdownLinks } from "../document-links/check.js";
+import type { MarkdownLinkCheckResult } from "../document-links/check.js";
+import type { ProjectFileDiscoveryOptions } from "../util/project-files.js";
 
 export type LinksCommandContext = {
   projectRootFs: string;

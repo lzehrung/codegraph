@@ -5,7 +5,7 @@ import {
   createGitIgnoreSourceOwnershipLookup,
   owningGitIgnoreSourceRoot,
   type GitIgnoreSourceRoot,
-} from "../src/util/projectFiles.js";
+} from "../src/util/project-files.js";
 
 const superproject: GitIgnoreSourceRoot = {
   path: "C:/Game/Source",

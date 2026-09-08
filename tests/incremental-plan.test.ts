@@ -11,7 +11,7 @@ import {
 import type { ManifestFileEntry } from "../src/indexer/build-cache.js";
 import { buildProjectIndex } from "../src/indexer/build-index.js";
 import type { Edge } from "../src/types.js";
-import * as projectFilesModule from "../src/util/projectFiles.js";
+import * as projectFilesModule from "../src/util/project-files.js";
 import { isSymlinkUnavailable, mkTmpDir } from "./helpers/filesystem.js";
 import { runGit as git } from "./helpers/git.js";
 

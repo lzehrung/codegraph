@@ -4,8 +4,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 const walkState = { count: 0 };
 
-vi.mock("../src/util/projectFiles.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/util/projectFiles.js")>();
+vi.mock("../src/util/project-files.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/util/project-files.js")>();
   return {
     ...actual,
     listProjectFiles: async (
@@ -25,9 +25,9 @@ vi.mock("../src/util/projectFiles.js", async (importOriginal) => {
 
 import { parseCliArgs } from "../src/cli/context.js";
 import * as cliContext from "../src/cli/context.js";
-import { createCliBaseContext, loadCliProjectContext } from "../src/cli/invocationContext.js";
+import { createCliBaseContext, loadCliProjectContext } from "../src/cli/invocation-context.js";
 import { normalizePath, resetFileIdentityCaseSensitivityForTests } from "../src/util/paths.js";
-import * as projectFilesModule from "../src/util/projectFiles.js";
+import * as projectFilesModule from "../src/util/project-files.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
 import { runGit } from "./helpers/git.js";
 

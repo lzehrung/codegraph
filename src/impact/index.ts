@@ -14,7 +14,7 @@ export {
   type CallsiteArguments,
   type ExtractCallableSignatureRequest,
   type ExtractCallsiteArgumentsRequest,
-} from "./callCompatibility.js";
+} from "./call-compatibility.js";
 
 export type ImpactAnalysisContext = {
   buildReport?: BuildReport | undefined;

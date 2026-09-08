@@ -16,7 +16,7 @@ import {
   tryLoadDuplicateUnitsFromCache,
   writeDuplicateUnitsBatchToCache,
   writeDuplicateUnitsToCache,
-} from "../src/duplicates/unitCache.js";
+} from "../src/duplicates/unit-cache.js";
 import { buildInternalUnit, formatDuplicateSqlHandle, formatDuplicateSymbolHandle } from "../src/duplicates/units.js";
 import * as buildCache from "../src/indexer/build-cache.js";
 import { MANIFEST_VERSION, type IndexManifest } from "../src/indexer/build-cache/manifest.js";

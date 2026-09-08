@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { tryCreateDirectorySymlink } from "./helpers/filesystem.js";
-import { checkMarkdownLinks, checkMarkdownLinksInFiles } from "../src/documentLinks/check.js";
+import { checkMarkdownLinks, checkMarkdownLinksInFiles } from "../src/document-links/check.js";
 
 async function makeRoot(name: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), `cg-markdown-links-${name}-`));

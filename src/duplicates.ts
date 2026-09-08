@@ -2,7 +2,7 @@ import { normalizePath, toProjectDisplayPath } from "./util/paths.js";
 import type { ProjectIndex } from "./indexer/types.js";
 import * as duplicateUnits from "./duplicates/units.js";
 import * as duplicateScoring from "./duplicates/scoring.js";
-import * as duplicateUnitCache from "./duplicates/unitCache.js";
+import * as duplicateUnitCache from "./duplicates/unit-cache.js";
 import type {
   CollectedDuplicateUnits,
   DuplicateContextResult,
@@ -602,4 +602,4 @@ export type {
   DuplicatePreparedAnalysis,
   DuplicatePreparationOptions,
 } from "./duplicates/types.js";
-export { closeDuplicateUnitCacheDatabase } from "./duplicates/unitCache.js";
+export { closeDuplicateUnitCacheDatabase } from "./duplicates/unit-cache.js";

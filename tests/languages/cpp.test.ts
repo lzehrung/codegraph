@@ -7,7 +7,7 @@ import { listCandidateTestFiles } from "../../src/impact/context.js";
 import { normalizePath } from "../../src/util/paths.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
-import { expectUnicodeSymbolRangeIdentity } from "./unicodeSymbolRange.js";
+import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import { C_SUPPORT, CPP_SUPPORT, supportForFile } from "../../src/languages.js";
 import { parseSyntaxTree } from "@lzehrung/codegraph-native";
 

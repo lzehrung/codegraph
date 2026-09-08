@@ -7,7 +7,7 @@ import {
   ensureSqliteVersionedTableSchema,
   readSqliteSchemaVersion,
   writeSqliteSchemaVersion,
-} from "../src/util/sqliteSchema.js";
+} from "../src/util/sqlite-schema.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
 describe("SQLite common helpers", () => {

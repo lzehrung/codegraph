@@ -9,7 +9,7 @@ import { findImplementations } from "../../src/indexer/type-hierarchy.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
-import { expectUnicodeSymbolRangeIdentity } from "./unicodeSymbolRange.js";
+import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 
 const definition: LanguageTestDefinition = {
   id: "php",

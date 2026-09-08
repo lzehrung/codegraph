@@ -31,12 +31,12 @@ describe("source module structure", () => {
       "src/util/comments.ts",
       "src/util/git.ts",
       "src/util/paths.ts",
-      "src/util/projectFiles.ts",
+      "src/util/project-files.ts",
       "src/util/resolution.ts",
-      "src/util/resolutionCandidates.ts",
+      "src/util/resolution-candidates.ts",
       "src/util/specifiers.ts",
       "src/util/workspace.ts",
-      "src/util/packageInfo.ts",
+      "src/util/package-info.ts",
     ];
 
     for (const relativePath of expectedModules) {
@@ -44,7 +44,7 @@ describe("source module structure", () => {
     }
     expect(sourceLineCount("src/util.ts")).toBeLessThanOrEqual(80);
     expect(fs.readFileSync(path.join(repoRoot, "src/util/workspace.ts"), "utf8")).not.toContain("./resolution.js");
-    expect(fs.readFileSync(path.join(repoRoot, "src/util/resolutionCandidates.ts"), "utf8")).not.toContain(
+    expect(fs.readFileSync(path.join(repoRoot, "src/util/resolution-candidates.ts"), "utf8")).not.toContain(
       "./workspace.js",
     );
   });
@@ -70,7 +70,7 @@ describe("source module structure", () => {
       "src/cli/artifact.ts",
       "src/cli/doctor.ts",
       "src/cli/explain.ts",
-      "src/cli/graphDelta.ts",
+      "src/cli/graph-delta.ts",
       "src/cli/help.ts",
       "src/cli/mcp.ts",
       "src/cli/search.ts",

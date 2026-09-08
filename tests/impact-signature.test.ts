@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildProjectIndex, analyzeImpactFromDiff } from "../src/index.js";
-import { extractCallableSignature, extractCallsiteArguments } from "../src/impact/callCompatibility.js";
+import { extractCallableSignature, extractCallsiteArguments } from "../src/impact/call-compatibility.js";
 import type { CallCompatibilityHint, CompactImpactReport, ImpactReport } from "../src/impact/types.js";
 import fs from "node:fs";
 import fsp from "node:fs/promises";

@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { tool_findCallees, tool_findCallers } from "../src/agent-tools.js";
 import { createAgentSession } from "../src/agent/session.js";
-import { workspaceSymbolsInSnapshot } from "../src/agent/workspaceSymbols.js";
+import { workspaceSymbolsInSnapshot } from "../src/agent/workspace-symbols.js";
 import { countingSession } from "./helpers/agent.js";
 
 let root = "";

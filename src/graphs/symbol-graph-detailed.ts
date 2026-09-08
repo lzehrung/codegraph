@@ -1,12 +1,12 @@
-import { isUnsupportedParserInputError, prepareSourceInput } from "../languages/filePrep.js";
+import { isUnsupportedParserInputError, prepareSourceInput } from "../languages/file-prep.js";
 import type { SyntaxTreeLike } from "../languages/types.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
-import { ProjectedSyntaxTree } from "../native/projectedTree.js";
+import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import {
   assertNativeRequiredAvailable,
   getNativeSyntaxTreeExecution,
   isNativeRequiredUnavailableError,
-} from "../native/treeSitterNative.js";
+} from "../native/tree-sitter-native.js";
 import { resolveExport } from "../indexer/navigation-resolve.js";
 import { SymbolKind, type ProjectIndex, type ResolvedExport, type SymbolDef } from "../indexer/types.js";
 import type { FileId } from "../types.js";
@@ -20,10 +20,10 @@ import {
   emitMemberImplementationEdges,
   emitPythonDecoratorEdges,
   emitRustImplEdges,
-} from "./symbol-graph-detailed/edgePasses.js";
-import { buildImportAliasMaps } from "./symbol-graph-detailed/importAliases.js";
-import { createMemberChainResolver } from "./symbol-graph-detailed/memberChains.js";
-import { emitReceiverCallEdges, type ReceiverCallCandidate } from "./symbol-graph-detailed/receiverCalls.js";
+} from "./symbol-graph-detailed/edge-passes.js";
+import { buildImportAliasMaps } from "./symbol-graph-detailed/import-aliases.js";
+import { createMemberChainResolver } from "./symbol-graph-detailed/member-chains.js";
+import { emitReceiverCallEdges, type ReceiverCallCandidate } from "./symbol-graph-detailed/receiver-calls.js";
 
 type BuildDetailedSymbolGraphOptions = {
   scope?: "all" | "imported";

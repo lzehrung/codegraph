@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { NativeBinding, NativeQueryResults, NativeSyntaxTree } from "../src/native/contracts.js";
-import { createNativeExtractor, REQUIRED_NATIVE_EXTRACTION_VERSION } from "../src/worker/nativeExtractWorker.js";
+import { createNativeExtractor, REQUIRED_NATIVE_EXTRACTION_VERSION } from "../src/worker/native-extract-worker.js";
 import { createStubNativeSyntaxTree } from "./helpers/native.js";
 
 const results: NativeQueryResults = {

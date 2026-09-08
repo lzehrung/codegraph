@@ -17,7 +17,7 @@ import { boundReviewReportForTransport } from "../src/review/types.js";
 import { summarizeChangedFiles } from "../src/review/summaries.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import * as impactMap from "../src/impact/map.js";
-import { collectDuplicateLeadSummary } from "../src/duplicatesLeads.js";
+import { collectDuplicateLeadSummary } from "../src/duplicates-leads.js";
 import { findDuplicates, findDuplicatesWithPreparedAnalysis, prepareDuplicateAnalysis } from "../src/duplicates.js";
 import { runGit } from "./helpers/git.js";
 

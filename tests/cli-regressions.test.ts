@@ -10,7 +10,7 @@ import packageJson from "../package.json" with { type: "json" };
 import { runGit as git } from "./helpers/git.js";
 import { captureCli, runCliOrThrow, runTsxScriptOrThrow } from "./helpers/cli.js";
 import { copyFixtureSubset, createTwoCommitCycleProject, readOnlySamplePath } from "./helpers/filesystem.js";
-import { decompactFileGraph, type CompactFileGraphPayload } from "./helpers/compactGraph.js";
+import { decompactFileGraph, type CompactFileGraphPayload } from "./helpers/compact-graph.js";
 import { cacheRoot } from "../src/indexer/build-cache/location.js";
 
 const sourceCliPath = path.resolve(process.cwd(), "src", "cli.ts");

@@ -1,8 +1,8 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { findCalleesWithSession, findCallersWithSession } from "../src/agent/callHierarchy.js";
+import { findCalleesWithSession, findCallersWithSession } from "../src/agent/call-hierarchy.js";
 import { createAgentSession } from "../src/agent/session.js";
-import { workspaceSymbolsInSnapshot } from "../src/agent/workspaceSymbols.js";
+import { workspaceSymbolsInSnapshot } from "../src/agent/workspace-symbols.js";
 import type { SymbolEdge } from "../src/graphs/symbol-graph.js";
 import { countingSession } from "./helpers/agent.js";
 

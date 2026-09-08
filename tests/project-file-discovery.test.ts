@@ -12,8 +12,8 @@ import {
   listProjectFilesWithGitCandidates,
   translateGlobRootIgnoreGlobsForScanRoot,
   type GitCandidateSet,
-} from "../src/util/projectFiles.js";
-import { parseDotnetName, parseGoModuleName, parsePomName, parseTomlName } from "../src/util/projectFiles/parsers.js";
+} from "../src/util/project-files.js";
+import { parseDotnetName, parseGoModuleName, parsePomName, parseTomlName } from "../src/util/project-files/parsers.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
 import { runGit as git } from "./helpers/git.js";
 import { listGitIgnoreFiles, listGitSubmoduleDirectories, setGitExecutableForTests } from "../src/util/git.js";

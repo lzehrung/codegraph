@@ -516,8 +516,8 @@ describe("package metadata", () => {
     };
     expect(barrelImportPatternFor("src/sub/module.ts").test('import { value } from "../index.js";')).toBe(true);
     expect(barrelImportPatternFor("src/sub/module.ts").test('import { value } from "./index.js";')).toBe(false);
-    expect(barrelImportPatternFor("src/cli/commandTable.ts").test('await import("./index.js");')).toBe(false);
-    expect(barrelImportPatternFor("src/cli/commandTable.ts").test('await import("../index.js");')).toBe(true);
+    expect(barrelImportPatternFor("src/cli/command-table.ts").test('await import("./index.js");')).toBe(false);
+    expect(barrelImportPatternFor("src/cli/command-table.ts").test('await import("../index.js");')).toBe(true);
     const offenders = listFilesRecursive("src", ".ts").filter((relativePath) => {
       if (relativePath === "src/index.ts") {
         return false;

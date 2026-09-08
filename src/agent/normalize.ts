@@ -6,8 +6,8 @@ import {
   toProjectDisplayPath,
   toProjectRelativePath,
 } from "../util/paths.js";
-import { parseSourceLocationInput } from "../util/sourceLocation.js";
-import { type AgentFollowUp, toolFollowUp } from "./followUps.js";
+import { parseSourceLocationInput } from "../util/source-location.js";
+import { type AgentFollowUp, toolFollowUp } from "./follow-ups.js";
 
 export type AgentFileSnapshot = {
   root: string;

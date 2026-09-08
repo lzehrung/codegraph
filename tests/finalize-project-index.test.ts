@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ProjectFileInfo } from "../src/util/projectFiles.js";
+import type { ProjectFileInfo } from "../src/util/project-files.js";
 
 const mocks = vi.hoisted(() => ({
   discoverProjectFiles: vi.fn(async () => []),
 }));
 
-vi.mock("../src/util/projectFiles.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/util/projectFiles.js")>();
+vi.mock("../src/util/project-files.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/util/project-files.js")>();
   return {
     ...actual,
     discoverProjectFiles: mocks.discoverProjectFiles,

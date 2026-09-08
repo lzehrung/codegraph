@@ -9,13 +9,13 @@ import {
   findBalancedAngleBrackets,
   findBalancedBraces,
   findBalancedParentheses,
-} from "./call-compatibility/textScanner.js";
+} from "./call-compatibility/text-scanner.js";
 import type { Range } from "../types.js";
 import { listCandidateTestFiles } from "./context.js";
 import { collectHunkLineText, collectRemovedLines } from "./hunks.js";
 import { normalizeImpactFilePath } from "./path.js";
 import { collectImpactSuggestions } from "./suggestions.js";
-import { compileTestPatterns, createIndexTestFileMatcher } from "./testPatterns.js";
+import { compileTestPatterns, createIndexTestFileMatcher } from "./test-patterns.js";
 import type { ChangedSymbol, FileChange, ImpactOptions, ImpactSuggestion } from "./types.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 

@@ -5,8 +5,8 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import { stripHashInlineComment } from "./comments.js";
-import { resolvePackageExportTargets, type PackageExportConditionMode } from "./packageExports.js";
-import { listResolutionCandidates } from "./resolutionCandidates.js";
+import { resolvePackageExportTargets, type PackageExportConditionMode } from "./package-exports.js";
+import { listResolutionCandidates } from "./resolution-candidates.js";
 
 async function pathMatchesCachedStat(
   cache: Map<string, boolean>,

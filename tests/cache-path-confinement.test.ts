@@ -22,9 +22,9 @@ import {
   tryLoadProjectIndexSnapshot,
 } from "../src/indexer/build-cache/project-snapshot.js";
 import { cacheRoot, resolveCacheLocation } from "../src/indexer/build-cache/location.js";
-import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
+import { isNativeTreeSitterAvailable } from "../src/native/tree-sitter-native.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
-import type { NativeRuntimeMode } from "../src/native/treeSitterNative.js";
+import type { NativeRuntimeMode } from "../src/native/tree-sitter-native.js";
 import { SymbolKind } from "../src/indexer/types.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;

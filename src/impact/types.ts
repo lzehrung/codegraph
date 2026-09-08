@@ -1,8 +1,8 @@
-import type { MarkdownLinkCheckResult } from "../documentLinks/check.js";
-import type { AnalysisSummary } from "../analysisSummary.js";
+import type { MarkdownLinkCheckResult } from "../document-links/check.js";
+import type { AnalysisSummary } from "../analysis-summary.js";
 import type { FileId, Range } from "../types.js";
 import { type SymbolHandle, type SymbolDef } from "../indexer/types.js";
-import { type ProjectFileInfo } from "../util/projectFiles.js";
+import { type ProjectFileInfo } from "../util/project-files.js";
 
 // Diff parsing types
 export type Hunk = {

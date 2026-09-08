@@ -4,7 +4,7 @@ import {
   ECMASCRIPT_CONTROL_SPLIT_POINTS,
   ECMASCRIPT_CORE_FUNCTION_BLOCKS,
   ECMASCRIPT_MODULE_VAR_BLOCKS,
-} from "./jsFamily.js";
+} from "./js-family.js";
 
 function normalizeTypeScriptNativeQuery(kind: string, query: string): string {
   let normalized = query.replace(

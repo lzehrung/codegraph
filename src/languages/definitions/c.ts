@@ -10,7 +10,7 @@ import {
   isInAncestorDeclarator,
   isInField,
   isInParameterList,
-} from "./cFamily.js";
+} from "./c-family.js";
 
 export const C_DEF = createCFamilyLanguageDefinition({
   id: "c",

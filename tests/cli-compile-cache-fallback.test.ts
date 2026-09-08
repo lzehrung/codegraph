@@ -15,7 +15,7 @@ describe("enableCliCompileCache failure and fallback paths", () => {
 
   it("returns null when enableCompileCache is unavailable", async () => {
     Reflect.deleteProperty(module, "enableCompileCache");
-    const { enableCliCompileCache } = await import("../src/cli/compileCache.js");
+    const { enableCliCompileCache } = await import("../src/cli/compile-cache.js");
     const result = enableCliCompileCache({ NODE_COMPILE_CACHE: path.join(os.tmpdir(), "cc-missing") });
     expect(result).toBeNull();
   });
@@ -31,7 +31,7 @@ describe("enableCliCompileCache failure and fallback paths", () => {
     }) as typeof module.enableCompileCache;
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cg-cc-fallback-"));
     try {
-      const { enableCliCompileCache } = await import("../src/cli/compileCache.js");
+      const { enableCliCompileCache } = await import("../src/cli/compile-cache.js");
       const result = enableCliCompileCache({ NODE_COMPILE_CACHE: dir });
       expect(calls).toHaveLength(2);
       expect(calls[0]).toMatchObject({ directory: dir, portable: true });
@@ -48,7 +48,7 @@ describe("enableCliCompileCache failure and fallback paths", () => {
     vi.spyOn(fs, "mkdirSync").mockImplementation(() => {
       throw new Error("mkdir failed");
     });
-    const { enableCliCompileCache } = await import("../src/cli/compileCache.js");
+    const { enableCliCompileCache } = await import("../src/cli/compile-cache.js");
     const result = enableCliCompileCache({}, path.join(os.tmpdir(), "cg-cc-home"), "linux");
     expect(result).toBeNull();
     expect(enable).not.toHaveBeenCalled();

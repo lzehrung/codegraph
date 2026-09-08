@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { prepareParserInput, UnsupportedParserInputError } from "../src/languages/filePrep.js";
+import { prepareParserInput, UnsupportedParserInputError } from "../src/languages/file-prep.js";
 
 describe("prepareParserInput", () => {
   afterEach(() => {

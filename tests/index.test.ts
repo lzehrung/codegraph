@@ -13,7 +13,7 @@ import {
   resetFileIdentityCaseSensitivityForTests,
   setFileIdentityCaseInsensitive,
 } from "../src/util/paths.js";
-import { setAfterConfinedPathVerifiedForTests } from "../src/util/confinedFile.js";
+import { setAfterConfinedPathVerifiedForTests } from "../src/util/confined-file.js";
 import { runGit as git } from "./helpers/git.js";
 import { createTestIndex, expectFileInIndex, expectModuleCount } from "./test-utils.js";
 

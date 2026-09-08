@@ -5,7 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
-import { resolveReadableFile } from "../src/util/confinedFile.js";
+import { resolveReadableFile } from "../src/util/confined-file.js";
 
 const execFileAsync = promisify(execFile);
 

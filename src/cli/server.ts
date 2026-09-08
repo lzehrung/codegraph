@@ -561,7 +561,7 @@ async function spawnServerProcess(
     }
   }
 
-  const lifecycleHealth = await import("../mcp/lifecycleHealth.js");
+  const lifecycleHealth = await import("../mcp/lifecycle-health.js");
   const startupDiagnostics = await createServerStartupDiagnostics(root);
   try {
     const child = spawn(process.execPath, args, {
@@ -775,10 +775,10 @@ async function requestServerHealth(
     return undefined;
   }
 
-  let lifecycleHealth: typeof import("../mcp/lifecycleHealth.js") | undefined;
+  let lifecycleHealth: typeof import("../mcp/lifecycle-health.js") | undefined;
   let challenge: string | undefined;
   if (lifecycleCredential) {
-    lifecycleHealth = await import("../mcp/lifecycleHealth.js");
+    lifecycleHealth = await import("../mcp/lifecycle-health.js");
     challenge = lifecycleHealth.createMcpLifecycleHealthChallenge();
   }
   const requestOptions: RequestInit = { signal: AbortSignal.timeout(timeoutMs) };
@@ -866,7 +866,7 @@ async function createServerLifecycleCredential(root: string): Promise<ServerLife
   const credentialPath = await resolveServerLifecycleCredentialPath(root, id, true);
   await assertRegularServerStateFile(credentialPath);
 
-  const lifecycleHealth = await import("../mcp/lifecycleHealth.js");
+  const lifecycleHealth = await import("../mcp/lifecycle-health.js");
   const credential = lifecycleHealth.createMcpLifecycleHealthToken();
   const temporaryPath = credentialPath + "." + process.pid + "." + Date.now() + ".tmp";
   try {
@@ -899,7 +899,7 @@ async function readServerLifecycleCredential(
     throw error;
   }
 
-  const lifecycleHealth = await import("../mcp/lifecycleHealth.js");
+  const lifecycleHealth = await import("../mcp/lifecycle-health.js");
   const env: NodeJS.ProcessEnv = {};
   env[lifecycleHealth.MCP_LIFECYCLE_HEALTH_TOKEN_ENV] = raw.trim();
   const token = lifecycleHealth.readMcpLifecycleHealthToken(env);
@@ -926,7 +926,7 @@ async function resolveServerLifecycleCredentialPath(
   credentialId: string,
   createDirectory = false,
 ): Promise<string> {
-  const compileCache = await import("./compileCache.js");
+  const compileCache = await import("./compile-cache.js");
   const crypto = await import("node:crypto");
   const rootId = crypto.createHash("sha256").update(normalizeServerRoot(root)).digest("hex");
   const credentialDirectory = path.resolve(compileCache.resolveCodegraphUserStateRoot(), "server-lifecycle-v1", rootId);

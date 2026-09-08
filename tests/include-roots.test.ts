@@ -3,7 +3,7 @@ import {
   isPathUnderIncludeRoots,
   normalizeIncludeRootsRelative,
   restrictGraphToIncludeRoots,
-} from "../src/util/includeRoots.js";
+} from "../src/util/include-roots.js";
 import type { Graph } from "../src/types.js";
 
 describe("includeRoots helpers", () => {

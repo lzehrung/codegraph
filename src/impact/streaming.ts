@@ -4,7 +4,7 @@
  */
 
 import { type ProjectIndex, type BuildReport } from "../indexer/types.js";
-import { summarizeAnalysis } from "../analysisSummary.js";
+import { summarizeAnalysis } from "../analysis-summary.js";
 import {
   IMPACT_SCHEMA_VERSION,
   type ImpactOptions,
@@ -15,7 +15,7 @@ import {
 } from "./types.js";
 import { getDiff } from "./providers/base.js";
 import { analyzeImpact } from "./analyzer.js";
-import { discoverProjectFiles, type ProjectFileInfo } from "../util/projectFiles.js";
+import { discoverProjectFiles, type ProjectFileInfo } from "../util/project-files.js";
 import { errorMessage } from "../util/errors.js";
 import { buildImpactReport, newFileRangeForHunk } from "./report.js";
 import {

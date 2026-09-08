@@ -11,15 +11,15 @@ import {
   getNativeTreeSitterLoadError,
   getNativeTreeSitterSupportedLanguageIds,
   isNativeTreeSitterAvailable,
-} from "../native/treeSitterNative.js";
+} from "../native/tree-sitter-native.js";
 import { cacheRoot } from "../indexer/build-cache/location.js";
-import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
+import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import type { Graph } from "../types.js";
-import { restrictGraphToIncludeRoots } from "../util/includeRoots.js";
+import { restrictGraphToIncludeRoots } from "../util/include-roots.js";
 import { supportForFile } from "../languages.js";
 import type { LanguageExtensionMap } from "../languages.js";
 import { normalizePath, toProjectDisplayPath } from "../util/paths.js";
-import type { ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+import type { ProjectFileDiscoveryOptions } from "../util/project-files.js";
 import { parseCacheModeOption, parsePositiveIntegerOption } from "./options.js";
 import { writeCliOutput } from "./pretty.js";
 import type { CommandReport } from "./context.js";

@@ -10,7 +10,7 @@ import type {
 } from "./types.js";
 import { fileIdentityKey, normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { findReferences, resolveExport, resolveImported } from "./navigation.js";
-import { parseSourceLocationInput } from "../util/sourceLocation.js";
+import { parseSourceLocationInput } from "../util/source-location.js";
 
 export function symbolId(def: SymbolDef): SymbolHandle {
   const index = def?.range?.start?.index ?? 0;

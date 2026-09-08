@@ -15,7 +15,7 @@ import type {
 } from "./contracts.js";
 import { getCachedNormalizedQuery, normalizeNativeQueryForSupport } from "./queries.js";
 import { loadBinding, resolveNativeBindingState, throwIfNativeRequiredUnavailable } from "./runtime.js";
-import { isColumnarSyntaxTree, nativeShapeMismatchMessage, REQUIRED_NATIVE_EXTRACTION_VERSION } from "./treeShape.js";
+import { isColumnarSyntaxTree, nativeShapeMismatchMessage, REQUIRED_NATIVE_EXTRACTION_VERSION } from "./tree-shape.js";
 
 export function isNativeDuplicateTokenizationAvailable(mode?: NativeRuntimeMode): boolean {
   const state = resolveNativeBindingState(mode);

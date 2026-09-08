@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { supportById } from "../src/languages.js";
-import { getNativeQueryMetadataForSupport, normalizeNativeQueryForSupport } from "../src/native/treeSitterNative.js";
+import { getNativeQueryMetadataForSupport, normalizeNativeQueryForSupport } from "../src/native/tree-sitter-native.js";
 
 describe("native query normalization", () => {
   it("keeps queries unchanged for languages without native compatibility hooks", () => {

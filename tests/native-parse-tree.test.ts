@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { supportById } from "../src/languages.js";
-import { getNativeSyntaxTreeExecution, isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
-import { ProjectedSyntaxTree } from "../src/native/projectedTree.js";
+import { getNativeSyntaxTreeExecution, isNativeTreeSitterAvailable } from "../src/native/tree-sitter-native.js";
+import { ProjectedSyntaxTree } from "../src/native/projected-tree.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
 

@@ -6,9 +6,9 @@ import {
   extractHtmlAttributeSpecifiers,
   extractHtmlInlineScriptSpecifiers,
   extractHtmlStyleSpecifiers,
-} from "../src/documentLinks.js";
+} from "../src/document-links.js";
 import { collectGraph } from "../src/index.js";
-import { extractMarkdownLinkOccurrences } from "../src/documentLinks/markdown.js";
+import { extractMarkdownLinkOccurrences } from "../src/document-links/markdown.js";
 
 describe("document link graph extraction", () => {
   it("ignores hash-only anchors and markdown image links", async () => {

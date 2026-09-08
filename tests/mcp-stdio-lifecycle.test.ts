@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { awaitStdioMcpLifecycle } from "../src/mcp/stdioLifecycle.js";
+import { awaitStdioMcpLifecycle } from "../src/mcp/stdio-lifecycle.js";
 
 function createFakeStdin(): Readable & EventEmitter {
   const stdin = new Readable({

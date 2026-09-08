@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Edge, FileId } from "../src/types.js";
 import { buildSymbolGraphDetailed } from "../src/graphs/symbol-graph-detailed.js";
 import { calculateSeverity, calculateTransitiveSeverity, normalizeSeverityWeights } from "../src/impact/severity.js";
-import { buildCallerRangeIndex, findCallerSymbolId } from "../src/impact/callCompatibility.js";
+import { buildCallerRangeIndex, findCallerSymbolId } from "../src/impact/call-compatibility.js";
 import { analyzeTransitiveImpact } from "../src/impact/transitive.js";
 import type { ChangedSymbol, ImpactItem } from "../src/impact/types.js";
 import type { Reference } from "../src/indexer/types.js";

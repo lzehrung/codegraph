@@ -2,16 +2,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { resolveNativeWorkerPath } from "../src/worker/nativeWorkerPool.js";
+import { resolveNativeWorkerPath } from "../src/worker/native-worker-pool.js";
 import { __resetNativeTreeSitterBindingForTests, loadBinding } from "../src/native/runtime.js";
-import { loadProductionBinding } from "../src/worker/nativeExtractWorker.js";
+import { loadProductionBinding } from "../src/worker/native-extract-worker.js";
 
 describe("native worker path resolution", () => {
   it("does not probe dist workers under the caller cwd", () => {
     const originalCwd = process.cwd();
     const callerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-worker-cwd-"));
     process.chdir(callerRoot);
-    const cwdWorkerPath = path.resolve(callerRoot, "dist", "worker", "nativeExtractWorker.js");
+    const cwdWorkerPath = path.resolve(callerRoot, "dist", "worker", "native-extract-worker.js");
     const existingPaths = new Set<string>();
     const existsSync = vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
       const filePath = typeof candidate === "string" ? candidate : String(candidate);

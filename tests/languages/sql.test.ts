@@ -11,7 +11,7 @@ import {
   supportForFile,
 } from "../../src/index.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
-import { LANG_CONFIGS } from "../../src/bootstrap/treeSitterLanguages.js";
+import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
 
 it("registers SQL files as language support", () => {
   expect(supportForFile("schema.sql")?.id).toBe("sql");
@@ -136,9 +136,9 @@ describe("native-only SQL support", () => {
     });
 
     vi.resetModules();
-    vi.doMock("../../src/native/treeSitterNative.js", async () => {
-      const actual = await vi.importActual<typeof import("../../src/native/treeSitterNative.js")>(
-        "../../src/native/treeSitterNative.js",
+    vi.doMock("../../src/native/tree-sitter-native.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/native/tree-sitter-native.js")>(
+        "../../src/native/tree-sitter-native.js",
       );
       return {
         ...actual,
@@ -165,7 +165,7 @@ describe("native-only SQL support", () => {
       );
       expect(parseSpy).not.toHaveBeenCalled();
     } finally {
-      vi.doUnmock("../../src/native/treeSitterNative.js");
+      vi.doUnmock("../../src/native/tree-sitter-native.js");
       vi.resetModules();
       await fsp.rm(root, { recursive: true, force: true });
     }

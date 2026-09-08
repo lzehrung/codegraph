@@ -5,8 +5,8 @@ import { isSymbolHandleExported } from "../indexer/declarations.js";
 import { findReferences } from "../indexer/navigation.js";
 import { type ExportEntry, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../indexer/types.js";
 import { symbolId } from "../indexer/symbols.js";
-import { attachCallCompatibilityHints } from "../impact/callCompatibility.js";
-import { computeMemberResolutionCoverage } from "../impact/memberResolutionCoverage.js";
+import { attachCallCompatibilityHints } from "../impact/call-compatibility.js";
+import { computeMemberResolutionCoverage } from "../impact/member-resolution-coverage.js";
 import { collectChangedLines, locateChangedSymbolsWithLines, mapChangedLinesToSymbols } from "../impact/map.js";
 import type { CallCompatibilityHint, ChangedSymbol, FileChange, Hunk } from "../impact/types.js";
 import type { FileId, Range } from "../types.js";
@@ -17,7 +17,7 @@ import { fileIdentityKey, toProjectDisplayPath } from "../util/paths.js";
 import type { DeletedFileSnapshot } from "./deleted.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { isRiskRelevantSymbolMappingFile } from "./risk.js";
-import { createReferenceLookupCache } from "../impact/referenceCache.js";
+import { createReferenceLookupCache } from "../impact/reference-cache.js";
 import type {
   ReviewChangedFileSummaries,
   ReviewDiagnostics,

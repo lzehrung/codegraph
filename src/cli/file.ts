@@ -5,11 +5,11 @@ import {
   MAX_FILE_VIEW_LINES,
   formatAgentFileViewResponse,
   getCodegraphFileView,
-} from "../agent/fileView.js";
+} from "../agent/file-view.js";
 import type { CliAgentCommandContext } from "./context.js";
 import { errorMessage } from "../util/errors.js";
 import { FILE_HELP_TEXT } from "./help.js";
-import { parseSourceLocationInput } from "../util/sourceLocation.js";
+import { parseSourceLocationInput } from "../util/source-location.js";
 import { parseBoundedIntegerOption, parsePositiveIntegerOption } from "./options.js";
 
 export type FileCommandContext = CliAgentCommandContext;

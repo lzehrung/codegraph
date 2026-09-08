@@ -1,5 +1,5 @@
 import { builtinModules } from "node:module";
-import { isGraphOnlyLanguage } from "../documentLinks.js";
+import { isGraphOnlyLanguage } from "../document-links.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { FileId, Graph } from "../types.js";
 import {

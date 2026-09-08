@@ -2,7 +2,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkMarkdownLinks } from "../src/documentLinks/check.js";
+import { checkMarkdownLinks } from "../src/document-links/check.js";
 import { captureCli } from "./helpers/cli.js";
 
 async function createMarkdownProject(files: Readonly<Record<string, string>>): Promise<string> {

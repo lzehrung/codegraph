@@ -7,8 +7,8 @@ import { extractJsTsDynamicSpecifiers, extractJsTsSpecifiers, stripJsLikeComment
 import {
   getNativeTreeSitterSupportedLanguageIds,
   isNativeTreeSitterAvailable,
-} from "../src/native/treeSitterNative.js";
-import * as nativeRuntime from "../src/native/treeSitterNative.js";
+} from "../src/native/tree-sitter-native.js";
+import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {

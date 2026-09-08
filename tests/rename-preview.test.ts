@@ -1,13 +1,13 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { previewRenameInSnapshot, previewRenameWithSession } from "../src/agent/renamePreview.js";
+import { previewRenameInSnapshot, previewRenameWithSession } from "../src/agent/rename-preview.js";
 import { createAgentSession, type AgentProjectSnapshot } from "../src/agent/session.js";
-import { workspaceSymbolsInSnapshot, workspaceSymbolsWithSession } from "../src/agent/workspaceSymbols.js";
+import { workspaceSymbolsInSnapshot, workspaceSymbolsWithSession } from "../src/agent/workspace-symbols.js";
 import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { isSymlinkUnavailable, mkTmpDir } from "./helpers/filesystem.js";
 import { fileIdentityKey } from "../src/util/paths.js";
-import { setAfterConfinedPathVerifiedForTests } from "../src/util/confinedFile.js";
+import { setAfterConfinedPathVerifiedForTests } from "../src/util/confined-file.js";
 
 async function renameFixture() {
   const root = await mkTmpDir("cg-rename-preview-");

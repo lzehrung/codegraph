@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import type { AnalysisSummary } from "../analysisSummary.js";
+import type { AnalysisSummary } from "../analysis-summary.js";
 import {
   findDuplicateContext,
   type DuplicateGroup,
@@ -30,7 +30,7 @@ import {
   AGENT_EXPLAIN_REVIEW_TASK_LIMIT,
 } from "../presentation/bounds.js";
 import { buildReviewReport } from "../review.js";
-import { extractSqlFactsFromSource, sqlObjectBaseName } from "../sql/extractFacts.js";
+import { extractSqlFactsFromSource, sqlObjectBaseName } from "../sql/extract-facts.js";
 import type { SqlStatementFact } from "../sql/types.js";
 import type { Range } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
@@ -55,8 +55,8 @@ import {
   resolveAgentSnapshotFile,
 } from "./normalize.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
-import { buildSymbolLookup, type SymbolLookup } from "./symbolLookup.js";
-import { formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./followUps.js";
+import { buildSymbolLookup, type SymbolLookup } from "./symbol-lookup.js";
+import { formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./follow-ups.js";
 
 export type AgentExplainTarget = {
   root: string;

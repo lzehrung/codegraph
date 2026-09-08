@@ -1,6 +1,6 @@
-import { renderCliCommandList } from "./commandCatalog.js";
+import { renderCliCommandList } from "./command-catalog.js";
 
-export { isKnownCliCommand } from "./commandCatalog.js";
+export { isKnownCliCommand } from "./command-catalog.js";
 
 export const CLI_TASK_HELP_TEXT = `codegraph - Ask structural questions about a repository
 

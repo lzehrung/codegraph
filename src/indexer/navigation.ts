@@ -36,7 +36,7 @@ import {
   isMemberAccessNode,
   isMemberObjectIdentifier,
   isMemberReferencePropertyIdentifier,
-} from "../util/memberAccess.js";
+} from "../util/member-access.js";
 import {
   type FindReferencesResult,
   type GoToRequest,

@@ -91,7 +91,7 @@ Public-stable APIs (documented integration surface):
 - Session presets (`src/presets.ts`): `SESSION_PRESETS`, `getSessionPreset(name, root)`,
   `mergePreset(base, override)` - typed preset maps for `createCodeReviewSession`
   options; not a CLI surface.
-- Partial-result helpers (`src/util/partialResults.ts`): `success`, `partial`,
+- Partial-result helpers (`src/util/partial-results.ts`): `success`, `partial`,
   `failed`, `combinePartialResults`, `mapPartialResult`, `filterErrorsBySeverity`
   (plus `withPartialResults` / `summarizePartialResult`) for returning usable data
   with recoverable errors from library callers.
@@ -582,8 +582,8 @@ Chunk IDs are content-addressed SHA-256 values scoped by language and file path.
 See the test suites for concrete examples:
 
 - `tests/languages/*.test.ts`
-- `tests/chunkFile.behavior.test.ts`
-- `tests/languages/chunkSFC.test.ts`
+- `tests/chunk-file.behavior.test.ts`
+- `tests/languages/chunk-sfc.test.ts`
 - `tests/samples/chunking/integration-example.test.ts`
 
 The integration examples demonstrate semantic chunking with type-based filtering, text-file chunking for configuration processing, intelligent splitting of large blocks, and metadata useful for embeddings or retrieval pipelines.

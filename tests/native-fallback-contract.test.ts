@@ -15,16 +15,16 @@ import {
   type ModuleIndex,
   type ProjectIndex,
 } from "../src/index.js";
-import { prepareParserInput } from "../src/languages/filePrep.js";
+import { prepareParserInput } from "../src/languages/file-prep.js";
 import {
   attemptParsePreparedFileContext,
   parsePreparedFileContext,
   prepareFileForIndexing,
 } from "../src/indexer/parse-context.js";
-import * as nativeRuntime from "../src/native/treeSitterNative.js";
+import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 import { supportForFile } from "../src/languages.js";
-import type { NativeCapture, NativeQueryResults } from "../src/native/treeSitterNative.js";
-import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../src/worker/nativeExtractWorker.js";
+import type { NativeCapture, NativeQueryResults } from "../src/native/tree-sitter-native.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../src/worker/native-extract-worker.js";
 import { simplifyNativeTestModuleIndex } from "./helpers/native.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 

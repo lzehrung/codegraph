@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import type { PathLike } from "node:fs";
 import type { DatabaseSync, StatementColumnMetadata, StatementResultingChanges, StatementSync } from "node:sqlite";
 import { errorMessage } from "./util/errors.js";
-import { markWindowsProcessDrainRequired } from "./util/windowsProcessDrain.js";
+import { markWindowsProcessDrainRequired } from "./util/windows-process-drain.js";
 
 export type SqliteValue = null | number | bigint | string | NodeJS.ArrayBufferView;
 export type SqliteRow = Record<string, unknown>;

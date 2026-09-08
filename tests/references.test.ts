@@ -5,7 +5,7 @@ import fsp from "node:fs/promises";
 import * as indexer from "../src/indexer.js";
 import * as scopeModule from "../src/indexer/scope.js";
 import { getCachedReferenceCandidateFiles } from "../src/indexer/navigation-references.js";
-import { createReferenceLookupCache } from "../src/impact/referenceCache.js";
+import { createReferenceLookupCache } from "../src/impact/reference-cache.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import {
   createTestIndex,

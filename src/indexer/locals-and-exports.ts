@@ -1,8 +1,8 @@
 import type { LogLevel } from "../logging.js";
-import { isGraphOnlyLanguage } from "../documentLinks.js";
-import { capturesByName, capturesNamed, rangeFromNativeCapture } from "../native/queryResults.js";
-import { buildByteToStringIndexMap, type ByteToStringIndexMap } from "../native/byteIndex.js";
-import { ProjectedSyntaxTree } from "../native/projectedTree.js";
+import { isGraphOnlyLanguage } from "../document-links.js";
+import { capturesByName, capturesNamed, rangeFromNativeCapture } from "../native/query-results.js";
+import { buildByteToStringIndexMap, type ByteToStringIndexMap } from "../native/byte-index.js";
+import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import {
   assertNativeRequiredAvailable,
   getNativeSyntaxTreeExecution,
@@ -10,7 +10,7 @@ import {
   type NativeCapture,
   type NativeQueryResults,
   type NativeRuntimeMode,
-} from "../native/treeSitterNative.js";
+} from "../native/tree-sitter-native.js";
 import { maskJsLikeCommentsAndStrings } from "../util/comments.js";
 import { sliceText, toRange, unquote } from "../util/ast.js";
 import { bindingKindToSymbolKind } from "./declarations.js";

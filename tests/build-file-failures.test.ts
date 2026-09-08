@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildProjectIndex } from "../src/indexer/build-index.js";
-import * as filePrep from "../src/languages/filePrep.js";
+import * as filePrep from "../src/languages/file-prep.js";
 
 describe("default build file failures", () => {
   let root: string | undefined;

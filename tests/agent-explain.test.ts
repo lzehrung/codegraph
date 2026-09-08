@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { explainCodegraphTarget } from "../src/agent/explain.js";
-import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
+import { formatAgentFollowUpAsCli } from "../src/agent/follow-ups.js";
 import { searchCodegraph } from "../src/agent/search.js";
 import { runGit } from "./helpers/git.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";

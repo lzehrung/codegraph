@@ -5,11 +5,11 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { NATIVE_WORKER_AUTO_FILE_THRESHOLD } from "../src/indexer/build-workers.js";
-import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
+import { isNativeTreeSitterAvailable } from "../src/native/tree-sitter-native.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bundledCli = path.join(rootDir, "dist", "bin", "cli.js");
-const bundledRawQueryWorker = path.join(rootDir, "dist", "bin", "rawQueryWorker.js");
+const bundledRawQueryWorker = path.join(rootDir, "dist", "bin", "raw-query-worker.js");
 const unbundledCli = path.join(rootDir, "dist", "cli.js");
 
 function run(entry: string, args: string[], cwd: string = rootDir, env: NodeJS.ProcessEnv = process.env) {
@@ -81,12 +81,12 @@ describe("bundled CLI entry", () => {
       .readdirSync(binDir)
       .filter((name) => name.endsWith(".js"))
       .sort();
-    // Bundle emits exactly three self-contained entrypoints (cli + queryIndexWorker + rawQueryWorker).
-    expect(outputs).toEqual(["cli.js", "queryIndexWorker.js", "rawQueryWorker.js"]);
+    // Bundle emits exactly three self-contained entrypoints (cli + query-index-worker + raw-query-worker).
+    expect(outputs).toEqual(["cli.js", "query-index-worker.js", "raw-query-worker.js"]);
     const entry = fs.readFileSync(bundledCli, "utf8");
-    expect(entry).toContain("queryIndexWorker.js");
-    expect(fs.existsSync(path.join(binDir, "queryIndexWorker.js"))).toBe(true);
-    expect(fs.existsSync(path.join(binDir, "rawQueryWorker.js"))).toBe(true);
+    expect(entry).toContain("query-index-worker.js");
+    expect(fs.existsSync(path.join(binDir, "query-index-worker.js"))).toBe(true);
+    expect(fs.existsSync(path.join(binDir, "raw-query-worker.js"))).toBe(true);
   });
 
   it("keeps a leading shebang so package managers can exec the bin directly", () => {
@@ -96,11 +96,11 @@ describe("bundled CLI entry", () => {
     expect(firstLine).toBe("#!/usr/bin/env node");
   });
   // Dist must exist before worker-pool assertions are trusted: resolveNativeWorkerPath falls
-  // back to dist/worker/nativeExtractWorker.js, and a bare vitest run does not build it.
+  // back to dist/worker/native-extract-worker.js, and a bare vitest run does not build it.
   it.runIf(isNativeTreeSitterAvailable() && fs.existsSync(bundledCli))(
     "starts a Piscina pool from the built bundle and submits native extract work",
     () => {
-      expect(fs.existsSync(path.join(rootDir, "dist", "worker", "nativeExtractWorker.js"))).toBe(true);
+      expect(fs.existsSync(path.join(rootDir, "dist", "worker", "native-extract-worker.js"))).toBe(true);
 
       const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-bundle-workers-"));
       const reportFile = path.join(fixtureRoot, "report.json");
