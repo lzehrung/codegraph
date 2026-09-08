@@ -1,5 +1,5 @@
 import { isUnsupportedParserInputError, prepareSourceInput } from "../languages/file-prep.js";
-import type { SyntaxTreeLike } from "../languages/types.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import {
@@ -8,6 +8,7 @@ import {
   isNativeRequiredUnavailableError,
 } from "../native/tree-sitter-native.js";
 import { resolveExport } from "../indexer/navigation-resolve.js";
+import { findClosestScopeBinding, getOrBuildScopeIndex } from "../indexer/navigation-local.js";
 import { SymbolKind, type ProjectIndex, type ResolvedExport, type SymbolDef } from "../indexer/types.js";
 import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
@@ -213,10 +214,26 @@ export async function buildSymbolGraphDetailed(
       const { memberExpressionType, optionalMemberTypes, propertyIdentifierTypes, resolveMemberChainTarget } =
         memberResolver;
 
-      const resolveIdentifier = (name: string): SymbolDef | null => {
-        const fromAlias = aliasToTargetDef.get(name);
-        if (fromAlias) return fromAlias;
-        return moduleEntry.locals.find((local) => local.localName === name) ?? null;
+      const scopeIndex = getOrBuildScopeIndex(index, file, src, sup, moduleEntry, tree);
+      const resolveIdentifier = (name: string, node: SyntaxNodeLike): SymbolDef | null => {
+        const binding = findClosestScopeBinding(scopeIndex, name, node, sup);
+        if (binding) {
+          if (!binding.def) return aliasToTargetDef.get(binding.name) ?? null;
+          return (
+            moduleEntry.locals.find(
+              (local) =>
+                sup.normalizeIdentifier(local.localName) === binding.canonicalName &&
+                local.range.start.index === binding.def?.start.index &&
+                local.range.end.index === binding.def?.end.index,
+            ) ?? null
+          );
+        }
+
+        const localCandidates = moduleEntry.locals.filter(
+          (local) => sup.normalizeIdentifier(local.localName) === sup.normalizeIdentifier(name),
+        );
+        if (localCandidates.length === 1) return localCandidates[0] ?? null;
+        return aliasToTargetDef.get(name) ?? null;
       };
 
       const edgePassContext = {

@@ -3,7 +3,7 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { okGoToResult } from "./navigation-provenance.js";
-import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
+import { buildScopeIndexFromSource, type Binding, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
 import { SymbolKind, type GoToResult, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
 
@@ -55,14 +55,13 @@ export function getOrBuildScopeIndex(
   return scopeIndex;
 }
 
-export function findClosestBinding(
+export function findClosestScopeBinding(
   scopeIndex: ScopeIndex,
-  file: FileId,
   bindingName: string,
   currentNode: SyntaxNodeLike,
   support: LanguageSupport,
-): SymbolDef | null {
-  bindingName = support.normalizeIdentifier(bindingName);
+): Binding | null {
+  const normalizedName = support.normalizeIdentifier(bindingName);
   let currentScope = scopeIndex.allScopes.find((scope) => {
     const start = scope.node.startIndex;
     const end = scope.node.endIndex;
@@ -85,27 +84,37 @@ export function findClosestBinding(
   }
 
   while (currentScope) {
-    const binding = currentScope.map.get(bindingName);
-    if (binding && binding.def) {
-      let kind = SymbolKind.Variable;
-      if (binding.kind === "function") {
-        kind = SymbolKind.Function;
-      } else if (binding.kind === "class") {
-        kind = SymbolKind.Class;
-      } else if (binding.kind === "type") {
-        kind = SymbolKind.TypeAlias;
-      }
-      return {
-        file,
-        localName: binding.name,
-        kind,
-        range: binding.def,
-      };
-    }
+    const binding = currentScope.map.get(normalizedName);
+    if (binding) return binding;
     currentScope = currentScope.parent;
   }
 
   return null;
+}
+
+export function findClosestBinding(
+  scopeIndex: ScopeIndex,
+  file: FileId,
+  bindingName: string,
+  currentNode: SyntaxNodeLike,
+  support: LanguageSupport,
+): SymbolDef | null {
+  const binding = findClosestScopeBinding(scopeIndex, bindingName, currentNode, support);
+  if (!binding?.def) return null;
+  let kind = SymbolKind.Variable;
+  if (binding.kind === "function") {
+    kind = SymbolKind.Function;
+  } else if (binding.kind === "class") {
+    kind = SymbolKind.Class;
+  } else if (binding.kind === "type") {
+    kind = SymbolKind.TypeAlias;
+  }
+  return {
+    file,
+    localName: binding.name,
+    kind,
+    range: binding.def,
+  };
 }
 
 export function toModuleRef(resolved?: FileId | { external: string }): string | undefined {

@@ -355,7 +355,50 @@ Within the 16 MiB input limit, ordinary reads and structural summaries for recog
 
 ## Agent packets
 
-`@lzehrung/codegraph-core/agent` exports `orientCodegraph()` for compact first-turn context and `getCodegraphPacket()` for bounded evidence by file path, symbol name, SQL object name, or stable target:
+`@lzehrung/codegraph-core/agent` (and `@lzehrung/codegraph/agent`) exports `orientCodegraph()` and `orientCodegraphWithSession()` for compact first-turn context, and `getCodegraphPacket()` and `getCodegraphPacketWithSession()` for bounded evidence by file path, symbol name, SQL object name, or stable target.
+
+When performing repeated agent operations, create a single `AgentSession` and pass it to `orientCodegraphWithSession()`, `getCodegraphPacketWithSession()`, and `searchCodegraphWithSession()`. The caller owns the session lifecycle and must invalidate it when work completes:
+
+```ts
+import {
+  createAgentSession,
+  getCodegraphPacketWithSession,
+  orientCodegraphWithSession,
+  searchCodegraphWithSession,
+} from "@lzehrung/codegraph-core/agent";
+
+const root = process.cwd();
+const session = createAgentSession({ root });
+
+try {
+  const orientation = await orientCodegraphWithSession(session, {
+    root,
+    includeRoots: ["src"],
+    budget: "small",
+  });
+
+  const target = orientation.focus.find((entry) => entry.file);
+  if (target?.file) {
+    const packet = await getCodegraphPacketWithSession(session, {
+      root,
+      target: target.file,
+      maxSymbols: 25,
+    });
+    console.log(target.why, packet.kind, packet.followUps);
+  }
+
+  const search = await searchCodegraphWithSession(session, {
+    root,
+    query: "auth session",
+    limit: 5,
+  });
+  console.log(search.results);
+} finally {
+  session.invalidate();
+}
+```
+
+Standalone calls without a pre-existing session build or load the index on demand:
 
 ```ts
 import { getCodegraphPacket, orientCodegraph } from "@lzehrung/codegraph-core/agent";
