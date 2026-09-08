@@ -54,7 +54,9 @@ import {
   findQueryIndexChunkCandidates,
   QUERY_INDEX_CANDIDATE_VERSION,
   type QueryIndexCandidate,
+  type QueryIndexCandidateResult,
 } from "./query-index/candidates.js";
+import { QUERY_INDEX_CANDIDATE_ROW_LIMIT } from "./query-index/store.js";
 import { registerSessionInvalidationHook } from "./session-lifecycle.js";
 import type { QueryIndexHandle } from "./query-index/update.js";
 
@@ -116,6 +118,7 @@ export type AgentSearchResponse = {
   freshness: AgentFreshnessResult;
   limits: {
     results: number;
+    indexedTextChunks: number;
     rankReasonsPerResult: number;
     evidencePerResult: number;
     neighborsPerResult: number;
@@ -123,8 +126,13 @@ export type AgentSearchResponse = {
   };
   resultCount: number;
   totalCandidates: number;
+  candidateCounts: {
+    indexedTextChunks: number;
+    indexedTextChunksLowerBound: boolean;
+  };
   omittedCounts: {
     results: number;
+    indexedTextChunks: number;
   };
   results: AgentSearchResult[];
 };
@@ -325,6 +333,7 @@ async function searchSnapshot(
   const resultMap = new Map<string, MutableSearchResult>();
   const limit = defaultAgentLimit(request.limit, DEFAULT_LIMIT, AGENT_SEARCH_RESULT_LIMIT);
   let fileNeighborIndex: Map<string, FileNeighbor[]> | undefined;
+  let indexedTextCandidateResult: QueryIndexCandidateResult | undefined;
   const getFileNeighborIndex = (): Map<string, FileNeighbor[]> => {
     fileNeighborIndex ??= buildFileNeighborIndex(snapshot);
     return fileNeighborIndex;
@@ -341,7 +350,14 @@ async function searchSnapshot(
       addPathResults(snapshot, resultMap, getFileNeighborIndex(), query);
     }
     if (mode === "hybrid" || mode === "text") {
-      await addTextResults(snapshot, resultMap, query, request.includeSnippets ?? true, mode, queryIndex);
+      indexedTextCandidateResult = await addTextResults(
+        snapshot,
+        resultMap,
+        query,
+        request.includeSnippets ?? true,
+        mode,
+        queryIndex,
+      );
     }
   }
   if (request.from !== undefined && (mode === "hybrid" || mode === "graph")) {
@@ -368,6 +384,7 @@ async function searchSnapshot(
     freshness,
     limits: {
       results: limit,
+      indexedTextChunks: QUERY_INDEX_CANDIDATE_ROW_LIMIT,
       rankReasonsPerResult: AGENT_SEARCH_RANK_REASONS_PER_RESULT_LIMIT,
       evidencePerResult: AGENT_SEARCH_EVIDENCE_PER_RESULT_LIMIT,
       neighborsPerResult: AGENT_SEARCH_NEIGHBORS_PER_RESULT_LIMIT,
@@ -375,8 +392,13 @@ async function searchSnapshot(
     },
     resultCount: results.length,
     totalCandidates: selectedResults.totalCandidates,
+    candidateCounts: {
+      indexedTextChunks: indexedTextCandidateResult?.totalCandidates ?? 0,
+      indexedTextChunksLowerBound: indexedTextCandidateResult?.totalCandidatesLowerBound ?? false,
+    },
     omittedCounts: {
       results: selectedResults.omitted,
+      indexedTextChunks: indexedTextCandidateResult?.omittedCandidates ?? 0,
     },
     results,
   };
@@ -478,6 +500,7 @@ function searchPathOnly(
     freshness,
     limits: {
       results: limit,
+      indexedTextChunks: QUERY_INDEX_CANDIDATE_ROW_LIMIT,
       rankReasonsPerResult: AGENT_SEARCH_RANK_REASONS_PER_RESULT_LIMIT,
       evidencePerResult: AGENT_SEARCH_EVIDENCE_PER_RESULT_LIMIT,
       neighborsPerResult: AGENT_SEARCH_NEIGHBORS_PER_RESULT_LIMIT,
@@ -485,8 +508,13 @@ function searchPathOnly(
     },
     resultCount: results.length,
     totalCandidates: selectedResults.totalCandidates,
+    candidateCounts: {
+      indexedTextChunks: 0,
+      indexedTextChunksLowerBound: false,
+    },
     omittedCounts: {
       results: selectedResults.omitted,
+      indexedTextChunks: 0,
     },
     results,
   };
@@ -762,16 +790,17 @@ async function addTextResults(
   includeSnippets: boolean,
   mode: AgentSearchMode,
   queryIndex?: QueryIndexHandle,
-): Promise<void> {
+): Promise<QueryIndexCandidateResult | undefined> {
   const projectSnapshotIdentity = snapshot.index.projectSnapshotIdentity;
   const store = queryIndex?.store;
   const diagnostics = queryIndex?.diagnostics;
   if (store && diagnostics && projectSnapshotIdentity) {
     const candidateResultMap = new Map<string, MutableSearchResult>();
     try {
-      store.withReadSnapshot(projectSnapshotIdentity, () => {
+      const candidateResult = store.withReadSnapshot(projectSnapshotIdentity, () => {
         const candidateStarted = performance.now();
-        const candidateChunks = findQueryIndexChunkCandidates(store, query.rankTokens, query.normalizedRankPhrase);
+        const candidateSearch = findQueryIndexChunkCandidates(store, query.rankTokens, query.normalizedRankPhrase);
+        const candidateChunks = candidateSearch.candidates;
         diagnostics.candidateMs += performance.now() - candidateStarted;
         diagnostics.fileCandidates += new Set(candidateChunks.map((chunk) => chunk.path)).size;
         diagnostics.chunkCandidates += candidateChunks.length;
@@ -793,9 +822,10 @@ async function addTextResults(
           );
         }
         diagnostics.scoringMs += performance.now() - scoringStarted;
+        return candidateSearch;
       });
       mergeSearchResults(resultMap, candidateResultMap);
-      return;
+      return candidateResult;
     } catch (error) {
       diagnostics.sidecarState = "unavailable";
       diagnostics.fallbackReason = errorMessage(error);
@@ -818,6 +848,7 @@ async function addTextResults(
     if (!fallback) continue;
     addTextFileResults(snapshot, resultMap, query, includeSnippets, mode, fallback.relFile, fallback.chunks);
   }
+  return undefined;
 }
 
 function addTextFileResults(

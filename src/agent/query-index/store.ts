@@ -41,6 +41,11 @@ export type StoredQueryIndexChunk = QueryTextChunk & {
   path: string;
 };
 
+export type QueryIndexCandidateRetrieval = {
+  chunks: StoredQueryIndexChunk[];
+  totalCandidatesLowerBound: boolean;
+};
+
 export class QueryIndexStaleError extends Error {
   constructor() {
     super("Query index identity does not match the loaded project snapshot.");
@@ -376,69 +381,116 @@ export class QueryIndexStore {
     }
   }
 
-  candidateChunksForTerms(
+  candidateChunkRetrievalForTerms(
     terms: readonly string[],
     paths: readonly string[],
+    normalizedRankPhrase: string,
     limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT,
-  ): StoredQueryIndexChunk[] {
-    if (!terms.length || !paths.length) return [];
+  ): QueryIndexCandidateRetrieval {
+    if (!terms.length || !paths.length) {
+      return { chunks: [], totalCandidatesLowerBound: false };
+    }
     const normalizedLimit = normalizedCandidateLimit(limit);
-    // Bound each term independently instead of sharing one global, path-ordered budget:
-    // a common term matching thousands of early-path chunks would otherwise exhaust the
-    // budget before a rarer term's (or a multi-term) match later in path order is read.
-    const perTermLimit = Math.max(1, Math.ceil(normalizedLimit / terms.length));
+    if (!normalizedLimit) {
+      return { chunks: [], totalCandidatesLowerBound: false };
+    }
     const candidates = new Map<string, Record<string, unknown>>();
     const batchSize = 500;
-    for (const term of terms) {
-      const isFtsEligible = codePointLength(term) >= 3 && !!isAscii(term);
-      const conditions: string[] = [];
-      const parameters: string[] = [];
-      if (isFtsEligible) {
-        conditions.push("chunks.chunk_id IN (SELECT rowid FROM fts_matches)");
-      } else {
-        conditions.push("instr(chunks.normalized_text, ?) > 0");
-        parameters.push(term);
-      }
-      conditions.push("instr(replace(chunks.normalized_text, ' ', ''), ?) > 0");
-      parameters.push(term);
-      const prefix = isFtsEligible
-        ? "WITH fts_matches AS (SELECT rowid FROM chunk_search WHERE chunk_search MATCH ?)"
-        : "";
-      let termMatches = 0;
-      for (let offset = 0; offset < paths.length && termMatches < perTermLimit; offset += batchSize) {
+    let totalCandidatesLowerBound = false;
+
+    const collect = (conditions: readonly string[], parameters: readonly string[], maximum: number): void => {
+      for (let offset = 0; offset < paths.length && candidates.size < maximum; offset += batchSize) {
         const batch = paths.slice(offset, offset + batchSize);
         const placeholders = batch.map(() => "?").join(", ");
-        const remaining = perTermLimit - termMatches;
+        const remaining = maximum - candidates.size;
+        const requested = remaining + 1;
         const rows = this.db
           .prepare(
             `
-            ${prefix}
             SELECT files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
                    chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
             FROM chunks
             JOIN files ON files.file_id = chunks.file_id
             WHERE files.path IN (${placeholders})
-              AND (${conditions.join(" OR ")})
+              AND (${conditions.join(" AND ")})
             ORDER BY files.path, chunks.ordinal
             LIMIT ?
           `,
           )
-          .all(
-            ...(isFtsEligible ? [escapeFtsTrigramTerm(term), ...batch, ...parameters] : [...batch, ...parameters]),
-            remaining,
-          ) as Array<Record<string, unknown>>;
+          .all(...batch, ...parameters, requested) as Array<Record<string, unknown>>;
+        if (rows.length === requested) totalCandidatesLowerBound = true;
         for (const row of rows) {
           const key = storedCandidateRowKey(row);
           if (!key || candidates.has(key)) continue;
           candidates.set(key, row);
-          termMatches += 1;
+          if (candidates.size >= maximum) break;
+        }
+        if (candidates.size >= maximum && offset + batchSize < paths.length) {
+          totalCandidatesLowerBound = true;
         }
       }
+    };
+
+    const termCondition = (term: string): { condition: string; parameters: string[] } => {
+      const compactCondition = "instr(replace(chunks.normalized_text, ' ', ''), ?) > 0";
+      if (codePointLength(term) < 3 || !isAscii(term)) {
+        return {
+          condition: `(instr(chunks.normalized_text, ?) > 0 OR ${compactCondition})`,
+          parameters: [term, term],
+        };
+      }
+      return {
+        condition: `(chunks.chunk_id IN (SELECT rowid FROM chunk_search WHERE chunk_search MATCH ?) OR ${compactCondition})`,
+        parameters: [escapeFtsTrigramTerm(term), term],
+      };
+    };
+
+    const phrase = normalizedRankPhrase;
+    if (terms.length > 1) {
+      const phraseCondition = terms.every((term) => codePointLength(term) >= 3 && isAscii(term))
+        ? "chunks.chunk_id IN (SELECT rowid FROM chunk_search WHERE chunk_search MATCH ?)"
+        : "instr(chunks.normalized_text, ?) > 0";
+      const phraseParameters = terms.every((term) => codePointLength(term) >= 3 && isAscii(term))
+        ? [escapeFtsTrigramTerm(phrase)]
+        : [phrase];
+      collect(
+        [phraseCondition, "instr(chunks.normalized_text, ?) > 0"],
+        [...phraseParameters, phrase],
+        normalizedLimit,
+      );
     }
-    return [...candidates.values()].flatMap((row) => {
+
+    if (terms.length > 1) {
+      if (candidates.size < normalizedLimit) {
+        const allTerms = terms.map(termCondition);
+        collect(
+          allTerms.map((term) => term.condition),
+          allTerms.flatMap((term) => term.parameters),
+          normalizedLimit,
+        );
+      } else {
+        totalCandidatesLowerBound = true;
+      }
+    }
+
+    const perTermLimit = Math.max(1, Math.ceil(normalizedLimit / terms.length));
+    for (let index = 0; index < terms.length; index += 1) {
+      if (candidates.size >= normalizedLimit) {
+        totalCandidatesLowerBound = true;
+        break;
+      }
+      const termMatch = termCondition(terms[index]!);
+      collect([termMatch.condition], termMatch.parameters, Math.min(normalizedLimit, candidates.size + perTermLimit));
+    }
+
+    const chunks = [...candidates.values()].flatMap((row) => {
       const chunk = storedCandidateChunkFromRow(row);
       return chunk ? [chunk] : [];
     });
+    return {
+      chunks,
+      totalCandidatesLowerBound,
+    };
   }
 
   ftsChunkCandidates(query: string, limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT): StoredQueryIndexChunk[] {

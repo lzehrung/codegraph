@@ -420,6 +420,8 @@ const exactFile = await exploreCodegraph({
 console.log(exactFile.fileView?.content, exactFile.fileView?.page?.nextOffset);
 ```
 
+For indexed text search, `limits.indexedTextChunks` caps candidates passed to final result scoring. `candidateCounts.indexedTextChunks` and `omittedCounts.indexedTextChunks` describe that earlier stage separately from `omittedCounts.results`. When `candidateCounts.indexedTextChunksLowerBound` is true, candidate totals and omissions are lower bounds because retrieval did not count all matches.
+
 `exploreCodegraph()` is one hybrid search plus context from top results. Use `orientCodegraph()` or `searchCodegraph()` first; for a known symbol, use `findReferences()` or `findCallHierarchy()`. It does not plan more searches or prove runtime behavior. `analysis.mode: "semantic"` is parser-backend quality, not query reasoning.
 When the entire query resolves to an indexed project-relative file path, or to one uniquely matching basename, the response also includes the live `fileView` described above. The library API defaults `includeSource` to `true`, like the CLI, because its caller controls the in-process response; `includeSource: false` suppresses source packets and `fileView`. In contrast, MCP `explore` defaults `includeSource` to `false` because source-bearing packets dominate transport responses; anchors and follow-ups identify the focused source request to make next. `includeGraphContext` and `allowSensitive` remain explicit request options and are never enabled automatically.
 

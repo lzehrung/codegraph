@@ -13,6 +13,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 - Shortened the bundled Codegraph skill around agent tool choice, task order, and safety checks. Detailed command and server contracts remain in the CLI and MCP references.
 
+### Fixed
+
+- Indexed text search now ranks complete-term candidates before bounded partial candidates, so a later exact match is not hidden by path-ordered SQL retrieval. Search responses separately disclose bounded indexed-text candidate omissions and lower-bound counts.
+
 ## [2.3.21] - 2026-09-05
 
 ### Fixed

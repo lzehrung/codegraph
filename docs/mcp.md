@@ -74,7 +74,7 @@ Run `codegraph doctor` in the installed release to inspect `native.origin`, `nat
 The server exposes the same bounded primitives as the CLI and library session layer:
 
 - `orient`: compact first-turn repo context.
-- `search`: deterministic ranked search across paths, symbols, chunks, SQL objects, and graph context.
+- `search`: deterministic ranked search across paths, symbols, chunks, SQL objects, and graph context. Its response separates `omittedCounts.results` from bounded indexed-text retrieval through `limits.indexedTextChunks`, `candidateCounts.indexedTextChunks`, and `omittedCounts.indexedTextChunks`; `candidateCounts.indexedTextChunksLowerBound` marks lower-bound candidate counts.
 - `explore`: one hybrid search plus context from top results; not a first-step planner.
 - `packet_get`: bounded evidence packet by file path, symbol name, SQL object name, or stable target.
 - `workspace_symbols`: deterministic symbol-identity lookup with exact locations and composable filters; use `search` for hybrid path, prose, SQL, snippet, or graph evidence.

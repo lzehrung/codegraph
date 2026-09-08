@@ -924,8 +924,10 @@ describe("persistent query index", () => {
         updatedAt: new Date().toISOString(),
       });
       decompressSpy.mockClear();
-      const candidates = findQueryIndexChunkCandidates(store, ["alpha", "beta"]);
-      expect(candidates.map((candidate) => `${candidate.path}:${candidate.ordinal}`)).toEqual(["src/match.ts:0"]);
+      const candidateResult = findQueryIndexChunkCandidates(store, ["alpha", "beta"]);
+      expect(candidateResult.candidates.map((candidate) => `${candidate.path}:${candidate.ordinal}`)).toEqual([
+        "src/match.ts:0",
+      ]);
       expect(decompressSpy).toHaveBeenCalledTimes(1);
     } finally {
       store.close();
@@ -951,14 +953,44 @@ describe("persistent query index", () => {
       updatedAt: new Date().toISOString(),
     });
 
-    const candidates = findQueryIndexChunkCandidates(store, ["alpha", "beta"]);
-    expect(candidates[0]?.path).toBe("src/zz-top.ts");
-    expect(candidates.some((candidate) => candidate.path === "src/zz-top.ts")).toBe(true);
-    expect(candidates).toHaveLength(QUERY_INDEX_CANDIDATE_ROW_LIMIT);
+    const candidateResult = findQueryIndexChunkCandidates(store, ["alpha", "beta"]);
+    expect(candidateResult.candidates[0]?.path).toBe("src/zz-top.ts");
+    expect(candidateResult.candidates.some((candidate) => candidate.path === "src/zz-top.ts")).toBe(true);
+    expect(candidateResult.candidates).toHaveLength(QUERY_INDEX_CANDIDATE_ROW_LIMIT);
     store.close();
   });
 
-  it("bounds candidateChunksForTerms SQL prefetch via the limit parameter", async () => {
+  it("retrieves later complete-term matches before bounded partial candidates", async () => {
+    const root = await createRepo();
+    const databasePath = path.join(root, "query-ranked-candidate-retrieval.sqlite");
+    const store = new QueryIndexStore(databasePath);
+    const fillerCount = QUERY_INDEX_CANDIDATE_ROW_LIMIT * 2 + 1;
+    const chunks = [
+      ...Array.from({ length: fillerCount }, () => "quasar filler"),
+      ...Array.from({ length: fillerCount }, () => "beacon filler"),
+      "quasar beacon",
+    ];
+    try {
+      store.replaceFiles([preparedFile("notes.md", chunks)], [], {
+        ...expectedQueryIndexVersionMetadata(),
+        projectSnapshotIdentity: "snap-ranked-retrieval",
+        projectRootIdentity: "root-ranked-retrieval",
+        createdByCodegraphVersion: "test",
+        updatedAt: new Date().toISOString(),
+      });
+
+      const candidateResult = findQueryIndexChunkCandidates(store, ["quasar", "beacon"]);
+
+      expect(candidateResult.candidates[0]?.startLine).toBe(chunks.length);
+      expect(candidateResult.candidates[0]?.score.exactPhrase).toBe(true);
+      expect(candidateResult.totalCandidatesLowerBound).toBe(true);
+      expect(candidateResult.omittedCandidates).toBeGreaterThan(0);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("bounds candidate retrieval via the limit parameter", async () => {
     const root = await createRepo();
     const databasePath = path.join(root, "query-candidate-limit.sqlite");
     const store = new QueryIndexStore(databasePath);
@@ -974,10 +1006,10 @@ describe("persistent query index", () => {
     });
     const paths = files.map((file) => file.path);
 
-    const unbounded = store.candidateChunksForTerms(["alpha"], paths);
+    const unbounded = store.candidateChunkRetrievalForTerms(["alpha"], paths, "alpha").chunks;
     expect(unbounded).toHaveLength(20);
 
-    const bounded = store.candidateChunksForTerms(["alpha"], paths, 5);
+    const bounded = store.candidateChunkRetrievalForTerms(["alpha"], paths, "alpha", 5).chunks;
     expect(bounded).toHaveLength(5);
     store.close();
   });
@@ -1000,10 +1032,44 @@ describe("persistent query index", () => {
     });
     const paths = files.map((file) => file.path);
 
-    const candidates = store.candidateChunksForTerms(["alpha", "beta"], paths, 10);
+    const candidates = store.candidateChunkRetrievalForTerms(["alpha", "beta"], paths, "alpha beta", 10).chunks;
 
     expect(candidates.some((candidate) => candidate.path === "src/zz-beta.ts")).toBe(true);
     store.close();
+  });
+
+  it("marks exact batch-boundary retrieval totals as lower bounds without inflating overlapping tiers", async () => {
+    const root = await createRepo();
+    const databasePath = path.join(root, "query-candidate-boundary.sqlite");
+    const store = new QueryIndexStore(databasePath);
+    const alphaFiles = Array.from({ length: 501 }, (_, index) =>
+      preparedFile(`src/a${String(index).padStart(3, "0")}.ts`, ["const alphaValue = 1;"]),
+    );
+    const overlap = preparedFile("src/overlap.ts", ["const gammaValue = deltaValue;"]);
+    store.replaceFiles([...alphaFiles, overlap], [], {
+      ...expectedQueryIndexVersionMetadata(),
+      projectSnapshotIdentity: "snap-boundary",
+      projectRootIdentity: "root-boundary",
+      createdByCodegraphVersion: "test",
+      updatedAt: new Date().toISOString(),
+    });
+    try {
+      const boundary = store.candidateChunkRetrievalForTerms(
+        ["alpha"],
+        alphaFiles.map((file) => file.path),
+        "alpha",
+        500,
+      );
+      const overlapResult = findQueryIndexChunkCandidates(store, ["gamma", "delta"]);
+
+      expect(boundary.chunks).toHaveLength(500);
+      expect(boundary.totalCandidatesLowerBound).toBe(true);
+      expect(overlapResult.totalCandidates).toBe(1);
+      expect(overlapResult.totalCandidatesLowerBound).toBe(false);
+      expect(overlapResult.omittedCandidates).toBe(0);
+    } finally {
+      store.close();
+    }
   });
 
   it("rejects absolute and traversing paths from persisted rows", async () => {
