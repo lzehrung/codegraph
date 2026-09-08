@@ -559,6 +559,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     freshnessInFlight = (async (): Promise<AgentFreshnessResult> => {
       if (cachedBase) await cachedBase;
       else if (cachedFilePlan) await cachedFilePlan;
+      if (!cachedFileSignatures) return { state: "fresh" };
       // Reuse the same fast-path-aware resolution loadFiles()/discoverFiles() use, instead
       // of an independent full scan, so freshness checks stay cheap on unchanged repos too.
       const currentFiles = await listAgentSessionFiles(options);
