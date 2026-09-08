@@ -2214,6 +2214,58 @@ describe("Cache invalidation and strict hashing", () => {
     prepSpy.mockRestore();
   });
 
+  it("keeps cached imports and graph edges consistent when resolution hints are reordered", async () => {
+    const root = await mkTmpDir("dg-resolution-hint-cache-");
+    const mainPath = path.join(root, "main.ts");
+    const oneFoo = path.join(root, "one", "foo.ts");
+    const twoFoo = path.join(root, "two", "foo.ts");
+    await fsp.mkdir(path.dirname(oneFoo), { recursive: true });
+    await fsp.mkdir(path.dirname(twoFoo), { recursive: true });
+    await fsp.writeFile(mainPath, `import { value } from "foo";\nexport { value };\n`, "utf8");
+    await fsp.writeFile(oneFoo, "export const value = 1;\n", "utf8");
+    await fsp.writeFile(twoFoo, "export const value = 2;\n", "utf8");
+
+    await buildProjectIndex(root, { cache: "disk", threads: 1, graph: { resolutionHints: ["one", "two"] } });
+
+    const refreshed = await buildProjectIndex(root, {
+      cache: "disk",
+      threads: 1,
+      graph: { resolutionHints: ["two", "one"] },
+    });
+
+    const mainModule = moduleForPath(refreshed, mainPath);
+    const resolvedImport = mainModule?.imports.find((imp) => imp.from === "foo")?.resolved;
+    expect(resolvedImport).toBe(normalize(twoFoo));
+    expect(
+      refreshed.graph.edges.some(
+        (edge) => edge.from === normalize(mainPath) && edge.to.type === "file" && edge.to.path === normalize(twoFoo),
+      ),
+    ).toBe(true);
+  });
+
+  it("reuses cached module state when resolutionHints are unchanged after normalization", async () => {
+    const root = await mkTmpDir("dg-resolution-hint-cache-stable-");
+    const mainPath = path.join(root, "main.ts");
+    const oneFoo = path.join(root, "one", "foo.ts");
+    await fsp.mkdir(path.dirname(oneFoo), { recursive: true });
+    await fsp.writeFile(mainPath, `import { value } from "foo";\nexport { value };\n`, "utf8");
+    await fsp.writeFile(oneFoo, "export const value = 1;\n", "utf8");
+
+    await buildProjectIndex(root, { cache: "disk", threads: 1, graph: { resolutionHints: ["one"] } });
+
+    const report: BuildReport = { timings: {} };
+    const reused = await buildProjectIndex(root, {
+      cache: "disk",
+      threads: 1,
+      graph: { resolutionHints: [" one "] },
+      report,
+    });
+
+    expect(report.files?.parsed).toBe(0);
+    const mainModule = moduleForPath(reused, mainPath);
+    expect(mainModule?.imports.find((imp) => imp.from === "foo")?.resolved).toBe(normalize(oneFoo));
+  });
+
   it("refreshes incremental manifest when HEAD diverges and picks up new commit files", async () => {
     const root = await mkTmpDir("dg-manifest-head-");
     runGit(root, ["init"]);

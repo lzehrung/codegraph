@@ -454,8 +454,10 @@ async function moduleCacheSignatureForFile(
 ): Promise<string> {
   const baseSignature = await cacheSignatureForFile(file, sigInfo, opts);
   const normalizedExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
-  const resolveNodeModules = normalizeGraphOptions(opts?.graph).resolveNodeModules;
-  if (!normalizedExtensions && !resolveNodeModules) return baseSignature;
+  const normalizedGraphOptions = normalizeGraphOptions(opts?.graph);
+  const resolveNodeModules = normalizedGraphOptions.resolveNodeModules;
+  const resolutionHints = normalizedGraphOptions.resolutionHints ?? [];
+  if (!normalizedExtensions && !resolveNodeModules && !resolutionHints.length) return baseSignature;
   // Combine via a hash rather than raw concatenation: the disk cache stores this string in a
   // SQLite TEXT column, and node:sqlite's DatabaseSync silently truncates TEXT bind parameters
   // at embedded NUL bytes, so a raw separator character risks the stored and freshly-computed
@@ -463,10 +465,14 @@ async function moduleCacheSignatureForFile(
   // extensions ever contained one. A cached ModuleIndex's ImportBinding.resolved values differ
   // depending on whether resolveNodeModules was on at write time (resolved node_modules targets
   // vs. external), so that state and the environment that produced it must be part of the key.
+  // The ordered resolutionHints list is likewise a resolution input: bare-specifier resolution
+  // tries hints in order, so both the set and the order (e.g. `one` then `two` vs. reordered)
+  // can change which file a specifier resolves to, and must invalidate the cache on any change.
   const hash = crypto.createHash("sha1");
   hash.update(baseSignature);
   hash.update(JSON.stringify(Object.entries(normalizedExtensions ?? {})));
   hash.update(resolveNodeModules ? "\0resolveNodeModules" : "");
+  hash.update(resolutionHints.length ? `\0resolutionHints:${JSON.stringify(resolutionHints)}` : "");
   hash.update(
     resolverEnvironmentFingerprint === null ? "\0resolverEnvironmentTooLarge" : (resolverEnvironmentFingerprint ?? ""),
   );
