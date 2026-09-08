@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildSymbolGraphDetailed } from "../src/graphs/symbol-graph-detailed.js";
+import { defNodeId } from "../src/graphs/symbol-graph.js";
 import { findCallHierarchy } from "../src/indexer/call-hierarchy.js";
 import { buildProjectIndex } from "../src/indexer/build-index.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
@@ -70,6 +71,66 @@ describe("call hierarchy", () => {
     expect(result.entries[0]).toMatchObject({ symbolId: recursive!.id, depth: 1 });
     expect(result.entries[0]?.callsites).toHaveLength(1);
   });
+  it("resolves nested calls at their lexical use site instead of a module local or import alias", async () => {
+    const root = await mkTmpDir("cg-call-lexical-scope-");
+    const source = [
+      'import { helper as importedHelper } from "./dependency.js";',
+      "export function helper(): number { return 1; }",
+      "export function outer(): number {",
+      "  function helper(): number { return 2; }",
+      "  return helper();",
+      "}",
+      "export function outerImport(): number {",
+      "  function importedHelper(): number { return 3; }",
+      "  return importedHelper();",
+      "}",
+    ].join("\n");
+    await fsp.writeFile(path.join(root, "dependency.ts"), "export function helper(): number { return 0; }\n");
+    await fsp.writeFile(path.join(root, "calls.ts"), source);
+    const index = await buildProjectIndex(root);
+    const graph = await buildSymbolGraphDetailed(index);
+    const calls = index.byFile.get([...index.byFile.keys()].find((file) => file.endsWith("/calls.ts"))!);
+    const dependency = index.byFile.get([...index.byFile.keys()].find((file) => file.endsWith("/dependency.ts"))!);
+    const outer = calls?.locals.find((local) => local.localName === "outer");
+    const nestedHelper = calls?.locals.find(
+      (local) =>
+        local.localName === "helper" && local.range.start.index === source.indexOf("helper", source.indexOf("outer")),
+    );
+    const outerImport = calls?.locals.find((local) => local.localName === "outerImport");
+    const nestedImportedHelper = calls?.locals.find(
+      (local) =>
+        local.localName === "importedHelper" &&
+        local.range.start.index === source.indexOf("importedHelper", source.indexOf("outerImport")),
+    );
+    const importedHelper = dependency?.locals.find((local) => local.localName === "helper");
+    expect(outer).toBeDefined();
+    expect(nestedHelper).toBeDefined();
+    expect(outerImport).toBeDefined();
+    expect(nestedImportedHelper).toBeDefined();
+    expect(importedHelper).toBeDefined();
+
+    const nestedCall = graph.edges.find(
+      (edge) => edge.from === defNodeId(outer!) && edge.to === defNodeId(nestedHelper!) && edge.label === "calls",
+    );
+    expect(nestedCall?.site && source.slice(nestedCall.site.range.start.index, nestedCall.site.range.end.index)).toBe(
+      "helper",
+    );
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === defNodeId(outerImport!) && edge.to === defNodeId(importedHelper!) && edge.label === "calls",
+      ),
+    ).toBe(false);
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === defNodeId(outerImport!) &&
+          edge.to === defNodeId(nestedImportedHelper!) &&
+          edge.label === "calls",
+      ),
+    ).toBe(true);
+  });
+
   it("disambiguates same-named namespace members and excludes unresolved dynamic calls", async () => {
     const root = await mkTmpDir("cg-call-receivers-");
     await fsp.writeFile(path.join(root, "alpha.ts"), "export function run(): number { return 1; }\n");
