@@ -22,6 +22,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 - Detailed call hierarchy edges now resolve direct identifiers through lexical scope at the callsite. Nested declarations and local bindings no longer incorrectly target same-named module locals or imports.
 - Type hierarchy now excludes generic arguments and enclosing-type qualifiers from inheritance edges. Generic and qualified Java superclasses now retain their `extends` edge.
+- Path-only search and session file discovery now track lightweight file signatures before full project loading, allowing file additions, deletions, and renames to refresh automatically without forcing semantic indexing. Freshness checks also detect deletions during initial signature capture.
 
 ## [2.3.21] - 2026-09-05
 
