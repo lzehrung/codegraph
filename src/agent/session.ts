@@ -590,7 +590,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
           result = {
             state: "stale",
             ...summarizeChangedFiles(changedFiles),
-            reason: `session configuration could not be checked: ${currentConfigurationIdentity.error}`,
+            reason: "session configuration could not be checked",
           };
         } else if (policy === "check") {
           result = {

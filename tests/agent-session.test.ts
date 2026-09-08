@@ -1010,7 +1010,10 @@ describe("agent session", () => {
     try {
       const snapshot = await session.loadProject({ symbolGraph: "skip" });
       for (let check = 0; check < 2; check++) {
-        expect(await session.checkFreshness?.()).toMatchObject({ state: "stale", changedFiles: [] });
+        const freshness = await session.checkFreshness!();
+        expect(freshness).toMatchObject({ state: "stale", changedFiles: [] });
+        if (freshness.state !== "stale") throw new Error("failed configuration checks must report stale state");
+        expect(normalizePath(freshness.reason)).not.toContain(normalizePath(root));
         expect(await session.loadProject({ symbolGraph: "skip" })).toBe(snapshot);
         now += AGENT_FRESHNESS_CHECK_INTERVAL_MS + 1;
       }
