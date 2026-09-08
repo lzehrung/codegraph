@@ -915,6 +915,26 @@ describe("agent session", () => {
     }
   });
 
+  it("refreshes a path-only list when a discovered file disappears before baseline capture", async () => {
+    const root = await mkTmpDir("cg-agent-session-baseline-race-");
+    const removedFile = path.join(root, "removed.ts");
+    await fs.writeFile(removedFile, "export const value = 1;\n");
+    const discover = projectFilesModule.listProjectFilesWithGitCandidates;
+    vi.spyOn(projectFilesModule, "listProjectFilesWithGitCandidates").mockImplementationOnce(async (...args) => {
+      const files = await discover(...args);
+      await fs.unlink(removedFile);
+      return files;
+    });
+    const session = createAgentSession({ root, freshness: { policy: "auto" } });
+    try {
+      expect((await session.listFiles!()).map((file) => path.basename(file))).toEqual(["removed.ts"]);
+      expect(await session.checkFreshness!()).toEqual({ state: "refreshed", changedFiles: ["removed.ts"] });
+      expect(await session.listFiles!()).toEqual([]);
+    } finally {
+      session.invalidate();
+    }
+  });
+
   it("reports stale discovery state for path-only session file lists under check policy", async () => {
     const root = await mkTmpDir("cg-agent-session-path-check-");
     const beforeFile = path.join(root, "before.ts");

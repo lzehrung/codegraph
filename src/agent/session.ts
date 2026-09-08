@@ -318,7 +318,7 @@ async function collectBuiltAgentFileSignatures(
 }
 
 function diffAgentFileSignatures(
-  previous: ReadonlyMap<string, AgentFileSignature>,
+  previous: ReadonlyMap<string, AgentFileSignature | undefined>,
   current: ReadonlyMap<string, AgentFileSignature>,
 ): AgentFreshnessDiff {
   const changedFiles: string[] = [];
@@ -337,7 +337,7 @@ function diffAgentFileSignatures(
   for (const [file, previousSignature] of previous.entries()) {
     if (current.has(file)) continue;
     changedFiles.push(file);
-    changedBytes += previousSignature.size;
+    changedBytes += previousSignature?.size ?? 0;
   }
   changedFiles.sort();
   return { changedFiles, changedBytes };
@@ -352,7 +352,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   let cachedEagerSnapshot: Promise<AgentProjectSnapshot> | undefined;
   let cachedBasicSnapshot: Promise<AgentProjectSnapshot> | undefined;
   let cachedSkippedSnapshot: Promise<AgentProjectSnapshot> | undefined;
-  let cachedFileSignatures: Map<string, AgentFileSignature> | undefined;
+  let cachedFileSignatures: Map<string, AgentFileSignature | undefined> | undefined;
   let cachedDuplicateAnalysis: Promise<DuplicatePreparedAnalysis> | undefined;
 
   let lastFreshnessCheckedAt = 0;
@@ -381,7 +381,13 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     const loadPromise = (async () => {
       const plan = await resolveAgentSessionFilePlan(options, discoveryContext);
       if (options.freshness?.policy !== "manual" && !cachedFileSignatures) {
-        cachedFileSignatures = await collectAgentFileSignatures(plan.files);
+        const signatures: Map<string, AgentFileSignature | undefined> = await collectAgentFileSignatures(plan.files);
+        // Keep discovered paths even when they vanish before stat, so deletion remains detectable.
+        for (const file of plan.files) {
+          const resolvedFile = normalizePath(path.resolve(file));
+          if (!signatures.has(resolvedFile)) signatures.set(resolvedFile, undefined);
+        }
+        cachedFileSignatures = signatures;
       }
       return plan;
     })();
@@ -436,9 +442,9 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
       const buildReport: BuildReport = options.buildOptions?.report ?? { timings: {} };
       buildOptions.report = buildReport;
       const index = await buildProjectIndexIncremental(options.root, buildOptions);
-      if (options.freshness?.policy !== "manual") {
-        cachedFileSignatures = await collectBuiltAgentFileSignatures(files, index);
-      }
+      const fileSignatures =
+        options.freshness?.policy === "manual" ? undefined : await collectBuiltAgentFileSignatures(files, index);
+      cachedFileSignatures = fileSignatures;
       const fileGraph = index.graph;
 
       return {
@@ -447,7 +453,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         fileLookup: createAgentFileLookup(files),
         index,
         fileGraph,
-        ...(cachedFileSignatures ? { fileSignatures: cachedFileSignatures } : {}),
+        ...(fileSignatures ? { fileSignatures } : {}),
         buildReport,
         analysis: summarizeAnalysis({ index, report: buildReport }),
       };
