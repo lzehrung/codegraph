@@ -216,6 +216,12 @@ Per-invocation CLI freshness and long-lived in-memory freshness are different pr
 
 The local review session refreshes manually with `refresh()` and records stale-snapshot metadata in `getStats()`. Navigation checks the requested file immediately and checks config or added/removed-file drift on the stale-check interval; impact calls add an interval-throttled tracked-file scan before computing the report.
 
+`createAgentSession()` freshness checks also compare the configuration and discovery identity used by indexing. Its `check` policy reports configuration drift while retaining the snapshot, `auto` refreshes within its normal bounds, and `manual` leaves refresh timing to the caller. This detects resolution, language, discovery, and ignore-rule changes even when source paths and bytes are unchanged.
+
+With `useConfig: false`, freshness excludes `codegraph.config.json` from configuration identity; language config and ignore files stay tracked. Files explicitly included in discovery still follow normal file freshness checks.
+
+If a configuration check fails, `check` and `auto` report stale state and retain the snapshot rather than repeatedly rebuilding it. The stale reason omits raw filesystem error details. Normal freshness checks resume when configuration can be read again.
+
 For library callers performing repeated navigation or impact work, use sessions like this:
 
 ```ts
