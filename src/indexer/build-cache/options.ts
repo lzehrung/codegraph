@@ -16,9 +16,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * contain. Epoch 3 added resolved call edges. Epoch 4 discards snapshots whose
  * import bindings could disagree with graph edges after resolution hints changed,
  * plus inheritance edges that treated generic arguments or enclosing-type
- * qualifiers as direct bases.
+ * qualifiers as direct bases. Epoch 5 invalidates modules whose TypeScript or
+ * workspace resolution inputs were not fingerprinted, including removed configs.
  */
-export const CORE_ALGORITHM_EPOCH = 4;
+export const CORE_ALGORITHM_EPOCH = 5;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

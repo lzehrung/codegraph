@@ -170,36 +170,47 @@ describe("navigation package cache invalidation", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
-  it("refreshes workspace package exports after a same-size, same-mtime package edit", async () => {
-    const root = await mkTmpDir("dg-package-exports-cache-");
-    const packageRoot = path.join(root, "packages", "pkg");
-    const packageJson = path.join(packageRoot, "package.json");
-    const oldFile = path.join(packageRoot, "src", "old.ts");
-    const newFile = path.join(packageRoot, "src", "new.ts");
-    const consumer = path.join(root, "consumer.ts");
-    await fsp.mkdir(path.dirname(oldFile), { recursive: true });
-    await fsp.writeFile(path.join(root, "package.json"), '{"private":true,"workspaces":["packages/*"]}', "utf8");
-    await fsp.writeFile(oldFile, "export const value = 1;\n", "utf8");
-    await fsp.writeFile(newFile, "export const value = 2;\n", "utf8");
-    const firstExports = '{"name":"pkg","exports":{".":"./src/old.ts"}}';
-    const secondExports = '{"name":"pkg","exports":{".":"./src/new.ts"}}';
-    expect(secondExports.length).toBe(firstExports.length);
-    await fsp.writeFile(packageJson, firstExports, "utf8");
-    await fsp.writeFile(consumer, 'import { value } from "pkg";\nexport const use = value;\n', "utf8");
-    try {
-      const first = await buildProjectIndex(root, { cache: "off" });
-      expect(moduleForPath(first, consumer)?.imports.some((entry) => entry.resolved === normalize(oldFile))).toBe(true);
-      const packageStat = await fsp.stat(packageJson);
-      await fsp.writeFile(packageJson, secondExports, "utf8");
-      await fsp.utimes(packageJson, packageStat.atime, packageStat.mtime);
-      const second = await buildProjectIndex(root, { cache: "off" });
-      expect(moduleForPath(second, consumer)?.imports.some((entry) => entry.resolved === normalize(newFile))).toBe(
-        true,
-      );
-    } finally {
-      await fsp.rm(root, { recursive: true, force: true });
-    }
-  });
+  it.each(["off", "memory", "disk", "incremental"] as const)(
+    "refreshes workspace exports after a same-metadata edit with %s caching",
+    async (mode) => {
+      const root = await mkTmpDir("dg-package-exports-cache-");
+      const packageRoot = path.join(root, "packages", "pkg");
+      const packageJson = path.join(packageRoot, "package.json");
+      const oldFile = path.join(packageRoot, "src", "old.ts");
+      const newFile = path.join(packageRoot, "src", "new.ts");
+      const consumer = path.join(root, "consumer.ts");
+      const cache = mode === "incremental" ? "disk" : mode;
+      const build = mode === "incremental" ? buildProjectIndexIncremental : buildProjectIndex;
+      await fsp.mkdir(path.dirname(oldFile), { recursive: true });
+      await fsp.writeFile(path.join(root, "package.json"), '{"private":true,"workspaces":["packages/*"]}', "utf8");
+      await fsp.writeFile(oldFile, "export const value = 1;\n", "utf8");
+      await fsp.writeFile(newFile, "export const value = 2;\n", "utf8");
+      const firstExports = '{"name":"pkg","exports":{".":"./src/old.ts"}}';
+      const secondExports = '{"name":"pkg","exports":{".":"./src/new.ts"}}';
+      expect(secondExports.length).toBe(firstExports.length);
+      await fsp.writeFile(packageJson, firstExports, "utf8");
+      await fsp.writeFile(consumer, 'import { value } from "pkg";\nexport const use = value;\n', "utf8");
+      try {
+        const first = await build(root, { cache, threads: 1 });
+        expect(moduleForPath(first, consumer)?.imports.map((entry) => entry.resolved)).toEqual([normalize(oldFile)]);
+        const packageStat = await fsp.stat(packageJson);
+        await fsp.writeFile(packageJson, secondExports, "utf8");
+        await fsp.utimes(packageJson, packageStat.atime, packageStat.mtime);
+        const second = await build(root, { cache, threads: 1 });
+        expect(moduleForPath(second, consumer)?.imports.map((entry) => entry.resolved)).toEqual([normalize(newFile)]);
+        expect(second.graph.edges.filter((edge) => edge.from === normalize(consumer)).map((edge) => edge.to)).toEqual([
+          { type: "file", path: normalize(newFile) },
+        ]);
+        const report: BuildReport = { timings: {} };
+        await build(root, { cache, threads: 1, report });
+        if (mode === "incremental") expect(report.files?.parsed).toBe(0);
+        else if (cache !== "off") expect(report.cache?.hits).toBe(3);
+      } finally {
+        buildCache.clearMemoryCache();
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("rebuilds cache-off indexes after a same-metadata source mutation", async () => {
     const root = await mkTmpDir("codegraph-cache-off-signature-");
@@ -2264,6 +2275,54 @@ describe("Cache invalidation and strict hashing", () => {
     expect(mainModule?.imports.find((imp) => imp.from === "foo")?.resolved).toBe(normalize(oneFoo));
   });
 
+  it.each(["memory", "disk", "incremental"] as const)(
+    "refreshes inherited TypeScript baseUrl and paths with %s caching",
+    async (mode) => {
+      const root = await mkTmpDir("dg-tsconfig-resolution-cache-");
+      const main = path.join(root, "app", "main.ts");
+      const config = path.join(root, "resolver-options.json");
+      const first = path.join(root, "one", "foo.ts");
+      const second = path.join(root, "two", "foo.ts");
+      const third = path.join(root, "two", "bar.ts");
+      const cache = mode === "incremental" ? "disk" : mode;
+      const build = mode === "incremental" ? buildProjectIndexIncremental : buildProjectIndex;
+      try {
+        for (const file of [main, first, second, third]) await fsp.mkdir(path.dirname(file), { recursive: true });
+        await fsp.writeFile(main, 'import { value } from "target";\nexport { value };\n');
+        for (const file of [first, second, third]) await fsp.writeFile(file, "export const value = 1;\n");
+        await fsp.writeFile(path.join(root, "app", "tsconfig.json"), '{"extends":"../resolver-options.json"}');
+        const update = async (baseUrl: string, target: string) =>
+          await fsp.writeFile(config, JSON.stringify({ compilerOptions: { baseUrl, paths: { target: [target] } } }));
+        const targets = (index: ProjectIndex) => ({
+          imports: moduleForPath(index, main)?.imports.map((entry) => entry.resolved),
+          edges: index.graph.edges.filter((edge) => edge.from === normalize(main)).map((edge) => edge.to),
+        });
+        await update("./one", "foo.ts");
+        expect(targets(await build(root, { cache, threads: 1 }))).toEqual({
+          imports: [normalize(first)],
+          edges: [{ type: "file", path: normalize(first) }],
+        });
+        for (const [baseUrl, target, expected] of [
+          ["./two", "foo.ts", second],
+          ["./two", "bar.ts", third],
+        ]) {
+          await update(baseUrl, target);
+          expect(targets(await build(root, { cache, threads: 1 }))).toEqual({
+            imports: [normalize(expected)],
+            edges: [{ type: "file", path: normalize(expected) }],
+          });
+        }
+        const report: BuildReport = { timings: {} };
+        await build(root, { cache, threads: 1, report });
+        if (mode === "incremental") expect(report.files?.parsed).toBe(0);
+        else expect(report.cache?.hits).toBe(4);
+      } finally {
+        buildCache.clearMemoryCache();
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("refreshes incremental manifest when HEAD diverges and picks up new commit files", async () => {
     const root = await mkTmpDir("dg-manifest-head-");
     runGit(root, ["init"]);
@@ -3860,7 +3919,14 @@ describe("Cache invalidation and strict hashing", () => {
       path.join(root, "packages", `package-${index}`, "src", "entry.ts"),
     );
 
-    await expect(resolverEnvironment.computeResolverEnvironmentFingerprint(root, files)).resolves.toBeNull();
+    await expect(
+      resolverEnvironment.computeResolverEnvironmentFingerprint(
+        root,
+        files,
+        { graph: { resolveNodeModules: true } },
+        undefined,
+      ),
+    ).resolves.toBeNull();
   });
 
   it("bounds resolver fingerprint reads for oversized lockfiles", async () => {
@@ -3896,8 +3962,18 @@ describe("Cache invalidation and strict hashing", () => {
       await fsp.mkdir(path.join(root, "node_modules"), { recursive: true });
       await fsp.writeFile(lockPath, oversizedLock);
 
-      const first = await resolverEnvironment.computeResolverEnvironmentFingerprint(root, []);
-      const second = await resolverEnvironment.computeResolverEnvironmentFingerprint(root, []);
+      const first = await resolverEnvironment.computeResolverEnvironmentFingerprint(
+        root,
+        [],
+        { graph: { resolveNodeModules: true } },
+        undefined,
+      );
+      const second = await resolverEnvironment.computeResolverEnvironmentFingerprint(
+        root,
+        [],
+        { graph: { resolveNodeModules: true } },
+        undefined,
+      );
 
       expect(first).toBeTruthy();
       expect(second).toBe(first);
@@ -3936,8 +4012,18 @@ describe("Cache invalidation and strict hashing", () => {
       await fsp.mkdir(path.join(root, "node_modules"), { recursive: true });
       await fsp.writeFile(lockPath, Buffer.alloc(bytes, 0x61));
 
-      await resolverEnvironment.computeResolverEnvironmentFingerprint(root, []);
-      await resolverEnvironment.computeResolverEnvironmentFingerprint(root, []);
+      await resolverEnvironment.computeResolverEnvironmentFingerprint(
+        root,
+        [],
+        { graph: { resolveNodeModules: true } },
+        undefined,
+      );
+      await resolverEnvironment.computeResolverEnvironmentFingerprint(
+        root,
+        [],
+        { graph: { resolveNodeModules: true } },
+        undefined,
+      );
 
       expect(readLengths).toEqual([bytes, bytes]);
     } finally {

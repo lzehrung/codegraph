@@ -105,8 +105,8 @@ export type IndexManifest = {
   buildOptions?: ManifestBuildOptions;
   files: Record<string, ManifestFileEntry>;
   /**
-   * Node-module resolver inputs from the build that produced cached file edges.
-   * Missing on older manifests; resolution-enabled builds treat that as stale.
+   * Effective TypeScript/workspace inputs and enabled node-module resolver inputs.
+   * Missing when no inputs apply; older configured manifests rebuild before reuse.
    */
   resolverEnvironmentFingerprint?: string;
   /**

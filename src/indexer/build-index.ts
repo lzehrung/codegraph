@@ -457,7 +457,14 @@ async function moduleCacheSignatureForFile(
   const normalizedGraphOptions = normalizeGraphOptions(opts?.graph);
   const resolveNodeModules = normalizedGraphOptions.resolveNodeModules;
   const resolutionHints = normalizedGraphOptions.resolutionHints ?? [];
-  if (!normalizedExtensions && !resolveNodeModules && !resolutionHints.length) return baseSignature;
+  if (
+    !normalizedExtensions &&
+    !resolveNodeModules &&
+    !resolutionHints.length &&
+    resolverEnvironmentFingerprint === undefined
+  ) {
+    return baseSignature;
+  }
   // Combine via a hash rather than raw concatenation: the disk cache stores this string in a
   // SQLite TEXT column, and node:sqlite's DatabaseSync silently truncates TEXT bind parameters
   // at embedded NUL bytes, so a raw separator character risks the stored and freshly-computed
@@ -468,6 +475,7 @@ async function moduleCacheSignatureForFile(
   // The ordered resolutionHints list is likewise a resolution input: bare-specifier resolution
   // tries hints in order, so both the set and the order (e.g. `one` then `two` vs. reordered)
   // can change which file a specifier resolves to, and must invalidate the cache on any change.
+  // Effective TypeScript paths/baseUrl and workspace exports also determine cached import targets.
   const hash = crypto.createHash("sha1");
   hash.update(baseSignature);
   hash.update(JSON.stringify(Object.entries(normalizedExtensions ?? {})));
@@ -803,10 +811,16 @@ async function buildIndexFromFileListShared(
   const manifestOptionDiffs = manifest ? diffBuildOptions(manifest.buildOptions, opts) : [];
   const languageExtensionsChanged = manifestOptionDiffs.includes("languageExtensions");
   const implementationChanged = manifestOptionDiffs.includes("implementation");
+  const workspaceConfig = await loadWorkspaceConfig(projectRoot);
   let resolverEnvironmentFingerprint: string | null | undefined;
   let resolverEnvironmentMatchesManifest = true;
-  if (cacheEnabled && graphOptions.resolveNodeModules) {
-    resolverEnvironmentFingerprint = await computeResolverEnvironmentFingerprint(projectRoot, normalizedFiles);
+  if (cacheEnabled) {
+    resolverEnvironmentFingerprint = await computeResolverEnvironmentFingerprint(
+      projectRoot,
+      normalizedFiles,
+      opts ?? {},
+      workspaceConfig,
+    );
     if (useManifest) {
       resolverEnvironmentMatchesManifest =
         resolverEnvironmentFingerprint !== null &&
@@ -963,7 +977,6 @@ async function buildIndexFromFileListShared(
       ? await tryLoadPersistedBloomFilters(projectRoot, opts, report)
       : null;
     const parsedMap = new Map<string, ParsedFileContext>();
-    const workspaceConfig = await loadWorkspaceConfig(projectRoot);
     const tsconfigMatchPathByDirectory = new Map<string, Promise<MatchPathFn | undefined>>();
     const loadMatchPathForFile = (file: string): Promise<MatchPathFn | undefined> => {
       const directory = path.dirname(file);
@@ -1586,12 +1599,15 @@ export async function buildProjectIndexIncremental(
     const currentConfigHash = recordConfigHashResult(manifestReport, currentConfigHashResult, opts?.logLevel);
     const configChanged =
       !!currentConfigHashResult.error || !manifest?.configHash || currentConfigHash !== manifest.configHash;
+    const workspaceConfig = manifest ? await loadWorkspaceConfig(projectRoot) : undefined;
     let resolverEnvironmentFingerprint: string | null | undefined;
     let resolverEnvironmentMatchesManifest = true;
-    if (manifest && graphOptions.resolveNodeModules) {
+    if (manifest) {
       resolverEnvironmentFingerprint = await computeResolverEnvironmentFingerprint(
         projectRoot,
         Object.keys(manifest.files),
+        opts,
+        workspaceConfig,
       );
       resolverEnvironmentMatchesManifest =
         resolverEnvironmentFingerprint !== null &&
@@ -1991,7 +2007,6 @@ export async function buildProjectIndexIncremental(
       }
     }
 
-    const workspaceConfig = await loadWorkspaceConfig(projectRoot);
     const tsconfigMatchPathByDirectory = new Map<string, Promise<MatchPathFn | undefined>>();
     const loadMatchPathForFile = (file: string): Promise<MatchPathFn | undefined> => {
       const directory = path.dirname(file);
