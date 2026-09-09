@@ -55,19 +55,18 @@ jobs:
           )
           echo "$version" >> "$GITHUB_OUTPUT"
 
-      - name: Require prepared changelog release entry
-        env:
-          ROOT_VERSION: ${{ steps.version.outputs.root_version }}
-        run: |
-          node --input-type=module <<'NODE'
-          import fs from "node:fs";
-          import { assertChangelogPreparedForRelease } from "./scripts/release-lib.mjs";
+      - name: Prepare release changelog
+        run: >-
+          node ./scripts/prepare-release-changelog.mjs ${{ inputs.release_type }}
+          --output temp/release-changelog/CHANGELOG.md
 
-          assertChangelogPreparedForRelease(
-            fs.readFileSync("CHANGELOG.md", "utf8"),
-            process.env.ROOT_VERSION,
-          );
-          NODE
+      - name: Upload prepared release changelog
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-changelog
+          path: temp/release-changelog/CHANGELOG.md
+          if-no-files-found: error
+          retention-days: 14
 
   build-native-artifacts:
     name: Build ${{ matrix.suffix }}
@@ -766,6 +765,12 @@ jobs:
           name: certification-report
           path: temp/certification
 
+      - name: Download prepared release changelog
+        uses: actions/download-artifact@v8
+        with:
+          name: release-changelog
+          path: temp/release-changelog
+
       - name: Refuse a stale source branch before registry writes
         env:
           SOURCE_REVISION: ${{ needs.plan-release.outputs.source_revision }}
@@ -803,6 +808,19 @@ jobs:
             report.versions?.root === process.env.ROOT_VERSION &&
             report.versions?.native === process.env.NATIVE_VERSION;
           if (!valid) throw new Error("CertificationReportV1 is incomplete or does not match the planned release.");
+          NODE
+
+      - name: Stage validated release changelog
+        env:
+          ROOT_VERSION: ${{ needs.plan-release.outputs.root_version }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import { assertChangelogPreparedForRelease } from "./scripts/release-lib.mjs";
+
+          const changelog = fs.readFileSync("temp/release-changelog/CHANGELOG.md", "utf8");
+          assertChangelogPreparedForRelease(changelog, process.env.ROOT_VERSION);
+          fs.writeFileSync("CHANGELOG.md", changelog);
           NODE
 
       - name: Publish only certified tarballs
@@ -860,7 +878,7 @@ jobs:
           NODE
           npx --yes npm@10.9.2 install --package-lock-only --ignore-scripts
           npx --yes npm@10.9.2 ci --ignore-scripts --dry-run
-          git add package.json package-lock.json packages/codegraph-core/package.json packages/codegraph-native/package.json
+          git add package.json package-lock.json packages/codegraph-core/package.json packages/codegraph-native/package.json CHANGELOG.md
           git commit -m "release: @lzehrung/codegraph@${ROOT_VERSION}, @lzehrung/codegraph-core@${ROOT_VERSION}, @lzehrung/codegraph-native@${NATIVE_VERSION}"
           node --input-type=module <<'NODE'
           import { execFileSync } from "node:child_process";
