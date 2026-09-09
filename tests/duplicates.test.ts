@@ -263,6 +263,19 @@ describe("duplicate detection", () => {
     }
   });
 
+  test("keeps non-import words during fallback import masking", () => {
+    const cases = [
+      { file: "sample.cs", language: "csharp", source: "usingSomething();\nclass KeepCsharp {}\n" },
+      { file: "sample.go", language: "go", source: "important := 1\nfunc keepGo() {}\n" },
+    ];
+
+    for (const scenario of cases) {
+      expect(maskDuplicateImportStatements(scenario.source, scenario.file, scenario.language, "off")).toBe(
+        scenario.source,
+      );
+    }
+  });
+
   test("excludes import-list boilerplate before duplicate scoring", async () => {
     const root = await makeTempProject();
     const importList = `${[
