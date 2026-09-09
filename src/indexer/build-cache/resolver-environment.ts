@@ -4,6 +4,11 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { mapLimit } from "../../util/concurrency.js";
 import { isFilePathWithinRoot } from "../../util/paths.js";
+import { supportForFileWithoutHeaderSample } from "../../languages.js";
+import { graphOnlyLanguageSupportsImportAliases } from "../../document-links.js";
+import { loadTsconfigResolutionInputsFor } from "../../util/resolution/tsconfig.js";
+import type { WorkspaceConfig } from "../../util/workspace.js";
+import type { BuildOptions } from "../types.js";
 
 const PROJECT_RESOLUTION_INPUTS = [
   "package.json",
@@ -131,7 +136,9 @@ async function installedPackageManifests(projectRoot: string, root: string): Pro
 }
 
 /**
- * Fingerprints resolver inputs once per build. A package tree beyond either bound returns null,
+ * Fingerprints effective TypeScript and workspace resolution inputs once per cached build.
+ * Installed-package inputs are included only when node_modules resolution is enabled.
+ * A package tree beyond either bound returns null,
  * making callers re-resolve rather than spending unbounded time scanning installations.
  *
  * Fixed leading and trailing samples detect common in-place edits without retaining whole files;
@@ -140,9 +147,51 @@ async function installedPackageManifests(projectRoot: string, root: string): Pro
 export async function computeResolverEnvironmentFingerprint(
   projectRoot: string,
   files: readonly string[],
-): Promise<string | null> {
-  const nodeModulesRoots = await activeNodeModulesRoots(projectRoot, files);
-  if (!nodeModulesRoots) return null;
+  opts: Pick<BuildOptions, "graph" | "languageExtensions" | "logLevel">,
+  workspace: WorkspaceConfig | undefined,
+): Promise<string | null | undefined> {
+  const nodeModulesRoots = opts.graph?.resolveNodeModules
+    ? await activeNodeModulesRoots(projectRoot, files)
+    : undefined;
+  if (nodeModulesRoots === null) return null;
+  const directories = new Map<string, string>();
+  for (const file of files) {
+    const support = supportForFileWithoutHeaderSample(file, opts.languageExtensions);
+    if (
+      support &&
+      (support.id === "ts" || support.id === "tsx" || graphOnlyLanguageSupportsImportAliases(support.id))
+    ) {
+      directories.set(path.dirname(file), file);
+    }
+  }
+  const configs = await mapLimit(
+    [...directories.values()],
+    RESOLUTION_INPUT_CONCURRENCY,
+    async (file) => await loadTsconfigResolutionInputsFor(file, projectRoot, opts.logLevel),
+  );
+  const configInputs = new Map<string, string>();
+  for (const config of configs) {
+    if (!config) continue;
+    const configFile = normalizedRelativePath(projectRoot, config.configFile);
+    if (configInputs.has(configFile)) continue;
+    configInputs.set(
+      configFile,
+      JSON.stringify([configFile, normalizedRelativePath(projectRoot, config.baseUrl), config.paths]),
+    );
+  }
+  const hash = crypto.createHash("sha256");
+  for (const [, input] of [...configInputs].sort(([left], [right]) => left.localeCompare(right))) {
+    hash.update(`tsconfig\0${input}\n`);
+  }
+  const packages = [...(workspace?.packages.values() ?? [])].sort((left, right) => left.name.localeCompare(right.name));
+  for (const pkg of packages) {
+    hash.update(
+      `workspace\0${JSON.stringify([pkg.name, normalizedRelativePath(projectRoot, pkg.path), pkg.main, pkg.exports])}\n`,
+    );
+  }
+  if (!nodeModulesRoots) {
+    return configInputs.size || packages.length ? hash.digest("hex") : undefined;
+  }
   const inputs: ResolutionInput[] = [];
   for (const name of PROJECT_RESOLUTION_INPUTS) {
     const input = await statInput(projectRoot, path.join(projectRoot, name));
@@ -158,7 +207,7 @@ export async function computeResolverEnvironmentFingerprint(
     inputs.push(...manifests);
   }
   inputs.sort((left, right) => left.path.localeCompare(right.path));
-  const hash = crypto.createHash("sha256");
+  hash.update("node_modules\0");
   for (const input of inputs) {
     hash.update(`${input.path}\0${input.mtimeMs}\0${input.size}\0${input.contentHash}\n`);
   }
