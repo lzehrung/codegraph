@@ -13,6 +13,7 @@ import {
 } from "../src/index.js";
 import { closeDuplicateUnitCacheDatabase } from "../src/duplicates.js";
 import {
+  DUPLICATE_UNIT_CACHE_VERSION,
   tryLoadDuplicateUnitsFromCache,
   writeDuplicateUnitsBatchToCache,
   writeDuplicateUnitsToCache,
@@ -689,7 +690,7 @@ describe("disk cache uses sqlite backend", () => {
     db.close();
 
     expect(row).toBeDefined();
-    expect(row!.version).toBe(4);
+    expect(row!.version).toBe(DUPLICATE_UNIT_CACHE_VERSION);
     const decompressed = brotliDecompressSync(row!.payload).toString("utf8");
     const units = JSON.parse(decompressed) as Array<Record<string, unknown>>;
     expect(units.length).toBeGreaterThan(0);
@@ -966,7 +967,7 @@ describe("disk cache uses sqlite backend", () => {
       | { version: number }
       | undefined;
     after.close();
-    expect(row?.version).toBe(4);
+    expect(row?.version).toBe(DUPLICATE_UNIT_CACHE_VERSION);
   });
 
   it("migrates absolute-path module cache rows and reuses their payloads", async () => {

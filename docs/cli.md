@@ -440,6 +440,7 @@ Without `--graph`, each UI load or reload builds the current project graph throu
 `duplicates` emits one-line triage summaries by default, or grouped exact, renamed, near, and weak clone candidates as JSON with `--json`.
 
 - It combines indexed symbols, semantic chunks, text chunks, token fingerprints, and AST shape hashes when parser context is available.
+- It removes import declarations and directives before duplicate matching, including Astro/MDX module imports and embedded HTML, Vue, and Svelte script and style blocks.
 - Pretty output is the default.
 - `--profile cleanup` and `--profile refactor-roi` are aliases for cleanup triage defaults. In pretty mode they default to `--sort reduced-lines`; in JSON mode they keep similarity order unless `--sort` is explicit. Both profiles also default `--min-confidence medium` and `--min-tokens 80`, and they suppress groups labeled `import-list-noise` or `barrel-export-noise`.
 - Pretty output includes reduced lines, estimated reducible lines, cleanup labels, cluster counts, and a compact summary footer. Use `--no-summary` to suppress the footer.
