@@ -21,6 +21,7 @@ import type { ParsedFileContext } from "../indexer/parse-context.js";
 import { attemptParsePreparedFileContext } from "../indexer/parse-context.js";
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "../indexer/types.js";
 import { prepareSourceInput } from "../languages/file-prep.js";
+import { buildByteToStringIndexMap, stringIndexForByte } from "../native/byte-index.js";
 import { getNativeDuplicateTokens, getNativeSingleQueryExecution } from "../native/tree-sitter-native.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
@@ -214,33 +215,6 @@ function languageForFile(filePath: string, source: string): LanguageForFileResul
   return undefined;
 }
 
-function utf8ByteLength(codePoint: number): number {
-  if (codePoint <= 0x7f) return 1;
-  if (codePoint <= 0x7ff) return 2;
-  if (codePoint <= 0xffff) return 3;
-  return 4;
-}
-
-function stringIndexForUtf8ByteOffset(source: string): (byteOffset: number) => number {
-  const singleByteSource = Buffer.byteLength(source, "utf8") === source.length;
-  return (byteOffset) => {
-    if (singleByteSource) return Math.min(byteOffset, source.length);
-
-    let sourceIndex = 0;
-    let currentByteOffset = 0;
-    while (sourceIndex < source.length && currentByteOffset < byteOffset) {
-      const codePoint = source.codePointAt(sourceIndex);
-      if (codePoint === undefined) break;
-      const codePointLength = codePoint > 0xffff ? 2 : 1;
-      const byteLength = utf8ByteLength(codePoint);
-      if (currentByteOffset + byteLength > byteOffset) return sourceIndex;
-      currentByteOffset += byteLength;
-      sourceIndex += codePointLength;
-    }
-    return sourceIndex;
-  };
-}
-
 function fallbackImportStatementRanges(source: string, languageId: string): SourceRange[] {
   const pattern = duplicateImportStatementFallbackPatterns[languageId];
   if (!pattern) return [];
@@ -267,13 +241,13 @@ function importStatementRanges(
   if (execution.matches === null) return fallbackImportStatementRanges(source, languageId);
 
   const ranges: SourceRange[] = [];
-  const stringIndexForByteOffset = stringIndexForUtf8ByteOffset(source);
+  const byteIndexMap = buildByteToStringIndexMap(source);
   for (const match of execution.matches) {
     for (const capture of match.captures) {
       if (capture.name !== "stmt") continue;
       ranges.push({
-        start: stringIndexForByteOffset(capture.start.index),
-        end: stringIndexForByteOffset(capture.end.index),
+        start: stringIndexForByte(byteIndexMap, capture.start.index),
+        end: stringIndexForByte(byteIndexMap, capture.end.index),
       });
     }
   }
