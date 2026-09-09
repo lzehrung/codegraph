@@ -9,6 +9,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [2.3.22] - 2026-09-09
+
 ### Added
 
 - Exported `orientCodegraphWithSession` and `getCodegraphPacketWithSession` from the public agent entrypoint (`@lzehrung/codegraph-core/agent` and `@lzehrung/codegraph/agent`) for shared-session orientation and packet retrieval.
@@ -440,7 +442,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.21...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.22...HEAD
+[2.3.22]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.22
 [2.3.21]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.21
 [2.3.19]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.19
 [2.3.18]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.18
