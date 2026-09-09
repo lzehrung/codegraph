@@ -21,6 +21,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 ### Fixed
 
 - Detailed call hierarchy edges now resolve direct identifiers through lexical scope at the callsite. Nested declarations and local bindings no longer incorrectly target same-named module locals or imports.
+- Indexed text search now ranks complete-term candidates before bounded partial candidates, so a later exact match is not hidden by path-ordered SQL retrieval. Search responses separately disclose bounded indexed-text candidate omissions and lower-bound counts.
 - Changing or reordering resolution hints, TypeScript `baseUrl`/`paths` (including `extends`), or workspace package exports now keeps cached import targets and graph edges consistent. This also applies when `resolveNodeModules` is disabled. Existing affected caches rebuild before reuse.
 - Type hierarchy now excludes generic arguments and enclosing-type qualifiers from inheritance edges. Generic and qualified Java superclasses now retain their `extends` edge.
 - Long-lived agent sessions now detect configuration-only changes before reusing a snapshot. Resolution, language, discovery, and ignore-rule changes now report stale state or refresh automatically according to the session freshness policy. Failed configuration checks report stale state without repeated automatic rebuilds or raw filesystem paths in the reason. Freshness respects `useConfig: false` without ignoring language config or ignore files.

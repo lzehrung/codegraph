@@ -1,7 +1,7 @@
 import { normalizeQuerySearchText } from "./content.js";
 import { QUERY_INDEX_CANDIDATE_ROW_LIMIT, type QueryIndexStore, type StoredQueryIndexChunk } from "./store.js";
 
-export const QUERY_INDEX_CANDIDATE_VERSION = 6;
+export const QUERY_INDEX_CANDIDATE_VERSION = 7;
 
 export type QueryIndexCandidateScore = {
   score: number;
@@ -14,6 +14,13 @@ export type QueryIndexCandidateScore = {
 export type QueryIndexCandidate = StoredQueryIndexChunk & {
   score: QueryIndexCandidateScore;
   matchedLine: number;
+};
+
+export type QueryIndexCandidateResult = {
+  candidates: QueryIndexCandidate[];
+  totalCandidates: number;
+  totalCandidatesLowerBound: boolean;
+  omittedCandidates: number;
 };
 
 function scoreCandidateChunk(
@@ -91,17 +98,24 @@ export function findQueryIndexChunkCandidates(
   store: QueryIndexStore,
   rankTerms: readonly string[],
   normalizedRankPhrase = rankTerms.join(" "),
-): QueryIndexCandidate[] {
+): QueryIndexCandidateResult {
   const terms = rankTerms.filter((term) => term.length);
   const eligiblePaths = store.eligibleFilePaths(terms);
-  return store
-    .candidateChunksForTerms(terms, eligiblePaths)
+  const retrieval = store.candidateChunkRetrievalForTerms(terms, eligiblePaths, normalizedRankPhrase);
+  const ranked = retrieval.chunks
     .map((chunk) => ({
       ...chunk,
       score: scoreCandidateChunk(chunk.normalizedText, terms, normalizedRankPhrase),
       matchedLine: firstMatchingLine(chunk.text, terms, normalizedRankPhrase),
     }))
     .filter((candidate) => candidate.score.score > 0)
-    .sort(compareCandidateChunks)
-    .slice(0, QUERY_INDEX_CANDIDATE_ROW_LIMIT);
+    .sort(compareCandidateChunks);
+  const candidates = ranked.slice(0, QUERY_INDEX_CANDIDATE_ROW_LIMIT);
+  const totalCandidates = ranked.length;
+  return {
+    candidates,
+    totalCandidates,
+    totalCandidatesLowerBound: retrieval.totalCandidatesLowerBound,
+    omittedCandidates: Math.max(0, totalCandidates - candidates.length),
+  };
 }

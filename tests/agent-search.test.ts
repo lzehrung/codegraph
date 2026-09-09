@@ -493,6 +493,37 @@ describe("agent search", () => {
     expect(hit?.rankReasons.some((reason) => /exact phrase/i.test(reason))).toBe(false);
   });
 
+  it("keeps late exact text matches ahead of capped partial disk candidates", async () => {
+    const root = await mkTmpDir("cg-agent-search-candidate-recall-");
+    const fillerCount = 4_001;
+    await fs.writeFile(
+      path.join(root, "notes.md"),
+      [
+        ...Array.from({ length: fillerCount }, () => "quasar filler"),
+        ...Array.from({ length: fillerCount }, () => "beacon filler"),
+        "quasar beacon",
+        "",
+      ].join("\n"),
+    );
+
+    const disk = await searchCodegraph({ root, query: "quasar beacon", mode: "text", limit: 3 });
+    const cacheOff = await searchCodegraph({
+      root,
+      query: "quasar beacon",
+      mode: "text",
+      limit: 3,
+      buildOptions: { cache: "off" },
+    });
+
+    expect(disk.results[0]?.range?.start.line).toBe(8_003);
+    expect(cacheOff.results[0]?.range?.start.line).toBe(8_003);
+    expect(disk.candidateCounts).toMatchObject({
+      indexedTextChunksLowerBound: true,
+    });
+    expect(disk.omittedCounts.indexedTextChunks).toBeGreaterThan(0);
+    expect(disk.limits.indexedTextChunks).toBe(2_000);
+  });
+
   it("keeps implementation results ahead of documentation phrases in hybrid mode", async () => {
     const root = await mkRepo();
 
