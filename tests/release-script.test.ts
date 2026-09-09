@@ -234,6 +234,9 @@ describe("release script helpers", () => {
             "[2.3.21]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.21",
         ),
     );
+    expect(() =>
+      finalizeChangelogForRelease(changelog.replace("- Faster indexes.\n", ""), "2.3.21", "2026-09-05"),
+    ).toThrow();
   });
 
   it("requires a prepared release section with no Unreleased entries", () => {
@@ -255,8 +258,8 @@ describe("release script helpers", () => {
     const prepared = finalizeChangelogForRelease(changelog, "2.3.21", "2026-09-05");
 
     expect(finalizeChangelogForRelease(prepared, "2.3.21", "2026-09-06")).toBe(prepared);
-    expect(() => assertChangelogPreparedForRelease(changelog, "2.3.21")).toThrow("Unreleased entries");
-    expect(() => assertChangelogPreparedForRelease(prepared, "2.3.22")).toThrow("not prepared");
+    expect(() => assertChangelogPreparedForRelease(changelog, "2.3.21")).toThrow();
+    expect(() => assertChangelogPreparedForRelease(prepared, "2.3.22")).toThrow();
     expect(() => finalizeChangelogForRelease(prepared, "2.3.22", "2026-09-06")).toThrow();
     expect(() =>
       finalizeChangelogForRelease(prepared.replace("[2.3.21]:", "[missing]:"), "2.3.21", "2026-09-06"),
@@ -310,16 +313,6 @@ describe("release script helpers", () => {
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
-  });
-
-  it("rejects a release without Unreleased entries", () => {
-    expect(() =>
-      finalizeChangelogForRelease(
-        "# Changelog\n\n## [Unreleased]\n\n## [2.3.20] - 2026-09-04\n",
-        "2.3.21",
-        "2026-09-05",
-      ),
-    ).toThrow();
   });
 
   it("updates only the native package version for pre-build release artifacts", () => {

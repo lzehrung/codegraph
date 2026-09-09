@@ -4,7 +4,7 @@ import { bumpVersion, finalizeChangelogForRelease, validReleaseTypes } from "./r
 
 const [releaseType, ...args] = process.argv.slice(2);
 if (!validReleaseTypes.has(releaseType) || (args.length && (args.length !== 2 || args[0] !== "--output" || !args[1]))) {
-  throw new Error("Usage: npm run release:prepare-changelog -- <patch|minor|major> [--output <path>]");
+  throw new Error("Usage: node ./scripts/prepare-release-changelog.mjs <patch|minor|major> [--output <path>]");
 }
 
 const rootPath = process.cwd();
