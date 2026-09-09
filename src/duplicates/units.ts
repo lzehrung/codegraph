@@ -329,7 +329,7 @@ export function maskDuplicateImportStatements(
   languageId: string,
   nativeMode?: ProjectIndex["nativeMode"],
 ): string {
-  const hasEmbeddedImportLanguages = detectSFCFramework(filePath) || languageId === "html";
+  const hasEmbeddedImportLanguages = Boolean(detectSFCFramework(filePath)) || languageId === "html";
   const ranges = hasEmbeddedImportLanguages
     ? sfcImportStatementRanges(source, nativeMode)
     : importStatementRanges(source, languageId, nativeMode);
