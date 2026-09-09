@@ -1,4 +1,7 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 type PackageManifest = {
@@ -20,7 +23,116 @@ function jobBlock(workflow: string, jobName: string): string {
   return workflow.slice(start, nextJob ? start + marker.length + nextJob.index : undefined);
 }
 
+function stepBlock(job: string, stepName: string): string {
+  const marker = `      - name: ${stepName}\n`;
+  const start = job.indexOf(marker);
+  if (start < 0) throw new Error(`Missing workflow step ${stepName}`);
+  const next = job.indexOf("\n      - ", start + marker.length);
+  return job.slice(start, next < 0 ? undefined : next);
+}
+
+function artifactInput(step: string, name: "name" | "path"): string {
+  const value = new RegExp(`^ {10}${name}: (.+)$`, "m").exec(step)?.[1];
+  if (!value) throw new Error(`Missing artifact input ${name}`);
+  return value;
+}
+
+function stepRun(step: string): string {
+  const match = / {8}run: ([>|]-?)\n([\s\S]*)/.exec(step);
+  if (!match) throw new Error("Missing workflow run block");
+  return match[2]
+    .split("\n")
+    .map((line) => line.replace(/^ {10}/, ""))
+    .join(match[1].startsWith(">") ? " " : "\n")
+    .trim();
+}
+
 describe("certified release workflows", () => {
+  it("preserves source notes and validates the transferred release changelog before staging", () => {
+    const plan = jobBlock(releaseWorkflow, "plan-release");
+    const publish = jobBlock(releaseWorkflow, "publish-certified");
+    const prepare = stepRun(stepBlock(plan, "Prepare release changelog"));
+    const upload = stepBlock(plan, "Upload prepared release changelog");
+    const download = stepBlock(publish, "Download prepared release changelog");
+    const stage = stepRun(stepBlock(publish, "Stage validated release changelog"));
+    const stageScript = /<<'NODE'\n([\s\S]*)\nNODE$/.exec(stage)?.[1];
+    if (!stageScript) throw new Error("Missing changelog staging script");
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-release-workflow-"));
+    const planRoot = path.join(root, "plan");
+    const publishRoot = path.join(root, "publish");
+    const source = [
+      "# Changelog",
+      "",
+      "## [Unreleased]",
+      "",
+      "### Fixed",
+      "",
+      "- Repair.",
+      "",
+      "### Changed",
+      "",
+      "- Faster indexes.",
+      "",
+      "## [2.3.20] - 2026-09-04",
+      "",
+      "- Earlier fix.",
+      "",
+      "[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.20...HEAD",
+      "[2.3.20]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.20",
+      "",
+    ].join("\n");
+    try {
+      for (const cwd of [planRoot, publishRoot]) {
+        fs.mkdirSync(path.join(cwd, "scripts"), { recursive: true });
+        for (const file of ["prepare-release-changelog.mjs", "release-lib.mjs", "native-targets-lib.mjs"]) {
+          fs.copyFileSync(path.join("scripts", file), path.join(cwd, "scripts", file));
+        }
+        fs.writeFileSync(path.join(cwd, "package.json"), '{"type":"module","version":"2.3.20"}\n');
+        fs.writeFileSync(path.join(cwd, "CHANGELOG.md"), source);
+      }
+      const [, ...prepareArgs] = prepare.replace("${{ inputs.release_type }}", "patch").split(/\s+/);
+      const prepared = spawnSync(process.execPath, prepareArgs, {
+        cwd: planRoot,
+        encoding: "utf8",
+        windowsHide: true,
+      });
+      expect(prepared.status, `${prepared.stdout}\n${prepared.stderr}`).toBe(0);
+      expect(fs.readFileSync(path.join(planRoot, "CHANGELOG.md"), "utf8")).toBe(source);
+
+      // Transfer the uploaded file using the workflow's declared artifact name and paths.
+      const uploadedPath = path.join(planRoot, artifactInput(upload, "path"));
+      const artifactRoot = path.join(root, "artifacts", artifactInput(upload, "name"));
+      fs.mkdirSync(artifactRoot, { recursive: true });
+      fs.copyFileSync(uploadedPath, path.join(artifactRoot, path.basename(uploadedPath)));
+      fs.cpSync(
+        path.join(root, "artifacts", artifactInput(download, "name")),
+        path.join(publishRoot, artifactInput(download, "path")),
+        { recursive: true },
+      );
+      const artifact = fs.readFileSync(uploadedPath, "utf8");
+      expect(artifact).toContain("## [Unreleased]\n\n## [2.3.21] - ");
+      expect(artifact).toContain("### Fixed\n\n- Repair.\n\n### Changed\n\n- Faster indexes.");
+      expect(artifact).toContain("## [2.3.20] - 2026-09-04\n\n- Earlier fix.");
+
+      const stageArtifact = (version: string) =>
+        spawnSync(process.execPath, ["--input-type=module", "-e", stageScript], {
+          cwd: publishRoot,
+          env: { ...process.env, ROOT_VERSION: version },
+          encoding: "utf8",
+          windowsHide: true,
+        });
+      const rejected = stageArtifact("2.3.22");
+      expect(rejected.status).not.toBe(0);
+      expect(fs.readFileSync(path.join(publishRoot, "CHANGELOG.md"), "utf8")).toBe(source);
+      const staged = stageArtifact("2.3.21");
+      expect(staged.status, `${staged.stdout}\n${staged.stderr}`).toBe(0);
+      expect(fs.readFileSync(path.join(publishRoot, "CHANGELOG.md"), "utf8")).toBe(artifact);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("finishes package certification and publication before standalone previews", () => {
     const assemble = jobBlock(releaseWorkflow, "assemble-release-candidates");
     const publish = jobBlock(releaseWorkflow, "publish-certified");
@@ -30,16 +142,9 @@ describe("certified release workflows", () => {
     const reducedSmoke = jobBlock(releaseWorkflow, "package-smoke-reduced");
     const packageFunnel = jobBlock(releaseWorkflow, "package-funnel");
     const report = jobBlock(releaseWorkflow, "certification-report");
-    const plan = jobBlock(releaseWorkflow, "plan-release");
     expect(releaseWorkflow).toContain("id-token: write");
     expect(releaseWorkflow).toContain("bootstrap_public_npm:");
     expect(releaseWorkflow).toContain("default: false");
-    expect(plan).toContain("Require prepared changelog release entry");
-    expect(plan).toContain("assertChangelogPreparedForRelease");
-    expect(plan).toContain("ROOT_VERSION: ${{ steps.version.outputs.root_version }}");
-    expect(releaseWorkflow.indexOf("Require prepared changelog release entry")).toBeLessThan(
-      releaseWorkflow.indexOf("build-native-artifacts:"),
-    );
     expect(releaseWorkflow).not.toContain("registry-auth-preflight:");
     expect(releaseWorkflow).not.toContain("PACKAGE_PUBLISH_TOKEN");
     expect(releaseWorkflow).not.toContain("npm.pkg.github.com");
@@ -195,10 +300,7 @@ describe("certified release workflows", () => {
     expect(publish).toContain("node-version: 22.16.0");
     expect(publish).toContain("npx --yes npm@10.9.2 install --package-lock-only --ignore-scripts");
     expect(publish).toContain("npx --yes npm@10.9.2 ci --ignore-scripts --dry-run");
-    expect(publish).not.toContain("finalizeChangelogForRelease");
-    expect(publish).not.toContain('const changelogPath = "CHANGELOG.md"');
     expect(publish).toContain("git add package.json package-lock.json");
-    expect(publish).not.toContain("git add CHANGELOG.md");
     expect(publish).not.toContain("\n          npm install --package-lock-only --ignore-scripts");
   });
 

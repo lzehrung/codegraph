@@ -139,7 +139,8 @@ export function finalizeChangelogForRelease(changelog, version, date) {
   }
   const unreleasedContent = changelog.slice(contentStart, nextReleaseStart);
   if (!/^\s*-\s+\S/m.test(unreleasedContent)) {
-    throw new Error("CHANGELOG.md has no Unreleased entries.");
+    assertChangelogPreparedForRelease(changelog, version);
+    return changelog;
   }
   if (new RegExp(`^## \\[${version.replaceAll(".", "\\.")}\\]`, "m").test(changelog)) {
     throw new Error(`CHANGELOG.md already records version ${version}.`);
@@ -179,13 +180,11 @@ export function assertChangelogPreparedForRelease(changelog, version) {
   }
   const unreleasedContent = changelog.slice(contentStart, nextReleaseStart);
   if (/^\s*-\s+\S/m.test(unreleasedContent)) {
-    throw new Error("CHANGELOG.md has Unreleased entries. Run npm run release:prepare-changelog -- <release-type>.");
+    throw new Error("CHANGELOG.md has Unreleased entries.");
   }
   const releaseHeading = `## [${version}] - `;
   if (!changelog.startsWith(releaseHeading, nextReleaseStart + 1)) {
-    throw new Error(
-      `CHANGELOG.md is not prepared for version ${version}. Run npm run release:prepare-changelog -- <release-type>.`,
-    );
+    throw new Error(`CHANGELOG.md is not prepared for version ${version}.`);
   }
   const releaseReference = `[${version}]: https://github.com/lzehrung/codegraph/releases/tag/v${version}`;
   if (

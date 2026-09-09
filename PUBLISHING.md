@@ -39,17 +39,19 @@ npm run release:minor -- --package @lzehrung/codegraph-native
 
 Use the manually triggered `release` GitHub Actions workflow for a complete certified release. Select `release_type=patch|minor|major`; the workflow publishes the certified packages, then builds, smokes, and attaches the standalone preview assets.
 
-Before dispatch, have the release agent prepare and commit the next changelog section:
+The plan job automatically moves all `[Unreleased]` notes into the next root-version section and updates the comparison links in a separate artifact. No changelog preparation commit is required. After certification and package publication, the release version commit includes those exact prepared notes. Failed certification leaves the source branch unchanged.
+
+A matching release section that is already prepared is preserved. To preview the next changelog locally without changing the source file:
 
 ```powershell
-npm run release:prepare-changelog -- patch
+npm run release:prepare-changelog -- patch --output temp/release-changelog/CHANGELOG.md
 ```
 
-Replace `patch` with `minor` or `major` when needed. This changes only `CHANGELOG.md`; commit and push it before starting the workflow. The plan job verifies the prepared version before build jobs start.
+Replace `patch` with `minor` or `major` when needed. Without `--output`, this optional local command updates `CHANGELOG.md` directly.
 
 The workflow uses this immutable byte flow:
 
-1. Plan the source revision and root/native versions.
+1. Plan the source revision and root/native versions, then prepare the release changelog artifact.
 2. Build all native target directories.
 3. Build the root package, then run `npm pack` exactly once for each target package, the native meta package, and the root package.
 4. Store those tarballs under `temp/release-candidates/packages/`.
@@ -58,7 +60,7 @@ The workflow uses this immutable byte flow:
 7. Merge the gate outputs into `CertificationReportV1`.
 8. Revalidate every candidate checksum and required report row before the first registry write.
 9. Publish the tarball paths from the manifest, without rebuilding or repacking.
-10. Attach the same tarballs, manifest, checksums, package summary, and certification report to the GitHub Release.
+10. Commit the versions and prepared changelog, tag the release, and attach the same tarballs, manifest, checksums, package summary, and certification report to the GitHub Release.
 
 ### Standalone release assets
 

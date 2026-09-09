@@ -234,6 +234,9 @@ describe("release script helpers", () => {
             "[2.3.21]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.21",
         ),
     );
+    expect(() =>
+      finalizeChangelogForRelease(changelog.replace("- Faster indexes.\n", ""), "2.3.21", "2026-09-05"),
+    ).toThrow();
   });
 
   it("requires a prepared release section with no Unreleased entries", () => {
@@ -254,9 +257,13 @@ describe("release script helpers", () => {
     ].join("\n");
     const prepared = finalizeChangelogForRelease(changelog, "2.3.21", "2026-09-05");
 
-    expect(() => assertChangelogPreparedForRelease(prepared, "2.3.21")).not.toThrow();
-    expect(() => assertChangelogPreparedForRelease(changelog, "2.3.21")).toThrow("Unreleased entries");
-    expect(() => assertChangelogPreparedForRelease(prepared, "2.3.22")).toThrow("not prepared");
+    expect(finalizeChangelogForRelease(prepared, "2.3.21", "2026-09-06")).toBe(prepared);
+    expect(() => assertChangelogPreparedForRelease(changelog, "2.3.21")).toThrow();
+    expect(() => assertChangelogPreparedForRelease(prepared, "2.3.22")).toThrow();
+    expect(() => finalizeChangelogForRelease(prepared, "2.3.22", "2026-09-06")).toThrow();
+    expect(() =>
+      finalizeChangelogForRelease(prepared.replace("[2.3.21]:", "[missing]:"), "2.3.21", "2026-09-06"),
+    ).toThrow();
   });
 
   it("prepares the next release changelog from the root package version", () => {
@@ -282,28 +289,30 @@ describe("release script helpers", () => {
       ].join("\n"),
     );
 
+    const originalChangelog = fs.readFileSync(path.join(tempDir, "CHANGELOG.md"), "utf8");
+    const outputPath = path.join(tempDir, "temp", "release-changelog", "CHANGELOG.md");
     try {
+      const artifactResult = spawnSync(process.execPath, [scriptPath, "patch", "--output", outputPath], {
+        cwd: tempDir,
+        encoding: "utf8",
+      });
+      expect(artifactResult.status, `${artifactResult.stdout}\n${artifactResult.stderr}`).toBe(0);
+      const artifactChangelog = fs.readFileSync(outputPath, "utf8");
+      assertChangelogPreparedForRelease(artifactChangelog, "2.3.21");
+      expect(artifactChangelog).toContain("- Repair.");
+      expect(fs.readFileSync(path.join(tempDir, "CHANGELOG.md"), "utf8")).toBe(originalChangelog);
+      expect(fs.readFileSync(path.join(tempDir, "package.json"), "utf8")).toBe('{"version":"2.3.20"}\n');
+
       const result = spawnSync(process.execPath, [scriptPath, "patch"], {
         cwd: tempDir,
         encoding: "utf8",
       });
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(result.stdout).toBe("Prepared CHANGELOG.md for 2.3.21.\n");
       assertChangelogPreparedForRelease(fs.readFileSync(path.join(tempDir, "CHANGELOG.md"), "utf8"), "2.3.21");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
-  });
-
-  it("rejects a release without Unreleased entries", () => {
-    expect(() =>
-      finalizeChangelogForRelease(
-        "# Changelog\n\n## [Unreleased]\n\n## [2.3.20] - 2026-09-04\n",
-        "2.3.21",
-        "2026-09-05",
-      ),
-    ).toThrow("CHANGELOG.md has no Unreleased entries.");
   });
 
   it("updates only the native package version for pre-build release artifacts", () => {
