@@ -17,6 +17,10 @@ export const QUERY_INDEX_CANDIDATE_ROW_LIMIT = 2000;
  * path-ordered SQL reads and be kept once we do cheap in-memory ranking. */
 const QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT = QUERY_INDEX_CANDIDATE_ROW_LIMIT * 4;
 
+/** With 500 paths and LIMIT, 128 two-parameter predicates stay below even SQLite's
+ * legacy 999-variable limit and its 1000-level expression-depth limit. */
+const QUERY_INDEX_INLINE_TERM_LIMIT = 128;
+
 export function codePointLength(value: string): number {
   return Array.from(value).length;
 }
@@ -26,6 +30,10 @@ function isAscii(value: string): boolean {
     if (value.charCodeAt(index) > 0x7f) return false;
   }
   return true;
+}
+
+function supportsFtsTrigramTerm(term: string): boolean {
+  return codePointLength(term) >= 3 && isAscii(term);
 }
 
 export function escapeFtsTrigramTerm(term: string): string {
@@ -433,7 +441,7 @@ export class QueryIndexStore {
 
     const termCondition = (term: string): { condition: string; parameters: string[] } => {
       const compactCondition = "instr(replace(chunks.normalized_text, ' ', ''), ?) > 0";
-      if (codePointLength(term) < 3 || !isAscii(term)) {
+      if (!supportsFtsTrigramTerm(term)) {
         return {
           condition: `(instr(chunks.normalized_text, ?) > 0 OR ${compactCondition})`,
           parameters: [term, term],
@@ -449,7 +457,7 @@ export class QueryIndexStore {
     if (terms.length > 1) {
       const conditions = ["instr(chunks.normalized_text, ?) > 0"];
       const parameters = [phrase];
-      if (terms.every((term) => codePointLength(term) >= 3 && isAscii(term))) {
+      if (terms.every(supportsFtsTrigramTerm)) {
         conditions.unshift("chunks.chunk_id IN (SELECT rowid FROM chunk_search WHERE chunk_search MATCH ?)");
         parameters.unshift(escapeFtsTrigramTerm(phrase));
       }
@@ -458,12 +466,40 @@ export class QueryIndexStore {
 
     if (terms.length > 1) {
       if (candidates.size < normalizedLimit) {
-        const allTerms = terms.map(termCondition);
-        collect(
-          allTerms.map((term) => term.condition),
-          allTerms.flatMap((term) => term.parameters),
-          normalizedLimit,
-        );
+        if (terms.length <= QUERY_INDEX_INLINE_TERM_LIMIT) {
+          const allTerms = terms.map(termCondition);
+          collect(
+            allTerms.map((term) => term.condition),
+            allTerms.flatMap((term) => term.parameters),
+            normalizedLimit,
+          );
+        } else {
+          // Keep every term without growing SQL depth or bind count. NOT EXISTS
+          // applies the same FTS/substring/compact match before the candidate cap.
+          const termValues = terms.map((term) => [
+            term,
+            supportsFtsTrigramTerm(term) ? escapeFtsTrigramTerm(term) : null,
+          ]);
+          collect(
+            [
+              `NOT EXISTS (
+                SELECT 1 FROM json_each(?) AS query_terms
+                WHERE NOT (
+                  CASE WHEN json_extract(query_terms.value, '$[1]') IS NULL
+                    THEN instr(chunks.normalized_text, json_extract(query_terms.value, '$[0]')) > 0
+                    ELSE chunks.chunk_id IN (
+                      SELECT rowid FROM chunk_search
+                      WHERE chunk_search MATCH json_extract(query_terms.value, '$[1]')
+                    )
+                  END
+                  OR instr(replace(chunks.normalized_text, ' ', ''), json_extract(query_terms.value, '$[0]')) > 0
+                )
+              )`,
+            ],
+            [JSON.stringify(termValues)],
+            normalizedLimit,
+          );
+        }
       } else {
         totalCandidatesLowerBound = true;
       }
