@@ -187,13 +187,6 @@ export function collectDetailedDeclarations(
   return { functionNodes, classNodes, constStringOf };
 }
 
-export function collectIdentifiers(node: SyntaxNodeLike, sup: LanguageSupport, source: string, out: string[]): void {
-  if (isIdentifierType(sup, node.type) || node.type === "type_identifier") {
-    out.push(sliceText(node, source));
-  }
-  for (const child of node.namedChildren ?? []) collectIdentifiers(child, sup, source, out);
-}
-
 export function findFirstNodeByType(node: SyntaxNodeLike, type: string): SyntaxNodeLike | null {
   for (const child of node.namedChildren ?? []) {
     if (child.type === type) return child;

@@ -6,7 +6,7 @@ import { getMemberAccessParts } from "../../util/member-access.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { defNodeId, nodeForDef, type SymbolGraph } from "../symbol-graph.js";
 import type { DetailedClassNode, DetailedFunctionNode } from "./ast.js";
-import { collectIdentifiers, collectNodesByType, findFirstNodeByType, isIdentifierType } from "./ast.js";
+import { collectNodesByType, findFirstNodeByType, isIdentifierType } from "./ast.js";
 import {
   CALL_ARGUMENT_NODE_TYPES,
   callArgumentCount,
@@ -434,6 +434,104 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
   }
 }
 
+/** Qualifiers name a container, not another base type. */
+const QUALIFIER_NAME_FIELD: Record<string, string> = {
+  qualified_name: "name", // C#: Namespace.Base, Outer.Inner
+  qualified_identifier: "name", // C++: ns::Base
+  scope_resolution: "name", // Ruby: Module::Base
+};
+
+/** Generic wrappers contribute the base name, not their type arguments. */
+const GENERIC_WRAPPER_TYPES: Record<string, true> = {
+  generic_name: true,
+  generic_type: true,
+  user_type: true,
+  template_type: true,
+};
+const GENERIC_ARGUMENT_CHILD_TYPES: Record<string, true> = {
+  type_argument_list: true, // C#: generic_name
+  type_arguments: true, // Java/TypeScript generic_type, Kotlin/Swift user_type
+  template_argument_list: true, // C++: template_type
+  type_modifiers: true, // Kotlin/Swift user_type nullability/variance modifiers
+};
+
+/** Kotlin delegation-specifier forms that wrap the base type with call syntax. */
+const CALL_LIKE_WRAPPER_SKIP_TYPES: Record<string, Record<string, true>> = {
+  constructor_invocation: { value_arguments: true }, // Base(args)
+  explicit_delegation: { primary_expression: true }, // Interface by delegate
+};
+
+/** Python base-list entries that are never base types. */
+const BASE_TYPE_IGNORED_TYPES: Record<string, true> = {
+  keyword_argument: true,
+  dictionary_splat: true,
+  list_splat: true,
+};
+
+/** Remove type arguments and wrapper syntax before resolving a direct base. */
+function narrowBaseSpecifierNode(node: SyntaxNodeLike): SyntaxNodeLike {
+  let current = node;
+  for (;;) {
+    const qualifierField = QUALIFIER_NAME_FIELD[current.type];
+    if (qualifierField) {
+      const named = current.childForFieldName(qualifierField);
+      if (!named || named === current) return current;
+      current = named;
+      continue;
+    }
+    if (current.type === "scoped_type_identifier") {
+      let named = current.childForFieldName("name");
+      if (!named) {
+        const parts = current.namedChildren ?? [];
+        for (let index = parts.length - 1; index >= 0; index -= 1) {
+          const part = parts[index]!;
+          if (part.type !== "annotation" && part.type !== "marker_annotation") {
+            named = part;
+            break;
+          }
+        }
+      }
+      if (!named || named === current) return current;
+      current = named;
+      continue;
+    }
+    if (GENERIC_WRAPPER_TYPES[current.type]) {
+      const named =
+        current.childForFieldName("name") ??
+        (current.namedChildren ?? []).find((child) => !GENERIC_ARGUMENT_CHILD_TYPES[child.type]);
+      if (!named || named === current) return current;
+      current = named;
+      continue;
+    }
+    if (current.type === "subscript") {
+      // Python `Base[Payload]` generic base: `value` names the base type.
+      const value = current.childForFieldName("value");
+      if (!value) return current;
+      current = value;
+      continue;
+    }
+    const callSkipTypes = CALL_LIKE_WRAPPER_SKIP_TYPES[current.type];
+    if (callSkipTypes) {
+      const named = (current.namedChildren ?? []).find((child) => !callSkipTypes[child.type]);
+      if (!named) return current;
+      current = named;
+      continue;
+    }
+    return current;
+  }
+}
+
+/** Collect one type identifier per direct base or interface specifier. */
+function collectBaseSpecifierIdentifiers(node: SyntaxNodeLike, sup: LanguageSupport, out: SyntaxNodeLike[]): void {
+  if (BASE_TYPE_IGNORED_TYPES[node.type]) return;
+  const narrowed = narrowBaseSpecifierNode(node);
+  if (isIdentifierType(sup, narrowed.type) || narrowed.type === "type_identifier") {
+    out.push(narrowed);
+    return;
+  }
+  for (const child of narrowed.namedChildren ?? []) collectBaseSpecifierIdentifiers(child, sup, out);
+}
+
 function recordIdentifierRelations(
   context: EdgePassContext,
   fromId: string,
@@ -441,14 +539,7 @@ function recordIdentifierRelations(
   relationForTarget: (target: SymbolDef, index: number) => "extends" | "implements" | "trait" | "mixin",
 ): void {
   const identifiers: SyntaxNodeLike[] = [];
-  const collect = (node: SyntaxNodeLike): void => {
-    if (isIdentifierType(context.sup, node.type) || node.type === "type_identifier") {
-      identifiers.push(node);
-      return;
-    }
-    for (const child of node.namedChildren ?? []) collect(child);
-  };
-  collect(container);
+  collectBaseSpecifierIdentifiers(container, context.sup, identifiers);
   const seen = new Set<string>();
   for (const [index, identifier] of identifiers.entries()) {
     const target = context.resolveIdentifier(sliceText(identifier, context.source), identifier);
@@ -489,15 +580,16 @@ export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: 
     markImplementationTarget(context, fromId, cls.node, cls.def);
     if (context.sup.id === "java") {
       const superClass = findFirstNodeByType(cls.node, "superclass");
-      const superNode = superClass?.childForFieldName("name") ?? superClass?.namedChildren?.[0] ?? null;
+      const rawSuperNode = superClass?.childForFieldName("name") ?? superClass?.namedChildren?.[0] ?? null;
+      const superNode = rawSuperNode ? narrowBaseSpecifierNode(rawSuperNode) : null;
       if (superNode) tryResolveNode(context, superNode, fromId, "extends");
 
       const interfaces = findFirstNodeByType(cls.node, "super_interfaces");
       if (interfaces) {
-        const names: string[] = [];
-        collectIdentifiers(interfaces, context.sup, context.source, names);
-        for (const name of names) {
-          const target = context.resolveIdentifier(name, interfaces);
+        const interfaceIdentifiers: SyntaxNodeLike[] = [];
+        collectBaseSpecifierIdentifiers(interfaces, context.sup, interfaceIdentifiers);
+        for (const identifier of interfaceIdentifiers) {
+          const target = context.resolveIdentifier(sliceText(identifier, context.source), identifier);
           if (target) recordDefEdge(context, fromId, target, "implements", interfaces);
         }
       }
@@ -578,16 +670,17 @@ export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: 
     }
 
     const superClause = findFirstNodeByType(cls.node, "extends_clause");
-    const superNode = superClause?.namedChildren?.[0] ?? superClause?.child(1);
+    const rawSuperNode = superClause?.namedChildren?.[0] ?? superClause?.child(1);
+    const superNode = rawSuperNode ? narrowBaseSpecifierNode(rawSuperNode) : null;
     if (superNode) tryResolveNode(context, superNode, fromId, "extends");
 
     const implementsClauses: SyntaxNodeLike[] = [];
     collectNodesByType(cls.node, "implements_clause", implementsClauses);
     for (const clause of implementsClauses) {
-      const names: string[] = [];
-      collectIdentifiers(clause, context.sup, context.source, names);
-      for (const name of names) {
-        const target = context.resolveIdentifier(name, clause);
+      const interfaceIdentifiers: SyntaxNodeLike[] = [];
+      collectBaseSpecifierIdentifiers(clause, context.sup, interfaceIdentifiers);
+      for (const identifier of interfaceIdentifiers) {
+        const target = context.resolveIdentifier(sliceText(identifier, context.source), identifier);
         if (target) recordDefEdge(context, fromId, target, "implements", clause);
       }
     }

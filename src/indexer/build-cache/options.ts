@@ -13,8 +13,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
 
 /**
  * Bump whenever indexing or graph construction changes what a cached artifact would
- * contain. Epoch 3 added resolved calls edges. Epoch 4 also discards snapshots whose
- * import bindings could disagree with graph edges after resolution hints changed.
+ * contain. Epoch 3 added resolved call edges. Epoch 4 discards snapshots whose
+ * import bindings could disagree with graph edges after resolution hints changed,
+ * plus inheritance edges that treated generic arguments or enclosing-type
+ * qualifiers as direct bases.
  */
 export const CORE_ALGORITHM_EPOCH = 4;
 /**
