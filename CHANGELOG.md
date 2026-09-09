@@ -9,6 +9,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [2.3.23] - 2026-09-09
+
 ### Fixed
 
 - `codegraph duplicates` now removes import declarations and directives from every supported import syntax before matching duplicate units.
@@ -446,7 +448,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.22...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.23...HEAD
+[2.3.23]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.23
 [2.3.22]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.22
 [2.3.21]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.21
 [2.3.19]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.19
