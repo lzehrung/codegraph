@@ -990,6 +990,70 @@ describe("persistent query index", () => {
     }
   });
 
+  it.each([1_000, 17_000])(
+    "preserves complete-term priority for %i-term queries across path batches",
+    async (termCount) => {
+      const root = await createRepo();
+      const store = new QueryIndexStore(path.join(root, "query-long-terms.sqlite"));
+      const terms = Array.from({ length: termCount }, (_, index) => `term${String(index).padStart(5, "0")}`);
+      const files = Array.from({ length: 501 }, (_, index) =>
+        preparedFile(`src/a${String(index).padStart(3, "0")}.ts`, [terms[0]!]),
+      );
+      // Reverse the terms so the exact-phrase tier cannot hide a broken all-term tier.
+      files.push(preparedFile("src/zz-complete.ts", [terms.toReversed().join(" ")]));
+      try {
+        store.replaceFiles(files, [], {
+          ...expectedQueryIndexVersionMetadata(),
+          projectSnapshotIdentity: "snap-long-terms",
+          projectRootIdentity: "root-long-terms",
+          createdByCodegraphVersion: "test",
+          updatedAt: new Date().toISOString(),
+        });
+        const result = store.candidateChunkRetrievalForTerms(
+          terms,
+          files.map((file) => file.path),
+          terms.join(" "),
+          1,
+        );
+        expect(result.chunks.map((chunk) => chunk.path)).toEqual(["src/zz-complete.ts"]);
+        expect(result.totalCandidatesLowerBound).toBe(true);
+      } finally {
+        store.close();
+      }
+    },
+  );
+
+  it("preserves mixed FTS, Unicode, short, and compact matches in long queries", async () => {
+    const root = await createRepo();
+    const store = new QueryIndexStore(path.join(root, "query-long-mixed.sqlite"));
+    const terms = ["alpha", "id", "café", "分割語", "splitword", 'say"hi'];
+    const files = [
+      preparedFile("src/a-missing-quote.ts", ["alpha id café 分割語 split word"]),
+      preparedFile("src/b-missing-accent.ts", ['alpha id cafe 分割語 split word say"hi']),
+      preparedFile("src/zz-complete.ts", ['alpha id café 分割語 split word say"hi']),
+    ];
+    try {
+      store.replaceFiles(files, [], {
+        ...expectedQueryIndexVersionMetadata(),
+        projectSnapshotIdentity: "snap-long-mixed",
+        projectRootIdentity: "root-long-mixed",
+        createdByCodegraphVersion: "test",
+        updatedAt: new Date().toISOString(),
+      });
+      for (const queryTerms of [terms, [...Array.from({ length: 130 }, () => "alpha"), ...terms]]) {
+        const result = store.candidateChunkRetrievalForTerms(
+          queryTerms,
+          files.map((file) => file.path),
+          queryTerms.join(" "),
+          1,
+        );
+        expect(result.chunks.map((chunk) => chunk.path)).toEqual(["src/zz-complete.ts"]);
+      }
+    } finally {
+      store.close();
+    }
+  });
+
   it("bounds candidate retrieval via the limit parameter", async () => {
     const root = await createRepo();
     const databasePath = path.join(root, "query-candidate-limit.sqlite");

@@ -22,7 +22,7 @@ Search follows a compact pipeline:
 
 1. Normalize the query by splitting camel case, lowercasing with JavaScript `toLowerCase()`, and removing punctuation while preserving Unicode letters, numbers, combining marks, and `_`. Diacritics are preserved, so `cafe` and `café` remain distinct terms.
 2. For natural-language queries, exclude a small syntax-term set from ranking. A query that is itself an identifier or path retains every term; a prose query that mentions a path is still filtered. A query containing whitespace counts as a path only when it resolves to a discovered file. Queries that would otherwise lose every term also retain the original terms.
-3. Gather candidates from the selected surfaces. For indexed text, retrieve exact phrases and complete-term matches before capped partial matches.
+3. Gather candidates from the selected surfaces. For indexed text, retrieve exact phrases and complete-term matches before capped partial matches. Long queries retain every term without exceeding SQLite parameter or expression-depth limits.
 4. Score lexical evidence. Exact words and phrases beat ordered-token and substring matches.
 5. Apply structural weights. Symbol-name matches outrank incidental prose; exports and nearby graph nodes can receive additional weight.
 6. Sort deterministically by score, capability (semantic, then graph, then text), distinct matched rank terms, ASCII label, ASCII file path, and stable handle.
