@@ -82,7 +82,9 @@ Caching avoids repeated work; it does not change extraction or resolution semant
 - `memory` reuses parsed work in one process.
 - `disk` persists parsed files and an incremental graph under `.codegraph/cache/index-v1`. The index `manifest.json` is compact JSON; pretty-printed files from earlier versions still load.
 
-Disk loads reuse unchanged files and update changed ones. Codegraph validates file, configuration, build, and available Git state before reuse; incompatible or corrupt data is rebuilt. Strict mode hashes content, while non-strict mode accepts the documented metadata speed tradeoff.
+Disk loads reuse unchanged files and update changed ones. Codegraph validates file, configuration, build, and available Git state before reuse; incompatible or corrupt data is rebuilt. Strict mode hashes content, while non-strict mode accepts the documented metadata speed tradeoff. Graph resolution options (`--resolve-node-modules`, `--resolution-hint`, and `graph.resolutionHints`) are part of that validated state, so changing them invalidates cached modules and edges instead of mixing resolutions from different runs.
+
+Module and graph cache identities also include effective TypeScript `baseUrl`/`paths` (including `extends`) and workspace package names, locations, `main`, and `exports`. These inputs are checked even when `resolveNodeModules` is disabled, so configuration-only changes cannot leave cached import targets on the old files. Unchanged resolution inputs still permit reuse.
 
 Existing `.codegraph-cache/` directories migrate automatically to `.codegraph/cache/` on the next run.
 

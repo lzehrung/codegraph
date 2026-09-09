@@ -10,7 +10,19 @@ import { fileExists } from "../workspace.js";
 
 export type MatchPathFn = ReturnType<typeof createMatchPath>;
 
-const tsconfigCache = new Map<string, { matchPath?: MatchPathFn }>();
+type TsconfigResolutionInputs = {
+  configFile: string;
+  baseUrl: string;
+  paths: Record<string, string[]>;
+};
+
+type CachedTsconfig = {
+  result: { matchPath?: MatchPathFn };
+  inputs?: TsconfigResolutionInputs;
+};
+
+const tsconfigCache = new Map<string, CachedTsconfig>();
+const resolvedTsconfigCache = new Map<string, Promise<CachedTsconfig>>();
 
 async function findNearestTsconfig(startFromFile: string, projectRoot: string): Promise<string | null> {
   const resolvedProjectRoot = path.resolve(projectRoot);
@@ -142,11 +154,7 @@ async function loadTsconfigConfig(
   return { baseUrl: baseUrl.replace(/\\/g, "/"), paths: normalizedPaths };
 }
 
-export async function loadNearestTsconfigFor(
-  file: string,
-  projectRoot: string,
-  logLevel?: LogLevel,
-): Promise<{ matchPath?: MatchPathFn }> {
+async function loadTsconfigFor(file: string, projectRoot: string, logLevel?: LogLevel): Promise<CachedTsconfig> {
   const dir = path.dirname(file);
   const cacheKey = `${fileIdentityKey(path.resolve(projectRoot))}::${fileIdentityKey(path.resolve(dir))}`;
   const cached = tsconfigCache.get(cacheKey);
@@ -154,25 +162,54 @@ export async function loadNearestTsconfigFor(
 
   const cfgPath = await findNearestTsconfig(file, projectRoot);
   if (!cfgPath) {
-    const val = {};
+    const val = { result: {} };
     tsconfigCache.set(cacheKey, val);
     return val;
   }
 
+  const configKey = `${fileIdentityKey(path.resolve(projectRoot))}::${fileIdentityKey(cfgPath)}`;
+  let pending = resolvedTsconfigCache.get(configKey);
+  if (!pending) {
+    pending = createTsconfigResolution(cfgPath, projectRoot, logLevel);
+    resolvedTsconfigCache.set(configKey, pending);
+  }
+  const val = await pending;
+  tsconfigCache.set(cacheKey, val);
+  return val;
+}
+
+async function createTsconfigResolution(
+  cfgPath: string,
+  projectRoot: string,
+  logLevel?: LogLevel,
+): Promise<CachedTsconfig> {
   try {
     const { baseUrl, paths } = await loadTsconfigConfig(cfgPath, projectRoot);
     const matchPath = createMatchPath(baseUrl, paths);
-    const val = { matchPath };
-    tsconfigCache.set(cacheKey, val);
-    return val;
+    return { result: { matchPath }, inputs: { configFile: cfgPath, baseUrl, paths } };
   } catch (error) {
     logWithLevel(logLevel, "warn", `Warning: Failed to load tsconfig at ${cfgPath}:`, error);
-    const val = {};
-    tsconfigCache.set(cacheKey, val);
-    return val;
+    return { result: {} };
   }
+}
+
+export async function loadNearestTsconfigFor(
+  file: string,
+  projectRoot: string,
+  logLevel?: LogLevel,
+): Promise<{ matchPath?: MatchPathFn }> {
+  return (await loadTsconfigFor(file, projectRoot, logLevel)).result;
+}
+
+export async function loadTsconfigResolutionInputsFor(
+  file: string,
+  projectRoot: string,
+  logLevel?: LogLevel,
+): Promise<TsconfigResolutionInputs | undefined> {
+  return (await loadTsconfigFor(file, projectRoot, logLevel)).inputs;
 }
 
 export function clearTsconfigCache(): void {
   tsconfigCache.clear();
+  resolvedTsconfigCache.clear();
 }
