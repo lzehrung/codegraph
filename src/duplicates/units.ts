@@ -9,12 +9,20 @@ import {
   hasUnterminatedQuotedLiteral,
   normalizeDuplicateSourceTokens,
 } from "../duplicate-token-normalization.js";
-import { supportForFileWithSource, supportForFileWithoutHeaderSample } from "../languages.js";
+import { supportById, supportForFileWithSource, supportForFileWithoutHeaderSample } from "../languages.js";
+import {
+  detectSFCFramework,
+  parseSFC,
+  prepareSFCBlockSource,
+  scriptLanguageIdForBlock,
+  styleLanguageKey,
+} from "../languages/sfc.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
 import { attemptParsePreparedFileContext } from "../indexer/parse-context.js";
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "../indexer/types.js";
 import { prepareSourceInput } from "../languages/file-prep.js";
-import { getNativeDuplicateTokens } from "../native/tree-sitter-native.js";
+import { buildByteToStringIndexMap, stringIndexForByte } from "../native/byte-index.js";
+import { getNativeDuplicateTokens, getNativeSingleQueryExecution } from "../native/tree-sitter-native.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { collectLineStartOffsets } from "../util/lines.js";
@@ -71,6 +79,83 @@ const symbolUnitKinds = new Set<SymbolKind>([
   SymbolKind.Table,
   SymbolKind.View,
 ]);
+
+type SourceRange = {
+  start: number;
+  end: number;
+};
+
+const duplicateImportStatementQueries: Readonly<Record<string, string>> = {
+  astro: "(import_statement) @stmt",
+  c: "(preproc_include) @stmt",
+  cpp: "(preproc_include) @stmt",
+  csharp: "(using_directive) @stmt",
+  css: "(import_statement) @stmt",
+  go: "(import_declaration) @stmt",
+  java: "(import_declaration) @stmt",
+  js: "(import_statement) @stmt",
+  kotlin: "(import_header) @stmt",
+  less: "(import_statement) @stmt",
+  mdx: "(import_statement) @stmt",
+  php: `
+    (require_expression) @stmt
+    (include_expression) @stmt
+    (require_once_expression) @stmt
+    (include_once_expression) @stmt
+    (namespace_use_declaration) @stmt
+  `,
+  python: `
+    (import_statement) @stmt
+    (import_from_statement) @stmt
+    (future_import_statement) @stmt
+  `,
+  ruby: `
+    (call method: (identifier) @method arguments: (argument_list (string (string_content) @mod))
+      (#match? @method "^(require|require_relative)$")) @stmt
+  `,
+  rust: `
+    (mod_item) @stmt (#match? @stmt ";\\s*$")
+    (extern_crate_declaration) @stmt
+    (use_declaration) @stmt
+  `,
+  scss: `
+    (import_statement) @stmt
+    (use_statement) @stmt
+    (forward_statement) @stmt
+  `,
+  swift: "(import_declaration) @stmt",
+  ts: "(import_statement) @stmt",
+  tsx: "(import_statement) @stmt",
+  zig: `
+    (variable_declaration
+      (builtin_function (builtin_identifier) @fn (arguments (string) @mod) (#eq? @fn "@import"))
+    ) @stmt
+  `,
+};
+
+const duplicateImportStatementFallbackPatterns: Readonly<Partial<Record<string, RegExp>>> = {
+  astro: /^[\t ]*import\b(?![\t ]*\()(?:[\t ]*["'][^"']*["']|[\s\S]*?\bfrom[\t ]*["'][^"']*["']|[\s\S]*?;)/gmu,
+  c: /^[\t ]*#\s*include(?:[^\r\n\\]|\\(?:\r?\n|.))*$/gmu,
+  cpp: /^[\t ]*#\s*include(?:[^\r\n\\]|\\(?:\r?\n|.))*$/gmu,
+  csharp: /^[\t ]*(?:global[\t ]+)?using\b(?![\t ]*(?:var\b|\())[\s\S]*?;/gmu,
+  css: /^[\t ]*@import\b[\s\S]*?;/gmu,
+  go: /^[\t ]*import\b(?:[\t ]*\([\s\S]*?\)|[^\r\n]*)/gmu,
+  java: /^[\t ]*import[\t ]+(?:static[\t ]+)?[^\r\n;]+;/gmu,
+  js: /^[\t ]*import\b(?![\t ]*\()(?:[\t ]*["'][^"']*["']|[\s\S]*?\bfrom[\t ]*["'][^"']*["']|[\s\S]*?;)/gmu,
+  kotlin: /^[\t ]*import[\t ]+[^\r\n]*/gmu,
+  less: /^[\t ]*@import\b[\s\S]*?;/gmu,
+  mdx: /^[\t ]*import\b(?![\t ]*\()(?:[\t ]*["'][^"']*["']|[\s\S]*?\bfrom[\t ]*["'][^"']*["']|[\s\S]*?;)/gmu,
+  php: /^[\t ]*(?:require(?:_once)?|include(?:_once)?|use)\b(?![\t ]*\()[\s\S]*?;/gmu,
+  python:
+    /^[\t ]*(?:from[\t ]+[^\r\n]+?[\t ]+import(?:[\t ]*\([\s\S]*?\)|[^\r\n]*(?:\\\r?\n[^\r\n]*)*)|import[\t ]+[^\r\n]*(?:\\\r?\n[^\r\n]*)*)/gmu,
+  ruby: /^[\t ]*require(?:_relative)?\b[^\r\n]*/gmu,
+  rust: /^[\t ]*(?:extern[\t ]+crate|use)\b[\s\S]*?;|^[\t ]*mod\b[^\r\n;]*;/gmu,
+  scss: /^[\t ]*@(import|use|forward)\b[\s\S]*?;/gmu,
+  swift: /^[\t ]*import[\t ]+[^\r\n]*/gmu,
+  ts: /^[\t ]*import\b(?![\t ]*\()(?:[\t ]*["'][^"']*["']|[\s\S]*?\bfrom[\t ]*["'][^"']*["']|[\s\S]*?;)/gmu,
+  tsx: /^[\t ]*import\b(?![\t ]*\()(?:[\t ]*["'][^"']*["']|[\s\S]*?\bfrom[\t ]*["'][^"']*["']|[\s\S]*?;)/gmu,
+  zig: /^[\t ]*(?:pub[\t ]+)?const\b[^\r\n;]*@import[\t ]*\([^;\r\n]*\)[\t ]*;/gmu,
+};
 function hashText(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
@@ -128,6 +213,101 @@ function languageForFile(filePath: string, source: string): LanguageForFileResul
     return { id: languageId, textOnly: true };
   }
   return undefined;
+}
+
+function fallbackImportStatementRanges(source: string, languageId: string): SourceRange[] {
+  const pattern = duplicateImportStatementFallbackPatterns[languageId];
+  if (!pattern) return [];
+
+  const ranges: SourceRange[] = [];
+  const maskedSource = maskJsLikeCommentsStringsAndRegex(source);
+  for (const match of maskedSource.matchAll(pattern)) {
+    if (match.index === undefined) continue;
+    ranges.push({ start: match.index, end: match.index + match[0].length });
+  }
+  return ranges;
+}
+
+function importStatementRanges(
+  source: string,
+  languageId: string,
+  nativeMode?: ProjectIndex["nativeMode"],
+): SourceRange[] {
+  const query = duplicateImportStatementQueries[languageId];
+  const support = supportById(languageId);
+  if (!query || !support) return [];
+
+  const execution = getNativeSingleQueryExecution(source, support, query, nativeMode);
+  if (execution.matches === null) return fallbackImportStatementRanges(source, languageId);
+
+  const ranges: SourceRange[] = [];
+  const byteIndexMap = buildByteToStringIndexMap(source);
+  for (const match of execution.matches) {
+    for (const capture of match.captures) {
+      if (capture.name !== "stmt") continue;
+      ranges.push({
+        start: stringIndexForByte(byteIndexMap, capture.start.index),
+        end: stringIndexForByte(byteIndexMap, capture.end.index),
+      });
+    }
+  }
+  return ranges;
+}
+
+function maskSourceRanges(source: string, ranges: readonly SourceRange[]): string {
+  if (!ranges.length) return source;
+
+  const merged: SourceRange[] = [];
+  const sortedRanges = [...ranges].sort((left, right) => left.start - right.start || left.end - right.end);
+  for (const range of sortedRanges) {
+    const start = Math.max(0, Math.min(source.length, range.start));
+    const end = Math.max(start, Math.min(source.length, range.end));
+    const previous = merged.at(-1);
+    if (previous && start <= previous.end) {
+      previous.end = Math.max(previous.end, end);
+      continue;
+    }
+    merged.push({ start, end });
+  }
+
+  const pieces: string[] = [];
+  let cursor = 0;
+  for (const range of merged) {
+    pieces.push(source.slice(cursor, range.start), source.slice(range.start, range.end).replace(/[^\r\n]/g, " "));
+    cursor = range.end;
+  }
+  pieces.push(source.slice(cursor));
+  return pieces.join("");
+}
+
+function sfcImportStatementRanges(source: string, nativeMode?: ProjectIndex["nativeMode"]): SourceRange[] {
+  const ranges: SourceRange[] = [];
+  for (const block of parseSFC(source)) {
+    if (block.type === "script") {
+      ranges.push(
+        ...importStatementRanges(prepareSFCBlockSource(source, block), scriptLanguageIdForBlock(block), nativeMode),
+      );
+    } else if (block.type === "style") {
+      const languageId = styleLanguageKey(block);
+      if (languageId)
+        ranges.push(...importStatementRanges(prepareSFCBlockSource(source, block), languageId, nativeMode));
+    }
+  }
+  return ranges;
+}
+
+/** Removes import declarations and directives before duplicate units are tokenized. */
+export function maskDuplicateImportStatements(
+  source: string,
+  filePath: string,
+  languageId: string,
+  nativeMode?: ProjectIndex["nativeMode"],
+): string {
+  const hasEmbeddedImportLanguages = Boolean(detectSFCFramework(filePath)) || languageId === "html";
+  const ranges = hasEmbeddedImportLanguages
+    ? sfcImportStatementRanges(source, nativeMode)
+    : importStatementRanges(source, languageId, nativeMode);
+  return maskSourceRanges(source, ranges);
 }
 
 function formatDuplicateFileHandle(file: string): string {
@@ -521,6 +701,7 @@ export function makeChunkUnits(
 }
 
 export function shouldKeepUnit(unit: DuplicateInternalUnit, includeSmall: boolean, minTokens: number): boolean {
+  if (!unit.tokenCount) return false;
   if (includeSmall) return true;
   return unit.tokenCount >= minTokens;
 }
@@ -616,12 +797,15 @@ export async function buildDuplicateUnitsForFile(
   const language = languageForFile(file, source);
   if (!language) return [];
 
-  const astContext = language.textOnly ? undefined : await getDuplicateAstContext(index, file, source, astContextCache);
+  const sourceWithoutImports = maskDuplicateImportStatements(source, file, language.id, index.nativeMode);
+  const astContext = language.textOnly
+    ? undefined
+    : await getDuplicateAstContext(index, file, sourceWithoutImports, astContextCache);
   const { chunks, symbolChunks } = makeDuplicateChunksWithSymbols(
     file,
     language.id,
     language.textOnly,
-    source,
+    sourceWithoutImports,
     minTokens,
     maxTokens,
   );

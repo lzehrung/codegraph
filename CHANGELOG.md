@@ -9,6 +9,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Fixed
+
+- `codegraph duplicates` now removes import declarations and directives from every supported import syntax before matching duplicate units.
+
 ## [2.3.22] - 2026-09-09
 
 ### Added

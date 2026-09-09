@@ -28,8 +28,8 @@ import { lruMapGet } from "../util/lru-map.js";
 import { assertFilePathWithinRoot, fileIdentityKey, normalizePath } from "../util/paths.js";
 import { cacheAbsolutePath, cacheRelativePath } from "../indexer/build-cache/module-cache.js";
 
-// v4: project-relative file fields and handles.
-export const DUPLICATE_UNIT_CACHE_VERSION = 4;
+// v5: duplicate units exclude import declarations and directives before tokenization.
+export const DUPLICATE_UNIT_CACHE_VERSION = 5;
 export const DUPLICATE_UNIT_CACHE_SCHEMA_VERSION = 2;
 export const DUPLICATE_UNIT_CACHE_TABLE = "duplicate_unit_cache";
 export const DUPLICATE_UNIT_CACHE_SCHEMA_VERSION_KEY = "duplicate_unit_cache.schema_version";

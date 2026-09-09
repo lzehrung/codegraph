@@ -19,7 +19,7 @@ import {
   DUPLICATE_IDENTIFIER_CONTINUE_RANGES,
   DUPLICATE_IDENTIFIER_START_RANGES,
 } from "../src/duplicate-identifier-ranges.js";
-import { getDuplicateAstContext } from "../src/duplicates/units.js";
+import { getDuplicateAstContext, maskDuplicateImportStatements } from "../src/duplicates/units.js";
 import {
   DUPLICATE_TOKENIZER_REVISION,
   DUPLICATE_UNIT_CACHE_VERSION,
@@ -127,6 +127,108 @@ function assertDuplicateTokenizerClassificationParity(codePoint: number, positio
   }
 }
 
+const importStatementMaskCases: Array<{ file: string; language: string; source: string }> = [
+  {
+    file: "sample.astro",
+    language: "astro",
+    source: '---\nimport marker from "duplicateImportMarker";\nconst keepAstro = marker;\n---\n',
+  },
+  { file: "sample.c", language: "c", source: '#include "duplicateImportMarker.h"\nint keepC = 1;\n' },
+  { file: "sample.cpp", language: "cpp", source: '#include "duplicateImportMarker.hpp"\nint keepCpp = 1;\n' },
+  { file: "sample.cs", language: "csharp", source: "using DuplicateImportMarker;\nclass KeepCsharp {}\n" },
+  { file: "sample.css", language: "css", source: '@import "duplicateImportMarker.css";\n.keep-css {}\n' },
+  {
+    file: "sample.html",
+    language: "html",
+    source:
+      '<script>\nimport marker from "duplicateImportMarker";\nconst keepHtml = marker;\n</script>\n<style>\n@import "duplicateImportMarker.css";\n.keep-html {}\n</style>\n',
+  },
+  {
+    file: "sample.go",
+    language: "go",
+    source: 'package sample\nimport (\n  "duplicateImportMarker/a"\n  "duplicateImportMarker/b"\n)\nfunc keepGo() {}\n',
+  },
+  {
+    file: "Sample.java",
+    language: "java",
+    source: "import duplicateImportMarker.Service;\nclass KeepJava {}\n",
+  },
+  { file: "sample.js", language: "js", source: 'import marker from "duplicateImportMarker";\nconst keepJs = 1;\n' },
+  {
+    file: "sample.kt",
+    language: "kotlin",
+    source: "import duplicateImportMarker.Service\nfun keepKotlin() = 1\n",
+  },
+  { file: "sample.less", language: "less", source: '@import "duplicateImportMarker.less";\n.keep-less {}\n' },
+  {
+    file: "sample.mdx",
+    language: "mdx",
+    source: 'import marker from "duplicateImportMarker";\n\nexport const keepMdx = marker;\n',
+  },
+  {
+    file: "sample.php",
+    language: "php",
+    source:
+      "<?php\nrequire 'duplicateImportMarker.php';\ninclude 'duplicateImportMarker.inc';\nrequire_once 'duplicateImportMarker.once';\ninclude_once 'duplicateImportMarker.again';\nuse DuplicateImportMarker\\Service;\nfunction keepPhp() {}\n",
+  },
+  {
+    file: "sample.py",
+    language: "python",
+    source:
+      "from __future__ import annotations\nimport duplicateImportMarker\nfrom duplicateImportMarker import Service\ndef keep_python():\n    return 1\n",
+  },
+  {
+    file: "sample.rb",
+    language: "ruby",
+    source: 'require "duplicateImportMarker"\nrequire_relative "duplicateImportMarker"\ndef keep_ruby\nend\n',
+  },
+  {
+    file: "sample.rs",
+    language: "rust",
+    source:
+      "mod duplicateImportMarker;\nextern crate duplicateImportMarker;\nuse duplicateImportMarker::Service;\nfn keep_rust() {}\n",
+  },
+  {
+    file: "sample.scss",
+    language: "scss",
+    source:
+      '@import "duplicateImportMarker";\n@use "duplicateImportMarker";\n@forward "duplicateImportMarker";\n.keep-scss {}\n',
+  },
+  {
+    file: "sample.swift",
+    language: "swift",
+    source: "import DuplicateImportMarker\nfunc keepSwift() {}\n",
+  },
+  {
+    file: "sample.ts",
+    language: "ts",
+    source:
+      '// café\nimport marker from "duplicateImportMarker";\nimport markerAlias = require("duplicateImportMarker");\nconst keepTs = 1;\n',
+  },
+  {
+    file: "sample.tsx",
+    language: "tsx",
+    source: 'import marker from "duplicateImportMarker";\nconst keepTsx = <div />;\n',
+  },
+  {
+    file: "sample.zig",
+    language: "zig",
+    source: 'const marker = @import("duplicateImportMarker");\npub fn keepZig() void {}\n',
+  },
+  {
+    file: "Component.vue",
+    language: "vue",
+    source:
+      '<script lang="ts">\nimport marker from "duplicateImportMarker";\nconst keepVue = marker;\n</script>\n<style>\n@import "duplicateImportMarker.css";\n.keep-vue {}\n</style>\n',
+  },
+  {
+    file: "Component.svelte",
+    language: "svelte",
+    source:
+      '<script>\nimport marker from "duplicateImportMarker";\nconst keepSvelte = marker;\n</script>\n<style>\n@import "duplicateImportMarker.css";\n.keep-svelte {}\n</style>\n',
+  },
+];
+
 describe("duplicate detection", () => {
   test("duplicate lead summaries retain omitted counts when no lead survives filters", () => {
     const lines: string[] = [];
@@ -148,7 +250,33 @@ describe("duplicate detection", () => {
     expect(lines).toContain("- omitted: 2 by confidence/type, 1 boilerplate, 3 outside changed scope");
   });
 
-  test("omits identical import-list boilerplate from core duplicate leads by default", async () => {
+  test("masks import declarations and directives across supported source grammars", () => {
+    for (const scenario of importStatementMaskCases) {
+      const masked = maskDuplicateImportStatements(scenario.source, scenario.file, scenario.language);
+      const fallbackMasked = maskDuplicateImportStatements(scenario.source, scenario.file, scenario.language, "off");
+
+      for (const result of [masked, fallbackMasked]) {
+        expect(result, scenario.file).not.toContain("duplicateImportMarker");
+        expect(result, scenario.file).toMatch(/keep/iu);
+        expect(result, scenario.file).toHaveLength(scenario.source.length);
+      }
+    }
+  });
+
+  test("keeps non-import words during fallback import masking", () => {
+    const cases = [
+      { file: "sample.cs", language: "csharp", source: "usingSomething();\nclass KeepCsharp {}\n" },
+      { file: "sample.go", language: "go", source: "important := 1\nfunc keepGo() {}\n" },
+    ];
+
+    for (const scenario of cases) {
+      expect(maskDuplicateImportStatements(scenario.source, scenario.file, scenario.language, "off")).toBe(
+        scenario.source,
+      );
+    }
+  });
+
+  test("excludes import-list boilerplate before duplicate scoring", async () => {
     const root = await makeTempProject();
     const importList = `${[
       'import { alphaOne } from "./alpha-one";',
@@ -167,6 +295,20 @@ describe("duplicate detection", () => {
     await writeProjectFile(root, "src/importListA.ts", importList);
     await writeProjectFile(root, "src/importListB.ts", importList);
 
+    const index = await buildProjectIndex(root, { native: "off" });
+    const result = await findDuplicates(index, {
+      projectRoot: root,
+      files: ["src/importListA.ts", "src/importListB.ts"],
+      includeSmall: true,
+      minConfidence: "low",
+    });
+
+    expect(result.units).toBe(0);
+    expect(result.groups).toEqual([]);
+  });
+
+  test("preserves non-import duplicate detection", async () => {
+    const root = await makeTempProject();
     const duplicateSource = `
 export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {
   const totals: number[] = [];
@@ -191,18 +333,6 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     expect(summary).toBeDefined();
     const leadFiles = new Set(summary?.leads.flatMap((lead) => [lead.file, lead.otherFile]));
     expect(leadFiles.has("src/a.ts") || leadFiles.has("src\\a.ts")).toBe(true);
-    expect([...leadFiles].some((file) => file.includes("importList"))).toBe(false);
-    expect(summary?.omittedCounts.byBoilerplate).toBeGreaterThan(0);
-
-    const optedIn = await collectDuplicateLeadSummary({
-      index,
-      projectRoot: root,
-      scope: "all",
-      includeBoilerplate: true,
-    });
-    const optedInFiles = new Set(optedIn?.leads.flatMap((lead) => [lead.file, lead.otherFile]));
-    expect([...optedInFiles].some((file) => file.includes("importList"))).toBe(true);
-    expect(optedIn?.omittedCounts.byBoilerplate).toBe(0);
   });
 
   test("omits identical barrel boilerplate from core duplicate leads by default", async () => {
