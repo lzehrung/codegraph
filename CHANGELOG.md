@@ -25,6 +25,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - Long-lived agent sessions now detect configuration-only changes before reusing a snapshot. Resolution, language, discovery, and ignore-rule changes now report stale state or refresh automatically according to the session freshness policy. Failed configuration checks report stale state without repeated automatic rebuilds or raw filesystem paths in the reason. Freshness respects `useConfig: false` without ignoring language config or ignore files.
 - Path-only search and session file discovery now track lightweight file signatures before full project loading, allowing file additions, deletions, and renames to refresh automatically without forcing semantic indexing. Freshness checks also detect deletions during initial signature capture.
 
+### Security
+
+- Updated transitive Hono to 4.13.7 to clear three production security advisories.
+
 ## [2.3.21] - 2026-09-05
 
 ### Fixed
