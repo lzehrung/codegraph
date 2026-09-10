@@ -12,7 +12,7 @@ import {
 } from "../src/index.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import * as indexerNavigation from "../src/indexer/navigation.js";
-import type { BuildReport, IncrementalBuildOptions, SymbolDef } from "../src/indexer/types.js";
+import type { BuildReport, IncrementalBuildOptions } from "../src/indexer/types.js";
 import { boundReviewReportForTransport } from "../src/review/types.js";
 import { summarizeChangedFiles } from "../src/review/summaries.js";
 import { fileIdentityKey } from "../src/util/paths.js";
@@ -2260,55 +2260,31 @@ describe("Review report", () => {
 
     await buildProjectIndex(root);
 
-    type RefResult = Awaited<ReturnType<typeof indexerNavigation.findReferences>>;
-    const deferreds: Array<{
-      promise: Promise<RefResult>;
-      resolve: (value: RefResult) => void;
-      def: SymbolDef | null;
-    }> = [];
-    const parallelCallsReady = Promise.withResolvers<void>();
-
-    const createDeferred = (def: SymbolDef | null) => {
-      let resolve: (value: RefResult) => void = () => {};
-      const promise = new Promise<RefResult>((res) => {
-        resolve = res;
-      });
-      const entry = { promise, resolve, def };
-      deferreds.push(entry);
-      if (deferreds.length === 2) parallelCallsReady.resolve();
-      return entry;
-    };
-
-    const findSpy = vi.spyOn(indexerNavigation, "findReferences").mockImplementation((idx, req) => {
-      const def = "def" in req ? req.def : null;
-      const entry = createDeferred(def ?? null);
-      return entry.promise;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const findSpy = vi.spyOn(indexerNavigation, "findReferences").mockImplementation(async (_index, request) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await Promise.resolve();
+      inFlight -= 1;
+      if (!("def" in request)) return { status: "not_found", reason: "missing def" };
+      return {
+        status: "ok",
+        definition: request.def,
+        references: [],
+      };
     });
 
     try {
-      const reportPromise = buildReviewReport(root, {
+      const report = await buildReviewReport(root, {
         files: [alphaFile, betaFile],
         includeSymbolDetails: true,
         maxCallsites: 1,
       });
 
-      await parallelCallsReady.promise;
-
-      for (const entry of deferreds) {
-        if (!entry.def) {
-          entry.resolve({ status: "not_found", reason: "missing def" });
-          continue;
-        }
-        entry.resolve({
-          status: "ok",
-          definition: entry.def,
-          references: [],
-        });
-      }
-
-      const report = await reportPromise;
       expect(report.status).toBe("ok");
       expect(report.changedFiles.length).toBe(2);
+      expect(maxInFlight).toBe(2);
     } finally {
       findSpy.mockRestore();
     }
@@ -2325,49 +2301,25 @@ describe("Review report", () => {
 
     await buildProjectIndex(root);
 
-    type RefResult = Awaited<ReturnType<typeof indexerNavigation.findReferences>>;
-    const deferreds: Array<{ resolve: (value: RefResult) => void }> = [];
-    const firstReferenceCall = Promise.withResolvers<void>();
-    const secondReferenceCall = Promise.withResolvers<void>();
     let inFlight = 0;
     let maxInFlight = 0;
 
-    const findSpy = vi.spyOn(indexerNavigation, "findReferences").mockImplementation(() => {
+    const findSpy = vi.spyOn(indexerNavigation, "findReferences").mockImplementation(async () => {
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
-      let resolveFn: (value: RefResult) => void = () => {};
-      const promise = new Promise<RefResult>((resolve) => {
-        resolveFn = resolve;
-      });
-      deferreds.push({
-        resolve: (value: RefResult) => {
-          inFlight -= 1;
-          resolveFn(value);
-        },
-      });
-      if (deferreds.length === 1) {
-        firstReferenceCall.resolve();
-      } else if (deferreds.length === 2) {
-        secondReferenceCall.resolve();
-      }
-      return promise;
+      await Promise.resolve();
+      inFlight -= 1;
+      return { status: "not_found", reason: "missing def" };
     });
 
     try {
-      const reportPromise = buildReviewReport(root, {
+      const report = await buildReviewReport(root, {
         files: [alphaFile, betaFile],
         includeSymbolDetails: true,
         maxCallsites: 1,
         referenceConcurrency: 1,
       });
 
-      await firstReferenceCall.promise;
-      deferreds[0]?.resolve({ status: "not_found", reason: "missing def" });
-
-      await secondReferenceCall.promise;
-      deferreds[1]?.resolve({ status: "not_found", reason: "missing def" });
-
-      const report = await reportPromise;
       expect(report.status).toBe("ok");
       expect(maxInFlight).toBe(1);
     } finally {
