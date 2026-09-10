@@ -763,7 +763,7 @@ export async function collectDuplicateUnits(
         file,
         variant,
         units: fileUnits,
-        ...(source !== undefined ? { source } : {}),
+        ...(cacheSignature === undefined && source !== undefined ? { source } : {}),
       });
     }
     for (const unit of fileUnits) {
