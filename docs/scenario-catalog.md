@@ -27,6 +27,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | ---------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------ | ---------- |
 | AST-shape duplicate evidence | `tests/duplicates.test.ts` | Same-language source units with matching parser-backed AST shapes report `astShapeEqual` metrics and `matching AST shape` reasons for renamed clones.                                            | Internal regression test | 2026-06-04 |
 | Import exclusion             | `tests/duplicates.test.ts` | Duplicate analysis removes import declarations and directives from every supported import syntax, including Astro/MDX module imports and embedded HTML, Vue, and Svelte script and style blocks. | Internal regression test | 2026-09-09 |
+| Glob-stable duplicate cache  | `tests/duplicates.test.ts` | Changing one or more `--ignore-glob` filters reuses a valid project index without rebuilding or updating it.                                                                                     | Internal regression test | 2026-09-09 |
 
 ## Fixture test matrix
 

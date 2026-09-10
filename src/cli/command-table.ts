@@ -475,16 +475,12 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
     run: async (ctx) => {
       const files = await ctx.resolveFiles();
       const { handleDuplicatesCommand } = await import("./duplicates.js");
-      const { createCurrentProjectIndexLoader } = await import("../indexer/load-current-index.js");
       await handleDuplicatesCommand({
         projectRootFs: ctx.projectRootFs,
         files,
         getOpt: ctx.getOpt,
         hasFlag: ctx.hasFlag,
-        loadCurrentIndex: createCurrentProjectIndexLoader(ctx.projectRootFs, ctx.buildAgentOptions(), {
-          kind: "project",
-          additionalFiles: files,
-        }),
+        loadCurrentIndex: ctx.createDuplicateIndexLoader(),
         writeJSONLine,
         writeStdoutLine,
         writeStderrLine,

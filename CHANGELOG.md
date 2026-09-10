@@ -11,7 +11,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Fixed
 
-- `codegraph duplicates` now reuses a fresh project index when duplicate-only text files are in scope.
+- `codegraph duplicates` now reuses a fresh project index when its duplicate scan glob filters change.
 
 ## [2.3.23] - 2026-09-09
 

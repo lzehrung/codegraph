@@ -452,7 +452,7 @@ Without `--graph`, each UI load or reload builds the current project graph throu
 - A single positional directory becomes the project root unless `--root` is set. `orient` is the exception: its positionals are always include roots.
 - Use `--root . ./src` for scoped scans with repository-relative paths.
 - Positional paths are scan roots, not glob patterns.
-- `--include-glob` and `--ignore-glob` are relative to each active scan root.
+- `--include-glob` and `--ignore-glob` are relative to each active scan root. They filter duplicate candidates without changing the shared project-index cache.
 - `--include-root-glob` and `--ignore-root-glob` are duplicates-only project-root-relative one-off filters.
 - Zero-match scan-root glob warnings explain the scan-root-relative interpretation and suggest likely replacements when a root-prefixed pattern misses under an include root.
 - Use `--include-small` for tiny helpers.

@@ -113,6 +113,7 @@ export type CliProjectContext = CliBaseContext & {
   includeRoots: string[];
   includeRootsAbs: string[];
   buildAgentOptions: () => BuildOptions;
+  createDuplicateIndexLoader: () => CurrentProjectIndexLoader;
   createGraphQueryIndexLoader: (
     graphOptions: GraphBuildOptions | undefined,
   ) => ReturnType<typeof createCurrentProjectIndexLoader>;
@@ -545,6 +546,18 @@ export async function loadCliProjectContext(base: CliBaseContext): Promise<CliPr
     };
   };
 
+  const createDuplicateIndexLoader = (): CurrentProjectIndexLoader => {
+    const options = buildAgentOptions();
+    // Per-command scan globs filter duplicate candidates. They must not redefine the
+    // shared project index or a different filter set would force a full rebuild.
+    if (hasDiscoveryOptions(diagnosticDiscoveryOptions)) {
+      options.discovery = diagnosticDiscoveryOptions;
+    } else {
+      delete options.discovery;
+    }
+    return createCurrentProjectIndexLoader(projectRootFs, options);
+  };
+
   // One place decides how current-state queries load the index: the shared loader
   // supplies the disk-cache default and the project scope encoding.
   const createGraphQueryIndexLoader = (graphOptions: GraphBuildOptions | undefined): CurrentProjectIndexLoader => {
@@ -563,6 +576,7 @@ export async function loadCliProjectContext(base: CliBaseContext): Promise<CliPr
     includeRoots,
     includeRootsAbs,
     buildAgentOptions,
+    createDuplicateIndexLoader,
     createGraphQueryIndexLoader,
     resolveFiles,
     resolveFilesFromRoots,
