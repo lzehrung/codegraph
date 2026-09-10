@@ -34,6 +34,7 @@ import {
   toProjectRelativePath,
 } from "../util/paths.js";
 import {
+  duplicateUnitCacheSignature,
   duplicateUnitCacheVariant,
   tryLoadDuplicateUnitsFromCache,
   writeDuplicateUnitsBatchToCache,
@@ -733,7 +734,17 @@ export async function collectDuplicateUnits(
 
   const pendingWrites: PendingDuplicateUnitCacheWrite[] = [];
   for (const file of normalizedFiles) {
-    const cachedUnits = tryLoadDuplicateUnitsFromCache(index, file, variant, options.projectRoot);
+    const fileKey = fileIdentityKey(file);
+    const cacheSignature = duplicateUnitCacheSignature(index, file, options.projectRoot);
+    let source = index.parsed?.get(fileKey)?.source;
+    if (!cacheSignature && index.cacheMode !== "off" && source === undefined) {
+      try {
+        source = await fsp.readFile(file, "utf8");
+      } catch {
+        // buildDuplicateUnitsForFile reports unreadable files by returning no units.
+      }
+    }
+    const cachedUnits = tryLoadDuplicateUnitsFromCache(index, file, variant, options.projectRoot, source);
     const fileUnits =
       cachedUnits ??
       (await buildDuplicateUnitsForFile(
@@ -745,9 +756,15 @@ export async function collectDuplicateUnits(
         options.shingleSize,
         options.windowSize,
         astContextCache,
+        source,
       ));
     if (!cachedUnits) {
-      pendingWrites.push({ file, variant, units: fileUnits });
+      pendingWrites.push({
+        file,
+        variant,
+        units: fileUnits,
+        ...(source !== undefined ? { source } : {}),
+      });
     }
     for (const unit of fileUnits) {
       if (!shouldKeepUnit(unit, options.includeSmall, options.minTokens)) {
@@ -781,12 +798,13 @@ export async function buildDuplicateUnitsForFile(
   shingleSize: number,
   windowSize: number,
   astContextCache: DuplicateAstContextCache,
+  sourceOverride?: string,
 ): Promise<DuplicateInternalUnit[]> {
   const fileKey = fileIdentityKey(file);
   const moduleIndex = index.byFile.get(fileKey);
   if (!isDuplicateCandidateFile(file)) return [];
 
-  let source = index.parsed?.get(fileKey)?.source;
+  let source = sourceOverride ?? index.parsed?.get(fileKey)?.source;
   if (source === undefined) {
     try {
       source = await fsp.readFile(file, "utf8");

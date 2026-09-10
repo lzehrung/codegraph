@@ -19,7 +19,11 @@ import {
   DUPLICATE_IDENTIFIER_CONTINUE_RANGES,
   DUPLICATE_IDENTIFIER_START_RANGES,
 } from "../src/duplicate-identifier-ranges.js";
-import { getDuplicateAstContext, maskDuplicateImportStatements } from "../src/duplicates/units.js";
+import {
+  collectDuplicateUnits,
+  getDuplicateAstContext,
+  maskDuplicateImportStatements,
+} from "../src/duplicates/units.js";
 import {
   DUPLICATE_TOKENIZER_REVISION,
   DUPLICATE_UNIT_CACHE_VERSION,
@@ -2959,5 +2963,48 @@ test("C5: duplicate unit cache signature prefers the content-hash cacheSig over 
     if (index) {
       closeDuplicateUnitCacheForIndex(index);
     }
+  }
+});
+
+test("C5: caches duplicate-only files by content signature", async () => {
+  const root = await makeTempProject();
+  let index: Awaited<ReturnType<typeof buildProjectIndex>> | undefined;
+  try {
+    await writeProjectFile(root, "src/anchor.ts", "export const anchor = true;\n");
+    const source = `{
+  "records": [
+    { "id": "one", "title": "duplicate cache content" },
+    { "id": "two", "title": "duplicate cache content" }
+  ]
+}
+`;
+    const file = await writeProjectFile(root, "data/records.json", source);
+    index = await buildProjectIndex(root, { cache: "disk" });
+
+    expect(duplicateUnitCacheSignature(index, file, root)).toBeUndefined();
+    const collection = await collectDuplicateUnits(index, {
+      projectRoot: root,
+      files: [file],
+      includeSmall: true,
+      minTokens: 1,
+      maxTokens: 400,
+      shingleSize: 3,
+      windowSize: 20,
+    });
+    expect(collection.units.length).toBeGreaterThan(0);
+
+    closeDuplicateUnitCacheForIndex(index);
+    index = await buildProjectIndex(root, { cache: "disk" });
+    expect(duplicateUnitCacheSignature(index, file, root)).toBeUndefined();
+
+    const variant = duplicateUnitCacheVariant(index, 1, 400, 3, 20, root);
+    const sourceSignature = duplicateUnitCacheSignature(index, file, root, source);
+    expect(sourceSignature).toMatch(/^source:/);
+    expect(tryLoadDuplicateUnitsFromCache(index, file, variant, root, source)).toEqual(collection.units);
+
+    const changedSource = source.replace("duplicate cache content", "changed cache content");
+    expect(tryLoadDuplicateUnitsFromCache(index, file, variant, root, changedSource)).toBeNull();
+  } finally {
+    if (index) closeDuplicateUnitCacheForIndex(index);
   }
 });

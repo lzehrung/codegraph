@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
@@ -163,6 +164,7 @@ export function duplicateUnitCacheSignature(
   index: ProjectIndex,
   file: string,
   projectRoot?: string,
+  source?: string,
 ): string | undefined {
   const root = projectRoot ?? index.projectRoot;
   const entry =
@@ -170,7 +172,11 @@ export function duplicateUnitCacheSignature(
   // `cacheSig` is git- or content-hash-derived and distinguishes a same-size edit whose mtime
   // got restored; falling back straight to `sig` would let a non-Git project reuse stale
   // duplicate units for a file whose content actually changed.
-  return entry?.cacheSig ?? entry?.gitSig ?? entry?.sig;
+  const signature = entry?.cacheSig ?? entry?.gitSig ?? entry?.sig;
+  if (signature) return signature;
+  if (source === undefined) return undefined;
+  // Duplicate-only candidates are intentionally outside the project manifest.
+  return `source:${crypto.createHash("sha256").update(source).digest("hex")}`;
 }
 
 export function duplicateUnitCacheKey(file: string, variant: string): string {
@@ -353,8 +359,9 @@ export function tryLoadDuplicateUnitsFromCache(
   file: string,
   variant: string,
   projectRoot?: string,
+  source?: string,
 ): DuplicateInternalUnit[] | null {
-  const sig = duplicateUnitCacheSignature(index, file, projectRoot);
+  const sig = duplicateUnitCacheSignature(index, file, projectRoot, source);
   if (!sig) return null;
   const key = duplicateUnitCacheKey(file, variant);
   if (index.cacheMode === "memory") {
@@ -383,6 +390,7 @@ export type PendingDuplicateUnitCacheWrite = {
   file: string;
   variant: string;
   units: DuplicateInternalUnit[];
+  source?: string;
 };
 
 export function writeDuplicateUnitsBatchToCache(
@@ -394,7 +402,7 @@ export function writeDuplicateUnitsBatchToCache(
   const root = projectRoot ?? index.projectRoot ?? "";
   if (index.cacheMode === "memory") {
     for (const write of writes) {
-      const sig = duplicateUnitCacheSignature(index, write.file, projectRoot);
+      const sig = duplicateUnitCacheSignature(index, write.file, projectRoot, write.source);
       if (!sig) continue;
       writeDuplicateUnitMemoryCache(duplicateUnitCacheKey(write.file, write.variant), {
         sig,
@@ -413,7 +421,7 @@ export function writeDuplicateUnitsBatchToCache(
       payload: Buffer;
     }> = [];
     for (const write of writes) {
-      const sig = duplicateUnitCacheSignature(index, write.file, projectRoot);
+      const sig = duplicateUnitCacheSignature(index, write.file, projectRoot, write.source);
       if (!sig) continue;
       const payload = brotliCompressSync(
         JSON.stringify(transformDuplicateUnits(root, serializeDuplicateUnits(write.units), true)),
