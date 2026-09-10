@@ -9,6 +9,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Fixed
+
+- `codegraph duplicates` now reuses a fresh project index when its duplicate scan glob filters change.
+
 ## [2.3.23] - 2026-09-09
 
 ### Fixed
