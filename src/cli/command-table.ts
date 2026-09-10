@@ -482,8 +482,8 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
         getOpt: ctx.getOpt,
         hasFlag: ctx.hasFlag,
         loadCurrentIndex: createCurrentProjectIndexLoader(ctx.projectRootFs, ctx.buildAgentOptions(), {
-          kind: "resolved-files",
-          files,
+          kind: "project",
+          additionalFiles: files,
         }),
         writeJSONLine,
         writeStdoutLine,

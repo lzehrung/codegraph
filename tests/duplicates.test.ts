@@ -1855,6 +1855,29 @@ export function formatUsage(value: string) {
     expect(warmResult.stderr).not.toContain("Building project index");
   });
 
+  test("duplicates CLI reuses a project cache after indexing duplicate-only text files", async () => {
+    const root = await makeTempProject();
+    await writeProjectFile(root, "src/anchor.ts", "export const anchor = 1;\n");
+    await writeProjectFile(root, "data/a.json", '{"value":"duplicate text source"}\n');
+    await writeProjectFile(root, "data/b.json", '{"value":"duplicate text source"}\n');
+
+    const indexed = await captureCli(["index", "--root", ".", "--json"], { cwd: root });
+    const cold = await captureCli(["duplicates", "--root", ".", "--json", "--include-small", "--progress"], {
+      cwd: root,
+    });
+    const warm = await captureCli(["duplicates", "--root", ".", "--json", "--include-small", "--progress"], {
+      cwd: root,
+    });
+
+    expect(indexed.exitCode).toBeUndefined();
+    expect(cold.exitCode).toBeUndefined();
+    expect(warm.exitCode).toBeUndefined();
+    expect(warm.stderr).toContain("Checking project index");
+    expect(warm.stderr).toContain("Checked project index");
+    expect(warm.stderr).not.toContain("Building project index");
+    expect(warm.stderr).not.toContain("Updating project index");
+  });
+
   test("duplicates CLI cleanup profile defaults to reduced-lines and summary output", async () => {
     const root = await makeTempProject();
     const source = `
