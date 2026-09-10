@@ -2266,6 +2266,7 @@ describe("Review report", () => {
       resolve: (value: RefResult) => void;
       def: SymbolDef | null;
     }> = [];
+    const parallelCallsReady = Promise.withResolvers<void>();
 
     const createDeferred = (def: SymbolDef | null) => {
       let resolve: (value: RefResult) => void = () => {};
@@ -2274,6 +2275,7 @@ describe("Review report", () => {
       });
       const entry = { promise, resolve, def };
       deferreds.push(entry);
+      if (deferreds.length === 2) parallelCallsReady.resolve();
       return entry;
     };
 
@@ -2290,15 +2292,7 @@ describe("Review report", () => {
         maxCallsites: 1,
       });
 
-      const waitFor = async (predicate: () => boolean) => {
-        for (let i = 0; i < 50; i += 1) {
-          if (predicate()) return;
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        throw new Error("Timed out waiting for parallel calls");
-      };
-
-      await waitFor(() => deferreds.length === 2);
+      await parallelCallsReady.promise;
 
       for (const entry of deferreds) {
         if (!entry.def) {
@@ -2333,6 +2327,8 @@ describe("Review report", () => {
 
     type RefResult = Awaited<ReturnType<typeof indexerNavigation.findReferences>>;
     const deferreds: Array<{ resolve: (value: RefResult) => void }> = [];
+    const firstReferenceCall = Promise.withResolvers<void>();
+    const secondReferenceCall = Promise.withResolvers<void>();
     let inFlight = 0;
     let maxInFlight = 0;
 
@@ -2349,6 +2345,11 @@ describe("Review report", () => {
           resolveFn(value);
         },
       });
+      if (deferreds.length === 1) {
+        firstReferenceCall.resolve();
+      } else if (deferreds.length === 2) {
+        secondReferenceCall.resolve();
+      }
       return promise;
     });
 
@@ -2360,18 +2361,10 @@ describe("Review report", () => {
         referenceConcurrency: 1,
       });
 
-      const waitFor = async (predicate: () => boolean) => {
-        for (let i = 0; i < 50; i += 1) {
-          if (predicate()) return;
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        throw new Error("Timed out waiting for findReferences calls");
-      };
-
-      await waitFor(() => deferreds.length === 1);
+      await firstReferenceCall.promise;
       deferreds[0]?.resolve({ status: "not_found", reason: "missing def" });
 
-      await waitFor(() => deferreds.length === 2);
+      await secondReferenceCall.promise;
       deferreds[1]?.resolve({ status: "not_found", reason: "missing def" });
 
       const report = await reportPromise;
