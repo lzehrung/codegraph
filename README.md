@@ -25,7 +25,7 @@ With Node.js 22.16 or newer, install from npm:
 npm install -g @lzehrung/codegraph
 codegraph doctor
 codegraph install
-codegraph explore "how does auth reach the database?" --root .
+codegraph explore "build review report" --root .
 ```
 
 No Node.js or npm? The standalone installers download a self-contained bundle with Node.js, the CLI, and the matching native runtime:
