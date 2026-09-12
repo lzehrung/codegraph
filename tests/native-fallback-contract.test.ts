@@ -22,11 +22,13 @@ import {
   prepareFileForIndexing,
 } from "../src/indexer/parse-context.js";
 import * as nativeRuntime from "../src/native/tree-sitter-native.js";
-import { supportForFile } from "../src/languages.js";
+import { supportById, supportForFile } from "../src/languages.js";
+import { collectModuleSpecifiersFromSource, type FallbackImportExtractionEvent } from "../src/graphs/specifiers.js";
 import type { NativeCapture, NativeQueryResults } from "../src/native/tree-sitter-native.js";
 import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../src/worker/native-extract-worker.js";
 import { simplifyNativeTestModuleIndex } from "./helpers/native.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import { createFallbackImportExtractionHandler } from "../src/indexer/build-cache/reports.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 
@@ -177,6 +179,27 @@ describe("native required fallback boundaries", () => {
 
     expect(moduleIndex).toEqual({ file, exports: [], imports: [], locals: [] });
     expect(nativeRequiredSpy).not.toHaveBeenCalled();
+  });
+
+  it("extracts graph-only links with required native unavailable without reporting degradation", () => {
+    vi.spyOn(nativeRuntime, "getCompactImportsExecution").mockImplementation(() => {
+      throw new Error(REQUIRED_NATIVE_UNAVAILABLE);
+    });
+    const report: BuildReport = { timings: {} };
+    const record = createFallbackImportExtractionHandler(report, { logLevel: "silent" });
+    const events: FallbackImportExtractionEvent[] = [];
+    const specifiers = collectModuleSpecifiersFromSource(supportById("markdown")!, "[Guide](./guide.md)", {
+      native: "on",
+      onFallbackImportExtraction: (event) => {
+        events.push(event);
+        record?.(event);
+      },
+    });
+    expect(specifiers.map((entry) => entry.spec)).toEqual(["./guide.md"]);
+    expect(events).toEqual([{ language: "markdown", reason: "unsupportedLanguage" }]);
+    expect(report.graph?.fallbackImportExtraction?.total).toBe(0);
+    record?.({ language: "python", reason: "unsupportedLanguage", file: "probe.py" });
+    expect(report.graph?.fallbackImportExtraction?.total).toBe(1);
   });
 
   it("uses a minimal syntax tree for reduced-mode parse recovery", () => {
@@ -342,6 +365,20 @@ describe("native required fallback boundaries", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+});
+
+it("does not report query-empty for python when native never ran", () => {
+  const support = supportById("python");
+  expect(support).toBeDefined();
+  const events: FallbackImportExtractionEvent[] = [];
+  collectModuleSpecifiersFromSource(support!, "import os\nfrom pkg import name\n", {
+    file: "main.py",
+    native: "off",
+    onFallbackImportExtraction: (event) => events.push(event),
+  });
+  expect(events.length).toBeGreaterThan(0);
+  expect(events.every((event) => event.reason !== "query-empty")).toBe(true);
+  expect(events).toEqual([expect.objectContaining({ language: "python", reason: "unavailable" })]);
 });
 
 nativeDescribe("native fallback contract", () => {

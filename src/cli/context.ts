@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import type { BuildOptions, BuildReport } from "../indexer/types.js";
+import { formatNativeBackendAffectedLanguages } from "../native/backend-report-format.js";
 import type { ReviewBuildReport } from "../review.js";
 import { errorMessage } from "../util/errors.js";
 import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
@@ -241,21 +242,23 @@ export function exitWithError(context: CliStderrExitContext, error: unknown, exi
 function formatNativeBackendStatus(report: BuildReport | undefined): string | undefined {
   const native = report?.backend?.native;
   if (!native) return undefined;
+  const affected = native.filesFellBack > 0 ? formatNativeBackendAffectedLanguages(report) : undefined;
+  const affectedSuffix = affected ? `; ${affected}` : "";
   if (native.filesUsed > 0) {
     if (native.filesFellBack > 0) {
-      return `Backend: native tree-sitter used for ${native.filesUsed} file(s); fallback for ${native.filesFellBack} file(s)`;
+      return `Backend: native tree-sitter used for ${native.filesUsed} file(s); fallback for ${native.filesFellBack} file(s)${affectedSuffix}`;
     }
     return `Backend: native tree-sitter used for ${native.filesUsed} file(s)`;
   }
   const fallbackTotal = native.filesFellBack;
   if (native.available) {
     if (fallbackTotal > 0) {
-      return `Backend: reduced graph/regex mode for ${fallbackTotal} file(s)`;
+      return `Backend: reduced graph/regex mode for ${fallbackTotal} file(s)${affectedSuffix}`;
     }
     return "Backend: native tree-sitter available";
   }
   const reason = native.loadError ? ` (${native.loadError})` : "";
-  return `Backend: reduced graph/regex mode; native addon unavailable${reason}`;
+  return `Backend: reduced graph/regex mode; native addon unavailable${reason}${affectedSuffix}`;
 }
 
 function formatNativeBackendFallbackSummary(report: BuildReport | undefined): string | undefined {
@@ -291,7 +294,7 @@ function formatParserBackendSummary(report: BuildReport | undefined): string | u
  * True when the run actually operated in a lower-accuracy mode: native
  * tree-sitter unavailable entirely, or some files fell back to regex/graph-
  * only extraction. Distinct from `showProgress`, which only controls whether
- * the *extra* per-language breakdown is printed.
+ * the extra per-language fallback-reason counts are printed.
  */
 function isNativeBackendDegraded(report: BuildReport | undefined): boolean {
   const native = report?.backend?.native;

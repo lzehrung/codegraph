@@ -42,8 +42,11 @@ export function extractMarkdownLinkOccurrences(source: string): MarkdownLinkOccu
 
   for (let index = 0; index < sanitized.length; index += 1) {
     if (sanitized[index] !== "[") continue;
-    if (sanitized[index - 1] === "!") continue;
-
+    const imageEnd = skipMarkdownImageConstruct(sanitized, index);
+    if (imageEnd !== null) {
+      index = imageEnd;
+      continue;
+    }
     const inlineLabelEnd = findMarkdownLabelEnd(sanitized, index + 1, MAX_MARKDOWN_INLINE_LABEL_SCAN_LENGTH);
     if (inlineLabelEnd >= 0 && sanitized[inlineLabelEnd + 1] === "(") {
       const parsed = parseMarkdownInlineLink(sanitized, inlineLabelEnd + 2);
@@ -290,23 +293,9 @@ function collectMarkdownReferenceLinkSpecifiers(
 
   for (let index = 0; index < source.length; index += 1) {
     if (source[index] !== "[") continue;
-    if (source[index - 1] === "!") {
-      const labelEnd = findMarkdownLabelEnd(source, index + 1, MAX_MARKDOWN_INLINE_LABEL_SCAN_LENGTH);
-      if (labelEnd < 0) {
-        index = skipConsecutiveMarkdownOpeners(source, index);
-        continue;
-      }
-      const suffix = parseMarkdownReferenceSuffix(source, labelEnd + 1);
-      if (suffix) {
-        index = suffix.endIndex;
-        continue;
-      }
-      if (source[labelEnd + 1] === "(") {
-        const parsed = parseMarkdownInlineLink(source, labelEnd + 2);
-        index = parsed?.endIndex ?? labelEnd;
-        continue;
-      }
-      index = labelEnd;
+    const imageEnd = skipMarkdownImageConstruct(source, index);
+    if (imageEnd !== null) {
+      index = imageEnd;
       continue;
     }
     const inlineLabelEnd = findMarkdownLabelEnd(source, index + 1, MAX_MARKDOWN_INLINE_LABEL_SCAN_LENGTH);
@@ -373,7 +362,11 @@ function collectMarkdownInlineLinkDestinations(source: string): string[] {
 
   for (let index = 0; index < source.length; index += 1) {
     if (source[index] !== "[") continue;
-    if (source[index - 1] === "!") continue;
+    const imageEnd = skipMarkdownImageConstruct(source, index);
+    if (imageEnd !== null) {
+      index = imageEnd;
+      continue;
+    }
 
     const labelEnd = findMarkdownLabelEnd(source, index + 1, MAX_MARKDOWN_INLINE_LABEL_SCAN_LENGTH);
     if (labelEnd < 0) {
@@ -568,10 +561,66 @@ function isLikelyMarkdownAutolinkTarget(candidate: string): boolean {
   return !!path.extname(candidate).length;
 }
 
+function skipMarkdownImageConstruct(source: string, bracketIndex: number): number | null {
+  if (source[bracketIndex - 1] !== "!") return null;
+  const labelEnd = findMarkdownLabelEnd(source, bracketIndex + 1, MAX_MARKDOWN_INLINE_LABEL_SCAN_LENGTH);
+  if (labelEnd < 0) {
+    return skipConsecutiveMarkdownOpeners(source, bracketIndex);
+  }
+  const suffix = parseMarkdownReferenceSuffix(source, labelEnd + 1);
+  if (suffix) return suffix.endIndex;
+  if (source[labelEnd + 1] === "(") {
+    const parsed = parseMarkdownInlineLink(source, labelEnd + 2);
+    return parsed?.endIndex ?? labelEnd;
+  }
+  return labelEnd;
+}
+
+function stripLeadingMarkdownFrontMatter(source: string): string {
+  const match = /^(---|\+\+\+)[ \t]*\r?\n(?:[\s\S]*?\r?\n)?\1[ \t]*(?:\r?\n|$)/.exec(source);
+  if (!match) return source;
+  return maskMatch(match[0]) + source.slice(match[0].length);
+}
+
+function stripIndentedMarkdownCode(source: string): string {
+  const listContentColumns: number[] = [];
+  return source.replace(/^[^\r\n]+/gm, (line) => {
+    if (!line.trim()) return line;
+    let index = 0;
+    let column = 0;
+    while (line[index] === " " || line[index] === "\t") {
+      column += line[index] === "\t" ? 4 - (column % 4) : 1;
+      index += 1;
+    }
+    while (listContentColumns.length && column < listContentColumns[listContentColumns.length - 1]!) {
+      listContentColumns.pop();
+    }
+    const contentColumn = listContentColumns[listContentColumns.length - 1] ?? 0;
+    if (column >= contentColumn + 4) return maskMatch(line);
+    const marker = /^(?:[-*+]|\d{1,9}[.)])(?=[ \t]|$)/.exec(line.slice(index));
+    if (marker) {
+      index += marker[0].length;
+      column += marker[0].length;
+      const markerEnd = column;
+      while (line[index] === " " || line[index] === "\t") {
+        column += line[index] === "\t" ? 4 - (column % 4) : 1;
+        index += 1;
+      }
+      // Five or more spaces after a marker start code, not wider list content.
+      const padding = column - markerEnd;
+      listContentColumns.push(markerEnd + (padding >= 1 && padding <= 4 ? padding : 1));
+      if (padding >= 5) return line.slice(0, index) + maskMatch(line.slice(index));
+    }
+    return line;
+  });
+}
+
 function stripMarkdownCode(source: string): string {
-  let sanitized = source.replace(/(^|\n)(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\2[^\n]*(?=\n|$)/g, maskMatch);
+  let sanitized = stripLeadingMarkdownFrontMatter(source);
+  sanitized = sanitized.replace(/(^|\n)(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\2[^\n]*(?=\n|$)/g, maskMatch);
   sanitized = sanitized.replace(/`[^`\n]*`/g, maskMatch);
-  sanitized = sanitized.replace(/^(?: {4}|\t).*$/gm, maskMatch);
+  sanitized = sanitized.replace(/<!--[\s\S]*?-->/g, maskMatch);
+  sanitized = stripIndentedMarkdownCode(sanitized);
   return sanitized;
 }
 

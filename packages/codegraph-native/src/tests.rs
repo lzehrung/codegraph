@@ -13,6 +13,7 @@ use crate::query::{
     try_execute_merged_language_queries,
     try_execute_merged_language_queries_with_match_limit,
     LanguageQueryTexts,
+    QueryCache,
 };
 use crate::types::NativeMatch;
 use std::collections::HashSet;
@@ -316,6 +317,74 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
         assert!(
             merged.is_none(),
             "a cached merged compile failure must skip recompiling the same query text"
+        );
+    }
+
+    #[test]
+    fn compiled_query_cache_keeps_a_repeated_query_warm() {
+        let language = language_for_id("js").expect("javascript language should exist");
+        let mut cache = QueryCache::with_capacity(2);
+        let query_text = "(identifier) @name";
+
+        cache
+            .get_or_compile("js", &language, query_text)
+            .expect("query should compile");
+        cache
+            .get_or_compile("js", &language, query_text)
+            .expect("repeated query should reuse the compiled entry");
+
+        assert_eq!(cache.len(), 1, "repeating a query must not grow the cache");
+        assert!(cache.contains("js", query_text));
+    }
+
+    #[test]
+    fn compiled_query_cache_evicts_lru_entries_after_capacity() {
+        let language = language_for_id("js").expect("javascript language should exist");
+        let mut cache = QueryCache::with_capacity(2);
+        let first = "(identifier) @first";
+        let second = "(identifier) @second";
+        let third = "(identifier) @third";
+
+        cache
+            .get_or_compile("js", &language, first)
+            .expect("first query should compile");
+        cache
+            .get_or_compile("js", &language, second)
+            .expect("second query should compile");
+        cache
+            .get_or_compile("js", &language, first)
+            .expect("first query should stay warm");
+        cache
+            .get_or_compile("js", &language, third)
+            .expect("third query should compile");
+
+        assert_eq!(cache.len(), 2, "cache must not grow past capacity");
+        assert!(cache.contains("js", first), "recently used query must remain");
+        assert!(cache.contains("js", third), "newest query must remain");
+        assert!(
+            !cache.contains("js", second),
+            "least recently used query must be evicted"
+        );
+    }
+
+    #[test]
+    fn merged_query_compile_failure_memo_evicts_after_capacity() {
+        let mut cache = QueryCache::with_capacity(2);
+        cache.record_failed_merged("ts", "one");
+        cache.record_failed_merged("ts", "two");
+        cache.record_failed_merged("ts", "one");
+        cache.record_failed_merged("ts", "three");
+
+        assert_eq!(
+            cache.failed_merged_len(),
+            2,
+            "failure memo must not grow past capacity"
+        );
+        assert!(cache.has_failed_merged("ts", "one"));
+        assert!(cache.has_failed_merged("ts", "three"));
+        assert!(
+            !cache.has_failed_merged("ts", "two"),
+            "least recently recorded merged failure must be evicted"
         );
     }
 

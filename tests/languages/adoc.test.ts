@@ -1,3 +1,7 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { extractAsciidocModuleSpecifiers } from "../../src/document-links/asciidoc.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -65,3 +69,62 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("AsciiDoc conditional includes", () => {
+  it("does not extract includes inside ifdef, ifndef, or ifeval regions", () => {
+    const source = [
+      "include::partials/live.adoc[]",
+      "ifdef::never[]",
+      "include::partials/ignored.adoc[]",
+      "endif::[]",
+      "ifndef::always[]",
+      "include::partials/ignored2.adoc[]",
+      "endif::[]",
+      "ifeval::[1 == 0]",
+      "include::partials/ignored3.adoc[]",
+      "endif::[]",
+      "include::partials/intro.adoc[]",
+    ].join("\n");
+
+    expect(extractAsciidocModuleSpecifiers(source).map((entry) => entry.spec)).toEqual([
+      "./partials/live.adoc",
+      "./partials/intro.adoc",
+    ]);
+  });
+
+  it("skips links in single-line conditionals without hiding the next line", () => {
+    const source = [
+      "ifdef::backend-pdf[xref:pdf-only.adoc[]]",
+      "ifndef::backend-html5[link:other.adoc[]]",
+      "xref:live.adoc[]",
+    ].join("\n");
+    expect(extractAsciidocModuleSpecifiers(source).map((entry) => entry.spec)).toEqual(["./live.adoc"]);
+  });
+
+  it("does not drop the rest of the file when a conditional is unterminated", () => {
+    const source = [
+      "include::partials/live.adoc[]",
+      "ifdef::never[]",
+      "include::partials/ignored.adoc[]",
+      "include::partials/after.adoc[]",
+    ].join("\n");
+
+    expect(extractAsciidocModuleSpecifiers(source).map((entry) => entry.spec)).toEqual([
+      "./partials/live.adoc",
+      "./partials/ignored.adoc",
+      "./partials/after.adoc",
+    ]);
+  });
+
+  it("still extracts unconditional includes from the adoc sample", async () => {
+    const source = await readFile(path.resolve("tests/samples/adoc/index.adoc"), "utf8");
+    expect(extractAsciidocModuleSpecifiers(source).map((entry) => entry.spec)).toEqual([
+      "./guide.adoc",
+      "./summary.adoc",
+      "https://example.com/adoc",
+      "./partials/intro.adoc",
+      "./partials/live.adoc",
+      "./appendix.adoc",
+    ]);
+  });
+});

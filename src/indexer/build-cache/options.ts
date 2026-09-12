@@ -20,8 +20,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * workspace resolution inputs were not fingerprinted, including removed configs.
  * Epoch 6 refreshes declaration exports, language discovery, and declaration-file resolution.
  * Epoch 7 refreshes import resolution, grouped import bindings, and typedef names.
+ * Epoch 8 refreshes document-link extraction and fallback diagnostics.
  */
-export const CORE_ALGORITHM_EPOCH = 7;
+export const CORE_ALGORITHM_EPOCH = 8;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

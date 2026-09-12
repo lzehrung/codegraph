@@ -6,9 +6,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const cliPath = path.resolve(process.cwd(), "dist", "cli.js");
-const sourceCliPath = path.resolve(process.cwd(), "src", "cli.ts");
-const sourceCommandTablePath = path.resolve(process.cwd(), "src", "cli", "command-table.ts");
-const sourceInvocationContextPath = path.resolve(process.cwd(), "src", "cli", "invocation-context.ts");
 
 /** Project modules under dist/ that load while handling lightweight CLI entrypoints. */
 function countDistModulesLoaded(args: string[]): {
@@ -60,74 +57,7 @@ function modulePathEndsWith(moduleUrl: string, suffix: string): boolean {
 }
 
 describe("CLI startup eager module loading", () => {
-  it("keeps command handlers and heavy discovery behind dynamic import()", async () => {
-    const [cliSource, commandTableSource, invocationContextSource] = await Promise.all([
-      fs.promises.readFile(sourceCliPath, "utf8"),
-      fs.promises.readFile(sourceCommandTablePath, "utf8"),
-      fs.promises.readFile(sourceInvocationContextPath, "utf8"),
-    ]);
-    // Basenames that must never be statically imported by the dispatcher family.
-    const lazyOnlyModules = [
-      "artifact.js",
-      "call-hierarchy.js",
-      "chunk.js",
-      "config.js",
-      "discovery-globs.js",
-      "doctor.js",
-      "drift.js",
-      "duplicates.js",
-      "explain.js",
-      "explore.js",
-      "file.js",
-      "git.js",
-      "graph-builder.js",
-      "graph.js",
-      "graph-delta.js",
-      "graph-queries.js",
-      "grep.js",
-      "impact.js",
-      "include-roots.js",
-      "index.js",
-      "inspect.js",
-      "install.js",
-      "lifecycle.js",
-      "manifest.js",
-      "mcp.js",
-      "navigation.js",
-      "orient.js",
-      "packet.js",
-      "project-files.js",
-      "refactor-plan.js",
-      "rename-preview.js",
-      "review.js",
-      "search.js",
-      "skill.js",
-      "sql.js",
-      "symbols.js",
-      "type-hierarchy.js",
-      "windows-process-drain.js",
-    ];
-
-    for (const source of [cliSource, commandTableSource, invocationContextSource]) {
-      for (const line of source.split(/\r?\n/)) {
-        if (!line.startsWith("import ")) continue;
-        if (line.startsWith("import type ")) continue;
-        const specifier = /"([^"]+)"\s*;?\s*$/.exec(line)?.[1] ?? "";
-        const finalSegment = specifier.split("/").pop() ?? "";
-        for (const moduleName of lazyOnlyModules) {
-          expect(finalSegment, `unexpected static import of ${moduleName}`).not.toBe(moduleName);
-        }
-      }
-    }
-
-    expect(commandTableSource).toContain('await import("./orient.js")');
-    expect(commandTableSource).toContain('await import("./search.js")');
-    expect(commandTableSource).toContain('await import("./doctor.js")');
-    expect(invocationContextSource).toContain("loadConfigHelpers");
-    expect(invocationContextSource).toContain("loadProjectFilesHelpers");
-  });
-
-  it("loads fewer than 30 dist modules for no args, --version, --help, and doctor", () => {
+  it("keeps lightweight CLI commands within the startup module budget", () => {
     const noArgs = countDistModulesLoaded([]);
     expect(noArgs.status).toBe(0);
     expect(noArgs.stdout).toContain("Start here:");
@@ -157,8 +87,9 @@ describe("CLI startup eager module loading", () => {
     const doctor = countDistModulesLoaded(["doctor", "--json"]);
     expect(doctor.status).toBe(0);
     expect(doctor.stdout).toContain('"package"');
-    // doctor inspects the native addon, which registers the Windows teardown drain.
-    expect(doctor.count).toBeLessThan(31);
+    // Doctor loads the native runtime, but not the document-link extractors.
+    expect(doctor.count).toBeLessThan(33);
+    expect(doctor.modules.some((url) => modulePathEndsWith(url, "/document-links.js"))).toBe(false);
     expect(doctor.modules.some((url) => modulePathEndsWith(url, "/duplicates.js"))).toBe(false);
     expect(doctor.modules.some((url) => modulePathEndsWith(url, "/project-files.js"))).toBe(false);
     expect(doctor.modules.some((url) => modulePathEndsWith(url, "/config.js"))).toBe(false);

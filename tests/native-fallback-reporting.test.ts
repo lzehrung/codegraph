@@ -3,6 +3,11 @@ import os from "node:os";
 import fsp from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { supportById } from "../src/languages.js";
+import { collectModuleSpecifiersFromSource, type FallbackImportExtractionEvent } from "../src/graphs/specifiers.js";
+import { maybeWriteNativeBackendStatus, runWithCliRuntime } from "../src/cli/context.js";
+import { buildDoctorReport, formatDoctorSummary } from "../src/cli/doctor.js";
+import { GRAPH_ONLY_LANGUAGE_IDS } from "../src/document-links.js";
+import type { BuildReport, NativeBackendLanguageReport } from "../src/indexer/types.js";
 import {
   getNativeQueryExecutionForState,
   getNativeSingleQueryExecution,
@@ -182,4 +187,130 @@ describe("native fallback reporting", () => {
     },
     slowNativeIntegrationTimeoutMs,
   );
+});
+
+function emptyLanguageReport(filesFellBack: number): NativeBackendLanguageReport {
+  return {
+    filesSeen: filesFellBack,
+    filesUsed: 0,
+    filesFellBack,
+    fallbackReasons: { unavailable: filesFellBack, unsupportedLanguage: 0, queryFailure: 0 },
+  };
+}
+
+describe("fallback import extraction honesty", () => {
+  it("reports unavailable when python has a grammar but the binding did not run", () => {
+    const support = supportById("python");
+    expect(support).toBeDefined();
+    const events: FallbackImportExtractionEvent[] = [];
+    const specs = collectModuleSpecifiersFromSource(support!, "import os\n", {
+      file: "main.py",
+      native: "off",
+      onFallbackImportExtraction: (event) => events.push(event),
+    });
+    expect(specs).toEqual(expect.arrayContaining([expect.objectContaining({ spec: "os" })]));
+    expect(events).toEqual([expect.objectContaining({ language: "python", reason: "unavailable", file: "main.py" })]);
+  });
+
+  it("reports unsupportedLanguage for graph-only markdown instead of query-empty", () => {
+    const support = supportById("markdown");
+    expect(support).toBeDefined();
+    const events: FallbackImportExtractionEvent[] = [];
+    const specs = collectModuleSpecifiersFromSource(support!, "[Guide](./guide.md)\n", {
+      file: "page.md",
+      native: "off",
+      onFallbackImportExtraction: (event) => events.push(event),
+    });
+    expect(specs).toEqual(expect.arrayContaining([expect.objectContaining({ spec: "./guide.md" })]));
+    expect(events).toEqual([
+      expect.objectContaining({ language: "markdown", reason: "unsupportedLanguage", file: "page.md" }),
+    ]);
+  });
+
+  it("reports unavailable for scss when the binding did not run", () => {
+    const support = supportById("scss");
+    expect(support).toBeDefined();
+    const events: FallbackImportExtractionEvent[] = [];
+    const specs = collectModuleSpecifiersFromSource(support!, '@use "variables";\n', {
+      file: "main.scss",
+      native: "off",
+      onFallbackImportExtraction: (event) => events.push(event),
+    });
+    expect(specs).toEqual(expect.arrayContaining([expect.objectContaining({ spec: "variables" })]));
+    expect(events).toEqual([expect.objectContaining({ language: "scss", reason: "unavailable", file: "main.scss" })]);
+  });
+
+  it("reports query-empty only when a native import query ran and matched nothing", () => {
+    const support = supportById("python");
+    expect(support).toBeDefined();
+    const events: FallbackImportExtractionEvent[] = [];
+    const specs = collectModuleSpecifiersFromSource(support!, "import os\n", {
+      file: "main.py",
+      compactNativeImports: { imports: [] },
+      onFallbackImportExtraction: (event) => events.push(event),
+    });
+    expect(specs).toEqual(expect.arrayContaining([expect.objectContaining({ spec: "os" })]));
+    expect(events).toEqual([expect.objectContaining({ language: "python", reason: "query-empty", file: "main.py" })]);
+  });
+});
+
+describe("degraded native backend language names", () => {
+  it("names affected languages in the default degraded backend line", async () => {
+    const report: BuildReport = {
+      timings: {},
+      backend: {
+        native: {
+          available: false,
+          enabled: false,
+          supportedLanguageIds: [],
+          filesUsed: 0,
+          filesFellBack: 5,
+          fallbackReasons: { unavailable: 5, unsupportedLanguage: 0, queryFailure: 0 },
+          byLanguage: {
+            js: emptyLanguageReport(1),
+            python: emptyLanguageReport(2),
+            rust: emptyLanguageReport(1),
+            ts: emptyLanguageReport(1),
+          },
+          errors: [],
+          loadError: "native tree-sitter disabled by CODEGRAPH_DISABLE_NATIVE",
+        },
+      },
+    };
+    const chunks: string[] = [];
+    await runWithCliRuntime({ stderr: (chunk) => chunks.push(chunk) }, async () => {
+      maybeWriteNativeBackendStatus(report, false);
+    });
+    const stderr = chunks.join("");
+    expect(stderr).toContain("Backend: reduced graph/regex mode");
+    expect(stderr).toContain("native addon unavailable");
+    expect(stderr).toContain("native tree-sitter disabled by CODEGRAPH_DISABLE_NATIVE");
+    expect(stderr).toContain("affected languages: js, python, rust, ts");
+  });
+});
+
+describe("doctor language support honesty", () => {
+  it("separates native grammar ids from registered graph-only ids when the binding is disabled", () => {
+    const previous = process.env.CODEGRAPH_DISABLE_NATIVE;
+    process.env.CODEGRAPH_DISABLE_NATIVE = "1";
+    try {
+      const report = buildDoctorReport();
+      expect(report.native.supportedLanguageIds).toEqual([]);
+      expect(report.native.graphOnlyLanguageIds).toEqual(
+        [...GRAPH_ONLY_LANGUAGE_IDS].sort((left, right) => left.localeCompare(right)),
+      );
+      expect(report.native.graphOnlyLanguageIds).toEqual(["adoc", "astro", "hbs", "markdown", "mdx", "rst"]);
+      const summary = formatDoctorSummary(report);
+      expect(summary).toContain("Native grammar language ids");
+      expect(summary).toContain("Graph-only language ids");
+      expect(summary).toContain("markdown");
+      expect(summary).not.toContain("Supported language ids");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CODEGRAPH_DISABLE_NATIVE;
+      } else {
+        process.env.CODEGRAPH_DISABLE_NATIVE = previous;
+      }
+    }
+  });
 });

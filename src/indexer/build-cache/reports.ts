@@ -1,7 +1,8 @@
 import { supportsReducedModeRegexRecovery } from "../../native/tree-sitter-native.js";
-import type { FallbackImportExtractionEvent } from "../../graphs/specifiers.js";
+import type { FallbackImportExtractionEvent, FallbackImportExtractionReason } from "../../graphs/specifiers.js";
 import { logWithLevel, type LogLevel } from "../../logging.js";
 import { stringifyUnknown } from "../../util/ast.js";
+import { isGraphOnlyLanguage } from "../../document-links/language-ids.js";
 import type {
   BuildFileReport,
   BuildOptions,
@@ -44,6 +45,15 @@ export function recordFileFailure(report: BuildReport | undefined, file: string,
   fileReport.errors = errors;
 }
 
+const EMPTY_FALLBACK_IMPORT_REASONS: Record<FallbackImportExtractionReason, number> = {
+  fast: 0,
+  "reduced-mode": 0,
+  unavailable: 0,
+  unsupportedLanguage: 0,
+  "query-error": 0,
+  "query-empty": 0,
+};
+
 function initFallbackImportExtractionReport(
   report: BuildReport | undefined,
 ): FallbackImportExtractionReport | undefined {
@@ -53,12 +63,7 @@ function initFallbackImportExtractionReport(
       fallbackImportExtraction: {
         total: 0,
         byLanguage: {},
-        byReason: {
-          fast: 0,
-          "reduced-mode": 0,
-          "query-error": 0,
-          "query-empty": 0,
-        },
+        byReason: { ...EMPTY_FALLBACK_IMPORT_REASONS },
         files: {},
       },
     };
@@ -66,12 +71,7 @@ function initFallbackImportExtractionReport(
     report.graph.fallbackImportExtraction = {
       total: 0,
       byLanguage: {},
-      byReason: {
-        fast: 0,
-        "reduced-mode": 0,
-        "query-error": 0,
-        "query-empty": 0,
-      },
+      byReason: { ...EMPTY_FALLBACK_IMPORT_REASONS },
       files: {},
     };
   }
@@ -89,17 +89,14 @@ export function createFallbackImportExtractionHandler(
 
   return (event: FallbackImportExtractionEvent) => {
     const filePath = event.file ? event.file.replace(/\\/g, "/") : "unknown";
-    if (fallbackReport) {
+    // Graph-only extraction is the supported path, not degraded native parsing.
+    const supportedGraphOnly = event.reason === "unsupportedLanguage" && isGraphOnlyLanguage(event.language);
+    if (fallbackReport && !supportedGraphOnly) {
       if (!fallbackReport.files[filePath]) {
         fallbackReport.total += 1;
         fallbackReport.byLanguage[event.language] = (fallbackReport.byLanguage[event.language] ?? 0) + 1;
-        fallbackReport.byReason ??= {
-          fast: 0,
-          "reduced-mode": 0,
-          "query-error": 0,
-          "query-empty": 0,
-        };
-        fallbackReport.byReason[event.reason] += 1;
+        fallbackReport.byReason ??= { ...EMPTY_FALLBACK_IMPORT_REASONS };
+        fallbackReport.byReason[event.reason] = (fallbackReport.byReason[event.reason] ?? 0) + 1;
       }
       fallbackReport.files[filePath] = {
         language: event.language,
@@ -111,12 +108,20 @@ export function createFallbackImportExtractionHandler(
     if (warned.has(warningKey)) return;
     warned.add(warningKey);
     const severity =
-      event.reason === "fast" || event.reason === "reduced-mode" || supportsReducedModeRegexRecovery(event.language)
+      event.reason === "fast" ||
+      event.reason === "reduced-mode" ||
+      event.reason === "unavailable" ||
+      event.reason === "unsupportedLanguage" ||
+      supportsReducedModeRegexRecovery(event.language)
         ? "debug"
         : "warn";
     let message: string;
     if (event.reason === "reduced-mode") {
       message = `Native parser unavailable for ${event.language}; using reduced import extraction.`;
+    } else if (event.reason === "unavailable") {
+      message = `Native parser unavailable for ${event.language}; no native query ran, using regex-based fallback extraction.`;
+    } else if (event.reason === "unsupportedLanguage") {
+      message = `Native grammar is not registered for ${event.language}; using graph-only extraction.`;
     } else if (event.reason === "fast") {
       message = `Fast mode active for ${event.language}; using regex-based import extraction instead of the native parser.`;
     } else if (supportsReducedModeRegexRecovery(event.language)) {
