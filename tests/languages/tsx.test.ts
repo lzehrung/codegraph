@@ -7,6 +7,7 @@ import { goToDefinition } from "../../src/index.js";
 import { collectImportsForFile } from "../../src/indexer/imports.js";
 import { TSX_SUPPORT } from "../../src/languages.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
+import { fileIdentityKey } from "../../src/util/paths.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -147,6 +148,51 @@ describe("TSX per-specifier type-only bindings", () => {
           expect.objectContaining({ imported: "b", typeOnly: false }),
         ]),
       );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("TSX declaration-only exports", () => {
+  it("resolves exported declaration-only functions and namespaces from a consumer import", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-tsx-declaration-exports-"));
+    const apiFile = path.join(root, "api.tsx").replace(/\\/g, "/");
+    const consumerFile = path.join(root, "consumer.tsx").replace(/\\/g, "/");
+    const apiSource = [
+      "export declare function overloaded(value: string): string;",
+      "export namespace Toolkit {}",
+      "export module NamespaceModule {}",
+      'declare module "ambient" {}',
+    ].join("\n");
+    const consumerSource = [
+      'import { overloaded, Toolkit, NamespaceModule } from "./api";',
+      "overloaded;",
+      "Toolkit;",
+    ].join("\n");
+    try {
+      await writeFile(apiFile, apiSource, "utf8");
+      await writeFile(consumerFile, consumerSource, "utf8");
+      const index = await createTestIndexFromFiles(root, [apiFile, consumerFile]);
+      const api = index.byFile.get(fileIdentityKey(apiFile));
+      const exported = api?.exports.flatMap((entry) => ("exportedAs" in entry ? [entry.exportedAs] : [])) ?? [];
+
+      expect(exported).toEqual(expect.arrayContaining(["overloaded", "Toolkit", "NamespaceModule"]));
+      expect(exported).not.toContain("ambient");
+      expect(exported).not.toContain('"ambient"');
+
+      const overloaded = await goToDefinition(index, { file: consumerFile, line: 2, column: 1 });
+      expect(overloaded.status).toBe("ok");
+      if (overloaded.status === "ok") {
+        expect(overloaded.definition.file).toBe(apiFile);
+        expect(overloaded.definition.range.start.line).toBe(1);
+      }
+      const toolkit = await goToDefinition(index, { file: consumerFile, line: 3, column: 1 });
+      expect(toolkit.status).toBe("ok");
+      if (toolkit.status === "ok") {
+        expect(toolkit.definition.file).toBe(apiFile);
+        expect(toolkit.definition.range.start.line).toBe(2);
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }

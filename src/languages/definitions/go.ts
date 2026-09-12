@@ -39,9 +39,9 @@ export const GO_DEF: LanguageDefinition = {
     exports: `
       (function_declaration name: (identifier) @name)
       (method_declaration name: (field_identifier) @name)
-      (type_spec name: (type_identifier) @name)
-      (const_spec (identifier) @name)
-      (var_spec (identifier) @name)
+      (source_file (type_declaration (type_spec name: (type_identifier) @name)))
+      (source_file (const_declaration (const_spec (identifier) @name)))
+      (source_file (var_declaration (var_spec (identifier) @name)))
     `,
     locals: `
       (function_declaration name: (identifier) @name)

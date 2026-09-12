@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runQuery } from "@lzehrung/codegraph-native";
-import { listSymbols } from "../../src/index.js";
+import { goToDefinition, listSymbols } from "../../src/index.js";
 import { chunkFile } from "../../src/chunking/chunk-file.js";
 import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
@@ -11,6 +11,7 @@ import { collectImportsForFile } from "../../src/indexer/imports.js";
 import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js";
 import { TS_SUPPORT } from "../../src/languages.js";
 import { createTestIndex, createTestIndexFromFiles } from "../test-utils.js";
+import { fileIdentityKey } from "../../src/util/paths.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -130,6 +131,62 @@ describe("TypeScript declaration-only symbols", () => {
       expect(symbols).toContainEqual(expect.objectContaining({ name: "Toolkit", kind: "type" }));
       expect(symbols).toContainEqual(expect.objectContaining({ name: "NamespaceModule", kind: "type" }));
       expect(chunks).toContainEqual(expect.objectContaining({ type: "namespace", name: '"ambient"' }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves exported declaration-only functions and namespaces from a consumer import", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-declaration-exports-"));
+    const apiFile = path.join(root, "api.d.ts").replace(/\\/g, "/");
+    const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+    const apiSource = [
+      "export declare function overloaded(value: string): string;",
+      "export function bareSig(value: number): number;",
+      "export namespace Toolkit {}",
+      "export module NamespaceModule {}",
+      "export declare namespace ExportedNS {}",
+      'declare module "ambient" {}',
+      'export declare module "ambient-export" {}',
+    ].join("\n");
+    const consumerSource = [
+      'import { overloaded, bareSig, Toolkit, NamespaceModule, ExportedNS } from "./api";',
+      "overloaded;",
+      "bareSig;",
+      "Toolkit;",
+      "NamespaceModule;",
+      "ExportedNS;",
+    ].join("\n");
+    try {
+      await writeFile(apiFile, apiSource, "utf8");
+      await writeFile(consumerFile, consumerSource, "utf8");
+      const index = await createTestIndexFromFiles(root, [apiFile, consumerFile]);
+      const api = index.byFile.get(fileIdentityKey(apiFile));
+      const exported = api?.exports.flatMap((entry) => ("exportedAs" in entry ? [entry.exportedAs] : [])) ?? [];
+
+      expect(exported).toEqual(
+        expect.arrayContaining(["overloaded", "bareSig", "Toolkit", "NamespaceModule", "ExportedNS"]),
+      );
+      expect(exported).not.toContain("ambient");
+      expect(exported).not.toContain("ambient-export");
+      expect(exported).not.toContain('"ambient"');
+      expect(exported).not.toContain('"ambient-export"');
+
+      const cases = [
+        { line: 2, name: "overloaded", expectedLine: 1 },
+        { line: 3, name: "bareSig", expectedLine: 2 },
+        { line: 4, name: "Toolkit", expectedLine: 3 },
+        { line: 5, name: "NamespaceModule", expectedLine: 4 },
+        { line: 6, name: "ExportedNS", expectedLine: 5 },
+      ];
+      for (const testCase of cases) {
+        const result = await goToDefinition(index, { file: consumerFile, line: testCase.line, column: 1 });
+        expect(result.status, testCase.name).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.definition.file).toBe(apiFile);
+          expect(result.definition.range.start.line).toBe(testCase.expectedLine);
+        }
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
