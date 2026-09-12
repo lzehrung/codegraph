@@ -1,4 +1,10 @@
-import { describe, it } from "vitest";
+import fsp from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { buildProjectIndex, findReferences } from "../../src/index.js";
+import { fileIdentityKey } from "../../src/util/paths.js";
+import { exportedNameOf } from "../helpers/narrow.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
@@ -148,5 +154,37 @@ describe("Kotlin Unicode symbol ranges (C11)", () => {
       source: "// café ☕ prüfung\n/* über */ fun créer(): Int {\n\treturn 1\n}\n",
       symbolName: "créer",
     });
+  });
+});
+
+describe("Kotlin native identifier declarations", () => {
+  it("resolves top-level identifier reads without exporting function locals", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-identifiers-"));
+    const file = path.join(root, "Scope.kt");
+    await fsp.writeFile(
+      file,
+      [
+        "fun outer() {",
+        "  val innerVar = 1",
+        "  fun nested() = innerVar",
+        "}",
+        'val topName = "module"',
+        "fun use() = topName",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const module = index.byFile.get(fileIdentityKey(file));
+      const references = await findReferences(index, { file, line: 5, column: 5 });
+
+      expect(module?.exports.map(exportedNameOf)).not.toContain("innerVar");
+      expect(module?.exports.map(exportedNameOf)).not.toContain("nested");
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") expect(references.references).toHaveLength(2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });

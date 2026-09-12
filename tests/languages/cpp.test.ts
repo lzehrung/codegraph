@@ -9,7 +9,9 @@ import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import { C_SUPPORT, CPP_SUPPORT, supportForFile } from "../../src/languages.js";
-import { parseSyntaxTree } from "@lzehrung/codegraph-native";
+import { createTestIndexFromFiles } from "../test-utils.js";
+import { fileIdentityKey } from "../../src/util/paths.js";
+import { parseSyntaxTree, runQuery } from "@lzehrung/codegraph-native";
 
 const definition: LanguageTestDefinition = {
   id: "cpp",
@@ -130,11 +132,68 @@ describe("C++ language boundaries", () => {
     }
   });
 
-  it("documents the C++20 module grammar limitation", () => {
-    const tree = parseSyntaxTree("export module foo;\nimport foo;\n", "cpp");
+  it("documents the C++20 module grammar limitation without exporting pseudo-declarations", () => {
+    const source = "export module foo;\nimport foo;\n";
+    const tree = parseSyntaxTree(source, "cpp");
     // The interned kind table is exactly the set of node kinds the projection produced.
     expect(tree.kinds).not.toContain("module_declaration");
     expect(tree.kinds).not.toContain("import_declaration");
+
+    const exports = runQuery(source, "cpp", CPP_SUPPORT.queries.exports);
+    const names = exports.matches.flatMap((match) =>
+      match.captures.filter((capture) => capture.name === "name").map((capture) => capture.text),
+    );
+    expect(names).not.toContain("module");
+    expect(names).not.toContain("foo");
+  });
+});
+
+describe("C++ native queries", () => {
+  it("captures qualified and in-class members without publishing module syntax", () => {
+    const source = `
+      #define FOO(x) (x)
+      namespace outer::inner {}
+      union U { int value; };
+      class A { void f(); ~A(); A& operator+=(const A&); };
+      void A::f() {}
+      A::~A() {}
+      A& A::operator+=(const A&) { return *this; }
+      export module foo;
+      import std;
+      void g() { int sum = 0; }
+    `;
+    const exports = runQuery(source, "cpp", CPP_SUPPORT.queries.exports);
+    const names = exports.matches.flatMap((match) =>
+      match.captures.filter((capture) => capture.name === "name").map((capture) => capture.text),
+    );
+
+    expect(names).toEqual(expect.arrayContaining(["FOO", "outer", "inner", "U", "f", "~A", "operator+="]));
+    expect(names).not.toContain("module");
+    expect(names).not.toContain("std");
+    expect(names).not.toContain("foo");
+    expect(names).not.toContain("sum");
+  });
+  it("exports file-scope declarations without leaking function-local types or static variables", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-static-storage-"));
+    const file = path.join(root, "exports.cpp");
+    const source = [
+      "static int helper;",
+      "int static_count = 1;",
+      "int ready() { static int once = 0; class Local {}; enum Hidden { Secret }; return once; }",
+    ].join("\n");
+    try {
+      await fs.writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const module = index.byFile.get(fileIdentityKey(file));
+      const exportedNames = module?.exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : []));
+
+      expect(exportedNames?.sort()).toEqual(["ready", "static_count"]);
+      expect(module?.locals.map((entry) => entry.localName)).toEqual(
+        expect.arrayContaining(["Local", "Hidden", "Secret"]),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });
 

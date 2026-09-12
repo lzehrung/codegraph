@@ -51,7 +51,7 @@ const BASE_STRUCTURE = {
     },
     {
       type: "module",
-      nameQuery: "name: (identifier) @chunk.name body: (statement_block) @chunk.block.namespace",
+      nameQuery: "name: [ (identifier) (string) ] @chunk.name body: (statement_block) @chunk.block.namespace",
       captureId: "namespace",
     },
 
@@ -84,10 +84,16 @@ const BASE_GRAPH = {
   exports: `
     (export_statement) @stmt
     (export_statement declaration: (function_declaration name: (identifier) @name)) @stmt
+    (export_statement declaration: (function_signature name: (identifier) @name)) @stmt
     (export_statement declaration: (generator_function_declaration name: (identifier) @name)) @stmt
     (export_statement declaration: (class_declaration name: (type_identifier) @name)) @stmt
     (export_statement declaration: (abstract_class_declaration name: (type_identifier) @name)) @stmt
     (export_statement declaration: (enum_declaration name: [ (identifier) (type_identifier) ] @name)) @stmt
+    (export_statement declaration: (internal_module name: (identifier) @name)) @stmt
+    (export_statement declaration: (module name: (identifier) @name)) @stmt
+    (export_statement declaration: (ambient_declaration (function_signature name: (identifier) @name))) @stmt
+    (export_statement declaration: (ambient_declaration (internal_module name: (identifier) @name))) @stmt
+    (export_statement declaration: (ambient_declaration (module name: (identifier) @name))) @stmt
     (export_statement declaration: (function_declaration) @anon_default) @stmt
     (export_statement declaration: (generator_function_declaration) @anon_default) @stmt
     (export_statement declaration: (class_declaration) @anon_default) @stmt
@@ -106,12 +112,15 @@ const BASE_GRAPH = {
     (method_definition name: (property_identifier) @name)
     (method_signature name: (property_identifier) @name)
     (abstract_method_signature name: (property_identifier) @name)
+    (function_signature name: (identifier) @name)
     (class_declaration name: (type_identifier) @name)
     (abstract_class_declaration name: (type_identifier) @name)
     (variable_declarator name: (identifier) @name)
     (interface_declaration name: (type_identifier) @name)
     (type_alias_declaration name: (type_identifier) @name)
     (enum_declaration name: [ (identifier) (type_identifier) ] @name)
+    (internal_module name: (identifier) @name)
+    (module name: (identifier) @name)
   `,
   importBindings: `
     (import_statement) @stmt
@@ -119,7 +128,7 @@ const BASE_GRAPH = {
     (import_statement (import_require_clause (identifier) @def (string) @from)) @stmt
     (import_statement (import_clause (identifier) @def) (string) @from) @stmt
     (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname alias: (identifier) @alias))) (string) @from) @stmt
-    (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname))) (string) @from) @stmt
+    (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname !alias))) (string) @from) @stmt
     (import_statement (import_clause (namespace_import (identifier) @ns)) (string) @from) @stmt
   `,
 };
@@ -138,11 +147,12 @@ const BASE_HELPERS = {
     if (t === "method_definition") return "function";
     if (t === "method_signature") return "function";
     if (t === "abstract_method_signature") return "function";
+    if (t === "function_signature") return "function";
     if (t === "class_declaration") return "class";
     if (t === "abstract_class_declaration") return "class";
     if (t === "interface_declaration") return "interface";
     if (t === "type_alias_declaration") return "type";
-    if (t === "enum_declaration") return "type";
+    if (t === "enum_declaration" || t === "internal_module" || t === "module") return "type";
     return "variable";
   },
   isDeclarationName: (node: SyntaxNodeLike) => {
@@ -158,6 +168,9 @@ const BASE_HELPERS = {
         "interface_declaration",
         "type_alias_declaration",
         "enum_declaration",
+        "function_signature",
+        "internal_module",
+        "module",
         "import_specifier",
         "namespace_import",
         "import_clause",
@@ -170,7 +183,15 @@ const BASE_HELPERS = {
       ].includes(p)
     );
   },
-  createsBlockScope: (n: SyntaxNodeLike) => n.type === "program" || n.type === "block" || n.type === "class_body",
+  // Scope construction has structural handling for the ordinary declaration forms. Ambient
+  // overload signatures and `namespace X {}` are not in it, so opt their name nodes in here;
+  // `isDeclarationName` already accepts both parents.
+  scopeDeclarationNames: (node: SyntaxNodeLike) => {
+    const parent = node.parent?.type;
+    return parent === "function_signature" || parent === "internal_module" || parent === "module";
+  },
+  createsBlockScope: (n: SyntaxNodeLike) =>
+    n.type === "program" || n.type === "block" || n.type === "class_body" || n.type === "class_static_block",
   createsFunctionScope: (n: SyntaxNodeLike) =>
     n.type === "generator_function_declaration" ||
     n.type === "function_declaration" ||

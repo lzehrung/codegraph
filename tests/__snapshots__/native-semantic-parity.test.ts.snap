@@ -689,7 +689,10 @@ exports[`native semantic coverage > keeps native semantics stable for representa
     "status": "not_found",
   },
   "references": {
-    "status": "not_found",
+    "refs": [
+      "_variables.scss:3",
+    ],
+    "status": "ok",
   },
 }
 `;
@@ -700,7 +703,10 @@ exports[`native semantic coverage > keeps native semantics stable for representa
     "status": "not_found",
   },
   "references": {
-    "status": "not_found",
+    "refs": [
+      "_variables.scss:3",
+    ],
+    "status": "ok",
   },
 }
 `;

@@ -1,6 +1,13 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { runQuery } from "@lzehrung/codegraph-native";
+import { C_SUPPORT } from "../../src/languages.js";
+import { fileIdentityKey } from "../../src/util/paths.js";
+import { createTestIndexFromFiles } from "../test-utils.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
-
 const definition: LanguageTestDefinition = {
   id: "c",
   samples: [
@@ -88,3 +95,32 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("C native queries", () => {
+  it("keeps erroneous macro includes from capturing a later preprocessor identifier", () => {
+    const source = '#include MACRO("x.h")\n#define HAS_FOO 1\n';
+    const imports = runQuery(source, "c", C_SUPPORT.queries.imports);
+    expect(imports.matches.flatMap((match) => match.captures.filter((capture) => capture.name === "mod"))).toEqual([]);
+  });
+
+  it("publishes non-static declarations whose names or bodies contain static", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-static-storage-"));
+    const file = path.join(root, "exports.c");
+    const source = [
+      "static int helper;",
+      "int static_count = 1;",
+      "int ready(void) { static int once = 0; return once; }",
+    ].join("\n");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const module = index.byFile.get(fileIdentityKey(file));
+      const exportedNames = module?.exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : []));
+
+      expect(exportedNames).toEqual(expect.arrayContaining(["static_count", "ready"]));
+      expect(exportedNames).not.toContain("helper");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

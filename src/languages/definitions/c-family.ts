@@ -21,13 +21,17 @@ export const cFamilyControlSplitPoints = [
 export const cFamilyIncludeImportsQuery = `
       (preproc_include path: (string_literal) @mod) @stmt
       (preproc_include path: (system_lib_string) @mod) @stmt
-      (preproc_include path: (identifier) @mod) @stmt
+      (preproc_include path: (call_expression) @mod) @stmt
+      ((preproc_include path: (identifier) @mod) @stmt
+        (#match? @stmt "^\\s*#include\\s+[A-Za-z_][A-Za-z0-9_]*\\s*$"))
     `;
 
 export const cFamilyIncludeBindingsQuery = `
       (preproc_include path: (string_literal) @from) @stmt
       (preproc_include path: (system_lib_string) @from) @stmt
-      (preproc_include path: (identifier) @from) @stmt
+      (preproc_include path: (call_expression) @from) @stmt
+      ((preproc_include path: (identifier) @from) @stmt
+        (#match? @stmt "^\\s*#include\\s+[A-Za-z_][A-Za-z0-9_]*\\s*$"))
     `;
 
 const cFamilyParameterListTypes = new Set(["parameter_declaration", "parameter_list"]);
@@ -47,6 +51,20 @@ export function cFunctionNameQuery(captureName: string, includeFieldIdentifier: 
       `(function_declarator declarator: (parenthesized_declarator (pointer_declarator declarator: (${identifierType}) @${captureName})))`,
     );
   }
+  if (includeFieldIdentifier) {
+    patterns.push(
+      `(function_declarator declarator: (qualified_identifier name: (identifier) @${captureName}))`,
+      `(function_declarator declarator: (qualified_identifier name: (destructor_name) @${captureName}))`,
+      `(function_declarator declarator: (qualified_identifier name: (operator_name) @${captureName}))`,
+      `(function_declarator declarator: (qualified_identifier name: (template_function name: (identifier) @${captureName})))`,
+      `(function_declarator declarator: (destructor_name) @${captureName})`,
+      `(function_declarator declarator: (operator_name) @${captureName})`,
+      `(reference_declarator (function_declarator declarator: (qualified_identifier name: (identifier) @${captureName})))`,
+      `(reference_declarator (function_declarator declarator: (qualified_identifier name: (destructor_name) @${captureName})))`,
+      `(reference_declarator (function_declarator declarator: (qualified_identifier name: (operator_name) @${captureName})))`,
+      `(reference_declarator (function_declarator declarator: (operator_name) @${captureName}))`,
+    );
+  }
   return `
   declarator: [
     ${patterns.join("\n    ")}
@@ -56,13 +74,15 @@ export function cFunctionNameQuery(captureName: string, includeFieldIdentifier: 
 
 export function cFamilyCoreExportQueries(functionNameQuery: string): string[] {
   return [
-    `(function_definition ${functionNameQuery})`,
-    `(declaration ${functionNameQuery})`,
-    `(struct_specifier name: (type_identifier) @name)`,
-    `(enum_specifier name: (type_identifier) @name)`,
-    `(type_definition declarator: (type_identifier) @name)`,
-    `(declaration declarator: (identifier) @name)`,
-    `(declaration declarator: (init_declarator declarator: (identifier) @name))`,
+    `(translation_unit (function_definition ${functionNameQuery}) @declaration)`,
+    `(translation_unit (declaration ${functionNameQuery}) @declaration)`,
+    `(translation_unit (struct_specifier name: (type_identifier) @name))`,
+    `(translation_unit (enum_specifier name: (type_identifier) @name))`,
+    `(translation_unit (type_definition declarator: (type_identifier) @name))`,
+    `((translation_unit (declaration type: (_) @type declarator: (identifier) @name) @declaration)
+      (#not-match? @type "^(import|export)$"))`,
+    `((translation_unit (declaration type: (_) @type declarator: (init_declarator declarator: (identifier) @name)) @declaration)
+      (#not-match? @type "^(import|export)$"))`,
   ];
 }
 

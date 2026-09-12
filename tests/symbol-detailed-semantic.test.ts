@@ -310,7 +310,13 @@ impl IService for App {
 
     const appDef = nodes.find((n) => n.file.endsWith("/main.rs") && n.name === "App");
     const serviceDef = nodes.find((n) => n.file.endsWith("/main.rs") && n.name === "IService");
-    const runDef = nodes.find((n) => n.file.endsWith("/main.rs") && n.name === "run");
+    // `run` now resolves twice: the trait's declaration-only `function_signature_item` and the
+    // impl's definition. Only the definition owns the call edges, so select the later offset.
+    const runNodes = nodes
+      .filter((n) => n.file.endsWith("/main.rs") && n.name === "run")
+      .sort((left, right) => Number(left.id.split("::").pop()) - Number(right.id.split("::").pop()));
+    expect(runNodes).toHaveLength(2);
+    const runDef = runNodes.at(-1);
     const helperDef = nodes.find((n) => n.file.endsWith("/main.rs") && n.name === "helper");
     const thingDef = nodes.find((n) => n.file.endsWith("/main.rs") && n.name === "Thing");
     expect(appDef).toBeDefined();

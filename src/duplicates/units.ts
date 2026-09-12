@@ -86,8 +86,7 @@ type SourceRange = {
   end: number;
 };
 
-const duplicateImportStatementQueries: Readonly<Record<string, string>> = {
-  astro: "(import_statement) @stmt",
+export const duplicateImportStatementQueries: Readonly<Record<string, string>> = {
   c: "(preproc_include) @stmt",
   cpp: "(preproc_include) @stmt",
   csharp: "(using_directive) @stmt",
@@ -97,7 +96,6 @@ const duplicateImportStatementQueries: Readonly<Record<string, string>> = {
   js: "(import_statement) @stmt",
   kotlin: "(import_header) @stmt",
   less: "(import_statement) @stmt",
-  mdx: "(import_statement) @stmt",
   php: `
     (require_expression) @stmt
     (include_expression) @stmt
@@ -115,7 +113,7 @@ const duplicateImportStatementQueries: Readonly<Record<string, string>> = {
       (#match? @method "^(require|require_relative)$")) @stmt
   `,
   rust: `
-    (mod_item) @stmt (#match? @stmt ";\\s*$")
+    ((mod_item) @stmt (#match? @stmt ";\\s*$"))
     (extern_crate_declaration) @stmt
     (use_declaration) @stmt
   `,
@@ -135,6 +133,8 @@ const duplicateImportStatementQueries: Readonly<Record<string, string>> = {
 };
 
 const duplicateImportStatementFallbackPatterns: Readonly<Partial<Record<string, RegExp>>> = {
+  // astro/mdx have no native grammar, so duplicateImportStatementQueries omits them
+  // and import masking uses these regexes only.
   astro: /^[\t ]*import\b(?![\t ]*\()(?:[\t ]*["'][^"']*["']|[\s\S]*?\bfrom[\t ]*["'][^"']*["']|[\s\S]*?;)/gmu,
   c: /^[\t ]*#\s*include(?:[^\r\n\\]|\\(?:\r?\n|.))*$/gmu,
   cpp: /^[\t ]*#\s*include(?:[^\r\n\\]|\\(?:\r?\n|.))*$/gmu,
@@ -236,8 +236,7 @@ function importStatementRanges(
 ): SourceRange[] {
   const query = duplicateImportStatementQueries[languageId];
   const support = supportById(languageId);
-  if (!query || !support) return [];
-
+  if (!query || !support) return fallbackImportStatementRanges(source, languageId);
   const execution = getNativeSingleQueryExecution(source, support, query, nativeMode);
   if (execution.matches === null) return fallbackImportStatementRanges(source, languageId);
 

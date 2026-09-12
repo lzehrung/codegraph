@@ -1,4 +1,8 @@
-import { describe, it } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { buildProjectIndex } from "../../src/index.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
@@ -72,8 +76,10 @@ const definition: LanguageTestDefinition = {
           symbols: [
             { name: "Runner", kind: "type" },
             { name: "Service", kind: "type" },
+            { name: "T", kind: "type" },
             { name: "Value", kind: "variable" },
             { name: "BuildService", kind: "function" },
+            { name: "T", kind: "type" },
             { name: "value", kind: "variable" },
           ],
         },
@@ -252,6 +258,50 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("Go type parameters and multi-name const specs", () => {
+  it("captures generic type parameters and every const/var name", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-go-tparams-const-"));
+    const file = path.join(root, "example.go");
+    const source = `package main
+
+type Box[T comparable] struct {
+	Value T
+}
+
+const (
+	B, C = iota, iota
+)
+
+func Work() {
+  const Hidden = 1
+  var Local = Hidden
+  type Private struct{}
+}
+`;
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const mod = [...index.byFile.values()][0]!;
+      const locals = mod.locals.map((local) => `${local.kind}:${local.localName}`);
+      const exports = mod.exports.flatMap((entry) =>
+        entry.type === "local" ? [`${entry.target.kind}:${entry.exportedAs}`] : [],
+      );
+      expect(locals).toEqual(expect.arrayContaining(["type:Box", "type:T", "variable:B", "variable:C"]));
+      expect(exports).toEqual(expect.arrayContaining(["type:Box", "variable:B", "variable:C"]));
+      expect(exports).not.toContain("type:T");
+      expect(locals).toEqual(expect.arrayContaining(["variable:Hidden", "variable:Local", "type:Private"]));
+      expect(mod.exports.map((entry) => (entry.type === "local" ? entry.exportedAs : entry.type)).sort()).toEqual([
+        "B",
+        "Box",
+        "C",
+        "Work",
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("Go Unicode symbol ranges (C11)", () => {
   it("publishes a UTF-16 string index for a function name preceded by multibyte text", async () => {

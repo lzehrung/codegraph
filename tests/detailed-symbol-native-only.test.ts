@@ -150,14 +150,9 @@ describe("detailed symbol graph in native-only installs", () => {
         resolved: normalizePath(depFile),
         typeOnly: false,
       },
-      {
-        kind: "named",
-        local: "helper",
-        imported: "helper",
-        from: "./dep",
-        resolved: normalizePath(depFile),
-        typeOnly: false,
-      },
+      // `{ helper as alias }` used to also yield a phantom binding under the original name
+      // `helper`, because the no-alias import-specifier pattern matched aliased specifiers too.
+      // `export { helper } from './dep'` is tracked as a reexport, not as an import binding.
     ]);
   });
 

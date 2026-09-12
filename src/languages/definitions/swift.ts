@@ -82,18 +82,45 @@ export const SWIFT_DEF: LanguageDefinition = {
       (import_declaration (identifier) @mod) @stmt
     `,
     exports: `
-      (class_declaration declaration_kind: "class" name: (_) @name)
-      (class_declaration declaration_kind: "struct" name: (_) @name)
-      (class_declaration declaration_kind: "enum" name: (_) @name)
-      (class_declaration declaration_kind: "extension" name: (user_type (type_identifier) @name))
-      (class_declaration declaration_kind: "actor" name: (_) @name)
-      (enum_entry name: (simple_identifier) @name)
-      (protocol_declaration name: (type_identifier) @name)
-      (function_declaration name: (simple_identifier) @name)
-      (typealias_declaration name: (type_identifier) @name)
-      (property_declaration name: (pattern bound_identifier: (simple_identifier) @name))
-      (protocol_function_declaration name: (simple_identifier) @name)
-      (protocol_property_declaration name: (pattern bound_identifier: (simple_identifier) @name))
+      (source_file (class_declaration declaration_kind: "class" name: (_) @name))
+      (class_body (class_declaration declaration_kind: "class" name: (_) @name))
+      (enum_class_body (class_declaration declaration_kind: "class" name: (_) @name))
+      (source_file (class_declaration declaration_kind: "struct" name: (_) @name))
+      (class_body (class_declaration declaration_kind: "struct" name: (_) @name))
+      (enum_class_body (class_declaration declaration_kind: "struct" name: (_) @name))
+      (source_file (class_declaration declaration_kind: "enum" name: (_) @name))
+      (class_body (class_declaration declaration_kind: "enum" name: (_) @name))
+      (enum_class_body (class_declaration declaration_kind: "enum" name: (_) @name))
+      (source_file (class_declaration declaration_kind: "extension" name: (user_type (type_identifier) @name)))
+      (class_body (class_declaration declaration_kind: "extension" name: (user_type (type_identifier) @name)))
+      (enum_class_body (class_declaration declaration_kind: "extension" name: (user_type (type_identifier) @name)))
+      (source_file (class_declaration declaration_kind: "actor" name: (_) @name))
+      (class_body (class_declaration declaration_kind: "actor" name: (_) @name))
+      (enum_class_body (class_declaration declaration_kind: "actor" name: (_) @name))
+      (enum_class_body (enum_entry name: (simple_identifier) @name))
+      (source_file (protocol_declaration name: (type_identifier) @name))
+      (class_body (protocol_declaration name: (type_identifier) @name))
+      (enum_class_body (protocol_declaration name: (type_identifier) @name))
+      (source_file (function_declaration name: (simple_identifier) @name))
+      (class_body (function_declaration name: (simple_identifier) @name))
+      (enum_class_body (function_declaration name: (simple_identifier) @name))
+      (source_file (typealias_declaration name: (type_identifier) @name))
+      (class_body (typealias_declaration name: (type_identifier) @name))
+      (enum_class_body (typealias_declaration name: (type_identifier) @name))
+      (protocol_body (typealias_declaration name: (type_identifier) @name))
+      (source_file (property_declaration name: (pattern bound_identifier: (simple_identifier) @name)))
+      (class_body (property_declaration name: (pattern bound_identifier: (simple_identifier) @name)))
+      (enum_class_body (property_declaration name: (pattern bound_identifier: (simple_identifier) @name)))
+      (protocol_body (protocol_function_declaration name: (simple_identifier) @name))
+      (protocol_body (protocol_property_declaration name: (pattern bound_identifier: (simple_identifier) @name)))
+      (source_file (associatedtype_declaration name: (type_identifier) @name))
+      (protocol_body (associatedtype_declaration name: (type_identifier) @name))
+      (class_body (associatedtype_declaration name: (type_identifier) @name))
+      (enum_class_body (associatedtype_declaration name: (type_identifier) @name))
+      (source_file (macro_declaration (simple_identifier) @name))
+      (source_file (operator_declaration [(custom_operator) (simple_identifier) (bang)] @name))
+      (class_body (operator_declaration [(custom_operator) (simple_identifier) (bang)] @name))
+      (enum_class_body (operator_declaration [(custom_operator) (simple_identifier) (bang)] @name))
     `,
     locals: `
       (class_declaration declaration_kind: "class" name: (_) @name)
@@ -109,6 +136,9 @@ export const SWIFT_DEF: LanguageDefinition = {
       (parameter name: (simple_identifier) @name)
       (protocol_function_declaration name: (simple_identifier) @name)
       (protocol_property_declaration name: (pattern bound_identifier: (simple_identifier) @name))
+      (associatedtype_declaration name: (type_identifier) @name)
+      (macro_declaration (simple_identifier) @name)
+      (operator_declaration [(custom_operator) (simple_identifier) (bang)] @name)
     `,
     importBindings: `
       (import_declaration (identifier) @from) @stmt
@@ -122,8 +152,16 @@ export const SWIFT_DEF: LanguageDefinition = {
   classifyDefinition: (node) => {
     const parent = node.parent;
     if (!parent) return "variable";
-    if (parent.type === "function_declaration") return "function";
-    if (parent.type === "protocol_function_declaration") return "function";
+    if (
+      parent.type === "function_declaration" ||
+      parent.type === "protocol_function_declaration" ||
+      parent.type === "init_declaration" ||
+      parent.type === "deinit_declaration" ||
+      parent.type === "subscript_declaration" ||
+      parent.type === "macro_declaration" ||
+      parent.type === "operator_declaration"
+    )
+      return "function";
     if (parent.type === "class_declaration") {
       const declarationKind = parent.childForFieldName("declaration_kind")?.text;
       if (declarationKind === "enum") return "type";
@@ -132,7 +170,12 @@ export const SWIFT_DEF: LanguageDefinition = {
     // Extension names are wrapped in a user_type node
     // (`extension Container { ... }` -> name: (user_type (type_identifier))).
     if (parent.type === "user_type" && parent.parent?.type === "class_declaration") return "class";
-    if (parent.type === "protocol_declaration" || parent.type === "typealias_declaration") return "type";
+    if (
+      parent.type === "protocol_declaration" ||
+      parent.type === "typealias_declaration" ||
+      parent.type === "associatedtype_declaration"
+    )
+      return "type";
     return "variable";
   },
   isDeclarationName: (node) => {
@@ -149,6 +192,16 @@ export const SWIFT_DEF: LanguageDefinition = {
     if (parent.type === "enum_entry" && parent.childForFieldName("name")?.id === node.id) return true;
     if (parent.type === "function_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
     if (parent.type === "typealias_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
+    if (parent.type === "associatedtype_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
+    if (parent.type === "macro_declaration" && node.type === "simple_identifier") return true;
+    if (
+      parent.type === "operator_declaration" &&
+      (node.type === "custom_operator" || node.type === "simple_identifier" || node.type === "bang")
+    )
+      return true;
+    if (parent.type === "init_declaration" && node.type === "init") return true;
+    if (parent.type === "deinit_declaration" && node.type === "deinit") return true;
+    if (parent.type === "subscript_declaration" && node.type === "subscript") return true;
     if (parent.type === "parameter" && parent.childForFieldName("name")?.id === node.id) return true;
     if (parent.type === "protocol_function_declaration" && parent.childForFieldName("name")?.id === node.id)
       return true;

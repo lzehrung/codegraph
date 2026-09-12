@@ -8,6 +8,7 @@ const ZIG_TYPE_INITIALIZER_TYPES = new Set([
   "union_declaration",
   "opaque_declaration",
   "error_set_declaration",
+  "error_union_type",
 ]);
 
 export const ZIG_DEF: LanguageDefinition = {
@@ -20,13 +21,16 @@ export const ZIG_DEF: LanguageDefinition = {
       { type: "test_declaration", nameQuery: "(string) @chunk.name", captureId: "test" },
     ],
     splitPoints: ["if_expression", "for_expression", "while_expression", "switch_expression"],
-    comments: ["line_comment", "doc_comment"],
+    comments: ["comment"],
   },
   graph: {
-    imports: '(builtin_function (builtin_identifier) @fn (arguments (string) @mod) (#eq? @fn "@import")) @stmt',
+    imports: `
+      (builtin_function (builtin_identifier) @fn (arguments (string) @mod) (#eq? @fn "@import")) @stmt
+      (builtin_function (builtin_identifier) @mod (arguments) (#eq? @mod "@cImport")) @stmt
+    `,
     exports: `
-      (function_declaration name: (identifier) @name)
-      (variable_declaration (identifier) @name)
+      (source_file (function_declaration name: (identifier) @name))
+      (source_file (variable_declaration (identifier) @name))
     `,
     locals: `
       (function_declaration name: (identifier) @name)
@@ -38,6 +42,13 @@ export const ZIG_DEF: LanguageDefinition = {
         (identifier) @alias
         (builtin_function (builtin_identifier) @fn (arguments (string) @from) (#eq? @fn "@import"))
       ) @stmt
+      (variable_declaration
+        (identifier) @alias
+        (builtin_function (builtin_identifier) @from (arguments) (#eq? @from "@cImport"))
+      ) @stmt
+      (using_namespace_declaration
+        (builtin_function (builtin_identifier) @fn (arguments (string) @from) (#eq? @fn "@import"))
+      ) @stmt @wild
     `,
   },
   nodeTypes: {
@@ -54,7 +65,16 @@ export const ZIG_DEF: LanguageDefinition = {
     const declaredName = parent.namedChildren.find((child) => child.type === "identifier");
     if (declaredName?.id !== node.id) return "variable";
 
-    const initializer = parent.namedChildren.find((child) => child.id !== node.id);
+    let equalsEndIndex = -1;
+    for (let index = 0; ; index++) {
+      const child = parent.child(index);
+      if (!child) break;
+      if (child.type === "=") {
+        equalsEndIndex = child.endIndex;
+        break;
+      }
+    }
+    const initializer = parent.namedChildren.find((child) => child.startIndex >= equalsEndIndex);
     if (initializer && ZIG_TYPE_INITIALIZER_TYPES.has(initializer.type)) return "type";
     return "variable";
   },

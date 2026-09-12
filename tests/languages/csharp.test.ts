@@ -1,8 +1,12 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { runLanguageTests } from "./runner.js";
-import { createTestIndexFromFiles } from "../test-utils.js";
+import { runQuery } from "@lzehrung/codegraph-native";
+import { CSHARP_SUPPORT } from "../../src/languages.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
+import { createTestIndexFromFiles } from "../test-utils.js";
+import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 
@@ -71,6 +75,7 @@ const definition: LanguageTestDefinition = {
           file: "RecordTypes.cs",
           symbols: [
             { name: "ISized", kind: "interface" },
+            { name: "Size", kind: "variable" },
             { name: "Point", kind: "class" },
             { name: "NamedShape", kind: "class" },
           ],
@@ -150,6 +155,61 @@ describe("C# global using directives", () => {
       expect(typeof binding?.resolved).toBe("string");
       if (typeof binding?.resolved !== "string") continue;
       expect(fileIdentityKey(binding.resolved)).toBe(fileIdentityKey(sharedFile));
+    }
+  });
+});
+
+describe("C# native declaration queries", () => {
+  it("captures member constructs that use non-uniform grammar shapes", () => {
+    const source = `
+      namespace Demo;
+      struct Point {
+        int X;
+        int Value { get; set; }
+        Point(int x) { X = x; }
+        public static Point operator +(Point a, Point b) => a;
+        public event System.Action Changed;
+        public int this[int i] { get => i; }
+      }
+      delegate void Notify();
+      class Holder { ~Holder() {} void M() { void Local() {} } }
+    `;
+    const exports = runQuery(source, "csharp", CSHARP_SUPPORT.queries.exports);
+    const names = exports.matches.flatMap((match) =>
+      match.captures.filter((capture) => capture.name === "name").map((capture) => capture.text),
+    );
+
+    // Structs, delegates, fields, properties, and events have a plain identifier name and were
+    // previously missing entirely. Local functions are intentionally local, not module exports.
+    expect(names).toEqual(expect.arrayContaining(["Point", "X", "Value", "Changed", "Notify", "Holder", "M"]));
+    expect(names).not.toContain("Local");
+    // Constructors and destructors repeat the type name, and operators, conversion operators and
+    // indexers have no identifier at all. Publishing them would make `Point`/`Holder` ambiguous and
+    // create symbols literally named `operator`/`this`, so they stay out of the symbol set.
+    expect(names.filter((name) => name === "Point")).toHaveLength(1);
+    expect(names.filter((name) => name === "Holder")).toHaveLength(1);
+    expect(names).not.toContain("operator");
+    expect(names).not.toContain("this");
+  });
+});
+
+describe("C# module declarations", () => {
+  it("keeps local functions local and classifies delegates as declared types", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-module-declarations-"));
+    const file = path.join(root, "Declarations.cs");
+    const source = "delegate void Notify(); class Holder { void M() { void Local() {} } }";
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const module = index.byFile.get(fileIdentityKey(file));
+      const notify = module?.locals.find((symbol) => symbol.localName === "Notify");
+
+      expect(module?.exports).toContainEqual(expect.objectContaining({ type: "local", exportedAs: "Notify" }));
+      expect(module?.exports).not.toContainEqual(expect.objectContaining({ type: "local", exportedAs: "Local" }));
+      expect(module?.locals).toContainEqual(expect.objectContaining({ localName: "Local" }));
+      expect(notify?.kind).toBe("type");
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

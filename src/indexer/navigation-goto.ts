@@ -87,7 +87,7 @@ export async function resolveMemberAccessDefinition(params: {
       const subObj = parts.object;
       let subProp = parts.property;
       if (!subProp && expr.type === "navigation_expression") {
-        subProp = getNavigationExpressionProperty(expr);
+        subProp = getNavigationExpressionProperty(sup, expr);
       }
       if (subObj && subProp) {
         const base = await resolveExpression(subObj);

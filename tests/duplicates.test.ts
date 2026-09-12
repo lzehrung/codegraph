@@ -280,6 +280,67 @@ describe("duplicate detection", () => {
     }
   });
 
+  test("does not mask inline Rust modules as import statements", () => {
+    const source = [
+      "mod inner {",
+      "    pub fn keep_wrapped() {",
+      "        let value = 1;",
+      "    }",
+      "}",
+      "mod duplicateImportMarker;",
+      "fn keep_rust() {}",
+      "",
+    ].join("\n");
+    const masked = maskDuplicateImportStatements(source, "sample.rs", "rust");
+    const fallbackMasked = maskDuplicateImportStatements(source, "sample.rs", "rust", "off");
+
+    for (const result of [masked, fallbackMasked]) {
+      expect(result).toContain("keep_wrapped");
+      expect(result).toContain("mod inner");
+      expect(result).not.toContain("duplicateImportMarker");
+      expect(result).toMatch(/keep_rust/i);
+      expect(result).toHaveLength(source.length);
+    }
+  });
+
+  test("detects duplicates inside inline Rust modules", async () => {
+    const root = await makeTempProject();
+    const duplicateSource = `mod inner {
+    pub fn normalize_invoice_rows(rows: &[i32]) -> String {
+        let mut totals: Vec<i32> = Vec::new();
+        let mut labels: Vec<&str> = Vec::new();
+        for row in rows {
+            let subtotal = row + 3;
+            let rounded = subtotal * 100 / 100;
+            let label = if rounded > 100 { "large" } else { "small" };
+            labels.push(label);
+            totals.push(rounded);
+        }
+        totals
+            .iter()
+            .enumerate()
+            .map(|(index, value)| format!("{}:{}", labels[index], value))
+            .filter(|value| value.contains(':'))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+`;
+    await writeProjectFile(root, "src/a.rs", duplicateSource);
+    await writeProjectFile(root, "src/b.rs", duplicateSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, {
+      projectRoot: root,
+      files: ["src/a.rs", "src/b.rs"],
+      includeSmall: true,
+      minConfidence: "low",
+    });
+
+    expect(result.units).toBeGreaterThan(0);
+    expect(result.groups.length).toBeGreaterThan(0);
+  });
+
   test("excludes import-list boilerplate before duplicate scoring", async () => {
     const root = await makeTempProject();
     const importList = `${[

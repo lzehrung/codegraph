@@ -1,55 +1,34 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
-
-function normalizeKotlinNativeQuery(kind: string, query: string): string {
-  if (kind === "imports") {
-    return `
-      (import (qualified_identifier) @mod) @stmt
-    `;
-  }
-  if (kind === "importBindings") {
-    return `
-      (import (qualified_identifier) @from (identifier) @alias) @stmt
-      (import (qualified_identifier) @from "*" @wild) @stmt
-      (import (qualified_identifier) @from) @stmt
-    `;
-  }
-  const normalized = query
-    .replace(/\bimport_header\b/g, "import")
-    .replace(/\bsimple_identifier\b/g, "identifier")
-    .replace(/\btype_identifier\b/g, "identifier");
-  return normalized;
-}
-
 export const KOTLIN_DEF: LanguageDefinition = {
   id: "kotlin",
-  extensions: [".kt", ".kts"],
+  extensions: [".kt", ".kts", ".ktm"],
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [
       {
         type: "class_declaration",
-        nameQuery: "(type_identifier) @chunk.name",
+        nameQuery: "(identifier) @chunk.name",
         captureId: "class",
       },
       {
         type: "object_declaration",
-        nameQuery: "(type_identifier) @chunk.name",
+        nameQuery: "(identifier) @chunk.name",
         captureId: "object",
       },
       {
         type: "function_declaration",
-        nameQuery: "(simple_identifier) @chunk.name",
+        nameQuery: "(identifier) @chunk.name",
         captureId: "function",
       },
       {
         type: "property_declaration",
-        nameQuery: "(variable_declaration (simple_identifier) @chunk.name)",
+        nameQuery: "(variable_declaration (identifier) @chunk.name)",
         captureId: "property",
       },
       {
         type: "type_alias",
-        nameQuery: "(type_identifier) @chunk.name",
+        nameQuery: "(identifier) @chunk.name",
         captureId: "type",
       },
     ],
@@ -67,36 +46,47 @@ export const KOTLIN_DEF: LanguageDefinition = {
   },
   graph: {
     imports: `
-      (import_header (identifier) @mod) @stmt
+      (import (qualified_identifier) @mod) @stmt
     `,
     exports: `
-      (class_declaration (type_identifier) @name)
-      (object_declaration (type_identifier) @name)
-      (function_declaration (simple_identifier) @name)
-      (property_declaration (variable_declaration (simple_identifier) @name))
-      (type_alias (type_identifier) @name)
-      (enum_entry (simple_identifier) @name)
+      (source_file
+        [
+          (class_declaration name: (identifier) @name)
+          (object_declaration name: (identifier) @name)
+          (function_declaration name: (identifier) @name)
+          (property_declaration (variable_declaration (identifier) @name))
+          (type_alias type: (identifier) @name)
+        ])
+      (class_body
+        [
+          (class_declaration name: (identifier) @name)
+          (object_declaration name: (identifier) @name)
+          (function_declaration name: (identifier) @name)
+          (property_declaration (variable_declaration (identifier) @name))
+          (type_alias type: (identifier) @name)
+        ])
+      (enum_class_body (enum_entry (identifier) @name))
     `,
     locals: `
-      (class_declaration (type_identifier) @name)
-      (object_declaration (type_identifier) @name)
-      (function_declaration (simple_identifier) @name)
-      (property_declaration (variable_declaration (simple_identifier) @name))
-      (type_alias (type_identifier) @name)
-      (enum_entry (simple_identifier) @name)
-      (parameter (simple_identifier) @name)
-      (class_parameter (simple_identifier) @name)
-      (type_parameter (type_identifier) @name)
+      (class_declaration name: (identifier) @name)
+      (object_declaration name: (identifier) @name)
+      (function_declaration name: (identifier) @name)
+      (property_declaration (variable_declaration (identifier) @name))
+      (type_alias type: (identifier) @name)
+      (enum_entry (identifier) @name)
+      (parameter (identifier) @name)
+      (class_parameter (identifier) @name)
+      (type_parameter (identifier) @name)
     `,
     importBindings: `
-      (import_header (identifier) @from (import_alias (type_identifier) @alias)) @stmt
-      (import_header (identifier) @from (wildcard_import) @wild) @stmt
-      (import_header (identifier) @from) @stmt
+      (import (qualified_identifier) @from (identifier) @alias) @stmt
+      (import (qualified_identifier) @from ("*") @wild) @stmt
+      (import (qualified_identifier) @from) @stmt
     `,
   },
   nodeTypes: {
-    identifier: ["identifier", "interpolated_identifier", "simple_identifier", "type_identifier"],
-    propertyIdentifier: ["simple_identifier", "type_identifier"],
+    identifier: ["identifier"],
+    propertyIdentifier: ["identifier"],
     memberExpression: "navigation_expression",
   },
   classifyDefinition: (node) => {
@@ -110,17 +100,15 @@ export const KOTLIN_DEF: LanguageDefinition = {
   isDeclarationName: (node) => {
     const parent = node.parent;
     if (!parent) return false;
-    if (parent.type === "class_declaration" && node.type === "type_identifier") return true;
-    if (parent.type === "object_declaration" && node.type === "type_identifier") return true;
-    if (parent.type === "function_declaration" && (node.type === "simple_identifier" || node.type === "identifier"))
-      return true;
-    if (parent.type === "type_alias" && node.type === "type_identifier") return true;
-    if (parent.type === "variable_declaration" && node.type === "simple_identifier") return true;
-    if (parent.type === "parameter" && (node.type === "simple_identifier" || node.type === "identifier")) return true;
-    if (parent.type === "class_parameter" && (node.type === "simple_identifier" || node.type === "identifier"))
-      return true;
-    if (parent.type === "enum_entry" && (node.type === "simple_identifier" || node.type === "identifier")) return true;
-    if (parent.type === "type_parameter" && node.type === "type_identifier") return true;
+    if (parent.type === "class_declaration" && node.type === "identifier") return true;
+    if (parent.type === "object_declaration" && node.type === "identifier") return true;
+    if (parent.type === "function_declaration" && node.type === "identifier") return true;
+    if (parent.type === "type_alias" && node.type === "identifier") return true;
+    if (parent.type === "variable_declaration" && node.type === "identifier") return true;
+    if (parent.type === "parameter" && node.type === "identifier") return true;
+    if (parent.type === "class_parameter" && node.type === "identifier") return true;
+    if (parent.type === "enum_entry" && node.type === "identifier") return true;
+    if (parent.type === "type_parameter" && node.type === "identifier") return true;
     return false;
   },
   scopeDeclarationNames: "all",
@@ -129,14 +117,9 @@ export const KOTLIN_DEF: LanguageDefinition = {
   createsBlockScope: (node) =>
     node.type === "function_body" ||
     node.type === "class_body" ||
-    node.type === "control_structure_body" ||
+    node.type === "block" ||
     node.type === "catch_block" ||
     node.type === "finally_block",
   supportsCrossModuleSymbols: true,
-  native: {
-    normalizeQuery: normalizeKotlinNativeQuery,
-    authoritativeKinds: ["imports", "importBindings", "exports", "locals"],
-    notes: ["normalizes kotlin import and identifier node names for the native grammar"],
-  },
 };
 registerLanguage(KOTLIN_DEF);

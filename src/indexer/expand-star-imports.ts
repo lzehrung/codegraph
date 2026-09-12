@@ -9,20 +9,26 @@ type StarImportSymbol = {
   symbol: SymbolDef;
 };
 
+const STYLESHEET_LANGUAGE_IDS = new Set(["css", "scss", "less"]);
+
 /**
  * Prefer explicit local exports when the target has any. Otherwise fall back
  * to non-private locals. Collect `{ exportedAs, target }` in one pass so star
  * expansion keeps renamed export names and does not filter `target.exports`
  * twice.
+ *
+ * Stylesheets never use the locals fallback. Their locals include every class
+ * and id selector, which are not importable names; only the module-level
+ * mixins, functions, variables and placeholders the exports query captures are.
  */
-function symbolsForStarImport(target: ModuleIndex): StarImportSymbol[] {
+function symbolsForStarImport(target: ModuleIndex, isStylesheet: boolean): StarImportSymbol[] {
   const localExports: StarImportSymbol[] = [];
   for (const entry of target.exports) {
     if (entry.type === "local") {
       localExports.push({ name: entry.exportedAs, symbol: entry.target });
     }
   }
-  if (localExports.length) return localExports;
+  if (localExports.length || isStylesheet) return localExports;
   const visible: StarImportSymbol[] = [];
   for (const local of target.locals) {
     if (local.localName.startsWith("_")) continue;
@@ -65,7 +71,10 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
       const target = modules.get(fileIdentityKey(imp.resolved));
       if (!target) continue;
       const targetSupport = supportForFile(imp.resolved, opts?.languageExtensions);
-      const exportedSymbols = symbolsForStarImport(target);
+      const exportedSymbols = symbolsForStarImport(
+        target,
+        !!targetSupport && STYLESHEET_LANGUAGE_IDS.has(targetSupport.id),
+      );
       const seen = new Set<string>();
       for (const { name, symbol } of exportedSymbols) {
         if (!name || seen.has(name)) continue;

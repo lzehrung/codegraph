@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
 import { buildProjectIndex, listProjectFiles, discoverProjectFiles } from "../src/index.js";
+import { LANGUAGE_SUPPORTS } from "../src/languages.js";
 import { DEFAULT_PROJECT_MANIFESTS } from "../src/util.js";
 import {
   createDiscoveredFileMatcher,
@@ -134,6 +135,37 @@ describe("project file discovery", () => {
 
     for (const filePath of files.map(normalize)) {
       expect(discoveredSet.has(filePath)).toBe(true);
+    }
+  });
+
+  it("discovers every registered language extension without custom patterns", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-aliases-"));
+    const registeredExtensions = [...new Set(LANGUAGE_SUPPORTS.flatMap((support) => support.matchExts))].sort();
+    const aliasFiles = registeredExtensions.map((extension, index) =>
+      path.join(tempDir, "aliases", `sample${index}${extension}`),
+    );
+    const ignoredAlias = path.join(tempDir, "node_modules", "pkg", "ignored.pyw");
+    const unsupportedFiles = [
+      path.join(tempDir, "unsupported", "styles.sass"),
+      path.join(tempDir, "unsupported", "notes.foo"),
+    ];
+    const manifestFile = path.join(tempDir, "package.json");
+
+    await Promise.all([
+      ...aliasFiles.map((filePath) => createFile(filePath, "// registered alias\n")),
+      createFile(ignoredAlias, "print('ignored')\n"),
+      ...unsupportedFiles.map((filePath) => createFile(filePath, "// unsupported\n")),
+      createFile(manifestFile, "{}\n"),
+    ]);
+
+    const discovered = await listProjectFiles(tempDir);
+    const discoveredSet = new Set(discovered.map(normalize));
+
+    for (const filePath of [...aliasFiles, manifestFile].map(normalize)) {
+      expect(discoveredSet.has(filePath)).toBe(true);
+    }
+    for (const filePath of [ignoredAlias, ...unsupportedFiles].map(normalize)) {
+      expect(discoveredSet.has(filePath)).toBe(false);
     }
   });
 
