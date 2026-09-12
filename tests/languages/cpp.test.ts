@@ -8,10 +8,21 @@ import { normalizePath } from "../../src/util/paths.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
-import { C_SUPPORT, CPP_SUPPORT, supportForFile } from "../../src/languages.js";
+import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
+import { C_SUPPORT, CPP_SUPPORT, supportForFile, type LanguageSupport } from "../../src/languages.js";
+import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { parseSyntaxTree, runQuery } from "@lzehrung/codegraph-native";
+
+function collectCppNames(file: string, source: string, support: LanguageSupport = CPP_SUPPORT) {
+  const nativeQueries = getNativeQueryExecution(source, support).results;
+  const module = collectLocalsAndExportsFromSource(file, source, support, [], { nativeQueries });
+  return {
+    exports: module.exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : [])),
+    locals: module.locals.map((entry) => entry.localName),
+  };
+}
 
 const definition: LanguageTestDefinition = {
   id: "cpp",
@@ -195,6 +206,80 @@ describe("C++ native queries", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("exports namespace, nested-namespace, and template declarations without leaking function-local names", () => {
+    const namespaced = collectCppNames(
+      "probe.cpp",
+      [
+        "namespace api {",
+        "void nsDefined() {}",
+        "void nsPrototype();",
+        "int nsCounter;",
+        "struct NsPair { int a; };",
+        "class Widget { public: void method(); };",
+        "static int hiddenHelper;",
+        "namespace inner { void nestedFn(); }",
+        "}",
+        "namespace outer::leaf { void nestedFn17(); }",
+        "template <class T> void tmplPrototype(T value);",
+        "template <class T> void tmplDefined(T value) {}",
+        "namespace api { template <class T> void nsTmpl(T value) {} }",
+        "void container() { class Local { public: void hidden() {} }; enum Flags { HiddenFlag }; }",
+      ].join("\n"),
+    );
+
+    expect(namespaced.exports).toEqual(
+      expect.arrayContaining([
+        "api",
+        "nsDefined",
+        "nsPrototype",
+        "nsCounter",
+        "NsPair",
+        "Widget",
+        "method",
+        "nestedFn",
+        "outer",
+        "leaf",
+        "nestedFn17",
+        "tmplPrototype",
+        "tmplDefined",
+        "nsTmpl",
+        "container",
+      ]),
+    );
+    expect(namespaced.exports).not.toContain("hiddenHelper");
+    expect(namespaced.exports).not.toContain("Local");
+    expect(namespaced.exports).not.toContain("hidden");
+    expect(namespaced.exports).not.toContain("Flags");
+    expect(namespaced.exports).not.toContain("HiddenFlag");
+
+    expect(namespaced.locals).toEqual(
+      expect.arrayContaining([
+        "nsDefined",
+        "nsPrototype",
+        "nestedFn",
+        "nestedFn17",
+        "tmplPrototype",
+        "tmplDefined",
+        "nsTmpl",
+        "Local",
+        "hidden",
+        "Flags",
+        "HiddenFlag",
+      ]),
+    );
+
+    const functionLocal = collectCppNames(
+      "probe.cpp",
+      "void outer() { class Local { public: void hidden() {} }; enum Flags { HiddenFlag }; }",
+    );
+    expect(functionLocal.exports).toEqual(["outer"]);
+    expect(functionLocal.locals).toEqual(expect.arrayContaining(["outer", "Local", "hidden", "Flags", "HiddenFlag"]));
+    expect(functionLocal.exports).not.toContain("Local");
+    expect(functionLocal.exports).not.toContain("hidden");
+    expect(functionLocal.exports).not.toContain("Flags");
+    expect(functionLocal.exports).not.toContain("HiddenFlag");
+  });
 });
 
 describe("C++ configured include roots", () => {
@@ -210,11 +295,7 @@ describe("C++ configured include roots", () => {
       await fs.mkdir(path.dirname(model), { recursive: true });
       await fs.mkdir(path.dirname(test), { recursive: true });
       await fs.writeFile(model, "class GunshipDamageModel {};\n", "utf8");
-      await fs.writeFile(
-        test,
-        '#include "Damage/Simulation/GunshipDamageModel.h"\nGunshipDamageModel model;\n',
-        "utf8",
-      );
+      await fs.writeFile(test, '#include "Damage/Simulation/GunshipDamageModel.h"\nGunshipDamageModel model;\n');
       await fs.writeFile(escapingTest, '#include "Secret.h"\n', "utf8");
       await fs.writeFile(outsideHeader, "class Secret {};\n", "utf8");
       await fs.writeFile(

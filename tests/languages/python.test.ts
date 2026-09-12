@@ -514,4 +514,20 @@ def outer(arg):
     expect(exportedNames).toEqual(["CLASS_ATTR", "Holder", "MODULE_CONST", "method", "outer"]);
     expect(localNames).toEqual(expect.arrayContaining(["secret_tmp", "nested", "inner_var", "method_local"]));
   });
+
+  it("does not export members of a function-local class", async () => {
+    const mod = await collectModule(`
+def outer():
+    class Hidden:
+        def member(self): pass
+
+def keep(): pass
+`);
+    const exportedNames = mod.exports.map((entry) => exportedNameOf(entry));
+    const localNames = mod.locals.map((entry) => entry.localName);
+    expect(localNames).toEqual(expect.arrayContaining(["outer", "Hidden", "member", "keep"]));
+    expect(exportedNames).toEqual(expect.arrayContaining(["outer", "keep"]));
+    expect(exportedNames).not.toContain("member");
+    expect(exportedNames).not.toContain("Hidden");
+  });
 });

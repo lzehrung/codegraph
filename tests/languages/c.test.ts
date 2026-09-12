@@ -3,11 +3,22 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runQuery } from "@lzehrung/codegraph-native";
-import { C_SUPPORT } from "../../src/languages.js";
+import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
+import { C_SUPPORT, CPP_SUPPORT, type LanguageSupport } from "../../src/languages.js";
+import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
+
+function collectCFamilyNames(file: string, source: string, support: LanguageSupport) {
+  const nativeQueries = getNativeQueryExecution(source, support).results;
+  const module = collectLocalsAndExportsFromSource(file, source, support, [], { nativeQueries });
+  return {
+    exports: module.exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : [])),
+    locals: module.locals.map((entry) => entry.localName),
+  };
+}
 const definition: LanguageTestDefinition = {
   id: "c",
   samples: [
@@ -122,5 +133,17 @@ describe("C native queries", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("exports the same header prototypes, globals, and structs as C++", () => {
+    const source = "void prototype(int value);\nint counter;\nstruct Pair { int a; };";
+    const cNames = collectCFamilyNames("probe.h", source, C_SUPPORT);
+    const cppNames = collectCFamilyNames("probe.hpp", source, CPP_SUPPORT);
+
+    expect(cNames.exports).toEqual(expect.arrayContaining(["prototype", "counter", "Pair"]));
+    expect(cppNames.exports).toEqual(expect.arrayContaining(["prototype", "counter", "Pair"]));
+    expect(cNames.locals).toEqual(expect.arrayContaining(["prototype", "counter", "Pair"]));
+    expect(cppNames.locals).toEqual(expect.arrayContaining(["prototype", "counter", "Pair"]));
+    expect([...cNames.exports].sort()).toEqual([...cppNames.exports].sort());
   });
 });

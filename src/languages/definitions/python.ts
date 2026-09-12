@@ -193,6 +193,8 @@ export const PYTHON_DEF: LanguageDefinition = {
   createsFunctionScope: (n) => n.type === "function_definition" || n.type === "lambda",
   membersAreImplicitlyInScope: false,
   supportsCrossModuleSymbols: true,
+  // A function body and a class body are both `block`, so only the function form blocks exports.
+  exportScopeBlockers: ["function_definition>block"],
   normalizeIdentifier: (name) => (hasNonAsciiCodePoint(name) ? name.normalize("NFKC") : name),
 };
 registerLanguage(PYTHON_DEF);

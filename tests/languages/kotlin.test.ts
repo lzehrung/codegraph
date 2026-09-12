@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildProjectIndex, findReferences } from "../../src/index.js";
+import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 import { runLanguageTests } from "./runner.js";
@@ -183,6 +184,30 @@ describe("Kotlin native identifier declarations", () => {
       expect(module?.exports.map(exportedNameOf)).not.toContain("nested");
       expect(references.status).toBe("ok");
       if (references.status === "ok") expect(references.references).toHaveLength(2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not export members of a function-local class", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-local-class-"));
+    const file = path.join(root, "Scope.kt");
+    await fsp.writeFile(
+      file,
+      ["fun outer() {", "    class Local {", "        fun hidden() {}", "    }", "}", "fun keep() {}", ""].join("\n"),
+      "utf8",
+    );
+    try {
+      const parsed = await parseFile(file);
+      const mod = collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
+        ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
+      });
+      const localNames = mod.locals.map((entry) => entry.localName);
+      const exportedNames = mod.exports.map(exportedNameOf);
+      expect(localNames).toEqual(expect.arrayContaining(["outer", "Local", "hidden", "keep"]));
+      expect(exportedNames).toEqual(expect.arrayContaining(["outer", "keep"]));
+      expect(exportedNames).not.toContain("hidden");
+      expect(exportedNames).not.toContain("Local");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

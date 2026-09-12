@@ -28,6 +28,7 @@ export type LanguageSupport = {
   createsFunctionScope: (node: SyntaxNodeLike) => boolean;
   membersAreImplicitlyInScope: boolean;
   supportsCrossModuleSymbols: boolean;
+  exportScopeBlockers: readonly string[];
   isTypeOnly: (stmtText: string) => boolean;
   usesQueryDrivenLocals: boolean;
   supportsExportFromReferences: boolean;
@@ -50,6 +51,7 @@ function adaptDefinition(def: LanguageDefinition): LanguageSupport {
     membersAreImplicitlyInScope: def.membersAreImplicitlyInScope ?? true,
     supportsCrossModuleSymbols: def.supportsCrossModuleSymbols || false,
     isTypeOnly: def.isTypeOnly || (() => false),
+    exportScopeBlockers: def.exportScopeBlockers ?? [],
     supportsExportFromReferences: def.supportsExportFromReferences ?? false,
     usesQueryDrivenLocals: def.usesQueryDrivenLocals || false,
     normalizeIdentifier: def.normalizeIdentifier || ((name) => name),

@@ -68,9 +68,11 @@ export const RUST_DEF: LanguageDefinition = {
       ;; form above. The shared path may itself be scoped, so it is captured
       ;; generically rather than requiring a single bare identifier segment.
       (use_declaration argument: (scoped_use_list path: (_) @from list: (use_list (identifier) @src))) @stmt
-      ;; Aliased members inside a group (\`use foo::{Bar as Baz}\`) export
-      ;; under their alias, matching how a single aliased import behaves.
-      (use_declaration argument: (scoped_use_list path: (_) @from list: (use_list (use_as_clause alias: (identifier) @src)))) @stmt
+      ;; Aliased members (\`use foo::Bar as Baz;\` and \`use foo::{Bar as Baz}\`) export under the
+      ;; alias while keeping the original member as the source, so a consumer of the alias
+      ;; resolves to the real definition.
+      (use_declaration argument: (use_as_clause path: (scoped_identifier path: (_) @from name: (identifier) @src) alias: (identifier) @alias)) @stmt
+      (use_declaration argument: (scoped_use_list path: (_) @from list: (use_list (use_as_clause path: (identifier) @src alias: (identifier) @alias)))) @stmt
     `,
     locals: `
       (function_item name: (identifier) @name)
@@ -106,6 +108,7 @@ export const RUST_DEF: LanguageDefinition = {
     memberExpression: "field_expression",
   },
   supportsCrossModuleSymbols: true,
+  exportScopeBlockers: ["block"],
   scopeDeclarationNames: (node) => node.parent?.type === "macro_definition",
   classifyDefinition: (node) => {
     const parent = node.parent;

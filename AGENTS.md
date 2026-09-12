@@ -7,6 +7,16 @@
 - Never use `=== true`, `=== false`, etc. in boolean conditions; keep them as terse and simple as possible like `!condition`. Extract conditions to variables when the variable name adds clarity/insight into the reason for the condition.
 - In boolean condition contexts, use the shortest syntactically equivalent expression. Prefer `items.length` over `items.length > 0`, `!items.length` over `items.length === 0`, and `items?.length` over `items && items.length > 0`.
 - Always consider the impact of a change on tests or when more test cases are needed. Never make tests pass for the sake of passing; always exercise real behavior.
+- Treat the actual implementation as the only evidence of behavior. Check node names, fields, and
+  APIs against the dependency version and runtime actually in use. Parsing without error, or a
+  query that compiles, does not prove that it matches or produces the intended result.
+- Cover inclusion and exclusion together. Assert what must be found and what must stay absent, and
+  include neighboring cases where scope, nesting, comments, or ordinary formatting can change the
+  outcome.
+- Verify a change through its consumers, not only at the seam you edited. A correct extractor does
+  not prove correct discovery, resolution, navigation, or reporting. Keep a shared rule consistent
+  across every consumer and fallback path, and keep a valid empty result distinct from unsupported,
+  unavailable, or failed work.
 - Always keep documentation updated and accurate while being minimal and concise.
 - Add a concise `[Unreleased]` entry for user-visible behavior, CLI output, support, compatibility, or user-facing fixes. Skip test-only, internal refactoring, and formatting-only changes; state why in the PR when omitted.
 - Keep paragraphs to no more than 4 concise sentences. Prefer bullets for dense details.

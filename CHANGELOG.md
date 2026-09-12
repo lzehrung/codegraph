@@ -13,6 +13,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 - Language queries now match the loaded grammars, preserve supported declaration forms, and exclude false CommonJS and function-local exports.
 - Default discovery includes registered language aliases. HTML queries ignore tag and attribute case, Python `__all__` respects module scope and complete static lists, and TypeScript declaration exports resolve through imports.
+- Module exports drop names declared inside a function body while keeping members of nested top-level types. C++ namespace, template, and prototype declarations are exported like their C counterparts, and an aliased Rust `pub use` keeps the original member as its source.
 
 ## [2.3.24] - 2026-09-10
 

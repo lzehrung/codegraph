@@ -121,5 +121,6 @@ export const KOTLIN_DEF: LanguageDefinition = {
     node.type === "catch_block" ||
     node.type === "finally_block",
   supportsCrossModuleSymbols: true,
+  exportScopeBlockers: ["function_body"],
 };
 registerLanguage(KOTLIN_DEF);

@@ -3,8 +3,10 @@ import {
   cFamilyBlock,
   cFamilyContainerTypes,
   cFamilyControlSplitPoints,
+  cFamilyCppContainerExportQueries,
   cFamilyFunctionBlock,
   cFamilyTypeIdentifierBlock,
+  cFunctionNameQuery,
   createCFamilyLanguageDefinition,
   findAncestor,
   isFunctionDeclarator,
@@ -29,6 +31,7 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
   ],
   splitPoints: [...cFamilyControlSplitPoints, "try_statement", "catch_clause"],
   extraExportQueries: [
+    ...cFamilyCppContainerExportQueries(cFunctionNameQuery("name", true)),
     `(class_specifier name: (type_identifier) @name)`,
     `(class_specifier name: (template_type name: (type_identifier) @name))`,
     `(enum_specifier name: (type_identifier) @name)`,

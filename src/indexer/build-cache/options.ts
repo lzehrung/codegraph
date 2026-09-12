@@ -53,6 +53,7 @@ type LanguageDefinitionFingerprintDescriptor = {
   graph: LanguageDefinition["graph"];
   nodeTypes?: LanguageDefinition["nodeTypes"];
   supportsCrossModuleSymbols: boolean;
+  exportScopeBlockers: string[];
   native?: {
     authoritativeKinds: string[];
     notes: string[];
@@ -79,6 +80,7 @@ function languageDefinitionFingerprintDescriptor(
     graph: definition.graph,
     ...(definition.nodeTypes ? { nodeTypes: definition.nodeTypes } : {}),
     supportsCrossModuleSymbols: definition.supportsCrossModuleSymbols ?? false,
+    exportScopeBlockers: [...(definition.exportScopeBlockers ?? [])].sort(),
     ...(native
       ? {
           native: {
@@ -123,6 +125,7 @@ export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof Langua
   createsFunctionScope: true,
   membersAreImplicitlyInScope: true,
   supportsCrossModuleSymbols: true,
+  exportScopeBlockers: true,
   isTypeOnly: true,
   nodeTypes: true,
   native: true,
