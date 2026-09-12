@@ -18,14 +18,16 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * plus inheritance edges that treated generic arguments or enclosing-type
  * qualifiers as direct bases. Epoch 5 invalidates modules whose TypeScript or
  * workspace resolution inputs were not fingerprinted, including removed configs.
+ * Epoch 6 refreshes declaration exports, language discovery, and declaration-file resolution.
+ * Epoch 7 refreshes import resolution, grouped import bindings, and typedef names.
  */
-export const CORE_ALGORITHM_EPOCH = 5;
+export const CORE_ALGORITHM_EPOCH = 7;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
  * consistently across the CLI and library build shapes.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 1;
+export const LANGUAGE_BEHAVIOR_EPOCH = 3;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];

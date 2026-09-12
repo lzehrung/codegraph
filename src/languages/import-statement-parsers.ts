@@ -40,13 +40,133 @@ const RUST_ATTRIBUTE_PREFIX_PATTERN = /^(?:#\s*\[[\s\S]*?\]\s*)+/;
 const RUST_PATH_ATTRIBUTE_PATTERN = /#\s*\[\s*path\s*=\s*(?:r(#*)"([\s\S]*?)"\1|"([^"]*)")\s*\]/gu;
 const RUST_USE_PATTERN = /^(?:pub(?:\s*\([^)]*\))?\s+)?use\s+([\s\S]+?)\s*;?$/;
 
-export function parseRustImportStatement(stmtText: string): ParsedRustImportStatement | null {
-  const parsed = parseRustImportStatements(stmtText);
-  return parsed.length === 1 ? parsed[0]! : null;
+export function skipRustCommentOrLiteral(
+  source: string,
+  index: number,
+): { end: number; kind: "comment" | "literal" } | null {
+  const ch = source[index];
+  const next = source[index + 1];
+  if (ch === "/" && next === "/") {
+    let end = index + 2;
+    while (end < source.length && source[end] !== "\n" && source[end] !== "\r") end += 1;
+    return { end, kind: "comment" };
+  }
+  if (ch === "/" && next === "*") {
+    let end = index + 2;
+    let depth = 1;
+    while (end < source.length && depth > 0) {
+      const current = source[end];
+      const following = source[end + 1];
+      if (current === "/" && following === "*") {
+        depth += 1;
+        end += 2;
+        continue;
+      }
+      if (current === "*" && following === "/") {
+        depth -= 1;
+        end += 2;
+        continue;
+      }
+      end += 1;
+    }
+    return { end, kind: "comment" };
+  }
+
+  let rawIndex = index;
+  if (ch === "b" || ch === "c") rawIndex += 1;
+  if (source[rawIndex] === "r") {
+    let hashes = 0;
+    let cursor = rawIndex + 1;
+    while (source[cursor] === "#") {
+      hashes += 1;
+      cursor += 1;
+    }
+    if (source[cursor] === '"') {
+      return { end: skipRustRawString(source, cursor, hashes), kind: "literal" };
+    }
+  }
+
+  if (ch === "b" && next === '"') {
+    return { end: skipRustQuotedString(source, index + 1), kind: "literal" };
+  }
+  if (ch === '"') {
+    return { end: skipRustQuotedString(source, index), kind: "literal" };
+  }
+  if (ch === "'") {
+    const charEnd = skipRustCharLiteral(source, index);
+    if (charEnd !== null) return { end: charEnd, kind: "literal" };
+  }
+  return null;
+}
+
+function skipRustQuotedString(source: string, quoteIndex: number): number {
+  let index = quoteIndex + 1;
+  while (index < source.length) {
+    const ch = source[index];
+    if (ch === "\\") {
+      index += 2;
+      continue;
+    }
+    if (ch === '"') return index + 1;
+    index += 1;
+  }
+  return source.length;
+}
+
+function skipRustRawString(source: string, quoteIndex: number, hashes: number): number {
+  let index = quoteIndex + 1;
+  while (index < source.length) {
+    if (source[index] !== '"') {
+      index += 1;
+      continue;
+    }
+    let count = 0;
+    while (count < hashes && source[index + 1 + count] === "#") count += 1;
+    if (count === hashes) return index + 1 + hashes;
+    index += 1;
+  }
+  return source.length;
+}
+
+function skipRustCharLiteral(source: string, index: number): number | null {
+  if (source[index] !== "'") return null;
+  let cursor = index + 1;
+  if (cursor >= source.length) return null;
+  if (source[cursor] === "\\") {
+    cursor += 1;
+    while (cursor < source.length && source[cursor] !== "'") {
+      if (source[cursor] === "\\") cursor += 2;
+      else cursor += 1;
+    }
+    if (cursor < source.length) return cursor + 1;
+    return cursor;
+  }
+  if (source[cursor + 1] === "'") return cursor + 2;
+  return null;
+}
+
+function stripRustComments(source: string): string {
+  let out = "";
+  let index = 0;
+  while (index < source.length) {
+    const skipped = skipRustCommentOrLiteral(source, index);
+    if (skipped) {
+      if (skipped.kind === "comment") {
+        out += source.slice(index, skipped.end).replace(/[^\n\r]/g, " ");
+      } else {
+        out += source.slice(index, skipped.end);
+      }
+      index = skipped.end;
+      continue;
+    }
+    out += source[index];
+    index += 1;
+  }
+  return out;
 }
 
 export function parseRustImportStatements(stmtText: string): ParsedRustImportStatement[] {
-  const trimmed = stmtText.trim();
+  const trimmed = stripRustComments(stmtText).trim();
   if (!trimmed) return [];
 
   const attributePrefix = trimmed.match(RUST_ATTRIBUTE_PREFIX_PATTERN)?.[0] ?? "";
@@ -107,13 +227,18 @@ function splitTopLevelRustAlias(input: string): { path: string; alias?: string }
     const character = input[index];
     if (character === "{") depth += 1;
     else if (character === "}") depth = Math.max(0, depth - 1);
-    if (depth === 0 && input.startsWith(" as ", index)) {
+    if (
+      depth === 0 &&
+      input.startsWith("as", index) &&
+      /\s/.test(input[index - 1] ?? "") &&
+      /\s/.test(input[index + 2] ?? "")
+    ) {
       asIndex = index;
     }
   }
   if (asIndex < 0) return { path: input.trim() };
   const path = input.slice(0, asIndex).trim();
-  const alias = input.slice(asIndex + 4).trim();
+  const alias = input.slice(asIndex + 2).trim();
   if (!path || !RUST_IDENTIFIER_PATTERN.test(alias)) return { path: input.trim() };
   return { path, alias };
 }

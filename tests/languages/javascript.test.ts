@@ -126,6 +126,8 @@ describe("JavaScript CommonJS export and static-block scopes", () => {
       "const local = 1;",
       "other.foo = local;",
       "config.setting = local;",
+      "module.foo = function () {};",
+      "module.bar = () => {};",
       "module.exports.real = local;",
     ].join("\n");
     try {
@@ -136,6 +138,7 @@ describe("JavaScript CommonJS export and static-block scopes", () => {
       expect(module?.exports).toContainEqual(expect.objectContaining({ type: "local", exportedAs: "real" }));
       expect(module?.exports).not.toContainEqual(expect.objectContaining({ type: "local", exportedAs: "foo" }));
       expect(module?.exports).not.toContainEqual(expect.objectContaining({ type: "local", exportedAs: "setting" }));
+      expect(module?.exports).not.toContainEqual(expect.objectContaining({ type: "local", exportedAs: "bar" }));
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -7,6 +7,7 @@ import {
   parseKotlinImportStatement,
   parsePhpImportStatement,
   parseRustImportStatements,
+  skipRustCommentOrLiteral,
   type ParsedRustImportStatement,
 } from "../../languages/import-statement-parsers.js";
 import { GO_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
@@ -352,6 +353,7 @@ async function resolveRustParsedFrom(
   if (pathAttribute) {
     const attributed = await resolveRustImportPath(context.projectRoot, context.file, from, pathAttribute);
     if (attributed) return attributed.replace(/\\/g, "/");
+    return { external: from };
   }
   return context.resolveFrom(from);
 }
@@ -366,26 +368,41 @@ function rustBindingKey(binding: ImportBinding): string {
 function scanRustImportStatements(sourceText: string): Array<{ text: string; start: number }> {
   const results: Array<{ text: string; start: number }> = [];
   const keyword = /(?:^|(?<=[\n;]))\s*(?:#\s*\[[\s\S]*?\]\s*)*(?:pub(?:\s*\([^)]*\))?\s+)?(use|extern\s+crate|mod)\b/gu;
+  let scannedUntil = 0;
   for (const match of sourceText.matchAll(keyword)) {
     if (match.index === undefined) continue;
     const start = match.index + match[0].search(/\S/);
+    // Reject keyword matches inside comments and literals without copying the source.
+    while (scannedUntil < start) {
+      const skipped = skipRustCommentOrLiteral(sourceText, scannedUntil);
+      scannedUntil = skipped?.end ?? scannedUntil + 1;
+    }
+    if (scannedUntil > start) continue;
     let depth = 0;
-    for (let index = start; index < sourceText.length; index += 1) {
+    for (let index = start; index < sourceText.length; ) {
+      const skipped = skipRustCommentOrLiteral(sourceText, index);
+      if (skipped) {
+        index = skipped.end;
+        continue;
+      }
       const character = sourceText[index];
       if (character === "{") {
         const head = sourceText.slice(start, index);
         if (/\bmod\b/.test(head) && !/\buse\b/.test(head)) break;
         depth += 1;
+        index += 1;
         continue;
       }
       if (character === "}") {
         depth = Math.max(0, depth - 1);
+        index += 1;
         continue;
       }
       if (character === ";" && depth === 0) {
         results.push({ text: sourceText.slice(start, index + 1), start });
         break;
       }
+      index += 1;
     }
   }
   return results;

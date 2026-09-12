@@ -17,7 +17,6 @@ function localIdentity(source: string, support: LanguageSupport): string[] {
     .locals.map((local) => `${local.kind}:${local.localName}:${local.range.start.index}:${local.range.end.index}`)
     .sort();
 }
-
 const definition: LanguageTestDefinition = {
   id: "c",
   samples: [
@@ -128,6 +127,8 @@ describe("C native queries", () => {
       "static int helper;",
       "int top;",
       "int f() { int sum = 0; return sum; }",
+      "int static_count = 1;",
+      "int ready(void) { static int once = 0; return once; }",
       "#endif",
       "",
     ].join("\n");
@@ -135,7 +136,7 @@ describe("C native queries", () => {
       .exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : []))
       .sort();
 
-    expect(exported).toEqual(["DEMO_H", "f", "top"]);
+    expect(exported).toEqual(["DEMO_H", "f", "ready", "static_count", "top"]);
   });
 });
 
@@ -168,6 +169,29 @@ describe("C vs C++ query-driven locals", () => {
       "int add(int left, int right) { int sum = left + right; return sum; }",
     ].join("\n");
     expect(localIdentity(source, C_SUPPORT)).toEqual(localIdentity(source, CPP_SUPPORT));
+  });
+
+  it("follows nested typedef declarators without indexing parameter type uses", () => {
+    const source = [
+      "typedef int **PP;",
+      "typedef int Vector[8];",
+      "typedef int (*Handlers[])(int);",
+      "typedef PP (*Factory)(Vector value);",
+    ].join("\n");
+    for (const support of [C_SUPPORT, CPP_SUPPORT]) {
+      const mod = moduleFromSource("types.h", source, support);
+      const aliases = mod.locals.filter((local) => local.kind === "type");
+      expect(aliases.map((local) => local.localName).sort()).toEqual(["Factory", "Handlers", "PP", "Vector"]);
+      expect(aliases.map((local) => source.slice(local.range.start.index, local.range.end.index))).toEqual(
+        aliases.map((local) => local.localName),
+      );
+      expect(mod.exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : [])).sort()).toEqual([
+        "Factory",
+        "Handlers",
+        "PP",
+        "Vector",
+      ]);
+    }
   });
 });
 

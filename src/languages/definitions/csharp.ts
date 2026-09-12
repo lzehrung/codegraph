@@ -76,7 +76,6 @@ export const CSHARP_DEF: LanguageDefinition = {
       (enum_member_declaration name: (identifier) @name)
       (method_declaration name: (identifier) @name)
       (delegate_declaration name: (identifier) @name)
-      (local_function_statement name: (identifier) @name)
       (property_declaration name: (identifier) @name)
       (field_declaration (variable_declaration (variable_declarator name: (identifier) @name)))
       (event_field_declaration (variable_declaration (variable_declarator name: (identifier) @name)))
@@ -123,7 +122,7 @@ export const CSHARP_DEF: LanguageDefinition = {
     )
       return "class";
     if (parent.type === "interface_declaration") return "interface";
-    if (parent.type === "enum_declaration") return "type";
+    if (parent.type === "enum_declaration" || parent.type === "delegate_declaration") return "type";
     return "variable";
   },
   createsFunctionScope: (node) =>
@@ -141,6 +140,7 @@ export const CSHARP_DEF: LanguageDefinition = {
         p.type === "struct_declaration" ||
         p.type === "interface_declaration" ||
         p.type === "enum_declaration" ||
+        p.type === "delegate_declaration" ||
         p.type === "enum_member_declaration" ||
         p.type === "method_declaration" ||
         p.type === "constructor_declaration" ||

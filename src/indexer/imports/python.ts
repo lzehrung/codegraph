@@ -136,7 +136,9 @@ const PYTHON_MODULE_LIST_ITEM_PATTERN = new RegExp(
 );
 
 function normalizePythonImportStatement(statement: string): string {
-  return statement.replace(/\\\r?\n[\t ]*/g, " ").trim();
+  return stripPythonCommentsAndStrings(statement)
+    .replace(/\\\r?\n[\t ]*/g, " ")
+    .trim();
 }
 
 async function collectPythonImportStatement(
@@ -188,7 +190,10 @@ export async function collectPythonImportsFromNativeMatches(
     if (!statementCapture) continue;
     const startIndex = utf8ByteOffsetToStringIndex(context.source, statementCapture.start.index);
     const lineStart = context.source.lastIndexOf("\n", startIndex - 1) + 1;
-    const moduleLevel = !/^[\t ]/.test(context.source.slice(lineStart, startIndex));
+    const prefix = context.source.slice(lineStart, startIndex);
+    const moduleLevel =
+      !/^[\t ]/.test(prefix) &&
+      !/^(?:async\s+)?(?:if|elif|else|for|while|try|except|finally|with|def|class|match|case)\b/.test(prefix);
     await collectPythonImportStatement(context, statementCapture.text, moduleLevel);
   }
 }

@@ -79,21 +79,15 @@ export function cFunctionNameQuery(captureName: string, includeFieldIdentifier: 
  */
 export function cFamilyCoreExportQueries(functionNameQuery: string): string[] {
   return [
-    `((function_definition ${functionNameQuery}) @declaration
-      (#not-match? @declaration "static"))`,
-    `((declaration ${functionNameQuery}) @declaration
-      (#not-match? @declaration "static"))`,
+    `(function_definition ${functionNameQuery}) @declaration`,
+    `(declaration ${functionNameQuery}) @declaration`,
     `(struct_specifier name: (type_identifier) @name)`,
     `(enum_specifier name: (type_identifier) @name)`,
-    `(type_definition declarator: (type_identifier) @name)`,
-    `(type_definition declarator: (function_declarator declarator: (parenthesized_declarator (pointer_declarator declarator: (type_identifier) @name))))`,
-    `(type_definition declarator: (pointer_declarator declarator: (type_identifier) @name))`,
+    `(type_definition declarator: (_) @declarator)`,
     `((declaration type: (_) @type declarator: (identifier) @name) @declaration
-      (#not-match? @type "^(import|export)$")
-      (#not-match? @declaration "static"))`,
+      (#not-match? @type "^(import|export)$"))`,
     `((declaration type: (_) @type declarator: (init_declarator declarator: (identifier) @name)) @declaration
-      (#not-match? @type "^(import|export)$")
-      (#not-match? @declaration "static"))`,
+      (#not-match? @type "^(import|export)$"))`,
   ];
 }
 
@@ -105,11 +99,8 @@ export function cFamilyCoreLocalQueries(functionNameQuery: string): string[] {
     `(declaration ${functionNameQuery})`,
     `(struct_specifier name: (type_identifier) @name)`,
     `(enum_specifier name: (type_identifier) @name)`,
-    `(type_definition declarator: (type_identifier) @name)`,
-    // `typedef int (*Comparator)(int, int);` and `typedef int *IntPtr;` wrap the typedef name in a
-    // declarator chain rather than exposing it directly.
-    `(type_definition declarator: (function_declarator declarator: (parenthesized_declarator (pointer_declarator declarator: (type_identifier) @name))))`,
-    `(type_definition declarator: (pointer_declarator declarator: (type_identifier) @name))`,
+    // Resolve the declarator chain in the consumer, without a fixed pointer/array depth.
+    `(type_definition declarator: (_) @declarator)`,
     `(declaration declarator: (identifier) @name)`,
     `(declaration declarator: (init_declarator declarator: (identifier) @name))`,
     `(parameter_declaration declarator: (identifier) @name)`,
