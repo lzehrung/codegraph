@@ -9,6 +9,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Fixed
+
+- Language queries now match the loaded grammars, preserve supported declaration forms, and exclude false CommonJS and function-local exports.
+
 ## [2.3.24] - 2026-09-10
 
 ### Fixed

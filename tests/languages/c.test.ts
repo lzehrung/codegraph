@@ -17,7 +17,6 @@ function localIdentity(source: string, support: LanguageSupport): string[] {
     .locals.map((local) => `${local.kind}:${local.localName}:${local.range.start.index}:${local.range.end.index}`)
     .sort();
 }
-
 const definition: LanguageTestDefinition = {
   id: "c",
   samples: [
@@ -128,6 +127,8 @@ describe("C native queries", () => {
       "static int helper;",
       "int top;",
       "int f() { int sum = 0; return sum; }",
+      "int static_count = 1;",
+      "int ready(void) { static int once = 0; return once; }",
       "#endif",
       "",
     ].join("\n");
@@ -135,7 +136,7 @@ describe("C native queries", () => {
       .exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : []))
       .sort();
 
-    expect(exported).toEqual(["DEMO_H", "f", "top"]);
+    expect(exported).toEqual(["DEMO_H", "f", "ready", "static_count", "top"]);
   });
 });
 

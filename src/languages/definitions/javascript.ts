@@ -57,7 +57,7 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
       ((expression_statement (assignment_expression
         left: (member_expression object: (identifier) @mod property: (property_identifier) @cjs_export_name)
         right: [ (function) (arrow_function) ] @cjs_fn))
-        (#eq? @mod "module"))
+        (#eq? @mod "module") (#eq? @cjs_export_name "exports"))
       ((expression_statement (assignment_expression
         left: (member_expression object: (identifier) @mod property: (property_identifier) @prop)
         right: (object (shorthand_property_identifier) @cjs_shorthand)))

@@ -634,6 +634,14 @@ export function collectLocalsAndExportsFromSource(
     for (const match of matches) {
       const map = capturesByName(match);
       const stmtText = map["stmt"]?.text ?? "";
+
+      if (support.id === "c" || support.id === "cpp") {
+        const declaration = nodeForCapture(map["declaration"]);
+        const hasStaticStorageClass = declaration?.namedChildren.some(
+          (child) => child.type === "storage_class_specifier" && child.text === "static",
+        );
+        if (hasStaticStorageClass) continue;
+      }
       const isTypeOnly = support.isTypeOnly(stmtText);
 
       if (support.id === "python") {

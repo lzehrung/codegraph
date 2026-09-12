@@ -13,6 +13,8 @@ import { parseSyntaxTree, runQuery } from "@lzehrung/codegraph-native";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
 import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js";
 import type { LanguageSupport } from "../../src/languages.js";
+import { createTestIndexFromFiles } from "../test-utils.js";
+import { fileIdentityKey } from "../../src/util/paths.js";
 
 function moduleFromSource(file: string, source: string, support: LanguageSupport) {
   const native = getNativeQueryExecution(source, support);
@@ -196,6 +198,26 @@ describe("C++ native queries", () => {
       .sort();
     expect(exported).not.toContain("sum");
     expect(exported).toEqual(expect.arrayContaining(["FOO", "U", "f"]));
+  });
+  it("publishes non-static declarations whose names or bodies contain static", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-static-storage-"));
+    const file = path.join(root, "exports.cpp");
+    const source = [
+      "static int helper;",
+      "int static_count = 1;",
+      "int ready() { static int once = 0; return once; }",
+    ].join("\n");
+    try {
+      await fs.writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const module = index.byFile.get(fileIdentityKey(file));
+      const exportedNames = module?.exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : []));
+
+      expect(exportedNames).toEqual(expect.arrayContaining(["static_count", "ready"]));
+      expect(exportedNames).not.toContain("helper");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });
 
