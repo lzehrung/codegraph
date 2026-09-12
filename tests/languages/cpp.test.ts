@@ -9,7 +9,7 @@ import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import { C_SUPPORT, CPP_SUPPORT, supportForFile } from "../../src/languages.js";
-import { parseSyntaxTree } from "@lzehrung/codegraph-native";
+import { parseSyntaxTree, runQuery } from "@lzehrung/codegraph-native";
 
 const definition: LanguageTestDefinition = {
   id: "cpp",
@@ -130,11 +130,46 @@ describe("C++ language boundaries", () => {
     }
   });
 
-  it("documents the C++20 module grammar limitation", () => {
-    const tree = parseSyntaxTree("export module foo;\nimport foo;\n", "cpp");
+  it("documents the C++20 module grammar limitation without exporting pseudo-declarations", () => {
+    const source = "export module foo;\nimport foo;\n";
+    const tree = parseSyntaxTree(source, "cpp");
     // The interned kind table is exactly the set of node kinds the projection produced.
     expect(tree.kinds).not.toContain("module_declaration");
     expect(tree.kinds).not.toContain("import_declaration");
+
+    const exports = runQuery(source, "cpp", CPP_SUPPORT.queries.exports);
+    const names = exports.matches.flatMap((match) =>
+      match.captures.filter((capture) => capture.name === "name").map((capture) => capture.text),
+    );
+    expect(names).not.toContain("module");
+    expect(names).not.toContain("foo");
+  });
+});
+
+describe("C++ native queries", () => {
+  it("captures qualified and in-class members without publishing module syntax", () => {
+    const source = `
+      #define FOO(x) (x)
+      namespace outer::inner {}
+      union U { int value; };
+      class A { void f(); ~A(); A& operator+=(const A&); };
+      void A::f() {}
+      A::~A() {}
+      A& A::operator+=(const A&) { return *this; }
+      export module foo;
+      import std;
+      void g() { int sum = 0; }
+    `;
+    const exports = runQuery(source, "cpp", CPP_SUPPORT.queries.exports);
+    const names = exports.matches.flatMap((match) =>
+      match.captures.filter((capture) => capture.name === "name").map((capture) => capture.text),
+    );
+
+    expect(names).toEqual(expect.arrayContaining(["FOO", "outer", "inner", "U", "f", "~A", "operator+="]));
+    expect(names).not.toContain("module");
+    expect(names).not.toContain("std");
+    expect(names).not.toContain("foo");
+    expect(names).not.toContain("sum");
   });
 });
 

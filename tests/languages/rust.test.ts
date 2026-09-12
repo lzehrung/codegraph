@@ -96,6 +96,7 @@ const definition: LanguageTestDefinition = {
             { name: "Slow", kind: "variable" },
             { name: "Engine", kind: "class" },
             { name: "run", kind: "function" },
+            { name: "run", kind: "function" },
           ],
         },
         {
@@ -221,6 +222,37 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("Rust type aliases, associated types, and trait signatures", () => {
+  it("indexes pub type aliases, associated types, and declaration-only trait methods", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-missing-decls-"));
+    const file = path.join(root, "example.rs");
+    const source = `pub type Alias = Vec<u8>;
+pub trait Runner {
+    type Assoc;
+    fn required(&self) -> u32;
+    fn defaulted(&self) -> u32 { 1 }
+}
+`;
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const mod = [...index.byFile.values()][0]!;
+      const locals = mod.locals.map((local) => `${local.kind}:${local.localName}`);
+      const exports = mod.exports.flatMap((entry) =>
+        entry.type === "local" ? [`${entry.target.kind}:${entry.exportedAs}`] : [],
+      );
+      expect(locals).toEqual(
+        expect.arrayContaining(["type:Alias", "class:Runner", "type:Assoc", "function:required", "function:defaulted"]),
+      );
+      expect(exports).toEqual(
+        expect.arrayContaining(["type:Alias", "class:Runner", "type:Assoc", "function:required", "function:defaulted"]),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("Rust macro_rules! structure", () => {
   it("chunks macro definitions from the dedicated fixture", async () => {

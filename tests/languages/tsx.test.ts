@@ -1,3 +1,9 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { goToDefinition } from "../../src/index.js";
+import { createTestIndexFromFiles } from "../test-utils.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -94,3 +100,21 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("TSX class static-block scopes", () => {
+  it("does not resolve static-block locals from sibling methods", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-tsx-static-block-scope-"));
+    const file = path.join(root, "scope.tsx");
+    const source = "class C { static { let hidden = 1; } method() { return hidden; } }";
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+
+      expect(await goToDefinition(index, { file, line: 1, column: source.lastIndexOf("hidden") + 1 })).toMatchObject({
+        status: "not_found",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

@@ -19,7 +19,8 @@ describe("grep default patterns", () => {
 
     try {
       const textHits = await textGrep(root, "helperFunction");
-      const astHits = await astGrep(root, "(function_declaration (simple_identifier) @name)");
+      // tree-sitter-kotlin-ng names every declaration name `identifier`, not `simple_identifier`.
+      const astHits = await astGrep(root, "(function_declaration (identifier) @name)");
 
       expect(textHits.some((hit) => hit.file === "src/Main.kt")).toBe(true);
       expect(astHits.some((hit) => hit.file === "src/Main.kt")).toBe(true);

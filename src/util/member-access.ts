@@ -78,7 +78,10 @@ export function isMemberReferencePropertyIdentifier(sup: LanguageSupport, nodeTy
   return memberReferencePropertyIdentifierTypes(sup).includes(nodeType);
 }
 
-export function getNavigationExpressionProperty(expr: SyntaxNodeLike): SyntaxNodeLike | null {
+export function getNavigationExpressionProperty(sup: LanguageSupport, expr: SyntaxNodeLike): SyntaxNodeLike | null {
+  if (sup.id === "kotlin") {
+    return expr.namedChildren[expr.namedChildren.length - 1] ?? expr.child(2);
+  }
   const suffix = expr.namedChildren.find((child) => child.type === "navigation_suffix") ?? expr.child(1);
   if (!suffix) return null;
   return (
@@ -149,7 +152,7 @@ export function getMemberAccessParts(sup: LanguageSupport, memberNode: SyntaxNod
   if ((sup.id === "kotlin" || sup.id === "swift") && memberNode.type === "navigation_expression") {
     return {
       object: memberNode.namedChildren[0] ?? memberNode.child(0),
-      property: getNavigationExpressionProperty(memberNode),
+      property: getNavigationExpressionProperty(sup, memberNode),
     };
   }
   return {

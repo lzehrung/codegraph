@@ -1,3 +1,7 @@
+import { describe, expect, it } from "vitest";
+import { runQuery } from "@lzehrung/codegraph-native";
+import { C_SUPPORT } from "../../src/languages.js";
+
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -88,3 +92,22 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("C native queries", () => {
+  it("keeps erroneous macro includes from capturing a later preprocessor identifier", () => {
+    const source = '#include MACRO("x.h")\n#define HAS_FOO 1\n';
+    const imports = runQuery(source, "c", C_SUPPORT.queries.imports);
+    expect(imports.matches.flatMap((match) => match.captures.filter((capture) => capture.name === "mod"))).toEqual([]);
+  });
+
+  it("exports only external non-static declarations", () => {
+    const source = "static int helper;\nint top;\nint f() { int sum = 0; return sum; }\n";
+    const exports = runQuery(source, "c", C_SUPPORT.queries.exports);
+    const names = exports.matches.flatMap((match) =>
+      match.captures.filter((capture) => capture.name === "name").map((capture) => capture.text),
+    );
+    expect(names).toEqual(expect.arrayContaining(["top", "f"]));
+    expect(names).not.toContain("helper");
+    expect(names).not.toContain("sum");
+  });
+});

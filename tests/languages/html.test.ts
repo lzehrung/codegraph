@@ -1,3 +1,6 @@
+import { describe, expect, it } from "vitest";
+import { HTML_SUPPORT } from "../../src/languages.js";
+import { runQuery } from "@lzehrung/codegraph-native";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -109,3 +112,26 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("HTML asset tag filtering", () => {
+  it("restricts href to link and anchor tags and src to script and img tags", () => {
+    const source = [
+      '<div href="div.html"></div>',
+      '<p src="paragraph.js"></p>',
+      '<a href="anchor.html"></a>',
+      '<link href="style.css">',
+      '<img src="image.png">',
+      '<video src="video.mp4"></video>',
+      '<script src="app.js"></script>',
+    ].join("\n");
+
+    const captured = runQuery(source, "html", HTML_SUPPORT.queries.imports)
+      .matches.flatMap((match) => match.captures.filter((capture) => capture.name === "mod").map((c) => c.text))
+      .sort();
+
+    // The tag predicates used to sit outside their patterns, so every element with an `href` or
+    // `src` attribute was captured. The graph's own asset walker still reports media sources; this
+    // asserts the query, which is what the predicates constrain.
+    expect(captured).toEqual(["anchor.html", "app.js", "image.png", "style.css"]);
+  });
+});

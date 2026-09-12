@@ -8,18 +8,18 @@ import {
 
 const JS_OBJECT_METHOD_EXPORT_PATTERN = `
       ;; CJS: module.exports = { helper () {} }
-      (expression_statement (assignment_expression
+      ((expression_statement (assignment_expression
         left: (member_expression object: (identifier) @mod property: (property_identifier) @prop)
         right: (object (pair key: (property_identifier) @cjs_export_name value: (function_declaration) @cjs_fn))))
-        (#eq? @mod "module") (#eq? @prop "exports")
+        (#eq? @mod "module") (#eq? @prop "exports"))
 `;
 
 const JS_OBJECT_METHOD_EXPORT_NATIVE_PATTERN = `
       ;; CJS: module.exports = { helper () {} }
-      (expression_statement (assignment_expression
+      ((expression_statement (assignment_expression
         left: (member_expression object: (identifier) @mod property: (property_identifier) @prop)
         right: (object (method_definition name: (property_identifier) @cjs_export_name) @cjs_fn)))
-        (#eq? @mod "module") (#eq? @prop "exports")
+        (#eq? @mod "module") (#eq? @prop "exports"))
 `;
 
 export const JAVASCRIPT_DEF: LanguageDefinition = {
@@ -53,58 +53,63 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
       (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)))
       (export_statement (export_clause (export_specifier name: (identifier) @src !alias)))
       (export_statement (string) @from)
-      (expression_statement (assignment_expression
+      ;; CJS whole-module export: module.exports = function () {} / = () => {}
+      ((expression_statement (assignment_expression
+        left: (member_expression object: (identifier) @mod property: (property_identifier) @cjs_export_name)
+        right: [ (function) (arrow_function) ] @cjs_fn))
+        (#eq? @mod "module"))
+      ((expression_statement (assignment_expression
         left: (member_expression object: (identifier) @mod property: (property_identifier) @prop)
         right: (object (shorthand_property_identifier) @cjs_shorthand)))
-        (#eq? @mod "module") (#eq? @prop "exports")
+        (#eq? @mod "module") (#eq? @prop "exports"))
       ;; CJS spread export: module.exports = { ...base }
       ((expression_statement (assignment_expression
         left: (member_expression object: (identifier) @mod property: (property_identifier) @prop)
         right: (object (spread_element (identifier) @cjs_spread))) @stmt)
         (#eq? @mod "module") (#eq? @prop "exports"))
-      (expression_statement (assignment_expression
+      ((expression_statement (assignment_expression
         left: (member_expression object: (identifier) @mod property: (property_identifier) @prop)
         right: (object (pair key: (property_identifier) @cjs_export_name value: (identifier) @cjs_local))))
-        (#eq? @mod "module") (#eq? @prop "exports")
-      (expression_statement (assignment_expression
+        (#eq? @mod "module") (#eq? @prop "exports"))
+      ((expression_statement (assignment_expression
         left: (member_expression object: (member_expression object: (identifier) @mod property: (property_identifier) @prop) property: (property_identifier) @cjs_export_name)
         right: (identifier) @cjs_local))
-        (#eq? @mod "module") (#eq? @prop "exports")
-      (expression_statement (assignment_expression
+        (#eq? @mod "module") (#eq? @prop "exports"))
+      ((expression_statement (assignment_expression
         left: (member_expression object: (identifier) @exp property: (property_identifier) @cjs_export_name)
         right: (identifier) @cjs_local))
-        (#eq? @exp "exports")
+        (#eq? @exp "exports"))
       ;; CJS function/arrow direct exports
-      (expression_statement (assignment_expression
+      ((expression_statement (assignment_expression
         left: (member_expression object: (member_expression object: (identifier) @mod property: (property_identifier) @prop) property: (property_identifier) @cjs_export_name)
         right: (function) @cjs_fn))
-        (#eq? @mod "module") (#eq? @prop "exports")
-      (expression_statement (assignment_expression
+        (#eq? @mod "module") (#eq? @prop "exports"))
+      ((expression_statement (assignment_expression
         left: (member_expression object: (member_expression object: (identifier) @mod property: (property_identifier) @prop) property: (property_identifier) @cjs_export_name)
         right: (arrow_function) @cjs_fn))
-        (#eq? @mod "module") (#eq? @prop "exports")
-      (expression_statement (assignment_expression
+        (#eq? @mod "module") (#eq? @prop "exports"))
+      ((expression_statement (assignment_expression
         left: (member_expression object: (identifier) @exp property: (property_identifier) @cjs_export_name)
         right: (function) @cjs_fn))
-        (#eq? @exp "exports")
-      (expression_statement (assignment_expression
+        (#eq? @exp "exports"))
+      ((expression_statement (assignment_expression
         left: (member_expression object: (identifier) @exp property: (property_identifier) @cjs_export_name)
         right: (arrow_function) @cjs_fn))
-        (#eq? @exp "exports")
+        (#eq? @exp "exports"))
       ;; CJS object export with function value
-      (expression_statement (assignment_expression
+      ((expression_statement (assignment_expression
         left: (member_expression object: (identifier) @mod property: (property_identifier) @prop)
         right: (object (pair key: (property_identifier) @cjs_export_name value: (function) @cjs_fn))))
-        (#eq? @mod "module") (#eq? @prop "exports")
-      (expression_statement (assignment_expression
+        (#eq? @mod "module") (#eq? @prop "exports"))
+      ((expression_statement (assignment_expression
         left: (member_expression object: (identifier) @mod property: (property_identifier) @prop)
         right: (object (pair key: (property_identifier) @cjs_export_name value: (arrow_function) @cjs_fn))))
-        (#eq? @mod "module") (#eq? @prop "exports")
+        (#eq? @mod "module") (#eq? @prop "exports"))
       ;; CJS: module.exports = { helper () {} }
-      (expression_statement (assignment_expression
+      ((expression_statement (assignment_expression
         left: (member_expression object: (identifier) @mod property: (property_identifier) @prop)
         right: (object (pair key: (property_identifier) @cjs_export_name value: (function_declaration) @cjs_fn))))
-        (#eq? @mod "module") (#eq? @prop "exports")
+        (#eq? @mod "module") (#eq? @prop "exports"))
     `,
     locals: `
       (function_declaration name: (identifier) @name)
@@ -118,10 +123,12 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
       (import_statement (string) @from) @stmt
       (import_statement (import_clause (identifier) @def) (string) @from) @stmt
       (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname alias: (identifier) @alias))) (string) @from) @stmt
-      (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname))) (string) @from) @stmt
+      (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname !alias))) (string) @from) @stmt
       (import_statement (import_clause (namespace_import (identifier) @ns)) (string) @from) @stmt
-      (lexical_declaration (variable_declarator name:(identifier) @def value: (call_expression (identifier) @req arguments: (arguments (string) @from)))) (#eq? @req "require")
-      (lexical_declaration (variable_declarator (object_pattern) @pattern value: (call_expression (identifier) @req arguments: (arguments (string) @from)))) (#eq? @req "require")
+      ((lexical_declaration (variable_declarator name:(identifier) @def value: (call_expression (identifier) @req arguments: (arguments (string) @from))))
+        (#eq? @req "require"))
+      ((lexical_declaration (variable_declarator (object_pattern) @pattern value: (call_expression (identifier) @req arguments: (arguments (string) @from))))
+        (#eq? @req "require"))
     `,
   },
   nodeTypes: {
@@ -135,6 +142,7 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
     if (t === "function_declaration") return "function";
     if (t === "generator_function_declaration") return "function";
     if (t === "method_definition") return "function";
+    if (t === "function" || t === "function_expression") return "function";
     if (t === "class_declaration") return "class";
     return "variable";
   },
@@ -153,10 +161,20 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
         // Method names in classes: needed so that editing a method name is
         // classified as a definition change, not an unrecognised node.
         "method_definition",
+        // A named function expression binds its own name; `$scope.x = function x() {}` and
+        // `const f = function inner() {}` are the common shapes.
+        "function",
+        "function_expression",
       ].includes(p)
     );
   },
-  createsBlockScope: (n) => n.type === "program" || n.type === "block" || n.type === "class_body",
+  // Scope construction has no structural handling for a function expression's own name.
+  scopeDeclarationNames: (node) => {
+    const parent = node.parent?.type;
+    return parent === "function" || parent === "function_expression";
+  },
+  createsBlockScope: (n) =>
+    n.type === "program" || n.type === "block" || n.type === "class_body" || n.type === "class_static_block",
   createsFunctionScope: (n) =>
     n.type === "function_declaration" ||
     n.type === "generator_function_declaration" ||

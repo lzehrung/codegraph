@@ -1,4 +1,8 @@
-import { describe, it } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { buildProjectIndex } from "../../src/index.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
@@ -139,8 +143,11 @@ const definition: LanguageTestDefinition = {
             { name: "Sized", kind: "interface" },
             { name: "size", kind: "function" },
             { name: "Point", kind: "class" },
+            { name: "x", kind: "variable" },
+            { name: "y", kind: "variable" },
             { name: "sum", kind: "function" },
             { name: "NamedShape", kind: "class" },
+            { name: "size", kind: "variable" },
             { name: "size", kind: "function" },
           ],
         },
@@ -281,6 +288,40 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("Java formal parameters", () => {
+  it("indexes method, constructor, spread, and record parameters as locals", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-formals-"));
+    const file = path.join(root, "Params.java");
+    const source = `class Params {
+  void method(int a, String... rest) {}
+  Params(int seed) {}
+}
+
+record Point(int x, int y) {}
+`;
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const mod = [...index.byFile.values()][0]!;
+      const locals = mod.locals.map((local) => `${local.kind}:${local.localName}`);
+      expect(locals).toEqual(
+        expect.arrayContaining([
+          "class:Params",
+          "function:method",
+          "variable:a",
+          "variable:rest",
+          "variable:seed",
+          "class:Point",
+          "variable:x",
+          "variable:y",
+        ]),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("Java Unicode symbol ranges (C11)", () => {
   it("publishes a UTF-16 string index for a method name preceded by multibyte text", async () => {

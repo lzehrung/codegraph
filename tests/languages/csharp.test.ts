@@ -2,6 +2,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
+import { runQuery } from "@lzehrung/codegraph-native";
+import { CSHARP_SUPPORT } from "../../src/languages.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
@@ -71,6 +73,7 @@ const definition: LanguageTestDefinition = {
           file: "RecordTypes.cs",
           symbols: [
             { name: "ISized", kind: "interface" },
+            { name: "Size", kind: "variable" },
             { name: "Point", kind: "class" },
             { name: "NamedShape", kind: "class" },
           ],
@@ -151,5 +154,38 @@ describe("C# global using directives", () => {
       if (typeof binding?.resolved !== "string") continue;
       expect(fileIdentityKey(binding.resolved)).toBe(fileIdentityKey(sharedFile));
     }
+  });
+});
+
+describe("C# native declaration queries", () => {
+  it("captures member constructs that use non-uniform grammar shapes", () => {
+    const source = `
+      namespace Demo;
+      struct Point {
+        int X;
+        int Value { get; set; }
+        Point(int x) { X = x; }
+        public static Point operator +(Point a, Point b) => a;
+        public event System.Action Changed;
+        public int this[int i] { get => i; }
+      }
+      delegate void Notify();
+      class Holder { ~Holder() {} void M() { void Local() {} } }
+    `;
+    const exports = runQuery(source, "csharp", CSHARP_SUPPORT.queries.exports);
+    const names = exports.matches.flatMap((match) =>
+      match.captures.filter((capture) => capture.name === "name").map((capture) => capture.text),
+    );
+
+    // `struct`, `delegate`, fields, properties, events and local functions all have a plain
+    // identifier name and were previously missing entirely.
+    expect(names).toEqual(expect.arrayContaining(["Point", "X", "Value", "Changed", "Notify", "Holder", "M", "Local"]));
+    // Constructors and destructors repeat the type name, and operators, conversion operators and
+    // indexers have no identifier at all. Publishing them would make `Point`/`Holder` ambiguous and
+    // create symbols literally named `operator`/`this`, so they stay out of the symbol set.
+    expect(names.filter((name) => name === "Point")).toHaveLength(1);
+    expect(names.filter((name) => name === "Holder")).toHaveLength(1);
+    expect(names).not.toContain("operator");
+    expect(names).not.toContain("this");
   });
 });

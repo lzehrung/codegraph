@@ -4,7 +4,7 @@ import fsp from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
-import { buildProjectIndex, collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
+import { buildProjectIndex, collectLocalsAndExportsFromSource, parseFile, SymbolKind } from "../../src/indexer.js";
 import { expectFileInIndex, findSymbolsByName } from "../test-utils.js";
 import { collectGraph, findReferences, goToDefinition } from "../../src/index.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
@@ -335,5 +335,92 @@ describe("Python dynamic imports", () => {
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Python query-driven declarations", () => {
+  async function collectModule(source: string) {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-decls-"));
+    const file = path.join(root, "test.py");
+    await fsp.writeFile(file, source, "utf8");
+    try {
+      const parsed = await parseFile(file);
+      return collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
+        ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it("binds except/with as-pattern aliases, not the exception class", async () => {
+    const mod = await collectModule(`
+def uses_bindings():
+    with open(__file__) as handle:
+        try:
+            1 / 0
+        except ValueError as err:
+            return handle, err
+`);
+    const localNames = mod.locals.map((entry) => entry.localName);
+    expect(localNames).toEqual(expect.arrayContaining(["handle", "err"]));
+    expect(localNames).not.toContain("ValueError");
+  });
+
+  it("indexes walrus, unpacking, and PEP 695 type-alias locals", async () => {
+    const mod = await collectModule(`
+a, b = (1, 2)
+(c, d) = (3, 4)
+type Pair = tuple[int, int]
+type PairGeneric[T] = tuple[T, T]
+
+def uses_walrus(value):
+    if (walrus := value):
+        return walrus
+    return None
+`);
+    const byName = new Map(mod.locals.map((entry) => [entry.localName, entry]));
+    for (const name of ["a", "b", "c", "d", "walrus", "Pair", "PairGeneric"]) {
+      expect(byName.has(name), name).toBe(true);
+    }
+    expect(byName.get("Pair")?.kind).toBe(SymbolKind.TypeAlias);
+    expect(byName.get("PairGeneric")?.kind).toBe(SymbolKind.TypeAlias);
+  });
+
+  it("indexes keyword-pattern binding names, not the matched attributes", async () => {
+    const mod = await collectModule(`
+def describe(p):
+    match p:
+        case Point(x=px, y=py):
+            return px + py
+`);
+    const localNames = mod.locals.map((entry) => entry.localName);
+    expect(localNames).toEqual(expect.arrayContaining(["px", "py"]));
+    expect(localNames.filter((name) => name === "x" || name === "y")).toEqual([]);
+  });
+
+  it("does not export function-body locals while keeping module and class members", async () => {
+    const mod = await collectModule(`
+MODULE_CONST = 1
+
+class Holder:
+    CLASS_ATTR = 8
+    def method(self):
+        method_local = 11
+        def nested():
+            return method_local
+        return nested()
+
+def outer(arg):
+    secret_tmp = arg + 1
+    def nested():
+        inner_var = secret_tmp
+        return inner_var
+    return nested()
+`);
+    const exportedNames = mod.exports.map((entry) => exportedNameOf(entry)).sort();
+    const localNames = mod.locals.map((entry) => entry.localName);
+    expect(exportedNames).toEqual(["CLASS_ATTR", "Holder", "MODULE_CONST", "method", "outer"]);
+    expect(localNames).toEqual(expect.arrayContaining(["secret_tmp", "nested", "inner_var", "method_local"]));
   });
 });

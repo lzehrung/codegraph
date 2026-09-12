@@ -50,8 +50,11 @@ export const RUST_DEF: LanguageDefinition = {
     `,
     exports: `
       (function_item name: (identifier) @name) @stmt
+      (function_signature_item name: (identifier) @name) @stmt
       (struct_item name: (type_identifier) @name) @stmt
       (trait_item name: (type_identifier) @name) @stmt
+      (type_item name: (type_identifier) @name) @stmt
+      (associated_type name: (type_identifier) @name) @stmt
       (enum_item name: (type_identifier) @name) @stmt
       (enum_variant name: (identifier) @name) @stmt
       (const_item name: (identifier) @name) @stmt
@@ -71,8 +74,11 @@ export const RUST_DEF: LanguageDefinition = {
     `,
     locals: `
       (function_item name: (identifier) @name)
+      (function_signature_item name: (identifier) @name)
       (struct_item name: (type_identifier) @name)
       (trait_item name: (type_identifier) @name)
+      (type_item name: (type_identifier) @name)
+      (associated_type name: (type_identifier) @name)
       (enum_item name: (type_identifier) @name)
       (enum_variant name: (identifier) @name)
       (const_item name: (identifier) @name)
@@ -104,8 +110,13 @@ export const RUST_DEF: LanguageDefinition = {
   classifyDefinition: (node) => {
     const parent = node.parent;
     if (!parent) return "variable";
-    if (parent.type === "function_item" || parent.type === "macro_definition") return "function";
-    if (parent.type === "enum_item") return "type";
+    if (
+      parent.type === "function_item" ||
+      parent.type === "function_signature_item" ||
+      parent.type === "macro_definition"
+    )
+      return "function";
+    if (parent.type === "enum_item" || parent.type === "type_item" || parent.type === "associated_type") return "type";
     if (parent.type === "struct_item" || parent.type === "trait_item") return "class";
     return "variable";
   },
@@ -116,8 +127,11 @@ export const RUST_DEF: LanguageDefinition = {
     const p = node.parent;
     if (!p) return false;
     if (p.type === "function_item" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "function_signature_item" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "struct_item" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "trait_item" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "type_item" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "associated_type" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "enum_item" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "enum_variant" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "const_item" && p.childForFieldName("name")?.id === node.id) return true;

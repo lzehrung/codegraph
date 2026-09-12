@@ -1,7 +1,11 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { listSymbols } from "../../src/index.js";
-import { createTestIndex } from "../test-utils.js";
+import { chunkFile } from "../../src/chunking/chunk-file.js";
+import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
+import { createTestIndex, createTestIndexFromFiles } from "../test-utils.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -93,5 +97,36 @@ describe("TypeScript symbol extraction", () => {
     const utilityType = listSymbols(index, { file }).find((symbol) => symbol.name === "UtilityType");
 
     expect(utilityType).toMatchObject({ name: "UtilityType", kind: "type" });
+  });
+});
+
+describe("TypeScript declaration-only symbols", () => {
+  it("indexes function signatures and namespace declarations", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-declaration-symbols-"));
+    const file = path.join(root, "api.d.ts");
+    const source = [
+      "declare function overloaded(value: string): string;",
+      "declare namespace Toolkit {}",
+      "declare module NamespaceModule {}",
+      'declare module "ambient" {}',
+    ].join("\n");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const symbols = listSymbols(index, { file });
+      const chunks = chunkFile({
+        language: LANG_CONFIGS.typescript!,
+        source,
+        filePath: file,
+        minTokens: 1,
+      });
+
+      expect(symbols).toContainEqual(expect.objectContaining({ name: "overloaded", kind: "function" }));
+      expect(symbols).toContainEqual(expect.objectContaining({ name: "Toolkit", kind: "type" }));
+      expect(symbols).toContainEqual(expect.objectContaining({ name: "NamespaceModule", kind: "type" }));
+      expect(chunks).toContainEqual(expect.objectContaining({ type: "namespace", name: '"ambient"' }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

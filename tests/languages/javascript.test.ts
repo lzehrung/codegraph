@@ -1,5 +1,7 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
@@ -112,6 +114,46 @@ describe("CommonJS spread exports", () => {
     if (localResult.status === "ok") {
       expect(localResult.definition.file).toBe(barrelFile);
       expect(localResult.definition.range.start.line).toBe(3);
+    }
+  });
+});
+
+describe("JavaScript CommonJS export and static-block scopes", () => {
+  it("does not publish object properties as CommonJS exports", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-js-export-filter-"));
+    const file = path.join(root, "exports.js");
+    const source = [
+      "const local = 1;",
+      "other.foo = local;",
+      "config.setting = local;",
+      "module.exports.real = local;",
+    ].join("\n");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const module = index.byFile.get(fileIdentityKey(file));
+
+      expect(module?.exports).toContainEqual(expect.objectContaining({ type: "local", exportedAs: "real" }));
+      expect(module?.exports).not.toContainEqual(expect.objectContaining({ type: "local", exportedAs: "foo" }));
+      expect(module?.exports).not.toContainEqual(expect.objectContaining({ type: "local", exportedAs: "setting" }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve static-block locals from sibling methods", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-js-static-block-scope-"));
+    const file = path.join(root, "scope.js");
+    const source = "class C { static { let hidden = 1; } method() { return hidden; } }";
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+
+      expect(await goToDefinition(index, { file, line: 1, column: source.lastIndexOf("hidden") + 1 })).toMatchObject({
+        status: "not_found",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

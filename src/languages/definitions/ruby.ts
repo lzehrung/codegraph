@@ -3,17 +3,17 @@ import { registerLanguage } from "../registry.js";
 
 export const RUBY_DEF: LanguageDefinition = {
   id: "ruby",
-  extensions: [".rb"],
+  extensions: [".rb", ".rbw", ".rake", ".gemspec"],
   structure: {
     blocks: [
       {
         type: "class",
-        nameQuery: "name: (constant) @chunk.name",
+        nameQuery: "name: [(constant) (scope_resolution)] @chunk.name",
         captureId: "class",
       },
       {
         type: "module",
-        nameQuery: "name: (constant) @chunk.name",
+        nameQuery: "name: [(constant) (scope_resolution)] @chunk.name",
         captureId: "module",
       },
       {
@@ -32,23 +32,25 @@ export const RUBY_DEF: LanguageDefinition = {
   },
   graph: {
     imports: `
-      (call method: (identifier) @method arguments: (argument_list (string (string_content) @mod)) (#match? @method "^(require|require_relative)$")) @stmt
+      (call method: (identifier) @method arguments: (argument_list (string (string_content) @mod)) (#match? @method "^(require|require_relative|load|autoload)$")) @stmt
     `,
     exports: `
-      (class name: (constant) @name)
-      (module name: (constant) @name)
-      (method name: (identifier) @name)
+      (class name: [(constant) (scope_resolution)] @name)
+      (module name: [(constant) (scope_resolution)] @name)
+      (method name: [(identifier) (setter)] @name)
+      (singleton_method name: [(identifier) (setter)] @name)
       (assignment left: (constant) @name)
     `,
     locals: `
-      (class name: (constant) @name)
-      (module name: (constant) @name)
-      (method name: (identifier) @name)
+      (class name: [(constant) (scope_resolution)] @name)
+      (module name: [(constant) (scope_resolution)] @name)
+      (method name: [(identifier) (setter)] @name)
+      (singleton_method name: [(identifier) (setter)] @name)
       (assignment left: (identifier) @name)
       (assignment left: (constant) @name)
     `,
     importBindings: `
-      ((call method: (identifier) @method arguments: (argument_list (string (string_content) @from))) @stmt (#match? @method "^(require|require_relative)$"))
+      ((call method: (identifier) @method arguments: (argument_list (string (string_content) @from))) @stmt (#match? @method "^(require|require_relative|load|autoload)$"))
     `,
   },
   nodeTypes: {

@@ -211,7 +211,7 @@ export function receiverCallAccess(
   if (!property && accessNode.type === "navigation_expression") {
     // Kotlin and Swift member access sometimes exposes the member as a direct child
     // rather than through a navigation suffix node.
-    property = getNavigationExpressionProperty(accessNode) ?? accessNode.namedChildren[1] ?? null;
+    property = getNavigationExpressionProperty(sup, accessNode) ?? accessNode.namedChildren[1] ?? null;
   }
   if (!receiver || !property) return null;
   // A receiverless call whose positional fallback collapsed onto the callee itself.

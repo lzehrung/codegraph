@@ -58,42 +58,31 @@ describe("native query normalization", () => {
     });
   });
 
-  it("blanks unsupported scss symbol queries", () => {
+  it("leaves scss queries unchanged now that they target the loaded grammar", () => {
     const support = supportById("scss");
     expect(support).toBeDefined();
-    expect(normalizeNativeQueryForSupport(support!, "locals", "(class_selector (class_name) @name)")).toBe("");
+    expect(normalizeNativeQueryForSupport(support!, "locals", support!.queries.locals)).toBe(support!.queries.locals);
+    expect(normalizeNativeQueryForSupport(support!, "exports", support!.queries.exports)).toBe(
+      support!.queries.exports,
+    );
     expect(getNativeQueryMetadataForSupport(support!)).toEqual({
-      normalizedQueryKinds: ["exports", "locals"],
-      skippedQueryKinds: ["exports", "locals"],
+      normalizedQueryKinds: [],
+      skippedQueryKinds: [],
     });
   });
 
-  it("normalizes kotlin import and identifier node names", () => {
+  it("leaves kotlin queries unchanged now that they target tree-sitter-kotlin-ng directly", () => {
     const support = supportById("kotlin");
     expect(support).toBeDefined();
-    const normalized = normalizeNativeQueryForSupport(support!, "imports", "(import_header (simple_identifier) @from)");
-    expect(normalized).toContain("(import (qualified_identifier) @mod) @stmt");
-  });
-
-  it("normalizes kotlin import-binding queries without blanking them", () => {
-    const support = supportById("kotlin");
-    expect(support).toBeDefined();
-    expect(
-      normalizeNativeQueryForSupport(
-        support!,
-        "importBindings",
-        "(import_header (identifier) @from (import_alias (type_identifier) @alias)) @stmt",
-      ),
-    ).toContain("(import (qualified_identifier) @from (identifier) @alias) @stmt");
-    expect(
-      normalizeNativeQueryForSupport(
-        support!,
-        "importBindings",
-        "(import_header (identifier) @from (wildcard_import) @wild) @stmt",
-      ),
-    ).toContain('(import (qualified_identifier) @from "*" @wild) @stmt');
+    for (const kind of ["imports", "exports", "locals", "importBindings"] as const) {
+      expect(normalizeNativeQueryForSupport(support!, kind, support!.queries[kind])).toBe(support!.queries[kind]);
+    }
+    expect(support!.queries.imports).toContain("(import");
+    expect(support!.queries.imports).not.toContain("import_header");
+    expect(support!.queries.locals).not.toContain("simple_identifier");
+    expect(support!.queries.locals).not.toContain("type_identifier");
     expect(getNativeQueryMetadataForSupport(support!)).toEqual({
-      normalizedQueryKinds: ["imports", "exports", "locals", "importBindings"],
+      normalizedQueryKinds: [],
       skippedQueryKinds: [],
     });
   });
