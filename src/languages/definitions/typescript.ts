@@ -93,10 +93,10 @@ const BASE_GRAPH = {
     (export_statement declaration: (class_declaration) @anon_default) @stmt
     (export_statement declaration: (abstract_class_declaration) @anon_default) @stmt
     (export_statement declaration: (lexical_declaration (variable_declarator name: (identifier) @name))) @stmt
-    (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)) (string) @from) @stmt
-    (export_statement (export_clause (export_specifier name: (identifier) @src !alias)) (string) @from) @stmt
-    (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias))) @stmt
-    (export_statement (export_clause (export_specifier name: (identifier) @src !alias))) @stmt
+    (export_statement (export_clause (export_specifier "type"? @type_kw name: (identifier) @src alias: (identifier) @alias)) (string) @from) @stmt
+    (export_statement (export_clause (export_specifier "type"? @type_kw name: (identifier) @src !alias)) (string) @from) @stmt
+    (export_statement (export_clause (export_specifier "type"? @type_kw name: (identifier) @src alias: (identifier) @alias))) @stmt
+    (export_statement (export_clause (export_specifier "type"? @type_kw name: (identifier) @src !alias))) @stmt
     (export_statement (string) @from) @stmt
     (export_assignment (identifier) @ts_export_assign)
   `,
@@ -121,8 +121,8 @@ const BASE_GRAPH = {
     (import_statement (string) @from) @stmt
     (import_statement (import_require_clause (identifier) @def (string) @from)) @stmt
     (import_statement (import_clause (identifier) @def) (string) @from) @stmt
-    (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname alias: (identifier) @alias))) (string) @from) @stmt
-    (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname !alias))) (string) @from) @stmt
+    (import_statement (import_clause (named_imports (import_specifier "type"? @type_kw name: (identifier) @iname alias: (identifier) @alias))) (string) @from) @stmt
+    (import_statement (import_clause (named_imports (import_specifier "type"? @type_kw name: (identifier) @iname !alias))) (string) @from) @stmt
     (import_statement (import_clause (namespace_import (identifier) @ns)) (string) @from) @stmt
   `,
 };

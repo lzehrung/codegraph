@@ -1636,8 +1636,11 @@ describe("Find References", () => {
       const helpersFile = path.join(samplePath, "helpers.h").replace(/\\/g, "/");
       const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
 
+      // The struct tag on line 4 and the typedef alias on line 6 are separate symbols now that C
+      // uses query-driven locals like C++. References for the tag keep its own declaration plus the
+      // cross-file use; the alias occurrence belongs to the alias symbol.
       const result = await testFindReferences(index, utilsFile, 4, 16, 2);
-      expectReferenceAt(result, utilsFile, 6);
+      expectReferenceAt(result, utilsFile, 4);
       expectReferenceAt(result, mainFile, 6);
     });
 

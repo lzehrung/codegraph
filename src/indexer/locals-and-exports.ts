@@ -121,6 +121,26 @@ function isTypeMemberDeclaration(node: SyntaxNodeLike): boolean {
   return false;
 }
 
+function localExportDedupeKey(entry: Extract<ExportEntry, { type: "local" }>): string {
+  return `${entry.exportedAs}\0${entry.target.localName}\0${entry.target.range.start.index ?? 0}\0${entry.target.range.end.index ?? 0}`;
+}
+
+function dedupeExportEntries(entries: ExportEntry[]): ExportEntry[] {
+  const seen = new Set<string>();
+  const out: ExportEntry[] = [];
+  for (const entry of entries) {
+    if (entry.type !== "local") {
+      out.push(entry);
+      continue;
+    }
+    const key = localExportDedupeKey(entry);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(entry);
+  }
+  return out;
+}
+
 function appendJsLikeRegexFallbackExports(
   file: string,
   source: string,
@@ -470,15 +490,8 @@ export function collectLocalsAndExportsFromSource(
     return SymbolKind.Variable;
   };
 
-  const classifyLocalCapture = (
-    capture: NativeCapture | { name: string },
-    range: Range,
-    node?: SyntaxNodeLike,
-  ): SymbolKind => {
+  const classifyLocalCapture = (node?: SyntaxNodeLike): SymbolKind => {
     if (node) return toKind(support.classifyDefinition(node));
-    if ("name" in capture && capture.name === "tname") {
-      return SymbolKind.TypeAlias;
-    }
     return SymbolKind.Variable;
   };
 
@@ -493,12 +506,12 @@ export function collectLocalsAndExportsFromSource(
       const enrichmentTree = ensureTree();
       for (const match of nativeQueries.locals) {
         for (const capture of match.captures) {
-          if (capture.name !== "name" && capture.name !== "tname") continue;
+          if (capture.name !== "name") continue;
           const nativeRange = rangeFromNativeCapture(capture, ensureByteIndexMap());
           const node =
             enrichmentTree?.rootNode.descendantForIndex(nativeRange.start.index ?? 0, nativeRange.end.index ?? 0) ??
             undefined;
-          pushLocal(capture.text, classifyLocalCapture(capture, nativeRange, node), nativeRange, node);
+          pushLocal(capture.text, classifyLocalCapture(node), nativeRange, node);
           capturedLocals = true;
         }
       }
@@ -509,10 +522,7 @@ export function collectLocalsAndExportsFromSource(
     }
   };
 
-  const extractLocalsFromJsQueries = (): boolean => false;
-
-  const usedNativeLocals = extractLocalsFromNativeQueries();
-  const usedQueryLocals = usedNativeLocals || extractLocalsFromJsQueries();
+  const usedQueryLocals = extractLocalsFromNativeQueries();
   if (!usedQueryLocals) {
     const scopeTree = ensureTree();
     if (scopeTree) {
@@ -607,6 +617,20 @@ export function collectLocalsAndExportsFromSource(
     const hasDefaultExport = (): boolean =>
       exports.some((entry) => entry.type === "local" && entry.exportedAs === "default");
 
+    /**
+     * True when the capture sits inside a node the language marks as non-module scope. Without a
+     * tree this cannot be decided, so it fails open and keeps the export.
+     */
+    const isOutsideModuleScope = (capture: NativeCapture | undefined): boolean => {
+      if (!support.exportScopeBlockers.length) return false;
+      let current = nodeForCapture(capture)?.parent ?? null;
+      while (current) {
+        if (support.exportScopeBlockers.includes(current.type)) return true;
+        current = current.parent;
+      }
+      return false;
+    };
+
     for (const match of matches) {
       const map = capturesByName(match);
       const stmtText = map["stmt"]?.text ?? "";
@@ -689,7 +713,7 @@ export function collectLocalsAndExportsFromSource(
             fromModule: from,
             moduleSpecifier: from,
             sourceSpecifier: srcName,
-            typeOnly: isTypeOnly,
+            typeOnly: Boolean(map["type_kw"]) || isTypeOnly,
           });
         } else if (/^\s*export\s*\*/.test(stmtText)) {
           exports.push({
@@ -897,6 +921,7 @@ export function collectLocalsAndExportsFromSource(
         continue;
       }
       if (map["name"]) {
+        if (isOutsideModuleScope(map["name"])) continue;
         const nameText = map["name"].text;
         const local = locals.find((def) => def.localName === nameText);
         if (local) {
@@ -1040,5 +1065,5 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
-  return { file, exports, imports, locals };
+  return { file, exports: dedupeExportEntries(exports), imports, locals };
 }

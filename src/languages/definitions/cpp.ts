@@ -83,6 +83,9 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
     const container = findAncestor(node, cFamilyContainerTypes);
     if (container?.type === "function_definition") return "function";
     if (container?.type === "declaration" && isFunctionDeclarator(node)) return "function";
+    // `typedef int (*Comparator)(int, int);` wraps the typedef name in a declarator chain, so the
+    // direct-parent check above cannot see it.
+    if (container?.type === "type_definition") return "type";
     return "variable";
   },
   isDeclarationName: (node) => {

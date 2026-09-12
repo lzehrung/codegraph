@@ -424,3 +424,89 @@ def outer(arg):
     expect(localNames).toEqual(expect.arrayContaining(["secret_tmp", "nested", "inner_var", "method_local"]));
   });
 });
+
+describe("Python native import bindings", () => {
+  it("binds multiline, comma-separated, continued, relative, star, and future imports", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-native-imports-"));
+    const packageDir = path.join(root, "pkg");
+    const consumerFile = path.join(packageDir, "consumer.py").replace(/\\/g, "/");
+    const alphaFile = path.join(packageDir, "alpha.py").replace(/\\/g, "/");
+    await fsp.mkdir(packageDir, { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(packageDir, "__init__.py"), "", "utf8"),
+      fsp.writeFile(alphaFile, "one = 1\ntwo = 2\n", "utf8"),
+      fsp.writeFile(path.join(packageDir, "beta.py"), "three = 3\nfour = 4\n", "utf8"),
+      fsp.writeFile(path.join(packageDir, "local.py"), "value = 5\n", "utf8"),
+      fsp.writeFile(
+        consumerFile,
+        [
+          "from .alpha import (",
+          "    one,",
+          "    two,",
+          ")",
+          "import os, sys",
+          "from .beta import three, \\",
+          "    four as renamed",
+          "from .local import *",
+          "from __future__ import annotations",
+          "if True:",
+          "    from .local import value as nested",
+          "one",
+          "",
+        ].join("\n"),
+        "utf8",
+      ),
+    ]);
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const imports = index.byFile.get(fileIdentityKey(consumerFile))?.imports ?? [];
+      expect(imports).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "named",
+            from: ".alpha",
+            imported: "one",
+            local: "one",
+            mechanism: "python",
+          }),
+          expect.objectContaining({
+            kind: "named",
+            from: ".alpha",
+            imported: "two",
+            local: "two",
+            mechanism: "python",
+          }),
+          expect.objectContaining({ kind: "namespace", from: "os", localNS: "os", mechanism: "python" }),
+          expect.objectContaining({ kind: "namespace", from: "sys", localNS: "sys", mechanism: "python" }),
+          expect.objectContaining({
+            kind: "named",
+            from: ".beta",
+            imported: "four",
+            local: "renamed",
+            mechanism: "python",
+          }),
+          expect.objectContaining({ kind: "star", from: ".local", mechanism: "python" }),
+          expect.objectContaining({ kind: "named", from: "__future__", imported: "annotations", mechanism: "python" }),
+          expect.objectContaining({
+            kind: "named",
+            from: ".local",
+            imported: "value",
+            local: "nested",
+            moduleLevel: false,
+          }),
+        ]),
+      );
+      const references = await findReferences(index, { file: alphaFile, line: 1, column: 1 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(
+          references.references.some(
+            (reference) => reference.file === consumerFile && reference.range.start.line === 12,
+          ),
+        ).toBe(true);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});

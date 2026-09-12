@@ -61,6 +61,7 @@ type LanguageDefinitionFingerprintDescriptor = {
     usesQueryDrivenLocals: boolean;
     membersAreImplicitlyInScope: boolean;
     supportsExportFromReferences: boolean;
+    exportScopeBlockers: string[];
   };
 };
 
@@ -93,6 +94,7 @@ function languageDefinitionFingerprintDescriptor(
       usesQueryDrivenLocals: definition.usesQueryDrivenLocals ?? false,
       membersAreImplicitlyInScope: definition.membersAreImplicitlyInScope ?? true,
       supportsExportFromReferences: definition.supportsExportFromReferences ?? false,
+      exportScopeBlockers: [...(definition.exportScopeBlockers ?? [])].sort(),
       ...(scopeDeclarationNames ? { scopeDeclarationNames } : {}),
     },
   };
@@ -114,6 +116,7 @@ export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof Langua
   graph: true,
   usesQueryDrivenLocals: true,
   supportsExportFromReferences: true,
+  exportScopeBlockers: true,
   classifyDefinition: true,
   isDeclarationName: true,
   scopeDeclarationNames: true,
