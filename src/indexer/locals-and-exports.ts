@@ -495,6 +495,22 @@ export function collectLocalsAndExportsFromSource(
     return SymbolKind.Variable;
   };
 
+  // Declarator captures name the declared entity, never parameter or array-bound types.
+  const declaratorNameNode = (node: SyntaxNodeLike | undefined): SyntaxNodeLike | undefined => {
+    while (node) {
+      if (node.type === "identifier" || node.type === "type_identifier") return node;
+      const next = node.childForFieldName("declarator");
+      if (next) {
+        node = next;
+      } else if (node.type === "parenthesized_declarator") {
+        node = node.namedChildren.find((child) => child.type !== "comment");
+      } else {
+        return undefined;
+      }
+    }
+    return undefined;
+  };
+
   const extractLocalsFromNativeQueries = (): boolean => {
     if (!nativeQueries) return false;
     if (!support.usesQueryDrivenLocals) return false;
@@ -506,12 +522,18 @@ export function collectLocalsAndExportsFromSource(
       const enrichmentTree = ensureTree();
       for (const match of nativeQueries.locals) {
         for (const capture of match.captures) {
-          if (capture.name !== "name") continue;
+          if (capture.name !== "name" && capture.name !== "declarator") continue;
           const nativeRange = rangeFromNativeCapture(capture, ensureByteIndexMap());
-          const node =
+          let node =
             enrichmentTree?.rootNode.descendantForIndex(nativeRange.start.index ?? 0, nativeRange.end.index ?? 0) ??
             undefined;
-          pushLocal(capture.text, classifyLocalCapture(node), nativeRange, node);
+          if (capture.name === "declarator") {
+            node = declaratorNameNode(node);
+            if (!node) continue;
+            pushLocal(node.text, classifyLocalCapture(node), toRange(node), node);
+          } else {
+            pushLocal(capture.text, classifyLocalCapture(node), nativeRange, node);
+          }
           capturedLocals = true;
         }
       }
@@ -907,9 +929,11 @@ export function collectLocalsAndExportsFromSource(
         }
         continue;
       }
-      if (map["name"]) {
-        if (isOutsideModuleScope(map["name"])) continue;
-        const nameText = map["name"].text;
+      const nameCapture = map["name"] ?? map["declarator"];
+      if (nameCapture) {
+        if (isOutsideModuleScope(nameCapture)) continue;
+        const nameText = map["declarator"] ? declaratorNameNode(nodeForCapture(nameCapture))?.text : nameCapture.text;
+        if (!nameText) continue;
         const local = locals.find((def) => def.localName === nameText);
         if (local) {
           const isDefaultExport = /^\s*export\s+default\b/.test(stmtText);

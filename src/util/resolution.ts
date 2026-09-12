@@ -171,7 +171,8 @@ export async function resolveImportSpecifier(
   }
   if (languageId === "rust") {
     const rustResolved = await resolveRustImportPath(projectRoot, fromFile, spec);
-    if (rustResolved) return isFilePathWithinRoot(projectRoot, rustResolved) ? rustResolved : { external: spec };
+    if (rustResolved && isFilePathWithinRoot(projectRoot, rustResolved)) return rustResolved;
+    return { external: spec };
   }
 
   const resolutionKind = opts?.resolutionKind;

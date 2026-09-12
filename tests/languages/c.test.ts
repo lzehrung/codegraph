@@ -170,6 +170,29 @@ describe("C vs C++ query-driven locals", () => {
     ].join("\n");
     expect(localIdentity(source, C_SUPPORT)).toEqual(localIdentity(source, CPP_SUPPORT));
   });
+
+  it("follows nested typedef declarators without indexing parameter type uses", () => {
+    const source = [
+      "typedef int **PP;",
+      "typedef int Vector[8];",
+      "typedef int (*Handlers[])(int);",
+      "typedef PP (*Factory)(Vector value);",
+    ].join("\n");
+    for (const support of [C_SUPPORT, CPP_SUPPORT]) {
+      const mod = moduleFromSource("types.h", source, support);
+      const aliases = mod.locals.filter((local) => local.kind === "type");
+      expect(aliases.map((local) => local.localName).sort()).toEqual(["Factory", "Handlers", "PP", "Vector"]);
+      expect(aliases.map((local) => source.slice(local.range.start.index, local.range.end.index))).toEqual(
+        aliases.map((local) => local.localName),
+      );
+      expect(mod.exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : [])).sort()).toEqual([
+        "Factory",
+        "Handlers",
+        "PP",
+        "Vector",
+      ]);
+    }
+  });
 });
 
 describe("export de-duplication for shadowed Kotlin vals", () => {

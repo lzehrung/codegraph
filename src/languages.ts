@@ -195,7 +195,8 @@ export function supportById(id: string): LanguageSupport | undefined {
 
 const HEADER_SAMPLE_SIZE = 8000;
 const CPP_HEADER_HINT =
-  /\b(?:class|namespace|template|typename|constexpr|operator|concept|co_await|import)\b|\busing\s+(?:namespace|\w+\s*=)|::/;
+  /\b(?:class|namespace|template|typename|constexpr|operator)\b|\bconcept\s+\w+\s*=|\bco_await\s+\w|\busing\s+(?:namespace|\w+\s*=)|::/;
+const CPP_MODULE_IMPORT_HINT = /^\s*(?:export\s+)?import\s+(?:[\w.:]+|<[^>\n]+>|"[^"\n]*")\s*;/m;
 
 function readFileSample(filePath: string): string | null {
   try {
@@ -207,5 +208,6 @@ function readFileSample(filePath: string): string | null {
 }
 
 function isLikelyCppHeader(sample: string): boolean {
-  return CPP_HEADER_HINT.test(maskJsLikeCommentsAndStrings(sample));
+  const masked = maskJsLikeCommentsAndStrings(sample);
+  return CPP_HEADER_HINT.test(masked) || CPP_MODULE_IMPORT_HINT.test(masked);
 }

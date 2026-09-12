@@ -1,5 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { isFilePathWithinRoot } from "../paths.js";
 import { fileExists } from "../workspace.js";
 
 function isWithinOrEqual(candidate: string, root: string): boolean {
@@ -168,9 +169,10 @@ export async function resolveRustImportPath(
   const attributed = pathAttribute || (await discoverRustPathAttribute(fromFile, parts));
   if (attributed) {
     const attributedPath = resolveAttributedRustPath(fromFile, attributed);
-    if (await fileExists(attributedPath)) {
+    if ((await fileExists(attributedPath)) && isFilePathWithinRoot(projectRoot, attributedPath)) {
       return path.resolve(attributedPath);
     }
+    return null;
   }
 
   const cargoRoot = await findNearestCargoRoot(fromFile, projectRoot);

@@ -600,4 +600,77 @@ describe("Python native import bindings", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps simple-suite imports out of module exports while retaining same-line top-level imports", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-simple-suite-"));
+    const consumer = path.join(root, "consumer.py");
+    await Promise.all(
+      ["feature", "hidden", "first", "second"].map((name) =>
+        fsp.writeFile(path.join(root, `${name}.py`), "value = 1\n"),
+      ),
+    );
+    await fsp.writeFile(
+      consumer,
+      ["if enabled: import feature", "def load(): import hidden", "import first; import second"].join("\n"),
+    );
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const module = index.byFile.get(fileIdentityKey(consumer));
+      expect(module?.imports).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ from: "feature", moduleLevel: false }),
+          expect.objectContaining({ from: "hidden", moduleLevel: false }),
+          expect.objectContaining({ from: "second", moduleLevel: true }),
+        ]),
+      );
+      const exported = module?.exports.flatMap((entry) => (entry.type === "exportStar" ? [] : [entry.exportedAs]));
+      expect(exported).not.toContain("feature");
+      expect(exported).not.toContain("hidden");
+      expect(exported).toContain("second");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps names after inline comments in native Python import statements", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-native-import-comments-"));
+    const packageDir = path.join(root, "pkg");
+    const consumerFile = path.join(packageDir, "consumer.py").replace(/\\/g, "/");
+    await fsp.mkdir(packageDir, { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(packageDir, "__init__.py"), "", "utf8"),
+      fsp.writeFile(path.join(packageDir, "alpha.py"), "one = 1\ntwo = 2\n", "utf8"),
+      fsp.writeFile(path.join(packageDir, "local.py"), "value = 5\n", "utf8"),
+      fsp.writeFile(
+        consumerFile,
+        [
+          "from .alpha import (",
+          "    one,  # kept",
+          "    two,",
+          ")",
+          "import os, sys  # stdlib",
+          "from .local import *  # noqa",
+          "from .local import value  # trailing",
+          "",
+        ].join("\n"),
+        "utf8",
+      ),
+    ]);
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const imports = index.byFile.get(fileIdentityKey(consumerFile))?.imports ?? [];
+      expect(imports).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: "named", from: ".alpha", imported: "one", local: "one" }),
+          expect.objectContaining({ kind: "named", from: ".alpha", imported: "two", local: "two" }),
+          expect.objectContaining({ kind: "namespace", from: "os", localNS: "os" }),
+          expect.objectContaining({ kind: "namespace", from: "sys", localNS: "sys" }),
+          expect.objectContaining({ kind: "star", from: ".local" }),
+          expect.objectContaining({ kind: "named", from: ".local", imported: "value", local: "value" }),
+        ]),
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
