@@ -206,4 +206,45 @@ describe("Markdown link validation", () => {
       ]);
     }
   });
+
+  it("does not report reference-style images as missing files", async () => {
+    const root = await makeRoot("reference-image");
+    await writeFile(root, "README.md", "![Missing][missing]\n\n[missing]: ./no-such.svg\n[Keep](./guide.md)\n");
+    await writeFile(root, "guide.md", "# Guide\n");
+
+    const result = await checkMarkdownLinks(root);
+
+    expect(result.summary).toMatchObject({ linksChecked: 1, failures: 0 });
+    expect(result.failures).toEqual([]);
+  });
+
+  it("does not check commented-out or front-matter markdown links", async () => {
+    const root = await makeRoot("masked-links");
+    await writeFile(
+      root,
+      "README.md",
+      [
+        "---",
+        "see: [Front](front-target.md)",
+        "---",
+        "<!-- [Commented](comment-target.md) -->",
+        "[Keep](./guide.md)",
+      ].join("\n"),
+    );
+    await writeFile(root, "guide.md", "# Guide\n");
+
+    const result = await checkMarkdownLinks(root);
+
+    expect(result.summary).toMatchObject({ linksChecked: 1, failures: 0 });
+    expect(result.failures).toEqual([]);
+  });
+
+  it("checks four-space nested list links", async () => {
+    const root = await makeRoot("nested-list");
+    await writeFile(root, "README.md", "- top\n    - nested [FourOnly](four-only.md)\n");
+
+    const result = await checkMarkdownLinks(root);
+
+    expect(result.failures).toEqual([expect.objectContaining({ reason: "missing_file", raw: "four-only.md" })]);
+  });
 });

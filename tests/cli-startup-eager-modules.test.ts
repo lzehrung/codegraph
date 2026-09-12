@@ -157,8 +157,12 @@ describe("CLI startup eager module loading", () => {
     const doctor = countDistModulesLoaded(["doctor", "--json"]);
     expect(doctor.status).toBe(0);
     expect(doctor.stdout).toContain('"package"');
-    // doctor inspects the native addon, which registers the Windows teardown drain.
-    expect(doctor.count).toBeLessThan(31);
+    // doctor inspects the native addon, which registers the Windows teardown drain, and reads the
+    // graph-only language ids plus the backend-report formatters from two dedicated leaf modules
+    // (`document-links/language-ids.js`, `native/backend-report-format.js`). Those exist precisely
+    // so doctor does not pull the document-link extractors or the native runtime into startup.
+    expect(doctor.count).toBeLessThan(33);
+    expect(doctor.modules.some((url) => modulePathEndsWith(url, "/document-links.js"))).toBe(false);
     expect(doctor.modules.some((url) => modulePathEndsWith(url, "/duplicates.js"))).toBe(false);
     expect(doctor.modules.some((url) => modulePathEndsWith(url, "/project-files.js"))).toBe(false);
     expect(doctor.modules.some((url) => modulePathEndsWith(url, "/config.js"))).toBe(false);

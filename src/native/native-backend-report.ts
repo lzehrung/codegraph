@@ -89,6 +89,8 @@ function getOrCreateNativeLanguageReport(
   return created;
 }
 
+export { formatNativeBackendAffectedLanguages, listNativeBackendAffectedLanguages } from "./backend-report-format.js";
+
 export function recordNativeBackendOutcome(report: BuildReport | undefined, outcome: NativeBackendOutcome): void {
   const backend = initNativeBackendReport(report);
   if (!backend) return;

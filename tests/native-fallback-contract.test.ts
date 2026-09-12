@@ -22,7 +22,8 @@ import {
   prepareFileForIndexing,
 } from "../src/indexer/parse-context.js";
 import * as nativeRuntime from "../src/native/tree-sitter-native.js";
-import { supportForFile } from "../src/languages.js";
+import { supportById, supportForFile } from "../src/languages.js";
+import { collectModuleSpecifiersFromSource, type FallbackImportExtractionEvent } from "../src/graphs/specifiers.js";
 import type { NativeCapture, NativeQueryResults } from "../src/native/tree-sitter-native.js";
 import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../src/worker/native-extract-worker.js";
 import { simplifyNativeTestModuleIndex } from "./helpers/native.js";
@@ -342,6 +343,20 @@ describe("native required fallback boundaries", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+});
+
+it("does not report query-empty for python when native never ran", () => {
+  const support = supportById("python");
+  expect(support).toBeDefined();
+  const events: FallbackImportExtractionEvent[] = [];
+  collectModuleSpecifiersFromSource(support!, "import os\nfrom pkg import name\n", {
+    file: "main.py",
+    native: "off",
+    onFallbackImportExtraction: (event) => events.push(event),
+  });
+  expect(events.length).toBeGreaterThan(0);
+  expect(events.every((event) => event.reason !== "query-empty")).toBe(true);
+  expect(events).toEqual([expect.objectContaining({ language: "python", reason: "unavailable" })]);
 });
 
 nativeDescribe("native fallback contract", () => {

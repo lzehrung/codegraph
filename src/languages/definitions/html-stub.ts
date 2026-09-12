@@ -1,16 +1,15 @@
 import type { LanguageDefinition } from "../types.js";
 
 /**
- * Builds a graph-first markup language definition backed by an HTML parser stub.
+ * Builds a registry placeholder for graph-only markup languages.
  *
  * Languages like AsciiDoc, Astro, Handlebars, reStructuredText, MDX, and
- * Markdown have no dedicated tree-sitter grammar wired up yet, so they borrow
- * `tree-sitter-html` purely as a permissive parser and expose empty
- * structure/graph/nodeTypes (no structural or graph extraction).
+ * Markdown register here so they have a language id and extensions. Native
+ * extraction is skipped entirely: the addon has no grammar mapping for these
+ * ids. Dependency extraction lives in `src/document-links.ts`.
  *
- * Use this for any new markup language that should register and parse without
- * (yet) participating in symbol or dependency extraction. Once a language gains
- * real queries, give it its own definition instead of this factory.
+ * Once a language gains real native queries, give it its own definition
+ * instead of this factory.
  *
  * @param id Stable language id, also used as the registry key.
  * @param extensions File extensions to associate, e.g. `[".md"]`.

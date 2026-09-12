@@ -9,7 +9,8 @@ import {
   supportForFile,
   type BuildReport,
 } from "../src/index.js";
-import type { FallbackImportExtractionEvent } from "../src/graphs.js";
+import type { FallbackImportExtractionEvent, FallbackImportExtractionReason } from "../src/graphs.js";
+import { createFallbackImportExtractionHandler } from "../src/indexer/build-cache/reports.js";
 import { logWithLevel } from "../src/logging.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -152,6 +153,52 @@ describe("logging behavior", () => {
       debugSpy.mockRestore();
       warnSpy.mockRestore();
       await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("emits fallback messages that match unavailable, unsupportedLanguage, and query-empty", () => {
+    const cases: Array<{
+      reason: FallbackImportExtractionReason;
+      language: string;
+      expectSubstring: string;
+      forbid?: string;
+    }> = [
+      {
+        reason: "unavailable",
+        language: "python",
+        expectSubstring: "no native query ran",
+        forbid: "returned no results",
+      },
+      {
+        reason: "unsupportedLanguage",
+        language: "markdown",
+        expectSubstring: "Native grammar is not registered",
+        forbid: "returned no results",
+      },
+      {
+        reason: "query-empty",
+        language: "python",
+        expectSubstring: "returned no results",
+      },
+    ];
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      for (const testCase of cases) {
+        debugSpy.mockClear();
+        warnSpy.mockClear();
+        const handler = createFallbackImportExtractionHandler(undefined, { logLevel: "debug" });
+        handler?.({ language: testCase.language, reason: testCase.reason, file: "probe" });
+        const logged = [...debugSpy.mock.calls, ...warnSpy.mock.calls].map((call) => String(call[0] ?? ""));
+        expect(logged.some((message) => message.includes(testCase.expectSubstring))).toBe(true);
+        const forbidden = testCase.forbid;
+        if (forbidden) {
+          expect(logged.some((message) => message.includes(forbidden))).toBe(false);
+        }
+      }
+    } finally {
+      debugSpy.mockRestore();
+      warnSpy.mockRestore();
     }
   });
 });

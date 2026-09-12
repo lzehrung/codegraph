@@ -14,17 +14,11 @@ export { extractMarkdownModuleSpecifiers, extractMdxModuleSpecifiers } from "./d
 export { extractRstModuleSpecifiers } from "./document-links/rst.js";
 export { extractAstroModuleSpecifiers, extractHandlebarsModuleSpecifiers } from "./document-links/sfc.js";
 
-export const GRAPH_ONLY_LANGUAGE_IDS = new Set(["markdown", "mdx", "astro", "hbs", "rst", "adoc"]);
-
-const GRAPH_ONLY_ALIAS_LANGUAGE_IDS = new Set(["mdx", "astro"]);
-
-export function isGraphOnlyLanguage(languageId: string): boolean {
-  return GRAPH_ONLY_LANGUAGE_IDS.has(languageId);
-}
-
-export function graphOnlyLanguageSupportsImportAliases(languageId: string): boolean {
-  return GRAPH_ONLY_ALIAS_LANGUAGE_IDS.has(languageId);
-}
+export {
+  GRAPH_ONLY_LANGUAGE_IDS,
+  graphOnlyLanguageSupportsImportAliases,
+  isGraphOnlyLanguage,
+} from "./document-links/language-ids.js";
 
 export function graphOnlySpecifierNeedsResolutionConfig(specifier: string): boolean {
   return !(

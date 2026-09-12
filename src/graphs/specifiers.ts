@@ -17,6 +17,7 @@ import {
   type CompactCapture,
   type CompactQueryResults,
   type NativeCapture,
+  type NativeFallbackReason,
   type NativeQueryResults,
   type NativeRuntimeMode,
 } from "../native/tree-sitter-native.js";
@@ -32,7 +33,13 @@ import { PYTHON_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { isRustCfgTestStatement, utf8ByteOffsetToStringIndex } from "../util/rust-test-modules.js";
 import { extractJsTsSpecifiers, extractPythonSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
 
-export type FallbackImportExtractionReason = "fast" | "reduced-mode" | "query-error" | "query-empty";
+export type FallbackImportExtractionReason =
+  | "fast"
+  | "reduced-mode"
+  | "unavailable"
+  | "unsupportedLanguage"
+  | "query-error"
+  | "query-empty";
 
 export type FallbackImportExtractionEvent = {
   file?: string;
@@ -241,6 +248,43 @@ const PYTHON_NATIVE_FROM_PATTERN = new RegExp(
   "u",
 );
 
+function mapNativeExecutionFallbackReason(
+  languageId: string,
+  nativeFallbackReason: NativeFallbackReason | undefined,
+  queryFailed: boolean,
+  queryRan: boolean,
+): FallbackImportExtractionReason {
+  if (queryFailed || nativeFallbackReason === "queryFailure") {
+    return "query-error";
+  }
+  if (nativeFallbackReason === "unsupportedLanguage") {
+    return "unsupportedLanguage";
+  }
+  if (nativeFallbackReason === "unavailable" || !queryRan) {
+    return supportsReducedModeRegexRecovery(languageId) ? "reduced-mode" : "unavailable";
+  }
+  return "query-empty";
+}
+
+function resolveNativeImportMatches(
+  support: LanguageSupport,
+  source: string,
+  opts: CollectModuleSpecifiersOptions | undefined,
+): {
+  matches: CompactQueryResults["imports"] | NativeQueryResults["imports"] | null;
+  fallbackReason?: NativeFallbackReason;
+} {
+  const providedImports = opts?.compactNativeImports?.imports ?? opts?.nativeQueries?.imports;
+  if (providedImports !== undefined) {
+    return { matches: providedImports };
+  }
+  const execution = getCompactImportsExecution(source, support, opts?.native);
+  return {
+    matches: execution.results?.imports ?? null,
+    ...(execution.fallbackReason ? { fallbackReason: execution.fallbackReason } : {}),
+  };
+}
+
 export function collectModuleSpecifiersFromSource(
   support: LanguageSupport,
   source: string,
@@ -252,12 +296,6 @@ export function collectModuleSpecifiersFromSource(
   const htmlLikeLanguage = isHtmlLikeLanguage(support.id, opts?.file);
   const graphOnlyLanguage = isGraphOnlyLanguage(support.id);
   const fastRegexDisabled = opts?.fastRegexDisabledLanguages?.includes(support.id);
-  if (graphOnlyLanguage) {
-    return extractGraphOnlyModuleSpecifiers(support.id, source);
-  }
-
-  const shouldAttemptFallback =
-    support.id === "python" ? /\b(import|from)\b/.test(source) : /\b(import|require|from)\b/.test(source);
   const reportFallback = (reason: FallbackImportExtractionReason) => {
     const event: FallbackImportExtractionEvent = {
       language: support.id,
@@ -266,11 +304,22 @@ export function collectModuleSpecifiersFromSource(
     };
     opts?.onFallbackImportExtraction?.(event);
   };
-  const resolvedNativeImports =
-    opts?.compactNativeImports?.imports ??
-    opts?.nativeQueries?.imports ??
-    getCompactImportsExecution(source, support, opts?.native).results?.imports ??
-    null;
+  if (graphOnlyLanguage) {
+    const specifiers = extractGraphOnlyModuleSpecifiers(support.id, source);
+    const nativeImportExecution = resolveNativeImportMatches(support, source, opts);
+    if (nativeImportExecution.fallbackReason === "unavailable" || opts?.native === "off") {
+      reportFallback("unsupportedLanguage");
+    }
+    return specifiers;
+  }
+
+  const shouldAttemptFallback =
+    support.id === "python" ? /\b(import|from)\b/.test(source) : /\b(import|require|from)\b/.test(source);
+  const nativeImportExecution = resolveNativeImportMatches(support, source, opts);
+  const resolvedNativeImports = nativeImportExecution.matches;
+  const nativeFallbackReason = nativeImportExecution.fallbackReason;
+  const importFallbackReason = (queryFailed: boolean): FallbackImportExtractionReason =>
+    mapNativeExecutionFallbackReason(support.id, nativeFallbackReason, queryFailed, resolvedNativeImports !== null);
 
   if (support.id === "python") {
     let queryFailed = false;
@@ -308,7 +357,7 @@ export function collectModuleSpecifiersFromSource(
     if ((queryFailed || !out.length) && shouldAttemptFallback) {
       const extracted = extractPythonSpecifiers(source);
       if (extracted.length) {
-        reportFallback(queryFailed ? "query-error" : "query-empty");
+        reportFallback(importFallbackReason(queryFailed));
         for (const spec of extracted) out.push({ spec });
       }
     }
@@ -423,7 +472,7 @@ export function collectModuleSpecifiersFromSource(
         appendUniqueSpecifiers(out, extractHtmlInlineScriptSpecifiers(source), htmlSeen);
         appendUniqueSpecifiers(out, extractHtmlStyleSpecifiers(source), htmlSeen);
         if (!beforeHtmlRecovery && out.length) {
-          reportFallback("query-empty");
+          reportFallback(importFallbackReason(false));
         }
       }
       if (support.id === "css" || support.id === "scss" || support.id === "less") {
@@ -433,7 +482,7 @@ export function collectModuleSpecifiersFromSource(
         appendUniqueSpecifiers(out, extractCssModuleSpecifiers(source), cssSeen);
         appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
         if (!beforeCssRecovery && out.length) {
-          reportFallback("query-empty");
+          reportFallback(importFallbackReason(false));
         }
       }
       appendTripleSlashReferencesForTs(support, source, out);
@@ -458,13 +507,7 @@ export function collectModuleSpecifiersFromSource(
       try {
         const extracted = extractJsTsSpecifiers(source);
         if (extracted.length) {
-          let reason: FallbackImportExtractionReason = "reduced-mode";
-          if (queryFailed) {
-            reason = "query-error";
-          } else if (hasNativeImports) {
-            reason = "query-empty";
-          }
-          reportFallback(reason);
+          reportFallback(importFallbackReason(queryFailed));
           out.push(...extracted);
         }
       } catch {
@@ -475,12 +518,7 @@ export function collectModuleSpecifiersFromSource(
     return normalizeModuleSpecifiers(out);
   }
 
-  let reducedRecoveryReason: FallbackImportExtractionReason = "reduced-mode";
-  if (queryFailed) {
-    reducedRecoveryReason = "query-error";
-  } else if (hasNativeImports) {
-    reducedRecoveryReason = "query-empty";
-  }
+  const reducedRecoveryReason = importFallbackReason(queryFailed);
   if (htmlLikeLanguage && !out.length) {
     const beforeRecovery = out.length;
     const attributeSpecs = extractHtmlAttributeSpecifiers(source);
