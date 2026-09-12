@@ -305,12 +305,8 @@ export function collectModuleSpecifiersFromSource(
     opts?.onFallbackImportExtraction?.(event);
   };
   if (graphOnlyLanguage) {
-    const specifiers = extractGraphOnlyModuleSpecifiers(support.id, source);
-    const nativeImportExecution = resolveNativeImportMatches(support, source, opts);
-    if (nativeImportExecution.fallbackReason === "unavailable" || opts?.native === "off") {
-      reportFallback("unsupportedLanguage");
-    }
-    return specifiers;
+    reportFallback("unsupportedLanguage");
+    return extractGraphOnlyModuleSpecifiers(support.id, source);
   }
 
   const shouldAttemptFallback =

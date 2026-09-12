@@ -70,7 +70,7 @@ const maskedMarkdown = [
   "- top",
   "    - nested [FourOnly](four-only.md)",
   "  - nested [TwoSpace](two-space.md)",
-  "    [CodeOnly](code-only.md)",
+  "        [CodeOnly](code-only.md)",
   "![Missing][missing]",
   "",
   "[guide-ref]: ./guide.md",
@@ -119,8 +119,43 @@ describe("Markdown document-link masking", () => {
     ).toEqual(["./keep.md"]);
   });
 
+  it("masks CRLF front matter without changing link coordinates", () => {
+    const source = "---\r\nsee: [Hidden](hidden.md)\r\n---\r\n[Live](live.md)\r\n";
+    expect(extractMarkdownModuleSpecifiers(source).map((entry) => entry.spec)).toEqual(["./live.md"]);
+    expect(extractMarkdownLinkOccurrences(source)).toMatchObject([
+      { raw: "live.md", range: { start: { line: 4, column: 8 }, end: { line: 4, column: 15 } } },
+    ]);
+  });
+
+  it("distinguishes indented code from nested lists and list continuations", () => {
+    const source = [
+      "Example:",
+      "",
+      "    - [Code](code.md)",
+      "",
+      "- Parent",
+      "    - [Nested](nested.md)",
+      "      [Continuation](continuation.md)",
+      "",
+      "          - [NestedCode](nested-code.md)",
+      "",
+      "[After](after.md)",
+    ].join("\n");
+    expect(extractMarkdownModuleSpecifiers(source).map((entry) => entry.spec)).toEqual([
+      "./nested.md",
+      "./continuation.md",
+      "./after.md",
+    ]);
+  });
+
   it("does not record a reference-style image as a link occurrence", () => {
     expect(extractMarkdownLinkOccurrences("![Missing][missing]\n\n[missing]: ./no-such.svg\n")).toEqual([]);
+  });
+
+  it("ignores nested link syntax inside image alt text on both extraction paths", () => {
+    const source = "![see [Guide](guide.md)](picture.png)";
+    expect(extractMarkdownModuleSpecifiers(source)).toEqual([]);
+    expect(extractMarkdownLinkOccurrences(source)).toEqual([]);
   });
 
   it("creates file edges for nested list links and not for comments or front matter", async () => {

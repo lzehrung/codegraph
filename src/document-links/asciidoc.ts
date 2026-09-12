@@ -25,6 +25,10 @@ function blankCompleteAsciidocConditionals(lines: string[]): void {
       openIndexes.push(index);
       continue;
     }
+    if (/^(?:ifdef|ifndef)::[^\[]*\[.+\]$/.test(trimmed)) {
+      lines[index] = blankAsciidocLine(lines[index] ?? "");
+      continue;
+    }
     if (!isAsciidocConditionalClose(trimmed) || openIndexes.length === 0) continue;
     const start = openIndexes.pop();
     if (start === undefined) continue;

@@ -2,6 +2,7 @@ import { supportsReducedModeRegexRecovery } from "../../native/tree-sitter-nativ
 import type { FallbackImportExtractionEvent, FallbackImportExtractionReason } from "../../graphs/specifiers.js";
 import { logWithLevel, type LogLevel } from "../../logging.js";
 import { stringifyUnknown } from "../../util/ast.js";
+import { isGraphOnlyLanguage } from "../../document-links/language-ids.js";
 import type {
   BuildFileReport,
   BuildOptions,
@@ -88,7 +89,9 @@ export function createFallbackImportExtractionHandler(
 
   return (event: FallbackImportExtractionEvent) => {
     const filePath = event.file ? event.file.replace(/\\/g, "/") : "unknown";
-    if (fallbackReport) {
+    // Graph-only extraction is the supported path, not degraded native parsing.
+    const supportedGraphOnly = event.reason === "unsupportedLanguage" && isGraphOnlyLanguage(event.language);
+    if (fallbackReport && !supportedGraphOnly) {
       if (!fallbackReport.files[filePath]) {
         fallbackReport.total += 1;
         fallbackReport.byLanguage[event.language] = (fallbackReport.byLanguage[event.language] ?? 0) + 1;

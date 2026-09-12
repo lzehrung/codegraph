@@ -92,6 +92,15 @@ describe("AsciiDoc conditional includes", () => {
     ]);
   });
 
+  it("skips links in single-line conditionals without hiding the next line", () => {
+    const source = [
+      "ifdef::backend-pdf[xref:pdf-only.adoc[]]",
+      "ifndef::backend-html5[link:other.adoc[]]",
+      "xref:live.adoc[]",
+    ].join("\n");
+    expect(extractAsciidocModuleSpecifiers(source).map((entry) => entry.spec)).toEqual(["./live.adoc"]);
+  });
+
   it("does not drop the rest of the file when a conditional is unterminated", () => {
     const source = [
       "include::partials/live.adoc[]",

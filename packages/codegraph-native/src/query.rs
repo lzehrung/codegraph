@@ -56,15 +56,10 @@ fn capture_to_object(
 
 /// Maximum compiled queries retained per thread.
 ///
-/// The indexer reuses a stable `(language_id, query_text)` set: 22 native
-/// languages × 5 product queries (imports, exports, locals, importBindings,
-/// generated chunking) = 110, plus one merged concatenation per language on
-/// the extract path (~22) and the duplicate-import queries (~18). 256 leaves
-/// headroom for those extras and a few one-off `run_query` texts so a reused
-/// indexer query is never evicted. Each native worker thread keeps its own
-/// `thread_local` copy; without a bound, 5,000 distinct caller queries grew
-/// RSS by ~12 MB in one isolate. The merged-query compile-failure memo uses
-/// the same cap.
+/// Covers the roughly 150 built-in queries with room for caller queries.
+/// Entries are not pinned: enough distinct caller queries can evict built-ins.
+/// Each worker thread has its own cache. The merged-query failure memo uses
+/// the same entry limit.
 const QUERY_CACHE_CAPACITY: usize = 256;
 
 pub(crate) struct QueryCache {

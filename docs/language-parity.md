@@ -157,6 +157,8 @@ Monorepo and diagnostic behavior:
 - `inspect` and `unresolved` use supported dependency manifests to suppress declared third-party packages from unresolved-import diagnostics.
 - Graph-only document and template link edges still appear in graph output. They are excluded from unresolved-import diagnostics by default, so source import health is not mixed with documentation link checking.
 - The `links` command and `checkMarkdownLinks()` validate only links authored in Markdown sources: local file and directory targets plus GitHub-style heading fragments, confined to the project root, with external URLs skipped and no network access. Images, MDX, other document formats, and custom HTML or site-generator anchors are not validated.
+- Markdown graph extraction and `codegraph links` ignore HTML comments, leading YAML/TOML front matter, images, and indented code. Nested list links and list continuation links retain their source coordinates, including CRLF files.
+- AsciiDoc graph extraction skips complete `ifdef`, `ifndef`, and `ifeval` regions without evaluating attributes. Unterminated regions remain visible to extraction.
 
 ## C/C++ resolution hints
 

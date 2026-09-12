@@ -362,7 +362,11 @@ function collectMarkdownInlineLinkDestinations(source: string): string[] {
 
   for (let index = 0; index < source.length; index += 1) {
     if (source[index] !== "[") continue;
-    if (source[index - 1] === "!") continue;
+    const imageEnd = skipMarkdownImageConstruct(source, index);
+    if (imageEnd !== null) {
+      index = imageEnd;
+      continue;
+    }
 
     const labelEnd = findMarkdownLabelEnd(source, index + 1, MAX_MARKDOWN_INLINE_LABEL_SCAN_LENGTH);
     if (labelEnd < 0) {
@@ -573,23 +577,50 @@ function skipMarkdownImageConstruct(source: string, bracketIndex: number): numbe
 }
 
 function stripLeadingMarkdownFrontMatter(source: string): string {
-  const match = /^(---|\+\+\+)[ \t]*\n(?:[\s\S]*?\n)?\1[ \t]*(?:\n|$)/.exec(source);
+  const match = /^(---|\+\+\+)[ \t]*\r?\n(?:[\s\S]*?\r?\n)?\1[ \t]*(?:\r?\n|$)/.exec(source);
   if (!match) return source;
   return maskMatch(match[0]) + source.slice(match[0].length);
 }
 
-function isIndentedMarkdownListItem(line: string): boolean {
-  return /^(?:[-*+]|\d+[.)])(?:[ \t]|$)/.test(line.trimStart());
+function stripIndentedMarkdownCode(source: string): string {
+  const listContentColumns: number[] = [];
+  return source.replace(/^[^\r\n]+/gm, (line) => {
+    if (!line.trim()) return line;
+    let index = 0;
+    let column = 0;
+    while (line[index] === " " || line[index] === "\t") {
+      column += line[index] === "\t" ? 4 - (column % 4) : 1;
+      index += 1;
+    }
+    while (listContentColumns.length && column < listContentColumns[listContentColumns.length - 1]!) {
+      listContentColumns.pop();
+    }
+    const contentColumn = listContentColumns[listContentColumns.length - 1] ?? 0;
+    if (column >= contentColumn + 4) return maskMatch(line);
+    const marker = /^(?:[-*+]|\d{1,9}[.)])(?=[ \t]|$)/.exec(line.slice(index));
+    if (marker) {
+      index += marker[0].length;
+      column += marker[0].length;
+      const markerEnd = column;
+      while (line[index] === " " || line[index] === "\t") {
+        column += line[index] === "\t" ? 4 - (column % 4) : 1;
+        index += 1;
+      }
+      // Five or more spaces after a marker start code, not wider list content.
+      const padding = column - markerEnd;
+      listContentColumns.push(markerEnd + (padding >= 1 && padding <= 4 ? padding : 1));
+      if (padding >= 5) return line.slice(0, index) + maskMatch(line.slice(index));
+    }
+    return line;
+  });
 }
 
 function stripMarkdownCode(source: string): string {
   let sanitized = stripLeadingMarkdownFrontMatter(source);
   sanitized = sanitized.replace(/(^|\n)(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\2[^\n]*(?=\n|$)/g, maskMatch);
   sanitized = sanitized.replace(/`[^`\n]*`/g, maskMatch);
-  sanitized = sanitized.replace(/^(?: {4}|\t).*$/gm, (line) =>
-    isIndentedMarkdownListItem(line) ? line : maskMatch(line),
-  );
   sanitized = sanitized.replace(/<!--[\s\S]*?-->/g, maskMatch);
+  sanitized = stripIndentedMarkdownCode(sanitized);
   return sanitized;
 }
 
