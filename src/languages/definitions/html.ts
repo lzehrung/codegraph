@@ -8,7 +8,7 @@ export const HTML_DEF: LanguageDefinition = {
     blocks: [
       {
         type: "element",
-        nameQuery: `(start_tag (attribute (attribute_name) @attr (#eq? @attr "id") (quoted_attribute_value (attribute_value) @chunk.name)))`,
+        nameQuery: `(start_tag (attribute (attribute_name) @attr (#match? @attr "^(?i)id$") (quoted_attribute_value (attribute_value) @chunk.name)))`,
         captureId: "element",
       },
       { type: "script_element", captureId: "script" },
@@ -19,22 +19,22 @@ export const HTML_DEF: LanguageDefinition = {
   },
   graph: {
     imports: `
-      (script_element (start_tag (attribute (attribute_name) @attr (#eq? @attr "src") (quoted_attribute_value (attribute_value) @mod)))) @stmt
-      ((element (start_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "href") (quoted_attribute_value (attribute_value) @mod)))) @stmt (#match? @tag "^(link|a)$"))
-      ((element (self_closing_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "href") (quoted_attribute_value (attribute_value) @mod)))) @stmt (#match? @tag "^(link|a)$"))
-      ((element (start_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "src") (quoted_attribute_value (attribute_value) @mod)))) @stmt (#eq? @tag "img"))
-      ((element (self_closing_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "src") (quoted_attribute_value (attribute_value) @mod)))) @stmt (#eq? @tag "img"))
+      (script_element (start_tag (attribute (attribute_name) @attr (#match? @attr "^(?i)src$") (quoted_attribute_value (attribute_value) @mod)))) @stmt
+      ((element (start_tag (tag_name) @tag (attribute (attribute_name) @attr (#match? @attr "^(?i)href$") (quoted_attribute_value (attribute_value) @mod)))) @stmt (#match? @tag "^(?i)(link|a)$"))
+      ((element (self_closing_tag (tag_name) @tag (attribute (attribute_name) @attr (#match? @attr "^(?i)href$") (quoted_attribute_value (attribute_value) @mod)))) @stmt (#match? @tag "^(?i)(link|a)$"))
+      ((element (start_tag (tag_name) @tag (attribute (attribute_name) @attr (#match? @attr "^(?i)src$") (quoted_attribute_value (attribute_value) @mod)))) @stmt (#match? @tag "^(?i)img$"))
+      ((element (self_closing_tag (tag_name) @tag (attribute (attribute_name) @attr (#match? @attr "^(?i)src$") (quoted_attribute_value (attribute_value) @mod)))) @stmt (#match? @tag "^(?i)img$"))
     `,
     exports: "",
     locals: `
-      (attribute (attribute_name) @attr (#eq? @attr "id") (quoted_attribute_value (attribute_value) @name))
+      (attribute (attribute_name) @attr (#match? @attr "^(?i)id$") (quoted_attribute_value (attribute_value) @name))
     `,
     importBindings: `
-      (script_element (start_tag (attribute (attribute_name) @attr (#eq? @attr "src") (quoted_attribute_value (attribute_value) @from)))) @stmt
-      ((element (start_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "href") (quoted_attribute_value (attribute_value) @from)))) @stmt (#match? @tag "^(link|a)$"))
-      ((element (self_closing_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "href") (quoted_attribute_value (attribute_value) @from)))) @stmt (#match? @tag "^(link|a)$"))
-      ((element (start_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "src") (quoted_attribute_value (attribute_value) @from)))) @stmt (#eq? @tag "img"))
-      ((element (self_closing_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "src") (quoted_attribute_value (attribute_value) @from)))) @stmt (#eq? @tag "img"))
+      (script_element (start_tag (attribute (attribute_name) @attr (#match? @attr "^(?i)src$") (quoted_attribute_value (attribute_value) @from)))) @stmt
+      ((element (start_tag (tag_name) @tag (attribute (attribute_name) @attr (#match? @attr "^(?i)href$") (quoted_attribute_value (attribute_value) @from)))) @stmt (#match? @tag "^(?i)(link|a)$"))
+      ((element (self_closing_tag (tag_name) @tag (attribute (attribute_name) @attr (#match? @attr "^(?i)href$") (quoted_attribute_value (attribute_value) @from)))) @stmt (#match? @tag "^(?i)(link|a)$"))
+      ((element (start_tag (tag_name) @tag (attribute (attribute_name) @attr (#match? @attr "^(?i)src$") (quoted_attribute_value (attribute_value) @from)))) @stmt (#match? @tag "^(?i)img$"))
+      ((element (self_closing_tag (tag_name) @tag (attribute (attribute_name) @attr (#match? @attr "^(?i)src$") (quoted_attribute_value (attribute_value) @from)))) @stmt (#match? @tag "^(?i)img$"))
     `,
   },
   nodeTypes: {

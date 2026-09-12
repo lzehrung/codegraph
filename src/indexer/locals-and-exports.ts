@@ -617,13 +617,16 @@ export function collectLocalsAndExportsFromSource(
           (child) => child.type === "storage_class_specifier" && child.text === "static",
         );
         if (hasStaticStorageClass) continue;
+        let ancestor = nodeForCapture(map["name"])?.parent;
+        while (ancestor && ancestor.type !== "compound_statement") ancestor = ancestor.parent;
+        if (ancestor) continue;
       }
       const isTypeOnly = support.isTypeOnly(stmtText);
 
       if (support.id === "python") {
         const leftText = map["left"]?.text ?? "";
         const methodText = map["method"]?.text ?? "";
-        const isAllAssignment = leftText === "__all__";
+        const isAllAssignment = leftText === "__all__" && !methodText;
         const isAllMethod = leftText === "__all__" && (methodText === "extend" || methodText === "append");
 
         if (isAllAssignment || isAllMethod) {
@@ -644,30 +647,6 @@ export function collectLocalsAndExportsFromSource(
                 exportedAs: name,
                 target: local,
               });
-            }
-          }
-          if (isAllAssignment && map["stmt"]) {
-            const assignmentText = map["stmt"].text;
-            const hasTuple = /=\s*\(/.test(assignmentText);
-            if (!items.length || hasTuple) {
-              const strRe = /["']([^"']+)["']/g;
-              for (let submatch; (submatch = strRe.exec(assignmentText)); ) {
-                const name = submatch[1]!;
-                pythonAllExports.add(name);
-                const local = mergedLocals.find((def) => def.localName === name);
-                if (
-                  local &&
-                  !exports.some(
-                    (entry) => entry.type !== "exportStar" && "exportedAs" in entry && entry.exportedAs === name,
-                  )
-                ) {
-                  exports.push({
-                    type: "local",
-                    exportedAs: name,
-                    target: local,
-                  });
-                }
-              }
             }
           }
           continue;

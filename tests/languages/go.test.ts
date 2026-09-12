@@ -272,6 +272,12 @@ type Box[T comparable] struct {
 const (
 	B, C = iota, iota
 )
+
+func Work() {
+  const Hidden = 1
+  var Local = Hidden
+  type Private struct{}
+}
 `;
     try {
       await writeFile(file, source, "utf8");
@@ -284,6 +290,13 @@ const (
       expect(locals).toEqual(expect.arrayContaining(["type:Box", "type:T", "variable:B", "variable:C"]));
       expect(exports).toEqual(expect.arrayContaining(["type:Box", "variable:B", "variable:C"]));
       expect(exports).not.toContain("type:T");
+      expect(locals).toEqual(expect.arrayContaining(["variable:Hidden", "variable:Local", "type:Private"]));
+      expect(mod.exports.map((entry) => (entry.type === "local" ? entry.exportedAs : entry.type)).sort()).toEqual([
+        "B",
+        "Box",
+        "C",
+        "Work",
+      ]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
