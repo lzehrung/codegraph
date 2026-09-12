@@ -207,6 +207,43 @@ func topLevel() {}
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("does not export members of a closure-local type", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-closure-type-"));
+    const file = path.join(root, "example.swift");
+    await writeFile(
+      file,
+      [
+        "class Outer {",
+        "    class Inner {",
+        "        func deep() {}",
+        "    }",
+        "}",
+        "let handler = {",
+        "    struct Local {",
+        "        func hidden() {}",
+        "    }",
+        "}",
+        "func keep() {}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    try {
+      const parsed = await parseFile(file);
+      const mod = collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
+        ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
+      });
+      const localNames = mod.locals.map((entry) => entry.localName);
+      const exportedNames = mod.exports.map(exportedNameOf);
+      expect(localNames).toEqual(expect.arrayContaining(["handler", "Local", "hidden", "keep", "deep"]));
+      expect(exportedNames).toEqual(expect.arrayContaining(["handler", "keep", "Outer", "Inner", "deep"]));
+      expect(exportedNames).not.toContain("hidden");
+      expect(exportedNames).not.toContain("Local");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Swift Unicode symbol ranges (C11)", () => {

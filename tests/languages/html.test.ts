@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { collectGraph } from "../../src/index.js";
 import { HTML_SUPPORT } from "../../src/languages.js";
 import { HTML_DEF } from "../../src/languages/definitions/html.js";
 import { generateChunkingQuery } from "../../src/languages/query-generator.js";
@@ -173,5 +177,27 @@ describe("HTML asset tag filtering", () => {
     expect(queryCaptureTexts(source, HTML_SUPPORT.queries.importBindings, "from")).toEqual(expectedAssets);
     expect(queryCaptureTexts(source, HTML_SUPPORT.queries.locals, "name")).toEqual(["hero", "ok"]);
     expect(queryCaptureTexts(source, generateChunkingQuery(HTML_DEF), "chunk.name")).toEqual(["hero", "ok"]);
+  });
+});
+
+describe("HTML alias link targets", () => {
+  it("resolves an anchor to a discovered .xhtml file instead of reporting it external", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-html-xhtml-"));
+    const index = path.join(root, "index.html");
+    const aliasTarget = path.join(root, "page.xhtml");
+    const missingTarget = path.join(root, "absent.xhtml");
+    try {
+      await fs.writeFile(index, '<a href="page.xhtml">kept</a>\n<a href="absent.xhtml">gone</a>\n', "utf8");
+      await fs.writeFile(aliasTarget, "<p>kept</p>\n", "utf8");
+      const graph = await collectGraph(root, [index, aliasTarget]);
+      const targets = graph.edges.map((edge) =>
+        edge.to.type === "file" ? path.basename(edge.to.path) : `external:${edge.to.name}`,
+      );
+
+      expect(targets).toContain(path.basename(aliasTarget));
+      expect(targets).toContain(`external:${path.basename(missingTarget)}`);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });

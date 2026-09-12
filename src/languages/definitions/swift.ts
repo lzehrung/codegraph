@@ -229,6 +229,6 @@ export const SWIFT_DEF: LanguageDefinition = {
     node.type === "catch_block" ||
     node.type === "willset_didset_block",
   supportsCrossModuleSymbols: true,
-  exportScopeBlockers: ["function_body"],
+  exportScopeBlockers: ["function_body", "lambda_literal"],
 };
 registerLanguage(SWIFT_DEF);

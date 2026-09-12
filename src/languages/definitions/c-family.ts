@@ -72,58 +72,19 @@ export function cFunctionNameQuery(captureName: string, includeFieldIdentifier: 
 `;
 }
 
-export function cFamilyScopedExportQueries(
-  functionNameQuery: string,
-  wrapItem: (item: string) => string,
-  options: { includeEnumSpecifier?: boolean; includeTypeDefinition?: boolean } = {},
-): string[] {
-  const includeEnumSpecifier = options.includeEnumSpecifier;
-  const includeTypeDefinition = options.includeTypeDefinition ?? true;
-  const items: Array<{ pattern: string; guardImportExportType: boolean }> = [
-    { pattern: `(function_definition ${functionNameQuery}) @declaration`, guardImportExportType: false },
-    { pattern: `(declaration ${functionNameQuery}) @declaration`, guardImportExportType: false },
-    { pattern: `(struct_specifier name: (type_identifier) @name)`, guardImportExportType: false },
-  ];
-  if (includeEnumSpecifier) {
-    items.push({ pattern: `(enum_specifier name: (type_identifier) @name)`, guardImportExportType: false });
-  }
-  if (includeTypeDefinition) {
-    items.push({ pattern: `(type_definition declarator: (type_identifier) @name)`, guardImportExportType: false });
-  }
-  items.push(
-    {
-      pattern: `(declaration type: (_) @type declarator: (identifier) @name) @declaration`,
-      guardImportExportType: true,
-    },
-    {
-      pattern: `(declaration type: (_) @type declarator: (init_declarator declarator: (identifier) @name)) @declaration`,
-      guardImportExportType: true,
-    },
-  );
-  return items.map(({ pattern, guardImportExportType }) => {
-    const wrapped = wrapItem(pattern);
-    if (guardImportExportType) {
-      return `(${wrapped}\n      (#not-match? @type "^(import|export)$"))`;
-    }
-    return wrapped;
-  });
-}
-
+// Include guards wrap header declarations, so the export queries cannot anchor on
+// the file root. A function body is what makes a declaration unreachable from other files.
 export function cFamilyCoreExportQueries(functionNameQuery: string): string[] {
-  return cFamilyScopedExportQueries(functionNameQuery, (item) => `(translation_unit ${item})`, {
-    includeEnumSpecifier: true,
-  });
-}
-
-export function cFamilyCppContainerExportQueries(functionNameQuery: string): string[] {
   return [
-    ...cFamilyScopedExportQueries(
-      functionNameQuery,
-      (item) => `(namespace_definition body: (declaration_list ${item}))`,
-    ),
-    ...cFamilyScopedExportQueries(functionNameQuery, (item) => `(template_declaration ${item})`, {
-      includeTypeDefinition: false,
-    }),
+    `(function_definition ${functionNameQuery}) @declaration`,
+    `(declaration ${functionNameQuery}) @declaration`,
+    `(struct_specifier name: (type_identifier) @name)`,
+    `(enum_specifier name: (type_identifier) @name)`,
+    `(type_definition declarator: (type_identifier) @name)`,
+    `((declaration type: (_) @type declarator: (identifier) @name) @declaration
+      (#not-match? @type "^(import|export)$"))`,
+    `((declaration type: (_) @type declarator: (init_declarator declarator: (identifier) @name)) @declaration
+      (#not-match? @type "^(import|export)$"))`,
   ];
 }
 
@@ -208,8 +169,6 @@ export function createCFamilyLanguageDefinition(options: CFamilyLanguageDefiniti
     createsFunctionScope: options.createsFunctionScope,
     createsBlockScope: (node) => node.type === "compound_statement",
     supportsCrossModuleSymbols: true,
-    // Include guards wrap header declarations, so the export queries cannot anchor on the file
-    // root alone; a function body is what makes a declaration unreachable from other files.
     exportScopeBlockers: ["compound_statement"],
     usesQueryDrivenLocals: options.usesQueryDrivenLocals || false,
   };

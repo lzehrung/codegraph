@@ -173,16 +173,14 @@ describe("C++ native queries", () => {
       import std;
       void g() { int sum = 0; }
     `;
-    const exports = runQuery(source, "cpp", CPP_SUPPORT.queries.exports);
-    const names = exports.matches.flatMap((match) =>
-      match.captures.filter((capture) => capture.name === "name").map((capture) => capture.text),
-    );
+    const names = collectCppNames("probe.cpp", source);
 
-    expect(names).toEqual(expect.arrayContaining(["FOO", "outer", "inner", "U", "f", "~A", "operator+="]));
-    expect(names).not.toContain("module");
-    expect(names).not.toContain("std");
-    expect(names).not.toContain("foo");
-    expect(names).not.toContain("sum");
+    expect(names.exports).toEqual(expect.arrayContaining(["FOO", "outer", "inner", "U", "f", "~A", "operator+="]));
+    expect(names.exports).not.toContain("module");
+    expect(names.exports).not.toContain("std");
+    expect(names.exports).not.toContain("foo");
+    expect(names.exports).not.toContain("sum");
+    expect(names.locals).toEqual(expect.arrayContaining(["sum"]));
   });
   it("exports file-scope declarations without leaking function-local types or static variables", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-static-storage-"));
@@ -279,6 +277,24 @@ describe("C++ native queries", () => {
     expect(functionLocal.exports).not.toContain("hidden");
     expect(functionLocal.exports).not.toContain("Flags");
     expect(functionLocal.exports).not.toContain("HiddenFlag");
+  });
+
+  it("exports include-guarded declarations", () => {
+    const source = "struct Pair { int a; };\nenum Mode { ON };\n#ifndef GUARD_H\nint guarded;\n#endif";
+    const names = collectCppNames("probe.hpp", source);
+
+    expect(names.exports).toEqual(expect.arrayContaining(["Pair", "Mode", "ON", "guarded"]));
+    expect(names.exports.filter((name) => name === "guarded")).toEqual(["guarded"]);
+    expect(names.locals).toEqual(expect.arrayContaining(["Pair", "Mode", "ON", "guarded"]));
+    expect(names.exports).not.toContain("a");
+  });
+
+  it("exports a C++ enum name once", () => {
+    const names = collectCppNames("probe.hpp", "enum Mode { ON };");
+
+    expect(names.exports.filter((name) => name === "Mode")).toEqual(["Mode"]);
+    expect(names.exports).toEqual(expect.arrayContaining(["Mode", "ON"]));
+    expect(names.locals).toEqual(expect.arrayContaining(["Mode", "ON"]));
   });
 });
 

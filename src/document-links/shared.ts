@@ -12,6 +12,7 @@ const DOCUMENT_RELATIVE_EXTENSIONS = new Set([
   ".asciidoc",
   ".html",
   ".htm",
+  ".xhtml",
   ".css",
   ".scss",
   ".less",

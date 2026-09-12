@@ -146,4 +146,14 @@ describe("C native queries", () => {
     expect(cppNames.locals).toEqual(expect.arrayContaining(["prototype", "counter", "Pair"]));
     expect([...cNames.exports].sort()).toEqual([...cppNames.exports].sort());
   });
+
+  it("exports include-guarded declarations", () => {
+    const source = "struct Pair { int a; };\nenum Mode { ON };\n#ifndef GUARD_H\nint guarded;\n#endif";
+    const names = collectCFamilyNames("probe.h", source, C_SUPPORT);
+
+    expect(names.exports).toEqual(expect.arrayContaining(["Pair", "Mode", "ON", "guarded"]));
+    expect(names.exports.filter((name) => name === "guarded")).toEqual(["guarded"]);
+    expect(names.locals).toEqual(expect.arrayContaining(["Pair", "Mode", "ON", "guarded"]));
+    expect(names.exports).not.toContain("a");
+  });
 });

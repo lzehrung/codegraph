@@ -2963,6 +2963,54 @@ export function processInvoiceItems(items: Array<{ price: number; qty: number }>
   }
 });
 
+test("C5: reopened duplicate unit cache recomputes units stored under a previous construction version", async () => {
+  const root = await makeTempProject();
+  let index: Awaited<ReturnType<typeof buildProjectIndex>> | undefined;
+  try {
+    const source = [
+      "mod inner {",
+      "    pub fn keep_wrapped() {",
+      "        let value = 1;",
+      "    }",
+      "}",
+      "mod duplicateImportMarker;",
+      "fn keep_rust() {}",
+      "",
+    ].join("\n");
+    const file = await writeProjectFile(root, "src/sample.rs", source);
+    index = await buildProjectIndex(root, { cache: "disk" });
+    const variant = duplicateUnitCacheVariant(index, 1, 400, 3, 20, root);
+    const sig = duplicateUnitCacheSignature(index, file, root);
+    if (!sig) throw new Error("expected a duplicate-unit cache signature");
+
+    const diskDb = duplicateUnitDiskCache(index);
+    if (!diskDb?.statements) throw new Error("expected an open duplicate-unit cache database");
+    diskDb.statements.write.run(
+      cacheRelativePath(root, file),
+      variant,
+      sig,
+      DUPLICATE_UNIT_CACHE_VERSION - 1,
+      brotliCompressSync(Buffer.from("[]", "utf8")),
+      Date.now(),
+    );
+
+    expect(tryLoadDuplicateUnitsFromCache(index, file, variant, root)).toBeNull();
+    const collection = await collectDuplicateUnits(index, {
+      projectRoot: root,
+      files: [file],
+      includeSmall: true,
+      minTokens: 1,
+      maxTokens: 400,
+      shingleSize: 3,
+      windowSize: 20,
+    });
+    expect(collection.units.length).toBeGreaterThan(0);
+    expect(collection.units.some((unit) => unit.name === "keep_wrapped")).toBe(true);
+  } finally {
+    if (index) closeDuplicateUnitCacheForIndex(index);
+  }
+});
+
 test("C5: duplicate units cached under a previous tokenizer revision are not reused", async () => {
   const root = await makeTempProject();
   let index;

@@ -212,4 +212,41 @@ describe("Kotlin native identifier declarations", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("does not export members of a lambda-local class", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-lambda-class-"));
+    const file = path.join(root, "Scope.kt");
+    await fsp.writeFile(
+      file,
+      [
+        "class Outer {",
+        "    class Inner {",
+        "        fun deep() {}",
+        "    }",
+        "}",
+        "val handler = {",
+        "    class Local {",
+        "        fun hidden() {}",
+        "    }",
+        "}",
+        "fun keep() {}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    try {
+      const parsed = await parseFile(file);
+      const mod = collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
+        ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
+      });
+      const localNames = mod.locals.map((entry) => entry.localName);
+      const exportedNames = mod.exports.map(exportedNameOf);
+      expect(localNames).toEqual(expect.arrayContaining(["handler", "Local", "hidden", "keep", "deep"]));
+      expect(exportedNames).toEqual(expect.arrayContaining(["handler", "keep", "Outer", "Inner", "deep"]));
+      expect(exportedNames).not.toContain("hidden");
+      expect(exportedNames).not.toContain("Local");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

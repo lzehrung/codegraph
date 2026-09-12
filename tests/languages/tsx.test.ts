@@ -135,6 +135,7 @@ describe("TSX declaration-only exports", () => {
       'import { overloaded, Toolkit, NamespaceModule } from "./api";',
       "overloaded;",
       "Toolkit;",
+      "NamespaceModule;",
     ].join("\n");
     try {
       await writeFile(apiFile, apiSource, "utf8");
@@ -158,6 +159,12 @@ describe("TSX declaration-only exports", () => {
       if (toolkit.status === "ok") {
         expect(toolkit.definition.file).toBe(apiFile);
         expect(toolkit.definition.range.start.line).toBe(2);
+      }
+      const namespaceModule = await goToDefinition(index, { file: consumerFile, line: 4, column: 1 });
+      expect(namespaceModule.status).toBe("ok");
+      if (namespaceModule.status === "ok") {
+        expect(namespaceModule.definition.file).toBe(apiFile);
+        expect(namespaceModule.definition.range.start.line).toBe(3);
       }
     } finally {
       await rm(root, { recursive: true, force: true });
