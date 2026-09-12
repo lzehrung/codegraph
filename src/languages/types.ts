@@ -115,6 +115,16 @@ export interface LanguageDefinition {
   supportsCrossModuleSymbols?: boolean;
 
   /**
+   * Node types whose subtree is not module scope. An `exports` capture with one of these as an
+   * ancestor is dropped, so a name declared inside a function body never becomes a module export.
+   *
+   * Languages whose `exports` query can anchor on the file root do that instead. C and C++ cannot:
+   * a header wraps its declarations in an include guard, so the anchor would have to enumerate
+   * every preprocessor nesting depth.
+   */
+  exportScopeBlockers?: readonly string[];
+
+  /**
    * Helper to check if a statement represents a type-only dependency.
    */
   isTypeOnly?: (stmtText: string) => boolean;

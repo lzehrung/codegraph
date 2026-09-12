@@ -167,17 +167,18 @@ export async function collectNativeCaptureImportBindings(
     const caps = capturesByName(match);
     const statementCapture = caps["stmt"];
     const stmtText = statementCapture?.text ?? "";
-    const typeOnly = context.isTypeOnly(stmtText);
+    const statementTypeOnly = context.isTypeOnly(stmtText);
+    const typeOnly = caps["type_kw"] !== undefined || statementTypeOnly;
     const statementStartIndex =
       statementCapture !== undefined
         ? utf8ByteOffsetToStringIndex(context.source, statementCapture.start.index)
         : undefined;
-    if (await context.applyStatementOverride(stmtText, typeOnly, statementStartIndex)) {
+    if (await context.applyStatementOverride(stmtText, statementTypeOnly, statementStartIndex)) {
       continue;
     }
     const from = caps["from"] ? unquote(caps["from"].text) : undefined;
     const patterns = capturesNamed(match, "pattern");
-    await pushTextObjectPatternBindings(context, patterns, from, typeOnly);
+    await pushTextObjectPatternBindings(context, patterns, from, statementTypeOnly);
     await pushStandardBindings(context, match, caps, stmtText, from, patterns.length, typeOnly);
   }
 }

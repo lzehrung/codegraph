@@ -3,6 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildProjectIndex, findReferences } from "../../src/index.js";
+import { finalizeLanguageSpecificImports } from "../../src/indexer/imports/language-specific.js";
+import { parseKotlinImportStatement } from "../../src/languages/import-statement-parsers.js";
+import type { ImportBinding } from "../../src/indexer/types.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 import { runLanguageTests } from "./runner.js";
@@ -186,5 +189,51 @@ describe("Kotlin native identifier declarations", () => {
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Kotlin semicolon-terminated text fallback imports", () => {
+  it("extracts semicolon-terminated imports when native bindings are empty", async () => {
+    expect(parseKotlinImportStatement("import a.b.C;")).toEqual({
+      kind: "named",
+      from: "a.b.C",
+      imported: "C",
+      local: "C",
+    });
+
+    const bindings: ImportBinding[] = [];
+    await finalizeLanguageSpecificImports({
+      file: "Consumer.kt",
+      projectRoot: process.cwd(),
+      source: "import a.b.C;\nimport a.b.D as Alias;\n",
+      languageId: "kotlin",
+      resolveFrom: async (from) => ({ external: from }),
+      pushBinding: (binding) => {
+        bindings.push(binding);
+      },
+      getBindings: () => bindings,
+      replaceBindings: (next) => {
+        bindings.splice(0, bindings.length, ...next);
+      },
+    });
+
+    expect(bindings).toEqual([
+      {
+        kind: "named",
+        local: "C",
+        imported: "C",
+        from: "a.b.C",
+        resolved: { external: "a.b.C" },
+        typeOnly: false,
+      },
+      {
+        kind: "named",
+        local: "Alias",
+        imported: "D",
+        from: "a.b.D",
+        resolved: { external: "a.b.D" },
+        typeOnly: false,
+      },
+    ]);
   });
 });

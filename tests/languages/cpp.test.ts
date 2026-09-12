@@ -8,10 +8,18 @@ import { normalizePath } from "../../src/util/paths.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
-import { C_SUPPORT, CPP_SUPPORT, supportForFile } from "../../src/languages.js";
+import { C_SUPPORT, CPP_SUPPORT, supportForFile, supportForFileWithSource } from "../../src/languages.js";
+import { parseSyntaxTree, runQuery } from "@lzehrung/codegraph-native";
+import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
+import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js";
+import type { LanguageSupport } from "../../src/languages.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
-import { parseSyntaxTree, runQuery } from "@lzehrung/codegraph-native";
+
+function moduleFromSource(file: string, source: string, support: LanguageSupport) {
+  const native = getNativeQueryExecution(source, support);
+  return collectLocalsAndExportsFromSource(file, source, support, [], { nativeQueries: native.results });
+}
 
 const definition: LanguageTestDefinition = {
   id: "cpp",
@@ -121,12 +129,24 @@ describe("C++ language boundaries", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-header-language-"));
     const cppHeader = path.join(root, "widget.h");
     const cHeader = path.join(root, "widget_c.h");
+    const commentHeader = path.join(root, "comment.h");
+    const usingHeader = path.join(root, "using.h");
     try {
       await fs.writeFile(cppHeader, "namespace widgets { class Widget {}; }\n", "utf8");
       await fs.writeFile(cHeader, "struct Widget { int value; };\n", "utf8");
+      await fs.writeFile(
+        commentHeader,
+        "/* This is a template for the audio driver. */ struct S { int x; };\n",
+        "utf8",
+      );
+      await fs.writeFile(usingHeader, "using Foo = int;\n", "utf8");
 
       expect(supportForFile(cppHeader)).toBe(CPP_SUPPORT);
       expect(supportForFile(cHeader)).toBe(C_SUPPORT);
+      expect(supportForFile(commentHeader)).toBe(C_SUPPORT);
+      expect(supportForFile(usingHeader)).toBe(CPP_SUPPORT);
+      expect(supportForFileWithSource("qualified.h", "void Widget::bar();\n")).toBe(CPP_SUPPORT);
+      expect(supportForFileWithSource("constexpr.h", "constexpr int k = 1;\n")).toBe(CPP_SUPPORT);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -171,7 +191,13 @@ describe("C++ native queries", () => {
     expect(names).not.toContain("module");
     expect(names).not.toContain("std");
     expect(names).not.toContain("foo");
-    expect(names).not.toContain("sum");
+    // The query is intentionally unanchored so include-guarded headers still match, so it does
+    // capture the function-body `sum`. `exportScopeBlockers` removes it from the module exports.
+    const exported = moduleFromSource("probe.cpp", source, CPP_SUPPORT)
+      .exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : []))
+      .sort();
+    expect(exported).not.toContain("sum");
+    expect(exported).toEqual(expect.arrayContaining(["FOO", "U", "f"]));
   });
   it("exports file-scope declarations without leaking function-local types or static variables", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-static-storage-"));

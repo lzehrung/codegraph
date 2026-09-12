@@ -20,78 +20,312 @@ export type ParsedRustImportStatement =
       from: string;
       local: string;
       isExternCrate: boolean;
+      pathAttribute?: string;
     }
   | {
       kind: "star";
       from: string;
     };
 
-const RUST_MODULE_PATTERN = new RegExp(String.raw`^mod\s+(${XID_IDENTIFIER_SOURCE})\s*;?$`, "u");
+const RUST_MODULE_PATTERN = new RegExp(
+  String.raw`^(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+(${XID_IDENTIFIER_SOURCE})\s*;?$`,
+  "u",
+);
 const RUST_EXTERN_CRATE_PATTERN = new RegExp(
   String.raw`^extern\s+crate\s+(${XID_IDENTIFIER_SOURCE})(?:\s+as\s+(${XID_IDENTIFIER_SOURCE}))?\s*;?$`,
   "u",
 );
-const RUST_USE_ALIAS_PATTERN = new RegExp(String.raw`^(.*?)\s+as\s+(${XID_IDENTIFIER_SOURCE})$`, "u");
+const RUST_IDENTIFIER_PATTERN = new RegExp(String.raw`^${XID_IDENTIFIER_SOURCE}$`, "u");
+const RUST_ATTRIBUTE_PREFIX_PATTERN = /^(?:#\s*\[[\s\S]*?\]\s*)+/;
+const RUST_PATH_ATTRIBUTE_PATTERN = /#\s*\[\s*path\s*=\s*(?:r(#*)"([\s\S]*?)"\1|"([^"]*)")\s*\]/gu;
+const RUST_USE_PATTERN = /^(?:pub(?:\s*\([^)]*\))?\s+)?use\s+([\s\S]+?)\s*;?$/;
 
-export function parseRustImportStatement(stmtText: string): ParsedRustImportStatement | null {
-  const trimmed = stmtText.trim();
+export function skipRustCommentOrLiteral(
+  source: string,
+  index: number,
+): { end: number; kind: "comment" | "literal" } | null {
+  const ch = source[index];
+  const next = source[index + 1];
+  if (ch === "/" && next === "/") {
+    let end = index + 2;
+    while (end < source.length && source[end] !== "\n" && source[end] !== "\r") end += 1;
+    return { end, kind: "comment" };
+  }
+  if (ch === "/" && next === "*") {
+    let end = index + 2;
+    let depth = 1;
+    while (end < source.length && depth > 0) {
+      const current = source[end];
+      const following = source[end + 1];
+      if (current === "/" && following === "*") {
+        depth += 1;
+        end += 2;
+        continue;
+      }
+      if (current === "*" && following === "/") {
+        depth -= 1;
+        end += 2;
+        continue;
+      }
+      end += 1;
+    }
+    return { end, kind: "comment" };
+  }
 
-  // Rust identifiers permit Unicode XID_Start/XID_Continue, not just ASCII.
-  const modMatch = trimmed.match(RUST_MODULE_PATTERN);
+  let rawIndex = index;
+  if (ch === "b" || ch === "c") rawIndex += 1;
+  if (source[rawIndex] === "r") {
+    let hashes = 0;
+    let cursor = rawIndex + 1;
+    while (source[cursor] === "#") {
+      hashes += 1;
+      cursor += 1;
+    }
+    if (source[cursor] === '"') {
+      return { end: skipRustRawString(source, cursor, hashes), kind: "literal" };
+    }
+  }
+
+  if (ch === "b" && next === '"') {
+    return { end: skipRustQuotedString(source, index + 1), kind: "literal" };
+  }
+  if (ch === '"') {
+    return { end: skipRustQuotedString(source, index), kind: "literal" };
+  }
+  if (ch === "'") {
+    const charEnd = skipRustCharLiteral(source, index);
+    if (charEnd !== null) return { end: charEnd, kind: "literal" };
+  }
+  return null;
+}
+
+function skipRustQuotedString(source: string, quoteIndex: number): number {
+  let index = quoteIndex + 1;
+  while (index < source.length) {
+    const ch = source[index];
+    if (ch === "\\") {
+      index += 2;
+      continue;
+    }
+    if (ch === '"') return index + 1;
+    index += 1;
+  }
+  return source.length;
+}
+
+function skipRustRawString(source: string, quoteIndex: number, hashes: number): number {
+  let index = quoteIndex + 1;
+  while (index < source.length) {
+    if (source[index] !== '"') {
+      index += 1;
+      continue;
+    }
+    let count = 0;
+    while (count < hashes && source[index + 1 + count] === "#") count += 1;
+    if (count === hashes) return index + 1 + hashes;
+    index += 1;
+  }
+  return source.length;
+}
+
+function skipRustCharLiteral(source: string, index: number): number | null {
+  if (source[index] !== "'") return null;
+  let cursor = index + 1;
+  if (cursor >= source.length) return null;
+  if (source[cursor] === "\\") {
+    cursor += 1;
+    while (cursor < source.length && source[cursor] !== "'") {
+      if (source[cursor] === "\\") cursor += 2;
+      else cursor += 1;
+    }
+    if (cursor < source.length) return cursor + 1;
+    return cursor;
+  }
+  if (source[cursor + 1] === "'") return cursor + 2;
+  return null;
+}
+
+function stripRustComments(source: string): string {
+  let out = "";
+  let index = 0;
+  while (index < source.length) {
+    const skipped = skipRustCommentOrLiteral(source, index);
+    if (skipped) {
+      if (skipped.kind === "comment") {
+        out += source.slice(index, skipped.end).replace(/[^\n\r]/g, " ");
+      } else {
+        out += source.slice(index, skipped.end);
+      }
+      index = skipped.end;
+      continue;
+    }
+    out += source[index];
+    index += 1;
+  }
+  return out;
+}
+
+export function parseRustImportStatements(stmtText: string): ParsedRustImportStatement[] {
+  const trimmed = stripRustComments(stmtText).trim();
+  if (!trimmed) return [];
+
+  const attributePrefix = trimmed.match(RUST_ATTRIBUTE_PREFIX_PATTERN)?.[0] ?? "";
+  const pathAttribute = rustPathAttributeFromText(attributePrefix);
+  const statement = attributePrefix ? trimmed.slice(attributePrefix.length).trim() : trimmed;
+
+  const modMatch = statement.match(RUST_MODULE_PATTERN);
   if (modMatch?.[1]) {
-    return {
-      kind: "module",
-      from: modMatch[1],
-      local: modMatch[1],
-      isExternCrate: false,
-    };
+    return [
+      {
+        kind: "module",
+        from: modMatch[1],
+        local: modMatch[1],
+        isExternCrate: false,
+        ...(pathAttribute ? { pathAttribute } : {}),
+      },
+    ];
   }
 
-  const externMatch = trimmed.match(RUST_EXTERN_CRATE_PATTERN);
+  const externMatch = statement.match(RUST_EXTERN_CRATE_PATTERN);
   if (externMatch?.[1]) {
+    return [
+      {
+        kind: "module",
+        from: externMatch[1],
+        local: externMatch[2] ?? externMatch[1],
+        isExternCrate: true,
+      },
+    ];
+  }
+
+  const useMatch = statement.match(RUST_USE_PATTERN);
+  const useBody = useMatch?.[1]?.trim();
+  if (!useBody) return [];
+  return flattenRustUseTree([], useBody);
+}
+
+function rustPathAttributeFromText(text: string): string | undefined {
+  let last: string | undefined;
+  RUST_PATH_ATTRIBUTE_PATTERN.lastIndex = 0;
+  for (const match of text.matchAll(RUST_PATH_ATTRIBUTE_PATTERN)) {
+    last = match[2] ?? match[3];
+  }
+  return last;
+}
+
+function rustPathSegments(spec: string): string[] {
+  return spec
+    .split("::")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function splitTopLevelRustAlias(input: string): { path: string; alias?: string } {
+  let depth = 0;
+  let asIndex = -1;
+  for (let index = 0; index < input.length; index += 1) {
+    const character = input[index];
+    if (character === "{") depth += 1;
+    else if (character === "}") depth = Math.max(0, depth - 1);
+    if (
+      depth === 0 &&
+      input.startsWith("as", index) &&
+      /\s/.test(input[index - 1] ?? "") &&
+      /\s/.test(input[index + 2] ?? "")
+    ) {
+      asIndex = index;
+    }
+  }
+  if (asIndex < 0) return { path: input.trim() };
+  const path = input.slice(0, asIndex).trim();
+  const alias = input.slice(asIndex + 2).trim();
+  if (!path || !RUST_IDENTIFIER_PATTERN.test(alias)) return { path: input.trim() };
+  return { path, alias };
+}
+
+function splitRustUseGroup(item: string): { prefix: string; inner: string } | null {
+  let depth = 0;
+  let open = -1;
+  for (let index = 0; index < item.length; index += 1) {
+    const character = item[index];
+    if (character === "{") {
+      if (depth === 0) open = index;
+      depth += 1;
+      continue;
+    }
+    if (character !== "}") continue;
+    depth -= 1;
+    if (depth !== 0 || open < 0) continue;
+    if (item.slice(index + 1).trim()) return null;
     return {
-      kind: "module",
-      from: externMatch[1],
-      local: externMatch[2] ?? externMatch[1],
-      isExternCrate: true,
+      prefix: item.slice(0, open).replace(/::$/, "").trim(),
+      inner: item.slice(open + 1, index),
     };
   }
+  return null;
+}
 
-  const useMatch = trimmed.match(/^(?:pub(?:\s*\([^)]*\))?\s+)?use\s+(.+?)\s*;?$/);
-  const useBody = useMatch?.[1]?.trim();
-  if (!useBody) return null;
-  if (useBody.includes("{") || useBody.includes(",")) return null;
+function flattenRustUseTree(prefix: readonly string[], item: string): ParsedRustImportStatement[] {
+  const trimmed = item.trim();
+  if (!trimmed) return [];
 
-  const aliasMatch = useBody.match(RUST_USE_ALIAS_PATTERN);
-  const rawPath = aliasMatch?.[1]?.trim() ?? useBody;
-  const alias = aliasMatch?.[2];
-
-  if (rawPath.endsWith("::*")) {
-    return { kind: "star", from: rawPath };
+  const group = splitRustUseGroup(trimmed);
+  if (group) {
+    const nextPrefix = group.prefix ? [...prefix, ...rustPathSegments(group.prefix)] : [...prefix];
+    const nested: ParsedRustImportStatement[] = [];
+    for (const piece of splitTopLevelCommaList(group.inner)) {
+      nested.push(...flattenRustUseTree(nextPrefix, piece));
+    }
+    return nested;
   }
 
-  const parts = rawPath.split("::").filter(Boolean);
-  if (!parts.length) return null;
+  const { path: rawPath, alias } = splitTopLevelRustAlias(trimmed);
+  if (!rawPath) return [];
+
+  if (rawPath === "*" || rawPath.endsWith("::*")) {
+    const base =
+      rawPath === "*"
+        ? prefix.join("::")
+        : [...prefix, ...rustPathSegments(rawPath.slice(0, -"::*".length))].join("::");
+    if (!base) return [];
+    return [{ kind: "star", from: `${base}::*` }];
+  }
+
+  if (rawPath === "self") {
+    const from = prefix.join("::");
+    if (!from) return [];
+    const segments = rustPathSegments(from);
+    const local = alias ?? segments[segments.length - 1];
+    if (!local) return [];
+    return [{ kind: "module", from, local, isExternCrate: false }];
+  }
+
+  const parts = [...prefix, ...rustPathSegments(rawPath)];
+  if (!parts.length) return [];
   if (parts.length === 1) {
     const moduleName = parts[0];
-    if (!moduleName) return null;
-    return {
-      kind: "module",
-      from: moduleName,
-      local: alias ?? moduleName,
-      isExternCrate: false,
-    };
+    if (!moduleName) return [];
+    return [
+      {
+        kind: "module",
+        from: moduleName,
+        local: alias ?? moduleName,
+        isExternCrate: false,
+      },
+    ];
   }
 
   const imported = parts[parts.length - 1];
   const from = parts.slice(0, -1).join("::");
-  if (!imported || !from) return null;
-  return {
-    kind: "member",
-    from,
-    imported,
-    local: alias ?? imported,
-  };
+  if (!imported || !from) return [];
+  return [
+    {
+      kind: "member",
+      from,
+      imported,
+      local: alias ?? imported,
+    },
+  ];
 }
 
 export type ParsedCsharpUsingDirective = {
@@ -368,7 +602,7 @@ function resolvePhpIncludePath(expr: string, fromFile?: string): string | null {
 
 export const KOTLIN_DOTTED_NAME_SOURCE = String.raw`${KOTLIN_IDENTIFIER_SOURCE}(?:\.${KOTLIN_IDENTIFIER_SOURCE})*`;
 const KOTLIN_IMPORT_PATTERN = new RegExp(
-  String.raw`^\s*import\s+(${KOTLIN_DOTTED_NAME_SOURCE}(?:\.\*)?)(?:\s+as\s+(${KOTLIN_IDENTIFIER_SOURCE}))?\s*$`,
+  String.raw`^\s*import\s+(${KOTLIN_DOTTED_NAME_SOURCE}(?:\.\*)?)(?:\s+as\s+(${KOTLIN_IDENTIFIER_SOURCE}))?\s*;?\s*$`,
   "mu",
 );
 export type ParsedKotlinImportStatement =

@@ -148,6 +148,8 @@ export async function resolveImportSpecifier(
     resolveNodeModules?: boolean;
     resolutionHints?: string[];
     phpImportType?: "class" | "function" | "const";
+    resolutionKind?: ModuleSpecifierResolutionKind;
+    allowScssPartialResolution?: boolean;
     exportCondition?: ModuleSpecifierExportCondition;
   },
 ): Promise<FileId | { external: string }> {
@@ -169,12 +171,17 @@ export async function resolveImportSpecifier(
   }
   if (languageId === "rust") {
     const rustResolved = await resolveRustImportPath(projectRoot, fromFile, spec);
-    if (rustResolved) return isFilePathWithinRoot(projectRoot, rustResolved) ? rustResolved : { external: spec };
+    if (rustResolved && isFilePathWithinRoot(projectRoot, rustResolved)) return rustResolved;
+    return { external: spec };
   }
 
+  const resolutionKind = opts?.resolutionKind;
   return resolveSpecifier(fromFile, spec, projectRoot, opts?.matchPath, opts?.workspaceConfig, {
     resolveNodeModules: !!opts?.resolveNodeModules,
     ...(opts?.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+    ...(resolutionKind ? { resolutionKind } : {}),
+    ...(resolutionKind === "stylesheet" ? { resolutionExtensions: STYLESHEET_RESOLUTION_EXTENSIONS } : {}),
+    ...(opts?.allowScssPartialResolution ? { allowScssPartialResolution: true } : {}),
     ...(opts?.exportCondition ? { exportCondition: opts.exportCondition } : {}),
   });
 }
@@ -189,6 +196,7 @@ export async function resolveSpecifier(
     resolveNodeModules?: boolean;
     resolutionHints?: string[];
     resolutionExtensions?: readonly string[];
+    resolutionKind?: ModuleSpecifierResolutionKind;
     allowScssPartialResolution?: boolean;
     exportCondition?: ModuleSpecifierExportCondition;
   },
@@ -205,6 +213,7 @@ export async function resolveSpecifier(
     spec,
     `workspace=${workspaceKey}`,
     `nm=${opts?.resolveNodeModules ? 1 : 0}`,
+    `kind=${opts?.resolutionKind ?? ""}`,
     `scssPartial=${opts?.allowScssPartialResolution ? 1 : 0}`,
     `hints=${hintKey}`,
     `exts=${extensionKey}`,
@@ -222,7 +231,8 @@ export async function resolveSpecifier(
   }
 
   const isRelativeOrAbsolute = spec.startsWith(".") || spec.startsWith("/") || isWindowsAbsolutePath;
-  if (isRelativeOrAbsolute) {
+  const stylesheetBareSpecifier = opts?.resolutionKind === "stylesheet" && !isRelativeOrAbsolute;
+  if (isRelativeOrAbsolute || stylesheetBareSpecifier) {
     let base = path.resolve(path.dirname(fromFile), spec);
     if (isWindowsAbsolutePath) {
       base = spec;
@@ -241,9 +251,11 @@ export async function resolveSpecifier(
         return partialHit;
       }
     }
-    const ext = { external: spec } as const;
-    setResolveSpecifierCacheEntry(cacheKey, ext);
-    return ext;
+    if (isRelativeOrAbsolute) {
+      const ext = { external: spec } as const;
+      setResolveSpecifierCacheEntry(cacheKey, ext);
+      return ext;
+    }
   }
   // Bare specifier: prefer TS path mappings (tsconfig `paths`) before workspace/node_modules.
   if (matchPath) {

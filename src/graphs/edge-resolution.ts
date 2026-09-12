@@ -65,6 +65,7 @@ async function resolveGenericSpecifier(
     {
       resolveNodeModules: !!context.resolveNodeModules,
       ...(resolutionExtensions ? { resolutionExtensions } : {}),
+      ...(entry.resolutionKind ? { resolutionKind: entry.resolutionKind } : {}),
       ...(context.resolutionHints ? { resolutionHints: context.resolutionHints } : {}),
       ...(entry.exportCondition ? { exportCondition: entry.exportCondition } : {}),
       ...(context.support.id === "scss" && entry.resolutionKind !== "document"

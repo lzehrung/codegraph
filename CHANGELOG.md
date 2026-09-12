@@ -13,6 +13,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 - Language queries now match the loaded grammars, preserve supported declaration forms, and exclude false CommonJS and function-local exports.
 - Default discovery includes registered language aliases. HTML queries ignore tag and attribute case, Python `__all__` respects module scope and complete static lists, and TypeScript declaration exports resolve through imports.
+- Import resolution now preserves commented Python imports, nested Rust uses and confined `#[path]` targets, stylesheet-relative paths, and per-specifier type-only bindings. C/C++ typedef names survive nested declarators.
 
 ## [2.3.24] - 2026-09-10
 

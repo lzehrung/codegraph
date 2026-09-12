@@ -3,7 +3,7 @@ import {
   parseCsharpUsingDirective,
   parseKotlinImportStatement,
   parsePhpImportStatement,
-  parseRustImportStatement,
+  parseRustImportStatements,
   type ParsedRustImportStatement,
 } from "../languages/import-statement-parsers.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
@@ -389,9 +389,10 @@ export function collectModuleSpecifiersFromSource(
         if (support.id === "rust") {
           const statementStartIndex = nativeCaptureStartIndex(source, capMap["stmt"]);
           if (isRustCfgTestStatement(source, stmtText, statementStartIndex)) continue;
-          const parsed = parseRustImportStatement(stmtText);
-          if (parsed) {
-            out.push(rustSpecifierFromParsedImport(parsed));
+          const parsedList = parseRustImportStatements(stmtText);
+          if (parsedList.length) {
+            const rustSeen = makeSeenSet(out);
+            appendUniqueSpecifiers(out, parsedList.map(rustSpecifierFromParsedImport), rustSeen);
             continue;
           }
         }

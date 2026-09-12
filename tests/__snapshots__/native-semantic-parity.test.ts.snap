@@ -536,7 +536,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
   "references": {
     "refs": [
       "main.c:6",
-      "utils.h:6",
+      "utils.h:4",
     ],
     "status": "ok",
   },

@@ -2,7 +2,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { runQuery } from "@lzehrung/codegraph-native";
 import { goToDefinition } from "../../src/index.js";
+import { collectImportsForFile } from "../../src/indexer/imports.js";
+import { TSX_SUPPORT } from "../../src/languages.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { runLanguageTests } from "./runner.js";
@@ -114,6 +117,37 @@ describe("TSX class static-block scopes", () => {
       expect(await goToDefinition(index, { file, line: 1, column: source.lastIndexOf("hidden") + 1 })).toMatchObject({
         status: "not_found",
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("TSX per-specifier type-only bindings", () => {
+  it("records mixed inline type imports per specifier", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-tsx-type-only-"));
+    try {
+      await writeFile(path.join(root, "m.tsx"), "export type Inline = number;\nexport const b = 1;\n", "utf8");
+      await writeFile(path.join(root, "consumer.tsx"), 'import { type Inline, b } from "./m";\n', "utf8");
+      const source = 'import { type Inline, b } from "./m";\n';
+      expect(
+        runQuery(source, "tsx", TSX_SUPPORT.queries.importBindings).matches.map((match) => {
+          const byName = Object.fromEntries(match.captures.map((capture) => [capture.name, capture.text]));
+          return { iname: byName.iname, type_kw: byName.type_kw };
+        }),
+      ).toEqual(
+        expect.arrayContaining([
+          { iname: "Inline", type_kw: "type" },
+          { iname: "b", type_kw: undefined },
+        ]),
+      );
+      const bindings = await collectImportsForFile(path.join(root, "consumer.tsx"), root);
+      expect(bindings.filter((binding) => binding.kind === "named")).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ imported: "Inline", typeOnly: true }),
+          expect.objectContaining({ imported: "b", typeOnly: false }),
+        ]),
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }
