@@ -74,19 +74,15 @@ export function cFunctionNameQuery(captureName: string, includeFieldIdentifier: 
 
 export function cFamilyCoreExportQueries(functionNameQuery: string): string[] {
   return [
-    `((translation_unit (function_definition ${functionNameQuery}) @declaration)
-      (#not-match? @declaration "static"))`,
-    `((translation_unit (declaration ${functionNameQuery}) @declaration)
-      (#not-match? @declaration "static"))`,
+    `(translation_unit (function_definition ${functionNameQuery}) @declaration)`,
+    `(translation_unit (declaration ${functionNameQuery}) @declaration)`,
     `(translation_unit (struct_specifier name: (type_identifier) @name))`,
     `(translation_unit (enum_specifier name: (type_identifier) @name))`,
     `(translation_unit (type_definition declarator: (type_identifier) @name))`,
     `((translation_unit (declaration type: (_) @type declarator: (identifier) @name) @declaration)
-      (#not-match? @type "^(import|export)$")
-      (#not-match? @declaration "static"))`,
+      (#not-match? @type "^(import|export)$"))`,
     `((translation_unit (declaration type: (_) @type declarator: (init_declarator declarator: (identifier) @name)) @declaration)
-      (#not-match? @type "^(import|export)$")
-      (#not-match? @declaration "static"))`,
+      (#not-match? @type "^(import|export)$"))`,
   ];
 }
 

@@ -1,10 +1,13 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runQuery } from "@lzehrung/codegraph-native";
 import { C_SUPPORT } from "../../src/languages.js";
-
+import { fileIdentityKey } from "../../src/util/paths.js";
+import { createTestIndexFromFiles } from "../test-utils.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
-
 const definition: LanguageTestDefinition = {
   id: "c",
   samples: [
@@ -100,14 +103,24 @@ describe("C native queries", () => {
     expect(imports.matches.flatMap((match) => match.captures.filter((capture) => capture.name === "mod"))).toEqual([]);
   });
 
-  it("exports only external non-static declarations", () => {
-    const source = "static int helper;\nint top;\nint f() { int sum = 0; return sum; }\n";
-    const exports = runQuery(source, "c", C_SUPPORT.queries.exports);
-    const names = exports.matches.flatMap((match) =>
-      match.captures.filter((capture) => capture.name === "name").map((capture) => capture.text),
-    );
-    expect(names).toEqual(expect.arrayContaining(["top", "f"]));
-    expect(names).not.toContain("helper");
-    expect(names).not.toContain("sum");
+  it("publishes non-static declarations whose names or bodies contain static", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-static-storage-"));
+    const file = path.join(root, "exports.c");
+    const source = [
+      "static int helper;",
+      "int static_count = 1;",
+      "int ready(void) { static int once = 0; return once; }",
+    ].join("\n");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const module = index.byFile.get(fileIdentityKey(file));
+      const exportedNames = module?.exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : []));
+
+      expect(exportedNames).toEqual(expect.arrayContaining(["static_count", "ready"]));
+      expect(exportedNames).not.toContain("helper");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

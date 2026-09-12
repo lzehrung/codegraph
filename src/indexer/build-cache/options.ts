@@ -25,7 +25,7 @@ export const CORE_ALGORITHM_EPOCH = 5;
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
  * consistently across the CLI and library build shapes.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 1;
+export const LANGUAGE_BEHAVIOR_EPOCH = 2;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];
