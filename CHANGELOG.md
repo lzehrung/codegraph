@@ -9,6 +9,11 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Fixed
+
+- Standalone installation on Windows survives a directory that a scanner or a departing process still holds open. `install.ps1` and the installer library now retry the staged version-root move for about nine seconds instead of under one, and removals retry as well.
+- The standalone bundle smoke now runs against the published version root instead of the staged copy that is about to be renamed, so running `node.exe` no longer blocks the move that follows it. A staged copy that cannot be removed afterwards no longer fails an install that already completed.
+
 ## [2.3.25] - 2026-09-13
 
 ### Fixed

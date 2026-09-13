@@ -16,6 +16,11 @@ const INSTALL_LOCK_TIMEOUT_MS = 30_000;
 const INSTALL_LOCK_INITIAL_RETRY_MS = 50;
 const INSTALL_LOCK_MAX_RETRY_MS = 500;
 const INSTALL_LOCK_UNOWNED_STALE_MS = 120_000;
+const VERSION_MOVE_MAX_ATTEMPTS = 10;
+const VERSION_MOVE_INITIAL_RETRY_MS = 50;
+const VERSION_MOVE_MAX_RETRY_MS = 2_000;
+const REMOVE_MAX_RETRIES = 10;
+const REMOVE_RETRY_DELAY_MS = 100;
 const LOCAL_HOSTNAME = hostname();
 
 export async function verifyStandaloneBundle(bundleRoot) {
@@ -112,13 +117,13 @@ export async function installStandaloneBundle(options) {
   const manifest = await verifyStandaloneBundle(bundleRoot);
   const versionRoot = standaloneVersionRoot(installBase, manifest.version);
   const stagingRoot = confinedPath(installBase, `.installing-${manifest.version}-${randomUUID()}`);
+  const smoke = options.smoke ?? smokeStandaloneRoot;
   await fsp.mkdir(installBase, { recursive: true });
-  await fsp.rm(stagingRoot, { recursive: true, force: true });
+  await removeDirectory(stagingRoot);
   try {
     await fsp.cp(bundleRoot, stagingRoot, { recursive: true, errorOnExist: true, force: false });
     const stagedManifest = await verifyStandaloneBundle(stagingRoot);
     assertMatchingStandaloneProvenance(manifest, stagedManifest);
-    await (options.smoke ?? smokeStandaloneRoot)(stagingRoot, manifest.target, manifest);
     return await withInstallLock(installBase, async () => {
       const launcherPaths = installedLauncherPaths(binDir, manifest.target);
       const installerState = await snapshotInstallerState(
@@ -136,6 +141,9 @@ export async function installStandaloneBundle(options) {
           await moveStagedVersionRoot(stagingRoot, versionRoot);
           createdVersionRoot = true;
         }
+        // Smoke the published tree, never the staging tree: Windows refuses to rename a
+        // directory while an image executed from it is still being torn down or scanned.
+        await smoke(versionRoot, manifest.target, manifest);
         await fsp.mkdir(binDir, { recursive: true });
         const launchers = await writeInstalledLaunchers(binDir, versionRoot, manifest.target);
         const installManifest = {
@@ -157,7 +165,7 @@ export async function installStandaloneBundle(options) {
         const failures = [];
         if (createdVersionRoot) {
           try {
-            await fsp.rm(versionRoot, { recursive: true, force: true });
+            await removeDirectory(versionRoot);
           } catch (rollbackError) {
             failures.push(rollbackError);
           }
@@ -177,7 +185,9 @@ export async function installStandaloneBundle(options) {
       }
     });
   } finally {
-    await fsp.rm(stagingRoot, { recursive: true, force: true });
+    // A staging directory that outlives its install is inert; failing to remove it must
+    // not turn a completed install into a reported failure.
+    await removeDirectory(stagingRoot).catch(() => undefined);
   }
 }
 
@@ -197,7 +207,7 @@ export async function uninstallStandaloneBundle(options) {
     }
   }
   const versionRoot = standaloneVersionRoot(installBase, manifest.currentVersion);
-  await fsp.rm(versionRoot, { recursive: true, force: true });
+  await removeDirectory(versionRoot);
   removed.push(versionRoot);
   await fsp.rm(path.join(installBase, INSTALL_MANIFEST_NAME), { force: true });
   return { uninstalled: true, removed };
@@ -401,16 +411,30 @@ async function isRealDirectory(directory, label) {
 }
 
 async function moveStagedVersionRoot(stagingRoot, versionRoot) {
-  for (let attempt = 0; attempt <= 4; attempt += 1) {
+  const lastAttempt = VERSION_MOVE_MAX_ATTEMPTS - 1;
+  for (let attempt = 0; attempt <= lastAttempt; attempt += 1) {
     try {
       await fsp.rename(stagingRoot, versionRoot);
       return;
     } catch (error) {
       const retryable = isCode(error, "EACCES") || isCode(error, "EBUSY") || isCode(error, "EPERM");
-      if (!retryable || attempt === 4) throw error;
-      await waitForInstallLock(Math.min(INSTALL_LOCK_MAX_RETRY_MS, INSTALL_LOCK_INITIAL_RETRY_MS * 2 ** attempt));
+      if (!retryable || attempt === lastAttempt) throw error;
+      // Windows can hold a directory open for a scanner or a departing process for seconds,
+      // not milliseconds, so the budget spans about nine seconds instead of under one.
+      await delay(Math.min(VERSION_MOVE_MAX_RETRY_MS, VERSION_MOVE_INITIAL_RETRY_MS * 2 ** attempt));
     }
   }
+}
+
+async function removeDirectory(target) {
+  // Recursive removal is the only fs.rm form that retries, and Windows needs those retries
+  // for the same reason the staged move does.
+  await fsp.rm(target, {
+    recursive: true,
+    force: true,
+    maxRetries: REMOVE_MAX_RETRIES,
+    retryDelay: REMOVE_RETRY_DELAY_MS,
+  });
 }
 
 async function withInstallLock(installBase, operation) {
@@ -435,7 +459,7 @@ async function acquireInstallLock(installBase) {
       if (performance.now() - startedAt >= INSTALL_LOCK_TIMEOUT_MS) {
         throw new Error(`Timed out waiting for standalone installation lock: ${lockPath}`);
       }
-      await waitForInstallLock(retryMs);
+      await delay(retryMs);
       retryMs = Math.min(INSTALL_LOCK_MAX_RETRY_MS, retryMs * 2);
       continue;
     }
@@ -453,14 +477,14 @@ async function acquireInstallLock(installBase) {
         { encoding: "utf8", flag: "wx" },
       );
     } catch (error) {
-      await fsp.rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+      await removeDirectory(lockPath).catch(() => undefined);
       throw error;
     }
     return { lockPath, token };
   }
 }
 
-function waitForInstallLock(milliseconds) {
+function delay(milliseconds) {
   const { promise, resolve } = Promise.withResolvers();
   setTimeout(resolve, milliseconds);
   return promise;
@@ -545,7 +569,7 @@ async function removeStaleInstallLock(lockPath) {
     if (isCode(error, "EEXIST")) return false;
     throw error;
   }
-  await fsp.rm(stalePath, { recursive: true, force: true });
+  await removeDirectory(stalePath);
   return true;
 }
 
@@ -554,7 +578,7 @@ async function releaseInstallLock(lock) {
   if (!owner || owner.token !== lock.token) {
     throw new Error(`Standalone installation lock ownership was lost: ${lock.lockPath}`);
   }
-  await fsp.rm(lock.lockPath, { recursive: true, force: true });
+  await removeDirectory(lock.lockPath);
 }
 
 async function readInstallManifest(installBase) {
@@ -643,7 +667,7 @@ async function writeAtomic(filePath, content) {
       throw replaceError;
     }
   } finally {
-    await fsp.rm(temporary, { force: true });
+    await fsp.rm(temporary, { force: true }).catch(() => undefined);
   }
 }
 
