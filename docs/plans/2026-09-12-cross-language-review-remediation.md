@@ -16,16 +16,16 @@ Grammar pins: `packages/codegraph-native/Cargo.toml`. Native id -> grammar map:
 | 3   | `fix/native-runtime-and-document-links`       | PR 2   | `packages/codegraph-native/**`, `scripts/**`, `src/document-links/**`, diagnostics, docs                                  |
 
 Rules for every wave: workers skip all builds/lints/tests; main owns one integrated `npm run check`
-per PR (serialize it — `tests/viewer.test.ts` binds a fixed port, so only one full gate per host).
+per PR (serialize it - `tests/viewer.test.ts` binds a fixed port, so only one full gate per host).
 No release/version/tag edits. No merging without explicit authorization.
 
 ---
 
-## PR 1 — language queries and grammar alignment
+## PR 1 - language queries and grammar alignment
 
 ### 1.1 Stray query predicates (high)
 
-A `(#eq? …)` / `(#match? …)` written after the closing paren of a pattern is a _separate_ top-level
+A `(#eq? ...)` / `(#match? ...)` written after the closing paren of a pattern is a _separate_ top-level
 pattern: it never filters, and it matches every node in the file. 29 occurrences found by static
 sweep. Predicates written inside the pattern parens do work (verified for Ruby `require`, Zig
 `@import`), so this is placement only.
@@ -38,15 +38,15 @@ sweep. Predicates written inside the pattern parens do work (verified for Ruby `
       `(#eq? @tag "img")`.
 - [x] `src/languages/definitions/html.ts` importBindings: fix the same 4.
 - [x] `src/duplicates/units.ts:118` Rust: `(mod_item) @stmt (#match? @stmt ";\s*$")` masks inline
-      `mod x { … }` bodies as imports. Intended semantics are already in the regex fallback at
+      `mod x { ... }` bodies as imports. Intended semantics are already in the regex fallback at
       `units.ts:153` (`^mod\b[^\r\n;]*;`).
 - [x] Regression: `obj.prop = localVar` in a `.js` file must not become an export (proof: `goto`
       resolved a fake `foo` export to `bar`).
-- [x] Regression: two identical Rust files wrapped in `mod inner { … }` must produce a duplicate
+- [x] Regression: two identical Rust files wrapped in `mod inner { ... }` must produce a duplicate
       group (before: `Units scanned: 0`; unwrapped control: 4 units / 1 group).
 - [x] Regression: `<div href>` / `<video src>` must not be captured by the img/link-restricted
       HTML import patterns.
-- [x] Add a guard test that fails on any stray top-level `(#…)` form in any registered query
+- [x] Add a guard test that fails on any stray top-level `(#...)` form in any registered query
       (imports/exports/locals/importBindings + generated chunk query).
 
 ### 1.2 Whole-query compile failures (high)
@@ -63,7 +63,7 @@ sweep. Predicates written inside the pattern parens do work (verified for Ruby `
 
 - [x] `src/languages/definitions/scss.ts`: rewrite `exports`/`locals` for arborium-scss 2.16.0
       (`mixin_statement name: (identifier)`, `function_statement name: (identifier)`,
-      `declaration (variable)`, `placeholder (identifier)`) — current queries use `(name)` and
+      `declaration (variable)`, `placeholder (identifier)`) - current queries use `(name)` and
       `variable_declaration`, which do not exist there.
 - [x] `src/languages/definitions/scss.ts:53-56`: delete the blanket `normalizeQuery` that returns
       `""` for the whole query; it also kills the valid `class_selector`/`id_selector` patterns.
@@ -71,7 +71,7 @@ sweep. Predicates written inside the pattern parens do work (verified for Ruby `
 - [x] Regression: `$brand`, `@mixin`, `@function` must appear as symbols (before: `Locals: (none)`,
       `Exports: (none)`).
 - [x] Make the `@use`/`@forward` string capture tolerant of a wrapping node so `as *` /
-      `as prefix-*` are not silently dropped (`(use_statement (_)* (string_value) @mod)`); `with (…)`
+      `as prefix-*` are not silently dropped (`(use_statement (_)* (string_value) @mod)`); `with (...)`
       stays deferred (see Deferred).
 
 ### 1.4 Kotlin grammar divergence (high)
@@ -124,7 +124,7 @@ Worst case proven: `from mod_a import secret_tmp` resolved to a Python function-
       deliberately left out during integration: a constructor/destructor repeats the type name and
       made `Point`/`Holder` ambiguous, and the rest have no identifier in the grammar, so they would
       publish symbols literally named `operator`/`this`.
-- [x] **C#**: make fields/properties symmetric — `property_declaration` into locals, and
+- [x] **C#**: make fields/properties symmetric - `property_declaration` into locals, and
       `field_declaration` / `event_field_declaration` `variable_declarator` into exports.
 - [x] **C#**: alias `using X = Y;` now captures `Y` as the module (arborium puts the alias in the
       `name:` field, so the old `. (_)` anchor captured the alias) and keeps the alias binding;
@@ -133,9 +133,9 @@ Worst case proven: `from mod_a import secret_tmp` resolved to a Python function-
       `qualified_identifier`, `operator_name`, `destructor_name`, `reference_declarator`,
       `template_function`, and apply it to `field_declaration` (in-class declarations). Verified
       missing: `void A::f()`, `A::~A()`, `A& A::operator+=`, and their in-class declarations.
-- [x] **C++**: add `namespace_definition name: (nested_namespace_specifier …)` and
-      `class_specifier name: (template_type …)`; add `concept_definition`.
-- [x] **C++**: reuse the C extras — `union_specifier`, `preproc_def`, `preproc_function_def` (C
+- [x] **C++**: add `namespace_definition name: (nested_namespace_specifier ...)` and
+      `class_specifier name: (template_type ...)`; add `concept_definition`.
+- [x] **C++**: reuse the C extras - `union_specifier`, `preproc_def`, `preproc_function_def` (C
       indexes them, C++ does not).
 - [x] **Rust** `src/languages/definitions/rust.ts`: add `type_item`, `associated_type`,
       `function_signature_item` to exports/locals with declaration-name + classification handling
@@ -146,22 +146,22 @@ Worst case proven: `from mod_a import secret_tmp` resolved to a Python function-
 - [x] **Ruby**: add `singleton_method name: (identifier)` and `method name: (setter)` to
       exports/locals; extend the import method predicate with `load` / `autoload`.
 - [x] **Java** `src/languages/definitions/java.ts`: add `formal_parameter` (plus spread/receiver
-      parameter forms) to locals — method parameters are absent from query-driven locals.
+      parameter forms) to locals - method parameters are absent from query-driven locals.
 - [x] **Go** `src/languages/definitions/go.ts`: add `type_parameter_declaration name: (identifier)`
-      to locals; fix `const_spec` / `var_spec` so every `name` field is captured (`const (B, C = …)`
+      to locals; fix `const_spec` / `var_spec` so every `name` field is captured (`const (B, C = ...)`
       silently drops `C`).
 - [x] **Swift** `src/languages/definitions/swift.ts`: add `associatedtype_declaration` (and
       `macro_declaration`, `operator_declaration`) to exports/locals. `init`/`deinit`/`subscript`
       were dropped again during integration: they have no identifier name in the grammar and repeat
       per type, so they stay chunks only.
 - [x] **Python** `src/languages/definitions/python.ts`: add
-      `(as_pattern alias: (as_pattern_target (identifier) @name))` — today `except E as e` indexes
+      `(as_pattern alias: (as_pattern_target (identifier) @name))` - today `except E as e` indexes
       `E`, not `e`; add `named_expression` (walrus), tuple/pattern-list unpacking,
       `type_alias_statement` (PEP 695), and `keyword_pattern` captures.
 - [x] **TS/TSX** `src/languages/definitions/typescript.ts`: add `function_signature name:` to locals
       (declaration-only overloads and `.d.ts` APIs are never symbols) and
       `internal_module` / `module` names (namespaces are chunked but not indexed).
-- [x] **JS/TS/TSX**: add `class_static_block` to `createsBlockScope` — a static-block `let`
+- [x] **JS/TS/TSX**: add `class_static_block` to `createsBlockScope` - a static-block `let`
       currently resolves from sibling methods.
 - [x] **TS**: allow `(string)` in the `module` chunk name query so `declare module "x"` is chunked.
 - [x] **Zig**: `classifyDefinition` must use the initializer after `=`, not the first non-name named
@@ -169,8 +169,8 @@ Worst case proven: `from mod_a import secret_tmp` resolved to a Python function-
       `type`.
 - [x] **Zig**: accept `@cImport` in imports/importBindings and `using_namespace_declaration` as a
       star import.
-- [x] **C** `src/languages/definitions/c-family.ts`: add `path: (call_expression …)` to
-      `preproc_include` and ignore `preproc_include` nodes containing ERROR —
+- [x] **C** `src/languages/definitions/c-family.ts`: add `path: (call_expression ...)` to
+      `preproc_include` and ignore `preproc_include` nodes containing ERROR -
       `#include MACRO("x.h")` currently binds a neighboring preprocessor identifier as the path.
 - [x] **C++20 modules**: stop false-exporting `export module foo;` / `import std;` (they parse as
       `declaration` + ERROR under tree-sitter-cpp 0.23.4). Exclude declarations whose `type` text is
@@ -220,11 +220,11 @@ These were not in the original finding list; each was caused by a PR 1 change an
       two callers in `src/graphs/symbol-graph-detailed/receiver-calls.ts` and
       `src/indexer/navigation-goto.ts` were updated with it.
 - [x] Recovered `tests/duplicates.test.ts`, `tests/languages/{go,java,python}.test.ts` after a worker
-      pasted truncated `read` output (including the tool's `[Showing lines …]` footer) into them.
+      pasted truncated `read` output (including the tool's `[Showing lines ...]` footer) into them.
 
 ---
 
-## PR 2 — resolution and extraction paths
+## PR 2 - resolution and extraction paths
 
 ### 2.1 Stylesheet import resolution (high)
 
@@ -253,17 +253,16 @@ These were not in the original finding list; each was caused by a PR 1 change an
 
 ### 2.3 Symbol/export plumbing (medium)
 
-- [x] `src/indexer/locals-and-exports.ts`: de-duplicate export rows. `typedef struct Point {…}
+- [x] `src/indexer/locals-and-exports.ts`: de-duplicate export rows. `typedef struct Point {...}
 Point;` currently exports `Point` twice (visible in `apisurface`); a Kotlin shadowed `val`
       duplicates the same way.
-- [x] `src/indexer/locals-and-exports.ts:479,496`: remove the `tname` capture handling — no
+- [x] `src/indexer/locals-and-exports.ts:479,496`: remove the `tname` capture handling - no
       registered language emits `@tname`.
 - [x] `src/indexer/locals-and-exports.ts:512`: remove the dead
       `extractLocalsFromJsQueries = () => false` stub and its call.
 - [x] `src/indexer/imports/native-captures.ts`: assign `typeOnly` per specifier instead of per
       statement so `import { type A, b }` does not record `A` as a value edge.
-- [x] `src/languages/definitions/typescript.ts`: drop the phantom binding for aliased named imports
-      — the no-alias pattern also matched `b as c`, yielding an extra binding under `b`. Done in
+- [x] `src/languages/definitions/typescript.ts`: drop the phantom binding for aliased named imports - the no-alias pattern also matched `b as c`, yielding an extra binding under `b`. Done in
       PR 1 with a `!alias` negated field on the no-alias import-specifier pattern.
 
 ### 2.4 Rust module resolution (high)
@@ -301,13 +300,13 @@ audio driver */`, `/* network operator id */`, `/* see C++ std::vector */`. Prov
       locals for C had dropped all three; a worker had downgraded the C tests to match.
 - [x] `src/languages/definitions/{c,cpp}.ts`: `classifyDefinition` walks to the enclosing
       `type_definition`, so a function-pointer typedef name is a `type`, not a `variable`.
-- [x] `typedef struct X { … } X;` now yields two C symbols (tag and alias) exactly as it already did
+- [x] `typedef struct X { ... } X;` now yields two C symbols (tag and alias) exactly as it already did
       for C++. `goto` on a use lands on the tag; the C goto/reference tests and the native parity
       snapshot were updated with that reasoning.
 
 ---
 
-## PR 3 — native runtime, diagnostics, documents
+## PR 3 - native runtime, diagnostics, documents
 
 ### 3.1 Native runtime (medium / low)
 
@@ -326,7 +325,7 @@ audio driver */`, `/* network operator id */`, `/* see C++ std::vector */`. Prov
       returned nothing". With the binding disabled, Python reports `reason: "query-empty"` although
       no query ran; SCSS reports the same for a deliberately blanked query.
 - [x] Surface the affected languages in degraded output (`src/cli/context.ts`,
-      `src/native/native-backend-report.ts`, `src/cli/doctor.ts`) — the per-language breakdown
+      `src/native/native-backend-report.ts`, `src/cli/doctor.ts`) - the per-language breakdown
       already exists in the report but is suppressed.
 
 ### 3.3 Document links (medium / low)
@@ -339,9 +338,9 @@ audio driver */`, `/* network operator id */`, `/* see C++ std::vector */`. Prov
 - [x] `src/document-links/asciidoc.ts:10-36`: blank `ifdef` / `ifndef` / `ifeval` regions through
       the matching `endif::`; conditional includes are extracted as live edges.
 - [x] `src/document-links/markdown.ts:44-46`: make the occurrence walker skip a full
-      `![…][…]` reference image the way the specifier walker does, so `codegraph links` stops
+      `![...][...]` reference image the way the specifier walker does, so `codegraph links` stops
       failing on image destinations the graph intentionally ignores.
-- [x] `src/languages/definitions/html-stub.ts:3-13`: rewrite the comment — it claims these languages
+- [x] `src/languages/definitions/html-stub.ts:3-13`: rewrite the comment - it claims these languages
       borrow `tree-sitter-html` and do not participate in dependency extraction; neither is true.
 - [x] `docs/scenario-catalog.md:149`: fix the self-contradicting Markdown row (raw `<a href>` _is_ an
       edge; images are not).
@@ -361,12 +360,12 @@ audio driver */`, `/* network operator id */`, `/* see C++ std::vector */`. Prov
 
 ## Deferred (recorded, not in these PRs)
 
-Each needs a new grammar, a new feature, or a product decision — not a defect fix.
+Each needs a new grammar, a new feature, or a product decision - not a defect fix.
 
 - [ ] Pin a real LESS grammar. `languages.rs:36` maps `less` to `tree-sitter-css`; a 15-line
       ordinary LESS file yields 15 ERROR nodes (variables, mixins, guards, `:extend`, escaping,
       detached rulesets). Until then, stop advertising LESS as a native peer of CSS.
-- [ ] SCSS module configuration (`@use "x" with (…)`) — arborium-scss 2.16.0 does not model it.
+- [ ] SCSS module configuration (`@use "x" with (...)`) - arborium-scss 2.16.0 does not model it.
 - [ ] Use the loaded `arborium-vue` / `tree-sitter-svelte-next` grammars on `.vue` / `.svelte`, or
       document those ids as split-only (today the SFC split routes to js/ts + embedded html/css and
       the grammars are never used).
@@ -375,7 +374,7 @@ Each needs a new grammar, a new feature, or a product decision — not a defect 
 - [ ] SQL `CREATE SCHEMA` / `CREATE TYPE` facts and symbols; SQL procedure chunking vs the fact
       pipeline; table-to-table lineage edges.
 - [ ] Go / Rust visibility in `apisurface` (lowercase Go identifiers and non-`pub` Rust items are
-      reported as exported) — needs a product decision on what "export" means for resolution vs API.
+      reported as exported) - needs a product decision on what "export" means for resolution vs API.
 - [ ] Cross-file member-access resolution for JVM/C#/Swift (`Util.helper()` through an imported
       type). Go resolves it via namespace bindings; TS resolves instance methods. Not a Kotlin-only
       gap.
