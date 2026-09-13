@@ -139,7 +139,9 @@ export function isSupportedStdlib(specifier: string, importerFile: string): bool
   const firstSegment = specifier.split(/[.:/]/)[0] ?? specifier;
   if (NODE_BUILTIN_MODULES.has(specifier)) return true;
   if ([".py", ".pyw"].includes(ext)) return PYTHON_STDLIB_MODULES.has(firstSegment);
-  if ([".rb"].includes(ext)) return RUBY_STDLIB_MODULES.has(specifier) || RUBY_STDLIB_MODULES.has(firstSegment);
+  if ([".rb", ".rbw", ".rake", ".gemspec"].includes(ext)) {
+    return RUBY_STDLIB_MODULES.has(specifier) || RUBY_STDLIB_MODULES.has(firstSegment);
+  }
   if (ext === ".zig") return specifier === "std";
   if (ext === ".go") return GO_STDLIB_IMPORTS.has(specifier) || GO_STDLIB_IMPORTS.has(firstSegment);
   if (ext === ".rs") {

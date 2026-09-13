@@ -94,7 +94,7 @@ export const duplicateImportStatementQueries: Readonly<Record<string, string>> =
   go: "(import_declaration) @stmt",
   java: "(import_declaration) @stmt",
   js: "(import_statement) @stmt",
-  kotlin: "(import_header) @stmt",
+  kotlin: "(import) @stmt",
   less: "(import_statement) @stmt",
   php: `
     (require_expression) @stmt
@@ -110,7 +110,7 @@ export const duplicateImportStatementQueries: Readonly<Record<string, string>> =
   `,
   ruby: `
     (call method: (identifier) @method arguments: (argument_list (string (string_content) @mod))
-      (#match? @method "^(require|require_relative)$")) @stmt
+      (#match? @method "^(require|require_relative|load|autoload)$")) @stmt
   `,
   rust: `
     ((mod_item) @stmt (#match? @stmt ";\\s*$"))
@@ -128,6 +128,9 @@ export const duplicateImportStatementQueries: Readonly<Record<string, string>> =
   zig: `
     (variable_declaration
       (builtin_function (builtin_identifier) @fn (arguments (string) @mod) (#eq? @fn "@import"))
+    ) @stmt
+    (variable_declaration
+      (builtin_function (builtin_identifier) @fn (arguments) (#eq? @fn "@cImport"))
     ) @stmt
   `,
 };
@@ -149,14 +152,20 @@ const duplicateImportStatementFallbackPatterns: Readonly<Partial<Record<string, 
   php: /^[\t ]*(?:require(?:_once)?|include(?:_once)?|use)\b(?![\t ]*\()[\s\S]*?;/gmu,
   python:
     /^[\t ]*(?:from[\t ]+[^\r\n]+?[\t ]+import(?:[\t ]*\([\s\S]*?\)|[^\r\n]*(?:\\\r?\n[^\r\n]*)*)|import[\t ]+[^\r\n]*(?:\\\r?\n[^\r\n]*)*)/gmu,
-  ruby: /^[\t ]*require(?:_relative)?\b[^\r\n]*/gmu,
+  ruby: /^[\t ]*(?:require(?:_relative)?\b[^\r\n]*|(?:load|autoload)\b[^\r\n;]*)/gmu,
   rust: /^[\t ]*(?:extern[\t ]+crate|use)\b[\s\S]*?;|^[\t ]*mod\b[^\r\n;]*;/gmu,
   scss: /^[\t ]*@(import|use|forward)\b[\s\S]*?;/gmu,
   swift: /^[\t ]*import[\t ]+[^\r\n]*/gmu,
   ts: /^[\t ]*import\b(?![\t ]*\()(?:[\t ]*["'][^"']*["']|[\s\S]*?\bfrom[\t ]*["'][^"']*["']|[\s\S]*?;)/gmu,
   tsx: /^[\t ]*import\b(?![\t ]*\()(?:[\t ]*["'][^"']*["']|[\s\S]*?\bfrom[\t ]*["'][^"']*["']|[\s\S]*?;)/gmu,
-  zig: /^[\t ]*(?:pub[\t ]+)?const\b[^\r\n;]*@import[\t ]*\([^;\r\n]*\)[\t ]*;/gmu,
+  zig: /^[\t ]*(?:pub[\t ]+)?const\b(?:[^\r\n;]*@import[\t ]*\([^;\r\n]*\)[\t ]*;|[^\r\n;]*@cImport\s*\()/gmu,
 };
+
+const RUBY_IMPORT_STRING = String.raw`(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')`;
+const RUBY_STATIC_LOAD = new RegExp(
+  String.raw`^(?:load\s*\(?\s*${RUBY_IMPORT_STRING}|autoload\s*\(?\s*(?::[^\s,()]+|${RUBY_IMPORT_STRING})\s*,\s*${RUBY_IMPORT_STRING})`,
+  "u",
+);
 function hashText(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
@@ -216,6 +225,19 @@ function languageForFile(filePath: string, source: string): LanguageForFileResul
   return undefined;
 }
 
+// Called just after "(" in source whose comments and strings are already masked.
+function balancedImportCallEnd(maskedSource: string, start: number): number | undefined {
+  let depth = 1;
+  for (let index = start; index < maskedSource.length; index += 1) {
+    if (maskedSource[index] === "(") depth += 1;
+    else if (maskedSource[index] === ")") {
+      depth -= 1;
+      if (!depth) return index + 1;
+    }
+  }
+  return undefined;
+}
+
 function fallbackImportStatementRanges(source: string, languageId: string): SourceRange[] {
   const pattern = duplicateImportStatementFallbackPatterns[languageId];
   if (!pattern) return [];
@@ -224,7 +246,25 @@ function fallbackImportStatementRanges(source: string, languageId: string): Sour
   const maskedSource = maskJsLikeCommentsStringsAndRegex(source);
   for (const match of maskedSource.matchAll(pattern)) {
     if (match.index === undefined) continue;
-    ranges.push({ start: match.index, end: match.index + match[0].length });
+    let end = match.index + match[0].length;
+    if (languageId === "ruby" && /^\s*(?:load|autoload)\b/.test(match[0])) {
+      const original = source.slice(match.index);
+      if (!RUBY_STATIC_LOAD.test(original.trimStart())) continue;
+      const callOpen = /^\s*(?:load|autoload)\s*\(/.exec(match[0]);
+      if (callOpen) {
+        const close = balancedImportCallEnd(maskedSource, match.index + callOpen[0].length);
+        if (close === undefined) continue;
+        end = close;
+      }
+    } else if (languageId === "zig" && match[0].includes("@cImport")) {
+      const close = balancedImportCallEnd(maskedSource, end);
+      if (close === undefined) continue;
+      end = close;
+      while (/\s/.test(maskedSource[end] ?? "") && end < maskedSource.length) end += 1;
+      if (maskedSource[end] !== ";") continue;
+      end += 1;
+    }
+    ranges.push({ start: match.index, end });
   }
   return ranges;
 }

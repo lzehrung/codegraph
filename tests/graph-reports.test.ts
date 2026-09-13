@@ -521,6 +521,7 @@ describe("graph reports", () => {
         path.join(projectRoot, "main.py"),
         path.join(projectRoot, "main.go"),
         path.join(projectRoot, "main.rb"),
+        path.join(projectRoot, "script.rake"),
         path.join(projectRoot, "main.zig"),
         path.join(projectRoot, "lib.rs"),
         path.join(projectRoot, "Main.java"),
@@ -535,6 +536,7 @@ describe("graph reports", () => {
         { from: path.join(projectRoot, "main.py"), to: { type: "external" as const, name: "pathlib" }, raw: "pathlib" },
         { from: path.join(projectRoot, "main.go"), to: { type: "external" as const, name: "fmt" }, raw: "fmt" },
         { from: path.join(projectRoot, "main.rb"), to: { type: "external" as const, name: "json" }, raw: "json" },
+        { from: path.join(projectRoot, "script.rake"), to: { type: "external" as const, name: "json" }, raw: "json" },
         { from: path.join(projectRoot, "main.zig"), to: { type: "external" as const, name: "std" }, raw: "std" },
         {
           from: path.join(projectRoot, "lib.rs"),

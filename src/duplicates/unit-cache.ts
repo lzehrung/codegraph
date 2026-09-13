@@ -31,7 +31,8 @@ import { cacheAbsolutePath, cacheRelativePath } from "../indexer/build-cache/mod
 
 // v5: duplicate units exclude import declarations and directives before tokenization.
 // v6: Rust import masking matches only semicolon-terminated `mod` items, so inline modules stay in the unit.
-export const DUPLICATE_UNIT_CACHE_VERSION = 6;
+// v7: Ruby load/autoload and Zig @cImport are masked; Kotlin uses its native import node.
+export const DUPLICATE_UNIT_CACHE_VERSION = 7;
 export const DUPLICATE_UNIT_CACHE_SCHEMA_VERSION = 2;
 export const DUPLICATE_UNIT_CACHE_TABLE = "duplicate_unit_cache";
 export const DUPLICATE_UNIT_CACHE_SCHEMA_VERSION_KEY = "duplicate_unit_cache.schema_version";

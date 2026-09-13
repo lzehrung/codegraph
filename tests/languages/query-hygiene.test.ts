@@ -84,6 +84,7 @@ describe.runIf(isNativeTreeSitterAvailable())("native query compilation", () => 
   const nativeIds = new Set(getNativeTreeSitterSupportedLanguageIds());
   const graphCases: Array<{ id: string }> = [];
   const chunkCases: Array<{ id: string; text: string }> = [];
+  const duplicateCases: Array<{ id: string; text: string }> = [];
 
   for (const def of getAllLanguages()) {
     if (!nativeIds.has(def.id)) continue;
@@ -92,6 +93,12 @@ describe.runIf(isNativeTreeSitterAvailable())("native query compilation", () => 
     graphCases.push({ id: def.id });
     const chunk = generateChunkingQuery(def);
     if (chunk.trim()) chunkCases.push({ id: def.id, text: chunk });
+  }
+
+  for (const [id, text] of Object.entries(duplicateImportStatementQueries)) {
+    if (!nativeIds.has(id) || !text.trim()) continue;
+    if (!supportById(id)) continue;
+    duplicateCases.push({ id, text });
   }
 
   it.each(graphCases)("$id graph queries compile against the native grammar", ({ id }) => {
@@ -112,5 +119,13 @@ describe.runIf(isNativeTreeSitterAvailable())("native query compilation", () => 
     const execution = getNativeSingleQueryExecution("", support, text);
     expect(execution.fallbackReason, `${id}/chunk: ${execution.error ?? "queryFailure"}`).not.toBe("queryFailure");
     expect(execution.matches, `${id}/chunk: ${execution.error ?? "no matches payload"}`).not.toBeNull();
+  });
+
+  it.each(duplicateCases)("$id duplicate import query compiles against the native grammar", ({ id, text }) => {
+    const support = supportById(id);
+    if (!support) throw new Error(`missing support for ${id}`);
+    const execution = getNativeSingleQueryExecution("", support, text);
+    expect(execution.fallbackReason, `${id}/duplicates: ${execution.error ?? "queryFailure"}`).not.toBe("queryFailure");
+    expect(execution.matches, `${id}/duplicates: ${execution.error ?? "no matches payload"}`).not.toBeNull();
   });
 });

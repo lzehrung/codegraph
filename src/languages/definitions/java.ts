@@ -85,6 +85,7 @@ export const JAVA_DEF: LanguageDefinition = {
     memberExpression: "field_access",
   },
   supportsCrossModuleSymbols: true,
+  exportScopeBlockers: ["block", "constructor_body"],
   classifyDefinition: (node) => {
     const parent = node.parent;
     if (!parent) return "variable";

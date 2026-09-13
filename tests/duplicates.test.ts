@@ -184,7 +184,8 @@ const importStatementMaskCases: Array<{ file: string; language: string; source: 
   {
     file: "sample.rb",
     language: "ruby",
-    source: 'require "duplicateImportMarker"\nrequire_relative "duplicateImportMarker"\ndef keep_ruby\nend\n',
+    source:
+      'require "duplicateImportMarker"\nrequire_relative "duplicateImportMarker"\nload "duplicateImportMarker"\nautoload :Lazy, "duplicateImportMarker"\ndef keep_ruby\nend\n',
   },
   {
     file: "sample.rs",
@@ -217,7 +218,8 @@ const importStatementMaskCases: Array<{ file: string; language: string; source: 
   {
     file: "sample.zig",
     language: "zig",
-    source: 'const marker = @import("duplicateImportMarker");\npub fn keepZig() void {}\n',
+    source:
+      'const marker = @import("duplicateImportMarker");\nconst c = @cImport({ @cInclude("duplicateImportMarker.h"); });\npub fn keepZig() void {}\n',
   },
   {
     file: "Component.vue",
@@ -264,6 +266,45 @@ describe("duplicate detection", () => {
         expect(result, scenario.file).toMatch(/keep/iu);
         expect(result, scenario.file).toHaveLength(scenario.source.length);
       }
+    }
+  });
+
+  test("does not mask Ruby dynamic loads or Zig non-import builtins", () => {
+    const ruby = 'load path_var\nautoload :Lazy, path_var\nputs "hello"\nlog.info "x"\ndef keep_ruby\nend\n';
+    const zig = 'const value = @intFromFloat(1.5);\nconst kind = @TypeOf("x");\npub fn keepZig() void {}\n';
+
+    for (const nativeMode of [undefined, "off"] as const) {
+      expect(maskDuplicateImportStatements(ruby, "sample.rb", "ruby", nativeMode)).toBe(ruby);
+      expect(maskDuplicateImportStatements(zig, "sample.zig", "zig", nativeMode)).toBe(zig);
+    }
+  });
+
+  test("masks multiline Zig @cImport without swallowing following code", () => {
+    const source = [
+      "const c = @cImport( {",
+      '    if (true) { @cInclude("duplicateImportMarker.h"); }',
+      "} );",
+      "pub fn keepZig() void {}",
+      "",
+    ].join("\n");
+    const masked = maskDuplicateImportStatements(source, "sample.zig", "zig");
+    const fallbackMasked = maskDuplicateImportStatements(source, "sample.zig", "zig", "off");
+
+    for (const result of [masked, fallbackMasked]) {
+      expect(result).not.toContain("duplicateImportMarker");
+      expect(result).toContain("keepZig");
+      expect(result).toHaveLength(source.length);
+    }
+  });
+
+  test("masks static Ruby load calls without hiding the next statement", () => {
+    const source = 'load(\n"one.rb"\n); keep()\nload "two.rb", true\nautoload(:Lazy, "three.rb"); keep_again()\n';
+    for (const nativeMode of [undefined, "off"] as const) {
+      const result = maskDuplicateImportStatements(source, "sample.rb", "ruby", nativeMode);
+      expect(result).not.toMatch(/one\.rb|two\.rb|three\.rb/);
+      expect(result).toContain("; keep()");
+      expect(result).toContain("; keep_again()");
+      expect(result.length).toBe(source.length);
     }
   });
 
