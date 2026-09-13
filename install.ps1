@@ -42,6 +42,49 @@ function ConvertTo-PowerShellSingleQuoted {
   return "'" + $Value.Replace("'", "''") + "'"
 }
 
+function Move-CodegraphDirectory {
+  param(
+    [string]$Source,
+    [string]$Destination,
+    [switch]$Atomic
+  )
+  # Windows refuses to move a directory while a scanner or a departing process still holds a
+  # handle inside it, and both installer moves follow running node.exe out of the source
+  # directory. Retry with backoff for about nine seconds instead of failing a sound install.
+  $MaxAttempts = 10
+  $DelayMs = 50
+  for ($Attempt = 1; $Attempt -le $MaxAttempts; $Attempt += 1) {
+    try {
+      if ($Atomic) {
+        [System.IO.Directory]::Move($Source, $Destination)
+      } else {
+        Move-Item -LiteralPath $Source -Destination $Destination -ErrorAction Stop
+      }
+      return
+    } catch {
+      $Retryable = Test-CodegraphRetryableMoveError $_.Exception
+      $DestinationTaken = Test-Path -LiteralPath $Destination
+      if (-not $Retryable -or $DestinationTaken -or $Attempt -eq $MaxAttempts) { throw }
+      Start-Sleep -Milliseconds $DelayMs
+      $DelayMs = [Math]::Min(2000, $DelayMs * 2)
+    }
+  }
+}
+
+function Test-CodegraphRetryableMoveError {
+  param($Exception)
+  while ($null -ne $Exception) {
+    if ($Exception -is [System.IO.FileNotFoundException] -or $Exception -is [System.IO.DirectoryNotFoundException]) {
+      return $false
+    }
+    if ($Exception -is [System.IO.IOException] -or $Exception -is [System.UnauthorizedAccessException]) {
+      return $true
+    }
+    $Exception = $Exception.InnerException
+  }
+  return $false
+}
+
 function Get-CodegraphInstallLock {
   param([string]$Base)
   $LockPath = Join-Path $Base ".install.lock"
@@ -448,9 +491,9 @@ if (origin.packageName !== nativePackage.name || origin.packageVersion !== nativ
     } else {
       $Staging = Join-Path $InstallBase (".installing-$InstalledVersion-" + [guid]::NewGuid().ToString("N"))
       if (Test-Path -LiteralPath $Staging) { throw "Unsafe existing Codegraph staging path: $Staging" }
-      Move-Item -LiteralPath $Bundle -Destination $Staging -ErrorAction Stop
+      Move-CodegraphDirectory $Bundle $Staging
       try {
-        [System.IO.Directory]::Move($Staging, $VersionRoot)
+        Move-CodegraphDirectory $Staging $VersionRoot -Atomic
         $Staging = $null
       } catch {
         if (Test-Path -LiteralPath $VersionRoot) {

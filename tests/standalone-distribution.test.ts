@@ -19,6 +19,19 @@ import {
 } from "../scripts/onboarding/standalone-install-lib.mjs";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
+// PowerShell ships with every GitHub runner, so the installer retry coverage runs on Linux and
+// macOS too; a host without it skips rather than reporting coverage it did not collect.
+function resolvePowerShell(): string {
+  const candidates = process.platform === "win32" ? ["pwsh.exe", "powershell.exe"] : ["pwsh"];
+  for (const candidate of candidates) {
+    const probe = spawnSync(candidate, ["-NoProfile", "-Command", "exit 0"], { encoding: "utf8" });
+    if (!probe.error && probe.status === 0) return candidate;
+  }
+  return "";
+}
+
+const powerShellExecutable = resolvePowerShell();
+
 const VIEWER_ASSETS = [
   "app.js",
   "file-tree-filters.js",
@@ -353,6 +366,58 @@ describe("standalone distribution", () => {
     expect(fs.existsSync(path.join(installBase, "1.1.0"))).toBe(false);
   });
 
+  it("smokes the published version root instead of the staged copy", async () => {
+    const root = await mkTmpDir("cg-standalone-smoke-target-");
+    const installBase = path.join(root, "install");
+    const binDir = path.join(root, "bin");
+    const bundle = await createFakeBundle(root, "1.0.0");
+    const smokedRoots: string[] = [];
+    const smoke = async (smokeRoot: string): Promise<void> => {
+      smokedRoots.push(smokeRoot);
+    };
+
+    const first = await installStandaloneBundle({ bundleRoot: bundle, installBase, binDir, smoke });
+    const repeated = await installStandaloneBundle({ bundleRoot: bundle, installBase, binDir, smoke });
+
+    expect(smokedRoots).toEqual([first.versionRoot, repeated.versionRoot]);
+    expect(smokedRoots.filter((entry) => path.basename(entry).startsWith(".installing-"))).toEqual([]);
+  });
+
+  it("keeps a completed install when staging cleanup cannot remove the staged copy", async () => {
+    const root = await mkTmpDir("cg-standalone-cleanup-failure-");
+    const installBase = path.join(root, "install");
+    const binDir = path.join(root, "bin");
+    const version = "1.0.0";
+    const bundle = await createFakeBundle(root, version);
+    const first = await installStandaloneBundle({ bundleRoot: bundle, installBase, binDir, smoke: async () => {} });
+    const originalRm = fsp.rm.bind(fsp);
+    let stagingRemovals = 0;
+    const rm = vi.spyOn(fsp, "rm").mockImplementation(async (target, options) => {
+      if (path.basename(String(target)).startsWith(".installing-")) {
+        stagingRemovals += 1;
+        if (stagingRemovals > 1) throw Object.assign(new Error("staged tree is locked"), { code: "EPERM" });
+      }
+      await originalRm(target, options);
+    });
+
+    try {
+      const repeated = await installStandaloneBundle({
+        bundleRoot: bundle,
+        installBase,
+        binDir,
+        smoke: async () => {},
+      });
+      expect(repeated.versionRoot).toBe(first.versionRoot);
+      expect(repeated.currentVersion).toBe(version);
+    } finally {
+      rm.mockRestore();
+    }
+
+    const leaked = (await fsp.readdir(installBase)).filter((entry) => entry.startsWith(".installing-"));
+    expect(leaked).toHaveLength(1);
+    expect(fs.existsSync(path.join(installBase, version))).toBe(true);
+  });
+
   it("retries a transient staged version-root rename", async () => {
     const root = await mkTmpDir("cg-standalone-version-move-retry-");
     const installBase = path.join(root, "install");
@@ -371,7 +436,9 @@ describe("standalone distribution", () => {
         path.basename(from).startsWith(".installing-" + version + "-");
       if (isVersionMove) {
         versionMoveAttempts += 1;
-        if (versionMoveAttempts === 1) {
+        // Five refusals outlast a one-second retry budget; Windows scanners hold a freshly
+        // written tree open for seconds.
+        if (versionMoveAttempts <= 5) {
           throw Object.assign(new Error("transient version-root lock"), { code: "EPERM" });
         }
       }
@@ -386,7 +453,7 @@ describe("standalone distribution", () => {
         smoke: async () => {},
       });
       expect(installed.versionRoot).toBe(versionRoot);
-      expect(versionMoveAttempts).toBe(2);
+      expect(versionMoveAttempts).toBe(6);
       await expectNoInstallTransientPaths(installBase);
     } finally {
       rename.mockRestore();
@@ -901,6 +968,22 @@ describe("standalone bootstrap scripts", () => {
     });
     return promise;
   }
+
+  it.skipIf(!powerShellExecutable)("retries a blocked installer directory move and surfaces the rest", () => {
+    const result = spawnSync(
+      powerShellExecutable,
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        path.join(bootstrapRoot, "tests", "helpers", "standalone-move-retry.ps1"),
+      ],
+      { cwd: bootstrapRoot, encoding: "utf8" },
+    );
+
+    expect(`${result.stdout}${result.stderr}`).toContain("recovered after 5 refusals");
+    expect(result.status).toBe(0);
+  });
 
   it("uses verified identity and lock contracts plus a Unicode-safe Windows launcher", async () => {
     const [posix, powershell] = await Promise.all([
