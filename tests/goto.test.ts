@@ -1285,7 +1285,7 @@ describe("Go to Definition", () => {
       const helpersFile = path.join(samplePath, "helpers.h").replace(/\\/g, "/");
       const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
 
-      // `typedef struct Utility { … } Utility;` declares two symbols: the struct tag on line 4 and
+      // `typedef struct Utility { ... } Utility;` declares two symbols: the struct tag on line 4 and
       // the typedef alias on line 6. C now uses query-driven locals like C++, so both exist and the
       // tag owns the exported name.
       await testGoToDefinition(index, mainFile, 6, 3, utilsFile, 4);
