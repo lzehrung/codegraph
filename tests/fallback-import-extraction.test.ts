@@ -10,6 +10,9 @@ import {
 } from "../src/native/tree-sitter-native.js";
 import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import { supportById } from "../src/languages.js";
+import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
+import { collectImportsForFile } from "../src/indexer/imports.js";
 import { isJsTsTypeOnlySpecifierStatement } from "../src/util/specifiers.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -379,6 +382,46 @@ describe("Import extraction fallback reporting", () => {
       (entry) => entry.from === normalizedMain && entry.to.type === "external" && entry.to.name === "__future__",
     );
     expect(futureEdge).toBeTruthy();
+  });
+
+  it("reports the same fallback reason to graph and import-binding consumers", async () => {
+    const root = await mkTmpDir("cg-fallback-reason-parity-");
+    const cases = [
+      { file: "app.ts", source: 'import { a } from "./other";\n', language: "ts", expected: "reduced-mode" },
+      { file: "mod.py", source: "import pkg\n", language: "python", expected: "unavailable" },
+      { file: "style.scss", source: '@use "variables";\n', language: "scss", expected: "unavailable" },
+    ];
+    try {
+      await fsp.writeFile(path.join(root, "other.ts"), "export const a = 1;\n", "utf8");
+      await fsp.mkdir(path.join(root, "pkg"));
+      await fsp.writeFile(path.join(root, "pkg", "__init__.py"), "x = 1\n", "utf8");
+      await fsp.writeFile(path.join(root, "_variables.scss"), "$c: red;\n", "utf8");
+
+      for (const testCase of cases) {
+        const file = path.join(root, testCase.file);
+        await fsp.writeFile(file, testCase.source, "utf8");
+        const support = supportById(testCase.language);
+        expect(support).toBeDefined();
+        if (!support) continue;
+
+        const graphReasons: string[] = [];
+        collectModuleSpecifiersFromSource(support, testCase.source, {
+          file,
+          native: "off",
+          onFallbackImportExtraction: (event) => graphReasons.push(event.reason),
+        });
+        const bindingReasons: string[] = [];
+        await collectImportsForFile(file, root, {
+          native: "off",
+          onFallbackImportExtraction: (event) => bindingReasons.push(event.reason),
+        });
+
+        expect(graphReasons).toEqual([testCase.expected]);
+        expect(bindingReasons).toEqual([testCase.expected]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("treats inline-only named specifiers as type-only and mixed clauses as runtime", () => {

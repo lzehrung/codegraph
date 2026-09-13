@@ -13,6 +13,7 @@ use crate::query::{
     try_execute_merged_language_queries,
     try_execute_merged_language_queries_with_match_limit,
     LanguageQueryTexts,
+    QueryCache,
 };
 use crate::types::NativeMatch;
 use std::collections::HashSet;
@@ -316,6 +317,146 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
         assert!(
             merged.is_none(),
             "a cached merged compile failure must skip recompiling the same query text"
+        );
+    }
+
+    #[test]
+    fn compiled_query_cache_keeps_a_repeated_query_warm() {
+        let language = language_for_id("js").expect("javascript language should exist");
+        let mut cache = QueryCache::with_capacity(2);
+        let query_text = "(identifier) @name";
+
+        cache
+            .get_or_compile("js", &language, query_text)
+            .expect("query should compile");
+        cache
+            .get_or_compile("js", &language, query_text)
+            .expect("repeated query should reuse the compiled entry");
+
+        assert_eq!(cache.len(), 1, "repeating a query must not grow the cache");
+        assert!(cache.contains("js", query_text));
+    }
+
+    #[test]
+    fn compiled_query_cache_evicts_lru_entries_after_capacity() {
+        let language = language_for_id("js").expect("javascript language should exist");
+        let mut cache = QueryCache::with_capacity(2);
+        let first = "(identifier) @first";
+        let second = "(identifier) @second";
+        let third = "(identifier) @third";
+
+        cache
+            .get_or_compile("js", &language, first)
+            .expect("first query should compile");
+        cache
+            .get_or_compile("js", &language, second)
+            .expect("second query should compile");
+        cache
+            .get_or_compile("js", &language, first)
+            .expect("first query should stay warm");
+        cache
+            .get_or_compile("js", &language, third)
+            .expect("third query should compile");
+
+        assert_eq!(cache.len(), 2, "cache must not grow past capacity");
+        assert!(cache.contains("js", first), "recently used query must remain");
+        assert!(cache.contains("js", third), "newest query must remain");
+        assert!(
+            !cache.contains("js", second),
+            "least recently used query must be evicted"
+        );
+    }
+
+    #[test]
+    fn merged_query_compile_failure_memo_evicts_after_capacity() {
+        let mut cache = QueryCache::with_capacity(2);
+        cache.record_failed_merged("ts", "one");
+        cache.record_failed_merged("ts", "two");
+        assert!(cache.has_failed_merged("ts", "one"));
+        cache.touch_failed_merged("ts", "one");
+        cache.record_failed_merged("ts", "three");
+
+        assert_eq!(
+            cache.failed_merged_len(),
+            2,
+            "failure memo must not grow past capacity"
+        );
+        assert!(
+            cache.has_failed_merged("ts", "one"),
+            "a repeatedly hit merged failure must stay warm instead of evicting as if cold"
+        );
+        assert!(cache.has_failed_merged("ts", "three"));
+        assert!(
+            !cache.has_failed_merged("ts", "two"),
+            "least recently recorded merged failure must be evicted"
+        );
+    }
+
+    #[test]
+    fn compiled_query_cache_releases_inner_capacity_after_partial_eviction() {
+        let js = language_for_id("js").expect("javascript language should exist");
+        let ts = language_for_id("ts").expect("typescript language should exist");
+        let mut cache = QueryCache::with_capacity(50);
+
+        for i in 0..50 {
+            let query_text = format!("(identifier) @q{i}");
+            cache
+                .get_or_compile("js", &js, &query_text)
+                .expect("js query should compile");
+        }
+        let peak_capacity = cache.language_query_capacity("js");
+        assert_eq!(cache.len(), 50, "cache must hold every js query up to capacity");
+
+        for i in 0..40 {
+            let query_text = format!("(identifier) @r{i}");
+            cache
+                .get_or_compile("ts", &ts, &query_text)
+                .expect("ts query should compile");
+        }
+
+        assert_eq!(cache.len(), 50, "cache must not grow past capacity");
+        let remaining_js: usize = (0..50)
+            .filter(|i| cache.contains("js", &format!("(identifier) @q{i}")))
+            .count();
+        assert_eq!(
+            remaining_js, 10,
+            "only the most recently used js queries should survive eviction"
+        );
+        let shrunk_capacity = cache.language_query_capacity("js");
+        assert!(
+            shrunk_capacity < peak_capacity,
+            "js query map must release capacity from its historical peak after eviction, \
+             got shrunk_capacity={shrunk_capacity} peak_capacity={peak_capacity}"
+        );
+    }
+
+    #[test]
+    fn merged_query_compile_failure_memo_releases_inner_capacity_after_partial_eviction() {
+        let mut cache = QueryCache::with_capacity(50);
+
+        for i in 0..50 {
+            cache.record_failed_merged("ts", &format!("query-{i}"));
+        }
+        let peak_capacity = cache.failed_merged_capacity("ts");
+        assert_eq!(cache.failed_merged_len(), 50, "memo must hold every failure up to capacity");
+
+        for i in 0..40 {
+            cache.record_failed_merged("py", &format!("query-{i}"));
+        }
+
+        assert_eq!(cache.failed_merged_len(), 50, "memo must not grow past capacity");
+        let remaining_ts: usize = (0..50)
+            .filter(|i| cache.has_failed_merged("ts", &format!("query-{i}")))
+            .count();
+        assert_eq!(
+            remaining_ts, 10,
+            "only the most recently recorded ts failures should survive eviction"
+        );
+        let shrunk_capacity = cache.failed_merged_capacity("ts");
+        assert!(
+            shrunk_capacity < peak_capacity,
+            "failure memo must release capacity from its historical peak after eviction, \
+             got shrunk_capacity={shrunk_capacity} peak_capacity={peak_capacity}"
         );
     }
 

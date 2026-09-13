@@ -4,6 +4,7 @@ import { loadWorkspaceConfig, type WorkspaceConfig } from "../util/workspace.js"
 import type { LogLevel } from "../logging.js";
 import {
   collectModuleSpecifiersFromSource,
+  mapNativeExecutionFallbackReason,
   type FallbackImportExtractionEvent,
   type FallbackImportExtractionReason,
 } from "../graphs/specifiers.js";
@@ -93,6 +94,16 @@ export async function collectImportsForFile(
     nativeExecution = getNativeQueryExecution(resolvedSource, resolvedSup, nativeMode);
     resolvedNativeQueries = nativeExecution.results;
   }
+  // The graph and binding consumers must agree on why extraction fell back, so both map the
+  // native execution reason with the same rule instead of labelling it per call site.
+  const nativeExecutionFallbackReason = nativeExecution?.fallbackReason
+    ? mapNativeExecutionFallbackReason(
+        resolvedSup.id,
+        nativeExecution.fallbackReason,
+        false,
+        resolvedNativeQueries !== null,
+      )
+    : null;
 
   if (resolvedSup.id === "python") {
     const context = {
@@ -105,6 +116,7 @@ export async function collectImportsForFile(
       await collectPythonImportsFromNativeMatches(context, resolvedNativeQueries.importBindings);
     } else {
       await collectPythonImportsFromSource(context);
+      if (nativeExecutionFallbackReason) reportFallback(nativeExecutionFallbackReason);
     }
     return imports;
   }
@@ -191,10 +203,7 @@ export async function collectImportsForFile(
   };
 
   const nativeLanguageAvailable = isNativeBindingLoadedForLanguage(resolvedSup.id, nativeMode);
-  let nativeFallbackReason: FallbackImportExtractionReason | null = null;
-  if (nativeExecution?.fallbackReason === "queryFailure") {
-    nativeFallbackReason = "query-error";
-  }
+  let nativeFallbackReason: FallbackImportExtractionReason | null = nativeExecutionFallbackReason;
 
   if (resolvedNativeQueries) {
     try {

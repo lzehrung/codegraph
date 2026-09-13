@@ -7,6 +7,41 @@ function blankAsciidocLine(line: string): string {
   return line.replace(/[^\r\n]/g, " ");
 }
 
+function isAsciidocConditionalOpen(trimmed: string): boolean {
+  return /^(?:ifdef|ifndef)::[^\[]*\[\s*\]$/.test(trimmed) || /^ifeval::\[.*\]$/.test(trimmed);
+}
+
+function isAsciidocConditionalClose(trimmed: string): boolean {
+  return /^endif::/.test(trimmed);
+}
+
+function blankCompleteAsciidocConditionals(lines: string[]): void {
+  const openIndexes: number[] = [];
+  const regions: Array<{ start: number; end: number }> = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const trimmed = (lines[index] ?? "").trim();
+    if (isAsciidocConditionalOpen(trimmed)) {
+      openIndexes.push(index);
+      continue;
+    }
+    if (/^(?:ifdef|ifndef)::[^\[]*\[.+\]$/.test(trimmed)) {
+      lines[index] = blankAsciidocLine(lines[index] ?? "");
+      continue;
+    }
+    if (!isAsciidocConditionalClose(trimmed) || openIndexes.length === 0) continue;
+    const start = openIndexes.pop();
+    if (start === undefined) continue;
+    regions.push({ start, end: index });
+  }
+
+  for (const region of regions) {
+    for (let index = region.start; index <= region.end; index += 1) {
+      lines[index] = blankAsciidocLine(lines[index] ?? "");
+    }
+  }
+}
+
 function stripAsciidocCommentsAndLiteralBlocks(source: string): string {
   const lines = source.split(/\r?\n/);
   let blockDelimiter: "----" | "...." | "////" | null = null;
@@ -32,6 +67,7 @@ function stripAsciidocCommentsAndLiteralBlocks(source: string): string {
     }
   }
 
+  blankCompleteAsciidocConditionals(lines);
   return lines.join("\n");
 }
 

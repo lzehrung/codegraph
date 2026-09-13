@@ -1,6 +1,6 @@
 use napi::bindgen_prelude::Result;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language, Query, QueryCapture, QueryCursor};
 
@@ -58,48 +58,172 @@ fn capture_to_object(
 // Query caching: compiled Query objects keyed by (language_id, query_text).
 // ---------------------------------------------------------------------------
 
-struct QueryCache {
+/// Maximum compiled queries retained per thread.
+///
+/// Covers the roughly 150 built-in queries with room for caller queries.
+/// Entries are not pinned: enough distinct caller queries can evict built-ins.
+/// Each worker thread has its own cache. The merged-query failure memo uses
+/// the same entry limit.
+const QUERY_CACHE_CAPACITY: usize = 256;
+
+pub(crate) struct QueryCache {
+    capacity: usize,
     /// Nested map: language_id -> query_text -> compiled Query.
     /// Using nested maps allows lookups with &str keys (no allocation on hits).
     entries: HashMap<String, HashMap<String, Query>>,
+    /// LRU order, oldest at the front. Length equals the compiled-query count.
+    order: VecDeque<(String, String)>,
     /// Merged query text that is valid only in separate query-kind executions.
     failed_merged: HashMap<String, HashSet<String>>,
+    failed_order: VecDeque<(String, String)>,
 }
 
 impl QueryCache {
     fn new() -> Self {
+        Self::with_capacity(QUERY_CACHE_CAPACITY)
+    }
+
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
         Self {
+            capacity,
             entries: HashMap::new(),
+            order: VecDeque::new(),
             failed_merged: HashMap::new(),
+            failed_order: VecDeque::new(),
         }
     }
 
-    fn get_or_compile(
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    pub(crate) fn contains(&self, language_id: &str, query_text: &str) -> bool {
+        self.entries
+            .get(language_id)
+            .is_some_and(|by_text| by_text.contains_key(query_text))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn failed_merged_len(&self) -> usize {
+        self.failed_order.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn language_query_capacity(&self, language_id: &str) -> usize {
+        self.entries
+            .get(language_id)
+            .map(|by_text| by_text.capacity())
+            .unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn failed_merged_capacity(&self, language_id: &str) -> usize {
+        self.failed_merged
+            .get(language_id)
+            .map(|failed_queries| failed_queries.capacity())
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn get_or_compile(
         &mut self,
         language_id: &str,
         language: &Language,
         query_text: &str,
     ) -> Result<&Query> {
-        let by_text = self.entries.entry(language_id.to_string()).or_default();
-        if !by_text.contains_key(query_text) {
+        if self.contains(language_id, query_text) {
+            Self::touch(&mut self.order, language_id, query_text);
+        } else {
             let query = Query::new(language, query_text)
                 .map_err(|e| napi::Error::from_reason(format!("Failed to compile query: {e}")))?;
-            by_text.insert(query_text.to_string(), query);
+            if self.order.len() >= self.capacity {
+                if let Some((evict_id, evict_text)) = self.order.pop_front() {
+                    let empty = self
+                        .entries
+                        .get_mut(&evict_id)
+                        .map(|by_text| {
+                            by_text.remove(&evict_text);
+                            let is_empty = by_text.is_empty();
+                            if !is_empty {
+                                // Release capacity from the historical peak so a long stream of
+                                // distinct caller queries for one language does not retain a
+                                // bucket allocation sized for every query it has ever held.
+                                by_text.shrink_to_fit();
+                            }
+                            is_empty
+                        })
+                        .unwrap_or(false);
+                    if empty {
+                        self.entries.remove(&evict_id);
+                    }
+                }
+            }
+            self.entries
+                .entry(language_id.to_string())
+                .or_default()
+                .insert(query_text.to_string(), query);
+            self.order
+                .push_back((language_id.to_string(), query_text.to_string()));
         }
-        Ok(by_text.get(query_text).unwrap())
+        Ok(self
+            .entries
+            .get(language_id)
+            .and_then(|by_text| by_text.get(query_text))
+            .expect("query must be present after compile or hit"))
     }
 
-    fn has_failed_merged(&self, language_id: &str, query_text: &str) -> bool {
+    pub(crate) fn has_failed_merged(&self, language_id: &str, query_text: &str) -> bool {
         self.failed_merged
             .get(language_id)
             .is_some_and(|failed_queries| failed_queries.contains(query_text))
     }
 
-    fn record_failed_merged(&mut self, language_id: &str, query_text: &str) {
+    pub(crate) fn touch_failed_merged(&mut self, language_id: &str, query_text: &str) {
+        Self::touch(&mut self.failed_order, language_id, query_text);
+    }
+
+    pub(crate) fn record_failed_merged(&mut self, language_id: &str, query_text: &str) {
+        // Callers record only after a miss; the guard keeps one order entry per memo entry.
+        if self.has_failed_merged(language_id, query_text) {
+            return;
+        }
+        if self.failed_order.len() >= self.capacity {
+            if let Some((evict_id, evict_text)) = self.failed_order.pop_front() {
+                let empty = self
+                    .failed_merged
+                    .get_mut(&evict_id)
+                    .map(|failed_queries| {
+                        failed_queries.remove(&evict_text);
+                        let is_empty = failed_queries.is_empty();
+                        if !is_empty {
+                            // Same capacity-release rationale as the compiled-query cache above.
+                            failed_queries.shrink_to_fit();
+                        }
+                        is_empty
+                    })
+                    .unwrap_or(false);
+                if empty {
+                    self.failed_merged.remove(&evict_id);
+                }
+            }
+        }
         self.failed_merged
             .entry(language_id.to_string())
             .or_default()
             .insert(query_text.to_string());
+        self.failed_order
+            .push_back((language_id.to_string(), query_text.to_string()));
+    }
+
+    fn touch(order: &mut VecDeque<(String, String)>, language_id: &str, query_text: &str) {
+        if let Some(index) = order
+            .iter()
+            .position(|(id, text)| id == language_id && text == query_text)
+        {
+            if let Some(key) = order.remove(index) {
+                order.push_back(key);
+            }
+        }
     }
 }
 
@@ -337,6 +461,7 @@ fn try_execute_merged_language_queries_with_limit(
         }
 
         if cache.has_failed_merged(language_id, &merged_query) {
+            cache.touch_failed_merged(language_id, &merged_query);
             return Ok(None);
         }
         let query = match cache.get_or_compile(language_id, language, &merged_query) {

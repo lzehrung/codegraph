@@ -49,6 +49,8 @@ The CLI defaults to `--native auto`, which uses the native Tree-sitter path when
 
 Reduced-accuracy runs are never silent: `graph` and `index` print a one-line `Backend:` warning on stderr whenever the native addon is unavailable or files fell back to regex extraction, independent of `--progress`, and `graph --json` / `index` structured output carries an `analysis` object (`mode`, `backend`, `label`, and fallback file counts) so automation can tell `semantic`, `mixed`, and `reduced` runs apart.
 
+The `Backend:` warning names affected languages. Fallback reports distinguish an unavailable parser from a query that ran but found no imports.
+
 ## Index and cache guidance
 
 Current-state, index-backed commands validate freshness automatically and default to the on-disk cache. The first query for a project may build the index; after one second, progress is written to stderr with a continuing heartbeat, leaving JSON stdout parseable. A cold or incompatible rebuild advances through source discovery, Git listing or filesystem scan, ignore-file listing, metadata discovery, and counted path checks when a total is known, then starts build progress. Later commands with the same `--root`, discovery configuration, graph options, and compatible build options reuse disk state under `.codegraph/cache/index-v1`, updating incrementally when files changed and rebuilding when compatibility cannot be proven.
@@ -824,6 +826,8 @@ codegraph skill doctor
 ```
 
 `codegraph skill install --agent <name>` supports `agents`, `codex`, `claude`, `cursor`, `gemini`, `opencode`, `omp`, and `kilo`. Skill install targets must end with `skills/codegraph`, except OMP's managed target ending with `managed-skills/codegraph`; when that safe target shape is satisfied, the installer creates the directory as needed. Cursor CLI now supports native skills directories too, so `.cursor/skills/codegraph` works alongside the universal `~/.agents/skills/codegraph` location. `codegraph -v`, `codegraph version --json`, and `codegraph doctor` include or identify the installed package version.
+
+`doctor.native.supportedLanguageIds` lists loaded native grammars; `doctor.native.graphOnlyLanguageIds` lists registered document languages that do not use a native grammar. An empty native list does not mean those document languages are unsupported.
 
 `doctor.native.origin` reports `workspace`, `package`, or `cache`, plus normalized source and loaded paths when known. Cache origins include the target, package version, cache key, SHA-256, and `updateSafeForCurrentProcess`; a package fallback retains `cacheError` instead of treating cache preparation failure as native unavailability.
 

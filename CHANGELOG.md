@@ -21,6 +21,14 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - Rust path attributes now follow the declaring module's scope and inline directory, preserve `]` in path strings, and exclude visible test-only imports.
 - TypeScript inline-only type imports have type-only graph edges, and reduced-mode re-exports retain type flags. C/C++ capture-only extraction keeps typedef names without leaking function-local or static exports.
 - Python imports after same-line top-level assignments and calls remain module re-exports.
+- Document links now exclude comments, front matter, conditional AsciiDoc content, image alt text, and indented code after thematic breaks or inside blockquotes. Nested lists and continuation links inside blockquotes retain their source coordinates. Two blank lines end list indentation, and unclosed HTML comments mask the remaining document.
+- Native query caches are bounded and release per-language capacity on eviction. Fallback diagnostics distinguish unavailable parsers from empty queries, name each fallback extraction path, and warn when a source language has no native grammar. `codegraph doctor` lists supported graph-only languages.
+- Go-to-definition and references now resolve C# local functions from sibling statements and Go generic type parameters within their own declaration. C++ nested namespaces and unions are type symbols, and C++ concepts and preprocessor macros bind in the same file.
+- Standard-library imports are classified from every registered extension of a language, so `.csx`, `.ktm`, and `.pyi` files no longer report their standard library as unresolved.
+- Rust file graphs resolve `#[path]` modules declared inside inline modules, omit `#[cfg(test)]` modules when another attribute follows, and resolve `super` from a path-attributed module relative to its declaring module.
+- A C include macro no longer creates a dependency, `#include HEADER` resolves again, a Ruby `load`/`autoload` argument must be a complete literal to be masked from duplicate scans, and a qualified Python `case module.CONST:` value no longer creates locals.
+- Python module-level import detection agrees between native and reduced extraction, including an import after a multi-line parenthesized statement. `.h` classification treats `class`, `template`, and similar words used as plain C identifiers as C.
+- Import-binding extraction reports the same fallback reason as graph extraction, so `native: "off"` no longer reports reduced mode for a language without regex recovery.
 - Rust graph extraction keeps conditional `#[path]` modules with the same module name distinct. TypeScript type-only imports tolerate comments and compact `type{...}` clauses, and C header classification recognizes function calls that use C++ keywords as C identifiers.
 
 ## [2.3.24] - 2026-09-10
