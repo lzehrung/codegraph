@@ -9,6 +9,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [2.3.26] - 2026-09-13
+
 ### Fixed
 
 - Standalone installation on Windows survives a directory that a scanner or a departing process still holds open. `install.ps1` and the installer library now retry the staged version-root move for about nine seconds instead of under one, and removals retry as well.
@@ -483,7 +485,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.25...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.26...HEAD
+[2.3.26]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.26
 [2.3.25]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.25
 [2.3.24]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.24
 [2.3.23]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.23
