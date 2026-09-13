@@ -151,21 +151,25 @@ describe("project file discovery", () => {
     ];
     const manifestFile = path.join(tempDir, "package.json");
 
-    await Promise.all([
-      ...aliasFiles.map((filePath) => createFile(filePath, "// registered alias\n")),
-      createFile(ignoredAlias, "print('ignored')\n"),
-      ...unsupportedFiles.map((filePath) => createFile(filePath, "// unsupported\n")),
-      createFile(manifestFile, "{}\n"),
-    ]);
+    try {
+      await Promise.all([
+        ...aliasFiles.map((filePath) => createFile(filePath, "// registered alias\n")),
+        createFile(ignoredAlias, "print('ignored')\n"),
+        ...unsupportedFiles.map((filePath) => createFile(filePath, "// unsupported\n")),
+        createFile(manifestFile, "{}\n"),
+      ]);
 
-    const discovered = await listProjectFiles(tempDir);
-    const discoveredSet = new Set(discovered.map(normalize));
+      const discovered = await listProjectFiles(tempDir);
+      const discoveredSet = new Set(discovered.map(normalize));
 
-    for (const filePath of [...aliasFiles, manifestFile].map(normalize)) {
-      expect(discoveredSet.has(filePath)).toBe(true);
-    }
-    for (const filePath of [ignoredAlias, ...unsupportedFiles].map(normalize)) {
-      expect(discoveredSet.has(filePath)).toBe(false);
+      for (const filePath of [...aliasFiles, manifestFile].map(normalize)) {
+        expect(discoveredSet.has(filePath)).toBe(true);
+      }
+      for (const filePath of [ignoredAlias, ...unsupportedFiles].map(normalize)) {
+        expect(discoveredSet.has(filePath)).toBe(false);
+      }
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 
