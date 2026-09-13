@@ -9,6 +9,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [2.3.25] - 2026-09-13
+
 ### Fixed
 
 - Language queries now match the loaded grammars, preserve supported declaration forms, and exclude false CommonJS and function-local exports.
@@ -476,7 +478,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.24...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.25...HEAD
+[2.3.25]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.25
 [2.3.24]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.24
 [2.3.23]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.23
 [2.3.22]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.22
