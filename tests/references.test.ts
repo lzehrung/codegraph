@@ -1637,7 +1637,7 @@ describe("Find References", () => {
           "utf8",
         );
         const index = await createTestIndexFromFiles(root, [file]);
-        // Box's own T (line 3 col 10) — only its own field use at line 4 should match, not Pair's T uses.
+        // Box's own T (line 3 col 10): only its own field use at line 4 should match, not Pair's T uses.
         const result = await testFindReferences(index, file, 3, 10, 1);
         expectReferenceAt(result, file, 4);
       } finally {
@@ -1913,7 +1913,7 @@ describe("Find References", () => {
           "utf8",
         );
         const index = await createTestIndexFromFiles(root, [mainFile]);
-        // RunA's Local() declaration, line 3 col 10 — only its own call at line 4 should match.
+        // RunA's Local() declaration, line 3 col 10: only its own call at line 4 should match.
         const result = await testFindReferences(index, mainFile, 3, 10, 1);
         expectReferenceAt(result, mainFile, 4);
       } finally {

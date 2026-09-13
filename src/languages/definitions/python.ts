@@ -136,7 +136,7 @@ export const PYTHON_DEF: LanguageDefinition = {
       ;; value pattern such as \`case module.CONST:\` from creating locals.
       (case_pattern (dotted_name . (identifier) @name .))
       ;; \`case value as alias:\` binds the direct identifier child as its alias.
-      ;; \`except E as err\` / \`with … as handle\` put the binding in alias.
+      ;; \`except E as err\` / \`with ctx as handle\` put the binding in alias.
       (as_pattern !alias (identifier) @name)
       (as_pattern alias: (as_pattern_target (identifier) @name))
       ;; \`case [head, *tail]:\` binds the capture after the splat.
