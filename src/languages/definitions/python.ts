@@ -126,11 +126,15 @@ export const PYTHON_DEF: LanguageDefinition = {
       ;; \`case Point(x=px, y=py):\` is case_pattern -> class_pattern ->
       ;; case_pattern -> keyword_pattern. The binding is the dotted_name child;
       ;; the left-hand attribute is a bare identifier and must not be captured.
-      (keyword_pattern (dotted_name (identifier) @name))
+      ;; Anchoring to the first and last (named) child restricts the match to a
+      ;; single-segment dotted_name, so a qualified value like \`x=module.CONST\`
+      ;; does not create locals for \`module\` or \`CONST\`.
+      (keyword_pattern (dotted_name . (identifier) @name .))
       ;; A bare identifier in a case pattern is represented as a single-name
       ;; dotted_name inside a case_pattern. Nested tuple/list/or patterns
-      ;; preserve this shape for each capture.
-      (case_pattern (dotted_name (identifier) @name))
+      ;; preserve this shape for each capture. The same anchor keeps a qualified
+      ;; value pattern such as \`case module.CONST:\` from creating locals.
+      (case_pattern (dotted_name . (identifier) @name .))
       ;; \`case value as alias:\` binds the direct identifier child as its alias.
       ;; \`except E as err\` / \`with … as handle\` put the binding in alias.
       (as_pattern !alias (identifier) @name)

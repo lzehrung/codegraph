@@ -21,17 +21,13 @@ export const cFamilyControlSplitPoints = [
 export const cFamilyIncludeImportsQuery = `
       (preproc_include path: (string_literal) @mod) @stmt
       (preproc_include path: (system_lib_string) @mod) @stmt
-      (preproc_include path: (call_expression) @mod) @stmt
-      ((preproc_include path: (identifier) @mod) @stmt
-        (#match? @stmt "^\\s*#include\\s+[A-Za-z_][A-Za-z0-9_]*\\s*$"))
+      (preproc_include path: (identifier) @mod) @stmt
     `;
 
 export const cFamilyIncludeBindingsQuery = `
       (preproc_include path: (string_literal) @from) @stmt
       (preproc_include path: (system_lib_string) @from) @stmt
-      (preproc_include path: (call_expression) @from) @stmt
-      ((preproc_include path: (identifier) @from) @stmt
-        (#match? @stmt "^\\s*#include\\s+[A-Za-z_][A-Za-z0-9_]*\\s*$"))
+      (preproc_include path: (identifier) @from) @stmt
     `;
 
 const cFamilyParameterListTypes = new Set(["parameter_declaration", "parameter_list"]);

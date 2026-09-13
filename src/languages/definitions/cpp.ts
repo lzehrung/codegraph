@@ -71,7 +71,9 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
     if (
       parent.type === "class_specifier" ||
       parent.type === "struct_specifier" ||
-      parent.type === "namespace_definition"
+      parent.type === "union_specifier" ||
+      parent.type === "namespace_definition" ||
+      parent.type === "nested_namespace_specifier"
     )
       return "class";
     if (
@@ -88,12 +90,20 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
     const parent = node.parent;
     if (!parent) return false;
     if (
-      (parent.type === "class_specifier" || parent.type === "struct_specifier" || parent.type === "enum_specifier") &&
+      (parent.type === "class_specifier" ||
+        parent.type === "struct_specifier" ||
+        parent.type === "union_specifier" ||
+        parent.type === "enum_specifier") &&
       isInField(node, parent, "name")
     )
       return true;
     if (parent.type === "namespace_definition" && isInField(node, parent, "name")) return true;
+    if (parent.type === "nested_namespace_specifier") {
+      const namespaceDefinition = findAncestor(node, new Set(["namespace_definition"]));
+      if (namespaceDefinition && isInField(node, namespaceDefinition, "name")) return true;
+    }
     if (parent.type === "alias_declaration" && isInField(node, parent, "name")) return true;
+    if (parent.type === "concept_definition" && isInField(node, parent, "name")) return true;
     if (
       isInAncestorDeclarator(node, new Set(["parameter_declaration"])) ||
       isInAncestorDeclarator(node, new Set(["field_declaration"])) ||
@@ -110,6 +120,8 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
     )
       return true;
     if (parent.type === "enumerator" && isInField(node, parent, "name")) return true;
+    if (parent.type === "preproc_def" && isInField(node, parent, "name")) return true;
+    if (parent.type === "preproc_function_def" && isInField(node, parent, "name")) return true;
     return false;
   },
   createsFunctionScope: (node) => node.type === "function_definition" || node.type === "lambda_expression",

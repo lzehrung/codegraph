@@ -6,6 +6,7 @@ import { runQuery } from "@lzehrung/codegraph-native";
 import { CSHARP_SUPPORT } from "../../src/languages.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
+import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
@@ -208,6 +209,34 @@ describe("C# module declarations", () => {
       expect(module?.exports).not.toContainEqual(expect.objectContaining({ type: "local", exportedAs: "Local" }));
       expect(module?.locals).toContainEqual(expect.objectContaining({ localName: "Local" }));
       expect(notify?.kind).toBe("type");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C# .csx script files", () => {
+  it("classifies a System.* import as resolved stdlib, not unresolved", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-csx-stdlib-"));
+    const file = path.join(root, "script.csx");
+    try {
+      await writeFile(file, 'using System;\nConsole.WriteLine("hi");\n', "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const unresolved = getUnresolvedImports(index.graph, { projectRoot: root });
+      expect(unresolved.map((entry) => entry.name)).not.toContain("System");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("still reports a genuinely unknown package import in a .csx file as unresolved", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-csx-unresolved-"));
+    const file = path.join(root, "script.csx");
+    try {
+      await writeFile(file, "using Some.Unknown.Package;\n", "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const unresolved = getUnresolvedImports(index.graph, { projectRoot: root });
+      expect(unresolved.map((entry) => entry.name)).toContain("Some.Unknown.Package");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

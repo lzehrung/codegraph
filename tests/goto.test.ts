@@ -1227,6 +1227,44 @@ describe("Go to Definition", () => {
 
       await testGoToDefinition(index, dotImportFile, 9, 15, utilsFile, 13);
     });
+
+    it("resolves a generic type parameter used inside its own declaration, not a same-named type parameter on a sibling type", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-go-generic-goto-"));
+      try {
+        const file = path.join(root, "main.go").replace(/\\/g, "/");
+        await fsp.writeFile(
+          file,
+          [
+            "package main",
+            "",
+            "type Box[T any] struct {",
+            "\tValue T",
+            "}",
+            "",
+            "type Pair[T any] struct {",
+            "\tA T",
+            "\tB T",
+            "}",
+            "",
+            "func F[T any](v T) T {",
+            "\treturn v",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [file]);
+        // Box's field type T (line 4) resolves to Box's own T (line 3), not Pair's.
+        await testGoToDefinition(index, file, 4, 8, file, 3);
+        // Pair's field type T (line 8) resolves to Pair's own T (line 7), not Box's.
+        await testGoToDefinition(index, file, 8, 4, file, 7);
+        // func F's parameter type T and return type T both resolve to F's own T (line 12).
+        await testGoToDefinition(index, file, 12, 17, file, 12);
+        await testGoToDefinition(index, file, 12, 20, file, 12);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("C", () => {
@@ -1675,6 +1713,37 @@ describe("Go to Definition", () => {
         );
         const index = await createTestIndexFromFiles(root, [mainFile]);
         await testGoToDefinition(index, mainFile, 4, 5, mainFile, 2);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves a call to a local function from a sibling statement in the same method, not a same-named local function in another method", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-localfn-goto-"));
+      try {
+        const mainFile = path.join(root, "Main.cs").replace(/\\/g, "/");
+        await fsp.writeFile(
+          mainFile,
+          [
+            "class Program {",
+            "  void RunA() {",
+            "    void Local() { }",
+            "    Local();",
+            "  }",
+            "  void RunB() {",
+            "    void Local() { }",
+            "    Local();",
+            "  }",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [mainFile]);
+        // "Local();" in RunA (line 4) resolves to RunA's own local function (line 3).
+        await testGoToDefinition(index, mainFile, 4, 5, mainFile, 3);
+        // "Local();" in RunB (line 8) resolves to RunB's own local function (line 7), not RunA's.
+        await testGoToDefinition(index, mainFile, 8, 5, mainFile, 7);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

@@ -8,6 +8,7 @@ import { buildProjectIndex, collectLocalsAndExportsFromSource, parseFile, Symbol
 import { expectFileInIndex, findSymbolsByName } from "../test-utils.js";
 import { collectGraph, findReferences, goToDefinition } from "../../src/index.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
+import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 
 const definition: LanguageTestDefinition = {
@@ -97,6 +98,21 @@ describe("Python stub discovery", () => {
     expect(findSymbolsByName(index, "StubType", stubFile)).toHaveLength(1);
     expect(findSymbolsByName(index, "stub_function", stubFile)).toHaveLength(1);
   });
+
+  it("classifies a standard-library import in a .pyi stub as resolved, and an unknown one as unresolved", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-stub-stdlib-"));
+    try {
+      const stub = path.join(root, "typings.pyi");
+      await fsp.writeFile(stub, "import os\nimport definitely_not_a_package\n", "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const unresolved = getUnresolvedImports(index.graph, { projectRoot: root }).map((entry) => entry.name);
+
+      expect(unresolved).not.toContain("os");
+      expect(unresolved).toContain("definitely_not_a_package");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Python match bindings", () => {
@@ -124,6 +140,57 @@ describe("Python match bindings", () => {
     const aliasReferences = await findReferences(index, { file, line: 5, column: 19 });
     expect(aliasReferences.status).toBe("ok");
     if (aliasReferences.status === "ok") expect(aliasReferences.references).toHaveLength(2);
+  });
+});
+
+describe("Python case pattern qualified values", () => {
+  it("does not create locals for a qualified case pattern value like module.CONST", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-case-qualified-"));
+    try {
+      const moduleFile = path.join(root, "module.py").replace(/\\/g, "/");
+      const mainFile = path.join(root, "main.py").replace(/\\/g, "/");
+      await fsp.writeFile(moduleFile, "CONST = 1\n", "utf8");
+      await fsp.writeFile(
+        mainFile,
+        [
+          "import module",
+          "",
+          "class Point:",
+          "    def __init__(self, x, y):",
+          "        self.x = x",
+          "        self.y = y",
+          "",
+          "def handle(value):",
+          "    match value:",
+          "        case module.CONST:",
+          "            return 1",
+          "        case Point(x=module.CONST):",
+          "            return 2",
+          "        case bare_name:",
+          "            return bare_name",
+          "        case Point(x=px, y=py):",
+          "            return px + py",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      // A qualified value pattern must not create phantom locals for either segment.
+      expect(findSymbolsByName(index, "module", mainFile)).toHaveLength(0);
+      expect(findSymbolsByName(index, "CONST", mainFile)).toHaveLength(0);
+      // The unaffected bare-name and keyword-pattern bindings keep working.
+      expect(findSymbolsByName(index, "bare_name", mainFile)).toHaveLength(1);
+      expect(findSymbolsByName(index, "px", mainFile)).toHaveLength(1);
+      expect(findSymbolsByName(index, "py", mainFile)).toHaveLength(1);
+
+      // "module" in `case module.CONST:` (line 10, col 14) still resolves to the import.
+      const gotoModule = await goToDefinition(index, { file: mainFile, line: 10, column: 14 });
+      expect(gotoModule.status).toBe("ok");
+      if (gotoModule.status === "ok") expect(gotoModule.definition.file).toBe(moduleFile);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });
 

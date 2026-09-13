@@ -11,6 +11,7 @@ import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
 import { C_SUPPORT, CPP_SUPPORT, supportForFile, type LanguageSupport } from "../../src/languages.js";
 import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js";
+import { findReferences, goToDefinition, listSymbols } from "../../src/index.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { parseSyntaxTree, runQuery } from "@lzehrung/codegraph-native";
@@ -295,6 +296,123 @@ describe("C++ native queries", () => {
     expect(names.exports.filter((name) => name === "Mode")).toEqual(["Mode"]);
     expect(names.exports).toEqual(expect.arrayContaining(["Mode", "ON"]));
     expect(names.locals).toEqual(expect.arrayContaining(["Mode", "ON"]));
+  });
+});
+
+
+describe("C++ classification and same-file navigation", () => {
+  it("classifies nested namespaces and unions, and resolves concepts and macros", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-classify-"));
+    const file = path.join(root, "probe.cpp");
+    const source = [
+      "namespace outer::leaf {}",
+      "union U { int a; };",
+      "template<typename T>",
+      "concept Sortable = true;",
+      "template<Sortable T>",
+      "void sort(T);",
+      "#define FOO 1",
+      "int x = FOO;",
+      "// FOO comment",
+      "int y = 0;",
+      "#define BAR(x) (x)",
+      "int z = BAR(1);",
+      "U value;",
+      "",
+    ].join("\n");
+    try {
+      await fs.writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const symbols = listSymbols(index, { file });
+      const symbolAt = (name: string, line: number) =>
+        symbols.find((symbol) => symbol.name === name && symbol.range.start.line === line);
+
+      expect(symbolAt("outer", 1)?.kind).toBe("class");
+      expect(symbolAt("leaf", 1)?.kind).toBe("class");
+      expect(symbolAt("U", 2)?.kind).toBe("class");
+      expect(symbols.filter((symbol) => symbol.name === "FOO" && symbol.range.start.line === 9)).toEqual([]);
+
+      const conceptGoto = await goToDefinition(index, { file, line: 5, column: 10 });
+      expect(conceptGoto.status).toBe("ok");
+      if (conceptGoto.status === "ok") {
+        expect(conceptGoto.definition.range.start.line).toBe(4);
+        expect(conceptGoto.definition.range.start.column).toBe(9);
+      }
+
+      const conceptRefs = await findReferences(index, { file, line: 5, column: 10 });
+      expect(conceptRefs.status).toBe("ok");
+      if (conceptRefs.status === "ok") {
+        expect(
+          conceptRefs.references.map((reference) => ({
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          })),
+        ).toEqual(
+          expect.arrayContaining([
+            { line: 4, column: 9 },
+            { line: 5, column: 10 },
+          ]),
+        );
+      }
+
+      const macroGoto = await goToDefinition(index, { file, line: 8, column: 9 });
+      expect(macroGoto.status).toBe("ok");
+      if (macroGoto.status === "ok") {
+        expect(macroGoto.definition.range.start.line).toBe(7);
+        expect(macroGoto.definition.range.start.column).toBe(9);
+      }
+
+      const functionMacroGoto = await goToDefinition(index, { file, line: 12, column: 9 });
+      expect(functionMacroGoto.status).toBe("ok");
+      if (functionMacroGoto.status === "ok") {
+        expect(functionMacroGoto.definition.range.start.line).toBe(11);
+        expect(functionMacroGoto.definition.range.start.column).toBe(9);
+      }
+
+      const commentGoto = await goToDefinition(index, { file, line: 9, column: 4 });
+      expect(commentGoto.status).toBe("not_found");
+
+      const macroRefs = await findReferences(index, { file, line: 8, column: 9 });
+      expect(macroRefs.status).toBe("ok");
+      if (macroRefs.status === "ok") {
+        const sites = macroRefs.references.map((reference) => ({
+          line: reference.range.start.line,
+          column: reference.range.start.column,
+        }));
+        expect(sites).toEqual(
+          expect.arrayContaining([
+            { line: 7, column: 9 },
+            { line: 8, column: 9 },
+          ]),
+        );
+        expect(sites.some((site) => site.line === 9)).toBe(false);
+      }
+
+      const unionGoto = await goToDefinition(index, { file, line: 13, column: 1 });
+      expect(unionGoto.status).toBe("ok");
+      if (unionGoto.status === "ok") {
+        expect(unionGoto.definition.range.start.line).toBe(2);
+        expect(unionGoto.definition.range.start.column).toBe(7);
+      }
+
+      const unionRefs = await findReferences(index, { file, line: 13, column: 1 });
+      expect(unionRefs.status).toBe("ok");
+      if (unionRefs.status === "ok") {
+        expect(
+          unionRefs.references.map((reference) => ({
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          })),
+        ).toEqual(
+          expect.arrayContaining([
+            { line: 2, column: 7 },
+            { line: 13, column: 1 },
+          ]),
+        );
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });
 

@@ -279,6 +279,20 @@ describe("duplicate detection", () => {
     }
   });
 
+  test("does not mask Ruby load concatenations as import statements", () => {
+    const cases = [
+      'load "file" + suffix\nputs "hello"\n',
+      'load("file" + suffix)\nputs "hello"\n',
+      'autoload :Lazy, "file" + suffix\nputs "hello"\n',
+      'autoload(:Lazy, "file" + suffix)\nputs "hello"\n',
+    ];
+    for (const source of cases) {
+      for (const nativeMode of [undefined, "off"] as const) {
+        expect(maskDuplicateImportStatements(source, "sample.rb", "ruby", nativeMode)).toBe(source);
+      }
+    }
+  });
+
   test("masks multiline Zig @cImport without swallowing following code", () => {
     const source = [
       "const c = @cImport( {",
@@ -305,6 +319,45 @@ describe("duplicate detection", () => {
       expect(result).toContain("; keep()");
       expect(result).toContain("; keep_again()");
       expect(result.length).toBe(source.length);
+    }
+  });
+
+  test("duplicate units scan executable Ruby load concatenations and skip static loads", async () => {
+    const root = await makeTempProject();
+    const staticFile = await writeProjectFile(
+      root,
+      "src/static.rb",
+      'require "duplicateImportMarker"\nrequire_relative "duplicateImportMarker"\nload "duplicateImportMarker"\nautoload :Lazy, "duplicateImportMarker"\n',
+    );
+    const dynamicFile = await writeProjectFile(
+      root,
+      "src/dynamic.rb",
+      'load "file" + suffix\nautoload :Lazy, "file" + suffix\ndef keep_ruby\nend\n',
+    );
+
+    for (const nativeMode of [undefined, "off"] as const) {
+      const index = await buildProjectIndex(root, nativeMode ? { native: nativeMode } : undefined);
+      const staticCollection = await collectDuplicateUnits(index, {
+        projectRoot: root,
+        files: [staticFile],
+        includeSmall: true,
+        minTokens: 1,
+        maxTokens: 400,
+        shingleSize: 3,
+        windowSize: 20,
+      });
+      const dynamicCollection = await collectDuplicateUnits(index, {
+        projectRoot: root,
+        files: [dynamicFile],
+        includeSmall: true,
+        minTokens: 1,
+        maxTokens: 400,
+        shingleSize: 3,
+        windowSize: 20,
+      });
+
+      expect(staticCollection.units).toEqual([]);
+      expect(dynamicCollection.units.some((unit) => unit.tokenSet.has("+"))).toBe(true);
     }
   });
 

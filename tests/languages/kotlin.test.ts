@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
 import { buildProjectIndex, findReferences } from "../../src/index.js";
 import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
@@ -245,6 +246,34 @@ describe("Kotlin native identifier declarations", () => {
       expect(exportedNames).toEqual(expect.arrayContaining(["handler", "keep", "Outer", "Inner", "deep"]));
       expect(exportedNames).not.toContain("hidden");
       expect(exportedNames).not.toContain("Local");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Kotlin .ktm script files", () => {
+  it("classifies a kotlin.* import as resolved stdlib, not unresolved", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-ktm-stdlib-"));
+    const file = path.join(root, "script.ktm");
+    try {
+      await fsp.writeFile(file, "import kotlin.io.*\nfun main() {}\n", "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const unresolved = getUnresolvedImports(index.graph, { projectRoot: root });
+      expect(unresolved.map((entry) => entry.name)).not.toContain("kotlin.io");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("still reports a genuinely unknown package import in a .ktm file as unresolved", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-ktm-unresolved-"));
+    const file = path.join(root, "script.ktm");
+    try {
+      await fsp.writeFile(file, "import com.example.unknown.Widget\nfun main() {}\n", "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const unresolved = getUnresolvedImports(index.graph, { projectRoot: root });
+      expect(unresolved.map((entry) => entry.name)).toContain("com.example.unknown.Widget");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
