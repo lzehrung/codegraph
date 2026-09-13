@@ -19,9 +19,12 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * qualifiers as direct bases. Epoch 5 invalidates modules whose TypeScript or
  * workspace resolution inputs were not fingerprinted, including removed configs.
  * Epoch 6 refreshes declaration exports, language discovery, and declaration-file resolution.
- * Epoch 7 refreshes lexical scope construction and standard-library classification.
+ * Epoch 7 refreshes import resolution, grouped import bindings, and typedef names.
+ * Epoch 9 refreshes scoped Rust paths, type-only edges, and capture-only symbols.
+ * Epoch 10 refreshes lexical scope construction, standard-library classification,
+ * Rust graph module scope, and Python module-level import detection.
  */
-export const CORE_ALGORITHM_EPOCH = 7;
+export const CORE_ALGORITHM_EPOCH = 10;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -54,7 +57,6 @@ type LanguageDefinitionFingerprintDescriptor = {
   graph: LanguageDefinition["graph"];
   nodeTypes?: LanguageDefinition["nodeTypes"];
   supportsCrossModuleSymbols: boolean;
-  exportScopeBlockers: string[];
   native?: {
     authoritativeKinds: string[];
     notes: string[];
@@ -64,6 +66,7 @@ type LanguageDefinitionFingerprintDescriptor = {
     usesQueryDrivenLocals: boolean;
     membersAreImplicitlyInScope: boolean;
     supportsExportFromReferences: boolean;
+    exportScopeBlockers: string[];
   };
 };
 
@@ -81,7 +84,6 @@ function languageDefinitionFingerprintDescriptor(
     graph: definition.graph,
     ...(definition.nodeTypes ? { nodeTypes: definition.nodeTypes } : {}),
     supportsCrossModuleSymbols: definition.supportsCrossModuleSymbols ?? false,
-    exportScopeBlockers: [...(definition.exportScopeBlockers ?? [])].sort(),
     ...(native
       ? {
           native: {
@@ -97,6 +99,7 @@ function languageDefinitionFingerprintDescriptor(
       usesQueryDrivenLocals: definition.usesQueryDrivenLocals ?? false,
       membersAreImplicitlyInScope: definition.membersAreImplicitlyInScope ?? true,
       supportsExportFromReferences: definition.supportsExportFromReferences ?? false,
+      exportScopeBlockers: [...(definition.exportScopeBlockers ?? [])].sort(),
       ...(scopeDeclarationNames ? { scopeDeclarationNames } : {}),
     },
   };
@@ -118,6 +121,7 @@ export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof Langua
   graph: true,
   usesQueryDrivenLocals: true,
   supportsExportFromReferences: true,
+  exportScopeBlockers: true,
   classifyDefinition: true,
   isDeclarationName: true,
   scopeDeclarationNames: true,
@@ -126,7 +130,6 @@ export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof Langua
   createsFunctionScope: true,
   membersAreImplicitlyInScope: true,
   supportsCrossModuleSymbols: true,
-  exportScopeBlockers: true,
   isTypeOnly: true,
   nodeTypes: true,
   native: true,

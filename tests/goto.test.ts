@@ -1285,7 +1285,10 @@ describe("Go to Definition", () => {
       const helpersFile = path.join(samplePath, "helpers.h").replace(/\\/g, "/");
       const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
 
-      await testGoToDefinition(index, mainFile, 6, 3, utilsFile, 6);
+      // `typedef struct Utility { … } Utility;` declares two symbols: the struct tag on line 4 and
+      // the typedef alias on line 6. C now uses query-driven locals like C++, so both exist and the
+      // tag owns the exported name.
+      await testGoToDefinition(index, mainFile, 6, 3, utilsFile, 4);
     });
 
     it("should find definition of function-pointer typedef", async () => {
@@ -1812,6 +1815,51 @@ describe("Go to Definition", () => {
       const utilsFile = path.join(samplePath, "utils.rs").replace(/\\/g, "/");
 
       await testGoToDefinition(index, aliasFile, 9, 5, utilsFile, 1);
+    });
+
+    it("resolves crate #[path] modules to the attributed file instead of importer or conventional decoys", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-attr-goto-"));
+      try {
+        const src = path.join(root, "src");
+        await fsp.mkdir(src, { recursive: true });
+        await fsp.writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-attr-goto"\nversion = "0.1.0"\n');
+        await fsp.writeFile(path.join(src, "lib.rs"), '#[path = "custom.rs"]\nmod external;\npub mod consumer;\n');
+        const customFile = path.join(src, "custom.rs").replace(/\\/g, "/");
+        const decoyFile = path.join(src, "external.rs").replace(/\\/g, "/");
+        const consumerFile = path.join(src, "consumer.rs").replace(/\\/g, "/");
+        await fsp.writeFile(customFile, "pub struct Thing;\n");
+        await fsp.writeFile(decoyFile, "pub struct Decoy;\n");
+        await fsp.writeFile(
+          consumerFile,
+          [
+            "use crate::external::Thing;",
+            '#[path = "decoy.rs"]',
+            "mod external;",
+            "pub fn consume() {",
+            "    let _t = Thing;",
+            "}",
+            "",
+          ].join("\n"),
+        );
+        await fsp.writeFile(path.join(src, "decoy.rs"), "pub struct Thing;\n");
+        const index = await createTestIndexFromFiles(root, [
+          path.join(src, "lib.rs"),
+          customFile,
+          decoyFile,
+          consumerFile,
+          path.join(src, "decoy.rs"),
+        ]);
+        const usage = "    let _t = Thing;";
+        const result = await testGoToDefinition(index, consumerFile, 5, usage.indexOf("Thing") + 1, customFile, 1);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(path.basename(result.definition.file)).toBe("custom.rs");
+          expect(path.basename(result.definition.file)).not.toBe("external.rs");
+          expect(path.basename(result.definition.file)).not.toBe("decoy.rs");
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
     });
 
     it("resolves receiver method calls through impl-backed locals", async () => {

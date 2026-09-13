@@ -21,7 +21,7 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { ExportEntry, ImportBinding, ModuleIndex, SymbolDef } from "./types.js";
 import type { Range } from "../types.js";
 
-import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../util/identifiers.js";
+import { ECMASCRIPT_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 
 /**
  * Matches one `exportScopeBlockers` entry against an ancestor node. A plain entry compares the
@@ -47,7 +47,11 @@ const JS_FALLBACK_EXPORT_ASSIGN_PATTERN = new RegExp(
   "gu",
 );
 const JS_FALLBACK_REEXPORT_SPECIFIER_PATTERN = new RegExp(
-  String.raw`^(${ECMASCRIPT_IDENTIFIER_SOURCE})(?:\s+as\s+(${ECMASCRIPT_IDENTIFIER_SOURCE}))?$`,
+  String.raw`^(?:type\s+)?(${ECMASCRIPT_IDENTIFIER_SOURCE})(?:\s+as\s+(${ECMASCRIPT_IDENTIFIER_SOURCE}))?$`,
+  "u",
+);
+const JS_FALLBACK_REEXPORT_TYPE_SPECIFIER_PATTERN = new RegExp(
+  String.raw`^type\s+(${ECMASCRIPT_IDENTIFIER_SOURCE})(?:\s+as\s+(${ECMASCRIPT_IDENTIFIER_SOURCE}))?$`,
   "u",
 );
 const JS_FALLBACK_REEXPORT_NAMESPACE_PATTERN = new RegExp(
@@ -132,6 +136,73 @@ function isTypeMemberDeclaration(node: SyntaxNodeLike): boolean {
   return false;
 }
 
+const C_DECLARATOR_IDENTIFIER_PATTERN = new RegExp(`^${XID_IDENTIFIER_SOURCE}`, "u");
+const C_DECLARATOR_QUALIFIER_PATTERN = /^(?:const|volatile|restrict|_Atomic)\b/;
+
+function cDeclaratorDeclaredName(text: string): { name: string; start: number; end: number } | undefined {
+  const masked = maskJsLikeCommentsAndStrings(text);
+  let index = 0;
+  while (index < masked.length) {
+    if (/[\s(*&]/.test(masked[index]!)) {
+      index += 1;
+      continue;
+    }
+    const rest = masked.slice(index);
+    const qualifier = C_DECLARATOR_QUALIFIER_PATTERN.exec(rest);
+    if (qualifier) {
+      index += qualifier[0].length;
+      continue;
+    }
+    const ident = C_DECLARATOR_IDENTIFIER_PATTERN.exec(rest);
+    if (!ident || rest.slice(ident[0].length).trimStart().startsWith("::")) return undefined;
+    return { name: ident[0], start: index, end: index + ident[0].length };
+  }
+  return undefined;
+}
+
+function declaratorNameNode(node: SyntaxNodeLike | undefined): SyntaxNodeLike | undefined {
+  let current = node;
+  while (current) {
+    if (current.type === "identifier" || current.type === "type_identifier") return current;
+    const next = current.childForFieldName("declarator");
+    if (next) {
+      current = next;
+    } else if (current.type === "parenthesized_declarator") {
+      current = current.namedChildren.find((child) => child.type !== "comment");
+    } else {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function declaratorCaptureName(capture: NativeCapture, node?: SyntaxNodeLike): string | undefined {
+  const fromNode = declaratorNameNode(node)?.text;
+  if (fromNode) return fromNode;
+  if (capture.nodeType === "identifier" || capture.nodeType === "type_identifier") return capture.text;
+  return cDeclaratorDeclaredName(capture.text)?.name;
+}
+
+function localExportDedupeKey(entry: Extract<ExportEntry, { type: "local" }>): string {
+  return `${entry.exportedAs}\0${entry.target.localName}\0${entry.target.range.start.index ?? 0}\0${entry.target.range.end.index ?? 0}`;
+}
+
+function dedupeExportEntries(entries: ExportEntry[]): ExportEntry[] {
+  const seen = new Set<string>();
+  const out: ExportEntry[] = [];
+  for (const entry of entries) {
+    if (entry.type !== "local") {
+      out.push(entry);
+      continue;
+    }
+    const key = localExportDedupeKey(entry);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(entry);
+  }
+  return out;
+}
+
 function appendJsLikeRegexFallbackExports(
   file: string,
   source: string,
@@ -148,7 +219,7 @@ function appendJsLikeRegexFallbackExports(
   const reDecl = JS_FALLBACK_DECLARATION_PATTERN;
   const reDefault = JS_FALLBACK_DEFAULT_PATTERN;
   const reExportAssign = JS_FALLBACK_EXPORT_ASSIGN_PATTERN;
-  const reReexport = new RegExp(String.raw`\bexport\s*\{\s*([^}]+)\}\s*from\s*("|')([^"']*)\2`, "gu");
+  const reReexport = new RegExp(String.raw`\bexport\b\s*(type\s+)?\{\s*([^}]*)\}\s*from\s*("|')([^"']*)\3`, "gu");
   const reReexportNs = JS_FALLBACK_REEXPORT_NAMESPACE_PATTERN;
   const reStar = /\bexport\s*\*\s*from\s*("|')([^"']*)\1/gu;
   const reCjsFn = JS_FALLBACK_CJS_FUNCTION_PATTERN;
@@ -193,7 +264,8 @@ function appendJsLikeRegexFallbackExports(
   }
 
   while ((match = reReexport.exec(maskedSource))) {
-    const list = match[1]!
+    const statementTypeOnly = Boolean(match[1]);
+    const list = match[2]!
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean);
@@ -204,6 +276,7 @@ function appendJsLikeRegexFallbackExports(
       if (!entryMatch) continue;
       const srcName = entryMatch[1]!;
       const alias = entryMatch[2] ?? srcName;
+      const typeOnly = statementTypeOnly || JS_FALLBACK_REEXPORT_TYPE_SPECIFIER_PATTERN.test(spec);
       if (
         !exports.some((entry) => entry.type === "reexport" && entry.exportedAs === alias && entry.fromModule === from)
       ) {
@@ -212,6 +285,7 @@ function appendJsLikeRegexFallbackExports(
           exportedAs: alias,
           fromModule: from,
           sourceSpecifier: srcName,
+          typeOnly,
         });
       }
     }
@@ -481,17 +555,12 @@ export function collectLocalsAndExportsFromSource(
     return SymbolKind.Variable;
   };
 
-  const classifyLocalCapture = (
-    capture: NativeCapture | { name: string },
-    range: Range,
-    node?: SyntaxNodeLike,
-  ): SymbolKind => {
+  const classifyLocalCapture = (node?: SyntaxNodeLike): SymbolKind => {
     if (node) return toKind(support.classifyDefinition(node));
-    if ("name" in capture && capture.name === "tname") {
-      return SymbolKind.TypeAlias;
-    }
     return SymbolKind.Variable;
   };
+
+  // Declarator captures name the declared entity, never parameter or array-bound types.
 
   const extractLocalsFromNativeQueries = (): boolean => {
     if (!nativeQueries) return false;
@@ -504,12 +573,34 @@ export function collectLocalsAndExportsFromSource(
       const enrichmentTree = ensureTree();
       for (const match of nativeQueries.locals) {
         for (const capture of match.captures) {
-          if (capture.name !== "name" && capture.name !== "tname") continue;
+          if (capture.name !== "name" && capture.name !== "declarator") continue;
           const nativeRange = rangeFromNativeCapture(capture, ensureByteIndexMap());
           const node =
             enrichmentTree?.rootNode.descendantForIndex(nativeRange.start.index ?? 0, nativeRange.end.index ?? 0) ??
             undefined;
-          pushLocal(capture.text, classifyLocalCapture(capture, nativeRange, node), nativeRange, node);
+          if (capture.name === "declarator") {
+            const namedNode = declaratorNameNode(node);
+            if (namedNode) {
+              pushLocal(namedNode.text, classifyLocalCapture(namedNode), toRange(namedNode), namedNode);
+            } else {
+              const extracted = cDeclaratorDeclaredName(capture.text);
+              if (!extracted) continue;
+              if (capture.nodeType === "identifier" || capture.nodeType === "type_identifier") {
+                pushLocal(capture.text, SymbolKind.TypeAlias, nativeRange);
+              } else {
+                pushLocal(
+                  extracted.name,
+                  SymbolKind.TypeAlias,
+                  rangeFromOffsets(
+                    (nativeRange.start.index ?? 0) + extracted.start,
+                    (nativeRange.start.index ?? 0) + extracted.end,
+                  ),
+                );
+              }
+            }
+          } else {
+            pushLocal(capture.text, classifyLocalCapture(node), nativeRange, node);
+          }
           capturedLocals = true;
         }
       }
@@ -520,10 +611,7 @@ export function collectLocalsAndExportsFromSource(
     }
   };
 
-  const extractLocalsFromJsQueries = (): boolean => false;
-
-  const usedNativeLocals = extractLocalsFromNativeQueries();
-  const usedQueryLocals = usedNativeLocals || extractLocalsFromJsQueries();
+  const usedQueryLocals = extractLocalsFromNativeQueries();
   if (!usedQueryLocals) {
     const scopeTree = ensureTree();
     if (scopeTree) {
@@ -618,19 +706,27 @@ export function collectLocalsAndExportsFromSource(
     const hasDefaultExport = (): boolean =>
       exports.some((entry) => entry.type === "local" && entry.exportedAs === "default");
 
-    /**
-     * True when the capture sits inside a node the language marks as non-module scope. Without a
-     * tree this cannot be decided, so it fails open and keeps the export.
-     */
+    const excludedCaptures: NativeCapture[] = [];
+    if (!treeForEnrichment) {
+      for (const match of matches) {
+        for (const capture of match.captures) {
+          if (capture.name === "export_scope" || capture.name === "private_declaration") excludedCaptures.push(capture);
+        }
+      }
+    }
+
+    // Native scope captures preserve C/C++ exclusions without an enrichment tree.
     const isOutsideModuleScope = (capture: NativeCapture | undefined): boolean => {
-      if (!support.exportScopeBlockers.length) return false;
+      if (!capture || !support.exportScopeBlockers.length) return false;
       let current = nodeForCapture(capture)?.parent ?? undefined;
       while (current) {
         const ancestor = current;
         if (support.exportScopeBlockers.some((blocker) => matchesExportScopeBlocker(ancestor, blocker))) return true;
         current = ancestor.parent ?? undefined;
       }
-      return false;
+      return excludedCaptures.some(
+        (scope) => capture.start.index >= scope.start.index && capture.end.index <= scope.end.index,
+      );
     };
 
     for (const match of matches) {
@@ -638,8 +734,8 @@ export function collectLocalsAndExportsFromSource(
       const stmtText = map["stmt"]?.text ?? "";
 
       if (support.id === "c" || support.id === "cpp") {
-        const declaration = nodeForCapture(map["declaration"]);
-        const hasStaticStorageClass = declaration?.namedChildren.some(
+        const declarationNode = nodeForCapture(map["declaration"]);
+        const hasStaticStorageClass = declarationNode?.namedChildren.some(
           (child) => child.type === "storage_class_specifier" && child.text === "static",
         );
         if (hasStaticStorageClass) continue;
@@ -700,7 +796,7 @@ export function collectLocalsAndExportsFromSource(
             fromModule: from,
             moduleSpecifier: from,
             sourceSpecifier: srcName,
-            typeOnly: isTypeOnly,
+            typeOnly: Boolean(map["type_kw"]) || isTypeOnly,
           });
         } else if (/^\s*export\s*\*/.test(stmtText)) {
           exports.push({
@@ -907,8 +1003,13 @@ export function collectLocalsAndExportsFromSource(
         }
         continue;
       }
-      if (map["name"]) {
-        const nameText = map["name"].text;
+      const nameCapture = map["name"] ?? map["declarator"];
+      if (nameCapture) {
+        if (isOutsideModuleScope(nameCapture)) continue;
+        const nameText = map["declarator"]
+          ? declaratorCaptureName(nameCapture, nodeForCapture(nameCapture))
+          : nameCapture.text;
+        if (!nameText) continue;
         const local = locals.find((def) => def.localName === nameText);
         if (local) {
           const isDefaultExport = /^\s*export\s+default\b/.test(stmtText);
@@ -1051,5 +1152,5 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
-  return { file, exports, imports, locals };
+  return { file, exports: dedupeExportEntries(exports), imports, locals };
 }

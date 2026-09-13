@@ -334,6 +334,58 @@ async function expectNativeSemantics(expectation: SemanticExpectation): Promise<
   }
 }
 
+async function createRustPathAttributeCase(): Promise<SemanticExpectation> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-rust-path-"));
+  tempDirs.push(root);
+  const src = path.join(root, "src");
+  await fsp.mkdir(src, { recursive: true });
+  await fsp.writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "native-rust-path"\nversion = "0.1.0"\n');
+  const libFile = path.join(src, "lib.rs");
+  const customFile = path.join(src, "custom.rs");
+  const decoyFile = path.join(src, "external.rs");
+  const consumerFile = path.join(src, "consumer.rs");
+  const importerDecoy = path.join(src, "decoy.rs");
+  await fsp.writeFile(libFile, '#[path = "custom.rs"]\nmod external;\npub mod consumer;\n');
+  await fsp.writeFile(customFile, "pub struct Thing;\n");
+  await fsp.writeFile(decoyFile, "pub struct Decoy;\n");
+  await fsp.writeFile(importerDecoy, "pub struct Thing;\n");
+  await fsp.writeFile(
+    consumerFile,
+    [
+      "use crate::external::Thing;",
+      '#[path = "decoy.rs"]',
+      "mod external;",
+      "pub fn consume() {",
+      "    let _t = Thing;",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  return {
+    root,
+    files: [libFile, customFile, decoyFile, consumerFile, importerDecoy],
+    symbols: [
+      {
+        file: customFile,
+        names: ["Thing"],
+      },
+    ],
+    goto: {
+      file: consumerFile,
+      line: 5,
+      column: "    let _t = Thing;".indexOf("Thing") + 1,
+      expectedStatus: "ok",
+    },
+    references: {
+      file: customFile,
+      line: 1,
+      column: 12,
+      expectedStatus: "ok",
+    },
+  };
+}
+
 async function createTypeScriptNormalizationCase(): Promise<SemanticExpectation> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-semantic-"));
   tempDirs.push(root);
@@ -888,6 +940,11 @@ nativeDescribe("native semantic coverage", () => {
 
   it("keeps native semantics stable for normalization-sensitive TypeScript export assignment", async () => {
     const testCase = await createTypeScriptNormalizationCase();
+    await expectNativeSemantics(testCase);
+  });
+
+  it("keeps native semantics stable for Rust path-attribute crate resolution", async () => {
+    const testCase = await createRustPathAttributeCase();
     await expectNativeSemantics(testCase);
   });
 

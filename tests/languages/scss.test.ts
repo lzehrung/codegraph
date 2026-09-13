@@ -1,6 +1,9 @@
+import os from "node:os";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { collectModuleSpecifiersFromSource } from "../../src/graphs.js";
+import { collectImportsForFile } from "../../src/indexer/imports.js";
 import { collectGraph, collectLocalsAndExportsFromSource } from "../../src/index.js";
 import { supportById } from "../../src/languages.js";
 import { isNativeTreeSitterAvailable, runNativeLanguageQueries } from "../../src/native/tree-sitter-native.js";
@@ -208,4 +211,49 @@ it("prefers SCSS partials over non-stylesheet files with the same partial basena
   expect(
     graph.edges.some((edge) => edge.from === mainFile && edge.to.type === "file" && edge.to.path === tsPartialFile),
   ).toBe(false);
+});
+
+it("resolves bare Sass imports to sibling partials", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-scss-bare-import-"));
+  const mainFile = path.join(root, "main.scss").replace(/\\/g, "/");
+  const partialFile = path.join(root, "_variables.scss").replace(/\\/g, "/");
+  await Promise.all([
+    fsp.writeFile(mainFile, '@use "variables";\n@use "./missing";\n', "utf8"),
+    fsp.writeFile(partialFile, "$color: red;\n", "utf8"),
+  ]);
+  try {
+    const graph = await collectGraph(root, [mainFile, partialFile]);
+    expect(
+      graph.edges.some((edge) => edge.from === mainFile && edge.to.type === "file" && edge.to.path === partialFile),
+    ).toBe(true);
+    expect(
+      graph.edges.some((edge) => edge.from === mainFile && edge.to.type === "external" && edge.to.name === "./missing"),
+    ).toBe(true);
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+});
+
+it("resolves a bare stylesheet import to the sibling partial, not a same-basename script", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-scss-binding-resolve-"));
+  const mainFile = path.join(root, "main.scss");
+  const partialFile = path.join(root, "_variables.scss");
+  const scriptFile = path.join(root, "variables.ts");
+  await Promise.all([
+    fsp.writeFile(mainFile, '@use "variables";\n', "utf8"),
+    fsp.writeFile(partialFile, "$color: red;\n", "utf8"),
+    fsp.writeFile(scriptFile, "export const color = 1;\n", "utf8"),
+  ]);
+  try {
+    const imports = await collectImportsForFile(mainFile, root);
+    const stylesheet = imports.find((entry) => entry.from === "variables");
+    expect(stylesheet).toBeDefined();
+    expect(typeof stylesheet?.resolved).toBe("string");
+    if (typeof stylesheet?.resolved === "string") {
+      expect(path.basename(stylesheet.resolved)).toBe("_variables.scss");
+      expect(path.basename(stylesheet.resolved)).not.toBe("variables.ts");
+    }
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
 });

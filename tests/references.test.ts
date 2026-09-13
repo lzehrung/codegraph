@@ -1666,8 +1666,11 @@ describe("Find References", () => {
       const helpersFile = path.join(samplePath, "helpers.h").replace(/\\/g, "/");
       const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
 
+      // The struct tag on line 4 and the typedef alias on line 6 are separate symbols now that C
+      // uses query-driven locals like C++. References for the tag keep its own declaration plus the
+      // cross-file use; the alias occurrence belongs to the alias symbol.
       const result = await testFindReferences(index, utilsFile, 4, 16, 2);
-      expectReferenceAt(result, utilsFile, 6);
+      expectReferenceAt(result, utilsFile, 4);
       expectReferenceAt(result, mainFile, 6);
     });
 
@@ -2031,6 +2034,51 @@ describe("Find References", () => {
 
       const result = await testFindReferences(index, utilsFile, 1, 8, 3);
       expectReferenceAt(result, aliasFile, 9);
+    });
+
+    it("finds references through crate #[path] modules and ignores conventional decoys", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-attr-refs-"));
+      try {
+        const src = path.join(root, "src");
+        await fsp.mkdir(src, { recursive: true });
+        await fsp.writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-attr-refs"\nversion = "0.1.0"\n');
+        await fsp.writeFile(path.join(src, "lib.rs"), '#[path = "custom.rs"]\nmod external;\npub mod consumer;\n');
+        const customFile = path.join(src, "custom.rs").replace(/\\/g, "/");
+        const decoyFile = path.join(src, "external.rs").replace(/\\/g, "/");
+        const consumerFile = path.join(src, "consumer.rs").replace(/\\/g, "/");
+        await fsp.writeFile(customFile, "pub struct Thing;\n");
+        await fsp.writeFile(decoyFile, "pub struct Decoy;\n");
+        await fsp.writeFile(
+          consumerFile,
+          [
+            "use crate::external::Thing;",
+            '#[path = "decoy.rs"]',
+            "mod external;",
+            "pub fn consume() {",
+            "    let _t = Thing;",
+            "}",
+            "",
+          ].join("\n"),
+        );
+        await fsp.writeFile(path.join(src, "decoy.rs"), "pub struct Thing;\n");
+        const index = await createTestIndexFromFiles(root, [
+          path.join(src, "lib.rs"),
+          customFile,
+          decoyFile,
+          consumerFile,
+          path.join(src, "decoy.rs"),
+        ]);
+        const result = await testFindReferences(index, customFile, 1, 12, 2);
+        expect(result.status).toBe("ok");
+        expectReferenceAt(result, customFile, 1);
+        expectReferenceAt(result, consumerFile, 5);
+        if (result.status === "ok") {
+          expect(result.references.some((reference) => path.basename(reference.file) === "external.rs")).toBe(false);
+          expect(result.references.some((reference) => path.basename(reference.file) === "decoy.rs")).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
     });
 
     it("finds macro_rules definitions and invocations", async () => {

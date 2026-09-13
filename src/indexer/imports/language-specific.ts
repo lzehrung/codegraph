@@ -2,19 +2,23 @@ import path from "node:path";
 import {
   JAVA_DOTTED_NAME_SOURCE,
   KOTLIN_DOTTED_NAME_SOURCE,
+  isRustItemStartBoundary,
   parseCsharpUsingDirective,
   parseJavaImportStatement,
   parseKotlinImportStatement,
   parsePhpImportStatement,
-  parseRustImportStatement,
+  parseRustImportStatements,
+  skipRustCommentOrLiteral,
+  skipRustMacroTokenTree,
+  skipRustOuterAttribute,
+  type ParsedRustImportStatement,
 } from "../../languages/import-statement-parsers.js";
-import { GO_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
+import { GO_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { getPhpComposerImplicitFiles } from "../../util/resolution.js";
+import { extractRustModPathAttribute, resolveRustImportPath } from "../../util/resolution/rust.js";
 import type { ImportBinding } from "../types.js";
 import type { ImportBindingSink, ImportResolver, ResolvedImportTarget } from "./context.js";
-
-const JAVA_UPPERCASE_IDENTIFIER_PATTERN = new RegExp(String.raw`^(?=\p{Lu})${JAVA_IDENTIFIER_SOURCE}$`, "u");
 
 export type LanguageSpecificImportContext = ImportBindingSink & {
   file: string;
@@ -136,7 +140,7 @@ async function appendKotlinTextImports(context: LanguageSpecificImportContext): 
     return;
   }
   const importPattern = new RegExp(
-    String.raw`^\s*import\s+(${KOTLIN_DOTTED_NAME_SOURCE}(?:\.\*)?)(?:\s+as\s+(${KOTLIN_IDENTIFIER_SOURCE}))?\s*$`,
+    String.raw`^\s*import\s+(${KOTLIN_DOTTED_NAME_SOURCE}(?:\.\*)?)(?:\s+as\s+(${KOTLIN_IDENTIFIER_SOURCE}))?\s*;?\s*$`,
     "gmu",
   );
   for (const match of context.source.matchAll(importPattern)) {
@@ -207,6 +211,7 @@ export async function finalizeLanguageSpecificImports(context: LanguageSpecificI
   normalizeGoImports(context);
   await appendJavaTextImports(context);
   await appendKotlinTextImports(context);
+  await appendRustTextImports(context);
   await appendPhpComposerImplicitImports(context);
 }
 
@@ -336,36 +341,161 @@ async function applyRustStatementOverride(
 ): Promise<boolean> {
   if (isRustTestOnlyStatement(context, normalizedStmt, statementStartIndex)) return true;
 
-  const parsed = parseRustImportStatement(normalizedStmt);
-  if (!parsed) return false;
-
-  const resolved = await context.resolveFrom(parsed.from);
-  if (parsed.kind === "member") {
-    context.pushBinding({
-      kind: "named",
-      local: parsed.local,
-      imported: parsed.imported,
-      from: parsed.from,
-      resolved,
-      typeOnly,
-    });
-  } else if (parsed.kind === "module") {
-    context.pushBinding({
-      kind: "namespace",
-      localNS: parsed.local,
-      from: parsed.from,
-      resolved,
-      typeOnly,
-    });
-  } else {
-    context.pushBinding({
-      kind: "star",
-      from: parsed.from,
-      resolved,
-      typeOnly,
-    });
-  }
+  const parsedList = parseRustImportStatements(normalizedStmt);
+  if (!parsedList.length) return false;
+  const seen = new Set(context.getBindings().map(rustBindingKey));
+  await pushParsedRustImports(context, parsedList, typeOnly, statementStartIndex, seen);
   return true;
+}
+
+async function resolveRustParsedFrom(
+  context: LanguageSpecificImportContext,
+  from: string,
+  pathAttribute?: string,
+  statementStartIndex?: number,
+): Promise<ResolvedImportTarget> {
+  if (pathAttribute) {
+    const attributed = await resolveRustImportPath(
+      context.projectRoot,
+      context.file,
+      from,
+      pathAttribute,
+      statementStartIndex,
+    );
+    if (attributed) return attributed.replace(/\\/g, "/");
+    return { external: from };
+  }
+  return context.resolveFrom(from);
+}
+
+function rustBindingKey(binding: ImportBinding): string {
+  const resolved = JSON.stringify(binding.resolved);
+  if (binding.kind === "named") return `named:${binding.local}:${binding.imported}:${binding.from}:${resolved}`;
+  if (binding.kind === "namespace") return `namespace:${binding.localNS}:${binding.from}:${resolved}`;
+  if (binding.kind === "star") return `star:${binding.from}:${resolved}`;
+  return JSON.stringify(binding);
+}
+
+const RUST_IMPORT_KEYWORD_PATTERN = /^(?:pub(?:\s*\([^)]*\))?\s+)?(use|extern\s+crate|mod)\b/;
+
+function scanRustImportStatements(sourceText: string): Array<{ text: string; start: number }> {
+  const results: Array<{ text: string; start: number }> = [];
+  let index = 0;
+  while (index < sourceText.length) {
+    const skipped = skipRustCommentOrLiteral(sourceText, index) ?? skipRustMacroTokenTree(sourceText, index);
+    if (skipped) {
+      index = skipped.end;
+      continue;
+    }
+    if (/\s/.test(sourceText[index]!)) {
+      index += 1;
+      continue;
+    }
+
+    const statementStart = index;
+    let cursor = index;
+    for (;;) {
+      while (cursor < sourceText.length && /\s/.test(sourceText[cursor]!)) cursor += 1;
+      const trivia = skipRustCommentOrLiteral(sourceText, cursor);
+      if (trivia) {
+        cursor = trivia.end;
+        continue;
+      }
+      const attrEnd = skipRustOuterAttribute(sourceText, cursor);
+      if (attrEnd === null) break;
+      cursor = attrEnd;
+    }
+
+    const match = sourceText.slice(cursor).match(RUST_IMPORT_KEYWORD_PATTERN);
+    if (!match || !isRustItemStartBoundary(sourceText, cursor)) {
+      index = Math.max(index + 1, cursor);
+      continue;
+    }
+
+    let consumed = false;
+    let depth = 0;
+    for (let scan = statementStart; scan < sourceText.length; ) {
+      const inner = skipRustCommentOrLiteral(sourceText, scan) ?? skipRustMacroTokenTree(sourceText, scan);
+      if (inner) {
+        scan = inner.end;
+        continue;
+      }
+      const character = sourceText[scan];
+      if (character === "{") {
+        const head = sourceText.slice(statementStart, scan);
+        if (/\bmod\b/.test(head) && !/\buse\b/.test(head)) {
+          index = scan + 1;
+          consumed = true;
+          break;
+        }
+        depth += 1;
+        scan += 1;
+        continue;
+      }
+      if (character === "}") {
+        depth = Math.max(0, depth - 1);
+        scan += 1;
+        continue;
+      }
+      if (character === ";" && !depth) {
+        results.push({ text: sourceText.slice(statementStart, scan + 1), start: statementStart });
+        index = scan + 1;
+        consumed = true;
+        break;
+      }
+      scan += 1;
+    }
+    if (!consumed) index += 1;
+  }
+  return results;
+}
+
+function buildRustBinding(
+  parsed: ParsedRustImportStatement,
+  resolved: ResolvedImportTarget,
+  typeOnly: boolean,
+): ImportBinding {
+  if (parsed.kind === "member") {
+    return { kind: "named", local: parsed.local, imported: parsed.imported, from: parsed.from, resolved, typeOnly };
+  }
+  if (parsed.kind === "module") {
+    return { kind: "namespace", localNS: parsed.local, from: parsed.from, resolved, typeOnly };
+  }
+  return { kind: "star", from: parsed.from, resolved, typeOnly };
+}
+
+async function pushParsedRustImports(
+  context: LanguageSpecificImportContext,
+  parsedList: ReturnType<typeof parseRustImportStatements>,
+  typeOnly: boolean,
+  statementStartIndex: number | undefined,
+  seen: Set<string>,
+): Promise<void> {
+  const statementPathAttribute = extractRustModPathAttribute(context.source, undefined, statementStartIndex);
+  for (const parsed of parsedList) {
+    const pathAttribute =
+      parsed.kind === "module" && !parsed.isExternCrate ? (parsed.pathAttribute ?? statementPathAttribute) : undefined;
+    const resolved = await resolveRustParsedFrom(context, parsed.from, pathAttribute, statementStartIndex);
+    const binding = buildRustBinding(parsed, resolved, typeOnly);
+    const key = rustBindingKey(binding);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    context.pushBinding(binding);
+  }
+}
+
+async function appendRustTextImports(context: LanguageSpecificImportContext): Promise<void> {
+  if (context.languageId !== "rust") return;
+  const seen = new Set(context.getBindings().map(rustBindingKey));
+  for (const statement of scanRustImportStatements(context.source)) {
+    const keywordOffset = rustImportKeywordOffset(statement.text);
+    const keywordIndex = keywordOffset >= 0 ? statement.start + keywordOffset : statement.start;
+    const keywordText = keywordOffset >= 0 ? statement.text.slice(keywordOffset) : statement.text;
+    if (isRustCfgTestStatement(context.source, keywordText, keywordIndex)) continue;
+    const parsedList = parseRustImportStatements(statement.text);
+    if (!parsedList.length) continue;
+    await pushParsedRustImports(context, parsedList, false, statement.start, seen);
+  }
 }
 
 function isRustTestOnlyStatement(
@@ -374,7 +504,37 @@ function isRustTestOnlyStatement(
   statementStartIndex?: number,
 ): boolean {
   if (context.languageId !== "rust") return false;
+  if (statementStartIndex !== undefined) {
+    const keywordOffset = rustImportKeywordOffset(context.source.slice(statementStartIndex));
+    const keywordIndex = keywordOffset >= 0 ? statementStartIndex + keywordOffset : statementStartIndex;
+    const keywordText = keywordOffset >= 0 ? context.source.slice(keywordIndex) : normalizedStmt;
+    return isRustCfgTestStatement(context.source, keywordText, keywordIndex);
+  }
   return isRustCfgTestStatement(context.source, normalizedStmt, statementStartIndex);
+}
+
+function rustImportKeywordOffset(text: string): number {
+  let index = 0;
+  while (index < text.length) {
+    if (/\s/.test(text[index]!)) {
+      index += 1;
+      continue;
+    }
+    const skipped = skipRustCommentOrLiteral(text, index);
+    if (skipped) {
+      index = skipped.end;
+      continue;
+    }
+    const attrEnd = skipRustOuterAttribute(text, index);
+    if (attrEnd !== null) {
+      index = attrEnd;
+      continue;
+    }
+    const match = text.slice(index).match(RUST_IMPORT_KEYWORD_PATTERN);
+    if (match) return index;
+    index += 1;
+  }
+  return -1;
 }
 
 async function applyPhpStatementOverride(
@@ -466,7 +626,7 @@ export function appendImplicitImportBinding(
     const last = parts[parts.length - 1];
     if (last === "*") {
       context.pushBinding({ kind: "star", from, resolved, typeOnly });
-    } else if (last && JAVA_UPPERCASE_IDENTIFIER_PATTERN.test(last)) {
+    } else if (last) {
       context.pushBinding({ kind: "named", local: last, imported: last, from, resolved, typeOnly });
     }
   } else if (context.languageId === "csharp") {

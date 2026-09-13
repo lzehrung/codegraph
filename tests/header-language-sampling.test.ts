@@ -218,6 +218,41 @@ describe("header language classification", () => {
   });
 });
 
+describe("C vs C++ header hint content", () => {
+  it("ignores C++ tokens in comments and strings and recognizes using/import/co_await", () => {
+    const cases: Array<{ source: string; id: "c" | "cpp" }> = [
+      { source: "/* This is a template for the audio driver. */ struct S { int x; };", id: "c" },
+      { source: "/* network operator id */ struct S { int x; };", id: "c" },
+      { source: "/* Copyright 2020 The class of 1999 */ struct S { int x; };", id: "c" },
+      { source: "/* see C++ std::vector */ int x;", id: "c" },
+      { source: "using Foo = int;", id: "cpp" },
+      { source: "import std;", id: "cpp" },
+      { source: "export import foo;", id: "cpp" },
+      { source: "#import <Foundation/Foundation.h>\nstruct S { int x; };", id: "c" },
+      { source: "void import(void);\nstruct S { int x; };", id: "c" },
+      { source: "struct S { int concept; int co_await; int import; };", id: "c" },
+      { source: "template<class T> concept Sized = sizeof(T) > 0;", id: "cpp" },
+      { source: 'import "widget.h";', id: "cpp" },
+      { source: "auto f() { co_await x; }", id: "cpp" },
+      { source: "namespace widgets { class Widget {}; }", id: "cpp" },
+      { source: "struct Widget { int value; };", id: "c" },
+      { source: "void Widget::bar();", id: "cpp" },
+      { source: "constexpr int k = 1;", id: "cpp" },
+      { source: "struct S { int class; };", id: "c" },
+      { source: "struct S { int namespace; int template; int typename; int constexpr; int operator; };", id: "c" },
+      { source: "void foo(int class);\nstruct S { int x; };", id: "c" },
+      { source: "class Foo;", id: "cpp" },
+      { source: "struct S { S& operator=(const S& o); int x; };", id: "cpp" },
+      { source: "struct S { bool operator[](int i); };", id: "cpp" },
+      { source: "template <class T = int> struct S { T x; };", id: "cpp" },
+      { source: "int template(int value);", id: "c" },
+    ];
+    for (const testCase of cases) {
+      expect(supportForFileWithSource("probe.h", testCase.source)?.id, testCase.source).toBe(testCase.id);
+    }
+  });
+});
+
 describe("header classification for callers that already hold the source", () => {
   it("prepares a query index entry for a header without sampling it", async () => {
     const root = await createTempProjectRoot("cg-header-query-index-", [{ path: "widget.h", contents: CPP_HEADER }]);

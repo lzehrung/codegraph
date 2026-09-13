@@ -65,6 +65,7 @@ async function resolveGenericSpecifier(
     {
       resolveNodeModules: !!context.resolveNodeModules,
       ...(resolutionExtensions ? { resolutionExtensions } : {}),
+      ...(entry.resolutionKind ? { resolutionKind: entry.resolutionKind } : {}),
       ...(context.resolutionHints ? { resolutionHints: context.resolutionHints } : {}),
       ...(entry.exportCondition ? { exportCondition: entry.exportCondition } : {}),
       ...(context.support.id === "scss" && entry.resolutionKind !== "document"
@@ -99,6 +100,8 @@ async function resolveImportSpecifierEdge(
     ...(context.resolutionHints ? { resolutionHints: context.resolutionHints } : {}),
     ...(entry.phpImportType ? { phpImportType: entry.phpImportType } : {}),
     ...(entry.exportCondition ? { exportCondition: entry.exportCondition } : {}),
+    ...(entry.pathAttribute ? { pathAttribute: entry.pathAttribute } : {}),
+    ...(entry.statementStartIndex !== undefined ? { statementStartIndex: entry.statementStartIndex } : {}),
   });
   return typeof res === "string" ? edgeToResolvedFile(res) : edgeToExternal(entry.raw ?? res.external);
 }

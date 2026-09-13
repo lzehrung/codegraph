@@ -4,9 +4,16 @@ import fsp from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
-import { buildProjectIndex, collectLocalsAndExportsFromSource, parseFile, SymbolKind } from "../../src/indexer.js";
+import {
+  buildProjectIndex,
+  collectImportsForFile,
+  collectLocalsAndExportsFromSource,
+  parseFile,
+  SymbolKind,
+} from "../../src/indexer.js";
 import { expectFileInIndex, findSymbolsByName } from "../test-utils.js";
 import { collectGraph, findReferences, goToDefinition } from "../../src/index.js";
+import { PY_SUPPORT } from "../../src/languages.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
 import { exportedNameOf } from "../helpers/narrow.js";
@@ -596,5 +603,269 @@ def keep(): pass
     expect(exportedNames).toEqual(expect.arrayContaining(["outer", "keep"]));
     expect(exportedNames).not.toContain("member");
     expect(exportedNames).not.toContain("Hidden");
+  });
+});
+
+describe("Python native import bindings", () => {
+  it("binds multiline, comma-separated, continued, relative, star, and future imports", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-native-imports-"));
+    const packageDir = path.join(root, "pkg");
+    const consumerFile = path.join(packageDir, "consumer.py").replace(/\\/g, "/");
+    const alphaFile = path.join(packageDir, "alpha.py").replace(/\\/g, "/");
+    await fsp.mkdir(packageDir, { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(packageDir, "__init__.py"), "", "utf8"),
+      fsp.writeFile(alphaFile, "one = 1\ntwo = 2\n", "utf8"),
+      fsp.writeFile(path.join(packageDir, "beta.py"), "three = 3\nfour = 4\n", "utf8"),
+      fsp.writeFile(path.join(packageDir, "local.py"), "value = 5\n", "utf8"),
+      fsp.writeFile(
+        consumerFile,
+        [
+          "from .alpha import (",
+          "    one,",
+          "    two,",
+          ")",
+          "import os, sys",
+          "from .beta import three, \\",
+          "    four as renamed",
+          "from .local import *",
+          "from __future__ import annotations",
+          "if True:",
+          "    from .local import value as nested",
+          "one",
+          "",
+        ].join("\n"),
+        "utf8",
+      ),
+    ]);
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const imports = index.byFile.get(fileIdentityKey(consumerFile))?.imports ?? [];
+      expect(imports).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "named",
+            from: ".alpha",
+            imported: "one",
+            local: "one",
+            mechanism: "python",
+          }),
+          expect.objectContaining({
+            kind: "named",
+            from: ".alpha",
+            imported: "two",
+            local: "two",
+            mechanism: "python",
+          }),
+          expect.objectContaining({ kind: "namespace", from: "os", localNS: "os", mechanism: "python" }),
+          expect.objectContaining({ kind: "namespace", from: "sys", localNS: "sys", mechanism: "python" }),
+          expect.objectContaining({
+            kind: "named",
+            from: ".beta",
+            imported: "four",
+            local: "renamed",
+            mechanism: "python",
+          }),
+          expect.objectContaining({ kind: "star", from: ".local", mechanism: "python" }),
+          expect.objectContaining({ kind: "named", from: "__future__", imported: "annotations", mechanism: "python" }),
+          expect.objectContaining({
+            kind: "named",
+            from: ".local",
+            imported: "value",
+            local: "nested",
+            moduleLevel: false,
+          }),
+        ]),
+      );
+      const references = await findReferences(index, { file: alphaFile, line: 1, column: 1 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(
+          references.references.some(
+            (reference) => reference.file === consumerFile && reference.range.start.line === 12,
+          ),
+        ).toBe(true);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps simple-suite imports out of module exports while retaining same-line top-level imports", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-simple-suite-"));
+    const consumer = path.join(root, "consumer.py");
+    await Promise.all(
+      ["feature", "hidden", "first", "second", "assigned", "called", "annotated"].map((name) =>
+        fsp.writeFile(path.join(root, `${name}.py`), "value = 1\n"),
+      ),
+    );
+    await fsp.writeFile(
+      consumer,
+      [
+        "if enabled: import feature",
+        "def load(): import hidden",
+        "import first; import second",
+        "x = 1; import assigned",
+        "print('if ignored: ; )'); import called",
+        "match: dict[str, int] = {'key': 1}; import annotated",
+      ].join("\n"),
+    );
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const module = index.byFile.get(fileIdentityKey(consumer));
+      expect(module?.imports).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ from: "feature", moduleLevel: false }),
+          expect.objectContaining({ from: "hidden", moduleLevel: false }),
+          expect.objectContaining({ from: "second", moduleLevel: true }),
+          expect.objectContaining({ from: "assigned", moduleLevel: true }),
+          expect.objectContaining({ from: "called", moduleLevel: true }),
+          expect.objectContaining({ from: "annotated", moduleLevel: true }),
+        ]),
+      );
+      const exported = module?.exports.flatMap((entry) => (entry.type === "exportStar" ? [] : [entry.exportedAs]));
+      expect(exported).not.toContain("feature");
+      expect(exported).not.toContain("hidden");
+      expect(exported).toContain("second");
+      expect(exported).toEqual(expect.arrayContaining(["assigned", "called", "annotated"]));
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a multi-line conditional import out of module exports", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-multiline-cond-"));
+    const consumer = path.join(root, "consumer.py");
+    await Promise.all([
+      fsp.writeFile(path.join(root, "feature.py"), "value = 1\n"),
+      fsp.writeFile(path.join(root, "kept.py"), "value = 2\n"),
+      fsp.writeFile(consumer, ["if (", "    enabled", "): import feature", "import kept"].join("\n")),
+    ]);
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const module = index.byFile.get(fileIdentityKey(consumer));
+      expect(module?.imports).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ from: "feature", moduleLevel: false }),
+          expect.objectContaining({ from: "kept", moduleLevel: true }),
+        ]),
+      );
+      const exported = module?.exports.flatMap((entry) => (entry.type === "exportStar" ? [] : [entry.exportedAs]));
+      expect(exported).not.toContain("feature");
+      expect(exported).toContain("kept");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a top-level import after a multi-line parenthesized simple statement module-level", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-multiline-simple-"));
+    const consumer = path.join(root, "consumer.py");
+    await Promise.all([
+      fsp.writeFile(path.join(root, "pkg.py"), "value = 1\n"),
+      fsp.writeFile(consumer, "value = (\n    1\n); import pkg\n"),
+    ]);
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const module = index.byFile.get(fileIdentityKey(consumer));
+      expect(module?.imports).toEqual(
+        expect.arrayContaining([expect.objectContaining({ from: "pkg", moduleLevel: true })]),
+      );
+      const exported = module?.exports.flatMap((entry) => (entry.type === "exportStar" ? [] : [entry.exportedAs]));
+      expect(exported).toContain("pkg");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("agrees between native and reduced-mode import extraction for the same source, including a compound-suite exclusion", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-mode-agreement-"));
+    const consumer = path.join(root, "consumer.py");
+    const source = ["value = (", "    1", "); import pkg", "if enabled: import feature", "import kept"].join("\n");
+    await Promise.all([
+      fsp.writeFile(path.join(root, "pkg.py"), "value = 1\n"),
+      fsp.writeFile(path.join(root, "feature.py"), "value = 1\n"),
+      fsp.writeFile(path.join(root, "kept.py"), "value = 1\n"),
+      fsp.writeFile(consumer, source),
+    ]);
+    try {
+      const nativeImports = await collectImportsForFile(consumer, root, { source, native: "auto" });
+      const reducedImports = await collectImportsForFile(consumer, root, { source, native: "off" });
+
+      // Both modes agree on the module-level imports: the semicolon-separated `pkg` import
+      // after the multi-line parenthesized statement, and the plain top-level `kept` import.
+      for (const imports of [nativeImports, reducedImports]) {
+        expect(imports).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ from: "pkg", moduleLevel: true }),
+            expect.objectContaining({ from: "kept", moduleLevel: true }),
+          ]),
+        );
+      }
+
+      // Exclusion case: `if enabled: import feature` never becomes a module-level export in
+      // either mode. Native still records the binding (with moduleLevel: false); reduced mode
+      // records no binding for it at all, but neither publishes it as a re-export.
+      expect(nativeImports).toEqual(
+        expect.arrayContaining([expect.objectContaining({ from: "feature", moduleLevel: false })]),
+      );
+      expect(reducedImports.some((binding) => binding.from === "feature")).toBe(false);
+
+      for (const [imports, nativeMode] of [
+        [nativeImports, "auto"],
+        [reducedImports, "off"],
+      ] as const) {
+        const mod = collectLocalsAndExportsFromSource(consumer, source, PY_SUPPORT, imports, { nativeMode });
+        const importExports = mod.exports
+          .filter((entry) => entry.type === "reexport" || entry.type === "namespaceReexport")
+          .map((entry) => entry.exportedAs);
+        expect(importExports).toEqual(expect.arrayContaining(["pkg", "kept"]));
+        expect(importExports).not.toContain("feature");
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps names after inline comments in native Python import statements", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-native-import-comments-"));
+    const packageDir = path.join(root, "pkg");
+    const consumerFile = path.join(packageDir, "consumer.py").replace(/\\/g, "/");
+    await fsp.mkdir(packageDir, { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(packageDir, "__init__.py"), "", "utf8"),
+      fsp.writeFile(path.join(packageDir, "alpha.py"), "one = 1\ntwo = 2\n", "utf8"),
+      fsp.writeFile(path.join(packageDir, "local.py"), "value = 5\n", "utf8"),
+      fsp.writeFile(
+        consumerFile,
+        [
+          "from .alpha import (",
+          "    one,  # kept",
+          "    two,",
+          ")",
+          "import os, sys  # stdlib",
+          "from .local import *  # noqa",
+          "from .local import value  # trailing",
+          "",
+        ].join("\n"),
+        "utf8",
+      ),
+    ]);
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const imports = index.byFile.get(fileIdentityKey(consumerFile))?.imports ?? [];
+      expect(imports).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: "named", from: ".alpha", imported: "one", local: "one" }),
+          expect.objectContaining({ kind: "named", from: ".alpha", imported: "two", local: "two" }),
+          expect.objectContaining({ kind: "namespace", from: "os", localNS: "os" }),
+          expect.objectContaining({ kind: "namespace", from: "sys", localNS: "sys" }),
+          expect.objectContaining({ kind: "star", from: ".local" }),
+          expect.objectContaining({ kind: "named", from: ".local", imported: "value", local: "value" }),
+        ]),
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });
