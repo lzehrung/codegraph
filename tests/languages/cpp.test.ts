@@ -299,7 +299,6 @@ describe("C++ native queries", () => {
   });
 });
 
-
 describe("C++ classification and same-file navigation", () => {
   it("classifies nested namespaces and unions, and resolves concepts and macros", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-classify-"));
@@ -325,12 +324,12 @@ describe("C++ classification and same-file navigation", () => {
       const index = await createTestIndexFromFiles(root, [file]);
       const symbols = listSymbols(index, { file });
       const symbolAt = (name: string, line: number) =>
-        symbols.find((symbol) => symbol.name === name && symbol.range.start.line === line);
+        symbols.find((symbol) => symbol.name === name && symbol.range?.start.line === line);
 
       expect(symbolAt("outer", 1)?.kind).toBe("class");
       expect(symbolAt("leaf", 1)?.kind).toBe("class");
       expect(symbolAt("U", 2)?.kind).toBe("class");
-      expect(symbols.filter((symbol) => symbol.name === "FOO" && symbol.range.start.line === 9)).toEqual([]);
+      expect(symbols.filter((symbol) => symbol.name === "FOO" && symbol.range?.start.line === 9)).toEqual([]);
 
       const conceptGoto = await goToDefinition(index, { file, line: 5, column: 10 });
       expect(conceptGoto.status).toBe("ok");
