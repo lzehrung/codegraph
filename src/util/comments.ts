@@ -111,7 +111,7 @@ function transformJsLikeTrivia(src: string, options?: { maskStrings?: boolean; p
 }
 
 export function stripJsLikeComments(src: string): string {
-  return transformJsLikeTrivia(src);
+  return transformJsLikeTrivia(src, { preserveLength: true });
 }
 
 export function maskJsLikeCommentsAndStrings(src: string): string {

@@ -10,6 +10,7 @@ import {
 } from "../src/native/tree-sitter-native.js";
 import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import { isJsTsTypeOnlySpecifierStatement } from "../src/util/specifiers.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -378,5 +379,38 @@ describe("Import extraction fallback reporting", () => {
       (entry) => entry.from === normalizedMain && entry.to.type === "external" && entry.to.name === "__future__",
     );
     expect(futureEdge).toBeTruthy();
+  });
+
+  it("treats inline-only named specifiers as type-only and mixed clauses as runtime", () => {
+    const source = [
+      "import { type Foo } from './only'",
+      "import { type Foo, bar } from './mixed'",
+      "import { type Foo, type Bar } from './all-inline'",
+      "import type { Foo } from './types'",
+      "import './side'",
+      "import {} from './empty'",
+      "export { type Baz } from './exp-only'",
+      "export { type Baz, qux } from './exp-mixed'",
+      "export type { Baz } from './exp-stmt'",
+    ].join("\n");
+
+    const specs = extractJsTsSpecifiers(source);
+    const bySpec = Object.fromEntries(specs.map((entry) => [entry.spec, Boolean(entry.typeOnly)]));
+    expect(bySpec).toMatchObject({
+      "./only": true,
+      "./mixed": false,
+      "./all-inline": true,
+      "./types": true,
+      "./side": false,
+      "./empty": false,
+      "./exp-only": true,
+      "./exp-mixed": false,
+      "./exp-stmt": true,
+    });
+  });
+
+  it("treats comments as whitespace around type modifiers", () => {
+    expect(isJsTsTypeOnlySpecifierStatement('import { type/* erased */Foo } from "./types";')).toBe(true);
+    expect(isJsTsTypeOnlySpecifierStatement('export type{Foo}from "./types";')).toBe(true);
   });
 });

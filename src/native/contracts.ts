@@ -72,6 +72,8 @@ export type NativeLanguageExtraction = {
 export type CompactCapture = {
   name: string;
   text: string;
+  /** UTF-8 byte offset of the captured node, present in current native add-ons. */
+  startIndex?: number;
 };
 
 export type CompactMatch = {

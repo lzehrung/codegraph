@@ -1,4 +1,5 @@
 import { XID_IDENTIFIER_SOURCE } from "./identifiers.js";
+import { rustLeadingAttributesIncludeCfgTest } from "./resolution/rust.js";
 
 const RUST_TEST_MODULE_PATTERN = new RegExp(
   String.raw`#\s*\[cfg\s*\(\s*test\s*\)\]\s*mod\s+${XID_IDENTIFIER_SOURCE}\s*\{`,
@@ -10,7 +11,7 @@ export function isRustCfgTestStatement(source: string, statementText: string, st
 
   const statementIndex = resolveStatementIndex(source, statementText, normalizedStatement, statementStartIndex);
   if (statementIndex === -1) return false;
-  if (hasImmediateRustCfgTestAttribute(source, statementIndex)) return true;
+  if (rustLeadingAttributesIncludeCfgTest(source, statementIndex)) return true;
   return isInsideRustCfgTestModule(source, statementIndex);
 }
 
@@ -38,11 +39,6 @@ function resolveStatementIndex(
     return statementStartIndex + Math.max(0, leadingWhitespace);
   }
   return source.indexOf(normalizedStatement);
-}
-
-function hasImmediateRustCfgTestAttribute(source: string, statementIndex: number): boolean {
-  const prefix = source.slice(0, statementIndex).trimEnd();
-  return /#\s*\[cfg\s*\(\s*test\s*\)\]\s*$/.test(prefix);
 }
 
 function isInsideRustCfgTestModule(source: string, statementIndex: number): boolean {

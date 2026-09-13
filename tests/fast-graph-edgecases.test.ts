@@ -59,4 +59,61 @@ describe("Fast graph edge cases", () => {
     const edgesFrom = gFast.edges.filter(edgeFrom(file));
     expect(edgesFrom.length).toBe(0);
   });
+
+  it("marks inline-only named type imports as typeOnly and mixed clauses as runtime", async () => {
+    const rootDir = await mkTmpDir("dg-fast-inline-type-");
+    const util = "export type T = { n: number };\nexport const v = 1;\n";
+    const main = [
+      'import { /* erased */ type T } from "./util";',
+      'import { type T as Only, v } from "./util";',
+      'import { type T as AllA, type T as AllB } from "./all";',
+      'import "./side";',
+      'import {} from "./empty";',
+      'export{type T}from"./exp-only";',
+      'export { type T, v as vv } from "./exp-mixed";',
+      'export type { T as Whole } from "./exp-stmt";',
+      'import type from "./side";',
+    ].join("\n");
+    await fsp.writeFile(path.join(rootDir, "util.ts"), util, "utf8");
+    await fsp.writeFile(path.join(rootDir, "all.ts"), "export type T = number;\n", "utf8");
+    await fsp.writeFile(path.join(rootDir, "side.ts"), "export const s = 1;\n", "utf8");
+    await fsp.writeFile(path.join(rootDir, "empty.ts"), "export const e = 1;\n", "utf8");
+    await fsp.writeFile(path.join(rootDir, "exp-only.ts"), "export type T = number;\n", "utf8");
+    await fsp.writeFile(path.join(rootDir, "exp-mixed.ts"), "export type T = number;\nexport const v = 1;\n", "utf8");
+    await fsp.writeFile(path.join(rootDir, "exp-stmt.ts"), "export type T = number;\n", "utf8");
+    await fsp.writeFile(path.join(rootDir, "main.ts"), main, "utf8");
+    const files = [
+      "main.ts",
+      "util.ts",
+      "all.ts",
+      "side.ts",
+      "empty.ts",
+      "exp-only.ts",
+      "exp-mixed.ts",
+      "exp-stmt.ts",
+    ].map((fileName) => path.join(rootDir, fileName).replace(/\\/g, "/"));
+
+    const graphs = [
+      await collectGraph(rootDir, files),
+      await (await import("../src/graphs.js")).collectGraph(rootDir, files, { fast: true }),
+      await collectGraph(rootDir, files, { native: "off" }),
+    ];
+    const mainPath = path.join(rootDir, "main.ts").replace(/\\/g, "/");
+    const typeOnlyOf = (graph: Awaited<ReturnType<typeof collectGraph>>, fileName: string) => {
+      const target = path.join(rootDir, fileName).replace(/\\/g, "/");
+      const edges = graph.edges.filter(
+        (edge) => edge.from === mainPath && edge.to.type === "file" && edge.to.path === target,
+      );
+      return edges.map((edge) => Boolean(edge.typeOnly));
+    };
+    for (const graph of graphs) {
+      expect(typeOnlyOf(graph, "util.ts").sort()).toEqual([false, true].sort());
+      expect(typeOnlyOf(graph, "all.ts")).toEqual([true]);
+      expect(typeOnlyOf(graph, "side.ts")).toEqual([false]);
+      expect(typeOnlyOf(graph, "empty.ts")).toEqual([false]);
+      expect(typeOnlyOf(graph, "exp-only.ts")).toEqual([true]);
+      expect(typeOnlyOf(graph, "exp-mixed.ts")).toEqual([false]);
+      expect(typeOnlyOf(graph, "exp-stmt.ts")).toEqual([true]);
+    }
+  });
 });

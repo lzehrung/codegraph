@@ -46,13 +46,13 @@ pub struct NativeLanguageExtraction {
     pub syntax_tree: NativeSyntaxTree,
 }
 
-/// Compact capture with only name and text -- used by graph-mode imports
-/// where position and node-type data are not consumed by the caller.
+/// Compact capture with name, text, and byte offset for graph-mode imports.
 #[derive(Debug, PartialEq, Eq)]
 #[napi(object)]
 pub struct CompactCapture {
     pub name: String,
     pub text: String,
+    pub start_index: u32,
 }
 
 #[derive(Debug, PartialEq, Eq)]

@@ -1,16 +1,40 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { collectImportsForFile } from "../../src/indexer/imports.js";
+import { parseRustImportStatements } from "../../src/languages/import-statement-parsers.js";
+import {
+  extractRustModPathAttribute,
+  resolveRustImportPath,
+  takeTrailingRustAttributes,
+} from "../../src/util/resolution/rust.js";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { isSymlinkUnavailable } from "../helpers/filesystem.js";
 import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
 import { chunkFile } from "../../src/chunking/chunk-file.js";
-import { buildProjectIndex, goToDefinition } from "../../src/index.js";
+import { buildProjectIndex, collectGraph, findReferences, goToDefinition } from "../../src/index.js";
 import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
+
+function canCreateRustFileSymlink(): boolean {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "cg-rust-path-symlink-probe-"));
+  try {
+    const target = path.join(dir, "target.rs");
+    writeFileSync(target, "\n");
+    symlinkSync(target, path.join(dir, "link.rs"), "file");
+    return true;
+  } catch (error) {
+    if (isSymlinkUnavailable(error)) return false;
+    throw error;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 const definition: LanguageTestDefinition = {
   id: "rust",
@@ -317,6 +341,871 @@ describe("Rust Unicode symbol ranges (C11)", () => {
       symbolName: "créer",
     });
   });
+});
+
+describe("Rust nested grouped use and path attributes", () => {
+  it("flattens nested scoped_use_list members to their full paths", () => {
+    expect(parseRustImportStatements("use crate::a::{b::{Thing as Renamed}, A};")).toEqual([
+      { kind: "member", from: "crate::a::b", imported: "Thing", local: "Renamed" },
+      { kind: "member", from: "crate::a", imported: "A", local: "A" },
+    ]);
+    expect(parseRustImportStatements("use crate::a::b::{self, *};")).toEqual([
+      { kind: "module", from: "crate::a::b", local: "b", isExternCrate: false },
+      { kind: "star", from: "crate::a::b::*" },
+    ]);
+  });
+
+  it("keeps path attributes whose raw or quoted value contains a closing bracket", () => {
+    const rawSource = ['#[path = r#"custom]file.rs"#]', "mod external;"].join("\n");
+    expect(takeTrailingRustAttributes(rawSource, rawSource.indexOf("mod"))).toContain("custom]file.rs");
+    expect(parseRustImportStatements(rawSource)).toEqual([
+      {
+        kind: "module",
+        from: "external",
+        local: "external",
+        isExternCrate: false,
+        pathAttribute: "custom]file.rs",
+      },
+    ]);
+    const quotedSource = ['#[path = "custom]file.rs"]', "mod external;"].join("\n");
+    expect(takeTrailingRustAttributes(quotedSource, quotedSource.indexOf("mod"))).toContain("custom]file.rs");
+    expect(parseRustImportStatements(quotedSource)).toEqual([
+      {
+        kind: "module",
+        from: "external",
+        local: "external",
+        isExternCrate: false,
+        pathAttribute: "custom]file.rs",
+      },
+    ]);
+  });
+
+  it("does not let nested, function, or test-only path attributes own a root module name", () => {
+    const source = [
+      "mod external;",
+      "mod nested {",
+      '    #[path = "nested_decoy.rs"]',
+      "    mod external;",
+      "}",
+      "fn hide() {",
+      '    #[path = "fn_decoy.rs"]',
+      "    mod external;",
+      "}",
+      "#[cfg(test)]",
+      '#[path = "test_decoy.rs"]',
+      "mod external;",
+      '#[path = "real.rs"]',
+      "mod other;",
+      "",
+    ].join("\n");
+    expect(extractRustModPathAttribute(source, "external")).toBeUndefined();
+    expect(extractRustModPathAttribute(source, "other")).toBe("real.rs");
+  });
+
+  it("binds nested grouped use members, self, and star to the nested module file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-nested-use-"));
+    const src = path.join(root, "src");
+    await mkdir(path.join(src, "a"), { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "nested-use"\nversion = "0.1.0"\n');
+    await writeFile(
+      path.join(src, "lib.rs"),
+      [
+        "mod a;",
+        "",
+        "use crate::a::{b::{Thing as Renamed}, A};",
+        "use crate::a::b::{self, *};",
+        "",
+        "pub fn consume() -> i32 {",
+        "    let _t = Renamed;",
+        "    let _a = A;",
+        "    let _m = b::Thing;",
+        "    star_item()",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(path.join(src, "a.rs"), "pub struct A;\n\npub mod b;\n");
+    await writeFile(path.join(src, "a", "b.rs"), "pub struct Thing;\n\npub fn star_item() -> i32 {\n    1\n}\n");
+    try {
+      const lib = path.join(src, "lib.rs");
+      const imports = await collectImportsForFile(lib, root);
+      const resolvedName = (resolved: unknown) =>
+        typeof resolved === "string" ? path.basename(resolved) : JSON.stringify(resolved);
+      expect(imports).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: "named", local: "Renamed", imported: "Thing", from: "crate::a::b" }),
+          expect.objectContaining({ kind: "named", local: "A", imported: "A", from: "crate::a" }),
+          expect.objectContaining({ kind: "namespace", localNS: "b", from: "crate::a::b" }),
+          expect.objectContaining({ kind: "star", from: "crate::a::b::*" }),
+        ]),
+      );
+      expect(resolvedName(imports.find((entry) => entry.kind === "named" && entry.local === "Renamed")?.resolved)).toBe(
+        "b.rs",
+      );
+      expect(resolvedName(imports.find((entry) => entry.kind === "named" && entry.local === "A")?.resolved)).toBe(
+        "a.rs",
+      );
+      expect(resolvedName(imports.find((entry) => entry.kind === "star")?.resolved)).toBe("b.rs");
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const renamed = await goToDefinition(index, { file: lib, line: 7, column: 14 });
+      expect(renamed.status).toBe("ok");
+      if (renamed.status === "ok") {
+        expect(renamed.definition.localName).toBe("Thing");
+        expect(path.basename(renamed.definition.file)).toBe("b.rs");
+      }
+      const star = await goToDefinition(index, { file: lib, line: 10, column: 5 });
+      expect(star.status).toBe("ok");
+      if (star.status === "ok") {
+        expect(star.definition.localName).toBe("star_item");
+        expect(path.basename(star.definition.file)).toBe("b.rs");
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps distinct conditional path modules and ignores module tokens inside attributes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-conditional-paths-"));
+    const src = path.join(root, "src");
+    const lib = path.join(src, "lib.rs");
+    const unix = path.join(src, "unix.rs");
+    const windows = path.join(src, "windows.rs");
+    try {
+      await mkdir(src, { recursive: true });
+      await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "conditional-paths"\nversion = "0.1.0"\n');
+      await writeFile(
+        lib,
+        ['#[cfg(unix)] #[path = "unix.rs"] mod platform;', '#[cfg(windows)] #[path = "windows.rs"] mod platform;'].join(
+          "\n",
+        ),
+      );
+      await writeFile(unix, "pub const UNIX: bool = true;\n");
+      await writeFile(windows, "pub const WINDOWS: bool = true;\n");
+
+      const bindings = await collectImportsForFile(lib, root, { native: "off" });
+      expect(bindings.map((entry) => entry.resolved).sort()).toEqual(
+        [unix, windows].map((file) => file.replace(/\\/g, "/")).sort(),
+      );
+
+      const graph = await collectGraph(root, [lib, unix, windows]);
+      const targets = graph.edges
+        .filter((edge) => edge.from === lib.replace(/\\/g, "/") && edge.to.type === "file")
+        .map((edge) => path.basename(edge.to.type === "file" ? edge.to.path : ""))
+        .sort();
+      expect(targets).toEqual(["unix.rs", "windows.rs"]);
+
+      await writeFile(lib, "#[my_attr(mod hidden;)] fn f() {}\n");
+      expect(await collectImportsForFile(lib, root, { native: "off" })).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves #[path] modules to the attributed file instead of the conventional name", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-attr-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-attr"\nversion = "0.1.0"\n');
+    await writeFile(
+      path.join(src, "lib.rs"),
+      '#[path = "custom.rs"]\nmod external;\n\npub fn consume() {\n    external::from_custom();\n}\n',
+    );
+    await writeFile(path.join(src, "custom.rs"), "pub fn from_custom() {}\n");
+    await writeFile(path.join(src, "external.rs"), "pub fn from_external() {}\n");
+    try {
+      const imports = await collectImportsForFile(path.join(src, "lib.rs"), root);
+      const external = imports.find((entry) => entry.kind === "namespace" && entry.localNS === "external");
+      expect(external).toBeDefined();
+      expect(typeof external?.resolved).toBe("string");
+      if (typeof external?.resolved === "string") {
+        expect(path.basename(external.resolved)).toBe("custom.rs");
+        expect(path.basename(external.resolved)).not.toBe("external.rs");
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a parent-declared #[path] module from a sibling consumer", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-parent-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-parent"\nversion = "0.1.0"\n');
+    await writeFile(path.join(src, "lib.rs"), '#[path = "custom.rs"]\nmod external;\npub mod consumer;\n');
+    await writeFile(path.join(src, "custom.rs"), "pub struct Thing;\n");
+    await writeFile(path.join(src, "external.rs"), "pub struct Decoy;\n");
+    await writeFile(path.join(src, "consumer.rs"), "use crate::external::Thing;\n");
+    try {
+      const imports = await collectImportsForFile(path.join(src, "consumer.rs"), root);
+      const thing = imports.find((entry) => entry.kind === "named" && entry.imported === "Thing");
+      expect(thing).toBeDefined();
+      expect(thing?.from).toBe("crate::external");
+      expect(typeof thing?.resolved).toBe("string");
+      if (typeof thing?.resolved === "string") {
+        expect(path.basename(thing.resolved)).toBe("custom.rs");
+        expect(path.basename(thing.resolved)).not.toBe("external.rs");
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a nested parent-declared #[path] module through crate prefixes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-nested-"));
+    const src = path.join(root, "src");
+    await mkdir(path.join(src, "a"), { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-nested"\nversion = "0.1.0"\n');
+    await writeFile(path.join(src, "lib.rs"), "mod a;\n");
+    await writeFile(path.join(src, "a.rs"), '#[path = "custom.rs"]\nmod external;\n');
+    await writeFile(path.join(src, "custom.rs"), "pub struct Thing;\n");
+    await writeFile(path.join(src, "a", "external.rs"), "pub struct Decoy;\n");
+    await writeFile(path.join(src, "consumer.rs"), "use crate::a::external::Thing;\n");
+    try {
+      const imports = await collectImportsForFile(path.join(src, "consumer.rs"), root);
+      const thing = imports.find((entry) => entry.kind === "named" && entry.imported === "Thing");
+      expect(thing).toBeDefined();
+      expect(thing?.from).toBe("crate::a::external");
+      expect(typeof thing?.resolved).toBe("string");
+      if (typeof thing?.resolved === "string") {
+        expect(path.basename(thing.resolved)).toBe("custom.rs");
+        expect(path.basename(thing.resolved)).not.toBe("external.rs");
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let an importer #[path] override a crate or nested conventional module", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-importer-"));
+    const src = path.join(root, "src");
+    await mkdir(path.join(src, "a"), { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-importer"\nversion = "0.1.0"\n');
+    await writeFile(path.join(src, "lib.rs"), "mod a;\npub mod consumer;\n");
+    await writeFile(path.join(src, "a.rs"), "pub mod child;\n");
+    await writeFile(path.join(src, "a", "child.rs"), "pub struct ChildThing;\n");
+    await writeFile(path.join(src, "custom.rs"), "pub struct Thing;\n");
+    await writeFile(path.join(src, "external.rs"), "pub struct Decoy;\n");
+    await writeFile(
+      path.join(src, "consumer.rs"),
+      [
+        "use crate::a::child::ChildThing;",
+        '#[path = "custom.rs"]',
+        "mod child;",
+        '#[path = "custom.rs"]',
+        "mod external;",
+        "pub fn consume() {",
+        "    let _c = ChildThing;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    try {
+      const consumer = path.join(src, "consumer.rs");
+      const imports = await collectImportsForFile(consumer, root);
+      const child = imports.find((entry) => entry.kind === "named" && entry.imported === "ChildThing");
+      expect(child?.from).toBe("crate::a::child");
+      expect(typeof child?.resolved).toBe("string");
+      if (typeof child?.resolved === "string") {
+        expect(path.basename(child.resolved)).toBe("child.rs");
+        expect(path.basename(child.resolved)).not.toBe("custom.rs");
+      }
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const usage = "    let _c = ChildThing;";
+      const gone = await goToDefinition(index, {
+        file: consumer,
+        line: 7,
+        column: usage.indexOf("ChildThing") + 1,
+      });
+      expect(gone.status).toBe("ok");
+      if (gone.status === "ok") {
+        expect(path.basename(gone.definition.file)).toBe("child.rs");
+        expect(path.basename(gone.definition.file)).not.toBe("custom.rs");
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves an inline nested #[path] module without leaking it to the crate root", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-scope-"));
+    const src = path.join(root, "src");
+    await mkdir(path.join(src, "nested"), { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-scope"\nversion = "0.1.0"\n');
+    await writeFile(
+      path.join(src, "lib.rs"),
+      [
+        "mod nested {",
+        '    #[path = "nested_external.rs"]',
+        "    pub mod external;",
+        "}",
+        "use crate::nested::external::NestedThing;",
+        "use crate::external::RootThing;",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(path.join(src, "nested", "nested_external.rs"), "pub struct NestedThing;\n");
+    await writeFile(path.join(src, "nested_external.rs"), "pub struct Decoy;\n");
+    await writeFile(path.join(src, "external.rs"), "pub struct RootThing;\n");
+    try {
+      const lib = path.join(src, "lib.rs");
+      const imports = await collectImportsForFile(lib, root);
+      const resolvedName = (resolved: unknown) =>
+        typeof resolved === "string" ? path.basename(resolved) : JSON.stringify(resolved);
+      const nested = imports.find((entry) => entry.from === "crate::nested::external");
+      const rootUse = imports.find((entry) => entry.from === "crate::external");
+      expect(nested?.resolved).toBe(path.join(src, "nested", "nested_external.rs").replace(/\\/g, "/"));
+      expect(imports.find((entry) => entry.kind === "namespace" && entry.localNS === "external")?.resolved).toBe(
+        nested?.resolved,
+      );
+      expect(resolvedName(rootUse?.resolved)).toBe("external.rs");
+      expect(resolvedName(rootUse?.resolved)).not.toBe("nested_external.rs");
+
+      const nestedExternal = path.join(src, "nested", "nested_external.rs");
+      const files = [lib, nestedExternal, path.join(src, "nested_external.rs"), path.join(src, "external.rs")];
+      const graph = await collectGraph(root, files);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "lib.rs" &&
+            edge.to.type === "file" &&
+            path.basename(edge.to.path) === "nested_external.rs" &&
+            edge.to.path.replace(/\\/g, "/").endsWith("/nested/nested_external.rs"),
+        ),
+      ).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a parent-declared #[path] module through goto and references", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-nav-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-nav"\nversion = "0.1.0"\n');
+    await writeFile(path.join(src, "lib.rs"), '#[path = "custom.rs"]\nmod external;\npub mod consumer;\n');
+    await writeFile(path.join(src, "custom.rs"), "pub struct Thing;\n");
+    await writeFile(path.join(src, "external.rs"), "pub struct Decoy;\n");
+    await writeFile(
+      path.join(src, "consumer.rs"),
+      ["use crate::external::Thing;", "pub fn consume() {", "    let _t = Thing;", "}", ""].join("\n"),
+    );
+    try {
+      const custom = path.join(src, "custom.rs");
+      const consumer = path.join(src, "consumer.rs");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const usage = "    let _t = Thing;";
+      const gone = await goToDefinition(index, {
+        file: consumer,
+        line: 3,
+        column: usage.indexOf("Thing") + 1,
+      });
+      expect(gone.status).toBe("ok");
+      if (gone.status === "ok") {
+        expect(path.basename(gone.definition.file)).toBe("custom.rs");
+        expect(path.basename(gone.definition.file)).not.toBe("external.rs");
+        expect(gone.definition.localName).toBe("Thing");
+      }
+      const refs = await findReferences(index, { file: custom, line: 1, column: 12 });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(refs.references.some((reference) => path.basename(reference.file) === "consumer.rs")).toBe(true);
+        expect(refs.references.some((reference) => path.basename(reference.file) === "external.rs")).toBe(false);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves #[path] modules whose raw string contains a closing bracket", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-bracket-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-bracket"\nversion = "0.1.0"\n');
+    await writeFile(path.join(src, "lib.rs"), '#[path = r#"custom]file.rs"#]\nmod external;\n');
+    await writeFile(path.join(src, "custom]file.rs"), "pub fn from_custom() {}\n");
+    await writeFile(path.join(src, "external.rs"), "pub fn from_external() {}\n");
+    try {
+      const imports = await collectImportsForFile(path.join(src, "lib.rs"), root);
+      const external = imports.find((entry) => entry.kind === "namespace" && entry.localNS === "external");
+      expect(external).toBeDefined();
+      expect(typeof external?.resolved).toBe("string");
+      if (typeof external?.resolved === "string") {
+        expect(path.basename(external.resolved)).toBe("custom]file.rs");
+        expect(path.basename(external.resolved)).not.toBe("external.rs");
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps #[cfg(test)] module statements from becoming import bindings", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-cfg-test-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "cfg-test"\nversion = "0.1.0"\n');
+    await writeFile(
+      path.join(src, "lib.rs"),
+      [
+        "mod production;",
+        "#[cfg(test)]",
+        "mod tests;",
+        "#[cfg(test)]",
+        "pub mod vis_tests;",
+        "#[cfg(test)]",
+        "pub(crate) use crate::production::Prod as TestProd;",
+        "use crate::production::Prod;",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(path.join(src, "production.rs"), "pub struct Prod;\n");
+    await writeFile(path.join(src, "tests.rs"), "pub fn t() {}\n");
+    await writeFile(path.join(src, "vis_tests.rs"), "pub fn vis() {}\n");
+    try {
+      const imports = await collectImportsForFile(path.join(src, "lib.rs"), root);
+      expect(imports.some((entry) => entry.kind === "namespace" && entry.from === "tests")).toBe(false);
+      expect(imports.some((entry) => entry.kind === "namespace" && entry.from === "vis_tests")).toBe(false);
+      expect(imports.some((entry) => entry.kind === "named" && entry.local === "TestProd")).toBe(false);
+      expect(imports.some((entry) => entry.kind === "namespace" && entry.from === "production")).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not bind use statements inside macro_rules or macro invocation bodies", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-macro-import-"));
+    const lib = path.join(root, "lib.rs");
+    await writeFile(
+      lib,
+      [
+        "macro_rules! shim {",
+        "    () => {",
+        "        use fake::Thing;",
+        "        mod hidden;",
+        "    };",
+        "}",
+        "shim! {",
+        "    use also_fake::Other;",
+        "}",
+        "use live::Visible;",
+        "",
+      ].join("\n"),
+    );
+    try {
+      const imports = await collectImportsForFile(lib, root);
+      expect(imports.map((entry) => entry.from)).toEqual(["live"]);
+      expect(
+        imports.some((entry) => entry.from === "fake" || entry.from === "also_fake" || entry.from === "hidden"),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps #[cfg(test)] modules with a #[path] attribute from becoming import bindings", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-cfg-path-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "cfg-path"\nversion = "0.1.0"\n');
+    await writeFile(
+      path.join(src, "cfg.rs"),
+      [
+        "mod production;",
+        "#[cfg(test)]",
+        '#[path = "mod.rs"]',
+        "mod tests;",
+        '#[path = "real.rs"]',
+        "mod other;",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(path.join(src, "production.rs"), "pub struct Prod;\n");
+    await writeFile(path.join(src, "real.rs"), "pub fn r() {}\n");
+    await mkdir(path.join(src, "tests"), { recursive: true });
+    await writeFile(path.join(src, "tests", "mod.rs"), "pub fn t() {}\n");
+    try {
+      const cfg = path.join(src, "cfg.rs");
+      const imports = await collectImportsForFile(cfg, root);
+      expect(imports.some((entry) => entry.kind === "namespace" && entry.from === "tests")).toBe(false);
+      expect(imports.some((entry) => entry.kind === "namespace" && entry.from === "production")).toBe(true);
+      const other = imports.find((entry) => entry.kind === "namespace" && entry.from === "other");
+      expect(typeof other?.resolved).toBe("string");
+      if (typeof other?.resolved === "string") {
+        expect(path.basename(other.resolved)).toBe("real.rs");
+      }
+
+      const files = [
+        cfg,
+        path.join(src, "production.rs"),
+        path.join(src, "real.rs"),
+        path.join(src, "tests", "mod.rs"),
+      ];
+      const graph = await collectGraph(root, files);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "cfg.rs" &&
+            edge.to.type === "file" &&
+            path.basename(edge.to.path) === "mod.rs",
+        ),
+      ).toBe(false);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "cfg.rs" &&
+            edge.to.type === "file" &&
+            path.basename(edge.to.path) === "real.rs",
+        ),
+      ).toBe(true);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "cfg.rs" &&
+            edge.to.type === "file" &&
+            path.basename(edge.to.path) === "production.rs",
+        ),
+      ).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves super from a #[path] module against the declaring module, not the crate root", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-super-"));
+    const src = path.join(root, "src");
+    await mkdir(path.join(src, "a"), { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-super"\nversion = "0.1.0"\n');
+    await writeFile(path.join(src, "lib.rs"), "mod a;\n");
+    await writeFile(path.join(src, "a.rs"), '#[path = "custom.rs"]\nmod child;\npub mod sibling;\n');
+    await writeFile(
+      path.join(src, "custom.rs"),
+      "use super::sibling;\nuse self::grandchild;\npub fn from_child() { sibling::from_sibling(); }\n",
+    );
+    await writeFile(path.join(src, "a", "sibling.rs"), "pub fn from_sibling() {}\n");
+    await writeFile(path.join(src, "sibling.rs"), "pub fn from_root_sibling() {}\n");
+    await writeFile(path.join(src, "grandchild.rs"), "pub fn from_grandchild() {}\n");
+    await writeFile(path.join(src, "a", "grandchild.rs"), "pub fn from_wrong_grandchild() {}\n");
+    try {
+      const custom = path.join(src, "custom.rs");
+      const sibling = path.join(src, "a", "sibling.rs");
+      const decoy = path.join(src, "sibling.rs");
+      const resolvedSuper = await resolveRustImportPath(root, custom, "super::sibling");
+      const resolvedSelf = await resolveRustImportPath(root, custom, "self::grandchild");
+      expect(resolvedSuper?.replace(/\\/g, "/")).toBe(sibling.replace(/\\/g, "/"));
+      expect(resolvedSuper?.replace(/\\/g, "/")).not.toBe(decoy.replace(/\\/g, "/"));
+      expect(resolvedSelf?.replace(/\\/g, "/")).toBe(path.join(src, "grandchild.rs").replace(/\\/g, "/"));
+      expect(resolvedSelf?.replace(/\\/g, "/")).not.toBe(path.join(src, "a", "grandchild.rs").replace(/\\/g, "/"));
+
+      const imports = await collectImportsForFile(custom, root);
+      const siblingImport = imports.find((entry) => entry.kind === "named" && entry.imported === "sibling");
+      expect(typeof siblingImport?.resolved).toBe("string");
+      if (typeof siblingImport?.resolved === "string") {
+        expect(siblingImport.resolved.replace(/\\/g, "/")).toBe(path.join(src, "a.rs").replace(/\\/g, "/"));
+      }
+
+      const files = [
+        path.join(src, "lib.rs"),
+        path.join(src, "a.rs"),
+        custom,
+        sibling,
+        decoy,
+        path.join(src, "grandchild.rs"),
+        path.join(src, "a", "grandchild.rs"),
+      ];
+      const graph = await collectGraph(root, files);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "custom.rs" &&
+            edge.raw === "super::sibling" &&
+            edge.to.type === "file" &&
+            edge.to.path.replace(/\\/g, "/").endsWith("/a/sibling.rs"),
+        ),
+      ).toBe(true);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "custom.rs" &&
+            edge.to.type === "file" &&
+            edge.to.path.replace(/\\/g, "/").endsWith("/src/sibling.rs"),
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not take a #[path] attribute from a commented or string mod declaration", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-comment-mod-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "comment-mod"\nversion = "0.1.0"\n');
+    await writeFile(
+      path.join(src, "lib.rs"),
+      [
+        "/*",
+        '#[path = "commented.rs"]',
+        "mod external;",
+        "*/",
+        'const TEXT: &str = r#"',
+        '#[path = "commented.rs"]',
+        "mod external;",
+        '"#;',
+        "mod external;",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(path.join(src, "commented.rs"), "pub fn from_commented() {}\n");
+    await writeFile(path.join(src, "external.rs"), "pub fn from_external() {}\n");
+    try {
+      const imports = await collectImportsForFile(path.join(src, "lib.rs"), root);
+      const external = imports.find((entry) => entry.kind === "namespace" && entry.localNS === "external");
+      expect(external).toBeDefined();
+      expect(typeof external?.resolved).toBe("string");
+      if (typeof external?.resolved === "string") {
+        expect(path.basename(external.resolved)).toBe("external.rs");
+        expect(path.basename(external.resolved)).not.toBe("commented.rs");
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores line and nested block comments inside grouped use trees", () => {
+    expect(
+      parseRustImportStatements(`use crate::{
+    a::Thing, // keep
+    b::Other,
+};`),
+    ).toEqual([
+      { kind: "member", from: "crate::a", imported: "Thing", local: "Thing" },
+      { kind: "member", from: "crate::b", imported: "Other", local: "Other" },
+    ]);
+    expect(
+      parseRustImportStatements(`use crate::{
+    a::Thing, /* outer /* inner */ still */
+    b::Other,
+};`),
+    ).toEqual([
+      { kind: "member", from: "crate::a", imported: "Thing", local: "Thing" },
+      { kind: "member", from: "crate::b", imported: "Other", local: "Other" },
+    ]);
+  });
+
+  it("binds grouped use members after interior comments", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-group-comments-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "group-comments"\nversion = "0.1.0"\n');
+    const lib = path.join(src, "lib.rs");
+    await writeFile(
+      lib,
+      [
+        "mod a;",
+        "mod b;",
+        "use crate::{",
+        "    a::Thing, // keep",
+        "    b::Other, /* outer /* inner */ still */",
+        "};",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(path.join(src, "a.rs"), "pub struct Thing;\n");
+    await writeFile(path.join(src, "b.rs"), "pub struct Other;\n");
+    try {
+      const imports = await collectImportsForFile(lib, root);
+      expect(imports).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: "named", local: "Thing", imported: "Thing", from: "crate::a" }),
+          expect.objectContaining({ kind: "named", local: "Other", imported: "Other", from: "crate::b" }),
+        ]),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records nested grouped-use module edges without a sibling self or star use", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-nested-graph-"));
+    const src = path.join(root, "src");
+    await mkdir(path.join(src, "a"), { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "nested-graph"\nversion = "0.1.0"\n');
+    const lib = path.join(src, "lib.rs");
+    const aFile = path.join(src, "a.rs");
+    const bFile = path.join(src, "a", "b.rs");
+    await writeFile(lib, "mod a;\n\nuse crate::a::{b::{Thing\tas\nRenamed}, A};\n");
+    await writeFile(aFile, "pub struct A;\n\npub mod b;\n");
+    await writeFile(bFile, "pub struct Thing;\n");
+    try {
+      const files = [lib, aFile, bFile];
+      const graph = await collectGraph(root, files);
+      const fromLib = graph.edges.filter((edge) => path.basename(edge.from) === "lib.rs");
+      const basenames = fromLib.flatMap((edge) => (edge.to.type === "file" ? [path.basename(edge.to.path)] : []));
+      expect(basenames).toEqual(expect.arrayContaining(["a.rs", "b.rs"]));
+
+      const imports = await collectImportsForFile(lib, root);
+      expect(imports).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: "named", local: "Renamed", imported: "Thing", from: "crate::a::b" }),
+          expect.objectContaining({ kind: "named", local: "A", imported: "A", from: "crate::a" }),
+        ]),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores fallback import text inside block comments and raw strings", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-import-trivia-"));
+    const lib = path.join(root, "lib.rs");
+    await writeFile(
+      lib,
+      [
+        "/* outer",
+        "use fake::Comment;",
+        "/* nested */",
+        "mod hidden;",
+        "*/",
+        'const TEXT: &str = r##"',
+        "use fake::Literal;",
+        '"##;',
+        "use live::Visible;",
+      ].join("\n"),
+    );
+    try {
+      const imports = await collectImportsForFile(lib, root);
+      expect(imports.map((entry) => entry.from)).toEqual(["live"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not bind an out-of-root #[path] module as a project import", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-outside-"));
+    const root = path.join(sandbox, "project");
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-outside"\nversion = "0.1.0"\n');
+    const outside = path.join(sandbox, "outside.rs");
+    await writeFile(outside, "pub fn leaked() {}\n");
+    await writeFile(path.join(src, "lib.rs"), '#[path = "../../outside.rs"]\nmod leaked;\n');
+    try {
+      const imports = await collectImportsForFile(path.join(src, "lib.rs"), root);
+      const leaked = imports.find((entry) => entry.kind === "namespace" && entry.localNS === "leaked");
+      expect(leaked).toBeDefined();
+      expect(leaked?.resolved).toEqual({ external: "leaked" });
+      if (typeof leaked?.resolved === "string") {
+        expect(leaked.resolved.replace(/\\/g, "/")).not.toContain("outside.rs");
+      }
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fall back to a conventional sibling when an explicit #[path] file is missing", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-missing-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-missing"\nversion = "0.1.0"\n');
+    await writeFile(
+      path.join(src, "lib.rs"),
+      '#[path = "missing.rs"]\nmod external;\n\npub fn consume() {\n    external::from_external();\n}\n',
+    );
+    await writeFile(path.join(src, "external.rs"), "pub fn from_external() {}\n");
+    try {
+      const lib = path.join(src, "lib.rs");
+      const imports = await collectImportsForFile(lib, root);
+      const external = imports.find((entry) => entry.kind === "namespace" && entry.localNS === "external");
+      expect(external).toBeDefined();
+      expect(external?.resolved).toEqual({ external: "external" });
+      if (typeof external?.resolved === "string") {
+        expect(path.basename(external.resolved)).not.toBe("external.rs");
+      }
+
+      const graph = await collectGraph(root, [lib, path.join(src, "external.rs")]);
+      const fromLib = graph.edges.filter((edge) => path.basename(edge.from) === "lib.rs");
+      expect(fromLib.some((edge) => edge.to.type === "file" && path.basename(edge.to.path) === "external.rs")).toBe(
+        false,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves #[path] modules when comments separate the attribute from the item", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-attr-comment-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-attr-comment"\nversion = "0.1.0"\n');
+    await writeFile(
+      path.join(src, "lib.rs"),
+      [
+        '#[path = "custom.rs"] // pick custom',
+        "mod same_line;",
+        "",
+        '#[path = "custom.rs"]',
+        "// pick custom",
+        "mod own_line;",
+        "",
+        '#[path = "custom.rs"] /* outer /* inner */ still */',
+        "mod nested;",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(path.join(src, "custom.rs"), "pub fn from_custom() {}\n");
+    await writeFile(path.join(src, "same_line.rs"), "pub fn from_same_line() {}\n");
+    await writeFile(path.join(src, "own_line.rs"), "pub fn from_own_line() {}\n");
+    await writeFile(path.join(src, "nested.rs"), "pub fn from_nested() {}\n");
+    try {
+      const imports = await collectImportsForFile(path.join(src, "lib.rs"), root);
+      for (const localNS of ["same_line", "own_line", "nested"]) {
+        const binding = imports.find((entry) => entry.kind === "namespace" && entry.localNS === localNS);
+        expect(binding).toBeDefined();
+        expect(typeof binding?.resolved).toBe("string");
+        if (typeof binding?.resolved === "string") {
+          expect(path.basename(binding.resolved)).toBe("custom.rs");
+          expect(path.basename(binding.resolved)).not.toBe(`${localNS}.rs`);
+        }
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(!canCreateRustFileSymlink())(
+    "does not bind an in-root #[path] symlink whose real path escapes the project",
+    async () => {
+      const sandbox = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-attr-symlink-"));
+      const root = path.join(sandbox, "project");
+      const src = path.join(root, "src");
+      await mkdir(src, { recursive: true });
+      await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-attr-symlink"\nversion = "0.1.0"\n');
+      const outside = path.join(sandbox, "outside.rs");
+      const linked = path.join(src, "linked.rs");
+      await writeFile(outside, "pub fn leaked() {}\n");
+      await writeFile(path.join(src, "leaked.rs"), "pub fn conventional() {}\n");
+      await writeFile(path.join(src, "lib.rs"), '#[path = "linked.rs"]\nmod leaked;\n');
+      try {
+        try {
+          await symlink(outside, linked, "file");
+        } catch (error) {
+          if (isSymlinkUnavailable(error)) return;
+          throw error;
+        }
+        const imports = await collectImportsForFile(path.join(src, "lib.rs"), root);
+        const leaked = imports.find((entry) => entry.kind === "namespace" && entry.localNS === "leaked");
+        expect(leaked).toBeDefined();
+        expect(leaked?.resolved).toEqual({ external: "leaked" });
+        if (typeof leaked?.resolved === "string") {
+          expect(path.basename(leaked.resolved)).not.toBe("linked.rs");
+          expect(path.basename(leaked.resolved)).not.toBe("leaked.rs");
+          expect(leaked.resolved.replace(/\\/g, "/")).not.toContain("outside.rs");
+        }
+      } finally {
+        await rm(sandbox, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("Rust function-local items and re-export aliases", () => {

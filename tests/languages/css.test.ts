@@ -1,5 +1,8 @@
+import os from "node:os";
+import path from "node:path";
+import fsp from "node:fs/promises";
 import { expect, it } from "vitest";
-import { collectModuleSpecifiersFromSource } from "../../src/graphs.js";
+import { collectGraph, collectModuleSpecifiersFromSource } from "../../src/graphs.js";
 import { supportById } from "../../src/languages.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
@@ -92,4 +95,22 @@ it("recovers media-qualified CSS imports in reduced mode", () => {
   });
 
   expect(specifiers).toEqual([{ spec: "./print.css", resolutionKind: "stylesheet" }]);
+});
+
+it("resolves bare stylesheet imports relative to their importing file", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-css-bare-import-"));
+  const mainFile = path.join(root, "main.css").replace(/\\/g, "/");
+  const themeFile = path.join(root, "theme.css").replace(/\\/g, "/");
+  await Promise.all([
+    fsp.writeFile(mainFile, '@import "theme.css";\n', "utf8"),
+    fsp.writeFile(themeFile, ".theme {}\n", "utf8"),
+  ]);
+  try {
+    const graph = await collectGraph(root, [mainFile, themeFile]);
+    expect(
+      graph.edges.some((edge) => edge.from === mainFile && edge.to.type === "file" && edge.to.path === themeFile),
+    ).toBe(true);
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
 });

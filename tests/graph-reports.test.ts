@@ -660,7 +660,7 @@ describe("graph reports", () => {
     const graph = await collectGraph(projectRoot, [libFile, duplicateFile, testsFile]);
 
     expect(
-      graph.edges.some((edge) => edge.from === libFile && edge.to.type === "file" && edge.to.path === testsFile),
+      graph.edges.some((edge) => edge.from.endsWith("lib.rs") && edge.to.type === "file" && edge.to.path === testsFile),
     ).toBe(false);
     expect(
       graph.edges.some((edge) => edge.from === duplicateFile && edge.to.type === "file" && edge.to.path === libFile),
@@ -692,6 +692,17 @@ describe("graph reports", () => {
     expect(isRustCfgTestStatement(source, "use crate::helper::shared;", testUseIndex)).toBe(true);
     expect(isRustCfgTestStatement(source, "mod test_helpers;", testModuleIndex)).toBe(true);
     expect(isRustCfgTestStatement(source, "mod production_helpers;", productionModuleIndex)).toBe(false);
+
+    const adjacent = [
+      "#[cfg(test)]",
+      '#[path = "tests.rs"]',
+      "mod tests;",
+      '#[path = "real.rs"]',
+      "mod other;",
+      "",
+    ].join("\n");
+    expect(isRustCfgTestStatement(adjacent, "mod tests;", adjacent.indexOf("mod tests;"))).toBe(true);
+    expect(isRustCfgTestStatement(adjacent, "mod other;", adjacent.indexOf("mod other;"))).toBe(false);
   });
 
   it("resolves Rust super imports from mod.rs files against the parent module directory", async () => {
@@ -722,6 +733,135 @@ describe("graph reports", () => {
           edge.to.path.endsWith("src/b.rs"),
       ),
     ).toBeTruthy();
+  });
+
+  it("resolves nested inline #[path] modules to the attributed file instead of a crate-root decoy", async () => {
+    const projectRoot = makeTempRoot("cg-rust-inline-path-graph-");
+    const sourceRoot = path.join(projectRoot, "src");
+    fs.mkdirSync(path.join(sourceRoot, "nested"), { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, "Cargo.toml"), '[package]\nname = "sample"\nversion = "0.1.0"\n', "utf8");
+    fs.writeFileSync(
+      path.join(sourceRoot, "lib.rs"),
+      ["mod nested {", '    #[path = "custom.rs"]', "    pub mod external;", "}", ""].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(sourceRoot, "nested", "custom.rs"), "pub fn from_custom() {}\n", "utf8");
+    fs.writeFileSync(path.join(sourceRoot, "external.rs"), "pub fn from_external() {}\n", "utf8");
+    fs.writeFileSync(path.join(sourceRoot, "custom.rs"), "pub fn from_root_custom() {}\n", "utf8");
+
+    const libFile = path.join(sourceRoot, "lib.rs");
+    const attributed = path.join(sourceRoot, "nested", "custom.rs");
+    const decoy = path.join(sourceRoot, "external.rs");
+    const graph = await collectGraph(projectRoot, [libFile, attributed, decoy, path.join(sourceRoot, "custom.rs")]);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from.endsWith("lib.rs") &&
+          edge.to.type === "file" &&
+          edge.to.path.replace(/\\/g, "/").endsWith("/nested/custom.rs"),
+      ),
+    ).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from.endsWith("lib.rs") &&
+          edge.to.type === "file" &&
+          edge.to.path.replace(/\\/g, "/").endsWith("/src/external.rs"),
+      ),
+    ).toBe(false);
+  });
+
+  it("omits cfg(test) #[path] modules from graph edges while keeping production #[path] modules", async () => {
+    const projectRoot = makeTempRoot("cg-rust-cfg-path-graph-");
+    const sourceRoot = path.join(projectRoot, "src");
+    fs.mkdirSync(sourceRoot, { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, "Cargo.toml"), '[package]\nname = "sample"\nversion = "0.1.0"\n', "utf8");
+    fs.writeFileSync(
+      path.join(sourceRoot, "lib.rs"),
+      [
+        "mod production;",
+        "#[cfg(test)]",
+        '#[path = "tests.rs"]',
+        "mod tests;",
+        '#[path = "real.rs"]',
+        "mod other;",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(sourceRoot, "production.rs"), "pub struct Prod;\n", "utf8");
+    fs.writeFileSync(path.join(sourceRoot, "tests.rs"), "pub fn t() {}\n", "utf8");
+    fs.writeFileSync(path.join(sourceRoot, "real.rs"), "pub fn r() {}\n", "utf8");
+
+    const libFile = path.join(sourceRoot, "lib.rs");
+    const testsFile = path.join(sourceRoot, "tests.rs");
+    const realFile = path.join(sourceRoot, "real.rs");
+    const productionFile = path.join(sourceRoot, "production.rs");
+    const graph = await collectGraph(projectRoot, [libFile, testsFile, realFile, productionFile]);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from.endsWith("lib.rs") &&
+          edge.to.type === "file" &&
+          edge.to.path.replace(/\\/g, "/").endsWith("/src/tests.rs"),
+      ),
+    ).toBe(false);
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from.endsWith("lib.rs") &&
+          edge.to.type === "file" &&
+          edge.to.path.replace(/\\/g, "/").endsWith("/src/real.rs"),
+      ),
+    ).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from.endsWith("lib.rs") &&
+          edge.to.type === "file" &&
+          edge.to.path.replace(/\\/g, "/").endsWith("/src/production.rs"),
+      ),
+    ).toBe(true);
+  });
+
+  it("resolves super from a nested #[path] module against the declaring module rather than a crate-root decoy", async () => {
+    const projectRoot = makeTempRoot("cg-rust-path-super-graph-");
+    const sourceRoot = path.join(projectRoot, "src");
+    fs.mkdirSync(path.join(sourceRoot, "a"), { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, "Cargo.toml"), '[package]\nname = "sample"\nversion = "0.1.0"\n', "utf8");
+    fs.writeFileSync(path.join(sourceRoot, "lib.rs"), "mod a;\n", "utf8");
+    fs.writeFileSync(path.join(sourceRoot, "a.rs"), '#[path = "custom.rs"]\nmod child;\npub mod sibling;\n', "utf8");
+    fs.writeFileSync(path.join(sourceRoot, "custom.rs"), "use super::sibling;\n", "utf8");
+    fs.writeFileSync(path.join(sourceRoot, "a", "sibling.rs"), "pub fn from_sibling() {}\n", "utf8");
+    fs.writeFileSync(path.join(sourceRoot, "sibling.rs"), "pub fn from_root_sibling() {}\n", "utf8");
+
+    const custom = path.join(sourceRoot, "custom.rs");
+    const sibling = path.join(sourceRoot, "a", "sibling.rs");
+    const decoy = path.join(sourceRoot, "sibling.rs");
+    const resolvedSuper = await resolveRustImportPath(projectRoot, custom, "super::sibling");
+    const files = [path.join(sourceRoot, "lib.rs"), path.join(sourceRoot, "a.rs"), custom, sibling, decoy];
+    const graph = await collectGraph(projectRoot, files);
+
+    expect(resolvedSuper?.replace(/\\/g, "/")).toBe(sibling.replace(/\\/g, "/"));
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from.endsWith("custom.rs") &&
+          edge.raw === "super::sibling" &&
+          edge.to.type === "file" &&
+          edge.to.path.replace(/\\/g, "/").endsWith("/a/sibling.rs"),
+      ),
+    ).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from.endsWith("custom.rs") &&
+          edge.to.type === "file" &&
+          edge.to.path.replace(/\\/g, "/").endsWith("/src/sibling.rs"),
+      ),
+    ).toBe(false);
   });
 
   it("should get hotspots", () => {

@@ -13,10 +13,15 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 - Language queries now match the loaded grammars, preserve supported declaration forms, and exclude false CommonJS and function-local exports.
 - Default discovery includes registered language aliases. HTML queries ignore tag and attribute case, Python `__all__` respects module scope and complete static lists, and TypeScript declaration exports resolve through imports.
+- Import resolution now preserves commented Python imports, nested Rust uses and confined `#[path]` targets, stylesheet-relative paths, and per-specifier type-only bindings. C/C++ typedef names survive nested declarators. Rust text recovery ignores macro bodies, and a Python import behind a multi-line conditional is not a module re-export.
 - Module exports drop names declared inside a function body, lambda, or closure while keeping members of nested top-level types. C/C++ exports again include include-guarded declarations, plus namespace, template, and prototype declarations, and an aliased Rust `pub use` keeps the original member as its source.
 - Links to registered alias files resolve, so an `<a href="page.xhtml">` target inside the project is a file edge instead of an external reference.
 - Duplicate masking includes Ruby `load`/`autoload` and Zig `@cImport`, with native and fallback handling. Ruby literal `load` and `autoload` calls remain masked with trailing comments. Kotlin duplicate queries use the loaded grammar's `import` node.
 - Java method-, constructor-, and lambda-local classes no longer publish module exports. Ruby extension aliases retain standard-library import classification.
+- Rust path attributes now follow the declaring module's scope and inline directory, preserve `]` in path strings, and exclude visible test-only imports.
+- TypeScript inline-only type imports have type-only graph edges, and reduced-mode re-exports retain type flags. C/C++ capture-only extraction keeps typedef names without leaking function-local or static exports.
+- Python imports after same-line top-level assignments and calls remain module re-exports.
+- Rust graph extraction keeps conditional `#[path]` modules with the same module name distinct. TypeScript type-only imports tolerate comments and compact `type{...}` clauses, and C header classification recognizes function calls that use C++ keywords as C identifiers.
 
 ## [2.3.24] - 2026-09-10
 

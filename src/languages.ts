@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { LanguageDefinition, NativeCompatibility, SyntaxNodeLike } from "./languages/types.js";
 import { getAllLanguages, getLanguageById } from "./languages/registry.js";
+import { maskJsLikeCommentsAndStrings } from "./util/comments.js";
 import "./languages/all.js";
 
 export type IdentifierNodeType = string;
@@ -193,7 +194,12 @@ export function supportById(id: string): LanguageSupport | undefined {
 }
 
 const HEADER_SAMPLE_SIZE = 8000;
-const CPP_HEADER_HINT = /\b(class|namespace|template|typename|constexpr|operator|using\s+namespace)\b|::/;
+// `class`/`namespace`/`template`/`typename`/`constexpr` are valid C identifiers (e.g. `int class;`
+// as a struct member); only treat them as C++ signals when followed by real declaration syntax
+// rather than a terminator or call delimiter that marks the word as a plain identifier.
+const CPP_HEADER_HINT =
+  /\b(?:class|namespace|template|typename|constexpr)\b(?!\s*(?:;|,|\)|=|\[|\())|\boperator\b(?!\s*[;,):])|\bconcept\s+\w+\s*=|\bco_await\s+\w|\busing\s+(?:namespace|\w+\s*=)|::/;
+const CPP_MODULE_IMPORT_HINT = /^\s*(?:export\s+)?import\s+(?:[\w.:]+|<[^>\n]+>|"[^"\n]*")\s*;/m;
 
 function readFileSample(filePath: string): string | null {
   try {
@@ -205,5 +211,6 @@ function readFileSample(filePath: string): string | null {
 }
 
 function isLikelyCppHeader(sample: string): boolean {
-  return CPP_HEADER_HINT.test(sample);
+  const masked = maskJsLikeCommentsAndStrings(sample);
+  return CPP_HEADER_HINT.test(masked) || CPP_MODULE_IMPORT_HINT.test(masked);
 }

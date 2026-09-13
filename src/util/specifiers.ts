@@ -1,6 +1,6 @@
 import path from "node:path";
 import { buildJsLikeLiteralMask, stripJsLikeComments, stripPythonCommentsAndStrings } from "./comments.js";
-import { PYTHON_IDENTIFIER_SOURCE } from "./identifiers.js";
+import { ECMASCRIPT_IDENTIFIER_SOURCE, PYTHON_IDENTIFIER_SOURCE } from "./identifiers.js";
 import { normalizePath } from "./paths.js";
 
 export type ModuleSpecifierResolutionKind = "document" | "source" | "stylesheet";
@@ -17,7 +17,39 @@ export type ModuleSpecifier = {
   dropIfUnresolved?: boolean;
   resolved?: "heuristic" | "precise";
   confidence?: number;
+  pathAttribute?: string;
+  statementStartIndex?: number;
 };
+
+const JS_TS_NAMED_TYPE_SPECIFIER_PATTERN = new RegExp(
+  String.raw`^type\s+(${ECMASCRIPT_IDENTIFIER_SOURCE})(?:\s+as\s+(${ECMASCRIPT_IDENTIFIER_SOURCE}))?$`,
+  "u",
+);
+
+function splitJsTsNamedSpecifiers(namedBlock: string): string[] {
+  return namedBlock
+    .split(",")
+    .map((spec) => spec.trim())
+    .filter(Boolean);
+}
+
+/**
+ * File-graph edges are per module specifier. A statement is type-only when it cannot
+ * introduce a runtime binding: `import type` / `export type`, `declare module`, or a
+ * named clause whose every specifier is inline `type`. Mixed clauses stay runtime.
+ */
+export function isJsTsTypeOnlySpecifierStatement(statement: string): boolean {
+  const text = stripJsLikeComments(statement).trim();
+  if (/^declare\s+module\s*["']/.test(text)) return true;
+  const fromMatch = /^(?:import|export)\b\s*([\s\S]*?)\bfrom\s*["']/.exec(text);
+  if (!fromMatch) return false;
+  const clause = fromMatch[1]!.trim();
+  if (/^type(?:\s+|(?=\{))/.test(clause) && !clause.slice(4).trimStart().startsWith(",")) return true;
+  if (!clause.startsWith("{") || !clause.endsWith("}")) return false;
+  const specs = splitJsTsNamedSpecifiers(clause.slice(1, -1));
+  if (!specs.length) return false;
+  return specs.every((spec) => JS_TS_NAMED_TYPE_SPECIFIER_PATTERN.test(spec));
+}
 
 function matchStartsInCode(mask: Uint8Array | undefined, match: RegExpMatchArray): boolean {
   const index = match.index;
@@ -49,7 +81,7 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
     // JS/TS identifiers permit Unicode ID_Start/ID_Continue plus $/_, with ZWNJ and ZWJ as
     // continuation characters, so import-equals aliases must not use ASCII-only \w.
     const combined =
-      /^\s*import\s+[^\n;]*?\s+from\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bexport\s+[^\n;]*?\s+from\s+["']([^"']+)["']|\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\brequire\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\bimport\s*\(\s*["']([^"']+)["']\s*\)|^\s*import\s+[$_\p{ID_Start}][$_\p{ID_Continue}\u200c\u200d]*\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|^\s*declare\s+module\s+["']([^"']+)["']/gmu;
+      /^\s*import\b\s*[^\n;]*?\bfrom\s*["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bexport\b\s*[^\n;]*?\bfrom\s*["']([^"']+)["']|\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\brequire\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\bimport\s*\(\s*["']([^"']+)["']\s*\)|^\s*import\s+[$_\p{ID_Start}][$_\p{ID_Continue}\u200c\u200d]*\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|^\s*declare\s+module\s+["']([^"']+)["']/gmu;
 
     for (const match of src.matchAll(combined)) {
       if (!matchStartsInCode(literalMask, match)) continue;
@@ -57,10 +89,8 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
       if (!spec) continue;
       const text = match[0] ?? "";
       let typeOnly = false;
-      if (match[1] !== undefined || match[2] !== undefined) {
-        typeOnly = /\bimport\s+type\b/.test(text);
-      } else if (match[3] !== undefined) {
-        typeOnly = /\bexport\s+type\b/.test(text);
+      if (match[1] !== undefined || match[2] !== undefined || match[3] !== undefined) {
+        typeOnly = isJsTsTypeOnlySpecifierStatement(text);
       } else if (match[8] !== undefined) {
         typeOnly = true;
       }

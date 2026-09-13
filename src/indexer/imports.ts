@@ -19,6 +19,7 @@ import {
   isNativeQueryAuthoritative,
 } from "../native/tree-sitter-native.js";
 import type { NativeQueryExecution, NativeQueryResults, NativeRuntimeMode } from "../native/tree-sitter-native.js";
+import type { ModuleSpecifierResolutionKind } from "../util/specifiers.js";
 import type { ResolvedImportTarget } from "./imports/context.js";
 import { collectGraphOnlyImports } from "./imports/graph-only.js";
 import { collectJsTextImports, collectJsTextValueRequireImports } from "./imports/js-text-imports.js";
@@ -28,7 +29,7 @@ import {
   finalizeLanguageSpecificImports,
 } from "./imports/language-specific.js";
 import { collectNativeCaptureImportBindings } from "./imports/native-captures.js";
-import { collectPythonImportsFromSource } from "./imports/python.js";
+import { collectPythonImportsFromNativeMatches, collectPythonImportsFromSource } from "./imports/python.js";
 import type { LanguageSupport } from "../languages.js";
 import type { ImportBinding } from "./types.js";
 
@@ -94,12 +95,17 @@ export async function collectImportsForFile(
   }
 
   if (resolvedSup.id === "python") {
-    await collectPythonImportsFromSource({
+    const context = {
       file,
       projectRoot,
       source: resolvedSource,
-      pushBinding: (binding) => imports.push(binding),
-    });
+      pushBinding: (binding: ImportBinding) => imports.push(binding),
+    };
+    if (resolvedNativeQueries) {
+      await collectPythonImportsFromNativeMatches(context, resolvedNativeQueries.importBindings);
+    } else {
+      await collectPythonImportsFromSource(context);
+    }
     return imports;
   }
 
@@ -110,11 +116,13 @@ export async function collectImportsForFile(
   const workspaceConfig = opts?.workspaceConfig ?? (await loadWorkspaceConfig(projectRoot));
   const resolvedImportCache = new Map<string, Promise<ResolvedImportTarget>>();
 
+  const stylesheetLanguage = ["css", "scss", "less"].includes(resolvedSup.id);
   const resolveFrom = async (
     from: string,
     phpImportType?: "class" | "function" | "const",
+    resolutionKind?: ModuleSpecifierResolutionKind,
   ): Promise<ResolvedImportTarget> => {
-    const cacheKey = `${from}\0${phpImportType ?? ""}`;
+    const cacheKey = `${from}\0${phpImportType ?? ""}\0${resolutionKind ?? ""}`;
     const cached = resolvedImportCache.get(cacheKey);
     if (cached) return await cached;
     const resolutionHints = opts?.graphOptions?.resolutionHints;
@@ -125,6 +133,8 @@ export async function collectImportsForFile(
         resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
         ...(resolutionHints ? { resolutionHints } : {}),
         ...(phpImportType ? { phpImportType } : {}),
+        ...(resolutionKind ? { resolutionKind } : {}),
+        ...(resolvedSup.id === "scss" && resolutionKind === "stylesheet" ? { allowScssPartialResolution: true } : {}),
       });
       return typeof result === "string" ? result.replace(/\\/g, "/") : result;
     })();
@@ -136,7 +146,8 @@ export async function collectImportsForFile(
     projectRoot,
     source: resolvedSource,
     languageId: resolvedSup.id,
-    resolveFrom,
+    resolveFrom: (from: string, phpImportType?: "class" | "function" | "const") =>
+      resolveFrom(from, phpImportType, stylesheetLanguage ? "stylesheet" : undefined),
     pushBinding: (binding: ImportBinding) => imports.push(binding),
     getBindings: () => imports,
     replaceBindings: (bindings: ImportBinding[]) => imports.splice(0, imports.length, ...bindings),
@@ -250,7 +261,7 @@ export async function collectImportsForFile(
       imports.push({
         kind: "star",
         from: specifier.spec,
-        resolved: await resolveFrom(specifier.spec),
+        resolved: await resolveFrom(specifier.spec, undefined, specifier.resolutionKind),
         ...(specifier.typeOnly ? { typeOnly: true } : {}),
       });
     }

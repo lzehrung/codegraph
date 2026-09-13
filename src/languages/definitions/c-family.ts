@@ -68,15 +68,22 @@ export function cFunctionNameQuery(captureName: string, includeFieldIdentifier: 
 `;
 }
 
-// Include guards wrap header declarations, so the export queries cannot anchor on
-// the file root. A function body is what makes a declaration unreachable from other files.
+/**
+ * Module-scope exports. These patterns are NOT anchored on `translation_unit`: a header wraps its
+ * declarations in an include guard, so the anchor would have to enumerate every preprocessor
+ * nesting depth. `exportScopeBlockers` drops any capture inside a function body instead.
+ */
 export function cFamilyCoreExportQueries(functionNameQuery: string): string[] {
   return [
+    // Keep scope/storage evidence even when the native syntax-tree projection is unavailable.
+    `(compound_statement) @export_scope`,
+    `((declaration (storage_class_specifier) @storage) @private_declaration (#eq? @storage "static"))`,
+    `((function_definition (storage_class_specifier) @storage) @private_declaration (#eq? @storage "static"))`,
     `(function_definition ${functionNameQuery}) @declaration`,
     `(declaration ${functionNameQuery}) @declaration`,
     `(struct_specifier name: (type_identifier) @name)`,
     `(enum_specifier name: (type_identifier) @name)`,
-    `(type_definition declarator: (type_identifier) @name)`,
+    `(type_definition declarator: (_) @declarator)`,
     `((declaration type: (_) @type declarator: (identifier) @name) @declaration
       (#not-match? @type "^(import|export)$"))`,
     `((declaration type: (_) @type declarator: (init_declarator declarator: (identifier) @name)) @declaration
@@ -87,10 +94,13 @@ export function cFamilyCoreExportQueries(functionNameQuery: string): string[] {
 export function cFamilyCoreLocalQueries(functionNameQuery: string): string[] {
   return [
     `(function_definition ${functionNameQuery})`,
+    // A prototype is a `declaration`, not a `function_definition`; without this a header that only
+    // declares its API has no function locals at all.
     `(declaration ${functionNameQuery})`,
     `(struct_specifier name: (type_identifier) @name)`,
     `(enum_specifier name: (type_identifier) @name)`,
-    `(type_definition declarator: (type_identifier) @name)`,
+    // Resolve the declarator chain in the consumer, without a fixed pointer/array depth.
+    `(type_definition declarator: (_) @declarator)`,
     `(declaration declarator: (identifier) @name)`,
     `(declaration declarator: (init_declarator declarator: (identifier) @name))`,
     `(parameter_declaration declarator: (identifier) @name)`,
@@ -165,6 +175,8 @@ export function createCFamilyLanguageDefinition(options: CFamilyLanguageDefiniti
     createsFunctionScope: options.createsFunctionScope,
     createsBlockScope: (node) => node.type === "compound_statement",
     supportsCrossModuleSymbols: true,
+    // A name declared inside a function body is not a module export. The exports query cannot
+    // anchor on `translation_unit` because include guards nest every header declaration.
     exportScopeBlockers: ["compound_statement"],
     usesQueryDrivenLocals: options.usesQueryDrivenLocals || false,
   };

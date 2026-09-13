@@ -3,7 +3,7 @@ import {
   parseCsharpUsingDirective,
   parseKotlinImportStatement,
   parsePhpImportStatement,
-  parseRustImportStatement,
+  parseRustImportStatements,
   type ParsedRustImportStatement,
 } from "../languages/import-statement-parsers.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
@@ -30,7 +30,17 @@ import {
 import { sliceText, unquote } from "../util/ast.js";
 import { PYTHON_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { isRustCfgTestStatement, utf8ByteOffsetToStringIndex } from "../util/rust-test-modules.js";
-import { extractJsTsSpecifiers, extractPythonSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
+import {
+  extractRustModPathAttribute,
+  rustGraphModuleSpecifier,
+  rustStatementStartIndex,
+} from "../util/resolution/rust.js";
+import {
+  extractJsTsSpecifiers,
+  extractPythonSpecifiers,
+  isJsTsTypeOnlySpecifierStatement,
+  type ModuleSpecifier,
+} from "../util/specifiers.js";
 
 export type FallbackImportExtractionReason = "fast" | "reduced-mode" | "query-error" | "query-empty";
 
@@ -59,7 +69,20 @@ function isHtmlLikeLanguage(languageId: string, filePath?: string): boolean {
   return !!filePath && filePath.toLowerCase().endsWith(".astro");
 }
 
-function rustSpecifierFromParsedImport(parsed: ParsedRustImportStatement): ModuleSpecifier {
+function rustSpecifierFromParsedImport(
+  parsed: ParsedRustImportStatement,
+  source: string,
+  statementStartIndex?: number,
+): ModuleSpecifier {
+  if (parsed.kind === "module" && !parsed.isExternCrate) {
+    const pathAttribute = parsed.pathAttribute ?? extractRustModPathAttribute(source, parsed.from, statementStartIndex);
+    return {
+      spec: rustGraphModuleSpecifier(source, parsed.from, statementStartIndex),
+      typeOnly: false,
+      ...(pathAttribute ? { pathAttribute } : {}),
+      ...(statementStartIndex !== undefined ? { statementStartIndex } : {}),
+    };
+  }
   if (parsed.kind !== "member") {
     return { spec: parsed.from, typeOnly: false };
   }
@@ -128,13 +151,19 @@ function normalizeModuleSpecifiers(specifiers: ModuleSpecifier[]): ModuleSpecifi
           ...(entry.dropIfUnresolved ? { dropIfUnresolved: true } : {}),
           ...(entry.resolved ? { resolved: entry.resolved } : {}),
           ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}),
+          ...(entry.pathAttribute ? { pathAttribute: entry.pathAttribute } : {}),
+          ...(entry.statementStartIndex !== undefined ? { statementStartIndex: entry.statementStartIndex } : {}),
         },
   );
 }
 
+function moduleSpecifierKey(entry: ModuleSpecifier): string {
+  return `${entry.spec}::${entry.typeOnly ? 1 : 0}::${entry.exportCondition ?? ""}::${entry.pathAttribute ?? ""}`;
+}
+
 function appendUniqueSpecifiers(target: ModuleSpecifier[], incoming: ModuleSpecifier[], seen: Set<string>): void {
   for (const entry of incoming) {
-    const key = `${entry.spec}::${entry.typeOnly ? 1 : 0}::${entry.exportCondition ?? ""}`;
+    const key = moduleSpecifierKey(entry);
     if (seen.has(key)) continue;
     seen.add(key);
     target.push(entry);
@@ -142,14 +171,18 @@ function appendUniqueSpecifiers(target: ModuleSpecifier[], incoming: ModuleSpeci
 }
 
 function makeSeenSet(target: ModuleSpecifier[]): Set<string> {
-  return new Set(target.map((entry) => `${entry.spec}::${entry.typeOnly ? 1 : 0}::${entry.exportCondition ?? ""}`));
+  return new Set(target.map(moduleSpecifierKey));
 }
 
 function nativeCaptureStartIndex(
   source: string,
   capture: CompactCapture | NativeCapture | undefined,
 ): number | undefined {
-  if (capture === undefined || !("start" in capture)) return undefined;
+  if (capture === undefined) return undefined;
+  if ("startIndex" in capture && typeof capture.startIndex === "number") {
+    return utf8ByteOffsetToStringIndex(source, capture.startIndex);
+  }
+  if (!("start" in capture)) return undefined;
   return utf8ByteOffsetToStringIndex(source, capture.start.index);
 }
 
@@ -186,7 +219,7 @@ function extractTripleSlashReferenceSpecifiers(source: string): ModuleSpecifier[
 }
 
 // Triple-slash reference edges are a source-text scan, independent of whether
-// the native query ran — apply it on every TS/TSX exit path (fast-mode regex
+// the native query ran; apply it on every TS/TSX exit path (fast-mode regex
 // recovery, the native-query happy path, and the query-unavailable/query-error
 // regex-recovery fallback), not just the native-query path.
 function appendTripleSlashReferencesForTs(support: LanguageSupport, source: string, out: ModuleSpecifier[]): void {
@@ -370,6 +403,8 @@ export function collectModuleSpecifiersFromSource(
   const nativeImportsToProcess = htmlLikeLanguage ? [] : (nativeImportsArray ?? []);
 
   let queryFailed = false;
+  // Current native add-ons retain capture offsets. Older add-ons use ordered source lookup.
+  let rustStatementSearchIndex = 0;
   if (hasNativeImports) {
     try {
       for (const match of nativeImportsToProcess) {
@@ -378,20 +413,32 @@ export function collectModuleSpecifiersFromSource(
           CompactCapture | NativeCapture | undefined
         >;
         const stmtText = capMap["stmt"]?.text ?? "";
-        const typeOnly =
-          (support.id === "ts" || support.id === "tsx") &&
-          (/\b(import|export)\s+type\b/.test(stmtText) || /^\s*declare\s+module\s+["']/.test(stmtText));
+        const typeOnly = (support.id === "ts" || support.id === "tsx") && isJsTsTypeOnlySpecifierStatement(stmtText);
         if (support.id === "kotlin") {
           const parsed = parseKotlinImportStatement(stmtText);
           if (parsed) out.push({ spec: parsed.from, typeOnly: false });
           continue;
         }
         if (support.id === "rust") {
-          const statementStartIndex = nativeCaptureStartIndex(source, capMap["stmt"]);
+          const capturedStartIndex = nativeCaptureStartIndex(source, capMap["stmt"]);
+          const statementStartIndex = rustStatementStartIndex(
+            source,
+            stmtText,
+            capturedStartIndex,
+            rustStatementSearchIndex,
+          );
+          if (capturedStartIndex === undefined && statementStartIndex !== undefined) {
+            rustStatementSearchIndex = statementStartIndex + stmtText.trim().length;
+          }
           if (isRustCfgTestStatement(source, stmtText, statementStartIndex)) continue;
-          const parsed = parseRustImportStatement(stmtText);
-          if (parsed) {
-            out.push(rustSpecifierFromParsedImport(parsed));
+          const parsedList = parseRustImportStatements(stmtText);
+          if (parsedList.length) {
+            const rustSeen = makeSeenSet(out);
+            appendUniqueSpecifiers(
+              out,
+              parsedList.map((parsed) => rustSpecifierFromParsedImport(parsed, source, statementStartIndex)),
+              rustSeen,
+            );
             continue;
           }
         }

@@ -7,7 +7,7 @@ import {
   parseJavaImportStatement,
   parseKotlinImportStatement,
   parsePhpImportStatement,
-  parseRustImportStatement,
+  parseRustImportStatements,
 } from "../src/languages/import-statement-parsers.js";
 import { extractJsTsSpecifiers, extractPythonSpecifiers } from "../src/util.js";
 import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
@@ -27,24 +27,30 @@ import type { NativeMatch } from "../src/native/tree-sitter-native.js";
 // letters, Go's Unicode "letter" production, JS/TS ID_Start/ID_Continue, PEP 3131 Python).
 describe("Import/alias extraction accepts Unicode identifiers", () => {
   it("Rust: extern crate alias, use alias, and module name", () => {
-    expect(parseRustImportStatement("mod \u2118\u0301;")).toEqual({
-      kind: "module",
-      from: "\u2118\u0301",
-      local: "\u2118\u0301",
-      isExternCrate: false,
-    });
-    expect(parseRustImportStatement("extern crate \u2118 as alias\u0301;")).toEqual({
-      kind: "module",
-      from: "\u2118",
-      local: "alias\u0301",
-      isExternCrate: true,
-    });
-    expect(parseRustImportStatement("use std::foo as alias\u0301;")).toEqual({
-      kind: "member",
-      from: "std",
-      imported: "foo",
-      local: "alias\u0301",
-    });
+    expect(parseRustImportStatements("mod \u2118\u0301;")).toEqual([
+      {
+        kind: "module",
+        from: "\u2118\u0301",
+        local: "\u2118\u0301",
+        isExternCrate: false,
+      },
+    ]);
+    expect(parseRustImportStatements("extern crate \u2118 as alias\u0301;")).toEqual([
+      {
+        kind: "module",
+        from: "\u2118",
+        local: "alias\u0301",
+        isExternCrate: true,
+      },
+    ]);
+    expect(parseRustImportStatements("use std::foo as alias\u0301;")).toEqual([
+      {
+        kind: "member",
+        from: "std",
+        imported: "foo",
+        local: "alias\u0301",
+      },
+    ]);
   });
 
   it("PHP: use-clause alias", () => {

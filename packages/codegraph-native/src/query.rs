@@ -23,7 +23,11 @@ fn capture_to_compact(
         .get(node.start_byte()..node.end_byte())
         .unwrap_or("")
         .to_string();
-    CompactCapture { name, text }
+    CompactCapture {
+        name,
+        text,
+        start_index: node.start_byte() as u32,
+    }
 }
 
 fn capture_to_object(

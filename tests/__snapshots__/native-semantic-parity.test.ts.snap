@@ -536,7 +536,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
   "references": {
     "refs": [
       "main.c:6",
-      "utils.h:6",
+      "utils.h:4",
     ],
     "status": "ok",
   },
@@ -976,6 +976,24 @@ exports[`native semantic coverage > keeps native semantics stable for representa
       "AnnotationConsumer.java:3",
       "AnnotationConsumer.java:5",
       "AnnotationTypes.java:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for Rust path-attribute crate resolution 1`] = `
+{
+  "goto": {
+    "file": "src/custom.rs",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "src/consumer.rs:1",
+      "src/consumer.rs:5",
+      "src/custom.rs:1",
     ],
     "status": "ok",
   },

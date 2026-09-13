@@ -8,13 +8,14 @@ import { normalizePath } from "../../src/util/paths.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
+import { C_SUPPORT, CPP_SUPPORT, supportForFile, supportForFileWithSource } from "../../src/languages.js";
+import { parseSyntaxTree, runQuery } from "@lzehrung/codegraph-native";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
-import { C_SUPPORT, CPP_SUPPORT, supportForFile, type LanguageSupport } from "../../src/languages.js";
 import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js";
+import type { LanguageSupport } from "../../src/languages.js";
 import { findReferences, goToDefinition, listSymbols } from "../../src/index.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
-import { parseSyntaxTree, runQuery } from "@lzehrung/codegraph-native";
 
 function collectCppNames(file: string, source: string, support: LanguageSupport = CPP_SUPPORT) {
   const nativeQueries = getNativeQueryExecution(source, support).results;
@@ -133,12 +134,24 @@ describe("C++ language boundaries", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-header-language-"));
     const cppHeader = path.join(root, "widget.h");
     const cHeader = path.join(root, "widget_c.h");
+    const commentHeader = path.join(root, "comment.h");
+    const usingHeader = path.join(root, "using.h");
     try {
       await fs.writeFile(cppHeader, "namespace widgets { class Widget {}; }\n", "utf8");
       await fs.writeFile(cHeader, "struct Widget { int value; };\n", "utf8");
+      await fs.writeFile(
+        commentHeader,
+        "/* This is a template for the audio driver. */ struct S { int x; };\n",
+        "utf8",
+      );
+      await fs.writeFile(usingHeader, "using Foo = int;\n", "utf8");
 
       expect(supportForFile(cppHeader)).toBe(CPP_SUPPORT);
       expect(supportForFile(cHeader)).toBe(C_SUPPORT);
+      expect(supportForFile(commentHeader)).toBe(C_SUPPORT);
+      expect(supportForFile(usingHeader)).toBe(CPP_SUPPORT);
+      expect(supportForFileWithSource("qualified.h", "void Widget::bar();\n")).toBe(CPP_SUPPORT);
+      expect(supportForFileWithSource("constexpr.h", "constexpr int k = 1;\n")).toBe(CPP_SUPPORT);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
