@@ -10,6 +10,7 @@ import {
   type BuildReport,
 } from "../src/index.js";
 import type { FallbackImportExtractionEvent } from "../src/graphs.js";
+import { createFallbackImportExtractionHandler } from "../src/indexer/build-cache/reports.js";
 import { logWithLevel } from "../src/logging.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -152,6 +153,24 @@ describe("logging behavior", () => {
       debugSpy.mockRestore();
       warnSpy.mockRestore();
       await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("warns for a missing source grammar but not supported graph-only extraction", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const handler = createFallbackImportExtractionHandler(undefined, { logLevel: "warn" });
+      handler?.({ language: "markdown", reason: "unsupportedLanguage", file: "guide.md" });
+      expect(warnSpy).not.toHaveBeenCalled();
+      handler?.({ language: "python", reason: "unsupportedLanguage", file: "source.py" });
+      expect(warnSpy).toHaveBeenCalledOnce();
+      expect(warnSpy.mock.calls[0]?.[1]).toEqual({ language: "python", reason: "unsupportedLanguage" });
+      handler?.({ language: "python", reason: "unsupportedLanguage", file: "other.py" });
+      expect(warnSpy).toHaveBeenCalledOnce();
+      handler?.({ language: "ts", reason: "unsupportedLanguage", file: "source.ts" });
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      warnSpy.mockRestore();
     }
   });
 });

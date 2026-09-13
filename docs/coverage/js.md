@@ -6,9 +6,9 @@ Source: `coverage/js/lcov.info`
 
 | Metric    |   Hit | Found | Coverage |
 | --------- | ----: | ----: | -------: |
-| Lines     | 31582 | 34875 |   90.56% |
-| Functions |  5176 |  5519 |   93.79% |
-| Branches  | 24107 | 30338 |   79.46% |
+| Lines     | 31642 | 34930 |   90.59% |
+| Functions |  5193 |  5536 |   93.80% |
+| Branches  | 24159 | 30386 |   79.51% |
 
 ## Least-covered Files
 
@@ -22,7 +22,7 @@ Source: `coverage/js/lcov.info`
 | `src/impact/call-compatibility/text-scanner.ts` | 66.04% |   100.00% |   70.75% |
 | `src/cli/bootstrap.ts`                          | 66.67% |    50.00% |      n/a |
 | `src/cli/artifact.ts`                           | 70.00% |   100.00% |   72.22% |
-| `src/cli/context.ts`                            | 72.84% |    62.75% |   76.70% |
+| `src/cli/context.ts`                            | 73.17% |    62.75% |   77.57% |
 | `src/cli/rename-preview.ts`                     | 73.81% |   100.00% |   62.50% |
 | `src/agent/follow-ups.ts`                       | 74.42% |    81.82% |   54.70% |
 | `src/cli/location.ts`                           | 75.00% |   100.00% |   50.00% |
@@ -30,8 +30,8 @@ Source: `coverage/js/lcov.info`
 | `src/cli/install.ts`                            | 75.71% |    76.00% |   72.09% |
 | `src/cli/mcp.ts`                                | 75.86% |    66.67% |   78.13% |
 | `src/cli/packet.ts`                             | 76.47% |    50.00% |   62.96% |
-| `src/native/execution.ts`                       | 77.01% |    87.50% |   73.77% |
 | `src/cli.ts`                                    | 77.91% |    71.43% |   82.76% |
+| `src/native/execution.ts`                       | 78.16% |    87.50% |   75.41% |
 | `src/cli/navigation.ts`                         | 78.35% |    62.96% |   74.69% |
 | `src/impact/report-shared.ts`                   | 78.95% |    82.76% |   50.00% |
 

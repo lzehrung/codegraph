@@ -8,6 +8,7 @@ import {
   getNativeTreeSitterLoadError,
   getNativeTreeSitterSupportedLanguageIds,
 } from "../native/tree-sitter-native.js";
+import { GRAPH_ONLY_LANGUAGE_IDS } from "../document-links/language-ids.js";
 import {
   getCodegraphPackageIdentity,
   normalizePathForDisplay,
@@ -42,6 +43,7 @@ export type DoctorReport = {
     available: boolean;
     loadError?: string;
     supportedLanguageIds: string[];
+    graphOnlyLanguageIds: string[];
     origin?: DoctorNativeOriginReport;
     update?: DoctorNativeUpdateReport;
   };
@@ -170,6 +172,10 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return isPlainRecord(value) ? value : undefined;
 }
 
+function registeredGraphOnlyLanguageIds(): string[] {
+  return [...GRAPH_ONLY_LANGUAGE_IDS].sort((left, right) => left.localeCompare(right));
+}
+
 function readField(record: Record<string, unknown> | undefined, key: string): unknown {
   return record?.[key];
 }
@@ -243,10 +249,12 @@ export function formatDoctorSummary(report: DoctorReport): string {
 
   const native = asRecord(report.native);
   const supportedLanguageIds = readField(native, "supportedLanguageIds");
+  const graphOnlyLanguageIds = readField(native, "graphOnlyLanguageIds");
   const nativeBody = formatLabeledFields([
     ["Available", readField(native, "available")],
     ["Load error", readField(native, "loadError")],
-    ["Supported language ids", Array.isArray(supportedLanguageIds) ? supportedLanguageIds : undefined],
+    ["Native grammar language ids", Array.isArray(supportedLanguageIds) ? supportedLanguageIds : undefined],
+    ["Graph-only language ids", Array.isArray(graphOnlyLanguageIds) ? graphOnlyLanguageIds : undefined],
   ]);
 
   const origin = asRecord(readField(native, "origin"));
@@ -380,6 +388,7 @@ export function buildDoctorReport(indexPath?: string): DoctorReport {
       available: isNativeTreeSitterAvailable(),
       ...(loadError ? { loadError: String(loadError) } : {}),
       supportedLanguageIds: getNativeTreeSitterSupportedLanguageIds(),
+      graphOnlyLanguageIds: registeredGraphOnlyLanguageIds(),
       ...(origin
         ? {
             origin: {

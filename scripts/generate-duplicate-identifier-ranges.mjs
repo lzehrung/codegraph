@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 import {
   DUPLICATE_IDENTIFIER_RANGES_TARGET,
   collectDuplicateIdentifierRanges,
@@ -9,7 +10,9 @@ import {
 
 const CHECK_ONLY = process.argv.includes("--check");
 
-const { getNativeDuplicateTokens } = await import(path.resolve("dist/native/tree-sitter-native.js"));
+const { getNativeDuplicateTokens } = await import(
+  pathToFileURL(path.resolve("dist/native/tree-sitter-native.js")).href
+);
 
 function tokenize(source) {
   const native = getNativeDuplicateTokens(source, "on");

@@ -140,6 +140,19 @@ thing. Delete the argument rather than blanking it.
 This ships in a 2.x minor by explicit decision rather than waiting for a major, matching how
 2.0.0 handled export narrowing without compatibility aliases.
 
+## Import fallback events
+
+`collectModuleSpecifiersFromSource(support, source, opts)` from `@lzehrung/codegraph-core/graphs` accepts `opts.onFallbackImportExtraction(event)`. Each event has `language`, `reason`, and an optional `file`. `FallbackImportExtractionReason` distinguishes:
+
+- `unavailable`: the native addon could not run and the language has no reduced-mode regex recovery, so another extractor ran without a native query.
+- `unsupportedLanguage`: the addon has no grammar for this language. Graph-only languages use their supported extractor; other languages use regex recovery.
+- `query-error`: native query execution failed.
+- `query-empty`: native results did not provide imports and another extractor is used. This is not an unavailable parser.
+- `fast`: fast mode selected regex extraction.
+- `reduced-mode`: reduced extraction was selected for a language that has regex recovery (`js`, `ts`, `tsx`), including explicit `native: "off"`. Other languages report `unavailable` in that case.
+
+These events describe the extraction path, not whether it found dependencies. Both the graph and the import-binding consumers report the same reason for a file. A valid empty native result need not emit an event. Build reports omit supported graph-only extraction from degraded-file counts.
+
 ## Symbol target resolution
 
 `resolveSymbolTarget(index, input)` is the index-level capability for turning a

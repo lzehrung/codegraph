@@ -100,7 +100,7 @@ Filename results are suggestions only.
 - Specialized reads: `codegraph grep --query` for syntax trees, `codegraph chunk` for embeddings, and `codegraph dumpmod` for indexed module data.
 - Compare architecture across revisions: `codegraph drift` or `codegraph graph-delta`.
 - Export graphs with `codegraph graph --json`; `codegraph viewer` is for people. Create bundles with `codegraph artifact build` / MCP `artifact_build`; query SQLite exports with `codegraph sql` / MCP `query_sqlite`.
-- If MCP startup or transport fails, do not keep retrying that server. Run `codegraph doctor` and use the CLI for the session.
+- If MCP startup or transport fails, do not keep retrying that server. Run `codegraph doctor` and use the CLI for the session. Doctor separates loaded grammars from graph-only languages; `Backend:` warnings name languages using fallback extraction.
 - First CLI queries may build an index; progress goes to stderr. Use `codegraph orient --report` to diagnose index costs.
 - After a Codegraph update, restart or reload the owning MCP client. `refresh_index` refreshes project state, not running tool code.
 - CLI exit `1` can mean findings, no target, or a runtime failure: read the output. Exit `2` means invalid usage or input.
