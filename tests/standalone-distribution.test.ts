@@ -19,6 +19,19 @@ import {
 } from "../scripts/onboarding/standalone-install-lib.mjs";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
+// PowerShell ships with every GitHub runner, so the installer retry coverage runs on Linux and
+// macOS too; a host without it skips rather than reporting coverage it did not collect.
+function resolvePowerShell(): string {
+  const candidates = process.platform === "win32" ? ["pwsh.exe", "powershell.exe"] : ["pwsh"];
+  for (const candidate of candidates) {
+    const probe = spawnSync(candidate, ["-NoProfile", "-Command", "exit 0"], { encoding: "utf8" });
+    if (!probe.error && probe.status === 0) return candidate;
+  }
+  return "";
+}
+
+const powerShellExecutable = resolvePowerShell();
+
 const VIEWER_ASSETS = [
   "app.js",
   "file-tree-filters.js",
@@ -955,6 +968,22 @@ describe("standalone bootstrap scripts", () => {
     });
     return promise;
   }
+
+  it.skipIf(!powerShellExecutable)("retries a blocked installer directory move and surfaces the rest", () => {
+    const result = spawnSync(
+      powerShellExecutable,
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        path.join(bootstrapRoot, "tests", "helpers", "standalone-move-retry.ps1"),
+      ],
+      { cwd: bootstrapRoot, encoding: "utf8" },
+    );
+
+    expect(`${result.stdout}${result.stderr}`).toContain("recovered after 5 refusals");
+    expect(result.status).toBe(0);
+  });
 
   it("uses verified identity and lock contracts plus a Unicode-safe Windows launcher", async () => {
     const [posix, powershell] = await Promise.all([
