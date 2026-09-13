@@ -201,8 +201,9 @@ describe("header language classification", () => {
     );
 
     expect(built.reads).toBe(0);
-    // Parsed as C, so the C++ namespace and class never become symbols.
-    expect(exportedNames(built.value, "widget0.h")).toEqual(["value"]);
+    // Parsed as C, so the C++ namespace, class and its field never become symbols: the C exports
+    // query only publishes translation-unit scope, and this header has none once it misparses.
+    expect(exportedNames(built.value, "widget0.h")).toEqual([]);
     expect(exportedNames(built.value, "schema.sql")).toEqual(["widgets"]);
   });
   it("builds a header bloom filter without a second synchronous sample", async () => {
@@ -261,5 +262,35 @@ describe("header classification for callers that already hold the source", () =>
     // Chunk units carry the grammar that produced them, so `cpp` proves the exact classification.
     expect(built.value.map((unit) => unit.languageId)).toContain("cpp");
     expect(built.reads).toBe(0);
+  });
+});
+
+describe("language dispatch for source-file extension aliases", () => {
+  const cases: Array<[string, string]> = [
+    ["setup.pyw", "python"],
+    ["build.rbw", "ruby"],
+    ["release.rake", "ruby"],
+    ["demo.gemspec", "ruby"],
+    ["Script.ktm", "kotlin"],
+    ["build.csx", "csharp"],
+    ["page.phtml", "php"],
+    ["legacy.php4", "php"],
+    ["modern.php8", "php"],
+    ["page.xhtml", "html"],
+    ["schema.ddl", "sql"],
+    ["report.pgsql", "sql"],
+    ["dump.mysql", "sql"],
+  ];
+
+  it.each(cases)("classifies %s as %s", (fileName, languageId) => {
+    expect(supportForFileWithoutHeaderSample(fileName)?.id).toBe(languageId);
+  });
+
+  it("leaves formats without a matching grammar unclassified", () => {
+    // Indented Sass, Objective-C, Stylus, Go templates and Zig manifests have no pinned grammar;
+    // the SCSS grammar in particular produces ERROR nodes for every indented Sass rule.
+    for (const fileName of ["theme.sass", "Widget.m", "Widget.mm", "theme.styl", "page.templ", "build.zon"]) {
+      expect(supportForFileWithoutHeaderSample(fileName)).toBeUndefined();
+    }
   });
 });

@@ -9,6 +9,15 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Fixed
+
+- Language queries now match the loaded grammars, preserve supported declaration forms, and exclude false CommonJS and function-local exports.
+- Default discovery includes registered language aliases. HTML queries ignore tag and attribute case, Python `__all__` respects module scope and complete static lists, and TypeScript declaration exports resolve through imports.
+- Module exports drop names declared inside a function body, lambda, or closure while keeping members of nested top-level types. C/C++ exports again include include-guarded declarations, plus namespace, template, and prototype declarations, and an aliased Rust `pub use` keeps the original member as its source.
+- Links to registered alias files resolve, so an `<a href="page.xhtml">` target inside the project is a file edge instead of an external reference.
+- Duplicate masking includes Ruby `load`/`autoload` and Zig `@cImport`, with native and fallback handling. Ruby literal `load` and `autoload` calls remain masked with trailing comments. Kotlin duplicate queries use the loaded grammar's `import` node.
+- Java method-, constructor-, and lambda-local classes no longer publish module exports. Ruby extension aliases retain standard-library import classification.
+
 ## [2.3.24] - 2026-09-10
 
 ### Fixed

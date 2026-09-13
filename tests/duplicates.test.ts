@@ -184,7 +184,8 @@ const importStatementMaskCases: Array<{ file: string; language: string; source: 
   {
     file: "sample.rb",
     language: "ruby",
-    source: 'require "duplicateImportMarker"\nrequire_relative "duplicateImportMarker"\ndef keep_ruby\nend\n',
+    source:
+      'require "duplicateImportMarker"\nrequire_relative "duplicateImportMarker"\nload "duplicateImportMarker" # dependency\nautoload :Lazy, "duplicateImportMarker"\ndef keep_ruby\nend\n',
   },
   {
     file: "sample.rs",
@@ -217,7 +218,8 @@ const importStatementMaskCases: Array<{ file: string; language: string; source: 
   {
     file: "sample.zig",
     language: "zig",
-    source: 'const marker = @import("duplicateImportMarker");\npub fn keepZig() void {}\n',
+    source:
+      'const marker = @import("duplicateImportMarker");\nconst c = @cImport({ @cInclude("duplicateImportMarker.h"); });\npub fn keepZig() void {}\n',
   },
   {
     file: "Component.vue",
@@ -267,6 +269,98 @@ describe("duplicate detection", () => {
     }
   });
 
+  test("does not mask Ruby dynamic loads or Zig non-import builtins", () => {
+    const ruby = 'load path_var\nautoload :Lazy, path_var\nputs "hello"\nlog.info "x"\ndef keep_ruby\nend\n';
+    const zig = 'const value = @intFromFloat(1.5);\nconst kind = @TypeOf("x");\npub fn keepZig() void {}\n';
+
+    for (const nativeMode of [undefined, "off"] as const) {
+      expect(maskDuplicateImportStatements(ruby, "sample.rb", "ruby", nativeMode)).toBe(ruby);
+      expect(maskDuplicateImportStatements(zig, "sample.zig", "zig", nativeMode)).toBe(zig);
+    }
+  });
+
+  test("does not mask Ruby load concatenations as import statements", () => {
+    const cases = [
+      'load "file" + suffix\nputs "hello"\n',
+      'load("file" + suffix)\nputs "hello"\n',
+      'autoload :Lazy, "file" + suffix\nputs "hello"\n',
+      'autoload(:Lazy, "file" + suffix)\nputs "hello"\n',
+    ];
+    for (const source of cases) {
+      for (const nativeMode of [undefined, "off"] as const) {
+        expect(maskDuplicateImportStatements(source, "sample.rb", "ruby", nativeMode)).toBe(source);
+      }
+    }
+  });
+
+  test("masks multiline Zig @cImport without swallowing following code", () => {
+    const source = [
+      "const c = @cImport( {",
+      '    if (true) { @cInclude("duplicateImportMarker.h"); }',
+      "} );",
+      "pub fn keepZig() void {}",
+      "",
+    ].join("\n");
+    const masked = maskDuplicateImportStatements(source, "sample.zig", "zig");
+    const fallbackMasked = maskDuplicateImportStatements(source, "sample.zig", "zig", "off");
+
+    for (const result of [masked, fallbackMasked]) {
+      expect(result).not.toContain("duplicateImportMarker");
+      expect(result).toContain("keepZig");
+      expect(result).toHaveLength(source.length);
+    }
+  });
+
+  test("masks static Ruby load calls without hiding the next statement", () => {
+    const source = 'load(\n"one.rb"\n); keep()\nload "two.rb", true\nautoload(:Lazy, "three.rb"); keep_again()\n';
+    for (const nativeMode of [undefined, "off"] as const) {
+      const result = maskDuplicateImportStatements(source, "sample.rb", "ruby", nativeMode);
+      expect(result).not.toMatch(/one\.rb|two\.rb|three\.rb/);
+      expect(result).toContain("; keep()");
+      expect(result).toContain("; keep_again()");
+      expect(result.length).toBe(source.length);
+    }
+  });
+
+  test("duplicate units scan executable Ruby load concatenations and skip static loads", async () => {
+    const root = await makeTempProject();
+    const staticFile = await writeProjectFile(
+      root,
+      "src/static.rb",
+      'require "duplicateImportMarker"\nrequire_relative "duplicateImportMarker"\nload "duplicateImportMarker"\nautoload :Lazy, "duplicateImportMarker"\n',
+    );
+    const dynamicFile = await writeProjectFile(
+      root,
+      "src/dynamic.rb",
+      'load "file" + suffix\nautoload :Lazy, "file" + suffix\ndef keep_ruby\nend\n',
+    );
+
+    for (const nativeMode of [undefined, "off"] as const) {
+      const index = await buildProjectIndex(root, nativeMode ? { native: nativeMode } : undefined);
+      const staticCollection = await collectDuplicateUnits(index, {
+        projectRoot: root,
+        files: [staticFile],
+        includeSmall: true,
+        minTokens: 1,
+        maxTokens: 400,
+        shingleSize: 3,
+        windowSize: 20,
+      });
+      const dynamicCollection = await collectDuplicateUnits(index, {
+        projectRoot: root,
+        files: [dynamicFile],
+        includeSmall: true,
+        minTokens: 1,
+        maxTokens: 400,
+        shingleSize: 3,
+        windowSize: 20,
+      });
+
+      expect(staticCollection.units).toEqual([]);
+      expect(dynamicCollection.units.some((unit) => unit.tokenSet.has("+"))).toBe(true);
+    }
+  });
+
   test("keeps non-import words during fallback import masking", () => {
     const cases = [
       { file: "sample.cs", language: "csharp", source: "usingSomething();\nclass KeepCsharp {}\n" },
@@ -278,6 +372,67 @@ describe("duplicate detection", () => {
         scenario.source,
       );
     }
+  });
+
+  test("does not mask inline Rust modules as import statements", () => {
+    const source = [
+      "mod inner {",
+      "    pub fn keep_wrapped() {",
+      "        let value = 1;",
+      "    }",
+      "}",
+      "mod duplicateImportMarker;",
+      "fn keep_rust() {}",
+      "",
+    ].join("\n");
+    const masked = maskDuplicateImportStatements(source, "sample.rs", "rust");
+    const fallbackMasked = maskDuplicateImportStatements(source, "sample.rs", "rust", "off");
+
+    for (const result of [masked, fallbackMasked]) {
+      expect(result).toContain("keep_wrapped");
+      expect(result).toContain("mod inner");
+      expect(result).not.toContain("duplicateImportMarker");
+      expect(result).toMatch(/keep_rust/i);
+      expect(result).toHaveLength(source.length);
+    }
+  });
+
+  test("detects duplicates inside inline Rust modules", async () => {
+    const root = await makeTempProject();
+    const duplicateSource = `mod inner {
+    pub fn normalize_invoice_rows(rows: &[i32]) -> String {
+        let mut totals: Vec<i32> = Vec::new();
+        let mut labels: Vec<&str> = Vec::new();
+        for row in rows {
+            let subtotal = row + 3;
+            let rounded = subtotal * 100 / 100;
+            let label = if rounded > 100 { "large" } else { "small" };
+            labels.push(label);
+            totals.push(rounded);
+        }
+        totals
+            .iter()
+            .enumerate()
+            .map(|(index, value)| format!("{}:{}", labels[index], value))
+            .filter(|value| value.contains(':'))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+`;
+    await writeProjectFile(root, "src/a.rs", duplicateSource);
+    await writeProjectFile(root, "src/b.rs", duplicateSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, {
+      projectRoot: root,
+      files: ["src/a.rs", "src/b.rs"],
+      includeSmall: true,
+      minConfidence: "low",
+    });
+
+    expect(result.units).toBeGreaterThan(0);
+    expect(result.groups.length).toBeGreaterThan(0);
   });
 
   test("excludes import-list boilerplate before duplicate scoring", async () => {
@@ -2899,6 +3054,54 @@ export function processInvoiceItems(items: Array<{ price: number; qty: number }>
     if (index) {
       closeDuplicateUnitCacheForIndex(index);
     }
+  }
+});
+
+test("C5: reopened duplicate unit cache recomputes units stored under a previous construction version", async () => {
+  const root = await makeTempProject();
+  let index: Awaited<ReturnType<typeof buildProjectIndex>> | undefined;
+  try {
+    const source = [
+      "mod inner {",
+      "    pub fn keep_wrapped() {",
+      "        let value = 1;",
+      "    }",
+      "}",
+      "mod duplicateImportMarker;",
+      "fn keep_rust() {}",
+      "",
+    ].join("\n");
+    const file = await writeProjectFile(root, "src/sample.rs", source);
+    index = await buildProjectIndex(root, { cache: "disk" });
+    const variant = duplicateUnitCacheVariant(index, 1, 400, 3, 20, root);
+    const sig = duplicateUnitCacheSignature(index, file, root);
+    if (!sig) throw new Error("expected a duplicate-unit cache signature");
+
+    const diskDb = duplicateUnitDiskCache(index);
+    if (!diskDb?.statements) throw new Error("expected an open duplicate-unit cache database");
+    diskDb.statements.write.run(
+      cacheRelativePath(root, file),
+      variant,
+      sig,
+      DUPLICATE_UNIT_CACHE_VERSION - 1,
+      brotliCompressSync(Buffer.from("[]", "utf8")),
+      Date.now(),
+    );
+
+    expect(tryLoadDuplicateUnitsFromCache(index, file, variant, root)).toBeNull();
+    const collection = await collectDuplicateUnits(index, {
+      projectRoot: root,
+      files: [file],
+      includeSmall: true,
+      minTokens: 1,
+      maxTokens: 400,
+      shingleSize: 3,
+      windowSize: 20,
+    });
+    expect(collection.units.length).toBeGreaterThan(0);
+    expect(collection.units.some((unit) => unit.name === "keep_wrapped")).toBe(true);
+  } finally {
+    if (index) closeDuplicateUnitCacheForIndex(index);
   }
 });
 

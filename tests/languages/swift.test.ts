@@ -1,4 +1,10 @@
-import { describe, it } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { buildProjectIndex } from "../../src/index.js";
+import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
+import { exportedNameOf } from "../helpers/narrow.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
@@ -97,6 +103,148 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("Swift associated types and export scope", () => {
+  it("indexes protocol associated types, macros, and operators", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-associated-"));
+    const file = path.join(root, "example.swift");
+    const source = `protocol Worker {
+  associatedtype Item
+  func act()
+}
+
+macro stringify(_ value: Int) = #externalMacro(module: "M", type: "T")
+
+infix operator **
+`;
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const mod = [...index.byFile.values()][0]!;
+      const locals = mod.locals.map((local) => `${local.kind}:${local.localName}`);
+      const exports = mod.exports.flatMap((entry) =>
+        entry.type === "local" ? [`${entry.target.kind}:${entry.exportedAs}`] : [],
+      );
+      expect(locals).toEqual(
+        expect.arrayContaining(["type:Worker", "type:Item", "function:act", "function:stringify", "function:**"]),
+      );
+      expect(exports).toEqual(
+        expect.arrayContaining(["type:Worker", "type:Item", "function:act", "function:stringify", "function:**"]),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps function-body lets and nested funcs as locals, not exports", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-export-scope-"));
+    const file = path.join(root, "example.swift");
+    const source = `struct Container {
+  func method() {}
+  let member = 1
+}
+
+func outer() {
+  let innerVar = 1
+  func nested() {
+    _ = innerVar
+  }
+}
+
+let topValue = 2
+func topLevel() {}
+`;
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const mod = [...index.byFile.values()][0]!;
+      const locals = mod.locals.map((local) => local.localName);
+      const exports = mod.exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : []));
+      expect(locals).toEqual(
+        expect.arrayContaining([
+          "Container",
+          "method",
+          "member",
+          "outer",
+          "innerVar",
+          "nested",
+          "topValue",
+          "topLevel",
+        ]),
+      );
+      expect(exports).toEqual(
+        expect.arrayContaining(["Container", "method", "member", "outer", "topValue", "topLevel"]),
+      );
+      expect(exports).not.toContain("innerVar");
+      expect(exports).not.toContain("nested");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not export members of a function-local type", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-local-type-"));
+    const file = path.join(root, "example.swift");
+    await writeFile(
+      file,
+      ["func outer() {", "    struct Local {", "        func hidden() {}", "    }", "}", "func keep() {}", ""].join(
+        "\n",
+      ),
+      "utf8",
+    );
+    try {
+      const parsed = await parseFile(file);
+      const mod = collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
+        ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
+      });
+      const localNames = mod.locals.map((entry) => entry.localName);
+      const exportedNames = mod.exports.map(exportedNameOf);
+      expect(localNames).toEqual(expect.arrayContaining(["outer", "Local", "hidden", "keep"]));
+      expect(exportedNames).toEqual(expect.arrayContaining(["outer", "keep"]));
+      expect(exportedNames).not.toContain("hidden");
+      expect(exportedNames).not.toContain("Local");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not export members of a closure-local type", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-closure-type-"));
+    const file = path.join(root, "example.swift");
+    await writeFile(
+      file,
+      [
+        "class Outer {",
+        "    class Inner {",
+        "        func deep() {}",
+        "    }",
+        "}",
+        "let handler = {",
+        "    struct Local {",
+        "        func hidden() {}",
+        "    }",
+        "}",
+        "func keep() {}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    try {
+      const parsed = await parseFile(file);
+      const mod = collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
+        ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
+      });
+      const localNames = mod.locals.map((entry) => entry.localName);
+      const exportedNames = mod.exports.map(exportedNameOf);
+      expect(localNames).toEqual(expect.arrayContaining(["handler", "Local", "hidden", "keep", "deep"]));
+      expect(exportedNames).toEqual(expect.arrayContaining(["handler", "keep", "Outer", "Inner", "deep"]));
+      expect(exportedNames).not.toContain("hidden");
+      expect(exportedNames).not.toContain("Local");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("Swift Unicode symbol ranges (C11)", () => {
   it("publishes a UTF-16 string index for a function name preceded by multibyte text", async () => {

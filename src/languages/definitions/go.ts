@@ -39,9 +39,9 @@ export const GO_DEF: LanguageDefinition = {
     exports: `
       (function_declaration name: (identifier) @name)
       (method_declaration name: (field_identifier) @name)
-      (type_spec name: (type_identifier) @name)
-      (const_spec name: (identifier) @name)
-      (var_spec name: (identifier) @name)
+      (source_file (type_declaration (type_spec name: (type_identifier) @name)))
+      (source_file (const_declaration (const_spec (identifier) @name)))
+      (source_file (var_declaration (var_spec (identifier) @name)))
     `,
     locals: `
       (function_declaration name: (identifier) @name)
@@ -49,9 +49,10 @@ export const GO_DEF: LanguageDefinition = {
       (type_spec name: (type_identifier) @name)
       (parameter_declaration name: (identifier) @name)
       (variadic_parameter_declaration name: (identifier) @name)
+      (type_parameter_declaration name: (identifier) @name)
       (short_var_declaration left: (expression_list (identifier) @name))
-      (var_spec name: (identifier) @name)
-      (const_spec name: (identifier) @name)
+      (var_spec (identifier) @name)
+      (const_spec (identifier) @name)
       (type_spec type: (struct_type (field_declaration_list (field_declaration name: (field_identifier) @name))))
       (range_clause left: (expression_list (identifier) @name) (#not-eq? @name "_"))
     `,
@@ -70,6 +71,7 @@ export const GO_DEF: LanguageDefinition = {
     if (!parent) return "variable";
     if (parent.type === "function_declaration" || parent.type === "method_declaration") return "function";
     if (parent.type === "type_spec" && parent.childForFieldName("name")?.id === node.id) return "type";
+    if (parent.type === "type_parameter_declaration") return "type";
     return "variable";
   },
   createsFunctionScope: (node) =>
@@ -82,8 +84,8 @@ export const GO_DEF: LanguageDefinition = {
     if (p.type === "function_declaration" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "method_declaration" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "type_spec" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "var_spec" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "const_spec" && p.childForFieldName("name")?.id === node.id) return true;
+    if ((p.type === "var_spec" || p.type === "const_spec") && node.type === "identifier") return true;
+    if (p.type === "type_parameter_declaration" && node.type === "identifier") return true;
     if (p.type === "expression_list" && p.parent?.type === "short_var_declaration") return node.type === "identifier";
     if (p.type === "expression_list" && p.parent?.type === "range_clause")
       return node.type === "identifier" && node.text !== "_";

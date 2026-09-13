@@ -3,7 +3,7 @@ import { registerLanguage } from "../registry.js";
 
 export const PHP_DEF: LanguageDefinition = {
   id: "php",
-  extensions: [".php"],
+  extensions: [".php", ".phtml", ".php4", ".php8"],
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

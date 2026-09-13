@@ -155,8 +155,11 @@ describe("AngularJS framework characterization", () => {
       ...node,
       file: normalizePath(node.file),
     }));
-    expect(nodes.some((node) => node.file === controllerFile && node.name === "UserCtrl")).toBe(false);
-    expect(nodes.some((node) => node.file === directiveFile && node.name === "userCard")).toBe(false);
+    // `UserCtrl` and `userCard` are real declarations: the DI array and the directive factory are
+    // named function expressions (`function UserCtrl(...)`, `function userCard()`), so their own
+    // names bind. The heuristics still invent no node for the registration string itself.
+    expect(nodes.some((node) => node.file === controllerFile && node.name === "UserCtrl")).toBe(true);
+    expect(nodes.some((node) => node.file === directiveFile && node.name === "userCard")).toBe(true);
     expect(nodes.some((node) => node.file === controllerFile && node.name === "$state")).toBe(true);
   });
 

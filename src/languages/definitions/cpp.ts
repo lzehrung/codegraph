@@ -30,16 +30,34 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
   splitPoints: [...cFamilyControlSplitPoints, "try_statement", "catch_clause"],
   extraExportQueries: [
     `(class_specifier name: (type_identifier) @name)`,
+    `(class_specifier name: (template_type name: (type_identifier) @name))`,
+    `(union_specifier name: (type_identifier) @name)`,
     `(enumerator name: (identifier) @name)`,
     `(namespace_definition name: (namespace_identifier) @name)`,
+    `(namespace_definition name: (nested_namespace_specifier (namespace_identifier) @name))`,
     `(alias_declaration name: (type_identifier) @name)`,
-    `(using_declaration (qualified_identifier name: (identifier) @name))`,
+    `(concept_definition name: (identifier) @name)`,
+    `(preproc_def name: (identifier) @name)`,
+    `(preproc_function_def name: (identifier) @name)`,
+    `(class_specifier body: (field_declaration_list (field_declaration declarator: (function_declarator declarator: (field_identifier) @name))))`,
+    `(class_specifier body: (field_declaration_list (field_declaration declarator: (reference_declarator (function_declarator declarator: (operator_name) @name)))))`,
+    `(class_specifier body: (field_declaration_list (declaration declarator: (function_declarator declarator: (destructor_name) @name))))`,
   ],
   extraLocalQueries: [
     `(class_specifier name: (type_identifier) @name)`,
+    `(class_specifier name: (template_type name: (type_identifier) @name))`,
+    `(enum_specifier name: (type_identifier) @name)`,
+    `(union_specifier name: (type_identifier) @name)`,
     `(enumerator name: (identifier) @name)`,
     `(namespace_definition name: (namespace_identifier) @name)`,
+    `(namespace_definition name: (nested_namespace_specifier (namespace_identifier) @name))`,
     `(alias_declaration name: (type_identifier) @name)`,
+    `(concept_definition name: (identifier) @name)`,
+    `(preproc_def name: (identifier) @name)`,
+    `(preproc_function_def name: (identifier) @name)`,
+    `(class_specifier body: (field_declaration_list (field_declaration declarator: (function_declarator declarator: (field_identifier) @name))))`,
+    `(class_specifier body: (field_declaration_list (field_declaration declarator: (reference_declarator (function_declarator declarator: (operator_name) @name)))))`,
+    `(class_specifier body: (field_declaration_list (declaration declarator: (function_declarator declarator: (destructor_name) @name))))`,
   ],
   nodeTypes: {
     identifier: ["identifier", "field_identifier", "type_identifier", "namespace_identifier"],
@@ -53,7 +71,9 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
     if (
       parent.type === "class_specifier" ||
       parent.type === "struct_specifier" ||
-      parent.type === "namespace_definition"
+      parent.type === "union_specifier" ||
+      parent.type === "namespace_definition" ||
+      parent.type === "nested_namespace_specifier"
     )
       return "class";
     if (
@@ -70,12 +90,20 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
     const parent = node.parent;
     if (!parent) return false;
     if (
-      (parent.type === "class_specifier" || parent.type === "struct_specifier" || parent.type === "enum_specifier") &&
+      (parent.type === "class_specifier" ||
+        parent.type === "struct_specifier" ||
+        parent.type === "union_specifier" ||
+        parent.type === "enum_specifier") &&
       isInField(node, parent, "name")
     )
       return true;
     if (parent.type === "namespace_definition" && isInField(node, parent, "name")) return true;
+    if (parent.type === "nested_namespace_specifier") {
+      const namespaceDefinition = findAncestor(node, new Set(["namespace_definition"]));
+      if (namespaceDefinition && isInField(node, namespaceDefinition, "name")) return true;
+    }
     if (parent.type === "alias_declaration" && isInField(node, parent, "name")) return true;
+    if (parent.type === "concept_definition" && isInField(node, parent, "name")) return true;
     if (
       isInAncestorDeclarator(node, new Set(["parameter_declaration"])) ||
       isInAncestorDeclarator(node, new Set(["field_declaration"])) ||
@@ -92,6 +120,8 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
     )
       return true;
     if (parent.type === "enumerator" && isInField(node, parent, "name")) return true;
+    if (parent.type === "preproc_def" && isInField(node, parent, "name")) return true;
+    if (parent.type === "preproc_function_def" && isInField(node, parent, "name")) return true;
     return false;
   },
   createsFunctionScope: (node) => node.type === "function_definition" || node.type === "lambda_expression",

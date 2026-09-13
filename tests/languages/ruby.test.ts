@@ -1,10 +1,13 @@
+import os from "node:os";
 import path from "node:path";
-import { expect } from "vitest";
+import fsp from "node:fs/promises";
+import { describe, expect, it } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { buildSymbolGraphDetailed } from "../../src/index.js";
 import { collectDetailedDeclarations } from "../../src/graphs/symbol-graph-detailed/ast.js";
-import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
+import { collectImportsForFile, collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
+import { exportedNameOf } from "../helpers/narrow.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 
 const definition: LanguageTestDefinition = {
@@ -121,5 +124,66 @@ describe("Ruby Struct.new declarations", () => {
     expect(Array.from(graph.nodes.values())).toContainEqual(
       expect.objectContaining({ file, name: "Point", kind: "class" }),
     );
+  });
+});
+
+describe("Ruby compact names and declarations", () => {
+  async function collectModule(source: string) {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-decls-"));
+    const file = path.join(root, "test.rb");
+    await fsp.writeFile(file, source, "utf8");
+    try {
+      const parsed = await parseFile(file);
+      const module = collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
+        ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
+      });
+      const imports = await collectImportsForFile(file, root, {
+        source: parsed.source,
+        sup: parsed.sup,
+        ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
+      });
+      return { module, imports };
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it("exports compact class and module names as the full scope resolution", async () => {
+    const { module } = await collectModule(`
+module Outer::Compact
+  class Inner::Tool
+  end
+end
+`);
+    const exportedNames = module.exports.map((entry) => exportedNameOf(entry));
+    expect(exportedNames).toEqual(expect.arrayContaining(["Outer::Compact", "Inner::Tool"]));
+  });
+
+  it("exports setter methods and singleton methods", async () => {
+    const { module } = await collectModule(`
+class Tool
+  def foo=(v)
+    @v = v
+  end
+  def self.x
+    :x
+  end
+end
+`);
+    const exportedNames = module.exports.map((entry) => exportedNameOf(entry));
+    expect(exportedNames).toEqual(expect.arrayContaining(["Tool", "foo=", "x"]));
+  });
+
+  it("captures load and autoload paths and ignores ordinary calls", async () => {
+    const { imports } = await collectModule(`
+require "json"
+require_relative "./other"
+load "lazy_load.rb"
+autoload :Lazy, "lazy"
+puts "hello"
+log.info "x"
+`);
+    const froms = imports.map((entry) => entry.from).sort();
+    expect(froms).toEqual(["./other", "json", "lazy", "lazy_load.rb"]);
   });
 });

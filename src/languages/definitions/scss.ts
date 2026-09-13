@@ -1,17 +1,10 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
 
-const SCSS_SYMBOL_QUERY_PATTERNS = [
-  "(mixin_statement (name) @name)",
-  "(function_statement (name) @name)",
-  "(variable_declaration (variable) @name)",
-  "(class_selector (class_name) @name)",
-  "(id_selector (id_name) @name)",
-] as const;
-
 export const SCSS_DEF: LanguageDefinition = {
   id: "scss",
   extensions: [".scss"],
+  usesQueryDrivenLocals: true,
   structure: {
     blocks: [
       { type: "rule_set", captureId: "rule" },
@@ -26,34 +19,42 @@ export const SCSS_DEF: LanguageDefinition = {
   graph: {
     imports: `
       (import_statement (string_value) @mod) @stmt
+      (import_statement (_ (string_value) @mod)) @stmt
       (use_statement (string_value) @mod) @stmt
+      (use_statement (_ (string_value) @mod)) @stmt
       (forward_statement (string_value) @mod) @stmt
+      (forward_statement (_ (string_value) @mod)) @stmt
     `,
     exports: `
-      (mixin_statement (name) @name)
-      (function_statement (name) @name)
-      (variable_declaration (variable) @name)
+      (stylesheet (mixin_statement name: (identifier) @name))
+      (stylesheet (function_statement name: (identifier) @name))
+      ((stylesheet (declaration (property_name) @name)) (#match? @name "^[$]"))
+      (stylesheet (rule_set (selectors (placeholder (identifier) @name))))
     `,
     locals: `
-      (mixin_statement (name) @name)
-      (function_statement (name) @name)
-      (variable_declaration (variable) @name)
+      (mixin_statement name: (identifier) @name)
+      (function_statement name: (identifier) @name)
+      ((declaration (property_name) @name) (#match? @name "^[$]"))
+      (placeholder (identifier) @name)
       (class_selector (class_name) @name)
       (id_selector (id_name) @name)
     `,
     importBindings: `
       (import_statement (string_value) @from) @stmt
+      (import_statement (_ (string_value) @from)) @stmt
       (use_statement (string_value) @from) @stmt
+      (use_statement (_ (string_value) @from)) @stmt
       (forward_statement (string_value) @from) @stmt
+      (forward_statement (_ (string_value) @from)) @stmt
     `,
   },
   nodeTypes: {
-    identifier: ["name", "variable", "class_name", "id_name"],
+    identifier: ["identifier", "variable", "class_name", "id_name", "property_name"],
   },
-  native: {
-    normalizeQuery: (_kind, query) =>
-      SCSS_SYMBOL_QUERY_PATTERNS.some((pattern) => query.includes(pattern)) ? "" : query,
-    notes: ["skips unsupported SCSS symbol queries in the native runtime"],
+  classifyDefinition: (node) => {
+    const parent = node.parent?.type;
+    if (parent === "mixin_statement" || parent === "function_statement") return "function";
+    return "variable";
   },
 };
 registerLanguage(SCSS_DEF);

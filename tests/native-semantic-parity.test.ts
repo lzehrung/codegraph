@@ -713,14 +713,16 @@ nativeDescribe("native semantic coverage", () => {
         ],
         undefined,
         { file: "_variables.scss", line: 3, column: 2, expectedStatus: "not_found" },
-        { file: "_variables.scss", line: 3, column: 2, expectedStatus: "not_found" },
+        // `.primary` is now a navigable SCSS selector local: the symbol queries used to be
+        // blanked wholesale for the native runtime, so nothing in a stylesheet had references.
+        { file: "_variables.scss", line: 3, column: 2, expectedStatus: "ok" },
       ),
       sampleExpectation(
         "scss",
         ["forward.scss", "_variables.scss", "_mixins.scss"],
         undefined,
         { file: "_variables.scss", line: 3, column: 2, expectedStatus: "not_found" },
-        { file: "_variables.scss", line: 3, column: 2, expectedStatus: "not_found" },
+        { file: "_variables.scss", line: 3, column: 2, expectedStatus: "ok" },
       ),
       sampleExpectation(
         "vue",

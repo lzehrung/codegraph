@@ -5,10 +5,13 @@ export const STYLESHEET_RESOLUTION_EXTENSIONS = [".css", ".scss", ".less"] as co
 export const DEFAULT_RESOLUTION_EXTENSIONS = [
   ".ts",
   ".tsx",
+  ".d.ts",
   ".js",
   ".jsx",
   ".mts",
+  ".d.mts",
   ".cts",
+  ".d.cts",
   ".mjs",
   ".cjs",
   ".json",
@@ -40,14 +43,14 @@ export const DEFAULT_RESOLUTION_EXTENSIONS = [
 ] as const;
 
 const EXPLICIT_SPECIFIER_EXTENSION_FAMILIES: Record<string, readonly string[]> = {
-  ".ts": [".ts", ".tsx", ".js", ".jsx"],
-  ".tsx": [".tsx", ".jsx", ".ts", ".js"],
-  ".js": [".ts", ".tsx", ".js", ".jsx"],
-  ".jsx": [".tsx", ".jsx", ".ts", ".js"],
-  ".mts": [".mts", ".mjs"],
-  ".mjs": [".mts", ".mjs"],
-  ".cts": [".cts", ".cjs"],
-  ".cjs": [".cts", ".cjs"],
+  ".ts": [".ts", ".tsx", ".d.ts", ".js", ".jsx"],
+  ".tsx": [".tsx", ".jsx", ".ts", ".d.ts", ".js"],
+  ".js": [".ts", ".tsx", ".d.ts", ".js", ".jsx"],
+  ".jsx": [".tsx", ".jsx", ".ts", ".d.ts", ".js"],
+  ".mts": [".mts", ".d.mts", ".mjs"],
+  ".mjs": [".mts", ".d.mts", ".mjs"],
+  ".cts": [".cts", ".d.cts", ".cjs"],
+  ".cjs": [".cts", ".d.cts", ".cjs"],
 };
 
 export function getResolutionExtensions(resolutionExtensions?: readonly string[]): string[] {

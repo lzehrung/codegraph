@@ -1,6 +1,9 @@
 import path from "node:path";
 import { expect, it } from "vitest";
-import { collectGraph } from "../../src/index.js";
+import { collectModuleSpecifiersFromSource } from "../../src/graphs.js";
+import { collectGraph, collectLocalsAndExportsFromSource } from "../../src/index.js";
+import { supportById } from "../../src/languages.js";
+import { isNativeTreeSitterAvailable, runNativeLanguageQueries } from "../../src/native/tree-sitter-native.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -82,22 +85,39 @@ const definition: LanguageTestDefinition = {
           to: { type: "file", path: "_variables.scss" },
         },
       ],
+      symbols: [
+        {
+          file: "_mixins.scss",
+          symbols: [{ name: "center", kind: "function" }],
+        },
+        {
+          file: "_tokens.scss",
+          symbols: [{ name: "$spacing", kind: "variable" }],
+        },
+        {
+          file: "_variables.scss",
+          symbols: [
+            { name: "$primary-color", kind: "variable" },
+            { name: "primary", kind: "variable" },
+          ],
+        },
+      ],
       references: [
         {
-          name: "find references is not available",
+          name: "find references is not available on a CSS property",
           file: "_variables.scss",
-          line: 3,
-          column: 2,
+          line: 4,
+          column: 3,
           expectedStatus: "not_found",
         },
       ],
     },
     goToDefinition: [
       {
-        name: "go to definition is not available",
+        name: "go to definition is not available on a CSS property",
         file: "_variables.scss",
-        line: 3,
-        column: 2,
+        line: 4,
+        column: 3,
         expectedStatus: "not_found",
       },
     ],
@@ -127,6 +147,39 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+it.runIf(isNativeTreeSitterAvailable())("captures SCSS mixin, function, and variable names", () => {
+  const support = supportById("scss")!;
+  const source = `$brand: #333;
+@mixin flex-center {
+  display: flex;
+}
+@function double($n) {
+  @return $n * 2;
+}
+`;
+  const nativeQueries = runNativeLanguageQueries(source, support);
+  expect(nativeQueries).not.toBeNull();
+  const moduleIndex = collectLocalsAndExportsFromSource("theme.scss", source, support, [], {
+    ...(nativeQueries ? { nativeQueries } : {}),
+  });
+  const localNames = moduleIndex.locals.map((symbol) => symbol.localName).sort();
+  const exportNames = moduleIndex.exports
+    .filter((entry): entry is typeof entry & { type: "local" } => entry.type === "local")
+    .map((entry) => entry.exportedAs)
+    .sort();
+  expect(localNames).toEqual(["$brand", "double", "flex-center"]);
+  expect(exportNames).toEqual(["$brand", "double", "flex-center"]);
+});
+
+it.runIf(isNativeTreeSitterAvailable())("captures @use and @forward paths wrapped by as *", () => {
+  const support = supportById("scss")!;
+  const specifiers = collectModuleSpecifiersFromSource(
+    support,
+    '@use "./mixins" as *;\n@forward "./buttons" as btn-*;\n',
+  );
+  expect(specifiers.map((entry) => entry.spec).sort()).toEqual(["./buttons", "./mixins"]);
+});
 
 it("does not resolve stylesheet url assets as Sass partials", async () => {
   const samplePath = path.resolve(process.cwd(), "tests", "samples", "scss");

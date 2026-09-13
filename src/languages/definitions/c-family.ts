@@ -47,6 +47,20 @@ export function cFunctionNameQuery(captureName: string, includeFieldIdentifier: 
       `(function_declarator declarator: (parenthesized_declarator (pointer_declarator declarator: (${identifierType}) @${captureName})))`,
     );
   }
+  if (includeFieldIdentifier) {
+    patterns.push(
+      `(function_declarator declarator: (qualified_identifier name: (identifier) @${captureName}))`,
+      `(function_declarator declarator: (qualified_identifier name: (destructor_name) @${captureName}))`,
+      `(function_declarator declarator: (qualified_identifier name: (operator_name) @${captureName}))`,
+      `(function_declarator declarator: (qualified_identifier name: (template_function name: (identifier) @${captureName})))`,
+      `(function_declarator declarator: (destructor_name) @${captureName})`,
+      `(function_declarator declarator: (operator_name) @${captureName})`,
+      `(reference_declarator (function_declarator declarator: (qualified_identifier name: (identifier) @${captureName})))`,
+      `(reference_declarator (function_declarator declarator: (qualified_identifier name: (destructor_name) @${captureName})))`,
+      `(reference_declarator (function_declarator declarator: (qualified_identifier name: (operator_name) @${captureName})))`,
+      `(reference_declarator (function_declarator declarator: (operator_name) @${captureName}))`,
+    );
+  }
   return `
   declarator: [
     ${patterns.join("\n    ")}
@@ -54,21 +68,26 @@ export function cFunctionNameQuery(captureName: string, includeFieldIdentifier: 
 `;
 }
 
+// Include guards wrap header declarations, so the export queries cannot anchor on
+// the file root. A function body is what makes a declaration unreachable from other files.
 export function cFamilyCoreExportQueries(functionNameQuery: string): string[] {
   return [
-    `(function_definition ${functionNameQuery})`,
-    `(declaration ${functionNameQuery})`,
+    `(function_definition ${functionNameQuery}) @declaration`,
+    `(declaration ${functionNameQuery}) @declaration`,
     `(struct_specifier name: (type_identifier) @name)`,
     `(enum_specifier name: (type_identifier) @name)`,
     `(type_definition declarator: (type_identifier) @name)`,
-    `(declaration declarator: (identifier) @name)`,
-    `(declaration declarator: (init_declarator declarator: (identifier) @name))`,
+    `((declaration type: (_) @type declarator: (identifier) @name) @declaration
+      (#not-match? @type "^(import|export)$"))`,
+    `((declaration type: (_) @type declarator: (init_declarator declarator: (identifier) @name)) @declaration
+      (#not-match? @type "^(import|export)$"))`,
   ];
 }
 
 export function cFamilyCoreLocalQueries(functionNameQuery: string): string[] {
   return [
     `(function_definition ${functionNameQuery})`,
+    `(declaration ${functionNameQuery})`,
     `(struct_specifier name: (type_identifier) @name)`,
     `(enum_specifier name: (type_identifier) @name)`,
     `(type_definition declarator: (type_identifier) @name)`,
@@ -146,6 +165,7 @@ export function createCFamilyLanguageDefinition(options: CFamilyLanguageDefiniti
     createsFunctionScope: options.createsFunctionScope,
     createsBlockScope: (node) => node.type === "compound_statement",
     supportsCrossModuleSymbols: true,
+    exportScopeBlockers: ["compound_statement"],
     usesQueryDrivenLocals: options.usesQueryDrivenLocals || false,
   };
 }

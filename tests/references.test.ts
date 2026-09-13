@@ -1614,6 +1614,36 @@ describe("Find References", () => {
       expectReferenceAt(valueResult, rangeFile, 5);
       expectReferenceAt(valueResult, rangeFile, 6);
     });
+
+    it("finds references to a generic type parameter within its own declaration, not a same-named type parameter on a sibling type", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-go-generic-references-"));
+      try {
+        const file = path.join(root, "main.go").replace(/\\/g, "/");
+        await fsp.writeFile(
+          file,
+          [
+            "package main",
+            "",
+            "type Box[T any] struct {",
+            "\tValue T",
+            "}",
+            "",
+            "type Pair[T any] struct {",
+            "\tA T",
+            "\tB T",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [file]);
+        // Box's own T (line 3 col 10): only its own field use at line 4 should match, not Pair's T uses.
+        const result = await testFindReferences(index, file, 3, 10, 1);
+        expectReferenceAt(result, file, 4);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("C", () => {
@@ -1859,6 +1889,36 @@ describe("Find References", () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "csharp");
       const utilsFile = path.join(samplePath, "Utils.cs").replace(/\\/g, "/");
       await testFindReferences(index, utilsFile, 2, 20, 3);
+    });
+
+    it("keeps a local function's references scoped to its own method, not a same-named local function in another method", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-localfn-references-"));
+      try {
+        const mainFile = path.join(root, "Main.cs").replace(/\\/g, "/");
+        await fsp.writeFile(
+          mainFile,
+          [
+            "class Program {",
+            "  void RunA() {",
+            "    void Local() { }",
+            "    Local();",
+            "  }",
+            "  void RunB() {",
+            "    void Local() { }",
+            "    Local();",
+            "  }",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [mainFile]);
+        // RunA's Local() declaration, line 3 col 10: only its own call at line 4 should match.
+        const result = await testFindReferences(index, mainFile, 3, 10, 1);
+        expectReferenceAt(result, mainFile, 4);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
     });
   });
 

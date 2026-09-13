@@ -3,7 +3,7 @@ import { registerLanguage } from "../registry.js";
 
 export const SQL_DEF: LanguageDefinition = {
   id: "sql",
-  extensions: [".sql"],
+  extensions: [".sql", ".ddl", ".pgsql", ".mysql"],
   structure: {
     blocks: [
       { type: "statement", nameQuery: "(create_table)", captureId: "create" },

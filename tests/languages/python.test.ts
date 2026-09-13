@@ -4,10 +4,11 @@ import fsp from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
-import { buildProjectIndex, collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
+import { buildProjectIndex, collectLocalsAndExportsFromSource, parseFile, SymbolKind } from "../../src/indexer.js";
 import { expectFileInIndex, findSymbolsByName } from "../test-utils.js";
 import { collectGraph, findReferences, goToDefinition } from "../../src/index.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
+import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 
 const definition: LanguageTestDefinition = {
@@ -97,6 +98,21 @@ describe("Python stub discovery", () => {
     expect(findSymbolsByName(index, "StubType", stubFile)).toHaveLength(1);
     expect(findSymbolsByName(index, "stub_function", stubFile)).toHaveLength(1);
   });
+
+  it("classifies a standard-library import in a .pyi stub as resolved, and an unknown one as unresolved", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-stub-stdlib-"));
+    try {
+      const stub = path.join(root, "typings.pyi");
+      await fsp.writeFile(stub, "import os\nimport definitely_not_a_package\n", "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const unresolved = getUnresolvedImports(index.graph, { projectRoot: root }).map((entry) => entry.name);
+
+      expect(unresolved).not.toContain("os");
+      expect(unresolved).toContain("definitely_not_a_package");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Python match bindings", () => {
@@ -124,6 +140,57 @@ describe("Python match bindings", () => {
     const aliasReferences = await findReferences(index, { file, line: 5, column: 19 });
     expect(aliasReferences.status).toBe("ok");
     if (aliasReferences.status === "ok") expect(aliasReferences.references).toHaveLength(2);
+  });
+});
+
+describe("Python case pattern qualified values", () => {
+  it("does not create locals for a qualified case pattern value like module.CONST", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-case-qualified-"));
+    try {
+      const moduleFile = path.join(root, "module.py").replace(/\\/g, "/");
+      const mainFile = path.join(root, "main.py").replace(/\\/g, "/");
+      await fsp.writeFile(moduleFile, "CONST = 1\n", "utf8");
+      await fsp.writeFile(
+        mainFile,
+        [
+          "import module",
+          "",
+          "class Point:",
+          "    def __init__(self, x, y):",
+          "        self.x = x",
+          "        self.y = y",
+          "",
+          "def handle(value):",
+          "    match value:",
+          "        case module.CONST:",
+          "            return 1",
+          "        case Point(x=module.CONST):",
+          "            return 2",
+          "        case bare_name:",
+          "            return bare_name",
+          "        case Point(x=px, y=py):",
+          "            return px + py",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      // A qualified value pattern must not create phantom locals for either segment.
+      expect(findSymbolsByName(index, "module", mainFile)).toHaveLength(0);
+      expect(findSymbolsByName(index, "CONST", mainFile)).toHaveLength(0);
+      // The unaffected bare-name and keyword-pattern bindings keep working.
+      expect(findSymbolsByName(index, "bare_name", mainFile)).toHaveLength(1);
+      expect(findSymbolsByName(index, "px", mainFile)).toHaveLength(1);
+      expect(findSymbolsByName(index, "py", mainFile)).toHaveLength(1);
+
+      // "module" in `case module.CONST:` (line 10, col 14) still resolves to the import.
+      const gotoModule = await goToDefinition(index, { file: mainFile, line: 10, column: 14 });
+      expect(gotoModule.status).toBe("ok");
+      if (gotoModule.status === "ok") expect(gotoModule.definition.file).toBe(moduleFile);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -212,9 +279,7 @@ __all__ = (
     expect(exportedNames).toEqual(["bar", "foo"]);
   });
 
-  it("avoids false positives from nearby strings in fallback", async () => {
-    // The current fallback just scans 800 chars after __all__.
-    // If we have a string that matches a local name, it will be exported.
+  it("ignores strings outside the explicit export list", async () => {
     const source = `
 def foo(): pass
 def private_func(): pass
@@ -229,6 +294,99 @@ description = "This module uses private_func internally"
     const exportedNames = mod.exports.map((e) => exportedNameOf(e)).sort();
     // It should NOT contain private_func
     expect(exportedNames).toEqual(["foo"]);
+  });
+
+  it("keeps module-level __all__ concatenation, extend, append, and augmented assignment", async () => {
+    const mod = await collectModule(`
+def foo(): pass
+def bar(): pass
+def extra(): pass
+def appended(): pass
+def leftover(): pass
+
+__all__ = ["foo"] + ["bar"]
+__all__ += ["extra"]
+__all__.extend(["appended"])
+__all__.append("leftover")
+`);
+    expect(mod.exports.map((entry) => exportedNameOf(entry)).sort()).toEqual([
+      "appended",
+      "bar",
+      "extra",
+      "foo",
+      "leftover",
+    ]);
+  });
+
+  it("retains every static list item without reading comment strings", async () => {
+    const mod = await collectModule(
+      'def a(): pass\ndef b(): pass\ndef hidden(): pass\n__all__ = ["a", # "hidden"\n "b"]\n',
+    );
+    expect(mod.exports.map((entry) => exportedNameOf(entry)).sort()).toEqual(["a", "b"]);
+  });
+
+  it("keeps an empty explicit export list empty", async () => {
+    const mod = await collectModule("def hidden(): pass\n__all__ = []\n");
+    expect(mod.exports).toEqual([]);
+  });
+
+  it("does not let function-local __all__ assignment, extend, append, or += filter module exports", async () => {
+    const mod = await collectModule(`
+VISIBLE = 1
+
+def public_fn():
+    return VISIBLE
+
+def mutate():
+    __all__ = ["HIDDEN"]
+    __all__ += ["nope"]
+    __all__.extend(["also"])
+    __all__.append("no")
+`);
+    expect(mod.exports.map((entry) => exportedNameOf(entry)).sort()).toEqual(["VISIBLE", "mutate", "public_fn"]);
+  });
+
+  it("resolves a public module export through a consumer when a function-local __all__ is present", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-local-all-"));
+    const packageDir = path.join(root, "sample");
+    const sourceFile = path.join(packageDir, "mod.py");
+    const consumerFile = path.join(root, "consumer.py");
+    await fsp.mkdir(packageDir, { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(packageDir, "__init__.py"), "", "utf8"),
+      fsp.writeFile(
+        sourceFile,
+        [
+          "VISIBLE = 1",
+          "",
+          "def public_fn():",
+          "    return VISIBLE",
+          "",
+          "def mutate():",
+          '    __all__ = ["HIDDEN"]',
+          '    __all__ += ["nope"]',
+          '    __all__.extend(["also"])',
+          '    __all__.append("no")',
+          "",
+        ].join("\n"),
+        "utf8",
+      ),
+      fsp.writeFile(consumerFile, "from sample.mod import public_fn\n\npublic_fn()\n", "utf8"),
+    ]);
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const source = index.byFile.get(fileIdentityKey(sourceFile));
+      const result = await goToDefinition(index, { file: consumerFile, line: 3, column: 1 });
+
+      expect(source?.exports.map((entry) => exportedNameOf(entry)).sort()).toEqual(["VISIBLE", "mutate", "public_fn"]);
+      expect(result.status).toBe("ok");
+      if (result.status === "ok") {
+        expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(sourceFile));
+        expect(result.definition.range.start.line).toBe(3);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -335,5 +493,108 @@ describe("Python dynamic imports", () => {
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Python query-driven declarations", () => {
+  async function collectModule(source: string) {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-decls-"));
+    const file = path.join(root, "test.py");
+    await fsp.writeFile(file, source, "utf8");
+    try {
+      const parsed = await parseFile(file);
+      return collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
+        ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it("binds except/with as-pattern aliases, not the exception class", async () => {
+    const mod = await collectModule(`
+def uses_bindings():
+    with open(__file__) as handle:
+        try:
+            1 / 0
+        except ValueError as err:
+            return handle, err
+`);
+    const localNames = mod.locals.map((entry) => entry.localName);
+    expect(localNames).toEqual(expect.arrayContaining(["handle", "err"]));
+    expect(localNames).not.toContain("ValueError");
+  });
+
+  it("indexes walrus, unpacking, and PEP 695 type-alias locals", async () => {
+    const mod = await collectModule(`
+a, b = (1, 2)
+(c, d) = (3, 4)
+type Pair = tuple[int, int]
+type PairGeneric[T] = tuple[T, T]
+
+def uses_walrus(value):
+    if (walrus := value):
+        return walrus
+    return None
+`);
+    const byName = new Map(mod.locals.map((entry) => [entry.localName, entry]));
+    for (const name of ["a", "b", "c", "d", "walrus", "Pair", "PairGeneric"]) {
+      expect(byName.has(name), name).toBe(true);
+    }
+    expect(byName.get("Pair")?.kind).toBe(SymbolKind.TypeAlias);
+    expect(byName.get("PairGeneric")?.kind).toBe(SymbolKind.TypeAlias);
+  });
+
+  it("indexes keyword-pattern binding names, not the matched attributes", async () => {
+    const mod = await collectModule(`
+def describe(p):
+    match p:
+        case Point(x=px, y=py):
+            return px + py
+`);
+    const localNames = mod.locals.map((entry) => entry.localName);
+    expect(localNames).toEqual(expect.arrayContaining(["px", "py"]));
+    expect(localNames.filter((name) => name === "x" || name === "y")).toEqual([]);
+  });
+
+  it("does not export function-body locals while keeping module and class members", async () => {
+    const mod = await collectModule(`
+MODULE_CONST = 1
+
+class Holder:
+    CLASS_ATTR = 8
+    def method(self):
+        method_local = 11
+        def nested():
+            return method_local
+        return nested()
+
+def outer(arg):
+    secret_tmp = arg + 1
+    def nested():
+        inner_var = secret_tmp
+        return inner_var
+    return nested()
+`);
+    const exportedNames = mod.exports.map((entry) => exportedNameOf(entry)).sort();
+    const localNames = mod.locals.map((entry) => entry.localName);
+    expect(exportedNames).toEqual(["CLASS_ATTR", "Holder", "MODULE_CONST", "method", "outer"]);
+    expect(localNames).toEqual(expect.arrayContaining(["secret_tmp", "nested", "inner_var", "method_local"]));
+  });
+
+  it("does not export members of a function-local class", async () => {
+    const mod = await collectModule(`
+def outer():
+    class Hidden:
+        def member(self): pass
+
+def keep(): pass
+`);
+    const exportedNames = mod.exports.map((entry) => exportedNameOf(entry));
+    const localNames = mod.locals.map((entry) => entry.localName);
+    expect(localNames).toEqual(expect.arrayContaining(["outer", "Hidden", "member", "keep"]));
+    expect(exportedNames).toEqual(expect.arrayContaining(["outer", "keep"]));
+    expect(exportedNames).not.toContain("member");
+    expect(exportedNames).not.toContain("Hidden");
   });
 });

@@ -23,6 +23,17 @@ import type { Range } from "../types.js";
 
 import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 
+/**
+ * Matches one `exportScopeBlockers` entry against an ancestor node. A plain entry compares the
+ * node type; a `parent>node` entry also requires that parent type, which is how Python separates a
+ * function body from a class body when the grammar spells both `block`.
+ */
+function matchesExportScopeBlocker(node: SyntaxNodeLike, blocker: string): boolean {
+  const separator = blocker.indexOf(">");
+  if (separator < 0) return node.type === blocker;
+  return node.type === blocker.slice(separator + 1) && node.parent?.type === blocker.slice(0, separator);
+}
+
 const JS_FALLBACK_DECLARATION_PATTERN = new RegExp(
   String.raw`\bexport\s+(?:const|let|var|function|class)\s+(${ECMASCRIPT_IDENTIFIER_SOURCE})`,
   "gu",
@@ -607,15 +618,39 @@ export function collectLocalsAndExportsFromSource(
     const hasDefaultExport = (): boolean =>
       exports.some((entry) => entry.type === "local" && entry.exportedAs === "default");
 
+    /**
+     * True when the capture sits inside a node the language marks as non-module scope. Without a
+     * tree this cannot be decided, so it fails open and keeps the export.
+     */
+    const isOutsideModuleScope = (capture: NativeCapture | undefined): boolean => {
+      if (!support.exportScopeBlockers.length) return false;
+      let current = nodeForCapture(capture)?.parent ?? undefined;
+      while (current) {
+        const ancestor = current;
+        if (support.exportScopeBlockers.some((blocker) => matchesExportScopeBlocker(ancestor, blocker))) return true;
+        current = ancestor.parent ?? undefined;
+      }
+      return false;
+    };
+
     for (const match of matches) {
       const map = capturesByName(match);
       const stmtText = map["stmt"]?.text ?? "";
+
+      if (support.id === "c" || support.id === "cpp") {
+        const declaration = nodeForCapture(map["declaration"]);
+        const hasStaticStorageClass = declaration?.namedChildren.some(
+          (child) => child.type === "storage_class_specifier" && child.text === "static",
+        );
+        if (hasStaticStorageClass) continue;
+      }
+      if (isOutsideModuleScope(map["name"] ?? map["src"])) continue;
       const isTypeOnly = support.isTypeOnly(stmtText);
 
       if (support.id === "python") {
         const leftText = map["left"]?.text ?? "";
         const methodText = map["method"]?.text ?? "";
-        const isAllAssignment = leftText === "__all__";
+        const isAllAssignment = leftText === "__all__" && !methodText;
         const isAllMethod = leftText === "__all__" && (methodText === "extend" || methodText === "append");
 
         if (isAllAssignment || isAllMethod) {
@@ -636,30 +671,6 @@ export function collectLocalsAndExportsFromSource(
                 exportedAs: name,
                 target: local,
               });
-            }
-          }
-          if (isAllAssignment && map["stmt"]) {
-            const assignmentText = map["stmt"].text;
-            const hasTuple = /=\s*\(/.test(assignmentText);
-            if (!items.length || hasTuple) {
-              const strRe = /["']([^"']+)["']/g;
-              for (let submatch; (submatch = strRe.exec(assignmentText)); ) {
-                const name = submatch[1]!;
-                pythonAllExports.add(name);
-                const local = mergedLocals.find((def) => def.localName === name);
-                if (
-                  local &&
-                  !exports.some(
-                    (entry) => entry.type !== "exportStar" && "exportedAs" in entry && entry.exportedAs === name,
-                  )
-                ) {
-                  exports.push({
-                    type: "local",
-                    exportedAs: name,
-                    target: local,
-                  });
-                }
-              }
             }
           }
           continue;

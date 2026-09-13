@@ -1,4 +1,12 @@
-import { describe, it } from "vitest";
+import fsp from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
+import { buildProjectIndex, findReferences } from "../../src/index.js";
+import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
+import { fileIdentityKey } from "../../src/util/paths.js";
+import { exportedNameOf } from "../helpers/narrow.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
@@ -148,5 +156,126 @@ describe("Kotlin Unicode symbol ranges (C11)", () => {
       source: "// café ☕ prüfung\n/* über */ fun créer(): Int {\n\treturn 1\n}\n",
       symbolName: "créer",
     });
+  });
+});
+
+describe("Kotlin native identifier declarations", () => {
+  it("resolves top-level identifier reads without exporting function locals", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-identifiers-"));
+    const file = path.join(root, "Scope.kt");
+    await fsp.writeFile(
+      file,
+      [
+        "fun outer() {",
+        "  val innerVar = 1",
+        "  fun nested() = innerVar",
+        "}",
+        'val topName = "module"',
+        "fun use() = topName",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const module = index.byFile.get(fileIdentityKey(file));
+      const references = await findReferences(index, { file, line: 5, column: 5 });
+
+      expect(module?.exports.map(exportedNameOf)).not.toContain("innerVar");
+      expect(module?.exports.map(exportedNameOf)).not.toContain("nested");
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") expect(references.references).toHaveLength(2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not export members of a function-local class", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-local-class-"));
+    const file = path.join(root, "Scope.kt");
+    await fsp.writeFile(
+      file,
+      ["fun outer() {", "    class Local {", "        fun hidden() {}", "    }", "}", "fun keep() {}", ""].join("\n"),
+      "utf8",
+    );
+    try {
+      const parsed = await parseFile(file);
+      const mod = collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
+        ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
+      });
+      const localNames = mod.locals.map((entry) => entry.localName);
+      const exportedNames = mod.exports.map(exportedNameOf);
+      expect(localNames).toEqual(expect.arrayContaining(["outer", "Local", "hidden", "keep"]));
+      expect(exportedNames).toEqual(expect.arrayContaining(["outer", "keep"]));
+      expect(exportedNames).not.toContain("hidden");
+      expect(exportedNames).not.toContain("Local");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not export members of a lambda-local class", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-lambda-class-"));
+    const file = path.join(root, "Scope.kt");
+    await fsp.writeFile(
+      file,
+      [
+        "class Outer {",
+        "    class Inner {",
+        "        fun deep() {}",
+        "    }",
+        "}",
+        "val handler = {",
+        "    class Local {",
+        "        fun hidden() {}",
+        "    }",
+        "}",
+        "fun keep() {}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    try {
+      const parsed = await parseFile(file);
+      const mod = collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
+        ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
+      });
+      const localNames = mod.locals.map((entry) => entry.localName);
+      const exportedNames = mod.exports.map(exportedNameOf);
+      expect(localNames).toEqual(expect.arrayContaining(["handler", "Local", "hidden", "keep", "deep"]));
+      expect(exportedNames).toEqual(expect.arrayContaining(["handler", "keep", "Outer", "Inner", "deep"]));
+      expect(exportedNames).not.toContain("hidden");
+      expect(exportedNames).not.toContain("Local");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Kotlin .ktm script files", () => {
+  it("classifies a kotlin.* import as resolved stdlib, not unresolved", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-ktm-stdlib-"));
+    const file = path.join(root, "script.ktm");
+    try {
+      await fsp.writeFile(file, "import kotlin.io.*\nfun main() {}\n", "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const unresolved = getUnresolvedImports(index.graph, { projectRoot: root });
+      expect(unresolved.map((entry) => entry.name)).not.toContain("kotlin.io");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("still reports a genuinely unknown package import in a .ktm file as unresolved", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-ktm-unresolved-"));
+    const file = path.join(root, "script.ktm");
+    try {
+      await fsp.writeFile(file, "import com.example.unknown.Widget\nfun main() {}\n", "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const unresolved = getUnresolvedImports(index.graph, { projectRoot: root });
+      expect(unresolved.map((entry) => entry.name)).toContain("com.example.unknown.Widget");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });

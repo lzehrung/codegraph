@@ -1,5 +1,6 @@
 import path from "node:path";
 import { builtinModules } from "node:module";
+import { supportById } from "../../languages.js";
 
 const NODE_BUILTIN_MODULES = new Set<string>([
   ...builtinModules,
@@ -134,15 +135,22 @@ function extensionForFile(filePath: string): string {
   return path.extname(filePath).toLowerCase();
 }
 
+/** Every registered extension of a language counts, so aliases stay consistent with indexing. */
+function isLanguageFile(languageId: string, ext: string): boolean {
+  return supportById(languageId)?.matchExts.includes(ext) ?? false;
+}
+
 export function isSupportedStdlib(specifier: string, importerFile: string): boolean {
   const ext = extensionForFile(importerFile);
   const firstSegment = specifier.split(/[.:/]/)[0] ?? specifier;
   if (NODE_BUILTIN_MODULES.has(specifier)) return true;
-  if ([".py", ".pyw"].includes(ext)) return PYTHON_STDLIB_MODULES.has(firstSegment);
-  if ([".rb"].includes(ext)) return RUBY_STDLIB_MODULES.has(specifier) || RUBY_STDLIB_MODULES.has(firstSegment);
-  if (ext === ".zig") return specifier === "std";
-  if (ext === ".go") return GO_STDLIB_IMPORTS.has(specifier) || GO_STDLIB_IMPORTS.has(firstSegment);
-  if (ext === ".rs") {
+  if (isLanguageFile("python", ext)) return PYTHON_STDLIB_MODULES.has(firstSegment);
+  if (isLanguageFile("ruby", ext)) {
+    return RUBY_STDLIB_MODULES.has(specifier) || RUBY_STDLIB_MODULES.has(firstSegment);
+  }
+  if (isLanguageFile("zig", ext)) return specifier === "std";
+  if (isLanguageFile("go", ext)) return GO_STDLIB_IMPORTS.has(specifier) || GO_STDLIB_IMPORTS.has(firstSegment);
+  if (isLanguageFile("rust", ext)) {
     return (
       specifier === "std" ||
       specifier.startsWith("std::") ||
@@ -150,7 +158,7 @@ export function isSupportedStdlib(specifier: string, importerFile: string): bool
       specifier.startsWith("alloc::")
     );
   }
-  if ([".java"].includes(ext)) {
+  if (isLanguageFile("java", ext)) {
     return (
       specifier.startsWith("java.") ||
       specifier.startsWith("javax.") ||
@@ -158,13 +166,15 @@ export function isSupportedStdlib(specifier: string, importerFile: string): bool
       specifier.startsWith("org.xml.")
     );
   }
-  if ([".kt", ".kts"].includes(ext)) return specifier === "kotlin" || specifier.startsWith("kotlin.");
-  if (ext === ".cs") {
+  if (isLanguageFile("kotlin", ext)) {
+    return specifier === "kotlin" || specifier.startsWith("kotlin.");
+  }
+  if (isLanguageFile("csharp", ext)) {
     return specifier === "System" || specifier.startsWith("System.") || specifier.startsWith("Microsoft.");
   }
-  if (ext === ".swift") return SWIFT_SDK_MODULES.has(firstSegment);
-  if ([".c", ".h", ".i"].includes(ext)) return C_STDLIB_HEADERS.has(specifier);
-  if ([".cc", ".cpp", ".cxx", ".c++", ".hpp", ".hh", ".hxx", ".ipp", ".tpp", ".inl"].includes(ext)) {
+  if (isLanguageFile("swift", ext)) return SWIFT_SDK_MODULES.has(firstSegment);
+  if (isLanguageFile("c", ext)) return C_STDLIB_HEADERS.has(specifier);
+  if (isLanguageFile("cpp", ext)) {
     return CPP_STDLIB_HEADERS.has(specifier) || C_STDLIB_HEADERS.has(specifier);
   }
   return false;

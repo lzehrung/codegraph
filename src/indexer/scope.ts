@@ -109,6 +109,17 @@ export function buildScopeIndexFromSource(
     if (!target.map.has(canonicalName)) addBinding(target, nameNode, kind);
   };
 
+  // Field-like declarations reached through the generic `scopeDeclarationNames`
+  // hook (below) must land in the type's *enclosing* scope, not inside the
+  // dedicated "type" scope a `type_spec` pushes for isolating its own type
+  // parameter (see the `type_spec` branch below): Go struct fields are
+  // accessed through a receiver from anywhere in the file, unlike a type
+  // parameter, which is scoped to its own declaration.
+  const addDeclSkippingTypeSpecScope = (nameNode: SyntaxNodeLike, kind: BindingKind): void => {
+    const target = [...stack].reverse().find((scope) => scope.kind !== "type") ?? rootScope;
+    addBinding(target, nameNode, kind);
+  };
+
   const lookup = (name: string): Binding | undefined => {
     const canonicalName = normalizeIdentifier(name);
     for (let index = stack.length - 1; index >= 0; index--) {
@@ -291,7 +302,12 @@ export function buildScopeIndexFromSource(
       node.type === "method" ||
       node.type === "singleton_method" ||
       node.type === "function_item" ||
-      node.type === "func_literal"
+      node.type === "func_literal" ||
+      // C# local functions are callable from sibling statements in the enclosing
+      // method, unlike a JS named function expression's self-only visibility, so
+      // their name must land in the *current* (enclosing) scope before the push
+      // below creates the local function's own body scope.
+      node.type === "local_function_statement"
     ) {
       const name = node.childForFieldName("name");
       if (name && (support.membersAreImplicitlyInScope || !isMemberFunction(node))) {
@@ -369,6 +385,21 @@ export function buildScopeIndexFromSource(
         allScopes.push(scope);
         pushed = true;
       }
+    } else if (node.type === "type_spec") {
+      // Go generic type declarations idiomatically reuse `T` as the type-parameter
+      // name across sibling `type` declarations in the same file. Give each
+      // `type_spec` its own scope so its type parameter doesn't collide with a
+      // sibling's; `addDeclSkippingTypeSpecScope` below keeps field names out of
+      // it so they stay visible file-wide, as before.
+      const scope: Scope = {
+        kind: "type",
+        map: new Map(),
+        node,
+        parent: stack[stack.length - 1],
+      };
+      stack.push(scope);
+      allScopes.push(scope);
+      pushed = true;
     }
 
     if (
@@ -397,6 +428,16 @@ export function buildScopeIndexFromSource(
       if (name) addDecl(name, "local");
     }
 
+    if (node.type === "type_parameter_declaration") {
+      // Go generic type parameter, e.g. the `T` in `Box[T any]`/`func F[T any]`.
+      // This node type is unique to Go's grammar, so it's safe to register
+      // unconditionally here. Targets the current scope directly (the `type_spec`
+      // scope pushed above, or the enclosing function's own scope for a generic
+      // function) rather than skipping past it like field declarations do.
+      const name = node.childForFieldName("name");
+      if (name) addDecl(name, "type");
+    }
+
     if (
       scopeDeclarationNames(node) &&
       idSet.has(node.type) &&
@@ -404,7 +445,7 @@ export function buildScopeIndexFromSource(
       !isScopedCppEnumeratorName(node)
     ) {
       const kind = isParamNode(node) ? "param" : declarationKindToBindingKind(support.classifyDefinition(node));
-      addDecl(node, kind);
+      addDeclSkippingTypeSpecScope(node, kind);
     }
 
     if (idSet.has(node.type) && !support.isDeclarationName(node)) {

@@ -72,6 +72,9 @@ export const JAVA_DEF: LanguageDefinition = {
       (enum_constant name: (identifier) @name)
       (method_declaration name: (identifier) @name)
       (variable_declarator name: (identifier) @name)
+      (formal_parameter name: (identifier) @name)
+      (spread_parameter (variable_declarator name: (identifier) @name))
+      (receiver_parameter (identifier) @name)
     `,
     importBindings: `
       (import_declaration . (_) @from) @stmt
@@ -82,6 +85,7 @@ export const JAVA_DEF: LanguageDefinition = {
     memberExpression: "field_access",
   },
   supportsCrossModuleSymbols: true,
+  exportScopeBlockers: ["block", "constructor_body"],
   classifyDefinition: (node) => {
     const parent = node.parent;
     if (!parent) return "variable";
@@ -105,6 +109,7 @@ export const JAVA_DEF: LanguageDefinition = {
     if (p.type === "method_declaration" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "variable_declarator" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "formal_parameter" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "receiver_parameter" && node.type === "identifier") return true;
     return false;
   },
   normalizeIdentifier: (name) =>

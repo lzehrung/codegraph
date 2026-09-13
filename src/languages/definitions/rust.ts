@@ -50,8 +50,11 @@ export const RUST_DEF: LanguageDefinition = {
     `,
     exports: `
       (function_item name: (identifier) @name) @stmt
+      (function_signature_item name: (identifier) @name) @stmt
       (struct_item name: (type_identifier) @name) @stmt
       (trait_item name: (type_identifier) @name) @stmt
+      (type_item name: (type_identifier) @name) @stmt
+      (associated_type name: (type_identifier) @name) @stmt
       (enum_item name: (type_identifier) @name) @stmt
       (enum_variant name: (identifier) @name) @stmt
       (const_item name: (identifier) @name) @stmt
@@ -65,14 +68,19 @@ export const RUST_DEF: LanguageDefinition = {
       ;; form above. The shared path may itself be scoped, so it is captured
       ;; generically rather than requiring a single bare identifier segment.
       (use_declaration argument: (scoped_use_list path: (_) @from list: (use_list (identifier) @src))) @stmt
-      ;; Aliased members inside a group (\`use foo::{Bar as Baz}\`) export
-      ;; under their alias, matching how a single aliased import behaves.
-      (use_declaration argument: (scoped_use_list path: (_) @from list: (use_list (use_as_clause alias: (identifier) @src)))) @stmt
+      ;; Aliased members (\`use foo::Bar as Baz;\` and \`use foo::{Bar as Baz}\`) export under the
+      ;; alias while keeping the original member as the source, so a consumer of the alias
+      ;; resolves to the real definition.
+      (use_declaration argument: (use_as_clause path: (scoped_identifier path: (_) @from name: (identifier) @src) alias: (identifier) @alias)) @stmt
+      (use_declaration argument: (scoped_use_list path: (_) @from list: (use_list (use_as_clause path: (identifier) @src alias: (identifier) @alias)))) @stmt
     `,
     locals: `
       (function_item name: (identifier) @name)
+      (function_signature_item name: (identifier) @name)
       (struct_item name: (type_identifier) @name)
       (trait_item name: (type_identifier) @name)
+      (type_item name: (type_identifier) @name)
+      (associated_type name: (type_identifier) @name)
       (enum_item name: (type_identifier) @name)
       (enum_variant name: (identifier) @name)
       (const_item name: (identifier) @name)
@@ -100,12 +108,18 @@ export const RUST_DEF: LanguageDefinition = {
     memberExpression: "field_expression",
   },
   supportsCrossModuleSymbols: true,
+  exportScopeBlockers: ["block"],
   scopeDeclarationNames: (node) => node.parent?.type === "macro_definition",
   classifyDefinition: (node) => {
     const parent = node.parent;
     if (!parent) return "variable";
-    if (parent.type === "function_item" || parent.type === "macro_definition") return "function";
-    if (parent.type === "enum_item") return "type";
+    if (
+      parent.type === "function_item" ||
+      parent.type === "function_signature_item" ||
+      parent.type === "macro_definition"
+    )
+      return "function";
+    if (parent.type === "enum_item" || parent.type === "type_item" || parent.type === "associated_type") return "type";
     if (parent.type === "struct_item" || parent.type === "trait_item") return "class";
     return "variable";
   },
@@ -116,8 +130,11 @@ export const RUST_DEF: LanguageDefinition = {
     const p = node.parent;
     if (!p) return false;
     if (p.type === "function_item" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "function_signature_item" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "struct_item" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "trait_item" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "type_item" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "associated_type" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "enum_item" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "enum_variant" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "const_item" && p.childForFieldName("name")?.id === node.id) return true;

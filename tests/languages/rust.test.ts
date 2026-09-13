@@ -1,10 +1,13 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
 import { chunkFile } from "../../src/chunking/chunk-file.js";
 import { buildProjectIndex, goToDefinition } from "../../src/index.js";
+import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
+import { fileIdentityKey } from "../../src/util/paths.js";
+import { exportedNameOf } from "../helpers/narrow.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
@@ -95,6 +98,7 @@ const definition: LanguageTestDefinition = {
             { name: "Fast", kind: "variable" },
             { name: "Slow", kind: "variable" },
             { name: "Engine", kind: "class" },
+            { name: "run", kind: "function" },
             { name: "run", kind: "function" },
           ],
         },
@@ -222,6 +226,37 @@ const definition: LanguageTestDefinition = {
 
 runLanguageTests(definition);
 
+describe("Rust type aliases, associated types, and trait signatures", () => {
+  it("indexes pub type aliases, associated types, and declaration-only trait methods", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-missing-decls-"));
+    const file = path.join(root, "example.rs");
+    const source = `pub type Alias = Vec<u8>;
+pub trait Runner {
+    type Assoc;
+    fn required(&self) -> u32;
+    fn defaulted(&self) -> u32 { 1 }
+}
+`;
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const mod = [...index.byFile.values()][0]!;
+      const locals = mod.locals.map((local) => `${local.kind}:${local.localName}`);
+      const exports = mod.exports.flatMap((entry) =>
+        entry.type === "local" ? [`${entry.target.kind}:${entry.exportedAs}`] : [],
+      );
+      expect(locals).toEqual(
+        expect.arrayContaining(["type:Alias", "class:Runner", "type:Assoc", "function:required", "function:defaulted"]),
+      );
+      expect(exports).toEqual(
+        expect.arrayContaining(["type:Alias", "class:Runner", "type:Assoc", "function:required", "function:defaulted"]),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Rust macro_rules! structure", () => {
   it("chunks macro definitions from the dedicated fixture", async () => {
     const source = await readFile("tests/samples/rust/.regressions/macros.rs", "utf8");
@@ -281,5 +316,79 @@ describe("Rust Unicode symbol ranges (C11)", () => {
       source: "// café ☕ prüfung\n/* über */ fn créer() -> i32 {\n\t1\n}\n",
       symbolName: "créer",
     });
+  });
+});
+
+describe("Rust function-local items and re-export aliases", () => {
+  it("does not export block-local types while keeping nested module items", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-local-type-"));
+    const file = path.join(root, "example.rs");
+    await writeFile(
+      file,
+      [
+        "fn outer() {",
+        "    type Hidden = u8;",
+        "    struct LocalStruct;",
+        "}",
+        "pub type Kept = u16;",
+        "pub mod nested {",
+        "    pub struct Deep;",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    try {
+      const parsed = await parseFile(file);
+      const mod = collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
+        ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
+      });
+      const exportedNames = mod.exports.map(exportedNameOf);
+
+      expect(mod.locals.map((entry) => entry.localName)).toEqual(
+        expect.arrayContaining(["outer", "Hidden", "LocalStruct", "Kept", "Deep"]),
+      );
+      expect(exportedNames).toEqual(expect.arrayContaining(["outer", "Kept", "Deep"]));
+      expect(exportedNames).not.toContain("Hidden");
+      expect(exportedNames).not.toContain("LocalStruct");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the original member as the source of an aliased pub-use re-export", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-reexport-alias-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    const apiFile = path.join(src, "api.rs");
+    const barrelFile = path.join(src, "barrel.rs");
+    const consumerFile = path.join(src, "consumer.rs");
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "reexport-alias"\nversion = "0.1.0"\n', "utf8");
+    await writeFile(path.join(src, "lib.rs"), "pub mod api;\npub mod barrel;\npub mod consumer;\n", "utf8");
+    await writeFile(apiFile, "pub struct Bar;\npub struct Qux;\npub struct Direct;\n", "utf8");
+    await writeFile(
+      barrelFile,
+      "pub use crate::api::{Bar as Baz, Qux};\npub use crate::api::Direct as Renamed;\n",
+      "utf8",
+    );
+    await writeFile(consumerFile, "use crate::barrel::Baz;\n", "utf8");
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const reexports = (index.byFile.get(fileIdentityKey(barrelFile))?.exports ?? []).filter(
+        (entry) => entry.type === "reexport",
+      );
+      expect(reexports).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ exportedAs: "Baz", sourceSpecifier: "Bar" }),
+          expect.objectContaining({ exportedAs: "Qux", sourceSpecifier: "Qux" }),
+          expect.objectContaining({ exportedAs: "Renamed", sourceSpecifier: "Direct" }),
+        ]),
+      );
+      const consumerImports = index.byFile.get(fileIdentityKey(consumerFile))?.imports ?? [];
+      expect(consumerImports).toEqual([expect.objectContaining({ imported: "Baz", from: "crate::barrel" })]);
+      expect(fileIdentityKey(String(consumerImports[0]?.resolved))).toBe(fileIdentityKey(barrelFile));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
