@@ -185,7 +185,7 @@ const importStatementMaskCases: Array<{ file: string; language: string; source: 
     file: "sample.rb",
     language: "ruby",
     source:
-      'require "duplicateImportMarker"\nrequire_relative "duplicateImportMarker"\nload "duplicateImportMarker"\nautoload :Lazy, "duplicateImportMarker"\ndef keep_ruby\nend\n',
+      'require "duplicateImportMarker"\nrequire_relative "duplicateImportMarker"\nload "duplicateImportMarker" # dependency\nautoload :Lazy, "duplicateImportMarker"\ndef keep_ruby\nend\n',
   },
   {
     file: "sample.rs",

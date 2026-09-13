@@ -164,8 +164,9 @@ const duplicateImportStatementFallbackPatterns: Readonly<Partial<Record<string, 
 const RUBY_IMPORT_STRING = String.raw`(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')`;
 const RUBY_AUTOLOAD_NAME = String.raw`(?::[^\s,()]+|${RUBY_IMPORT_STRING})`;
 const RUBY_LOAD_TRAILING_ARGS = String.raw`(?:\s*,\s*[^)\r\n]*)?`;
+const RUBY_LINE_COMMENT = String.raw`(?:\s*#.*)?`;
 const RUBY_STATIC_LOAD = new RegExp(
-  String.raw`^(?:load\s*\(\s*${RUBY_IMPORT_STRING}${RUBY_LOAD_TRAILING_ARGS}\s*\)|load\s+${RUBY_IMPORT_STRING}${RUBY_LOAD_TRAILING_ARGS}|autoload\s*\(\s*${RUBY_AUTOLOAD_NAME}\s*,\s*${RUBY_IMPORT_STRING}${RUBY_LOAD_TRAILING_ARGS}\s*\)|autoload\s+${RUBY_AUTOLOAD_NAME}\s*,\s*${RUBY_IMPORT_STRING}${RUBY_LOAD_TRAILING_ARGS})\s*$`,
+  String.raw`^(?:load\s*\(\s*${RUBY_IMPORT_STRING}${RUBY_LOAD_TRAILING_ARGS}\s*\)|load\s+${RUBY_IMPORT_STRING}${RUBY_LOAD_TRAILING_ARGS}|autoload\s*\(\s*${RUBY_AUTOLOAD_NAME}\s*,\s*${RUBY_IMPORT_STRING}${RUBY_LOAD_TRAILING_ARGS}\s*\)|autoload\s+${RUBY_AUTOLOAD_NAME}\s*,\s*${RUBY_IMPORT_STRING}${RUBY_LOAD_TRAILING_ARGS})${RUBY_LINE_COMMENT}\s*$`,
   "u",
 );
 function hashText(value: string): string {
