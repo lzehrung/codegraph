@@ -45,7 +45,7 @@ function actionInputBlocks(action: string): string[] {
   const blocks: string[] = [];
   let current: string[] = [];
   for (const line of match[1].split("\n")) {
-    if (/^  [a-z0-9-]+:\s*$/u.test(line)) {
+    if (/^ {2}[a-z0-9-]+:\s*$/u.test(line)) {
       if (current.length > 0) blocks.push(current.join("\n"));
       current = [line];
     } else {
@@ -242,7 +242,7 @@ describe("certified release workflows", () => {
     expect(downloadAction).toContain("uses: actions/download-artifact@v8");
     expect(downloadAction.split("uses: actions/download-artifact@v8")).toHaveLength(7);
     for (const block of [...actionInputBlocks(uploadAction), ...actionInputBlocks(downloadAction)]) {
-      expect(block).toMatch(/^  [a-z0-9-]+:\n    description: \S+/u);
+      expect(block).toMatch(/^ {2}[a-z0-9-]+:\n {4}description: \S+/u);
     }
     expect(uploadAttempt1).toContain("continue-on-error: true");
     expect(uploadAttempt1).not.toMatch(/^\s+if:/m);
