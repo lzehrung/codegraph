@@ -61,6 +61,14 @@ jobs:
         with:
           ref: ${{ needs.plan-standalone.outputs.source_revision }}
 
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .github-helpers
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: true
+
       - name: Download immutable package candidates
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -97,7 +105,7 @@ jobs:
           NODE
 
       - name: Upload immutable release candidates
-        uses: ./.github/actions/upload-artifact-retry
+        uses: ./.github-helpers/.github/actions/upload-artifact-retry
         with:
           name: release-candidates
           path: temp/release-candidates
@@ -150,6 +158,14 @@ jobs:
         with:
           ref: ${{ needs.plan-standalone.outputs.source_revision }}
 
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .github-helpers
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: true
+
       - name: Setup target-matching Node
         uses: actions/setup-node@v6
         with:
@@ -157,7 +173,7 @@ jobs:
           architecture: ${{ matrix.arch }}
 
       - name: Download immutable release candidates
-        uses: ./.github/actions/download-artifact-retry
+        uses: ./.github-helpers/.github/actions/download-artifact-retry
         with:
           name: release-candidates
           path: temp/release-candidates
@@ -265,7 +281,7 @@ jobs:
           --allow-cross-target ${{ matrix.target == 'win32-arm64' }}
 
       - name: Upload standalone candidate archive
-        uses: ./.github/actions/upload-artifact-retry
+        uses: ./.github-helpers/.github/actions/upload-artifact-retry
         with:
           name: standalone-candidate-${{ matrix.target }}
           path: |
@@ -320,6 +336,14 @@ jobs:
         with:
           ref: ${{ needs.plan-standalone.outputs.source_revision }}
 
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .github-helpers
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: true
+
       - name: Setup smoke host Node
         uses: actions/setup-node@v6
         with:
@@ -327,7 +351,7 @@ jobs:
           architecture: ${{ matrix.arch }}
 
       - name: Download standalone candidate archive
-        uses: ./.github/actions/download-artifact-retry
+        uses: ./.github-helpers/.github/actions/download-artifact-retry
         with:
           name: standalone-candidate-${{ matrix.target }}
           path: temp/standalone-candidate
@@ -387,7 +411,7 @@ jobs:
           NODE
 
       - name: Upload only the successfully smoked archive
-        uses: ./.github/actions/upload-artifact-retry
+        uses: ./.github-helpers/.github/actions/upload-artifact-retry
         with:
           name: standalone-smoked-${{ matrix.target }}
           path: temp/standalone-candidate/codegraph-${{ matrix.target }}.${{ matrix.extension }}
@@ -430,6 +454,14 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
 
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .github-helpers
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: true
+
       - name: Setup funnel host Node
         uses: actions/setup-node@v6
         with:
@@ -437,7 +469,7 @@ jobs:
           architecture: ${{ matrix.arch }}
 
       - name: Download immutable standalone candidate archive
-        uses: ./.github/actions/download-artifact-retry
+        uses: ./.github-helpers/.github/actions/download-artifact-retry
         with:
           name: standalone-candidate-${{ matrix.target }}
           path: temp/standalone-candidate
@@ -502,7 +534,7 @@ jobs:
 
       - name: Upload standalone FunnelResultV1
         if: always()
-        uses: ./.github/actions/upload-artifact-retry
+        uses: ./.github-helpers/.github/actions/upload-artifact-retry
         with:
           name: standalone-funnel-${{ matrix.target }}
           path: temp/certification/funnel-standalone-${{ matrix.target }}.json
@@ -523,14 +555,22 @@ jobs:
         with:
           ref: ${{ needs.plan-standalone.outputs.source_revision }}
 
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .github-helpers
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: true
+
       - name: Download immutable release candidates
-        uses: ./.github/actions/download-artifact-retry
+        uses: ./.github-helpers/.github/actions/download-artifact-retry
         with:
           name: release-candidates
           path: temp/release-candidates
 
       - name: Download successfully smoked standalone archives
-        uses: ./.github/actions/download-artifact-retry
+        uses: ./.github-helpers/.github/actions/download-artifact-retry
         with:
           pattern: standalone-smoked-*
           path: temp/standalone-smoked
@@ -549,7 +589,7 @@ jobs:
           )
 
       - name: Upload exact standalone release assets
-        uses: ./.github/actions/upload-artifact-retry
+        uses: ./.github-helpers/.github/actions/upload-artifact-retry
         with:
           name: standalone-release-assets
           path: |
@@ -570,11 +610,13 @@ jobs:
       - name: Checkout workflow helpers
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.workflow_sha }}
+          path: .github-helpers
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
 
       - name: Download verified standalone assets
-        uses: ./.github/actions/download-artifact-retry
+        uses: ./.github-helpers/.github/actions/download-artifact-retry
         with:
           name: standalone-release-assets
           path: temp/standalone-release-assets

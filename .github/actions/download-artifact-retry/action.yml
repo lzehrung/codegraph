@@ -2,12 +2,16 @@ name: Download artifact with retries
 description: Download a GitHub Actions artifact, retrying transient DNS and network failures.
 inputs:
   name:
+    description: Artifact name to download; leave empty to use pattern
     default: ""
   path:
+    description: Destination directory
     required: true
   pattern:
+    description: Artifact name pattern used when name is empty
     default: ""
   merge-multiple:
+    description: Whether multiple matching artifacts are merged into path
     default: "false"
 runs:
   using: composite

@@ -2,14 +2,19 @@ name: Upload artifact with retries
 description: Upload a GitHub Actions artifact, retrying transient DNS and network failures.
 inputs:
   name:
+    description: Artifact name
     required: true
   path:
+    description: Files or directory to upload
     required: true
   if-no-files-found:
+    description: Behavior when no files match path
     default: error
   retention-days:
+    description: Days to retain the artifact; 0 uses the repository default
     default: "0"
   include-hidden-files:
+    description: Whether hidden files are included
     default: "false"
 runs:
   using: composite

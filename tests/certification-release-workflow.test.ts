@@ -31,6 +31,32 @@ function stepBlock(job: string, stepName: string): string {
   return job.slice(start, next < 0 ? undefined : next);
 }
 
+function compositeStep(action: string, stepName: string): string {
+  const marker = `    - name: ${stepName}\n`;
+  const start = action.indexOf(marker);
+  if (start < 0) throw new Error(`Missing composite step ${stepName}`);
+  const next = action.indexOf("\n    - ", start + marker.length);
+  return action.slice(start, next < 0 ? undefined : next);
+}
+
+function actionInputBlocks(action: string): string[] {
+  const match = /\ninputs:\n([\s\S]*?)\nruns:/u.exec(`\n${action}`);
+  if (!match) throw new Error("Missing composite action inputs");
+  const blocks: string[] = [];
+  let current: string[] = [];
+  for (const line of match[1].split("\n")) {
+    if (/^  [a-z0-9-]+:\s*$/u.test(line)) {
+      if (current.length > 0) blocks.push(current.join("\n"));
+      current = [line];
+    } else {
+      current.push(line);
+    }
+  }
+  if (current.length > 0) blocks.push(current.join("\n"));
+  if (blocks.length === 0) throw new Error("Composite action declared no inputs");
+  return blocks;
+}
+
 function artifactInput(step: string, name: "name" | "path"): string {
   const value = new RegExp(`^ {10}${name}: (.+)$`, "m").exec(step)?.[1];
   if (!value) throw new Error(`Missing artifact input ${name}`);
@@ -188,7 +214,24 @@ describe("certified release workflows", () => {
     const buildNative = jobBlock(releaseWorkflow, "build-native-artifacts");
     const uploadAction = fs.readFileSync(".github/actions/upload-artifact-retry/action.yml", "utf8");
     const downloadAction = fs.readFileSync(".github/actions/download-artifact-retry/action.yml", "utf8");
-    const standalonePublish = jobBlock(standaloneWorkflow, "publish-standalone-assets");
+    const changelog = fs.readFileSync("CHANGELOG.md", "utf8");
+    const uploadAttempt1 = compositeStep(uploadAction, "Upload artifact (attempt 1)");
+    const uploadAttempt2 = compositeStep(uploadAction, "Upload artifact (attempt 2)");
+    const uploadAttempt3 = compositeStep(uploadAction, "Upload artifact (attempt 3)");
+    const named1 = compositeStep(downloadAction, "Download named artifact (attempt 1)");
+    const pattern1 = compositeStep(downloadAction, "Download matching artifacts (attempt 1)");
+    const named2 = compositeStep(downloadAction, "Download named artifact (attempt 2)");
+    const pattern2 = compositeStep(downloadAction, "Download matching artifacts (attempt 2)");
+    const named3 = compositeStep(downloadAction, "Download named artifact (attempt 3)");
+    const pattern3 = compositeStep(downloadAction, "Download matching artifacts (attempt 3)");
+    const standaloneRetryJobs = [
+      "download-release-candidates",
+      "build-standalone-archives",
+      "smoke-standalone-archives",
+      "standalone-funnel",
+      "assemble-standalone-release-assets",
+      "publish-standalone-assets",
+    ];
 
     expect(buildNative).toContain("timeout-minutes: 30");
     expect(buildNative).toContain("fail-fast: false");
@@ -198,15 +241,65 @@ describe("certified release workflows", () => {
     expect(uploadAction.split("uses: actions/upload-artifact@v7")).toHaveLength(4);
     expect(downloadAction).toContain("uses: actions/download-artifact@v8");
     expect(downloadAction.split("uses: actions/download-artifact@v8")).toHaveLength(7);
+    for (const block of [...actionInputBlocks(uploadAction), ...actionInputBlocks(downloadAction)]) {
+      expect(block).toMatch(/^  [a-z0-9-]+:\n    description: \S+/u);
+    }
+    expect(uploadAttempt1).toContain("continue-on-error: true");
+    expect(uploadAttempt1).not.toMatch(/^\s+if:/m);
+    expect(compositeStep(uploadAction, "Wait before artifact upload retry")).toContain(
+      "if: ${{ steps.attempt1.outcome == 'failure' }}",
+    );
+    expect(uploadAttempt2).toContain("if: ${{ steps.attempt1.outcome == 'failure' }}");
+    expect(uploadAttempt2).toContain("continue-on-error: true");
+    expect(compositeStep(uploadAction, "Wait before final artifact upload retry")).toContain(
+      "if: ${{ steps.attempt2.outcome == 'failure' }}",
+    );
+    expect(uploadAttempt3).toContain("if: ${{ steps.attempt2.outcome == 'failure' }}");
+    expect(uploadAttempt3).not.toContain("continue-on-error:");
+    expect(named1).toContain("if: ${{ inputs.name != '' }}");
+    expect(named1).toContain("continue-on-error: true");
+    expect(named1).not.toContain("pattern:");
+    expect(pattern1).toContain("if: ${{ inputs.name == '' }}");
+    expect(pattern1).toContain("continue-on-error: true");
+    expect(pattern1).toContain("merge-multiple:");
+    expect(compositeStep(downloadAction, "Wait before artifact download retry")).toContain(
+      "if: ${{ steps.named1.outcome == 'failure' || steps.pattern1.outcome == 'failure' }}",
+    );
+    expect(named2).toContain("if: ${{ steps.named1.outcome == 'failure' }}");
+    expect(named2).toContain("continue-on-error: true");
+    expect(pattern2).toContain("if: ${{ steps.pattern1.outcome == 'failure' }}");
+    expect(pattern2).toContain("continue-on-error: true");
+    expect(compositeStep(downloadAction, "Wait before final artifact download retry")).toContain(
+      "if: ${{ steps.named2.outcome == 'failure' || steps.pattern2.outcome == 'failure' }}",
+    );
+    expect(named3).toContain("if: ${{ steps.named2.outcome == 'failure' }}");
+    expect(named3).not.toContain("continue-on-error:");
+    expect(pattern3).toContain("if: ${{ steps.pattern2.outcome == 'failure' }}");
+    expect(pattern3).not.toContain("continue-on-error:");
     expect(releaseWorkflow).not.toContain("uses: actions/upload-artifact@");
     expect(releaseWorkflow).not.toContain("uses: actions/download-artifact@");
     expect(standaloneWorkflow).not.toContain("uses: actions/upload-artifact@");
     expect(standaloneWorkflow).not.toContain("uses: actions/download-artifact@");
     expect(releaseWorkflow).toContain("uses: ./.github/actions/upload-artifact-retry");
     expect(releaseWorkflow).toContain("uses: ./.github/actions/download-artifact-retry");
-    expect(standalonePublish).toContain("Checkout workflow helpers");
-    expect(standalonePublish).toContain("sparse-checkout: .github/actions");
+    expect(standaloneWorkflow).not.toContain("uses: ./.github/actions/upload-artifact-retry");
+    expect(standaloneWorkflow).not.toContain("uses: ./.github/actions/download-artifact-retry");
+    for (const jobName of standaloneRetryJobs) {
+      const job = jobBlock(standaloneWorkflow, jobName);
+      expect(job, jobName).toContain("Checkout workflow helpers");
+      expect(job, jobName).toContain("ref: ${{ github.workflow_sha }}");
+      expect(job, jobName).toContain("path: .github-helpers");
+      expect(job, jobName).toContain("sparse-checkout: .github/actions");
+      expect(job, jobName).toContain("uses: ./.github-helpers/.github/actions/");
+    }
+    expect(jobBlock(standaloneWorkflow, "publish-standalone-assets")).not.toContain(
+      "needs.plan-standalone.outputs.source_revision",
+    );
+    expect(changelog).toContain("## [Unreleased]");
+    expect(changelog).toContain("Re-run failed jobs");
+    expect(changelog).toContain("fail-fast: false");
   });
+
   it("keeps assembly checks non-redundant with dedicated certification jobs", () => {
     const assemble = jobBlock(releaseWorkflow, "assemble-release-candidates");
     const releaseTests = jobBlock(releaseWorkflow, "tests-release");
