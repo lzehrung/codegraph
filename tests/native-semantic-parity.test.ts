@@ -561,6 +561,162 @@ async function createRustPathOwnerAutobinsCase(): Promise<SemanticExpectation> {
   };
 }
 
+async function createRustPathOwnerNamedBinCase(): Promise<SemanticExpectation> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-rust-path-owner-named-bin-"));
+  tempDirs.push(root);
+  const src = path.join(root, "src");
+  const binDir = path.join(src, "bin");
+  await fsp.mkdir(binDir, { recursive: true });
+  await fsp.writeFile(
+    path.join(root, "Cargo.toml"),
+    '[package]\nname = "named-bin"\nversion = "0.1.0"\nautobins = false\nautolib = false\n\n[[bin]]\nname = "tool"\n',
+  );
+  const ownerFile = path.join(binDir, "tool.rs");
+  const decoyFile = path.join(src, "aaa_decoy.rs");
+  const sharedFile = path.join(src, "shared.rs");
+  await fsp.writeFile(ownerFile, '#[path = "../shared.rs"]\nmod shared;\npub struct NamedThing;\n');
+  await fsp.writeFile(decoyFile, '#[path = "shared.rs"]\nmod shared;\npub struct DecoyThing;\n');
+  await fsp.writeFile(
+    sharedFile,
+    ["use super::NamedThing;", "pub fn take() -> NamedThing {", "    NamedThing", "}", ""].join("\n"),
+  );
+
+  return {
+    root,
+    files: [ownerFile, decoyFile, sharedFile],
+    symbols: [{ file: ownerFile, names: ["NamedThing"] }],
+    goto: {
+      file: sharedFile,
+      line: 3,
+      column: "    NamedThing".indexOf("NamedThing") + 1,
+      expectedStatus: "ok",
+    },
+    references: {
+      file: ownerFile,
+      line: 3,
+      column: "pub struct NamedThing;".indexOf("NamedThing") + 1,
+      expectedStatus: "ok",
+    },
+  };
+}
+
+async function createRustPathOwnerExplicitLibCase(): Promise<SemanticExpectation> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-rust-path-owner-explicit-lib-"));
+  tempDirs.push(root);
+  const src = path.join(root, "src");
+  await fsp.mkdir(src, { recursive: true });
+  await fsp.writeFile(
+    path.join(root, "Cargo.toml"),
+    '[package]\nname = "explicit-lib"\nversion = "0.1.0"\nautolib = false\n\n[lib]\n',
+  );
+  const libFile = path.join(src, "lib.rs");
+  const decoyFile = path.join(src, "aaa_decoy.rs");
+  const sharedFile = path.join(src, "shared.rs");
+  await fsp.writeFile(libFile, '#[path = "shared.rs"]\nmod shared;\npub struct LibThing;\n');
+  await fsp.writeFile(decoyFile, '#[path = "shared.rs"]\nmod shared;\npub struct DecoyThing;\n');
+  await fsp.writeFile(
+    sharedFile,
+    ["use super::LibThing;", "pub fn take() -> LibThing {", "    LibThing", "}", ""].join("\n"),
+  );
+
+  return {
+    root,
+    files: [libFile, decoyFile, sharedFile],
+    symbols: [{ file: libFile, names: ["LibThing"] }],
+    goto: {
+      file: sharedFile,
+      line: 3,
+      column: "    LibThing".indexOf("LibThing") + 1,
+      expectedStatus: "ok",
+    },
+    references: {
+      file: libFile,
+      line: 3,
+      column: "pub struct LibThing;".indexOf("LibThing") + 1,
+      expectedStatus: "ok",
+    },
+  };
+}
+
+async function createRustPathOwnerCustomChildCase(): Promise<SemanticExpectation> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-rust-path-owner-custom-child-"));
+  tempDirs.push(root);
+  const src = path.join(root, "src");
+  const customDir = path.join(root, "custom");
+  await fsp.mkdir(src, { recursive: true });
+  await fsp.mkdir(path.join(customDir, "root"), { recursive: true });
+  await fsp.writeFile(
+    path.join(root, "Cargo.toml"),
+    '[package]\nname = "custom-child"\nversion = "0.1.0"\n\n[lib]\npath = "custom/root.rs"\n',
+  );
+  const customRoot = path.join(customDir, "root.rs");
+  const ownerFile = path.join(customDir, "owner.rs");
+  const nestedDecoy = path.join(customDir, "root", "owner.rs");
+  const sharedFile = path.join(src, "shared.rs");
+  await fsp.writeFile(customRoot, "mod owner;\n");
+  await fsp.writeFile(ownerFile, '#[path = "../src/shared.rs"]\nmod shared;\npub struct OwnerThing;\n');
+  await fsp.writeFile(nestedDecoy, '#[path = "../../src/shared.rs"]\nmod shared;\npub struct NestedThing;\n');
+  await fsp.writeFile(
+    sharedFile,
+    ["use super::OwnerThing;", "pub fn take() -> OwnerThing {", "    OwnerThing", "}", ""].join("\n"),
+  );
+
+  return {
+    root,
+    files: [customRoot, ownerFile, nestedDecoy, sharedFile],
+    symbols: [{ file: ownerFile, names: ["OwnerThing"] }],
+    goto: {
+      file: sharedFile,
+      line: 3,
+      column: "    OwnerThing".indexOf("OwnerThing") + 1,
+      expectedStatus: "ok",
+    },
+    references: {
+      file: ownerFile,
+      line: 3,
+      column: "pub struct OwnerThing;".indexOf("OwnerThing") + 1,
+      expectedStatus: "ok",
+    },
+  };
+}
+
+async function createRustPathOwnerRawIdentCase(): Promise<SemanticExpectation> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-rust-path-owner-raw-ident-"));
+  tempDirs.push(root);
+  const src = path.join(root, "src");
+  await fsp.mkdir(src, { recursive: true });
+  await fsp.writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "raw-ident"\nversion = "0.1.0"\n');
+  const libFile = path.join(src, "lib.rs");
+  const typeFile = path.join(src, "type.rs");
+  const decoyFile = path.join(src, "aaa_decoy.rs");
+  const sharedFile = path.join(src, "shared.rs");
+  await fsp.writeFile(libFile, "mod r#type;\n");
+  await fsp.writeFile(typeFile, '#[path = "shared.rs"]\nmod shared;\npub struct TypeThing;\n');
+  await fsp.writeFile(decoyFile, '#[path = "shared.rs"]\nmod shared;\npub struct DecoyThing;\n');
+  await fsp.writeFile(
+    sharedFile,
+    ["use super::TypeThing;", "pub fn take() -> TypeThing {", "    TypeThing", "}", ""].join("\n"),
+  );
+
+  return {
+    root,
+    files: [libFile, typeFile, decoyFile, sharedFile],
+    symbols: [{ file: typeFile, names: ["TypeThing"] }],
+    goto: {
+      file: sharedFile,
+      line: 3,
+      column: "    TypeThing".indexOf("TypeThing") + 1,
+      expectedStatus: "ok",
+    },
+    references: {
+      file: typeFile,
+      line: 3,
+      column: "pub struct TypeThing;".indexOf("TypeThing") + 1,
+      expectedStatus: "ok",
+    },
+  };
+}
+
 async function createTypeScriptNormalizationCase(): Promise<SemanticExpectation> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-semantic-"));
   tempDirs.push(root);
@@ -1140,6 +1296,26 @@ nativeDescribe("native semantic coverage", () => {
 
   it("keeps native semantics stable when Rust autobins is false", async () => {
     const testCase = await createRustPathOwnerAutobinsCase();
+    await expectNativeSemantics(testCase);
+  });
+
+  it("keeps native semantics stable for an explicit named Rust bin without path", async () => {
+    const testCase = await createRustPathOwnerNamedBinCase();
+    await expectNativeSemantics(testCase);
+  });
+
+  it("keeps native semantics stable for an explicit [lib] table when autolib is false", async () => {
+    const testCase = await createRustPathOwnerExplicitLibCase();
+    await expectNativeSemantics(testCase);
+  });
+
+  it("keeps native semantics stable for a conventional child of a custom crate-root filename", async () => {
+    const testCase = await createRustPathOwnerCustomChildCase();
+    await expectNativeSemantics(testCase);
+  });
+
+  it("keeps native semantics stable for a raw-identifier conventional module", async () => {
+    const testCase = await createRustPathOwnerRawIdentCase();
     await expectNativeSemantics(testCase);
   });
 

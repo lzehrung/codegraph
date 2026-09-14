@@ -47,15 +47,47 @@ function packageBuildScriptPath(parsed: TomlTable): string | null {
   return "build.rs";
 }
 
+function packageName(parsed: TomlTable): string | undefined {
+  const pkg = isTomlTable(parsed.package) ? parsed.package : undefined;
+  return pkg ? tomlString(pkg, "name") : undefined;
+}
+
+function inferredNamedTargetDirectory(kind: "bin" | "example" | "test" | "bench"): string {
+  if (kind === "bin") return path.join("src", "bin");
+  if (kind === "example") return "examples";
+  if (kind === "test") return "tests";
+  return "benches";
+}
+
+function inferredNamedTargetPaths(
+  kind: "bin" | "example" | "test" | "bench",
+  name: string,
+  pkgName: string | undefined,
+): string[] {
+  const directory = inferredNamedTargetDirectory(kind);
+  const candidates = [path.join(directory, `${name}.rs`), path.join(directory, name, "main.rs")];
+  if (kind === "bin" && pkgName && name === pkgName) {
+    candidates.push(path.join("src", "main.rs"));
+  }
+  return candidates;
+}
+
 function explicitTargetPaths(parsed: TomlTable): string[] {
   const paths: string[] = [];
   const lib = isTomlTable(parsed.lib) ? parsed.lib : undefined;
   const libPath = lib ? tomlString(lib, "path") : undefined;
   if (libPath) paths.push(libPath);
+  const pkgName = packageName(parsed);
   for (const key of ["bin", "example", "test", "bench"] as const) {
     for (const target of tomlTables(parsed[key])) {
       const targetPath = tomlString(target, "path");
-      if (targetPath) paths.push(targetPath);
+      if (targetPath) {
+        paths.push(targetPath);
+        continue;
+      }
+      const name = tomlString(target, "name");
+      if (!name) continue;
+      paths.push(...inferredNamedTargetPaths(key, name, pkgName));
     }
   }
   return paths;
@@ -150,7 +182,7 @@ export async function rustCrateRootFiles(cargoRoot: string, projectRoot: string)
     }
     const lib = isTomlTable(parsed.lib) ? parsed.lib : undefined;
     const libPath = lib ? tomlString(lib, "path") : undefined;
-    if (!libPath && packageAutoFlag(parsed, "autolib")) {
+    if (!libPath && (lib || packageAutoFlag(parsed, "autolib"))) {
       await addCrateRoot(roots, probed, path.join(root, "src", "lib.rs"), projectRoot);
     }
     if (packageAutoFlag(parsed, "autobins")) {

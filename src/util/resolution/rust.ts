@@ -77,7 +77,7 @@ async function resolveRustModuleParts(baseDir: string, parts: readonly string[])
 const RUST_PATH_ATTRIBUTE_PATTERN = /#\s*\[\s*path\s*=\s*(?:r(#*)"([\s\S]*?)"\1|"([^"]*)")\s*\]/gu;
 const RUST_CFG_TEST_ATTRIBUTE_PATTERN = /#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]/;
 const RUST_VISIBILITY_PATTERN = /^(?:pub(?:\s*\([^)]*\))?\s+)/;
-const RUST_MOD_NAME_PATTERN = new RegExp(String.raw`^mod\s+(${XID_IDENTIFIER_SOURCE})`, "u");
+const RUST_MOD_NAME_PATTERN = new RegExp(String.raw`^mod\s+(?:r#)?(${XID_IDENTIFIER_SOURCE})`, "u");
 const MAX_RUST_PATH_ATTRIBUTE_CACHE_ENTRIES = 256;
 const MAX_RUST_MODULE_TREE_CACHE_ENTRIES = 256;
 const MAX_RUST_MODULE_TREE_FILES = 4096;
@@ -483,13 +483,17 @@ function rustChildModuleDir(parentFile: string): string {
 }
 
 async function resolveDeclaredConventionalModule(
+  projectRoot: string,
   currentModuleDir: string,
   name: string,
   signatures: Map<string, string>,
 ): Promise<string | null> {
   for (const candidate of rustModuleCandidates(currentModuleDir, [name])) {
-    const stat = await recordPathStat(candidate, signatures);
-    if (stat?.isFile()) return path.resolve(candidate);
+    const resolved = path.resolve(candidate);
+    const stat = await recordPathStat(resolved, signatures);
+    if (!stat?.isFile()) continue;
+    if (await isExistingAttributedPathInsideProject(projectRoot, resolved, stat)) return resolved;
+    return null;
   }
   return null;
 }
@@ -533,6 +537,12 @@ async function buildRustModuleTree(cargoRoot: string, projectRoot: string): Prom
     await recordPathStat(path.join(cargoRoot, relative), signatures);
   }
 
+  const crateRoots = await rustCrateRootFiles(cargoRoot, projectRoot);
+  const crateRootSet = new Set(crateRoots.roots.map((file) => path.resolve(file)));
+  for (const candidate of crateRoots.probed) {
+    await recordPathStat(candidate, signatures);
+  }
+
   const walkFile = async (file: string, depth: number): Promise<void> => {
     if (truncated) return;
     if (depth > MAX_RUST_MODULE_TREE_DEPTH) {
@@ -541,15 +551,16 @@ async function buildRustModuleTree(cargoRoot: string, projectRoot: string): Prom
     }
     const resolved = path.resolve(file);
     if (reachable.has(resolved)) return;
+    const stat = await recordPathStat(resolved, signatures);
+    if (!(await isExistingAttributedPathInsideProject(projectRoot, resolved, stat))) return;
     if (reachable.size >= MAX_RUST_MODULE_TREE_FILES) {
       truncated = true;
       return;
     }
     reachable.add(resolved);
-    const stat = await recordPathStat(resolved, signatures);
-    if (!stat?.isFile()) return;
     const scope = await loadRustPathAttributeScope(resolved);
-    await walkScope(scope, resolved, rustChildModuleDir(resolved), path.dirname(resolved), depth);
+    const moduleDir = crateRootSet.has(resolved) ? path.dirname(resolved) : rustChildModuleDir(resolved);
+    await walkScope(scope, resolved, moduleDir, path.dirname(resolved), depth);
   };
 
   const walkScope = async (
@@ -575,7 +586,7 @@ async function buildRustModuleTree(cargoRoot: string, projectRoot: string): Prom
           addAttributedOwner(ownerSets, target, { parentFile: currentFile, parentModuleDir: currentModuleDir });
         }
       } else {
-        target = await resolveDeclaredConventionalModule(currentModuleDir, name, signatures);
+        target = await resolveDeclaredConventionalModule(projectRoot, currentModuleDir, name, signatures);
       }
       if (target) await walkFile(target, depth + 1);
     }
@@ -586,10 +597,6 @@ async function buildRustModuleTree(cargoRoot: string, projectRoot: string): Prom
     }
   };
 
-  const crateRoots = await rustCrateRootFiles(cargoRoot, projectRoot);
-  for (const candidate of crateRoots.probed) {
-    await recordPathStat(candidate, signatures);
-  }
   for (const crateRoot of crateRoots.roots) {
     await walkFile(crateRoot, 0);
   }

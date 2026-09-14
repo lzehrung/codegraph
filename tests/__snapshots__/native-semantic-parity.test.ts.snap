@@ -47,6 +47,24 @@ exports[`native semantic coverage > keeps native semantics stable for Rust path-
 }
 `;
 
+exports[`native semantic coverage > keeps native semantics stable for a conventional child of a custom crate-root filename 1`] = `
+{
+  "goto": {
+    "file": "custom/owner.rs",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "custom/owner.rs:3",
+      "src/shared.rs:1",
+      "src/shared.rs:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
 exports[`native semantic coverage > keeps native semantics stable for a custom Rust library path over a stray src/lib.rs 1`] = `
 {
   "goto": {
@@ -57,6 +75,60 @@ exports[`native semantic coverage > keeps native semantics stable for a custom R
   "references": {
     "refs": [
       "custom/root.rs:3",
+      "src/shared.rs:1",
+      "src/shared.rs:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for a raw-identifier conventional module 1`] = `
+{
+  "goto": {
+    "file": "src/type.rs",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "src/shared.rs:1",
+      "src/shared.rs:3",
+      "src/type.rs:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for an explicit [lib] table when autolib is false 1`] = `
+{
+  "goto": {
+    "file": "src/lib.rs",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "src/lib.rs:3",
+      "src/shared.rs:1",
+      "src/shared.rs:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for an explicit named Rust bin without path 1`] = `
+{
+  "goto": {
+    "file": "src/bin/tool.rs",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "src/bin/tool.rs:3",
       "src/shared.rs:1",
       "src/shared.rs:3",
     ],
