@@ -24,8 +24,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 10 refreshes lexical scope construction, standard-library classification,
  * Rust graph module scope, and Python module-level import detection.
  * Epoch 11 refreshes document-link extraction and fallback diagnostics.
+ * Epoch 12 refreshes Rust `#[path]` module owner resolution.
  */
-export const CORE_ALGORITHM_EPOCH = 11;
+export const CORE_ALGORITHM_EPOCH = 12;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

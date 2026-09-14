@@ -1,6 +1,6 @@
 # Rust `#[path]` module owner resolution
 
-Status: Planned. Reproduced defect, no implementation yet.
+Status: Implemented 2026-09-14. Kept as the record of the defect and the approach.
 
 ## Problem
 

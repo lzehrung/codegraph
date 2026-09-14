@@ -11,6 +11,132 @@ exports[`native semantic coverage > keeps native SQL ambiguous basename fallback
 }
 `;
 
+exports[`native semantic coverage > keeps native semantics stable for Rust #[path] module owner resolution from the crate tree 1`] = `
+{
+  "goto": {
+    "file": "src/real.rs",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "src/real.rs:3",
+      "src/shared.rs:1",
+      "src/shared.rs:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for Rust path-attribute crate resolution 1`] = `
+{
+  "goto": {
+    "file": "src/custom.rs",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "src/consumer.rs:1",
+      "src/consumer.rs:5",
+      "src/custom.rs:1",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for a conventional child of a custom crate-root filename 1`] = `
+{
+  "goto": {
+    "file": "custom/owner.rs",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "custom/owner.rs:3",
+      "src/shared.rs:1",
+      "src/shared.rs:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for a custom Rust library path over a stray src/lib.rs 1`] = `
+{
+  "goto": {
+    "file": "custom/root.rs",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "custom/root.rs:3",
+      "src/shared.rs:1",
+      "src/shared.rs:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for a raw-identifier conventional module 1`] = `
+{
+  "goto": {
+    "file": "src/type.rs",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "src/shared.rs:1",
+      "src/shared.rs:3",
+      "src/type.rs:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for an explicit [lib] table when autolib is false 1`] = `
+{
+  "goto": {
+    "file": "src/lib.rs",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "src/lib.rs:3",
+      "src/shared.rs:1",
+      "src/shared.rs:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for an explicit named Rust bin without path 1`] = `
+{
+  "goto": {
+    "file": "src/bin/tool.rs",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "src/bin/tool.rs:3",
+      "src/shared.rs:1",
+      "src/shared.rs:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
 exports[`native semantic coverage > keeps native semantics stable for normalization-sensitive TypeScript export assignment 1`] = `
 {
   "goto": {
@@ -982,18 +1108,47 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for Rust path-attribute crate resolution 1`] = `
+exports[`native semantic coverage > keeps native semantics stable when Rust autobins is false 1`] = `
 {
   "goto": {
-    "file": "src/custom.rs",
-    "line": 1,
+    "file": "src/real.rs",
+    "line": 3,
     "status": "ok",
   },
   "references": {
     "refs": [
-      "src/consumer.rs:1",
-      "src/consumer.rs:5",
-      "src/custom.rs:1",
+      "src/real.rs:3",
+      "src/shared.rs:1",
+      "src/shared.rs:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable when a Rust #[path] target has two reachable owners 1`] = `
+{
+  "goto": {
+    "status": "not_found",
+  },
+  "references": {
+    "status": "not_found",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable without treating a virtual workspace root as a package 1`] = `
+{
+  "goto": {
+    "file": "src/aaa_owner.rs",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "src/aaa_owner.rs:3",
+      "src/shared.rs:1",
+      "src/shared.rs:3",
     ],
     "status": "ok",
   },

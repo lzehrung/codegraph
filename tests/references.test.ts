@@ -2081,6 +2081,315 @@ describe("Find References", () => {
       }
     });
 
+    it("finds references to the reachable #[path] module owner and never the undeclared decoy", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-refs-"));
+      try {
+        const src = path.join(root, "src");
+        await fsp.mkdir(src, { recursive: true });
+        await fsp.writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-owner"\nversion = "0.1.0"\n');
+        const realFile = path.join(src, "real.rs").replace(/\\/g, "/");
+        const orphanFile = path.join(src, "aaa_orphan.rs").replace(/\\/g, "/");
+        const sharedFile = path.join(src, "shared.rs").replace(/\\/g, "/");
+        await fsp.writeFile(path.join(src, "lib.rs"), "mod real;\npub struct RootThing;\n");
+        await fsp.writeFile(realFile, '#[path = "shared.rs"]\nmod shared;\npub struct RealThing;\n');
+        await fsp.writeFile(orphanFile, '#[path = "shared.rs"]\nmod shared;\npub struct OrphanThing;\n');
+        await fsp.writeFile(
+          sharedFile,
+          ["use super::RealThing;", "pub fn take() -> RealThing {", "    RealThing", "}", ""].join("\n"),
+        );
+        const index = await createTestIndexFromFiles(root, [
+          path.join(src, "lib.rs"),
+          realFile,
+          orphanFile,
+          sharedFile,
+        ]);
+        const declLine = "pub struct RealThing;";
+        const result = await testFindReferences(index, realFile, 3, declLine.indexOf("RealThing") + 1, 3);
+        expectReferenceAt(result, realFile, 3);
+        expectReferenceAt(result, sharedFile, 1);
+        expectReferenceAt(result, sharedFile, 3);
+        if (result.status === "ok") {
+          expect(result.references.some((reference) => path.basename(reference.file) === "aaa_orphan.rs")).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("finds references through a custom library path and never a stray src/lib.rs", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-custom-lib-refs-"));
+      try {
+        const src = path.join(root, "src");
+        const customDir = path.join(root, "custom");
+        await fsp.mkdir(src, { recursive: true });
+        await fsp.mkdir(customDir, { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "Cargo.toml"),
+          '[package]\nname = "path-owner-custom-lib"\nversion = "0.1.0"\n\n[lib]\npath = "custom/root.rs"\n',
+        );
+        const customFile = path.join(customDir, "root.rs").replace(/\\/g, "/");
+        const strayLib = path.join(src, "lib.rs").replace(/\\/g, "/");
+        const sharedFile = path.join(src, "shared.rs").replace(/\\/g, "/");
+        await fsp.writeFile(customFile, '#[path = "../src/shared.rs"]\nmod shared;\npub struct CustomThing;\n');
+        await fsp.writeFile(strayLib, '#[path = "shared.rs"]\nmod shared;\npub struct StrayThing;\n');
+        await fsp.writeFile(
+          sharedFile,
+          ["use super::CustomThing;", "pub fn take() -> CustomThing {", "    CustomThing", "}", ""].join("\n"),
+        );
+        const index = await createTestIndexFromFiles(root, [customFile, strayLib, sharedFile]);
+        const declLine = "pub struct CustomThing;";
+        const result = await testFindReferences(index, customFile, 3, declLine.indexOf("CustomThing") + 1, 3);
+        expectReferenceAt(result, customFile, 3);
+        expectReferenceAt(result, sharedFile, 1);
+        expectReferenceAt(result, sharedFile, 3);
+        if (result.status === "ok") {
+          expect(result.references.some((reference) => path.basename(reference.file) === "lib.rs")).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("finds references without treating src/main.rs as a crate root when autobins is false", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-autobins-refs-"));
+      try {
+        const src = path.join(root, "src");
+        await fsp.mkdir(src, { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "Cargo.toml"),
+          '[package]\nname = "path-owner-autobins"\nversion = "0.1.0"\nautobins = false\n',
+        );
+        const realFile = path.join(src, "real.rs").replace(/\\/g, "/");
+        const mainFile = path.join(src, "main.rs").replace(/\\/g, "/");
+        const sharedFile = path.join(src, "shared.rs").replace(/\\/g, "/");
+        await fsp.writeFile(path.join(src, "lib.rs"), "mod real;\n");
+        await fsp.writeFile(realFile, '#[path = "shared.rs"]\nmod shared;\npub struct RealThing;\n');
+        await fsp.writeFile(mainFile, '#[path = "shared.rs"]\nmod shared;\nfn main() {}\n');
+        await fsp.writeFile(
+          sharedFile,
+          ["use super::RealThing;", "pub fn take() -> RealThing {", "    RealThing", "}", ""].join("\n"),
+        );
+        const index = await createTestIndexFromFiles(root, [path.join(src, "lib.rs"), realFile, mainFile, sharedFile]);
+        const declLine = "pub struct RealThing;";
+        const result = await testFindReferences(index, realFile, 3, declLine.indexOf("RealThing") + 1, 3);
+        expectReferenceAt(result, realFile, 3);
+        expectReferenceAt(result, sharedFile, 1);
+        expectReferenceAt(result, sharedFile, 3);
+        if (result.status === "ok") {
+          expect(result.references.some((reference) => path.basename(reference.file) === "main.rs")).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("finds references through an explicit named bin without path when autobins is false", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-named-bin-refs-"));
+      try {
+        const src = path.join(root, "src");
+        const binDir = path.join(src, "bin");
+        await fsp.mkdir(binDir, { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "Cargo.toml"),
+          '[package]\nname = "named-bin"\nversion = "0.1.0"\nautobins = false\nautolib = false\n\n[[bin]]\nname = "tool"\n',
+        );
+        const ownerFile = path.join(binDir, "tool.rs").replace(/\\/g, "/");
+        const decoyFile = path.join(src, "aaa_decoy.rs").replace(/\\/g, "/");
+        const sharedFile = path.join(src, "shared.rs").replace(/\\/g, "/");
+        await fsp.writeFile(ownerFile, '#[path = "../shared.rs"]\nmod shared;\npub struct NamedThing;\n');
+        await fsp.writeFile(decoyFile, '#[path = "shared.rs"]\nmod shared;\npub struct DecoyThing;\n');
+        await fsp.writeFile(
+          sharedFile,
+          ["use super::NamedThing;", "pub fn take() -> NamedThing {", "    NamedThing", "}", ""].join("\n"),
+        );
+        const index = await createTestIndexFromFiles(root, [ownerFile, decoyFile, sharedFile]);
+        const declLine = "pub struct NamedThing;";
+        const result = await testFindReferences(index, ownerFile, 3, declLine.indexOf("NamedThing") + 1, 3);
+        expectReferenceAt(result, ownerFile, 3);
+        expectReferenceAt(result, sharedFile, 1);
+        expectReferenceAt(result, sharedFile, 3);
+        if (result.status === "ok") {
+          expect(result.references.some((reference) => path.basename(reference.file) === "aaa_decoy.rs")).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("finds references through an explicit [lib] table when autolib is false", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-explicit-lib-refs-"));
+      try {
+        const src = path.join(root, "src");
+        await fsp.mkdir(src, { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "Cargo.toml"),
+          '[package]\nname = "explicit-lib"\nversion = "0.1.0"\nautolib = false\n\n[lib]\n',
+        );
+        const libFile = path.join(src, "lib.rs").replace(/\\/g, "/");
+        const decoyFile = path.join(src, "aaa_decoy.rs").replace(/\\/g, "/");
+        const sharedFile = path.join(src, "shared.rs").replace(/\\/g, "/");
+        await fsp.writeFile(libFile, '#[path = "shared.rs"]\nmod shared;\npub struct LibThing;\n');
+        await fsp.writeFile(decoyFile, '#[path = "shared.rs"]\nmod shared;\npub struct DecoyThing;\n');
+        await fsp.writeFile(
+          sharedFile,
+          ["use super::LibThing;", "pub fn take() -> LibThing {", "    LibThing", "}", ""].join("\n"),
+        );
+        const index = await createTestIndexFromFiles(root, [libFile, decoyFile, sharedFile]);
+        const declLine = "pub struct LibThing;";
+        const result = await testFindReferences(index, libFile, 3, declLine.indexOf("LibThing") + 1, 3);
+        expectReferenceAt(result, libFile, 3);
+        expectReferenceAt(result, sharedFile, 1);
+        expectReferenceAt(result, sharedFile, 3);
+        if (result.status === "ok") {
+          expect(result.references.some((reference) => path.basename(reference.file) === "aaa_decoy.rs")).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("finds references without treating a virtual workspace root as a package", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-virtual-ws-refs-"));
+      try {
+        const src = path.join(root, "src");
+        const pkgSrc = path.join(root, "pkg", "src");
+        await fsp.mkdir(src, { recursive: true });
+        await fsp.mkdir(pkgSrc, { recursive: true });
+        await fsp.writeFile(path.join(root, "Cargo.toml"), '[workspace]\nmembers = ["pkg"]\n');
+        await fsp.writeFile(path.join(root, "pkg", "Cargo.toml"), '[package]\nname = "pkg"\nversion = "0.1.0"\n');
+        await fsp.writeFile(path.join(pkgSrc, "lib.rs"), "");
+        const strayBuild = path.join(root, "build.rs").replace(/\\/g, "/");
+        const ownerFile = path.join(src, "aaa_owner.rs").replace(/\\/g, "/");
+        const sharedFile = path.join(src, "shared.rs").replace(/\\/g, "/");
+        await fsp.writeFile(strayBuild, '#[path = "src/shared.rs"]\nmod shared;\npub struct WorkspaceThing;\n');
+        await fsp.writeFile(ownerFile, '#[path = "shared.rs"]\nmod shared;\npub struct OwnerThing;\n');
+        await fsp.writeFile(
+          sharedFile,
+          ["use super::OwnerThing;", "pub fn take() -> OwnerThing {", "    OwnerThing", "}", ""].join("\n"),
+        );
+        const index = await createTestIndexFromFiles(root, [strayBuild, ownerFile, sharedFile]);
+        const declLine = "pub struct OwnerThing;";
+        const result = await testFindReferences(index, ownerFile, 3, declLine.indexOf("OwnerThing") + 1, 3);
+        expectReferenceAt(result, ownerFile, 3);
+        expectReferenceAt(result, sharedFile, 1);
+        expectReferenceAt(result, sharedFile, 3);
+        if (result.status === "ok") {
+          expect(result.references.some((reference) => path.basename(reference.file) === "build.rs")).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("finds references when a reachable #[path] uses a differently cased spelling of the target", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-case-fold-refs-"));
+      try {
+        const src = path.join(root, "src");
+        await fsp.mkdir(src, { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "Cargo.toml"),
+          '[package]\nname = "path-owner-case-fold"\nversion = "0.1.0"\n',
+        );
+        const libFile = path.join(src, "lib.rs").replace(/\\/g, "/");
+        const decoyFile = path.join(src, "aaa_decoy.rs").replace(/\\/g, "/");
+        const sharedFile = path.join(src, "shared.rs").replace(/\\/g, "/");
+        await fsp.writeFile(libFile, '#[path = "SHARED.rs"]\nmod shared;\npub struct CaseThing;\n');
+        await fsp.writeFile(decoyFile, '#[path = "shared.rs"]\nmod shared;\npub struct DecoyThing;\n');
+        await fsp.writeFile(
+          sharedFile,
+          ["use super::CaseThing;", "pub fn take() -> CaseThing {", "    CaseThing", "}", ""].join("\n"),
+        );
+        try {
+          await fsp.stat(path.join(src, "SHARED.rs"));
+        } catch {
+          return;
+        }
+        const index = await createTestIndexFromFiles(root, [libFile, decoyFile, sharedFile]);
+        const declLine = "pub struct CaseThing;";
+        const result = await testFindReferences(index, libFile, 3, declLine.indexOf("CaseThing") + 1, 3);
+        expectReferenceAt(result, libFile, 3);
+        expectReferenceAt(result, sharedFile, 1);
+        expectReferenceAt(result, sharedFile, 3);
+        if (result.status === "ok") {
+          expect(result.references.some((reference) => path.basename(reference.file) === "aaa_decoy.rs")).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("finds references through a conventional child of a custom crate-root filename", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-custom-child-refs-"));
+      try {
+        const src = path.join(root, "src");
+        const customDir = path.join(root, "custom");
+        await fsp.mkdir(src, { recursive: true });
+        await fsp.mkdir(path.join(customDir, "root"), { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "Cargo.toml"),
+          '[package]\nname = "custom-child"\nversion = "0.1.0"\n\n[lib]\npath = "custom/root.rs"\n',
+        );
+        const customRoot = path.join(customDir, "root.rs").replace(/\\/g, "/");
+        const ownerFile = path.join(customDir, "owner.rs").replace(/\\/g, "/");
+        const nestedDecoy = path.join(customDir, "root", "owner.rs").replace(/\\/g, "/");
+        const sharedFile = path.join(src, "shared.rs").replace(/\\/g, "/");
+        await fsp.writeFile(customRoot, "mod owner;\n");
+        await fsp.writeFile(ownerFile, '#[path = "../src/shared.rs"]\nmod shared;\npub struct OwnerThing;\n');
+        await fsp.writeFile(nestedDecoy, '#[path = "../../src/shared.rs"]\nmod shared;\npub struct NestedThing;\n');
+        await fsp.writeFile(
+          sharedFile,
+          ["use super::OwnerThing;", "pub fn take() -> OwnerThing {", "    OwnerThing", "}", ""].join("\n"),
+        );
+        const index = await createTestIndexFromFiles(root, [customRoot, ownerFile, nestedDecoy, sharedFile]);
+        const declLine = "pub struct OwnerThing;";
+        const result = await testFindReferences(index, ownerFile, 3, declLine.indexOf("OwnerThing") + 1, 3);
+        expectReferenceAt(result, ownerFile, 3);
+        expectReferenceAt(result, sharedFile, 1);
+        expectReferenceAt(result, sharedFile, 3);
+        if (result.status === "ok") {
+          expect(
+            result.references.some(
+              (reference) =>
+                path.basename(reference.file) === "owner.rs" && path.basename(path.dirname(reference.file)) === "root",
+            ),
+          ).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("finds references through a raw-identifier conventional module", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-raw-ident-refs-"));
+      try {
+        const src = path.join(root, "src");
+        await fsp.mkdir(src, { recursive: true });
+        await fsp.writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "raw-ident"\nversion = "0.1.0"\n');
+        const libFile = path.join(src, "lib.rs").replace(/\\/g, "/");
+        const typeFile = path.join(src, "type.rs").replace(/\\/g, "/");
+        const decoyFile = path.join(src, "aaa_decoy.rs").replace(/\\/g, "/");
+        const sharedFile = path.join(src, "shared.rs").replace(/\\/g, "/");
+        await fsp.writeFile(libFile, "mod r#type;\n");
+        await fsp.writeFile(typeFile, '#[path = "shared.rs"]\nmod shared;\npub struct TypeThing;\n');
+        await fsp.writeFile(decoyFile, '#[path = "shared.rs"]\nmod shared;\npub struct DecoyThing;\n');
+        await fsp.writeFile(
+          sharedFile,
+          ["use super::TypeThing;", "pub fn take() -> TypeThing {", "    TypeThing", "}", ""].join("\n"),
+        );
+        const index = await createTestIndexFromFiles(root, [libFile, typeFile, decoyFile, sharedFile]);
+        const declLine = "pub struct TypeThing;";
+        const result = await testFindReferences(index, typeFile, 3, declLine.indexOf("TypeThing") + 1, 3);
+        expectReferenceAt(result, typeFile, 3);
+        expectReferenceAt(result, sharedFile, 1);
+        expectReferenceAt(result, sharedFile, 3);
+        if (result.status === "ok") {
+          expect(result.references.some((reference) => path.basename(reference.file) === "aaa_decoy.rs")).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("finds macro_rules definitions and invocations", async () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "rust");
       const macroFile = path.join(samplePath, ".regressions", "macros.rs").replace(/\\/g, "/");
