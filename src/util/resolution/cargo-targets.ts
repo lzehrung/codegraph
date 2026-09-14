@@ -91,12 +91,25 @@ async function acceptCrateRoot(candidate: string, projectRoot: string): Promise<
   return resolved;
 }
 
-async function addCrateRoot(files: Set<string>, candidate: string, projectRoot: string): Promise<void> {
-  const accepted = await acceptCrateRoot(candidate, projectRoot);
-  if (accepted) files.add(accepted);
+async function addCrateRoot(
+  roots: Set<string>,
+  probed: Set<string>,
+  candidate: string,
+  projectRoot: string,
+): Promise<void> {
+  const resolved = path.resolve(candidate);
+  probed.add(resolved);
+  const accepted = await acceptCrateRoot(resolved, projectRoot);
+  if (accepted) roots.add(accepted);
 }
 
-async function addAutodiscoveredDirectory(files: Set<string>, directory: string, projectRoot: string): Promise<void> {
+async function addAutodiscoveredDirectory(
+  roots: Set<string>,
+  probed: Set<string>,
+  directory: string,
+  projectRoot: string,
+): Promise<void> {
+  probed.add(path.resolve(directory));
   let entries: Dirent[] = [];
   try {
     entries = await fsp.readdir(directory, { withFileTypes: true });
@@ -105,39 +118,54 @@ async function addAutodiscoveredDirectory(files: Set<string>, directory: string,
   }
   for (const entry of entries) {
     if (entry.isDirectory()) {
-      await addCrateRoot(files, path.join(directory, entry.name, "main.rs"), projectRoot);
+      await addCrateRoot(roots, probed, path.join(directory, entry.name, "main.rs"), projectRoot);
       continue;
     }
     if (entry.name.endsWith(".rs")) {
-      await addCrateRoot(files, path.join(directory, entry.name), projectRoot);
+      await addCrateRoot(roots, probed, path.join(directory, entry.name), projectRoot);
     }
   }
 }
 
-export async function rustCrateRootFiles(cargoRoot: string, projectRoot: string): Promise<string[]> {
+export type RustCrateRoots = {
+  /** Existing, resolved, project-confined crate root files. */
+  roots: string[];
+  /** Every candidate path considered, existing or not, for cache revalidation. */
+  probed: string[];
+};
+
+export async function rustCrateRootFiles(cargoRoot: string, projectRoot: string): Promise<RustCrateRoots> {
   const root = path.resolve(cargoRoot);
-  const files = new Set<string>();
+  const roots = new Set<string>();
+  const probed = new Set<string>();
   const parsed = await parseCargoToml(root);
 
   if (parsed) {
     for (const relativePath of explicitTargetPaths(parsed)) {
-      await addCrateRoot(files, path.resolve(root, relativePath), projectRoot);
+      await addCrateRoot(roots, probed, path.resolve(root, relativePath), projectRoot);
     }
     const buildScript = packageBuildScriptPath(parsed);
     if (buildScript) {
-      await addCrateRoot(files, path.resolve(root, buildScript), projectRoot);
+      await addCrateRoot(roots, probed, path.resolve(root, buildScript), projectRoot);
+    }
+    const lib = isTomlTable(parsed.lib) ? parsed.lib : undefined;
+    const libPath = lib ? tomlString(lib, "path") : undefined;
+    if (!libPath && packageAutoFlag(parsed, "autolib")) {
+      await addCrateRoot(roots, probed, path.join(root, "src", "lib.rs"), projectRoot);
+    }
+    if (packageAutoFlag(parsed, "autobins")) {
+      await addCrateRoot(roots, probed, path.join(root, "src", "main.rs"), projectRoot);
     }
   } else {
-    await addCrateRoot(files, path.join(root, "build.rs"), projectRoot);
+    await addCrateRoot(roots, probed, path.join(root, "build.rs"), projectRoot);
+    await addCrateRoot(roots, probed, path.join(root, "src", "lib.rs"), projectRoot);
+    await addCrateRoot(roots, probed, path.join(root, "src", "main.rs"), projectRoot);
   }
-
-  await addCrateRoot(files, path.join(root, "src", "lib.rs"), projectRoot);
-  await addCrateRoot(files, path.join(root, "src", "main.rs"), projectRoot);
 
   for (const group of AUTO_DISCOVERY_GROUPS) {
     if (parsed && !packageAutoFlag(parsed, group.flag)) continue;
-    await addAutodiscoveredDirectory(files, path.join(root, group.directory), projectRoot);
+    await addAutodiscoveredDirectory(roots, probed, path.join(root, group.directory), projectRoot);
   }
 
-  return [...files];
+  return { roots: [...roots], probed: [...probed] };
 }

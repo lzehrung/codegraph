@@ -388,8 +388,21 @@ export function extractRustModPathAttribute(
   return extractRustModPathAttributeScopes(source).pathAttributes.get(moduleName);
 }
 
-async function isExistingAttributedPathInsideProject(projectRoot: string, attributedPath: string): Promise<boolean> {
-  if (!(await fileExists(attributedPath))) return false;
+async function isExistingAttributedPathInsideProject(
+  projectRoot: string,
+  attributedPath: string,
+  knownStat?: Awaited<ReturnType<typeof fsp.stat>> | null,
+): Promise<boolean> {
+  if (knownStat !== undefined) {
+    if (knownStat === null || !knownStat.isFile()) return false;
+  } else {
+    try {
+      const stat = await fsp.stat(attributedPath);
+      if (!stat.isFile()) return false;
+    } catch {
+      return false;
+    }
+  }
   if (!isFilePathWithinRoot(projectRoot, attributedPath)) return false;
   try {
     const realRoot = await fsp.realpath(projectRoot);
@@ -556,8 +569,8 @@ async function buildRustModuleTree(cargoRoot: string, projectRoot: string): Prom
       let target: string | null = null;
       if (pathValue !== undefined) {
         const attributedPath = path.resolve(attributeDirectory, pathValue);
-        await recordPathStat(attributedPath, signatures);
-        if (await isExistingAttributedPathInsideProject(projectRoot, attributedPath)) {
+        const attributedStat = await recordPathStat(attributedPath, signatures);
+        if (await isExistingAttributedPathInsideProject(projectRoot, attributedPath, attributedStat)) {
           target = path.resolve(attributedPath);
           addAttributedOwner(ownerSets, target, { parentFile: currentFile, parentModuleDir: currentModuleDir });
         }
@@ -573,7 +586,11 @@ async function buildRustModuleTree(cargoRoot: string, projectRoot: string): Prom
     }
   };
 
-  for (const crateRoot of await rustCrateRootFiles(cargoRoot, projectRoot)) {
+  const crateRoots = await rustCrateRootFiles(cargoRoot, projectRoot);
+  for (const candidate of crateRoots.probed) {
+    await recordPathStat(candidate, signatures);
+  }
+  for (const crateRoot of crateRoots.roots) {
     await walkFile(crateRoot, 0);
   }
 

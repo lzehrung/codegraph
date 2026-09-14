@@ -471,6 +471,96 @@ async function createRustPathOwnerAmbiguousCase(): Promise<SemanticExpectation> 
   };
 }
 
+async function createRustPathOwnerCustomLibCase(): Promise<SemanticExpectation> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-rust-path-owner-custom-lib-"));
+  tempDirs.push(root);
+  const src = path.join(root, "src");
+  const customDir = path.join(root, "custom");
+  await fsp.mkdir(src, { recursive: true });
+  await fsp.mkdir(customDir, { recursive: true });
+  await fsp.writeFile(
+    path.join(root, "Cargo.toml"),
+    '[package]\nname = "path-owner-custom-lib"\nversion = "0.1.0"\n\n[lib]\npath = "custom/root.rs"\n',
+  );
+  const customFile = path.join(customDir, "root.rs");
+  const strayLib = path.join(src, "lib.rs");
+  const sharedFile = path.join(src, "shared.rs");
+  await fsp.writeFile(customFile, '#[path = "../src/shared.rs"]\nmod shared;\npub struct CustomThing;\n');
+  await fsp.writeFile(strayLib, '#[path = "shared.rs"]\nmod shared;\npub struct StrayThing;\n');
+  await fsp.writeFile(
+    sharedFile,
+    ["use super::CustomThing;", "pub fn take() -> CustomThing {", "    CustomThing", "}", ""].join("\n"),
+  );
+
+  return {
+    root,
+    files: [customFile, strayLib, sharedFile],
+    symbols: [
+      {
+        file: customFile,
+        names: ["CustomThing"],
+      },
+    ],
+    goto: {
+      file: sharedFile,
+      line: 3,
+      column: "    CustomThing".indexOf("CustomThing") + 1,
+      expectedStatus: "ok",
+    },
+    references: {
+      file: customFile,
+      line: 3,
+      column: "pub struct CustomThing;".indexOf("CustomThing") + 1,
+      expectedStatus: "ok",
+    },
+  };
+}
+
+async function createRustPathOwnerAutobinsCase(): Promise<SemanticExpectation> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-rust-path-owner-autobins-"));
+  tempDirs.push(root);
+  const src = path.join(root, "src");
+  await fsp.mkdir(src, { recursive: true });
+  await fsp.writeFile(
+    path.join(root, "Cargo.toml"),
+    '[package]\nname = "path-owner-autobins"\nversion = "0.1.0"\nautobins = false\n',
+  );
+  const libFile = path.join(src, "lib.rs");
+  const realFile = path.join(src, "real.rs");
+  const mainFile = path.join(src, "main.rs");
+  const sharedFile = path.join(src, "shared.rs");
+  await fsp.writeFile(libFile, "mod real;\n");
+  await fsp.writeFile(realFile, '#[path = "shared.rs"]\nmod shared;\npub struct RealThing;\n');
+  await fsp.writeFile(mainFile, '#[path = "shared.rs"]\nmod shared;\nfn main() {}\n');
+  await fsp.writeFile(
+    sharedFile,
+    ["use super::RealThing;", "pub fn take() -> RealThing {", "    RealThing", "}", ""].join("\n"),
+  );
+
+  return {
+    root,
+    files: [libFile, realFile, mainFile, sharedFile],
+    symbols: [
+      {
+        file: realFile,
+        names: ["RealThing"],
+      },
+    ],
+    goto: {
+      file: sharedFile,
+      line: 3,
+      column: "    RealThing".indexOf("RealThing") + 1,
+      expectedStatus: "ok",
+    },
+    references: {
+      file: realFile,
+      line: 3,
+      column: "pub struct RealThing;".indexOf("RealThing") + 1,
+      expectedStatus: "ok",
+    },
+  };
+}
+
 async function createTypeScriptNormalizationCase(): Promise<SemanticExpectation> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-semantic-"));
   tempDirs.push(root);
@@ -1040,6 +1130,16 @@ nativeDescribe("native semantic coverage", () => {
 
   it("keeps native semantics stable when a Rust #[path] target has two reachable owners", async () => {
     const testCase = await createRustPathOwnerAmbiguousCase();
+    await expectNativeSemantics(testCase);
+  });
+
+  it("keeps native semantics stable for a custom Rust library path over a stray src/lib.rs", async () => {
+    const testCase = await createRustPathOwnerCustomLibCase();
+    await expectNativeSemantics(testCase);
+  });
+
+  it("keeps native semantics stable when Rust autobins is false", async () => {
+    const testCase = await createRustPathOwnerAutobinsCase();
     await expectNativeSemantics(testCase);
   });
 

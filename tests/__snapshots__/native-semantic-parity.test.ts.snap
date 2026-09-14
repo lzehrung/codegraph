@@ -47,6 +47,24 @@ exports[`native semantic coverage > keeps native semantics stable for Rust path-
 }
 `;
 
+exports[`native semantic coverage > keeps native semantics stable for a custom Rust library path over a stray src/lib.rs 1`] = `
+{
+  "goto": {
+    "file": "custom/root.rs",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "custom/root.rs:3",
+      "src/shared.rs:1",
+      "src/shared.rs:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
 exports[`native semantic coverage > keeps native semantics stable for normalization-sensitive TypeScript export assignment 1`] = `
 {
   "goto": {
@@ -1012,6 +1030,24 @@ exports[`native semantic coverage > keeps native semantics stable for representa
       "AnnotationConsumer.java:3",
       "AnnotationConsumer.java:5",
       "AnnotationTypes.java:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable when Rust autobins is false 1`] = `
+{
+  "goto": {
+    "file": "src/real.rs",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "src/real.rs:3",
+      "src/shared.rs:1",
+      "src/shared.rs:3",
     ],
     "status": "ok",
   },

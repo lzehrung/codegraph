@@ -2116,6 +2116,73 @@ describe("Find References", () => {
       }
     });
 
+    it("finds references through a custom library path and never a stray src/lib.rs", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-custom-lib-refs-"));
+      try {
+        const src = path.join(root, "src");
+        const customDir = path.join(root, "custom");
+        await fsp.mkdir(src, { recursive: true });
+        await fsp.mkdir(customDir, { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "Cargo.toml"),
+          '[package]\nname = "path-owner-custom-lib"\nversion = "0.1.0"\n\n[lib]\npath = "custom/root.rs"\n',
+        );
+        const customFile = path.join(customDir, "root.rs").replace(/\\/g, "/");
+        const strayLib = path.join(src, "lib.rs").replace(/\\/g, "/");
+        const sharedFile = path.join(src, "shared.rs").replace(/\\/g, "/");
+        await fsp.writeFile(customFile, '#[path = "../src/shared.rs"]\nmod shared;\npub struct CustomThing;\n');
+        await fsp.writeFile(strayLib, '#[path = "shared.rs"]\nmod shared;\npub struct StrayThing;\n');
+        await fsp.writeFile(
+          sharedFile,
+          ["use super::CustomThing;", "pub fn take() -> CustomThing {", "    CustomThing", "}", ""].join("\n"),
+        );
+        const index = await createTestIndexFromFiles(root, [customFile, strayLib, sharedFile]);
+        const declLine = "pub struct CustomThing;";
+        const result = await testFindReferences(index, customFile, 3, declLine.indexOf("CustomThing") + 1, 3);
+        expectReferenceAt(result, customFile, 3);
+        expectReferenceAt(result, sharedFile, 1);
+        expectReferenceAt(result, sharedFile, 3);
+        if (result.status === "ok") {
+          expect(result.references.some((reference) => path.basename(reference.file) === "lib.rs")).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("finds references without treating src/main.rs as a crate root when autobins is false", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-autobins-refs-"));
+      try {
+        const src = path.join(root, "src");
+        await fsp.mkdir(src, { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "Cargo.toml"),
+          '[package]\nname = "path-owner-autobins"\nversion = "0.1.0"\nautobins = false\n',
+        );
+        const realFile = path.join(src, "real.rs").replace(/\\/g, "/");
+        const mainFile = path.join(src, "main.rs").replace(/\\/g, "/");
+        const sharedFile = path.join(src, "shared.rs").replace(/\\/g, "/");
+        await fsp.writeFile(path.join(src, "lib.rs"), "mod real;\n");
+        await fsp.writeFile(realFile, '#[path = "shared.rs"]\nmod shared;\npub struct RealThing;\n');
+        await fsp.writeFile(mainFile, '#[path = "shared.rs"]\nmod shared;\nfn main() {}\n');
+        await fsp.writeFile(
+          sharedFile,
+          ["use super::RealThing;", "pub fn take() -> RealThing {", "    RealThing", "}", ""].join("\n"),
+        );
+        const index = await createTestIndexFromFiles(root, [path.join(src, "lib.rs"), realFile, mainFile, sharedFile]);
+        const declLine = "pub struct RealThing;";
+        const result = await testFindReferences(index, realFile, 3, declLine.indexOf("RealThing") + 1, 3);
+        expectReferenceAt(result, realFile, 3);
+        expectReferenceAt(result, sharedFile, 1);
+        expectReferenceAt(result, sharedFile, 3);
+        if (result.status === "ok") {
+          expect(result.references.some((reference) => path.basename(reference.file) === "main.rs")).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("finds macro_rules definitions and invocations", async () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "rust");
       const macroFile = path.join(samplePath, ".regressions", "macros.rs").replace(/\\/g, "/");

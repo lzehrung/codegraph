@@ -1896,6 +1896,71 @@ describe("Go to Definition", () => {
       }
     });
 
+    it("resolves super through a custom library path, not a stray src/lib.rs", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-custom-lib-goto-"));
+      try {
+        const src = path.join(root, "src");
+        const customDir = path.join(root, "custom");
+        await fsp.mkdir(src, { recursive: true });
+        await fsp.mkdir(customDir, { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "Cargo.toml"),
+          '[package]\nname = "path-owner-custom-lib"\nversion = "0.1.0"\n\n[lib]\npath = "custom/root.rs"\n',
+        );
+        const customFile = path.join(customDir, "root.rs").replace(/\\/g, "/");
+        const strayLib = path.join(src, "lib.rs").replace(/\\/g, "/");
+        const sharedFile = path.join(src, "shared.rs").replace(/\\/g, "/");
+        await fsp.writeFile(customFile, '#[path = "../src/shared.rs"]\nmod shared;\npub struct CustomThing;\n');
+        await fsp.writeFile(strayLib, '#[path = "shared.rs"]\nmod shared;\npub struct StrayThing;\n');
+        await fsp.writeFile(
+          sharedFile,
+          ["use super::CustomThing;", "pub fn take() -> CustomThing {", "    CustomThing", "}", ""].join("\n"),
+        );
+        const index = await createTestIndexFromFiles(root, [customFile, strayLib, sharedFile]);
+        const usage = "    CustomThing";
+        const result = await testGoToDefinition(index, sharedFile, 3, usage.indexOf("CustomThing") + 1, customFile, 3);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(path.basename(result.definition.file)).toBe("root.rs");
+          expect(path.basename(result.definition.file)).not.toBe("lib.rs");
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves super without treating src/main.rs as a crate root when autobins is false", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-autobins-goto-"));
+      try {
+        const src = path.join(root, "src");
+        await fsp.mkdir(src, { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "Cargo.toml"),
+          '[package]\nname = "path-owner-autobins"\nversion = "0.1.0"\nautobins = false\n',
+        );
+        const realFile = path.join(src, "real.rs").replace(/\\/g, "/");
+        const mainFile = path.join(src, "main.rs").replace(/\\/g, "/");
+        const sharedFile = path.join(src, "shared.rs").replace(/\\/g, "/");
+        await fsp.writeFile(path.join(src, "lib.rs"), "mod real;\n");
+        await fsp.writeFile(realFile, '#[path = "shared.rs"]\nmod shared;\npub struct RealThing;\n');
+        await fsp.writeFile(mainFile, '#[path = "shared.rs"]\nmod shared;\nfn main() {}\n');
+        await fsp.writeFile(
+          sharedFile,
+          ["use super::RealThing;", "pub fn take() -> RealThing {", "    RealThing", "}", ""].join("\n"),
+        );
+        const index = await createTestIndexFromFiles(root, [path.join(src, "lib.rs"), realFile, mainFile, sharedFile]);
+        const usage = "    RealThing";
+        const result = await testGoToDefinition(index, sharedFile, 3, usage.indexOf("RealThing") + 1, realFile, 3);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(path.basename(result.definition.file)).toBe("real.rs");
+          expect(path.basename(result.definition.file)).not.toBe("main.rs");
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("resolves receiver method calls through impl-backed locals", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-method-goto-receiver-"));
       try {

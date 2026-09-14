@@ -9,6 +9,7 @@ import {
 } from "../../src/util/resolution/rust.js";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { isSymlinkUnavailable } from "../helpers/filesystem.js";
 import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
@@ -1593,6 +1594,219 @@ describe("Rust nested grouped use and path attributes", () => {
       buildRelative: path.join("tools", "build.rs"),
       pathValue: "../src/generated.rs",
     });
+  });
+
+  it("resolves super through a custom library path and ignores a stray src/lib.rs that Cargo does not build", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-custom-lib-"));
+    const src = path.join(root, "src");
+    const customDir = path.join(root, "custom");
+    await mkdir(src, { recursive: true });
+    await mkdir(customDir, { recursive: true });
+    await writeFile(
+      path.join(root, "Cargo.toml"),
+      '[package]\nname = "path-owner-custom-lib"\nversion = "0.1.0"\n\n[lib]\npath = "custom/root.rs"\n',
+    );
+    const customRoot = path.join(customDir, "root.rs");
+    const strayLib = path.join(src, "lib.rs");
+    const shared = path.join(src, "shared.rs");
+    await writeFile(customRoot, '#[path = "../src/shared.rs"]\nmod shared;\npub struct CustomThing;\n');
+    await writeFile(strayLib, '#[path = "shared.rs"]\nmod shared;\npub struct StrayThing;\n');
+    await writeFile(shared, "use super::CustomThing;\npub fn take(_v: CustomThing) {}\n");
+    try {
+      const owner = await resolveRustImportPath(root, shared, "super");
+      expect(owner?.replace(/\\/g, "/")).toBe(customRoot.replace(/\\/g, "/"));
+      expect(owner?.replace(/\\/g, "/")).not.toBe(strayLib.replace(/\\/g, "/"));
+
+      const imports = await collectImportsForFile(shared, root);
+      const customThingImport = imports.find((entry) => entry.kind === "named" && entry.imported === "CustomThing");
+      expect(customThingImport).toBeDefined();
+      expect(typeof customThingImport?.resolved).toBe("string");
+      if (typeof customThingImport?.resolved === "string") {
+        expect(customThingImport.resolved.replace(/\\/g, "/")).toBe(customRoot.replace(/\\/g, "/"));
+        expect(customThingImport.resolved.replace(/\\/g, "/")).not.toBe(strayLib.replace(/\\/g, "/"));
+      }
+
+      const graph = await collectGraph(root, [customRoot, strayLib, shared]);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "shared.rs" &&
+            edge.raw === "super::CustomThing" &&
+            edge.to.type === "file" &&
+            path.basename(edge.to.path) === "root.rs",
+        ),
+      ).toBe(true);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "shared.rs" &&
+            edge.to.type === "file" &&
+            path.basename(edge.to.path) === "lib.rs",
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves super without treating src/main.rs as a crate root when autobins is false", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-autobins-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(
+      path.join(root, "Cargo.toml"),
+      '[package]\nname = "path-owner-autobins"\nversion = "0.1.0"\nautobins = false\n',
+    );
+    await writeFile(path.join(src, "lib.rs"), "mod real;\n");
+    const real = path.join(src, "real.rs");
+    const main = path.join(src, "main.rs");
+    const shared = path.join(src, "shared.rs");
+    await writeFile(real, '#[path = "shared.rs"]\nmod shared;\npub struct RealThing;\n');
+    await writeFile(main, '#[path = "shared.rs"]\nmod shared;\nfn main() {}\n');
+    await writeFile(shared, "use super::RealThing;\npub fn take(_v: RealThing) {}\n");
+    try {
+      const owner = await resolveRustImportPath(root, shared, "super");
+      expect(owner?.replace(/\\/g, "/")).toBe(real.replace(/\\/g, "/"));
+      expect(owner?.replace(/\\/g, "/")).not.toBe(main.replace(/\\/g, "/"));
+
+      const imports = await collectImportsForFile(shared, root);
+      const realThingImport = imports.find((entry) => entry.kind === "named" && entry.imported === "RealThing");
+      expect(realThingImport).toBeDefined();
+      expect(typeof realThingImport?.resolved).toBe("string");
+      if (typeof realThingImport?.resolved === "string") {
+        expect(realThingImport.resolved.replace(/\\/g, "/")).toBe(real.replace(/\\/g, "/"));
+      }
+
+      const graph = await collectGraph(root, [path.join(src, "lib.rs"), real, main, shared]);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "shared.rs" &&
+            edge.raw === "super::RealThing" &&
+            edge.to.type === "file" &&
+            path.basename(edge.to.path) === "real.rs",
+        ),
+      ).toBe(true);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "shared.rs" &&
+            edge.to.type === "file" &&
+            path.basename(edge.to.path) === "main.rs",
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rebuilds the crate module tree after a missing explicit library root appears", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-late-root-"));
+    const src = path.join(root, "src");
+    const customDir = path.join(root, "custom");
+    await mkdir(src, { recursive: true });
+    await mkdir(customDir, { recursive: true });
+    await writeFile(
+      path.join(root, "Cargo.toml"),
+      '[package]\nname = "path-owner-late-root"\nversion = "0.1.0"\n\n[lib]\npath = "custom/root.rs"\n',
+    );
+    const decoy = path.join(src, "aaa_decoy.rs");
+    const shared = path.join(src, "shared.rs");
+    const customRoot = path.join(customDir, "root.rs");
+    await writeFile(decoy, '#[path = "shared.rs"]\nmod shared;\npub struct DecoyThing;\n');
+    await writeFile(shared, "use super::CustomThing;\npub fn take(_v: CustomThing) {}\n");
+    try {
+      const firstOwner = await resolveRustImportPath(root, shared, "super");
+      expect(firstOwner?.replace(/\\/g, "/")).toBe(decoy.replace(/\\/g, "/"));
+
+      await writeFile(customRoot, '#[path = "../src/shared.rs"]\nmod shared;\npub struct CustomThing;\n');
+      // Wait past RUST_MODULE_TREE_REVALIDATE_INTERVAL_MS (100) so probed missing-path signatures are re-stat'd.
+      await delay(150);
+
+      const secondOwner = await resolveRustImportPath(root, shared, "super");
+      expect(secondOwner?.replace(/\\/g, "/")).toBe(customRoot.replace(/\\/g, "/"));
+      expect(secondOwner?.replace(/\\/g, "/")).not.toBe(decoy.replace(/\\/g, "/"));
+
+      const imports = await collectImportsForFile(shared, root);
+      const customThingImport = imports.find((entry) => entry.kind === "named" && entry.imported === "CustomThing");
+      expect(typeof customThingImport?.resolved).toBe("string");
+      if (typeof customThingImport?.resolved === "string") {
+        expect(customThingImport.resolved.replace(/\\/g, "/")).toBe(customRoot.replace(/\\/g, "/"));
+      }
+
+      const graph = await collectGraph(root, [customRoot, decoy, shared]);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "shared.rs" &&
+            edge.raw === "super::CustomThing" &&
+            edge.to.type === "file" &&
+            path.basename(edge.to.path) === "root.rs",
+        ),
+      ).toBe(true);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "shared.rs" &&
+            edge.to.type === "file" &&
+            path.basename(edge.to.path) === "aaa_decoy.rs",
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records a #[path] owner after the attributed target appears without using a stale existence cache", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-late-target-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-owner-late-target"\nversion = "0.1.0"\n');
+    const lib = path.join(src, "lib.rs");
+    const decoy = path.join(src, "aaa_decoy.rs");
+    const shared = path.join(src, "shared.rs");
+    await writeFile(lib, '#[path = "shared.rs"]\nmod shared;\npub struct RootThing;\n');
+    await writeFile(decoy, '#[path = "shared.rs"]\nmod shared;\npub struct DecoyThing;\n');
+    try {
+      // Prime the module tree and the process-wide fileExists cache while shared.rs is missing.
+      await resolveRustImportPath(root, decoy, "super");
+
+      await writeFile(shared, "use super::RootThing;\npub fn take(_v: RootThing) {}\n");
+      // Wait past RUST_MODULE_TREE_REVALIDATE_INTERVAL_MS (100) so the missing-target signature is re-stat'd.
+      await delay(150);
+
+      const owner = await resolveRustImportPath(root, shared, "super");
+      expect(owner?.replace(/\\/g, "/")).toBe(lib.replace(/\\/g, "/"));
+      expect(owner?.replace(/\\/g, "/")).not.toBe(decoy.replace(/\\/g, "/"));
+
+      const imports = await collectImportsForFile(shared, root);
+      const rootThingImport = imports.find((entry) => entry.kind === "named" && entry.imported === "RootThing");
+      expect(typeof rootThingImport?.resolved).toBe("string");
+      if (typeof rootThingImport?.resolved === "string") {
+        expect(rootThingImport.resolved.replace(/\\/g, "/")).toBe(lib.replace(/\\/g, "/"));
+      }
+
+      const graph = await collectGraph(root, [lib, decoy, shared]);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "shared.rs" &&
+            edge.raw === "super::RootThing" &&
+            edge.to.type === "file" &&
+            path.basename(edge.to.path) === "lib.rs",
+        ),
+      ).toBe(true);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "shared.rs" &&
+            edge.to.type === "file" &&
+            path.basename(edge.to.path) === "aaa_decoy.rs",
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 
