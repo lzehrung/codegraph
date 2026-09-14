@@ -1862,6 +1862,40 @@ describe("Go to Definition", () => {
       }
     });
 
+    it("resolves super to the crate module tree owner, not an undeclared decoy in the same directory", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-goto-"));
+      try {
+        const src = path.join(root, "src");
+        await fsp.mkdir(src, { recursive: true });
+        await fsp.writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-owner"\nversion = "0.1.0"\n');
+        const realFile = path.join(src, "real.rs").replace(/\\/g, "/");
+        const orphanFile = path.join(src, "aaa_orphan.rs").replace(/\\/g, "/");
+        const sharedFile = path.join(src, "shared.rs").replace(/\\/g, "/");
+        await fsp.writeFile(path.join(src, "lib.rs"), "mod real;\npub struct RootThing;\n");
+        await fsp.writeFile(realFile, '#[path = "shared.rs"]\nmod shared;\npub struct RealThing;\n');
+        await fsp.writeFile(orphanFile, '#[path = "shared.rs"]\nmod shared;\npub struct OrphanThing;\n');
+        await fsp.writeFile(
+          sharedFile,
+          ["use super::RealThing;", "pub fn take() -> RealThing {", "    RealThing", "}", ""].join("\n"),
+        );
+        const index = await createTestIndexFromFiles(root, [
+          path.join(src, "lib.rs"),
+          realFile,
+          orphanFile,
+          sharedFile,
+        ]);
+        const usage = "    RealThing";
+        const result = await testGoToDefinition(index, sharedFile, 3, usage.indexOf("RealThing") + 1, realFile, 3);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(path.basename(result.definition.file)).toBe("real.rs");
+          expect(path.basename(result.definition.file)).not.toBe("aaa_orphan.rs");
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("resolves receiver method calls through impl-backed locals", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-method-goto-receiver-"));
       try {

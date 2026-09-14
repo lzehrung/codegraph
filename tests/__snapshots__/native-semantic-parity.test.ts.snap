@@ -11,6 +11,42 @@ exports[`native semantic coverage > keeps native SQL ambiguous basename fallback
 }
 `;
 
+exports[`native semantic coverage > keeps native semantics stable for Rust #[path] module owner resolution from the crate tree 1`] = `
+{
+  "goto": {
+    "file": "src/real.rs",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "src/real.rs:3",
+      "src/shared.rs:1",
+      "src/shared.rs:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for Rust path-attribute crate resolution 1`] = `
+{
+  "goto": {
+    "file": "src/custom.rs",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "src/consumer.rs:1",
+      "src/consumer.rs:5",
+      "src/custom.rs:1",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
 exports[`native semantic coverage > keeps native semantics stable for normalization-sensitive TypeScript export assignment 1`] = `
 {
   "goto": {
@@ -982,20 +1018,13 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
-exports[`native semantic coverage > keeps native semantics stable for Rust path-attribute crate resolution 1`] = `
+exports[`native semantic coverage > keeps native semantics stable when a Rust #[path] target has two reachable owners 1`] = `
 {
   "goto": {
-    "file": "src/custom.rs",
-    "line": 1,
-    "status": "ok",
+    "status": "not_found",
   },
   "references": {
-    "refs": [
-      "src/consumer.rs:1",
-      "src/consumer.rs:5",
-      "src/custom.rs:1",
-    ],
-    "status": "ok",
+    "status": "not_found",
   },
 }
 `;

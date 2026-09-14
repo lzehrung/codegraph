@@ -36,6 +36,17 @@ function packageAutoFlag(parsed: TomlTable, key: string): boolean {
   return true;
 }
 
+function packageBuildScriptPath(parsed: TomlTable): string | null {
+  const pkg = isTomlTable(parsed.package) ? parsed.package : undefined;
+  const build = pkg?.build;
+  if (typeof build === "boolean") {
+    if (!build) return null;
+    return "build.rs";
+  }
+  if (typeof build === "string" && build.length) return build;
+  return "build.rs";
+}
+
 function explicitTargetPaths(parsed: TomlTable): string[] {
   const paths: string[] = [];
   const lib = isTomlTable(parsed.lib) ? parsed.lib : undefined;
@@ -112,6 +123,12 @@ export async function rustCrateRootFiles(cargoRoot: string, projectRoot: string)
     for (const relativePath of explicitTargetPaths(parsed)) {
       await addCrateRoot(files, path.resolve(root, relativePath), projectRoot);
     }
+    const buildScript = packageBuildScriptPath(parsed);
+    if (buildScript) {
+      await addCrateRoot(files, path.resolve(root, buildScript), projectRoot);
+    }
+  } else {
+    await addCrateRoot(files, path.join(root, "build.rs"), projectRoot);
   }
 
   await addCrateRoot(files, path.join(root, "src", "lib.rs"), projectRoot);

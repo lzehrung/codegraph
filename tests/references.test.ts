@@ -2081,6 +2081,41 @@ describe("Find References", () => {
       }
     });
 
+    it("finds references to the reachable #[path] module owner and never the undeclared decoy", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-refs-"));
+      try {
+        const src = path.join(root, "src");
+        await fsp.mkdir(src, { recursive: true });
+        await fsp.writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-owner"\nversion = "0.1.0"\n');
+        const realFile = path.join(src, "real.rs").replace(/\\/g, "/");
+        const orphanFile = path.join(src, "aaa_orphan.rs").replace(/\\/g, "/");
+        const sharedFile = path.join(src, "shared.rs").replace(/\\/g, "/");
+        await fsp.writeFile(path.join(src, "lib.rs"), "mod real;\npub struct RootThing;\n");
+        await fsp.writeFile(realFile, '#[path = "shared.rs"]\nmod shared;\npub struct RealThing;\n');
+        await fsp.writeFile(orphanFile, '#[path = "shared.rs"]\nmod shared;\npub struct OrphanThing;\n');
+        await fsp.writeFile(
+          sharedFile,
+          ["use super::RealThing;", "pub fn take() -> RealThing {", "    RealThing", "}", ""].join("\n"),
+        );
+        const index = await createTestIndexFromFiles(root, [
+          path.join(src, "lib.rs"),
+          realFile,
+          orphanFile,
+          sharedFile,
+        ]);
+        const declLine = "pub struct RealThing;";
+        const result = await testFindReferences(index, realFile, 3, declLine.indexOf("RealThing") + 1, 3);
+        expectReferenceAt(result, realFile, 3);
+        expectReferenceAt(result, sharedFile, 1);
+        expectReferenceAt(result, sharedFile, 3);
+        if (result.status === "ok") {
+          expect(result.references.some((reference) => path.basename(reference.file) === "aaa_orphan.rs")).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("finds macro_rules definitions and invocations", async () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "rust");
       const macroFile = path.join(samplePath, ".regressions", "macros.rs").replace(/\\/g, "/");

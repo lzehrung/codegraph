@@ -386,6 +386,91 @@ async function createRustPathAttributeCase(): Promise<SemanticExpectation> {
   };
 }
 
+async function createRustPathOwnerCase(): Promise<SemanticExpectation> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-rust-path-owner-"));
+  tempDirs.push(root);
+  const src = path.join(root, "src");
+  await fsp.mkdir(src, { recursive: true });
+  await fsp.writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-owner"\nversion = "0.1.0"\n');
+  const libFile = path.join(src, "lib.rs");
+  const realFile = path.join(src, "real.rs");
+  const orphanFile = path.join(src, "aaa_orphan.rs");
+  const sharedFile = path.join(src, "shared.rs");
+  await fsp.writeFile(libFile, "mod real;\npub struct RootThing;\n");
+  await fsp.writeFile(realFile, '#[path = "shared.rs"]\nmod shared;\npub struct RealThing;\n');
+  await fsp.writeFile(orphanFile, '#[path = "shared.rs"]\nmod shared;\npub struct OrphanThing;\n');
+  await fsp.writeFile(
+    sharedFile,
+    ["use super::RealThing;", "pub fn take() -> RealThing {", "    RealThing", "}", ""].join("\n"),
+  );
+
+  return {
+    root,
+    files: [libFile, realFile, orphanFile, sharedFile],
+    symbols: [
+      {
+        file: realFile,
+        names: ["RealThing"],
+      },
+    ],
+    goto: {
+      file: sharedFile,
+      line: 3,
+      column: "    RealThing".indexOf("RealThing") + 1,
+      expectedStatus: "ok",
+    },
+    references: {
+      file: realFile,
+      line: 3,
+      column: "pub struct RealThing;".indexOf("RealThing") + 1,
+      expectedStatus: "ok",
+    },
+  };
+}
+
+async function createRustPathOwnerAmbiguousCase(): Promise<SemanticExpectation> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-rust-path-owner-ambiguous-"));
+  tempDirs.push(root);
+  const src = path.join(root, "src");
+  await fsp.mkdir(src, { recursive: true });
+  await fsp.writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-owner-ambiguous"\nversion = "0.1.0"\n');
+  const libFile = path.join(src, "lib.rs");
+  const oneFile = path.join(src, "one.rs");
+  const twoFile = path.join(src, "two.rs");
+  const sharedFile = path.join(src, "shared.rs");
+  await fsp.writeFile(libFile, "mod one;\nmod two;\n");
+  await fsp.writeFile(oneFile, '#[path = "shared.rs"]\nmod shared;\npub struct OneThing;\n');
+  await fsp.writeFile(twoFile, '#[path = "shared.rs"]\nmod shared;\npub struct TwoThing;\n');
+  await fsp.writeFile(
+    sharedFile,
+    ["use super::OneThing;", "pub fn take() -> OneThing {", "    OneThing", "}", ""].join("\n"),
+  );
+  const usageColumn = "    OneThing".indexOf("OneThing") + 1;
+
+  return {
+    root,
+    files: [libFile, oneFile, twoFile, sharedFile],
+    symbols: [
+      {
+        file: oneFile,
+        names: ["OneThing"],
+      },
+    ],
+    goto: {
+      file: sharedFile,
+      line: 3,
+      column: usageColumn,
+      expectedStatus: "not_found",
+    },
+    references: {
+      file: sharedFile,
+      line: 3,
+      column: usageColumn,
+      expectedStatus: "not_found",
+    },
+  };
+}
+
 async function createTypeScriptNormalizationCase(): Promise<SemanticExpectation> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-semantic-"));
   tempDirs.push(root);
@@ -945,6 +1030,16 @@ nativeDescribe("native semantic coverage", () => {
 
   it("keeps native semantics stable for Rust path-attribute crate resolution", async () => {
     const testCase = await createRustPathAttributeCase();
+    await expectNativeSemantics(testCase);
+  });
+
+  it("keeps native semantics stable for Rust #[path] module owner resolution from the crate tree", async () => {
+    const testCase = await createRustPathOwnerCase();
+    await expectNativeSemantics(testCase);
+  });
+
+  it("keeps native semantics stable when a Rust #[path] target has two reachable owners", async () => {
+    const testCase = await createRustPathOwnerAmbiguousCase();
     await expectNativeSemantics(testCase);
   });
 

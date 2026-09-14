@@ -1447,6 +1447,153 @@ describe("Rust nested grouped use and path attributes", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves super from both cfg-gated #[path] modules to the declaring crate root, not an undeclared decoy", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-platform-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-owner-platform"\nversion = "0.1.0"\n');
+    await writeFile(
+      path.join(src, "lib.rs"),
+      [
+        "#[cfg(unix)]",
+        '#[path = "unix.rs"]',
+        "mod platform;",
+        "#[cfg(windows)]",
+        '#[path = "windows.rs"]',
+        "mod platform;",
+        "pub struct RootThing;",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(path.join(src, "unix.rs"), "use super::RootThing;\n");
+    await writeFile(path.join(src, "windows.rs"), "use super::RootThing;\n");
+    await writeFile(path.join(src, "aaa_decoy.rs"), '#[path = "windows.rs"]\nmod platform;\npub struct DecoyThing;\n');
+    try {
+      const lib = path.join(src, "lib.rs");
+      const unix = path.join(src, "unix.rs");
+      const windows = path.join(src, "windows.rs");
+      const decoy = path.join(src, "aaa_decoy.rs");
+
+      const unixOwner = await resolveRustImportPath(root, unix, "super");
+      expect(unixOwner?.replace(/\\/g, "/")).toBe(lib.replace(/\\/g, "/"));
+      expect(unixOwner?.replace(/\\/g, "/")).not.toBe(decoy.replace(/\\/g, "/"));
+
+      const windowsOwner = await resolveRustImportPath(root, windows, "super");
+      expect(windowsOwner?.replace(/\\/g, "/")).toBe(lib.replace(/\\/g, "/"));
+      expect(windowsOwner?.replace(/\\/g, "/")).not.toBe(decoy.replace(/\\/g, "/"));
+
+      for (const file of [unix, windows]) {
+        const imports = await collectImportsForFile(file, root);
+        const rootThingImport = imports.find((entry) => entry.kind === "named" && entry.imported === "RootThing");
+        expect(rootThingImport).toBeDefined();
+        expect(typeof rootThingImport?.resolved).toBe("string");
+        if (typeof rootThingImport?.resolved === "string") {
+          expect(rootThingImport.resolved.replace(/\\/g, "/")).toBe(lib.replace(/\\/g, "/"));
+          expect(rootThingImport.resolved.replace(/\\/g, "/")).not.toBe(decoy.replace(/\\/g, "/"));
+        }
+      }
+
+      const graph = await collectGraph(root, [lib, unix, windows, decoy]);
+      for (const fromFile of ["unix.rs", "windows.rs"]) {
+        expect(
+          graph.edges.some(
+            (edge) =>
+              path.basename(edge.from) === fromFile &&
+              edge.raw === "super::RootThing" &&
+              edge.to.type === "file" &&
+              path.basename(edge.to.path) === "lib.rs",
+          ),
+        ).toBe(true);
+        expect(
+          graph.edges.some(
+            (edge) =>
+              path.basename(edge.from) === fromFile &&
+              edge.to.type === "file" &&
+              path.basename(edge.to.path) === "aaa_decoy.rs",
+          ),
+        ).toBe(false);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves super through a module only a build-script target declares", async () => {
+    const runBuildScriptCase = async (options: {
+      prefix: string;
+      cargoToml: string;
+      buildRelative: string;
+      pathValue: string;
+    }): Promise<void> => {
+      const root = await mkdtemp(path.join(os.tmpdir(), options.prefix));
+      const src = path.join(root, "src");
+      const buildFile = path.join(root, options.buildRelative);
+      await mkdir(src, { recursive: true });
+      await mkdir(path.dirname(buildFile), { recursive: true });
+      await writeFile(path.join(root, "Cargo.toml"), options.cargoToml);
+      await writeFile(
+        buildFile,
+        `#[path = "${options.pathValue}"]\nmod generated;\npub struct BuildThing;\nfn main() {}\n`,
+      );
+      await writeFile(
+        path.join(src, "aaa_decoy.rs"),
+        '#[path = "generated.rs"]\nmod generated;\npub struct DecoyThing;\n',
+      );
+      await writeFile(path.join(src, "generated.rs"), "use super::BuildThing;\npub fn take(_v: BuildThing) {}\n");
+      try {
+        const generated = path.join(src, "generated.rs");
+        const decoy = path.join(src, "aaa_decoy.rs");
+
+        const owner = await resolveRustImportPath(root, generated, "super");
+        expect(owner?.replace(/\\/g, "/")).toBe(buildFile.replace(/\\/g, "/"));
+        expect(owner?.replace(/\\/g, "/")).not.toBe(decoy.replace(/\\/g, "/"));
+
+        const imports = await collectImportsForFile(generated, root);
+        const buildThingImport = imports.find((entry) => entry.kind === "named" && entry.imported === "BuildThing");
+        expect(buildThingImport).toBeDefined();
+        expect(typeof buildThingImport?.resolved).toBe("string");
+        if (typeof buildThingImport?.resolved === "string") {
+          expect(buildThingImport.resolved.replace(/\\/g, "/")).toBe(buildFile.replace(/\\/g, "/"));
+          expect(buildThingImport.resolved.replace(/\\/g, "/")).not.toBe(decoy.replace(/\\/g, "/"));
+        }
+
+        const graph = await collectGraph(root, [buildFile, decoy, generated]);
+        expect(
+          graph.edges.some(
+            (edge) =>
+              path.basename(edge.from) === "generated.rs" &&
+              edge.raw === "super::BuildThing" &&
+              edge.to.type === "file" &&
+              path.basename(edge.to.path) === path.basename(buildFile),
+          ),
+        ).toBe(true);
+        expect(
+          graph.edges.some(
+            (edge) =>
+              path.basename(edge.from) === "generated.rs" &&
+              edge.to.type === "file" &&
+              path.basename(edge.to.path) === "aaa_decoy.rs",
+          ),
+        ).toBe(false);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    };
+
+    await runBuildScriptCase({
+      prefix: "cg-rust-path-owner-build-",
+      cargoToml: '[package]\nname = "path-owner-build"\nversion = "0.1.0"\n',
+      buildRelative: "build.rs",
+      pathValue: "src/generated.rs",
+    });
+    await runBuildScriptCase({
+      prefix: "cg-rust-path-owner-build-custom-",
+      cargoToml: '[package]\nname = "path-owner-build-custom"\nversion = "0.1.0"\nbuild = "tools/build.rs"\n',
+      buildRelative: path.join("tools", "build.rs"),
+      pathValue: "../src/generated.rs",
+    });
+  });
 });
 
 describe("Rust function-local items and re-export aliases", () => {

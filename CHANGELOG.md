@@ -11,7 +11,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Fixed
 
-- A `#[path]` module now resolves `super` against the module that actually declares it in the crate module tree, so an undeclared or generated `.rs` file can no longer own it and the result no longer depends on directory-entry order.
+- A `#[path]` module now resolves `super` against the module that actually declares it in the crate module tree, so an undeclared or generated `.rs` file can no longer own it and the result no longer depends on directory-entry order. The tree covers every Cargo target, including binaries, tests, examples, benches, and the build script, and keeps `cfg`-gated declarations of the same module name distinct.
 - When two reachable modules declare the same `#[path]` target, `super` stays unresolved instead of picking one.
 
 ## [2.3.26] - 2026-09-13

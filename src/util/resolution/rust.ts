@@ -92,10 +92,15 @@ const MISSING_PATH_SIGNATURE = "missing";
  */
 const RUST_MODULE_TREE_REVALIDATE_INTERVAL_MS = 100;
 
+type RustDeclaredModule = {
+  name: string;
+  pathValue: string | undefined;
+};
+
 type RustModuleScope = {
   pathAttributes: Map<string, string>;
   inlineModules: Map<string, RustModuleScope>;
-  declaredModules: Map<string, string | undefined>;
+  declaredModules: RustDeclaredModule[];
   inlineLocation?: { start: number; end: number; directory: string };
 };
 
@@ -131,7 +136,7 @@ type RustPathAttributeCacheEntry = {
 const EMPTY_RUST_MODULE_SCOPE: RustModuleScope = {
   pathAttributes: new Map(),
   inlineModules: new Map(),
-  declaredModules: new Map(),
+  declaredModules: [],
 };
 
 const rustPathAttributeCache = new Map<string, RustPathAttributeCacheEntry>();
@@ -140,7 +145,7 @@ const rustModuleTreeCache = new Map<string, RustModuleTree>();
 const rustModuleTreeInflight = new Map<string, Promise<RustModuleTree>>();
 
 function createRustModuleScope(): RustModuleScope {
-  return { pathAttributes: new Map(), inlineModules: new Map(), declaredModules: new Map() };
+  return { pathAttributes: new Map(), inlineModules: new Map(), declaredModules: [] };
 }
 
 function pathAttributeFromAttributeBlock(attributes: string): string | undefined {
@@ -331,8 +336,8 @@ function scanRustModuleScope(source: string, start: number, end: number, scope: 
         if (!testOnly && pathValue && !scope.pathAttributes.has(moduleName)) {
           scope.pathAttributes.set(moduleName, pathValue);
         }
-        if (!testOnly && !scope.declaredModules.has(moduleName)) {
-          scope.declaredModules.set(moduleName, pathValue);
+        if (!testOnly) {
+          scope.declaredModules.push({ name: moduleName, pathValue });
         }
         index = cursor + 1;
         continue;
@@ -546,7 +551,7 @@ async function buildRustModuleTree(cargoRoot: string, projectRoot: string): Prom
       truncated = true;
       return;
     }
-    for (const [name, pathValue] of scope.declaredModules) {
+    for (const { name, pathValue } of scope.declaredModules) {
       if (truncated) return;
       let target: string | null = null;
       if (pathValue !== undefined) {
