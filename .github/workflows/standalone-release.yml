@@ -107,7 +107,7 @@ jobs:
       - name: Upload immutable release candidates
         uses: ./.github-helpers/.github/actions/upload-artifact-retry
         with:
-          name: release-candidates
+          name: standalone-release-candidates
           path: temp/release-candidates
           if-no-files-found: error
           retention-days: 14
@@ -175,7 +175,7 @@ jobs:
       - name: Download immutable release candidates
         uses: ./.github-helpers/.github/actions/download-artifact-retry
         with:
-          name: release-candidates
+          name: standalone-release-candidates
           path: temp/release-candidates
 
       - name: Resolve target package inputs
@@ -566,7 +566,7 @@ jobs:
       - name: Download immutable release candidates
         uses: ./.github-helpers/.github/actions/download-artifact-retry
         with:
-          name: release-candidates
+          name: standalone-release-candidates
           path: temp/release-candidates
 
       - name: Download successfully smoked standalone archives

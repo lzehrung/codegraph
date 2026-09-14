@@ -18,7 +18,7 @@ runs:
   steps:
     - name: Download named artifact (attempt 1)
       id: named1
-      if: ${{ inputs.name != '' }}
+      if: ${{ !cancelled() && inputs.name != '' }}
       continue-on-error: true
       uses: actions/download-artifact@v8
       with:
@@ -26,7 +26,7 @@ runs:
         path: ${{ inputs.path }}
     - name: Download matching artifacts (attempt 1)
       id: pattern1
-      if: ${{ inputs.name == '' }}
+      if: ${{ !cancelled() && inputs.name == '' }}
       continue-on-error: true
       uses: actions/download-artifact@v8
       with:
@@ -34,12 +34,12 @@ runs:
         path: ${{ inputs.path }}
         merge-multiple: ${{ inputs.merge-multiple }}
     - name: Wait before artifact download retry
-      if: ${{ steps.named1.outcome == 'failure' || steps.pattern1.outcome == 'failure' }}
+      if: ${{ !cancelled() && (steps.named1.outcome == 'failure' || steps.pattern1.outcome == 'failure') }}
       shell: bash
       run: sleep 20
     - name: Download named artifact (attempt 2)
       id: named2
-      if: ${{ steps.named1.outcome == 'failure' }}
+      if: ${{ !cancelled() && steps.named1.outcome == 'failure' }}
       continue-on-error: true
       uses: actions/download-artifact@v8
       with:
@@ -47,7 +47,7 @@ runs:
         path: ${{ inputs.path }}
     - name: Download matching artifacts (attempt 2)
       id: pattern2
-      if: ${{ steps.pattern1.outcome == 'failure' }}
+      if: ${{ !cancelled() && steps.pattern1.outcome == 'failure' }}
       continue-on-error: true
       uses: actions/download-artifact@v8
       with:
@@ -55,17 +55,17 @@ runs:
         path: ${{ inputs.path }}
         merge-multiple: ${{ inputs.merge-multiple }}
     - name: Wait before final artifact download retry
-      if: ${{ steps.named2.outcome == 'failure' || steps.pattern2.outcome == 'failure' }}
+      if: ${{ !cancelled() && (steps.named2.outcome == 'failure' || steps.pattern2.outcome == 'failure') }}
       shell: bash
       run: sleep 20
     - name: Download named artifact (attempt 3)
-      if: ${{ steps.named2.outcome == 'failure' }}
+      if: ${{ !cancelled() && steps.named2.outcome == 'failure' }}
       uses: actions/download-artifact@v8
       with:
         name: ${{ inputs.name }}
         path: ${{ inputs.path }}
     - name: Download matching artifacts (attempt 3)
-      if: ${{ steps.pattern2.outcome == 'failure' }}
+      if: ${{ !cancelled() && steps.pattern2.outcome == 'failure' }}
       uses: actions/download-artifact@v8
       with:
         pattern: ${{ inputs.pattern }}
