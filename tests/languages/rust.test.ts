@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import fsp, { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { collectImportsForFile } from "../../src/indexer/imports.js";
 import { parseRustImportStatements } from "../../src/languages/import-statement-parsers.js";
@@ -10,7 +10,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { isSymlinkUnavailable } from "../helpers/filesystem.js";
 import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
 import { chunkFile } from "../../src/chunking/chunk-file.js";
@@ -34,6 +34,21 @@ function canCreateRustFileSymlink(): boolean {
     throw error;
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+async function pathCaseFoldsOnFilesystem(filePath: string): Promise<boolean> {
+  const base = path.basename(filePath);
+  const flipped = [...base]
+    .map((character) => (character === character.toLowerCase() ? character.toUpperCase() : character.toLowerCase()))
+    .join("");
+  if (flipped === base) return false;
+  try {
+    const original = await fsp.stat(filePath);
+    const other = await fsp.stat(path.join(path.dirname(filePath), flipped));
+    return original.dev === other.dev && original.ino === other.ino;
+  } catch {
+    return false;
   }
 }
 
@@ -2106,6 +2121,95 @@ describe("Rust nested grouped use and path attributes", () => {
       }
     },
   );
+
+  it("resolves super when a reachable #[path] uses a differently cased spelling of the target", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-case-fold-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-owner-case-fold"\nversion = "0.1.0"\n');
+    const lib = path.join(src, "lib.rs");
+    const decoy = path.join(src, "aaa_decoy.rs");
+    const shared = path.join(src, "shared.rs");
+    await writeFile(lib, '#[path = "SHARED.rs"]\nmod shared;\npub struct CaseThing;\n');
+    await writeFile(decoy, '#[path = "shared.rs"]\nmod shared;\npub struct DecoyThing;\n');
+    await writeFile(shared, "use super::CaseThing;\npub fn take(_v: CaseThing) {}\n");
+    try {
+      if (!(await pathCaseFoldsOnFilesystem(shared))) return;
+      await expectReachableRustPathOwner({
+        root,
+        fromFile: shared,
+        ownerFile: lib,
+        imported: "CaseThing",
+        files: [lib, decoy, shared],
+        excludedBasenames: ["aaa_decoy.rs"],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("treats differently cased #[path] spellings of the same file as one target when detecting ambiguity", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-case-ambiguous-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(
+      path.join(root, "Cargo.toml"),
+      '[package]\nname = "path-owner-case-ambiguous"\nversion = "0.1.0"\n',
+    );
+    const lib = path.join(src, "lib.rs");
+    const one = path.join(src, "one.rs");
+    const two = path.join(src, "two.rs");
+    const shared = path.join(src, "shared.rs");
+    await writeFile(lib, "mod one;\nmod two;\n");
+    await writeFile(one, '#[path = "shared.rs"]\nmod shared;\npub struct OneThing;\n');
+    await writeFile(two, '#[path = "SHARED.rs"]\nmod shared;\npub struct TwoThing;\n');
+    await writeFile(shared, "use super::OneThing;\npub fn take(_v: OneThing) {}\n");
+    try {
+      if (!(await pathCaseFoldsOnFilesystem(shared))) return;
+      const owner = await resolveRustImportPath(root, shared, "super");
+      expect(owner).toBeNull();
+      const imports = await collectImportsForFile(shared, root);
+      const oneThingImport = imports.find((entry) => entry.kind === "named" && entry.imported === "OneThing");
+      expect(oneThingImport).toBeDefined();
+      expect(oneThingImport?.resolved).toEqual({ external: "super" });
+      const graph = await collectGraph(root, [lib, one, two, shared]);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "shared.rs" && edge.raw === "super::OneThing" && edge.to.type === "file",
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("serializes crate module-tree freshness checks so concurrent lookups share one stat sweep", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-freshness-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-owner-freshness"\nversion = "0.1.0"\n');
+    const lib = path.join(src, "lib.rs");
+    const shared = path.join(src, "shared.rs");
+    await writeFile(lib, '#[path = "shared.rs"]\nmod shared;\npub struct FreshThing;\n');
+    await writeFile(shared, "use super::FreshThing;\npub fn take(_v: FreshThing) {}\n");
+    const spy = vi.spyOn(fsp, "stat");
+    try {
+      const owner = await resolveRustImportPath(root, shared, "super");
+      expect(owner?.replace(/\\/g, "/")).toBe(lib.replace(/\\/g, "/"));
+      await delay(150);
+      spy.mockClear();
+      await Promise.all(Array.from({ length: 8 }, () => resolveRustImportPath(root, shared, "super")));
+      const examplesDir = path.resolve(root, "examples");
+      const examplesStats = spy.mock.calls.filter(
+        (call) => typeof call[0] === "string" && fileIdentityKey(call[0]) === fileIdentityKey(examplesDir),
+      ).length;
+      expect(examplesStats).toBe(1);
+    } finally {
+      spy.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Rust function-local items and re-export aliases", () => {

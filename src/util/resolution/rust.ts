@@ -11,13 +11,17 @@ import {
 } from "../../languages/import-statement-parsers.js";
 import { XID_IDENTIFIER_SOURCE } from "../identifiers.js";
 import { lruMapGet, lruMapSet } from "../lru-map.js";
-import { isFilePathWithinRoot } from "../paths.js";
+import { fileIdentityKey, isFilePathWithinRoot } from "../paths.js";
 import { fileExists } from "../workspace.js";
 import { rustCrateRootFiles } from "./cargo-targets.js";
 
 function isWithinOrEqual(candidate: string, root: string): boolean {
   const relative = path.relative(root, candidate);
   return !relative || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function rustPathIdentity(filePath: string): string {
+  return fileIdentityKey(path.resolve(filePath));
 }
 
 async function findNearestCargoRoot(fromFile: string, projectRoot: string): Promise<string | null> {
@@ -503,26 +507,26 @@ function addAttributedOwner(
   target: string,
   owner: AttributedModuleParent,
 ): void {
-  const resolvedTarget = path.resolve(target);
-  let set = ownerSets.get(resolvedTarget);
+  const targetKey = rustPathIdentity(target);
+  let set = ownerSets.get(targetKey);
   if (!set) {
     set = new Map();
-    ownerSets.set(resolvedTarget, set);
+    ownerSets.set(targetKey, set);
   }
   const parentFile = path.resolve(owner.parentFile);
   const parentModuleDir = path.resolve(owner.parentModuleDir);
-  set.set(`${parentFile}\0${parentModuleDir}`, { parentFile, parentModuleDir });
+  set.set(`${rustPathIdentity(parentFile)}\0${rustPathIdentity(parentModuleDir)}`, {
+    parentFile,
+    parentModuleDir,
+  });
 }
 
-async function rustModuleTreeIsFresh(tree: RustModuleTree): Promise<boolean> {
-  const now = Date.now();
-  if (now - tree.validatedAt < RUST_MODULE_TREE_REVALIDATE_INTERVAL_MS) return true;
+async function rustModuleTreeSignaturesMatch(tree: RustModuleTree): Promise<boolean> {
   const entries = [...tree.signatures];
   const actual = await Promise.all(entries.map(([filePath]) => currentPathSignature(filePath)));
   for (let i = 0; i < entries.length; i += 1) {
     if (actual[i] !== entries[i]?.[1]) return false;
   }
-  tree.validatedAt = Date.now();
   return true;
 }
 
@@ -538,7 +542,7 @@ async function buildRustModuleTree(cargoRoot: string, projectRoot: string): Prom
   }
 
   const crateRoots = await rustCrateRootFiles(cargoRoot, projectRoot);
-  const crateRootSet = new Set(crateRoots.roots.map((file) => path.resolve(file)));
+  const crateRootSet = new Set(crateRoots.roots.map((file) => rustPathIdentity(file)));
   for (const candidate of crateRoots.probed) {
     await recordPathStat(candidate, signatures);
   }
@@ -550,16 +554,17 @@ async function buildRustModuleTree(cargoRoot: string, projectRoot: string): Prom
       return;
     }
     const resolved = path.resolve(file);
-    if (reachable.has(resolved)) return;
+    const identity = rustPathIdentity(resolved);
+    if (reachable.has(identity)) return;
     const stat = await recordPathStat(resolved, signatures);
     if (!(await isExistingAttributedPathInsideProject(projectRoot, resolved, stat))) return;
     if (reachable.size >= MAX_RUST_MODULE_TREE_FILES) {
       truncated = true;
       return;
     }
-    reachable.add(resolved);
+    reachable.add(identity);
     const scope = await loadRustPathAttributeScope(resolved);
-    const moduleDir = crateRootSet.has(resolved) ? path.dirname(resolved) : rustChildModuleDir(resolved);
+    const moduleDir = crateRootSet.has(identity) ? path.dirname(resolved) : rustChildModuleDir(resolved);
     await walkScope(scope, resolved, moduleDir, path.dirname(resolved), depth);
   };
 
@@ -609,15 +614,29 @@ async function buildRustModuleTree(cargoRoot: string, projectRoot: string): Prom
 }
 
 async function getRustModuleTree(cargoRoot: string, projectRoot: string): Promise<RustModuleTree> {
-  const key = `${path.resolve(cargoRoot)}\0${path.resolve(projectRoot)}`;
+  const resolvedCargoRoot = path.resolve(cargoRoot);
+  const resolvedProjectRoot = path.resolve(projectRoot);
+  const key = `${rustPathIdentity(resolvedCargoRoot)}\0${rustPathIdentity(resolvedProjectRoot)}`;
   const cached = lruMapGet(rustModuleTreeCache, key);
-  if (cached && (await rustModuleTreeIsFresh(cached))) return cached;
+  if (cached && Date.now() - cached.validatedAt < RUST_MODULE_TREE_REVALIDATE_INTERVAL_MS) {
+    return cached;
+  }
   const inflight = rustModuleTreeInflight.get(key);
   if (inflight) return await inflight;
 
   const pending = (async (): Promise<RustModuleTree> => {
     try {
-      const tree = await buildRustModuleTree(path.resolve(cargoRoot), path.resolve(projectRoot));
+      const existing = lruMapGet(rustModuleTreeCache, key);
+      if (existing) {
+        if (Date.now() - existing.validatedAt < RUST_MODULE_TREE_REVALIDATE_INTERVAL_MS) {
+          return existing;
+        }
+        if (await rustModuleTreeSignaturesMatch(existing)) {
+          existing.validatedAt = Date.now();
+          return existing;
+        }
+      }
+      const tree = await buildRustModuleTree(resolvedCargoRoot, resolvedProjectRoot);
       lruMapSet(rustModuleTreeCache, key, tree, MAX_RUST_MODULE_TREE_CACHE_ENTRIES);
       return tree;
     } finally {
@@ -712,13 +731,14 @@ async function findPathAttributeParent(
   if (cargoRoot) {
     const tree = await getRustModuleTree(cargoRoot, projectRoot);
     if (!tree.truncated) {
-      const owners = tree.owners.get(path.resolve(fromFile)) ?? [];
+      const fromKey = rustPathIdentity(fromFile);
+      const owners = tree.owners.get(fromKey) ?? [];
       if (owners.length === 1) {
         const owner = owners[0];
         if (owner) return { status: "resolved", parent: owner };
       }
       if (owners.length > 1) return { status: "ambiguous" };
-      if (tree.reachable.has(path.resolve(fromFile))) return { status: "unresolved" };
+      if (tree.reachable.has(fromKey)) return { status: "unresolved" };
     }
   }
   const candidates = await rustDeclaringFileCandidates(fromFile, sourceRoot);

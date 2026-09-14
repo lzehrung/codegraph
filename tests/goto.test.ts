@@ -2056,6 +2056,42 @@ describe("Go to Definition", () => {
       }
     });
 
+    it("resolves super when a reachable #[path] uses a differently cased spelling of the target", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-case-fold-goto-"));
+      try {
+        const src = path.join(root, "src");
+        await fsp.mkdir(src, { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "Cargo.toml"),
+          '[package]\nname = "path-owner-case-fold"\nversion = "0.1.0"\n',
+        );
+        const libFile = path.join(src, "lib.rs").replace(/\\/g, "/");
+        const decoyFile = path.join(src, "aaa_decoy.rs").replace(/\\/g, "/");
+        const sharedFile = path.join(src, "shared.rs").replace(/\\/g, "/");
+        await fsp.writeFile(libFile, '#[path = "SHARED.rs"]\nmod shared;\npub struct CaseThing;\n');
+        await fsp.writeFile(decoyFile, '#[path = "shared.rs"]\nmod shared;\npub struct DecoyThing;\n');
+        await fsp.writeFile(
+          sharedFile,
+          ["use super::CaseThing;", "pub fn take() -> CaseThing {", "    CaseThing", "}", ""].join("\n"),
+        );
+        try {
+          await fsp.stat(path.join(src, "SHARED.rs"));
+        } catch {
+          return;
+        }
+        const index = await createTestIndexFromFiles(root, [libFile, decoyFile, sharedFile]);
+        const usage = "    CaseThing";
+        const result = await testGoToDefinition(index, sharedFile, 3, usage.indexOf("CaseThing") + 1, libFile, 3);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(path.basename(result.definition.file)).toBe("lib.rs");
+          expect(path.basename(result.definition.file)).not.toBe("aaa_decoy.rs");
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("resolves super through a conventional child of a custom crate-root filename", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-custom-child-goto-"));
       try {
