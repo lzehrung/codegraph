@@ -52,15 +52,17 @@ Replace `patch` with `minor` or `major` when needed. Without `--output`, this op
 The workflow uses this immutable byte flow:
 
 1. Plan the source revision and root/native versions, then prepare the release changelog artifact.
-2. Build all native target directories.
+2. Build all native target directories. Native matrix jobs use `fail-fast: false` and retry artifact upload/download after transient GitHub artifact-service errors such as DNS `ENOTFOUND`.
 3. Build the root package, then run `npm pack` exactly once for each target package, the native meta package, and the root package.
 4. Store those tarballs under `temp/release-candidates/packages/`.
 5. Record every relative path, package identity, target, SHA-256 digest, and size in `release-candidate-manifest.json`; write the matching `SHA256SUMS`.
-6. Run production security, fixture hermeticity, package smoke, reduced-mode, and checked-in release semantic gates.
+6. Run production security and fixture hermeticity from planned source in parallel with native compilation. Package smoke, reduced-mode, and checked-in release semantic gates still consume the packed candidates.
 7. Merge the gate outputs into `CertificationReportV1`.
 8. Revalidate every candidate checksum and required report row before the first registry write.
 9. Publish the tarball paths from the manifest, without rebuilding or repacking.
 10. Commit the versions and prepared changelog, tag the release, and attach the same tarballs, manifest, checksums, package summary, and certification report to the GitHub Release.
+
+A single native-target flake does not cancel the other target builds. After a failed run, use **Re-run failed jobs** on the same Actions run so successful native artifacts are reused; do not start a new release unless the planned source revision moved.
 
 ### Standalone release assets
 

@@ -61,7 +61,7 @@ jobs:
           --output temp/release-changelog/CHANGELOG.md
 
       - name: Upload prepared release changelog
-        uses: actions/upload-artifact@v7
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: release-changelog
           path: temp/release-changelog/CHANGELOG.md
@@ -73,6 +73,7 @@ jobs:
     needs:
       - plan-release
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -179,7 +180,7 @@ jobs:
           tar -czf "native-artifacts/${{ matrix.suffix }}.tgz" -C packages/codegraph-native/npm "${{ matrix.suffix }}"
 
       - name: Upload staged native directory
-        uses: actions/upload-artifact@v7
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: native-${{ matrix.suffix }}
           path: native-artifacts/${{ matrix.suffix }}.tgz
@@ -218,7 +219,7 @@ jobs:
         run: npm run build
 
       - name: Download staged native directories
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-retry
         with:
           pattern: native-*
           path: native-artifacts
@@ -241,7 +242,7 @@ jobs:
           --output temp/release-candidates
 
       - name: Upload immutable release candidates
-        uses: actions/upload-artifact@v7
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: release-candidates
           path: temp/release-candidates
@@ -252,7 +253,6 @@ jobs:
     name: Certify production dependency security
     needs:
       - plan-release
-      - assemble-release-candidates
     runs-on: ubuntu-latest
     steps:
       - name: Checkout planned source
@@ -277,7 +277,7 @@ jobs:
 
       - name: Upload security report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: security-production
           path: temp/certification/security.json
@@ -287,7 +287,6 @@ jobs:
     name: Certify fixture hermeticity
     needs:
       - plan-release
-      - assemble-release-candidates
     runs-on: ubuntu-latest
     steps:
       - name: Checkout planned source
@@ -308,7 +307,7 @@ jobs:
 
       - name: Upload hermeticity report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: fixture-hermeticity
           path: temp/certification/hermeticity.json
@@ -370,7 +369,7 @@ jobs:
           cache: npm
 
       - name: Download release candidates
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-retry
         with:
           name: release-candidates
           path: temp/release-candidates
@@ -399,7 +398,7 @@ jobs:
 
       - name: Upload package smoke report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: package-smoke-${{ matrix.target }}
           path: temp/certification/package-smoke-${{ matrix.target }}.json
@@ -457,7 +456,7 @@ jobs:
           cache: npm
 
       - name: Download immutable release candidates
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-retry
         with:
           name: release-candidates
           path: temp/release-candidates
@@ -487,7 +486,7 @@ jobs:
 
       - name: Upload package FunnelResultV1
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: package-funnel-${{ matrix.native-target }}
           path: temp/certification/funnel-package-${{ matrix.native-target }}.json
@@ -514,7 +513,7 @@ jobs:
           cache: npm
 
       - name: Download release candidates
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-retry
         with:
           name: release-candidates
           path: temp/release-candidates
@@ -529,7 +528,7 @@ jobs:
 
       - name: Upload reduced package smoke report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: package-smoke-reduced
           path: temp/certification/package-smoke-reduced.json
@@ -603,7 +602,7 @@ jobs:
 
       - name: Upload tests report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: tests-release
           path: temp/certification/tests-results.json
@@ -633,32 +632,32 @@ jobs:
           node-version: 24.10.0
 
       - name: Download release candidates
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-retry
         with:
           name: release-candidates
           path: temp/release-candidates
 
       - name: Download package smoke reports
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-retry
         with:
           pattern: package-smoke-*
           path: temp/package-smoke-reports
           merge-multiple: true
 
       - name: Download security report
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-retry
         with:
           name: security-production
           path: temp/sections/security
 
       - name: Download hermeticity report
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-retry
         with:
           name: fixture-hermeticity
           path: temp/sections/hermeticity
 
       - name: Download tests report
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-retry
         with:
           name: tests-release
           path: temp/sections/tests
@@ -688,7 +687,7 @@ jobs:
           --output temp/certification/certification-report-v1.json
 
       - name: Upload final certification envelope
-        uses: actions/upload-artifact@v7
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: certification-report
           path: |
@@ -754,19 +753,19 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Download certified release candidates
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-retry
         with:
           name: release-candidates
           path: temp/release-candidates
 
       - name: Download certification envelope
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-retry
         with:
           name: certification-report
           path: temp/certification
 
       - name: Download prepared release changelog
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-retry
         with:
           name: release-changelog
           path: temp/release-changelog

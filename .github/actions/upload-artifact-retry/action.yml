@@ -1,0 +1,57 @@
+name: Upload artifact with retries
+description: Upload a GitHub Actions artifact, retrying transient DNS and network failures.
+inputs:
+  name:
+    required: true
+  path:
+    required: true
+  if-no-files-found:
+    default: error
+  retention-days:
+    default: "0"
+  include-hidden-files:
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: Upload artifact (attempt 1)
+      id: attempt1
+      continue-on-error: true
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        if-no-files-found: ${{ inputs.if-no-files-found }}
+        retention-days: ${{ inputs.retention-days }}
+        include-hidden-files: ${{ inputs.include-hidden-files }}
+        overwrite: true
+    - name: Wait before artifact upload retry
+      if: ${{ steps.attempt1.outcome == 'failure' }}
+      shell: bash
+      run: sleep 20
+    - name: Upload artifact (attempt 2)
+      id: attempt2
+      if: ${{ steps.attempt1.outcome == 'failure' }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        if-no-files-found: ${{ inputs.if-no-files-found }}
+        retention-days: ${{ inputs.retention-days }}
+        include-hidden-files: ${{ inputs.include-hidden-files }}
+        overwrite: true
+    - name: Wait before final artifact upload retry
+      if: ${{ steps.attempt2.outcome == 'failure' }}
+      shell: bash
+      run: sleep 20
+    - name: Upload artifact (attempt 3)
+      if: ${{ steps.attempt2.outcome == 'failure' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        if-no-files-found: ${{ inputs.if-no-files-found }}
+        retention-days: ${{ inputs.retention-days }}
+        include-hidden-files: ${{ inputs.include-hidden-files }}
+        overwrite: true

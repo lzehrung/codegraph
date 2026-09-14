@@ -97,7 +97,7 @@ jobs:
           NODE
 
       - name: Upload immutable release candidates
-        uses: actions/upload-artifact@v7
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: release-candidates
           path: temp/release-candidates
@@ -157,7 +157,7 @@ jobs:
           architecture: ${{ matrix.arch }}
 
       - name: Download immutable release candidates
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-retry
         with:
           name: release-candidates
           path: temp/release-candidates
@@ -265,7 +265,7 @@ jobs:
           --allow-cross-target ${{ matrix.target == 'win32-arm64' }}
 
       - name: Upload standalone candidate archive
-        uses: actions/upload-artifact@v7
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: standalone-candidate-${{ matrix.target }}
           path: |
@@ -327,7 +327,7 @@ jobs:
           architecture: ${{ matrix.arch }}
 
       - name: Download standalone candidate archive
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-retry
         with:
           name: standalone-candidate-${{ matrix.target }}
           path: temp/standalone-candidate
@@ -387,7 +387,7 @@ jobs:
           NODE
 
       - name: Upload only the successfully smoked archive
-        uses: actions/upload-artifact@v7
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: standalone-smoked-${{ matrix.target }}
           path: temp/standalone-candidate/codegraph-${{ matrix.target }}.${{ matrix.extension }}
@@ -437,7 +437,7 @@ jobs:
           architecture: ${{ matrix.arch }}
 
       - name: Download immutable standalone candidate archive
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-retry
         with:
           name: standalone-candidate-${{ matrix.target }}
           path: temp/standalone-candidate
@@ -502,7 +502,7 @@ jobs:
 
       - name: Upload standalone FunnelResultV1
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: standalone-funnel-${{ matrix.target }}
           path: temp/certification/funnel-standalone-${{ matrix.target }}.json
@@ -524,13 +524,13 @@ jobs:
           ref: ${{ needs.plan-standalone.outputs.source_revision }}
 
       - name: Download immutable release candidates
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-retry
         with:
           name: release-candidates
           path: temp/release-candidates
 
       - name: Download successfully smoked standalone archives
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-retry
         with:
           pattern: standalone-smoked-*
           path: temp/standalone-smoked
@@ -549,7 +549,7 @@ jobs:
           )
 
       - name: Upload exact standalone release assets
-        uses: actions/upload-artifact@v7
+        uses: ./.github/actions/upload-artifact-retry
         with:
           name: standalone-release-assets
           path: |
@@ -567,8 +567,14 @@ jobs:
       - assemble-standalone-release-assets
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: true
+
       - name: Download verified standalone assets
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-retry
         with:
           name: standalone-release-assets
           path: temp/standalone-release-assets

@@ -1772,7 +1772,13 @@ void onImpactItemStreaming;
   });
 
   it("keeps GitHub-owned actions off deprecated Node 20 action majors", () => {
-    const workflowPaths = [".github/workflows/on-demand-ci.yml", ".github/workflows/release.yml"];
+    const workflowPaths = [
+      ".github/workflows/on-demand-ci.yml",
+      ".github/workflows/release.yml",
+      ".github/workflows/standalone-release.yml",
+      ".github/actions/upload-artifact-retry/action.yml",
+      ".github/actions/download-artifact-retry/action.yml",
+    ];
 
     for (const workflowPath of workflowPaths) {
       const workflow = readText(workflowPath);

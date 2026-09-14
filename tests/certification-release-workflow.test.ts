@@ -162,7 +162,10 @@ describe("certified release workflows", () => {
     expect(publish).toContain('export NODE_AUTH_TOKEN="$NPM_BOOTSTRAP_TOKEN"');
     expect(publish).not.toContain("NODE_AUTH_TOKEN:");
     expect(assemble).toContain("- build-native-artifacts");
-    expect(security).toContain("- assemble-release-candidates");
+    expect(security).toContain("- plan-release");
+    expect(security).not.toContain("- assemble-release-candidates");
+    expect(jobBlock(releaseWorkflow, "fixture-hermeticity")).toContain("- plan-release");
+    expect(jobBlock(releaseWorkflow, "fixture-hermeticity")).not.toContain("- assemble-release-candidates");
     expect(smoke).toContain("- security-production");
     expect(packageFunnel).toContain("- assemble-release-candidates");
     expect(report).toContain("- package-smoke");
@@ -179,6 +182,30 @@ describe("certified release workflows", () => {
     expect(releaseWorkflow).not.toContain("build-standalone-archives");
     expect(releaseWorkflow).not.toContain("standalone-funnel");
     expect(releaseWorkflow).not.toContain("standalone-release-assets");
+  });
+
+  it("retries transient GitHub artifact transfers without blocking source gates on native builds", () => {
+    const buildNative = jobBlock(releaseWorkflow, "build-native-artifacts");
+    const uploadAction = fs.readFileSync(".github/actions/upload-artifact-retry/action.yml", "utf8");
+    const downloadAction = fs.readFileSync(".github/actions/download-artifact-retry/action.yml", "utf8");
+    const standalonePublish = jobBlock(standaloneWorkflow, "publish-standalone-assets");
+
+    expect(buildNative).toContain("timeout-minutes: 30");
+    expect(buildNative).toContain("fail-fast: false");
+    expect(uploadAction).toContain("uses: actions/upload-artifact@v7");
+    expect(uploadAction).toContain("overwrite: true");
+    expect(uploadAction).toContain("sleep 20");
+    expect(uploadAction.split("uses: actions/upload-artifact@v7")).toHaveLength(4);
+    expect(downloadAction).toContain("uses: actions/download-artifact@v8");
+    expect(downloadAction.split("uses: actions/download-artifact@v8")).toHaveLength(7);
+    expect(releaseWorkflow).not.toContain("uses: actions/upload-artifact@");
+    expect(releaseWorkflow).not.toContain("uses: actions/download-artifact@");
+    expect(standaloneWorkflow).not.toContain("uses: actions/upload-artifact@");
+    expect(standaloneWorkflow).not.toContain("uses: actions/download-artifact@");
+    expect(releaseWorkflow).toContain("uses: ./.github/actions/upload-artifact-retry");
+    expect(releaseWorkflow).toContain("uses: ./.github/actions/download-artifact-retry");
+    expect(standalonePublish).toContain("Checkout workflow helpers");
+    expect(standalonePublish).toContain("sparse-checkout: .github/actions");
   });
   it("keeps assembly checks non-redundant with dedicated certification jobs", () => {
     const assemble = jobBlock(releaseWorkflow, "assemble-release-candidates");
