@@ -1932,6 +1932,78 @@ describe("Rust nested grouped use and path attributes", () => {
     }
   });
 
+  it("resolves super through an explicit crate-root path that does not end in .rs", async () => {
+    const cases = [
+      {
+        prefix: "cg-rust-path-owner-extless-lib-",
+        cargoToml: '[package]\nname = "extless-lib"\nversion = "0.1.0"\n\n[lib]\npath = "custom/root"\n',
+        ownerRelative: path.join("custom", "root"),
+        pathValue: "../src/shared.rs",
+      },
+      {
+        prefix: "cg-rust-path-owner-extless-bin-",
+        cargoToml:
+          '[package]\nname = "extless-bin"\nversion = "0.1.0"\nautolib = false\n\n[[bin]]\nname = "tool"\npath = "tools/tool"\n',
+        ownerRelative: path.join("tools", "tool"),
+        pathValue: "../src/shared.rs",
+      },
+    ] as const;
+    for (const testCase of cases) {
+      const root = await mkdtemp(path.join(os.tmpdir(), testCase.prefix));
+      const src = path.join(root, "src");
+      await mkdir(src, { recursive: true });
+      await mkdir(path.dirname(path.join(root, testCase.ownerRelative)), { recursive: true });
+      await writeFile(path.join(root, "Cargo.toml"), testCase.cargoToml);
+      const ownerFile = path.join(root, testCase.ownerRelative);
+      const decoy = path.join(src, "aaa_decoy.rs");
+      const shared = path.join(src, "shared.rs");
+      await writeFile(ownerFile, `#[path = "${testCase.pathValue}"]\nmod shared;\npub struct ExtlessThing;\n`);
+      await writeFile(decoy, '#[path = "shared.rs"]\nmod shared;\npub struct DecoyThing;\n');
+      await writeFile(shared, "use super::ExtlessThing;\npub fn take(_v: ExtlessThing) {}\n");
+      try {
+        await expectReachableRustPathOwner({
+          root,
+          fromFile: shared,
+          ownerFile,
+          imported: "ExtlessThing",
+          files: [ownerFile, decoy, shared],
+          excludedBasenames: ["aaa_decoy.rs", "lib.rs"],
+        });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("does not treat a virtual workspace root as a package when resolving #[path] owners", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-virtual-ws-"));
+    const src = path.join(root, "src");
+    const pkgSrc = path.join(root, "pkg", "src");
+    await mkdir(src, { recursive: true });
+    await mkdir(pkgSrc, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[workspace]\nmembers = ["pkg"]\n');
+    await writeFile(path.join(root, "pkg", "Cargo.toml"), '[package]\nname = "pkg"\nversion = "0.1.0"\n');
+    await writeFile(path.join(pkgSrc, "lib.rs"), "");
+    const strayBuild = path.join(root, "build.rs");
+    const ownerFile = path.join(src, "aaa_owner.rs");
+    const shared = path.join(src, "shared.rs");
+    await writeFile(strayBuild, '#[path = "src/shared.rs"]\nmod shared;\npub struct WorkspaceThing;\n');
+    await writeFile(ownerFile, '#[path = "shared.rs"]\nmod shared;\npub struct OwnerThing;\n');
+    await writeFile(shared, "use super::OwnerThing;\npub fn take(_v: OwnerThing) {}\n");
+    try {
+      await expectReachableRustPathOwner({
+        root,
+        fromFile: shared,
+        ownerFile,
+        imported: "OwnerThing",
+        files: [strayBuild, ownerFile, shared],
+        excludedBasenames: ["build.rs"],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves super through a conventional child of a custom crate-root filename", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-custom-child-"));
     const src = path.join(root, "src");

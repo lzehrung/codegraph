@@ -1136,3 +1136,21 @@ exports[`native semantic coverage > keeps native semantics stable when a Rust #[
   },
 }
 `;
+
+exports[`native semantic coverage > keeps native semantics stable without treating a virtual workspace root as a package 1`] = `
+{
+  "goto": {
+    "file": "src/aaa_owner.rs",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "src/aaa_owner.rs:3",
+      "src/shared.rs:1",
+      "src/shared.rs:3",
+    ],
+    "status": "ok",
+  },
+}
+`;

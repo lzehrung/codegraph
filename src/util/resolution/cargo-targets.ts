@@ -103,9 +103,13 @@ async function parseCargoToml(cargoRoot: string): Promise<TomlTable | null> {
   }
 }
 
-async function acceptCrateRoot(candidate: string, projectRoot: string): Promise<string | null> {
+async function acceptCrateRoot(
+  candidate: string,
+  projectRoot: string,
+  requireRustExtension = false,
+): Promise<string | null> {
   const resolved = path.resolve(candidate);
-  if (!resolved.endsWith(".rs")) return null;
+  if (requireRustExtension && !resolved.endsWith(".rs")) return null;
   try {
     const stat = await fsp.stat(resolved);
     if (!stat.isFile()) return null;
@@ -128,10 +132,11 @@ async function addCrateRoot(
   probed: Set<string>,
   candidate: string,
   projectRoot: string,
+  requireRustExtension = false,
 ): Promise<void> {
   const resolved = path.resolve(candidate);
   probed.add(resolved);
-  const accepted = await acceptCrateRoot(resolved, projectRoot);
+  const accepted = await acceptCrateRoot(resolved, projectRoot, requireRustExtension);
   if (accepted) roots.add(accepted);
 }
 
@@ -150,11 +155,11 @@ async function addAutodiscoveredDirectory(
   }
   for (const entry of entries) {
     if (entry.isDirectory()) {
-      await addCrateRoot(roots, probed, path.join(directory, entry.name, "main.rs"), projectRoot);
+      await addCrateRoot(roots, probed, path.join(directory, entry.name, "main.rs"), projectRoot, true);
       continue;
     }
     if (entry.name.endsWith(".rs")) {
-      await addCrateRoot(roots, probed, path.join(directory, entry.name), projectRoot);
+      await addCrateRoot(roots, probed, path.join(directory, entry.name), projectRoot, true);
     }
   }
 }
@@ -171,6 +176,10 @@ export async function rustCrateRootFiles(cargoRoot: string, projectRoot: string)
   const roots = new Set<string>();
   const probed = new Set<string>();
   const parsed = await parseCargoToml(root);
+
+  if (parsed && !isTomlTable(parsed.package)) {
+    return { roots: [], probed: [] };
+  }
 
   if (parsed) {
     for (const relativePath of explicitTargetPaths(parsed)) {

@@ -638,6 +638,45 @@ async function createRustPathOwnerExplicitLibCase(): Promise<SemanticExpectation
   };
 }
 
+async function createRustPathOwnerVirtualWorkspaceCase(): Promise<SemanticExpectation> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-rust-path-owner-virtual-ws-"));
+  tempDirs.push(root);
+  const src = path.join(root, "src");
+  const pkgSrc = path.join(root, "pkg", "src");
+  await fsp.mkdir(src, { recursive: true });
+  await fsp.mkdir(pkgSrc, { recursive: true });
+  await fsp.writeFile(path.join(root, "Cargo.toml"), '[workspace]\nmembers = ["pkg"]\n');
+  await fsp.writeFile(path.join(root, "pkg", "Cargo.toml"), '[package]\nname = "pkg"\nversion = "0.1.0"\n');
+  await fsp.writeFile(path.join(pkgSrc, "lib.rs"), "");
+  const strayBuild = path.join(root, "build.rs");
+  const ownerFile = path.join(src, "aaa_owner.rs");
+  const sharedFile = path.join(src, "shared.rs");
+  await fsp.writeFile(strayBuild, '#[path = "src/shared.rs"]\nmod shared;\npub struct WorkspaceThing;\n');
+  await fsp.writeFile(ownerFile, '#[path = "shared.rs"]\nmod shared;\npub struct OwnerThing;\n');
+  await fsp.writeFile(
+    sharedFile,
+    ["use super::OwnerThing;", "pub fn take() -> OwnerThing {", "    OwnerThing", "}", ""].join("\n"),
+  );
+
+  return {
+    root,
+    files: [strayBuild, ownerFile, sharedFile],
+    symbols: [{ file: ownerFile, names: ["OwnerThing"] }],
+    goto: {
+      file: sharedFile,
+      line: 3,
+      column: "    OwnerThing".indexOf("OwnerThing") + 1,
+      expectedStatus: "ok",
+    },
+    references: {
+      file: ownerFile,
+      line: 3,
+      column: "pub struct OwnerThing;".indexOf("OwnerThing") + 1,
+      expectedStatus: "ok",
+    },
+  };
+}
+
 async function createRustPathOwnerCustomChildCase(): Promise<SemanticExpectation> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-rust-path-owner-custom-child-"));
   tempDirs.push(root);
@@ -1306,6 +1345,11 @@ nativeDescribe("native semantic coverage", () => {
 
   it("keeps native semantics stable for an explicit [lib] table when autolib is false", async () => {
     const testCase = await createRustPathOwnerExplicitLibCase();
+    await expectNativeSemantics(testCase);
+  });
+
+  it("keeps native semantics stable without treating a virtual workspace root as a package", async () => {
+    const testCase = await createRustPathOwnerVirtualWorkspaceCase();
     await expectNativeSemantics(testCase);
   });
 

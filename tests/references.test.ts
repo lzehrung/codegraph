@@ -2248,6 +2248,39 @@ describe("Find References", () => {
       }
     });
 
+    it("finds references without treating a virtual workspace root as a package", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-virtual-ws-refs-"));
+      try {
+        const src = path.join(root, "src");
+        const pkgSrc = path.join(root, "pkg", "src");
+        await fsp.mkdir(src, { recursive: true });
+        await fsp.mkdir(pkgSrc, { recursive: true });
+        await fsp.writeFile(path.join(root, "Cargo.toml"), '[workspace]\nmembers = ["pkg"]\n');
+        await fsp.writeFile(path.join(root, "pkg", "Cargo.toml"), '[package]\nname = "pkg"\nversion = "0.1.0"\n');
+        await fsp.writeFile(path.join(pkgSrc, "lib.rs"), "");
+        const strayBuild = path.join(root, "build.rs").replace(/\\/g, "/");
+        const ownerFile = path.join(src, "aaa_owner.rs").replace(/\\/g, "/");
+        const sharedFile = path.join(src, "shared.rs").replace(/\\/g, "/");
+        await fsp.writeFile(strayBuild, '#[path = "src/shared.rs"]\nmod shared;\npub struct WorkspaceThing;\n');
+        await fsp.writeFile(ownerFile, '#[path = "shared.rs"]\nmod shared;\npub struct OwnerThing;\n');
+        await fsp.writeFile(
+          sharedFile,
+          ["use super::OwnerThing;", "pub fn take() -> OwnerThing {", "    OwnerThing", "}", ""].join("\n"),
+        );
+        const index = await createTestIndexFromFiles(root, [strayBuild, ownerFile, sharedFile]);
+        const declLine = "pub struct OwnerThing;";
+        const result = await testFindReferences(index, ownerFile, 3, declLine.indexOf("OwnerThing") + 1, 3);
+        expectReferenceAt(result, ownerFile, 3);
+        expectReferenceAt(result, sharedFile, 1);
+        expectReferenceAt(result, sharedFile, 3);
+        if (result.status === "ok") {
+          expect(result.references.some((reference) => path.basename(reference.file) === "build.rs")).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("finds references through a conventional child of a custom crate-root filename", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-custom-child-refs-"));
       try {

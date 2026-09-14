@@ -2024,6 +2024,38 @@ describe("Go to Definition", () => {
       }
     });
 
+    it("does not treat a virtual workspace root as a package when resolving super", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-virtual-ws-goto-"));
+      try {
+        const src = path.join(root, "src");
+        const pkgSrc = path.join(root, "pkg", "src");
+        await fsp.mkdir(src, { recursive: true });
+        await fsp.mkdir(pkgSrc, { recursive: true });
+        await fsp.writeFile(path.join(root, "Cargo.toml"), '[workspace]\nmembers = ["pkg"]\n');
+        await fsp.writeFile(path.join(root, "pkg", "Cargo.toml"), '[package]\nname = "pkg"\nversion = "0.1.0"\n');
+        await fsp.writeFile(path.join(pkgSrc, "lib.rs"), "");
+        const strayBuild = path.join(root, "build.rs").replace(/\\/g, "/");
+        const ownerFile = path.join(src, "aaa_owner.rs").replace(/\\/g, "/");
+        const sharedFile = path.join(src, "shared.rs").replace(/\\/g, "/");
+        await fsp.writeFile(strayBuild, '#[path = "src/shared.rs"]\nmod shared;\npub struct WorkspaceThing;\n');
+        await fsp.writeFile(ownerFile, '#[path = "shared.rs"]\nmod shared;\npub struct OwnerThing;\n');
+        await fsp.writeFile(
+          sharedFile,
+          ["use super::OwnerThing;", "pub fn take() -> OwnerThing {", "    OwnerThing", "}", ""].join("\n"),
+        );
+        const index = await createTestIndexFromFiles(root, [strayBuild, ownerFile, sharedFile]);
+        const usage = "    OwnerThing";
+        const result = await testGoToDefinition(index, sharedFile, 3, usage.indexOf("OwnerThing") + 1, ownerFile, 3);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(path.basename(result.definition.file)).toBe("aaa_owner.rs");
+          expect(path.basename(result.definition.file)).not.toBe("build.rs");
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("resolves super through a conventional child of a custom crate-root filename", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-custom-child-goto-"));
       try {
