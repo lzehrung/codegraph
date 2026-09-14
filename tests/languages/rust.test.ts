@@ -1206,6 +1206,247 @@ describe("Rust nested grouped use and path attributes", () => {
       }
     },
   );
+
+  it("resolves super to the module that actually declares the #[path] target, not an undeclared decoy in the same directory", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-orphan-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-owner"\nversion = "0.1.0"\n');
+    await writeFile(path.join(src, "lib.rs"), "mod real;\npub struct RootThing;\n");
+    await writeFile(path.join(src, "real.rs"), '#[path = "shared.rs"]\nmod shared;\npub struct RealThing;\n');
+    await writeFile(path.join(src, "aaa_orphan.rs"), '#[path = "shared.rs"]\nmod shared;\npub struct OrphanThing;\n');
+    await writeFile(path.join(src, "shared.rs"), "use super::RealThing;\npub fn take(_v: RealThing) {}\n");
+    try {
+      const shared = path.join(src, "shared.rs");
+      const real = path.join(src, "real.rs");
+      const orphan = path.join(src, "aaa_orphan.rs");
+
+      const owner = await resolveRustImportPath(root, shared, "super");
+      expect(owner?.replace(/\\/g, "/")).toBe(real.replace(/\\/g, "/"));
+      expect(owner?.replace(/\\/g, "/")).not.toBe(orphan.replace(/\\/g, "/"));
+
+      const imports = await collectImportsForFile(shared, root);
+      const realThingImport = imports.find((entry) => entry.kind === "named" && entry.imported === "RealThing");
+      expect(realThingImport).toBeDefined();
+      expect(typeof realThingImport?.resolved).toBe("string");
+      if (typeof realThingImport?.resolved === "string") {
+        expect(realThingImport.resolved.replace(/\\/g, "/")).toBe(real.replace(/\\/g, "/"));
+        expect(realThingImport.resolved.replace(/\\/g, "/")).not.toBe(orphan.replace(/\\/g, "/"));
+      }
+
+      const files = [path.join(src, "lib.rs"), real, orphan, shared];
+      const graph = await collectGraph(root, files);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "shared.rs" &&
+            edge.raw === "super::RealThing" &&
+            edge.to.type === "file" &&
+            path.basename(edge.to.path) === "real.rs",
+        ),
+      ).toBe(true);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "shared.rs" &&
+            edge.raw === "super::RealThing" &&
+            edge.to.type === "file" &&
+            path.basename(edge.to.path) === "aaa_orphan.rs",
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves super to a reachable ancestor owner over a nearer undeclared decoy in the target's own directory", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-ancestor-"));
+    const src = path.join(root, "src");
+    const nested = path.join(src, "nested");
+    await mkdir(nested, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-owner-ancestor"\nversion = "0.1.0"\n');
+    await writeFile(path.join(src, "lib.rs"), "mod outer;\n");
+    await writeFile(path.join(src, "outer.rs"), '#[path = "nested/shared.rs"]\nmod shared;\npub struct OuterThing;\n');
+    await writeFile(path.join(nested, "zz_decoy.rs"), '#[path = "shared.rs"]\nmod shared;\npub struct DecoyThing;\n');
+    await writeFile(path.join(nested, "shared.rs"), "use super::OuterThing;\npub fn take(_v: OuterThing) {}\n");
+    try {
+      const shared = path.join(nested, "shared.rs");
+      const outer = path.join(src, "outer.rs");
+      const decoy = path.join(nested, "zz_decoy.rs");
+
+      const owner = await resolveRustImportPath(root, shared, "super");
+      expect(owner?.replace(/\\/g, "/")).toBe(outer.replace(/\\/g, "/"));
+      expect(owner?.replace(/\\/g, "/")).not.toBe(decoy.replace(/\\/g, "/"));
+
+      const imports = await collectImportsForFile(shared, root);
+      const outerThingImport = imports.find((entry) => entry.kind === "named" && entry.imported === "OuterThing");
+      expect(outerThingImport).toBeDefined();
+      expect(typeof outerThingImport?.resolved).toBe("string");
+      if (typeof outerThingImport?.resolved === "string") {
+        expect(outerThingImport.resolved.replace(/\\/g, "/")).toBe(outer.replace(/\\/g, "/"));
+        expect(outerThingImport.resolved.replace(/\\/g, "/")).not.toBe(decoy.replace(/\\/g, "/"));
+      }
+
+      const files = [path.join(src, "lib.rs"), outer, decoy, shared];
+      const graph = await collectGraph(root, files);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "shared.rs" &&
+            edge.raw === "super::OuterThing" &&
+            edge.to.type === "file" &&
+            path.basename(edge.to.path) === "outer.rs",
+        ),
+      ).toBe(true);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "shared.rs" &&
+            edge.raw === "super::OuterThing" &&
+            edge.to.type === "file" &&
+            path.basename(edge.to.path) === "zz_decoy.rs",
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves super to the reachable owner regardless of undeclared decoy directory-entry order", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-order-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-owner-order"\nversion = "0.1.0"\n');
+    await writeFile(path.join(src, "lib.rs"), "mod real;\npub struct RootThing;\n");
+    await writeFile(path.join(src, "real.rs"), '#[path = "shared.rs"]\nmod shared;\npub struct RealThing;\n');
+    await writeFile(path.join(src, "aaa_orphan.rs"), '#[path = "shared.rs"]\nmod shared;\npub struct OrphanThing;\n');
+    await writeFile(
+      path.join(src, "zzz_orphan.rs"),
+      '#[path = "shared.rs"]\nmod shared;\npub struct OtherOrphanThing;\n',
+    );
+    await writeFile(path.join(src, "shared.rs"), "use super::RealThing;\npub fn take(_v: RealThing) {}\n");
+    try {
+      const shared = path.join(src, "shared.rs");
+      const real = path.join(src, "real.rs");
+      const aaaOrphan = path.join(src, "aaa_orphan.rs");
+      const zzzOrphan = path.join(src, "zzz_orphan.rs");
+
+      const owner = await resolveRustImportPath(root, shared, "super");
+      expect(owner?.replace(/\\/g, "/")).toBe(real.replace(/\\/g, "/"));
+      expect(owner?.replace(/\\/g, "/")).not.toBe(aaaOrphan.replace(/\\/g, "/"));
+      expect(owner?.replace(/\\/g, "/")).not.toBe(zzzOrphan.replace(/\\/g, "/"));
+
+      const imports = await collectImportsForFile(shared, root);
+      const realThingImport = imports.find((entry) => entry.kind === "named" && entry.imported === "RealThing");
+      expect(realThingImport).toBeDefined();
+      expect(typeof realThingImport?.resolved).toBe("string");
+      if (typeof realThingImport?.resolved === "string") {
+        expect(realThingImport.resolved.replace(/\\/g, "/")).toBe(real.replace(/\\/g, "/"));
+        expect(realThingImport.resolved.replace(/\\/g, "/")).not.toBe(aaaOrphan.replace(/\\/g, "/"));
+        expect(realThingImport.resolved.replace(/\\/g, "/")).not.toBe(zzzOrphan.replace(/\\/g, "/"));
+      }
+
+      const files = [path.join(src, "lib.rs"), real, aaaOrphan, zzzOrphan, shared];
+      const graph = await collectGraph(root, files);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "shared.rs" &&
+            edge.raw === "super::RealThing" &&
+            edge.to.type === "file" &&
+            path.basename(edge.to.path) === "real.rs",
+        ),
+      ).toBe(true);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "shared.rs" &&
+            edge.raw === "super::RealThing" &&
+            edge.to.type === "file" &&
+            (path.basename(edge.to.path) === "aaa_orphan.rs" || path.basename(edge.to.path) === "zzz_orphan.rs"),
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves super unresolved, not falling back to any parent, when two reachable modules declare the same #[path] target", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-ambiguous-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-owner-ambiguous"\nversion = "0.1.0"\n');
+    await writeFile(path.join(src, "lib.rs"), "mod one;\nmod two;\n");
+    await writeFile(path.join(src, "one.rs"), '#[path = "shared.rs"]\nmod shared;\npub struct OneThing;\n');
+    await writeFile(path.join(src, "two.rs"), '#[path = "shared.rs"]\nmod shared;\npub struct TwoThing;\n');
+    await writeFile(path.join(src, "shared.rs"), "use super::OneThing;\npub fn take(_v: OneThing) {}\n");
+    try {
+      const shared = path.join(src, "shared.rs");
+      const lib = path.join(src, "lib.rs");
+      const one = path.join(src, "one.rs");
+      const two = path.join(src, "two.rs");
+
+      const owner = await resolveRustImportPath(root, shared, "super");
+      expect(owner).toBeNull();
+
+      const imports = await collectImportsForFile(shared, root);
+      const oneThingImport = imports.find((entry) => entry.kind === "named" && entry.imported === "OneThing");
+      expect(oneThingImport).toBeDefined();
+      expect(oneThingImport?.resolved).toEqual({ external: "super" });
+
+      const files = [lib, one, two, shared];
+      const graph = await collectGraph(root, files);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "shared.rs" && edge.raw === "super::OneThing" && edge.to.type === "file",
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves super through a module only a binary target declares", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-owner-bin-"));
+    const src = path.join(root, "src");
+    const bin = path.join(src, "bin");
+    await mkdir(bin, { recursive: true });
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-owner-bin"\nversion = "0.1.0"\n');
+    await writeFile(
+      path.join(bin, "tool.rs"),
+      '#[path = "../shared.rs"]\nmod shared;\npub struct ToolThing;\nfn main() {}\n',
+    );
+    await writeFile(path.join(src, "aaa_decoy.rs"), '#[path = "shared.rs"]\nmod shared;\npub struct DecoyThing;\n');
+    await writeFile(path.join(src, "shared.rs"), "use super::ToolThing;\npub fn take(_v: ToolThing) {}\n");
+    try {
+      const shared = path.join(src, "shared.rs");
+      const tool = path.join(bin, "tool.rs");
+      const decoy = path.join(src, "aaa_decoy.rs");
+
+      const owner = await resolveRustImportPath(root, shared, "super");
+      expect(owner?.replace(/\\/g, "/")).toBe(tool.replace(/\\/g, "/"));
+
+      const imports = await collectImportsForFile(shared, root);
+      const toolImport = imports.find((entry) => entry.kind === "named" && entry.imported === "ToolThing");
+      expect(typeof toolImport?.resolved).toBe("string");
+      if (typeof toolImport?.resolved === "string") {
+        expect(toolImport.resolved.replace(/\\/g, "/")).toBe(tool.replace(/\\/g, "/"));
+      }
+
+      const graph = await collectGraph(root, [tool, decoy, shared]);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            path.basename(edge.from) === "shared.rs" &&
+            edge.to.type === "file" &&
+            path.basename(edge.to.path) === "aaa_decoy.rs",
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Rust function-local items and re-export aliases", () => {

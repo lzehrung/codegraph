@@ -9,6 +9,11 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Fixed
+
+- A `#[path]` module now resolves `super` against the module that actually declares it in the crate module tree, so an undeclared or generated `.rs` file can no longer own it and the result no longer depends on directory-entry order.
+- When two reachable modules declare the same `#[path]` target, `super` stays unresolved instead of picking one.
+
 ## [2.3.26] - 2026-09-13
 
 ### Fixed

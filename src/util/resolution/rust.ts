@@ -13,6 +13,7 @@ import { XID_IDENTIFIER_SOURCE } from "../identifiers.js";
 import { lruMapGet, lruMapSet } from "../lru-map.js";
 import { isFilePathWithinRoot } from "../paths.js";
 import { fileExists } from "../workspace.js";
+import { rustCrateRootFiles } from "./cargo-targets.js";
 
 function isWithinOrEqual(candidate: string, root: string): boolean {
   const relative = path.relative(root, candidate);
@@ -78,11 +79,48 @@ const RUST_CFG_TEST_ATTRIBUTE_PATTERN = /#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]/;
 const RUST_VISIBILITY_PATTERN = /^(?:pub(?:\s*\([^)]*\))?\s+)/;
 const RUST_MOD_NAME_PATTERN = new RegExp(String.raw`^mod\s+(${XID_IDENTIFIER_SOURCE})`, "u");
 const MAX_RUST_PATH_ATTRIBUTE_CACHE_ENTRIES = 256;
+const MAX_RUST_MODULE_TREE_CACHE_ENTRIES = 256;
+const MAX_RUST_MODULE_TREE_FILES = 4096;
+const MAX_RUST_MODULE_TREE_DEPTH = 32;
+const MISSING_PATH_SIGNATURE = "missing";
+/**
+ * A cached module tree is re-checked against its recorded stat signatures at most once per
+ * interval. Every reachable file and every probed path contributes a signature, so validating on
+ * each lookup would cost one stat per crate file per resolved `super` specifier. The window bounds
+ * that to one sweep per interval; a source edit is therefore observed within the interval rather
+ * than on the next lookup.
+ */
+const RUST_MODULE_TREE_REVALIDATE_INTERVAL_MS = 100;
 
 type RustModuleScope = {
   pathAttributes: Map<string, string>;
   inlineModules: Map<string, RustModuleScope>;
+  declaredModules: Map<string, string | undefined>;
   inlineLocation?: { start: number; end: number; directory: string };
+};
+
+type AttributedModuleParent = {
+  parentFile: string;
+  parentModuleDir: string;
+};
+
+type PathAttributeParentResult =
+  | { status: "resolved"; parent: AttributedModuleParent }
+  | { status: "ambiguous" }
+  | { status: "unresolved" };
+
+type RustSuperModuleContext =
+  | { status: "resolved"; parentFile: string | null; parentModuleDir: string }
+  | { status: "ambiguous" };
+
+type DeclaringFileForHead = { status: "resolved"; file: string | null } | { status: "ambiguous" };
+
+type RustModuleTree = {
+  signatures: Map<string, string>;
+  truncated: boolean;
+  reachable: Set<string>;
+  owners: Map<string, AttributedModuleParent[]>;
+  validatedAt: number;
 };
 
 type RustPathAttributeCacheEntry = {
@@ -93,13 +131,16 @@ type RustPathAttributeCacheEntry = {
 const EMPTY_RUST_MODULE_SCOPE: RustModuleScope = {
   pathAttributes: new Map(),
   inlineModules: new Map(),
+  declaredModules: new Map(),
 };
 
 const rustPathAttributeCache = new Map<string, RustPathAttributeCacheEntry>();
 const rustPathAttributeInflight = new Map<string, Promise<RustModuleScope>>();
+const rustModuleTreeCache = new Map<string, RustModuleTree>();
+const rustModuleTreeInflight = new Map<string, Promise<RustModuleTree>>();
 
 function createRustModuleScope(): RustModuleScope {
-  return { pathAttributes: new Map(), inlineModules: new Map() };
+  return { pathAttributes: new Map(), inlineModules: new Map(), declaredModules: new Map() };
 }
 
 function pathAttributeFromAttributeBlock(attributes: string): string | undefined {
@@ -290,6 +331,9 @@ function scanRustModuleScope(source: string, start: number, end: number, scope: 
         if (!testOnly && pathValue && !scope.pathAttributes.has(moduleName)) {
           scope.pathAttributes.set(moduleName, pathValue);
         }
+        if (!testOnly && !scope.declaredModules.has(moduleName)) {
+          scope.declaredModules.set(moduleName, pathValue);
+        }
         index = cursor + 1;
         continue;
       }
@@ -355,6 +399,30 @@ function rustPathAttributeSignature(stat: { size: number; mtimeMs: number }): st
   return `${stat.size}:${stat.mtimeMs}`;
 }
 
+async function currentPathSignature(target: string): Promise<string> {
+  try {
+    const stat = await fsp.stat(target);
+    return rustPathAttributeSignature(stat);
+  } catch {
+    return MISSING_PATH_SIGNATURE;
+  }
+}
+
+async function recordPathStat(
+  target: string,
+  signatures: Map<string, string>,
+): Promise<Awaited<ReturnType<typeof fsp.stat>> | null> {
+  const resolved = path.resolve(target);
+  try {
+    const stat = await fsp.stat(resolved);
+    signatures.set(resolved, rustPathAttributeSignature(stat));
+    return stat;
+  } catch {
+    signatures.set(resolved, MISSING_PATH_SIGNATURE);
+    return null;
+  }
+}
+
 async function loadRustPathAttributeScope(file: string): Promise<RustModuleScope> {
   const resolved = path.resolve(file);
   let signature: string;
@@ -394,6 +462,141 @@ function rustChildModuleDir(parentFile: string): string {
   const stem = path.basename(parentFile, ".rs");
   if (stem === "mod" || stem === "lib" || stem === "main") return dir;
   return path.join(dir, stem);
+}
+
+async function resolveDeclaredConventionalModule(
+  currentModuleDir: string,
+  name: string,
+  signatures: Map<string, string>,
+): Promise<string | null> {
+  for (const candidate of rustModuleCandidates(currentModuleDir, [name])) {
+    const stat = await recordPathStat(candidate, signatures);
+    if (stat?.isFile()) return path.resolve(candidate);
+  }
+  return null;
+}
+
+function addAttributedOwner(
+  ownerSets: Map<string, Map<string, AttributedModuleParent>>,
+  target: string,
+  owner: AttributedModuleParent,
+): void {
+  const resolvedTarget = path.resolve(target);
+  let set = ownerSets.get(resolvedTarget);
+  if (!set) {
+    set = new Map();
+    ownerSets.set(resolvedTarget, set);
+  }
+  const parentFile = path.resolve(owner.parentFile);
+  const parentModuleDir = path.resolve(owner.parentModuleDir);
+  set.set(`${parentFile}\0${parentModuleDir}`, { parentFile, parentModuleDir });
+}
+
+async function rustModuleTreeIsFresh(tree: RustModuleTree): Promise<boolean> {
+  const now = Date.now();
+  if (now - tree.validatedAt < RUST_MODULE_TREE_REVALIDATE_INTERVAL_MS) return true;
+  const entries = [...tree.signatures];
+  const actual = await Promise.all(entries.map(([filePath]) => currentPathSignature(filePath)));
+  for (let i = 0; i < entries.length; i += 1) {
+    if (actual[i] !== entries[i]?.[1]) return false;
+  }
+  tree.validatedAt = Date.now();
+  return true;
+}
+
+async function buildRustModuleTree(cargoRoot: string, projectRoot: string): Promise<RustModuleTree> {
+  const signatures = new Map<string, string>();
+  const reachable = new Set<string>();
+  const ownerSets = new Map<string, Map<string, AttributedModuleParent>>();
+  let truncated = false;
+
+  await recordPathStat(path.join(cargoRoot, "Cargo.toml"), signatures);
+  for (const relative of ["src", path.join("src", "bin"), "tests", "examples", "benches"]) {
+    await recordPathStat(path.join(cargoRoot, relative), signatures);
+  }
+
+  const walkFile = async (file: string, depth: number): Promise<void> => {
+    if (truncated) return;
+    if (depth > MAX_RUST_MODULE_TREE_DEPTH) {
+      truncated = true;
+      return;
+    }
+    const resolved = path.resolve(file);
+    if (reachable.has(resolved)) return;
+    if (reachable.size >= MAX_RUST_MODULE_TREE_FILES) {
+      truncated = true;
+      return;
+    }
+    reachable.add(resolved);
+    const stat = await recordPathStat(resolved, signatures);
+    if (!stat?.isFile()) return;
+    const scope = await loadRustPathAttributeScope(resolved);
+    await walkScope(scope, resolved, rustChildModuleDir(resolved), path.dirname(resolved), depth);
+  };
+
+  const walkScope = async (
+    scope: RustModuleScope,
+    currentFile: string,
+    currentModuleDir: string,
+    attributeDirectory: string,
+    depth: number,
+  ): Promise<void> => {
+    if (truncated) return;
+    if (depth > MAX_RUST_MODULE_TREE_DEPTH) {
+      truncated = true;
+      return;
+    }
+    for (const [name, pathValue] of scope.declaredModules) {
+      if (truncated) return;
+      let target: string | null = null;
+      if (pathValue !== undefined) {
+        const attributedPath = path.resolve(attributeDirectory, pathValue);
+        await recordPathStat(attributedPath, signatures);
+        if (await isExistingAttributedPathInsideProject(projectRoot, attributedPath)) {
+          target = path.resolve(attributedPath);
+          addAttributedOwner(ownerSets, target, { parentFile: currentFile, parentModuleDir: currentModuleDir });
+        }
+      } else {
+        target = await resolveDeclaredConventionalModule(currentModuleDir, name, signatures);
+      }
+      if (target) await walkFile(target, depth + 1);
+    }
+    for (const [name, child] of scope.inlineModules) {
+      if (truncated) return;
+      const nextDir = path.resolve(currentModuleDir, child.inlineLocation?.directory ?? name);
+      await walkScope(child, currentFile, nextDir, nextDir, depth + 1);
+    }
+  };
+
+  for (const crateRoot of await rustCrateRootFiles(cargoRoot, projectRoot)) {
+    await walkFile(crateRoot, 0);
+  }
+
+  const owners = new Map<string, AttributedModuleParent[]>();
+  for (const [target, set] of ownerSets) {
+    owners.set(target, [...set.values()]);
+  }
+  return { signatures, truncated, reachable, owners, validatedAt: Date.now() };
+}
+
+async function getRustModuleTree(cargoRoot: string, projectRoot: string): Promise<RustModuleTree> {
+  const key = `${path.resolve(cargoRoot)}\0${path.resolve(projectRoot)}`;
+  const cached = lruMapGet(rustModuleTreeCache, key);
+  if (cached && (await rustModuleTreeIsFresh(cached))) return cached;
+  const inflight = rustModuleTreeInflight.get(key);
+  if (inflight) return await inflight;
+
+  const pending = (async (): Promise<RustModuleTree> => {
+    try {
+      const tree = await buildRustModuleTree(path.resolve(cargoRoot), path.resolve(projectRoot));
+      lruMapSet(rustModuleTreeCache, key, tree, MAX_RUST_MODULE_TREE_CACHE_ENTRIES);
+      return tree;
+    } finally {
+      rustModuleTreeInflight.delete(key);
+    }
+  })();
+  rustModuleTreeInflight.set(key, pending);
+  return await pending;
 }
 
 async function rustDeclaringFileCandidates(fromFile: string, sourceRoot: string): Promise<string[]> {
@@ -446,14 +649,14 @@ async function findAttributedDeclarationParent(
   projectRoot: string,
   declaringFile: string,
   targetFile: string,
-): Promise<{ parentFile: string; parentModuleDir: string } | null> {
+): Promise<AttributedModuleParent | null> {
   const resolvedTarget = path.resolve(targetFile);
   const walk = async (
     scope: RustModuleScope,
     currentFile: string,
     currentModuleDir: string,
     attributeDirectory: string,
-  ): Promise<{ parentFile: string; parentModuleDir: string } | null> => {
+  ): Promise<AttributedModuleParent | null> => {
     for (const pathValue of scope.pathAttributes.values()) {
       const attributedPath = path.resolve(attributeDirectory, pathValue);
       if (path.resolve(attributedPath) !== resolvedTarget) continue;
@@ -475,45 +678,72 @@ async function findPathAttributeParent(
   projectRoot: string,
   fromFile: string,
   sourceRoot: string,
-): Promise<{ parentFile: string; parentModuleDir: string } | null> {
+  cargoRoot: string | null,
+): Promise<PathAttributeParentResult> {
+  if (cargoRoot) {
+    const tree = await getRustModuleTree(cargoRoot, projectRoot);
+    if (!tree.truncated) {
+      const owners = tree.owners.get(path.resolve(fromFile)) ?? [];
+      if (owners.length === 1) {
+        const owner = owners[0];
+        if (owner) return { status: "resolved", parent: owner };
+      }
+      if (owners.length > 1) return { status: "ambiguous" };
+      if (tree.reachable.has(path.resolve(fromFile))) return { status: "unresolved" };
+    }
+  }
   const candidates = await rustDeclaringFileCandidates(fromFile, sourceRoot);
   for (const candidate of candidates) {
     const found = await findAttributedDeclarationParent(projectRoot, candidate, fromFile);
-    if (found) return found;
+    if (found) return { status: "resolved", parent: found };
   }
-  return null;
+  return { status: "unresolved" };
 }
 
 async function rustSuperModuleContext(
   projectRoot: string,
   fromFile: string,
   sourceRoot: string,
-): Promise<{ parentFile: string | null; parentModuleDir: string }> {
-  const attributed = await findPathAttributeParent(projectRoot, fromFile, sourceRoot);
-  if (attributed) return attributed;
+  cargoRoot: string | null,
+): Promise<RustSuperModuleContext> {
+  const attributed = await findPathAttributeParent(projectRoot, fromFile, sourceRoot, cargoRoot);
+  if (attributed.status === "ambiguous") return { status: "ambiguous" };
+  if (attributed.status === "resolved") {
+    return {
+      status: "resolved",
+      parentFile: attributed.parent.parentFile,
+      parentModuleDir: attributed.parent.parentModuleDir,
+    };
+  }
   const currentDir = path.dirname(fromFile);
   const parentModuleDir = parentRustModuleDir(fromFile, currentDir);
-  return { parentFile: await resolveRustModuleParts(parentModuleDir, []), parentModuleDir };
+  return {
+    status: "resolved",
+    parentFile: await resolveRustModuleParts(parentModuleDir, []),
+    parentModuleDir,
+  };
 }
 
 async function declaringFileForSpecifierHead(
   projectRoot: string,
   fromFile: string,
   sourceRoot: string,
+  cargoRoot: string | null,
   head: string,
-): Promise<string | null> {
-  if (head === "*") return null;
+): Promise<DeclaringFileForHead> {
+  if (head === "*") return { status: "resolved", file: null };
   if (head === "crate") {
-    return resolveRustModuleParts(sourceRoot, []);
+    return { status: "resolved", file: await resolveRustModuleParts(sourceRoot, []) };
   }
   if (head === "self") {
-    return path.resolve(fromFile);
+    return { status: "resolved", file: path.resolve(fromFile) };
   }
   if (head === "super") {
-    const context = await rustSuperModuleContext(projectRoot, fromFile, sourceRoot);
-    return context.parentFile;
+    const context = await rustSuperModuleContext(projectRoot, fromFile, sourceRoot, cargoRoot);
+    if (context.status === "ambiguous") return { status: "ambiguous" };
+    return { status: "resolved", file: context.parentFile };
   }
-  return path.resolve(fromFile);
+  return { status: "resolved", file: path.resolve(fromFile) };
 }
 
 function rustScopeAtDirectory(scope: RustModuleScope, fromDir: string, toDir: string): RustModuleScope {
@@ -533,6 +763,7 @@ async function resolveAttributedRustModulePath(
   fromFile: string,
   parts: readonly string[],
   sourceRoot: string,
+  cargoRoot: string | null,
 ): Promise<string | null | undefined> {
   const head = parts[0];
   if (!head) return undefined;
@@ -540,11 +771,14 @@ async function resolveAttributedRustModulePath(
   let startFile: string | null;
   let startModuleDir: string | undefined;
   if (head === "super") {
-    const context = await rustSuperModuleContext(projectRoot, fromFile, sourceRoot);
+    const context = await rustSuperModuleContext(projectRoot, fromFile, sourceRoot, cargoRoot);
+    if (context.status === "ambiguous") return null;
     startFile = context.parentFile;
     startModuleDir = context.parentModuleDir;
   } else {
-    startFile = await declaringFileForSpecifierHead(projectRoot, fromFile, sourceRoot, head);
+    const declaring = await declaringFileForSpecifierHead(projectRoot, fromFile, sourceRoot, cargoRoot, head);
+    if (declaring.status === "ambiguous") return null;
+    startFile = declaring.file;
   }
   if (!startFile) return undefined;
 
@@ -641,7 +875,7 @@ export async function resolveRustImportPath(
 
   const cargoRoot = await findNearestCargoRoot(fromFile, projectRoot);
   const sourceRoot = crateSourceRoot(cargoRoot, projectRoot);
-  const walked = await resolveAttributedRustModulePath(projectRoot, fromFile, parts, sourceRoot);
+  const walked = await resolveAttributedRustModulePath(projectRoot, fromFile, parts, sourceRoot, cargoRoot);
   if (walked !== undefined) return walked;
 
   const currentDir = path.dirname(fromFile);
@@ -656,7 +890,8 @@ export async function resolveRustImportPath(
     return resolveRustModuleParts(currentDir, tail);
   }
   if (head === "super") {
-    const context = await rustSuperModuleContext(projectRoot, fromFile, sourceRoot);
+    const context = await rustSuperModuleContext(projectRoot, fromFile, sourceRoot, cargoRoot);
+    if (context.status === "ambiguous") return null;
     if (!tail.length) return context.parentFile;
     return resolveRustModuleParts(context.parentModuleDir, tail);
   }
