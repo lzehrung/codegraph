@@ -14,6 +14,7 @@ import {
   type ImportBinding,
   type ProjectIndex,
   type Reference,
+  type ReferenceCoverage,
   type SymbolDef,
 } from "../indexer/types.js";
 import { supportForFile, supportForFileWithoutHeaderSample } from "../languages.js";
@@ -148,6 +149,12 @@ const DEFAULT_MAX_RENAME_EDITS = 5_000;
 const MAX_RENAME_EDITS = 10_000;
 const renameExportIndexCache = new WeakMap<ProjectIndex, ReadonlyMap<string, readonly IndexedExportDeclaration[]>>();
 const strictUtf8Decoder = new TextDecoder("utf-8", { fatal: true });
+function incompleteReferenceCoverageReason(coverage: ReferenceCoverage): string | undefined {
+  if (coverage.state === "complete") return undefined;
+  const reasons = (coverage.reasons ?? []).filter((reason) => reason !== "truncated");
+  if (coverage.reasons?.length && !reasons.length) return undefined;
+  return reasons.length ? `Reference coverage is partial (${reasons.join(", ")}).` : "Reference coverage is partial.";
+}
 
 export async function previewRename(request: RenamePreviewRequest): Promise<RenamePreviewResponse> {
   const session = createAgentSession({
@@ -181,8 +188,12 @@ export async function previewRenameInSnapshot(
     const referenceResult = await findRenameReferences(snapshot.index, resolved.def, {
       maxReferences: maxEdits + 1,
     });
-    if (referenceResult.status === "ok") semanticReferences.push(...referenceResult.references);
-    else referenceFailure = referenceResult.reason;
+    if (referenceResult.status === "ok") {
+      semanticReferences.push(...referenceResult.references);
+      referenceFailure = incompleteReferenceCoverageReason(referenceResult.referenceCoverage);
+    } else {
+      referenceFailure = referenceResult.reason;
+    }
   } catch (error: unknown) {
     referenceFailure = errorMessage(error);
   }
@@ -253,8 +264,12 @@ export async function previewRenameInSnapshot(
         const memberReferences = await findRenameReferences(snapshot.index, memberDef, {
           maxReferences: maxEdits + 1,
         });
-        if (memberReferences.status === "ok") semanticReferences.push(...memberReferences.references);
-        else referenceFailure ??= memberReferences.reason;
+        if (memberReferences.status === "ok") {
+          semanticReferences.push(...memberReferences.references);
+          referenceFailure ??= incompleteReferenceCoverageReason(memberReferences.referenceCoverage);
+        } else {
+          referenceFailure ??= memberReferences.reason;
+        }
       } catch (error: unknown) {
         referenceFailure ??= errorMessage(error);
       }

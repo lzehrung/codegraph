@@ -1,9 +1,10 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { previewRenameInSnapshot, previewRenameWithSession } from "../src/agent/rename-preview.js";
 import { createAgentSession, type AgentProjectSnapshot } from "../src/agent/session.js";
 import { workspaceSymbolsInSnapshot, workspaceSymbolsWithSession } from "../src/agent/workspace-symbols.js";
+import * as navigationModule from "../src/indexer/navigation.js";
 import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { isSymlinkUnavailable, mkTmpDir } from "./helpers/filesystem.js";
 import { fileIdentityKey } from "../src/util/paths.js";
@@ -211,6 +212,88 @@ describe("rename preview", () => {
     expect(result.safe).toBe(false);
     expect(result.omittedCounts.edits).toBeGreaterThan(0);
     expect(result.unsafeSites.some((site) => site.reason === "limit_exceeded")).toBe(true);
+  });
+
+  it("marks partial target-reference coverage unsafe", async () => {
+    const { root, session, target } = await renameFixture();
+    const findRenameReferences = navigationModule.findRenameReferences;
+    const referenceSpy = vi.spyOn(navigationModule, "findRenameReferences").mockImplementation(async (...args) => {
+      const result = await findRenameReferences(...args);
+      return result.status === "ok"
+        ? {
+            ...result,
+            referenceCoverage: {
+              scope: "indexed_candidates",
+              state: "partial",
+              reasons: ["parser_degraded"],
+            },
+          }
+        : result;
+    });
+    try {
+      const result = await previewRenameWithSession(session, {
+        root,
+        handle: target.handle,
+        newName: "renamedService",
+      });
+
+      expect(result.safe).toBe(false);
+      expect(result.unsafeSites).toContainEqual(
+        expect.objectContaining({
+          reason: "unresolved_reference",
+          provenance: expect.objectContaining({ reason: expect.stringContaining("parser_degraded") }),
+        }),
+      );
+    } finally {
+      referenceSpy.mockRestore();
+    }
+  });
+
+  it("marks partial implementation-member coverage unsafe", async () => {
+    const root = await mkTmpDir("cg-rename-partial-implementation-");
+    await fsp.writeFile(
+      path.join(root, "types.ts"),
+      ["export interface Contract { run(): void }", "export class Worker implements Contract { run(): void {} }"].join(
+        "\n",
+      ),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const snapshot = await session.loadProject();
+    const symbols = await workspaceSymbolsInSnapshot(snapshot, { query: "run" });
+    const target = symbols.symbols.find((symbol) => symbol.location.range.start.line === 1);
+    expect(target).toBeDefined();
+    const findRenameReferences = navigationModule.findRenameReferences;
+    const referenceSpy = vi
+      .spyOn(navigationModule, "findRenameReferences")
+      .mockImplementation(async (index, def, options) => {
+        const result = await findRenameReferences(index, def, options);
+        if (result.status !== "ok" || def.range.start.line !== 2) return result;
+        return {
+          ...result,
+          referenceCoverage: {
+            scope: "indexed_candidates",
+            state: "partial",
+            reasons: ["unresolved_import"],
+          },
+        };
+      });
+    try {
+      const result = await previewRenameInSnapshot(snapshot, {
+        root,
+        handle: target!.handle,
+        newName: "execute",
+      });
+
+      expect(result.safe).toBe(false);
+      expect(result.unsafeSites).toContainEqual(
+        expect.objectContaining({
+          reason: "unresolved_reference",
+          provenance: expect.objectContaining({ reason: expect.stringContaining("unresolved_import") }),
+        }),
+      );
+    } finally {
+      referenceSpy.mockRestore();
+    }
   });
 
   it("adds bounded heuristic comment and string candidates only when requested", async () => {

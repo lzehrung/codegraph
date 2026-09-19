@@ -169,7 +169,7 @@ describe("refactor plan deterministic performance regression", () => {
           }),
         (response) => response.edits.length,
       );
-      expect(rename.edits).toHaveLength(limit - 1);
+      expect(rename.edits).toHaveLength(limit);
       expect(rename.safe).toBe(false);
       expect(rename.omittedCounts.edits).toBeGreaterThan(0);
     }

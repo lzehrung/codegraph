@@ -631,15 +631,14 @@ function findReceiverMemberDefinition(
   normalizeIdentifier: (name: string) => string,
   memberScope: ReceiverMemberScope = "any",
 ): SymbolDef | undefined {
-  const containerHit = findLocalWithinNode(
-    locals,
-    member,
-    container,
-    normalizeIdentifier,
+  const memberPredicate =
     memberScope === "any"
       ? undefined
-      : (local) => hasStaticModifier(local, targetContext, container) === (memberScope === "static"),
-  );
+      : (local: SymbolDef) => hasStaticModifier(local, targetContext, container) === (memberScope === "static");
+  const containerHit =
+    memberScope === "any"
+      ? findLocalWithinNode(locals, member, container, normalizeIdentifier)
+      : findDirectLocalWithinNode(locals, member, container, targetContext, normalizeIdentifier, memberPredicate);
   if (containerHit) return containerHit;
   if (targetContext.sup.id !== "rust") return undefined;
 
@@ -713,6 +712,7 @@ function findDirectLocalWithinNode(
   container: SyntaxNodeLike,
   targetContext: ParsedFileContext,
   normalizeIdentifier: (name: string) => string,
+  predicate?: (local: SymbolDef) => boolean,
 ): SymbolDef | undefined {
   const containerStart = container.startIndex;
   const containerEnd = container.endIndex;
@@ -748,7 +748,7 @@ function findDirectLocalWithinNode(
       isDeclarationParent = false;
       current = current.parent;
     }
-    if (current) return local;
+    if (current && (!predicate || predicate(local))) return local;
   }
   return undefined;
 }

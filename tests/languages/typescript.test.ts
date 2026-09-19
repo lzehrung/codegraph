@@ -205,6 +205,7 @@ describe("TypeScript enum and field member navigation", () => {
       "  Heavy = Light,",
       "}",
       "export class Box {",
+      "  static probe(): number { const value = 99; return value; }",
       "  static value = Mode.Light;",
       "  instanceValue = 1;",
       "  static create(): Box { return new Box(); }",
@@ -244,7 +245,7 @@ describe("TypeScript enum and field member navigation", () => {
       expect(classField.status).toBe("ok");
       if (classField.status === "ok") {
         expect(classField.definition.file).toBe(apiFile);
-        expect(classField.definition.range.start.line).toBe(6);
+        expect(classField.definition.range.start.line).toBe(7);
       }
       const staticMethod = await goToDefinition(index, {
         file: consumerFile,
@@ -254,7 +255,7 @@ describe("TypeScript enum and field member navigation", () => {
       expect(staticMethod.status).toBe("ok");
       if (staticMethod.status === "ok") {
         expect(staticMethod.definition.file).toBe(apiFile);
-        expect(staticMethod.definition.range.start.line).toBe(8);
+        expect(staticMethod.definition.range.start.line).toBe(9);
       }
 
       for (const testCase of [
@@ -275,7 +276,7 @@ describe("TypeScript enum and field member navigation", () => {
         expect(references.references.map((reference) => [reference.file, reference.range.start.line])).toEqual(
           expect.arrayContaining([
             [apiFile, 3],
-            [apiFile, 6],
+            [apiFile, 7],
             [consumerFile, 2],
           ]),
         );

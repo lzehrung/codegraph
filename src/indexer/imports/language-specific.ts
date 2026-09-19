@@ -1,7 +1,6 @@
 import path from "node:path";
 import {
   JAVA_DOTTED_NAME_SOURCE,
-  KOTLIN_DOTTED_NAME_SOURCE,
   isRustItemStartBoundary,
   parseCsharpUsingDirective,
   parseJavaImportStatement,
@@ -152,16 +151,18 @@ async function appendKotlinTextImports(context: LanguageSpecificImportContext): 
   if (context.languageId !== "kotlin" || context.getBindings().length) {
     return;
   }
+  const dottedNameWithTrivia = String.raw`${KOTLIN_IDENTIFIER_SOURCE}(?:\s*\.\s*${KOTLIN_IDENTIFIER_SOURCE})*`;
   const importPattern = new RegExp(
-    String.raw`^\s*import\s+(${KOTLIN_DOTTED_NAME_SOURCE}(?:\.\*)?)(?:\s+as\s+(${KOTLIN_IDENTIFIER_SOURCE}))?\s*;?\s*$`,
+    String.raw`^\s*import\s+(${dottedNameWithTrivia}(?:\s*\.\s*\*)?)(?:\s+as\s+(${KOTLIN_IDENTIFIER_SOURCE}))?\s*;?\s*$`,
     "gmu",
   );
   const maskedSource = maskImportBindingTrivia(context.source, context.languageId);
   for (const match of maskedSource.matchAll(importPattern)) {
     const rawSpec = match[1];
     if (!rawSpec) continue;
-    if (rawSpec.endsWith(".*")) {
-      const fromValue = rawSpec.slice(0, -2);
+    const normalizedSpec = rawSpec.replace(/\s+/gu, "");
+    if (normalizedSpec.endsWith(".*")) {
+      const fromValue = normalizedSpec.slice(0, -2);
       const resolved = await context.resolveFrom(fromValue);
       context.pushBinding({
         kind: "star",
@@ -172,15 +173,15 @@ async function appendKotlinTextImports(context: LanguageSpecificImportContext): 
       continue;
     }
 
-    const parts = rawSpec.split(".");
+    const parts = normalizedSpec.split(".");
     const imported = parts[parts.length - 1];
     if (!imported) continue;
-    const resolved = await context.resolveFrom(rawSpec);
+    const resolved = await context.resolveFrom(normalizedSpec);
     const namedBinding: ImportBinding = {
       kind: "named",
       local: match[2] ?? imported,
       imported,
-      from: rawSpec,
+      from: normalizedSpec,
       ...(match[2] !== undefined ? { explicitAlias: true } : {}),
       resolved,
       typeOnly: false,
