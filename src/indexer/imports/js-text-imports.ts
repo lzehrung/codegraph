@@ -88,7 +88,7 @@ function closingBraceIndex(maskedSource: string, openingIndex: number): number {
   return -1;
 }
 
-function splitNamedRequireBindingsWithOffsets(
+export function splitNamedRequireBindingsWithOffsets(
   source: string,
   maskedSource: string,
   blockStart: number,

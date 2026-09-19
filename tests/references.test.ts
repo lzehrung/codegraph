@@ -149,6 +149,43 @@ describe("Find References", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("applies usage bounds after excluding re-export declarations", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-reexport-usage-bound-"));
+    try {
+      const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+      await fsp.writeFile(sourceFile, "export function target() { return 1; }\n", "utf8");
+      await fsp.writeFile(
+        consumerFile,
+        [
+          'export { target as first } from "./source";',
+          'export { target as second } from "./source";',
+          'import { target } from "./source";',
+          "target();",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+      const def = index.byFile.get(fileIdentityKey(sourceFile))?.locals.find((local) => local.localName === "target");
+      if (!def) throw new Error("Expected target definition");
+
+      const result = await findUsageReferences(index, { def }, { maxReferences: 1 });
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.references).toEqual([
+        expect.objectContaining({
+          file: consumerFile,
+          range: expect.objectContaining({ start: expect.objectContaining({ line: 4 }) }),
+        }),
+      ]);
+      expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
   it("labels path-alias re-export declarations", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-path-alias-reexport-reference-"));
     try {

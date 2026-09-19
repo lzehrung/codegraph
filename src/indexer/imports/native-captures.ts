@@ -10,6 +10,7 @@ import type { ImportBinding } from "../types.js";
 import type { ImportResolver, ResolvedImportTarget } from "./context.js";
 import { sourceRangeFromOffsets } from "./binding-ranges.js";
 import { appendImplicitImportBinding, type LanguageSpecificImportContext } from "./language-specific.js";
+import { splitNamedRequireBindingsWithOffsets } from "./js-text-imports.js";
 
 type ImportCaptureExtractionContext = {
   source: string;
@@ -40,15 +41,14 @@ function parseObjectPatternBindings(patternText: string): ObjectPatternBinding[]
   const closeBrace = maskedPatternText.lastIndexOf("}");
   if (openBrace < 0 || closeBrace <= openBrace) return [];
   const bodyStart = openBrace + 1;
-  const body = maskedPatternText.slice(bodyStart, closeBrace);
   const out: ObjectPatternBinding[] = [];
-  let rawPartStart = 0;
-  for (const rawPart of body.split(",")) {
-    const leadingWhitespace = rawPart.length - rawPart.trimStart().length;
-    const specStart = bodyStart + rawPartStart + leadingWhitespace;
-    rawPartStart += rawPart.length + 1;
-    const spec = rawPart.trim();
-    if (!spec) continue;
+  for (const { spec, start } of splitNamedRequireBindingsWithOffsets(
+    maskedPatternText,
+    maskedPatternText,
+    bodyStart,
+    closeBrace,
+  )) {
+    const specStart = bodyStart + start;
     const withoutDefault = spec.replace(/\s*=\s*.+$/s, "").trim();
     // JS/TS identifiers permit Unicode ID_Start/ID_Continue plus $/_, not just ASCII.
     const match = withoutDefault.match(OBJECT_PATTERN_BINDING_PATTERN);

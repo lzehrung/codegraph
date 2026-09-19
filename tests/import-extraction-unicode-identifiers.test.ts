@@ -401,10 +401,10 @@ describe("Identifier equality rules", () => {
 });
 
 describe("Unicode import parser seams", () => {
-  it("parses native object-pattern captures with ECMAScript-only identifier characters", async () => {
+  it("parses native object-pattern captures with Unicode names and nested default commas", async () => {
     const bindings: ImportBinding[] = [];
-    const source = "const { \u2118: localAlias\u200d } = require('properties');";
-    const patternText = "{ \u2118: localAlias\u200d }";
+    const source = "const { \u2118: localAlias\u200d, x = fallback(a, b, c), y } = require('properties');";
+    const patternText = "{ \u2118: localAlias\u200d, x = fallback(a, b, c), y }";
     const patternStartIndex = source.indexOf(patternText);
     const utf8Length = (value: string): number => new TextEncoder().encode(value).length;
     const patternStartByte = utf8Length(source.slice(0, patternStartIndex));
@@ -466,6 +466,8 @@ describe("Unicode import parser seams", () => {
         resolved: { external: "properties" },
         typeOnly: false,
       },
+      expect.objectContaining({ kind: "named", imported: "x", local: "x" }),
+      expect.objectContaining({ kind: "named", imported: "y", local: "y" }),
     ]);
     expect(source.slice(importedRange.start.index, importedRange.end.index)).toBe("\u2118");
     expect(source.slice(localRange.start.index, localRange.end.index)).toBe("localAlias\u200d");

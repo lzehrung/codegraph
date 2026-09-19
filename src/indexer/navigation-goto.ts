@@ -192,6 +192,15 @@ export async function resolveMemberAccessDefinition(params: {
       };
       const nameNode = targetContext.tree.rootNode.descendantForPosition(targetPosition, targetPosition);
       const container = nameNode.parent;
+      if (
+        receiver.runtimeTypeOnly &&
+        container &&
+        container.type !== "enum_declaration" &&
+        container.type !== "internal_module" &&
+        container.type !== "module"
+      ) {
+        return null;
+      }
       if (container) {
         const targetModule = index.byFile.get(fileIdentityKey(objDef.file));
         if (targetModule) {
@@ -260,6 +269,7 @@ type ReceiverMemberScope = "any" | "instance" | "static";
 type ResolvedReceiverDefinition = {
   def: SymbolDef;
   memberScope: ReceiverMemberScope;
+  runtimeTypeOnly?: true;
 };
 
 async function resolveReceiverDefinition(
@@ -284,7 +294,7 @@ async function resolveReceiverDefinition(
       return { def: direct.def, memberScope: "static" };
     }
     if (direct?.kind === "resolved" && direct.def.kind === SymbolKind.TypeAlias) {
-      return { def: direct.def, memberScope: "any" };
+      return { def: direct.def, memberScope: "any", runtimeTypeOnly: true };
     }
     return null;
   }

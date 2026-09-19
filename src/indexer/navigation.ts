@@ -588,6 +588,7 @@ async function findReferencesInternal(
               def,
               (params, parsed) => goToDefinition(index, params, parsed),
               remainingReferences,
+              verifiedReferenceFilter(fileId),
             );
             for (const { range, provenance, via } of ranges) {
               if (hasReachedCollectionLimit()) break;

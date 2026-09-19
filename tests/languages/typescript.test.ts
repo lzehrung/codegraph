@@ -285,6 +285,26 @@ describe("TypeScript enum and field member navigation", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("does not treat ordinary type aliases as runtime member receivers", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-type-receiver-"));
+    const file = path.join(root, "types.ts").replace(/\\/g, "/");
+    const source = ["type Shape = { run(): void };", "Shape.run();", ""].join("\n");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+
+      const result = await goToDefinition(index, {
+        file,
+        line: 2,
+        column: source.split("\n")[1]!.indexOf("run") + 1,
+      });
+
+      expect(result.status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("TypeScript per-specifier type-only bindings", () => {
