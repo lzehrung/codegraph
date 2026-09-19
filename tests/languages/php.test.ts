@@ -727,7 +727,7 @@ describe("PHP property_element and const_element initializer references", () => 
       await writeFile(file, source, "utf8");
       const index = await buildProjectIndex(root, { cache: "off" });
 
-      // Regression: only one declaration for SOME_CONST — the initializer use in
+      // Regression: only one declaration for SOME_CONST -- the initializer use in
       // `const OTHER = SOME_CONST;` must not create a phantom duplicate declaration.
       const module = index.byFile.get(fileIdentityKey(file));
       expect(module?.locals.filter((entry) => entry.localName === "SOME_CONST")).toHaveLength(1);
@@ -744,7 +744,7 @@ describe("PHP property_element and const_element initializer references", () => 
       await writeFile(file, source, "utf8");
       const index = await buildProjectIndex(root, { cache: "off" });
 
-      // Regression: only one declaration for `$y` — the default-value use in
+      // Regression: only one declaration for `$y` -- the default-value use in
       // `public $x = $y;` must not create a phantom duplicate declaration.
       const module = index.byFile.get(fileIdentityKey(file));
       expect(module?.locals.filter((entry) => entry.localName === "$y")).toHaveLength(1);

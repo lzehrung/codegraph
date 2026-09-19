@@ -193,7 +193,7 @@ describe("Zig variable_declaration initializer references", () => {
         expect(references.references.map((entry) => entry.range.start.line)).toEqual([1, 2]);
       }
 
-      // Regression: only one declaration for `original` and one for `alias` — the
+      // Regression: only one declaration for `original` and one for `alias` -- the
       // initializer use must not create a phantom duplicate declaration.
       const module = index.byFile.get(fileIdentityKey(file));
       expect(module?.locals.filter((entry) => entry.localName === "original")).toHaveLength(1);

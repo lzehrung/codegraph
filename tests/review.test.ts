@@ -2303,6 +2303,51 @@ describe("Review report", () => {
     }
   });
 
+  it("normalizes callsite coverage affected files relative to the project root", async () => {
+    const root = await mkTmpDir("dg-review-coverage-paths-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const featureFile = path.join(srcDir, "feature.ts");
+    const degradedFile = normalize(path.join(srcDir, "consumer.ts"));
+    await fsp.writeFile(featureFile, "export function feature() { return 1; }\n", "utf8");
+    await buildProjectIndex(root);
+
+    const findSpy = vi.spyOn(indexerNavigation, "findUsageReferences").mockImplementation(async (_index, request) => {
+      if (!("def" in request)) return { status: "not_found", reason: "missing def" };
+      return {
+        status: "ok",
+        definition: request.def,
+        references: [],
+        referenceCoverage: {
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["parser_degraded"],
+          affectedFiles: [degradedFile],
+        },
+      };
+    });
+
+    try {
+      const report = await buildReviewReport(root, {
+        files: [featureFile],
+        includeSymbolDetails: true,
+        maxCallsites: 1,
+      });
+      const feature = report.changedFiles.find((entry) => entry.file === "src/feature.ts");
+      const symbol = feature?.symbols.find((entry) => entry.name === "feature");
+
+      expect(symbol?.callsiteCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parser_degraded"],
+        affectedFiles: ["src/consumer.ts"],
+      });
+    } finally {
+      findSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("respects reference concurrency limits", async () => {
     const root = await mkTmpDir("dg-review-concurrency-");
     const srcDir = path.join(root, "src");

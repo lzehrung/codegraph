@@ -583,7 +583,12 @@ export async function summarizeChangedFiles(input: {
       const entry = referencesByHandle.get(handle);
       const refs = entry?.refs;
       if (refs?.status === "ok") {
-        callsiteCoverage = refs.referenceCoverage;
+        callsiteCoverage = refs.referenceCoverage.affectedFiles
+          ? {
+              ...refs.referenceCoverage,
+              affectedFiles: refs.referenceCoverage.affectedFiles.map((file) => relativePath(projectRoot, file)),
+            }
+          : refs.referenceCoverage;
         const limited = refs.references.map((ref) => ({
           file: relativePath(projectRoot, ref.file),
           range: ref.range,

@@ -14,7 +14,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - Cross-file reference searches now include resolved named and default import declaration tokens across supported languages. They preserve exact source-name and local-alias roles when both names have the same spelling, exclude names in comments and string literals, retain multi-line Python imports, preserve reduced-mode Kotlin qualified imports across nested comments, and avoid duplicate rename edits. Native and reduced CommonJS destructuring now ignore commas inside nested defaults. Rename previews treat partial reference coverage as unsafe.
 - TypeScript and JavaScript receiver-member navigation now resolves enum members and valid static class fields without treating initializer reads, nested method locals, or type-only aliases as runtime class members. Declaration extraction also keeps Zig `extern const` variables, PHP constants with initializers, and Python destructuring targets accurate.
 - Successful reference results now report complete or partial indexed-candidate coverage separately from target-definition confidence, including parser, unresolved-import, and exact truncation reasons.
-- Detailed review summaries now apply callsite limits after excluding definition, import, and re-export declarations, and report `callsiteCoverage` when the bounded usage scan is partial.
+- Detailed review summaries now apply callsite limits after excluding definition, import, and re-export declarations, report `callsiteCoverage` when the bounded usage scan is partial, and keep affected file paths project-relative.
 
 ## [2.3.27] - 2026-09-15
 
