@@ -180,9 +180,10 @@ export async function resolveMemberAccessDefinition(params: {
       }
     }
 
-    const objDef = await resolveReceiverDefinition(obj, source, sup, resolveExpression);
+    const receiver = await resolveReceiverDefinition(obj, source, sup, resolveExpression);
 
-    if (objDef) {
+    if (receiver) {
+      const objDef = receiver.def;
       const targetContext = await ensureParsedContext(objDef.file, undefined, index.languageExtensions);
       const start = objDef.range.start;
       const targetPosition = {
@@ -205,6 +206,7 @@ export async function resolveMemberAccessDefinition(params: {
                   container,
                   targetContext,
                   normalizeIdentifier,
+                  receiver.memberScope,
                 );
 
           if (memberDef) {
@@ -253,31 +255,41 @@ export function supportsReceiverMemberResolution(languageId: string): boolean {
   );
 }
 
+type ReceiverMemberScope = "any" | "instance" | "static";
+
+type ResolvedReceiverDefinition = {
+  def: SymbolDef;
+  memberScope: ReceiverMemberScope;
+};
+
 async function resolveReceiverDefinition(
   obj: SyntaxNodeLike,
   source: string,
   sup: LanguageSupport,
   resolveExpression: (expr: SyntaxNodeLike) => Promise<ResolvedExport | null>,
-): Promise<SymbolDef | null> {
+): Promise<ResolvedReceiverDefinition | null> {
   const constructor = receiverConstructorExpression(obj, source, sup);
   if (constructor) {
     const result = await resolveExpression(constructor);
     if (result?.kind === "resolved") {
-      return result.def;
+      return {
+        def: result.def,
+        memberScope: isJsTsLanguage(sup.id) ? "instance" : "any",
+      };
     }
   }
   const direct = await resolveExpression(obj);
   if (isJsTsLanguage(sup.id) && sup.nodeTypes.identifier.includes(obj.type)) {
-    if (
-      direct?.kind === "resolved" &&
-      (direct.def.kind === SymbolKind.Class || direct.def.kind === SymbolKind.TypeAlias)
-    ) {
-      return direct.def;
+    if (direct?.kind === "resolved" && direct.def.kind === SymbolKind.Class) {
+      return { def: direct.def, memberScope: "static" };
+    }
+    if (direct?.kind === "resolved" && direct.def.kind === SymbolKind.TypeAlias) {
+      return { def: direct.def, memberScope: "any" };
     }
     return null;
   }
   if (direct?.kind === "resolved") {
-    return direct.def;
+    return { def: direct.def, memberScope: "any" };
   }
   return null;
 }
@@ -617,8 +629,17 @@ function findReceiverMemberDefinition(
   container: SyntaxNodeLike,
   targetContext: ParsedFileContext,
   normalizeIdentifier: (name: string) => string,
+  memberScope: ReceiverMemberScope = "any",
 ): SymbolDef | undefined {
-  const containerHit = findLocalWithinNode(locals, member, container, normalizeIdentifier);
+  const containerHit = findLocalWithinNode(
+    locals,
+    member,
+    container,
+    normalizeIdentifier,
+    memberScope === "any"
+      ? undefined
+      : (local) => hasStaticModifier(local, targetContext, container) === (memberScope === "static"),
+  );
   if (containerHit) return containerHit;
   if (targetContext.sup.id !== "rust") return undefined;
 
@@ -631,6 +652,7 @@ function findLocalWithinNode(
   member: string,
   node: SyntaxNodeLike,
   normalizeIdentifier: (name: string) => string = (name) => name,
+  predicate?: (local: SymbolDef) => boolean,
 ): SymbolDef | undefined {
   const containerStart = node.startIndex;
   const containerEnd = node.endIndex;
@@ -643,9 +665,26 @@ function findLocalWithinNode(
       startIndex !== undefined &&
       endIndex !== undefined &&
       startIndex >= containerStart &&
-      endIndex <= containerEnd
+      endIndex <= containerEnd &&
+      (!predicate || predicate(local))
     );
   });
+}
+function hasStaticModifier(local: SymbolDef, targetContext: ParsedFileContext, container: SyntaxNodeLike): boolean {
+  const position = {
+    row: local.range.start.line - 1,
+    column: local.range.start.column - 1,
+  };
+  let current: SyntaxNodeLike | null = targetContext.tree.rootNode.descendantForPosition(position, position);
+  while (current && current !== container) {
+    for (let childIndex = 0; ; childIndex += 1) {
+      const child = current.child(childIndex);
+      if (!child) break;
+      if (child.type === "static") return true;
+    }
+    current = current.parent;
+  }
+  return false;
 }
 
 const NESTED_MEMBER_LOCAL_CONTAINERS = new Set([

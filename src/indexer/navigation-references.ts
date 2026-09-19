@@ -545,27 +545,56 @@ export function importBindingDeclarationRangeKeys(moduleIndex: ModuleIndex | und
   return keys;
 }
 
-function importNameMatchesTarget(imp: ImportBinding, exportedNames: readonly string[]): boolean {
-  if (imp.kind === "named") return exportedNames.includes(imp.imported);
-  if (imp.kind === "default") return exportedNames.includes("default");
-  return false;
-}
-
-function moduleStructurallyLinksToDefinition(
+function structurallyExportsDefinition(
   index: ProjectIndex,
   moduleFile: string,
+  exportedName: string,
   def: SymbolDef,
+  definitionExportedNames: readonly string[],
   visited: Set<string> = new Set(),
 ): boolean {
+  const normalizeIdentifier =
+    supportForFileWithoutHeaderSample(moduleFile, index.languageExtensions)?.normalizeIdentifier ?? ((name) => name);
+  const canonicalName = normalizeIdentifier(exportedName);
   const fileKey = fileIdentityKey(moduleFile);
-  if (fileKey === fileIdentityKey(def.file)) return true;
-  if (visited.has(fileKey)) return false;
-  visited.add(fileKey);
+  const visitKey = `${fileKey}::${canonicalName}`;
+  if (visited.has(visitKey)) return false;
+  visited.add(visitKey);
+  if (
+    fileKey === fileIdentityKey(def.file) &&
+    definitionExportedNames.some((name) => normalizeIdentifier(name) === canonicalName)
+  ) {
+    return true;
+  }
   const moduleIndex = index.byFile.get(fileKey);
   if (!moduleIndex) return false;
   for (const entry of moduleIndex.exports) {
-    if (entry.type === "local") continue;
-    if (moduleStructurallyLinksToDefinition(index, entry.fromModule, def, visited)) {
+    if (entry.type === "local") {
+      if (
+        normalizeIdentifier(entry.exportedAs) === canonicalName &&
+        sameDef(entry.target, def, index.languageExtensions)
+      ) {
+        return true;
+      }
+      continue;
+    }
+    if (entry.type === "reexport" && normalizeIdentifier(entry.exportedAs) === canonicalName) {
+      if (
+        structurallyExportsDefinition(
+          index,
+          entry.fromModule,
+          entry.sourceSpecifier || exportedName,
+          def,
+          definitionExportedNames,
+          visited,
+        )
+      ) {
+        return true;
+      }
+    } else if (
+      entry.type === "exportStar" &&
+      structurallyExportsDefinition(index, entry.fromModule, exportedName, def, definitionExportedNames, visited)
+    ) {
       return true;
     }
   }
@@ -579,8 +608,11 @@ function isUnresolvedIndexedImport(
   exportedNames: readonly string[],
 ): boolean {
   if (typeof imp.resolved !== "string") return false;
-  if (!importNameMatchesTarget(imp, exportedNames)) return false;
-  if (!moduleStructurallyLinksToDefinition(index, imp.resolved, def)) return false;
+  let importedName: string;
+  if (imp.kind === "named") importedName = imp.imported;
+  else if (imp.kind === "default") importedName = "default";
+  else return false;
+  if (!structurallyExportsDefinition(index, imp.resolved, importedName, def, exportedNames)) return false;
   return !importCanReferenceDefinition(index, imp, def, exportedNames);
 }
 

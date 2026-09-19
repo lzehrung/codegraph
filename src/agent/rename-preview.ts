@@ -4,7 +4,7 @@ import { boundList } from "../presentation/bounds.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import { shapeCandidateTests, type RenameCandidateTest } from "./candidate-tests.js";
 export type { RenameCandidateTest };
-import { findReferences } from "../indexer/navigation.js";
+import { findRenameReferences } from "../indexer/navigation.js";
 import { resolveExport } from "../indexer/navigation-resolve.js";
 import { getCachedScope } from "../indexer/navigation-references.js";
 import { findImplementations as queryImplementations } from "../indexer/type-hierarchy.js";
@@ -178,11 +178,9 @@ export async function previewRenameInSnapshot(
   const semanticReferences: Reference[] = [];
   let referenceFailure: string | undefined;
   try {
-    const referenceResult = await findReferences(
-      snapshot.index,
-      { def: resolved.def },
-      { maxReferences: maxEdits + 1 },
-    );
+    const referenceResult = await findRenameReferences(snapshot.index, resolved.def, {
+      maxReferences: maxEdits + 1,
+    });
     if (referenceResult.status === "ok") semanticReferences.push(...referenceResult.references);
     else referenceFailure = referenceResult.reason;
   } catch (error: unknown) {
@@ -252,11 +250,9 @@ export async function previewRenameInSnapshot(
       }
       semanticDefinitions.set(implementation.symbolId, memberDef);
       try {
-        const memberReferences = await findReferences(
-          snapshot.index,
-          { def: memberDef },
-          { maxReferences: maxEdits + 1 },
-        );
+        const memberReferences = await findRenameReferences(snapshot.index, memberDef, {
+          maxReferences: maxEdits + 1,
+        });
         if (memberReferences.status === "ok") semanticReferences.push(...memberReferences.references);
         else referenceFailure ??= memberReferences.reason;
       } catch (error: unknown) {

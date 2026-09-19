@@ -267,6 +267,31 @@ describe("rename preview", () => {
     ]);
     expect(result.edits.some((edit) => edit.oldText === "localService")).toBe(false);
   });
+  it("does not charge preserved alias sites against the edit limit", async () => {
+    const root = await mkTmpDir("cg-rename-alias-bound-");
+    await fsp.writeFile(path.join(root, "service.ts"), "export function service(): number { return 1; }\n");
+    await fsp.writeFile(
+      path.join(root, "consumer.ts"),
+      'import { service as localService } from "./service.js";\nexport const value = localService();\n',
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const symbols = await workspaceSymbolsWithSession(session, { root, query: "service", exportedOnly: true });
+
+    const result = await previewRenameWithSession(session, {
+      root,
+      handle: symbols.symbols[0]!.handle,
+      newName: "renamedService",
+      maxEdits: 2,
+    });
+
+    expect(result.safe).toBe(true);
+    expect(result.omittedCounts.edits).toBe(0);
+    expect(result.unsafeSites.some((site) => site.reason === "limit_exceeded")).toBe(false);
+    expect(result.edits.map((edit) => [edit.file, edit.oldText, edit.kind])).toEqual([
+      ["consumer.ts", "service", "import"],
+      ["service.ts", "service", "definition"],
+    ]);
+  });
 
   it("preserves an explicit local alias that spells the same as its imported symbol", async () => {
     const root = await mkTmpDir("cg-rename-same-alias-");

@@ -1012,6 +1012,64 @@ describe("Find References", () => {
         await fsp.rm(root, { recursive: true, force: true });
       }
     });
+    it("reports unresolved imports through an aliased re-export chain", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-aliased-reexport-unresolved-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const barrelFile = path.join(root, "barrel.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export function target() { return 1; }\n", "utf8");
+        await fsp.writeFile(barrelFile, 'export { target as renamed } from "./source";\n', "utf8");
+        await fsp.writeFile(consumerFile, 'import { renamed } from "./barrel";\n', "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, barrelFile, consumerFile]);
+        const sourceModule = index.byFile.get(fileIdentityKey(sourceFile));
+        const def = sourceModule?.locals.find((local) => local.localName === "target");
+        if (!sourceModule || !def) throw new Error("Expected source definition");
+        sourceModule.exports = [];
+        sourceModule.locals = sourceModule.locals.filter((local) => local.localName !== "target");
+        index.exportCache.clear();
+
+        const result = await indexer.findReferences(index, { def });
+
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(result.referenceCoverage.state).toBe("partial");
+        expect(result.referenceCoverage.reasons).toContain("unresolved_import");
+        expect(result.referenceCoverage.affectedFiles).toContain(consumerFile);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not lower coverage for an unrelated alias on a barrel that also reaches the definition", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-aliased-reexport-unrelated-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const otherFile = path.join(root, "other.ts").replace(/\\/g, "/");
+        const barrelFile = path.join(root, "barrel.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export function target() { return 1; }\n", "utf8");
+        await fsp.writeFile(otherFile, "export function other() { return 2; }\n", "utf8");
+        await fsp.writeFile(
+          barrelFile,
+          ['export { target as renamed } from "./source";', 'export { other as target } from "./other";', ""].join(
+            "\n",
+          ),
+          "utf8",
+        );
+        await fsp.writeFile(consumerFile, 'import { target } from "./barrel";\ntarget();\n', "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, otherFile, barrelFile, consumerFile]);
+
+        const result = await indexer.findReferences(index, { file: sourceFile, line: 1, column: 17 });
+
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        expect(result.references.some((reference) => reference.file === consumerFile)).toBe(false);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
 
     it("marks exact maxReferences truncation as partial coverage", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-truncation-refs-"));

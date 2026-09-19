@@ -206,6 +206,9 @@ describe("TypeScript enum and field member navigation", () => {
       "}",
       "export class Box {",
       "  static value = Mode.Light;",
+      "  instanceValue = 1;",
+      "  static create(): Box { return new Box(); }",
+      "  instanceMethod(): number { return this.instanceValue; }",
       "}",
       "",
     ].join("\n");
@@ -213,6 +216,9 @@ describe("TypeScript enum and field member navigation", () => {
       'import { Mode, Box } from "./api";',
       "const selected = Mode.Light;",
       "const copy = Box.value;",
+      "const made = Box.create();",
+      "const invalidField = Box.instanceValue;",
+      "const invalidMethod = Box.instanceMethod();",
       "",
     ].join("\n");
     try {
@@ -239,6 +245,28 @@ describe("TypeScript enum and field member navigation", () => {
       if (classField.status === "ok") {
         expect(classField.definition.file).toBe(apiFile);
         expect(classField.definition.range.start.line).toBe(6);
+      }
+      const staticMethod = await goToDefinition(index, {
+        file: consumerFile,
+        line: 4,
+        column: consumerSource.split("\n")[3]!.indexOf("create") + 1,
+      });
+      expect(staticMethod.status).toBe("ok");
+      if (staticMethod.status === "ok") {
+        expect(staticMethod.definition.file).toBe(apiFile);
+        expect(staticMethod.definition.range.start.line).toBe(8);
+      }
+
+      for (const testCase of [
+        { line: 5, member: "instanceValue" },
+        { line: 6, member: "instanceMethod" },
+      ]) {
+        const result = await goToDefinition(index, {
+          file: consumerFile,
+          line: testCase.line,
+          column: consumerSource.split("\n")[testCase.line - 1]!.indexOf(testCase.member) + 1,
+        });
+        expect(result.status, testCase.member).toBe("not_found");
       }
 
       const references = await findReferences(index, { file: apiFile, line: 2, column: 3 });

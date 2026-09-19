@@ -269,12 +269,20 @@ export async function findUsageReferences(
 ): Promise<FindReferencesResult> {
   return findReferencesInternal(index, req, opts, "usages");
 }
+/** Internal bounded lookup for semantic rename sites after preserved aliases are excluded. */
+export async function findRenameReferences(
+  index: ProjectIndex,
+  def: SymbolDef,
+  opts?: FindReferencesOptions,
+): Promise<FindReferencesResult> {
+  return findReferencesInternal(index, { def }, opts, "rename");
+}
 
 async function findReferencesInternal(
   index: ProjectIndex,
   req: FindReferencesRequest,
   opts: FindReferencesOptions | undefined,
-  collectionMode: "all" | "usages",
+  collectionMode: "all" | "usages" | "rename",
 ): Promise<FindReferencesResult> {
   let def: SymbolDef | null = null;
   let provenance: ResolutionProvenance | undefined;
@@ -314,11 +322,18 @@ async function findReferencesInternal(
 
   const definitionFile = def.file;
   const definitionSiteKey = referenceSiteKey(definitionFile, def.range);
-  const includeReference = (ref: Reference): boolean =>
-    collectionMode === "all" ||
-    (ref.via?.importBinding === undefined &&
-      ref.via?.reexport !== true &&
-      referenceSiteKey(ref.file, ref.range) !== definitionSiteKey);
+  const includeReference = (ref: Reference): boolean => {
+    if (collectionMode === "all") return true;
+    if (ref.via?.reexport === true || referenceSiteKey(ref.file, ref.range) === definitionSiteKey) return false;
+    if (collectionMode === "usages") return ref.via?.importBinding === undefined;
+    const binding = ref.via?.import;
+    if (!binding || binding.kind === "star" || binding.kind === "namespace") return true;
+    if (ref.via?.importBinding === "imported" && binding.kind === "named" && binding.imported === def.localName) {
+      return true;
+    }
+    if (binding.kind === "default") return false;
+    return binding.explicitAlias !== true && binding.local === def.localName;
+  };
   const verifiedReferenceFilter = (
     fileId: string,
   ): ((reference: VerifiedNamedNodeReference) => boolean) | undefined => {
