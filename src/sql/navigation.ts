@@ -401,25 +401,44 @@ export async function goToSqlDefinition(index: ProjectIndex, req: GoToRequest): 
   });
 }
 
+type FindSqlReferencesOptions = {
+  includeDefinition?: boolean;
+  maxReferences?: number;
+};
+
 export async function findSqlReferences(
   index: ProjectIndex,
   definition: SymbolDef,
+  options?: FindSqlReferencesOptions,
 ): Promise<FindReferencesResult | null> {
   if (!isSqlFile(definition.file)) return null;
   const references: Reference[] = [];
   const seen = new Set<string>();
   const lookup = getSqlDefinitionLookup(index);
-  const scannedFiles = sqlFiles(index);
+  const candidateFiles = sqlFiles(index);
+  const scannedFiles: string[] = [];
+  const includeDefinition = options?.includeDefinition ?? true;
+  const maxReferences =
+    typeof options?.maxReferences === "number" && options.maxReferences > 0 ? options.maxReferences : undefined;
+  const collectionLimit = maxReferences === undefined ? undefined : maxReferences + 1;
+  const definitionKey = `${fileIdentityKey(definition.file)}:${definition.range.start.line}:${definition.range.start.column}`;
+  const hasReachedCollectionLimit = (): boolean =>
+    collectionLimit !== undefined && references.length >= collectionLimit;
   const addReference = (file: string, range: Range): void => {
-    const key = `${file}:${range.start.line}:${range.start.column}`;
+    if (hasReachedCollectionLimit()) return;
+    const key = `${fileIdentityKey(file)}:${range.start.line}:${range.start.column}`;
+    if (!includeDefinition && key === definitionKey) return;
     if (seen.has(key)) return;
     seen.add(key);
     references.push({ file, range });
   };
 
-  for (const file of scannedFiles) {
+  for (const file of candidateFiles) {
+    if (hasReachedCollectionLimit()) break;
+    scannedFiles.push(file);
     const facts = await sqlFactsForFile(index, file);
     for (const fact of facts) {
+      if (hasReachedCollectionLimit()) break;
       for (const name of [fact.objectName, fact.relatedObjectName]) {
         if (!name || !sqlNameResolvesToDefinition(lookup, name, definition)) continue;
         for (const range of factReferenceRanges(fact, name)) {
@@ -427,7 +446,9 @@ export async function findSqlReferences(
         }
       }
     }
+    if (hasReachedCollectionLimit()) break;
     for (const statement of sqlStatementSlices(facts)) {
+      if (hasReachedCollectionLimit()) break;
       for (const range of qualifiedReferenceRanges(lookup, statement, definition)) {
         addReference(file, range);
       }
@@ -438,6 +459,8 @@ export async function findSqlReferences(
     if (fileCompare !== 0) return fileCompare;
     return left.range.start.line - right.range.start.line || left.range.start.column - right.range.start.column;
   });
+  const truncated = maxReferences !== undefined && references.length > maxReferences;
+  if (truncated) references.length = maxReferences;
   return {
     status: "ok",
     definition,
@@ -447,9 +470,9 @@ export async function findSqlReferences(
       index,
       def: definition,
       exportedNames: [],
-      candidateFiles: scannedFiles,
+      candidateFiles,
       scannedFiles,
-      truncated: false,
+      truncated,
     }),
   };
 }

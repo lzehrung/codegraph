@@ -304,7 +304,12 @@ async function findReferencesInternal(
     return { status: "not_found", reason: "Could not resolve definition" };
   }
 
-  const sqlReferences = await findSqlReferences(index, def);
+  const maxReferences =
+    typeof opts?.maxReferences === "number" && opts.maxReferences > 0 ? opts.maxReferences : undefined;
+  const sqlReferences = await findSqlReferences(index, def, {
+    includeDefinition: collectionMode === "all",
+    ...(maxReferences === undefined ? {} : { maxReferences }),
+  });
   if (sqlReferences) return sqlReferences;
 
   const definitionFile = def.file;
@@ -329,8 +334,6 @@ async function findReferencesInternal(
 
   const scope = getCachedScope(index, definitionFile, mod, parsedContext);
   const refs: Reference[] = [];
-  const maxReferences =
-    typeof opts?.maxReferences === "number" && opts.maxReferences > 0 ? opts.maxReferences : undefined;
   const seenRefs = new Map<string, number>();
   const collectionLimit = maxReferences !== undefined ? maxReferences + 1 : undefined;
   const hasReachedCollectionLimit = (): boolean => collectionLimit !== undefined && refs.length >= collectionLimit;
@@ -621,11 +624,13 @@ async function findReferencesInternal(
     }
   }
 
+  const receiverScannedFiles: FileId[] = [];
   if (shouldScanVerifiedReferences(def, phpQualifiedNames, parsedContext)) {
     for (const fileId of Array.from(index.byFile.values(), (module) => module.file).sort((left, right) =>
       left.localeCompare(right),
     )) {
       if (hasReachedCollectionLimit()) break;
+      receiverScannedFiles.push(fileId);
       const filter = index.bloomFilters?.get(fileIdentityKey(fileId));
       // Bloom filters contain names normalized by the candidate file's language, so probes must use that rule.
       const canonicalName =
@@ -685,7 +690,7 @@ async function findReferencesInternal(
     }
   }
 
-  const scannedFiles = [definitionFile, ...candidateFiles];
+  const scannedFiles = [definitionFile, ...candidateFiles, ...receiverScannedFiles];
   const referenceCoverage = buildIndexedCandidateCoverage({
     index,
     def,

@@ -216,6 +216,39 @@ describe("reduced/text-fallback named and default import token ranges", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+  it("keeps bindings after object-literal defaults in CommonJS destructuring", async () => {
+    const root = await mkTmpDir("cg-cjs-object-default-");
+    const main = path.join(root, "main.ts");
+    const dep = path.join(root, "dep.ts");
+    const source = 'const { x = { value: 1, nested: true }, y: localY } = require("./dep");\n';
+    await fsp.writeFile(dep, "export const x = 1;\nexport const y = 2;\n", "utf8");
+    const sup = supportById("ts");
+    if (!sup) throw new Error("TypeScript language support unavailable");
+
+    try {
+      const bindings = await collectImportsForFile(main, root, { source, sup, native: "off" });
+      expect(bindings).toEqual([
+        expect.objectContaining({
+          kind: "named",
+          imported: "x",
+          local: "x",
+          from: "./dep",
+          importedRange: rangeForToken(source, "x"),
+          localRange: rangeForToken(source, "x"),
+        }),
+        expect.objectContaining({
+          kind: "named",
+          imported: "y",
+          local: "localY",
+          from: "./dep",
+          importedRange: rangeForToken(source, "y"),
+          localRange: rangeForToken(source, "localY"),
+        }),
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 
   const namedDefaultFallbackCases: Array<{
     label: string;

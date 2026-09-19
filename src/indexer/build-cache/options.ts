@@ -30,8 +30,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * language paths, fixes repeated-name attribution, and refreshes Zig lexical scope bindings.
  * Epoch 15 preserves explicit same-spelling aliases, multiline Python imports,
  * CommonJS destructuring defaults, and corrected declaration captures.
+ * Epoch 16 handles balanced CommonJS destructuring defaults and corrected bounded references.
  */
-export const CORE_ALGORITHM_EPOCH = 15;
+export const CORE_ALGORITHM_EPOCH = 16;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

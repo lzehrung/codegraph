@@ -30,6 +30,8 @@ const IMPORT_EQUALS_REQUIRE_PATTERN = new RegExp(
   String.raw`(?:^|[;{}])\s*import\s+(${ECMASCRIPT_IDENTIFIER_SOURCE})\s*=\s*require\s*\(\s*(["'])(?<module>[^"']+)\2\s*\)`,
   "gmu",
 );
+const NAMED_REQUIRE_DECLARATION_PATTERN = /(?:^|[;{}])\s*(?:export\s+)?(?:const|let|var)\s*\{/gmu;
+const REQUIRE_AFTER_BINDING_PATTERN = /^\s*=\s*require\s*\(\s*(["'])(?<module>[^"']+)\1\s*\)/u;
 
 function sourceForTextImportExtraction(context: JsTextImportExtractionContext): string {
   if (context.languageId === "ts" || context.languageId === "tsx" || context.languageId === "js") {
@@ -70,6 +72,53 @@ function splitNamedImportsWithOffsets(namedBlock: string): Array<{ spec: string;
     if (spec) out.push({ spec, start: cursor + leading });
     cursor += raw.length + 1;
   }
+  return out;
+}
+function closingBraceIndex(maskedSource: string, openingIndex: number): number {
+  let depth = 0;
+  for (let index = openingIndex; index < maskedSource.length; index += 1) {
+    const character = maskedSource[index];
+    if (character === "{") {
+      depth += 1;
+    } else if (character === "}") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function splitNamedRequireBindingsWithOffsets(
+  source: string,
+  maskedSource: string,
+  blockStart: number,
+  blockEnd: number,
+): Array<{ spec: string; start: number }> {
+  const out: Array<{ spec: string; start: number }> = [];
+  let specStart = blockStart;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  let parenDepth = 0;
+  const push = (end: number): void => {
+    const raw = source.slice(specStart, end);
+    const leading = raw.length - raw.trimStart().length;
+    const spec = raw.trim();
+    if (spec) out.push({ spec, start: specStart - blockStart + leading });
+  };
+  for (let index = blockStart; index < blockEnd; index += 1) {
+    const character = maskedSource[index];
+    if (character === "{") braceDepth += 1;
+    else if (character === "}") braceDepth -= 1;
+    else if (character === "[") bracketDepth += 1;
+    else if (character === "]") bracketDepth -= 1;
+    else if (character === "(") parenDepth += 1;
+    else if (character === ")") parenDepth -= 1;
+    else if (character === "," && braceDepth === 0 && bracketDepth === 0 && parenDepth === 0) {
+      push(index);
+      specStart = index + 1;
+    }
+  }
+  push(blockEnd);
   return out;
 }
 
@@ -268,23 +317,26 @@ async function collectCommonJsRequireDeclarations(
     });
   }
 
-  const namedRequirePattern =
-    /(?:^|[;{}])\s*(?:export\s+)?(?:const|let|var)\s*\{(?<named>[^}]+)\}\s*=\s*require\s*\(\s*(["'])(?<module>[^"']+)\2\s*\)/dgm;
-  for (const match of source.matchAll(namedRequirePattern)) {
-    if (!matchStartsInCode(maskedSource, match)) continue;
-    const namedBlock = match.groups?.named;
-    const moduleSpecifier = match.groups?.module;
-    if (!namedBlock || !moduleSpecifier) continue;
-    const namedBlockStart = match.indices?.groups?.named?.[0] ?? -1;
+  for (const match of maskedSource.matchAll(NAMED_REQUIRE_DECLARATION_PATTERN)) {
+    const openingIndex = (match.index ?? 0) + match[0].lastIndexOf("{");
+    const closingIndex = closingBraceIndex(maskedSource, openingIndex);
+    if (closingIndex < 0) continue;
+    const requireMatch = REQUIRE_AFTER_BINDING_PATTERN.exec(source.slice(closingIndex + 1));
+    const moduleSpecifier = requireMatch?.groups?.module;
+    if (!moduleSpecifier) continue;
+    const namedBlockStart = openingIndex + 1;
     const resolved = await context.resolveFrom(moduleSpecifier);
-    for (const { spec, start } of splitNamedImportsWithOffsets(namedBlock)) {
+    for (const { spec, start } of splitNamedRequireBindingsWithOffsets(
+      source,
+      maskedSource,
+      namedBlockStart,
+      closingIndex,
+    )) {
       const namedRequire = parseNamedRequireSpecifier(spec);
       if (!namedRequire) continue;
-      const specStart = namedBlockStart < 0 ? -1 : namedBlockStart + start;
-      const importedRange =
-        specStart < 0 ? undefined : tokenRange(source, specStart + namedRequire.importedOffset, namedRequire.imported);
-      const localRange =
-        specStart < 0 ? undefined : tokenRange(source, specStart + namedRequire.localOffset, namedRequire.local);
+      const specStart = namedBlockStart + start;
+      const importedRange = tokenRange(source, specStart + namedRequire.importedOffset, namedRequire.imported);
+      const localRange = tokenRange(source, specStart + namedRequire.localOffset, namedRequire.local);
       context.pushBinding({
         kind: "named",
         local: namedRequire.local,

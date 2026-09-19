@@ -5,6 +5,7 @@ import fsp from "node:fs/promises";
 import * as indexer from "../src/indexer.js";
 import * as scopeModule from "../src/indexer/scope.js";
 import { getCachedReferenceCandidateFiles } from "../src/indexer/navigation-references.js";
+import { findUsageReferences } from "../src/indexer/navigation.js";
 import { createReferenceLookupCache } from "../src/impact/reference-cache.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import {
@@ -566,6 +567,35 @@ describe("Find References", () => {
         await fsp.rm(root, { recursive: true, force: true });
       }
     });
+    it("excludes SQL definitions and applies limits to usage-only reference scans", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-usage-bound-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(schemaFile, "CREATE TABLE users (id integer);\n", "utf8");
+        await fsp.writeFile(reportFile, "SELECT id FROM users;\nSELECT count(*) FROM users;\n", "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const result = await findUsageReferences(
+          index,
+          { file: schemaFile, line: 1, column: 16 },
+          { maxReferences: 1 },
+        );
+
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(result.references).toHaveLength(1);
+        expect(result.references[0]?.file).toBe(reportFile);
+        expect(result.references.some((reference) => reference.file === schemaFile)).toBe(false);
+        expect(result.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["truncated"],
+        });
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
 
     it("marks a parser-degraded SQL candidate file as partial coverage", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-degraded-coverage-"));
@@ -623,6 +653,37 @@ describe("Find References", () => {
           expect(imported?.via?.import).toBeDefined();
           expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
         }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+    it("includes receiver-scan files in parser-degradation coverage", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-enum-member-coverage-"));
+      try {
+        const typesFile = path.join(root, "types.ts").replace(/\\/g, "/");
+        const barrelFile = path.join(root, "barrel.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(typesFile, "export enum Mode {\n  Light,\n}\n", "utf8");
+        await fsp.writeFile(barrelFile, 'export { Mode } from "./types";\n', "utf8");
+        await fsp.writeFile(
+          consumerFile,
+          ['import { Mode } from "./barrel";', "const selected = Mode.Light;", ""].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [typesFile, barrelFile, consumerFile]);
+        const def = index.byFile.get(fileIdentityKey(typesFile))?.locals.find((local) => local.localName === "Light");
+        if (!def) throw new Error("Expected enum member definition");
+        expect(getCachedReferenceCandidateFiles(index, def, [], false)).not.toContain(consumerFile);
+        markCandidateParserDegraded(index, consumerFile);
+
+        const result = await indexer.findReferences(index, { def });
+
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expectReferenceAt(result, consumerFile, 2);
+        expect(result.referenceCoverage.state).toBe("partial");
+        expect(result.referenceCoverage.reasons).toEqual(["parser_degraded"]);
+        expect(result.referenceCoverage.affectedFiles).toEqual([consumerFile]);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
