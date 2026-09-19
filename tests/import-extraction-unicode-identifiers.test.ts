@@ -401,10 +401,11 @@ describe("Identifier equality rules", () => {
 });
 
 describe("Unicode import parser seams", () => {
-  it("parses native object-pattern captures with Unicode names and nested default commas", async () => {
+  it("keeps native and fallback object-pattern bindings after nested defaults and regex literals", async () => {
     const bindings: ImportBinding[] = [];
-    const source = "const { \u2118: localAlias\u200d, x = fallback(a, b, c), y } = require('properties');";
-    const patternText = "{ \u2118: localAlias\u200d, x = fallback(a, b, c), y }";
+    const source =
+      "const { \u2118: localAlias\u200d, x = fallback(a, b, c), pattern = /[},(]/, y } = require('properties');";
+    const patternText = "{ \u2118: localAlias\u200d, x = fallback(a, b, c), pattern = /[},(]/, y }";
     const patternStartIndex = source.indexOf(patternText);
     const utf8Length = (value: string): number => new TextEncoder().encode(value).length;
     const patternStartByte = utf8Length(source.slice(0, patternStartIndex));
@@ -467,10 +468,25 @@ describe("Unicode import parser seams", () => {
         typeOnly: false,
       },
       expect.objectContaining({ kind: "named", imported: "x", local: "x" }),
+      expect.objectContaining({ kind: "named", imported: "pattern", local: "pattern" }),
       expect.objectContaining({ kind: "named", imported: "y", local: "y" }),
     ]);
     expect(source.slice(importedRange.start.index, importedRange.end.index)).toBe("\u2118");
     expect(source.slice(localRange.start.index, localRange.end.index)).toBe("localAlias\u200d");
+
+    const fallbackBindings: ImportBinding[] = [];
+    await collectJsTextImports({
+      source,
+      languageId: "ts",
+      resolveFrom,
+      pushBinding: (binding) => fallbackBindings.push(binding),
+    });
+    expect(fallbackBindings.map((binding) => (binding.kind === "named" ? binding.imported : binding.kind))).toEqual([
+      "\u2118",
+      "x",
+      "pattern",
+      "y",
+    ]);
   });
 
   it("normalizes a Unicode Go import alias from text", async () => {

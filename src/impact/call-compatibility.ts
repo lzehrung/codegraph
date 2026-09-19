@@ -1,5 +1,5 @@
 import path from "node:path";
-import { findReferences, goToDefinition } from "../indexer/navigation.js";
+import { findUsageReferences, goToDefinition } from "../indexer/navigation.js";
 import { ensureParsedContext, type ParsedFileContext } from "../indexer/parse-context.js";
 import { SymbolKind, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
@@ -1200,8 +1200,8 @@ export async function attachCallCompatibilityHints(
       recordReferenceLookupStarted(options.workBudget);
     }
     const referenceResult = await (options.referenceCache
-      ? options.referenceCache.get(index, referenceDef, { maxReferences: referenceScanLimit })
-      : findReferences(index, { def: referenceDef }, { maxReferences: referenceScanLimit }));
+      ? options.referenceCache.getUsages(index, referenceDef, { maxReferences: referenceScanLimit })
+      : findUsageReferences(index, { def: referenceDef }, { maxReferences: referenceScanLimit }));
     let refs: Reference[] = [];
     const shouldIncludeReference = options.shouldIncludeReference ?? (() => true);
     if (referenceResult.status === "ok") {

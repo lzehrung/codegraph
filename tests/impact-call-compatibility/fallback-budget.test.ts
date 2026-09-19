@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { buildProjectIndex } from "../../src/indexer.js";
-import { findReferences, goToDefinition } from "../../src/indexer/navigation.js";
+import { findUsageReferences, goToDefinition } from "../../src/indexer/navigation.js";
 import { attachCallCompatibilityHints } from "../../src/impact/call-compatibility.js";
 import type { ChangedSymbol } from "../../src/impact/types.js";
 import type { Range } from "../../src/types.js";
@@ -16,7 +16,7 @@ vi.mock(
     const actual = await importOriginal();
     return {
       ...actual,
-      findReferences: vi.fn(),
+      findUsageReferences: vi.fn(),
       goToDefinition: vi.fn(),
     };
   },
@@ -85,7 +85,7 @@ describe("call compatibility fallback budget", () => {
   it("does not run verified callsite scanning after resolved refs produce a callsite", async () => {
     const fixture = await buildChangedHelperFixture();
     try {
-      vi.mocked(findReferences).mockResolvedValue({
+      vi.mocked(findUsageReferences).mockResolvedValue({
         status: "ok",
         definition: {
           file: "definition.ts",
@@ -111,7 +111,7 @@ describe("call compatibility fallback budget", () => {
       );
       expect(goToDefinition).not.toHaveBeenCalled();
     } finally {
-      vi.mocked(findReferences).mockReset();
+      vi.mocked(findUsageReferences).mockReset();
       vi.mocked(goToDefinition).mockReset();
       await fsp.rm(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
@@ -120,7 +120,7 @@ describe("call compatibility fallback budget", () => {
   it("clears stale hints when changed symbols are reused with stricter limits or filters", async () => {
     const fixture = await buildChangedHelperFixture();
     try {
-      vi.mocked(findReferences).mockResolvedValue({
+      vi.mocked(findUsageReferences).mockResolvedValue({
         status: "ok",
         definition: {
           file: "definition.ts",
@@ -157,7 +157,7 @@ describe("call compatibility fallback budget", () => {
       });
       expect(fixture.changedSymbol.callCompatibility).toBeUndefined();
     } finally {
-      vi.mocked(findReferences).mockReset();
+      vi.mocked(findUsageReferences).mockReset();
       vi.mocked(goToDefinition).mockReset();
       await fsp.rm(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
@@ -184,7 +184,7 @@ describe("call compatibility fallback budget", () => {
         range: helper.range,
         signatureChanged: true,
       };
-      vi.mocked(findReferences).mockResolvedValue({ status: "not_found", reason: "test" });
+      vi.mocked(findUsageReferences).mockResolvedValue({ status: "not_found", reason: "test" });
       vi.mocked(goToDefinition).mockResolvedValue({ status: "not_found", reason: "test" });
       const readFileSync = vi.spyOn(fs, "readFileSync");
       try {
@@ -196,7 +196,7 @@ describe("call compatibility fallback budget", () => {
         readFileSync.mockRestore();
       }
     } finally {
-      vi.mocked(findReferences).mockReset();
+      vi.mocked(findUsageReferences).mockReset();
       vi.mocked(goToDefinition).mockReset();
       await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }

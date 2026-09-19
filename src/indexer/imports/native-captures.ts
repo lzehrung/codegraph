@@ -2,7 +2,7 @@ import { buildByteToStringIndexMap, stringIndexForByte, type ByteToStringIndexMa
 import { capturesByName, capturesNamed, rangeFromNativeCapture } from "../../native/query-results.js";
 import type { NativeCapture, NativeMatch } from "../../native/tree-sitter-native.js";
 import { unquote } from "../../util/ast.js";
-import { maskJsLikeCommentsAndStrings } from "../../util/comments.js";
+import { maskJsLikeCommentsStringsAndRegex } from "../../util/comments.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rust-test-modules.js";
 import { parseGoImportAlias } from "../shared.js";
@@ -36,7 +36,7 @@ type ObjectPatternBinding = {
 };
 
 function parseObjectPatternBindings(patternText: string): ObjectPatternBinding[] {
-  const maskedPatternText = maskJsLikeCommentsAndStrings(patternText);
+  const maskedPatternText = maskJsLikeCommentsStringsAndRegex(patternText);
   const openBrace = maskedPatternText.indexOf("{");
   const closeBrace = maskedPatternText.lastIndexOf("}");
   if (openBrace < 0 || closeBrace <= openBrace) return [];
@@ -49,7 +49,7 @@ function parseObjectPatternBindings(patternText: string): ObjectPatternBinding[]
     closeBrace,
   )) {
     const specStart = bodyStart + start;
-    const withoutDefault = spec.replace(/\s*=\s*.+$/s, "").trim();
+    const withoutDefault = spec.replace(/\s*=\s*[\s\S]*$/u, "").trim();
     // JS/TS identifiers permit Unicode ID_Start/ID_Continue plus $/_, not just ASCII.
     const match = withoutDefault.match(OBJECT_PATTERN_BINDING_PATTERN);
     if (!match) continue;

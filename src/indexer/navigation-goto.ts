@@ -205,18 +205,34 @@ export async function resolveMemberAccessDefinition(params: {
         const targetModule = index.byFile.get(fileIdentityKey(objDef.file));
         if (targetModule) {
           const normalizeIdentifier = targetContext.sup.normalizeIdentifier;
-          const memberDef =
-            targetContext.sup.id === "java"
-              ? findDirectLocalWithinNode(targetModule.locals, member, container, targetContext, normalizeIdentifier)
-              : findReceiverMemberDefinition(
-                  targetModule.locals,
-                  member,
-                  objDef,
-                  container,
-                  targetContext,
-                  normalizeIdentifier,
-                  receiver.memberScope,
-                );
+          let memberDef: SymbolDef | undefined;
+          if (receiver.runtimeTypeOnly) {
+            memberDef = findDirectLocalWithinNode(
+              targetModule.locals,
+              member,
+              container,
+              targetContext,
+              normalizeIdentifier,
+            );
+          } else if (targetContext.sup.id === "java") {
+            memberDef = findDirectLocalWithinNode(
+              targetModule.locals,
+              member,
+              container,
+              targetContext,
+              normalizeIdentifier,
+            );
+          } else {
+            memberDef = findReceiverMemberDefinition(
+              targetModule.locals,
+              member,
+              objDef,
+              container,
+              targetContext,
+              normalizeIdentifier,
+              receiver.memberScope,
+            );
+          }
 
           if (memberDef) {
             return okGoToResult(index, memberDef, {
@@ -747,8 +763,10 @@ function findDirectLocalWithinNode(
     let current = targetContext.tree.rootNode.descendantForPosition(position, position).parent;
     let isDeclarationParent = true;
     while (current && current !== container) {
+      const isDirectBody = current.type === "statement_block" && current.parent === container;
       if (
         !isDeclarationParent &&
+        !isDirectBody &&
         ((current.type === "class_body" && current.parent !== container) ||
           NESTED_MEMBER_LOCAL_CONTAINERS.has(current.type))
       ) {

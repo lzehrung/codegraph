@@ -305,6 +305,43 @@ describe("TypeScript enum and field member navigation", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves only direct namespace members", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-namespace-members-"));
+    const file = path.join(root, "namespace.ts").replace(/\\/g, "/");
+    const source = [
+      "namespace Tools {",
+      "  export const visible = 1;",
+      "  export function build() { const hidden = 2; return hidden; }",
+      "}",
+      "const valid = Tools.visible;",
+      "const invalid = Tools.hidden;",
+      "",
+    ].join("\n");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+
+      const visible = await goToDefinition(index, {
+        file,
+        line: 5,
+        column: source.split("\n")[4]!.indexOf("visible") + 1,
+      });
+      expect(visible.status).toBe("ok");
+      if (visible.status === "ok") {
+        expect(visible.definition.range.start.line).toBe(2);
+      }
+
+      const hidden = await goToDefinition(index, {
+        file,
+        line: 6,
+        column: source.split("\n")[5]!.indexOf("hidden") + 1,
+      });
+      expect(hidden.status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("TypeScript per-specifier type-only bindings", () => {
