@@ -18,6 +18,7 @@ import {
   buildIndexedCandidateCoverage,
   buildPhpQualifiedNames,
   collectVerifiedNamedNodeReferences,
+  type VerifiedNamedNodeReference,
   getCachedScope,
   exportFromIdentifier,
   getCachedReferenceCandidateFiles,
@@ -243,15 +244,37 @@ function isUnresolvedReceiverMemberProperty(sup: LanguageSupport, node: SyntaxNo
   return !!property && node.id === property.id;
 }
 
+type FindReferencesRequest = { file: FileId; line: number; column: number } | { def: SymbolDef };
+
+type FindReferencesOptions = {
+  context?: "line" | "block";
+  lines?: number;
+  blockMaxLines?: number;
+  maxReferences?: number;
+};
+
 export async function findReferences(
   index: ProjectIndex,
-  req: { file: FileId; line: number; column: number } | { def: SymbolDef },
-  opts?: {
-    context?: "line" | "block";
-    lines?: number;
-    blockMaxLines?: number;
-    maxReferences?: number;
-  },
+  req: FindReferencesRequest,
+  opts?: FindReferencesOptions,
+): Promise<FindReferencesResult> {
+  return findReferencesInternal(index, req, opts, "all");
+}
+
+/** Internal bounded lookup for consumers that need usage sites, not declaration sites. */
+export async function findUsageReferences(
+  index: ProjectIndex,
+  req: FindReferencesRequest,
+  opts?: FindReferencesOptions,
+): Promise<FindReferencesResult> {
+  return findReferencesInternal(index, req, opts, "usages");
+}
+
+async function findReferencesInternal(
+  index: ProjectIndex,
+  req: FindReferencesRequest,
+  opts: FindReferencesOptions | undefined,
+  collectionMode: "all" | "usages",
 ): Promise<FindReferencesResult> {
   let def: SymbolDef | null = null;
   let provenance: ResolutionProvenance | undefined;
@@ -285,6 +308,19 @@ export async function findReferences(
   if (sqlReferences) return sqlReferences;
 
   const definitionFile = def.file;
+  const definitionSiteKey = referenceSiteKey(definitionFile, def.range);
+  const includeReference = (ref: Reference): boolean =>
+    collectionMode === "all" ||
+    (ref.via?.importBinding === undefined &&
+      ref.via?.reexport !== true &&
+      referenceSiteKey(ref.file, ref.range) !== definitionSiteKey);
+  const verifiedReferenceFilter = (
+    fileId: string,
+  ): ((reference: VerifiedNamedNodeReference) => boolean) | undefined => {
+    if (collectionMode === "all") return undefined;
+    return (reference) =>
+      reference.via?.reexport !== true && referenceSiteKey(fileId, reference.range) !== definitionSiteKey;
+  };
   const parsedDef = index.parsed?.get(fileIdentityKey(definitionFile));
   const parsedContext = await ensureParsedContext(definitionFile, parsedDef, index.languageExtensions);
 
@@ -302,6 +338,7 @@ export async function findReferences(
     collectionLimit !== undefined ? Math.max(0, collectionLimit - refs.length) : undefined;
   const importBindingRank = (ref: Reference): number => (ref.via?.importBinding === "imported" ? 1 : 0);
   const pushRef = (ref: Reference): void => {
+    if (!includeReference(ref)) return;
     const key = referenceSiteKey(ref.file, ref.range);
     const existingIndex = seenRefs.get(key);
     if (existingIndex !== undefined) {
@@ -401,6 +438,7 @@ export async function findReferences(
           def,
           (params, parsed) => goToDefinition(index, params, parsed),
           remainingReferences,
+          verifiedReferenceFilter(fileId),
         );
         for (const { range, provenance, via } of ranges) {
           if (hasReachedCollectionLimit()) break;
@@ -492,6 +530,7 @@ export async function findReferences(
             def,
             (params, parsed) => goToDefinition(index, params, parsed),
             remainingReferences,
+            verifiedReferenceFilter(fileId),
           );
           for (const { range, provenance, via } of ranges) {
             if (hasReachedCollectionLimit()) break;
@@ -572,6 +611,7 @@ export async function findReferences(
           def,
           (params, parsed) => goToDefinition(index, params, parsed),
           remainingReferences,
+          verifiedReferenceFilter(fileId),
         );
         for (const { range, provenance, via } of ranges) {
           if (hasReachedCollectionLimit()) break;
@@ -600,6 +640,7 @@ export async function findReferences(
         def,
         (params, parsed) => goToDefinition(index, params, parsed),
         remainingReferences,
+        verifiedReferenceFilter(fileId),
       );
       for (const { range, provenance, via } of ranges) {
         if (hasReachedCollectionLimit()) break;

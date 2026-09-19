@@ -142,6 +142,7 @@ describe("Zig declaration classification and exports", () => {
       file,
       [
         "const Shape = struct {};",
+        "pub const shaped: Shape = .{};",
         "extern const external: u8;",
         "const Alias = error{}!u8;",
         "pub const flag: bool = true;",
@@ -161,6 +162,8 @@ describe("Zig declaration classification and exports", () => {
       const localKinds = Object.fromEntries(module?.locals.map((symbol) => [symbol.localName, symbol.kind]) ?? []);
 
       expect(localKinds["Shape"]).toBe("type");
+      expect(module?.locals.filter((symbol) => symbol.localName === "Shape")).toHaveLength(1);
+      expect(module?.exports.filter((entry) => exportedNameOf(entry) === "Shape")).toHaveLength(1);
       expect(localKinds["Alias"]).toBe("type");
       expect(localKinds["external"]).toBe("variable");
       expect(localKinds["flag"]).toBe("variable");

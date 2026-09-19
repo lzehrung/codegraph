@@ -214,11 +214,15 @@ export async function collectVerifiedNamedNodeReferences(
     parsed: ParsedFileContext,
   ) => Promise<{ status: string; definition?: SymbolDef; provenance?: ResolutionProvenance }>,
   maxVerified?: number,
+  includeReference?: (reference: VerifiedNamedNodeReference) => boolean,
 ): Promise<VerifiedNamedNodeReference[]> {
   const collected = await collectNamedNodeReferences(index, fileId, symbolName);
   if (!collected) return [];
   const { ranges, parsed } = collected;
   const verified: VerifiedNamedNodeReference[] = [];
+  const pushVerified = (reference: VerifiedNamedNodeReference): void => {
+    if (!includeReference || includeReference(reference)) verified.push(reference);
+  };
   for (const range of ranges) {
     if (maxVerified !== undefined && maxVerified > 0 && verified.length >= maxVerified) {
       break;
@@ -228,7 +232,7 @@ export async function collectVerifiedNamedNodeReferences(
       const reexported = resolveExport(index, exportFrom.entry.fromModule, exportFrom.entry.sourceSpecifier);
       if (reexported?.kind === "resolved") {
         if (sameDef(reexported.def, expectedDef, index.languageExtensions)) {
-          verified.push({ range, via: { reexport: true } });
+          pushVerified({ range, via: { reexport: true } });
         }
         continue;
       }
@@ -243,7 +247,7 @@ export async function collectVerifiedNamedNodeReferences(
     );
     if (resolved.status !== "ok" || !resolved.definition) continue;
     if (sameDef(resolved.definition, expectedDef, index.languageExtensions)) {
-      verified.push({
+      pushVerified({
         range,
         ...(exportFrom?.isExportFrom ? { via: { reexport: true } } : {}),
         ...(resolved.provenance ? { provenance: resolved.provenance } : {}),
@@ -580,19 +584,31 @@ function isUnresolvedIndexedImport(
   return !importCanReferenceDefinition(index, imp, def, exportedNames);
 }
 
-function parserDegradedCandidateFiles(index: ProjectIndex, scannedFiles: readonly string[]): FileId[] {
-  const files = index.buildReport?.backend?.parser?.files;
-  if (!files?.length) return [];
+function parserDegradedCandidateFiles(
+  index: ProjectIndex,
+  scannedFiles: readonly string[],
+): { files: FileId[]; hasUnlistedCandidate: boolean } {
+  const report = index.buildReport?.backend?.parser;
+  if (!report) return { files: [], hasUnlistedCandidate: false };
   const scanned = new Set(scannedFiles.map((file) => fileIdentityKey(file)));
+  const listed = new Set(report.files.map((entry) => fileIdentityKey(entry.file)));
   const affected: FileId[] = [];
   const seen = new Set<string>();
-  for (const entry of files) {
+  for (const entry of report.files) {
     const key = fileIdentityKey(entry.file);
     if (!scanned.has(key) || seen.has(key)) continue;
     seen.add(key);
     affected.push(entry.file);
   }
-  return affected;
+  let hasUnlistedCandidate = false;
+  if (report.total > report.files.length) {
+    for (const fileKey of scanned) {
+      if (listed.has(fileKey)) continue;
+      hasUnlistedCandidate = true;
+      break;
+    }
+  }
+  return { files: affected, hasUnlistedCandidate };
 }
 
 export function buildIndexedCandidateCoverage(args: {
@@ -615,9 +631,9 @@ export function buildIndexedCandidateCoverage(args: {
   };
 
   const degraded = parserDegradedCandidateFiles(index, scannedFiles);
-  if (degraded.length) {
+  if (degraded.files.length || degraded.hasUnlistedCandidate) {
     reasons.push("parser_degraded");
-    for (const file of degraded) addAffected(file);
+    for (const file of degraded.files) addAffected(file);
   }
 
   const unresolvedFiles: FileId[] = [];

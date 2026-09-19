@@ -1,4 +1,4 @@
-import { findReferences } from "../indexer/navigation.js";
+import { findReferences, findUsageReferences } from "../indexer/navigation.js";
 import { ensureParsedContext } from "../indexer/parse-context.js";
 import { extractEnclosingBlock, extractLineContext } from "../indexer/reference-context.js";
 import { DEFAULT_REF_CONTEXT_LINES } from "../indexer/shared.js";
@@ -28,20 +28,28 @@ type BaseReferenceEntry = {
 
 export type ReferenceLookupCache = {
   get(index: ProjectIndex, def: SymbolDef, options?: CachedReferenceOptions): Promise<FindReferencesResult>;
+  getUsages(index: ProjectIndex, def: SymbolDef, options?: CachedReferenceOptions): Promise<FindReferencesResult>;
 };
 
 export function createReferenceLookupCache(): ReferenceLookupCache {
   const cachesByIndex = new WeakMap<ProjectIndex, Map<string, BaseReferenceEntry[]>>();
+  const lookup = async (
+    mode: "all" | "usages",
+    index: ProjectIndex,
+    def: SymbolDef,
+    options?: CachedReferenceOptions,
+  ): Promise<FindReferencesResult> => {
+    const maxReferences = normalizeMaxReferences(options?.maxReferences);
+    const indexCache = getIndexReferenceCache(cachesByIndex, index);
+    const baseResult = await getBaseReferences(index, def, maxReferences, indexCache, mode);
+    const bounded = cloneReferenceResult(baseResult, maxReferences);
+    if (bounded.status !== "ok" || options?.context === undefined) return bounded;
+    await attachReferenceContext(index, bounded.references, options);
+    return bounded;
+  };
   return {
-    async get(index, def, options) {
-      const maxReferences = normalizeMaxReferences(options?.maxReferences);
-      const indexCache = getIndexReferenceCache(cachesByIndex, index);
-      const baseResult = await getBaseReferences(index, def, maxReferences, indexCache);
-      const bounded = cloneReferenceResult(baseResult, maxReferences);
-      if (bounded.status !== "ok" || options?.context === undefined) return bounded;
-      await attachReferenceContext(index, bounded.references, options);
-      return bounded;
-    },
+    get: (index, def, options) => lookup("all", index, def, options),
+    getUsages: (index, def, options) => lookup("usages", index, def, options),
   };
 }
 function getIndexReferenceCache(
@@ -61,12 +69,14 @@ function getBaseReferences(
   def: SymbolDef,
   maxReferences: number | undefined,
   cache: Map<string, BaseReferenceEntry[]>,
+  mode: "all" | "usages",
 ): Promise<FindReferencesResult> {
-  const key = referenceLookupKey(def);
+  const key = referenceLookupKey(def, mode);
   const entries = cache.get(key) ?? [];
   const reusable = entries.find((entry) => canReuseEntry(entry.maxReferences, maxReferences));
   if (reusable) return reusable.refs;
-  const refs = findReferences(index, { def }, maxReferences === undefined ? undefined : { maxReferences });
+  const finder = mode === "usages" ? findUsageReferences : findReferences;
+  const refs = finder(index, { def }, maxReferences === undefined ? undefined : { maxReferences });
   entries.push({ maxReferences, refs });
   cache.set(key, entries);
   return refs;
@@ -158,8 +168,9 @@ async function attachReferenceContext(
   }
 }
 
-function referenceLookupKey(def: SymbolDef): string {
+function referenceLookupKey(def: SymbolDef, mode: "all" | "usages"): string {
   return JSON.stringify({
+    mode,
     file: def.file,
     name: def.localName,
     kind: def.kind,

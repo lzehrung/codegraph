@@ -30,12 +30,12 @@ export const ZIG_DEF: LanguageDefinition = {
     `,
     exports: `
       (source_file (function_declaration name: (identifier) @name))
-      (source_file (variable_declaration (identifier) @name . (_)))
+      (source_file (variable_declaration . (identifier) @name (_)))
     `,
     locals: `
       (function_declaration name: (identifier) @name)
       (parameter (identifier) @name)
-      (variable_declaration (identifier) @name . (_))
+      (variable_declaration . (identifier) @name (_))
     `,
     importBindings: `
       (variable_declaration

@@ -3,7 +3,13 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isSymbolHandleExported } from "../indexer/declarations.js";
 import { findReferences } from "../indexer/navigation.js";
-import { type ExportEntry, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../indexer/types.js";
+import {
+  type ExportEntry,
+  type ModuleIndex,
+  type ProjectIndex,
+  type ReferenceCoverage,
+  type SymbolDef,
+} from "../indexer/types.js";
 import { symbolId } from "../indexer/symbols.js";
 import { attachCallCompatibilityHints } from "../impact/call-compatibility.js";
 import { computeMemberResolutionCoverage } from "../impact/member-resolution-coverage.js";
@@ -371,21 +377,6 @@ function collectDiffSnippets(source: string, range: Range, changedLines: Set<num
   return snippets;
 }
 
-function sameRange(left: Range, right: Range): boolean {
-  const leftStart = left.start.index;
-  const rightStart = right.start.index;
-  const leftEnd = left.end.index;
-  const rightEnd = right.end.index;
-  if (typeof leftStart === "number" && typeof rightStart === "number") {
-    if (leftStart !== rightStart) return false;
-    if (typeof leftEnd === "number" && typeof rightEnd === "number") {
-      return leftEnd === rightEnd;
-    }
-    return true;
-  }
-  return left.start.line === right.start.line && left.start.column === right.start.column;
-}
-
 export async function summarizeChangedFiles(input: {
   projectRoot: string;
   index: ProjectIndex;
@@ -547,8 +538,8 @@ export async function summarizeChangedFiles(input: {
   const referenceResults =
     includeSymbolDetails && maxCallsites > 0
       ? await mapLimit(defsToResolve, referenceConcurrency, async (def) => {
-          const refs = await referenceCache.get(index, def, {
-            maxReferences: maxCallsites + 1,
+          const refs = await referenceCache.getUsages(index, def, {
+            maxReferences: maxCallsites,
           });
           return { def, refs };
         })
@@ -587,16 +578,13 @@ export async function summarizeChangedFiles(input: {
       includeDiffContext && diffLines.size ? collectDiffSnippets(source, local.range, diffLines, diffContextLines) : [];
 
     let callsites: ReviewSymbolCallsite[] | undefined;
+    let callsiteCoverage: ReferenceCoverage | undefined;
     if (maxCallsites > 0) {
       const entry = referencesByHandle.get(handle);
       const refs = entry?.refs;
       if (refs?.status === "ok") {
-        const candidates = refs.references.filter(
-          (ref) =>
-            ref.via?.importBinding === undefined &&
-            !(fileIdentityKey(ref.file) === fileIdentityKey(local.file) && sameRange(ref.range, local.range)),
-        );
-        const limited = candidates.slice(0, maxCallsites).map((ref) => ({
+        callsiteCoverage = refs.referenceCoverage;
+        const limited = refs.references.map((ref) => ({
           file: relativePath(projectRoot, ref.file),
           range: ref.range,
         }));
@@ -609,6 +597,7 @@ export async function summarizeChangedFiles(input: {
       ...definitionSnippet,
       ...(diffSnippets.length ? { diffSnippets } : {}),
       ...(callsites ? { callsites } : {}),
+      ...(callsiteCoverage ? { callsiteCoverage } : {}),
     };
   };
   const summariesWithHandles = await mapLimit(

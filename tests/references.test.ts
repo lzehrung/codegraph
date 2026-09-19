@@ -880,6 +880,34 @@ describe("Find References", () => {
       }
     });
 
+    it("marks coverage partial when the degraded-file report omits a candidate after its cap", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-capped-degraded-refs-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export function target() { return 1; }\n", "utf8");
+        await fsp.writeFile(consumerFile, 'import { target } from "./source";\ntarget();\n', "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+        markCandidateParserDegraded(index, path.join(root, "listed.ts").replace(/\\/g, "/"));
+        const parser = index.buildReport?.backend?.parser;
+        if (!parser) throw new Error("Expected parser degradation report");
+        parser.total = 21;
+        parser.files = Array.from({ length: 20 }, (_, entryIndex) => ({
+          file: path.join(root, `listed-${entryIndex}.ts`).replace(/\\/g, "/"),
+          languageId: "typescript",
+        }));
+
+        const result = await indexer.findReferences(index, { file: sourceFile, line: 1, column: 17 });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(result.referenceCoverage.state).toBe("partial");
+        expect(result.referenceCoverage.reasons).toEqual(["parser_degraded"]);
+        expect(result.referenceCoverage.affectedFiles).toBeUndefined();
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("does not lower coverage for an unrelated unresolved same-name import", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-unrelated-unresolved-refs-"));
       try {
