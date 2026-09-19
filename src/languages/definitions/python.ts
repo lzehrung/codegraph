@@ -190,8 +190,16 @@ export const PYTHON_DEF: LanguageDefinition = {
     if (t === "splat_pattern") return true;
     if (t === "named_expression") return parent?.childForFieldName("name")?.id === node.id;
     if (t === "pattern_list" || t === "tuple_pattern") return true;
+    // `assignment` exposes the target via the `left` field; a bare-identifier
+    // initializer (`x = y`) makes `y` a direct namedChild too, so field
+    // identity is required to avoid classifying the right-hand read as a
+    // declaration.
+    if (t === "assignment") return parent?.childForFieldName("left")?.id === node.id;
+    // `aliased_import` (`import foo as bar`) exposes the imported path via
+    // `name` and the local binding via `alias`; only `alias` declares a name.
+    if (t === "aliased_import") return parent?.childForFieldName("alias")?.id === node.id;
     if (isTypeAliasLeftName(node)) return true;
-    return !!t && ["function_definition", "class_definition", "assignment", "aliased_import"].includes(t);
+    return !!t && ["function_definition", "class_definition"].includes(t);
   },
   createsBlockScope: (n) => n.type === "module" || n.type === "block",
   createsFunctionScope: (n) => n.type === "function_definition" || n.type === "lambda",

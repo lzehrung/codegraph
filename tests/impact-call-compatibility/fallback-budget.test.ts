@@ -94,6 +94,7 @@ describe("call compatibility fallback budget", () => {
           range: { start: { line: 1, column: 0 }, end: { line: 1, column: 6 } },
         },
         references: [{ file: fixture.indexedMainFile, range: rangeFor(fixture.mainSource, "helper") }],
+        referenceCoverage: { scope: "indexed_candidates", state: "complete" },
       });
 
       await attachCallCompatibilityHints(fixture.index, [fixture.changedSymbol], {
@@ -128,6 +129,7 @@ describe("call compatibility fallback budget", () => {
           range: { start: { line: 1, column: 0 }, end: { line: 1, column: 6 } },
         },
         references: [{ file: fixture.indexedMainFile, range: rangeFor(fixture.mainSource, "helper") }],
+        referenceCoverage: { scope: "indexed_candidates", state: "complete" },
       });
 
       await attachCallCompatibilityHints(fixture.index, [fixture.changedSymbol], {

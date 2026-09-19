@@ -420,11 +420,27 @@ export type GoToResult =
     }
   | { status: "not_found"; reason: string };
 
+export type ImportBindingRole = "imported" | "local";
+
+export type ReferenceCoverageReason = "parser_degraded" | "unresolved_import" | "truncated";
+
+export type ReferenceCoverage = {
+  scope: "indexed_candidates";
+  state: "complete" | "partial";
+  reasons?: ReferenceCoverageReason[];
+  affectedFiles?: FileId[];
+};
+
 export type Reference = {
   file: FileId;
   range: Range;
   context?: string;
-  via?: { import?: ImportBinding; namespaceMember?: string; reexport?: true };
+  via?: {
+    import?: ImportBinding;
+    namespaceMember?: string;
+    reexport?: true;
+    importBinding?: ImportBindingRole;
+  };
   /**
    * Resolution provenance for this specific reference, populated only when the
    * reference was verified through a goto-style lookup (e.g. member-access
@@ -440,5 +456,6 @@ export type FindReferencesResult =
       definition: SymbolDef;
       references: Reference[];
       provenance?: ResolutionProvenance;
+      referenceCoverage: ReferenceCoverage;
     }
   | { status: "not_found"; reason: string };

@@ -226,6 +226,16 @@ export function buildScopeIndexFromSource(
       if (left) addPatternDecls(left, "local", addBindingToScope);
       return;
     }
+    if (support.id === "zig" && node.type === "variable_declaration") {
+      // Zig's grammar has no name field. The first identifier is the declaration;
+      // later identifiers belong to the initializer. Keep an @import declaration's
+      // existing namespace binding because it carries the resolved target.
+      const name = node.namedChildren.find((child) => child.type === "identifier");
+      const isImportDeclaration =
+        name !== undefined && hasImportBinding(name) && /@(?:import|cImport)\s*\(/.test(sliceText(node, source));
+      if (name && !isImportDeclaration) addBindingToScope(name, "local");
+      return;
+    }
     for (const child of node.namedChildren) {
       if (child.type === "variable_declarator" || child.type === "var_spec" || child.type === "const_spec") {
         const name = child.childForFieldName("name");
@@ -356,6 +366,12 @@ export function buildScopeIndexFromSource(
           addDecl(name, "local");
         else extraBindings.push(buildBinding(name, "local"));
       }
+    }
+    if (node.type === "enum_assignment") {
+      const name = node.childForFieldName("name");
+      if (name) addDecl(name, "local");
+    } else if (node.type === "property_identifier" && node.parent?.type === "enum_body") {
+      addDecl(node, "local");
     }
 
     let pushed = false;

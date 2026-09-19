@@ -110,6 +110,7 @@ const BASE_GRAPH = {
     (function_declaration name: (identifier) @name)
     (generator_function_declaration name: (identifier) @name)
     (method_definition name: (property_identifier) @name)
+    (public_field_definition name: (property_identifier) @name)
     (method_signature name: (property_identifier) @name)
     (abstract_method_signature name: (property_identifier) @name)
     (function_signature name: (identifier) @name)
@@ -118,6 +119,8 @@ const BASE_GRAPH = {
     (variable_declarator name: (identifier) @name)
     (interface_declaration name: (type_identifier) @name)
     (type_alias_declaration name: (type_identifier) @name)
+    (enum_body (property_identifier) @name)
+    (enum_assignment name: (property_identifier) @name)
     (enum_declaration name: [ (identifier) (type_identifier) ] @name)
     (internal_module name: (identifier) @name)
     (module name: (identifier) @name)
@@ -156,7 +159,18 @@ const BASE_HELPERS = {
     return "variable";
   },
   isDeclarationName: (node: SyntaxNodeLike) => {
-    const p = node.parent?.type;
+    const parent = node.parent;
+    const p = parent?.type;
+    if (parent?.type === "variable_declarator") {
+      return parent.childForFieldName("name")?.id === node.id;
+    }
+    if (parent?.type === "public_field_definition" || parent?.type === "enum_assignment") {
+      const name = parent.childForFieldName("name") ?? parent.childForFieldName("property");
+      return name?.id === node.id;
+    }
+    if (parent?.type === "enum_body") {
+      return node.type === "property_identifier";
+    }
     return (
       !!p &&
       [
@@ -164,7 +178,6 @@ const BASE_HELPERS = {
         "function_declaration",
         "class_declaration",
         "abstract_class_declaration",
-        "variable_declarator",
         "interface_declaration",
         "type_alias_declaration",
         "enum_declaration",
@@ -191,7 +204,11 @@ const BASE_HELPERS = {
     return parent === "function_signature" || parent === "internal_module" || parent === "module";
   },
   createsBlockScope: (n: SyntaxNodeLike) =>
-    n.type === "program" || n.type === "block" || n.type === "class_body" || n.type === "class_static_block",
+    n.type === "program" ||
+    n.type === "block" ||
+    n.type === "class_body" ||
+    n.type === "class_static_block" ||
+    n.type === "enum_body",
   createsFunctionScope: (n: SyntaxNodeLike) =>
     n.type === "generator_function_declaration" ||
     n.type === "function_declaration" ||

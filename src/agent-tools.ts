@@ -6,6 +6,7 @@ import type {
   ImportBinding,
   ProjectIndex,
   Reference,
+  ReferenceCoverage,
   ResolutionProvenance,
   SymbolDef,
   SymbolListItem,
@@ -976,6 +977,11 @@ function normalizeToolReference(root: string, reference: Reference): Reference {
   };
 }
 
+function normalizeToolReferenceCoverage(root: string, coverage: ReferenceCoverage): ReferenceCoverage {
+  if (!coverage.affectedFiles) return coverage;
+  return { ...coverage, affectedFiles: coverage.affectedFiles.map((file) => normalizeToolFileOutput(root, file)) };
+}
+
 function normalizeToolEdge(root: string, edge: Edge): Edge {
   return {
     ...edge,
@@ -1064,6 +1070,7 @@ export async function tool_findReferences(
   definition?: SymbolDef;
   references?: Reference[];
   provenance?: ResolutionProvenance;
+  referenceCoverage?: ReferenceCoverage;
   error?: string;
   reason?: string;
 }> {
@@ -1088,6 +1095,9 @@ export async function tool_findReferences(
       definition: normalizeToolDefinition(root, result.definition),
       references: result.references.map((reference) => normalizeToolReference(root, reference)),
       ...(result.provenance ? { provenance: result.provenance } : {}),
+      ...(result.referenceCoverage
+        ? { referenceCoverage: normalizeToolReferenceCoverage(root, result.referenceCoverage) }
+        : {}),
     };
   } catch (error) {
     return { status: "error", error: errorMessage(error) };

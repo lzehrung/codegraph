@@ -7,7 +7,7 @@ import {
   type DuplicateTarget,
 } from "../duplicates.js";
 import { findReferences } from "../indexer/navigation.js";
-import type { BuildOptions, Reference, SymbolDef } from "../indexer/types.js";
+import type { BuildOptions, ImportBindingRole, ReferenceCoverage, Reference, SymbolDef } from "../indexer/types.js";
 import { getDependencies, getReverseDependencies } from "../graphs/queries.js";
 import { getHotspots } from "../graphs/hotspots.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
@@ -96,7 +96,15 @@ export type AgentExplanationDependency = {
 export type AgentExplanationReference = {
   file: string;
   range: Range;
+  importBinding?: ImportBindingRole;
 };
+
+/**
+ * Coverage of the reference search backing `AgentExplanation.references`, mirroring
+ * `FindReferencesResult.referenceCoverage`. Absent when no reference search ran (e.g. a
+ * file-kind target) or the search itself failed to resolve.
+ */
+export type AgentExplanationReferenceCoverage = ReferenceCoverage;
 
 export type AgentExplanationSnippet = {
   file: string;
@@ -156,6 +164,7 @@ export type AgentExplanation = {
   dependencies: AgentExplanationDependency[];
   reverseDependencies: AgentExplanationDependency[];
   references: AgentExplanationReference[];
+  referenceCoverage?: AgentExplanationReferenceCoverage;
   relatedSqlObjects: AgentExplanationSqlObject[];
   duplicates: AgentExplanationDuplicate[];
   snippets: AgentExplanationSnippet[];
@@ -188,6 +197,7 @@ type ReferenceContext = {
   references: BoundedAgentList<AgentExplanationReference>;
   snippets: BoundedAgentList<AgentExplanationSnippet>;
   referencesOmittedLowerBound: boolean;
+  referenceCoverage: AgentExplanationReferenceCoverage | undefined;
 };
 
 type ResolvedExplainTarget =
@@ -505,6 +515,7 @@ async function buildExplanation(
     dependencies: dependencies.items,
     reverseDependencies: reverseDependencies.items,
     references: references.items,
+    ...(referenceContext.referenceCoverage ? { referenceCoverage: referenceContext.referenceCoverage } : {}),
     relatedSqlObjects: relatedSqlObjects.items,
     duplicates: duplicates.items,
     snippets: snippets.items,
@@ -779,6 +790,7 @@ async function collectReferenceContext(
     .map((reference) => ({
       file: normalizeAgentFilePath(snapshot.root, reference.file),
       range: reference.range,
+      ...(reference.via?.importBinding ? { importBinding: reference.via.importBinding } : {}),
     }))
     .sort((left, right) => {
       const fileDelta = left.file.localeCompare(right.file);
@@ -800,7 +812,24 @@ async function collectReferenceContext(
   return {
     references: boundedReferences,
     snippets: boundedSnippets,
-    referencesOmittedLowerBound: result.references.length === collectionLimit && boundedReferences.omitted > 0,
+    // Core now reports `truncated` exactly (it probes one past `maxReferences` internally), so
+    // reuse that signal instead of guessing from a boundary count: a returned length that merely
+    // happens to equal `collectionLimit` is not by itself evidence of truncation.
+    referencesOmittedLowerBound:
+      Boolean(result.referenceCoverage.reasons?.includes("truncated")) && boundedReferences.omitted > 0,
+    referenceCoverage: normalizeReferenceCoverage(snapshot, result.referenceCoverage),
+  };
+}
+
+function normalizeReferenceCoverage(
+  snapshot: AgentProjectSnapshot,
+  coverage: AgentExplanationReferenceCoverage | undefined,
+): AgentExplanationReferenceCoverage | undefined {
+  if (!coverage) return undefined;
+  if (!coverage.affectedFiles) return coverage;
+  return {
+    ...coverage,
+    affectedFiles: coverage.affectedFiles.map((file) => normalizeAgentFilePath(snapshot.root, file)),
   };
 }
 
@@ -1006,6 +1035,7 @@ function emptyReferenceContext(): ReferenceContext {
     references: emptyAgentBoundedList(),
     snippets: emptyAgentBoundedList(),
     referencesOmittedLowerBound: false,
+    referenceCoverage: undefined,
   };
 }
 

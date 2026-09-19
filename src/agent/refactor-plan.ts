@@ -8,6 +8,7 @@ import {
   type TypeHierarchyResult,
 } from "../indexer/type-hierarchy.js";
 import type { BuildOptions } from "../indexer/types.js";
+import type { AgentExplanationReferenceCoverage } from "./explain.js";
 import { shapeCandidateTests } from "./candidate-tests.js";
 import { classifySensitiveFile } from "./file-view.js";
 import { normalizeAgentFilePath } from "./normalize.js";
@@ -46,6 +47,7 @@ export type RefactorPlanResponse = SemanticResponseEnvelope & {
   target: SemanticSymbol;
   definition: SemanticLocation;
   references: SemanticLocation[];
+  referenceCoverage?: AgentExplanationReferenceCoverage;
   callers: CallHierarchyEntry[];
   callees: CallHierarchyEntry[];
   supertypes: TypeHierarchyRelation[];
@@ -110,6 +112,18 @@ export async function buildRefactorPlanInSnapshot(
       ...(includeContext && reference.context ? { context: reference.context } : {}),
     };
   });
+  const referenceCoverage = referenceResult.referenceCoverage
+    ? {
+        ...referenceResult.referenceCoverage,
+        ...(referenceResult.referenceCoverage.affectedFiles
+          ? {
+              affectedFiles: referenceResult.referenceCoverage.affectedFiles.map((file) =>
+                normalizeAgentFilePath(snapshot.root, file),
+              ),
+            }
+          : {}),
+      }
+    : undefined;
   const callersResult = findCallHierarchy(snapshot.symbolGraph, resolved.id, "incoming", {
     depth: 1,
     limit: callerLimit,
@@ -218,6 +232,7 @@ export async function buildRefactorPlanInSnapshot(
     target,
     definition: target.location,
     references,
+    ...(referenceCoverage ? { referenceCoverage } : {}),
     callers,
     callees,
     supertypes,

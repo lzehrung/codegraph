@@ -13,7 +13,14 @@ import { CSHARP_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
-import type { GoToResult, ModuleIndex, ProjectIndex, ResolvedExport, SymbolDef } from "./types.js";
+import {
+  SymbolKind,
+  type GoToResult,
+  type ModuleIndex,
+  type ProjectIndex,
+  type ResolvedExport,
+  type SymbolDef,
+} from "./types.js";
 
 const RUBY_CONSTANT_SOURCE = String.raw`(?=\p{Lu})${XID_IDENTIFIER_SOURCE}`;
 const CSHARP_CONSTANT_SOURCE = String.raw`(?=@?\p{Lu})${CSHARP_IDENTIFIER_SOURCE}`;
@@ -259,13 +266,16 @@ async function resolveReceiverDefinition(
       return result.def;
     }
   }
-  if (isJsTsLanguage(sup.id)) {
-    if (sup.nodeTypes.identifier.includes(obj.type)) {
-      return null;
-    }
-  }
-
   const direct = await resolveExpression(obj);
+  if (isJsTsLanguage(sup.id) && sup.nodeTypes.identifier.includes(obj.type)) {
+    if (
+      direct?.kind === "resolved" &&
+      (direct.def.kind === SymbolKind.Class || direct.def.kind === SymbolKind.TypeAlias)
+    ) {
+      return direct.def;
+    }
+    return null;
+  }
   if (direct?.kind === "resolved") {
     return direct.def;
   }

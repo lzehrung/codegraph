@@ -1,11 +1,14 @@
-import { capturesByName, capturesNamed } from "../../native/query-results.js";
+import { buildByteToStringIndexMap, stringIndexForByte, type ByteToStringIndexMap } from "../../native/byte-index.js";
+import { capturesByName, capturesNamed, rangeFromNativeCapture } from "../../native/query-results.js";
 import type { NativeCapture, NativeMatch } from "../../native/tree-sitter-native.js";
 import { unquote } from "../../util/ast.js";
+import { maskJsLikeCommentsAndStrings } from "../../util/comments.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rust-test-modules.js";
 import { parseGoImportAlias } from "../shared.js";
 import type { ImportBinding } from "../types.js";
 import type { ImportResolver, ResolvedImportTarget } from "./context.js";
+import { sourceRangeFromOffsets } from "./binding-ranges.js";
 import { appendImplicitImportBinding, type LanguageSpecificImportContext } from "./language-specific.js";
 
 type ImportCaptureExtractionContext = {
@@ -23,24 +26,38 @@ const OBJECT_PATTERN_BINDING_PATTERN = new RegExp(
   "u",
 );
 
-function parseObjectPatternBindings(patternText: string): Array<{ imported: string; local: string }> {
-  const trimmed = patternText.trim();
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return [];
-  const body = trimmed.slice(1, -1).trim();
-  if (!body) return [];
-  const parts = body
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const out: Array<{ imported: string; local: string }> = [];
-  for (const part of parts) {
-    const withoutDefault = part.replace(/\s*=\s*.+$/, "").trim();
+type ObjectPatternBinding = {
+  imported: string;
+  local: string;
+  importedOffset: number;
+  localOffset: number;
+  explicitAlias: boolean;
+};
+
+function parseObjectPatternBindings(patternText: string): ObjectPatternBinding[] {
+  const maskedPatternText = maskJsLikeCommentsAndStrings(patternText);
+  const openBrace = maskedPatternText.indexOf("{");
+  const closeBrace = maskedPatternText.lastIndexOf("}");
+  if (openBrace < 0 || closeBrace <= openBrace) return [];
+  const bodyStart = openBrace + 1;
+  const body = maskedPatternText.slice(bodyStart, closeBrace);
+  const out: ObjectPatternBinding[] = [];
+  let rawPartStart = 0;
+  for (const rawPart of body.split(",")) {
+    const leadingWhitespace = rawPart.length - rawPart.trimStart().length;
+    const specStart = bodyStart + rawPartStart + leadingWhitespace;
+    rawPartStart += rawPart.length + 1;
+    const spec = rawPart.trim();
+    if (!spec) continue;
+    const withoutDefault = spec.replace(/\s*=\s*.+$/s, "").trim();
     // JS/TS identifiers permit Unicode ID_Start/ID_Continue plus $/_, not just ASCII.
     const match = withoutDefault.match(OBJECT_PATTERN_BINDING_PATTERN);
     if (!match) continue;
     const imported = match[1]!;
     const local = match[2] ?? imported;
-    out.push({ imported, local });
+    const importedOffset = specStart + withoutDefault.indexOf(imported);
+    const localOffset = match[2] === undefined ? importedOffset : specStart + withoutDefault.lastIndexOf(local);
+    out.push({ imported, local, importedOffset, localOffset, explicitAlias: match[2] !== undefined });
   }
   return out;
 }
@@ -50,21 +67,33 @@ async function pushTextObjectPatternBindings(
   patterns: NativeCapture[],
   from: string | undefined,
   typeOnly: boolean,
+  byteIndexMap: ByteToStringIndexMap,
 ): Promise<void> {
   if (!from) return;
   for (const pattern of patterns) {
     if (pattern.nodeType !== "object_pattern") continue;
     const resolved = await context.resolveFrom(from);
-    for (const binding of parseObjectPatternBindings(pattern.text)) {
-      context.pushBinding({
-        kind: "named",
-        local: binding.local,
-        imported: binding.imported,
-        from,
-        resolved,
-        typeOnly,
-      });
-    }
+    const patternStartIndex = stringIndexForByte(byteIndexMap, pattern.start.index);
+    const patternBindings: ImportBinding[] = parseObjectPatternBindings(pattern.text).map((binding) => ({
+      kind: "named",
+      local: binding.local,
+      imported: binding.imported,
+      from,
+      ...(binding.explicitAlias ? { explicitAlias: true } : {}),
+      importedRange: sourceRangeFromOffsets(
+        context.source,
+        patternStartIndex + binding.importedOffset,
+        patternStartIndex + binding.importedOffset + binding.imported.length,
+      ),
+      localRange: sourceRangeFromOffsets(
+        context.source,
+        patternStartIndex + binding.localOffset,
+        patternStartIndex + binding.localOffset + binding.local.length,
+      ),
+      resolved,
+      typeOnly,
+    }));
+    for (const binding of patternBindings) context.pushBinding(binding);
   }
 }
 
@@ -75,6 +104,7 @@ function pushNamespaceBinding(
   from: string,
   resolved: ResolvedImportTarget,
   typeOnly: boolean,
+  byteIndexMap: ByteToStringIndexMap,
 ): void {
   const namespaceCapture = caps["ns"];
   if (!namespaceCapture) return;
@@ -103,6 +133,7 @@ function pushNamespaceBinding(
     kind: "namespace",
     localNS: namespaceCapture.text,
     from,
+    localRange: rangeFromNativeCapture(namespaceCapture, byteIndexMap),
     resolved,
     typeOnly,
   });
@@ -116,6 +147,8 @@ async function pushStandardBindings(
   from: string | undefined,
   patternCount: number,
   typeOnly: boolean,
+  byteIndexMap: ByteToStringIndexMap,
+  statementStartIndex: number | undefined,
 ): Promise<void> {
   if (!from) return;
   const resolved = await context.resolveFrom(from);
@@ -125,23 +158,29 @@ async function pushStandardBindings(
       kind: "default",
       local: defaultCapture.text,
       from,
+      localRange: rangeFromNativeCapture(defaultCapture, byteIndexMap),
       resolved,
       typeOnly,
     });
   }
 
-  pushNamespaceBinding(context, caps, stmtText, from, resolved, typeOnly);
+  pushNamespaceBinding(context, caps, stmtText, from, resolved, typeOnly, byteIndexMap);
 
   const inames = capturesNamed(match, "iname");
   const aliases = capturesNamed(match, "alias");
   for (let i = 0; i < inames.length; i++) {
     const imported = inames[i]!.text;
-    const alias = aliases[i]?.text ?? imported;
+    const importedRange = rangeFromNativeCapture(inames[i]!, byteIndexMap);
+    const aliasCapture = aliases[i];
+    const alias = aliasCapture?.text ?? imported;
     context.pushBinding({
       kind: "named",
       local: alias,
       imported,
       from,
+      ...(aliasCapture ? { explicitAlias: true } : {}),
+      importedRange,
+      localRange: aliasCapture ? rangeFromNativeCapture(aliasCapture, byteIndexMap) : importedRange,
       resolved,
       typeOnly,
     });
@@ -153,6 +192,7 @@ async function pushStandardBindings(
       resolved,
       typeOnly,
       stmtText,
+      ...(statementStartIndex !== undefined ? { stmtStartIndex: statementStartIndex, source: context.source } : {}),
       ...(caps["alias"]?.text ? { alias: caps["alias"].text } : {}),
       ...(caps["wild"] ? { wildcard: true } : {}),
     });
@@ -163,6 +203,7 @@ export async function collectNativeCaptureImportBindings(
   context: ImportCaptureExtractionContext,
   matches: NativeMatch[],
 ): Promise<void> {
+  const byteIndexMap = buildByteToStringIndexMap(context.source);
   for (const match of matches) {
     const caps = capturesByName(match);
     const statementCapture = caps["stmt"];
@@ -178,7 +219,17 @@ export async function collectNativeCaptureImportBindings(
     }
     const from = caps["from"] ? unquote(caps["from"].text) : undefined;
     const patterns = capturesNamed(match, "pattern");
-    await pushTextObjectPatternBindings(context, patterns, from, statementTypeOnly);
-    await pushStandardBindings(context, match, caps, stmtText, from, patterns.length, typeOnly);
+    await pushTextObjectPatternBindings(context, patterns, from, statementTypeOnly, byteIndexMap);
+    await pushStandardBindings(
+      context,
+      match,
+      caps,
+      stmtText,
+      from,
+      patterns.length,
+      typeOnly,
+      byteIndexMap,
+      statementStartIndex,
+    );
   }
 }

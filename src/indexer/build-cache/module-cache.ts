@@ -26,6 +26,7 @@ import {
   type SqliteTableColumn,
 } from "../../util/sqlite-schema.js";
 import type { BuildOptions, BuildReport, ExportEntry, ModuleIndex } from "../types.js";
+import type { Pos, Range } from "../../types.js";
 import {
   assertFilePathWithinRoot,
   fileIdentityKey,
@@ -410,7 +411,42 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     typeof mod.file === "string" &&
     Array.isArray(mod.exports) &&
     Array.isArray(mod.imports) &&
+    mod.imports.every(hasValidImportBindingRanges) &&
     Array.isArray(mod.locals)
+  );
+}
+
+/**
+ * Rejects cached bindings whose optional token ranges are structurally invalid. Mirrors the
+ * snapshot guard in `project-snapshot.ts` so both cache paths accept the same payloads.
+ */
+function hasValidImportBindingRanges(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const binding = value as { explicitAlias?: unknown; importedRange?: unknown; localRange?: unknown };
+  return (
+    (binding.explicitAlias === undefined || typeof binding.explicitAlias === "boolean") &&
+    isOptionalRange(binding.importedRange) &&
+    isOptionalRange(binding.localRange)
+  );
+}
+
+function isOptionalRange(value: unknown): boolean {
+  return value === undefined || isRange(value);
+}
+
+function isRange(value: unknown): value is Range {
+  if (!value || typeof value !== "object") return false;
+  const range = value as Partial<Range>;
+  return isPos(range.start) && isPos(range.end);
+}
+
+function isPos(value: unknown): value is Pos {
+  if (!value || typeof value !== "object") return false;
+  const pos = value as Partial<Pos>;
+  return (
+    typeof pos.line === "number" &&
+    typeof pos.column === "number" &&
+    (pos.index === undefined || typeof pos.index === "number")
   );
 }
 

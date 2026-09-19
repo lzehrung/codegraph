@@ -2,7 +2,14 @@ import { findReferences } from "../indexer/navigation.js";
 import { ensureParsedContext } from "../indexer/parse-context.js";
 import { extractEnclosingBlock, extractLineContext } from "../indexer/reference-context.js";
 import { DEFAULT_REF_CONTEXT_LINES } from "../indexer/shared.js";
-import type { FindReferencesResult, ProjectIndex, Reference, SymbolDef } from "../indexer/types.js";
+import type {
+  FindReferencesResult,
+  ProjectIndex,
+  Reference,
+  ReferenceCoverage,
+  ReferenceCoverageReason,
+  SymbolDef,
+} from "../indexer/types.js";
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxTreeLike } from "../languages/types.js";
 import { fileIdentityKey } from "../util/paths.js";
@@ -76,13 +83,38 @@ function normalizeMaxReferences(maxReferences: number | undefined): number | und
   return maxReferences;
 }
 
+const COVERAGE_REASON_ORDER: ReferenceCoverageReason[] = ["parser_degraded", "unresolved_import", "truncated"];
+
+function cloneCoverage(coverage: ReferenceCoverage): ReferenceCoverage {
+  return {
+    scope: coverage.scope,
+    state: coverage.state,
+    ...(coverage.reasons ? { reasons: [...coverage.reasons] } : {}),
+    ...(coverage.affectedFiles ? { affectedFiles: [...coverage.affectedFiles] } : {}),
+  };
+}
+
+function withTruncatedCoverage(coverage: ReferenceCoverage): ReferenceCoverage {
+  const reasons = new Set<ReferenceCoverageReason>(coverage.reasons ?? []);
+  reasons.add("truncated");
+  return {
+    scope: "indexed_candidates",
+    state: "partial",
+    reasons: COVERAGE_REASON_ORDER.filter((reason) => reasons.has(reason)),
+    ...(coverage.affectedFiles ? { affectedFiles: [...coverage.affectedFiles] } : {}),
+  };
+}
+
 function cloneReferenceResult(result: FindReferencesResult, maxReferences: number | undefined): FindReferencesResult {
   if (result.status !== "ok") return result;
+  const truncatedByBound = maxReferences !== undefined && result.references.length > maxReferences;
   const references = result.references.slice(0, maxReferences).map(cloneReference);
+  const baseCoverage = cloneCoverage(result.referenceCoverage);
   return {
     status: "ok",
     definition: result.definition,
     references,
+    referenceCoverage: truncatedByBound ? withTruncatedCoverage(baseCoverage) : baseCoverage,
     ...(result.provenance ? { provenance: result.provenance } : {}),
   };
 }
@@ -90,10 +122,10 @@ function cloneReferenceResult(result: FindReferencesResult, maxReferences: numbe
 function cloneReference(reference: Reference): Reference {
   return {
     file: reference.file,
-    range: reference.range,
+    range: { start: { ...reference.range.start }, end: { ...reference.range.end } },
     ...(reference.context !== undefined ? { context: reference.context } : {}),
-    ...(reference.via !== undefined ? { via: reference.via } : {}),
-    ...(reference.provenance !== undefined ? { provenance: reference.provenance } : {}),
+    ...(reference.via !== undefined ? { via: { ...reference.via } } : {}),
+    ...(reference.provenance !== undefined ? { provenance: { ...reference.provenance } } : {}),
   };
 }
 

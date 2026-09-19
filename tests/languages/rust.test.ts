@@ -406,7 +406,7 @@ describe("Rust Unicode symbol ranges (C11)", () => {
 describe("Rust nested grouped use and path attributes", () => {
   it("flattens nested scoped_use_list members to their full paths", () => {
     expect(parseRustImportStatements("use crate::a::{b::{Thing as Renamed}, A};")).toEqual([
-      { kind: "member", from: "crate::a::b", imported: "Thing", local: "Renamed" },
+      { kind: "member", from: "crate::a::b", imported: "Thing", local: "Renamed", explicitAlias: true },
       { kind: "member", from: "crate::a", imported: "A", local: "A" },
     ]);
     expect(parseRustImportStatements("use crate::a::b::{self, *};")).toEqual([

@@ -6,9 +6,9 @@ Source: `coverage/js/lcov.info`
 
 | Metric    |   Hit | Found | Coverage |
 | --------- | ----: | ----: | -------: |
-| Lines     | 31642 | 34930 |   90.59% |
-| Functions |  5193 |  5536 |   93.80% |
-| Branches  | 24159 | 30386 |   79.51% |
+| Lines     | 32893 | 36298 |   90.62% |
+| Functions |  5328 |  5672 |   93.94% |
+| Branches  | 25180 | 31610 |   79.66% |
 
 ## Least-covered Files
 
@@ -28,12 +28,12 @@ Source: `coverage/js/lcov.info`
 | `src/cli/location.ts`                           | 75.00% |   100.00% |   50.00% |
 | `src/frameworks/angularjs.ts`                   | 75.64% |    88.46% |   57.27% |
 | `src/cli/install.ts`                            | 75.71% |    76.00% |   72.09% |
+| `src/native/execution.ts`                       | 75.86% |    87.50% |   73.77% |
 | `src/cli/mcp.ts`                                | 75.86% |    66.67% |   78.13% |
 | `src/cli/packet.ts`                             | 76.47% |    50.00% |   62.96% |
 | `src/cli.ts`                                    | 77.91% |    71.43% |   82.76% |
-| `src/native/execution.ts`                       | 78.16% |    87.50% |   75.41% |
-| `src/cli/navigation.ts`                         | 78.35% |    62.96% |   74.69% |
 | `src/impact/report-shared.ts`                   | 78.95% |    82.76% |   50.00% |
+| `src/cli/index.ts`                              | 80.00% |   100.00% |   75.51% |
 
 ## Type-Only Or Re-Export Files
 

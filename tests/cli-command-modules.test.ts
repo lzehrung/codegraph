@@ -42,6 +42,8 @@ import * as indexerBuild from "../src/indexer/build-index.js";
 import { diffBuildOptions, summarizeBuildOptions } from "../src/indexer/build-cache.js";
 import type { ProjectIndex } from "../src/indexer.js";
 import type { BuildOptions, BuildReport, NativeBackendReport } from "../src/indexer/types.js";
+import { SymbolKind } from "../src/indexer/types.js";
+import * as navigationModule from "../src/indexer/navigation.js";
 import { getNativeRuntimeFingerprint } from "../src/native/tree-sitter-native.js";
 import type { Graph } from "../src/types.js";
 import { runGit } from "./helpers/git.js";
@@ -622,6 +624,114 @@ describe("CLI command modules", () => {
       scanSpy.mockRestore();
     }
   });
+  test("refs pretty output prints a note only when reference coverage is partial", async () => {
+    const root = await mkTmpDir("codegraph-refs-coverage-partial-");
+    const filePath = path.join(root, "main.ts");
+    await fsp.writeFile(filePath, "export function helper() {\n  return 1;\n}\nhelper();\n", "utf8");
+    const stdout: string[] = [];
+    const definition = {
+      file: filePath,
+      localName: "helper",
+      kind: SymbolKind.Function,
+      range: { start: { line: 1, column: 17 }, end: { line: 3, column: 2 } },
+    };
+    const findReferencesSpy = vi.spyOn(navigationModule, "findReferences").mockResolvedValue({
+      status: "ok",
+      definition,
+      references: [{ file: filePath, range: { start: { line: 4, column: 1 }, end: { line: 4, column: 7 } } }],
+      referenceCoverage: { scope: "indexed_candidates", state: "partial", reasons: ["parser_degraded"] },
+    });
+    try {
+      await handleRefsCommand(
+        createNavigationContext({
+          projectRootFs: root,
+          positionals: [filePath, "1", "17"],
+          hasFlag: () => false,
+          writeStdoutLine: (message) => stdout.push(message),
+        }),
+      );
+      expect(stdout).toContain("note: reference coverage partial (parser_degraded)");
+    } finally {
+      findReferencesSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("refs pretty output omits the coverage note when reference coverage is complete", async () => {
+    const root = await mkTmpDir("codegraph-refs-coverage-complete-");
+    const filePath = path.join(root, "main.ts");
+    await fsp.writeFile(filePath, "export function helper() {\n  return 1;\n}\nhelper();\n", "utf8");
+    const stdout: string[] = [];
+    const definition = {
+      file: filePath,
+      localName: "helper",
+      kind: SymbolKind.Function,
+      range: { start: { line: 1, column: 17 }, end: { line: 3, column: 2 } },
+    };
+    const findReferencesSpy = vi.spyOn(navigationModule, "findReferences").mockResolvedValue({
+      status: "ok",
+      definition,
+      references: [{ file: filePath, range: { start: { line: 4, column: 1 }, end: { line: 4, column: 7 } } }],
+      referenceCoverage: { scope: "indexed_candidates", state: "complete" },
+    });
+    try {
+      await handleRefsCommand(
+        createNavigationContext({
+          projectRootFs: root,
+          positionals: [filePath, "1", "17"],
+          hasFlag: () => false,
+          writeStdoutLine: (message) => stdout.push(message),
+        }),
+      );
+      expect(stdout.some((line) => line.startsWith("note:"))).toBe(false);
+    } finally {
+      findReferencesSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("refs JSON output preserves via.importBinding roles and referenceCoverage", async () => {
+    const root = await mkTmpDir("codegraph-refs-json-roles-");
+    const servicePath = path.join(root, "service.ts");
+    const consumerPath = path.join(root, "consumer.ts");
+    await fsp.writeFile(servicePath, "export function service(): number { return 1; }\n", "utf8");
+    await fsp.writeFile(
+      consumerPath,
+      'import { service as usedAlias } from "./service.js";\nexport const value = usedAlias();\n',
+      "utf8",
+    );
+    const results: unknown[] = [];
+    try {
+      await handleRefsCommand(
+        createNavigationContext({
+          projectRootFs: root,
+          positionals: [servicePath, "1", "17"],
+          writeJSONLine: (value) => results.push(value),
+        }),
+      );
+      expect(results).toHaveLength(1);
+      const result = readJsonRecord(results[0]);
+      expect(result.status).toBe("ok");
+      const references = readJsonArray(result.references).map((entry) => readJsonRecord(entry));
+      const importedRoleRefs = references.filter(
+        (reference) => readJsonRecord(reference.via ?? {}).importBinding === "imported",
+      );
+      const localRoleRefs = references.filter(
+        (reference) => readJsonRecord(reference.via ?? {}).importBinding === "local",
+      );
+      // Aliased import: the source-side "service" token and the "usedAlias" declaration are
+      // distinct declaration sites, each carrying its own role.
+      expect(importedRoleRefs).toHaveLength(1);
+      expect(localRoleRefs).toHaveLength(1);
+      expect(readJsonRecord(result.referenceCoverage ?? {})).toMatchObject({
+        scope: "indexed_candidates",
+        state: "complete",
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("dumpmod preserves imports in JSON output", async () => {
     const root = await mkTmpDir("codegraph-dumpmod-json-");
     const mainPath = path.join(root, "main.ts");

@@ -2272,6 +2272,7 @@ describe("Review report", () => {
         status: "ok",
         definition: request.def,
         references: [],
+        referenceCoverage: { scope: "indexed_candidates", state: "complete" },
       };
     });
 

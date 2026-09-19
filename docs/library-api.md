@@ -502,7 +502,7 @@ const explanation = await explainCodegraphTarget({
 console.log(explanation.summary, explanation.followUps);
 ```
 
-Reference and snippet omission counts are lower bounds once the bounded navigation scan reaches the requested cap. This keeps small packets cheap for symbols with many references while still signaling that more context exists.
+Reference omission counts are lower bounds only when `referenceCoverage.reasons` includes `truncated`; an exact count at the scan cap remains complete. Snippet omissions follow the bounded reference scan. This keeps small packets cheap for symbols with many references while still signaling incomplete context.
 
 `buildCodegraphArtifact()` writes the same core artifacts agents usually need for offline navigation. Artifact contents exclude the output directory itself when it is inside the repo; hosts that write through a resolved path while indexing through a symlinked root can pass `filterOutDir` with the lexical project-relative output path:
 
@@ -729,6 +729,10 @@ if (refs.status === "ok") {
   );
 }
 ```
+
+A successful `FindReferencesResult` always includes `referenceCoverage`. `complete` means that every statically linked candidate known to the current index was checked and the search was not capped. `partial` reports `parser_degraded`, `unresolved_import`, or `truncated`, with `affectedFiles` when a known file caused the incomplete scan. The `indexed_candidates` scope does not certify dynamic imports or bare imports that the index cannot associate with the target. Definition-selection `provenance` does not imply complete reference coverage.
+
+The result keeps the definition site as a reference. Import declarations are also references. `Reference.via.importBinding` is `imported` for the source-side name and `local` for a distinct alias or default binding. The root and `indexer` entry points export `ImportBindingRole`, `ReferenceCoverage`, and `ReferenceCoverageReason`.
 
 ## Incremental indexing
 
@@ -1121,7 +1125,7 @@ Useful wrapper details:
 
 - Build a shared index once and pass it through when an agent will call several wrappers in one pass; otherwise each wrapper may rebuild the same project view.
 - `tool_findSymbol()` returns stable `id` handles plus `range`, `exported`, `exactMatch`, and `matchKind`.
-- `tool_goToDefinition()` and `tool_findReferences()` surface additive `provenance` metadata when the resolver used imports, namespaces, or other non-local paths.
+- `tool_goToDefinition()` and `tool_findReferences()` surface additive `provenance` metadata when the resolver used imports, namespaces, or other non-local paths. Successful `tool_findReferences()` results also preserve `via.importBinding` and normalized `referenceCoverage`; these fields do not inherit the target provenance confidence.
 - `tool_getDependencies()`, `tool_getReverseDependencies()`, and `tool_getHotspots()` ignore non-finite `limit` values and clamp non-positive finite values to empty bounded results instead of returning malformed slices.
 - The batch impact wrappers include `schemaVersion` and `format: "full" | "compact"` so downstream agents do not have to infer payload shape; streaming `complete.report` uses `format: "stream-summary"`.
 

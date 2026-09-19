@@ -145,6 +145,7 @@ describe("call compatibility parse resilience", () => {
           range: rangeFor(mainSource, "helper"),
         },
       ],
+      referenceCoverage: { scope: "indexed_candidates", state: "complete" },
     });
 
     await fsp.unlink(mainFile);
@@ -224,6 +225,7 @@ describe("call compatibility parse resilience", () => {
         range: { start: { line: 1, column: 0 }, end: { line: 1, column: 6 } },
       },
       references: [],
+      referenceCoverage: { scope: "indexed_candidates", state: "complete" },
     });
 
     await fsp.unlink(extraFile);

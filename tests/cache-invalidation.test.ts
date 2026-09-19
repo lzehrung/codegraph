@@ -44,6 +44,7 @@ import { getAllLanguages, getLanguageById } from "../src/languages/registry.js";
 import type { LanguageDefinition } from "../src/languages/types.js";
 import {
   clearImplementationFingerprintCache,
+  CORE_ALGORITHM_EPOCH,
   getImplementationFingerprint,
   getImplementationFingerprintForEpoch,
   LANGUAGE_BEHAVIOR_EPOCH,
@@ -558,6 +559,39 @@ describe("Cache invalidation and strict hashing", () => {
       else typescript.normalizeIdentifier = originalNormalizeIdentifier;
       clearImplementationFingerprintCache();
     }
+  });
+
+  it("invalidates cached indexing written under an older core algorithm epoch", async () => {
+    const root = await mkTmpDir("dg-cache-core-epoch-");
+    const entryPath = path.join(root, "entry.ts");
+    const file = normalize(path.resolve(entryPath));
+    await fsp.writeFile(entryPath, "export const current = 1;\n", "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    const stored = await readManifest(root);
+    // Keep the stored implementation fingerprint current so the only difference is the epoch,
+    // then attach an edge only a stale read could resurrect.
+    stored.buildOptions = { ...stored.buildOptions, coreAlgorithmEpoch: CORE_ALGORITHM_EPOCH - 1 };
+    stored.files = {
+      [file]: {
+        sig: "superseded-signature",
+        edges: [
+          { from: file, to: { type: "file" as const, path: normalize(path.join(root, "stale.ts")) }, raw: "./stale" },
+        ],
+      },
+    };
+    await fsp.writeFile(manifestPathFor(root), JSON.stringify(stored), "utf8");
+
+    const report: BuildReport = { timings: {} };
+    const rebuilt = await buildProjectIndexIncremental(root, { threads: 2, cache: "disk", report });
+
+    expect(report.manifest?.optionsMismatch).toContain("coreAlgorithm");
+    expect(rebuilt.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path.endsWith("/stale.ts"))).toBe(
+      false,
+    );
+    expect(moduleForPath(rebuilt, entryPath)?.locals.some((local) => local.localName === "current")).toBe(true);
+    const refreshed = await readManifest(root);
+    expect(refreshed.buildOptions?.coreAlgorithmEpoch).toBe(CORE_ALGORITHM_EPOCH);
   });
 
   it("uses one implementation fingerprint from bundled and unbundled entrypoints", async () => {
@@ -2008,6 +2042,88 @@ describe("Cache invalidation and strict hashing", () => {
 
     const moduleIndex = incremental.byFile.get(fileIdentityKey(normalize(filePath)));
     expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
+  });
+
+  it("rejects project snapshot import bindings with malformed token ranges", async () => {
+    const root = await mkTmpDir("dg-incremental-bad-project-snapshot-binding-ranges-");
+    const depPath = path.join(root, "dep.ts");
+    const filePath = path.join(root, "foo.ts");
+    await fsp.writeFile(depPath, `export const dep = 1;\n`, "utf8");
+    await fsp.writeFile(filePath, `import { dep as renamed } from "./dep";\nexport const snap = renamed;\n`, "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshot = (await readProjectSnapshot(snapshotPath)) as {
+      modules?: Array<{ file?: string; imports?: unknown[] }>;
+    };
+    embedSqliteModulesInSnapshot(root, snapshot);
+    const moduleSnapshot = snapshot.modules?.find((moduleIndex) => moduleIndex.file === "foo.ts");
+    if (!moduleSnapshot) throw new Error("expected foo.ts snapshot module");
+    // `importedRange` stays well-formed; only `localRange` is malformed, so rejection
+    // must come from the new range validation rather than a generic binding failure.
+    moduleSnapshot.imports = [
+      {
+        kind: "named",
+        local: "renamed",
+        imported: "dep",
+        from: "./dep",
+        importedRange: { start: { line: 1, column: 8 }, end: { line: 1, column: 11 } },
+        localRange: { start: { line: 1 }, end: { line: 1, column: 11 } },
+      },
+    ];
+    await writeProjectSnapshot(snapshotPath, snapshot);
+
+    const report: BuildReport = { timings: {} };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const incremental = await buildProjectIndexIncremental(root, { threads: 2, cache: "disk", report });
+      expect(
+        report.manifest?.corruptions?.some((entry) => entry.artifact.endsWith("project-index-snapshot.json")),
+      ).toBe(true);
+      const moduleIndex = incremental.byFile.get(fileIdentityKey(normalize(filePath)));
+      expect(moduleIndex?.imports.some((binding) => binding.kind === "named" && binding.local === "renamed")).toBe(
+        true,
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("rejects disk module cache entries with malformed token ranges", async () => {
+    const root = await mkTmpDir("dg-module-cache-binding-range-");
+    const depPath = path.join(root, "dep.ts");
+    const filePath = path.join(root, "entry.ts");
+    await fsp.writeFile(depPath, `export const dep = 1;\n`, "utf8");
+    await fsp.writeFile(filePath, `import { dep } from "./dep";\nexport const snap = dep;\n`, "utf8");
+
+    await buildProjectIndex(root, { threads: 1, cache: "disk" });
+    const normalizedFile = normalize(path.resolve(filePath));
+    const sig = readModuleCacheSignature(root, filePath);
+    if (!sig) throw new Error("missing disk module cache signature");
+    // Control read proves the signature/version/path wiring, so the later null is the
+    // range guard rejecting the payload rather than an unrelated cache miss.
+    expect(await buildCache.tryLoadFromCache(root, normalizedFile, sig, { cache: "disk" })).not.toBeNull();
+
+    buildCache.closeDiskCacheDatabase(root, { cache: "disk" });
+    const db = new DatabaseSync(diskCacheDbPathFor(root));
+    try {
+      const row = db.prepare("SELECT payload FROM module_cache WHERE file = ?").get(cacheFile(root, filePath)) as {
+        payload: Uint8Array;
+      };
+      const parsed = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as {
+        imports: Array<Record<string, unknown>>;
+      };
+      if (!parsed.imports[0]) throw new Error("expected a cached import binding");
+      parsed.imports[0].localRange = { start: { line: 1 }, end: { line: 1, column: 11 } };
+      db.prepare("UPDATE module_cache SET payload = ? WHERE file = ?").run(
+        brotliCompressSync(JSON.stringify(parsed)),
+        cacheFile(root, filePath),
+      );
+    } finally {
+      db.close();
+    }
+
+    expect(await buildCache.tryLoadFromCache(root, normalizedFile, sig, { cache: "disk" })).toBeNull();
   });
 
   it("falls back when project snapshot metadata fields are malformed", async () => {

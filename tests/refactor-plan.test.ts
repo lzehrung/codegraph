@@ -1,7 +1,8 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { defNodeId } from "../src/graphs/symbol-graph.js";
+import * as navigationModule from "../src/indexer/navigation.js";
 import { buildRefactorPlanWithSession } from "../src/agent/refactor-plan.js";
 import { formatAgentFollowUpAsCli } from "../src/agent/follow-ups.js";
 import { resolveSemanticSymbol, semanticSymbolFromDef } from "../src/agent/semantic-symbols.js";
@@ -54,6 +55,7 @@ describe("refactor evidence plan", () => {
     expect(result.target.handle).toBe(handle);
     expect(result.definition.file).toBe("service.ts");
     expect(result.references.some((reference) => reference.file === "service.test.ts")).toBe(true);
+    expect(result.referenceCoverage).toMatchObject({ scope: "indexed_candidates", state: "complete" });
     expect(result.callers.map((entry) => entry.symbol.name)).toEqual(["caller"]);
     expect(result.callees.map((entry) => entry.symbol.name)).toEqual(["helper"]);
     expect(result.candidateTests).toContainEqual(expect.objectContaining({ file: "service.test.ts" }));
@@ -77,6 +79,34 @@ describe("refactor evidence plan", () => {
       ),
     ).toBe(true);
     expect(result.rename).toBeUndefined();
+  });
+  it("surfaces partial reference coverage from the underlying reference scan instead of implying completeness", async () => {
+    const { root, backing, handle } = await refactorFixture();
+    const snapshot = await backing.loadProject();
+    const resolved = resolveSemanticSymbol(snapshot, handle);
+    expect(resolved).not.toBeNull();
+    const session: AgentSession = {
+      root,
+      loadProject: async (options) => await backing.loadProject(options),
+      checkFreshness: async () => ({ state: "fresh" }),
+      invalidate: () => backing.invalidate(),
+    };
+    const findReferencesSpy = vi.spyOn(navigationModule, "findReferences").mockResolvedValue({
+      status: "ok",
+      definition: resolved!.def,
+      references: [],
+      referenceCoverage: { scope: "indexed_candidates", state: "partial", reasons: ["parser_degraded"] },
+    });
+    try {
+      const result = await buildRefactorPlanWithSession(session, { root, handle, maxReferences: 20 });
+      expect(result.referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parser_degraded"],
+      });
+    } finally {
+      findReferencesSpy.mockRestore();
+    }
   });
   it("composes supported implementations with independent limits and no section issue", async () => {
     const root = await mkTmpDir("cg-refactor-plan-implementations-");

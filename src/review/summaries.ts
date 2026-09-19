@@ -592,7 +592,9 @@ export async function summarizeChangedFiles(input: {
       const refs = entry?.refs;
       if (refs?.status === "ok") {
         const candidates = refs.references.filter(
-          (ref) => !(fileIdentityKey(ref.file) === fileIdentityKey(local.file) && sameRange(ref.range, local.range)),
+          (ref) =>
+            ref.via?.importBinding === undefined &&
+            !(fileIdentityKey(ref.file) === fileIdentityKey(local.file) && sameRange(ref.range, local.range)),
         );
         const limited = candidates.slice(0, maxCallsites).map((ref) => ({
           file: relativePath(projectRoot, ref.file),

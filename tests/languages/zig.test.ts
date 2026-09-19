@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { collectModuleSpecifiersFromSource } from "../../src/graphs.js";
-import { buildProjectIndex } from "../../src/index.js";
+import { buildProjectIndex, findReferences } from "../../src/index.js";
 import { supportById } from "../../src/languages.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { exportedNameOf } from "../helpers/narrow.js";
@@ -58,7 +58,6 @@ const definition: LanguageTestDefinition = {
             { name: "run", kind: "function" },
             { name: "value", kind: "variable" },
             { name: "_", kind: "variable" },
-            { name: "value", kind: "variable" },
             { name: "std", kind: "variable" },
             { name: "build_options", kind: "variable" },
           ],
@@ -143,6 +142,7 @@ describe("Zig declaration classification and exports", () => {
       file,
       [
         "const Shape = struct {};",
+        "extern const external: u8;",
         "const Alias = error{}!u8;",
         "pub const flag: bool = true;",
         "var counter: i32 = 0;",
@@ -162,10 +162,39 @@ describe("Zig declaration classification and exports", () => {
 
       expect(localKinds["Shape"]).toBe("type");
       expect(localKinds["Alias"]).toBe("type");
+      expect(localKinds["external"]).toBe("variable");
       expect(localKinds["flag"]).toBe("variable");
       expect(localKinds["counter"]).toBe("variable");
       expect(module?.exports.map(exportedNameOf)).not.toContain("inner");
       expect(module?.exports.map(exportedNameOf)).not.toContain("local");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Zig variable_declaration initializer references", () => {
+  it("finds a reference to a declared symbol used as a bare initializer, keeping one declaration", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-zig-decl-init-"));
+    const file = path.join(root, "scope.zig");
+    const source = ["const original = 5;", "const alias = original;", ""].join("\n");
+    await fsp.writeFile(file, source, "utf8");
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      // The initializer use of `original` in `const alias = original;` must be
+      // returned as a reference, not swallowed as if it were itself a declaration.
+      const references = await findReferences(index, { file, line: 1, column: 7 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(references.references.map((entry) => entry.range.start.line)).toEqual([1, 2]);
+      }
+
+      // Regression: only one declaration for `original` and one for `alias` — the
+      // initializer use must not create a phantom duplicate declaration.
+      const module = index.byFile.get(fileIdentityKey(file));
+      expect(module?.locals.filter((entry) => entry.localName === "original")).toHaveLength(1);
+      expect(module?.locals.filter((entry) => entry.localName === "alias")).toHaveLength(1);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

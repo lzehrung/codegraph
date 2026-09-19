@@ -13,10 +13,53 @@ import { fileIdentityKey } from "../src/util/paths.js";
 import { supportById } from "../src/languages.js";
 import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
 import { collectImportsForFile } from "../src/indexer/imports.js";
+import type { ImportBinding } from "../src/indexer/types.js";
 import { isJsTsTypeOnlySpecifierStatement } from "../src/util/specifiers.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
+}
+
+type TokenRange = {
+  start: { line: number; column: number; index: number };
+  end: { line: number; column: number; index: number };
+};
+
+function positionForIndex(source: string, index: number): TokenRange["start"] {
+  const prefix = source.slice(0, index);
+  const lineStart = prefix.lastIndexOf("\n") + 1;
+  return { line: prefix.split("\n").length, column: index - lineStart + 1, index };
+}
+
+/** Exact UTF-16 range of the first occurrence of `token` in `source`. */
+function rangeForToken(source: string, token: string): TokenRange {
+  const index = source.indexOf(token);
+  if (index < 0) throw new Error(`token not found: ${token}`);
+  return { start: positionForIndex(source, index), end: positionForIndex(source, index + token.length) };
+}
+
+function localNameOf(binding: ImportBinding): string {
+  if (binding.kind === "default") return binding.local;
+  if (binding.kind === "namespace") return binding.localNS;
+  if (binding.kind === "named") return binding.local;
+  return "";
+}
+
+/** Stable lookup key covering the binding shape compared between native and text extraction. */
+function bindingRangeKey(binding: ImportBinding): string {
+  const imported = binding.kind === "named" ? binding.imported : "";
+  return `${binding.kind}:${localNameOf(binding)}:${imported}`;
+}
+
+function bindingRanges(bindings: ImportBinding[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const binding of bindings) {
+    out[bindingRangeKey(binding)] = {
+      importedRange: binding.kind === "named" ? binding.importedRange : undefined,
+      localRange: binding.kind === "star" ? undefined : binding.localRange,
+    };
+  }
+  return out;
 }
 
 const nativeTsDescribe =
@@ -75,6 +118,208 @@ nativeTsDescribe("native TypeScript import binding recovery", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("carries the same exact token ranges through native and text fallback extraction", async () => {
+    const root = await mkTmpDir("cg-native-range-parity-");
+    const main = path.join(root, "main.ts");
+    const dep = path.join(root, "dep.ts");
+    const source = [
+      'import def from "./dep";',
+      'import { alpha } from "./dep";',
+      'import { beta as gamma } from "./dep";',
+      'import type { Delta } from "./dep";',
+      'import * as nsBinding from "./dep";',
+      'import mixed, { epsilon as zeta } from "./dep";',
+      'const cjsDefault = require("./dep");',
+      'const { cjsTarget: cjsLocal } = require("./dep");',
+      "export const use = [def, alpha, gamma, mixed, zeta, nsBinding, cjsDefault, cjsLocal] as const;",
+    ].join("\n");
+    await fsp.writeFile(dep, "export const dep = 1;\n", "utf8");
+
+    const sup = supportById("ts");
+    if (!sup) throw new Error("TypeScript language support unavailable");
+
+    const expected: Record<string, unknown> = {
+      "default:def:": { localRange: rangeForToken(source, "def") },
+      "named:alpha:alpha": {
+        importedRange: rangeForToken(source, "alpha"),
+        localRange: rangeForToken(source, "alpha"),
+      },
+      "named:gamma:beta": {
+        importedRange: rangeForToken(source, "beta"),
+        localRange: rangeForToken(source, "gamma"),
+      },
+      "named:Delta:Delta": {
+        importedRange: rangeForToken(source, "Delta"),
+        localRange: rangeForToken(source, "Delta"),
+      },
+      "namespace:nsBinding:": { localRange: rangeForToken(source, "nsBinding") },
+      "default:mixed:": { localRange: rangeForToken(source, "mixed") },
+      "named:zeta:epsilon": {
+        importedRange: rangeForToken(source, "epsilon"),
+        localRange: rangeForToken(source, "zeta"),
+      },
+      "default:cjsDefault:": { localRange: rangeForToken(source, "cjsDefault") },
+      "named:cjsLocal:cjsTarget": {
+        importedRange: rangeForToken(source, "cjsTarget"),
+        localRange: rangeForToken(source, "cjsLocal"),
+      },
+    };
+
+    try {
+      const nativeImports = await collectImportsForFile(main, root, { source, sup, native: "auto" });
+      const fallbackImports = await collectImportsForFile(main, root, { source, sup, native: "off" });
+
+      expect(bindingRanges(nativeImports)).toEqual(expected);
+      expect(bindingRanges(fallbackImports)).toEqual(expected);
+      expect(bindingRanges(fallbackImports)).toEqual(bindingRanges(nativeImports));
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("reduced/text-fallback named and default import token ranges", () => {
+  it("attributes binding ranges without consuming CommonJS destructuring defaults", async () => {
+    const root = await mkTmpDir("cg-cjs-destructure-range-");
+    const main = path.join(root, "main.ts");
+    const dep = path.join(root, "dep.ts");
+    const source = 'const { cjsTarget: cjsLocal = fallbackValue } = require("./dep");\ncjsLocal();\n';
+    await fsp.writeFile(dep, "export const cjsTarget = 1;\n", "utf8");
+    const sup = supportById("ts");
+    if (!sup) throw new Error("TypeScript language support unavailable");
+    const importedRange = rangeForToken(source, "cjsTarget");
+    const localRange = rangeForToken(source, "cjsLocal");
+
+    try {
+      for (const native of ["auto", "off"] as const) {
+        const bindings = await collectImportsForFile(main, root, { source, sup, native });
+        expect(bindings).toEqual([
+          expect.objectContaining({
+            kind: "named",
+            imported: "cjsTarget",
+            local: "cjsLocal",
+            from: "./dep",
+            importedRange,
+            localRange,
+          }),
+        ]);
+        expect(source.slice(importedRange.start.index, importedRange.end.index)).toBe("cjsTarget");
+        expect(source.slice(localRange.start.index, localRange.end.index)).toBe("cjsLocal");
+        expect(importedRange.start.index).toBe(8);
+        expect(localRange.start.index).toBe(19);
+        expect(importedRange.start).toEqual({ line: 1, column: 9, index: 8 });
+        expect(localRange.start).toEqual({ line: 1, column: 20, index: 19 });
+        expect(localRange.start.column).not.toBe(importedRange.start.column);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  const namedDefaultFallbackCases: Array<{
+    label: string;
+    languageId: string;
+    file: string;
+    source: string;
+    imported: string;
+    local: string;
+    from: string;
+    kind: "named" | "default";
+  }> = [
+    {
+      label: "Java unaliased import",
+      languageId: "java",
+      file: "Consumer.java",
+      source: "import pkg.Target;\n",
+      imported: "Target",
+      local: "Target",
+      from: "pkg.Target",
+      kind: "named",
+    },
+    {
+      label: "Kotlin explicit alias",
+      languageId: "kotlin",
+      file: "Consumer.kt",
+      source: "import pkg.Target as LocalTarget;\n",
+      imported: "Target",
+      local: "LocalTarget",
+      from: "pkg.Target",
+      kind: "named",
+    },
+    {
+      label: "Python explicit alias",
+      languageId: "python",
+      file: "consumer.py",
+      source: "from source import target as local_target\n",
+      imported: "target",
+      local: "local_target",
+      from: "source",
+      kind: "named",
+    },
+    {
+      label: "Rust grouped alias",
+      languageId: "rust",
+      file: "consumer.rs",
+      source: "use source::{target as local_target};\n",
+      imported: "target",
+      local: "local_target",
+      from: "source",
+      kind: "named",
+    },
+  ];
+
+  for (const testCase of namedDefaultFallbackCases) {
+    it(`attributes imported/local UTF-16 ranges for ${testCase.label} in native and reduced extraction`, async () => {
+      const root = await mkTmpDir(`cg-fallback-${testCase.label.toLowerCase().replace(/\s+/g, "-")}-`);
+      const file = path.join(root, testCase.file);
+      const sup = supportById(testCase.languageId);
+      if (!sup) throw new Error(`${testCase.languageId} language support unavailable`);
+      const importedRange = rangeForToken(testCase.source, testCase.imported);
+      const localRange = rangeForToken(testCase.source, testCase.local);
+      const nativeLanguageIds = getNativeTreeSitterSupportedLanguageIds();
+
+      try {
+        for (const native of ["auto", "off"] as const) {
+          if (
+            native === "auto" &&
+            (!isNativeTreeSitterAvailable() || !nativeLanguageIds.includes(testCase.languageId))
+          ) {
+            continue;
+          }
+          const bindings = await collectImportsForFile(file, root, { source: testCase.source, sup, native });
+          const match = bindings.find(
+            (binding) =>
+              binding.kind === testCase.kind &&
+              (binding.kind === "named"
+                ? binding.imported === testCase.imported && binding.local === testCase.local
+                : binding.kind === "default" && binding.local === testCase.local),
+          );
+          expect(match).toBeDefined();
+          expect(match).toEqual(
+            expect.objectContaining({
+              kind: testCase.kind,
+              from: testCase.from,
+              ...(testCase.kind === "named"
+                ? { imported: testCase.imported, local: testCase.local }
+                : { local: testCase.local }),
+              importedRange: testCase.kind === "named" ? importedRange : undefined,
+              localRange,
+            }),
+          );
+          expect(testCase.source.slice(importedRange.start.index, importedRange.end.index)).toBe(testCase.imported);
+          expect(testCase.source.slice(localRange.start.index, localRange.end.index)).toBe(testCase.local);
+          if (testCase.imported === testCase.local) {
+            expect(localRange).toEqual(importedRange);
+          } else {
+            expect(localRange.start.index).not.toBe(importedRange.start.index);
+          }
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
 });
 
 describe("Import extraction fallback reporting", () => {
@@ -124,6 +369,61 @@ describe("Import extraction fallback reporting", () => {
         expect.objectContaining({ kind: "named", imported: "bar", local: "bar", typeOnly: false }),
       ]);
       expect(mod?.imports).not.toEqual([expect.objectContaining({ kind: "default", local: "type" })]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records exact token ranges for fallback import bindings", async () => {
+    const root = await mkTmpDir("cg-fallback-range-");
+    const main = path.join(root, "main.ts");
+    const dep = path.join(root, "dep.ts");
+    const source = [
+      'import def from "./dep";',
+      'import { alpha } from "./dep";',
+      'import { beta as gamma } from "./dep";',
+      'import type { Delta } from "./dep";',
+      'import * as nsBinding from "./dep";',
+      'import { type Epsilon, zeta } from "./dep";',
+      'const cjsDefault = require("./dep");',
+      'const { cjsTarget: cjsLocal } = require("./dep");',
+      "export const use = [def, alpha, gamma, Delta, nsBinding, Epsilon, zeta, cjsDefault, cjsLocal] as const;",
+    ].join("\n");
+    await fsp.writeFile(dep, "export const dep = 1;\n", "utf8");
+    const sup = supportById("ts");
+    if (!sup) throw new Error("TypeScript language support unavailable");
+
+    try {
+      const bindings = await collectImportsForFile(main, root, { source, sup, native: "off" });
+      expect(bindingRanges(bindings)).toEqual({
+        "default:def:": { localRange: rangeForToken(source, "def") },
+        "named:alpha:alpha": {
+          importedRange: rangeForToken(source, "alpha"),
+          localRange: rangeForToken(source, "alpha"),
+        },
+        "named:gamma:beta": {
+          importedRange: rangeForToken(source, "beta"),
+          localRange: rangeForToken(source, "gamma"),
+        },
+        "named:Delta:Delta": {
+          importedRange: rangeForToken(source, "Delta"),
+          localRange: rangeForToken(source, "Delta"),
+        },
+        "namespace:nsBinding:": { localRange: rangeForToken(source, "nsBinding") },
+        "named:Epsilon:Epsilon": {
+          importedRange: rangeForToken(source, "Epsilon"),
+          localRange: rangeForToken(source, "Epsilon"),
+        },
+        "named:zeta:zeta": {
+          importedRange: rangeForToken(source, "zeta"),
+          localRange: rangeForToken(source, "zeta"),
+        },
+        "default:cjsDefault:": { localRange: rangeForToken(source, "cjsDefault") },
+        "named:cjsLocal:cjsTarget": {
+          importedRange: rangeForToken(source, "cjsTarget"),
+          localRange: rangeForToken(source, "cjsLocal"),
+        },
+      });
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

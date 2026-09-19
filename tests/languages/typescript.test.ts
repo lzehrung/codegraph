@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runQuery } from "@lzehrung/codegraph-native";
-import { goToDefinition, listSymbols } from "../../src/index.js";
+import { findReferences, goToDefinition, listSymbols } from "../../src/index.js";
 import { chunkFile } from "../../src/chunking/chunk-file.js";
 import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
@@ -74,6 +74,7 @@ const definition: LanguageTestDefinition = {
           line: 5,
           column: 14,
           references: [
+            { file: "main.ts", line: 1 },
             { file: "main.ts", line: 8 },
             { file: "main.ts", line: 12 },
             { file: "utils.ts", line: 5 },
@@ -186,6 +187,70 @@ describe("TypeScript declaration-only symbols", () => {
           expect(result.definition.file).toBe(apiFile);
           expect(result.definition.range.start.line).toBe(testCase.expectedLine);
         }
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("TypeScript enum and field member navigation", () => {
+  it("resolves enum members and class fields without treating initializer reads as declarations", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-members-"));
+    const apiFile = path.join(root, "api.ts").replace(/\\/g, "/");
+    const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+    const apiSource = [
+      "export enum Mode {",
+      "  Light,",
+      "  Heavy = Light,",
+      "}",
+      "export class Box {",
+      "  static value = Mode.Light;",
+      "}",
+      "",
+    ].join("\n");
+    const consumerSource = [
+      'import { Mode, Box } from "./api";',
+      "const selected = Mode.Light;",
+      "const copy = Box.value;",
+      "",
+    ].join("\n");
+    try {
+      await Promise.all([writeFile(apiFile, apiSource, "utf8"), writeFile(consumerFile, consumerSource, "utf8")]);
+      const index = await createTestIndexFromFiles(root, [apiFile, consumerFile]);
+
+      const enumMember = await goToDefinition(index, {
+        file: consumerFile,
+        line: 2,
+        column: consumerSource.split("\n")[1]!.indexOf("Light") + 1,
+      });
+      expect(enumMember.status).toBe("ok");
+      if (enumMember.status === "ok") {
+        expect(enumMember.definition.file).toBe(apiFile);
+        expect(enumMember.definition.range.start.line).toBe(2);
+      }
+
+      const classField = await goToDefinition(index, {
+        file: consumerFile,
+        line: 3,
+        column: consumerSource.split("\n")[2]!.indexOf("value") + 1,
+      });
+      expect(classField.status).toBe("ok");
+      if (classField.status === "ok") {
+        expect(classField.definition.file).toBe(apiFile);
+        expect(classField.definition.range.start.line).toBe(6);
+      }
+
+      const references = await findReferences(index, { file: apiFile, line: 2, column: 3 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(references.references.map((reference) => [reference.file, reference.range.start.line])).toEqual(
+          expect.arrayContaining([
+            [apiFile, 3],
+            [apiFile, 6],
+            [consumerFile, 2],
+          ]),
+        );
       }
     } finally {
       await rm(root, { recursive: true, force: true });

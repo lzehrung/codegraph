@@ -168,7 +168,7 @@ async function analyzeChangedSymbolReferences(
     let reason: ImpactReason = "directRef";
     if (ref.via?.namespaceMember) {
       reason = "namespaceMember";
-    } else if (ref.via?.import) {
+    } else if (ref.via?.import || ref.via?.importBinding) {
       reason = "importAlias";
     }
 

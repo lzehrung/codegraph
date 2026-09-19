@@ -1743,18 +1743,25 @@ function isImportBinding(value: unknown): value is ImportBinding {
   ) {
     return false;
   }
-  if (binding.kind === "default") return typeof binding.local === "string";
+  if (binding.kind === "default") {
+    return typeof binding.local === "string" && isOptionalRange(binding.localRange);
+  }
   if (binding.kind === "named") {
     return (
       typeof binding.local === "string" &&
       typeof binding.imported === "string" &&
+      isOptionalBoolean(binding.explicitAlias) &&
+      isOptionalRange(binding.importedRange) &&
+      isOptionalRange(binding.localRange) &&
       (binding.phpImportType === undefined ||
         binding.phpImportType === "class" ||
         binding.phpImportType === "function" ||
         binding.phpImportType === "const")
     );
   }
-  if (binding.kind === "namespace") return typeof binding.localNS === "string";
+  if (binding.kind === "namespace") {
+    return typeof binding.localNS === "string" && isOptionalRange(binding.localRange);
+  }
   return binding.kind === "star";
 }
 
@@ -1809,6 +1816,10 @@ function isOptionalBoolean(value: unknown): boolean {
 
 function isOptionalNumber(value: unknown): boolean {
   return value === undefined || typeof value === "number";
+}
+
+function isOptionalRange(value: unknown): boolean {
+  return value === undefined || isRange(value);
 }
 
 function isSymbolKind(value: unknown): value is SymbolKind {

@@ -3,9 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
-import { buildProjectIndex, goToDefinition } from "../../src/index.js";
+import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
 import { findCallHierarchy } from "../../src/indexer/call-hierarchy.js";
 import { findImplementations } from "../../src/indexer/type-hierarchy.js";
+import { fileIdentityKey } from "../../src/util/paths.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
@@ -714,5 +715,49 @@ describe("PHP Unicode symbol ranges (C11)", () => {
       source: "<?php\n// café ☕ prüfung\n/* über */ function créer() {\n\treturn 1;\n}\n",
       symbolName: "créer",
     });
+  });
+});
+
+describe("PHP property_element and const_element initializer references", () => {
+  it("does not create a phantom duplicate declaration for a class constant used as another constant's initializer", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-const-init-"));
+    const file = path.join(root, "consts.php");
+    const source = ["<?php", "class C {", "  const SOME_CONST = 1;", "  const OTHER = SOME_CONST;", "}", ""].join("\n");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      // Regression: only one declaration for SOME_CONST — the initializer use in
+      // `const OTHER = SOME_CONST;` must not create a phantom duplicate declaration.
+      const module = index.byFile.get(fileIdentityKey(file));
+      expect(module?.locals.filter((entry) => entry.localName === "SOME_CONST")).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds a reference to a property used as another property's default value", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-prop-init-"));
+    const file = path.join(root, "props.php");
+    const source = ["<?php", "class C {", "  public $y = 1;", "  public $x = $y;", "}", ""].join("\n");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      // Regression: only one declaration for `$y` — the default-value use in
+      // `public $x = $y;` must not create a phantom duplicate declaration.
+      const module = index.byFile.get(fileIdentityKey(file));
+      expect(module?.locals.filter((entry) => entry.localName === "$y")).toHaveLength(1);
+
+      // The default-value occurrence of `$y` must be found as a reference to the
+      // `$y` property declaration, not suppressed as if it were itself a declaration.
+      const references = await findReferences(index, { file, line: 3, column: 11 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(references.references.map((entry) => entry.range.start.line)).toContain(4);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

@@ -44,7 +44,7 @@ export const PHP_DEF: LanguageDefinition = {
       },
       {
         type: "const_declaration",
-        nameQuery: "(const_element (name) @chunk.name)",
+        nameQuery: "(const_element . (name) @chunk.name)",
         captureId: "const",
       },
     ],
@@ -76,7 +76,7 @@ export const PHP_DEF: LanguageDefinition = {
       (enum_declaration name: (name) @name)
       (enum_case name: (name) @name)
       (function_definition name: (name) @name)
-      (const_declaration (const_element (name) @name))
+      (const_declaration (const_element . (name) @name))
     `,
     locals: `
       (class_declaration name: (name) @name)
@@ -86,8 +86,8 @@ export const PHP_DEF: LanguageDefinition = {
       (enum_case name: (name) @name)
       (function_definition name: (name) @name)
       (method_declaration name: (name) @name)
-      (const_declaration (const_element (name) @name))
-      (property_element (variable_name) @name)
+      (const_declaration (const_element . (name) @name))
+      (property_element name: (variable_name) @name)
     `,
     importBindings: `
       (require_expression) @stmt
@@ -137,11 +137,17 @@ export const PHP_DEF: LanguageDefinition = {
       return parent.childForFieldName("name")?.id === node.id;
     }
 
-    if (parent.type === "property_element" && node.type === "variable_name") return true;
-    return (
-      parent.type === "const_element" &&
-      parent.namedChildren.some((child) => child.id === node.id && child.type === "name")
-    );
+    // `property_element` exposes the declared name via the `name` field and any
+    // initializer via `default_value`; field identity keeps a default value that
+    // happens to be a bare variable reference from being misread as a declaration.
+    if (parent.type === "property_element") {
+      return parent.childForFieldName("name")?.id === node.id;
+    }
+    // `const_element` has no named fields (grammar: `seq($.name, '=', $.expression)`),
+    // so the declared name is identified positionally as the first namedChild; a
+    // value that is itself a bare `name` reference (e.g. `const X = SOME_CONST;`)
+    // is the second namedChild and must not qualify.
+    return parent.type === "const_element" && parent.namedChildren[0]?.id === node.id && node.type === "name";
   },
   scopeDeclarationNames: (node) => node.type === "variable_name" && node.parent?.type === "property_element",
   createsFunctionScope: (node) => node.type === "function_definition" || node.type === "method_declaration",

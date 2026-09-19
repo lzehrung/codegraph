@@ -105,6 +105,7 @@ function configureReferenceLookups(fixtures: readonly ReferenceFixture[]): void 
               ...(provenance !== undefined ? { provenance } : {}),
             },
           ],
+          referenceCoverage: { scope: "indexed_candidates", state: "complete" },
         };
       } finally {
         mockedNavigation.activeLookups -= 1;

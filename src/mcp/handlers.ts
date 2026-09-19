@@ -3,7 +3,11 @@ import path from "node:path";
 import { buildCodegraphArtifactWithSession } from "../agent/artifact.js";
 import type { CodegraphArtifactBuildResult } from "../agent/artifact.js";
 import { explainCodegraphTargetWithSession, resolveCodegraphTargetWithSession } from "../agent/explain.js";
-import type { AgentExplanation, AgentExplanationReference } from "../agent/explain.js";
+import type {
+  AgentExplanation,
+  AgentExplanationReference,
+  AgentExplanationReferenceCoverage,
+} from "../agent/explain.js";
 import { getCodegraphFileViewWithSession, type AgentFileViewResponse } from "../agent/file-view.js";
 import { exploreCodegraphWithSession, type AgentExploreResponse } from "../agent/explore.js";
 import { orientCodegraphWithSession, type AgentOrientBudget, type AgentOrientResponse } from "../agent/orient.js";
@@ -241,7 +245,14 @@ type CodegraphMcpHandlerDefinitions = {
     request:
       | { handle: string; limit?: number | undefined }
       | { file: string; line: number; column: number; limit?: number | undefined },
-  ) => Promise<CodegraphMcpFreshResult<McpTruncationMeta & { references: AgentExplanationReference[] }>>;
+  ) => Promise<
+    CodegraphMcpFreshResult<
+      McpTruncationMeta & {
+        references: AgentExplanationReference[];
+        referenceCoverage?: AgentExplanationReferenceCoverage;
+      }
+    >
+  >;
   deps: (request: {
     file: string;
     depth?: number | undefined;
@@ -664,18 +675,34 @@ function createCodegraphMcpHandlersForSession(
   const boundedReferencesFromResult = (
     result: FindReferencesResult,
     limit: number,
-  ): McpTruncationMeta & { references: AgentExplanationReference[] } => {
+  ): McpTruncationMeta & {
+    references: AgentExplanationReference[];
+    referenceCoverage?: AgentExplanationReferenceCoverage;
+  } => {
     if (result.status !== "ok") {
       return { references: [], limit, totalSeen: 0, truncated: false, omitted: 0 };
     }
     const { items, omitted } = boundList(result.references, limit);
-    const references = items.map((reference) => ({ file: relative(reference.file), range: reference.range }));
+    const references = items.map((reference) => ({
+      file: relative(reference.file),
+      range: reference.range,
+      ...(reference.via?.importBinding ? { importBinding: reference.via.importBinding } : {}),
+    }));
+    const referenceCoverage = result.referenceCoverage
+      ? {
+          ...result.referenceCoverage,
+          ...(result.referenceCoverage.affectedFiles
+            ? { affectedFiles: result.referenceCoverage.affectedFiles.map((file) => relative(file)) }
+            : {}),
+        }
+      : undefined;
     return {
       references,
       limit,
       totalSeen: result.references.length,
       truncated: Boolean(omitted),
       omitted,
+      ...(referenceCoverage ? { referenceCoverage } : {}),
     };
   };
   const fileDeps = async (request: {
@@ -880,6 +907,7 @@ function createCodegraphMcpHandlersForSession(
             totalSeen: explanation.references.length + explanation.omittedCounts.references,
             truncated: explanation.omittedCounts.references > 0,
             omitted: explanation.omittedCounts.references,
+            ...(explanation.referenceCoverage ? { referenceCoverage: explanation.referenceCoverage } : {}),
           };
         }
         if (file === undefined || line === undefined || column === undefined) {

@@ -1,10 +1,12 @@
-import type { FileId } from "../types.js";
+import type { FileId, Range } from "../types.js";
 
 export type ImportBinding =
   | {
       kind: "default";
       local: string;
       from: string;
+      /** UTF-16 range of the local binding token in the importing file. */
+      localRange?: Range;
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
       mechanism?: "es" | "cjs" | "python" | "php";
@@ -18,6 +20,15 @@ export type ImportBinding =
       local: string;
       imported: string;
       from: string;
+      /** True when the source spells an alias even if the alias equals the imported name. */
+      explicitAlias?: boolean;
+      /** UTF-16 range of the imported (source) name token, before any `as` alias. */
+      importedRange?: Range;
+      /**
+       * UTF-16 range of the local binding token. For an unaliased specifier this is the
+       * same range as `importedRange`; for `import { a as b }` it is the alias token.
+       */
+      localRange?: Range;
       phpImportType?: "class" | "function" | "const";
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
@@ -31,6 +42,8 @@ export type ImportBinding =
       kind: "namespace";
       localNS: string;
       from: string;
+      /** UTF-16 range of the namespace binding token. */
+      localRange?: Range;
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
       mechanism?: "es" | "cjs" | "python" | "php";

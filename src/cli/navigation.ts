@@ -354,6 +354,10 @@ function writePrettyReferences(context: NavigationCommandContext, result: FindRe
     const { line, column } = reference.range.start;
     context.writeStdoutLine(`${rel}:${line}:${column}`);
   }
+  if (result.referenceCoverage?.state === "partial") {
+    const reasons = result.referenceCoverage.reasons?.length ? ` (${result.referenceCoverage.reasons.join(", ")})` : "";
+    context.writeStdoutLine(`note: reference coverage partial${reasons}`);
+  }
 }
 
 export async function handleGotoCommand(context: NavigationCommandContext): Promise<void> {

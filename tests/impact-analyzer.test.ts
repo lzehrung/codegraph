@@ -1989,7 +1989,7 @@ describe("Impact Analyzer Edge Cases", () => {
         expect(diagnostics.referenceLookupsOmitted).toBe(changedSymbols.length - 3);
         expect(diagnostics.changedSymbolsTotal).toBe(changedSymbols.length);
         expect(diagnostics.referencesRetained).toBe(2);
-        expect(diagnostics.referencesOmitted).toBe(4);
+        expect(diagnostics.referencesOmitted).toBe(7);
       } finally {
         await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }

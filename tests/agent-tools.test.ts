@@ -359,7 +359,48 @@ describe("Agent Tools", () => {
       expect(result.references!.every((reference) => typeof reference.range.start.line === "number")).toBe(true);
       expect(result.provenance?.resolution).toBe("exact");
       expect(result.provenance?.confidence).toBe("high");
+      // Import declaration sites now carry an explicit role instead of being silently omitted.
+      const importedRoleRefs = result.references!.filter((reference) => reference.via?.importBinding === "imported");
+      expect(importedRoleRefs.length).toBeGreaterThan(0);
+      expect(result.referenceCoverage?.scope).toBe("indexed_candidates");
     }
+  });
+
+  it("tool_findReferences preserves imported/local import-binding roles for an unused aliased import", async () => {
+    const root = await mkTmpDir("dg-agent-import-roles-");
+    await fsp.writeFile(path.join(root, "service.ts"), "export function service(): number { return 1; }\n", "utf8");
+    await fsp.writeFile(
+      path.join(root, "used.ts"),
+      'import { service } from "./service.js";\nexport const value = service();\n',
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "unused.ts"),
+      'import { service as unusedAlias } from "./service.js";\nexport const marker = true;\n',
+      "utf8",
+    );
+    const serviceFile = path.join(root, "service.ts");
+    // Line 1, column 17 is the `service` definition.
+    const result = await tool_findReferences(root, serviceFile, 1, 17);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    const usedFileRefs = result.references!.filter((reference) => reference.file === "used.ts");
+    const unusedFileRefs = result.references!.filter((reference) => reference.file === "unused.ts");
+    // used.ts: an unaliased import dedupes the "imported" and "local" roles to a single
+    // "imported" site, plus the actual `service()` call occurrence.
+    expect(usedFileRefs.filter((reference) => reference.via?.importBinding === "imported")).toHaveLength(1);
+    expect(usedFileRefs.filter((reference) => reference.via?.importBinding === "local")).toHaveLength(0);
+    expect(
+      usedFileRefs.filter((reference) => reference.via?.import && reference.via.importBinding === undefined),
+    ).toHaveLength(1);
+    // unused.ts: an aliased import with no other use still reports both the "imported" source
+    // token and the "local" alias declaration, but has no occurrence.
+    expect(unusedFileRefs.filter((reference) => reference.via?.importBinding === "imported")).toHaveLength(1);
+    expect(unusedFileRefs.filter((reference) => reference.via?.importBinding === "local")).toHaveLength(1);
+    expect(
+      unusedFileRefs.filter((reference) => reference.via?.import && reference.via.importBinding === undefined),
+    ).toHaveLength(0);
+    expect(result.referenceCoverage).toMatchObject({ scope: "indexed_candidates", state: "complete" });
   });
 
   it("tool_goToDefinition handles relative paths", async () => {

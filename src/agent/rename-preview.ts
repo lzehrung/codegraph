@@ -8,7 +8,14 @@ import { findReferences } from "../indexer/navigation.js";
 import { resolveExport } from "../indexer/navigation-resolve.js";
 import { getCachedScope } from "../indexer/navigation-references.js";
 import { findImplementations as queryImplementations } from "../indexer/type-hierarchy.js";
-import { SymbolKind, type BuildOptions, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
+import {
+  SymbolKind,
+  type BuildOptions,
+  type ImportBinding,
+  type ProjectIndex,
+  type Reference,
+  type SymbolDef,
+} from "../indexer/types.js";
 import { supportForFile, supportForFileWithoutHeaderSample } from "../languages.js";
 import type { Range } from "../types.js";
 import { ensureParsedContext } from "../indexer/parse-context.js";
@@ -319,7 +326,7 @@ export async function previewRenameInSnapshot(
       (reference): CandidateEdit => ({
         file: reference.file,
         range: reference.range,
-        kind: "reference",
+        kind: reference.via?.importBinding === "imported" ? "import" : "reference",
         reference,
       }),
     ),
@@ -917,12 +924,24 @@ async function collectImportDeclarationCandidates(
   const candidates: CandidateEdit[] = [];
   const missing: Reference[] = [];
   const seenBindings = new Set<string>();
+  const resolvedBindingKeys = new Set<string>();
+  for (const reference of references) {
+    if (reference.via?.importBinding !== "imported") continue;
+    const binding = reference.via.import;
+    if (binding && binding.kind === "named") {
+      resolvedBindingKeys.add(namedImportBindingKey(reference.file, binding));
+    }
+  }
   for (const reference of references) {
     const binding = reference.via?.import;
     if (!binding || binding.kind !== "named" || binding.imported !== oldName) continue;
-    const key = `${reference.file}:${binding.from}:${binding.imported}:${binding.local}`;
+    const key = namedImportBindingKey(reference.file, binding);
     if (seenBindings.has(key)) continue;
     seenBindings.add(key);
+    // Core already returns an exact "imported" role reference for this binding when the
+    // extractor recorded a token range; that reference flows through as its own candidate,
+    // so scanning text for the same import statement would duplicate the edit.
+    if (resolvedBindingKeys.has(key)) continue;
     const source = await loadSource(reference.file);
     if (!source) continue;
     const range = findImportDeclarationRange(source, binding.from, oldName);
@@ -930,6 +949,10 @@ async function collectImportDeclarationCandidates(
     else missing.push(reference);
   }
   return { candidates, missing };
+}
+
+function namedImportBindingKey(file: string, binding: Extract<ImportBinding, { kind: "named" }>): string {
+  return `${file}:${binding.from}:${binding.imported}:${binding.local}`;
 }
 
 async function collectExportDeclarationCandidates(
@@ -1152,8 +1175,11 @@ function rangeFromOffsets(source: string, startIndex: number, endIndex: number):
 function isPreservedImportAlias(reference: Reference, text: string, oldName: string): boolean {
   const binding = reference.via?.import;
   if (!binding || binding.kind === "star" || binding.kind === "namespace") return false;
+  if (reference.via?.importBinding === "imported" && binding.kind === "named" && binding.imported === oldName) {
+    return false;
+  }
   if (binding.kind === "default") return true;
-  return binding.local !== oldName && text === binding.local;
+  return (binding.explicitAlias || binding.local !== oldName) && text === binding.local;
 }
 
 function normalizeEdits(

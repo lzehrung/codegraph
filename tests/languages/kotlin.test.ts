@@ -14,6 +14,23 @@ import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 
+type TokenRange = {
+  start: { line: number; column: number; index: number };
+  end: { line: number; column: number; index: number };
+};
+
+function positionForIndex(source: string, index: number): TokenRange["start"] {
+  const prefix = source.slice(0, index);
+  const lineStart = prefix.lastIndexOf("\n") + 1;
+  return { line: prefix.split("\n").length, column: index - lineStart + 1, index };
+}
+
+function rangeForToken(source: string, token: string): TokenRange {
+  const index = source.indexOf(token);
+  if (index < 0) throw new Error(`token not found: ${token}`);
+  return { start: positionForIndex(source, index), end: positionForIndex(source, index + token.length) };
+}
+
 const definition: LanguageTestDefinition = {
   id: "kotlin",
   samples: [
@@ -265,10 +282,11 @@ describe("Kotlin semicolon-terminated text fallback imports", () => {
     });
 
     const bindings: ImportBinding[] = [];
+    const source = "import a.b.C;\nimport a.b.D as Alias;\n";
     await finalizeLanguageSpecificImports({
       file: "Consumer.kt",
       projectRoot: process.cwd(),
-      source: "import a.b.C;\nimport a.b.D as Alias;\n",
+      source,
       languageId: "kotlin",
       resolveFrom: async (from) => ({ external: from }),
       pushBinding: (binding) => {
@@ -280,12 +298,17 @@ describe("Kotlin semicolon-terminated text fallback imports", () => {
       },
     });
 
+    const importedC = rangeForToken(source, "C");
+    const importedD = rangeForToken(source, "D");
+    const localAlias = rangeForToken(source, "Alias");
     expect(bindings).toEqual([
       {
         kind: "named",
         local: "C",
         imported: "C",
         from: "a.b.C",
+        importedRange: importedC,
+        localRange: importedC,
         resolved: { external: "a.b.C" },
         typeOnly: false,
       },
@@ -294,10 +317,17 @@ describe("Kotlin semicolon-terminated text fallback imports", () => {
         local: "Alias",
         imported: "D",
         from: "a.b.D",
+        explicitAlias: true,
+        importedRange: importedD,
+        localRange: localAlias,
         resolved: { external: "a.b.D" },
         typeOnly: false,
       },
     ]);
+    expect(source.slice(importedC.start.index, importedC.end.index)).toBe("C");
+    expect(source.slice(importedD.start.index, importedD.end.index)).toBe("D");
+    expect(source.slice(localAlias.start.index, localAlias.end.index)).toBe("Alias");
+    expect(localAlias.start.column).not.toBe(importedD.start.column);
   });
 });
 

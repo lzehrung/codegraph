@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { createNavigationProvenance, okGoToResult } from "../indexer/navigation-provenance.js";
+import { buildIndexedCandidateCoverage } from "../indexer/navigation-references.js";
 import type {
   FindReferencesResult,
   GoToRequest,
@@ -408,6 +409,7 @@ export async function findSqlReferences(
   const references: Reference[] = [];
   const seen = new Set<string>();
   const lookup = getSqlDefinitionLookup(index);
+  const scannedFiles = sqlFiles(index);
   const addReference = (file: string, range: Range): void => {
     const key = `${file}:${range.start.line}:${range.start.column}`;
     if (seen.has(key)) return;
@@ -415,7 +417,7 @@ export async function findSqlReferences(
     references.push({ file, range });
   };
 
-  for (const file of sqlFiles(index)) {
+  for (const file of scannedFiles) {
     const facts = await sqlFactsForFile(index, file);
     for (const fact of facts) {
       for (const name of [fact.objectName, fact.relatedObjectName]) {
@@ -441,5 +443,13 @@ export async function findSqlReferences(
     definition,
     references,
     provenance: createNavigationProvenance(index, "exact", "high"),
+    referenceCoverage: buildIndexedCandidateCoverage({
+      index,
+      def: definition,
+      exportedNames: [],
+      candidateFiles: scannedFiles,
+      scannedFiles,
+      truncated: false,
+    }),
   };
 }

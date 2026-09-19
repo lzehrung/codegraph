@@ -4,9 +4,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
-import { createTestIndexFromFiles } from "../test-utils.js";
+import { createTestIndexFromFiles, findSymbolsByName } from "../test-utils.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
-import { goToDefinition } from "../../src/index.js";
+import { findReferences, goToDefinition } from "../../src/index.js";
 
 const definition: LanguageTestDefinition = {
   id: "javascript",
@@ -155,6 +155,70 @@ describe("JavaScript CommonJS export and static-block scopes", () => {
       expect(await goToDefinition(index, { file, line: 1, column: source.lastIndexOf("hidden") + 1 })).toMatchObject({
         status: "not_found",
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("JavaScript variable_declarator initializer references", () => {
+  it("finds a reference to an imported symbol used as a bare initializer", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-js-decl-init-"));
+    const aFile = path.join(root, "a.js");
+    const bFile = path.join(root, "b.js");
+    try {
+      await writeFile(aFile, "export function helper() {\n  return 1;\n}\n", "utf8");
+      await writeFile(bFile, "import { helper } from './a.js';\n\nconst alias = helper;\n", "utf8");
+      const index = await createTestIndexFromFiles(root, [aFile, bFile]);
+
+      const references = await findReferences(index, { file: aFile, line: 1, column: 17 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(references.references.map((entry) => entry.range.start.line)).toContain(3);
+      }
+
+      // Regression: the declarator's own name (`alias`) must still be classified as a
+      // legitimate declaration, not swallowed by the initializer-identity check.
+      expect(findSymbolsByName(index, "alias", bFile)).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("JavaScript class field navigation", () => {
+  it("resolves class fields and keeps initializer reads as references", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-js-field-"));
+    const apiFile = path.join(root, "api.js").replace(/\\/g, "/");
+    const consumerFile = path.join(root, "consumer.js").replace(/\\/g, "/");
+    const apiSource = ["export const source = 1;", "export class Box {", "  static value = source;", "}", ""].join(
+      "\n",
+    );
+    const consumerSource = ['import { Box } from "./api.js";', "Box.value;", ""].join("\n");
+    try {
+      await Promise.all([writeFile(apiFile, apiSource, "utf8"), writeFile(consumerFile, consumerSource, "utf8")]);
+      const index = await createTestIndexFromFiles(root, [apiFile, consumerFile]);
+
+      const field = await goToDefinition(index, {
+        file: consumerFile,
+        line: 2,
+        column: consumerSource.split("\n")[1]!.indexOf("value") + 1,
+      });
+      expect(field.status).toBe("ok");
+      if (field.status === "ok") {
+        expect(field.definition.file).toBe(apiFile);
+        expect(field.definition.range.start.line).toBe(3);
+      }
+
+      const references = await findReferences(index, {
+        file: apiFile,
+        line: 1,
+        column: apiSource.split("\n")[0]!.indexOf("source") + 1,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(references.references.map((reference) => reference.range.start.line)).toContain(3);
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }

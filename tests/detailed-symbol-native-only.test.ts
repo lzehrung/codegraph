@@ -12,6 +12,24 @@ async function mkTmpDir(prefix: string): Promise<string> {
 
 const normalizePath = (value: string): string => value.replace(/\\/g, "/");
 
+type TokenRange = {
+  start: { line: number; column: number; index: number };
+  end: { line: number; column: number; index: number };
+};
+
+function positionForIndex(source: string, index: number): TokenRange["start"] {
+  const prefix = source.slice(0, index);
+  const lineStart = prefix.lastIndexOf("\n") + 1;
+  return { line: prefix.split("\n").length, column: index - lineStart + 1, index };
+}
+
+/** Exact UTF-16 range of the first occurrence of `token` in `source`. */
+function rangeForToken(source: string, token: string): TokenRange {
+  const index = source.indexOf(token);
+  if (index < 0) throw new Error(`token not found: ${token}`);
+  return { start: positionForIndex(source, index), end: positionForIndex(source, index + token.length) };
+}
+
 describe("detailed symbol graph in native-only installs", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -116,11 +134,10 @@ describe("detailed symbol graph in native-only installs", () => {
     const root = await mkTmpDir("cg-ts-imports-native-only-");
     const entryFile = path.join(root, "entry.ts");
     const depFile = path.join(root, "dep.ts");
-    await fsp.writeFile(
-      entryFile,
-      ["import value, { helper as alias } from './dep';", "export { helper } from './dep';", ""].join("\n"),
-      "utf8",
+    const entrySource = ["import value, { helper as alias } from './dep';", "export { helper } from './dep';", ""].join(
+      "\n",
     );
+    await fsp.writeFile(entryFile, entrySource, "utf8");
     await fsp.writeFile(depFile, ["export default 1;", "export const helper = 2;", ""].join("\n"), "utf8");
 
     vi.resetModules();
@@ -139,6 +156,7 @@ describe("detailed symbol graph in native-only installs", () => {
         kind: "default",
         local: "value",
         from: "./dep",
+        localRange: rangeForToken(entrySource, "value"),
         resolved: normalizePath(depFile),
         typeOnly: false,
       },
@@ -147,6 +165,9 @@ describe("detailed symbol graph in native-only installs", () => {
         local: "alias",
         imported: "helper",
         from: "./dep",
+        explicitAlias: true,
+        importedRange: rangeForToken(entrySource, "helper"),
+        localRange: rangeForToken(entrySource, "alias"),
         resolved: normalizePath(depFile),
         typeOnly: false,
       },
@@ -176,10 +197,25 @@ describe("detailed symbol graph in native-only installs", () => {
         local: "RenamedUtilityClass",
         imported: "UtilityClass",
         from: "utils.UtilityClass",
+        explicitAlias: true,
+        importedRange: rangeForToken(parsed.source, "UtilityClass"),
+        localRange: rangeForToken(parsed.source, "RenamedUtilityClass"),
         resolved: normalizePath(depFile),
         typeOnly: false,
       },
     ]);
+    expect(
+      parsed.source.slice(
+        rangeForToken(parsed.source, "UtilityClass").start.index,
+        rangeForToken(parsed.source, "UtilityClass").end.index,
+      ),
+    ).toBe("UtilityClass");
+    expect(
+      parsed.source.slice(
+        rangeForToken(parsed.source, "RenamedUtilityClass").start.index,
+        rangeForToken(parsed.source, "RenamedUtilityClass").end.index,
+      ),
+    ).toBe("RenamedUtilityClass");
   });
 
   it("indexes TypeScript locals and exports without loading a non-native parser", async () => {
