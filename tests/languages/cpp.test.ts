@@ -223,6 +223,24 @@ describe("C++ native queries", () => {
     }
   });
 
+  it("exports class and struct static members while hiding file-scope static functions", () => {
+    const names = collectCppNames(
+      "probe.cpp",
+      [
+        "static int helper() { return 0; }",
+        "int visible() { return 1; }",
+        "class Foo { public: static int member; static int method(); };",
+        "struct Bar { static int field; };",
+      ].join("\n"),
+    );
+
+    expect(names.exports).toEqual(expect.arrayContaining(["visible", "Foo", "method", "Bar"]));
+    expect(names.exports).not.toContain("helper");
+    expect(names.locals).toEqual(
+      expect.arrayContaining(["helper", "visible", "Foo", "member", "method", "Bar", "field"]),
+    );
+  });
+
   it("exports namespace, nested-namespace, and template declarations without leaking function-local names", () => {
     const namespaced = collectCppNames(
       "probe.cpp",

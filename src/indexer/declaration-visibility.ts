@@ -116,12 +116,28 @@ const SWIFT_ROW: DeclarationVisibilityRow = {
   hiddenModifierTexts: new Set(["private", "fileprivate"]),
 };
 
+/**
+ * C and C++ `storage_class_specifier` is a named child of `function_definition`,
+ * `declaration`, and `field_declaration` with no field name (pinned tree-sitter-c
+ * 0.24.1 and tree-sitter-cpp 8b5b49eb). File-scope `static` is internal linkage;
+ * `static` on a class/struct/union member is storage duration and stays exported.
+ */
+const C_FAMILY_ROW: DeclarationVisibilityRow = {
+  declarationTypes: new Set(["function_definition", "declaration", "field_declaration"]),
+  modifierNodeTypes: new Set(["storage_class_specifier"]),
+  hiddenModifierTexts: new Set(),
+  namespaceHiddenModifierTexts: new Set(["static"]),
+  typeContainerTypes: new Set(["class_specifier", "struct_specifier", "union_specifier"]),
+};
+
 const VISIBILITY_BY_LANGUAGE: Record<string, DeclarationVisibilityRow> = {
   rust: RUST_ROW,
   java: JAVA_ROW,
   csharp: CSHARP_ROW,
   kotlin: KOTLIN_ROW,
   swift: SWIFT_ROW,
+  c: C_FAMILY_ROW,
+  cpp: C_FAMILY_ROW,
 };
 
 /** True when `languageId` has a visibility row that filters module exports. */

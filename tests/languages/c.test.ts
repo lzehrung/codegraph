@@ -188,6 +188,7 @@ describe("C native queries", () => {
       "#ifndef DEMO_H",
       "#define DEMO_H",
       "static int helper;",
+      "static int helper_fn(void) { return 0; }",
       "int top;",
       "int f() { int sum = 0; return sum; }",
       "int static_count = 1;",
@@ -200,6 +201,8 @@ describe("C native queries", () => {
       .sort();
 
     expect(exported).toEqual(["DEMO_H", "f", "ready", "static_count", "top"]);
+    expect(exported).not.toContain("helper");
+    expect(exported).not.toContain("helper_fn");
   });
 });
 
@@ -348,6 +351,7 @@ describe("C native queries without a projected tree", () => {
       "#ifndef DEMO_H",
       "#define DEMO_H",
       "static int helper;",
+      "static int helper_fn(void) { return 0; }",
       "int /* static is only a comment */ top;",
       "int f() { int hidden; struct Inner { int x; }; return hidden; }",
       "int static_count = 1;",
@@ -367,6 +371,7 @@ describe("C native queries without a projected tree", () => {
     expect(noTree).not.toContain("Inner");
     expect(noTree).not.toContain("once");
     expect(noTree).not.toContain("helper");
+    expect(noTree).not.toContain("helper_fn");
   });
 
   it("keeps C++ namespace members when the tree is absent", () => {

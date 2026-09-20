@@ -460,6 +460,114 @@ describe("declaration visibility module exports", () => {
       );
     });
   });
+
+  it("keeps C file-scope static names local while non-static siblings stay importable", async () => {
+    await withTempRoot("cg-vis-c-", async (root) => {
+      const visFile = path.join(root, "vis.c").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.c").replace(/\\/g, "/");
+      const visHiddenDef = "static int helper(void) {";
+      const visHiddenUse = "  return helper();";
+      const consumerUse = "int run(void) { return helper() + visible(); }";
+      await writeFile(visFile, [visHiddenDef, visHiddenUse, "}", "int visible(void) { return 1; }", ""].join("\n"));
+      await writeFile(consumerFile, ['#include "./vis.c"', consumerUse, ""].join("\n"));
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const visMod = index.byFile.get(fileIdentityKey(visFile));
+      const exported = localExportNames(visMod);
+      expect(exported).toEqual(expect.arrayContaining(["visible"]));
+      expect(exported).not.toContain("helper");
+      expect(visMod?.locals.map((local) => local.localName)).toEqual(expect.arrayContaining(["helper", "visible"]));
+
+      expect(resolveExport(index, visFile, "visible", { allowLocalFallback: false })?.kind).toBe("resolved");
+      expect(resolveExport(index, visFile, "helper", { allowLocalFallback: false })).toBeNull();
+      expect(resolveExport(index, visFile, "helper")).toBeNull();
+
+      await testGoToDefinition(index, visFile, 2, tokenColumn(visHiddenUse, "helper"), visFile, 1);
+      const hiddenRefs = await findReferences(index, {
+        file: visFile,
+        line: 1,
+        column: tokenColumn(visHiddenDef, "helper"),
+      });
+      expect(hiddenRefs.status).toBe("ok");
+      if (hiddenRefs.status === "ok") {
+        expect(hiddenRefs.references.map((reference) => reference.range.start.line).sort()).toEqual(
+          expect.arrayContaining([1, 2]),
+        );
+        expect(
+          hiddenRefs.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(consumerFile)),
+        ).toBe(false);
+      }
+
+      await testGoToDefinition(index, consumerFile, 2, tokenColumn(consumerUse, "visible"), visFile, 4);
+      await testGoToDefinition(
+        index,
+        consumerFile,
+        2,
+        tokenColumn(consumerUse, "helper"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+    });
+  });
+
+  it("keeps C++ file-scope static names local while class and struct static members stay exported", async () => {
+    await withTempRoot("cg-vis-cpp-", async (root) => {
+      const visFile = path.join(root, "vis.cpp").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.cpp").replace(/\\/g, "/");
+      const visHiddenDef = "static int helper() {";
+      const visHiddenUse = "  return helper();";
+      const visClass = "class Foo { public: static int member; static int method(); };";
+      const visStruct = "struct Bar { static int field; };";
+      const consumerUse = "int run() { return helper() + visible(); }";
+      await writeFile(
+        visFile,
+        [visHiddenDef, visHiddenUse, "}", "int visible() { return 1; }", visClass, visStruct, ""].join("\n"),
+      );
+      await writeFile(consumerFile, ['#include "./vis.cpp"', consumerUse, ""].join("\n"));
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const visMod = index.byFile.get(fileIdentityKey(visFile));
+      const exported = localExportNames(visMod);
+      expect(exported).toEqual(expect.arrayContaining(["visible", "Foo", "method", "Bar"]));
+      expect(exported).not.toContain("helper");
+      expect(visMod?.locals.map((local) => local.localName)).toEqual(
+        expect.arrayContaining(["helper", "visible", "Foo", "member", "method", "Bar", "field"]),
+      );
+
+      expect(resolveExport(index, visFile, "visible", { allowLocalFallback: false })?.kind).toBe("resolved");
+      expect(resolveExport(index, visFile, "method", { allowLocalFallback: false })?.kind).toBe("resolved");
+      expect(resolveExport(index, visFile, "helper", { allowLocalFallback: false })).toBeNull();
+      expect(resolveExport(index, visFile, "helper")).toBeNull();
+
+      await testGoToDefinition(index, visFile, 2, tokenColumn(visHiddenUse, "helper"), visFile, 1);
+      const hiddenRefs = await findReferences(index, {
+        file: visFile,
+        line: 1,
+        column: tokenColumn(visHiddenDef, "helper"),
+      });
+      expect(hiddenRefs.status).toBe("ok");
+      if (hiddenRefs.status === "ok") {
+        expect(hiddenRefs.references.map((reference) => reference.range.start.line).sort()).toEqual(
+          expect.arrayContaining([1, 2]),
+        );
+        expect(
+          hiddenRefs.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(consumerFile)),
+        ).toBe(false);
+      }
+
+      await testGoToDefinition(index, consumerFile, 2, tokenColumn(consumerUse, "visible"), visFile, 4);
+      await testGoToDefinition(
+        index,
+        consumerFile,
+        2,
+        tokenColumn(consumerUse, "helper"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+    });
+  });
 });
 
 describe("Python star re-export", () => {
