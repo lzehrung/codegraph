@@ -22,15 +22,17 @@ Checklist for landing a new first-class source language without drifting from re
 - Add the native grammar dependency in `packages/codegraph-native/Cargo.toml`.
 - Register the native language id in `packages/codegraph-native/src/languages.rs` (the registry); `packages/codegraph-native/src/lib.rs` only delegates. Add smoke coverage alongside that registration.
 - Rebuild the native addon before trusting any native parity failures.
-- If reduced-mode recovery needs language-specific heuristics, add them in the existing regex/graph-only recovery paths rather than adding a second grammar backend.
+- If reduced-mode recovery needs language-specific heuristics, register a text import extractor in `src/indexer/imports/text-import-extractors.ts` rather than adding a second grammar backend or a new call site. The registry owns the entry shape (source, sink, context) and the graph and indexer paths both run it.
 
 ## 4. Implement the language definition cleanly
 
 - Define chunk blocks, split points, comments, and node-type hints in the language definition.
-- Add import, export, local, and import-binding queries that match the real grammar node names.
-- Implement `classifyDefinition`, `isDeclarationName`, and scope helpers so symbol indexing and navigation stay consistent with other source languages.
-- When changing a function-valued language behavior hook, bump `LANGUAGE_BEHAVIOR_EPOCH` in `src/indexer/build-cache/options.ts`. The disk-cache fingerprint deliberately uses this declared epoch rather than hook source text so bundled CLI and library builds share caches.
-- Prefer shared pipeline hooks over language-specific branches. Add a language-specific branch only when the grammar shape actually requires it.
+- Add import, export, local, and import-binding queries that match the real grammar node names. Import-bearing queries use the shared capture vocabulary in `src/languages/graph-captures.ts`: required `@stmt` plus path-bearing `@from`, with optional `@alias`, `@wild`, `@iname`, `@def`, `@ns`, and `@type_kw`. An unknown capture name is a typecheck error. Probe the pinned grammar for the node shapes you match; a query that compiles and matches nothing yields an empty graph rather than an error.
+- Implement `classifyDefinition`, `isDeclarationName`, and scope helpers so symbol indexing and navigation stay consistent with other source languages. Reuse the shared hook bodies in `src/languages/definitions/shared.ts`, `js-family.ts`, and `c-family.ts` before writing new ones.
+- Cross-language capability data belongs in the table keyed by language id that sits with its subsystem, not in a `LanguageDefinition` field and not in an inlined branch: `src/util/trivia-tables.ts` for comment and string forms, `src/indexer/scope-nodes.ts` for scope and member-container node types, `src/indexer/declaration-visibility.ts` for export visibility modifiers, and `src/document-links/html-forms.ts` for document-format HTML passes. Reserve `LanguageDefinition` for hooks that need real per-language code.
+- Set `membersAreImplicitlyInScope: true` only when the language runtime resolves a bare member name inside a type body. It defaults to false, so a language whose members need a receiver requires no entry.
+- When changing a function-valued language behavior hook, bump `LANGUAGE_BEHAVIOR_EPOCH` in `src/indexer/build-cache/options.ts`. The disk-cache fingerprint deliberately uses this declared epoch rather than hook source text so bundled CLI and library builds share caches. Changes to scope construction, resolution, classification, or export visibility bump `CORE_ALGORITHM_EPOCH` instead.
+- Prefer shared pipeline hooks over language-specific branches. Add a language-specific branch only when the grammar shape actually requires it, and say which grammar limitation forces it.
 
 ## 5. Implement import binding and resolution
 

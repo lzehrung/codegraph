@@ -23,10 +23,7 @@
 
 export const GRAPH_IMPORT_REQUIRED_CAPTURES = ["stmt", "from"] as const;
 export const GRAPH_IMPORT_OPTIONAL_CAPTURES = ["alias", "wild", "iname", "def", "ns", "type_kw"] as const;
-export const GRAPH_IMPORT_CAPTURES = [
-  ...GRAPH_IMPORT_REQUIRED_CAPTURES,
-  ...GRAPH_IMPORT_OPTIONAL_CAPTURES,
-] as const;
+export const GRAPH_IMPORT_CAPTURES = [...GRAPH_IMPORT_REQUIRED_CAPTURES, ...GRAPH_IMPORT_OPTIONAL_CAPTURES] as const;
 
 export type GraphImportRequiredCapture = (typeof GRAPH_IMPORT_REQUIRED_CAPTURES)[number];
 export type GraphImportOptionalCapture = (typeof GRAPH_IMPORT_OPTIONAL_CAPTURES)[number];

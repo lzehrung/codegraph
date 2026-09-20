@@ -6,7 +6,10 @@ import {
   callCompatibilityLanguageIds,
   getCallCompatibilityProvider,
 } from "../src/impact/call-compatibility/providers/index.js";
-import { receiverKeywordLanguageIds, staticMemberLanguageIds } from "../src/graphs/symbol-graph-detailed/receiver-calls.js";
+import {
+  receiverKeywordLanguageIds,
+  staticMemberLanguageIds,
+} from "../src/graphs/symbol-graph-detailed/receiver-calls.js";
 import { isJsTsLanguage, jsFamilyLanguageIdDeclarations } from "../src/languages/js-family.js";
 import { getAllLanguages } from "../src/languages/registry.js";
 
@@ -54,10 +57,9 @@ describe("language capability registry consistency", () => {
     for (const list of [...derivedCapabilityLists, ...directCapabilityLists]) {
       const languageIds = "declaredIds" in list ? list.declaredIds : list.languageIds;
       for (const languageId of languageIds) {
-        expect(
-          registeredLanguageIds.has(languageId),
-          `${list.name} names unregistered language id ${languageId}`,
-        ).toBe(true);
+        expect(registeredLanguageIds.has(languageId), `${list.name} names unregistered language id ${languageId}`).toBe(
+          true,
+        );
       }
     }
   });

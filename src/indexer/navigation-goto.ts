@@ -233,8 +233,7 @@ export async function resolveMemberAccessDefinition(params: {
           const memberPredicate =
             receiver.memberScope === "any"
               ? undefined
-              : (local: SymbolDef) =>
-                  matchesReceiverMemberScope(local, receiver.memberScope, targetContext, container);
+              : (local: SymbolDef) => matchesReceiverMemberScope(local, receiver.memberScope, targetContext, container);
           let memberDef: SymbolDef | undefined;
           if (receiver.runtimeTypeOnly || targetContext.sup.id === "java") {
             memberDef = findDirectLocalWithinNode(
@@ -560,17 +559,11 @@ function findRustImplForType(root: SyntaxNodeLike, typeName: string, source: str
 
 const GO_EMBED_DEPTH = 16;
 
-function goMethodReceiverTypeName(
-  methodNode: SyntaxNodeLike,
-  source: string,
-  sup: LanguageSupport,
-): string | null {
+function goMethodReceiverTypeName(methodNode: SyntaxNodeLike, source: string, sup: LanguageSupport): string | null {
   const receiver = methodNode.childForFieldName("receiver");
   if (!receiver) return null;
   const parameter =
-    receiver.namedChildren.find((child) => child.type === "parameter_declaration") ??
-    receiver.namedChildren[0] ??
-    null;
+    receiver.namedChildren.find((child) => child.type === "parameter_declaration") ?? receiver.namedChildren[0] ?? null;
   const typeNode = parameter?.childForFieldName("type") ?? null;
   if (!typeNode) return null;
   const named = unwrapNamedType(typeNode, sup);
@@ -607,12 +600,7 @@ function goEmbeddedTypeNames(
   targetContext: ParsedFileContext,
   normalizeIdentifier: (name: string) => string,
 ): string[] {
-  const spec = goTypeSpecNamed(
-    targetContext.tree.rootNode,
-    typeName,
-    targetContext.source,
-    normalizeIdentifier,
-  );
+  const spec = goTypeSpecNamed(targetContext.tree.rootNode, typeName, targetContext.source, normalizeIdentifier);
   if (!spec) return [];
   const typeNode = spec.childForFieldName("type");
   if (!typeNode) return [];
@@ -669,13 +657,7 @@ function findGoReceiverMember(
     for (const currentType of level) {
       if (visited.has(currentType)) continue;
       visited.add(currentType);
-      for (const method of goMethodsNamedOnType(
-        locals,
-        member,
-        currentType,
-        targetContext,
-        normalizeIdentifier,
-      )) {
+      for (const method of goMethodsNamedOnType(locals, member, currentType, targetContext, normalizeIdentifier)) {
         if (!matches.includes(method)) matches.push(method);
       }
       for (const embedded of goEmbeddedTypeNames(currentType, targetContext, normalizeIdentifier)) {

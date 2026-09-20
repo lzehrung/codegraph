@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-20T14:37:39.213Z",
+  "generatedAt": "2026-09-20T20:40:21.077Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.16.0",
-  "numTotalTests": 432,
+  "numTotalTests": 446,
   "numFailedTests": 0,
   "languages": [
     {
@@ -22,8 +22,8 @@
       "files": [
         "tests/languages/astro.test.ts"
       ],
-      "tests": 5,
-      "passed": 5,
+      "tests": 6,
+      "passed": 6,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -44,8 +44,8 @@
       "files": [
         "tests/languages/csharp.test.ts"
       ],
-      "tests": 25,
-      "passed": 25,
+      "tests": 26,
+      "passed": 26,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -55,8 +55,8 @@
       "files": [
         "tests/languages/cpp.test.ts"
       ],
-      "tests": 16,
-      "passed": 16,
+      "tests": 18,
+      "passed": 18,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -110,8 +110,8 @@
       "files": [
         "tests/languages/java.test.ts"
       ],
-      "tests": 22,
-      "passed": 22,
+      "tests": 24,
+      "passed": 24,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -121,8 +121,8 @@
       "files": [
         "tests/languages/javascript.test.ts"
       ],
-      "tests": 9,
-      "passed": 9,
+      "tests": 11,
+      "passed": 11,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -132,8 +132,8 @@
       "files": [
         "tests/languages/kotlin.test.ts"
       ],
-      "tests": 17,
-      "passed": 17,
+      "tests": 18,
+      "passed": 18,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -176,8 +176,8 @@
       "files": [
         "tests/languages/php.test.ts"
       ],
-      "tests": 52,
-      "passed": 52,
+      "tests": 54,
+      "passed": 54,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -209,8 +209,8 @@
       "files": [
         "tests/languages/ruby.test.ts"
       ],
-      "tests": 11,
-      "passed": 11,
+      "tests": 13,
+      "passed": 13,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -308,8 +308,8 @@
       "files": [
         "tests/languages/zig.test.ts"
       ],
-      "tests": 11,
-      "passed": 11,
+      "tests": 12,
+      "passed": 12,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -318,6 +318,8 @@
   "unattributed": {
     "files": [
       "tests/languages/chunk-sfc.test.ts",
+      "tests/languages/graph-captures.test.ts",
+      "tests/languages/import-from-captures.test.ts",
       "tests/languages/query-hygiene.test.ts"
     ],
     "tests": 66,

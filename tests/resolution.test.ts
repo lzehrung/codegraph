@@ -2042,7 +2042,7 @@ describe("Import Resolution", () => {
     await expect(resolveSpecifier(mainFile, "./alias", root)).resolves.toEqual({ external: "./alias" });
   });
 
-  it("does not resolve a Python namespace directory without __init__ as a file module", async () => {
+  it("resolves a Python namespace package directory that contains an importable module", async () => {
     const root = await mkTmpDir("dg-resolve-python-namespace-dir-");
     const pkgDir = path.join(root, "nspkg");
     const fromFile = path.join(root, "main.py");
@@ -2052,8 +2052,24 @@ describe("Import Resolution", () => {
     await fsp.writeFile(fromFile, "import nspkg\n", "utf8");
 
     clearImportResolutionCaches();
-    await expect(resolvePythonModule(root, fromFile, "nspkg", 0)).resolves.toEqual({ external: "nspkg" });
+    await expect(resolvePythonModule(root, fromFile, "nspkg", 0)).resolves.toBe(pkgDir.replace(/\\/g, "/"));
     await expect(resolvePathLikeModule(root, "nspkg")).resolves.toBeNull();
+  });
+
+  it("does not resolve a Python directory with no importable module content", async () => {
+    const root = await mkTmpDir("dg-resolve-python-empty-dir-");
+    const pkgDir = path.join(root, "emptypkg");
+    const fromFile = path.join(root, "main.py");
+
+    await fsp.mkdir(pkgDir, { recursive: true });
+    await fsp.writeFile(fromFile, "import emptypkg\n", "utf8");
+
+    clearImportResolutionCaches();
+    await expect(resolvePythonModule(root, fromFile, "emptypkg", 0)).resolves.toEqual({ external: "emptypkg" });
+    await expect(resolvePathLikeModule(root, "emptypkg")).resolves.toBeNull();
+
+    const graph = await collectGraph(root, [fromFile.replace(/\\/g, "/")]);
+    expect(graph.edges.filter((edge) => edge.to.type === "file")).toEqual([]);
   });
 
   it("resolves a Python package directory to __init__.py", async () => {

@@ -1,7 +1,7 @@
 import { maskTrivia } from "../../util/trivia.js";
 import { collectLineStartOffsets, positionAtOffset } from "../../util/lines.js";
 import type { Range } from "../../types.js";
-import type { ImportBinding } from "../types.js";
+import type { ImportBinding } from "../import-types.js";
 
 type NamedRangeField = "importedRange" | "localRange";
 

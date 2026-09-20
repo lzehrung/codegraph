@@ -547,5 +547,4 @@ describe("Unicode import parser seams", () => {
 
     expect(specs).toEqual([{ spec: "café\u0301" }, { spec: "pkg" }]);
   });
-
 });

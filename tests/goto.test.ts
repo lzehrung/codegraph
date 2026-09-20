@@ -2748,7 +2748,14 @@ describe("Receiver construction, reassignment, typed parameters, and static scop
     const source = ["class SwBox {", "  func swHelper() {}", "  func swRun() { self.swHelper() }", "}"].join("\n");
     const { root, paths, index } = await buildFiles("cg-swift-self-goto-", { "swx.swift": source });
     try {
-      await testGoToDefinition(index, paths["swx.swift"]!, 3, columnOf(source, 3, "swHelper()"), paths["swx.swift"]!, 2);
+      await testGoToDefinition(
+        index,
+        paths["swx.swift"]!,
+        3,
+        columnOf(source, 3, "swHelper()"),
+        paths["swx.swift"]!,
+        2,
+      );
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -2845,14 +2852,7 @@ describe("Receiver construction, reassignment, typed parameters, and static scop
     ].join("\n");
     const { root, paths, index } = await buildFiles("cg-ts-static-instance-goto-", { "box.ts": source });
     try {
-      await testGoToDefinition(
-        index,
-        paths["box.ts"]!,
-        6,
-        columnOf(source, 6, "staticValue"),
-        paths["box.ts"]!,
-        2,
-      );
+      await testGoToDefinition(index, paths["box.ts"]!, 6, columnOf(source, 6, "staticValue"), paths["box.ts"]!, 2);
       await testGoToDefinition(
         index,
         paths["box.ts"]!,
@@ -2862,14 +2862,7 @@ describe("Receiver construction, reassignment, typed parameters, and static scop
         undefined,
         "not_found",
       );
-      await testGoToDefinition(
-        index,
-        paths["box.ts"]!,
-        8,
-        columnOf(source, 8, "instanceValue"),
-        paths["box.ts"]!,
-        3,
-      );
+      await testGoToDefinition(index, paths["box.ts"]!, 8, columnOf(source, 8, "instanceValue"), paths["box.ts"]!, 3);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

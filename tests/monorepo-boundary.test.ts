@@ -169,14 +169,7 @@ describe("monorepo resolution boundaries", () => {
     await writeFile(csLibB, "namespace Shared;\npublic class Lib {}\n");
     await writeFile(csAppA, "using Shared;\npublic class App { Shared.Lib lib; }\n");
 
-    const index = await createTestIndexFromFiles(root, [
-      javaAppA,
-      javaServiceA,
-      javaServiceB,
-      csAppA,
-      csLibA,
-      csLibB,
-    ]);
+    const index = await createTestIndexFromFiles(root, [javaAppA, javaServiceA, javaServiceB, csAppA, csLibA, csLibB]);
 
     const fileTargetsFrom = (file: string): string[] =>
       index.graph.edges

@@ -27,8 +27,7 @@ const CALL_COMPATIBILITY_LANGUAGE_ID_DECLARATIONS = [
   "zig",
 ] as const;
 
-export const callCompatibilityLanguageIdDeclarations: readonly string[] =
-  CALL_COMPATIBILITY_LANGUAGE_ID_DECLARATIONS;
+export const callCompatibilityLanguageIdDeclarations: readonly string[] = CALL_COMPATIBILITY_LANGUAGE_ID_DECLARATIONS;
 
 export const callCompatibilityLanguageIds: readonly string[] = CALL_COMPATIBILITY_LANGUAGE_ID_DECLARATIONS.filter(
   (languageId) => getLanguageById(languageId) !== undefined,

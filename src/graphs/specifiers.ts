@@ -452,6 +452,16 @@ export function collectModuleSpecifiersFromSource(
         }
       }
       appendTripleSlashReferencesForTs(support, source, out);
+      // Python's reduced-mode text registry still recovers when the native query ran and
+      // matched nothing (e.g. native off with empty compact results); the recovery must
+      // report query-empty instead of the authoritative early return dropping the imports.
+      if (support.id === "python" && (queryFailed || !out.length) && shouldAttemptFallback) {
+        const extracted = collectTextImportSpecifiers("python", source);
+        if (extracted.length) {
+          reportFallback(importFallbackReason(queryFailed));
+          appendUniqueSpecifiers(out, extracted, makeSeenSet(out));
+        }
+      }
       if (out.length || isNativeQueryAuthoritative(support, "imports")) {
         return normalizeModuleSpecifiers(out);
       }

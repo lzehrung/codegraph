@@ -110,7 +110,7 @@ New source-language support should extend the shared definition, native grammar,
 
 Opt-in dynamic import heuristics enter through `extractDynamicImportSpecifiers(...)` in `src/util/specifiers.ts`, which dispatches to a shared per-language adapter. Each adapter scans source without executing it, emits the common heuristic module-specifier shape, and sends candidates through the existing language resolver. The same adapters run for embedded JS or TypeScript script blocks.
 
-A new adapter is appropriate only when static call data maps to the language's existing source module resolver. It must mask comments and strings, keep alias tracking bounded, ignore computed values it cannot prove, and cover enabled, disabled, and false-positive behavior. Reflection or runtime plugin APIs need separate graph semantics unless their values can be mapped to source files.
+An adapter supplies only its call shapes: the runner owns the trivia mask, the shared constant-path fold, deduplication, and the heuristic confidence tag. A new adapter is appropriate only when static call data maps to the language's existing source module resolver. It must keep alias tracking bounded, ignore computed values it cannot prove, and cover enabled, disabled, and false-positive behavior. Reflection or runtime plugin APIs need separate graph semantics unless their values can be mapped to source files.
 
 - [Adding language support](./adding-language-support.md) gives the implementation and review checklist.
 - [Language parity](./language-parity.md) records the public capability matrix.

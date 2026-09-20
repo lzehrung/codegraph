@@ -38,20 +38,78 @@ async function findPythonPackageAnchor(startDir: string, stopDir: string): Promi
   return topWithInit;
 }
 
-async function acceptPythonModuleFile(projectRoot: string, candidate: string): Promise<string | null> {
+function isPythonSourceFileName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return lower.endsWith(".py") || lower.endsWith(".pyi");
+}
+
+async function directoryContainsImportablePython(dirPath: string, seen: Set<string>): Promise<boolean> {
+  const key = path.resolve(dirPath);
+  if (seen.has(key)) return false;
+  seen.add(key);
+  let entries: fs.Dirent[];
+  try {
+    entries = await fsp.readdir(dirPath, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  const subdirs: string[] = [];
+  for (const entry of entries) {
+    if (entry.name === "__pycache__" || entry.name.startsWith(".")) continue;
+    const full = path.join(dirPath, entry.name);
+    if (entry.isFile()) {
+      if (isPythonSourceFileName(entry.name)) return true;
+      continue;
+    }
+    if (entry.isDirectory()) {
+      subdirs.push(full);
+      continue;
+    }
+    if (!entry.isSymbolicLink()) continue;
+    try {
+      const st = await fsp.stat(full);
+      if (st.isFile()) {
+        if (isPythonSourceFileName(entry.name)) return true;
+      } else if (st.isDirectory()) {
+        subdirs.push(full);
+      }
+    } catch {
+      // Dangling symlink: not an importable member.
+    }
+  }
+  for (const sub of subdirs) {
+    if (await directoryContainsImportablePython(sub, seen)) return true;
+  }
+  return false;
+}
+
+async function isPythonDirectoryModule(dirPath: string): Promise<boolean> {
+  return directoryContainsImportablePython(dirPath, new Set());
+}
+
+async function acceptPythonModule(projectRoot: string, candidate: string): Promise<string | null> {
   const confined = await confineResolvedPath(projectRoot, candidate);
   if (!confined) return null;
   try {
     const st = await fsp.stat(confined);
-    if (!st.isFile()) return null;
+    if (st.isFile()) return normalizePath(confined);
+    if (st.isDirectory() && (await isPythonDirectoryModule(confined))) {
+      return normalizePath(confined);
+    }
   } catch {
     return null;
   }
-  return normalizePath(confined);
+  return null;
 }
 
 function pythonFileCandidates(basePath: string): string[] {
-  return [basePath + ".py", basePath + ".pyi", path.join(basePath, "__init__.py"), path.join(basePath, "__init__.pyi")];
+  return [
+    basePath + ".py",
+    basePath + ".pyi",
+    path.join(basePath, "__init__.py"),
+    path.join(basePath, "__init__.pyi"),
+    basePath,
+  ];
 }
 
 export async function resolvePythonModule(
@@ -85,10 +143,11 @@ export async function resolvePythonModule(
   } else if (importDotCount > 0) {
     candidates.push(path.join(startDir, "__init__.py"));
     candidates.push(path.join(startDir, "__init__.pyi"));
+    candidates.push(startDir);
   }
 
   for (const c of candidates) {
-    const accepted = await acceptPythonModuleFile(projectRoot, c);
+    const accepted = await acceptPythonModule(projectRoot, c);
     if (accepted) {
       resolvePythonModuleCache.set(cacheKey, accepted);
       return accepted;
@@ -108,7 +167,7 @@ export async function resolvePythonModule(
     const anchorPath = path.join(anchor, ...moduleParts);
     const anchorCandidates = [...pythonFileCandidates(parentPath), ...pythonFileCandidates(anchorPath)];
     for (const c of anchorCandidates) {
-      const accepted = await acceptPythonModuleFile(projectRoot, c);
+      const accepted = await acceptPythonModule(projectRoot, c);
       if (accepted) {
         resolvePythonModuleCache.set(cacheKey, accepted);
         return accepted;

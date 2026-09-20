@@ -1,5 +1,5 @@
 import type { BlockDefinition, SyntaxNodeLike } from "../types.js";
-import { hasParentType, isNameFieldOnParent, isNameOrPropertyFieldOnParent, nodeTypeIn } from "./shared.js";
+import { isNameFieldOnParent, isNameOrPropertyFieldOnParent } from "./shared.js";
 
 /**
  * `import type` / `export type` statements. The JS grammar has no type-only syntax (the

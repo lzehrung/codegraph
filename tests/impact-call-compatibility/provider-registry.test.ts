@@ -30,8 +30,7 @@ describe("call compatibility provider registry", () => {
     const expected = getAllLanguages()
       .map((definition) => definition.id)
       .filter(
-        (languageId) =>
-          !GRAPH_ONLY_LANGUAGE_IDS.has(languageId) && NON_CALLABLE_LANGUAGE_IDS[languageId] === undefined,
+        (languageId) => !GRAPH_ONLY_LANGUAGE_IDS.has(languageId) && NON_CALLABLE_LANGUAGE_IDS[languageId] === undefined,
       )
       .sort();
     expect([...getCallCompatibilitySupportedLanguages()].sort()).toEqual(expected);

@@ -40,8 +40,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * containers are indexed, per-language declaration visibility filters module exports and
  * refuses cross-module binds for hidden names, first-party hits are realpath-confined,
  * JVM/C#/PHP/Python symbol indexes are scoped to the nearest language manifest,
- * non-module directory hits are rejected, a leading BOM no longer discards tsconfig
- * path mappings, and lone-CR sources report real line numbers.
+ * a directory hit becomes a file edge only for real module directories (Python
+ * `__init__` packages, PEP 420 namespace directories, and Go package directories),
+ * a leading BOM no longer discards tsconfig path mappings, and lone-CR sources
+ * report real line numbers.
  */
 export const CORE_ALGORITHM_EPOCH = 20;
 /**
@@ -125,7 +127,7 @@ function languageDefinitionFingerprintDescriptor(
       // Bundlers rewrite their source text, so hashing it would make equivalent
       // CLI and library builds invalidate one another's caches.
       usesQueryDrivenLocals: definition.usesQueryDrivenLocals ?? false,
-      membersAreImplicitlyInScope: definition.membersAreImplicitlyInScope ?? true,
+      membersAreImplicitlyInScope: definition.membersAreImplicitlyInScope ?? false,
       supportsExportFromReferences: definition.supportsExportFromReferences ?? false,
       exportScopeBlockers: [...(definition.exportScopeBlockers ?? [])].sort(),
       ...(scopeDeclarationNames ? { scopeDeclarationNames } : {}),
