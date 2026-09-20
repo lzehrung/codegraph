@@ -455,6 +455,116 @@ describe("C# namespace aliases", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves an alias to a later block-scoped namespace in a file that declares several", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-multiple-"));
+    const declaration = path.join(root, "Declarations.cs");
+    const main = path.join(root, "Main.cs");
+    try {
+      await writeFile(
+        declaration,
+        "namespace Project.First {\n  public class Alpha {}\n}\nnamespace Project.Second {\n  public class Widget { public static void Do() {} }\n}\n",
+        "utf8",
+      );
+      await writeFile(main, "using A = Project.Second;\nclass Program { void M() { A.Widget.Do(); } }\n", "utf8");
+      const index = await createTestIndexFromFiles(root, [declaration, main]);
+      const module = index.byFile.get(fileIdentityKey(main));
+      const alias = module?.imports.find((binding) => binding.kind === "namespace" && binding.localNS === "A");
+
+      // The second namespace in the file must be indexed, not just the first.
+      expect(alias).toMatchObject({ kind: "namespace", localNS: "A", from: "Project.Second" });
+      expect(typeof alias?.resolved).toBe("string");
+      if (typeof alias?.resolved !== "string") return;
+      expect(fileIdentityKey(alias.resolved)).toBe(fileIdentityKey(declaration));
+
+      const edges = edgesFrom(index, main);
+      expect(edges.map((edge) => edge.to)).toEqual([{ type: "file", path: declaration.replace(/\\/g, "/") }]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a file-scoped namespace declared after a using directive and a comment", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-late-filescoped-"));
+    const declaration = path.join(root, "Scoped.cs");
+    const main = path.join(root, "Main.cs");
+    try {
+      await writeFile(
+        declaration,
+        "// Leading comment before the namespace.\nusing System;\n\nnamespace Tail.Model;\npublic class Widget { public static void Static() {} }\n",
+        "utf8",
+      );
+      await writeFile(main, "using T = Tail.Model;\nclass Program { void M() { T.Widget.Static(); } }\n", "utf8");
+      const index = await createTestIndexFromFiles(root, [declaration, main]);
+      const module = index.byFile.get(fileIdentityKey(main));
+      const alias = module?.imports.find((binding) => binding.kind === "namespace" && binding.localNS === "T");
+
+      expect(alias).toMatchObject({ kind: "namespace", localNS: "T", from: "Tail.Model" });
+      expect(typeof alias?.resolved).toBe("string");
+      if (typeof alias?.resolved !== "string") return;
+      expect(fileIdentityKey(alias.resolved)).toBe(fileIdentityKey(declaration));
+
+      const edges = edgesFrom(index, main);
+      expect(edges.map((edge) => edge.to)).toEqual([{ type: "file", path: declaration.replace(/\\/g, "/") }]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores namespace text inside block comments and string literals", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-trivia-"));
+    const decoy = path.join(root, "Decoy.cs");
+    const main = path.join(root, "Main.cs");
+    try {
+      await writeFile(
+        decoy,
+        [
+          "namespace Real.Model;",
+          "",
+          "/*",
+          "namespace Fake.Block { }",
+          "*/",
+          "",
+          "public class Decoy {",
+          '  public string Text = @"',
+          "namespace Fake.Text;",
+          '";',
+          "}",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await writeFile(
+        main,
+        "using R = Real.Model;\nusing F = Fake.Block;\nusing G = Fake.Text;\nclass Program {}\n",
+        "utf8",
+      );
+      const index = await createTestIndexFromFiles(root, [decoy, main]);
+      const module = index.byFile.get(fileIdentityKey(main));
+      const real = module?.imports.find((binding) => binding.kind === "namespace" && binding.localNS === "R");
+      const commented = module?.imports.find((binding) => binding.kind === "named" && binding.local === "F");
+      const inString = module?.imports.find((binding) => binding.kind === "named" && binding.local === "G");
+
+      // Only the real namespace maps to the file; the comment and the verbatim string do not.
+      expect(typeof real?.resolved).toBe("string");
+      if (typeof real?.resolved !== "string") return;
+      expect(fileIdentityKey(real.resolved)).toBe(fileIdentityKey(decoy));
+      expect(commented?.resolved).toEqual({ external: "Fake.Block" });
+      expect(inString?.resolved).toEqual({ external: "Fake.Text" });
+
+      const edges = edgesFrom(index, main).map((edge) => edge.to);
+      expect(edges).toEqual(
+        expect.arrayContaining([
+          { type: "file", path: decoy.replace(/\\/g, "/") },
+          { type: "external", name: "Fake.Block" },
+          { type: "external", name: "Fake.Text" },
+        ]),
+      );
+      expect(edges).toHaveLength(3);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("C# record components", () => {
