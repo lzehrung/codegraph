@@ -137,6 +137,23 @@ The first three removals are positional, so leaving `undefined` in the vacated s
 and then misbehaves: `imports` slides into the `opts` position and both are read as the wrong
 thing. Delete the argument rather than blanking it.
 
+`extractJsTsDynamicSpecifiers(source, fromFile, projectRoot)` is gone from the util surface. It
+extracted dynamic-import candidates for JavaScript and TypeScript only, while the pipeline itself
+called the language-dispatching entry point. Use that entry point, which is now exported in its
+place and covers every language with a dynamic-import adapter:
+
+```text
+before
+extractJsTsDynamicSpecifiers(source, fromFile, projectRoot);
+
+after
+extractDynamicImportSpecifiers("js", source, fromFile, projectRoot);
+```
+
+Pass the language id the file resolves to (`js`, `ts`, `python`, `ruby`, or `php`); an id with no
+adapter returns no candidates. `extractPythonDynamicSpecifiers` is also gone and had no callers,
+inside or outside this repository.
+
 This ships in a 2.x minor by explicit decision rather than waiting for a major, matching how
 2.0.0 handled export narrowing without compatibility aliases.
 
