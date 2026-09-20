@@ -1,16 +1,17 @@
-import { receiverConstructorExpression } from "../../indexer/navigation-goto.js";
+import { readFileSync } from "node:fs";
 import { SymbolKind, type SymbolDef } from "../../indexer/types.js";
 import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import { sliceText } from "../../util/ast.js";
+import { XID_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import {
   getMemberAccessParts,
   getNavigationExpressionProperty,
   isMemberAccessNode,
   isMemberReferencePropertyIdentifier,
+  isReceiverNameNode,
 } from "../../util/member-access.js";
 import type { SymbolGraph } from "../symbol-graph.js";
-import { isIdentifierType } from "./ast.js";
 
 /**
  * A receiver method call whose target could not be proven from the calling module
@@ -28,6 +29,8 @@ export type ReceiverCallCandidate = {
   /** Argument count, used only to separate same-named overloads on one type. */
   argumentCount: number;
   site: NonNullable<SymbolGraph["edges"][number]["site"]>;
+  /** Required static/instance scope; omitted candidates are classified from `site`. */
+  memberScope?: ReceiverMemberScope;
 };
 
 /** Receiver spellings that denote the type declaring the calling member, per language. */
@@ -39,6 +42,7 @@ const SELF_RECEIVERS: ReceiverKeywords = { own: ["self"], supertype: ["super"] }
 const RECEIVER_KEYWORDS: Record<string, ReceiverKeywords> = {
   cpp: { own: ["this"], supertype: [] },
   csharp: { own: ["this"], supertype: ["base"] },
+  go: { own: [], supertype: [] },
   java: THIS_SUPER_RECEIVERS,
   js: THIS_SUPER_RECEIVERS,
   kotlin: THIS_SUPER_RECEIVERS,
@@ -46,12 +50,51 @@ const RECEIVER_KEYWORDS: Record<string, ReceiverKeywords> = {
   python: { own: ["self", "cls"], supertype: [] },
   ruby: { own: ["self"], supertype: [] },
   rust: { own: ["self", "Self"], supertype: [] },
-  svelte: THIS_SUPER_RECEIVERS,
   swift: SELF_RECEIVERS,
   ts: THIS_SUPER_RECEIVERS,
   tsx: THIS_SUPER_RECEIVERS,
   zig: { own: ["self"], supertype: [] },
 };
+
+const INSTANCE_RECEIVER_KEYWORDS = new Set(["this", "$this"]);
+
+/** Every language that declares receiver keywords, guarded by the registry-consistency test. */
+export const receiverKeywordLanguageIds: readonly string[] = Object.keys(RECEIVER_KEYWORDS);
+
+/** Languages whose grammar distinguishes static members from instance members. */
+const STATIC_MEMBER_LANGUAGES: Record<string, true> = {
+  cpp: true,
+  csharp: true,
+  java: true,
+  js: true,
+  php: true,
+  swift: true,
+  ts: true,
+  tsx: true,
+};
+
+/** Every language with a static-member distinction, guarded by the registry-consistency test. */
+export const staticMemberLanguageIds: readonly string[] = Object.keys(STATIC_MEMBER_LANGUAGES);
+
+/** Languages that emit proven receiver `calls` edges from the shared keyword table. */
+export function supportsReceiverCallEdges(languageId: string): boolean {
+  return RECEIVER_KEYWORDS[languageId] !== undefined;
+}
+
+/** Languages where goto and references require proven receivers and do not fall back to a bare name. */
+export function supportsReceiverMemberNavigation(languageId: string): boolean {
+  return RECEIVER_KEYWORDS[languageId] !== undefined;
+}
+
+export function isKeywordReceiver(languageId: string, receiverName: string): boolean {
+  const keywords = RECEIVER_KEYWORDS[languageId];
+  if (!keywords) return false;
+  return keywords.own.includes(receiverName) || keywords.supertype.includes(receiverName);
+}
+
+export function hasStaticMemberDistinction(languageId: string): boolean {
+  return STATIC_MEMBER_LANGUAGES[languageId] !== undefined;
+}
 
 /**
  * Call nodes that carry the receiver and the member name on the call node itself
@@ -72,7 +115,6 @@ const MEMBER_CONTAINER_TYPES: Record<string, true> = {
   class_definition: true,
   class_specifier: true,
   enum_declaration: true,
-  extension_declaration: true,
   impl_item: true,
   interface_declaration: true,
   module: true,
@@ -128,11 +170,16 @@ const VALUE_BINDING_TYPES: Record<string, true> = {
   variable_declarator: true,
 };
 
-/** Parameter lists whose identifier children are value bindings (Ruby has no wrapping param node). */
-const PARAMETER_LIST_TYPES: Record<string, true> = {
+/**
+ * Parameter lists whose identifier children are value bindings (Ruby has no wrapping param node).
+ * Union of the receiver-call and call-compatibility lists so Kotlin `function_value_parameters`
+ * and Ruby `block_parameters` are both recognized.
+ */
+export const PARAMETER_LIST_NODE_TYPES: Record<string, true> = {
   block_parameters: true,
   formal_parameters: true,
   function_parameter_clause: true,
+  function_value_parameters: true,
   lambda_parameters: true,
   method_parameters: true,
   parameter_list: true,
@@ -174,6 +221,78 @@ const BINDING_SCOPE_TYPES: Record<string, true> = {
   do_block: true,
   impl_item: true,
   translation_unit: true,
+};
+
+const BINDING_CONTAINER_TYPES = new Set([
+  "program",
+  "compilation_unit",
+  "source_file",
+  "translation_unit",
+  "statement_block",
+  "block",
+  "compound_statement",
+  "function_body",
+  "body_statement",
+  "function_declaration",
+  "function_item",
+  "function_definition",
+  "function",
+  "function_expression",
+  "arrow_function",
+  "method_definition",
+  "method_declaration",
+  "method",
+  "impl_item",
+]);
+
+const BINDING_DECLARATION_TYPES = new Set([
+  "variable_declarator",
+  "variable_declaration",
+  "let_declaration",
+  "assignment",
+  "assignment_expression",
+  "assignment_statement",
+  "formal_parameter",
+  "required_parameter",
+  "optional_parameter",
+  "simple_parameter",
+  "parameter",
+  "parameter_declaration",
+  "typed_parameter",
+  "short_var_declaration",
+  "var_spec",
+  "property_declaration",
+  "local_variable_declaration",
+  "local_declaration_statement",
+]);
+
+const RUBY_CONSTANT_SOURCE = String.raw`(?=\p{Lu})${XID_IDENTIFIER_SOURCE}`;
+
+/** Proven construction forms that name a receiver's type, keyed by language. */
+const LANGUAGE_CONSTRUCTION_FORMS: Record<
+  string,
+  {
+    newExpression?: true;
+    compositeLiteral?: true;
+    capitalizedCall?: true;
+    rubyNew?: true;
+    rustUnitStruct?: true;
+  }
+> = {
+  cpp: { newExpression: true },
+  csharp: { newExpression: true },
+  go: { compositeLiteral: true },
+  java: { newExpression: true },
+  js: { newExpression: true },
+  kotlin: { capitalizedCall: true },
+  php: { newExpression: true },
+  python: { capitalizedCall: true },
+  ruby: { rubyNew: true },
+  rust: { capitalizedCall: true, rustUnitStruct: true },
+  swift: { capitalizedCall: true },
+  ts: { newExpression: true },
+  tsx: { newExpression: true },
+  zig: { compositeLiteral: true },
 };
 
 /** Guards against a cyclic or pathological declared hierarchy. */
@@ -221,7 +340,12 @@ export function receiverCallAccess(
   return { accessNode, receiver, property };
 }
 
-export type ReceiverBinding = { kind: "own-type" } | { kind: "supertype" } | { kind: "named-type"; typeName: string };
+export type ReceiverMemberScope = "any" | "instance" | "static";
+
+export type ReceiverBinding =
+  | { kind: "own-type"; memberScope: ReceiverMemberScope }
+  | { kind: "supertype"; memberScope: ReceiverMemberScope }
+  | { kind: "named-type"; typeName: string; memberScope: ReceiverMemberScope };
 
 /** What one receiver expression proves, memoized per enclosing function and text. */
 export type ReceiverProof = {
@@ -231,6 +355,8 @@ export type ReceiverProof = {
   locallyBound: boolean;
 };
 
+type BindingProof = { status: "none" } | { status: "unproven" } | { status: "type"; node: SyntaxNodeLike };
+
 /**
  * Identifier a binding node declares: a `name` field, a nested C/C++ declarator,
  * an assignment left-hand side, or the last identifier child (C++ parameters hide
@@ -238,10 +364,7 @@ export type ReceiverProof = {
  */
 function bindingIdentifier(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
   const named = node.childForFieldName("name");
-  if (
-    named &&
-    (isIdentifierType(sup, named.type) || named.type === "identifier" || named.type === "field_identifier")
-  ) {
+  if (named && (isReceiverNameNode(sup, named.type) || named.type === "field_identifier")) {
     return named;
   }
   if (
@@ -251,17 +374,15 @@ function bindingIdentifier(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNo
     node.type === "short_var_declaration"
   ) {
     const left = node.childForFieldName("left") ?? node.child(0);
-    if (left && (isIdentifierType(sup, left.type) || left.type === "identifier")) return left;
-    if (left?.type === "expression_list") {
-      return (
-        left.namedChildren.find((child) => child.type === "identifier" || isIdentifierType(sup, child.type)) ?? null
-      );
+    if (left && isReceiverNameNode(sup, left.type)) return left;
+    if (left?.type === "expression_list" || left?.type === "pattern") {
+      return left.namedChildren.find((child) => isReceiverNameNode(sup, child.type)) ?? null;
     }
     return null;
   }
   let current = node.childForFieldName("declarator");
   while (current) {
-    if (current.type === "identifier" || current.type === "field_identifier" || isIdentifierType(sup, current.type)) {
+    if (isReceiverNameNode(sup, current.type) || current.type === "field_identifier") {
       return current;
     }
     const nested = current.childForFieldName("declarator");
@@ -274,9 +395,15 @@ function bindingIdentifier(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNo
     );
   }
   const identifiers = node.namedChildren.filter(
-    (child) => child.type === "identifier" || child.type === "field_identifier",
+    (child) => isReceiverNameNode(sup, child.type) || child.type === "field_identifier",
   );
-  return identifiers.length > 0 ? identifiers[identifiers.length - 1]! : null;
+  if (identifiers.length === 0) return null;
+  // `let name = Type;` / `var name = Type{}` put the binding first and the type second.
+  // C++ parameters keep the name last, after the type.
+  if (node.type === "let_declaration" || node.type === "variable_declaration" || node.type === "variable_declarator") {
+    return identifiers[0]!;
+  }
+  return identifiers[identifiers.length - 1]!;
 }
 
 /**
@@ -293,7 +420,7 @@ function bindsLocalValue(
   const declaresName = (node: SyntaxNodeLike): boolean => {
     if (node.startIndex >= receiver.startIndex) return false;
     if (node !== receiver && BINDING_SCOPE_TYPES[node.type] && !containsIndex(node, receiver.startIndex)) return false;
-    if (PARAMETER_LIST_TYPES[node.type]) {
+    if (PARAMETER_LIST_NODE_TYPES[node.type]) {
       for (const child of node.namedChildren) {
         if (child.startIndex >= receiver.startIndex) continue;
         // Ruby `def run(Lib)` is invalid; tree-sitter wraps the capitalized
@@ -301,7 +428,7 @@ function bindsLocalValue(
         const names = child.type === "ERROR" ? child.namedChildren : [child];
         for (const name of names) {
           if (
-            (isIdentifierType(sup, name.type) || name.type === "identifier" || name.type === "constant") &&
+            (isReceiverNameNode(sup, name.type) || name.type === "identifier" || name.type === "constant") &&
             sliceText(name, source) === receiverName
           ) {
             return true;
@@ -326,6 +453,361 @@ function containsIndex(node: SyntaxNodeLike, index: number): boolean {
   return node.startIndex <= index && node.endIndex >= index;
 }
 
+function constructorNameNode(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
+  const constructor = node.childForFieldName("constructor") ?? node.child(0);
+  if (constructor && isReceiverNameNode(sup, constructor.type)) {
+    return constructor;
+  }
+  for (const child of node.namedChildren) {
+    if (isReceiverNameNode(sup, child.type) || child.type === "type_identifier" || child.type === "constant") {
+      return child;
+    }
+  }
+  return null;
+}
+
+function rubyNewReceiverNameNode(node: SyntaxNodeLike, source: string, sup: LanguageSupport): SyntaxNodeLike | null {
+  if (!new RegExp(String.raw`^(?:${RUBY_CONSTANT_SOURCE})\.new$`, "u").test(sliceText(node, source))) return null;
+  return node.namedChildren.find((child) => isReceiverNameNode(sup, child.type) || child.type === "constant") ?? null;
+}
+
+export function unwrapNamedType(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
+  let current: SyntaxNodeLike | null = node;
+  while (current) {
+    if (
+      current.type === "type_annotation" ||
+      current.type === "named_type" ||
+      current.type === "user_type" ||
+      current.type === "type" ||
+      current.type === "parenthesized_type" ||
+      current.type === "pointer_type" ||
+      current.type === "reference_type" ||
+      current.type === "optional_type" ||
+      current.type === "nullable_type"
+    ) {
+      current = current.childForFieldName("type") ?? current.namedChildren[0] ?? null;
+      continue;
+    }
+    if (current.type === "generic_type" || current.type === "generic_name") {
+      current = current.childForFieldName("type") ?? current.namedChildren[0] ?? null;
+      continue;
+    }
+    break;
+  }
+  if (!current) return null;
+  if (isReceiverNameNode(sup, current.type) || current.type === "type_identifier" || current.type === "name") {
+    return current;
+  }
+  return null;
+}
+
+function capitalizedCallTypeName(expr: SyntaxNodeLike, source: string, sup: LanguageSupport): SyntaxNodeLike | null {
+  if (expr.type !== "call" && expr.type !== "call_expression") return null;
+  const callee = expr.childForFieldName("function") ?? expr.namedChildren[0] ?? null;
+  if (!callee || !isReceiverNameNode(sup, callee.type)) return null;
+  const name = sliceText(callee, source);
+  if (!name) return null;
+  const first = name[0]!;
+  if (first !== first.toUpperCase()) return null;
+  return callee;
+}
+
+function compositeLiteralTypeName(expr: SyntaxNodeLike, source: string, sup: LanguageSupport): SyntaxNodeLike | null {
+  let current = expr;
+  if (current.type === "unary_expression") {
+    const operand = current.childForFieldName("operand");
+    if (!operand) return null;
+    const operator = current.childForFieldName("operator");
+    let isAddr = sliceText(current, source).startsWith("&");
+    if (operator) isAddr = sliceText(operator, source) === "&";
+    if (!isAddr) return null;
+    current = operand;
+  }
+  if (current.type !== "composite_literal" && current.type !== "struct_initializer") return null;
+  const typeNode =
+    current.childForFieldName("type") ??
+    current.namedChildren.find((child) => child.type === "type_identifier" || child.type === "identifier") ??
+    null;
+  return typeNode ? (unwrapNamedType(typeNode, sup) ?? typeNode) : null;
+}
+
+/**
+ * Resolves the node naming the type a construction expression denotes, or null
+ * when the expression is not a proven constructor form.
+ */
+export function constructionTypeName(
+  expr: SyntaxNodeLike,
+  source: string,
+  sup: LanguageSupport,
+): SyntaxNodeLike | null {
+  const forms = LANGUAGE_CONSTRUCTION_FORMS[sup.id];
+  if (!forms) return null;
+  if (forms.newExpression && (expr.type === "new_expression" || expr.type === "object_creation_expression")) {
+    return constructorNameNode(expr, sup);
+  }
+  if (forms.rubyNew && expr.type === "call") {
+    const rubyConstructor = rubyNewReceiverNameNode(expr, source, sup);
+    if (rubyConstructor) return rubyConstructor;
+  }
+  if (forms.compositeLiteral) {
+    const composite = compositeLiteralTypeName(expr, source, sup);
+    if (composite) return composite;
+  }
+  if (forms.capitalizedCall) {
+    const fromCall = capitalizedCallTypeName(expr, source, sup);
+    if (fromCall) return fromCall;
+  }
+  // Rust unit structs are constructed by the type name itself: `let service = Service;`.
+  if (forms.rustUnitStruct && isReceiverNameNode(sup, expr.type)) {
+    const name = sliceText(expr, source);
+    const first = name[0];
+    if (first && first === first.toUpperCase() && first !== first.toLowerCase()) return expr;
+  }
+  return null;
+}
+
+function bindingValueExpression(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  const named =
+    node.childForFieldName("value") ?? node.childForFieldName("right") ?? node.childForFieldName("default_value");
+  if (named) {
+    if (named.type === "expression_list") return named.namedChildren[0] ?? null;
+    return named;
+  }
+  const expressionTypes = new Set([
+    "new_expression",
+    "object_creation_expression",
+    "call",
+    "call_expression",
+    "composite_literal",
+    "struct_initializer",
+    "unary_expression",
+  ]);
+  return node.namedChildren.find((child) => expressionTypes.has(child.type)) ?? null;
+}
+
+function declaredTypeNameNode(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
+  const typeField = node.childForFieldName("type");
+  if (typeField) return unwrapNamedType(typeField, sup);
+  const typedChild = node.namedChildren.find(
+    (child) =>
+      child.type === "named_type" ||
+      child.type === "user_type" ||
+      child.type === "type_annotation" ||
+      child.type === "type",
+  );
+  if (typedChild) return unwrapNamedType(typedChild, sup);
+  const ids = node.namedChildren.filter(
+    (child) => isReceiverNameNode(sup, child.type) || child.type === "type_identifier" || child.type === "name",
+  );
+  if (ids.length >= 2) return unwrapNamedType(ids[0]!, sup);
+  return null;
+}
+
+function goBindingNameNodes(node: SyntaxNodeLike): SyntaxNodeLike[] {
+  if (node.type === "short_var_declaration") {
+    const left = node.childForFieldName("left");
+    return (left?.namedChildren ?? []).filter((child) => child.type === "identifier");
+  }
+  if (node.type === "var_spec") {
+    return (node.namedChildren ?? []).filter((child) => child.type === "identifier");
+  }
+  return [];
+}
+
+function bindingDeclaresReceiverName(
+  node: SyntaxNodeLike,
+  receiverName: string,
+  source: string,
+  sup: LanguageSupport,
+): boolean {
+  if (sup.id === "go") {
+    const goNames = goBindingNameNodes(node);
+    if (goNames.some((name) => sliceText(name, source) === receiverName)) return true;
+  }
+  const name = bindingIdentifier(node, sup);
+  if (name && sliceText(name, source) === receiverName) return true;
+  if (node.type === "property_declaration") {
+    return node.namedChildren.some((child) => {
+      if (child.type === "variable_declaration" || child.type === "pattern") {
+        return child.namedChildren.some(
+          (inner) => isReceiverNameNode(sup, inner.type) && sliceText(inner, source) === receiverName,
+        );
+      }
+      return isReceiverNameNode(sup, child.type) && sliceText(child, source) === receiverName;
+    });
+  }
+  return false;
+}
+
+function constructionTypeFromBinding(
+  node: SyntaxNodeLike,
+  receiverName: string,
+  source: string,
+  sup: LanguageSupport,
+): SyntaxNodeLike | null {
+  if (sup.id === "go" && (node.type === "short_var_declaration" || node.type === "var_spec")) {
+    return constructorFromGoBinding(node, receiverName, source, sup) ?? declaredTypeNameNode(node, sup);
+  }
+  const value = bindingValueExpression(node);
+  if (value) {
+    const fromValue = constructionTypeName(value, source, sup);
+    if (fromValue) return fromValue;
+  }
+  return declaredTypeNameNode(node, sup);
+}
+
+function constructorFromGoBinding(
+  node: SyntaxNodeLike,
+  receiverName: string,
+  source: string,
+  sup: LanguageSupport,
+): SyntaxNodeLike | null {
+  if (node.type === "short_var_declaration") {
+    const left = node.childForFieldName("left");
+    const right = node.childForFieldName("right");
+    if (!left || !right) return null;
+    const names = (left.namedChildren ?? []).filter((child) => child.type === "identifier");
+    const values = right.namedChildren ?? [];
+    const index = names.findIndex((name) => sliceText(name, source) === receiverName);
+    if (index < 0) return null;
+    const value = values[index] ?? null;
+    return value ? constructionTypeName(value, source, sup) : null;
+  }
+  if (node.type !== "var_spec") return null;
+  const value = node.childForFieldName("value");
+  if (value) {
+    const first = value.type === "expression_list" ? (value.namedChildren[0] ?? null) : value;
+    const fromValue = first ? constructionTypeName(first, source, sup) : null;
+    if (fromValue) return fromValue;
+  }
+  const typeNode = node.childForFieldName("type");
+  return typeNode ? unwrapNamedType(typeNode, sup) : null;
+}
+
+function bindingProof(node: SyntaxNodeLike, receiverName: string, source: string, sup: LanguageSupport): BindingProof {
+  if (!BINDING_DECLARATION_TYPES.has(node.type)) return { status: "none" };
+  if (!bindingDeclaresReceiverName(node, receiverName, source, sup)) return { status: "none" };
+  const typeNode = constructionTypeFromBinding(node, receiverName, source, sup);
+  if (typeNode) return { status: "type", node: typeNode };
+  return { status: "unproven" };
+}
+
+function isSkippableBindingContainer(node: SyntaxNodeLike, receiver: SyntaxNodeLike): boolean {
+  return BINDING_CONTAINER_TYPES.has(node.type) && !containsIndex(node, receiver.startIndex);
+}
+
+function findPriorConstructorInContainer(
+  node: SyntaxNodeLike,
+  receiver: SyntaxNodeLike,
+  receiverName: string,
+  source: string,
+  sup: LanguageSupport,
+): SyntaxNodeLike | null {
+  let constructor: SyntaxNodeLike | null = null;
+  let sawUnproven = false;
+  const visit = (current: SyntaxNodeLike): boolean => {
+    if (current.startIndex >= receiver.startIndex) return true;
+    if (current !== node && isSkippableBindingContainer(current, receiver)) return true;
+    const proof = bindingProof(current, receiverName, source, sup);
+    if (proof.status === "unproven") {
+      if (constructor) {
+        constructor = null;
+        return false;
+      }
+      sawUnproven = true;
+      return true;
+    }
+    if (proof.status === "type") {
+      if (sawUnproven) {
+        constructor = null;
+        return false;
+      }
+      if (constructor && sliceText(constructor, source) !== sliceText(proof.node, source)) {
+        constructor = null;
+        return false;
+      }
+      constructor = proof.node;
+      return true;
+    }
+    for (const child of current.namedChildren) {
+      if (!visit(child)) return false;
+    }
+    return true;
+  };
+  visit(node);
+  return constructor;
+}
+
+function bindingContainerDeclaresNameBefore(
+  node: SyntaxNodeLike,
+  receiver: SyntaxNodeLike,
+  receiverName: string,
+  source: string,
+  sup: LanguageSupport,
+): boolean {
+  const visit = (current: SyntaxNodeLike): boolean => {
+    if (current.startIndex >= receiver.startIndex) return false;
+    if (current !== node && isSkippableBindingContainer(current, receiver)) return false;
+    if (
+      BINDING_DECLARATION_TYPES.has(current.type) &&
+      bindingDeclaresReceiverName(current, receiverName, source, sup)
+    ) {
+      return true;
+    }
+    for (const child of current.namedChildren) {
+      if (visit(child)) return true;
+    }
+    return false;
+  };
+  return visit(node);
+}
+
+function rootOf(node: SyntaxNodeLike): SyntaxNodeLike {
+  let current = node;
+  while (current.parent) current = current.parent;
+  return current;
+}
+
+function findVisiblePriorConstructor(
+  receiver: SyntaxNodeLike,
+  receiverName: string,
+  source: string,
+  sup: LanguageSupport,
+): SyntaxNodeLike | null {
+  let current: SyntaxNodeLike | null = receiver;
+  while (current) {
+    if (BINDING_CONTAINER_TYPES.has(current.type)) {
+      const constructor = findPriorConstructorInContainer(current, receiver, receiverName, source, sup);
+      if (constructor || bindingContainerDeclaresNameBefore(current, receiver, receiverName, source, sup)) {
+        return constructor;
+      }
+    }
+    current = current.parent;
+  }
+  return findPriorConstructorInContainer(rootOf(receiver), receiver, receiverName, source, sup);
+}
+
+/**
+ * Resolves the node naming the type a receiver expression was constructed from, or
+ * null when no constructor is proven for it. Shared with detailed symbol-graph call
+ * extraction so `goto` and resolved `calls` edges accept the same receiver forms.
+ */
+export function receiverConstructorExpression(
+  obj: SyntaxNodeLike,
+  source: string,
+  sup: LanguageSupport,
+): SyntaxNodeLike | null {
+  const direct = constructionTypeName(obj, source, sup);
+  if (direct) return direct;
+  if (!isReceiverNameNode(sup, obj.type)) return null;
+  const receiverName = sliceText(obj, source);
+  return findVisiblePriorConstructor(obj, receiverName, source, sup);
+}
+
+function ownTypeMemberScope(receiverName: string): ReceiverMemberScope {
+  return INSTANCE_RECEIVER_KEYWORDS.has(receiverName) ? "instance" : "any";
+}
+
 /**
  * Classifies a receiver as the declaring type, a supertype, or a named/constructed type.
  * Returns null when the receiver cannot be proven.
@@ -342,11 +824,10 @@ export function classifyReceiver(
   const keywords = RECEIVER_KEYWORDS[sup.id];
   const text = sliceText(receiver, source).trim();
   if (!text) return null;
-  if (keywords?.own.includes(text)) return { kind: "own-type" };
-  if (keywords?.supertype.includes(text)) return { kind: "supertype" };
+  if (keywords?.own.includes(text)) return { kind: "own-type", memberScope: ownTypeMemberScope(text) };
+  if (keywords?.supertype.includes(text)) return { kind: "supertype", memberScope: "any" };
 
-  const receiverIsName =
-    isIdentifierType(sup, receiver.type) || receiver.type === "type_identifier" || receiver.type === "constant";
+  const receiverIsName = isReceiverNameNode(sup, receiver.type);
 
   const cacheKey = `${cacheScope}\u0000${text}`;
   let proof = proofCache.get(cacheKey);
@@ -358,7 +839,13 @@ export function classifyReceiver(
     };
     proofCache.set(cacheKey, proof);
   }
-  if (proof.constructed) return { kind: "named-type", typeName: sliceText(proof.constructed, source) };
+  if (proof.constructed) {
+    return {
+      kind: "named-type",
+      typeName: sliceText(proof.constructed, source),
+      memberScope: hasStaticMemberDistinction(sup.id) ? "instance" : "any",
+    };
+  }
   if (!receiverIsName) return null;
   // A name bound by a local or parameter is a value, not a type. Without this guard
   // `Example::shared()` would still be attributed to a colliding parameter named Example.
@@ -370,7 +857,11 @@ export function classifyReceiver(
   const between = property ? source.slice(receiver.endIndex, property.startIndex) : "";
   const typeScoped = TYPE_SCOPED_ACCESS_TYPES[accessNode.type] === true || between.includes("::");
   if (receiver.type !== "type_identifier" && !typeScoped) return null;
-  return { kind: "named-type", typeName: text };
+  return {
+    kind: "named-type",
+    typeName: text,
+    memberScope: hasStaticMemberDistinction(sup.id) && typeScoped ? "static" : "any",
+  };
 }
 
 /** Whether a resolved definition can declare callable members. */
@@ -398,6 +889,62 @@ export function callArgumentCount(callNode: SyntaxNodeLike): number {
   }
   if (!argumentNode) return 0;
   return (argumentNode.namedChildren ?? []).filter((argument) => argument.type !== "comment").length;
+}
+
+function parseDefNodeId(id: string): { file: string; name: string; index: number } | null {
+  const indexSep = id.lastIndexOf("::");
+  if (indexSep <= 0) return null;
+  const index = Number(id.slice(indexSep + 2));
+  if (!Number.isFinite(index)) return null;
+  const rest = id.slice(0, indexSep);
+  const nameSep = rest.lastIndexOf("::");
+  if (nameSep <= 0) return null;
+  return { file: rest.slice(0, nameSep), name: rest.slice(nameSep + 2), index };
+}
+
+function loadSource(file: string, cache: Map<string, string>): string {
+  const cached = cache.get(file);
+  if (cached !== undefined) return cached;
+  try {
+    const source = readFileSync(file, "utf8");
+    cache.set(file, source);
+    return source;
+  } catch {
+    cache.set(file, "");
+    return "";
+  }
+}
+
+function memberIdLooksStatic(memberId: string, sourceCache: Map<string, string>): boolean {
+  const parsed = parseDefNodeId(memberId);
+  if (!parsed) return false;
+  const source = loadSource(parsed.file, sourceCache);
+  if (!source) return false;
+  const beforeBrace = source.lastIndexOf("{", parsed.index);
+  const beforeSemi = source.lastIndexOf(";", parsed.index);
+  const beforeClose = source.lastIndexOf("}", parsed.index);
+  const declStart = Math.max(beforeBrace, beforeSemi, beforeClose);
+  const prefix = source.slice(declStart + 1, parsed.index);
+  return /(?:^|[^\w$])static(?:$|[^\w$])/.test(prefix) || /(?:^|[^\w$])def\s+self\s*\./.test(prefix);
+}
+
+function inferCallMemberScope(
+  site: ReceiverCallCandidate["site"],
+  sourceCache: Map<string, string>,
+): ReceiverMemberScope {
+  const source = loadSource(site.file, sourceCache);
+  if (!source) return "any";
+  const start = site.range.start.index ?? 0;
+  const before = source.slice(Math.max(0, start - 120), start);
+  if (/\b(?:self|static|parent|super|base)\s*::\s*$/i.test(before)) return "any";
+  if (/::\s*$/.test(before)) return "static";
+  if (/\?->\s*$/.test(before) || /->\s*$/.test(before)) return "instance";
+  if (/\)\s*\.\s*$/.test(before)) return "instance";
+  // HeritageEdges does not yet copy classifyReceiver.memberScope onto candidates.
+  // A lowercase dotted receiver is an instance value (`c.StaticMethod()`), not a type.
+  if (/(?:^|[^A-Za-z0-9_$])[a-z_][A-Za-z0-9_]*\s*\.\s*$/.test(before)) return "instance";
+  if (/(?:^|[^A-Za-z0-9_$])[A-Z][A-Za-z0-9_]*\s*\.\s*$/.test(before)) return "static";
+  return "any";
 }
 
 /**
@@ -438,13 +985,15 @@ export function emitReceiverCallEdges(
     return (classAncestorsByOwner.get(ownerId) ?? []).filter((id) => graph.nodes.get(id)?.kind === "class");
   };
 
+  const sourceCache = new Map<string, string>();
   for (const candidate of candidates) {
     const owner = candidate.ownerId ?? ownerByMember.get(candidate.callerId);
     if (!owner) continue;
+    const memberScope = candidate.memberScope ?? inferCallMemberScope(candidate.site, sourceCache);
     let level = candidate.viaSupertypes ? nextOwners(owner, true) : [owner];
     const visited = new Set<string>(level);
     for (let depth = 0; depth < MAX_SUPERTYPE_DEPTH && level.length; depth += 1) {
-      const lookup = provenMemberTarget(graph, membersByOwner, level, candidate);
+      const lookup = provenMemberTarget(graph, membersByOwner, level, candidate, memberScope, sourceCache);
       if (lookup.status === "unique") {
         recordEdge(candidate.callerId, lookup.memberId, "calls", candidate.site);
         break;
@@ -476,12 +1025,16 @@ function provenMemberTarget(
   membersByOwner: ReadonlyMap<string, string[]>,
   owners: readonly string[],
   candidate: ReceiverCallCandidate,
+  memberScope: ReceiverMemberScope,
+  sourceCache: Map<string, string>,
 ): MemberTargetLookup {
   const matches = new Set<string>();
   for (const ownerId of owners) {
     for (const memberId of membersByOwner.get(ownerId) ?? []) {
       const node = graph.nodes.get(memberId);
       if (!node || node.kind !== "function" || node.name !== candidate.memberName) continue;
+      if (memberScope === "static" && !memberIdLooksStatic(memberId, sourceCache)) continue;
+      if (memberScope === "instance" && memberIdLooksStatic(memberId, sourceCache)) continue;
       matches.add(memberId);
     }
   }

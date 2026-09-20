@@ -177,7 +177,7 @@ function resourceLimitFallback(
     compactResults: null,
     syntaxTree: null,
     ...(bloomFilter ? { bloomFilter } : {}),
-    fallbackReason: "queryFailure",
+    fallbackReason: "sourceTooLarge",
     error,
   };
 }

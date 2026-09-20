@@ -137,7 +137,7 @@ describe("HTML asset tag filtering", () => {
       '<script src="app.js"></script>',
     ].join("\n");
 
-    const captured = queryCaptureTexts(source, HTML_SUPPORT.queries.imports, "mod");
+    const captured = queryCaptureTexts(source, HTML_SUPPORT.queries.imports, "from");
 
     // The tag predicates used to sit outside their patterns, so every element with an `href` or
     // `src` attribute was captured. The graph's own asset walker still reports media sources; this
@@ -173,7 +173,7 @@ describe("HTML asset tag filtering", () => {
       "upper-style.css",
     ];
 
-    expect(queryCaptureTexts(source, HTML_SUPPORT.queries.imports, "mod")).toEqual(expectedAssets);
+    expect(queryCaptureTexts(source, HTML_SUPPORT.queries.imports, "from")).toEqual(expectedAssets);
     expect(queryCaptureTexts(source, HTML_SUPPORT.queries.importBindings, "from")).toEqual(expectedAssets);
     expect(queryCaptureTexts(source, HTML_SUPPORT.queries.locals, "name")).toEqual(["hero", "ok"]);
     expect(queryCaptureTexts(source, generateChunkingQuery(HTML_DEF), "chunk.name")).toEqual(["hero", "ok"]);

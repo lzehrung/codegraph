@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import { buildProjectIndexFromFiles, collectGraph, type BuildReport } from "../src/index.js";
-import { extractJsTsDynamicSpecifiers, extractJsTsSpecifiers, stripJsLikeComments } from "../src/util.js";
+import { extractDynamicImportSpecifiers, extractJsTsSpecifiers, stripJsLikeComments } from "../src/util.js";
 import {
   getNativeTreeSitterSupportedLanguageIds,
   isNativeTreeSitterAvailable,
@@ -551,7 +551,7 @@ describe("Import extraction fallback reporting", () => {
     const fromFile = path.join(process.cwd(), "src", "main.ts");
     const projectRoot = process.cwd();
 
-    const specs = extractJsTsDynamicSpecifiers(source, fromFile, projectRoot);
+    const specs = extractDynamicImportSpecifiers("js", source, fromFile, projectRoot);
 
     expect(specs.map((entry) => entry.spec)).toEqual(["./actual"]);
   });
@@ -566,7 +566,7 @@ describe("Import extraction fallback reporting", () => {
       "const duplicate = import(path.join(__dirname, '..', 'shared'));",
     ].join("\n");
 
-    const specs = extractJsTsDynamicSpecifiers(source, fromFile, projectRoot);
+    const specs = extractDynamicImportSpecifiers("js", source, fromFile, projectRoot);
 
     expect(specs.map((entry) => entry.spec)).toEqual(["../shared", "./sibling", "./asset.json"]);
     expect(specs.every((entry) => entry.resolved === "heuristic")).toBeTruthy();
@@ -583,7 +583,7 @@ describe("Import extraction fallback reporting", () => {
       "const unsupportedUrlBase = require(new URL('./dep', process.cwd()));",
     ].join("\n");
 
-    const specs = extractJsTsDynamicSpecifiers(source, fromFile, projectRoot);
+    const specs = extractDynamicImportSpecifiers("js", source, fromFile, projectRoot);
 
     expect(specs).toEqual([]);
   });
@@ -788,5 +788,451 @@ describe("Import extraction fallback reporting", () => {
   it("treats comments as whitespace around type modifiers", () => {
     expect(isJsTsTypeOnlySpecifierStatement('import { type/* erased */Foo } from "./types";')).toBe(true);
     expect(isJsTsTypeOnlySpecifierStatement('export type{Foo}from "./types";')).toBe(true);
+  });
+});
+
+async function writeReducedFixture(root: string, files: Record<string, string>): Promise<void> {
+  for (const [relativePath, content] of Object.entries(files)) {
+    const target = path.join(root, relativePath);
+    await fsp.mkdir(path.dirname(target), { recursive: true });
+    await fsp.writeFile(target, content, "utf8");
+  }
+}
+
+function normalizedAbsolute(file: string): string {
+  return path.resolve(file).replace(/\\/g, "/");
+}
+
+describe("reduced-mode text import extraction registry", () => {
+  it("recovers module specifiers without the native addon for every wired language", () => {
+    const cases: Array<{ language: string; file: string; source: string; expected: string[] }> = [
+      {
+        language: "java",
+        file: "Consumer.java",
+        source: "import pkg.Target;\nimport static pkg.Util.helper;\n",
+        expected: ["pkg.Target", "pkg.Util.helper"],
+      },
+      {
+        language: "kotlin",
+        file: "Consumer.kt",
+        source: "import pkg.Target\nimport pkg.Beta as B\nimport pkg.inner.*\n",
+        expected: ["pkg.Target", "pkg.Beta", "pkg.inner"],
+      },
+      {
+        language: "rust",
+        file: "consumer.rs",
+        source: "use crate::helper::Thing;\nmod sibling;\n",
+        expected: ["crate::helper", "sibling"],
+      },
+      {
+        language: "csharp",
+        file: "Consumer.cs",
+        source: "using Pkg;\nusing Beta = Pkg.Beta;\n",
+        expected: ["Pkg", "Pkg.Beta"],
+      },
+      {
+        language: "php",
+        file: "Consumer.php",
+        source: "<?php\nuse Pkg\\Target;\nuse Pkg\\{Beta, Gamma};\n",
+        expected: ["Pkg\\Target", "Pkg\\Beta", "Pkg\\Gamma"],
+      },
+      {
+        language: "python",
+        file: "consumer.py",
+        source: "import pkg\nfrom other import thing\n",
+        expected: ["pkg", "other"],
+      },
+      {
+        language: "go",
+        file: "main.go",
+        source: 'package main\n\nimport "example/app"\n',
+        expected: ["example/app"],
+      },
+      {
+        language: "go",
+        file: "grouped.go",
+        source: 'package main\n\nimport (\n\t"fmt"\n\talias "example/app"\n)\n',
+        expected: ["fmt", "example/app"],
+      },
+      {
+        language: "ruby",
+        file: "main.rb",
+        source: 'require "set"\nrequire_relative "./lib/target"\nautoload :Lazy, "lazy/thing"\n',
+        expected: ["set", "./lib/target", "lazy/thing"],
+      },
+      {
+        language: "c",
+        file: "main.c",
+        source: '#include <stdio.h>\n#include "./dep.h"\n',
+        expected: ["stdio.h", "./dep.h"],
+      },
+      {
+        language: "cpp",
+        file: "main.cpp",
+        source: '#include <vector>\n#include "./dep.h"\n',
+        expected: ["vector", "./dep.h"],
+      },
+      {
+        language: "swift",
+        file: "main.swift",
+        source: "import Foundation\nimport struct Nested.Thing\n",
+        expected: ["Foundation", "Nested.Thing"],
+      },
+      {
+        language: "zig",
+        file: "main.zig",
+        source: 'const std = @import("std");\n',
+        expected: ["std"],
+      },
+    ];
+    for (const testCase of cases) {
+      const support = supportById(testCase.language);
+      expect(support, testCase.language).toBeDefined();
+      if (!support) continue;
+      const specifiers = collectModuleSpecifiersFromSource(support, testCase.source, {
+        file: testCase.file,
+        native: "off",
+      }).map((entry) => entry.spec);
+      expect(specifiers, `${testCase.language} ${testCase.file}`).toEqual(testCase.expected);
+    }
+  });
+
+  it("reports an empty list for a language with no text extractor", () => {
+    const support = supportById("sql");
+    expect(support).toBeDefined();
+    if (!support) return;
+    expect(collectModuleSpecifiersFromSource(support, "SELECT 1;\n", { file: "q.sql", native: "off" })).toEqual([]);
+  });
+
+  const edgeFixtures: Array<{
+    label: string;
+    entry: string;
+    indexFiles: string[];
+    files: Record<string, string>;
+    target: string;
+    binding?: Record<string, unknown>;
+    options?: { graph?: { resolutionHints: string[] } };
+  }> = [
+    {
+      label: "java",
+      entry: "Consumer.java",
+      indexFiles: ["Consumer.java", "pkg/Target.java"],
+      files: {
+        "pkg/Target.java": "package pkg;\n\npublic class Target {}\n",
+        "Consumer.java": "import pkg.Target;\n\npublic class Consumer {}\n",
+      },
+      target: "pkg/Target.java",
+      binding: { kind: "named", local: "Target", imported: "Target", from: "pkg.Target" },
+    },
+    {
+      label: "kotlin",
+      entry: "Consumer.kt",
+      indexFiles: ["Consumer.kt", "pkg/Target.kt"],
+      files: {
+        "pkg/Target.kt": "package pkg\n\nclass Target\n",
+        "Consumer.kt": "import pkg.Target\n\nclass Consumer\n",
+      },
+      target: "pkg/Target.kt",
+      binding: { kind: "named", local: "Target", imported: "Target", from: "pkg.Target" },
+    },
+    {
+      label: "rust",
+      entry: "src/consumer.rs",
+      indexFiles: ["src/lib.rs", "src/helper.rs", "src/consumer.rs"],
+      files: {
+        "Cargo.toml": '[package]\nname = "sample"\nversion = "0.1.0"\n',
+        "src/lib.rs": "mod helper;\npub mod consumer;\n",
+        "src/helper.rs": "pub struct Thing;\n",
+        "src/consumer.rs": "use crate::helper::Thing;\n",
+      },
+      target: "src/helper.rs",
+      binding: { kind: "named", local: "Thing", imported: "Thing", from: "crate::helper" },
+    },
+    {
+      label: "csharp",
+      entry: "Consumer.cs",
+      indexFiles: ["Consumer.cs", "pkg/Target.cs"],
+      files: {
+        "pkg/Target.cs": "namespace Pkg\n{\n    public class Target {}\n}\n",
+        "Consumer.cs": "using Pkg;\n\nnamespace App\n{\n    public class Consumer {}\n}\n",
+      },
+      target: "pkg/Target.cs",
+      binding: { kind: "star", from: "Pkg" },
+    },
+    {
+      label: "php",
+      entry: "Consumer.php",
+      indexFiles: ["Consumer.php", "Pkg/Target.php"],
+      files: {
+        "Pkg/Target.php": "<?php\n\nnamespace Pkg;\n\nclass Target {}\n",
+        "Consumer.php": "<?php\n\nuse Pkg\\Target;\n",
+      },
+      target: "Pkg/Target.php",
+      binding: { kind: "named", local: "Target", imported: "Target", from: "Pkg\\Target" },
+    },
+    {
+      label: "python",
+      entry: "consumer.py",
+      indexFiles: ["consumer.py", "pkg/__init__.py"],
+      files: {
+        "pkg/__init__.py": "value = 1\n",
+        "consumer.py": "import pkg\n",
+      },
+      target: "pkg/__init__.py",
+      binding: { kind: "namespace", localNS: "pkg", from: "pkg" },
+    },
+    {
+      label: "go",
+      entry: "main.go",
+      indexFiles: ["main.go", "app/target.go"],
+      files: {
+        "go.mod": "module example\n\ngo 1.22\n",
+        "app/target.go": "package app\n",
+        "main.go": 'package main\n\nimport "example/app"\n',
+      },
+      target: "app/target.go",
+    },
+    {
+      label: "ruby",
+      entry: "main.rb",
+      indexFiles: ["main.rb", "lib/target.rb"],
+      files: {
+        "lib/target.rb": "class Target\nend\n",
+        "main.rb": 'require_relative "./lib/target"\n',
+      },
+      target: "lib/target.rb",
+    },
+    {
+      label: "c",
+      entry: "main.c",
+      indexFiles: ["main.c", "dep.h"],
+      files: {
+        "dep.h": "int dep(void);\n",
+        "main.c": '#include "./dep.h"\n\nint main(void) { return dep(); }\n',
+      },
+      target: "dep.h",
+    },
+    {
+      label: "cpp",
+      entry: "main.cpp",
+      indexFiles: ["main.cpp", "dep.h"],
+      files: {
+        "dep.h": "int dep();\n",
+        "main.cpp": '#include "./dep.h"\n\nint main() { return dep(); }\n',
+      },
+      target: "dep.h",
+    },
+    {
+      label: "swift",
+      entry: "main.swift",
+      indexFiles: ["main.swift", "Dep.swift"],
+      files: {
+        "Dep.swift": "public struct Dep {}\n",
+        "main.swift": "import Dep\n",
+      },
+      target: "Dep.swift",
+    },
+    {
+      label: "zig",
+      entry: "main.zig",
+      indexFiles: ["main.zig", "dep.zig"],
+      files: {
+        "dep.zig": "pub const value = 1;\n",
+        "main.zig": 'const dep = @import("dep.zig");\n',
+      },
+      target: "dep.zig",
+      options: { graph: { resolutionHints: ["."] } },
+    },
+  ];
+
+  for (const fixture of edgeFixtures) {
+    const expectation = fixture.binding ? "an import binding" : "no fabricated binding";
+    it(`recovers ${fixture.label} file edges and ${expectation} without the native addon`, async () => {
+      const root = await mkTmpDir(`cg-reduced-registry-${fixture.label}-`);
+      try {
+        await writeReducedFixture(root, fixture.files);
+        const entry = path.join(root, fixture.entry);
+        const index = await buildProjectIndexFromFiles(
+          root,
+          fixture.indexFiles.map((file) => path.join(root, file)),
+          { native: "off", ...(fixture.options ?? {}) },
+        );
+
+        const targetPath = normalizedAbsolute(path.join(root, fixture.target));
+        expect(
+          index.graph.edges.some(
+            (edge) => edge.from === normalizedAbsolute(entry) && edge.to.type === "file" && edge.to.path === targetPath,
+          ),
+          `${fixture.label} edge to ${fixture.target}`,
+        ).toBe(true);
+
+        const imports = index.byFile.get(fileIdentityKey(entry))?.imports ?? [];
+        if (fixture.binding) {
+          expect(imports).toEqual([expect.objectContaining(fixture.binding)]);
+        } else {
+          expect(imports).toEqual([]);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it("recovers no import from a forged import inside a string or a comment", async () => {
+    const root = await mkTmpDir("cg-reduced-forged-import-");
+    const cases: Array<{
+      language: string;
+      file: string;
+      source: string;
+      expected: string[];
+      expectedBindings: string[];
+    }> = [
+      {
+        language: "go",
+        file: "main.go",
+        source: [
+          "package main",
+          "",
+          '// import "fake/comment"',
+          'var doc = `import "fake/raw"`',
+          'var interp = "start import \\"fake/string\\" end"',
+          'import "real/pkg"',
+          "",
+        ].join("\n"),
+        expected: ["real/pkg"],
+        expectedBindings: [],
+      },
+      {
+        language: "ruby",
+        file: "main.rb",
+        source: [
+          '# require "fake/comment"',
+          "=begin",
+          'require "fake/block"',
+          "=end",
+          "doc = \"require 'fake/string'\"",
+          'require "real/gem"',
+          "",
+        ].join("\n"),
+        expected: ["real/gem"],
+        expectedBindings: [],
+      },
+      {
+        language: "php",
+        file: "Consumer.php",
+        source: [
+          "<?php",
+          "// use Fake\\Comment;",
+          "/* require 'fake/block.php'; */",
+          '$doc = "use Fake\\\\String;";',
+          "use Real\\Target;",
+          "",
+        ].join("\n"),
+        expected: ["Real\\Target"],
+        expectedBindings: ["Real\\Target"],
+      },
+    ];
+
+    try {
+      for (const testCase of cases) {
+        const support = supportById(testCase.language);
+        expect(support, testCase.language).toBeDefined();
+        if (!support) continue;
+        const specifiers = collectModuleSpecifiersFromSource(support, testCase.source, {
+          file: path.join(root, testCase.file),
+          native: "off",
+        }).map((entry) => entry.spec);
+        expect(specifiers, `${testCase.language} graph specifiers`).toEqual(testCase.expected);
+
+        const bindings = await collectImportsForFile(path.join(root, testCase.file), root, {
+          source: testCase.source,
+          sup: support,
+          native: "off",
+        });
+        expect(
+          bindings.map((binding) => binding.from),
+          `${testCase.language} bindings`,
+        ).toEqual(testCase.expectedBindings);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a Rust #[path] attribute from the raw statement in reduced mode", async () => {
+    const root = await mkTmpDir("cg-reduced-rust-path-attribute-");
+    try {
+      await writeReducedFixture(root, {
+        "Cargo.toml": '[package]\nname = "path-attr"\nversion = "0.1.0"\n',
+        "src/lib.rs": '#[path = "custom.rs"]\nmod external;\npub mod consumer;\n',
+        "src/custom.rs": "pub struct Thing;\n",
+        "src/external.rs": "pub struct Decoy;\n",
+        "src/consumer.rs": "use crate::external::Thing;\n",
+      });
+      const lib = path.join(root, "src/lib.rs");
+      const custom = path.join(root, "src/custom.rs");
+      const index = await buildProjectIndexFromFiles(
+        root,
+        [lib, custom, path.join(root, "src/external.rs"), path.join(root, "src/consumer.rs")],
+        { native: "off" },
+      );
+
+      expect(
+        index.graph.edges.some(
+          (edge) =>
+            edge.from === normalizedAbsolute(lib) &&
+            edge.to.type === "file" &&
+            edge.to.path === normalizedAbsolute(custom),
+        ),
+        "lib.rs edge to the #[path] module",
+      ).toBe(true);
+      expect(index.byFile.get(fileIdentityKey(lib))?.imports).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "namespace",
+            localNS: "external",
+            from: "external",
+            resolved: normalizedAbsolute(custom),
+          }),
+        ]),
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("agrees between the graph path and the indexer path for the same source", async () => {
+    const root = await mkTmpDir("cg-reduced-path-agreement-");
+    const cases: Array<{ language: string; file: string; source: string }> = [
+      { language: "java", file: "Consumer.java", source: "import pkg.Target;\nimport pkg.Other;\n" },
+      { language: "kotlin", file: "Consumer.kt", source: "import pkg.Target\nimport pkg.Other as Alias\n" },
+      { language: "rust", file: "consumer.rs", source: "use crate::helper::Thing;\nuse crate::helper::Other;\n" },
+      { language: "csharp", file: "Consumer.cs", source: "using Pkg;\nusing Alias = Pkg.Beta;\n" },
+      { language: "php", file: "Consumer.php", source: "<?php\nuse Pkg\\Target;\nuse Pkg\\Beta;\n" },
+    ];
+
+    try {
+      for (const testCase of cases) {
+        const support = supportById(testCase.language);
+        expect(support, testCase.language).toBeDefined();
+        if (!support) continue;
+        const file = path.join(root, testCase.file);
+        const graphSpecifiers = collectModuleSpecifiersFromSource(support, testCase.source, {
+          file,
+          native: "off",
+        })
+          .map((entry) => entry.spec)
+          .sort();
+        const bindings = await collectImportsForFile(file, root, {
+          source: testCase.source,
+          sup: support,
+          native: "off",
+        });
+        const bindingSources = Array.from(new Set(bindings.map((binding) => binding.from))).sort();
+        expect(bindingSources, `${testCase.language} specifiers`).toEqual(graphSpecifiers);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });

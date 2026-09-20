@@ -89,7 +89,7 @@ export type NativeDuplicateTokens = {
   normalizedTokens: string[];
 };
 
-export type NativeFallbackReason = "unavailable" | "unsupportedLanguage" | "queryFailure";
+export type NativeFallbackReason = "unavailable" | "unsupportedLanguage" | "queryFailure" | "sourceTooLarge";
 
 export type NativeQueryExecution = {
   results: NativeQueryResults | null;

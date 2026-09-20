@@ -2223,6 +2223,7 @@ describe("Rust function-local items and re-export aliases", () => {
         "    type Hidden = u8;",
         "    struct LocalStruct;",
         "}",
+        "pub fn kept_fn() {}",
         "pub type Kept = u16;",
         "pub mod nested {",
         "    pub struct Deep;",
@@ -2239,9 +2240,13 @@ describe("Rust function-local items and re-export aliases", () => {
       const exportedNames = mod.exports.map(exportedNameOf);
 
       expect(mod.locals.map((entry) => entry.localName)).toEqual(
-        expect.arrayContaining(["outer", "Hidden", "LocalStruct", "Kept", "Deep"]),
+        expect.arrayContaining(["outer", "Hidden", "LocalStruct", "kept_fn", "Kept", "Deep"]),
       );
-      expect(exportedNames).toEqual(expect.arrayContaining(["outer", "Kept", "Deep"]));
+      // Rust export visibility: only `pub` items are module exports. The non-`pub` `fn outer`
+      // stays a file local (another module cannot `use` it), while the `pub fn` sibling and
+      // the `pub mod`'s nested item remain exported.
+      expect(exportedNames).toEqual(expect.arrayContaining(["kept_fn", "Kept", "Deep"]));
+      expect(exportedNames).not.toContain("outer");
       expect(exportedNames).not.toContain("Hidden");
       expect(exportedNames).not.toContain("LocalStruct");
     } finally {

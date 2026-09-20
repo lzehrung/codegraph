@@ -1,15 +1,21 @@
+import "../../../languages/all.js";
+import { getLanguageById } from "../../../languages/registry.js";
 import type { CallCompatibilityProvider, ExtractCallsiteRequest, ExtractSignatureRequest } from "./types.js";
 import type { CallableSignature, CallsiteArguments } from "../types.js";
 
-export const callCompatibilityLanguageIds = [
+/**
+ * Source languages the structural extractor understands. The registry has no call-compatibility
+ * flag, so the list is declared here and filtered through the registry: a stale id such as the
+ * old `javascript`/`typescript`/`jsx` spellings can never be reported as supported.
+ * `tests/language-capability-registry.test.ts` asserts every declaration is registered.
+ */
+const CALL_COMPATIBILITY_LANGUAGE_ID_DECLARATIONS = [
   "c",
   "cpp",
   "csharp",
   "go",
   "java",
-  "javascript",
   "js",
-  "jsx",
   "kotlin",
   "php",
   "python",
@@ -18,9 +24,15 @@ export const callCompatibilityLanguageIds = [
   "swift",
   "ts",
   "tsx",
-  "typescript",
   "zig",
 ] as const;
+
+export const callCompatibilityLanguageIdDeclarations: readonly string[] =
+  CALL_COMPATIBILITY_LANGUAGE_ID_DECLARATIONS;
+
+export const callCompatibilityLanguageIds: readonly string[] = CALL_COMPATIBILITY_LANGUAGE_ID_DECLARATIONS.filter(
+  (languageId) => getLanguageById(languageId) !== undefined,
+);
 
 interface RegisteredCallCompatibilityExtractors {
   extractSignature(request: ExtractSignatureRequest): CallableSignature | null;

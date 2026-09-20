@@ -1,5 +1,6 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
+import { classifyByParentType, isNameFieldOnParent, nodeTypeIn } from "./shared.js";
 import { hasNonAsciiCodePoint } from "../../util/identifiers.js";
 
 export const RUST_DEF: LanguageDefinition = {
@@ -44,9 +45,9 @@ export const RUST_DEF: LanguageDefinition = {
   },
   graph: {
     imports: `
-      (mod_item name: (identifier) @mod) @stmt
-      (extern_crate_declaration name: (identifier) @mod) @stmt
-      (use_declaration argument: (_) @mod) @stmt
+      (mod_item name: (identifier) @from) @stmt
+      (extern_crate_declaration name: (identifier) @from) @stmt
+      (use_declaration argument: (_) @from) @stmt
     `,
     exports: `
       (function_item name: (identifier) @name) @stmt
@@ -96,6 +97,7 @@ export const RUST_DEF: LanguageDefinition = {
       (use_declaration argument: (use_as_clause path: (identifier) @from alias: (identifier) @alias)) @stmt
       (use_declaration argument: (use_as_clause path: (scoped_identifier path: (_) @from name: (identifier) @iname) alias: (identifier) @alias)) @stmt
       (use_declaration argument: (scoped_identifier path: (_) @from name: (identifier) @iname)) @stmt
+      (use_declaration argument: (use_wildcard) @from @wild) @stmt
       (use_declaration argument: (identifier) @from) @stmt
       (use_declaration argument: (scoped_use_list path: (_) @from list: (use_list (identifier) @iname))) @stmt
       ;; Aliased members inside a group (\`use foo::{Bar as Baz}\`): import
@@ -110,40 +112,32 @@ export const RUST_DEF: LanguageDefinition = {
   supportsCrossModuleSymbols: true,
   exportScopeBlockers: ["block"],
   scopeDeclarationNames: (node) => node.parent?.type === "macro_definition",
-  classifyDefinition: (node) => {
-    const parent = node.parent;
-    if (!parent) return "variable";
-    if (
-      parent.type === "function_item" ||
-      parent.type === "function_signature_item" ||
-      parent.type === "macro_definition"
-    )
-      return "function";
-    if (parent.type === "enum_item" || parent.type === "type_item" || parent.type === "associated_type") return "type";
-    if (parent.type === "struct_item" || parent.type === "trait_item") return "class";
-    return "variable";
-  },
-  createsFunctionScope: (node) => node.type === "function_item",
-  createsBlockScope: (node) => node.type === "block",
-  membersAreImplicitlyInScope: false,
-  isDeclarationName: (node) => {
-    const p = node.parent;
-    if (!p) return false;
-    if (p.type === "function_item" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "function_signature_item" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "struct_item" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "trait_item" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "type_item" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "associated_type" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "enum_item" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "enum_variant" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "const_item" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "static_item" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "macro_definition" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "let_declaration" && p.childForFieldName("pattern")?.id === node.id) return true;
-    if (p.type === "parameter" && p.childForFieldName("pattern")?.id === node.id) return true;
-    return false;
-  },
+  classifyDefinition: classifyByParentType({
+    function_item: "function",
+    function_signature_item: "function",
+    macro_definition: "function",
+    enum_item: "type",
+    type_item: "type",
+    associated_type: "type",
+    struct_item: "class",
+    trait_item: "class",
+  }),
+  createsFunctionScope: nodeTypeIn(["function_item"]),
+  createsBlockScope: nodeTypeIn(["block"]),
+  isDeclarationName: (node) =>
+    isNameFieldOnParent(node, [
+      "function_item",
+      "function_signature_item",
+      "struct_item",
+      "trait_item",
+      "type_item",
+      "associated_type",
+      "enum_item",
+      "enum_variant",
+      "const_item",
+      "static_item",
+      "macro_definition",
+    ]) || isNameFieldOnParent(node, ["let_declaration", "parameter"], "pattern"),
   normalizeIdentifier: (name) => (hasNonAsciiCodePoint(name) ? name.normalize("NFC") : name),
 };
 registerLanguage(RUST_DEF);

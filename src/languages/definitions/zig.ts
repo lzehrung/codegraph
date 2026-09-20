@@ -1,5 +1,6 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
+import { isNameFieldOnParent, nodeTypeIn } from "./shared.js";
 
 const ZIG_TYPE_INITIALIZER_TYPES = new Set([
   "builtin_type",
@@ -25,8 +26,9 @@ export const ZIG_DEF: LanguageDefinition = {
   },
   graph: {
     imports: `
-      (builtin_function (builtin_identifier) @fn (arguments (string) @mod) (#eq? @fn "@import")) @stmt
-      (builtin_function (builtin_identifier) @mod (arguments) (#eq? @mod "@cImport")) @stmt
+      (builtin_function (builtin_identifier) @fn (arguments (string) @from) (#eq? @fn "@import")) @stmt
+      ;; @cImport has no path argument; the builtin identifier is the specifier.
+      (builtin_function (builtin_identifier) @from (arguments) (#eq? @from "@cImport")) @stmt
     `,
     exports: `
       (source_file (function_declaration name: (identifier) @name))
@@ -78,20 +80,16 @@ export const ZIG_DEF: LanguageDefinition = {
     if (initializer && ZIG_TYPE_INITIALIZER_TYPES.has(initializer.type)) return "type";
     return "variable";
   },
-  createsFunctionScope: (node) => node.type === "function_declaration",
-  createsBlockScope: (node) => node.type === "block",
-  isDeclarationName: (node) => {
-    const parent = node.parent;
-    if (!parent) return false;
-    if (parent.type === "function_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
-    if (parent.type !== "variable_declaration") return false;
+  createsFunctionScope: nodeTypeIn(["function_declaration"]),
+  createsBlockScope: nodeTypeIn(["block"]),
+  isDeclarationName: (node) =>
+    isNameFieldOnParent(node, ["function_declaration"]) ||
     // No named field distinguishes the declared identifier from an initializer that is
     // itself a bare identifier (e.g. `const x = y;` puts both `x` and `y` directly under
     // `variable_declaration`); the declared name is always the first identifier child,
     // matching the lookup classifyDefinition above already relies on.
-    const declaredName = parent.namedChildren.find((child) => child.type === "identifier");
-    return declaredName?.id === node.id;
-  },
+    (node.parent?.type === "variable_declaration" &&
+      node.parent.namedChildren.find((child) => child.type === "identifier")?.id === node.id),
 };
 
 registerLanguage(ZIG_DEF);

@@ -338,3 +338,32 @@ export function normalizeResolutionHints(hints?: string[]): string[] {
   }
   return out;
 }
+
+export function stripBom(text: string): string {
+  return text.replace(/^\uFEFF/, "");
+}
+
+export async function readUtf8WithoutBom(filePath: string): Promise<string> {
+  return stripBom(await fsp.readFile(filePath, "utf8"));
+}
+
+export async function isPhysicalPathWithinRoot(projectRoot: string, filePath: string): Promise<boolean> {
+  if (!isFilePathWithinRoot(projectRoot, filePath)) return false;
+  try {
+    const realRoot = await fsp.realpath(projectRoot);
+    const realCandidate = await fsp.realpath(filePath);
+    return isFilePathWithinRoot(realRoot, realCandidate);
+  } catch {
+    return false;
+  }
+}
+
+export async function confineResolvedPath(
+  projectRoot: string,
+  filePath: string | null | undefined,
+): Promise<string | null> {
+  if (!filePath) return null;
+  const resolved = path.resolve(filePath);
+  if (!(await isPhysicalPathWithinRoot(projectRoot, resolved))) return null;
+  return filePath;
+}

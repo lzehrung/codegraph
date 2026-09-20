@@ -1,4 +1,6 @@
 import { type ModuleSpecifier } from "../util/specifiers.js";
+import { DOCUMENT_HTML_FORMS } from "./html-forms.js";
+import { extractDocumentHtmlSpecifiers } from "./html.js";
 import { dedupeModuleSpecifiers, normalizeLinkSpecifier, normalizeReferenceLabel } from "./shared.js";
 
 // Sphinx `:ref:`/`:term:` roles are deliberately not extracted here: they
@@ -67,6 +69,11 @@ export function extractRstModuleSpecifiers(source: string): ModuleSpecifier[] {
   }
 
   out.push(...extractRstToctreeSpecifiers(cleaned));
+
+  // reStructuredText deliberately runs no HTML pass: see DOCUMENT_HTML_FORMS.rst
+  // for the stated reason. Routing it through the shared helper keeps the
+  // decision in one table instead of an implicit omission at this call site.
+  out.push(...extractDocumentHtmlSpecifiers(cleaned, DOCUMENT_HTML_FORMS.rst));
 
   return dedupeModuleSpecifiers(out);
 }

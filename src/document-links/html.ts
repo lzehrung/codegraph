@@ -1,17 +1,6 @@
 import { extractJsTsSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
+import { SHARED_HTML_TAG_ATTRS, type DocumentHtmlForm } from "./html-forms.js";
 import { dedupeModuleSpecifiers, markResolutionKind, normalizeLinkSpecifier } from "./shared.js";
-
-const DEFAULT_HTML_TAG_ATTRS: Record<string, string[]> = {
-  script: ["src"],
-  link: ["href"],
-  a: ["href"],
-  img: ["src", "srcset"],
-  source: ["src", "srcset"],
-  video: ["src"],
-  audio: ["src"],
-  iframe: ["src"],
-  track: ["src"],
-};
 
 const HTML_RAW_TEXT_TAGS: Record<string, true> = { script: true, style: true };
 const HTML_LITERAL_BLOCK_TAGS: Record<string, true> = { pre: true, code: true };
@@ -261,9 +250,11 @@ function extractNormalizedStyleSpecifier(rawSpecifier: string): ModuleSpecifier 
 }
 
 export function extractHtmlStyleSpecifiers(source: string): ModuleSpecifier[] {
-  const out: ModuleSpecifier[] = [];
-  const cleaned = stripHtmlCommentsAndLiteralBlocks(source);
+  return styleSpecifiersFromCleaned(stripHtmlCommentsAndLiteralBlocks(source));
+}
 
+function styleSpecifiersFromCleaned(cleaned: string): ModuleSpecifier[] {
+  const out: ModuleSpecifier[] = [];
   for (const event of scanHtmlEvents(cleaned)) {
     if (event.kind !== "tag" || event.name !== "style") continue;
     const body = cleaned.slice(event.bodyStart, event.bodyEnd).replace(/\/\*[\s\S]*?\*\//g, "");
@@ -288,8 +279,11 @@ export function extractHtmlStyleSpecifiers(source: string): ModuleSpecifier[] {
 }
 
 export function extractHtmlInlineScriptSpecifiers(source: string): ModuleSpecifier[] {
+  return inlineScriptSpecifiersFromCleaned(stripHtmlCommentsAndLiteralBlocks(source));
+}
+
+function inlineScriptSpecifiersFromCleaned(cleaned: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
-  const cleaned = stripHtmlCommentsAndLiteralBlocks(source);
   for (const event of scanHtmlEvents(cleaned)) {
     if (event.kind !== "tag" || event.name !== "script") continue;
     const attrs = cleaned.slice(event.attrsStart, event.attrsEnd);
@@ -303,10 +297,13 @@ export function extractHtmlInlineScriptSpecifiers(source: string): ModuleSpecifi
 
 export function extractHtmlAttributeSpecifiers(
   source: string,
-  tagAttrNames: Record<string, string[]> = DEFAULT_HTML_TAG_ATTRS,
+  tagAttrNames: Record<string, string[]> = SHARED_HTML_TAG_ATTRS,
 ): ModuleSpecifier[] {
+  return attributeSpecifiersFromCleaned(stripHtmlCommentsAndLiteralBlocks(source), tagAttrNames);
+}
+
+function attributeSpecifiersFromCleaned(cleaned: string, tagAttrNames: Record<string, string[]>): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
-  const cleaned = stripHtmlCommentsAndLiteralBlocks(source);
 
   for (const event of scanHtmlEvents(cleaned)) {
     if (event.kind !== "tag") continue;
@@ -341,5 +338,21 @@ export function extractHtmlAttributeSpecifiers(
     }
   }
 
+  return dedupeModuleSpecifiers(out);
+}
+
+/**
+ * The one entry point every document format uses for embedded HTML: it runs the
+ * attribute, inline `<script>`, and inline `<style>` passes this format's
+ * `DocumentHtmlForm` enables and returns their deduplicated union. Formats that
+ * omit a pass carry the reason in that table rather than at the call site.
+ */
+export function extractDocumentHtmlSpecifiers(source: string, form: DocumentHtmlForm): ModuleSpecifier[] {
+  if (!form.attributes && !form.inlineScript && !form.inlineStyle) return [];
+  const cleaned = stripHtmlCommentsAndLiteralBlocks(source);
+  const out: ModuleSpecifier[] = [];
+  if (form.attributes) out.push(...attributeSpecifiersFromCleaned(cleaned, form.attributes));
+  if (form.inlineScript) out.push(...inlineScriptSpecifiersFromCleaned(cleaned));
+  if (form.inlineStyle) out.push(...styleSpecifiersFromCleaned(cleaned));
   return dedupeModuleSpecifiers(out);
 }

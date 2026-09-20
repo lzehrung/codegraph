@@ -36,6 +36,23 @@ export interface NativeCompatibility {
   notes?: string[];
 }
 
+export {
+  GRAPH_IMPORT_CAPTURES,
+  GRAPH_IMPORT_OPTIONAL_CAPTURES,
+  GRAPH_IMPORT_REQUIRED_CAPTURES,
+  graphCapture,
+  graphImportCaptures,
+  importCapture,
+  isGraphImportCapture,
+} from "./graph-captures.js";
+export type {
+  GraphImportCapture,
+  GraphImportCaptureExcludesMod,
+  GraphImportCaptureMap,
+  GraphImportOptionalCapture,
+  GraphImportRequiredCapture,
+} from "./graph-captures.js";
+
 export interface LanguageDefinition {
   id: string;
   extensions: string[];
@@ -106,6 +123,8 @@ export interface LanguageDefinition {
 
   /**
    * Whether an unqualified call within a type can resolve to one of its members.
+   * Defaults to false; set true only for languages whose unqualified names really
+   * do resolve against enclosing members (Java, C#, Kotlin, Swift, Ruby, C++).
    */
   membersAreImplicitlyInScope?: boolean;
 

@@ -9,6 +9,9 @@ import { collectDetailedDeclarations } from "../../src/graphs/symbol-graph-detai
 import { collectImportsForFile, collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
+import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js";
+
+const sampleRoot = path.resolve(process.cwd(), "tests", "samples", "ruby");
 
 const definition: LanguageTestDefinition = {
   id: "ruby",
@@ -185,5 +188,34 @@ log.info "x"
 `);
     const froms = imports.map((entry) => entry.from).sort();
     expect(froms).toEqual(["./other", "json", "lazy", "lazy_load.rb"]);
+  });
+});
+
+describe("Ruby query-driven locals", () => {
+  it("extracts locals from the natives locals query without a syntax tree", async () => {
+    const parsed = await parseFile(path.join(sampleRoot, ".regressions", "struct_point.rb"));
+    const native = getNativeQueryExecution(parsed.source, parsed.sup);
+    const module = collectLocalsAndExportsFromSource("probe.rb", parsed.source, parsed.sup, [], {
+      nativeQueries: native.results,
+      nativeMode: "off",
+    });
+    const names = module.locals.map((local) => local.localName);
+    // `usesQueryDrivenLocals` must be on for the query lane to run without a tree; before
+    // it was enabled the Ruby locals query was captured but its results were discarded.
+    expect(names).toContain("Point");
+    expect(names).toContain("point");
+  });
+
+  it("kinds classes, modules, and methods from the locals query captures", async () => {
+    const parsed = await parseFile(path.join(sampleRoot, ".regressions", "struct_point.rb"));
+    const native = getNativeQueryExecution(parsed.source, parsed.sup);
+    const module = collectLocalsAndExportsFromSource("probe.rb", parsed.source, parsed.sup, [], {
+      nativeQueries: native.results,
+    });
+    const kindByName = new Map(module.locals.map((local) => [local.localName, local.kind]));
+    // Query-driven kinds come from classifyDefinition; it must agree with the kinds the
+    // scope walker supplies structurally for class, module, and method captures.
+    expect(kindByName.get("Point")).toBe("class");
+    expect(kindByName.get("point")).toBe("variable");
   });
 });

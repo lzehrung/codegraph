@@ -1,11 +1,11 @@
 import { extractJsTsSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
-import { extractHtmlAttributeSpecifiers, extractHtmlInlineScriptSpecifiers } from "./html.js";
+import { DOCUMENT_HTML_FORMS } from "./html-forms.js";
+import { extractDocumentHtmlSpecifiers } from "./html.js";
 import { dedupeModuleSpecifiers, markResolutionKind, normalizeLinkSpecifier } from "./shared.js";
 
 export function extractAstroModuleSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
-  out.push(...extractHtmlAttributeSpecifiers(source));
-  out.push(...extractHtmlInlineScriptSpecifiers(source));
+  out.push(...extractDocumentHtmlSpecifiers(source, DOCUMENT_HTML_FORMS.astro));
 
   const frontmatterMatch = source.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (frontmatterMatch?.[1]) {
@@ -17,7 +17,7 @@ export function extractAstroModuleSpecifiers(source: string): ModuleSpecifier[] 
 
 export function extractHandlebarsModuleSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
-  out.push(...extractHtmlAttributeSpecifiers(source));
+  out.push(...extractDocumentHtmlSpecifiers(source, DOCUMENT_HTML_FORMS.hbs));
 
   for (const match of source.matchAll(/\{\{\s*(?:#\s*)?>\s*(?:"([^"]+)"|'([^']+)'|([^\s}]+))/g)) {
     const rawSpecifier = match[1] ?? match[2] ?? match[3];

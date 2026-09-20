@@ -35,8 +35,15 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 18 refreshes direct namespace-member resolution.
  * Epoch 19 adds Go and Python receiver member resolution, C# namespace-to-file
  * resolution, SCSS declaration navigation, and object-level SQL impact mapping.
+ * Epoch 20 covers the cross-language consolidation: C++20 module imports bind to
+ * first-party declarations without hints, Kotlin `.ktm` and PHP `.phtml`/`.php4`/`.php8`
+ * containers are indexed, per-language declaration visibility filters module exports and
+ * refuses cross-module binds for hidden names, first-party hits are realpath-confined,
+ * JVM/C#/PHP/Python symbol indexes are scoped to the nearest language manifest,
+ * non-module directory hits are rejected, a leading BOM no longer discards tsconfig
+ * path mappings, and lone-CR sources report real line numbers.
  */
-export const CORE_ALGORITHM_EPOCH = 19;
+export const CORE_ALGORITHM_EPOCH = 20;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -46,8 +53,12 @@ export const CORE_ALGORITHM_EPOCH = 19;
  * Epoch 6 adds field and enum-member declarations and tightens PHP and Zig declarations.
  * Epoch 7 adds SCSS declaration scope, TypeScript named function expression self-binding,
  * and C# positional record component locals.
+ * Epoch 8 makes implicit member scope opt-in per language, adds C# method and constructor
+ * parameter locals, Java constructor and spread-parameter declaration names, PHP block
+ * scope, Ruby query-driven locals, JavaScript type-only imports, and Ruby and PHP
+ * dynamic-import heuristics.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 7;
+export const LANGUAGE_BEHAVIOR_EPOCH = 8;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];

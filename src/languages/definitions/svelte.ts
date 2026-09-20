@@ -1,5 +1,6 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
+import { sfcExternalScriptGraph } from "./sfc-graph.js";
 
 export const SVELTE_DEF: LanguageDefinition = {
   id: "svelte",
@@ -13,16 +14,7 @@ export const SVELTE_DEF: LanguageDefinition = {
     splitPoints: ["script_element", "style_element"],
     comments: ["comment"],
   },
-  graph: {
-    imports: `
-      (script_element (start_tag (attribute (attribute_name) @attr (#eq? @attr "src") (quoted_attribute_value (attribute_value) @mod)))) @stmt
-    `,
-    exports: "",
-    locals: "",
-    importBindings: `
-      (script_element (start_tag (attribute (attribute_name) @attr (#eq? @attr "src") (quoted_attribute_value (attribute_value) @from)))) @stmt
-    `,
-  },
+  graph: sfcExternalScriptGraph(),
   nodeTypes: {
     identifier: ["attribute_value"],
   },

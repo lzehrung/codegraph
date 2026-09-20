@@ -62,7 +62,7 @@ const definition: LanguageTestDefinition = {
         },
         {
           from: "module-import.cpp",
-          to: { type: "external", name: "foo" },
+          to: { type: "file", path: "module-import.cpp" },
         },
       ],
       symbols: [
@@ -527,6 +527,54 @@ describe("C++ Unicode symbol ranges (C11)", () => {
 });
 
 describe("C++20 modules", () => {
+  it("resolves import widget without resolutionHints and keeps import std external", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-modules-no-hints-"));
+    const declaring = path.join(root, "widget.cpp");
+    const importing = path.join(root, "main.cpp");
+    try {
+      await fs.writeFile(declaring, "export module widget;\n", "utf8");
+      await fs.writeFile(importing, "import widget;\nimport std;\n", "utf8");
+
+      const index = await createTestIndexFromFiles(root, [declaring, importing]);
+      const fromMain = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(importing));
+
+      expect(fromMain).toContainEqual(
+        expect.objectContaining({
+          from: importing.replace(/\\/g, "/"),
+          to: { type: "file", path: declaring.replace(/\\/g, "/") },
+        }),
+      );
+      expect(fromMain).toContainEqual(
+        expect.objectContaining({
+          from: importing.replace(/\\/g, "/"),
+          to: { type: "external", name: "std" },
+        }),
+      );
+      expect(fromMain.some((edge) => edge.to.type === "external" && edge.to.name === "widget")).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a module declared in two files unresolved", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-modules-split-"));
+    const first = path.join(root, "alpha.cpp");
+    const second = path.join(root, "beta.cpp");
+    const importing = path.join(root, "main.cpp");
+    try {
+      await fs.writeFile(first, "export module shared;\n", "utf8");
+      await fs.writeFile(second, "export module shared;\n", "utf8");
+      await fs.writeFile(importing, "import shared;\n", "utf8");
+
+      const index = await createTestIndexFromFiles(root, [first, second, importing]);
+      const fromMain = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(importing));
+
+      expect(fromMain.map((edge) => edge.to)).toEqual([{ type: "external", name: "shared" }]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("indexes a module declaration and binds first-party imports without treating std as in-repo", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-modules-"));
     const declaring = path.join(root, "foo.cpp");

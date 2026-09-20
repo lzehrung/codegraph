@@ -224,3 +224,55 @@ describe("JavaScript class field navigation", () => {
     }
   });
 });
+
+describe("JavaScript type-only import and export edges", () => {
+  it("marks import type statements as type-only import bindings", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-js-type-only-"));
+    const main = path.join(root, "main.js");
+    const types = path.join(root, "types.js");
+    try {
+      await writeFile(types, "export class Widget {}\n", "utf8");
+      await writeFile(main, 'import type { Widget } from "./types.js";\nexport type { Widget };\n', "utf8");
+      const index = await createTestIndexFromFiles(root, [types, main]);
+      const module = index.byFile.get(fileIdentityKey(main));
+      const typeOnlyImports = (module?.imports ?? []).filter((binding) => binding.typeOnly);
+      // JSDoc-typed `.js` projects use `import type`; the binding must be type-only, not a
+      // runtime dependency.
+      expect(typeOnlyImports).toEqual([expect.objectContaining({ from: "./types.js", typeOnly: true })]);
+      // The graph edge carries the type-only classification too.
+      const typeOnlyEdges = index.graph.edges.filter(
+        (edge) => edge.typeOnly && fileIdentityKey(edge.from) === fileIdentityKey(main),
+      );
+      expect(typeOnlyEdges).toEqual([
+        expect.objectContaining({
+          from: expect.any(String),
+          to: { type: "file", path: types.replace(/\\/g, "/") },
+          typeOnly: true,
+        }),
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps runtime imports and mixed clauses as runtime edges", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-js-runtime-imports-"));
+    const main = path.join(root, "main.js");
+    const types = path.join(root, "types.js");
+    try {
+      await writeFile(types, "export class Widget {}\nexport type Shape = { size: number };\n", "utf8");
+      // A side-effect import and a mixed clause (`{ type X }` without the statement-level
+      // `type` keyword) are runtime dependencies, matching TypeScript's rules.
+      await writeFile(
+        main,
+        ['import "./types.js";', 'import { type Widget } from "./types.js";', "const w = new Widget();", ""].join("\n"),
+        "utf8",
+      );
+      const index = await createTestIndexFromFiles(root, [types, main]);
+      const module = index.byFile.get(fileIdentityKey(main));
+      expect((module?.imports ?? []).filter((binding) => binding.typeOnly)).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

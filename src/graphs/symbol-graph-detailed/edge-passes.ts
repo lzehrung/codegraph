@@ -228,7 +228,12 @@ function memberOwnerDef(
       (candidate) => candidate.node.startIndex <= fn.node.startIndex && candidate.node.endIndex >= fn.node.endIndex,
     )
     .sort((left, right) => left.node.endIndex - left.node.startIndex - (right.node.endIndex - right.node.startIndex));
-  return owners[0]?.def ?? null;
+  if (owners[0]?.def) return owners[0].def;
+  if (context.sup.id !== "zig") return null;
+  const container = nearestMemberContainer(fn.node);
+  if (container?.type !== "struct_declaration") return null;
+  const name = container.parent?.namedChildren.find((child) => child.type === "identifier");
+  return name ? resolveNamedType(context, sliceText(name, context.source), name) : null;
 }
 
 /** Receiver type of `func (b *T) M()` / `func (b T) M()`, unwrapped through pointers. */
@@ -263,7 +268,13 @@ function unwrapGoNamedType(node: SyntaxNodeLike): SyntaxNodeLike | null {
 /** Type-like defs only, so a PHP `use function` alias cannot steal `Example::m()`. */
 function resolveNamedType(context: EdgePassContext, name: string, node: SyntaxNodeLike): SymbolDef | null {
   const target = context.resolveIdentifier(name, node);
-  return target && declaresMembers(target) ? target : null;
+  if (target && declaresMembers(target)) return target;
+  // A parameter/annotation type name is a closer scope binding than the class it names.
+  const normalized = context.sup.normalizeIdentifier(name);
+  const typed = context.moduleEntry.locals.filter(
+    (local) => context.sup.normalizeIdentifier(local.localName) === normalized && declaresMembers(local),
+  );
+  return typed.length === 1 ? typed[0]! : null;
 }
 
 export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: DetailedFunctionNode[]): void {
@@ -480,6 +491,7 @@ const QUALIFIER_NAME_FIELD: Record<string, string> = {
   qualified_name: "name", // C#: Namespace.Base, Outer.Inner
   qualified_identifier: "name", // C++: ns::Base
   scope_resolution: "name", // Ruby: Module::Base
+  qualified_type: "name", // Go: pkg.Base
 };
 
 /** Generic wrappers contribute the base name, not their type arguments. */
@@ -603,7 +615,140 @@ function collectDirectCallsExcludingNestedScopes(node: SyntaxNodeLike, out: Synt
   }
 }
 
+type InheritanceRelation = "extends" | "implements" | "trait" | "mixin";
+
+/** `superclass-first` extends the first non-interface specifier and conforms to every later one. */
+type BaseClauseLabel = InheritanceRelation | "superclass-first";
+
+/** One clause form that names base types on a class-like declaration. */
+type BaseClauseRule = {
+  /** Node type naming the clause. */
+  type: string;
+  label: BaseClauseLabel;
+  /** Descend into this field of the clause before collecting specifiers. */
+  field?: string;
+  /** Treat every matching clause separately, so its specifier index restarts at zero. */
+  each?: boolean;
+};
+
+/**
+ * Go embeds a member type rather than naming a base clause: an interface embeds
+ * `type_elem` members, a struct embeds unnamed `field_declaration` members, and
+ * each embedded type is a conformance relation.
+ */
+type EmbedRule = {
+  /** Direct declared type node that carries the embedded members. */
+  body: string;
+  /** Child list node that holds the members, when the body is not already the list. */
+  memberList?: string;
+  /** Member node type that may carry an embedded type. */
+  member: string;
+  /** Field of the member holding the embedded type; the member itself when omitted. */
+  typeField?: string;
+  /** Only members with no name field embed. */
+  nameless?: boolean;
+};
+
+type InheritanceRuleSet = {
+  clauses: readonly BaseClauseRule[];
+  embeds?: readonly EmbedRule[];
+  /** Ruby module-inclusion calls in the class body whose arguments are mixins. */
+  mixinCalls?: readonly string[];
+};
+
+const TYPESCRIPT_INHERITANCE_RULES: InheritanceRuleSet = {
+  clauses: [
+    // The value field is the superclass expression; the sibling type_arguments
+    // field holds super-call type arguments, which are not base types.
+    { type: "extends_clause", label: "extends", field: "value" },
+    { type: "implements_clause", label: "implements" },
+  ],
+};
+
+/**
+ * Per-language class hierarchy forms. The grammar and the language runtime are
+ * the only sources of these node names: JavaScript emits `class_heritage` for
+ * `extends`, while TypeScript emits `extends_clause` and `implements_clause`.
+ */
+const INHERITANCE_RULES: Record<string, InheritanceRuleSet> = {
+  js: { clauses: [{ type: "class_heritage", label: "extends" }] },
+  ts: TYPESCRIPT_INHERITANCE_RULES,
+  tsx: TYPESCRIPT_INHERITANCE_RULES,
+  java: {
+    clauses: [
+      { type: "superclass", label: "extends" },
+      { type: "super_interfaces", label: "implements" },
+    ],
+  },
+  csharp: { clauses: [{ type: "base_list", label: "superclass-first" }] },
+  kotlin: { clauses: [{ type: "delegation_specifiers", label: "superclass-first" }] },
+  swift: { clauses: [{ type: "inheritance_specifier", label: "superclass-first", each: true }] },
+  python: { clauses: [{ type: "argument_list", label: "extends" }] },
+  php: {
+    clauses: [
+      { type: "base_clause", label: "extends" },
+      { type: "class_interface_clause", label: "implements" },
+      { type: "use_declaration", label: "trait", each: true },
+    ],
+  },
+  ruby: {
+    clauses: [{ type: "superclass", label: "extends" }],
+    mixinCalls: ["include", "extend", "prepend"],
+  },
+  cpp: { clauses: [{ type: "base_class_clause", label: "extends" }] },
+  go: {
+    clauses: [],
+    embeds: [
+      { body: "interface_type", member: "type_elem" },
+      {
+        body: "struct_type",
+        memberList: "field_declaration_list",
+        member: "field_declaration",
+        typeField: "type",
+        nameless: true,
+      },
+    ],
+  },
+};
+
+function baseClauseRelation(
+  label: BaseClauseLabel,
+  target: SymbolDef,
+  index: number,
+  interfaceIds: Set<string>,
+): InheritanceRelation {
+  if (label !== "superclass-first") return label;
+  if (interfaceIds.has(defNodeId(target)) || index > 0) return "implements";
+  return "extends";
+}
+
+/** Records `implements` for every embedded type of a Go interface or struct declaration. */
+function recordEmbedRelations(
+  context: EdgePassContext,
+  fromId: string,
+  declaration: SyntaxNodeLike,
+  embeds: readonly EmbedRule[],
+): void {
+  const declaredType = declaration.childForFieldName("type");
+  if (!declaredType) return;
+  for (const rule of embeds) {
+    if (declaredType.type !== rule.body) continue;
+    const list = rule.memberList ? findFirstNodeByType(declaredType, rule.memberList) : declaredType;
+    if (!list) continue;
+    for (const member of list.namedChildren ?? []) {
+      if (member.type !== rule.member) continue;
+      if (rule.nameless && member.childForFieldName("name")) continue;
+      const specifier = rule.typeField ? member.childForFieldName(rule.typeField) : member;
+      if (!specifier) continue;
+      recordIdentifierRelations(context, fromId, specifier, () => "implements");
+    }
+  }
+}
+
 export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: DetailedClassNode[]): void {
+  const rules = INHERITANCE_RULES[context.sup.id];
+  if (!rules) return;
+
   const interfaceIds = new Set(
     classNodes
       .filter(
@@ -619,112 +764,37 @@ export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: 
   for (const cls of classNodes) {
     const fromId = ensureNode(context, cls.def);
     markImplementationTarget(context, fromId, cls.node, cls.def);
-    if (context.sup.id === "java") {
-      const superClass = findFirstNodeByType(cls.node, "superclass");
-      const rawSuperNode = superClass?.childForFieldName("name") ?? superClass?.namedChildren?.[0] ?? null;
-      const superNode = rawSuperNode ? narrowBaseSpecifierNode(rawSuperNode) : null;
-      if (superNode) tryResolveNode(context, superNode, fromId, "extends");
 
-      const interfaces = findFirstNodeByType(cls.node, "super_interfaces");
-      if (interfaces) {
-        const interfaceIdentifiers: SyntaxNodeLike[] = [];
-        collectBaseSpecifierIdentifiers(interfaces, context.sup, interfaceIdentifiers);
-        for (const identifier of interfaceIdentifiers) {
-          const target = context.resolveIdentifier(sliceText(identifier, context.source), identifier);
-          if (target) recordDefEdge(context, fromId, target, "implements", interfaces);
-        }
+    for (const rule of rules.clauses) {
+      const clauses: SyntaxNodeLike[] = [];
+      if (rule.each) {
+        collectNodesByType(cls.node, rule.type, clauses);
+      } else {
+        const found = findFirstNodeByType(cls.node, rule.type);
+        if (found) clauses.push(found);
       }
-      continue;
-    }
-
-    if (context.sup.id === "csharp") {
-      const baseList = findFirstNodeByType(cls.node, "base_list");
-      if (baseList) {
-        recordIdentifierRelations(context, fromId, baseList, (target, index) =>
-          interfaceIds.has(defNodeId(target)) || index > 0 ? "implements" : "extends",
+      for (const clause of clauses) {
+        const specifiers = rule.field ? (clause.childForFieldName(rule.field) ?? clause) : clause;
+        recordIdentifierRelations(context, fromId, specifiers, (target, index) =>
+          baseClauseRelation(rule.label, target, index, interfaceIds),
         );
       }
-      continue;
     }
 
-    if (context.sup.id === "python") {
-      const bases = cls.node.childForFieldName("superclasses") ?? findFirstNodeByType(cls.node, "argument_list");
-      if (bases) recordIdentifierRelations(context, fromId, bases, () => "extends");
-      continue;
-    }
-
-    if (context.sup.id === "php") {
-      const base = findFirstNodeByType(cls.node, "base_clause");
-      if (base) recordIdentifierRelations(context, fromId, base, () => "extends");
-
-      const interfaces = findFirstNodeByType(cls.node, "class_interface_clause");
-      if (interfaces) recordIdentifierRelations(context, fromId, interfaces, () => "implements");
-
-      const traitUses: SyntaxNodeLike[] = [];
-      collectNodesByType(cls.node, "use_declaration", traitUses);
-      for (const traitUse of traitUses) recordIdentifierRelations(context, fromId, traitUse, () => "trait");
-      continue;
-    }
-
-    if (context.sup.id === "ruby") {
-      const superclass = findFirstNodeByType(cls.node, "superclass");
-      if (superclass) recordIdentifierRelations(context, fromId, superclass, () => "extends");
-
+    if (rules.mixinCalls) {
       const calls: SyntaxNodeLike[] = [];
       collectDirectCallsExcludingNestedScopes(cls.node, calls);
       for (const call of calls) {
         if (call.childForFieldName("receiver")) continue;
         const methodNode = call.childForFieldName("method");
         const methodName = methodNode ? sliceText(methodNode, context.source) : undefined;
-        if (methodName !== "include" && methodName !== "extend" && methodName !== "prepend") continue;
+        if (!methodName || !rules.mixinCalls.includes(methodName)) continue;
         const args = call.childForFieldName("arguments");
         if (args) recordIdentifierRelations(context, fromId, args, () => "mixin");
       }
-      continue;
     }
 
-    if (context.sup.id === "cpp") {
-      const bases = findFirstNodeByType(cls.node, "base_class_clause");
-      if (bases) recordIdentifierRelations(context, fromId, bases, () => "extends");
-      continue;
-    }
-
-    if (context.sup.id === "kotlin") {
-      const bases = findFirstNodeByType(cls.node, "delegation_specifiers");
-      if (bases) {
-        recordIdentifierRelations(context, fromId, bases, (target, index) =>
-          interfaceIds.has(defNodeId(target)) || index > 0 ? "implements" : "extends",
-        );
-      }
-      continue;
-    }
-
-    if (context.sup.id === "swift") {
-      const bases: SyntaxNodeLike[] = [];
-      collectNodesByType(cls.node, "inheritance_specifier", bases);
-      for (const [index, base] of bases.entries()) {
-        recordIdentifierRelations(context, fromId, base, (target) =>
-          interfaceIds.has(defNodeId(target)) || index > 0 ? "implements" : "extends",
-        );
-      }
-      continue;
-    }
-
-    const superClause = findFirstNodeByType(cls.node, "extends_clause");
-    const rawSuperNode = superClause?.namedChildren?.[0] ?? superClause?.child(1);
-    const superNode = rawSuperNode ? narrowBaseSpecifierNode(rawSuperNode) : null;
-    if (superNode) tryResolveNode(context, superNode, fromId, "extends");
-
-    const implementsClauses: SyntaxNodeLike[] = [];
-    collectNodesByType(cls.node, "implements_clause", implementsClauses);
-    for (const clause of implementsClauses) {
-      const interfaceIdentifiers: SyntaxNodeLike[] = [];
-      collectBaseSpecifierIdentifiers(clause, context.sup, interfaceIdentifiers);
-      for (const identifier of interfaceIdentifiers) {
-        const target = context.resolveIdentifier(sliceText(identifier, context.source), identifier);
-        if (target) recordDefEdge(context, fromId, target, "implements", clause);
-      }
-    }
+    if (rules.embeds) recordEmbedRelations(context, fromId, cls.node, rules.embeds);
   }
 }
 

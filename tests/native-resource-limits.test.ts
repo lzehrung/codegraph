@@ -100,7 +100,7 @@ describe("native extraction resource limits", () => {
     expect(result.nativeResults).toBeNull();
     expect(result.compactResults).toBeNull();
     expect(result.syntaxTree).toBeNull();
-    expect(result.fallbackReason).toBe("queryFailure");
+    expect(result.fallbackReason).toBe("sourceTooLarge");
     expect(result.error).toMatch(/source exceeds native byte limit/i);
     expect(result.error).toContain(String(DEFAULT_NATIVE_SOURCE_MAX_BYTES));
     expect(extractLanguage).not.toHaveBeenCalled();
@@ -194,7 +194,7 @@ describe("native extraction resource limits", () => {
       limits: { maxSourceBytes: 32 },
     });
 
-    expect(result.fallbackReason).toBe("queryFailure");
+    expect(result.fallbackReason).toBe("sourceTooLarge");
     expect(result.error).toMatch(/source exceeds native byte limit \(64 > 32\)/);
     expect(readFile).not.toHaveBeenCalled();
     expect(extractLanguage).not.toHaveBeenCalled();

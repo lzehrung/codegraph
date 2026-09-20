@@ -5,7 +5,7 @@ import path from "node:path";
 import { createMatchPath } from "tsconfig-paths";
 import { logWithLevel, type LogLevel } from "../../logging.js";
 import { parseJsonc } from "../comments.js";
-import { fileIdentityKey, isFilePathWithinRoot } from "../paths.js";
+import { fileIdentityKey, isFilePathWithinRoot, stripBom } from "../paths.js";
 import { fileExists } from "../workspace.js";
 
 export type MatchPathFn = ReturnType<typeof createMatchPath>;
@@ -112,7 +112,7 @@ async function loadTsconfigConfig(
   }
   seen.add(cfgKey);
 
-  const raw = await fsp.readFile(cfgPath, "utf8");
+  const raw = stripBom(await fsp.readFile(cfgPath, "utf8"));
   const json = parseJsonc<TsconfigJson>(raw);
   const cfgDir = path.dirname(cfgPath);
   const compilerOptions = json.compilerOptions;

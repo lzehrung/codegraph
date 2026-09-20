@@ -1,9 +1,16 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
+import { classifyByParentType, hasParentType, nodeTypeIn } from "./shared.js";
 import {
+  ECMASCRIPT_BLOCK_SCOPE_TYPES,
   ECMASCRIPT_CONTROL_SPLIT_POINTS,
   ECMASCRIPT_CORE_FUNCTION_BLOCKS,
+  ECMASCRIPT_DECLARATION_NAME_PARENTS,
+  ECMASCRIPT_FUNCTION_SCOPE_TYPES,
   ECMASCRIPT_MODULE_VAR_BLOCKS,
+  isEcmaScriptFieldDefinitionName,
+  isEcmaScriptTypeOnlyStatement,
+  isEcmaScriptVariableDeclaratorName,
 } from "./js-family.js";
 
 const JS_OBJECT_METHOD_EXPORT_PATTERN = `
@@ -33,10 +40,10 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
   },
   graph: {
     imports: `
-      (import_statement (string) @mod) @stmt
-      (export_statement (string) @mod) @stmt
-      (call_expression function: (import) arguments: (arguments (string) @mod)) @stmt
-      ((call_expression function: (identifier) @fn arguments: (arguments (string) @mod)) @stmt
+      (import_statement (string) @from) @stmt
+      (export_statement (string) @from) @stmt
+      (call_expression function: (import) arguments: (arguments (string) @from)) @stmt
+      ((call_expression function: (identifier) @fn arguments: (arguments (string) @from)) @stmt
         (#eq? @fn "require"))
     `,
     exports: `
@@ -52,8 +59,10 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
       (export_statement (export_clause (export_specifier name: (identifier) @src !alias)) (string) @from)
       (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)))
       (export_statement (export_clause (export_specifier name: (identifier) @src !alias)))
+      (export_statement "*" @wild (string) @from)
       (export_statement (string) @from)
       ;; CJS whole-module export: module.exports = function () {} / = () => {}
+      ;; @mod is the identifier module in module.exports, not a specifier; keep it out of GraphImportCapture.
       ((expression_statement (assignment_expression
         left: (member_expression object: (identifier) @mod property: (property_identifier) @cjs_export_name)
         right: [ (function) (arrow_function) ] @cjs_fn))
@@ -138,60 +147,31 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
     shorthandPropertyIdentifier: ["shorthand_property_identifier", "shorthand_property_identifier_pattern"],
     memberExpression: "member_expression",
   },
-  classifyDefinition: (n) => {
-    const t = n.parent?.type;
-    if (t === "function_declaration") return "function";
-    if (t === "generator_function_declaration") return "function";
-    if (t === "method_definition") return "function";
-    if (t === "function" || t === "function_expression") return "function";
-    if (t === "class_declaration") return "class";
-    return "variable";
-  },
-  isDeclarationName: (node) => {
-    const parent = node.parent;
-    const p = parent?.type;
-    if (parent?.type === "variable_declarator") {
-      return parent.childForFieldName("name")?.id === node.id;
-    }
-    if (parent?.type === "field_definition") {
-      const name = parent.childForFieldName("name") ?? parent.childForFieldName("property");
-      return name?.id === node.id;
-    }
-    return (
-      !!p &&
-      [
-        "function_declaration",
-        "generator_function_declaration",
-        "class_declaration",
-        "import_specifier",
-        "namespace_import",
-        "import_clause",
-        // Method names in classes: needed so that editing a method name is
-        // classified as a definition change, not an unrecognised node.
-        "method_definition",
-        // A named function expression binds its own name; `$scope.x = function x() {}` and
-        // `const f = function inner() {}` are the common shapes.
-        "function",
-        "function_expression",
-      ].includes(p)
-    );
-  },
+  classifyDefinition: classifyByParentType({
+    function_declaration: "function",
+    generator_function_declaration: "function",
+    method_definition: "function",
+    function: "function",
+    function_expression: "function",
+    class_declaration: "class",
+  }),
+  isDeclarationName: (node) =>
+    isEcmaScriptVariableDeclaratorName(node) ||
+    isEcmaScriptFieldDefinitionName(node, "field_definition") ||
+    // `function` is the JS grammar's function-expression node; the TS grammar spells it
+    // `function_expression` instead.
+    hasParentType(node, [...ECMASCRIPT_DECLARATION_NAME_PARENTS, "function"]),
   // Scope construction has no structural handling for a function expression's own name.
   scopeDeclarationNames: (node) => {
     const parent = node.parent?.type;
     return parent === "function" || parent === "function_expression";
   },
-  createsBlockScope: (n) =>
-    n.type === "program" || n.type === "block" || n.type === "class_body" || n.type === "class_static_block",
-  createsFunctionScope: (n) =>
-    n.type === "function_declaration" ||
-    n.type === "generator_function_declaration" ||
-    n.type === "function" ||
-    n.type === "function_expression" ||
-    n.type === "arrow_function" ||
-    n.type === "method_definition",
-  membersAreImplicitlyInScope: false,
+  createsBlockScope: nodeTypeIn([...ECMASCRIPT_BLOCK_SCOPE_TYPES]),
+  createsFunctionScope: nodeTypeIn([...ECMASCRIPT_FUNCTION_SCOPE_TYPES, "function"]),
   supportsCrossModuleSymbols: true,
+  // JSDoc-typed `.js` files use `import type` / `export type`; the JS grammar has no type-only
+  // syntax, so classification matches the statement text like TypeScript's.
+  isTypeOnly: isEcmaScriptTypeOnlyStatement,
   native: {
     normalizeQuery: (_kind, query) =>
       query

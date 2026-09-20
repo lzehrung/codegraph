@@ -1,10 +1,15 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { normalizePath } from "../paths.js";
+import { normalizePath, stripBom } from "../paths.js";
 import { listProjectFiles } from "../project-files.js";
 import { fileExists } from "../workspace.js";
 import { findFirstExistingResolutionCandidate } from "./find-first-existing.js";
 import { findNearestFile } from "./files.js";
+import {
+  fileHasImportableLanguageExtension,
+  getImportableLanguageExtensions,
+  getImportableLanguageGlobs,
+} from "../resolution-candidates.js";
 
 export type PhpComposerConfig = {
   psr4: Map<string, string[]>;
@@ -81,7 +86,7 @@ export async function loadPhpComposerConfig(composerPath: string): Promise<PhpCo
   const pending = (async () => {
     try {
       const raw = await fsp.readFile(composerPath, "utf8");
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const parsed = JSON.parse(stripBom(raw)) as Record<string, unknown>;
       const composerDir = path.dirname(composerPath);
       const autoload =
         parsed.autoload && typeof parsed.autoload === "object" ? (parsed.autoload as Record<string, unknown>) : {};
@@ -135,7 +140,7 @@ export async function resolvePhpPsr4MappedPath(spec: string, mappings: Map<strin
     const suffix = normalizedSpec.slice(prefix.length).replace(/\\/g, "/");
     for (const dir of dirs) {
       const basePath = suffix ? path.join(dir, suffix) : dir;
-      const resolved = await findFirstExistingResolutionCandidate(basePath, [".php"]);
+      const resolved = await findFirstExistingResolutionCandidate(basePath, getImportableLanguageExtensions("php"));
       if (resolved) return resolved;
     }
   }
@@ -162,7 +167,7 @@ export async function resolvePhpPsr0MappedPath(spec: string, mappings: Map<strin
     if (relativePath === null) continue;
     for (const dir of dirs) {
       const basePath = relativePath ? path.join(dir, relativePath) : dir;
-      const resolved = await findFirstExistingResolutionCandidate(basePath, [".php"]);
+      const resolved = await findFirstExistingResolutionCandidate(basePath, getImportableLanguageExtensions("php"));
       if (resolved) return resolved;
     }
   }
@@ -253,7 +258,7 @@ export async function getPhpComposerAutoloadFiles(
       try {
         const stat = await fsp.stat(root.path);
         if (stat.isDirectory()) {
-          const files = await listProjectFiles(root.path, ["**/*.php"]);
+          const files = await listProjectFiles(root.path, getImportableLanguageGlobs("php"));
           for (const filePath of files) {
             if (!(await phpFileMatchesNamespacePrefixes(filePath, root.namespacePrefixes))) {
               continue;
@@ -265,7 +270,7 @@ export async function getPhpComposerAutoloadFiles(
           }
           continue;
         }
-        if (stat.isFile() && root.path.toLowerCase().endsWith(".php")) {
+        if (stat.isFile() && fileHasImportableLanguageExtension(root.path, "php")) {
           if (!(await phpFileMatchesNamespacePrefixes(root.path, root.namespacePrefixes))) continue;
           if (root.applyClassmapExcludes && isPhpComposerClassmapExcluded(root.path, composerConfig)) continue;
           candidates.add(path.resolve(root.path));
@@ -296,7 +301,7 @@ async function phpFileMatchesNamespacePrefixes(
   }
   let source: string;
   try {
-    source = await fsp.readFile(filePath, "utf8");
+    source = stripBom(await fsp.readFile(filePath, "utf8"));
   } catch {
     return false;
   }

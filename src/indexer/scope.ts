@@ -3,7 +3,7 @@ import { getNativeSyntaxTreeExecution, type NativeRuntimeMode } from "../native/
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import { declarationKindToBindingKind } from "./declarations.js";
 import type { LanguageSupport } from "../languages.js";
-import { isJsTsLanguage } from "../languages/js-family.js";
+import { scopeNodesFor } from "./scope-nodes.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { ImportBinding } from "./types.js";
 import type { Binding, BindingKind, Scope, ScopeIndex } from "./scope-types.js";
@@ -74,20 +74,14 @@ export function buildScopeIndexFromSource(
     }
   }
 
+  const row = scopeNodesFor(support.id);
   const idSet = new Set([...support.nodeTypes.identifier, ...(support.nodeTypes.shorthandPropertyIdentifier ?? [])]);
   const scopeDeclarationNames = support.scopeDeclarationNames;
-  const paramParentTypes = new Set(["parameter_declaration", "parameter", "class_parameter", "lambda_parameters"]);
-  const isJavaScriptOrTypeScript = isJsTsLanguage(support.id);
-  const isJsTsFunctionDeclaration = (node: SyntaxNodeLike): boolean =>
-    isJavaScriptOrTypeScript &&
-    (node.type === "function_declaration" || node.type === "generator_function_declaration");
-  const isJsTsVarDeclaration = (node: SyntaxNodeLike): boolean =>
-    isJavaScriptOrTypeScript && node.type === "variable_declaration";
 
   const isParamNode = (node: SyntaxNodeLike): boolean => {
     let current: SyntaxNodeLike | null = node.parent;
     while (current) {
-      if (paramParentTypes.has(current.type)) return true;
+      if (row.parameterParents?.has(current.type)) return true;
       current = current.parent;
     }
     return false;
@@ -111,11 +105,11 @@ export function buildScopeIndexFromSource(
 
   // Field-like declarations reached through the generic `scopeDeclarationNames`
   // hook (below) must land in the type's *enclosing* scope, not inside the
-  // dedicated "type" scope a `type_spec` pushes for isolating its own type
-  // parameter (see the `type_spec` branch below): Go struct fields are
-  // accessed through a receiver from anywhere in the file, unlike a type
-  // parameter, which is scoped to its own declaration.
-  const addDeclSkippingTypeSpecScope = (nameNode: SyntaxNodeLike, kind: BindingKind): void => {
+  // dedicated "type" scope a `typeScopeTypes` node pushes for isolating its own
+  // type parameter: Go struct fields are accessed through a receiver from
+  // anywhere in the file, unlike a type parameter, which is scoped to its own
+  // declaration.
+  const addDeclSkippingTypeScope = (nameNode: SyntaxNodeLike, kind: BindingKind): void => {
     const target = [...stack].reverse().find((scope) => scope.kind !== "type") ?? rootScope;
     addBinding(target, nameNode, kind);
   };
@@ -140,7 +134,7 @@ export function buildScopeIndexFromSource(
     }
     // Parameter nodes put names and types as siblings. Walking the whole subtree
     // would register type-position identifiers (`int`, `T`, package qualifiers).
-    if (pattern.type === "parameter_declaration" || pattern.type === "variadic_parameter_declaration") {
+    if (row.destructuringTypeFieldTypes?.has(pattern.type)) {
       const typeNode = pattern.childForFieldName("type");
       for (const child of pattern.namedChildren) {
         if (typeNode && child.id === typeNode.id) continue;
@@ -148,7 +142,7 @@ export function buildScopeIndexFromSource(
       }
       return;
     }
-    if (pattern.type === "pair_pattern") {
+    if (row.destructuringPairPatternTypes?.has(pattern.type)) {
       const value = pattern.childForFieldName("value");
       if (value) {
         addPatternDecls(value, kind, addBindingToScope);
@@ -161,11 +155,12 @@ export function buildScopeIndexFromSource(
   };
 
   const isStaticRequireCall = (node: SyntaxNodeLike | null): boolean => {
-    if (!node || node.type !== "call_expression") return false;
+    const requireCall = row.requireCall;
+    if (!node || !requireCall?.callTypes.has(node.type)) return false;
     const callee = node.childForFieldName("function") ?? node.childForFieldName("callee") ?? node.child(0);
-    if (!callee || sliceText(callee, source) !== "require") return false;
+    if (!callee || !requireCall.calleeNames.has(sliceText(callee, source))) return false;
     const args = node.childForFieldName("arguments");
-    return !!args && /^\(\s*["'][^"']+["']\s*\)$/.test(sliceText(args, source));
+    return !!args && requireCall.argumentsPattern.test(sliceText(args, source));
   };
 
   const hasImportBinding = (nameNode: SyntaxNodeLike): boolean => {
@@ -176,11 +171,14 @@ export function buildScopeIndexFromSource(
     );
   };
 
-  const isScopedCppEnumeratorName = (node: SyntaxNodeLike): boolean => {
-    if (support.id !== "cpp" || node.parent?.type !== "enumerator") return false;
+  const isScopedEnumeratorName = (node: SyntaxNodeLike): boolean => {
+    const scopedEnum = row.scopedEnum;
+    if (!scopedEnum || !node.parent || !row.enumMemberTypes?.has(node.parent.type)) return false;
     let current = node.parent.parent;
     while (current) {
-      if (current.type === "enum_specifier") return /^\s*enum\s+(?:class|struct)\b/.test(sliceText(current, source));
+      if (scopedEnum.enumDeclarationTypes.has(current.type)) {
+        return scopedEnum.scopedKeywordPattern.test(sliceText(current, source));
+      }
       current = current.parent;
     }
     return false;
@@ -194,16 +192,16 @@ export function buildScopeIndexFromSource(
       if (!hasImportBinding(pattern)) addPatternDecls(pattern, "local", addBindingToScope);
       return;
     }
-    if (pattern.type !== "object_pattern") {
+    if (!row.destructuringObjectPatternTypes?.has(pattern.type)) {
       addPatternDecls(pattern, "local", addBindingToScope);
       return;
     }
     for (const child of pattern.namedChildren) {
-      if (child.type === "shorthand_property_identifier" || child.type === "shorthand_property_identifier_pattern") {
+      if (row.destructuringShorthandTypes?.has(child.type)) {
         if (!hasImportBinding(child)) addPatternDecls(child, "local", addBindingToScope);
         continue;
       }
-      if (child.type === "pair_pattern") {
+      if (row.destructuringPairPatternTypes?.has(child.type)) {
         const value = child.childForFieldName("value");
         if (value && idSet.has(value.type) && hasImportBinding(value)) {
           continue;
@@ -221,32 +219,33 @@ export function buildScopeIndexFromSource(
     node: SyntaxNodeLike,
     addBindingToScope: (nameNode: SyntaxNodeLike, kind: BindingKind) => void = addDecl,
   ): void => {
-    if (node.type === "short_var_declaration") {
+    if (row.shortVariableDeclarationTypes?.has(node.type)) {
       const left = node.childForFieldName("left");
       if (left) addPatternDecls(left, "local", addBindingToScope);
       return;
     }
-    if (support.id === "zig" && node.type === "variable_declaration") {
+    const nameless = row.namelessVariableDeclaration;
+    if (nameless?.declarationTypes.has(node.type)) {
       // Zig's grammar has no name field. The first identifier is the declaration;
       // later identifiers belong to the initializer. Keep an @import declaration's
       // existing namespace binding because it carries the resolved target.
-      const name = node.namedChildren.find((child) => child.type === "identifier");
+      const name = node.namedChildren.find((child) => idSet.has(child.type));
       const isImportDeclaration =
-        name !== undefined && hasImportBinding(name) && /@(?:import|cImport)\s*\(/.test(sliceText(node, source));
+        name !== undefined && hasImportBinding(name) && nameless.importCallPattern.test(sliceText(node, source));
       if (name && !isImportDeclaration) addBindingToScope(name, "local");
       return;
     }
     for (const child of node.namedChildren) {
-      if (child.type === "variable_declarator" || child.type === "var_spec" || child.type === "const_spec") {
+      if (row.variableDeclaratorTypes?.has(child.type)) {
         const name = child.childForFieldName("name");
         const value = child.childForFieldName("value");
         if (name) {
           if (isStaticRequireCall(value)) addUnsupportedRequirePatternDecls(name, addBindingToScope);
           else addPatternDecls(name, "local", addBindingToScope);
         }
-      } else if ((child.type === "identifier" || child.type === "field_identifier") && node.type === "assignment") {
+      } else if (row.assignmentIdentifierTypes?.has(child.type) && row.assignmentDeclarationTypes?.has(node.type)) {
         addBindingToScope(child, "local");
-      } else if (node.type === "let_declaration" || node.type === "const_item" || node.type === "static_item") {
+      } else if (row.patternBindingTypes?.has(node.type)) {
         const pattern = node.childForFieldName("pattern") || node.childForFieldName("name");
         if (pattern) addPatternDecls(pattern, "local", addBindingToScope);
       }
@@ -254,17 +253,17 @@ export function buildScopeIndexFromSource(
   };
 
   const collectHoistedDeclarations = (scopeNode: SyntaxNodeLike): void => {
-    if (!isJavaScriptOrTypeScript) return;
+    if (!row.hoistedFunctionTypes && !row.hoistedVariableDeclarationTypes) return;
 
     const visit = (node: SyntaxNodeLike): void => {
       if (support.createsFunctionScope(node)) {
-        if (isJsTsFunctionDeclaration(node)) {
+        if (row.hoistedFunctionTypes?.has(node.type)) {
           const name = node.childForFieldName("name");
           if (name) addHoistedDecl(name, "function");
         }
         return;
       }
-      if (isJsTsVarDeclaration(node)) {
+      if (row.hoistedVariableDeclarationTypes?.has(node.type)) {
         addVariableDeclarations(node, addHoistedDecl);
       }
       for (const child of node.namedChildren) {
@@ -278,23 +277,12 @@ export function buildScopeIndexFromSource(
   };
 
   const isMemberFunction = (node: SyntaxNodeLike): boolean => {
-    if (
-      node.type === "method_definition" ||
-      node.type === "method_declaration" ||
-      node.type === "method" ||
-      node.type === "singleton_method"
-    ) {
+    if (row.memberFunctionTypes?.has(node.type)) {
       return true;
     }
     let current = node.parent;
     while (current) {
-      if (
-        current.type === "class_body" ||
-        current.type === "class_declaration" ||
-        current.type === "class_definition" ||
-        current.type === "class" ||
-        current.type === "impl_item"
-      ) {
+      if (row.memberContainerTypes?.has(current.type)) {
         return true;
       }
       current = current.parent;
@@ -303,74 +291,40 @@ export function buildScopeIndexFromSource(
   };
 
   const walk = (node: SyntaxNodeLike) => {
-    if (
-      node.type === "function_declaration" ||
-      node.type === "generator_function_declaration" ||
-      node.type === "function_definition" ||
-      node.type === "method_definition" ||
-      node.type === "method_declaration" ||
-      node.type === "method" ||
-      node.type === "singleton_method" ||
-      node.type === "function_item" ||
-      node.type === "func_literal" ||
-      // C# local functions are callable from sibling statements in the enclosing
-      // method, unlike a JS named function expression's self-only visibility, so
-      // their name must land in the *current* (enclosing) scope before the push
-      // below creates the local function's own body scope.
-      node.type === "local_function_statement"
-    ) {
+    // A name-registering node puts its name in the *current* (enclosing) scope before the push
+    // below creates the node's own scope. C# local functions need that: they are callable from
+    // sibling statements in the enclosing method, unlike a JS named function expression's
+    // self-only visibility, which the language's `scopeDeclarationNames` hook handles instead.
+    if (row.functionNameTypes?.has(node.type)) {
       const name = node.childForFieldName("name");
       if (name && (support.membersAreImplicitlyInScope || !isMemberFunction(node))) {
-        if (isJsTsFunctionDeclaration(node)) addHoistedDecl(name, "function");
+        if (row.hoistedFunctionTypes?.has(node.type)) addHoistedDecl(name, "function");
         else addDecl(name, "function");
       }
     }
-    if (
-      node.type === "class_declaration" ||
-      node.type === "abstract_class_declaration" ||
-      node.type === "class_definition" ||
-      node.type === "class" ||
-      node.type === "module" ||
-      node.type === "struct_item" ||
-      node.type === "mod_item"
-    ) {
+    if (row.classNameTypes?.has(node.type)) {
       const name = node.childForFieldName("name");
       if (name) addDecl(name, "class");
     }
-    if (
-      node.type === "interface_declaration" ||
-      node.type === "type_alias_declaration" ||
-      node.type === "type_spec" ||
-      node.type === "trait_item" ||
-      node.type === "enum_declaration" ||
-      node.type === "enum_item" ||
-      node.type === "enum_specifier"
-    ) {
+    if (row.typeNameTypes?.has(node.type)) {
       const name = node.childForFieldName("name");
       if (name) addDecl(name, "type");
     }
-    if (
-      node.type === "enum_case" ||
-      node.type === "enum_constant" ||
-      node.type === "enum_entry" ||
-      node.type === "enum_member_declaration" ||
-      node.type === "enum_variant" ||
-      node.type === "enumerator"
-    ) {
+    if (row.enumMemberTypes?.has(node.type)) {
       const name = node.childForFieldName("name");
       if (name) {
-        if (
-          node.type === "enumerator" &&
-          (support.id === "c" || (support.id === "cpp" && !isScopedCppEnumeratorName(name)))
-        )
-          addDecl(name, "local");
+        if (row.enumMemberLocalTypes?.has(node.type) && !isScopedEnumeratorName(name)) addDecl(name, "local");
         else extraBindings.push(buildBinding(name, "local"));
       }
     }
-    if (node.type === "enum_assignment") {
+    if (row.enumAssignmentTypes?.has(node.type)) {
       const name = node.childForFieldName("name");
       if (name) addDecl(name, "local");
-    } else if (node.type === "property_identifier" && node.parent?.type === "enum_body") {
+    } else if (
+      row.enumBodyMemberTypes?.has(node.type) &&
+      node.parent &&
+      row.enumBodyParentTypes?.has(node.parent.type)
+    ) {
       addDecl(node, "local");
     }
 
@@ -390,7 +344,7 @@ export function buildScopeIndexFromSource(
       if (params) addPatternDecls(params, "param");
       collectHoistedDeclarations(node);
     } else if (support.createsBlockScope(node)) {
-      if (node.type !== "program" && node.type !== "module") {
+      if (!row.moduleRootTypes?.has(node.type)) {
         const scope: Scope = {
           kind: "block",
           map: new Map(),
@@ -401,11 +355,11 @@ export function buildScopeIndexFromSource(
         allScopes.push(scope);
         pushed = true;
       }
-    } else if (node.type === "type_spec") {
+    } else if (row.typeScopeTypes?.has(node.type)) {
       // Go generic type declarations idiomatically reuse `T` as the type-parameter
       // name across sibling `type` declarations in the same file. Give each
       // `type_spec` its own scope so its type parameter doesn't collide with a
-      // sibling's; `addDeclSkippingTypeSpecScope` below keeps field names out of
+      // sibling's; `addDeclSkippingTypeScope` below keeps field names out of
       // it so they stay visible file-wide, as before.
       const scope: Scope = {
         kind: "type",
@@ -418,38 +372,23 @@ export function buildScopeIndexFromSource(
       pushed = true;
     }
 
-    if (
-      node.type === "variable_declaration" ||
-      node.type === "lexical_declaration" ||
-      node.type === "assignment" ||
-      node.type === "field_declaration" ||
-      node.type === "local_variable_declaration" ||
-      node.type === "var_declaration" ||
-      node.type === "const_declaration" ||
-      node.type === "short_var_declaration" ||
-      node.type === "let_declaration" ||
-      node.type === "const_item" ||
-      node.type === "static_item"
-    ) {
-      addVariableDeclarations(node, isJsTsVarDeclaration(node) ? addHoistedDecl : addDecl);
+    if (row.variableDeclarationTypes?.has(node.type)) {
+      addVariableDeclarations(node, row.hoistedVariableDeclarationTypes?.has(node.type) ? addHoistedDecl : addDecl);
     }
 
-    if (node.type === "declaration_pattern") {
-      // C# is-pattern bound variable: `if (o is string text)`. This node type
-      // is unique to C#'s pattern-matching grammar, so it's safe to register
-      // unconditionally here rather than gating on customDeclLanguages (which
-      // would also newly activate isDeclarationName-driven registration for
-      // every other C# declaration form, an unrelated and untested change).
+    if (row.declarationPatternTypes?.has(node.type)) {
+      // C# is-pattern bound variable: `if (o is string text)`. The walker registers the bound name
+      // without consulting `scopeDeclarationNames`, which would also newly activate
+      // isDeclarationName-driven registration for every other C# declaration form.
       const name = node.childForFieldName("name");
       if (name) addDecl(name, "local");
     }
 
-    if (node.type === "type_parameter_declaration") {
-      // Go generic type parameter, e.g. the `T` in `Box[T any]`/`func F[T any]`.
-      // This node type is unique to Go's grammar, so it's safe to register
-      // unconditionally here. Targets the current scope directly (the `type_spec`
-      // scope pushed above, or the enclosing function's own scope for a generic
-      // function) rather than skipping past it like field declarations do.
+    if (row.typeParameterTypes?.has(node.type)) {
+      // Go and C++ generic type parameter, e.g. the `T` in `Box[T any]` / `func F[T any]`. Targets
+      // the current scope directly (the `type_spec` scope pushed above, or the enclosing
+      // function's own scope for a generic function) rather than skipping past it like field
+      // declarations do.
       const name = node.childForFieldName("name");
       if (name) addDecl(name, "type");
     }
@@ -458,10 +397,10 @@ export function buildScopeIndexFromSource(
       scopeDeclarationNames(node) &&
       idSet.has(node.type) &&
       support.isDeclarationName(node) &&
-      !isScopedCppEnumeratorName(node)
+      !isScopedEnumeratorName(node)
     ) {
       const kind = isParamNode(node) ? "param" : declarationKindToBindingKind(support.classifyDefinition(node));
-      addDeclSkippingTypeSpecScope(node, kind);
+      addDeclSkippingTypeScope(node, kind);
     }
 
     if (idSet.has(node.type) && !support.isDeclarationName(node)) {
@@ -475,26 +414,10 @@ export function buildScopeIndexFromSource(
       if (pushed) {
         const params = node.childForFieldName("parameters");
         const skipsFunctionParameters = support.createsFunctionScope(node) && params?.id === child.id;
-        if (
-          skipsFunctionParameters ||
-          ((node.type === "function_declaration" ||
-            node.type === "generator_function_declaration" ||
-            node.type === "function_definition" ||
-            node.type === "method_definition" ||
-            node.type === "method_declaration" ||
-            node.type === "method" ||
-            node.type === "singleton_method" ||
-            node.type === "function_item" ||
-            node.type === "func_literal" ||
-            node.type === "class_declaration" ||
-            node.type === "abstract_class_declaration" ||
-            node.type === "class_definition" ||
-            node.type === "class" ||
-            node.type === "module" ||
-            node.type === "struct_item" ||
-            node.type === "mod_item") &&
-            (child.type === "identifier" || child.type === "type_identifier" || child.type === "parameters"))
-        ) {
+        const skipsNameOrParameters =
+          (row.functionNameTypes?.has(node.type) || row.classNameTypes?.has(node.type)) &&
+          row.childSkipNameTypes?.has(child.type);
+        if (skipsFunctionParameters || skipsNameOrParameters) {
           continue;
         }
       }

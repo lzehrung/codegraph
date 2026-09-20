@@ -68,7 +68,7 @@ function markCandidateParserDegraded(index: indexer.ProjectIndex, file: string):
     supportedLanguageIds: [],
     filesUsed: 0,
     filesFellBack: 0,
-    fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 0 },
+    fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 0, sourceTooLarge: 0 },
     byLanguage: {},
     errors: [],
   };
@@ -4161,6 +4161,30 @@ describe("Find References: Python receiver member resolution", () => {
     const { root, file, index } = await buildReceiverFixture();
     try {
       await testFindReferences(index, file, 56, columnOf(56, "shared"), 0, "not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: PHP unproven receiver is not a bare-name hit", () => {
+  it("does not treat $unknown->helper() as a reference to an imported helper", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-misattr-refs-"));
+    try {
+      const libFile = path.join(root, "lib.php").replace(/\\/g, "/");
+      const hostFile = path.join(root, "host.php").replace(/\\/g, "/");
+      await fsp.writeFile(libFile, ["<?php", "namespace Imported;", "function helper() {}", ""].join("\n"), "utf8");
+      const host = [
+        "<?php",
+        "use function Imported\\helper;",
+        "class Box { function helper() {} }",
+        "function run() { $unknown->helper(); }",
+        "",
+      ].join("\n");
+      await fsp.writeFile(hostFile, host, "utf8");
+      const index = await createTestIndexFromFiles(root, [libFile, hostFile]);
+      const helperColumn = host.split("\n")[3]!.indexOf("helper();") + 1;
+      await testFindReferences(index, hostFile, 4, helperColumn, 0, "not_found");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

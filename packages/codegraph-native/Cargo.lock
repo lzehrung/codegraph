@@ -34,42 +34,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arborium-html"
-version = "2.18.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ed785a76d53a63ff144b26a68b789fe4d10169a5f683d573ee72f3234d8a9a4"
-dependencies = [
- "arborium-css",
- "arborium-javascript",
- "arborium-sysroot",
- "cc",
- "tree-sitter-language",
-]
-
-[[package]]
-name = "arborium-javascript"
-version = "2.18.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47b63db8c449ac227061f2bb4ed62673d85c3f567be8f01483b34f266298d061"
-dependencies = [
- "arborium-jsdoc",
- "arborium-sysroot",
- "cc",
- "tree-sitter-language",
-]
-
-[[package]]
-name = "arborium-jsdoc"
-version = "2.18.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73945c45bdbbed8c137556d3a833999463e707078ca877597756dc394689e8b5"
-dependencies = [
- "arborium-sysroot",
- "cc",
- "tree-sitter-language",
-]
-
-[[package]]
 name = "arborium-scss"
 version = "2.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -89,34 +53,6 @@ checksum = "ddd9d120dd5df8b918cd96676a88f1233a66f10687d415b69f70b3396acddddf"
 dependencies = [
  "cc",
  "dlmalloc",
-]
-
-[[package]]
-name = "arborium-typescript"
-version = "2.18.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0024689641490077765b291be46197f48d23e75cbade86768b1abed64d406ed1"
-dependencies = [
- "arborium-javascript",
- "arborium-sysroot",
- "cc",
- "tree-sitter-language",
-]
-
-[[package]]
-name = "arborium-vue"
-version = "2.18.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91feaa2706ff071f7e9c516d09436e68a25ef8871772b009098c6182a2ea7afb"
-dependencies = [
- "arborium-css",
- "arborium-html",
- "arborium-javascript",
- "arborium-scss",
- "arborium-sysroot",
- "arborium-typescript",
- "cc",
- "tree-sitter-language",
 ]
 
 [[package]]
@@ -147,7 +83,6 @@ version = "0.1.0"
 dependencies = [
  "arborium-c-sharp",
  "arborium-scss",
- "arborium-vue",
  "napi",
  "napi-build",
  "napi-derive",
@@ -166,7 +101,6 @@ dependencies = [
  "tree-sitter-ruby",
  "tree-sitter-rust",
  "tree-sitter-sequel",
- "tree-sitter-svelte-next",
  "tree-sitter-swift",
  "tree-sitter-typescript",
  "tree-sitter-zig",
@@ -699,16 +633,6 @@ name = "tree-sitter-sequel"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d198ad3c319c02e43c21efa1ec796b837afcb96ffaef1a40c1978fbdcec7d17"
-dependencies = [
- "cc",
- "tree-sitter-language",
-]
-
-[[package]]
-name = "tree-sitter-svelte-next"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56f88190d0743e897c3e148a7e241aba0a8844b8afe816943851426e3f7b9753"
 dependencies = [
  "cc",
  "tree-sitter-language",

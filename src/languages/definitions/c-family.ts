@@ -18,13 +18,7 @@ export const cFamilyControlSplitPoints = [
   "case_statement",
 ];
 
-export const cFamilyIncludeImportsQuery = `
-      (preproc_include path: (string_literal) @mod) @stmt
-      (preproc_include path: (system_lib_string) @mod) @stmt
-      (preproc_include path: (identifier) @mod) @stmt
-    `;
-
-export const cFamilyIncludeBindingsQuery = `
+export const cFamilyIncludeQuery = `
       (preproc_include path: (string_literal) @from) @stmt
       (preproc_include path: (system_lib_string) @from) @stmt
       (preproc_include path: (identifier) @from) @stmt
@@ -120,9 +114,9 @@ export type CFamilyLanguageDefinitionOptions = {
   includeFieldIdentifier: boolean;
   blocks: (functionNameQuery: string) => BlockDefinition[];
   splitPoints?: readonly string[];
-  extraExportQueries?: readonly string[];
-  extraLocalQueries?: readonly string[];
+  extraSymbolQueries?: readonly string[];
   usesQueryDrivenLocals?: boolean;
+  membersAreImplicitlyInScope?: boolean;
   nodeTypes: NonNullable<LanguageDefinition["nodeTypes"]>;
   classifyDefinition: NonNullable<LanguageDefinition["classifyDefinition"]>;
   isDeclarationName: NonNullable<LanguageDefinition["isDeclarationName"]>;
@@ -157,16 +151,16 @@ export function createCFamilyLanguageDefinition(options: CFamilyLanguageDefiniti
       comments: ["comment"],
     },
     graph: {
-      imports: cFamilyIncludeImportsQuery,
+      imports: cFamilyIncludeQuery,
       exports: joinQueryPatterns([
         ...cFamilyCoreExportQueries(graphFunctionNameQuery),
-        ...(options.extraExportQueries ?? []),
+        ...(options.extraSymbolQueries ?? []),
       ]),
       locals: joinQueryPatterns([
         ...cFamilyCoreLocalQueries(graphFunctionNameQuery),
-        ...(options.extraLocalQueries ?? []),
+        ...(options.extraSymbolQueries ?? []),
       ]),
-      importBindings: cFamilyIncludeBindingsQuery,
+      importBindings: cFamilyIncludeQuery,
     },
     nodeTypes: options.nodeTypes,
     classifyDefinition: options.classifyDefinition,
@@ -179,6 +173,9 @@ export function createCFamilyLanguageDefinition(options: CFamilyLanguageDefiniti
     // anchor on `translation_unit` because include guards nest every header declaration.
     exportScopeBlockers: ["compound_statement"],
     usesQueryDrivenLocals: options.usesQueryDrivenLocals || false,
+    ...(options.membersAreImplicitlyInScope !== undefined
+      ? { membersAreImplicitlyInScope: options.membersAreImplicitlyInScope }
+      : {}),
   };
 }
 
@@ -206,6 +203,44 @@ export function findAncestor(node: SyntaxNodeLike, types: Set<string>): SyntaxNo
 
 export function isInParameterList(node: SyntaxNodeLike): boolean {
   return !!findAncestor(node, cFamilyParameterListTypes);
+}
+
+/** True when `node` sits inside the `name` field of a parent of one of the listed types. */
+export function isSpecifierNameField(node: SyntaxNodeLike, specifierTypes: readonly string[]): boolean {
+  const parent = node.parent;
+  return !!parent && specifierTypes.includes(parent.type) && isInField(node, parent, "name");
+}
+
+/**
+ * Declarator-chain and preprocessor declaration checks shared by C and C++: parameter, field,
+ * initializer, typedef, function, and plain declarations name their declarator, and enumerator
+ * and preprocessor definitions carry a `name` field.
+ */
+export function cFamilyIsDeclarationName(node: SyntaxNodeLike): boolean {
+  if (
+    isInAncestorDeclarator(node, new Set(["parameter_declaration"])) ||
+    isInAncestorDeclarator(node, new Set(["field_declaration"])) ||
+    isInAncestorDeclarator(node, new Set(["init_declarator"])) ||
+    isInAncestorDeclarator(node, new Set(["type_definition"]))
+  )
+    return true;
+  if (isInAncestorDeclarator(node, new Set(["function_definition"])) && !isInParameterList(node)) return true;
+  if (isInAncestorDeclarator(node, new Set(["declaration"])) && !isInParameterList(node)) return true;
+  return isSpecifierNameField(node, ["enumerator", "preproc_def", "preproc_function_def"]);
+}
+
+/**
+ * Container-walk classification shared by C and C++: a name inside a function body is a
+ * function, one inside a declaration with a function declarator is a function, and
+ * `typedef int (*Comparator)(int, int);` wraps the typedef name in a declarator chain, so the
+ * direct-parent checks above cannot see it.
+ */
+export function cFamilyContainerClassifyDefinition(node: SyntaxNodeLike): string {
+  const container = findAncestor(node, cFamilyContainerTypes);
+  if (container?.type === "function_definition") return "function";
+  if (container?.type === "declaration" && isFunctionDeclarator(node)) return "function";
+  if (container?.type === "type_definition") return "type";
+  return "variable";
 }
 
 function resolveDeclaratorRoot(ancestor: SyntaxNodeLike): SyntaxNodeLike | null {

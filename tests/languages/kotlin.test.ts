@@ -426,4 +426,19 @@ describe("Kotlin .ktm script files", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves an import of a package declared in a .ktm file", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-ktm-package-"));
+    const declaring = path.join(root, "models.ktm");
+    const importing = path.join(root, "main.kt");
+    try {
+      await fsp.writeFile(declaring, "package app.models\nclass Widget\n", "utf8");
+      await fsp.writeFile(importing, "import app.models.Widget\nfun use(): Widget = Widget()\n", "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const fromMain = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(importing));
+      expect(fromMain.map((edge) => edge.to)).toEqual([{ type: "file", path: declaring.replace(/\\/g, "/") }]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

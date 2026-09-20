@@ -1,15 +1,14 @@
 import { registerLanguage } from "../registry.js";
+import { nodeTypeIn } from "./shared.js";
 import {
   cFamilyBlock,
-  cFamilyContainerTypes,
+  cFamilyContainerClassifyDefinition,
   cFamilyFunctionBlock,
   cFamilyTypeIdentifierBlock,
+  cFamilyIsDeclarationName,
   createCFamilyLanguageDefinition,
-  findAncestor,
-  isFunctionDeclarator,
-  isInAncestorDeclarator,
   isInField,
-  isInParameterList,
+  isSpecifierNameField,
 } from "./c-family.js";
 
 export const C_DEF = createCFamilyLanguageDefinition({
@@ -26,13 +25,7 @@ export const C_DEF = createCFamilyLanguageDefinition({
     cFamilyBlock("preproc_def", "name: (identifier) @chunk.name", "macro"),
     cFamilyBlock("preproc_function_def", "name: (identifier) @chunk.name", "macro"),
   ],
-  extraExportQueries: [
-    `(union_specifier name: (type_identifier) @name)`,
-    `(enumerator name: (identifier) @name)`,
-    `(preproc_def name: (identifier) @name)`,
-    `(preproc_function_def name: (identifier) @name)`,
-  ],
-  extraLocalQueries: [
+  extraSymbolQueries: [
     `(union_specifier name: (type_identifier) @name)`,
     `(enumerator name: (identifier) @name)`,
     `(preproc_def name: (identifier) @name)`,
@@ -49,37 +42,12 @@ export const C_DEF = createCFamilyLanguageDefinition({
     if (parent.type === "enum_specifier") return "type";
     if (parent.type === "struct_specifier" || parent.type === "union_specifier") return "class";
     if (parent.type === "type_definition" && isInField(node, parent, "declarator")) return "type";
-    const container = findAncestor(node, cFamilyContainerTypes);
-    if (container?.type === "function_definition") return "function";
-    if (container?.type === "declaration" && isFunctionDeclarator(node)) return "function";
-    // `typedef int (*Comparator)(int, int);` and `typedef int *IntPtr;` wrap the typedef name in a
-    // declarator chain, so the direct-parent check above cannot see it.
-    if (container?.type === "type_definition") return "type";
-    return "variable";
+    return cFamilyContainerClassifyDefinition(node);
   },
-  isDeclarationName: (node) => {
-    const parent = node.parent;
-    if (!parent) return false;
-    if (
-      (parent.type === "struct_specifier" || parent.type === "union_specifier" || parent.type === "enum_specifier") &&
-      isInField(node, parent, "name")
-    )
-      return true;
-    if (
-      isInAncestorDeclarator(node, new Set(["parameter_declaration"])) ||
-      isInAncestorDeclarator(node, new Set(["field_declaration"])) ||
-      isInAncestorDeclarator(node, new Set(["init_declarator"])) ||
-      isInAncestorDeclarator(node, new Set(["type_definition"]))
-    )
-      return true;
-    if (isInAncestorDeclarator(node, new Set(["function_definition"])) && !isInParameterList(node)) return true;
-    if (isInAncestorDeclarator(node, new Set(["declaration"])) && !isInParameterList(node)) return true;
-    if (parent.type === "enumerator" && isInField(node, parent, "name")) return true;
-    if (parent.type === "preproc_def" && isInField(node, parent, "name")) return true;
-    if (parent.type === "preproc_function_def" && isInField(node, parent, "name")) return true;
-    return false;
-  },
-  createsFunctionScope: (node) => node.type === "function_definition",
+  isDeclarationName: (node) =>
+    isSpecifierNameField(node, ["struct_specifier", "union_specifier", "enum_specifier"]) ||
+    cFamilyIsDeclarationName(node),
+  createsFunctionScope: nodeTypeIn(["function_definition"]),
 });
 
 registerLanguage(C_DEF);

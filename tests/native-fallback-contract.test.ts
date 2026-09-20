@@ -241,6 +241,36 @@ describe("native required fallback boundaries", () => {
     }
   });
 
+  it("reports the oversized-source downgrade as a structured fallback reason", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-oversized-report-"));
+    const file = path.join(root, "huge.ts");
+    const source = `export const value = 1;\n${" ".repeat(DEFAULT_NATIVE_SOURCE_MAX_BYTES)}`;
+    await fsp.writeFile(file, source, "utf8");
+
+    try {
+      const report: BuildReport = { timings: {} };
+      const index = await buildProjectIndexFromFiles(root, [file], { report, useNativeWorkers: false });
+      const normalizedFile = normalizeFile(file);
+
+      expect(report.backend?.native.fallbackReasons.sourceTooLarge).toBe(1);
+      expect(report.backend?.native.fallbackReasons.queryFailure).toBe(0);
+      expect(report.backend?.native.byLanguage.ts?.fallbackReasons.sourceTooLarge).toBe(1);
+      expect(report.backend?.native.errors).toContainEqual(
+        expect.objectContaining({
+          file: normalizedFile,
+          languageId: "ts",
+          reason: "sourceTooLarge",
+        }),
+      );
+
+      const moduleIndex = index.byFile.get(fileIdentityKey(normalizedFile));
+      expect(moduleIndex).toBeDefined();
+      expect(moduleIndex?.locals).toEqual([]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("preserves required-native parse failures", () => {
     const file = normalizeFile(path.join(os.tmpdir(), "required-native-parse.ts"));
     const support = supportForFile(file);

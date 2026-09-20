@@ -7,7 +7,7 @@ import { CSHARP_SUPPORT } from "../../src/languages.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
-import { buildProjectIndexFromFiles, goToDefinition, type ProjectIndex } from "../../src/index.js";
+import { buildProjectIndexFromFiles, goToDefinition, listSymbols, type ProjectIndex } from "../../src/index.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
@@ -714,6 +714,41 @@ describe("C# extern alias", () => {
       // import finding for `Foo`.
       expect(edgesFrom(index, main)).toEqual([]);
       expect(getUnresolvedImports(index.graph, { projectRoot: root }).map((entry) => entry.name)).not.toContain("Foo");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C# method parameters as locals", () => {
+  it("lists a method parameter as a local and resolves it through goto", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-method-params-"));
+    const file = path.join(root, "Params.cs");
+    const source = [
+      "public class Greeter {",
+      "  public void Greet(string name, int times) {",
+      "    System.Console.WriteLine(name);",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+
+      const symbols = listSymbols(index, { file });
+      const nameParam = symbols.filter((symbol) => symbol.name === "name");
+      expect(nameParam.length).toBeGreaterThan(0);
+
+      // `name` is used inside the method body; goto resolves it to the parameter declaration.
+      const useLine = 3;
+      const useColumn = source.split("\n")[useLine - 1].indexOf("name") + 1;
+      const goto = await goToDefinition(index, { file, line: useLine, column: useColumn });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") {
+        expect(goto.definition.localName).toBe("name");
+        expect(goto.definition.range.start.line).toBe(2);
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }

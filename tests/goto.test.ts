@@ -2618,3 +2618,333 @@ describe("Python receiver member resolution", () => {
     }
   });
 });
+
+describe("Receiver construction, reassignment, typed parameters, and static scope", () => {
+  function columnOf(source: string, line: number, token: string): number {
+    const lines = source.split("\n");
+    const index = lines[line - 1]!.indexOf(token);
+    if (index < 0) throw new Error(`Expected token ${token} on fixture line ${line}`);
+    return index + 1;
+  }
+
+  async function buildFiles(
+    prefix: string,
+    files: Record<string, string>,
+  ): Promise<{ root: string; paths: Record<string, string>; index: ProjectIndex }> {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
+    const paths: Record<string, string> = {};
+    for (const [name, source] of Object.entries(files)) {
+      const file = path.join(root, name).replace(/\\/g, "/");
+      await fsp.mkdir(path.dirname(file), { recursive: true });
+      await fsp.writeFile(file, source, "utf8");
+      paths[name] = file;
+    }
+    return { root, paths, index: await createTestIndexFromFiles(root, Object.values(paths)) };
+  }
+
+  it("resolves a PHP named receiver assigned from new", async () => {
+    const source = [
+      "<?php",
+      "class Box { function helper() {} }",
+      "function run() { $box = new Box(); $box->helper(); }",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-php-named-goto-", { "box.php": source });
+    try {
+      await testGoToDefinition(index, paths["box.php"]!, 3, columnOf(source, 3, "helper();"), paths["box.php"]!, 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve an unproven PHP receiver to an imported function of the same name", async () => {
+    const lib = ["<?php", "namespace Imported;", "function helper() {}", ""].join("\n");
+    const host = [
+      "<?php",
+      "use function Imported\\helper;",
+      "class Box { function helper() {} }",
+      "function run() { $unknown->helper(); }",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-php-misattr-goto-", { "lib.php": lib, "host.php": host });
+    try {
+      await testGoToDefinition(
+        index,
+        paths["host.php"]!,
+        4,
+        columnOf(host, 4, "helper();"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a Zig struct-literal receiver", async () => {
+    const source = [
+      "const Box = struct {",
+      "    fn helper(self: Box) void {}",
+      "};",
+      "fn run() void { var box = Box{}; box.helper(); }",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-zig-literal-goto-", { "box.zig": source });
+    try {
+      await testGoToDefinition(index, paths["box.zig"]!, 4, columnOf(source, 4, "helper();"), paths["box.zig"]!, 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a Ruby instance-variable receiver assigned from .new", async () => {
+    const source = [
+      "class Box",
+      "  def helper",
+      "  end",
+      "end",
+      "def run",
+      "  @box = Box.new",
+      "  @box.helper",
+      "end",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-rb-ivar-goto-", { "box.rb": source });
+    try {
+      await testGoToDefinition(index, paths["box.rb"]!, 7, columnOf(source, 7, "helper"), paths["box.rb"]!, 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a JavaScript this-receiver method", async () => {
+    const source = ["class JsBox {", "  helper() {}", "  run() { this.helper(); }", "}"].join("\n");
+    const { root, paths, index } = await buildFiles("cg-js-this-goto-", { "box.js": source });
+    try {
+      await testGoToDefinition(index, paths["box.js"]!, 3, columnOf(source, 3, "helper();"), paths["box.js"]!, 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a Go constructor-assigned receiver", async () => {
+    const source = [
+      "package gox",
+      "type GoBox struct{}",
+      "func (b GoBox) GoHelper() {}",
+      "func GoRun() { b := GoBox{}; b.GoHelper() }",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-go-ctor-goto-", { "gox.go": source });
+    try {
+      await testGoToDefinition(index, paths["gox.go"]!, 4, columnOf(source, 4, "GoHelper()"), paths["gox.go"]!, 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a Swift self-receiver method", async () => {
+    const source = ["class SwBox {", "  func swHelper() {}", "  func swRun() { self.swHelper() }", "}"].join("\n");
+    const { root, paths, index } = await buildFiles("cg-swift-self-goto-", { "swx.swift": source });
+    try {
+      await testGoToDefinition(index, paths["swx.swift"]!, 3, columnOf(source, 3, "swHelper()"), paths["swx.swift"]!, 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a TypeScript typed-parameter receiver", async () => {
+    const source = [
+      "export class Lib { target(): number { return 1; } }",
+      "export function run(box: Lib): number { return box.target(); }",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-typed-goto-", { "run.ts": source });
+    try {
+      await testGoToDefinition(index, paths["run.ts"]!, 2, columnOf(source, 2, "target();"), paths["run.ts"]!, 1);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a reassigned receiver unresolved in TypeScript, Java, and Go", async () => {
+    const ts = [
+      "export class Lib { target(): number { return 1; } }",
+      "export function other(): Lib { return new Lib(); }",
+      "export function run(): number { let l = new Lib(); l = other(); return l.target(); }",
+      "",
+    ].join("\n");
+    const java = [
+      "class Lib { void target() {} }",
+      "class Host {",
+      "  Lib other() { return new Lib(); }",
+      "  void run() { Lib l = new Lib(); l = other(); l.target(); }",
+      "}",
+      "",
+    ].join("\n");
+    const go = [
+      "package run",
+      "type Lib struct{}",
+      "func (l Lib) Target() {}",
+      "func other() Lib { return Lib{} }",
+      "func Run() { l := Lib{}; l = other(); l.Target() }",
+      "",
+    ].join("\n");
+    const tsFix = await buildFiles("cg-ts-reassign-goto-", { "run.ts": ts });
+    const javaFix = await buildFiles("cg-java-reassign-goto-", { "Run.java": java });
+    const goFix = await buildFiles("cg-go-reassign-goto-", { "run.go": go });
+    try {
+      await testGoToDefinition(
+        tsFix.index,
+        tsFix.paths["run.ts"]!,
+        3,
+        columnOf(ts, 3, "target();"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+      await testGoToDefinition(
+        javaFix.index,
+        javaFix.paths["Run.java"]!,
+        4,
+        columnOf(java, 4, "target();"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+      await testGoToDefinition(
+        goFix.index,
+        goFix.paths["run.go"]!,
+        5,
+        columnOf(go, 5, "Target()"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+    } finally {
+      await fsp.rm(tsFix.root, { recursive: true, force: true });
+      await fsp.rm(javaFix.root, { recursive: true, force: true });
+      await fsp.rm(goFix.root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves TypeScript static members on the class and instance members only on a constructed receiver", async () => {
+    const source = [
+      "export class Box {",
+      "  static staticValue = 1;",
+      "  instanceValue = 2;",
+      "}",
+      "export function run(): number {",
+      "  const fromClass = Box.staticValue;",
+      "  const invalid = Box.instanceValue;",
+      "  const fromNew = new Box().instanceValue;",
+      "  return fromClass + invalid + fromNew;",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-static-instance-goto-", { "box.ts": source });
+    try {
+      await testGoToDefinition(
+        index,
+        paths["box.ts"]!,
+        6,
+        columnOf(source, 6, "staticValue"),
+        paths["box.ts"]!,
+        2,
+      );
+      await testGoToDefinition(
+        index,
+        paths["box.ts"]!,
+        7,
+        columnOf(source, 7, "instanceValue"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+      await testGoToDefinition(
+        index,
+        paths["box.ts"]!,
+        8,
+        columnOf(source, 8, "instanceValue"),
+        paths["box.ts"]!,
+        3,
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not cross-resolve static and instance members in C#, Java, and PHP", async () => {
+    const cs = [
+      "class Cfg {",
+      "  public void InstanceMethod() {}",
+      "  public static void StaticMethod() {}",
+      "  public void Run() { var c = new Cfg(); c.StaticMethod(); }",
+      "}",
+      "",
+    ].join("\n");
+    const java = [
+      "class Cfg {",
+      "  void instanceMethod() {}",
+      "  static void staticMethod() {}",
+      "  void run() { Cfg c = new Cfg(); c.staticMethod(); }",
+      "}",
+      "",
+    ].join("\n");
+    const php = [
+      "<?php",
+      "class Cfg {",
+      "    function instanceMethod() {}",
+      "    static function staticMethod() {}",
+      "    function run() { $c = new Cfg(); $c->staticMethod(); Cfg::instanceMethod(); }",
+      "}",
+      "",
+    ].join("\n");
+    const csFix = await buildFiles("cg-cs-static-goto-", { "Cfg.cs": cs });
+    const javaFix = await buildFiles("cg-java-static-goto-", { "Cfg.java": java });
+    const phpFix = await buildFiles("cg-php-static-goto-", { "cfg.php": php });
+    try {
+      await testGoToDefinition(
+        csFix.index,
+        csFix.paths["Cfg.cs"]!,
+        4,
+        columnOf(cs, 4, "StaticMethod();"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+      await testGoToDefinition(
+        javaFix.index,
+        javaFix.paths["Cfg.java"]!,
+        4,
+        columnOf(java, 4, "staticMethod();"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+      await testGoToDefinition(
+        phpFix.index,
+        phpFix.paths["cfg.php"]!,
+        5,
+        columnOf(php, 5, "staticMethod();"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+      await testGoToDefinition(
+        phpFix.index,
+        phpFix.paths["cfg.php"]!,
+        5,
+        columnOf(php, 5, "instanceMethod();"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+    } finally {
+      await fsp.rm(csFix.root, { recursive: true, force: true });
+      await fsp.rm(javaFix.root, { recursive: true, force: true });
+      await fsp.rm(phpFix.root, { recursive: true, force: true });
+    }
+  });
+});

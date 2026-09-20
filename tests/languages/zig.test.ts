@@ -1,15 +1,27 @@
-import fsp from "node:fs/promises";
+import fsp, { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { collectModuleSpecifiersFromSource } from "../../src/graphs.js";
-import { buildProjectIndex, findReferences } from "../../src/index.js";
+import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
+import { parseFile } from "../../src/indexer.js";
 import { supportById } from "../../src/languages.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
+import { createTestIndexFromFiles } from "../test-utils.js";
+import type { SyntaxNodeLike } from "../../src/languages/types.js";
+
+function findFirstNode(root: SyntaxNodeLike, type: string, text: string): SyntaxNodeLike | null {
+  if (root.type === type && root.text === text) return root;
+  for (const child of root.namedChildren) {
+    const found = findFirstNode(child, type, text);
+    if (found) return found;
+  }
+  return null;
+}
 
 const definition: LanguageTestDefinition = {
   id: "zig",
@@ -200,6 +212,38 @@ describe("Zig variable_declaration initializer references", () => {
       expect(module?.locals.filter((entry) => entry.localName === "alias")).toHaveLength(1);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Zig unqualified member lookup", () => {
+  it("does not resolve an unqualified call to a struct member", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-zig-member-scope-"));
+    const file = path.join(root, "self.zig");
+    const source = [
+      "const Self = struct {",
+      "    pub fn helper() void {}",
+      "    pub fn caller() void {",
+      "        helper();",
+      "    }",
+      "};",
+      "",
+    ].join("\n");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const parsed = await parseFile(file);
+      const call = findFirstNode(parsed.tree.rootNode, "call_expression", "helper()");
+      expect(call).not.toBeNull();
+      const { row, column } = call!.startPosition;
+      const result = await goToDefinition(index, {
+        file: fileIdentityKey(file),
+        line: row + 1,
+        column: column + 1,
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

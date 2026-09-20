@@ -2260,8 +2260,10 @@ describe("memberResolutionCoverage diagnostics", () => {
       await fsp.mkdir(path.join(root, "src"), { recursive: true });
       const tsFile = path.join(root, "src", "main.ts");
       const phpFile = path.join(root, "src", "main.php");
+      const cFile = path.join(root, "src", "helper.c");
       await fsp.writeFile(tsFile, "export function helper(a: string) { return a; }\n", "utf8");
       await fsp.writeFile(phpFile, "<?php\nfunction helper(a) { return a; }\n", "utf8");
+      await fsp.writeFile(cFile, "int helper(int a) { return a; }\n", "utf8");
 
       const index = await buildProjectIndex(root, { cache: "memory" });
       const diffText = `diff --git a/src/main.ts b/src/main.ts
@@ -2276,6 +2278,12 @@ diff --git a/src/main.php b/src/main.php
 @@ -2,1 +2,1 @@
 -function helper(a) { return a; }
 +function helper(a, b) { return a; }
+diff --git a/src/helper.c b/src/helper.c
+--- a/src/helper.c
++++ b/src/helper.c
+@@ -1,1 +1,1 @@
+-int helper(int a) { return a; }
++int helper(int a, int b) { return a; }
 `;
 
       const result = await analyzeImpactFromDiff(root, index, {
@@ -2288,7 +2296,9 @@ diff --git a/src/main.php b/src/main.php
       }
 
       expect(result.diagnostics?.memberResolutionCoverage?.receiverAwareLanguages).toContain("ts");
-      expect(result.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("php");
+      expect(result.diagnostics?.memberResolutionCoverage?.receiverAwareLanguages).toContain("php");
+      expect(result.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("c");
+      expect(result.diagnostics?.memberResolutionCoverage?.limitedLanguages).not.toContain("php");
     } finally {
       await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
@@ -2330,9 +2340,9 @@ diff --git a/src/main.php b/src/main.php
     try {
       await fsp.mkdir(path.join(root, "src"), { recursive: true });
       const tsFile = path.join(root, "src", "a.ts");
-      const phpFile = path.join(root, "src", "b.php");
+      const cFile = path.join(root, "src", "b.c");
       await fsp.writeFile(tsFile, "export function helperA(x: string) { return x; }\n", "utf8");
-      await fsp.writeFile(phpFile, "<?php\nfunction helperB(x) { return x; }\n", "utf8");
+      await fsp.writeFile(cFile, "int helperB(int x) { return x; }\n", "utf8");
 
       const index = await buildProjectIndex(root, { cache: "memory" });
       const diffText = `diff --git a/src/a.ts b/src/a.ts
@@ -2341,12 +2351,12 @@ diff --git a/src/main.php b/src/main.php
 @@ -1,1 +1,1 @@
 -export function helperA(x: string) { return x; }
 +export function helperA(x: string, y: number) { return x; }
-diff --git a/src/b.php b/src/b.php
---- a/src/b.php
-+++ b/src/b.php
-@@ -2,1 +2,1 @@
--function helperB(x) { return x; }
-+function helperB(x, y) { return x; }
+diff --git a/src/b.c b/src/b.c
+--- a/src/b.c
++++ b/src/b.c
+@@ -1,1 +1,1 @@
+-int helperB(int x) { return x; }
++int helperB(int x, int y) { return x; }
 `;
 
       // Force the ranking budget to select only one changed symbol for reference
@@ -2363,7 +2373,7 @@ diff --git a/src/b.php b/src/b.php
         throw new Error("Expected full impact report");
       }
 
-      expect(result.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("php");
+      expect(result.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("c");
     } finally {
       await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }

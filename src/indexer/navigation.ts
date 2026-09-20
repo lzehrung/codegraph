@@ -1,7 +1,7 @@
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
-import { resolveMemberAccessDefinition, supportsReceiverMemberResolution } from "./navigation-goto.js";
+import { resolveMemberAccessDefinition, supportsReceiverMemberNavigation } from "./navigation-goto.js";
 import {
   findClosestBinding,
   findDeclarationNameNode,
@@ -43,6 +43,7 @@ import {
   isMemberAccessNode,
   isMemberObjectIdentifier,
   isMemberReferencePropertyIdentifier,
+  isReceiverNameNode,
 } from "../util/member-access.js";
 import {
   type FindReferencesResult,
@@ -160,7 +161,7 @@ export async function goToDefinition(
       ...(scopeIndex
         ? {
             resolveLexicalBinding: (receiver) => {
-              if (!sup.nodeTypes.identifier.includes(receiver.type)) return null;
+              if (!isReceiverNameNode(sup, receiver.type)) return null;
               return findClosestBinding(scopeIndex, file, sliceText(receiver, source), receiver, sup);
             },
           }
@@ -250,11 +251,45 @@ export async function goToDefinition(
 
 function isUnresolvedReceiverMemberProperty(sup: LanguageSupport, node: SyntaxNodeLike): boolean {
   const parent = node.parent;
-  if (!parent || !supportsReceiverMemberResolution(sup.id) || !isMemberAccessNode(sup, parent)) {
+  if (!parent || !supportsReceiverMemberNavigation(sup.id) || !isMemberAccessNode(sup, parent)) {
     return false;
   }
-  const { property } = getMemberAccessParts(sup, parent);
-  return !!property && node.id === property.id;
+  const { object, property } = getMemberAccessParts(sup, parent);
+  if (!property || node.id !== property.id) return false;
+  // Unqualified calls reuse member-call nodes with the name in both slots.
+  if (!object || object.startIndex === property.startIndex) return false;
+  // Namespace and nested-type qualification still resolve through the language
+  // paths below; only value-receiver members must not fall back to a bare name.
+  if (
+    parent.type === "qualified_name" ||
+    parent.type === "qualified_identifier" ||
+    parent.type === "qualified_type" ||
+    parent.type === "scoped_identifier" ||
+    parent.type === "scoped_type_identifier" ||
+    parent.type === "scope_resolution" ||
+    parent.type === "namespace_name"
+  ) {
+    return false;
+  }
+  if (
+    (parent.type === "scoped_call_expression" ||
+      parent.type === "class_constant_access_expression" ||
+      parent.type === "scoped_property_access_expression") &&
+    (object.type === "qualified_name" || object.type === "namespace_name")
+  ) {
+    return false;
+  }
+  // Go `o.Name` and C `obj.field` are member-access nodes but not method calls.
+  if (parent.type === "selector_expression" || parent.type === "field_expression") {
+    const grandparent = parent.parent;
+    const called =
+      grandparent !== null &&
+      (grandparent.type === "call_expression" ||
+        grandparent.type === "call" ||
+        grandparent.type === "method_invocation");
+    if (called === false) return false;
+  }
+  return true;
 }
 
 type FindReferencesRequest = { file: FileId; line: number; column: number } | { def: SymbolDef };
@@ -743,7 +778,7 @@ function shouldScanVerifiedReferences(
   parsedContext: ParsedFileContext,
 ): boolean {
   if (phpQualifiedNames.length) return false;
-  if (!supportsReceiverMemberResolution(parsedContext.sup.id)) return false;
+  if (!supportsReceiverMemberNavigation(parsedContext.sup.id)) return false;
   return isReceiverMemberDefinition(def, parsedContext);
 }
 

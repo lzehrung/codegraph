@@ -11,7 +11,7 @@ import {
 } from "../../languages/import-statement-parsers.js";
 import { XID_IDENTIFIER_SOURCE } from "../identifiers.js";
 import { lruMapGet, lruMapSet } from "../lru-map.js";
-import { fileIdentityKey, isFilePathWithinRoot } from "../paths.js";
+import { fileIdentityKey, isPhysicalPathWithinRoot, readUtf8WithoutBom } from "../paths.js";
 import { fileExists } from "../workspace.js";
 import { rustCrateRootFiles } from "./cargo-targets.js";
 
@@ -407,14 +407,7 @@ async function isExistingAttributedPathInsideProject(
       return false;
     }
   }
-  if (!isFilePathWithinRoot(projectRoot, attributedPath)) return false;
-  try {
-    const realRoot = await fsp.realpath(projectRoot);
-    const realCandidate = await fsp.realpath(attributedPath);
-    return isFilePathWithinRoot(realRoot, realCandidate);
-  } catch {
-    return false;
-  }
+  return await isPhysicalPathWithinRoot(projectRoot, attributedPath);
 }
 
 function rustPathAttributeSignature(stat: { size: number; mtimeMs: number }): string {
@@ -465,7 +458,7 @@ async function loadRustPathAttributeScope(file: string): Promise<RustModuleScope
 
   const pending = (async (): Promise<RustModuleScope> => {
     try {
-      const source = await fsp.readFile(resolved, "utf8");
+      const source = await readUtf8WithoutBom(resolved);
       const attributes = extractRustModPathAttributeScopes(source);
       lruMapSet(rustPathAttributeCache, resolved, { signature, attributes }, MAX_RUST_PATH_ATTRIBUTE_CACHE_ENTRIES);
       return attributes;

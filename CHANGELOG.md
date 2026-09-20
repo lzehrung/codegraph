@@ -23,6 +23,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 ### Fixed
 
 - The generated fixture test matrix is current again. `npm run bench:fixtures:check` failed on the cross-language `tests/languages/query-hygiene.test.ts` stem instead of comparing counts, so `docs/benchmarks/fixture-snapshot.md` reported 256 tests while the suites ran 477. The check now runs in CI, and the generated snapshot JSON is excluded from Prettier so the format and freshness gates stop contradicting each other.
+- First-party import resolution now realpath-confines targets while keeping the logical path, scopes Java, Kotlin, C#, PHP, and Python symbol indexes to the nearest language manifest so a same-named package in a sibling workspace does not bind, and no longer treats a directory as a file edge unless the language runtime does (Python `__init__` packages and Go package directories). A leading U+FEFF is stripped from `tsconfig.json` and other resolution source text so BOM-prefixed path mappings still apply.
 
 ### Changed
 

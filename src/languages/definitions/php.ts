@@ -1,5 +1,20 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
+import { classifyByParentType, isNameFieldOnParent } from "./shared.js";
+
+// Include/require arguments are string | encapsed_string | binary_expression |
+// variable_name | other expressions; no closed node-type list, so keep `(_)`.
+const PHP_IMPORT_QUERY = `
+      (require_expression (_) @from) @stmt
+      (include_expression (_) @from) @stmt
+      (require_once_expression (_) @from) @stmt
+      (include_once_expression (_) @from) @stmt
+      (namespace_use_declaration (namespace_use_clause (qualified_name) @from alias: (name) @alias)) @stmt
+      (namespace_use_declaration (namespace_use_clause (qualified_name) @from !alias)) @stmt
+      (namespace_use_declaration (namespace_use_clause (name) @from alias: (name) @alias)) @stmt
+      (namespace_use_declaration (namespace_use_clause (name) @from !alias)) @stmt
+      (namespace_use_declaration (namespace_name) @from (namespace_use_group)) @stmt
+    `;
 
 export const PHP_DEF: LanguageDefinition = {
   id: "php",
@@ -61,13 +76,11 @@ export const PHP_DEF: LanguageDefinition = {
     comments: ["comment"],
   },
   graph: {
-    imports: `
-      (require_expression) @stmt
-      (include_expression) @stmt
-      (require_once_expression) @stmt
-      (include_once_expression) @stmt
-      (namespace_use_declaration) @stmt
-    `,
+    // Path-bearing nodes: include/require argument, `use Foo\Bar` qualified_name.
+    // Grouped `use Foo\{A}` has no single node for `Foo\A` (prefix + clause); the
+    // prefix is `@from`. Concatenated includes (`__DIR__ . "/x"`) capture the
+    // expression. PHP has no star-import token, so there is no `@wild`.
+    imports: PHP_IMPORT_QUERY,
     exports: `
       (namespace_definition name: (namespace_name) @name)
       (class_declaration name: (name) @name)
@@ -89,40 +102,28 @@ export const PHP_DEF: LanguageDefinition = {
       (const_declaration (const_element . (name) @name))
       (property_element name: (variable_name) @name)
     `,
-    importBindings: `
-      (require_expression) @stmt
-      (include_expression) @stmt
-      (require_once_expression) @stmt
-      (include_once_expression) @stmt
-      (namespace_use_declaration) @stmt
-  `,
+    importBindings: PHP_IMPORT_QUERY,
   },
   nodeTypes: {
     identifier: ["name", "variable_name", "namespace_name", "qualified_name", "relative_name"],
     propertyIdentifier: ["name"],
     memberExpression: "member_access_expression",
   },
-  classifyDefinition: (node) => {
-    const parentType = node.parent?.type;
-    if (parentType === "class_declaration") return "class";
-    if (parentType === "interface_declaration") return "interface";
-    if (parentType === "trait_declaration") return "trait";
-    if (parentType === "enum_declaration") return "type";
-    if (parentType === "enum_case") return "constant";
-    if (parentType === "function_definition") return "function";
-    if (parentType === "method_declaration") return "method";
-    if (parentType === "namespace_definition") return "namespace";
-    if (parentType === "const_element" || parentType === "const_declaration") {
-      return "constant";
-    }
-    return "variable";
-  },
+  classifyDefinition: classifyByParentType({
+    class_declaration: "class",
+    interface_declaration: "interface",
+    trait_declaration: "trait",
+    enum_declaration: "type",
+    enum_case: "constant",
+    function_definition: "function",
+    method_declaration: "method",
+    namespace_definition: "namespace",
+    const_element: "constant",
+    const_declaration: "constant",
+  }),
   normalizeIdentifier: (name) => name.replace(/^\$/, ""),
-  isDeclarationName: (node) => {
-    const parent = node.parent;
-    if (!parent) return false;
-
-    const nameFieldOwnerTypes = new Set([
+  isDeclarationName: (node) =>
+    isNameFieldOnParent(node, [
       "namespace_definition",
       "class_declaration",
       "interface_declaration",
@@ -131,27 +132,24 @@ export const PHP_DEF: LanguageDefinition = {
       "enum_case",
       "function_definition",
       "method_declaration",
-    ]);
-
-    if (nameFieldOwnerTypes.has(parent.type)) {
-      return parent.childForFieldName("name")?.id === node.id;
-    }
-
-    // `property_element` exposes the declared name via the `name` field and any
-    // initializer via `default_value`; field identity keeps a default value that
-    // happens to be a bare variable reference from being misread as a declaration.
-    if (parent.type === "property_element") {
-      return parent.childForFieldName("name")?.id === node.id;
-    }
+      // `property_element` exposes the declared name via the `name` field and any
+      // initializer via `default_value`; field identity keeps a default value that
+      // happens to be a bare variable reference from being misread as a declaration.
+      "property_element",
+    ]) ||
     // `const_element` has no named fields (grammar: `seq($.name, '=', $.expression)`),
     // so the declared name is identified positionally as the first namedChild; a
     // value that is itself a bare `name` reference (e.g. `const X = SOME_CONST;`)
     // is the second namedChild and must not qualify.
-    return parent.type === "const_element" && parent.namedChildren[0]?.id === node.id && node.type === "name";
-  },
+    (node.parent?.type === "const_element" && node.parent.namedChildren[0]?.id === node.id && node.type === "name"),
   scopeDeclarationNames: (node) => node.type === "variable_name" && node.parent?.type === "property_element",
   createsFunctionScope: (node) => node.type === "function_definition" || node.type === "method_declaration",
-  membersAreImplicitlyInScope: false,
+  // PHP `if`/`while`/function bodies are all `compound_statement`; without a block scope a
+  // nested declaration leaks into the enclosing scope.
+  createsBlockScope: (node) => node.type === "compound_statement",
+  // The exports query anchors unanchored, so a `function_definition` nested inside another
+  // function's `compound_statement` would otherwise publish as a module export.
+  exportScopeBlockers: ["compound_statement"],
   supportsCrossModuleSymbols: true,
 };
 

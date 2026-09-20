@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { collectGraph } from "../src/index.js";
+import { extractDynamicImportSpecifiers } from "../src/util/specifiers.js";
 import { mkTmpDir, normalizeTestPath } from "./helpers/filesystem.js";
 import { edgeFrom } from "./helpers/graph.js";
 
@@ -115,5 +116,70 @@ describe("Fast graph edge cases", () => {
       expect(typeOnlyOf(graph, "exp-mixed.ts")).toEqual([false]);
       expect(typeOnlyOf(graph, "exp-stmt.ts")).toEqual([true]);
     }
+  });
+});
+
+describe("Dynamic import heuristics across languages", () => {
+  const projectRoot = path.join(process.cwd(), "fixture-root");
+
+  it("folds Ruby require File.join(__dir__, ...) to a file-relative specifier", () => {
+    const fromFile = path.join(projectRoot, "app", "models", "user.rb");
+    const source = [
+      'require File.join(__dir__, "lib", "user_repo")',
+      "require File.join(File.dirname(__FILE__), 'unrelated')",
+    ].join("\n");
+
+    const specs = extractDynamicImportSpecifiers("ruby", source, fromFile, projectRoot);
+
+    expect(specs).toEqual([{ spec: "./lib/user_repo", resolved: "heuristic", confidence: 0.7 }]);
+  });
+
+  it("ignores Ruby requires whose path needs runtime evaluation or a comment hides", () => {
+    const fromFile = path.join(projectRoot, "app", "models", "user.rb");
+    const source = [
+      'require File.join(dir, "user_repo")',
+      "require File.join(__dir__, name)",
+      'require "user_repo"',
+      '# require File.join(__dir__, "commented")',
+      'require File.join(__dir__, "user_repo")',
+    ].join("\n");
+
+    const specs = extractDynamicImportSpecifiers("ruby", source, fromFile, projectRoot);
+
+    expect(specs).toEqual([{ spec: "./user_repo", resolved: "heuristic", confidence: 0.7 }]);
+  });
+
+  it("folds PHP computed include and require chains rooted at __DIR__ or dirname(__FILE__)", () => {
+    const fromFile = path.join(projectRoot, "public", "index.php");
+    const source = [
+      "require __DIR__ . '/config/database.php';",
+      "include(dirname(__FILE__) . '/partials/menu.php');",
+      "require_once __DIR__.'/boot.php';",
+      "include_once __DIR__ . '/legacy/menu.php';",
+    ].join("\n");
+
+    const specs = extractDynamicImportSpecifiers("php", source, fromFile, projectRoot);
+
+    expect(specs).toEqual([
+      { spec: "./config/database.php", resolved: "heuristic", confidence: 0.7 },
+      { spec: "./partials/menu.php", resolved: "heuristic", confidence: 0.7 },
+      { spec: "./boot.php", resolved: "heuristic", confidence: 0.7 },
+      { spec: "./legacy/menu.php", resolved: "heuristic", confidence: 0.7 },
+    ]);
+  });
+
+  it("ignores PHP includes whose path needs runtime evaluation or stays static", () => {
+    const fromFile = path.join(projectRoot, "public", "index.php");
+    const source = [
+      "require $module . '/routes.php';",
+      "include 'partials/footer.php';",
+      "require dirname(__FILE__) . '/' . $page . '.php';",
+      "// require __DIR__ . '/commented.php';",
+      "require __DIR__ . '/actual.php';",
+    ].join("\n");
+
+    const specs = extractDynamicImportSpecifiers("php", source, fromFile, projectRoot);
+
+    expect(specs).toEqual([{ spec: "./actual.php", resolved: "heuristic", confidence: 0.7 }]);
   });
 });

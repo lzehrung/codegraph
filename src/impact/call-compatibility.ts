@@ -33,6 +33,7 @@ import {
 } from "./call-compatibility/text-scanner.js";
 
 import type { ReferenceLookupCache } from "./reference-cache.js";
+import { PARAMETER_LIST_NODE_TYPES } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
   directSignatureParameterNode,
   findAncestorOfTypes,
@@ -195,13 +196,7 @@ const callableDeclarationTypes = new Set([
 
 const callableVariableValueTypes = new Set(["arrow_function", "function_expression", "function"]);
 
-const parameterListTypes = new Set([
-  "parameters",
-  "parameter_list",
-  "formal_parameters",
-  "function_value_parameters",
-  "method_parameters",
-]);
+const parameterListTypes = new Set(Object.keys(PARAMETER_LIST_NODE_TYPES));
 
 function isPythonMethodDeclaration(declaration: SyntaxNodeLike): boolean {
   let current = declaration.parent;

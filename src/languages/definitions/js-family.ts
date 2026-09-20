@@ -1,4 +1,49 @@
-import type { BlockDefinition } from "../types.js";
+import type { BlockDefinition, SyntaxNodeLike } from "../types.js";
+import { hasParentType, isNameFieldOnParent, isNameOrPropertyFieldOnParent, nodeTypeIn } from "./shared.js";
+
+/**
+ * `import type` / `export type` statements. The JS grammar has no type-only syntax (the
+ * keyword parses as an ERROR node), so this matches the statement text instead.
+ */
+export function isEcmaScriptTypeOnlyStatement(stmtText: string): boolean {
+  return /\b(import|export)\s+type\b/.test(stmtText);
+}
+
+/** Declaration parents whose direct name child declares a name in both the JS and TS grammars. */
+export const ECMASCRIPT_DECLARATION_NAME_PARENTS = [
+  "function_declaration",
+  "generator_function_declaration",
+  "class_declaration",
+  "import_specifier",
+  "namespace_import",
+  "import_clause",
+  // Method names in classes: needed so that editing a method name is
+  // classified as a definition change, not an unrecognised node.
+  "method_definition",
+  // A named function expression binds its own name; `$scope.x = function x() {}` and
+  // `const f = function inner() {}` are the common shapes.
+  "function_expression",
+] as const;
+
+export const ECMASCRIPT_BLOCK_SCOPE_TYPES = ["program", "block", "class_body", "class_static_block"] as const;
+
+export const ECMASCRIPT_FUNCTION_SCOPE_TYPES = [
+  "function_declaration",
+  "generator_function_declaration",
+  "function_expression",
+  "arrow_function",
+  "method_definition",
+] as const;
+
+/** A `variable_declarator`'s declared name (field identity; `const x = y` must not match `y`). */
+export function isEcmaScriptVariableDeclaratorName(node: SyntaxNodeLike): boolean {
+  return isNameFieldOnParent(node, ["variable_declarator"]);
+}
+
+/** A class field's declared name; the grammar spells the field `name` or `property`. */
+export function isEcmaScriptFieldDefinitionName(node: SyntaxNodeLike, parentType: string): boolean {
+  return isNameOrPropertyFieldOnParent(node, [parentType]);
+}
 
 export const ECMASCRIPT_CONTROL_SPLIT_POINTS = [
   "if_statement",

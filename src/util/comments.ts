@@ -1,3 +1,5 @@
+import { buildTriviaMask, maskTrivia, stripTrivia } from "./trivia.js";
+
 export type InlineCommentTrimMode = "preserve" | "trim";
 
 export function stripHashInlineComment(line: string, trimMode: InlineCommentTrimMode): string {
@@ -20,194 +22,16 @@ export function stripHashInlineComment(line: string, trimMode: InlineCommentTrim
   return trimMode === "trim" ? line.trim() : line;
 }
 
-function transformJsLikeTrivia(
-  src: string,
-  options?: { maskStrings?: boolean; nestedBlockComments?: boolean; preserveLength?: boolean },
-): string {
-  let out = "";
-  let i = 0;
-  let inSingle = false;
-  let inDouble = false;
-  let inTemplate = false;
-  let escapeNext = false;
-  const maskStrings = options?.maskStrings ?? false;
-  const preserveLength = options?.preserveLength ?? false;
-  const maskedChar = (ch: string) => (ch === "\n" || ch === "\r" ? ch : " ");
-
-  while (i < src.length) {
-    const ch = src[i]!;
-    const next = src[i + 1] ?? "";
-
-    if (inSingle || inDouble || inTemplate) {
-      const isClosingQuote =
-        !escapeNext && ((inSingle && ch === "'") || (inDouble && ch === '"') || (inTemplate && ch === "`"));
-      if (maskStrings) {
-        out += isClosingQuote ? ch : maskedChar(ch);
-      } else {
-        out += ch;
-      }
-      if (escapeNext) {
-        escapeNext = false;
-      } else if (ch === "\\") {
-        escapeNext = true;
-      } else if (inSingle && ch === "'") {
-        inSingle = false;
-      } else if (inDouble && ch === '"') {
-        inDouble = false;
-      } else if (inTemplate && ch === "`") {
-        inTemplate = false;
-      }
-      i += 1;
-      continue;
-    }
-
-    if (ch === "'") {
-      inSingle = true;
-      out += ch;
-      i += 1;
-      continue;
-    }
-    if (ch === '"') {
-      inDouble = true;
-      out += ch;
-      i += 1;
-      continue;
-    }
-    if (ch === "`") {
-      inTemplate = true;
-      out += ch;
-      i += 1;
-      continue;
-    }
-
-    if (ch === "/" && next === "*") {
-      if (preserveLength) out += "  ";
-      i += 2;
-      let depth = 1;
-      while (i < src.length && depth > 0) {
-        if (options?.nestedBlockComments && src[i] === "/" && src[i + 1] === "*") {
-          if (preserveLength) out += "  ";
-          depth += 1;
-          i += 2;
-          continue;
-        }
-        if (src[i] === "*" && src[i + 1] === "/") {
-          if (preserveLength) out += "  ";
-          depth -= 1;
-          i += 2;
-          continue;
-        }
-        if (preserveLength) out += maskedChar(src[i]!);
-        else if (src[i] === "\n") out += "\n";
-        i += 1;
-      }
-      continue;
-    }
-
-    if (ch === "/" && next === "/") {
-      if (preserveLength) out += "  ";
-      i += 2;
-      while (i < src.length && src[i] !== "\n") {
-        if (preserveLength) out += " ";
-        i += 1;
-      }
-      continue;
-    }
-
-    out += ch;
-    i += 1;
-  }
-
-  return out;
-}
-
 export function stripJsLikeComments(src: string): string {
-  return transformJsLikeTrivia(src, { preserveLength: true });
+  return maskTrivia(src, "js", { maskStrings: false });
 }
 
 export function maskJsLikeCommentsAndStrings(src: string): string {
-  return transformJsLikeTrivia(src, {
-    maskStrings: true,
-    preserveLength: true,
-  });
+  return maskTrivia(src, "js");
 }
 
 function hasJsLikeLiteralDelimiter(source: string): boolean {
   return source.includes("'") || source.includes('"') || source.includes("`") || source.includes("/");
-}
-
-export function maskNestedBlockCommentsAndStrings(src: string): string {
-  return transformJsLikeTrivia(src, {
-    maskStrings: true,
-    nestedBlockComments: true,
-    preserveLength: true,
-  });
-}
-
-function maskQuotedString(source: string, mask: Uint8Array, start: number, quote: "'" | '"'): number {
-  for (let i = start; i < source.length; i += 1) {
-    const ch = source[i]!;
-    mask[i] = 1;
-    if (ch === "\\") {
-      const nextIndex = i + 1;
-      if (nextIndex < source.length) {
-        mask[nextIndex] = 1;
-        i = nextIndex;
-      }
-      continue;
-    }
-    if (i > start && ch === quote) return i + 1;
-  }
-  return source.length;
-}
-
-function maskTemplateLiteral(source: string, mask: Uint8Array, start: number): number {
-  mask[start] = 1;
-  for (let i = start + 1; i < source.length; i += 1) {
-    const ch = source[i]!;
-    mask[i] = 1;
-    if (ch === "\\") {
-      const nextIndex = i + 1;
-      if (nextIndex < source.length) {
-        mask[nextIndex] = 1;
-        i = nextIndex;
-      }
-      continue;
-    }
-    if (ch === "`") return i + 1;
-    if (ch === "$" && source[i + 1] === "{") {
-      mask[i + 1] = 1;
-      i = scanTemplateExpression(source, mask, i + 2) - 1;
-    }
-  }
-  return source.length;
-}
-
-function scanTemplateExpression(source: string, mask: Uint8Array, start: number): number {
-  let depth = 1;
-  for (let i = start; i < source.length; i += 1) {
-    const ch = source[i]!;
-    if (ch === "'" || ch === '"') {
-      i = maskQuotedString(source, mask, i, ch) - 1;
-      continue;
-    }
-    if (ch === "`") {
-      i = maskTemplateLiteral(source, mask, i) - 1;
-      continue;
-    }
-    if (ch === "{") {
-      depth += 1;
-      continue;
-    }
-    if (ch === "}") {
-      depth -= 1;
-      if (!depth) {
-        mask[i] = 1;
-        return i + 1;
-      }
-    }
-  }
-  return source.length;
 }
 
 function previousVisibleIndex(source: string, mask: Uint8Array, start: number): number {
@@ -313,18 +137,10 @@ function maskRegexLiteral(source: string, mask: Uint8Array, start: number): numb
 
 export function buildJsLikeLiteralMask(source: string): Uint8Array | undefined {
   if (!hasJsLikeLiteralDelimiter(source)) return undefined;
-  const mask = new Uint8Array(source.length);
+  const mask = buildTriviaMask(source, "js", { holes: true });
   for (let i = 0; i < source.length; i += 1) {
-    const ch = source[i]!;
-    if (ch === "'" || ch === '"') {
-      i = maskQuotedString(source, mask, i, ch) - 1;
-      continue;
-    }
-    if (ch === "`") {
-      i = maskTemplateLiteral(source, mask, i) - 1;
-      continue;
-    }
-    if (ch === "/" && canStartRegex(source, mask, i)) {
+    if (mask[i]) continue;
+    if (source[i] === "/" && canStartRegex(source, mask, i)) {
       i = maskRegexLiteral(source, mask, i) - 1;
     }
   }
@@ -410,36 +226,18 @@ export function parseJsonc<T>(raw: string): T {
 }
 
 export function stripPythonCommentsAndStrings(src: string): string {
-  let out = src;
-  out = out.replace(/([rRuU]?[fF]?)("""|''')[\s\S]*?\2/g, "");
-  out = out.replace(/([rRuU]?[fF]?)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g, "");
-  out = out.replace(/#.*$/gm, "");
-  return out;
-}
-
-function maskMatchPreservingNewlines(match: string): string {
-  let out = "";
-  for (const character of match) {
-    // Iterate by code point (not UTF-16 unit) so an astral character inside a masked
-    // comment/string is replaced by exactly as many space units as it occupied, keeping
-    // every later offset in `src` aligned with the masked output.
-    out += character === "\n" ? "\n" : " ".repeat(character.length);
-  }
-  return out;
+  return stripTrivia(src, "python");
 }
 
 /**
- * Same matching as {@link stripPythonCommentsAndStrings}, but blanks comment/string content
- * to same-length whitespace (preserving embedded newlines) instead of deleting it. Callers
- * that need to map a regex match position in the masked text back to an exact offset in the
- * original source -- rather than only using the masked text to avoid false-positive matches
- * inside unrelated strings/comments -- must use this instead; `stripPythonCommentsAndStrings`
- * is not offset-preserving.
+ * Blanks Python comments and string literals to same-length whitespace (preserving embedded
+ * newlines) instead of deleting them. Callers that need to map a regex match position in the
+ * masked text back to an exact offset in the original source -- rather than only using the
+ * masked text to avoid false-positive matches inside unrelated strings/comments -- must use
+ * this instead; `stripPythonCommentsAndStrings` is not offset-preserving. Unlike the previous
+ * regex implementation, comments are masked before string literals are located, so an
+ * apostrophe inside a comment can no longer open a string literal.
  */
 export function maskPythonCommentsAndStrings(src: string): string {
-  let out = src;
-  out = out.replace(/([rRuU]?[fF]?)("""|''')[\s\S]*?\2/g, maskMatchPreservingNewlines);
-  out = out.replace(/([rRuU]?[fF]?)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g, maskMatchPreservingNewlines);
-  out = out.replace(/#.*$/gm, maskMatchPreservingNewlines);
-  return out;
+  return maskTrivia(src, "python");
 }

@@ -1,11 +1,14 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import {
-  buildProjectSymbolIndex,
+  buildDeclaredContainerIndex,
   getOrCreateProjectSymbolIndex,
   type LanguageProjectSymbolIndex,
 } from "./project-symbols.js";
 import { JAVA_IDENTIFIER_IGNORABLE_SOURCE, JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../identifiers.js";
+import { confineResolvedPath, readUtf8WithoutBom } from "../paths.js";
+import { getImportableLanguageGlobs } from "../resolution-candidates.js";
+import { JVM_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRoot } from "./files.js";
 
 const KOTLIN_PACKAGE_PATTERN = new RegExp(
   String.raw`^\s*package\s+(${KOTLIN_IDENTIFIER_SOURCE}(?:\.${KOTLIN_IDENTIFIER_SOURCE})*)`,
@@ -36,6 +39,14 @@ type JvmSymbolIndexReaderOptions = {
   normalizeSymbol?: (symbol: string) => string;
 };
 
+type JvmImportResolutionOptions = {
+  languageId: "java" | "kotlin";
+  allowBarePackage: boolean;
+  matchExactPackage: boolean;
+  filenameFallback: boolean;
+  fromFile: string;
+};
+
 const kotlinImportResolutionCache = new Map<string, string | null>();
 const kotlinSymbolIndexCache = new Map<string, JvmSymbolIndexEntry>();
 const kotlinProjectSymbolIndexCache = new Map<string, Promise<LanguageProjectSymbolIndex>>();
@@ -51,7 +62,7 @@ async function readJvmSymbolIndex(
   const cached = cache.get(filePath);
   if (cached) return cached;
 
-  const source = await fsp.readFile(filePath, "utf8");
+  const source = await readUtf8WithoutBom(filePath);
   const packageName = source.match(options.packagePattern)?.[1] ?? null;
   const symbols = new Set<string>();
   for (const match of source.matchAll(options.declarationPattern)) {
@@ -84,68 +95,110 @@ async function readJavaSymbolIndex(filePath: string): Promise<JvmSymbolIndexEntr
 }
 
 async function getJvmLanguageProjectSymbolIndex(
-  projectRoot: string,
+  indexRoot: string,
   cache: Map<string, Promise<LanguageProjectSymbolIndex>>,
-  includeGlobs: string[],
+  languageId: "java" | "kotlin",
   readSymbolIndex: (filePath: string) => Promise<JvmSymbolIndexEntry>,
 ): Promise<LanguageProjectSymbolIndex> {
-  return await getOrCreateProjectSymbolIndex(
-    cache,
-    projectRoot,
-    async () => await buildProjectSymbolIndex(projectRoot, includeGlobs, readSymbolIndex),
+  return await getOrCreateProjectSymbolIndex(cache, indexRoot, async () =>
+    buildDeclaredContainerIndex(indexRoot, getImportableLanguageGlobs(languageId), async (filePath) => {
+      const entry = await readSymbolIndex(filePath);
+      if (entry.packageName === null) return [];
+      return [{ name: entry.packageName, symbols: entry.symbols }];
+    }),
   );
 }
 
-async function getKotlinProjectSymbolIndex(projectRoot: string): Promise<LanguageProjectSymbolIndex> {
+async function getKotlinProjectSymbolIndex(indexRoot: string): Promise<LanguageProjectSymbolIndex> {
   return await getJvmLanguageProjectSymbolIndex(
-    projectRoot,
+    indexRoot,
     kotlinProjectSymbolIndexCache,
-    ["**/*.kt", "**/*.kts"],
+    "kotlin",
     readKotlinSymbolIndex,
   );
 }
 
-async function getJavaProjectSymbolIndex(projectRoot: string): Promise<LanguageProjectSymbolIndex> {
-  return await getJvmLanguageProjectSymbolIndex(
-    projectRoot,
-    javaProjectSymbolIndexCache,
-    ["**/*.java"],
-    readJavaSymbolIndex,
-  );
+async function getJavaProjectSymbolIndex(indexRoot: string): Promise<LanguageProjectSymbolIndex> {
+  return await getJvmLanguageProjectSymbolIndex(indexRoot, javaProjectSymbolIndexCache, "java", readJavaSymbolIndex);
 }
 
 async function getJvmProjectSymbolIndex(
-  projectRoot: string,
+  indexRoot: string,
   languageId: "java" | "kotlin",
 ): Promise<LanguageProjectSymbolIndex> {
   if (languageId === "kotlin") {
-    return await getKotlinProjectSymbolIndex(projectRoot);
+    return await getKotlinProjectSymbolIndex(indexRoot);
   }
-  return await getJavaProjectSymbolIndex(projectRoot);
+  return await getJavaProjectSymbolIndex(indexRoot);
+}
+
+async function confineJvmResolvedPath(projectRoot: string, resolved: string | null): Promise<string | null> {
+  const confined = await confineResolvedPath(projectRoot, resolved);
+  if (!confined) return null;
+  try {
+    const st = await fsp.stat(confined);
+    if (st.isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  return confined;
+}
+
+async function jvmIndexRoot(projectRoot: string, fromFile: string): Promise<string> {
+  return await resolveNearestManifestRoot(projectRoot, fromFile, JVM_PACKAGE_MANIFEST_NAMES);
 }
 
 export async function resolveJvmPackageImportPaths(
   projectRoot: string,
   spec: string,
   languageId: "java" | "kotlin",
+  fromFile: string,
 ): Promise<string[]> {
-  const projectIndex = await getJvmProjectSymbolIndex(projectRoot, languageId);
+  const indexRoot = await jvmIndexRoot(projectRoot, fromFile);
+  const projectIndex = await getJvmProjectSymbolIndex(indexRoot, languageId);
   const packageCandidates = projectIndex.filesByPackage.get(spec) ?? [];
-  return packageCandidates.map((candidate) => path.resolve(candidate));
+  const confined: string[] = [];
+  for (const candidate of packageCandidates) {
+    const hit = await confineJvmResolvedPath(projectRoot, candidate);
+    if (hit) confined.push(hit);
+  }
+  return confined;
 }
 
-export async function resolveKotlinImportPath(projectRoot: string, spec: string): Promise<string | null> {
-  const cacheKey = `${projectRoot}::${spec}`;
-  const cached = kotlinImportResolutionCache.get(cacheKey);
+async function resolveJvmImportPath(
+  projectRoot: string,
+  spec: string,
+  options: JvmImportResolutionOptions,
+): Promise<string | null> {
+  const cache = options.languageId === "kotlin" ? kotlinImportResolutionCache : javaImportResolutionCache;
+  const indexRoot = await jvmIndexRoot(projectRoot, options.fromFile);
+  const cacheKey = `${path.resolve(projectRoot)}::${indexRoot}::${spec}`;
+  const cached = cache.get(cacheKey);
   if (cached !== undefined) return cached;
 
   const parts = spec.split(".").filter(Boolean);
-  const projectIndex = await getKotlinProjectSymbolIndex(projectRoot);
+  const projectIndex = await getJvmProjectSymbolIndex(indexRoot, options.languageId);
   if (parts.length < 2) {
+    if (!options.allowBarePackage) {
+      cache.set(cacheKey, null);
+      return null;
+    }
     const packageCandidates = projectIndex.filesByPackage.get(spec) ?? [];
-    const resolved = packageCandidates[0] ? path.resolve(packageCandidates[0]) : null;
-    kotlinImportResolutionCache.set(cacheKey, resolved);
+    const resolved = await confineJvmResolvedPath(
+      projectRoot,
+      packageCandidates[0] ? path.resolve(packageCandidates[0]) : null,
+    );
+    cache.set(cacheKey, resolved);
     return resolved;
+  }
+
+  if (options.matchExactPackage) {
+    const exactPackageFiles = projectIndex.filesByPackage.get(spec) ?? [];
+    if (exactPackageFiles[0]) {
+      const resolved = await confineJvmResolvedPath(projectRoot, path.resolve(exactPackageFiles[0]));
+      cache.set(cacheKey, resolved);
+      return resolved;
+    }
   }
 
   const importedName = parts[parts.length - 1]!;
@@ -153,52 +206,51 @@ export async function resolveKotlinImportPath(projectRoot: string, spec: string)
   const packageCandidates = projectIndex.filesByPackage.get(packageName) ?? [];
 
   if (importedName === "*") {
-    const resolved = packageCandidates[0] ? path.resolve(packageCandidates[0]) : null;
-    kotlinImportResolutionCache.set(cacheKey, resolved);
+    const resolved = await confineJvmResolvedPath(
+      projectRoot,
+      packageCandidates[0] ? path.resolve(packageCandidates[0]) : null,
+    );
+    cache.set(cacheKey, resolved);
     return resolved;
   }
 
   const symbolFiles = projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
-  const resolved = symbolFiles.length === 1 ? path.resolve(symbolFiles[0]!) : null;
-  kotlinImportResolutionCache.set(cacheKey, resolved);
+  const filenameMatched = options.filenameFallback
+    ? packageCandidates.filter((candidate) => path.parse(candidate).name === importedName)
+    : [];
+  const candidates = symbolFiles.length ? symbolFiles : filenameMatched;
+  const resolved =
+    candidates.length === 1 ? await confineJvmResolvedPath(projectRoot, path.resolve(candidates[0]!)) : null;
+  cache.set(cacheKey, resolved);
   return resolved;
 }
 
-export async function resolveJavaImportPath(projectRoot: string, spec: string): Promise<string | null> {
-  const cacheKey = `${projectRoot}::${spec}`;
-  const cached = javaImportResolutionCache.get(cacheKey);
-  if (cached !== undefined) return cached;
+export async function resolveKotlinImportPath(
+  projectRoot: string,
+  spec: string,
+  fromFile: string,
+): Promise<string | null> {
+  return await resolveJvmImportPath(projectRoot, spec, {
+    languageId: "kotlin",
+    allowBarePackage: true,
+    matchExactPackage: false,
+    filenameFallback: false,
+    fromFile,
+  });
+}
 
-  const parts = spec.split(".").filter(Boolean);
-  if (parts.length < 2) {
-    javaImportResolutionCache.set(cacheKey, null);
-    return null;
-  }
-
-  const projectIndex = await getJavaProjectSymbolIndex(projectRoot);
-  const exactPackageFiles = projectIndex.filesByPackage.get(spec) ?? [];
-  if (exactPackageFiles[0]) {
-    const resolved = path.resolve(exactPackageFiles[0]);
-    javaImportResolutionCache.set(cacheKey, resolved);
-    return resolved;
-  }
-
-  const importedName = parts[parts.length - 1]!;
-  const packageName = parts.slice(0, -1).join(".");
-
-  const packageCandidates = projectIndex.filesByPackage.get(packageName) ?? [];
-  if (importedName === "*") {
-    const resolved = packageCandidates[0] ? path.resolve(packageCandidates[0]) : null;
-    javaImportResolutionCache.set(cacheKey, resolved);
-    return resolved;
-  }
-
-  const symbolFiles = projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
-  const filenameMatched = packageCandidates.filter((candidate) => path.basename(candidate, ".java") === importedName);
-  const candidates = symbolFiles.length ? symbolFiles : filenameMatched;
-  const resolved = candidates.length === 1 ? path.resolve(candidates[0]!) : null;
-  javaImportResolutionCache.set(cacheKey, resolved);
-  return resolved;
+export async function resolveJavaImportPath(
+  projectRoot: string,
+  spec: string,
+  fromFile: string,
+): Promise<string | null> {
+  return await resolveJvmImportPath(projectRoot, spec, {
+    languageId: "java",
+    allowBarePackage: false,
+    matchExactPackage: true,
+    filenameFallback: true,
+    fromFile,
+  });
 }
 
 export function clearJvmResolutionCaches(): void {

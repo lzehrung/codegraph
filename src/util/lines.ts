@@ -3,7 +3,10 @@ import type { Pos } from "../types.js";
 export function collectLineStartOffsets(source: string): number[] {
   const lineStarts = [0];
   for (let index = 0; index < source.length; index += 1) {
-    if (source[index] === "\n") lineStarts.push(index + 1);
+    const char = source[index];
+    // A lone carriage return ends a line; `\r\n` is ended by its `\n` alone, so the pair
+    // contributes one line start rather than two.
+    if (char === "\n" || (char === "\r" && source[index + 1] !== "\n")) lineStarts.push(index + 1);
   }
   return lineStarts;
 }

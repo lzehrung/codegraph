@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { buildSymbolGraphDetailed } from "../src/graphs/symbol-graph-detailed.js";
 import { buildProjectIndex } from "../src/indexer/build-index.js";
-import { findImplementations } from "../src/indexer/type-hierarchy.js";
+import { findImplementations, findTypeHierarchy } from "../src/indexer/type-hierarchy.js";
 import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
@@ -302,5 +302,74 @@ nativeDescribe("type hierarchy language parity", () => {
       new Set(expectedRelations.map((expected) => `${expected.from}:${expected.relation}:${expected.to}`)),
     );
     expect(actualRelations).not.toContain("CppQualifiedDerived:extends:CppQualifierHost");
+  });
+
+  it("extracts JavaScript extends and Go interface and struct embedding", async () => {
+    const root = await mkTmpDir("cg-hierarchy-js-go-");
+    roots.push(root);
+    const fixtures: Record<string, string> = {
+      "hierarchy.js": [
+        "class JsBase {",
+        "  shared() { return 1; }",
+        "}",
+        "class JsChild extends JsBase {",
+        "  run() { return super.shared(); }",
+        "}",
+      ].join("\n"),
+      "hierarchy.go": [
+        "package hierarchy",
+        "",
+        "type GoBase interface {",
+        "  Base()",
+        "}",
+        "type GoWorker interface {",
+        "  GoBase",
+        "  Work()",
+        "}",
+        "type GoStruct struct {",
+        "  GoBase",
+        "}",
+        "type GoNamed struct {",
+        "  base GoBase",
+        "}",
+      ].join("\n"),
+    };
+    for (const [file, source] of Object.entries(fixtures)) await fs.writeFile(path.join(root, file), source);
+
+    const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+    const graph = await buildSymbolGraphDetailed(index);
+    const nodesByName = new Map([...graph.nodes.values()].map((node) => [node.name, node.id]));
+    const actualRelations = new Set(
+      graph.edges
+        .filter((edge) => edge.label && ["extends", "implements", "trait", "mixin"].includes(edge.label))
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}:${edge.label}:${graph.nodes.get(edge.to)?.name}`),
+    );
+
+    expect(actualRelations).toEqual(
+      new Set(["JsChild:extends:JsBase", "GoWorker:implements:GoBase", "GoStruct:implements:GoBase"]),
+    );
+
+    const jsChildId = nodesByName.get("JsChild");
+    expect(jsChildId, "JsChild was not indexed").toBeDefined();
+    if (jsChildId) {
+      const supers = findTypeHierarchy(graph, jsChildId, "super");
+      expect(supers.status).toBe("ok");
+      if (supers.status === "ok") {
+        expect(supers.relations.map((relation) => graph.nodes.get(relation.targetId)?.name)).toEqual(["JsBase"]);
+      }
+    }
+
+    const goBaseId = nodesByName.get("GoBase");
+    expect(goBaseId, "GoBase was not indexed").toBeDefined();
+    if (goBaseId) {
+      const implementations = findImplementations(index, graph, goBaseId);
+      expect(implementations.status).toBe("ok");
+      if (implementations.status === "ok") {
+        expect(implementations.implementations.map((match) => graph.nodes.get(match.symbolId)?.name).sort()).toEqual([
+          "GoStruct",
+          "GoWorker",
+        ]);
+      }
+    }
   });
 });

@@ -129,19 +129,23 @@ const definition: LanguageTestDefinition = {
 
 runLanguageTests(definition);
 
-function cFamilyIncludeCaptureTexts(source: string, support: LanguageSupport, name: "mod" | "from"): string[] {
+function cFamilyIncludeCaptureTexts(
+  source: string,
+  support: LanguageSupport,
+  kind: "imports" | "importBindings",
+): string[] {
   const results = getNativeQueryExecution(source, support).results;
-  const matches = name === "mod" ? results?.imports : results?.importBindings;
+  const matches = kind === "imports" ? results?.imports : results?.importBindings;
   return (matches ?? []).flatMap((match) =>
-    match.captures.filter((capture) => capture.name === name).map((capture) => capture.text),
+    match.captures.filter((capture) => capture.name === "from").map((capture) => capture.text),
   );
 }
 
 describe("C native queries", () => {
   it("keeps literal and identifier includes and rejects function-like include macros", async () => {
     const isolatedMacro = '#include MACRO("x.h")\n#define HAS_FOO 1\n';
-    expect(cFamilyIncludeCaptureTexts(isolatedMacro, C_SUPPORT, "mod")).toEqual([]);
-    expect(cFamilyIncludeCaptureTexts(isolatedMacro, C_SUPPORT, "from")).toEqual([]);
+    expect(cFamilyIncludeCaptureTexts(isolatedMacro, C_SUPPORT, "imports")).toEqual([]);
+    expect(cFamilyIncludeCaptureTexts(isolatedMacro, C_SUPPORT, "importBindings")).toEqual([]);
 
     const source = [
       '#include "x.h"',
@@ -155,11 +159,11 @@ describe("C native queries", () => {
     const expectedSpecs = ["x.h", "<stdio.h>", "HEADER"];
 
     for (const support of [C_SUPPORT, CPP_SUPPORT]) {
-      const mods = cFamilyIncludeCaptureTexts(source, support, "mod");
-      const froms = cFamilyIncludeCaptureTexts(source, support, "from");
-      expect(mods).toEqual(expectedCaptures);
+      const imports = cFamilyIncludeCaptureTexts(source, support, "imports");
+      const froms = cFamilyIncludeCaptureTexts(source, support, "importBindings");
+      expect(imports).toEqual(expectedCaptures);
       expect(froms).toEqual(expectedCaptures);
-      expect(mods).not.toContain("keep(void)");
+      expect(imports).not.toContain("keep(void)");
       expect(froms).not.toContain("keep(void)");
       expect(collectModuleSpecifiersFromSource(support, source).map((entry) => entry.spec)).toEqual(expectedSpecs);
     }

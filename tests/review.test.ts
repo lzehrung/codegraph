@@ -98,9 +98,11 @@ describe("Review report", () => {
     const tsFile = path.join(srcDir, "api.ts");
     const pythonFile = path.join(srcDir, "helper.py");
     const phpFile = path.join(srcDir, "helper.php");
+    const cFile = path.join(srcDir, "helper.c");
     await fsp.writeFile(tsFile, "export function helper(a: string, b: number) { return a + b; }\n", "utf8");
     await fsp.writeFile(pythonFile, "def helper(a: str, b: int) -> str:\n    return a\n", "utf8");
     await fsp.writeFile(phpFile, "<?php\nfunction helper($a, $b) { return $a; }\n", "utf8");
+    await fsp.writeFile(cFile, "int helper(int a, int b, int c) { return a + b; }\n", "utf8");
 
     const diffText = [
       "diff --git a/src/api.ts b/src/api.ts",
@@ -126,6 +128,13 @@ describe("Review report", () => {
       " <?php",
       "-function helper($a) { return $a; }",
       "+function helper($a, $b) { return $a; }",
+      "diff --git a/src/helper.c b/src/helper.c",
+      "index 1234567..abcdef0 100644",
+      "--- a/src/helper.c",
+      "+++ b/src/helper.c",
+      "@@ -1,1 +1,1 @@",
+      "-int helper(int a) { return a; }",
+      "+int helper(int a, int b, int c) { return a + b; }",
       "",
     ].join("\n");
 
@@ -133,7 +142,9 @@ describe("Review report", () => {
 
     expect(report.diagnostics?.memberResolutionCoverage?.receiverAwareLanguages).toContain("ts");
     expect(report.diagnostics?.memberResolutionCoverage?.receiverAwareLanguages).toContain("python");
-    expect(report.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("php");
+    expect(report.diagnostics?.memberResolutionCoverage?.receiverAwareLanguages).toContain("php");
+    expect(report.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("c");
+    expect(report.diagnostics?.memberResolutionCoverage?.limitedLanguages).not.toContain("php");
     expect(report.diagnostics?.memberResolutionCoverage?.limitedLanguages).not.toContain("python");
   });
 
@@ -697,7 +708,7 @@ describe("Review report", () => {
           supportedLanguageIds: [],
           filesUsed: 0,
           filesFellBack: 0,
-          fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 0 },
+          fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 0, sourceTooLarge: 0 },
           byLanguage: {},
           errors: [],
         },
@@ -3131,7 +3142,9 @@ describe("Review report: Python receiver member coverage", () => {
     const tsFile = path.join(srcDir, "api.ts");
     const pythonFile = path.join(srcDir, "helper.py");
     const phpFile = path.join(srcDir, "helper.php");
+    const cFile = path.join(srcDir, "helper.c");
     await fsp.writeFile(tsFile, "export function helper(a: string, b: number) { return a + b; }\n", "utf8");
+    await fsp.writeFile(cFile, "int helper(int a, int b, int c) { return a + b; }\n", "utf8");
     await fsp.writeFile(
       pythonFile,
       [
@@ -3176,6 +3189,13 @@ describe("Review report: Python receiver member coverage", () => {
       " <?php",
       "-function helper($a) { return $a; }",
       "+function helper($a, $b) { return $a; }",
+      "diff --git a/src/helper.c b/src/helper.c",
+      "index 1234567..abcdef0 100644",
+      "--- a/src/helper.c",
+      "+++ b/src/helper.c",
+      "@@ -1,1 +1,1 @@",
+      "-int helper(int a) { return a; }",
+      "+int helper(int a, int b, int c) { return a + b; }",
       "",
     ].join("\n");
 
@@ -3184,7 +3204,9 @@ describe("Review report: Python receiver member coverage", () => {
 
     expect(coverage?.receiverAwareLanguages).toContain("ts");
     expect(coverage?.receiverAwareLanguages).toContain("python");
-    expect(coverage?.limitedLanguages).toContain("php");
+    expect(coverage?.receiverAwareLanguages).toContain("php");
+    expect(coverage?.limitedLanguages).toContain("c");
+    expect(coverage?.limitedLanguages).not.toContain("php");
     expect(coverage?.limitedLanguages).not.toContain("python");
   });
 });

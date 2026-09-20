@@ -225,19 +225,19 @@ describe("native build worker batches", () => {
     };
     const workerResult = await workerExtractor(task);
 
-    expect(mainPrepared.nativeFallbackReason).toBe("queryFailure");
+    expect(mainPrepared.nativeFallbackReason).toBe("sourceTooLarge");
     expect(mainPrepared.nativeError).toBe(expectedDiagnostic);
     expect(mainAttempt.parsed).toBeNull();
-    expect(mainAttempt.nativeFallbackReason).toBe("queryFailure");
+    expect(mainAttempt.nativeFallbackReason).toBe("sourceTooLarge");
     expect(mainAttempt.nativeError).toBe(expectedDiagnostic);
     // Omit the diagnostic rather than setting it undefined: the field is optional, and
     // this asserts the no-diagnostic path.
     const { nativeError: _nativeError, ...withoutDiagnostic } = mainPrepared;
     const unlabeledAttempt = attemptParsePreparedFileContext(withoutDiagnostic);
     expect(unlabeledAttempt.parsed).toBeNull();
-    expect(unlabeledAttempt.nativeFallbackReason).toBe("queryFailure");
+    expect(unlabeledAttempt.nativeFallbackReason).toBe("sourceTooLarge");
     expect(unlabeledAttempt.nativeError).toBeUndefined();
-    expect(workerResult.fallbackReason).toBe("queryFailure");
+    expect(workerResult.fallbackReason).toBe("sourceTooLarge");
     expect(workerResult.error).toBe(expectedDiagnostic);
   });
 });

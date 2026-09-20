@@ -164,6 +164,7 @@ function initParserBackendDegradationReport(
         unavailable: 0,
         unsupportedLanguage: 0,
         queryFailure: 0,
+        sourceTooLarge: 0,
       },
       byLanguage: {},
       errors: [],
@@ -274,9 +275,7 @@ async function buildIndexedModuleForFile(args: {
   const { source, sup, nativeQueries, embeddedBlocks } = prepared;
   let tree: SyntaxTreeLike | undefined;
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id),
-    nativeSourceLimitFallback =
-      prepared.nativeFallbackReason === "queryFailure" &&
-      !!prepared.nativeError?.startsWith("source exceeds native byte limit");
+    nativeSourceLimitFallback = prepared.nativeFallbackReason === "sourceTooLarge";
 
   if (prepared.syntaxTree) {
     const parsedTree = new ProjectedSyntaxTree(source, prepared.syntaxTree);

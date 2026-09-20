@@ -1,6 +1,7 @@
 import path from "node:path";
 import { type ModuleSpecifier } from "../util/specifiers.js";
-import { extractHtmlAttributeSpecifiers } from "./html.js";
+import { DOCUMENT_HTML_FORMS } from "./html-forms.js";
+import { extractDocumentHtmlSpecifiers } from "./html.js";
 import { dedupeModuleSpecifiers, normalizeLinkSpecifier } from "./shared.js";
 
 function blankAsciidocLine(line: string): string {
@@ -116,11 +117,7 @@ export function extractAsciidocModuleSpecifiers(source: string): ModuleSpecifier
     if (normalized) out.push(normalized);
   }
 
-  out.push(
-    ...extractHtmlAttributeSpecifiers(cleaned, {
-      a: ["href"],
-    }),
-  );
+  out.push(...extractDocumentHtmlSpecifiers(cleaned, DOCUMENT_HTML_FORMS.adoc));
 
   return dedupeModuleSpecifiers(out);
 }

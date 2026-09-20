@@ -194,7 +194,7 @@ function emptyLanguageReport(filesFellBack: number): NativeBackendLanguageReport
     filesSeen: filesFellBack,
     filesUsed: 0,
     filesFellBack,
-    fallbackReasons: { unavailable: filesFellBack, unsupportedLanguage: 0, queryFailure: 0 },
+    fallbackReasons: { unavailable: filesFellBack, unsupportedLanguage: 0, queryFailure: 0, sourceTooLarge: 0 },
   };
 }
 
@@ -265,7 +265,7 @@ describe("degraded native backend language names", () => {
           supportedLanguageIds: [],
           filesUsed: 0,
           filesFellBack: 5,
-          fallbackReasons: { unavailable: 5, unsupportedLanguage: 0, queryFailure: 0 },
+          fallbackReasons: { unavailable: 5, unsupportedLanguage: 0, queryFailure: 0, sourceTooLarge: 0 },
           byLanguage: {
             js: emptyLanguageReport(1),
             python: emptyLanguageReport(2),

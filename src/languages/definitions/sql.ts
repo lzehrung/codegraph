@@ -25,6 +25,7 @@ export const SQL_DEF: LanguageDefinition = {
     comments: ["comment"],
   },
   graph: {
+    // SQL has no import specifier node; statements are the only capture.
     imports: "(statement) @stmt",
     exports: "",
     locals: "",

@@ -1,5 +1,6 @@
 import type { LanguageDefinition, SyntaxNodeLike } from "../types.js";
 import { registerLanguage } from "../registry.js";
+import { isNameFieldOnParent, nodeTypeIn } from "./shared.js";
 import { hasNonAsciiCodePoint } from "../../util/identifiers.js";
 
 function isTypeAliasLeftName(node: SyntaxNodeLike): boolean {
@@ -47,6 +48,25 @@ export function isPythonInstanceAttributeDeclaration(node: SyntaxNodeLike): bool
   }
   return false;
 }
+
+const PYTHON_GRAPH_IMPORT_QUERY = `
+      (import_statement name: (dotted_name) @from) @stmt
+      (import_statement name: (aliased_import name: (dotted_name) @from alias: (identifier) @alias)) @stmt
+      (import_from_statement module_name: (dotted_name) @from (wildcard_import)* @wild) @stmt
+      (import_from_statement (relative_import) @from (wildcard_import)* @wild) @stmt
+      ;; tree-sitter-python's future_import_statement has no named node for the
+      ;; \`__future__\` module; only the imported names are named children.
+      (future_import_statement) @stmt
+    `;
+
+// One match per statement so the native binding path that re-reads @stmt text
+// does not duplicate. `@from` still sits on the path-bearing node.
+const PYTHON_BINDING_QUERY = `
+      (import_statement . (_) @from) @stmt
+      (import_from_statement module_name: (dotted_name) @from) @stmt
+      (import_from_statement (relative_import) @from) @stmt
+      (future_import_statement) @stmt
+    `;
 
 export const PYTHON_DEF: LanguageDefinition = {
   id: "python",
@@ -101,11 +121,7 @@ export const PYTHON_DEF: LanguageDefinition = {
     comments: ["comment"],
   },
   graph: {
-    imports: `
-      (import_statement) @stmt
-      (import_from_statement) @stmt
-      (future_import_statement) @stmt
-    `,
+    imports: PYTHON_GRAPH_IMPORT_QUERY,
     // NOTE: These __all__ queries only capture module-level assignments.
     // Dynamic __all__ definitions inside functions, conditionals, or loops
     // (e.g., `if PY3: __all__ = [...]`) are not detected by these patterns.
@@ -176,11 +192,7 @@ export const PYTHON_DEF: LanguageDefinition = {
       ;; \`case [head, *tail]:\` binds the capture after the splat.
       (splat_pattern (identifier) @name)
     `,
-    importBindings: `
-      (import_statement) @stmt
-      (import_from_statement) @stmt
-      (future_import_statement) @stmt
-    `,
+    importBindings: PYTHON_BINDING_QUERY,
   },
   nodeTypes: {
     identifier: ["identifier"],
@@ -222,7 +234,7 @@ export const PYTHON_DEF: LanguageDefinition = {
     if (t === "as_pattern_target") return true;
     if (t === "as_pattern") return parent?.childForFieldName("alias") == null;
     if (t === "splat_pattern") return true;
-    if (t === "named_expression") return parent?.childForFieldName("name")?.id === node.id;
+    if (t === "named_expression") return isNameFieldOnParent(node, ["named_expression"]);
     if (t === "pattern_list" || t === "tuple_pattern") return true;
     // `assignment` exposes the target via the `left` field; a bare-identifier
     // initializer (`x = y`) makes `y` a direct namedChild too, so field
@@ -236,9 +248,8 @@ export const PYTHON_DEF: LanguageDefinition = {
     if (isTypeAliasLeftName(node)) return true;
     return !!t && ["function_definition", "class_definition"].includes(t);
   },
-  createsBlockScope: (n) => n.type === "module" || n.type === "block",
-  createsFunctionScope: (n) => n.type === "function_definition" || n.type === "lambda",
-  membersAreImplicitlyInScope: false,
+  createsBlockScope: nodeTypeIn(["module", "block"]),
+  createsFunctionScope: nodeTypeIn(["function_definition", "lambda"]),
   supportsCrossModuleSymbols: true,
   // A function body and a class body are both `block`, so only the function form blocks exports.
   exportScopeBlockers: ["function_definition>block"],

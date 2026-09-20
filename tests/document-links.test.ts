@@ -3,12 +3,25 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  extractAstroModuleSpecifiers,
+  extractHandlebarsModuleSpecifiers,
   extractHtmlAttributeSpecifiers,
   extractHtmlInlineScriptSpecifiers,
   extractHtmlStyleSpecifiers,
 } from "../src/document-links.js";
 import { collectGraph } from "../src/index.js";
-import { extractMarkdownLinkOccurrences } from "../src/document-links/markdown.js";
+import { extractAsciidocModuleSpecifiers } from "../src/document-links/asciidoc.js";
+import {
+  DOCUMENT_HTML_FORMS,
+  SHARED_HTML_TAG_ATTRS,
+  type DocumentHtmlFormId,
+} from "../src/document-links/html-forms.js";
+import {
+  extractMarkdownLinkOccurrences,
+  extractMarkdownModuleSpecifiers,
+  extractMdxModuleSpecifiers,
+} from "../src/document-links/markdown.js";
+import { extractRstModuleSpecifiers } from "../src/document-links/rst.js";
 
 describe("document link graph extraction", () => {
   it("ignores hash-only anchors and markdown image links", async () => {
@@ -860,6 +873,177 @@ describe("document link graph extraction", () => {
       { raw: "./raw.html", line: 5 },
     ]);
     expect(occurrences[0]?.range.start).toMatchObject({ line: 1, column: 10 });
+  });
+});
+
+describe("document format HTML forms", () => {
+  it("names a reason for every opt-out from the shared HTML forms", () => {
+    for (const [formatId, form] of Object.entries(DOCUMENT_HTML_FORMS)) {
+      const omitted: string[] = [];
+      if (form.attributes === null) {
+        omitted.push("attributes");
+      } else {
+        for (const tag of Object.keys(SHARED_HTML_TAG_ATTRS)) {
+          if (!(tag in form.attributes)) omitted.push(tag);
+        }
+      }
+      if (!form.inlineScript) omitted.push("inlineScript");
+      if (!form.inlineStyle) omitted.push("inlineStyle");
+
+      expect(Object.keys(form.optOuts).sort(), formatId).toEqual(omitted.sort());
+      for (const [omittedName, reason] of Object.entries(form.optOuts)) {
+        expect(reason.trim(), `${formatId}.${omittedName}`).not.toBe("");
+      }
+    }
+  });
+
+  it("runs every shared pass for HTML, Astro, and Handlebars", () => {
+    const fullFormIds: DocumentHtmlFormId[] = ["html", "astro", "hbs"];
+    for (const formatId of fullFormIds) {
+      const form = DOCUMENT_HTML_FORMS[formatId];
+      expect(form.attributes, formatId).toEqual(SHARED_HTML_TAG_ATTRS);
+      expect(form.inlineScript, formatId).toBe(true);
+      expect(form.inlineStyle, formatId).toBe(true);
+    }
+  });
+
+  it("extracts Astro attributes, inline script, inline style, and frontmatter", () => {
+    const source = [
+      "---",
+      'import Layout from "./Layout.astro";',
+      "---",
+      "<Layout>",
+      '  <a href="./guide.md">Guide</a>',
+      '  <link rel="stylesheet" href="./styles.css">',
+      '  <script src="./app.js"></script>',
+      '  <script>import "./inline.ts";</script>',
+      '  <style>@import "./theme.css";</style>',
+      "  <style>.hero { background: url(./bg.png); }</style>",
+      '  <img src="./image.png">',
+      "</Layout>",
+    ].join("\n");
+
+    expect(extractAstroModuleSpecifiers(source).map((entry) => entry.spec)).toEqual([
+      "./guide.md",
+      "./styles.css",
+      "./app.js",
+      "./image.png",
+      "./inline.ts",
+      "./theme.css",
+      "./bg.png",
+      "./Layout.astro",
+    ]);
+  });
+
+  it("extracts Astro scoped style imports and url references", () => {
+    const specs = extractAstroModuleSpecifiers(
+      '<style>@import "./theme.css";</style>\n<style>.hero { background: url(./bg.png); }</style>',
+    ).map((entry) => entry.spec);
+
+    expect(specs).toEqual(["./theme.css", "./bg.png"]);
+  });
+
+  it("extracts static Handlebars markup and inline passes while ignoring interpolated paths", () => {
+    const source = [
+      '<a href="./guide.adoc">Guide</a>',
+      "{{> ./partials/card}}",
+      "{{#> ./partials/block}}body{{/partials/block}}",
+      '<script src="./app.js"></script>',
+      '<script>import "./inline.js";</script>',
+      '<style>@import "./theme.css";</style>',
+      '<img src="./image.png">',
+      '<a href="{{dynamicPath}}">Dynamic</a>',
+    ].join("\n");
+
+    expect(extractHandlebarsModuleSpecifiers(source).map((entry) => entry.spec)).toEqual([
+      "./guide.adoc",
+      "./app.js",
+      "./image.png",
+      "./inline.js",
+      "./theme.css",
+      "./partials/card",
+      "./partials/block",
+    ]);
+  });
+
+  it("walks embedded HTML in Markdown except image sources, and keeps markdown exclusions", () => {
+    const source = [
+      "[Guide](./guide.md)",
+      "![Diagram](./images/diagram.svg)",
+      '<a href="./raw.html">Raw</a>',
+      '<link rel="stylesheet" href="./styles.css">',
+      '<script src="./app.js"></script>',
+      '<script>import "./inline.ts";</script>',
+      '<style>@import "./theme.css";</style>',
+      '<img src="./image.png">',
+      '<picture><source srcset="./wide.avif 1x"></picture>',
+      '<!-- <a href="./commented.html">Commented</a> -->',
+      "```html",
+      '<a href="./fenced.html">Fenced</a>',
+      "```",
+      '    <a href="./indented.html">Indented</a>',
+    ].join("\n");
+
+    expect(extractMarkdownModuleSpecifiers(source).map((entry) => entry.spec)).toEqual([
+      "./guide.md",
+      "./raw.html",
+      "./styles.css",
+      "./app.js",
+      "./inline.ts",
+      "./theme.css",
+    ]);
+  });
+
+  it("gives MDX the Markdown HTML form plus its JS specifiers", () => {
+    const source = [
+      'import Card from "./components/Card.tsx";',
+      "[Guide](./guide.md)",
+      '<script src="./app.js"></script>',
+      '<img src="./image.png">',
+    ].join("\n");
+
+    expect(extractMdxModuleSpecifiers(source).map((entry) => entry.spec)).toEqual([
+      "./guide.md",
+      "./app.js",
+      "./components/Card.tsx",
+    ]);
+  });
+
+  it("gives AsciiDoc the same embedded-HTML walk as Markdown, with ifdef and listing blocks masked", () => {
+    const source = [
+      "include::partials/live.adoc[]",
+      '<a href="./guide.adoc">Guide</a>',
+      '<link rel="stylesheet" href="./styles.css">',
+      '<script src="./app.js"></script>',
+      '<img src="./image.png">',
+      "----",
+      '<a href="./listing.adoc">Listing</a>',
+      "----",
+      "ifdef::never[]",
+      '<a href="./conditional.adoc">Conditional</a>',
+      "endif::[]",
+    ].join("\n");
+
+    expect(extractAsciidocModuleSpecifiers(source).map((entry) => entry.spec)).toEqual([
+      "./partials/live.adoc",
+      "./guide.adoc",
+      "./styles.css",
+      "./app.js",
+    ]);
+  });
+
+  it("keeps reStructuredText directive-based and ignores embedded HTML", () => {
+    const source = [
+      ".. include:: ./intro.rst",
+      "See :doc:`guide`.",
+      '<a href="./raw.html">Raw</a>',
+      '<link rel="stylesheet" href="./styles.css">',
+      '<script src="./app.js"></script>',
+      '<style>@import "./theme.css";</style>',
+      '<img src="./image.png">',
+    ].join("\n");
+
+    expect(extractRstModuleSpecifiers(source).map((entry) => entry.spec)).toEqual(["./guide", "./intro.rst"]);
   });
 });
 

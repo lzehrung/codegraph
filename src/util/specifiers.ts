@@ -1,6 +1,7 @@
 import path from "node:path";
 import { buildJsLikeLiteralMask, stripJsLikeComments, stripPythonCommentsAndStrings } from "./comments.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE, PYTHON_IDENTIFIER_SOURCE } from "./identifiers.js";
+import { buildTriviaMask } from "./trivia.js";
 import { normalizePath } from "./paths.js";
 
 export type ModuleSpecifierResolutionKind = "document" | "source" | "stylesheet";
@@ -109,8 +110,43 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
 
 type DynamicBase = "fileDir" | "filePath" | "project";
 type ParsedDynamicToken = { kind: "base"; base: DynamicBase } | { kind: "literal"; value: string };
+type FoldedPath = { base: DynamicBase; segments: string[] };
 
-function parseStringLiteralToken(token: string): string | null {
+/**
+ * Per-language inputs to the shared constant-path fold: the base tokens that root a computed
+ * path and the join-style helper calls that combine a base with literal segments. Tokens are
+ * compared after whitespace removal, so `dirname(__FILE__)` and `process.cwd()` fold like
+ * identifiers. Languages without a concatenation operator only fold join-helper arguments.
+ */
+type PathFoldProfile = {
+  bases: Readonly<Record<string, DynamicBase>>;
+  joinHelpers: readonly string[];
+  /** Top-level concatenation operator between constant parts (PHP `.`). */
+  concat?: string;
+};
+
+const JS_PATH_FOLD_PROFILE: PathFoldProfile = {
+  bases: {
+    __dirname: "fileDir",
+    __filename: "filePath",
+    "import.meta.url": "filePath",
+    "process.cwd()": "project",
+  },
+  joinHelpers: ["path.join", "path.resolve"],
+};
+
+const RUBY_PATH_FOLD_PROFILE: PathFoldProfile = {
+  bases: { __dir__: "fileDir" },
+  joinHelpers: ["File.join"],
+};
+
+const PHP_PATH_FOLD_PROFILE: PathFoldProfile = {
+  bases: { __DIR__: "fileDir", "dirname(__FILE__)": "fileDir" },
+  joinHelpers: [],
+  concat: ".",
+};
+
+function parseQuotedStringToken(token: string): string | null {
   const trimmed = token.trim();
   if (trimmed.length < 2) return null;
   const quote = trimmed[0];
@@ -120,7 +156,7 @@ function parseStringLiteralToken(token: string): string | null {
   return trimmed.slice(1, -1);
 }
 
-function splitTopLevelArgs(text: string): string[] | null {
+function splitTopLevelDelimited(text: string, delimiter: string): string[] | null {
   const args: string[] = [];
   let current = "";
   let depth = 0;
@@ -157,7 +193,7 @@ function splitTopLevelArgs(text: string): string[] | null {
       current += ch;
       continue;
     }
-    if (ch === "," && depth === 0) {
+    if (ch === delimiter && depth === 0) {
       const trimmed = current.trim();
       if (trimmed) args.push(trimmed);
       current = "";
@@ -171,36 +207,42 @@ function splitTopLevelArgs(text: string): string[] | null {
   return args;
 }
 
-function parseDynamicToken(token: string): ParsedDynamicToken | null {
+function parsePathToken(token: string, profile: PathFoldProfile): ParsedDynamicToken | null {
   const compact = token.replace(/\s+/g, "");
-  if (compact === "__dirname") {
-    return { kind: "base", base: "fileDir" };
-  }
-  if (compact === "__filename" || compact === "import.meta.url") {
-    return { kind: "base", base: "filePath" };
-  }
-  if (compact === "process.cwd()") {
-    return { kind: "base", base: "project" };
-  }
-  const literal = parseStringLiteralToken(token);
+  const base = profile.bases[compact];
+  if (base) return { kind: "base", base };
+  const literal = parseQuotedStringToken(token);
   if (literal !== null) {
     return { kind: "literal", value: literal };
   }
   return null;
 }
 
-function parsePathCallArg(argText: string): {
-  base: DynamicBase;
-  segments: string[];
-} | null {
-  const match = argText.match(/^\s*path\.(?:join|resolve)\s*\(([\s\S]*)\)\s*$/);
-  if (!match) return null;
-  const args = splitTopLevelArgs(match[1] ?? "");
-  if (!args?.length) return null;
+const JOIN_HELPER_PATTERNS = new WeakMap<PathFoldProfile, RegExp | null>();
+
+function joinHelperPatternFor(profile: PathFoldProfile): RegExp | null {
+  let pattern = JOIN_HELPER_PATTERNS.get(profile);
+  if (pattern === undefined) {
+    pattern = profile.joinHelpers.length
+      ? new RegExp(
+          `^\\s*(?:${profile.joinHelpers
+            .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+            .join("|")})\\s*\\(([\\s\\S]*)\\)\\s*$`,
+        )
+      : null;
+    JOIN_HELPER_PATTERNS.set(profile, pattern);
+  }
+  return pattern;
+}
+
+/** Folds an already-split argument list into one rooted base plus literal segments; mixed
+ * bases, missing bases, and unparseable tokens fold to null. */
+function foldPathTokens(args: string[], profile: PathFoldProfile): FoldedPath | null {
+  if (!args.length) return null;
   let base: DynamicBase | null = null;
   const segments: string[] = [];
   for (const arg of args) {
-    const token = parseDynamicToken(arg);
+    const token = parsePathToken(arg, profile);
     if (!token) return null;
     if (token.kind === "base") {
       if (base && base !== token.base) return null;
@@ -213,17 +255,34 @@ function parsePathCallArg(argText: string): {
   return { base, segments };
 }
 
-function parseNewUrlArg(argText: string): {
-  base: DynamicBase;
-  segments: string[];
-} | null {
+/**
+ * Shared constant-path fold for dynamic-import heuristics: either a join-helper call such as
+ * `path.join(__dirname, "src")` or, where the language declares a concatenation operator, a
+ * constant chain such as `__DIR__ . "/config.php"`. Anything needing runtime evaluation
+ * (variables, template placeholders, mixed bases) folds to null.
+ */
+function foldPathArgument(argText: string, profile: PathFoldProfile): FoldedPath | null {
+  const joinPattern = joinHelperPatternFor(profile);
+  const joinMatch = joinPattern ? joinPattern.exec(argText) : null;
+  if (joinMatch) {
+    const args = splitTopLevelDelimited(joinMatch[1] ?? "", ",");
+    return args ? foldPathTokens(args, profile) : null;
+  }
+  if (profile.concat !== undefined) {
+    const parts = splitTopLevelDelimited(argText, profile.concat);
+    return parts ? foldPathTokens(parts, profile) : null;
+  }
+  return null;
+}
+
+function foldNewUrlArgument(argText: string, profile: PathFoldProfile): FoldedPath | null {
   const match = argText.match(/^\s*new\s+URL\s*\(([\s\S]*)\)\s*$/);
   if (!match) return null;
-  const args = splitTopLevelArgs(match[1] ?? "");
+  const args = splitTopLevelDelimited(match[1] ?? "", ",");
   if (!args || args.length < 2) return null;
-  const firstLiteral = parseStringLiteralToken(args[0] ?? "");
+  const firstLiteral = parseQuotedStringToken(args[0] ?? "");
   if (!firstLiteral) return null;
-  const baseToken = parseDynamicToken(args[1] ?? "");
+  const baseToken = parsePathToken(args[1] ?? "", profile);
   if (!baseToken || baseToken.kind !== "base") return null;
   if (baseToken.base !== "filePath") return null;
   return { base: baseToken.base, segments: [firstLiteral] };
@@ -236,105 +295,137 @@ function buildRelativeSpecifier(fromFile: string, targetPath: string): string | 
   return rel.startsWith(".") ? rel : `./${rel}`;
 }
 
-export function extractJsTsDynamicSpecifiers(source: string, fromFile: string, projectRoot: string): ModuleSpecifier[] {
-  const out: ModuleSpecifier[] = [];
-  try {
-    const src = stripJsLikeComments(source);
-    const literalMask = buildJsLikeLiteralMask(src);
-    const seen = new Set<string>();
-    const addSpec = (spec: string | null) => {
-      if (!spec || seen.has(spec)) return;
-      seen.add(spec);
-      out.push({ spec, resolved: "heuristic", confidence: 0.7 });
-    };
-    const pathCallRe =
-      /(?<!["'`])\b(?:require|import)\s*\(\s*(path\.(?:join|resolve)\s*\((?:[^()]|\([^()]*\))*\))\s*\)/g;
-    for (const match of src.matchAll(pathCallRe)) {
-      if (!matchStartsInCode(literalMask, match)) continue;
-      const argText = match[1] ?? "";
-      const parsed = parsePathCallArg(argText);
-      if (!parsed) continue;
-      let basePath = projectRoot;
-      if (parsed.base === "fileDir") {
-        basePath = path.dirname(fromFile);
-      } else if (parsed.base === "filePath") {
-        basePath = fromFile;
-      }
-      const targetPath = path.resolve(basePath, ...parsed.segments);
-      addSpec(buildRelativeSpecifier(fromFile, targetPath));
-    }
-    const urlCallRe = /(?<!["'`])\b(?:require|import)\s*\(\s*(new\s+URL\s*\([^)]*\))\s*\)/g;
-    for (const match of src.matchAll(urlCallRe)) {
-      if (!matchStartsInCode(literalMask, match)) continue;
-      const argText = match[1] ?? "";
-      const parsed = parseNewUrlArg(argText);
-      if (!parsed) continue;
-      const baseDir = path.dirname(fromFile);
-      const targetPath = path.resolve(baseDir, ...parsed.segments);
-      addSpec(buildRelativeSpecifier(fromFile, targetPath));
-    }
-  } catch {
-    /* parse fallback: ignore */
+/** Resolves a folded path against the root its base names: fileDir names the file's
+ * directory, filePath the file itself, project the project root. */
+function resolveFoldedPathAgainstBase(folded: FoldedPath, fromFile: string, projectRoot: string): string | null {
+  let basePath = projectRoot;
+  if (folded.base === "fileDir") {
+    basePath = path.dirname(fromFile);
+  } else if (folded.base === "filePath") {
+    basePath = fromFile;
   }
-  return out;
+  return buildRelativeSpecifier(fromFile, path.resolve(basePath, ...folded.segments));
 }
+
+/** Resolves a folded path against the containing file's directory regardless of the named
+ * base: `new URL("./x", import.meta.url)` lives next to the file. */
+function resolveFoldedPathAgainstFileDir(folded: FoldedPath, fromFile: string): string | null {
+  return buildRelativeSpecifier(fromFile, path.resolve(path.dirname(fromFile), ...folded.segments));
+}
+
+/** Resolves a folded path by concatenation onto the containing file's directory, the way
+ * `File.join` and PHP's `.` operator build paths: a leading separator in a segment stays part
+ * of the file-relative path instead of resetting to a filesystem root. */
+function resolveFoldedPathByConcatenation(folded: FoldedPath, fromFile: string): string | null {
+  return buildRelativeSpecifier(fromFile, path.join(path.dirname(fromFile), ...folded.segments));
+}
+
+type DynamicImportPreparation = {
+  /** Python importlib alias tables collected once per file. */
+  pythonImportlibAliases?: Set<string>;
+  pythonImportModuleAliases?: Set<string>;
+};
+
+type DynamicImportShapeContext = {
+  /** The text the shape's pattern ran over (comment-blanked for the JS family). */
+  text: string;
+  match: RegExpMatchArray;
+  fromFile: string;
+  projectRoot: string;
+  preparation: DynamicImportPreparation;
+};
+
+type DynamicImportCallShape = {
+  /** Pattern over the entry's matching text; capture 1 holds the foldable argument, or the
+   * fold reads the argument from the match end (Python's escape-aware literal reader). */
+  pattern: RegExp;
+  fold: (context: DynamicImportShapeContext) => string | null;
+};
+
+type DynamicImportEntry = {
+  languageId: string;
+  /** Matching text, blanking comments through the shared trivia lexer where needed; string
+   * literals stay intact so folds can read their contents. */
+  text: (source: string) => string;
+  /** Non-code guard over the matching text; matches starting inside trivia are skipped. */
+  guard: (text: string) => Uint8Array | undefined;
+  /** Per-file preparation, evaluated once per extraction. */
+  prepare?: (source: string) => DynamicImportPreparation;
+  shapes: readonly DynamicImportCallShape[];
+};
+
+function foldCapturedPath(
+  profile: PathFoldProfile,
+  resolve: (folded: FoldedPath, fromFile: string, projectRoot: string) => string | null,
+): (context: DynamicImportShapeContext) => string | null {
+  return ({ match, fromFile, projectRoot }) => {
+    const folded = foldPathArgument(match[1] ?? "", profile);
+    return folded ? resolve(folded, fromFile, projectRoot) : null;
+  };
+}
+
+const JS_DYNAMIC_PATH_CALL_PATTERN =
+  /(?<!["'`])\b(?:require|import)\s*\(\s*(path\.(?:join|resolve)\s*\((?:[^()]|\([^()]*\))*\))\s*\)/g;
+const JS_DYNAMIC_URL_CALL_PATTERN = /(?<!["'`])\b(?:require|import)\s*\(\s*(new\s+URL\s*\([^)]*\))\s*\)/g;
+const RUBY_REQUIRE_FILE_JOIN_PATTERN =
+  /(?<![\p{XID_Continue}])require\s*\(?\s*(File\.join\s*\((?:[^()]|\([^()]*\))*\))/gu;
+const PHP_COMPUTED_INCLUDE_PATTERN =
+  /(?<![\p{XID_Continue}$])(?:include_once|include|require_once|require)\b\s*\(?\s*([^;\r\n]*?)\s*\)?\s*;/gu;
+
+const JS_TS_DYNAMIC_IMPORT_ENTRY: DynamicImportEntry = {
+  languageId: "js",
+  // Comments are blanked before matching so a `require(...)` inside a comment cannot match;
+  // string literals stay intact because the fold reads their contents.
+  text: stripJsLikeComments,
+  guard: buildJsLikeLiteralMask,
+  shapes: [
+    {
+      pattern: JS_DYNAMIC_PATH_CALL_PATTERN,
+      fold: foldCapturedPath(JS_PATH_FOLD_PROFILE, resolveFoldedPathAgainstBase),
+    },
+    {
+      pattern: JS_DYNAMIC_URL_CALL_PATTERN,
+      fold: ({ match, fromFile }) => {
+        const folded = foldNewUrlArgument(match[1] ?? "", JS_PATH_FOLD_PROFILE);
+        return folded ? resolveFoldedPathAgainstFileDir(folded, fromFile) : null;
+      },
+    },
+  ],
+};
+
+const RUBY_DYNAMIC_IMPORT_ENTRY: DynamicImportEntry = {
+  languageId: "ruby",
+  text: (source) => source,
+  guard: (text) => buildTriviaMask(text, "ruby"),
+  shapes: [
+    {
+      // Only the computed `require File.join(__dir__, ...)` form is folded here; bare-string
+      // requires flow through the static pipeline and `$LOAD_PATH` lookups stay external.
+      pattern: RUBY_REQUIRE_FILE_JOIN_PATTERN,
+      fold: foldCapturedPath(RUBY_PATH_FOLD_PROFILE, resolveFoldedPathByConcatenation),
+    },
+  ],
+};
+
+const PHP_DYNAMIC_IMPORT_ENTRY: DynamicImportEntry = {
+  languageId: "php",
+  text: (source) => source,
+  guard: (text) => buildTriviaMask(text, "php"),
+  shapes: [
+    {
+      // Computed `include`/`require` whose path is a constant chain rooted at `__DIR__` (or
+      // the legacy `dirname(__FILE__)`); plain string operands stay with the static pipeline
+      // and the include-path search stays external.
+      pattern: PHP_COMPUTED_INCLUDE_PATTERN,
+      fold: foldCapturedPath(PHP_PATH_FOLD_PROFILE, resolveFoldedPathByConcatenation),
+    },
+  ],
+};
 
 // Python module/package names are dotted sequences of PEP 3131 Unicode identifiers; a
 // per-segment character class (rather than Unicode letters/digits spanning the dots) keeps
 // a digit from matching directly after a `.` separator.
 const PYTHON_DOTTED_NAME_SOURCE = String.raw`${PYTHON_IDENTIFIER_SOURCE}(?:\.${PYTHON_IDENTIFIER_SOURCE})*`;
-
-function maskPythonString(source: string, mask: Uint8Array, start: number): number {
-  const quote = source[start]!;
-  const triple = source[start + 1] === quote && source[start + 2] === quote;
-  const delimiterLength = triple ? 3 : 1;
-  for (let offset = 0; offset < delimiterLength; offset += 1) {
-    mask[start + offset] = 1;
-  }
-
-  let index = start + delimiterLength;
-  while (index < source.length) {
-    const ch = source[index]!;
-    if (!triple && (ch === "\n" || ch === "\r")) return index;
-    mask[index] = 1;
-    if (ch === "\\") {
-      const nextIndex = index + 1;
-      if (nextIndex < source.length) mask[nextIndex] = 1;
-      index += 2;
-      continue;
-    }
-    if (ch === quote) {
-      if (!triple) return index + 1;
-      if (source[index + 1] === quote && source[index + 2] === quote) {
-        mask[index + 1] = 1;
-        mask[index + 2] = 1;
-        return index + delimiterLength;
-      }
-    }
-    index += 1;
-  }
-  return source.length;
-}
-
-function buildPythonNonCodeMask(source: string): Uint8Array | undefined {
-  if (!source.includes("#") && !source.includes("'") && !source.includes('"')) return undefined;
-  const mask = new Uint8Array(source.length);
-  for (let index = 0; index < source.length; index += 1) {
-    const ch = source[index]!;
-    if (ch === "#") {
-      while (index < source.length && source[index] !== "\n" && source[index] !== "\r") {
-        mask[index] = 1;
-        index += 1;
-      }
-      index -= 1;
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      index = maskPythonString(source, mask, index) - 1;
-    }
-  }
-  return mask;
-}
 
 const PYTHON_IMPORTLIB_ALIAS_PATTERN = new RegExp(
   String.raw`^importlib(?:\s+as\s+(${PYTHON_IDENTIFIER_SOURCE}))?$`,
@@ -502,50 +593,60 @@ function collectPythonDynamicImportAliases(source: string): {
   return { importlibAliases, importModuleAliases };
 }
 
-/**
- * Extracts best-effort Python dynamic imports whose first argument is a static module
- * string. Alias recognition is intentionally limited to direct `importlib` imports;
- * assignment flow and computed module names remain outside graph construction.
- */
-export function extractPythonDynamicSpecifiers(source: string): ModuleSpecifier[] {
-  const out: ModuleSpecifier[] = [];
-  try {
-    const mask = buildPythonNonCodeMask(source);
-    const { importlibAliases, importModuleAliases } = collectPythonDynamicImportAliases(source);
-    const seen = new Set<string>();
-    for (const match of source.matchAll(PYTHON_DYNAMIC_CALL_PREFIX_PATTERN)) {
-      if (!matchStartsInCode(mask, match)) continue;
-      const receiver = match[1] ?? "";
-      const member = match[2];
-      const isBuiltinImport = !member && receiver === "__import__";
-      const isImportlibCall = member === "import_module" && importlibAliases.has(receiver);
-      const isImportedFunctionCall = !member && importModuleAliases.has(receiver);
-      if (!isBuiltinImport && !isImportlibCall && !isImportedFunctionCall) continue;
-      const argumentStart = (match.index ?? 0) + (match[0]?.length ?? 0);
-      const spec = parsePythonStaticStringExpression(source, argumentStart);
-      if (!spec || !PYTHON_DYNAMIC_MODULE_PATTERN.test(spec) || seen.has(spec)) continue;
-      if (isBuiltinImport && spec.startsWith(".")) continue;
-      seen.add(spec);
-      out.push({ spec, resolved: "heuristic", confidence: 0.7 });
-    }
-  } catch {
-    /* parse fallback: ignore */
-  }
-  return out;
+/** Folds the argument of a Python dynamic import call into a static module string. Alias
+ * recognition is intentionally limited to direct `importlib` imports; assignment flow and
+ * computed module names remain outside graph construction. */
+function foldPythonDynamicModuleArgument(
+  source: string,
+  match: RegExpMatchArray,
+  preparation: DynamicImportPreparation,
+): string | null {
+  const importlibAliases = preparation.pythonImportlibAliases;
+  const importModuleAliases = preparation.pythonImportModuleAliases;
+  if (!importlibAliases || !importModuleAliases) return null;
+  const receiver = match[1] ?? "";
+  const member = match[2];
+  const isBuiltinImport = !member && receiver === "__import__";
+  const isImportlibCall = member === "import_module" && importlibAliases.has(receiver);
+  const isImportedFunctionCall = !member && importModuleAliases.has(receiver);
+  if (!isBuiltinImport && !isImportlibCall && !isImportedFunctionCall) return null;
+  const argumentStart = (match.index ?? 0) + (match[0]?.length ?? 0);
+  const spec = parsePythonStaticStringExpression(source, argumentStart);
+  if (!spec || !PYTHON_DYNAMIC_MODULE_PATTERN.test(spec)) return null;
+  // `__import__` cannot take a package argument, so a leading dot names nothing resolvable.
+  if (isBuiltinImport && spec.startsWith(".")) return null;
+  return spec;
 }
 
-type DynamicImportSpecifierExtractor = (source: string, fromFile: string, projectRoot: string) => ModuleSpecifier[];
+const PYTHON_DYNAMIC_IMPORT_ENTRY: DynamicImportEntry = {
+  languageId: "python",
+  text: (source) => source,
+  guard: (text) => buildTriviaMask(text, "python"),
+  prepare: (source) => {
+    const { importlibAliases, importModuleAliases } = collectPythonDynamicImportAliases(source);
+    return { pythonImportlibAliases: importlibAliases, pythonImportModuleAliases: importModuleAliases };
+  },
+  shapes: [
+    {
+      pattern: PYTHON_DYNAMIC_CALL_PREFIX_PATTERN,
+      fold: ({ text, match, preparation }) => foldPythonDynamicModuleArgument(text, match, preparation),
+    },
+  ],
+};
 
-const DYNAMIC_IMPORT_SPECIFIER_EXTRACTORS: Readonly<Record<string, DynamicImportSpecifierExtractor>> = {
-  js: extractJsTsDynamicSpecifiers,
-  ts: extractJsTsDynamicSpecifiers,
-  python: extractPythonDynamicSpecifiers,
+const DYNAMIC_IMPORT_SPECIFIER_EXTRACTORS: Readonly<Record<string, DynamicImportEntry>> = {
+  js: JS_TS_DYNAMIC_IMPORT_ENTRY,
+  ts: JS_TS_DYNAMIC_IMPORT_ENTRY,
+  python: PYTHON_DYNAMIC_IMPORT_ENTRY,
+  ruby: RUBY_DYNAMIC_IMPORT_ENTRY,
+  php: PHP_DYNAMIC_IMPORT_ENTRY,
 };
 
 /**
- * Shared adapter boundary for opt-in dynamic import heuristics. A language adapter
- * extracts only non-executed module candidates and leaves target resolution, provenance
- * merging, and graph construction to the common pipeline.
+ * Shared adapter boundary for opt-in dynamic import heuristics. A language entry supplies only
+ * its call shapes and trivia mask; the shared fold turns constant arguments into candidates,
+ * while target resolution, provenance merging, and graph construction stay in the common
+ * pipeline.
  */
 export function extractDynamicImportSpecifiers(
   languageId: string,
@@ -553,9 +654,27 @@ export function extractDynamicImportSpecifiers(
   fromFile: string,
   projectRoot: string,
 ): ModuleSpecifier[] {
-  const extractor = DYNAMIC_IMPORT_SPECIFIER_EXTRACTORS[languageId];
-  if (!extractor) return [];
-  return extractor(source, fromFile, projectRoot);
+  const entry = DYNAMIC_IMPORT_SPECIFIER_EXTRACTORS[languageId];
+  if (!entry) return [];
+  const out: ModuleSpecifier[] = [];
+  const seen = new Set<string>();
+  try {
+    const text = entry.text(source);
+    const guard = entry.guard(text);
+    const preparation = entry.prepare ? entry.prepare(source) : {};
+    for (const shape of entry.shapes) {
+      for (const match of text.matchAll(shape.pattern)) {
+        if (!matchStartsInCode(guard, match)) continue;
+        const spec = shape.fold({ text, match, fromFile, projectRoot, preparation });
+        if (!spec || seen.has(spec)) continue;
+        seen.add(spec);
+        out.push({ spec, resolved: "heuristic", confidence: 0.7 });
+      }
+    }
+  } catch {
+    /* parse fallback: ignore */
+  }
+  return out;
 }
 
 export function extractPythonSpecifiers(source: string): string[] {
