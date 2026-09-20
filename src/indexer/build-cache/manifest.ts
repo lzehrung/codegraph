@@ -110,6 +110,13 @@ export type IndexManifest = {
    */
   resolverEnvironmentFingerprint?: string;
   /**
+   * Declared-container index (container name to project-relative declaring files) as of the last
+   * build. An incremental build compares it to the index rebuilt from modules to invalidate the
+   * consumers whose imports name a container declaration that changed. Values are relative so a
+   * relocated project root does not spuriously invalidate.
+   */
+  declaredContainers?: Record<string, string[]>;
+  /**
    * Files added only for a caller-scoped build. Missing on older manifests and treated
    * as empty; incremental builds prune entries once callers stop supplying them.
    */
@@ -259,6 +266,33 @@ function resolveManifestSymlinkDirectories(
     resolvedDirectories.add(cacheAbsolutePath(projectRoot, relativeDirectory));
   }
   return [...resolvedDirectories];
+}
+
+/**
+ * Re-anchor a stored declared-container index against the current project root. Entries whose
+ * declaring files no longer fall under either root are dropped, which makes the next build treat
+ * those containers as removed and re-resolve their consumers.
+ */
+function resolveManifestDeclaredContainers(
+  projectRoot: string,
+  storedProjectRoot: string,
+  containers: unknown,
+): Record<string, string[]> | undefined {
+  if (containers === undefined) return undefined;
+  if (!containers || typeof containers !== "object" || Array.isArray(containers)) return undefined;
+  const resolved: Record<string, string[]> = {};
+  for (const [name, files] of Object.entries(containers as Record<string, unknown>)) {
+    if (!Array.isArray(files)) continue;
+    const absoluteFiles: string[] = [];
+    for (const file of files) {
+      if (typeof file !== "string") continue;
+      const storedFile = cacheAbsolutePath(storedProjectRoot, file);
+      if (!isFilePathWithinRoot(storedProjectRoot, storedFile)) continue;
+      absoluteFiles.push(cacheAbsolutePath(projectRoot, cacheRelativePath(storedProjectRoot, storedFile)));
+    }
+    if (absoluteFiles.length) resolved[name] = absoluteFiles;
+  }
+  return resolved;
 }
 
 export async function computeConfigHash(
@@ -449,13 +483,20 @@ export async function loadManifest(
       parsed.projectRoot,
       parsed.symlinkDirectories,
     );
+    const { declaredContainers: storedDeclaredContainers, ...parsedWithoutDeclaredContainers } = parsed;
+    const declaredContainers = resolveManifestDeclaredContainers(
+      projectRoot,
+      parsed.projectRoot,
+      storedDeclaredContainers,
+    );
     const migrated: IndexManifest = {
-      ...parsed,
+      ...parsedWithoutDeclaredContainers,
       version: MANIFEST_VERSION,
       projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
       files: transformManifestEntries(projectRoot, relativeFiles, false),
       transientFiles: sanitizeManifestTransientFilesForRoot(projectRoot, parsed.projectRoot, parsed.transientFiles),
       ...(symlinkDirectories !== undefined ? { symlinkDirectories } : {}),
+      ...(declaredContainers !== undefined ? { declaredContainers } : {}),
     };
     return migrated;
   } catch (error) {

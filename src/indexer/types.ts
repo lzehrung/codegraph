@@ -67,6 +67,13 @@ export type ModuleIndex = {
   exports: ExportEntry[];
   imports: ImportBinding[];
   locals: SymbolDef[];
+  /**
+   * Names of containers this file declares for project-wide import resolution (currently the
+   * C++20 `export module foo;` names). Cached with the module so an incremental build can
+   * rebuild the declared-container index without rereading unchanged files, and invalidate the
+   * consumers whose imports name a container this build changed.
+   */
+  declaredContainers?: string[];
 };
 
 export type ResolvedExport = { kind: "resolved"; def: SymbolDef } | { kind: "namespace"; file: FileId };

@@ -29,7 +29,7 @@ export function isCppNamedModuleSpecifier(spec: string): boolean {
   return CPP_NAMED_MODULE_SPECIFIER_PATTERN.test(spec);
 }
 
-function collectCppModuleNames(source: string): string[] {
+export function collectCppDeclaredModules(source: string): string[] {
   const masked = maskTrivia(source, "cpp");
   const names = new Set<string>();
   for (const match of masked.matchAll(CPP_MODULE_DECLARATION_PATTERN)) {
@@ -45,7 +45,7 @@ async function readCppModuleIndex(filePath: string): Promise<CppModuleIndexEntry
   if (cached) return cached;
 
   const source = await readUtf8WithoutBom(filePath);
-  const entry = { modules: collectCppModuleNames(source) };
+  const entry = { modules: collectCppDeclaredModules(source) };
   cppModuleFileCache.set(filePath, entry);
   return entry;
 }

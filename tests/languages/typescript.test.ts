@@ -424,6 +424,45 @@ describe("TypeScript per-specifier type-only bindings", () => {
     );
     expect(reexports).toHaveLength(5);
   });
+
+  it("keeps a default import named type as a runtime edge and binding", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-type-binding-"));
+    const mod = path.join(root, "mod.ts");
+    const types = path.join(root, "types.ts");
+    const consumer = path.join(root, "consumer.ts");
+    try {
+      await writeFile(mod, "export default 1;\n", "utf8");
+      await writeFile(types, "export class Widget {}\n", "utf8");
+      await writeFile(
+        consumer,
+        [
+          'import type from "./mod";',
+          'import type { Widget } from "./types";',
+          'import foo from "import type";',
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const index = await createTestIndexFromFiles(root, [mod, types, consumer]);
+      const module = index.byFile.get(fileIdentityKey(consumer));
+      const typeOnlyImports = (module?.imports ?? []).filter((binding) => binding.typeOnly);
+      expect(typeOnlyImports).toEqual([expect.objectContaining({ from: "./types", typeOnly: true })]);
+      expect((module?.imports ?? []).find((binding) => binding.from === "./mod")?.typeOnly).toBeFalsy();
+
+      const fromConsumer = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(consumer));
+      const typeOnlyTargets = fromConsumer
+        .filter((edge) => edge.typeOnly)
+        .map((edge) => (edge.to.type === "file" ? edge.to.path : edge.to.name));
+      expect(typeOnlyTargets).toEqual([types.replace(/\\/g, "/")]);
+      expect(
+        fromConsumer.some(
+          (edge) => !edge.typeOnly && edge.to.type === "file" && fileIdentityKey(edge.to.path) === fileIdentityKey(mod),
+        ),
+      ).toBeTruthy();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("TypeScript named function expression self-binding", () => {

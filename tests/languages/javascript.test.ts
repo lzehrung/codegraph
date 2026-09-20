@@ -275,4 +275,57 @@ describe("JavaScript type-only import and export edges", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps a default import named type as a runtime edge", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-js-type-binding-"));
+    const types = path.join(root, "types.js");
+    const mod = path.join(root, "mod.js");
+    const other = path.join(root, "other.js");
+    const multiline = path.join(root, "multiline.js");
+    const runtime = path.join(root, "runtime.js");
+    const main = path.join(root, "main.js");
+    try {
+      await writeFile(types, "export class Widget {}\n", "utf8");
+      await writeFile(mod, "export default 1;\n", "utf8");
+      await writeFile(other, "export default 2;\nexport const helper = 1;\n", "utf8");
+      await writeFile(multiline, "export default 3;\n", "utf8");
+      await writeFile(runtime, "export default 4;\n", "utf8");
+      await writeFile(
+        main,
+        [
+          'import type { Widget } from "./types.js";',
+          'import type from "./mod.js";',
+          'import type, { helper } from "./other.js";',
+          "import",
+          'type from "./multiline.js";',
+          'import foo from "import type";',
+          'import runtime from "./runtime.js"; // import type { Widget }',
+          'import typeOf from "./runtime.js";',
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const index = await createTestIndexFromFiles(root, [types, mod, other, multiline, runtime, main]);
+      const module = index.byFile.get(fileIdentityKey(main));
+      const typeOnlyImports = (module?.imports ?? []).filter((binding) => binding.typeOnly);
+      expect(typeOnlyImports).toEqual([expect.objectContaining({ from: "./types.js", typeOnly: true })]);
+      expect((module?.imports ?? []).filter((binding) => binding.from === "./mod.js")).toEqual([
+        expect.objectContaining({ from: "./mod.js", kind: "default", local: "type" }),
+      ]);
+      expect((module?.imports ?? []).find((binding) => binding.from === "./mod.js")?.typeOnly).toBeFalsy();
+
+      const fromMain = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(main));
+      const typeOnlyTargets = fromMain
+        .filter((edge) => edge.typeOnly)
+        .map((edge) => (edge.to.type === "file" ? edge.to.path : edge.to.name));
+      expect(typeOnlyTargets).toEqual([types.replace(/\\/g, "/")]);
+      expect(
+        fromMain.some(
+          (edge) => !edge.typeOnly && edge.to.type === "file" && fileIdentityKey(edge.to.path) === fileIdentityKey(mod),
+        ),
+      ).toBeTruthy();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

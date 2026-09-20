@@ -53,6 +53,7 @@ const EXCLUDED_STEMS = new Set([
   "query-hygiene",
   "graph-captures",
   "import-from-captures",
+  "cpp-module-incremental",
 ]);
 
 function usage() {

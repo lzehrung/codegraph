@@ -170,7 +170,7 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
   createsFunctionScope: nodeTypeIn([...ECMASCRIPT_FUNCTION_SCOPE_TYPES, "function"]),
   supportsCrossModuleSymbols: true,
   // JSDoc-typed `.js` files use `import type` / `export type`; the JS grammar has no type-only
-  // syntax, so classification matches the statement text like TypeScript's.
+  // syntax, so classification matches statement text. A binding named `type` stays runtime.
   isTypeOnly: isEcmaScriptTypeOnlyStatement,
   native: {
     normalizeQuery: (_kind, query) =>

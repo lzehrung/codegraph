@@ -42,8 +42,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * JVM/C#/PHP/Python symbol indexes are scoped to the nearest language manifest,
  * a directory hit becomes a file edge only for real module directories (Python
  * `__init__` packages, PEP 420 namespace directories, and Go package directories),
- * a leading BOM no longer discards tsconfig path mappings, and lone-CR sources
- * report real line numbers.
+ * a leading BOM no longer discards tsconfig path mappings, lone-CR sources report
+ * real line numbers, and cached modules persist `declaredContainers` so a consumer
+ * whose declaring file changed elsewhere is re-resolved on an incremental build.
  */
 export const CORE_ALGORITHM_EPOCH = 20;
 /**

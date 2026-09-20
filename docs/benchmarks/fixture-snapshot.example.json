@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-20T21:51:11.281Z",
+  "generatedAt": "2026-09-20T23:21:04.306Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.16.0",
-  "numTotalTests": 447,
+  "numTotalTests": 450,
   "numFailedTests": 0,
   "languages": [
     {
@@ -121,8 +121,8 @@
       "files": [
         "tests/languages/javascript.test.ts"
       ],
-      "tests": 11,
-      "passed": 11,
+      "tests": 12,
+      "passed": 12,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -275,8 +275,8 @@
       "files": [
         "tests/languages/tsx.test.ts"
       ],
-      "tests": 10,
-      "passed": 10,
+      "tests": 11,
+      "passed": 11,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -286,8 +286,8 @@
       "files": [
         "tests/languages/typescript.test.ts"
       ],
-      "tests": 15,
-      "passed": 15,
+      "tests": 16,
+      "passed": 16,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -318,12 +318,13 @@
   "unattributed": {
     "files": [
       "tests/languages/chunk-sfc.test.ts",
+      "tests/languages/cpp-module-incremental.test.ts",
       "tests/languages/graph-captures.test.ts",
       "tests/languages/import-from-captures.test.ts",
       "tests/languages/query-hygiene.test.ts"
     ],
-    "tests": 66,
-    "passed": 66,
+    "tests": 73,
+    "passed": 73,
     "failed": 0,
     "skipped": 0
   }

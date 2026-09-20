@@ -1,12 +1,23 @@
 import type { BlockDefinition, SyntaxNodeLike } from "../types.js";
+import { stripJsLikeComments } from "../../util/comments.js";
 import { isNameFieldOnParent, isNameOrPropertyFieldOnParent } from "./shared.js";
 
+function isStatementLevelTypeKeywordClause(clause: string): boolean {
+  const trimmed = clause.trim();
+  if (!/^type(?:\s+|(?=\{))/.test(trimmed)) return false;
+  return !trimmed.slice(4).trimStart().startsWith(",");
+}
+
 /**
- * `import type` / `export type` statements. The JS grammar has no type-only syntax (the
- * keyword parses as an ERROR node), so this matches the statement text instead.
+ * Statement-level `import type` / `export type`. The JS grammar has no type-only syntax
+ * (the keyword parses as an ERROR node), so this matches the statement text. A binding
+ * literally named `type` (`import type from "./mod"`) is a runtime import.
  */
 export function isEcmaScriptTypeOnlyStatement(stmtText: string): boolean {
-  return /\b(import|export)\s+type\b/.test(stmtText);
+  const text = stripJsLikeComments(stmtText).trim();
+  const fromMatch = /^(?:import|export)\b\s*([\s\S]*?)\bfrom\s*["']/.exec(text);
+  if (fromMatch) return isStatementLevelTypeKeywordClause(fromMatch[1] ?? "");
+  return /^(?:import|export)\b\s+type(?:\s+|(?=\{|$))/.test(text);
 }
 
 /** Declaration parents whose direct name child declares a name in both the JS and TS grammars. */
