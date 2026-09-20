@@ -6,9 +6,9 @@ Scope: this counts only the dedicated per-language smoke files, not a language's
 
 Regenerate with `npm run bench:fixtures`. Verify it is current with `npm run bench:fixtures:check`.
 
-Generated: 2026-09-20T20:40:21.077Z (Node v22.16.0)
+Generated: 2026-09-20T21:51:11.281Z (Node v22.16.0)
 
-Total across the 28 language suites: 446 tests, 0 failed.
+Total across the 28 language suites: 447 tests, 0 failed.
 The tests/languages run also executed 66 tests in cross-language files that are not attributed to a language: `tests/languages/chunk-sfc.test.ts`, `tests/languages/graph-captures.test.ts`, `tests/languages/import-from-captures.test.ts`, `tests/languages/query-hygiene.test.ts`.
 
 | Language         | Status  | Tests | Test file(s)                         |
@@ -17,7 +17,7 @@ The tests/languages run also executed 66 tests in cross-language files that are 
 | Astro            | passing | 6     | `tests/languages/astro.test.ts`      |
 | C                | passing | 17    | `tests/languages/c.test.ts`          |
 | C#               | passing | 26    | `tests/languages/csharp.test.ts`     |
-| C++              | passing | 18    | `tests/languages/cpp.test.ts`        |
+| C++              | passing | 19    | `tests/languages/cpp.test.ts`        |
 | CSS              | passing | 7     | `tests/languages/css.test.ts`        |
 | Go               | passing | 14    | `tests/languages/go.test.ts`         |
 | Handlebars       | passing | 3     | `tests/languages/hbs.test.ts`        |

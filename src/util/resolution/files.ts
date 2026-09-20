@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileIdentityKey, isFilePathWithinRoot } from "../paths.js";
@@ -21,6 +22,36 @@ function isExtensionManifestPattern(name: string): boolean {
   return name.startsWith("*.") && !name.includes("/") && !name.includes("\\");
 }
 
+/**
+ * A symlink counts as a manifest when `stat` follows it to a regular file.
+ * Directories, directory links, and dangling links are not manifests.
+ */
+async function direntIsManifestFile(entry: Dirent, fullPath: string): Promise<boolean> {
+  if (entry.isFile()) return true;
+  if (entry.isDirectory()) return false;
+  try {
+    const st = await fsp.stat(fullPath);
+    return st.isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function findExtensionManifestInDir(dir: string, suffix: string): Promise<string | null> {
+  let entries: Dirent[];
+  try {
+    entries = await fsp.readdir(dir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const entry of entries) {
+    if (!entry.name.toLowerCase().endsWith(suffix)) continue;
+    const fullPath = path.join(dir, entry.name);
+    if (await direntIsManifestFile(entry, fullPath)) return fullPath;
+  }
+  return null;
+}
+
 export async function findNearestFile(startDir: string, stopDir: string, fileName: string): Promise<string | null> {
   return await findNearestManifest(startDir, stopDir, [fileName]);
 }
@@ -37,13 +68,8 @@ export async function findNearestManifest(
     for (const name of names) {
       if (isExtensionManifestPattern(name)) {
         const suffix = name.slice(1).toLowerCase();
-        try {
-          const entries = await fsp.readdir(dir);
-          const hit = entries.find((entry) => entry.toLowerCase().endsWith(suffix));
-          if (hit) return path.join(dir, hit);
-        } catch {
-          // Unreadable directory: try the next name, then climb.
-        }
+        const hit = await findExtensionManifestInDir(dir, suffix);
+        if (hit) return hit;
         continue;
       }
       const candidate = path.join(dir, name);

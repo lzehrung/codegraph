@@ -303,6 +303,33 @@ describe("Import Resolution", () => {
     }
   });
 
+  it("skips a directory named tsconfig.json and still loads paths from a parent file", async () => {
+    const root = await mkTmpDir("dg-resolve-tsconfig-named-dir-");
+    const srcDir = path.join(root, "src");
+    const appFile = path.join(srcDir, "app.ts");
+    const aliasFile = path.join(srcDir, "alias.ts");
+
+    await fsp.mkdir(path.join(srcDir, "tsconfig.json"), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          baseUrl: ".",
+          paths: { "@alias": ["src/alias.ts"] },
+        },
+      }),
+      "utf8",
+    );
+    await fsp.writeFile(aliasFile, "export const value = 1;\n", "utf8");
+    await fsp.writeFile(appFile, 'import { value } from "@alias";\nexport const result = value;\n', "utf8");
+
+    clearImportResolutionCaches();
+    const { matchPath } = await loadNearestTsconfigFor(appFile, root);
+    expect(matchPath).toBeDefined();
+    const resolvedAlias = await resolveSpecifier(appFile, "@alias", root, matchPath);
+    expect(String(resolvedAlias).replace(/\\/g, "/")).toBe(aliasFile.replace(/\\/g, "/"));
+  });
+
   it("does not resolve node_modules packages to package directories without entry files", async () => {
     const root = await mkTmpDir("dg-resolve-node-modules-no-entry-");
     const appFile = path.join(root, "app.ts");

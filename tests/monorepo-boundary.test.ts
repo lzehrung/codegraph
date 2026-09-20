@@ -5,6 +5,11 @@ import fsp from "node:fs/promises";
 import { clearImportResolutionCaches, resolveImportSpecifier, resolvePythonModule } from "../src/util.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { resolveCsharpNamespaceImportPaths } from "../src/util/resolution/csharp.js";
+import {
+  CSHARP_PACKAGE_MANIFEST_NAMES,
+  findNearestManifest,
+  resolveNearestManifestRoot,
+} from "../src/util/resolution/files.js";
 import { resolveJavaImportPath, resolveKotlinImportPath } from "../src/util/resolution/jvm.js";
 import { resolvePhpImportPath } from "../src/util/resolution/php.js";
 import { createTestIndexFromFiles } from "./test-utils.js";
@@ -88,6 +93,54 @@ describe("monorepo resolution boundaries", () => {
 
     const fromB = await resolveCsharpNamespaceImportPaths(root, "Shared", libB);
     expect(fromB.map(posix)).toEqual([posix(libB)]);
+  });
+
+  it("skips a directory named like a csproj and still binds to a real sibling csproj", async () => {
+    const root = await mkTmpDir("dg-mono-csharp-csproj-dir-");
+    const pkgA = path.join(root, "packages", "a");
+    const pkgB = path.join(root, "packages", "b");
+    const libA = path.join(pkgA, "Lib.cs");
+    const libB = path.join(pkgB, "Lib.cs");
+    const appA = path.join(pkgA, "src", "App.cs");
+    const realProj = path.join(pkgA, "Thing.csproj");
+
+    await fsp.mkdir(path.join(pkgA, "build.csproj"), { recursive: true });
+    await fsp.mkdir(path.join(pkgA, "src", "obj.csproj"), { recursive: true });
+    await writeFile(realProj, '<Project Sdk="Microsoft.NET.Sdk"></Project>\n');
+    await writeFile(path.join(pkgB, "B.csproj"), '<Project Sdk="Microsoft.NET.Sdk"></Project>\n');
+    await writeFile(libA, "namespace Shared;\npublic class Lib {}\n");
+    await writeFile(libB, "namespace Shared;\npublic class Lib {}\n");
+    await writeFile(appA, "using Shared;\npublic class App { Shared.Lib lib; }\n");
+
+    const fromSrc = await findNearestManifest(path.dirname(appA), root, CSHARP_PACKAGE_MANIFEST_NAMES);
+    expect(posix(fromSrc ?? "")).toBe(posix(realProj));
+    const beside = await findNearestManifest(pkgA, root, CSHARP_PACKAGE_MANIFEST_NAMES);
+    expect(posix(beside ?? "")).toBe(posix(realProj));
+    expect(posix(await resolveNearestManifestRoot(root, appA, CSHARP_PACKAGE_MANIFEST_NAMES))).toBe(posix(pkgA));
+
+    const local = await resolveCsharpNamespaceImportPaths(root, "Shared", appA);
+    expect(local.map(posix)).toEqual([posix(libA)]);
+    expect(local.map(posix)).not.toContain(posix(libB));
+  });
+
+  it("falls back to the project root when the only *.csproj match is a directory", async () => {
+    const root = await mkTmpDir("dg-mono-csharp-csproj-dir-fallback-");
+    const pkgA = path.join(root, "packages", "a");
+    const pkgB = path.join(root, "packages", "b");
+    const libA = path.join(pkgA, "Lib.cs");
+    const libB = path.join(pkgB, "Lib.cs");
+    const appA = path.join(pkgA, "App.cs");
+
+    await fsp.mkdir(path.join(pkgA, "build.csproj"), { recursive: true });
+    await writeFile(libA, "namespace Shared;\npublic class Lib {}\n");
+    await writeFile(libB, "namespace Shared;\npublic class Lib {}\n");
+    await writeFile(appA, "using Shared;\npublic class App { Shared.Lib lib; }\n");
+
+    await expect(findNearestManifest(pkgA, root, CSHARP_PACKAGE_MANIFEST_NAMES)).resolves.toBeNull();
+    expect(posix(await resolveNearestManifestRoot(root, appA, CSHARP_PACKAGE_MANIFEST_NAMES))).toBe(posix(root));
+
+    const local = await resolveCsharpNamespaceImportPaths(root, "Shared", appA);
+    expect(local.map(posix).sort()).toEqual([posix(libA), posix(libB)].sort());
   });
 
   it("binds a PHP namespace to the nearest composer.json, not a sibling", async () => {

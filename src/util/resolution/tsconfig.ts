@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -30,12 +29,7 @@ async function findNearestTsconfig(startFromFile: string, projectRoot: string): 
   let dir = path.dirname(startFromFile);
   while (isFilePathWithinRoot(resolvedProjectRoot, dir)) {
     const candidate = path.join(dir, "tsconfig.json");
-    try {
-      await fsp.access(candidate, fs.constants.R_OK);
-      return candidate;
-    } catch {
-      /* file not found: continue up */
-    }
+    if (await fileExists(candidate)) return candidate;
     if (fileIdentityKey(dir) === projectRootKey) break;
     const parent = path.dirname(dir);
     if (!isFilePathWithinRoot(resolvedProjectRoot, parent)) break;

@@ -1,7 +1,8 @@
-import fs from "node:fs";
+import type { Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { confineResolvedPath, normalizePath } from "../paths.js";
+import { fileExists } from "../workspace.js";
 import { PYTHON_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRoot } from "./files.js";
 
 type FileId = string;
@@ -24,11 +25,8 @@ async function findPythonPackageAnchor(startDir: string, stopDir: string): Promi
   let topWithInit = startDir;
   const stop = path.resolve(stopDir);
   while (true) {
-    try {
-      await fsp.access(path.join(dir, "__init__.py"), fs.constants.R_OK);
+    if (await fileExists(path.join(dir, "__init__.py"))) {
       topWithInit = dir;
-    } catch {
-      /* no __init__.py: continue */
     }
     if (path.resolve(dir) === stop) break;
     const parent = path.dirname(dir);
@@ -47,7 +45,7 @@ async function directoryContainsImportablePython(dirPath: string, seen: Set<stri
   const key = path.resolve(dirPath);
   if (seen.has(key)) return false;
   seen.add(key);
-  let entries: fs.Dirent[];
+  let entries: Dirent[];
   try {
     entries = await fsp.readdir(dirPath, { withFileTypes: true });
   } catch {

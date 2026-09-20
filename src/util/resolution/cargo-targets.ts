@@ -151,8 +151,17 @@ async function addAutodiscoveredDirectory(
       await addCrateRoot(roots, probed, path.join(directory, entry.name, "main.rs"), projectRoot, true);
       continue;
     }
-    if (entry.name.endsWith(".rs")) {
-      await addCrateRoot(roots, probed, path.join(directory, entry.name), projectRoot, true);
+    if (!entry.name.endsWith(".rs")) continue;
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isFile()) {
+      await addCrateRoot(roots, probed, entryPath, projectRoot, true);
+      continue;
+    }
+    try {
+      const st = await fsp.stat(entryPath);
+      if (st.isFile()) await addCrateRoot(roots, probed, entryPath, projectRoot, true);
+    } catch {
+      // Dangling or unreadable symlink: not a crate root.
     }
   }
 }
