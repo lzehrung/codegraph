@@ -12,9 +12,10 @@ import {
   skipRustOuterAttribute,
   type ParsedRustImportStatement,
 } from "../../languages/import-statement-parsers.js";
-import { GO_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
+import { CSHARP_IDENTIFIER_SOURCE, GO_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { getPhpComposerImplicitFiles } from "../../util/resolution.js";
+import { resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
 import { extractRustModPathAttribute, resolveRustImportPath } from "../../util/resolution/rust.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia } from "./binding-ranges.js";
 import type { ImportBinding } from "../types.js";
@@ -271,16 +272,47 @@ function pushCsharpOverride(
   });
 }
 
+const CSHARP_EXTERN_ALIAS_PATTERN = new RegExp(String.raw`^extern\s+alias\s+(${CSHARP_IDENTIFIER_SOURCE})\s*;$`, "u");
+
 async function applyCsharpStatementOverride(
   context: LanguageSpecificImportContext,
   normalizedStmt: string,
   typeOnly: boolean,
 ): Promise<boolean> {
+  const externAlias = normalizedStmt.match(CSHARP_EXTERN_ALIAS_PATTERN)?.[1];
+  if (externAlias) {
+    // `extern alias X;` names a compiler-provided alias for an assembly's extern alias. It has no
+    // first-party or package target, so it stays an unresolved namespace binding and produces no
+    // dependency edge: the graph query does not treat it as an import specifier.
+    context.pushBinding({ kind: "namespace", localNS: externAlias, from: externAlias });
+    return true;
+  }
+
   const parsed = parseCsharpUsingDirective(normalizedStmt);
   if (!parsed) return false;
 
+  // A target that is itself a declared namespace is a namespace alias, even when the alias is
+  // written in alias form. Resolving it here keeps the local name a namespace so member
+  // navigation can reach the declaring file instead of treating the last segment as a type.
+  // A namespace split across several files has no single target, so it keeps the local alias
+  // as an unresolved namespace rather than claiming one of the declaring files.
+  const namespaceTargets = await resolveCsharpNamespaceImportPaths(context.projectRoot, parsed.from);
+  if (parsed.alias && namespaceTargets.length) {
+    context.pushBinding({
+      kind: "namespace",
+      localNS: parsed.alias,
+      from: parsed.from,
+      ...(namespaceTargets.length === 1 ? { resolved: namespaceTargets[0]!.replace(/\\/g, "/") } : {}),
+      typeOnly,
+    });
+    return true;
+  }
+
   let fromValue = parsed.from;
   let resolved = await context.resolveFrom(fromValue);
+  if (typeof resolved !== "string" && namespaceTargets.length === 1) {
+    resolved = namespaceTargets[0]!.replace(/\\/g, "/");
+  }
   if (parsed.alias) {
     const fromParts = parsed.from.split(".");
     if (typeof resolved !== "string" && fromParts.length > 1) {

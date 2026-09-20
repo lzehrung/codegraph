@@ -10,8 +10,7 @@ export type SqlArtifactNodeKind =
   | "sql_view_candidate"
   | "sql_index_candidate"
   | "sql_constraint_candidate"
-  | "sql_routine_candidate"
-  | "sql_current_schema";
+  | "sql_routine_candidate";
 
 export type SqlArtifactEdgeKind =
   | "sql_contains_statement"

@@ -9,6 +9,25 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Added
+
+- Go receiver method calls resolve. A Go `method_declaration` now publishes a `member_of` edge to its receiver type, so `b.GoHelper()` produces a resolved `calls` edge for value, pointer, and `var`-declared receivers, and `callers`, `callees`, and impact report those call sites. A same-named package function is never attributed to a method, and interface-typed or factory-assigned receivers still emit nothing.
+- Python receiver member navigation resolves `self` and `cls` members, attributes assigned in `__init__`, unique members inherited from declared bases, and locals assigned from a direct constructor call (`svc = Service()` or `svc: Service = Service()`). Python now appears in `diagnostics.memberResolutionCoverage.receiverAwareLanguages`; factory-assigned and unannotated-parameter receivers stay unresolved.
+- C# namespace aliases resolve to first-party files. `using X = Project.Namespace;` contributes a dependency edge to every file declaring that namespace in block or file-scoped form, and a namespace declared in exactly one file also binds the alias, so member access through it navigates. A split namespace keeps the alias unresolved, and an external namespace such as `System.Collections.Generic` stays external.
+- C# positional record components are indexed as variable locals, matching Java records, and `extern alias X;` is recognized as a local namespace alias with no dependency edge.
+- SCSS go-to-definition and find references resolve same-file declarations and uses, including `$variable` reads, `@include` mixin names, and `@extend %placeholder`. Namespaced `@use` members and cross-file SCSS navigation stay unresolved.
+- TypeScript and TSX named function expressions, including named generator function expressions, bind their own name inside the function body, matching JavaScript. The name is not exported and does not resolve from a sibling statement.
+- C++20 module declarations are indexed: `export module foo;` publishes the module name, a first-party `import foo;` resolves to the declaring file like a `#include`, and `import std;` stays external. The C++ grammar is pinned to the upstream revision that exposes the module nodes.
+- SQL impact mapping is object level. A changed SQL object becomes a changed symbol and impacts only files that read it, with a symbol-level reason; an unreferenced object in the same file no longer fans out to those readers, and unmapped statements still fall back to file-level impact.
+
+### Fixed
+
+- The generated fixture test matrix is current again. `npm run bench:fixtures:check` failed on the cross-language `tests/languages/query-hygiene.test.ts` stem instead of comparing counts, so `docs/benchmarks/fixture-snapshot.md` reported 256 tests while the suites ran 477. The check now runs in CI, and the generated snapshot JSON is excluded from Prettier so the format and freshness gates stop contradicting each other.
+
+### Changed
+
+- `docs/language-parity.md` now groups its capability notes by surface instead of one flat list, and corrects claims that no longer matched the code: `this.member` navigation resolves, reduced-mode regex import recovery is JavaScript/TypeScript only, `exports` publishes type members only for languages whose query captures them, and the Vue and Svelte native-addon cells state that single-file-component indexing uses the embedded JS/TS, HTML, and CSS grammars. Node.js, Java/Kotlin, and .NET project-name verdicts and the Gradle ignore default are fixed.
+
 ## [2.3.28] - 2026-09-20
 
 ### Fixed

@@ -205,18 +205,59 @@ export function emitMemberOwnershipEdges(
   classNodes: DetailedClassNode[],
 ): void {
   for (const fn of functionNodes) {
-    const owners = classNodes
-      .filter(
-        (candidate) => candidate.node.startIndex <= fn.node.startIndex && candidate.node.endIndex >= fn.node.endIndex,
-      )
-      .sort((left, right) => left.node.endIndex - left.node.startIndex - (right.node.endIndex - right.node.startIndex));
-    const owner = owners[0];
-    if (!owner) continue;
+    const ownerDef = memberOwnerDef(context, fn, classNodes);
+    if (!ownerDef) continue;
     const memberId = ensureNode(context, fn.def);
     markImplementationTarget(context, memberId, fn.node, fn.def);
     markMemberArity(context, memberId, fn.node);
-    recordDefEdge(context, memberId, owner.def, "member_of");
+    recordDefEdge(context, memberId, ownerDef, "member_of");
   }
+}
+
+/** Lexical class body, or the named Go receiver type for an out-of-line method. */
+function memberOwnerDef(
+  context: EdgePassContext,
+  fn: DetailedFunctionNode,
+  classNodes: DetailedClassNode[],
+): SymbolDef | null {
+  if (context.sup.id === "go" && fn.node.type === "method_declaration") {
+    return goMethodReceiverTypeDef(context, fn.node);
+  }
+  const owners = classNodes
+    .filter(
+      (candidate) => candidate.node.startIndex <= fn.node.startIndex && candidate.node.endIndex >= fn.node.endIndex,
+    )
+    .sort((left, right) => left.node.endIndex - left.node.startIndex - (right.node.endIndex - right.node.startIndex));
+  return owners[0]?.def ?? null;
+}
+
+/** Receiver type of `func (b *T) M()` / `func (b T) M()`, unwrapped through pointers. */
+function goMethodReceiverTypeDef(context: EdgePassContext, methodNode: SyntaxNodeLike): SymbolDef | null {
+  const receiver = methodNode.childForFieldName("receiver");
+  const parameter =
+    receiver?.namedChildren.find((child) => child.type === "parameter_declaration") ?? receiver?.namedChildren[0];
+  const typeNode = parameter?.childForFieldName("type");
+  const namedType = typeNode ? unwrapGoNamedType(typeNode) : null;
+  if (!namedType) return null;
+  const target = context.resolveIdentifier(sliceText(namedType, context.source), namedType);
+  return target && declaresMembers(target) ? target : null;
+}
+
+/** Base type identifier of a Go receiver type, or null if it is not a named type. */
+function unwrapGoNamedType(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  let current: SyntaxNodeLike | null = node;
+  while (current) {
+    if (current.type === "parenthesized_type" || current.type === "pointer_type") {
+      current = current.namedChildren[0] ?? null;
+      continue;
+    }
+    if (current.type === "generic_type") {
+      current = current.childForFieldName("type") ?? current.namedChildren[0] ?? null;
+      continue;
+    }
+    break;
+  }
+  return current?.type === "type_identifier" ? current : null;
 }
 
 /** Type-like defs only, so a PHP `use function` alias cannot steal `Example::m()`. */

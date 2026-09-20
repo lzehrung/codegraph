@@ -60,6 +60,10 @@ const definition: LanguageTestDefinition = {
           from: "namespace-usage.cpp",
           to: { type: "file", path: "namespaces.hpp" },
         },
+        {
+          from: "module-import.cpp",
+          to: { type: "external", name: "foo" },
+        },
       ],
       symbols: [
         {
@@ -114,7 +118,6 @@ const definition: LanguageTestDefinition = {
         },
       ],
     },
-    absentDependencyGraph: [{ from: "module-import.cpp", to: { type: "external", name: "foo" } }],
     goToDefinition: [
       {
         name: "go to definition resolves namespace-qualified Widget alias target",
@@ -157,24 +160,24 @@ describe("C++ language boundaries", () => {
     }
   });
 
-  it("documents the C++20 module grammar limitation without exporting pseudo-declarations", () => {
+  it("indexes C++20 module declarations without exporting the module keyword", () => {
     const source = "export module foo;\nimport foo;\n";
     const tree = parseSyntaxTree(source, "cpp");
     // The interned kind table is exactly the set of node kinds the projection produced.
-    expect(tree.kinds).not.toContain("module_declaration");
-    expect(tree.kinds).not.toContain("import_declaration");
+    expect(tree.kinds).toContain("module_declaration");
+    expect(tree.kinds).toContain("import_declaration");
 
     const exports = runQuery(source, "cpp", CPP_SUPPORT.queries.exports);
     const names = exports.matches.flatMap((match) =>
       match.captures.filter((capture) => capture.name === "name").map((capture) => capture.text),
     );
+    expect(names).toContain("foo");
     expect(names).not.toContain("module");
-    expect(names).not.toContain("foo");
   });
 });
 
 describe("C++ native queries", () => {
-  it("captures qualified and in-class members without publishing module syntax", () => {
+  it("captures qualified and in-class members and the module name without keyword tokens", () => {
     const source = `
       #define FOO(x) (x)
       namespace outer::inner {}
@@ -189,10 +192,11 @@ describe("C++ native queries", () => {
     `;
     const names = collectCppNames("probe.cpp", source);
 
-    expect(names.exports).toEqual(expect.arrayContaining(["FOO", "outer", "inner", "U", "f", "~A", "operator+="]));
+    expect(names.exports).toEqual(
+      expect.arrayContaining(["FOO", "outer", "inner", "U", "f", "~A", "operator+=", "foo"]),
+    );
     expect(names.exports).not.toContain("module");
     expect(names.exports).not.toContain("std");
-    expect(names.exports).not.toContain("foo");
     expect(names.exports).not.toContain("sum");
     expect(names.locals).toEqual(expect.arrayContaining(["sum"]));
   });
@@ -519,5 +523,60 @@ describe("C++ Unicode symbol ranges (C11)", () => {
       source: "// café ☕ prüfung\n/* über */ int créer() {\n\treturn 1;\n}\n",
       symbolName: "créer",
     });
+  });
+});
+
+describe("C++20 modules", () => {
+  it("indexes a module declaration and binds first-party imports without treating std as in-repo", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-modules-"));
+    const declaring = path.join(root, "foo.cpp");
+    const importing = path.join(root, "user.cpp");
+    try {
+      await fs.writeFile(declaring, "export module foo;\n", "utf8");
+      await fs.writeFile(importing, "import foo;\nimport std;\n", "utf8");
+      await fs.writeFile(
+        path.join(root, "codegraph.config.json"),
+        JSON.stringify({
+          graph: {
+            resolutionHints: ["."],
+          },
+        }),
+        "utf8",
+      );
+
+      const snapshot = await createAgentSession({
+        root,
+        buildOptions: { cache: "memory" },
+      }).loadProject();
+      const normalizedDeclaring = normalizePath(declaring);
+      const normalizedImporting = normalizePath(importing);
+      const symbols = listSymbols(snapshot.index, { file: declaring });
+
+      expect(symbols).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "foo",
+            kind: "class",
+          }),
+        ]),
+      );
+      expect(snapshot.fileGraph.edges).toContainEqual(
+        expect.objectContaining({
+          from: normalizedImporting,
+          to: { type: "file", path: normalizedDeclaring },
+        }),
+      );
+      expect(snapshot.fileGraph.edges).toContainEqual(
+        expect.objectContaining({
+          from: normalizedImporting,
+          to: { type: "external", name: "std" },
+        }),
+      );
+      expect(snapshot.fileGraph.edges.some((edge) => edge.to.type === "external" && edge.to.name === "foo")).toBe(
+        false,
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });

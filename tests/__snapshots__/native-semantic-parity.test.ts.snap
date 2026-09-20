@@ -825,7 +825,9 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 39`] = `
 {
   "goto": {
-    "status": "not_found",
+    "file": "_variables.scss",
+    "line": 3,
+    "status": "ok",
   },
   "references": {
     "refs": [
@@ -839,7 +841,9 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 40`] = `
 {
   "goto": {
-    "status": "not_found",
+    "file": "_variables.scss",
+    "line": 3,
+    "status": "ok",
   },
   "references": {
     "refs": [
@@ -1163,6 +1167,38 @@ exports[`native semantic coverage > keeps native semantics stable without treati
       "src/aaa_owner.rs:3",
       "src/shared.rs:1",
       "src/shared.rs:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > scss go-to-definition resolves indexed declaration locals 1`] = `
+{
+  "goto": {
+    "file": "_variables.scss",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "_variables.scss:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > scss go-to-definition resolves indexed declaration locals 2`] = `
+{
+  "goto": {
+    "file": "_variables.scss",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "_variables.scss:3",
     ],
     "status": "ok",
   },

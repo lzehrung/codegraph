@@ -1042,3 +1042,157 @@ describe("Python native import bindings", () => {
     }
   });
 });
+
+describe("Python receiver member declarations", () => {
+  async function collectModule(source: string) {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-receiver-decls-"));
+    const file = path.join(root, "test.py");
+    await fsp.writeFile(file, source, "utf8");
+    try {
+      const parsed = await parseFile(file);
+      return collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
+        ...(parsed.nativeQueries === undefined ? {} : { nativeQueries: parsed.nativeQueries }),
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it("indexes self and cls attributes assigned in methods as class members, not exports", async () => {
+    const mod = await collectModule(`
+class Holder:
+    def __init__(self, value):
+        self.value = value
+        hidden = 1
+
+    @classmethod
+    def mark(cls):
+        cls.tagged = True
+`);
+    const members = mod.locals.filter((entry) => entry.isMember);
+    const memberNames = members.map((entry) => entry.localName).sort();
+    expect(memberNames).toEqual(expect.arrayContaining(["__init__", "mark", "value", "tagged"]));
+    expect(members.some((entry) => entry.localName === "value")).toBe(true);
+    expect(members.some((entry) => entry.localName === "tagged")).toBe(true);
+    expect(mod.locals.some((entry) => entry.localName === "hidden" && entry.isMember)).toBe(false);
+    const exportedNames = mod.exports.map((entry) => exportedNameOf(entry));
+    expect(exportedNames).toContain("Holder");
+    expect(exportedNames).not.toContain("value");
+    expect(exportedNames).not.toContain("tagged");
+    expect(exportedNames).not.toContain("hidden");
+  });
+});
+
+describe("Python receiver member navigation", () => {
+  it("resolves self, cls, inherited, and constructor-assigned members, and keeps unproven receivers unresolved", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-receiver-lang-"));
+    const file = path.join(root, "models.py").replace(/\\/g, "/");
+    const source = [
+      "class Base:",
+      "    def base_method(self):",
+      "        return 1",
+      "",
+      "class Service(Base):",
+      '    kind = "svc"',
+      "    def __init__(self, name):",
+      "        self.name = name",
+      "    def run(self):",
+      "        return self.name",
+      "    def call_self(self):",
+      "        run = 0",
+      "        return self.run()",
+      "    def use_inherited(self):",
+      "        return self.base_method()",
+      "    @classmethod",
+      "    def from_kind(cls):",
+      "        return cls.kind",
+      "",
+      "class Other:",
+      "    def run(self):",
+      "        return 2",
+      "",
+      "def run():",
+      "    return 0",
+      "",
+      "def make_service():",
+      '    return Service("x")',
+      "",
+      "def via_constructor():",
+      "    svc = Service()",
+      "    return svc.run()",
+      "",
+      "def via_annotated():",
+      "    svc: Service = Service()",
+      "    return svc.run()",
+      "",
+      "def via_factory():",
+      "    svc = make_service()",
+      "    return svc.run()",
+      "",
+      "def via_param(svc):",
+      "    return svc.run()",
+      "",
+      "def via_other():",
+      "    other = Other()",
+      "    return other.run()",
+      "",
+    ].join("\n");
+    await fsp.writeFile(file, source, "utf8");
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const lines = source.split("\n");
+      const columnOf = (line: number, token: string): number => {
+        const indexOf = lines[line - 1]!.indexOf(token);
+        if (indexOf < 0) throw new Error(`Expected token ${token} on fixture line ${line}`);
+        return indexOf + 1;
+      };
+
+      const selfRun = await goToDefinition(index, { file, line: 13, column: columnOf(13, "run") });
+      expect(selfRun.status).toBe("ok");
+      if (selfRun.status === "ok") expect(selfRun.definition.range.start.line).toBe(9);
+
+      const selfName = await goToDefinition(index, { file, line: 10, column: columnOf(10, "name") });
+      expect(selfName.status).toBe("ok");
+      if (selfName.status === "ok") expect(selfName.definition.range.start.line).toBe(8);
+
+      const clsKind = await goToDefinition(index, { file, line: 18, column: columnOf(18, "kind") });
+      expect(clsKind.status).toBe("ok");
+      if (clsKind.status === "ok") expect(clsKind.definition.range.start.line).toBe(6);
+
+      const inherited = await goToDefinition(index, { file, line: 15, column: columnOf(15, "base_method") });
+      expect(inherited.status).toBe("ok");
+      if (inherited.status === "ok") expect(inherited.definition.range.start.line).toBe(2);
+
+      const constructed = await goToDefinition(index, { file, line: 32, column: columnOf(32, "run") });
+      expect(constructed.status).toBe("ok");
+      if (constructed.status === "ok") expect(constructed.definition.range.start.line).toBe(9);
+
+      const annotated = await goToDefinition(index, { file, line: 36, column: columnOf(36, "run") });
+      expect(annotated.status).toBe("ok");
+      if (annotated.status === "ok") expect(annotated.definition.range.start.line).toBe(9);
+
+      const factory = await goToDefinition(index, { file, line: 40, column: columnOf(40, "run") });
+      expect(factory.status).toBe("not_found");
+
+      const param = await goToDefinition(index, { file, line: 43, column: columnOf(43, "run") });
+      expect(param.status).toBe("not_found");
+
+      const unrelated = await goToDefinition(index, { file, line: 47, column: columnOf(47, "run") });
+      expect(unrelated.status).toBe("ok");
+      if (unrelated.status === "ok") expect(unrelated.definition.range.start.line).toBe(21);
+
+      const methodRefs = await findReferences(index, { file, line: 9, column: columnOf(9, "run") });
+      expect(methodRefs.status).toBe("ok");
+      if (methodRefs.status === "ok") {
+        const linesHit = methodRefs.references.map((reference) => reference.range.start.line);
+        expect(linesHit).toEqual(expect.arrayContaining([9, 13, 32, 36]));
+        expect(linesHit).not.toContain(25);
+        expect(linesHit).not.toContain(40);
+        expect(linesHit).not.toContain(43);
+        expect(linesHit).not.toContain(21);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});

@@ -49,6 +49,9 @@ jobs:
       - name: Check fixture cleanliness
         run: npm run fixtures:check-clean
 
+      - name: Check fixture matrix snapshot
+        run: npm run bench:fixtures:check
+
       - name: Native benchmark smoke
         run: npm run bench:native:smoke -- --json
   build-and-test-source:

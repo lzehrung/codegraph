@@ -229,6 +229,19 @@ export async function goToDefinition(
     }
   }
 
+  const localAtPosition = mod.locals.find((local) =>
+    rangeContains(local.range, {
+      row: line,
+      column: column,
+    }),
+  );
+  if (localAtPosition) {
+    return okGoToResult(index, localAtPosition, {
+      resolution: "exact",
+      confidence: "high",
+    });
+  }
+
   return {
     status: "not_found",
     reason: "No matching local or imported definition",

@@ -66,6 +66,8 @@ node ./dist/cli.js doctor
 
 Run checkout commands through `node ./dist/cli.js`. `npm run build` rebuilds `dist/` and builds the native workspace when Cargo is available; run `npm run build:native` when the native addon must build successfully. To use the global `codegraph` command instead, run `npm install -g .` after the build.
 
+Building the native addon needs Git access to `github.com/tree-sitter/tree-sitter-cpp`: the C++ grammar is pinned to an upstream revision because no published release exposes the C++20 module nodes. A fully offline or registry-only Cargo environment cannot build the addon until that revision ships in a release. Installing the published package is unaffected, because it ships prebuilt binaries.
+
 ## Configure agent clients
 
 After installing the CLI, preview the client configuration before writing it:

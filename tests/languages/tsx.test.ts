@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runQuery } from "@lzehrung/codegraph-native";
-import { goToDefinition } from "../../src/index.js";
+import { findReferences, goToDefinition, listSymbols } from "../../src/index.js";
 import { collectImportsForFile } from "../../src/indexer/imports.js";
 import { TSX_SUPPORT } from "../../src/languages.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
@@ -200,6 +200,111 @@ describe("TSX declaration-only exports", () => {
         expect(namespaceModule.definition.file).toBe(apiFile);
         expect(namespaceModule.definition.range.start.line).toBe(3);
       }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("TSX named function expression self-binding", () => {
+  it("binds the function expression name inside its own body only", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-tsx-fn-expr-self-binding-"));
+    const file = path.join(root, "scope.tsx").replace(/\\/g, "/");
+    const source = [
+      "export const visible = 1;",
+      "const outer = function inner(value: number): number {",
+      "  return value <= 0 ? 0 : inner(value - 1);",
+      "};",
+      "const sibling = inner;",
+      "const anonymous = function () { return 1; };",
+      "const arrow = () => 1;",
+      "const scope: { refresh?: () => void } = {};",
+      "scope.refresh = function refresh() {",
+      "  refresh();",
+      "};",
+      "const counter = function* gen(value: number): number {",
+      "  return yield* gen(value - 1);",
+      "};",
+      "const outsideGen = gen;",
+      "",
+    ].join("\n");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const lines = source.split("\n");
+
+      const recursiveInner = await goToDefinition(index, {
+        file,
+        line: 3,
+        column: lines[2]!.indexOf("inner") + 1,
+      });
+      expect(recursiveInner.status).toBe("ok");
+      if (recursiveInner.status === "ok") {
+        expect(recursiveInner.definition.localName).toBe("inner");
+        expect(recursiveInner.definition.kind).toBe("function");
+        expect(recursiveInner.definition.range.start.line).toBe(2);
+      }
+
+      const siblingInner = await goToDefinition(index, {
+        file,
+        line: 5,
+        column: lines[4]!.indexOf("inner") + 1,
+      });
+      expect(siblingInner.status).toBe("not_found");
+
+      const recursiveRefresh = await goToDefinition(index, {
+        file,
+        line: 10,
+        column: lines[9]!.indexOf("refresh") + 1,
+      });
+      expect(recursiveRefresh.status).toBe("ok");
+      if (recursiveRefresh.status === "ok") {
+        expect(recursiveRefresh.definition.localName).toBe("refresh");
+        expect(recursiveRefresh.definition.range.start.line).toBe(9);
+      }
+
+      const recursiveGen = await goToDefinition(index, {
+        file,
+        line: 13,
+        column: lines[12]!.indexOf("gen") + 1,
+      });
+      expect(recursiveGen.status).toBe("ok");
+      if (recursiveGen.status === "ok") {
+        expect(recursiveGen.definition.localName).toBe("gen");
+        expect(recursiveGen.definition.range.start.line).toBe(12);
+      }
+
+      const siblingGen = await goToDefinition(index, {
+        file,
+        line: 15,
+        column: lines[14]!.indexOf("gen") + 1,
+      });
+      expect(siblingGen.status).toBe("not_found");
+
+      const references = await findReferences(index, {
+        file,
+        line: 2,
+        column: lines[1]!.indexOf("inner") + 1,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(
+          references.references.map((reference) => reference.range.start.line).sort((left, right) => left - right),
+        ).toEqual([2, 3]);
+      }
+
+      const apiModule = index.byFile.get(fileIdentityKey(file));
+      const exported = apiModule?.exports.flatMap((entry) => ("exportedAs" in entry ? [entry.exportedAs] : [])) ?? [];
+      expect(exported).toContain("visible");
+      expect(exported).not.toContain("inner");
+      expect(exported).not.toContain("refresh");
+      expect(exported).not.toContain("gen");
+
+      const selfBindingNames = listSymbols(index, { file })
+        .map((symbol) => symbol.name)
+        .filter((name) => ["inner", "gen", "refresh", "anonymous", "arrow"].includes(name))
+        .sort();
+      expect(selfBindingNames).toEqual(["anonymous", "arrow", "gen", "inner", "refresh"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -16,6 +16,7 @@ import {
   type WorkspaceConfig,
 } from "./workspace.js";
 import { clearJvmResolutionCaches, resolveJavaImportPath, resolveKotlinImportPath } from "./resolution/jvm.js";
+import { clearCsharpResolutionCaches } from "./resolution/csharp.js";
 import { findFirstExistingResolutionCandidate } from "./resolution/find-first-existing.js";
 import { resolveGoImportPath } from "./resolution/go.js";
 import { resolveFromNodeModules } from "./resolution/node.js";
@@ -347,6 +348,7 @@ export function clearImportResolutionCaches(): void {
   clearPythonResolutionCache();
   clearFileExistsCache();
   clearJvmResolutionCaches();
+  clearCsharpResolutionCaches();
   clearPhpResolutionCaches();
 }
 

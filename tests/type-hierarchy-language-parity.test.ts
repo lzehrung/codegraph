@@ -42,6 +42,12 @@ const PROVEN_RELATIONS: ProvenRelation[] = [
   { from: "PhpStatus", to: "PhpService", relation: "implements" },
   { from: "RubyWorker", to: "RubyBase", relation: "extends" },
   { from: "RubyWorker", to: "RubyGreets", relation: "mixin" },
+  { from: "RubyWorker", to: "RubyExtends", relation: "mixin" },
+  { from: "RubyWorker", to: "RubyPrepends", relation: "mixin" },
+  { from: "JavaRecord", to: "JavaService", relation: "implements" },
+  { from: "CsRecordClass", to: "CsRecordBase", relation: "extends" },
+  { from: "CsRecordClass", to: "CsService", relation: "implements" },
+  { from: "CsRecordStruct", to: "CsService", relation: "implements" },
 ];
 
 nativeDescribe("type hierarchy language parity", () => {
@@ -61,6 +67,7 @@ nativeDescribe("type hierarchy language parity", () => {
         "interface JavaService { void run(); }",
         "class JavaWorker implements JavaService { public void run() {} }",
         "class JavaSpecialized extends JavaWorker {}",
+        "record JavaRecord(int amount) implements JavaService { public void run() {} }",
       ].join("\n"),
       "Types.cs": [
         "interface CsService { void Run(); }",
@@ -68,6 +75,9 @@ nativeDescribe("type hierarchy language parity", () => {
         "class CsSpecialized : CsWorker {}",
         "abstract class CsAbstract { public abstract void Execute(); }",
         "class CsConcrete : CsAbstract { public override void Execute() {} }",
+        "public record class CsRecordBase {}",
+        "public record class CsRecordClass(int Size) : CsRecordBase, CsService { public void Run() {} }",
+        "public record struct CsRecordStruct(int Width) : CsService { public void Run() {} }",
       ].join("\n"),
       "types.rs": [
         "trait RustService { fn run(&self); }",
@@ -112,11 +122,25 @@ nativeDescribe("type hierarchy language parity", () => {
         "  end",
         "end",
         "",
+        "module RubyExtends",
+        "  def extended_greet",
+        '    "hi"',
+        "  end",
+        "end",
+        "",
+        "module RubyPrepends",
+        "  def prepended_greet",
+        '    "hi"',
+        "  end",
+        "end",
+        "",
         "class RubyBase",
         "end",
         "",
         "class RubyWorker < RubyBase",
         "  include RubyGreets",
+        "  extend RubyExtends",
+        "  prepend RubyPrepends",
         "end",
       ].join("\n"),
     };
@@ -140,6 +164,27 @@ nativeDescribe("type hierarchy language parity", () => {
       PROVEN_RELATIONS.length,
     );
     expect(actualRelations).not.toContain("TsUnrelated:implements:TsService");
+    for (const [recordName, componentName] of [
+      ["JavaRecord", "amount"],
+      ["CsRecordClass", "Size"],
+      ["CsRecordStruct", "Width"],
+    ] as const) {
+      const recordId = nodesByName.get(recordName);
+      expect(recordId, `${recordName} was not indexed`).toBeDefined();
+      const memberNames = graph.edges
+        .filter((edge) => edge.to === recordId && edge.label === "member_of")
+        .map((edge) => graph.nodes.get(edge.from)?.name);
+      expect(memberNames, `${recordName} exposed a component-derived member symbol`).not.toContain(componentName);
+    }
+    const moduleLocals = [...index.byFile.values()].flatMap((entry) =>
+      entry.locals.map((local) => ({ name: local.localName, kind: local.kind })),
+    );
+    const componentKinds = moduleLocals.filter((local) => local.name === "amount").map((local) => local.kind);
+    expect(componentKinds, "Java record components are indexed as variable locals").toEqual(["variable"]);
+    expect(
+      moduleLocals.filter((local) => ["amount", "Size", "Width"].includes(local.name) && local.kind !== "variable"),
+      "record components must not become accessor or field symbols",
+    ).toEqual([]);
     for (const [ownerName, implementationName, memberName] of [
       ["TsAbstract", "TsConcrete", "execute"],
       ["CsAbstract", "CsConcrete", "Execute"],
@@ -195,6 +240,8 @@ nativeDescribe("type hierarchy language parity", () => {
         "class CppPayload {};",
         "template<typename T> class CppGenericBase {};",
         "class CppGenericDerived : public CppGenericBase<CppPayload> {};",
+        "class CppQualifierHost { public: class CppQualifiedBase {}; };",
+        "class CppQualifiedDerived : public CppQualifierHost::CppQualifiedBase {};",
       ].join("\n"),
       "types2.py": [
         "class PyPayload:",
@@ -245,6 +292,7 @@ nativeDescribe("type hierarchy language parity", () => {
       { from: "SwiftGenericDerived", to: "SwiftGenericBase", relation: "extends" },
       { from: "SwiftGenericDerived", to: "SwiftGenericService", relation: "implements" },
       { from: "CppGenericDerived", to: "CppGenericBase", relation: "extends" },
+      { from: "CppQualifiedDerived", to: "CppQualifiedBase", relation: "extends" },
       { from: "PyGenericDerived", to: "PyGenericBase", relation: "extends" },
       { from: "KotlinGenericWorker", to: "KotlinGenericService", relation: "implements" },
       { from: "KotlinArgDerived", to: "KotlinArgBase", relation: "extends" },
@@ -253,5 +301,6 @@ nativeDescribe("type hierarchy language parity", () => {
     expect(actualRelations).toEqual(
       new Set(expectedRelations.map((expected) => `${expected.from}:${expected.relation}:${expected.to}`)),
     );
+    expect(actualRelations).not.toContain("CppQualifiedDerived:extends:CppQualifierHost");
   });
 });

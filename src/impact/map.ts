@@ -43,6 +43,13 @@ export async function locateChangedSymbolsWithLines(
   parseFailed: boolean;
 }> {
   const changedLines = collectChangedLines(hunks);
+  if (isSqlLanguageFile(file, index.languageExtensions)) {
+    return {
+      changedSymbols: changedSymbolsFromSqlLocals(index, file, changedLines),
+      changedLines,
+      parseFailed: false,
+    };
+  }
   if (isGraphOnlyFile(file, index.languageExtensions)) {
     return { changedSymbols: [], changedLines, parseFailed: false };
   }
@@ -280,6 +287,14 @@ export async function mapChangedLinesToSymbols(
   hunks: FileChange["hunks"],
   changedLinesOverride?: Set<number>,
 ): Promise<Map<SymbolHandle, Set<number>>> {
+  const changedLines = changedLinesOverride ?? collectChangedLines(hunks);
+  if (isSqlLanguageFile(file, index.languageExtensions)) {
+    const linesByHandle = new Map<SymbolHandle, Set<number>>();
+    for (const entry of sqlLocalsOverlappingChangedLines(index, file, changedLines)) {
+      linesByHandle.set(entry.handle, new Set(entry.lines));
+    }
+    return linesByHandle;
+  }
   if (isGraphOnlyFile(file, index.languageExtensions)) {
     return new Map();
   }
@@ -294,8 +309,6 @@ export async function mapChangedLinesToSymbols(
 
   const { source, tree } = parsedEntry;
   const sup = parsedEntry.sup;
-  const changedLines = changedLinesOverride ?? collectChangedLines(hunks);
-
   const mod = index.byFile.get(fileIdentityKey(file));
   const trackedPositions = mod ? buildTrackedSymbolPositions(mod.locals) : undefined;
 
@@ -324,6 +337,58 @@ export async function mapChangedLinesToSymbols(
 function isGraphOnlyFile(file: FileId, languageExtensions?: LanguageExtensionMap): boolean {
   const support = supportForFileWithoutHeaderSample(file, languageExtensions);
   return support ? isGraphOnlyLanguage(support.id) : false;
+}
+
+function isSqlLanguageFile(file: FileId, languageExtensions?: LanguageExtensionMap): boolean {
+  return supportForFileWithoutHeaderSample(file, languageExtensions)?.id === "sql";
+}
+
+function sqlLocalsOverlappingChangedLines(
+  index: ProjectIndex,
+  file: FileId,
+  changedLines: ReadonlySet<number>,
+): Array<{ handle: SymbolHandle; symbolDef: SymbolDef; lines: number[] }> {
+  const mod = index.byFile.get(fileIdentityKey(file));
+  if (!mod) return [];
+  const matched: Array<{ handle: SymbolHandle; symbolDef: SymbolDef; lines: number[] }> = [];
+  for (const symbolDef of mod.locals) {
+    const lines: number[] = [];
+    for (const line of changedLines) {
+      if (line >= symbolDef.range.start.line && line <= symbolDef.range.end.line) {
+        lines.push(line);
+      }
+    }
+    if (!lines.length) continue;
+    lines.sort((left, right) => left - right);
+    matched.push({
+      handle: symbolHandleFromLocal(file, symbolDef),
+      symbolDef,
+      lines,
+    });
+  }
+  return matched;
+}
+
+function changedSymbolsFromSqlLocals(
+  index: ProjectIndex,
+  file: FileId,
+  changedLines: ReadonlySet<number>,
+): ChangedSymbol[] {
+  const changedSymbols: ChangedSymbol[] = [];
+  for (const entry of sqlLocalsOverlappingChangedLines(index, file, changedLines)) {
+    changedSymbols.push({
+      id: entry.handle,
+      file,
+      name: entry.symbolDef.localName,
+      kind: entry.symbolDef.kind,
+      exported: isProjectSymbolExported(index, file, entry.symbolDef),
+      range: entry.symbolDef.range,
+      typeOnly: false,
+      changedLines: entry.lines,
+      signatureChanged: false,
+    });
+  }
+  return changedSymbols;
 }
 
 /**

@@ -1,5 +1,6 @@
 import type { LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
+import { isPythonReceiverAttributeAssignmentName } from "../languages/definitions/python.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { sliceText } from "../util/ast.js";
 import { fileIdentityKey } from "../util/paths.js";
@@ -166,6 +167,24 @@ export async function resolveMemberAccessDefinition(params: {
     (sup.id === "rust" && /^(?:self|Self)$/.test(receiverName));
   if (obj && prop && node.id === prop.id && (supportsReceiverMemberResolution(sup.id) || implicitClassReceiver)) {
     const member = sliceText(prop, source);
+    if (sup.id === "python") {
+      const memberDef = await resolvePythonReceiverMember(
+        index,
+        mod,
+        node,
+        obj,
+        member,
+        source,
+        sup,
+        resolveExpression,
+      );
+      if (!memberDef) return null;
+      return okGoToResult(index, memberDef, {
+        via: { exportedName: member },
+        resolution: "member-access",
+        confidence: "medium",
+      });
+    }
     if (!sup.membersAreImplicitlyInScope && implicitClassReceiver) {
       const classContainer = findEnclosingClassContainer(node);
       const memberDef = classContainer
@@ -386,6 +405,7 @@ const BINDING_CONTAINER_TYPES = new Set([
   "block",
   "function_declaration",
   "function_item",
+  "function_definition",
   "function",
   "function_expression",
   "arrow_function",
@@ -401,6 +421,9 @@ const BINDING_DECLARATION_TYPES = new Set([
   "formal_parameter",
   "required_parameter",
   "optional_parameter",
+  "parameter_declaration",
+  "short_var_declaration",
+  "var_spec",
 ]);
 
 function findVisiblePriorNewConstructor(
@@ -485,6 +508,16 @@ function findPriorNewConstructorInContainer(
         constructor = candidate;
       }
     }
+    if (sup.id === "go" && (current.type === "short_var_declaration" || current.type === "var_spec")) {
+      const candidate = constructorFromGoBinding(current, receiverName, source, sup);
+      if (candidate) {
+        if (constructor && sliceText(constructor, source) !== sliceText(candidate, source)) {
+          constructor = null;
+          return false;
+        }
+        constructor = candidate;
+      }
+    }
     for (const child of current.namedChildren) {
       if (!visit(child)) {
         return false;
@@ -530,6 +563,7 @@ function bindingContainerDeclaresNameBefore(
       return false;
     }
     if (BINDING_DECLARATION_TYPES.has(current.type)) {
+      if (goBindingDeclaresName(current, receiverName, source, sup)) return true;
       const name = current.childForFieldName("name") ?? current.child(0);
       if (name && sup.nodeTypes.identifier.includes(name.type) && sliceText(name, source) === receiverName) {
         return true;
@@ -587,7 +621,92 @@ function constructorFromAssignmentLike(
     if (!match?.[1]) return null;
     return findNamedChildText(node, match[1], source, sup);
   }
+  if (sup.id === "python") {
+    return pythonConstructorFromAssignment(node, receiverName, source, sup);
+  }
   return null;
+}
+
+function goBindingNameNodes(node: SyntaxNodeLike): SyntaxNodeLike[] {
+  if (node.type === "short_var_declaration") {
+    const left = node.childForFieldName("left");
+    return (left?.namedChildren ?? []).filter((child) => child.type === "identifier");
+  }
+  if (node.type === "var_spec") {
+    return (node.namedChildren ?? []).filter((child) => child.type === "identifier");
+  }
+  return [];
+}
+
+function goBindingDeclaresName(
+  node: SyntaxNodeLike,
+  receiverName: string,
+  source: string,
+  sup: LanguageSupport,
+): boolean {
+  if (sup.id !== "go") return false;
+  return goBindingNameNodes(node).some((name) => sliceText(name, source) === receiverName);
+}
+
+function constructorFromGoBinding(
+  node: SyntaxNodeLike,
+  receiverName: string,
+  source: string,
+  sup: LanguageSupport,
+): SyntaxNodeLike | null {
+  if (!goBindingDeclaresName(node, receiverName, source, sup)) return null;
+  if (node.type === "short_var_declaration") {
+    const left = node.childForFieldName("left");
+    const right = node.childForFieldName("right");
+    if (!left || !right) return null;
+    const names = (left.namedChildren ?? []).filter((child) => child.type === "identifier");
+    const values = right.namedChildren ?? [];
+    const index = names.findIndex((name) => sliceText(name, source) === receiverName);
+    if (index < 0) return null;
+    const value = values[index] ?? null;
+    return value ? goCompositeLiteralTypeName(value, source) : null;
+  }
+  if (node.type !== "var_spec") return null;
+  const value = node.childForFieldName("value");
+  if (value) {
+    const first = value.type === "expression_list" ? (value.namedChildren[0] ?? null) : value;
+    const fromValue = first ? goCompositeLiteralTypeName(first, source) : null;
+    if (fromValue) return fromValue;
+  }
+  const typeNode = node.childForFieldName("type");
+  return typeNode ? unwrapGoConstructorType(typeNode) : null;
+}
+
+function goCompositeLiteralTypeName(expr: SyntaxNodeLike, source: string): SyntaxNodeLike | null {
+  let current = expr;
+  if (current.type === "unary_expression") {
+    const operand = current.childForFieldName("operand");
+    if (!operand) return null;
+    const operator = current.childForFieldName("operator");
+    let isAddr = sliceText(current, source).startsWith("&");
+    if (operator) isAddr = sliceText(operator, source) === "&";
+    if (!isAddr) return null;
+    current = operand;
+  }
+  if (current.type !== "composite_literal") return null;
+  const typeNode = current.childForFieldName("type");
+  return typeNode ? unwrapGoConstructorType(typeNode) : null;
+}
+
+function unwrapGoConstructorType(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  let current: SyntaxNodeLike | null = node;
+  while (current) {
+    if (current.type === "parenthesized_type" || current.type === "pointer_type") {
+      current = current.namedChildren[0] ?? null;
+      continue;
+    }
+    if (current.type === "generic_type") {
+      current = current.childForFieldName("type") ?? current.namedChildren[0] ?? null;
+      continue;
+    }
+    break;
+  }
+  return current?.type === "type_identifier" ? current : null;
 }
 
 function findNamedChildText(
@@ -763,7 +882,8 @@ function findDirectLocalWithinNode(
     let current = targetContext.tree.rootNode.descendantForPosition(position, position).parent;
     let isDeclarationParent = true;
     while (current && current !== container) {
-      const isDirectBody = current.type === "statement_block" && current.parent === container;
+      const isDirectBody =
+        (current.type === "statement_block" || current.type === "block") && current.parent === container;
       if (
         !isDeclarationParent &&
         !isDirectBody &&
@@ -798,6 +918,273 @@ function findRustImplForType(root: SyntaxNodeLike, typeName: string, source: str
   };
   visit(root);
   return found;
+}
+
+function pythonConstructorFromAssignment(
+  node: SyntaxNodeLike,
+  receiverName: string,
+  source: string,
+  sup: LanguageSupport,
+): SyntaxNodeLike | null {
+  const left = node.childForFieldName("left");
+  if (!left || !sup.nodeTypes.identifier.includes(left.type) || sliceText(left, source) !== receiverName) {
+    return null;
+  }
+  const right = node.childForFieldName("right");
+  if (!right || right.type !== "call") return null;
+  const callee = right.childForFieldName("function") ?? right.namedChildren[0] ?? null;
+  if (!callee || !sup.nodeTypes.identifier.includes(callee.type)) return null;
+  return callee;
+}
+
+const PYTHON_SUPERTYPE_DEPTH = 16;
+
+type PythonClassRef = {
+  def: SymbolDef;
+  container: SyntaxNodeLike;
+  context: ParsedFileContext;
+  module: ModuleIndex;
+};
+
+function pythonClassKey(def: SymbolDef): string {
+  const start = def.range.start;
+  return `${fileIdentityKey(def.file)}:${start.index ?? `${start.line}:${start.column}`}`;
+}
+
+async function resolvePythonReceiverMember(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  node: SyntaxNodeLike,
+  obj: SyntaxNodeLike,
+  member: string,
+  source: string,
+  sup: LanguageSupport,
+  resolveExpression: (expr: SyntaxNodeLike) => Promise<ResolvedExport | null>,
+): Promise<SymbolDef | undefined> {
+  const classRef = await pythonReceiverClassRef(index, mod, node, obj, source, sup, resolveExpression);
+  if (!classRef) return undefined;
+  return lookupPythonClassMember(index, classRef, member);
+}
+
+async function pythonReceiverClassRef(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  node: SyntaxNodeLike,
+  obj: SyntaxNodeLike,
+  source: string,
+  sup: LanguageSupport,
+  resolveExpression: (expr: SyntaxNodeLike) => Promise<ResolvedExport | null>,
+): Promise<PythonClassRef | null> {
+  const receiverName = sliceText(obj, source);
+  if (receiverName === "self" || receiverName === "cls") {
+    const container = findEnclosingClassContainer(node);
+    if (!container) return null;
+    const nameNode = container.childForFieldName("name");
+    if (!nameNode) return null;
+    const className = sliceText(nameNode, source);
+    const def = mod.locals.find((local) => {
+      const startIndex = local.range.start.index;
+      const endIndex = local.range.end.index;
+      return (
+        local.kind === SymbolKind.Class &&
+        local.localName === className &&
+        startIndex !== undefined &&
+        endIndex !== undefined &&
+        startIndex >= container.startIndex &&
+        endIndex <= container.endIndex
+      );
+    });
+    if (!def) return null;
+    return pythonClassRefFromDef(index, def);
+  }
+
+  let classDef: SymbolDef | undefined;
+  const constructor = receiverConstructorExpression(obj, source, sup);
+  if (constructor) {
+    const result = await resolveExpression(constructor);
+    if (result?.kind === "resolved" && result.def.kind === SymbolKind.Class) {
+      classDef = result.def;
+    }
+  }
+  if (!classDef) {
+    const direct = await resolveExpression(obj);
+    if (direct?.kind === "resolved" && direct.def.kind === SymbolKind.Class) {
+      classDef = direct.def;
+    }
+  }
+  if (!classDef) return null;
+  return pythonClassRefFromDef(index, classDef);
+}
+
+async function pythonClassRefFromDef(index: ProjectIndex, def: SymbolDef): Promise<PythonClassRef | null> {
+  const module = index.byFile.get(fileIdentityKey(def.file));
+  if (!module) return null;
+  const context = await ensureParsedContext(def.file, undefined, index.languageExtensions);
+  const start = def.range.start;
+  const position = {
+    row: start.line - 1,
+    column: start.column - 1,
+  };
+  let current: SyntaxNodeLike | null = context.tree.rootNode.descendantForPosition(position, position);
+  while (current && current.type !== "class_definition") {
+    current = current.parent;
+  }
+  if (!current) return null;
+  return { def, container: current, context, module };
+}
+
+function pythonMembersOnClass(classRef: PythonClassRef, member: string): SymbolDef[] {
+  const normalizeIdentifier = classRef.context.sup.normalizeIdentifier;
+  const direct = findDirectLocalWithinNode(
+    classRef.module.locals,
+    member,
+    classRef.container,
+    classRef.context,
+    normalizeIdentifier,
+  );
+  if (direct) return [direct];
+  const attribute = findPythonInstanceAttributeWithinClass(
+    classRef.module.locals,
+    member,
+    classRef.container,
+    classRef.context,
+    normalizeIdentifier,
+  );
+  return attribute ? [attribute] : [];
+}
+
+function findPythonInstanceAttributeWithinClass(
+  locals: readonly SymbolDef[],
+  member: string,
+  container: SyntaxNodeLike,
+  targetContext: ParsedFileContext,
+  normalizeIdentifier: (name: string) => string,
+): SymbolDef | undefined {
+  const containerStart = container.startIndex;
+  const containerEnd = container.endIndex;
+  const normalizedMember = normalizeIdentifier(member);
+  for (const local of locals) {
+    const startIndex = local.range.start.index;
+    const endIndex = local.range.end.index;
+    if (
+      normalizeIdentifier(local.localName) !== normalizedMember ||
+      startIndex === undefined ||
+      endIndex === undefined ||
+      startIndex < containerStart ||
+      endIndex > containerEnd
+    ) {
+      continue;
+    }
+    const start = local.range.start;
+    const position = {
+      row: start.line - 1,
+      column: start.column - 1,
+    };
+    const nameNode = targetContext.tree.rootNode.descendantForPosition(position, position);
+    if (isPythonReceiverAttributeAssignmentName(nameNode)) return local;
+  }
+  return undefined;
+}
+
+function pythonBaseIdentifierNodes(classNode: SyntaxNodeLike): SyntaxNodeLike[] {
+  const bases =
+    classNode.childForFieldName("superclasses") ??
+    (classNode.namedChildren ?? []).find((child) => child.type === "argument_list");
+  if (!bases) return [];
+  const names: SyntaxNodeLike[] = [];
+  const visit = (node: SyntaxNodeLike): void => {
+    if (node.type === "keyword_argument" || node.type === "dictionary_splat" || node.type === "list_splat") {
+      return;
+    }
+    if (node.type === "identifier") {
+      names.push(node);
+      return;
+    }
+    if (node.type === "subscript") {
+      const value = node.childForFieldName("value");
+      if (value) visit(value);
+      return;
+    }
+    for (const child of node.namedChildren) visit(child);
+  };
+  visit(bases);
+  return names;
+}
+
+function resolvePythonNamedClass(index: ProjectIndex, mod: ModuleIndex, name: string): SymbolDef | undefined {
+  const classes = mod.locals.filter((local) => local.kind === SymbolKind.Class && local.localName === name);
+  const topLevel = classes.filter((local) => !local.isMember);
+  const candidates = topLevel.length ? topLevel : classes;
+  if (candidates.length === 1) return candidates[0];
+  if (candidates.length > 1) return undefined;
+
+  for (const imp of mod.imports) {
+    if (imp.kind === "named" && imp.local === name) {
+      const result = resolveImported(index, imp, imp.imported);
+      if (result && !("namespace" in result) && result.kind === SymbolKind.Class) return result;
+    }
+    if (imp.kind === "star") {
+      const result = resolveImported(index, imp, name);
+      if (result && !("namespace" in result) && result.kind === SymbolKind.Class) return result;
+    }
+  }
+  const exported = resolveExport(index, mod.file, name, { preferredKind: SymbolKind.Class, allowLocalFallback: false });
+  if (exported?.kind === "resolved" && exported.def.kind === SymbolKind.Class) return exported.def;
+  return undefined;
+}
+
+async function pythonBaseClassRefs(index: ProjectIndex, classRef: PythonClassRef): Promise<PythonClassRef[]> {
+  const names = pythonBaseIdentifierNodes(classRef.container);
+  const refs: PythonClassRef[] = [];
+  const seen = new Set<string>();
+  for (const nameNode of names) {
+    const def = resolvePythonNamedClass(index, classRef.module, sliceText(nameNode, classRef.context.source));
+    if (!def) continue;
+    const key = pythonClassKey(def);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const ref = await pythonClassRefFromDef(index, def);
+    if (ref) refs.push(ref);
+  }
+  return refs;
+}
+
+async function lookupPythonClassMember(
+  index: ProjectIndex,
+  start: PythonClassRef,
+  member: string,
+): Promise<SymbolDef | undefined> {
+  const own = pythonMembersOnClass(start, member);
+  if (own.length === 1) return own[0];
+  if (own.length > 1) return undefined;
+
+  let level = await pythonBaseClassRefs(index, start);
+  const visited = new Set<string>([pythonClassKey(start.def), ...level.map((base) => pythonClassKey(base.def))]);
+  for (let depth = 0; depth < PYTHON_SUPERTYPE_DEPTH && level.length; depth += 1) {
+    const matches: SymbolDef[] = [];
+    const seenMatch = new Set<string>();
+    for (const base of level) {
+      for (const hit of pythonMembersOnClass(base, member)) {
+        const key = pythonClassKey(hit);
+        if (seenMatch.has(key)) continue;
+        seenMatch.add(key);
+        matches.push(hit);
+      }
+    }
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) return undefined;
+    const next: PythonClassRef[] = [];
+    for (const base of level) {
+      for (const parent of await pythonBaseClassRefs(index, base)) {
+        const key = pythonClassKey(parent.def);
+        if (visited.has(key)) continue;
+        visited.add(key);
+        next.push(parent);
+      }
+    }
+    level = next;
+  }
+  return undefined;
 }
 
 function escapeRegExp(value: string): string {

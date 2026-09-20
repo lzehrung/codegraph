@@ -30,10 +30,7 @@ export function computeMemberResolutionCoverage(
     const languageId = index.parsed?.get(fileKey)?.sup.id ?? supportForFile(symbol.file)?.id;
     if (!languageId) continue;
 
-    // Python attributes are parsed, but normal instance receivers cannot yet be
-    // proven through assignments or constructor calls. Keep its coverage claim
-    // conservative until that lookup path has direct semantic coverage.
-    const hasVerifiedReceiverResolution = languageId !== "python" && supportsReceiverMemberResolution(languageId);
+    const hasVerifiedReceiverResolution = supportsReceiverMemberResolution(languageId);
     if (hasVerifiedReceiverResolution) {
       receiverAware.add(languageId);
     } else {

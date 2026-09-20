@@ -97,8 +97,10 @@ describe("Review report", () => {
     await fsp.mkdir(srcDir, { recursive: true });
     const tsFile = path.join(srcDir, "api.ts");
     const pythonFile = path.join(srcDir, "helper.py");
+    const phpFile = path.join(srcDir, "helper.php");
     await fsp.writeFile(tsFile, "export function helper(a: string, b: number) { return a + b; }\n", "utf8");
     await fsp.writeFile(pythonFile, "def helper(a: str, b: int) -> str:\n    return a\n", "utf8");
+    await fsp.writeFile(phpFile, "<?php\nfunction helper($a, $b) { return $a; }\n", "utf8");
 
     const diffText = [
       "diff --git a/src/api.ts b/src/api.ts",
@@ -116,13 +118,23 @@ describe("Review report", () => {
       "-def helper(a: str) -> str:",
       "+def helper(a: str, b: int) -> str:",
       "     return a",
+      "diff --git a/src/helper.php b/src/helper.php",
+      "index 1234567..abcdef0 100644",
+      "--- a/src/helper.php",
+      "+++ b/src/helper.php",
+      "@@ -1,2 +1,2 @@",
+      " <?php",
+      "-function helper($a) { return $a; }",
+      "+function helper($a, $b) { return $a; }",
       "",
     ].join("\n");
 
     const report = await buildReviewReport(root, { diffText });
 
     expect(report.diagnostics?.memberResolutionCoverage?.receiverAwareLanguages).toContain("ts");
-    expect(report.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("python");
+    expect(report.diagnostics?.memberResolutionCoverage?.receiverAwareLanguages).toContain("python");
+    expect(report.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("php");
+    expect(report.diagnostics?.memberResolutionCoverage?.limitedLanguages).not.toContain("python");
   });
 
   it("includes definition snippets and callsites when enabled", async () => {
@@ -3108,5 +3120,71 @@ describe("review duplicate and candidate budget gates", () => {
         }),
       ]),
     );
+  });
+});
+
+describe("Review report: Python receiver member coverage", () => {
+  it("lists Python with TypeScript in receiverAwareLanguages once self receivers resolve", async () => {
+    const root = await mkTmpDir("dg-review-python-receiver-coverage-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const tsFile = path.join(srcDir, "api.ts");
+    const pythonFile = path.join(srcDir, "helper.py");
+    const phpFile = path.join(srcDir, "helper.php");
+    await fsp.writeFile(tsFile, "export function helper(a: string, b: number) { return a + b; }\n", "utf8");
+    await fsp.writeFile(
+      pythonFile,
+      [
+        "class Helper:",
+        "    def __init__(self, value, scale):",
+        "        self.value = value * scale",
+        "",
+        "    def run(self):",
+        "        return self.assist()",
+        "",
+        "    def assist(self):",
+        "        return self.value",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(phpFile, "<?php\nfunction helper($a, $b) { return $a; }\n", "utf8");
+
+    const diffText = [
+      "diff --git a/src/api.ts b/src/api.ts",
+      "index 1234567..abcdef0 100644",
+      "--- a/src/api.ts",
+      "+++ b/src/api.ts",
+      "@@ -1,1 +1,1 @@",
+      "-export function helper(a: string) { return a; }",
+      "+export function helper(a: string, b: number) { return a + b; }",
+      "diff --git a/src/helper.py b/src/helper.py",
+      "index 1234567..abcdef0 100644",
+      "--- a/src/helper.py",
+      "+++ b/src/helper.py",
+      "@@ -1,4 +1,4 @@",
+      " class Helper:",
+      "-    def __init__(self, value):",
+      "-        self.value = value",
+      "+    def __init__(self, value, scale):",
+      "+        self.value = value * scale",
+      "diff --git a/src/helper.php b/src/helper.php",
+      "index 1234567..abcdef0 100644",
+      "--- a/src/helper.php",
+      "+++ b/src/helper.php",
+      "@@ -1,2 +1,2 @@",
+      " <?php",
+      "-function helper($a) { return $a; }",
+      "+function helper($a, $b) { return $a; }",
+      "",
+    ].join("\n");
+
+    const report = await buildReviewReport(root, { diffText });
+    const coverage = report.diagnostics?.memberResolutionCoverage;
+
+    expect(coverage?.receiverAwareLanguages).toContain("ts");
+    expect(coverage?.receiverAwareLanguages).toContain("python");
+    expect(coverage?.limitedLanguages).toContain("php");
+    expect(coverage?.limitedLanguages).not.toContain("python");
   });
 });

@@ -15,7 +15,7 @@ const sqlFiles = ["001_create_users.sql", "002_alter_users.sql", "report.sql"].m
 );
 
 describe("SQL artifact graph", () => {
-  it("groups repeated object mentions into SQL candidates without current schema nodes", async () => {
+  it("groups repeated object mentions into SQL candidates with defines, alters, and reads edges", async () => {
     const graph = await buildSqlArtifactGraphFromFiles(sqlFiles);
     const usersCandidates = graph.nodes.filter((node) => node.kind === "sql_table_candidate" && node.name === "users");
 
@@ -24,10 +24,19 @@ describe("SQL artifact graph", () => {
       namespace: "sql",
       truthTier: "sql_schema_candidate",
     });
-    expect(graph.nodes.some((node) => node.kind === "sql_current_schema")).toBe(false);
-    expect(graph.edges.some((edge) => edge.kind === "sql_statement_defines")).toBe(true);
-    expect(graph.edges.some((edge) => edge.kind === "sql_statement_alters")).toBe(true);
-    expect(graph.edges.some((edge) => edge.kind === "sql_statement_reads")).toBe(true);
+    expect([...new Set(graph.nodes.map((node) => node.kind))].sort()).toEqual([
+      "sql_file",
+      "sql_object_candidate",
+      "sql_statement",
+      "sql_table_candidate",
+    ]);
+    expect([...new Set(graph.edges.map((edge) => edge.kind))].sort()).toEqual([
+      "sql_candidate_mentions",
+      "sql_contains_statement",
+      "sql_statement_alters",
+      "sql_statement_defines",
+      "sql_statement_reads",
+    ]);
   });
 
   it("adds SQL-to-SQL object edges to the source dependency graph without linking app code", async () => {

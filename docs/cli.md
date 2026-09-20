@@ -306,7 +306,7 @@ Line-and-column navigation remains primary: use `<file>:<line>:<column>` with `g
 
 Pretty symbol and callsite rows are the default. `--json` reports exact project-relative callsites, provenance, freshness, and separate symbol, callsite, and unresolved-site omissions; `--include-heuristic` is accepted, but current results remain limited to resolved semantic `calls` edges rather than guessed dynamic calls, file dependencies, imports, or references.
 
-Receiver method calls are reported like free-function calls when the receiver is proven (`this`, `$this`, `self`, a class-qualified name, a constructed local, or `super`/`base`/`parent` on a class `extends` ancestor). Unproven receivers and Go methods declared outside the type emit no edge. See [language parity](./language-parity.md).
+Receiver method calls are reported like free-function calls when the receiver is proven (`this`, `$this`, `self`, `cls`, a class-qualified name, a constructed local, a Go value or pointer receiver, or `super`/`base`/`parent` on a class `extends` ancestor). Unproven receivers emit no edge. See [language parity](./language-parity.md).
 
 `supertypes` and `subtypes` accept one portable symbol handle from `symbols`, default to depth 1 and 100 results, cap depth at 10 and results at 500, and return only proven indexed `extends` and `implements` relationships. `implementations` uses the same 100/500 result bounds without `--depth`; supported targets are interfaces, traits, abstract types, and members with proven implementation or override relationships.
 
