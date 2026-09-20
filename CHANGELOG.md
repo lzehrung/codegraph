@@ -9,6 +9,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [2.3.29] - 2026-09-20
+
 ### Added
 
 - Go receiver method calls resolve. A Go `method_declaration` now publishes a `member_of` edge to its receiver type, so `b.GoHelper()` produces a resolved `calls` edge for value, pointer, and `var`-declared receivers, and `callers`, `callees`, and impact report those call sites. A same-named package function is never attributed to a method, and interface-typed or factory-assigned receivers still emit nothing.
@@ -522,7 +524,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.28...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.29...HEAD
+[2.3.29]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.29
 [2.3.28]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.28
 [2.3.27]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.27
 [2.3.26]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.26
