@@ -1,6 +1,9 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { findCalleesWithSession } from "../src/agent/call-hierarchy.js";
+import { createAgentSession } from "../src/agent/session.js";
+import { workspaceSymbolsInSnapshot } from "../src/agent/workspace-symbols.js";
 import { buildSymbolGraphDetailed } from "../src/graphs/symbol-graph-detailed.js";
 import { defNodeId } from "../src/graphs/symbol-graph.js";
 import { findCallHierarchy } from "../src/indexer/call-hierarchy.js";
@@ -236,5 +239,98 @@ describe("call hierarchy", () => {
     if (result.status !== "ok") return;
     expect(result.entries.map((entry) => entry.symbolId)).toEqual(["upper", "lower"]);
     expect(result.entries[0]?.callsites.map((callsite) => callsite.file)).toEqual(["Z.ts", "a.ts"]);
+  });
+});
+
+describe("reduced-mode call hierarchy provenance", () => {
+  it("indexes no symbols for a native-off project, so reduced call hierarchy has no resolvable target", async () => {
+    const root = await mkTmpDir("cg-call-hierarchy-reduced-empty-");
+    try {
+      await fsp.writeFile(
+        path.join(root, "calls.ts"),
+        ["export function leaf(): number { return 1; }", "export function outer(): number { return leaf(); }"].join(
+          "\n",
+        ),
+        "utf8",
+      );
+      const snapshot = await createAgentSession({
+        root,
+        buildOptions: { cache: "off", native: "off" },
+        freshness: { policy: "manual" },
+      }).loadProject();
+      expect(snapshot.analysis.mode).toBe("reduced");
+      expect((await workspaceSymbolsInSnapshot(snapshot, { query: "outer" })).symbols).toEqual([]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("downgrades provenance to graph capability when the snapshot reports reduced analysis", async () => {
+    const root = await mkTmpDir("cg-call-hierarchy-reduced-");
+    try {
+      await fsp.writeFile(
+        path.join(root, "calls.ts"),
+        ["export function leaf(): number { return 1; }", "export function outer(): number { return leaf(); }"].join(
+          "\n",
+        ),
+        "utf8",
+      );
+      const semanticSession = createAgentSession({
+        root,
+        buildOptions: { cache: "off" },
+        freshness: { policy: "manual" },
+      });
+      const semanticSnapshot = await semanticSession.loadProject();
+      const reducedSession = createAgentSession({
+        root,
+        buildOptions: { cache: "off", native: "off" },
+        freshness: { policy: "manual" },
+      });
+      const reducedAnalysis = (await reducedSession.loadProject()).analysis;
+      expect(reducedAnalysis.mode).toBe("reduced");
+      const outer = (await workspaceSymbolsInSnapshot(semanticSnapshot, { query: "outer" })).symbols.find(
+        (symbol) => symbol.localName === "outer",
+      );
+      expect(outer, "outer was not indexed").toBeDefined();
+
+      const semanticResponse = await findCalleesWithSession(semanticSession, {
+        root,
+        handle: outer!.handle,
+        depth: 1,
+      });
+      const semanticProvenance = semanticResponse.entries[0]?.provenance;
+      expect(semanticProvenance).toMatchObject({ capability: "semantic", confidence: "high" });
+
+      // A cold native-off project indexes no locals at all, so this drives the reduced
+      // provenance branch with a real symbol graph and the reduced analysis summary a
+      // native-off build reports.
+      const response = await findCalleesWithSession(
+        {
+          root,
+          loadProject: async () => ({ ...semanticSnapshot, analysis: reducedAnalysis }),
+          invalidate: () => undefined,
+        },
+        { root, handle: outer!.handle, depth: 1 },
+      );
+
+      expect(response.entries.length, "reduced-mode callees were not returned").toBeGreaterThan(0);
+      expect(response.analysis.mode).toBe("reduced");
+      expect(response.target.provenance).toMatchObject({
+        capability: "graph",
+        backend: "graph-only",
+        confidence: "medium",
+        reason: reducedAnalysis.label,
+      });
+      for (const entry of response.entries) {
+        expect(entry.provenance).toMatchObject({
+          capability: "graph",
+          backend: "graph-only",
+          confidence: "medium",
+          reason: reducedAnalysis.label,
+        });
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });

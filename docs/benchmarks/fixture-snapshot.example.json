@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-20T05:56:12.410Z",
+  "generatedAt": "2026-09-20T07:45:33.321Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.16.0",
-  "numTotalTests": 477,
+  "numTotalTests": 493,
   "numFailedTests": 0,
   "languages": [
     {
@@ -44,8 +44,8 @@
       "files": [
         "tests/languages/csharp.test.ts"
       ],
-      "tests": 12,
-      "passed": 12,
+      "tests": 20,
+      "passed": 20,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -187,8 +187,8 @@
       "files": [
         "tests/languages/python.test.ts"
       ],
-      "tests": 33,
-      "passed": 33,
+      "tests": 35,
+      "passed": 35,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -231,8 +231,8 @@
       "files": [
         "tests/languages/scss.test.ts"
       ],
-      "tests": 12,
-      "passed": 12,
+      "tests": 15,
+      "passed": 15,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -242,8 +242,8 @@
       "files": [
         "tests/languages/sql.test.ts"
       ],
-      "tests": 7,
-      "passed": 7,
+      "tests": 8,
+      "passed": 8,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -275,8 +275,8 @@
       "files": [
         "tests/languages/tsx.test.ts"
       ],
-      "tests": 9,
-      "passed": 9,
+      "tests": 10,
+      "passed": 10,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -286,8 +286,8 @@
       "files": [
         "tests/languages/typescript.test.ts"
       ],
-      "tests": 14,
-      "passed": 14,
+      "tests": 15,
+      "passed": 15,
       "failed": 0,
       "skipped": 0,
       "status": "passing"

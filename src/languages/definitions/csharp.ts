@@ -65,7 +65,6 @@ export const CSHARP_DEF: LanguageDefinition = {
     imports: `
       (using_directive !name (_) @mod) @stmt
       (using_directive name: (identifier) (_) @mod) @stmt
-      (extern_alias_directive name: (identifier) @mod) @stmt
     `,
     exports: `
       (class_declaration name: (identifier) @name)
@@ -83,6 +82,7 @@ export const CSHARP_DEF: LanguageDefinition = {
     locals: `
       (class_declaration name: (identifier) @name)
       (record_declaration name: (identifier) @name)
+      (record_declaration (parameter_list (parameter name: (identifier) @name)))
       (struct_declaration name: (identifier) @name)
       (interface_declaration name: (identifier) @name)
       (enum_declaration name: (identifier) @name)

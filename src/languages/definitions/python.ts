@@ -21,6 +21,33 @@ function isTypeAliasLeftName(node: SyntaxNodeLike): boolean {
   return false;
 }
 
+function isPythonImplicitReceiverName(name: string): boolean {
+  return name === "self" || name === "cls";
+}
+
+/** Assignment target `self.x` / `cls.x`, the usual Python instance-attribute declaration. */
+export function isPythonReceiverAttributeAssignmentName(node: SyntaxNodeLike): boolean {
+  const attr = node.parent;
+  if (attr?.type !== "attribute") return false;
+  if (attr.childForFieldName("attribute")?.id !== node.id) return false;
+  const object = attr.childForFieldName("object");
+  if (!object || !isPythonImplicitReceiverName(object.text)) return false;
+  const assignment = attr.parent;
+  if (assignment?.type !== "assignment") return false;
+  return assignment.childForFieldName("left")?.id === attr.id;
+}
+
+/** `self.x = ...` / `cls.x = ...` inside a `class_definition`, treated as a type member. */
+export function isPythonInstanceAttributeDeclaration(node: SyntaxNodeLike): boolean {
+  if (!isPythonReceiverAttributeAssignmentName(node)) return false;
+  let current = node.parent;
+  while (current) {
+    if (current.type === "class_definition") return true;
+    current = current.parent;
+  }
+  return false;
+}
+
 export const PYTHON_DEF: LanguageDefinition = {
   id: "python",
   extensions: [".py", ".pyi", ".pyw"],
@@ -121,6 +148,13 @@ export const PYTHON_DEF: LanguageDefinition = {
       (class_definition name: (identifier) @name)
       (assignment left: (identifier) @name)
       (assignment left: [(pattern_list (identifier) @name) (tuple_pattern (identifier) @name)])
+      ;; Instance / class attributes declared as \`self.x = ...\` or \`cls.x = ...\`.
+      ((assignment
+        left: (attribute object: (identifier) @receiver attribute: (identifier) @name))
+        (#eq? @receiver "self"))
+      ((assignment
+        left: (attribute object: (identifier) @receiver attribute: (identifier) @name))
+        (#eq? @receiver "cls"))
       (named_expression name: (identifier) @name)
       (type_alias_statement left: (type [(identifier) @name (generic_type (identifier) @name)]))
       ;; \`case Point(x=px, y=py):\` is case_pattern -> class_pattern ->
@@ -194,6 +228,7 @@ export const PYTHON_DEF: LanguageDefinition = {
     // initializer (`x = y`) makes `y` a direct namedChild too, so field
     // identity is required to avoid classifying the right-hand read as a
     // declaration.
+    if (isPythonReceiverAttributeAssignmentName(node)) return true;
     if (t === "assignment") return parent?.childForFieldName("left")?.id === node.id;
     // `aliased_import` (`import foo as bar`) exposes the imported path via
     // `name` and the local binding via `alias`; only `alias` declares a name.

@@ -88,6 +88,9 @@ export function collectDetailedDeclarations(
     "struct_declaration",
     "class_specifier",
     "struct_specifier",
+    // Go methods sit beside the type, not inside it. Collect the type_spec so
+    // member_of can name the receiver type the same way class bodies do.
+    "type_spec",
     // Enums can implement interfaces/protocols in several supported languages
     // (Java, C#, PHP, Kotlin) - treat them as class-kind nodes so
     // emitClassInheritanceEdges sees them and wires implements/extends edges.

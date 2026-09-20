@@ -42,6 +42,7 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
     `(class_specifier body: (field_declaration_list (field_declaration declarator: (function_declarator declarator: (field_identifier) @name))))`,
     `(class_specifier body: (field_declaration_list (field_declaration declarator: (reference_declarator (function_declarator declarator: (operator_name) @name)))))`,
     `(class_specifier body: (field_declaration_list (declaration declarator: (function_declarator declarator: (destructor_name) @name))))`,
+    `(module_declaration name: (module_name) @name)`,
   ],
   extraLocalQueries: [
     `(class_specifier name: (type_identifier) @name)`,
@@ -58,6 +59,7 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
     `(class_specifier body: (field_declaration_list (field_declaration declarator: (function_declarator declarator: (field_identifier) @name))))`,
     `(class_specifier body: (field_declaration_list (field_declaration declarator: (reference_declarator (function_declarator declarator: (operator_name) @name)))))`,
     `(class_specifier body: (field_declaration_list (declaration declarator: (function_declarator declarator: (destructor_name) @name))))`,
+    `(module_declaration name: (module_name) @name)`,
   ],
   nodeTypes: {
     identifier: ["identifier", "field_identifier", "type_identifier", "namespace_identifier"],
@@ -73,9 +75,14 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
       parent.type === "struct_specifier" ||
       parent.type === "union_specifier" ||
       parent.type === "namespace_definition" ||
-      parent.type === "nested_namespace_specifier"
+      parent.type === "nested_namespace_specifier" ||
+      parent.type === "module_declaration"
     )
       return "class";
+    if (parent.type === "module_name") {
+      const moduleDeclaration = findAncestor(node, new Set(["module_declaration"]));
+      if (moduleDeclaration) return "class";
+    }
     if (
       parent.type === "alias_declaration" ||
       (parent.type === "type_definition" && isInField(node, parent, "declarator"))
@@ -101,6 +108,11 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
     )
       return true;
     if (parent.type === "namespace_definition" && isInField(node, parent, "name")) return true;
+    if (parent.type === "module_declaration" && isInField(node, parent, "name")) return true;
+    if (parent.type === "module_name") {
+      const moduleDeclaration = findAncestor(node, new Set(["module_declaration"]));
+      if (moduleDeclaration && isInField(node, moduleDeclaration, "name")) return true;
+    }
     if (parent.type === "nested_namespace_specifier") {
       const namespaceDefinition = findAncestor(node, new Set(["namespace_definition"]));
       if (namespaceDefinition && isInField(node, namespaceDefinition, "name")) return true;
@@ -129,5 +141,18 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
   },
   createsFunctionScope: (node) => node.type === "function_definition" || node.type === "lambda_expression",
 });
+
+const cppModuleImportQuery = `
+      (import_declaration name: (module_name) @mod) @stmt
+      (import_declaration header: (string_literal) @mod) @stmt
+      (import_declaration header: (system_lib_string) @mod) @stmt
+    `;
+const cppModuleBindingQuery = `
+      (import_declaration name: (module_name) @from) @stmt
+      (import_declaration header: (string_literal) @from) @stmt
+      (import_declaration header: (system_lib_string) @from) @stmt
+    `;
+CPP_DEF.graph.imports += cppModuleImportQuery;
+CPP_DEF.graph.importBindings += cppModuleBindingQuery;
 
 registerLanguage(CPP_DEF);

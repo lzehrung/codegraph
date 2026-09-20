@@ -35,7 +35,7 @@ export const SCSS_DEF: LanguageDefinition = {
       (mixin_statement name: (identifier) @name)
       (function_statement name: (identifier) @name)
       ((declaration (property_name) @name) (#match? @name "^[$]"))
-      (placeholder (identifier) @name)
+      (selectors (placeholder (identifier) @name))
       (class_selector (class_name) @name)
       (id_selector (id_name) @name)
     `,
@@ -56,5 +56,24 @@ export const SCSS_DEF: LanguageDefinition = {
     if (parent === "mixin_statement" || parent === "function_statement") return "function";
     return "variable";
   },
+  isDeclarationName: (node) => {
+    const parent = node.parent;
+    if (!parent) return false;
+    if (parent.type === "mixin_statement" || parent.type === "function_statement") {
+      return parent.childForFieldName("name")?.id === node.id;
+    }
+    if (parent.type === "declaration" && node.type === "property_name") {
+      return node.text.startsWith("$");
+    }
+    // A placeholder in a selector list is a declaration. `@extend %name` is a use;
+    // the pinned grammar currently wraps that form in ERROR rather than extend_statement.
+    if (parent.type === "placeholder") {
+      return parent.parent?.type === "selectors";
+    }
+    if (node.type === "class_name") return parent.type === "class_selector";
+    if (node.type === "id_name") return parent.type === "id_selector";
+    return false;
+  },
+  scopeDeclarationNames: "all",
 };
 registerLanguage(SCSS_DEF);

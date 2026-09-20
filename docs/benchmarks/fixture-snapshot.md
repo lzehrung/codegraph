@@ -6,16 +6,16 @@ Scope: this counts only the dedicated per-language smoke files, not a language's
 
 Regenerate with `npm run bench:fixtures`. Verify it is current with `npm run bench:fixtures:check`.
 
-Generated: 2026-09-20T05:56:12.410Z (Node v22.16.0)
+Generated: 2026-09-20T07:45:33.321Z (Node v22.16.0)
 
-Total: 477 tests, 0 failed.
+Total: 493 tests, 0 failed.
 
 | Language         | Status  | Tests | Test file(s)                         |
 | ---------------- | ------- | ----- | ------------------------------------ |
 | AsciiDoc         | passing | 8     | `tests/languages/adoc.test.ts`       |
 | Astro            | passing | 5     | `tests/languages/astro.test.ts`      |
 | C                | passing | 17    | `tests/languages/c.test.ts`          |
-| C#               | passing | 12    | `tests/languages/csharp.test.ts`     |
+| C#               | passing | 20    | `tests/languages/csharp.test.ts`     |
 | C++              | passing | 16    | `tests/languages/cpp.test.ts`        |
 | CSS              | passing | 7     | `tests/languages/css.test.ts`        |
 | Go               | passing | 14    | `tests/languages/go.test.ts`         |
@@ -28,16 +28,16 @@ Total: 477 tests, 0 failed.
 | Markdown         | passing | 15    | `tests/languages/markdown.test.ts`   |
 | MDX              | passing | 4     | `tests/languages/mdx.test.ts`        |
 | PHP              | passing | 52    | `tests/languages/php.test.ts`        |
-| Python           | passing | 33    | `tests/languages/python.test.ts`     |
+| Python           | passing | 35    | `tests/languages/python.test.ts`     |
 | reStructuredText | passing | 4     | `tests/languages/rst.test.ts`        |
 | Ruby             | passing | 11    | `tests/languages/ruby.test.ts`       |
 | Rust             | passing | 64    | `tests/languages/rust.test.ts`       |
-| SCSS             | passing | 12    | `tests/languages/scss.test.ts`       |
-| SQL              | passing | 7     | `tests/languages/sql.test.ts`        |
+| SCSS             | passing | 15    | `tests/languages/scss.test.ts`       |
+| SQL              | passing | 8     | `tests/languages/sql.test.ts`        |
 | Svelte           | passing | 10    | `tests/languages/svelte.test.ts`     |
 | Swift            | passing | 9     | `tests/languages/swift.test.ts`      |
-| TSX              | passing | 9     | `tests/languages/tsx.test.ts`        |
-| TypeScript       | passing | 14    | `tests/languages/typescript.test.ts` |
+| TSX              | passing | 10    | `tests/languages/tsx.test.ts`        |
+| TypeScript       | passing | 15    | `tests/languages/typescript.test.ts` |
 | Vue              | passing | 11    | `tests/languages/vue.test.ts`        |
 | Zig              | passing | 11    | `tests/languages/zig.test.ts`        |
 

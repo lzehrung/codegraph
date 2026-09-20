@@ -6,6 +6,7 @@ import * as indexer from "../src/indexer.js";
 import * as scopeModule from "../src/indexer/scope.js";
 import { getCachedReferenceCandidateFiles } from "../src/indexer/navigation-references.js";
 import { findUsageReferences } from "../src/indexer/navigation.js";
+import type { ProjectIndex } from "../src/index.js";
 import { createReferenceLookupCache } from "../src/impact/reference-cache.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import {
@@ -3971,6 +3972,197 @@ describe("Find References: canonical Unicode identifier equality", () => {
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
       expect(result.references.some((reference) => reference.file === consumerFile)).toBe(false);
+    }
+  });
+});
+
+describe("Find References: Python receiver member resolution", () => {
+  const source = [
+    "class Service:",
+    "    def __init__(self, name):",
+    "        self.name = name",
+    "",
+    "    def run(self):",
+    "        return self.name",
+    "",
+    "    def call_self(self):",
+    "        return self.run()",
+    "",
+    "class Base:",
+    "    def base_method(self):",
+    "        return 1",
+    "",
+    "class Derived(Base):",
+    "    def use_inherited(self):",
+    "        return self.base_method()",
+    "",
+    "def run():",
+    "    return 0",
+    "",
+    "def bare_call():",
+    "    return run()",
+    "",
+    "def make_service():",
+    '    return Service("x")',
+    "",
+    "def via_constructor():",
+    "    svc = Service()",
+    "    return svc.run()",
+    "",
+    "def via_factory():",
+    "    svc = make_service()",
+    "    return svc.run()",
+    "",
+    "def via_param(svc):",
+    "    return svc.run()",
+    "",
+    "class KindHolder:",
+    '    kind = "svc"',
+    "",
+    "    @classmethod",
+    "    def from_kind(cls):",
+    "        return cls.kind",
+    "",
+    "class Left:",
+    "    def shared(self):",
+    '        return "L"',
+    "",
+    "class Right:",
+    "    def shared(self):",
+    '        return "R"',
+    "",
+    "class Ambiguous(Left, Right):",
+    "    def use_shared(self):",
+    "        return self.shared()",
+    "",
+    "class Other:",
+    "    def run(self):",
+    "        return 2",
+    "",
+    "class Shadow:",
+    "    def run(self):",
+    "        return 1",
+    "",
+    "    def call(self):",
+    "        run = 0",
+    "        return self.run()",
+    "",
+    "def via_annotated():",
+    "    svc: Service = Service()",
+    "    return svc.run()",
+    "",
+    "def via_other():",
+    "    other = Other()",
+    "    return other.run()",
+    "",
+  ].join("\n");
+  const lines = source.split("\n");
+
+  function columnOf(line: number, token: string): number {
+    const index = lines[line - 1]!.indexOf(token);
+    if (index < 0) throw new Error(`Expected token ${token} on fixture line ${line}`);
+    return index + 1;
+  }
+
+  async function buildReceiverFixture(): Promise<{ root: string; file: string; index: ProjectIndex }> {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-receiver-refs-"));
+    const file = path.join(root, "models.py").replace(/\\/g, "/");
+    await fsp.writeFile(file, source, "utf8");
+    return { root, file, index: await createTestIndexFromFiles(root, [file]) };
+  }
+
+  it("resolves references from a Python self member call or attribute", async () => {
+    const { root, file, index } = await buildReceiverFixture();
+    try {
+      const methodRefs = await testFindReferences(index, file, 5, columnOf(5, "run"), 3);
+      if (methodRefs.status === "ok") {
+        expectReferenceAt(methodRefs, file, 5);
+        expectReferenceAt(methodRefs, file, 9);
+        expectReferenceAt(methodRefs, file, 30);
+        expect(methodRefs.references.some((reference) => reference.range.start.line === 23)).toBe(false);
+        expect(methodRefs.references.some((reference) => reference.range.start.line === 34)).toBe(false);
+        expect(methodRefs.references.some((reference) => reference.range.start.line === 37)).toBe(false);
+        expect(methodRefs.references.some((reference) => reference.range.start.line === 59)).toBe(false);
+      }
+
+      const nameRefs = await testFindReferences(index, file, 6, columnOf(6, "name"), 2);
+      if (nameRefs.status === "ok") {
+        expectReferenceAt(nameRefs, file, 3);
+        expectReferenceAt(nameRefs, file, 6);
+      }
+
+      const inheritedRefs = await testFindReferences(index, file, 17, columnOf(17, "base_method"), 2);
+      if (inheritedRefs.status === "ok") {
+        expectReferenceAt(inheritedRefs, file, 12);
+        expectReferenceAt(inheritedRefs, file, 17);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a Python module-level function separate from a same-named method", async () => {
+    const { root, file, index } = await buildReceiverFixture();
+    try {
+      // The module-level `def run` on line 19 owns the bare `run()` call on line 23 but not
+      // the method declaration on line 5 or the `self.run()` receiver on line 9.
+      const moduleRefs = await testFindReferences(index, file, 19, columnOf(19, "run"), 2);
+      if (moduleRefs.status === "ok") {
+        expectReferenceAt(moduleRefs, file, 19);
+        expectReferenceAt(moduleRefs, file, 23);
+        expect(moduleRefs.references.some((reference) => reference.range.start.line === 5)).toBe(false);
+        expect(moduleRefs.references.some((reference) => reference.range.start.line === 9)).toBe(false);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves references through a Python constructor-assigned receiver", async () => {
+    const { root, file, index } = await buildReceiverFixture();
+    try {
+      const refs = await testFindReferences(index, file, 30, columnOf(30, "run"), 2);
+      if (refs.status === "ok") {
+        expectReferenceAt(refs, file, 5);
+        expectReferenceAt(refs, file, 30);
+        expect(refs.references.some((reference) => reference.range.start.line === 23)).toBe(false);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve references through an unproven Python receiver", async () => {
+    const { root, file, index } = await buildReceiverFixture();
+    try {
+      // `svc.run()` on line 34 (receiver from a factory call) and on line 37 (unannotated
+      // parameter) have no proven receiver type.
+      await testFindReferences(index, file, 34, columnOf(34, "run"), 0, "not_found");
+      await testFindReferences(index, file, 37, columnOf(37, "run"), 0, "not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves references from a Python cls class-level member", async () => {
+    const { root, file, index } = await buildReceiverFixture();
+    try {
+      const refs = await testFindReferences(index, file, 44, columnOf(44, "kind"), 2);
+      if (refs.status === "ok") {
+        expectReferenceAt(refs, file, 40);
+        expectReferenceAt(refs, file, 44);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve references for an ambiguous Python inherited member", async () => {
+    const { root, file, index } = await buildReceiverFixture();
+    try {
+      await testFindReferences(index, file, 56, columnOf(56, "shared"), 0, "not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
     }
   });
 });

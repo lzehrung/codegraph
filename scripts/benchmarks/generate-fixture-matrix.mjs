@@ -262,7 +262,12 @@ function main() {
       JSON.stringify(normalizeForComparison(committedSnapshot)) === JSON.stringify(normalizeForComparison(snapshot));
     const matrixMatches = stripTimestamp(committedMatrix) === stripTimestamp(matrixMarkdown);
     if (!snapshotMatches || !matrixMatches) {
-      throw new Error("Fixture matrix is stale. Run `npm run bench:fixtures` and commit the result.");
+      const stalePaths = [];
+      if (!snapshotMatches) stalePaths.push(options.snapshotPath);
+      if (!matrixMatches) stalePaths.push(options.matrixPath);
+      throw new Error(
+        `Fixture matrix is stale: ${stalePaths.join(", ")}. Run \`npm run bench:fixtures\` and commit the result.`,
+      );
     }
     console.log("Fixture matrix is up to date.");
     return;

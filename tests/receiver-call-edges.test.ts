@@ -56,6 +56,21 @@ function nodeIn(graph: DetailedSymbolGraph, file: string, name: string): string 
   return matches[0]!.id;
 }
 
+/** Package-level function that is not a `member_of` any type. */
+function freeFunctionIn(graph: DetailedSymbolGraph, file: string, name: string): string {
+  const owned = new Set(graph.edges.filter((edge) => edge.label === "member_of").map((edge) => edge.from));
+  const matches = [...graph.nodes.values()].filter(
+    (node) =>
+      node.name === name && path.basename(node.file) === file && node.kind === "function" && !owned.has(node.id),
+  );
+  expect(matches, `expected exactly one free ${name} function in ${file}`).toHaveLength(1);
+  return matches[0]!.id;
+}
+
+function outgoingCallCount(graph: DetailedSymbolGraph, callerId: string): number {
+  return graph.edges.filter((edge) => edge.label === "calls" && edge.from === callerId).length;
+}
+
 /** Callsite texts of `caller -> callee` from the resolved calls edges, or null when no edge exists. */
 function callsiteTexts(
   graph: DetailedSymbolGraph,
@@ -407,10 +422,7 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(callsiteTexts(graph, faceShared[0]!, go, files)).toBeNull();
   });
 
-  // Documented limitation (docs/language-parity.md): Go declares methods outside the
-  // receiver type, so no member ownership edge ties a method to its type and no
-  // receiver call can be proven. Free Go calls keep working.
-  it("leaves Go receiver calls unresolved while keeping free Go calls resolved", async () => {
+  it("records calls edges for Go value-receiver calls while keeping free Go calls resolved", async () => {
     const files: Record<string, string> = {
       "gox.go": [
         "package gox",
@@ -421,11 +433,13 @@ nativeDescribe("receiver method call edge language parity", () => {
       ].join("\n"),
     };
     const graph = await buildFixture("cg-receiver-go-", files);
-    const helper = nodeIn(graph, "gox.go", "GoHelper");
+    const helper = membersOwnedBy(graph, "GoBox", "GoHelper");
+    expect(helper).toHaveLength(1);
     const free = nodeIn(graph, "gox.go", "goFree");
     const run = nodeIn(graph, "gox.go", "GoRun");
-    expect(callsiteTexts(graph, helper, run, files)).toBeNull();
+    expect(callsiteTexts(graph, helper[0]!, run, files)).toEqual(["GoHelper"]);
     expect(callsiteTexts(graph, free, run, files)).toEqual(["goFree"]);
+    expect(outgoingCallCount(graph, run)).toBe(2);
   });
 
   it("records calls edges for Rust self receivers", async () => {
@@ -906,6 +920,127 @@ nativeDescribe("receiver method call edge language parity", () => {
     const helper = nodeIn(graph, "box.zig", "helper");
     const run = nodeIn(graph, "box.zig", "run");
     expect(callsiteTexts(graph, helper, run, files)).toEqual(["helper"]);
+  });
+
+  it("records calls edges for Go pointer-receiver calls", async () => {
+    const files: Record<string, string> = {
+      "ptr.go": [
+        "package ptr",
+        "type GoBox struct{}",
+        "func (b *GoBox) GoHelper() {}",
+        "func GoRun() { b := &GoBox{}; b.GoHelper() }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-go-ptr-", files);
+    const helper = membersOwnedBy(graph, "GoBox", "GoHelper");
+    expect(helper).toHaveLength(1);
+    const run = nodeIn(graph, "ptr.go", "GoRun");
+    expect(callsiteTexts(graph, helper[0]!, run, files)).toEqual(["GoHelper"]);
+    expect(outgoingCallCount(graph, run)).toBe(1);
+  });
+
+  it("records calls edges for Go var-declared receivers", async () => {
+    const files: Record<string, string> = {
+      "var.go": [
+        "package vargo",
+        "type GoBox struct{}",
+        "func (b GoBox) GoHelper() {}",
+        "func GoRun() { var b GoBox; b.GoHelper() }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-go-var-", files);
+    const helper = membersOwnedBy(graph, "GoBox", "GoHelper");
+    expect(helper).toHaveLength(1);
+    const run = nodeIn(graph, "var.go", "GoRun");
+    expect(callsiteTexts(graph, helper[0]!, run, files)).toEqual(["GoHelper"]);
+    expect(outgoingCallCount(graph, run)).toBe(1);
+  });
+
+  it("does not attribute a Go package-level function to a same-named method", async () => {
+    const files: Record<string, string> = {
+      "same.go": [
+        "package same",
+        "type GoBox struct{}",
+        "func (b *GoBox) GoHelper() {}",
+        "func GoHelper() {}",
+        "func CallMethod() { b := &GoBox{}; b.GoHelper() }",
+        "func CallFree() { GoHelper() }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-go-free-name-", files);
+    const method = membersOwnedBy(graph, "GoBox", "GoHelper");
+    expect(method).toHaveLength(1);
+    const free = freeFunctionIn(graph, "same.go", "GoHelper");
+    const callMethod = nodeIn(graph, "same.go", "CallMethod");
+    const callFree = nodeIn(graph, "same.go", "CallFree");
+    expect(callsiteTexts(graph, method[0]!, callMethod, files)).toEqual(["GoHelper"]);
+    expect(callsiteTexts(graph, free, callMethod, files)).toBeNull();
+    expect(callsiteTexts(graph, free, callFree, files)).toEqual(["GoHelper"]);
+    expect(callsiteTexts(graph, method[0]!, callFree, files)).toBeNull();
+  });
+
+  it("resolves same-named Go methods to the receiver's own type", async () => {
+    const files: Record<string, string> = {
+      "own.go": [
+        "package own",
+        "type BoxA struct{}",
+        "func (b BoxA) Shared() {}",
+        "type BoxB struct{}",
+        "func (b BoxB) Shared() {}",
+        "func RunA() { a := BoxA{}; a.Shared() }",
+        "func RunB() { b := BoxB{}; b.Shared() }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-go-own-", files);
+    const aShared = membersOwnedBy(graph, "BoxA", "Shared");
+    const bShared = membersOwnedBy(graph, "BoxB", "Shared");
+    expect(aShared).toHaveLength(1);
+    expect(bShared).toHaveLength(1);
+    const runA = nodeIn(graph, "own.go", "RunA");
+    const runB = nodeIn(graph, "own.go", "RunB");
+    expect(callsiteTexts(graph, aShared[0]!, runA, files)).toEqual(["Shared"]);
+    expect(callsiteTexts(graph, aShared[0]!, runB, files)).toBeNull();
+    expect(callsiteTexts(graph, bShared[0]!, runB, files)).toEqual(["Shared"]);
+    expect(callsiteTexts(graph, bShared[0]!, runA, files)).toBeNull();
+  });
+
+  it("leaves an unproven Go receiver call unresolved", async () => {
+    const files: Record<string, string> = {
+      "unproven.go": [
+        "package unproven",
+        "type GoBox struct{}",
+        "func (b GoBox) GoHelper() {}",
+        "type Face interface { GoHelper() }",
+        "func makeBox() GoBox { return GoBox{} }",
+        "func CallFactory() { b := makeBox(); b.GoHelper() }",
+        "func CallIface(b Face) { b.GoHelper() }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-go-unproven-", files);
+    const helper = membersOwnedBy(graph, "GoBox", "GoHelper");
+    expect(helper).toHaveLength(1);
+    const makeBox = nodeIn(graph, "unproven.go", "makeBox");
+    const callFactory = nodeIn(graph, "unproven.go", "CallFactory");
+    const callIface = nodeIn(graph, "unproven.go", "CallIface");
+    expect(callsiteTexts(graph, helper[0]!, callFactory, files)).toBeNull();
+    expect(callsiteTexts(graph, helper[0]!, callIface, files)).toBeNull();
+    expect(callsiteTexts(graph, makeBox, callFactory, files)).toEqual(["makeBox"]);
+    expect(outgoingCallCount(graph, callIface)).toBe(0);
+  });
+
+  it("emits no receiver calls edges for C struct-field function pointer calls", async () => {
+    const files: Record<string, string> = {
+      "ops.c": [
+        "void run(void) {}",
+        "struct Ops { void (*run)(void); };",
+        "void go(struct Ops ops) { ops.run(); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-c-ops-", files);
+    const caller = nodeIn(graph, "ops.c", "go");
+    const freeRun = nodeIn(graph, "ops.c", "run");
+    expect(callsiteTexts(graph, freeRun, caller, files)).toBeNull();
+    expect(outgoingCallCount(graph, caller)).toBe(0);
   });
 });
 

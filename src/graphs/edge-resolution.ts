@@ -12,6 +12,7 @@ import { type ModuleSpecifier } from "../util/specifiers.js";
 import { type WorkspaceConfig } from "../util/workspace.js";
 import { isGraphOnlyLanguage } from "../document-links.js";
 import { STYLESHEET_RESOLUTION_EXTENSIONS } from "../util/resolution-candidates.js";
+import { resolveCsharpNamespaceImportPaths } from "../util/resolution/csharp.js";
 
 type ResolvedSpecifierEdge = {
   to: EdgeTo;
@@ -134,6 +135,11 @@ export async function resolveModuleSpecifierEdges(
   } else if (context.support.id === "go" || context.support.id === "php" || context.support.id === "rust") {
     to = await resolveImportSpecifierEdge(entry, context);
   } else if (["csharp", "ruby"].includes(context.support.id)) {
+    const namespaceTargets =
+      context.support.id === "csharp" ? await resolveCsharpNamespaceImportPaths(context.projectRoot, entry.spec) : [];
+    if (namespaceTargets.length) {
+      return namespaceTargets.map((targetPath) => withSpecifierMetadata(entry, edgeToResolvedFile(targetPath)));
+    }
     const { resolvePathLikeModule } = await import("../util/resolution.js");
     const pathLike = await resolvePathLikeModule(context.projectRoot, entry.spec);
     to = pathLike ? edgeToResolvedFile(pathLike) : await resolveGenericSpecifier(entry, context, resolutionExtensions);

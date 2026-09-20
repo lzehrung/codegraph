@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { goToDefinition } from "../src/index.js";
+import { goToDefinition, type ProjectIndex } from "../src/index.js";
 import { JAVA_SUPPORT } from "../src/languages.js";
 import { resolveNamedDefinition } from "../src/indexer/navigation-local.js";
 import { fileIdentityKey } from "../src/util/paths.js";
@@ -2422,5 +2422,199 @@ describe("Go to Definition: canonical Unicode identifier equality", () => {
 
     const result = await goToDefinition(index, { file: consumerFile, line: 7, column: 1 });
     expect(result.status).not.toBe("ok");
+  });
+});
+
+describe("Python receiver member resolution", () => {
+  const source = [
+    "class Service:",
+    "    def __init__(self, name):",
+    "        self.name = name",
+    "",
+    "    def run(self):",
+    "        return self.name",
+    "",
+    "    def call_self(self):",
+    "        return self.run()",
+    "",
+    "class Base:",
+    "    def base_method(self):",
+    "        return 1",
+    "",
+    "class Derived(Base):",
+    "    def use_inherited(self):",
+    "        return self.base_method()",
+    "",
+    "def run():",
+    "    return 0",
+    "",
+    "def bare_call():",
+    "    return run()",
+    "",
+    "def make_service():",
+    '    return Service("x")',
+    "",
+    "def via_constructor():",
+    "    svc = Service()",
+    "    return svc.run()",
+    "",
+    "def via_factory():",
+    "    svc = make_service()",
+    "    return svc.run()",
+    "",
+    "def via_param(svc):",
+    "    return svc.run()",
+    "",
+    "class KindHolder:",
+    '    kind = "svc"',
+    "",
+    "    @classmethod",
+    "    def from_kind(cls):",
+    "        return cls.kind",
+    "",
+    "class Left:",
+    "    def shared(self):",
+    '        return "L"',
+    "",
+    "class Right:",
+    "    def shared(self):",
+    '        return "R"',
+    "",
+    "class Ambiguous(Left, Right):",
+    "    def use_shared(self):",
+    "        return self.shared()",
+    "",
+    "class Other:",
+    "    def run(self):",
+    "        return 2",
+    "",
+    "class Shadow:",
+    "    def run(self):",
+    "        return 1",
+    "",
+    "    def call(self):",
+    "        run = 0",
+    "        return self.run()",
+    "",
+    "def via_annotated():",
+    "    svc: Service = Service()",
+    "    return svc.run()",
+    "",
+    "def via_other():",
+    "    other = Other()",
+    "    return other.run()",
+    "",
+  ].join("\n");
+  const lines = source.split("\n");
+
+  function columnOf(line: number, token: string): number {
+    const index = lines[line - 1]!.indexOf(token);
+    if (index < 0) throw new Error(`Expected token ${token} on fixture line ${line}`);
+    return index + 1;
+  }
+
+  async function buildReceiverFixture(): Promise<{ root: string; file: string; index: ProjectIndex }> {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-receiver-goto-"));
+    const file = path.join(root, "models.py").replace(/\\/g, "/");
+    await fsp.writeFile(file, source, "utf8");
+    return { root, file, index: await createTestIndexFromFiles(root, [file]) };
+  }
+
+  it("resolves a Python self member inside the declaring class", async () => {
+    const { root, file, index } = await buildReceiverFixture();
+    try {
+      await testGoToDefinition(index, file, 9, columnOf(9, "run"), file, 5);
+      await testGoToDefinition(index, file, 6, columnOf(6, "name"), file, 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a Python inherited member reached through self", async () => {
+    const { root, file, index } = await buildReceiverFixture();
+    try {
+      await testGoToDefinition(index, file, 17, columnOf(17, "base_method"), file, 12);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a Python constructor-assigned local receiver", async () => {
+    const { root, file, index } = await buildReceiverFixture();
+    try {
+      await testGoToDefinition(index, file, 30, columnOf(30, "run"), file, 5);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve an unproven Python receiver", async () => {
+    const { root, file, index } = await buildReceiverFixture();
+    try {
+      // `svc.run()` on line 34 after `svc = make_service()` on line 32: a factory call proves
+      // no constructor.
+      await testGoToDefinition(index, file, 34, columnOf(34, "run"), undefined, undefined, "not_found");
+      // `svc.run()` on line 37: an unannotated parameter proves no receiver type.
+      await testGoToDefinition(index, file, 37, columnOf(37, "run"), undefined, undefined, "not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a Python module-level function separate from a same-named method", async () => {
+    const { root, file, index } = await buildReceiverFixture();
+    try {
+      // The bare `run()` call on line 23 resolves to the module-level `def run` on line 19,
+      // not to `Service.run` on line 5.
+      await testGoToDefinition(index, file, 23, columnOf(23, "run"), file, 19);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a Python cls class-level member", async () => {
+    const { root, file, index } = await buildReceiverFixture();
+    try {
+      await testGoToDefinition(index, file, 44, columnOf(44, "kind"), file, 40);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve an ambiguous Python inherited member at the same level", async () => {
+    const { root, file, index } = await buildReceiverFixture();
+    try {
+      await testGoToDefinition(index, file, 56, columnOf(56, "shared"), undefined, undefined, "not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not attribute a Python method to a same-named member on an unrelated class", async () => {
+    const { root, file, index } = await buildReceiverFixture();
+    try {
+      await testGoToDefinition(index, file, 30, columnOf(30, "run"), file, 5);
+      await testGoToDefinition(index, file, 76, columnOf(76, "run"), file, 59);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let a Python method-local variable shadow a class member", async () => {
+    const { root, file, index } = await buildReceiverFixture();
+    try {
+      await testGoToDefinition(index, file, 68, columnOf(68, "run"), file, 63);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a Python annotated constructor-assigned local receiver", async () => {
+    const { root, file, index } = await buildReceiverFixture();
+    try {
+      await testGoToDefinition(index, file, 72, columnOf(72, "run"), file, 5);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });

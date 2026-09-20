@@ -7,6 +7,7 @@ import {
   buildProjectIndexFromFiles,
   chunkFile,
   extractSqlFactsFromSource,
+  goToDefinition,
   listSymbols,
   supportForFile,
 } from "../../src/index.js";
@@ -167,6 +168,38 @@ describe("native-only SQL support", () => {
     } finally {
       vi.doUnmock("../../src/native/tree-sitter-native.js");
       vi.resetModules();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("SQL routine symbols", () => {
+  it("indexes a CREATE FUNCTION routine and navigates a call site to it", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-routine-"));
+    try {
+      const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+      const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+      const routine = "CREATE FUNCTION compute_total(amount integer) RETURNS integer AS $$ SELECT amount $$;\n";
+      const query = "SELECT compute_total(id) FROM users;\n";
+      await fsp.writeFile(schemaFile, routine, "utf8");
+      await fsp.writeFile(reportFile, query, "utf8");
+      const index = await buildProjectIndexFromFiles(root, [schemaFile, reportFile]);
+
+      const routineSymbols = listSymbols(index, { file: schemaFile }).filter(
+        (symbol) => symbol.name === "compute_total",
+      );
+      expect(routineSymbols.map((symbol) => symbol.kind)).toEqual(["routine"]);
+
+      const result = await goToDefinition(index, {
+        file: reportFile,
+        line: 1,
+        column: query.indexOf("compute_total") + 1,
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.definition.file).toBe(schemaFile);
+      expect(result.definition.range.start.line).toBe(1);
+    } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });

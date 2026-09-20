@@ -33,8 +33,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 16 handles balanced CommonJS destructuring defaults and corrected bounded references.
  * Epoch 17 corrects rename bounds, static member lookup, and aliased re-export coverage.
  * Epoch 18 refreshes direct namespace-member resolution.
+ * Epoch 19 adds Go and Python receiver member resolution, C# namespace-to-file
+ * resolution, SCSS declaration navigation, and object-level SQL impact mapping.
  */
-export const CORE_ALGORITHM_EPOCH = 18;
+export const CORE_ALGORITHM_EPOCH = 19;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -42,8 +44,10 @@ export const CORE_ALGORITHM_EPOCH = 18;
  * Epoch 4 distinguishes TypeScript variable names from initializer references.
  * Epoch 5 applies the same declaration-name boundary to JavaScript, Python, PHP, and Zig.
  * Epoch 6 adds field and enum-member declarations and tightens PHP and Zig declarations.
+ * Epoch 7 adds SCSS declaration scope, TypeScript named function expression self-binding,
+ * and C# positional record component locals.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 6;
+export const LANGUAGE_BEHAVIOR_EPOCH = 7;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];

@@ -1134,7 +1134,7 @@ nativeDescribe("native semantic coverage", () => {
           "_icons.scss",
         ],
         undefined,
-        { file: "_variables.scss", line: 3, column: 2, expectedStatus: "not_found" },
+        { file: "_variables.scss", line: 3, column: 2, expectedStatus: "ok" },
         // `.primary` is now a navigable SCSS selector local: the symbol queries used to be
         // blanked wholesale for the native runtime, so nothing in a stylesheet had references.
         { file: "_variables.scss", line: 3, column: 2, expectedStatus: "ok" },
@@ -1143,7 +1143,7 @@ nativeDescribe("native semantic coverage", () => {
         "scss",
         ["forward.scss", "_variables.scss", "_mixins.scss"],
         undefined,
-        { file: "_variables.scss", line: 3, column: 2, expectedStatus: "not_found" },
+        { file: "_variables.scss", line: 3, column: 2, expectedStatus: "ok" },
         { file: "_variables.scss", line: 3, column: 2, expectedStatus: "ok" },
       ),
       sampleExpectation(
@@ -1307,6 +1307,37 @@ nativeDescribe("native semantic coverage", () => {
     // This serial fixture matrix is CPU-bound. Under parallel native CI on Windows,
     // deterministic assertions can exceed 60 seconds, so retain headroom for host variance.
   }, 120_000);
+
+  it("scss go-to-definition resolves indexed declaration locals", async () => {
+    await expectNativeSemantics(
+      sampleExpectation(
+        "scss",
+        [
+          "main.scss",
+          "use-partials.scss",
+          "extensionless-forward.scss",
+          "extensionless-import.scss",
+          "_variables.scss",
+          "_mixins.scss",
+          "_tokens.scss",
+          "_tokens.ts",
+          "_icons.scss",
+        ],
+        undefined,
+        { file: "_variables.scss", line: 3, column: 2, expectedStatus: "ok" },
+        { file: "_variables.scss", line: 3, column: 2, expectedStatus: "ok" },
+      ),
+    );
+    await expectNativeSemantics(
+      sampleExpectation(
+        "scss",
+        ["forward.scss", "_variables.scss", "_mixins.scss"],
+        undefined,
+        { file: "_variables.scss", line: 3, column: 2, expectedStatus: "ok" },
+        { file: "_variables.scss", line: 3, column: 2, expectedStatus: "ok" },
+      ),
+    );
+  });
 
   it("keeps native semantics stable for normalization-sensitive TypeScript export assignment", async () => {
     const testCase = await createTypeScriptNormalizationCase();

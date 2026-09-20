@@ -123,6 +123,7 @@ const VALUE_BINDING_TYPES: Record<string, true> = {
   short_var_declaration: true,
   simple_parameter: true,
   typed_parameter: true,
+  var_spec: true,
   variable_declaration: true,
   variable_declarator: true,
 };
@@ -243,9 +244,19 @@ function bindingIdentifier(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNo
   ) {
     return named;
   }
-  if (node.type === "assignment" || node.type === "assignment_expression" || node.type === "assignment_statement") {
+  if (
+    node.type === "assignment" ||
+    node.type === "assignment_expression" ||
+    node.type === "assignment_statement" ||
+    node.type === "short_var_declaration"
+  ) {
     const left = node.childForFieldName("left") ?? node.child(0);
     if (left && (isIdentifierType(sup, left.type) || left.type === "identifier")) return left;
+    if (left?.type === "expression_list") {
+      return (
+        left.namedChildren.find((child) => child.type === "identifier" || isIdentifierType(sup, child.type)) ?? null
+      );
+    }
     return null;
   }
   let current = node.childForFieldName("declarator");

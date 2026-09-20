@@ -17,6 +17,7 @@ import { bindingKindToSymbolKind } from "./declarations.js";
 import { buildScopeIndexFromSource } from "./scope.js";
 import { SymbolKind } from "./types.js";
 import type { LanguageSupport } from "../languages.js";
+import { isPythonInstanceAttributeDeclaration } from "../languages/definitions/python.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { ExportEntry, ImportBinding, ModuleIndex, SymbolDef } from "./types.js";
 import type { Range } from "../types.js";
@@ -127,6 +128,7 @@ const CALLABLE_DECLARATION_NODE_TYPES: Record<string, true> = {
 };
 
 function isTypeMemberDeclaration(node: SyntaxNodeLike): boolean {
+  if (isPythonInstanceAttributeDeclaration(node)) return true;
   let current = node.parent?.parent ?? null;
   while (current) {
     if (MEMBER_CONTAINER_NODE_TYPES[current.type]) return true;

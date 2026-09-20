@@ -147,6 +147,11 @@ const BASE_HELPERS = {
     const t = n.parent?.type;
     if (t === "function_declaration") return "function";
     if (t === "generator_function_declaration") return "function";
+    // A named function expression's own name is a function-kind binding, matching the
+    // declaration forms; the grammar spells the expression forms without the `_declaration`
+    // suffix (`function_expression`, `generator_function`).
+    if (t === "function_expression") return "function";
+    if (t === "generator_function") return "function";
     if (t === "method_definition") return "function";
     if (t === "method_signature") return "function";
     if (t === "abstract_method_signature") return "function";
@@ -193,15 +198,27 @@ const BASE_HELPERS = {
         "method_definition",
         "method_signature",
         "abstract_method_signature",
+        // A named function expression binds its own name inside its body:
+        // `const f = function inner() {}` and `$scope.refresh = function refresh() {}`.
+        "function_expression",
+        "generator_function",
       ].includes(p)
     );
   },
   // Scope construction has structural handling for the ordinary declaration forms. Ambient
-  // overload signatures and `namespace X {}` are not in it, so opt their name nodes in here;
-  // `isDeclarationName` already accepts both parents.
+  // overload signatures, `namespace X {}`, and a named function expression's own name are not
+  // in it, so opt their name nodes in here; `isDeclarationName` already accepts every parent.
+  // The function-expression name is registered after the function scope is pushed, so it lands
+  // in that scope: visible to the body (and recursive calls) but never to the module.
   scopeDeclarationNames: (node: SyntaxNodeLike) => {
     const parent = node.parent?.type;
-    return parent === "function_signature" || parent === "internal_module" || parent === "module";
+    return (
+      parent === "function_signature" ||
+      parent === "internal_module" ||
+      parent === "module" ||
+      parent === "function_expression" ||
+      parent === "generator_function"
+    );
   },
   createsBlockScope: (n: SyntaxNodeLike) =>
     n.type === "program" ||
@@ -214,6 +231,9 @@ const BASE_HELPERS = {
     n.type === "function_declaration" ||
     n.type === "function" ||
     n.type === "function_expression" ||
+    // A generator function expression has its own body scope: without this, its own name
+    // (registered above) and its parameters would land in the enclosing scope.
+    n.type === "generator_function" ||
     n.type === "arrow_function" ||
     n.type === "method_definition",
   membersAreImplicitlyInScope: false,

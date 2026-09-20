@@ -1,10 +1,16 @@
 import os from "node:os";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, describe, it } from "vitest";
 import { collectModuleSpecifiersFromSource } from "../../src/graphs.js";
 import { collectImportsForFile } from "../../src/indexer/imports.js";
-import { collectGraph, collectLocalsAndExportsFromSource } from "../../src/index.js";
+import {
+  buildProjectIndex,
+  collectGraph,
+  collectLocalsAndExportsFromSource,
+  findReferences,
+  goToDefinition,
+} from "../../src/index.js";
 import { supportById } from "../../src/languages.js";
 import { isNativeTreeSitterAvailable, runNativeLanguageQueries } from "../../src/native/tree-sitter-native.js";
 import { runLanguageTests } from "./runner.js";
@@ -256,4 +262,168 @@ it("resolves a bare stylesheet import to the sibling partial, not a same-basenam
   } finally {
     await fsp.rm(root, { recursive: true, force: true });
   }
+});
+
+describe("SCSS same-file navigation", () => {
+  function positionOf(source: string, needle: string, occurrence = 0): { line: number; column: number } {
+    let from = 0;
+    let index = -1;
+    for (let count = 0; count <= occurrence; count += 1) {
+      index = source.indexOf(needle, from);
+      if (index < 0) {
+        throw new Error(`missing ${needle}`);
+      }
+      from = index + needle.length;
+    }
+    const lineStart = source.lastIndexOf("\n", index - 1) + 1;
+    return {
+      line: source.slice(0, index).split("\n").length,
+      column: index - lineStart + 1,
+    };
+  }
+
+  it.runIf(isNativeTreeSitterAvailable())(
+    "resolves declarations and same-file variable, mixin, and placeholder uses",
+    async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-scss-nav-"));
+      const file = path.join(root, "theme.scss").replace(/\\/g, "/");
+      const source = [
+        "$brand: #333;",
+        "",
+        "@mixin center {",
+        "  display: flex;",
+        "}",
+        "",
+        "%placeholder {",
+        "  color: inherit;",
+        "}",
+        "",
+        ".box {",
+        "  color: $brand;",
+        "  @include center;",
+        "  @extend %placeholder;",
+        "}",
+        "",
+      ].join("\n");
+      await fsp.writeFile(file, source, "utf8");
+      try {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const brandDecl = positionOf(source, "$brand");
+        const brandUse = positionOf(source, "$brand", 1);
+        const mixinDecl = positionOf(source, "center");
+        const mixinUse = positionOf(source, "center", 1);
+        const placeholderDecl = positionOf(source, "placeholder");
+        const placeholderUse = positionOf(source, "placeholder", 1);
+
+        const brandFromDecl = await goToDefinition(index, { file, ...brandDecl });
+        expect(brandFromDecl.status).toBe("ok");
+        if (brandFromDecl.status === "ok") {
+          expect(brandFromDecl.definition.range.start.line).toBe(brandDecl.line);
+          expect(brandFromDecl.definition.localName).toBe("$brand");
+        }
+
+        const brandFromUse = await goToDefinition(index, { file, ...brandUse });
+        expect(brandFromUse.status).toBe("ok");
+        if (brandFromUse.status === "ok") {
+          expect(brandFromUse.definition.range.start.line).toBe(brandDecl.line);
+        }
+
+        const mixinFromUse = await goToDefinition(index, { file, ...mixinUse });
+        expect(mixinFromUse.status).toBe("ok");
+        if (mixinFromUse.status === "ok") {
+          expect(mixinFromUse.definition.range.start.line).toBe(mixinDecl.line);
+          expect(mixinFromUse.definition.localName).toBe("center");
+        }
+
+        const placeholderFromUse = await goToDefinition(index, { file, ...placeholderUse });
+        expect(placeholderFromUse.status).toBe("ok");
+        if (placeholderFromUse.status === "ok") {
+          expect(placeholderFromUse.definition.range.start.line).toBe(placeholderDecl.line);
+        }
+
+        const brandRefs = await findReferences(index, { file, ...brandDecl });
+        expect(brandRefs.status).toBe("ok");
+        if (brandRefs.status === "ok") {
+          expect(brandRefs.references.map((entry) => entry.range.start.line).sort((a, b) => a - b)).toEqual([
+            brandDecl.line,
+            brandUse.line,
+          ]);
+        }
+
+        const mixinRefs = await findReferences(index, { file, ...mixinDecl });
+        expect(mixinRefs.status).toBe("ok");
+        if (mixinRefs.status === "ok") {
+          expect(mixinRefs.references.map((entry) => entry.range.start.line).sort((a, b) => a - b)).toEqual([
+            mixinDecl.line,
+            mixinUse.line,
+          ]);
+        }
+
+        const placeholderRefs = await findReferences(index, { file, ...placeholderDecl });
+        expect(placeholderRefs.status).toBe("ok");
+        if (placeholderRefs.status === "ok") {
+          expect(placeholderRefs.references.map((entry) => entry.range.start.line).sort((a, b) => a - b)).toEqual([
+            placeholderDecl.line,
+            placeholderUse.line,
+          ]);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(isNativeTreeSitterAvailable())("does not resolve namespaced @use members", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-scss-ns-"));
+    const themeFile = path.join(root, "theme.scss").replace(/\\/g, "/");
+    const tokensFile = path.join(root, "_tokens.scss").replace(/\\/g, "/");
+    const themeSource = ["$brand: blue;", '@use "./tokens" as b;', ".ns {", "  color: b.$brand;", "}", ""].join("\n");
+    await Promise.all([
+      fsp.writeFile(themeFile, themeSource, "utf8"),
+      fsp.writeFile(tokensFile, "$brand: red;\n", "utf8"),
+    ]);
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const namespaced = positionOf(themeSource, "b.$brand");
+      const result = await goToDefinition(index, { file: themeFile, ...namespaced });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(isNativeTreeSitterAvailable())("does not resolve a selector inside a comment or string", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-scss-lit-"));
+    const file = path.join(root, "theme.scss").replace(/\\/g, "/");
+    const source = [
+      ".primary {",
+      "  color: red;",
+      "}",
+      "/* .primary */",
+      ".quoted {",
+      '  content: ".primary";',
+      "}",
+      "",
+    ].join("\n");
+    await fsp.writeFile(file, source, "utf8");
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const decl = positionOf(source, "primary");
+      const comment = positionOf(source, ".primary", 1);
+      const quoted = positionOf(source, ".primary", 2);
+
+      const commentGoto = await goToDefinition(index, { file, ...comment });
+      expect(commentGoto.status).toBe("not_found");
+      const quotedGoto = await goToDefinition(index, { file, ...quoted });
+      expect(quotedGoto.status).toBe("not_found");
+
+      const refs = await findReferences(index, { file, ...decl });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(refs.references.map((entry) => entry.range.start.line)).toEqual([decl.line]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
