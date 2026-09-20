@@ -1,5 +1,6 @@
 import { skipRustCommentOrLiteral } from "../../languages/import-statement-parsers.js";
 import { maskJsLikeCommentsAndStrings, maskNestedBlockCommentsAndStrings } from "../../util/comments.js";
+import { collectLineStartOffsets, positionAtOffset } from "../../util/lines.js";
 import type { Range } from "../../types.js";
 import type { ImportBinding } from "../types.js";
 
@@ -86,11 +87,13 @@ export function attributeNamedBindingRanges(args: {
   const matches = matchRoleSequenceBackward(text, slots);
   if (!matches) return;
 
+  const lineStarts = collectLineStartOffsets(source);
+
   for (let index = 0; index < slots.length; index++) {
     const slot = slots[index]!;
     const binding = bindings[slot.bindingIndex]!;
     if (binding.kind !== "named") continue;
-    const range = toSourceRange(source, textStartIndex, matches[index]!);
+    const range = toSourceRange(lineStarts, textStartIndex, matches[index]!);
     binding[slot.field] = range;
     if (
       slot.field === "importedRange" &&
@@ -205,21 +208,17 @@ function findRightmostWholeWordOccurrence(
   return best;
 }
 
-function toSourceRange(source: string, textStartIndex: number, match: { start: number; end: number }): Range {
-  return sourceRangeFromOffsets(source, textStartIndex + match.start, textStartIndex + match.end);
+function toSourceRange(
+  lineStarts: readonly number[],
+  textStartIndex: number,
+  match: { start: number; end: number },
+): Range {
+  return sourceRangeFromOffsets(lineStarts, textStartIndex + match.start, textStartIndex + match.end);
 }
 
-export function sourceRangeFromOffsets(source: string, startIndex: number, endIndex: number): Range {
+export function sourceRangeFromOffsets(lineStarts: readonly number[], startIndex: number, endIndex: number): Range {
   return {
-    start: positionForIndex(source, startIndex),
-    end: positionForIndex(source, endIndex),
+    start: positionAtOffset(lineStarts, startIndex),
+    end: positionAtOffset(lineStarts, endIndex),
   };
-}
-
-// UTF-16 index -> {line, column, index}, matching the convention `rangeFromNativeCapture`
-// produces for native captures (1-based line/column, 0-based index).
-function positionForIndex(source: string, index: number): Range["start"] {
-  const prefix = source.slice(0, index);
-  const lineStart = prefix.lastIndexOf("\n") + 1;
-  return { line: prefix.split("\n").length, column: index - lineStart + 1, index };
 }

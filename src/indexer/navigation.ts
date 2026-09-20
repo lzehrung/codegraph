@@ -324,7 +324,7 @@ async function findReferencesInternal(
   const definitionSiteKey = referenceSiteKey(definitionFile, def.range);
   const includeReference = (ref: Reference): boolean => {
     if (collectionMode === "all") return true;
-    if (ref.via?.reexport === true || referenceSiteKey(ref.file, ref.range) === definitionSiteKey) return false;
+    if (ref.via?.reexport || referenceSiteKey(ref.file, ref.range) === definitionSiteKey) return false;
     if (collectionMode === "usages") return ref.via?.importBinding === undefined;
     const binding = ref.via?.import;
     if (!binding || binding.kind === "star" || binding.kind === "namespace") return true;
@@ -332,14 +332,13 @@ async function findReferencesInternal(
       return true;
     }
     if (binding.kind === "default") return false;
-    return binding.explicitAlias !== true && binding.local === def.localName;
+    return !binding.explicitAlias && binding.local === def.localName;
   };
   const verifiedReferenceFilter = (
     fileId: string,
   ): ((reference: VerifiedNamedNodeReference) => boolean) | undefined => {
     if (collectionMode === "all") return undefined;
-    return (reference) =>
-      reference.via?.reexport !== true && referenceSiteKey(fileId, reference.range) !== definitionSiteKey;
+    return (reference) => !reference.via?.reexport && referenceSiteKey(fileId, reference.range) !== definitionSiteKey;
   };
   const parsedDef = index.parsed?.get(fileIdentityKey(definitionFile));
   const parsedContext = await ensureParsedContext(definitionFile, parsedDef, index.languageExtensions);

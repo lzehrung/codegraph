@@ -1,6 +1,7 @@
 import { maskJsLikeCommentsStringsAndRegex, stripJsLikeComments } from "../../util/comments.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
-import type { Pos, Range } from "../../types.js";
+import { collectLineStartOffsets, positionAtOffset } from "../../util/lines.js";
+import type { Range } from "../../types.js";
 import type { ImportBindingSink, ImportResolver } from "./context.js";
 
 export type JsTextImportExtractionContext = ImportBindingSink & {
@@ -40,27 +41,18 @@ function sourceForTextImportExtraction(context: JsTextImportExtractionContext): 
   return context.source;
 }
 
-function positionAt(source: string, index: number): Pos {
-  let line = 1;
-  let lineStart = 0;
-  for (let offset = 0; offset < index && offset < source.length; offset += 1) {
-    if (source.charCodeAt(offset) === 10) {
-      line += 1;
-      lineStart = offset + 1;
-    }
-  }
-  return { line, column: index - lineStart + 1, index };
-}
-
 /**
  * Builds a binding token range only when the computed offset really holds `token`.
  * Text extraction can mis-locate a token for exotic syntax, and a wrong range would
  * be worse than an absent one, so an unverifiable offset yields `undefined`.
  */
-function tokenRange(source: string, index: number, token: string): Range | undefined {
+function tokenRange(source: string, lineStarts: readonly number[], index: number, token: string): Range | undefined {
   if (index < 0 || !token) return undefined;
   if (source.slice(index, index + token.length) !== token) return undefined;
-  return { start: positionAt(source, index), end: positionAt(source, index + token.length) };
+  return {
+    start: positionAtOffset(lineStarts, index),
+    end: positionAtOffset(lineStarts, index + token.length),
+  };
 }
 
 function splitNamedImportsWithOffsets(namedBlock: string): Array<{ spec: string; start: number }> {
@@ -215,6 +207,7 @@ async function collectEsImports(
   context: JsTextImportExtractionContext,
   source: string,
   maskedSource: string,
+  lineStarts: readonly number[],
 ): Promise<void> {
   const typeOnlyImport = /\bimport\s+type\b/;
   const fromPattern = /^\s*import\s+([^\n;]*?)\s+from\s+(["'])(?<module>[^"']+)\2/gm;
@@ -238,7 +231,9 @@ async function collectEsImports(
     if (namespaceMatch) {
       const localNS = namespaceMatch[1]!;
       const localRange =
-        bodyStart < 0 ? undefined : tokenRange(source, bodyStart + namespaceMatch[0].indexOf(localNS), localNS);
+        bodyStart < 0
+          ? undefined
+          : tokenRange(source, lineStarts, bodyStart + namespaceMatch[0].indexOf(localNS), localNS);
       context.pushBinding({
         kind: "namespace",
         localNS,
@@ -257,7 +252,9 @@ async function collectEsImports(
         : clause.slice(0, namedBlockMatch.index).replace(/,\s*$/, "").trim();
     if (defaultPart) {
       const localRange =
-        bodyStart < 0 ? undefined : tokenRange(source, bodyStart + clause.indexOf(defaultPart), defaultPart);
+        bodyStart < 0
+          ? undefined
+          : tokenRange(source, lineStarts, bodyStart + clause.indexOf(defaultPart), defaultPart);
       context.pushBinding({
         kind: "default",
         local: defaultPart,
@@ -274,8 +271,13 @@ async function collectEsImports(
         if (!namedImport) continue;
         const specStart = namedBlockContentStart + start;
         const bindingTypeOnly = typeOnly || namedImport.typeOnly;
-        const importedRange = tokenRange(source, specStart + namedImport.importedOffset, namedImport.imported);
-        const localRange = tokenRange(source, specStart + namedImport.localOffset, namedImport.local);
+        const importedRange = tokenRange(
+          source,
+          lineStarts,
+          specStart + namedImport.importedOffset,
+          namedImport.imported,
+        );
+        const localRange = tokenRange(source, lineStarts, specStart + namedImport.localOffset, namedImport.local);
         context.pushBinding({
           kind: "named",
           local: namedImport.local,
@@ -296,6 +298,7 @@ async function collectCommonJsRequireDeclarations(
   context: JsTextImportExtractionContext,
   source: string,
   maskedSource: string,
+  lineStarts: readonly number[],
 ): Promise<void> {
   const defaultRequirePattern = DEFAULT_REQUIRE_PATTERN;
   const defaultRequirePrefix = /(?:^|[;{}])\s*(?:export\s+)?(?:const|let|var)\s+/;
@@ -305,7 +308,7 @@ async function collectCommonJsRequireDeclarations(
     const moduleSpecifier = match.groups?.module;
     if (!moduleSpecifier) continue;
     const localStart = (match.index ?? 0) + (defaultRequirePrefix.exec(match[0])?.[0].length ?? 0);
-    const localRange = tokenRange(source, localStart, local);
+    const localRange = tokenRange(source, lineStarts, localStart, local);
     const resolved = await context.resolveFrom(moduleSpecifier);
     context.pushBinding({
       kind: "default",
@@ -335,8 +338,13 @@ async function collectCommonJsRequireDeclarations(
       const namedRequire = parseNamedRequireSpecifier(spec);
       if (!namedRequire) continue;
       const specStart = namedBlockStart + start;
-      const importedRange = tokenRange(source, specStart + namedRequire.importedOffset, namedRequire.imported);
-      const localRange = tokenRange(source, specStart + namedRequire.localOffset, namedRequire.local);
+      const importedRange = tokenRange(
+        source,
+        lineStarts,
+        specStart + namedRequire.importedOffset,
+        namedRequire.imported,
+      );
+      const localRange = tokenRange(source, lineStarts, specStart + namedRequire.localOffset, namedRequire.local);
       context.pushBinding({
         kind: "named",
         local: namedRequire.local,
@@ -356,6 +364,7 @@ async function collectCommonJsImportEquals(
   context: JsTextImportExtractionContext,
   source: string,
   maskedSource: string,
+  lineStarts: readonly number[],
 ): Promise<void> {
   const importEqualsPattern = IMPORT_EQUALS_REQUIRE_PATTERN;
   const importEqualsPrefix = /(?:^|[;{}])\s*import\s+/;
@@ -365,7 +374,7 @@ async function collectCommonJsImportEquals(
     const moduleSpecifier = match.groups?.module;
     if (!moduleSpecifier) continue;
     const localStart = (match.index ?? 0) + (importEqualsPrefix.exec(match[0])?.[0].length ?? 0);
-    const localRange = tokenRange(source, localStart, local);
+    const localRange = tokenRange(source, lineStarts, localStart, local);
     const resolved = await context.resolveFrom(moduleSpecifier);
     context.pushBinding({
       kind: "default",
@@ -382,19 +391,22 @@ async function collectCommonJsImports(
   context: JsTextImportExtractionContext,
   source: string,
   maskedSource: string,
+  lineStarts: readonly number[],
 ): Promise<void> {
-  await collectCommonJsRequireDeclarations(context, source, maskedSource);
-  await collectCommonJsImportEquals(context, source, maskedSource);
+  await collectCommonJsRequireDeclarations(context, source, maskedSource, lineStarts);
+  await collectCommonJsImportEquals(context, source, maskedSource, lineStarts);
 }
 
 export async function collectJsTextValueRequireImports(context: JsTextImportExtractionContext): Promise<void> {
   const source = sourceForTextImportExtraction(context);
-  await collectCommonJsRequireDeclarations(context, source, maskJsLikeCommentsStringsAndRegex(source));
+  const lineStarts = collectLineStartOffsets(source);
+  await collectCommonJsRequireDeclarations(context, source, maskJsLikeCommentsStringsAndRegex(source), lineStarts);
 }
 
 export async function collectJsTextImports(context: JsTextImportExtractionContext): Promise<void> {
   const source = sourceForTextImportExtraction(context);
   const maskedSource = maskJsLikeCommentsStringsAndRegex(source);
-  await collectEsImports(context, source, maskedSource);
-  await collectCommonJsImports(context, source, maskedSource);
+  const lineStarts = collectLineStartOffsets(source);
+  await collectEsImports(context, source, maskedSource, lineStarts);
+  await collectCommonJsImports(context, source, maskedSource, lineStarts);
 }

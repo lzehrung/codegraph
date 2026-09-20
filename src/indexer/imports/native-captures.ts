@@ -4,6 +4,7 @@ import type { NativeCapture, NativeMatch } from "../../native/tree-sitter-native
 import { unquote } from "../../util/ast.js";
 import { maskJsLikeCommentsStringsAndRegex } from "../../util/comments.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
+import { collectLineStartOffsets } from "../../util/lines.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rust-test-modules.js";
 import { parseGoImportAlias } from "../shared.js";
 import type { ImportBinding } from "../types.js";
@@ -68,6 +69,7 @@ async function pushTextObjectPatternBindings(
   from: string | undefined,
   typeOnly: boolean,
   byteIndexMap: ByteToStringIndexMap,
+  lineStarts: readonly number[],
 ): Promise<void> {
   if (!from) return;
   for (const pattern of patterns) {
@@ -81,12 +83,12 @@ async function pushTextObjectPatternBindings(
       from,
       ...(binding.explicitAlias ? { explicitAlias: true } : {}),
       importedRange: sourceRangeFromOffsets(
-        context.source,
+        lineStarts,
         patternStartIndex + binding.importedOffset,
         patternStartIndex + binding.importedOffset + binding.imported.length,
       ),
       localRange: sourceRangeFromOffsets(
-        context.source,
+        lineStarts,
         patternStartIndex + binding.localOffset,
         patternStartIndex + binding.localOffset + binding.local.length,
       ),
@@ -204,6 +206,7 @@ export async function collectNativeCaptureImportBindings(
   matches: NativeMatch[],
 ): Promise<void> {
   const byteIndexMap = buildByteToStringIndexMap(context.source);
+  let lineStarts: number[] | undefined;
   for (const match of matches) {
     const caps = capturesByName(match);
     const statementCapture = caps["stmt"];
@@ -219,7 +222,11 @@ export async function collectNativeCaptureImportBindings(
     }
     const from = caps["from"] ? unquote(caps["from"].text) : undefined;
     const patterns = capturesNamed(match, "pattern");
-    await pushTextObjectPatternBindings(context, patterns, from, statementTypeOnly, byteIndexMap);
+    if (patterns.length) {
+      const rangeLineStarts = lineStarts ?? collectLineStartOffsets(context.source);
+      lineStarts = rangeLineStarts;
+      await pushTextObjectPatternBindings(context, patterns, from, statementTypeOnly, byteIndexMap, rangeLineStarts);
+    }
     await pushStandardBindings(
       context,
       match,
