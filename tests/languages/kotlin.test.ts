@@ -360,6 +360,44 @@ describe("Kotlin text fallback imports", () => {
       }),
     ]);
   });
+
+  it("ignores import text in raw multiline strings before real imports", async () => {
+    const bindings: ImportBinding[] = [];
+    const source = [
+      '@file:Suppress("""',
+      '"',
+      "import fake.Decoy",
+      '""")',
+      "import real.Target as RealTarget",
+      "",
+    ].join("\n");
+    await finalizeLanguageSpecificImports({
+      file: "Consumer.kt",
+      projectRoot: process.cwd(),
+      source,
+      languageId: "kotlin",
+      resolveFrom: async (from) => ({ external: from }),
+      pushBinding: (binding) => {
+        bindings.push(binding);
+      },
+      getBindings: () => bindings,
+      replaceBindings: (next) => {
+        bindings.splice(0, bindings.length, ...next);
+      },
+    });
+
+    expect(bindings).toEqual([
+      expect.objectContaining({
+        kind: "named",
+        imported: "Target",
+        local: "RealTarget",
+        from: "real.Target",
+        importedRange: rangeForToken(source, "Target"),
+        localRange: rangeForToken(source, "RealTarget"),
+        resolved: { external: "real.Target" },
+      }),
+    ]);
+  });
 });
 
 describe("Kotlin .ktm script files", () => {

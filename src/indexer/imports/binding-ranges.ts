@@ -1,5 +1,5 @@
 import { skipRustCommentOrLiteral } from "../../languages/import-statement-parsers.js";
-import { maskJsLikeCommentsAndStrings, maskNestedBlockCommentsAndStrings } from "../../util/comments.js";
+import { maskJsLikeCommentsAndStrings } from "../../util/comments.js";
 import { collectLineStartOffsets, positionAtOffset } from "../../util/lines.js";
 import type { Range } from "../../types.js";
 import type { ImportBinding } from "../types.js";
@@ -11,6 +11,104 @@ type RoleSlot = {
   field: NamedRangeField;
   name: string;
 };
+
+type NestedStringLanguage = "kotlin" | "swift";
+
+function maskTriviaSpan(text: string, start: number, end: number): string {
+  return text.slice(start, end).replace(/[^\r\n]/g, " ");
+}
+
+function nestedBlockCommentEnd(text: string, start: number): number {
+  let depth = 1;
+  let index = start + 2;
+  while (index < text.length && depth) {
+    if (text.startsWith("/*", index)) {
+      depth += 1;
+      index += 2;
+    } else if (text.startsWith("*/", index)) {
+      depth -= 1;
+      index += 2;
+    } else {
+      index += 1;
+    }
+  }
+  return index;
+}
+
+function lineCommentEnd(text: string, start: number): number {
+  let index = start + 2;
+  while (index < text.length && text[index] !== "\r" && text[index] !== "\n") index += 1;
+  return index;
+}
+
+function escapedQuotedLiteralEnd(text: string, start: number, quote: "'" | '"'): number {
+  let index = start + 1;
+  while (index < text.length) {
+    if (text[index] === "\\") {
+      index = Math.min(text.length, index + 2);
+    } else if (text[index] === quote) {
+      return index + 1;
+    } else {
+      index += 1;
+    }
+  }
+  return text.length;
+}
+
+function kotlinLiteralEnd(text: string, start: number): number | null {
+  const quote = text[start];
+  if (quote !== '"' && quote !== "'") return null;
+  if (quote === '"' && text.startsWith('"""', start)) {
+    const close = text.indexOf('"""', start + 3);
+    return close === -1 ? text.length : close + 3;
+  }
+  return escapedQuotedLiteralEnd(text, start, quote);
+}
+
+function swiftStringEnd(text: string, start: number): number | null {
+  let quoteStart = start;
+  while (text[quoteStart] === "#") quoteStart += 1;
+  if (text[quoteStart] !== '"') return null;
+
+  const hashCount = quoteStart - start;
+  const quote = text.startsWith('"""', quoteStart) ? '"""' : '"';
+  const close = `${quote}${"#".repeat(hashCount)}`;
+  let index = quoteStart + quote.length;
+  while (index < text.length) {
+    if (!hashCount && text[index] === "\\") {
+      index = Math.min(text.length, index + 2);
+    } else if (text.startsWith(close, index)) {
+      return index + close.length;
+    } else {
+      index += 1;
+    }
+  }
+  return text.length;
+}
+
+function maskNestedLanguageCommentsAndStrings(text: string, languageId: NestedStringLanguage): string {
+  let masked = "";
+  let copiedThrough = 0;
+  for (let index = 0; index < text.length; ) {
+    let end: number | null = null;
+    if (text.startsWith("//", index)) {
+      end = lineCommentEnd(text, index);
+    } else if (text.startsWith("/*", index)) {
+      end = nestedBlockCommentEnd(text, index);
+    } else {
+      end = languageId === "kotlin" ? kotlinLiteralEnd(text, index) : swiftStringEnd(text, index);
+    }
+    if (end === null) {
+      index += 1;
+      continue;
+    }
+    masked += text.slice(copiedThrough, index);
+    masked += maskTriviaSpan(text, index, end);
+    copiedThrough = end;
+    index = end;
+  }
+  return masked + text.slice(copiedThrough);
+}
 
 /** Masks non-code text while preserving every UTF-16 offset used for range attribution. */
 export function maskImportBindingTrivia(text: string, languageId: string): string {
@@ -29,7 +127,7 @@ export function maskImportBindingTrivia(text: string, languageId: string): strin
     return masked;
   }
   if (languageId === "kotlin" || languageId === "swift") {
-    return maskNestedBlockCommentsAndStrings(text);
+    return maskNestedLanguageCommentsAndStrings(text, languageId);
   }
   const masked = maskJsLikeCommentsAndStrings(text);
   if (languageId !== "php") return masked;
