@@ -9,6 +9,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [2.3.28] - 2026-09-20
+
 ### Fixed
 
 - Cross-file reference searches now include resolved named and default import declaration tokens across supported languages. They preserve exact source-name and local-alias roles when both names have the same spelling, exclude names in comments and string literals, retain multi-line Python imports, ignore raw multiline-string contents and preserve qualified imports across nested comments in reduced-mode Kotlin, and avoid duplicate rename edits. Native and reduced CommonJS destructuring now ignore commas inside nested defaults. Rename previews treat partial reference coverage as unsafe.
@@ -501,7 +503,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.27...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.28...HEAD
+[2.3.28]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.28
 [2.3.27]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.27
 [2.3.26]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.26
 [2.3.25]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.25
