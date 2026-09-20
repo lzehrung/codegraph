@@ -565,6 +565,96 @@ describe("C# namespace aliases", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves a nested namespace's qualified name and its enclosing namespace to the declaring file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-nested-"));
+    const declaration = path.join(root, "Nested.cs");
+    const main = path.join(root, "Main.cs");
+    try {
+      // One line, so the scan cannot rely on a declaration starting a line.
+      await writeFile(
+        declaration,
+        "namespace Outer { namespace Inner { public class Widget { public static void Do() {} } } }\n",
+        "utf8",
+      );
+      await writeFile(
+        main,
+        "using A = Outer.Inner;\nusing B = Outer;\nclass Program { void M() { A.Widget.Do(); } }\n",
+        "utf8",
+      );
+      const index = await createTestIndexFromFiles(root, [declaration, main]);
+      const module = index.byFile.get(fileIdentityKey(main));
+      const nested = module?.imports.find((binding) => binding.kind === "namespace" && binding.localNS === "A");
+      const enclosing = module?.imports.find((binding) => binding.kind === "namespace" && binding.localNS === "B");
+
+      // The nested block contributes the composed name, and the enclosing block is also declared.
+      expect(nested).toMatchObject({ kind: "namespace", localNS: "A", from: "Outer.Inner" });
+      expect(enclosing).toMatchObject({ kind: "namespace", localNS: "B", from: "Outer" });
+      expect(typeof nested?.resolved).toBe("string");
+      expect(typeof enclosing?.resolved).toBe("string");
+      if (typeof nested?.resolved !== "string") return;
+      if (typeof enclosing?.resolved !== "string") return;
+      expect(fileIdentityKey(nested.resolved)).toBe(fileIdentityKey(declaration));
+      expect(fileIdentityKey(enclosing.resolved)).toBe(fileIdentityKey(declaration));
+
+      const edges = edgesFrom(index, main);
+      expect(edges.map((edge) => edge.to)).toEqual([{ type: "file", path: declaration.replace(/\\/g, "/") }]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not compose namespace names out of block comments", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-nested-comment-"));
+    const decoy = path.join(root, "Commented.cs");
+    const main = path.join(root, "Main.cs");
+    try {
+      await writeFile(
+        decoy,
+        [
+          "namespace Real.Model;",
+          "",
+          "/*",
+          "namespace Outer {",
+          "  namespace Inner { }",
+          "}",
+          "*/",
+          "",
+          "public class Decoy {}",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await writeFile(
+        main,
+        "using R = Real.Model;\nusing N = Outer.Inner;\nusing O = Outer;\nclass Program {}\n",
+        "utf8",
+      );
+      const index = await createTestIndexFromFiles(root, [decoy, main]);
+      const module = index.byFile.get(fileIdentityKey(main));
+      const real = module?.imports.find((binding) => binding.kind === "namespace" && binding.localNS === "R");
+      const nested = module?.imports.find((binding) => binding.kind === "named" && binding.local === "N");
+      const enclosing = module?.imports.find((binding) => binding.kind === "named" && binding.local === "O");
+
+      expect(typeof real?.resolved).toBe("string");
+      if (typeof real?.resolved !== "string") return;
+      expect(fileIdentityKey(real.resolved)).toBe(fileIdentityKey(decoy));
+      expect(nested?.resolved).toEqual({ external: "Outer.Inner" });
+      expect(enclosing?.resolved).toEqual({ external: "Outer" });
+
+      const edges = edgesFrom(index, main).map((edge) => edge.to);
+      expect(edges).toEqual(
+        expect.arrayContaining([
+          { type: "file", path: decoy.replace(/\\/g, "/") },
+          { type: "external", name: "Outer.Inner" },
+          { type: "external", name: "Outer" },
+        ]),
+      );
+      expect(edges).toHaveLength(3);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("C# record components", () => {

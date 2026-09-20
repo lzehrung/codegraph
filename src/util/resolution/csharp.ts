@@ -11,15 +11,23 @@ import { mapLimitSemaphore } from "../concurrency.js";
 import { CSHARP_IDENTIFIER_SOURCE } from "../identifiers.js";
 
 // A namespace name may be qualified (`namespace A.B { }`) and either block-scoped (closing
-// `{`) or file-scoped (closing `;`). Both forms declare the same namespace for a file, and a
-// file may declare several namespaces, so every match is indexed.
+// `{`) or file-scoped (closing `;`). Both forms declare the same namespace for a file, a file
+// may declare several namespaces, and a block-scoped namespace may nest inside another, so
+// every declaration is indexed under its composed name.
 const CSHARP_NAMESPACE_DECLARATION_PATTERN = new RegExp(
-  String.raw`^\s*namespace\s+(${CSHARP_IDENTIFIER_SOURCE}(?:\s*\.\s*${CSHARP_IDENTIFIER_SOURCE})*)\s*[;{]`,
-  "gmu",
+  String.raw`(?<![\w@.])namespace\s+(${CSHARP_IDENTIFIER_SOURCE}(?:\s*\.\s*${CSHARP_IDENTIFIER_SOURCE})*)\s*[;{]`,
+  "gu",
 );
 
 type CsharpNamespaceIndexEntry = {
   namespaces: string[];
+};
+
+type CsharpNamespaceScope = {
+  /** Brace depth when the namespace's own `{` was opened, used to close it on the matching `}`. */
+  openedDepth: number;
+  /** Fully qualified name contributed by this block. */
+  name: string;
 };
 
 const csharpNamespaceFileCache = new Map<string, CsharpNamespaceIndexEntry>();
@@ -106,18 +114,54 @@ function scanCsharpRawLiteral(source: string, start: number, quoteRun: number): 
   return close < 0 ? source.length : close + quoteRun;
 }
 
+/**
+ * Every namespace a file declares, qualified by its enclosing block-scoped namespaces, so
+ * `namespace Outer { namespace Inner { } }` yields both `Outer` and `Outer.Inner`. Brace depth
+ * is tracked on the masked source, so braces inside comments and strings cannot compose a name,
+ * and a namespace nested inside a non-namespace construct is not qualified by that construct.
+ */
+function collectCsharpNamespaceNames(source: string): string[] {
+  const masked = maskCsharpTrivia(source);
+  const names = new Set<string>();
+  const scopes: CsharpNamespaceScope[] = [];
+  let depth = 0;
+  let cursor = 0;
+  for (const match of masked.matchAll(CSHARP_NAMESPACE_DECLARATION_PATTERN)) {
+    const matchIndex = match.index;
+    for (; cursor < matchIndex; cursor += 1) {
+      const ch = masked[cursor];
+      if (ch === "{") {
+        depth += 1;
+      } else if (ch === "}") {
+        depth -= 1;
+        while (scopes.length && scopes[scopes.length - 1]!.openedDepth >= depth) scopes.pop();
+      }
+    }
+    const namespaceName = match[1];
+    if (!namespaceName) continue;
+    const normalized = namespaceName.replace(/\s+/gu, "");
+    const terminator = masked[matchIndex + match[0].length - 1];
+    cursor = matchIndex + match[0].length;
+    if (terminator !== "{") {
+      // A file-scoped namespace is always top level and does not open a scope.
+      names.add(normalized);
+      continue;
+    }
+    const enclosing = scopes.length ? scopes[scopes.length - 1]!.name : null;
+    const qualified = enclosing ? `${enclosing}.${normalized}` : normalized;
+    names.add(qualified);
+    scopes.push({ openedDepth: depth, name: qualified });
+    depth += 1;
+  }
+  return Array.from(names);
+}
+
 async function readCsharpNamespaceIndex(filePath: string): Promise<CsharpNamespaceIndexEntry> {
   const cached = csharpNamespaceFileCache.get(filePath);
   if (cached) return cached;
 
   const source = await fsp.readFile(filePath, "utf8");
-  const namespaces = new Set<string>();
-  for (const match of maskCsharpTrivia(source).matchAll(CSHARP_NAMESPACE_DECLARATION_PATTERN)) {
-    const namespaceName = match[1];
-    if (namespaceName) namespaces.add(namespaceName.replace(/\s+/gu, ""));
-  }
-
-  const entry = { namespaces: Array.from(namespaces) };
+  const entry = { namespaces: collectCsharpNamespaceNames(source) };
   csharpNamespaceFileCache.set(filePath, entry);
   return entry;
 }

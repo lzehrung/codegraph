@@ -1,9 +1,9 @@
 {
-  "schemaVersion": 1,
-  "generatedAt": "2026-09-20T14:09:05.281Z",
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-20T14:37:39.213Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.16.0",
-  "numTotalTests": 496,
+  "numTotalTests": 432,
   "numFailedTests": 0,
   "languages": [
     {
@@ -44,8 +44,8 @@
       "files": [
         "tests/languages/csharp.test.ts"
       ],
-      "tests": 23,
-      "passed": 23,
+      "tests": 25,
+      "passed": 25,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -314,5 +314,15 @@
       "skipped": 0,
       "status": "passing"
     }
-  ]
+  ],
+  "unattributed": {
+    "files": [
+      "tests/languages/chunk-sfc.test.ts",
+      "tests/languages/query-hygiene.test.ts"
+    ],
+    "tests": 66,
+    "passed": 66,
+    "failed": 0,
+    "skipped": 0
+  }
 }

@@ -135,22 +135,49 @@ function languageForFile(relativePath) {
   return displayName;
 }
 
+function countAssertions(assertions) {
+  let passed = 0;
+  let failed = 0;
+  let skipped = 0;
+  for (const assertion of assertions) {
+    if (assertion.status === "passed") passed += 1;
+    else if (assertion.status === "failed") failed += 1;
+    else if (assertion.status === "skipped" || assertion.status === "pending") skipped += 1;
+  }
+  return { tests: assertions.length, passed, failed, skipped };
+}
+
+function addAssertionCounts(target, counts) {
+  target.tests += counts.tests;
+  target.passed += counts.passed;
+  target.failed += counts.failed;
+  target.skipped += counts.skipped;
+}
+
+function statusForEntry(entry) {
+  if (entry.failed > 0) return "failing";
+  if (entry.tests > 0) return "passing";
+  return "no-tests";
+}
+
 function buildSnapshot(reportPath) {
   const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
   const byLanguage = new Map();
+  // tests/languages files that cover more than one language (or are not per-language
+  // suites) get no table row, so their assertions are reported separately instead of
+  // being folded into a total that no longer matches the sum of the rows.
+  const unattributed = { files: [], tests: 0, passed: 0, failed: 0, skipped: 0 };
 
   for (const fileResult of report.testResults ?? []) {
     const relativePath = path.relative(rootDir, fileResult.name ?? "").replace(/\\/g, "/");
     if (!relativePath.startsWith(`${LANGUAGES_DIR}/`)) continue;
+    const counts = countAssertions(fileResult.assertionResults ?? []);
     const language = languageForFile(relativePath);
-    if (!language) continue;
-
-    const assertions = fileResult.assertionResults ?? [];
-    const passed = assertions.filter((assertion) => assertion.status === "passed").length;
-    const failed = assertions.filter((assertion) => assertion.status === "failed").length;
-    const skipped = assertions.filter(
-      (assertion) => assertion.status === "skipped" || assertion.status === "pending",
-    ).length;
+    if (!language) {
+      unattributed.files.push(relativePath);
+      addAssertionCounts(unattributed, counts);
+      continue;
+    }
 
     const existing = byLanguage.get(language) ?? {
       language,
@@ -161,29 +188,30 @@ function buildSnapshot(reportPath) {
       skipped: 0,
     };
     existing.files.push(relativePath);
-    existing.tests += assertions.length;
-    existing.passed += passed;
-    existing.failed += failed;
-    existing.skipped += skipped;
+    addAssertionCounts(existing, counts);
     byLanguage.set(language, existing);
   }
 
   const languages = [...byLanguage.values()]
-    .map((entry) => ({
-      ...entry,
-      files: entry.files.sort(),
-      status: entry.failed > 0 ? "failing" : entry.tests > 0 ? "passing" : "no-tests",
-    }))
+    .map((entry) => ({ ...entry, files: entry.files.sort(), status: statusForEntry(entry) }))
     .sort((left, right) => left.language.localeCompare(right.language));
 
+  const attributed = languages.reduce(
+    (totals, entry) => ({ tests: totals.tests + entry.tests, failed: totals.failed + entry.failed }),
+    { tests: 0, failed: 0 },
+  );
+
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: new Date().toISOString(),
     source: "tests/languages/*.test.ts via vitest",
     nodeVersion: process.version,
-    numTotalTests: report.numTotalTests ?? languages.reduce((sum, entry) => sum + entry.tests, 0),
-    numFailedTests: report.numFailedTests ?? languages.reduce((sum, entry) => sum + entry.failed, 0),
+    // Attributed to a table row: these totals are the sum of the per-language rows.
+    numTotalTests: attributed.tests,
+    numFailedTests: attributed.failed,
     languages,
+    // Executed by the same run, but excluded from the table by EXCLUDED_STEMS.
+    unattributed: { ...unattributed, files: unattributed.files.sort() },
   };
 }
 
@@ -206,6 +234,16 @@ function buildMatrixMarkdown(snapshot) {
     filesText: entry.files.map((file) => `\`${file}\``).join(", "),
   }));
 
+  const summaryLines = [
+    `Total across the ${snapshot.languages.length} language suites: ${snapshot.numTotalTests} tests, ${snapshot.numFailedTests} failed.`,
+  ];
+  if (snapshot.unattributed.tests > 0) {
+    const unattributedFiles = snapshot.unattributed.files.map((file) => `\`${file}\``).join(", ");
+    summaryLines.push(
+      `The tests/languages run also executed ${snapshot.unattributed.tests} tests in cross-language files that are not attributed to a language: ${unattributedFiles}.`,
+    );
+  }
+
   return [
     "# Fixture test matrix",
     "",
@@ -217,7 +255,7 @@ function buildMatrixMarkdown(snapshot) {
     "",
     `Generated: ${snapshot.generatedAt} (Node ${snapshot.nodeVersion})`,
     "",
-    `Total: ${snapshot.numTotalTests} tests, ${snapshot.numFailedTests} failed.`,
+    ...summaryLines,
     "",
     markdownTable(rows, [
       { label: "Language", value: (row) => row.language },
