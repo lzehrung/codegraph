@@ -13,7 +13,14 @@ import { CSHARP_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
-import type { GoToResult, ModuleIndex, ProjectIndex, ResolvedExport, SymbolDef } from "./types.js";
+import {
+  SymbolKind,
+  type GoToResult,
+  type ModuleIndex,
+  type ProjectIndex,
+  type ResolvedExport,
+  type SymbolDef,
+} from "./types.js";
 
 const RUBY_CONSTANT_SOURCE = String.raw`(?=\p{Lu})${XID_IDENTIFIER_SOURCE}`;
 const CSHARP_CONSTANT_SOURCE = String.raw`(?=@?\p{Lu})${CSHARP_IDENTIFIER_SOURCE}`;
@@ -173,9 +180,10 @@ export async function resolveMemberAccessDefinition(params: {
       }
     }
 
-    const objDef = await resolveReceiverDefinition(obj, source, sup, resolveExpression);
+    const receiver = await resolveReceiverDefinition(obj, source, sup, resolveExpression);
 
-    if (objDef) {
+    if (receiver) {
+      const objDef = receiver.def;
       const targetContext = await ensureParsedContext(objDef.file, undefined, index.languageExtensions);
       const start = objDef.range.start;
       const targetPosition = {
@@ -184,21 +192,47 @@ export async function resolveMemberAccessDefinition(params: {
       };
       const nameNode = targetContext.tree.rootNode.descendantForPosition(targetPosition, targetPosition);
       const container = nameNode.parent;
+      if (
+        receiver.runtimeTypeOnly &&
+        container &&
+        container.type !== "enum_declaration" &&
+        container.type !== "internal_module" &&
+        container.type !== "module"
+      ) {
+        return null;
+      }
       if (container) {
         const targetModule = index.byFile.get(fileIdentityKey(objDef.file));
         if (targetModule) {
           const normalizeIdentifier = targetContext.sup.normalizeIdentifier;
-          const memberDef =
-            targetContext.sup.id === "java"
-              ? findDirectLocalWithinNode(targetModule.locals, member, container, targetContext, normalizeIdentifier)
-              : findReceiverMemberDefinition(
-                  targetModule.locals,
-                  member,
-                  objDef,
-                  container,
-                  targetContext,
-                  normalizeIdentifier,
-                );
+          let memberDef: SymbolDef | undefined;
+          if (receiver.runtimeTypeOnly) {
+            memberDef = findDirectLocalWithinNode(
+              targetModule.locals,
+              member,
+              container,
+              targetContext,
+              normalizeIdentifier,
+            );
+          } else if (targetContext.sup.id === "java") {
+            memberDef = findDirectLocalWithinNode(
+              targetModule.locals,
+              member,
+              container,
+              targetContext,
+              normalizeIdentifier,
+            );
+          } else {
+            memberDef = findReceiverMemberDefinition(
+              targetModule.locals,
+              member,
+              objDef,
+              container,
+              targetContext,
+              normalizeIdentifier,
+              receiver.memberScope,
+            );
+          }
 
           if (memberDef) {
             return okGoToResult(index, memberDef, {
@@ -246,28 +280,42 @@ export function supportsReceiverMemberResolution(languageId: string): boolean {
   );
 }
 
+type ReceiverMemberScope = "any" | "instance" | "static";
+
+type ResolvedReceiverDefinition = {
+  def: SymbolDef;
+  memberScope: ReceiverMemberScope;
+  runtimeTypeOnly?: true;
+};
+
 async function resolveReceiverDefinition(
   obj: SyntaxNodeLike,
   source: string,
   sup: LanguageSupport,
   resolveExpression: (expr: SyntaxNodeLike) => Promise<ResolvedExport | null>,
-): Promise<SymbolDef | null> {
+): Promise<ResolvedReceiverDefinition | null> {
   const constructor = receiverConstructorExpression(obj, source, sup);
   if (constructor) {
     const result = await resolveExpression(constructor);
     if (result?.kind === "resolved") {
-      return result.def;
+      return {
+        def: result.def,
+        memberScope: isJsTsLanguage(sup.id) ? "instance" : "any",
+      };
     }
   }
-  if (isJsTsLanguage(sup.id)) {
-    if (sup.nodeTypes.identifier.includes(obj.type)) {
-      return null;
-    }
-  }
-
   const direct = await resolveExpression(obj);
+  if (isJsTsLanguage(sup.id) && sup.nodeTypes.identifier.includes(obj.type)) {
+    if (direct?.kind === "resolved" && direct.def.kind === SymbolKind.Class) {
+      return { def: direct.def, memberScope: "static" };
+    }
+    if (direct?.kind === "resolved" && direct.def.kind === SymbolKind.TypeAlias) {
+      return { def: direct.def, memberScope: "any", runtimeTypeOnly: true };
+    }
+    return null;
+  }
   if (direct?.kind === "resolved") {
-    return direct.def;
+    return { def: direct.def, memberScope: "any" };
   }
   return null;
 }
@@ -607,8 +655,16 @@ function findReceiverMemberDefinition(
   container: SyntaxNodeLike,
   targetContext: ParsedFileContext,
   normalizeIdentifier: (name: string) => string,
+  memberScope: ReceiverMemberScope = "any",
 ): SymbolDef | undefined {
-  const containerHit = findLocalWithinNode(locals, member, container, normalizeIdentifier);
+  const memberPredicate =
+    memberScope === "any"
+      ? undefined
+      : (local: SymbolDef) => hasStaticModifier(local, targetContext, container) === (memberScope === "static");
+  const containerHit =
+    memberScope === "any"
+      ? findLocalWithinNode(locals, member, container, normalizeIdentifier)
+      : findDirectLocalWithinNode(locals, member, container, targetContext, normalizeIdentifier, memberPredicate);
   if (containerHit) return containerHit;
   if (targetContext.sup.id !== "rust") return undefined;
 
@@ -621,6 +677,7 @@ function findLocalWithinNode(
   member: string,
   node: SyntaxNodeLike,
   normalizeIdentifier: (name: string) => string = (name) => name,
+  predicate?: (local: SymbolDef) => boolean,
 ): SymbolDef | undefined {
   const containerStart = node.startIndex;
   const containerEnd = node.endIndex;
@@ -633,9 +690,26 @@ function findLocalWithinNode(
       startIndex !== undefined &&
       endIndex !== undefined &&
       startIndex >= containerStart &&
-      endIndex <= containerEnd
+      endIndex <= containerEnd &&
+      (!predicate || predicate(local))
     );
   });
+}
+function hasStaticModifier(local: SymbolDef, targetContext: ParsedFileContext, container: SyntaxNodeLike): boolean {
+  const position = {
+    row: local.range.start.line - 1,
+    column: local.range.start.column - 1,
+  };
+  let current: SyntaxNodeLike | null = targetContext.tree.rootNode.descendantForPosition(position, position);
+  while (current && current !== container) {
+    for (let childIndex = 0; ; childIndex += 1) {
+      const child = current.child(childIndex);
+      if (!child) break;
+      if (child.type === "static") return true;
+    }
+    current = current.parent;
+  }
+  return false;
 }
 
 const NESTED_MEMBER_LOCAL_CONTAINERS = new Set([
@@ -664,6 +738,7 @@ function findDirectLocalWithinNode(
   container: SyntaxNodeLike,
   targetContext: ParsedFileContext,
   normalizeIdentifier: (name: string) => string,
+  predicate?: (local: SymbolDef) => boolean,
 ): SymbolDef | undefined {
   const containerStart = container.startIndex;
   const containerEnd = container.endIndex;
@@ -688,8 +763,10 @@ function findDirectLocalWithinNode(
     let current = targetContext.tree.rootNode.descendantForPosition(position, position).parent;
     let isDeclarationParent = true;
     while (current && current !== container) {
+      const isDirectBody = current.type === "statement_block" && current.parent === container;
       if (
         !isDeclarationParent &&
+        !isDirectBody &&
         ((current.type === "class_body" && current.parent !== container) ||
           NESTED_MEMBER_LOCAL_CONTAINERS.has(current.type))
       ) {
@@ -699,7 +776,7 @@ function findDirectLocalWithinNode(
       isDeclarationParent = false;
       current = current.parent;
     }
-    if (current) return local;
+    if (current && (!predicate || predicate(local))) return local;
   }
   return undefined;
 }

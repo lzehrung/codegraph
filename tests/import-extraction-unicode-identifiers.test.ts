@@ -20,6 +20,24 @@ import { collectPythonImportsFromSource } from "../src/indexer/imports/python.js
 import type { ImportBinding } from "../src/indexer/types.js";
 import type { NativeMatch } from "../src/native/tree-sitter-native.js";
 
+type TokenRange = {
+  start: { line: number; column: number; index: number };
+  end: { line: number; column: number; index: number };
+};
+
+function positionForIndex(source: string, index: number): TokenRange["start"] {
+  const prefix = source.slice(0, index);
+  const lineStart = prefix.lastIndexOf("\n") + 1;
+  return { line: prefix.split("\n").length, column: index - lineStart + 1, index };
+}
+
+/** Exact UTF-16 range of the first occurrence of `token` in `source` at or after `fromIndex`. */
+function rangeForToken(source: string, token: string, fromIndex = 0): TokenRange {
+  const index = source.indexOf(token, fromIndex);
+  if (index < 0) throw new Error(`token not found: ${token}`);
+  return { start: positionForIndex(source, index), end: positionForIndex(source, index + token.length) };
+}
+
 // C11-adjacent finding: several import/alias extractors used an ASCII-only [A-Za-z_][\w]*
 // character class, which silently drops the binding (or the whole statement) for any
 // non-ASCII identifier even though the source language's real grammar permits Unicode
@@ -49,6 +67,7 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
         from: "std",
         imported: "foo",
         local: "alias\u0301",
+        explicitAlias: true,
       },
     ]);
   });
@@ -60,6 +79,7 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
         from: "App\\Foo",
         imported: "Foo",
         local: "créer",
+        explicitAlias: true,
         importType: "class",
       },
     ]);
@@ -80,6 +100,7 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
       from: "com.example.Foo",
       imported: "Foo",
       local: "créer",
+      explicitAlias: true,
     });
     // A dotted segment must itself start with a valid identifier character; a digit
     // immediately after "." is not part of Kotlin's grammar.
@@ -170,6 +191,7 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
       file: path.join(process.cwd(), "consumer.py"),
       source: "from package import café as alias\nimport package.café as moduleAlias\n",
       pushBinding: (binding) => bindings.push(binding),
+      getBindings: () => bindings,
     });
 
     expect(bindings).toEqual([
@@ -182,19 +204,29 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cjs-unicode-destructure-"));
     try {
       await fsp.writeFile(path.join(root, "dep.js"), "module.exports = { créer() { return 1; } };\n", "utf8");
-      await fsp.writeFile(path.join(root, "main.js"), "const { créer } = require('./dep');\ncréer();\n", "utf8");
+      const source = "const { créer } = require('./dep');\ncréer();\n";
+      await fsp.writeFile(path.join(root, "main.js"), source, "utf8");
 
       const index = await buildProjectIndex(root, { cache: "off" });
       const mainFile = [...index.byFile.keys()].find((file) => file.endsWith("/main.js"))!;
       const mainModule = index.byFile.get(mainFile)!;
+      const créerRange = rangeForToken(source, "créer");
       // `const { créer } = require('./dep')` is parsed via an object-pattern text regex
       // (native captures only expose the whole pattern's text, not per-property names).
       // Before the fix the ASCII-only character class matched nothing in "créer" and the
       // whole binding was silently dropped -- imports was empty even though the require()
       // call and file-level graph edge were both still detected by a separate mechanism.
       expect(mainModule.imports).toEqual([
-        expect.objectContaining({ kind: "named", local: "créer", imported: "créer", from: "./dep" }),
+        expect.objectContaining({
+          kind: "named",
+          local: "créer",
+          imported: "créer",
+          from: "./dep",
+          importedRange: créerRange,
+          localRange: créerRange,
+        }),
       ]);
+      expect(source.slice(créerRange.start.index, créerRange.end.index)).toBe("créer");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -202,25 +234,30 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
 
   it("JS text fallback preserves every Unicode identifier import form", async () => {
     const bindings: ImportBinding[] = [];
+    const source = [
+      'import { \u2118 as namedAlias\u200c, type typeName\u200d as typeAlias } from "es";',
+      'import * as namespaceAlias\u200d from "namespace";',
+      'const defaultAlias\u200c = require("default");',
+      'const { \u2118: objectAlias\u200d, propertyName\u200c } = require("properties");',
+      'import equalsAlias\u200d = require("equals");',
+    ].join("\n");
     await collectJsTextImports({
-      source: [
-        'import { \u2118 as namedAlias\u200c, type typeName\u200d as typeAlias } from \"es\";',
-        'import * as namespaceAlias\u200d from \"namespace\";',
-        'const defaultAlias\u200c = require(\"default\");',
-        'const { \u2118: objectAlias\u200d, propertyName\u200c } = require(\"properties\");',
-        'import equalsAlias\u200d = require(\"equals\");',
-      ].join("\n"),
+      source,
       languageId: "ts",
       resolveFrom: async (from) => ({ external: from }),
       pushBinding: (binding) => bindings.push(binding),
     });
 
+    const cjsPatternStart = source.indexOf("const {");
     expect(bindings).toEqual([
       {
         kind: "named",
         local: "namedAlias\u200c",
         imported: "\u2118",
+        explicitAlias: true,
         from: "es",
+        importedRange: rangeForToken(source, "\u2118"),
+        localRange: rangeForToken(source, "namedAlias\u200c"),
         resolved: { external: "es" },
         typeOnly: false,
       },
@@ -228,7 +265,10 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
         kind: "named",
         local: "typeAlias",
         imported: "typeName\u200d",
+        explicitAlias: true,
         from: "es",
+        importedRange: rangeForToken(source, "typeName\u200d"),
+        localRange: rangeForToken(source, "typeAlias"),
         resolved: { external: "es" },
         typeOnly: true,
       },
@@ -236,6 +276,7 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
         kind: "namespace",
         localNS: "namespaceAlias\u200d",
         from: "namespace",
+        localRange: rangeForToken(source, "namespaceAlias\u200d"),
         resolved: { external: "namespace" },
         typeOnly: false,
       },
@@ -243,6 +284,7 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
         kind: "default",
         local: "defaultAlias\u200c",
         from: "default",
+        localRange: rangeForToken(source, "defaultAlias\u200c"),
         resolved: { external: "default" },
         mechanism: "cjs",
       },
@@ -250,7 +292,10 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
         kind: "named",
         local: "objectAlias\u200d",
         imported: "\u2118",
+        explicitAlias: true,
         from: "properties",
+        importedRange: rangeForToken(source, "\u2118", cjsPatternStart),
+        localRange: rangeForToken(source, "objectAlias\u200d"),
         resolved: { external: "properties" },
         mechanism: "cjs",
       },
@@ -259,6 +304,8 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
         local: "propertyName\u200c",
         imported: "propertyName\u200c",
         from: "properties",
+        importedRange: rangeForToken(source, "propertyName\u200c"),
+        localRange: rangeForToken(source, "propertyName\u200c"),
         resolved: { external: "properties" },
         mechanism: "cjs",
       },
@@ -266,6 +313,7 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
         kind: "default",
         local: "equalsAlias\u200d",
         from: "equals",
+        localRange: rangeForToken(source, "equalsAlias\u200d"),
         resolved: { external: "equals" },
         mechanism: "cjs",
       },
@@ -353,15 +401,29 @@ describe("Identifier equality rules", () => {
 });
 
 describe("Unicode import parser seams", () => {
-  it("parses native object-pattern captures with ECMAScript-only identifier characters", async () => {
+  it("keeps native and fallback object-pattern bindings after nested defaults and regex literals", async () => {
     const bindings: ImportBinding[] = [];
-    const source = "const { \u2118: localAlias\u200d } = require('properties');";
+    const source =
+      "const { \u2118: localAlias\u200d, x = fallback(a, b, c), pattern = /[},(]/, y } = require('properties');";
+    const patternText = "{ \u2118: localAlias\u200d, x = fallback(a, b, c), pattern = /[},(]/, y }";
+    const patternStartIndex = source.indexOf(patternText);
+    const utf8Length = (value: string): number => new TextEncoder().encode(value).length;
+    const patternStartByte = utf8Length(source.slice(0, patternStartIndex));
+    const patternEndByte = patternStartByte + utf8Length(patternText);
+    const patternStart = { row: 0, column: patternStartIndex, index: patternStartByte };
+    const patternEnd = { row: 0, column: patternStartIndex + patternText.length, index: patternEndByte };
     const point = { row: 0, column: 0, index: 0 };
     const match: NativeMatch = {
       patternIndex: 0,
       captures: [
         { name: "from", text: "'properties'", nodeType: "string", start: point, end: point },
-        { name: "pattern", text: "{ \u2118: localAlias\u200d }", nodeType: "object_pattern", start: point, end: point },
+        {
+          name: "pattern",
+          text: patternText,
+          nodeType: "object_pattern",
+          start: patternStart,
+          end: patternEnd,
+        },
       ],
     };
     const resolveFrom = async (from: string) => ({ external: from });
@@ -391,15 +453,39 @@ describe("Unicode import parser seams", () => {
       [match],
     );
 
+    const importedRange = rangeForToken(source, "\u2118");
+    const localRange = rangeForToken(source, "localAlias\u200d");
     expect(bindings).toEqual([
       {
         kind: "named",
         local: "localAlias\u200d",
         imported: "\u2118",
+        explicitAlias: true,
         from: "properties",
+        importedRange,
+        localRange,
         resolved: { external: "properties" },
         typeOnly: false,
       },
+      expect.objectContaining({ kind: "named", imported: "x", local: "x" }),
+      expect.objectContaining({ kind: "named", imported: "pattern", local: "pattern" }),
+      expect.objectContaining({ kind: "named", imported: "y", local: "y" }),
+    ]);
+    expect(source.slice(importedRange.start.index, importedRange.end.index)).toBe("\u2118");
+    expect(source.slice(localRange.start.index, localRange.end.index)).toBe("localAlias\u200d");
+
+    const fallbackBindings: ImportBinding[] = [];
+    await collectJsTextImports({
+      source,
+      languageId: "ts",
+      resolveFrom,
+      pushBinding: (binding) => fallbackBindings.push(binding),
+    });
+    expect(fallbackBindings.map((binding) => (binding.kind === "named" ? binding.imported : binding.kind))).toEqual([
+      "\u2118",
+      "x",
+      "pattern",
+      "y",
     ]);
   });
 

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { buildProjectIndex } from "../../src/indexer.js";
-import { findReferences } from "../../src/indexer/navigation.js";
+import { findUsageReferences } from "../../src/indexer/navigation.js";
 import { attachCallCompatibilityHints } from "../../src/impact/call-compatibility.js";
 import type { ChangedSymbol, ImpactDiagnostics } from "../../src/impact/types.js";
 import type { Range } from "../../src/types.js";
@@ -30,7 +30,7 @@ vi.mock(
     const actual = await importOriginal();
     return {
       ...actual,
-      findReferences: vi.fn(),
+      findUsageReferences: vi.fn(),
       goToDefinition: vi.fn(),
     };
   },
@@ -136,7 +136,7 @@ describe("call compatibility parse resilience", () => {
       signatureChanged: true,
     };
 
-    vi.mocked(findReferences).mockResolvedValue({
+    vi.mocked(findUsageReferences).mockResolvedValue({
       status: "ok",
       definition: helperDef,
       references: [
@@ -145,6 +145,7 @@ describe("call compatibility parse resilience", () => {
           range: rangeFor(mainSource, "helper"),
         },
       ],
+      referenceCoverage: { scope: "indexed_candidates", state: "complete" },
     });
 
     await fsp.unlink(mainFile);
@@ -215,7 +216,7 @@ describe("call compatibility parse resilience", () => {
       signatureChanged: true,
     };
 
-    vi.mocked(findReferences).mockResolvedValue({
+    vi.mocked(findUsageReferences).mockResolvedValue({
       status: "ok",
       definition: {
         file: "definition.ts",
@@ -224,6 +225,7 @@ describe("call compatibility parse resilience", () => {
         range: { start: { line: 1, column: 0 }, end: { line: 1, column: 6 } },
       },
       references: [],
+      referenceCoverage: { scope: "indexed_candidates", state: "complete" },
     });
 
     await fsp.unlink(extraFile);
@@ -264,6 +266,6 @@ describe("call compatibility parse resilience", () => {
     ).resolves.toBeUndefined();
 
     expect(diagnostics.callCompatibility?.skippedByReason["parse-failed"]).toBe(1);
-    vi.mocked(findReferences).mockReset();
+    vi.mocked(findUsageReferences).mockReset();
   });
 });

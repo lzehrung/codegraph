@@ -1748,7 +1748,7 @@ describe("Impact Analyzer Edge Cases", () => {
       }
     });
 
-    it("does not spend the callsite limit on non-call references", async () => {
+    it("does not spend the callsite limit on non-call references or unused imports", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-compat-alias-"));
       try {
         await fsp.mkdir(path.join(root, "src"), { recursive: true });
@@ -1772,6 +1772,15 @@ describe("Impact Analyzer Edge Cases", () => {
             "",
           ].join("\n"),
           "utf8",
+        );
+        await Promise.all(
+          Array.from({ length: 60 }, (_, index) =>
+            fsp.writeFile(
+              path.join(root, "src", `a-unused-${index.toString().padStart(2, "0")}.ts`),
+              'import { helper } from "./api";\n',
+              "utf8",
+            ),
+          ),
         );
         const index = await buildProjectIndex(root);
         const diffText = [
@@ -1989,7 +1998,7 @@ describe("Impact Analyzer Edge Cases", () => {
         expect(diagnostics.referenceLookupsOmitted).toBe(changedSymbols.length - 3);
         expect(diagnostics.changedSymbolsTotal).toBe(changedSymbols.length);
         expect(diagnostics.referencesRetained).toBe(2);
-        expect(diagnostics.referencesOmitted).toBe(4);
+        expect(diagnostics.referencesOmitted).toBe(7);
       } finally {
         await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }

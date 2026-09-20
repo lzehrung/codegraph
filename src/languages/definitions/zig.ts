@@ -30,12 +30,12 @@ export const ZIG_DEF: LanguageDefinition = {
     `,
     exports: `
       (source_file (function_declaration name: (identifier) @name))
-      (source_file (variable_declaration (identifier) @name))
+      (source_file (variable_declaration . (identifier) @name (_)))
     `,
     locals: `
       (function_declaration name: (identifier) @name)
       (parameter (identifier) @name)
-      (variable_declaration (identifier) @name)
+      (variable_declaration . (identifier) @name (_))
     `,
     importBindings: `
       (variable_declaration
@@ -84,7 +84,13 @@ export const ZIG_DEF: LanguageDefinition = {
     const parent = node.parent;
     if (!parent) return false;
     if (parent.type === "function_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
-    return parent.type === "variable_declaration";
+    if (parent.type !== "variable_declaration") return false;
+    // No named field distinguishes the declared identifier from an initializer that is
+    // itself a bare identifier (e.g. `const x = y;` puts both `x` and `y` directly under
+    // `variable_declaration`); the declared name is always the first identifier child,
+    // matching the lookup classifyDefinition above already relies on.
+    const declaredName = parent.namedChildren.find((child) => child.type === "identifier");
+    return declaredName?.id === node.id;
   },
 };
 

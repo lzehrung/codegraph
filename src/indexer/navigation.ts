@@ -15,13 +15,20 @@ import {
   normalizePhpQualifiedReference,
 } from "./navigation-php.js";
 import {
+  buildIndexedCandidateCoverage,
   buildPhpQualifiedNames,
   collectVerifiedNamedNodeReferences,
+  type VerifiedNamedNodeReference,
   getCachedScope,
   exportFromIdentifier,
   getCachedReferenceCandidateFiles,
   getCandidateReferenceNames,
   hasExpandedNamedImport,
+  importBindingDeclarationRangeKeys,
+  importBindingIdentityVerificationSites,
+  importBindingReferenceSites,
+  rangeIdentityKey,
+  referenceSiteKey,
 } from "./navigation-references.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
 import { extractEnclosingBlock, extractLineContext, rangeContains, sameDef } from "./reference-context.js";
@@ -237,15 +244,45 @@ function isUnresolvedReceiverMemberProperty(sup: LanguageSupport, node: SyntaxNo
   return !!property && node.id === property.id;
 }
 
+type FindReferencesRequest = { file: FileId; line: number; column: number } | { def: SymbolDef };
+
+type FindReferencesOptions = {
+  context?: "line" | "block";
+  lines?: number;
+  blockMaxLines?: number;
+  maxReferences?: number;
+};
+
 export async function findReferences(
   index: ProjectIndex,
-  req: { file: FileId; line: number; column: number } | { def: SymbolDef },
-  opts?: {
-    context?: "line" | "block";
-    lines?: number;
-    blockMaxLines?: number;
-    maxReferences?: number;
-  },
+  req: FindReferencesRequest,
+  opts?: FindReferencesOptions,
+): Promise<FindReferencesResult> {
+  return findReferencesInternal(index, req, opts, "all");
+}
+
+/** Internal bounded lookup for consumers that need usage sites, not declaration sites. */
+export async function findUsageReferences(
+  index: ProjectIndex,
+  req: FindReferencesRequest,
+  opts?: FindReferencesOptions,
+): Promise<FindReferencesResult> {
+  return findReferencesInternal(index, req, opts, "usages");
+}
+/** Internal bounded lookup for semantic rename sites after preserved aliases are excluded. */
+export async function findRenameReferences(
+  index: ProjectIndex,
+  def: SymbolDef,
+  opts?: FindReferencesOptions,
+): Promise<FindReferencesResult> {
+  return findReferencesInternal(index, { def }, opts, "rename");
+}
+
+async function findReferencesInternal(
+  index: ProjectIndex,
+  req: FindReferencesRequest,
+  opts: FindReferencesOptions | undefined,
+  collectionMode: "all" | "usages" | "rename",
 ): Promise<FindReferencesResult> {
   let def: SymbolDef | null = null;
   let provenance: ResolutionProvenance | undefined;
@@ -275,10 +312,34 @@ export async function findReferences(
     return { status: "not_found", reason: "Could not resolve definition" };
   }
 
-  const sqlReferences = await findSqlReferences(index, def);
+  const maxReferences =
+    typeof opts?.maxReferences === "number" && opts.maxReferences > 0 ? opts.maxReferences : undefined;
+  const sqlReferences = await findSqlReferences(index, def, {
+    includeDefinition: collectionMode === "all",
+    ...(maxReferences === undefined ? {} : { maxReferences }),
+  });
   if (sqlReferences) return sqlReferences;
 
   const definitionFile = def.file;
+  const definitionSiteKey = referenceSiteKey(definitionFile, def.range);
+  const includeReference = (ref: Reference): boolean => {
+    if (collectionMode === "all") return true;
+    if (ref.via?.reexport || referenceSiteKey(ref.file, ref.range) === definitionSiteKey) return false;
+    if (collectionMode === "usages") return ref.via?.importBinding === undefined;
+    const binding = ref.via?.import;
+    if (!binding || binding.kind === "star" || binding.kind === "namespace") return true;
+    if (ref.via?.importBinding === "imported" && binding.kind === "named" && binding.imported === def.localName) {
+      return true;
+    }
+    if (binding.kind === "default") return false;
+    return !binding.explicitAlias && binding.local === def.localName;
+  };
+  const verifiedReferenceFilter = (
+    fileId: string,
+  ): ((reference: VerifiedNamedNodeReference) => boolean) | undefined => {
+    if (collectionMode === "all") return undefined;
+    return (reference) => !reference.via?.reexport && referenceSiteKey(fileId, reference.range) !== definitionSiteKey;
+  };
   const parsedDef = index.parsed?.get(fileIdentityKey(definitionFile));
   const parsedContext = await ensureParsedContext(definitionFile, parsedDef, index.languageExtensions);
 
@@ -287,14 +348,25 @@ export async function findReferences(
 
   const scope = getCachedScope(index, definitionFile, mod, parsedContext);
   const refs: Reference[] = [];
-  const maxReferences =
-    typeof opts?.maxReferences === "number" && opts.maxReferences > 0 ? opts.maxReferences : undefined;
-  const seenRefs = new Set<string>();
-  const hasReachedMaxReferences = (): boolean => maxReferences !== undefined && refs.length >= maxReferences;
+  const seenRefs = new Map<string, number>();
+  const collectionLimit = maxReferences !== undefined ? maxReferences + 1 : undefined;
+  const hasReachedCollectionLimit = (): boolean => collectionLimit !== undefined && refs.length >= collectionLimit;
+  const remainingCollectionSlots = (): number | undefined =>
+    collectionLimit !== undefined ? Math.max(0, collectionLimit - refs.length) : undefined;
+  const importBindingRank = (ref: Reference): number => (ref.via?.importBinding === "imported" ? 1 : 0);
   const pushRef = (ref: Reference): void => {
-    const key = `${fileIdentityKey(ref.file)}:${ref.range.start.line}:${ref.range.start.column}`;
-    if (seenRefs.has(key)) return;
-    seenRefs.add(key);
+    if (!includeReference(ref)) return;
+    const key = referenceSiteKey(ref.file, ref.range);
+    const existingIndex = seenRefs.get(key);
+    if (existingIndex !== undefined) {
+      const existing = refs[existingIndex]!;
+      if (importBindingRank(ref) > importBindingRank(existing)) {
+        refs[existingIndex] = ref;
+      }
+      return;
+    }
+    if (hasReachedCollectionLimit()) return;
+    seenRefs.set(key, refs.length);
     refs.push(ref);
   };
 
@@ -306,7 +378,7 @@ export async function findReferences(
   pushRef({ file: definitionFile, range: def.range });
   if (localBinding) {
     for (const occurrence of localBinding.occurrences) {
-      if (hasReachedMaxReferences()) break;
+      if (hasReachedCollectionLimit()) break;
       pushRef({ file: definitionFile, range: occurrence });
     }
   }
@@ -347,7 +419,7 @@ export async function findReferences(
   }
 
   for (const fileId of candidateFiles) {
-    if (hasReachedMaxReferences()) break;
+    if (hasReachedCollectionLimit()) break;
     const module = index.byFile.get(fileIdentityKey(fileId));
     if (!module) continue;
 
@@ -370,12 +442,12 @@ export async function findReferences(
 
     if (supportForFileWithoutHeaderSample(fileId, index.languageExtensions)?.supportsExportFromReferences) {
       for (const entry of module.exports) {
-        if (hasReachedMaxReferences()) break;
+        if (hasReachedCollectionLimit()) break;
         if (entry.type !== "reexport") continue;
         if (!exportedNameSet.has(entry.sourceSpecifier)) continue;
         const resolved = resolveExport(index, entry.fromModule, entry.sourceSpecifier);
         if (resolved?.kind === "resolved" && !sameDef(resolved.def, def, index.languageExtensions)) continue;
-        const remainingReferences = maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
+        const remainingReferences = remainingCollectionSlots();
         const ranges = await collectVerifiedNamedNodeReferences(
           index,
           fileId,
@@ -383,9 +455,10 @@ export async function findReferences(
           def,
           (params, parsed) => goToDefinition(index, params, parsed),
           remainingReferences,
+          verifiedReferenceFilter(fileId),
         );
         for (const { range, provenance, via } of ranges) {
-          if (hasReachedMaxReferences()) break;
+          if (hasReachedCollectionLimit()) break;
           if (!via?.reexport) continue;
           pushRef({ file: fileId, range, via, ...(provenance ? { provenance } : {}) });
         }
@@ -393,12 +466,49 @@ export async function findReferences(
     }
 
     for (const imp of module.imports) {
-      if (hasReachedMaxReferences()) break;
+      if (hasReachedCollectionLimit()) break;
       const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
-      if (!targetFile) continue;
+      const bindingSites = importBindingReferenceSites(imp);
+      let verifiedBindingMatches: boolean | undefined;
+      const bindingMatchesDefinition = async (): Promise<boolean> => {
+        if (verifiedBindingMatches !== undefined) return verifiedBindingMatches;
+        verifiedBindingMatches = false;
+        const parsed = await ensureCandidateParsed();
+        for (const verificationSite of importBindingIdentityVerificationSites(imp)) {
+          const resolved = await goToDefinition(
+            index,
+            {
+              file: fileId,
+              line: verificationSite.range.start.line,
+              column: verificationSite.range.start.column,
+            },
+            parsed,
+          );
+          if (resolved.status === "ok" && sameDef(resolved.definition, def, index.languageExtensions)) {
+            verifiedBindingMatches = true;
+            break;
+          }
+        }
+        return verifiedBindingMatches;
+      };
 
+      // Package and Composer imports can be stored as external specifiers even when
+      // language-specific goto resolution proves that their declaration binds this
+      // indexed definition. Preserve those exact declaration sites; generic occurrence
+      // collection intentionally excludes every attributed import range.
+      if (!targetFile) {
+        if (!bindingSites.length || !(await bindingMatchesDefinition())) continue;
+        for (const site of bindingSites) {
+          pushRef({
+            file: fileId,
+            range: site.range,
+            via: { import: imp, importBinding: site.importBinding },
+          });
+        }
+        continue;
+      }
       for (const exportedName of exportedNames) {
-        if (hasReachedMaxReferences()) break;
+        if (hasReachedCollectionLimit()) break;
         if (imp.kind === "namespace") {
           const hit = resolveExport(index, targetFile, exportedName);
           const matchesDef =
@@ -415,7 +525,7 @@ export async function findReferences(
             index.languageExtensions,
           );
           for (const range of ranges) {
-            if (hasReachedMaxReferences()) break;
+            if (hasReachedCollectionLimit()) break;
             pushRef({
               file: fileId,
               range,
@@ -429,8 +539,7 @@ export async function findReferences(
           if (hasExpandedNamedImport(module, targetFile, exportedName)) {
             continue;
           }
-          const remainingReferences =
-            maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
+          const remainingReferences = remainingCollectionSlots();
           const ranges = await collectVerifiedNamedNodeReferences(
             index,
             fileId,
@@ -438,9 +547,10 @@ export async function findReferences(
             def,
             (params, parsed) => goToDefinition(index, params, parsed),
             remainingReferences,
+            verifiedReferenceFilter(fileId),
           );
           for (const { range, provenance, via } of ranges) {
-            if (hasReachedMaxReferences()) break;
+            if (hasReachedCollectionLimit()) break;
             pushRef({
               file: fileId,
               range,
@@ -456,11 +566,20 @@ export async function findReferences(
             exported = "default";
           }
           const hit = resolveExport(index, targetFile, exported);
-          const matchesDef = hit?.kind === "resolved" && sameDef(hit.def, def, index.languageExtensions);
+          let matchesDef = hit?.kind === "resolved" && sameDef(hit.def, def, index.languageExtensions);
+          if (!matchesDef && bindingSites.length) {
+            matchesDef = await bindingMatchesDefinition();
+          }
           if (!matchesDef) continue;
+          for (const site of bindingSites) {
+            pushRef({
+              file: fileId,
+              range: site.range,
+              via: { import: imp, importBinding: site.importBinding },
+            });
+          }
           if (fileIdentityKey(targetFile) !== fileIdentityKey(definitionFile)) {
-            const remainingReferences =
-              maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
+            const remainingReferences = remainingCollectionSlots();
             const ranges = await collectVerifiedNamedNodeReferences(
               index,
               fileId,
@@ -468,9 +587,10 @@ export async function findReferences(
               def,
               (params, parsed) => goToDefinition(index, params, parsed),
               remainingReferences,
+              verifiedReferenceFilter(fileId),
             );
             for (const { range, provenance, via } of ranges) {
-              if (hasReachedMaxReferences()) break;
+              if (hasReachedCollectionLimit()) break;
               pushRef({
                 file: fileId,
                 range,
@@ -483,11 +603,13 @@ export async function findReferences(
           const parsed = await ensureCandidateParsed();
           const resolvedScope = await ensureScope();
           const localName = parsed.sup.normalizeIdentifier(imp.local);
+          const declarationKeys = importBindingDeclarationRangeKeys(module);
           const bindings = resolvedScope.bindings.get(localName) ?? [];
           for (const binding of bindings) {
             if (binding.import === imp) {
               for (const occurrence of binding.occurrences) {
-                if (hasReachedMaxReferences()) break;
+                if (hasReachedCollectionLimit()) break;
+                if (declarationKeys.has(rangeIdentityKey(occurrence))) continue;
                 pushRef({ file: fileId, range: occurrence, via: { import: imp } });
               }
             }
@@ -497,9 +619,9 @@ export async function findReferences(
     }
 
     if (phpQualifiedNames.length) {
-      const remainingReferences = maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
+      const remainingReferences = remainingCollectionSlots();
       for (const candidateName of [...exportedNames, ...phpQualifiedNames]) {
-        if (hasReachedMaxReferences()) break;
+        if (hasReachedCollectionLimit()) break;
         const ranges = await collectVerifiedNamedNodeReferences(
           index,
           fileId,
@@ -507,27 +629,30 @@ export async function findReferences(
           def,
           (params, parsed) => goToDefinition(index, params, parsed),
           remainingReferences,
+          verifiedReferenceFilter(fileId),
         );
         for (const { range, provenance, via } of ranges) {
-          if (hasReachedMaxReferences()) break;
+          if (hasReachedCollectionLimit()) break;
           pushRef({ file: fileId, range, ...(via ? { via } : {}), ...(provenance ? { provenance } : {}) });
         }
       }
     }
   }
 
+  const receiverScannedFiles: FileId[] = [];
   if (shouldScanVerifiedReferences(def, phpQualifiedNames, parsedContext)) {
     for (const fileId of Array.from(index.byFile.values(), (module) => module.file).sort((left, right) =>
       left.localeCompare(right),
     )) {
-      if (hasReachedMaxReferences()) break;
+      if (hasReachedCollectionLimit()) break;
+      receiverScannedFiles.push(fileId);
       const filter = index.bloomFilters?.get(fileIdentityKey(fileId));
       // Bloom filters contain names normalized by the candidate file's language, so probes must use that rule.
       const canonicalName =
         supportForFileWithoutHeaderSample(fileId, index.languageExtensions)?.normalizeIdentifier(def.localName) ??
         def.localName;
       if (filter && !filter.mightContain(canonicalName)) continue;
-      const remainingReferences = maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
+      const remainingReferences = remainingCollectionSlots();
       const ranges = await collectVerifiedNamedNodeReferences(
         index,
         fileId,
@@ -535,12 +660,18 @@ export async function findReferences(
         def,
         (params, parsed) => goToDefinition(index, params, parsed),
         remainingReferences,
+        verifiedReferenceFilter(fileId),
       );
       for (const { range, provenance, via } of ranges) {
-        if (hasReachedMaxReferences()) break;
+        if (hasReachedCollectionLimit()) break;
         pushRef({ file: fileId, range, ...(via ? { via } : {}), ...(provenance ? { provenance } : {}) });
       }
     }
+  }
+
+  const truncated = maxReferences !== undefined && refs.length > maxReferences;
+  if (truncated) {
+    refs.length = maxReferences;
   }
 
   refs.sort((left, right) => {
@@ -574,10 +705,21 @@ export async function findReferences(
     }
   }
 
+  const scannedFiles = [definitionFile, ...candidateFiles, ...receiverScannedFiles];
+  const referenceCoverage = buildIndexedCandidateCoverage({
+    index,
+    def,
+    exportedNames,
+    candidateFiles,
+    scannedFiles,
+    truncated,
+  });
+
   return {
     status: "ok",
     definition: def,
     references: refs,
+    referenceCoverage,
     ...(provenance ? { provenance } : {}),
   };
 }
@@ -587,20 +729,17 @@ function shouldScanVerifiedReferences(
   phpQualifiedNames: readonly string[],
   parsedContext: ParsedFileContext,
 ): boolean {
-  if (def.kind !== SymbolKind.Function || phpQualifiedNames.length) {
-    return false;
-  }
-  if (!supportsReceiverMemberResolution(parsedContext.sup.id)) {
-    return false;
-  }
-  return isReceiverMethodDefinition(def, parsedContext);
+  if (phpQualifiedNames.length) return false;
+  if (!supportsReceiverMemberResolution(parsedContext.sup.id)) return false;
+  return isReceiverMemberDefinition(def, parsedContext);
 }
 
 function shouldUseLocalNameAsExportFallback(def: SymbolDef, parsedContext: ParsedFileContext): boolean {
-  return !isReceiverMethodDefinition(def, parsedContext);
+  return !isReceiverMemberDefinition(def, parsedContext);
 }
 
-function isReceiverMethodDefinition(def: SymbolDef, parsedContext: ParsedFileContext): boolean {
+function isReceiverMemberDefinition(def: SymbolDef, parsedContext: ParsedFileContext): boolean {
+  if (def.isMember) return true;
   if (def.kind !== SymbolKind.Function) {
     return false;
   }

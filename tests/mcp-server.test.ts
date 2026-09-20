@@ -2151,12 +2151,23 @@ describe("codegraph MCP handlers", () => {
     expect(limited.truncated).toBe(true);
     expect(limited.totalSeen).toBe(2);
     expect(limited.omitted).toBe(1);
+    // The import declaration's source token is now a proper, role-tagged reference.
+    expect(limited.references[0]?.importBinding).toBe("imported");
+    // The MCP truncation probe (`limit + 1`) becomes core's own `maxReferences` cap, so core
+    // itself reports the scan as truncated even though the MCP-level `truncated` flag above is
+    // the more precise, exact-boundary-aware signal for display purposes.
+    expect(limited.referenceCoverage).toEqual({
+      scope: "indexed_candidates",
+      state: "partial",
+      reasons: ["truncated"],
+    });
 
     const complete = await handlers.refs({ handle: "auth.ts::validateUser", limit: 50 });
     expect(complete.references.length).toBeGreaterThan(1);
     expect(complete.truncated).toBe(false);
     expect(complete.omitted).toBe(0);
     expect(complete.totalSeen).toBe(complete.references.length);
+    expect(complete.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
 
     // The position-based form shares the same metadata contract.
     const byPosition = await handlers.refs({
@@ -2208,6 +2219,7 @@ describe("codegraph MCP handlers", () => {
       totalSeen: 1,
       truncated: true,
       omitted: 1,
+      referenceCoverage: { scope: "indexed_candidates", state: "partial", reasons: ["truncated"] },
       freshness: { state: "fresh" },
     });
   });

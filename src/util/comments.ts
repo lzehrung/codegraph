@@ -20,7 +20,10 @@ export function stripHashInlineComment(line: string, trimMode: InlineCommentTrim
   return trimMode === "trim" ? line.trim() : line;
 }
 
-function transformJsLikeTrivia(src: string, options?: { maskStrings?: boolean; preserveLength?: boolean }): string {
+function transformJsLikeTrivia(
+  src: string,
+  options?: { maskStrings?: boolean; nestedBlockComments?: boolean; preserveLength?: boolean },
+): string {
   let out = "";
   let i = 0;
   let inSingle = false;
@@ -80,11 +83,19 @@ function transformJsLikeTrivia(src: string, options?: { maskStrings?: boolean; p
     if (ch === "/" && next === "*") {
       if (preserveLength) out += "  ";
       i += 2;
-      while (i < src.length) {
+      let depth = 1;
+      while (i < src.length && depth > 0) {
+        if (options?.nestedBlockComments && src[i] === "/" && src[i + 1] === "*") {
+          if (preserveLength) out += "  ";
+          depth += 1;
+          i += 2;
+          continue;
+        }
         if (src[i] === "*" && src[i + 1] === "/") {
           if (preserveLength) out += "  ";
+          depth -= 1;
           i += 2;
-          break;
+          continue;
         }
         if (preserveLength) out += maskedChar(src[i]!);
         else if (src[i] === "\n") out += "\n";
@@ -123,6 +134,14 @@ export function maskJsLikeCommentsAndStrings(src: string): string {
 
 function hasJsLikeLiteralDelimiter(source: string): boolean {
   return source.includes("'") || source.includes('"') || source.includes("`") || source.includes("/");
+}
+
+export function maskNestedBlockCommentsAndStrings(src: string): string {
+  return transformJsLikeTrivia(src, {
+    maskStrings: true,
+    nestedBlockComments: true,
+    preserveLength: true,
+  });
 }
 
 function maskQuotedString(source: string, mask: Uint8Array, start: number, quote: "'" | '"'): number {
@@ -395,5 +414,32 @@ export function stripPythonCommentsAndStrings(src: string): string {
   out = out.replace(/([rRuU]?[fF]?)("""|''')[\s\S]*?\2/g, "");
   out = out.replace(/([rRuU]?[fF]?)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g, "");
   out = out.replace(/#.*$/gm, "");
+  return out;
+}
+
+function maskMatchPreservingNewlines(match: string): string {
+  let out = "";
+  for (const character of match) {
+    // Iterate by code point (not UTF-16 unit) so an astral character inside a masked
+    // comment/string is replaced by exactly as many space units as it occupied, keeping
+    // every later offset in `src` aligned with the masked output.
+    out += character === "\n" ? "\n" : " ".repeat(character.length);
+  }
+  return out;
+}
+
+/**
+ * Same matching as {@link stripPythonCommentsAndStrings}, but blanks comment/string content
+ * to same-length whitespace (preserving embedded newlines) instead of deleting it. Callers
+ * that need to map a regex match position in the masked text back to an exact offset in the
+ * original source -- rather than only using the masked text to avoid false-positive matches
+ * inside unrelated strings/comments -- must use this instead; `stripPythonCommentsAndStrings`
+ * is not offset-preserving.
+ */
+export function maskPythonCommentsAndStrings(src: string): string {
+  let out = src;
+  out = out.replace(/([rRuU]?[fF]?)("""|''')[\s\S]*?\2/g, maskMatchPreservingNewlines);
+  out = out.replace(/([rRuU]?[fF]?)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g, maskMatchPreservingNewlines);
+  out = out.replace(/#.*$/gm, maskMatchPreservingNewlines);
   return out;
 }

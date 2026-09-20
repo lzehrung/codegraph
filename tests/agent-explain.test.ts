@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { explainCodegraphTarget } from "../src/agent/explain.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { explainCodegraphTarget, explainCodegraphTargetWithSession } from "../src/agent/explain.js";
+import { createAgentSession, type AgentSession } from "../src/agent/session.js";
+import * as navigationModule from "../src/indexer/navigation.js";
+import { SymbolKind, type SymbolDef } from "../src/indexer/types.js";
 import { formatAgentFollowUpAsCli } from "../src/agent/follow-ups.js";
 import { searchCodegraph } from "../src/agent/search.js";
 import { runGit } from "./helpers/git.js";
@@ -92,10 +95,46 @@ describe("agent explain", () => {
 
     expect(explanation.target.kind).toBe("symbol");
     expect(explanation.references.some((reference) => reference.file === "api.ts")).toBeTruthy();
+    // The import declaration's source token is now a proper, role-tagged reference.
+    expect(explanation.references.some((reference) => reference.importBinding === "imported")).toBe(true);
+    expect(explanation.referenceCoverage).toMatchObject({ scope: "indexed_candidates", state: "complete" });
     expect(
       explanation.snippets.some((snippet) => snippet.file === "api.ts" && snippet.text.includes("validateUser")),
     ).toBeTruthy();
     expect(explanation.followUps.some((followUp) => followUp.tool === "goto")).toBeTruthy();
+  });
+
+  it("surfaces partial reference coverage instead of implying a complete result", async () => {
+    const root = await mkRepo();
+    const backing = createAgentSession({ root, freshness: { policy: "check" } });
+    const definition: SymbolDef = {
+      file: path.join(root, "auth.ts"),
+      localName: "validateUser",
+      kind: SymbolKind.Function,
+      range: { start: { line: 1, column: 1 }, end: { line: 1, column: 1 } },
+    };
+    const findReferencesSpy = vi.spyOn(navigationModule, "findReferences").mockResolvedValue({
+      status: "ok",
+      definition,
+      references: [],
+      referenceCoverage: { scope: "indexed_candidates", state: "partial", reasons: ["unresolved_import"] },
+    });
+    const session: AgentSession = {
+      root,
+      loadProject: async (options) => await backing.loadProject(options),
+      checkFreshness: async () => ({ state: "fresh" }),
+      invalidate: () => backing.invalidate(),
+    };
+    try {
+      const explanation = await explainCodegraphTargetWithSession(session, { root, target: "validateUser" });
+      expect(explanation.referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["unresolved_import"],
+      });
+    } finally {
+      findReferencesSpy.mockRestore();
+    }
   });
 
   it("shell-quotes generated follow-up commands for path metacharacters", async () => {
@@ -278,7 +317,10 @@ describe("agent explain", () => {
 
     expect(explanation.references).toHaveLength(2);
     expect(explanation.omittedCounts.references).toBeGreaterThan(0);
-    expect(explanation.references.map((reference) => reference.file)).toEqual(["ref-00.ts", "ref-01.ts"]);
+    expect(explanation.references.map((reference) => [reference.file, reference.range.start.line])).toEqual([
+      ["ref-00.ts", 1],
+      ["ref-00.ts", 2],
+    ]);
   });
 
   it("marks reference omissions as a lower bound when collection truncates before display", async () => {
@@ -300,6 +342,27 @@ describe("agent explain", () => {
     expect(explanation.references).toHaveLength(2);
     expect(explanation.omittedCounts.references).toBe(18);
     expect(explanation.omittedCountsLowerBounds.references).toBe(true);
+  });
+
+  it("does not mark an exact, untruncated reference count at the collection boundary as a lower bound", async () => {
+    const root = await mkTmpDir("cg-agent-explain-exact-boundary-");
+    const calls = Array.from({ length: 19 }, () => "sharedTarget();").join("\n");
+    await fs.writeFile(path.join(root, "target.ts"), `export function sharedTarget() { return 1; }\n${calls}\n`);
+
+    const explanation = await explainCodegraphTarget({
+      root,
+      target: "sharedTarget",
+      maxReferences: 2,
+      maxSnippets: 2,
+    });
+
+    // displayLimit (2) * the internal collection multiplier (10) == 20, matching the
+    // definition plus 19 call-site references exactly. Core found every reference,
+    // so the omitted count (18) is exact, not a lower bound.
+    expect(explanation.references).toHaveLength(2);
+    expect(explanation.omittedCounts.references).toBe(18);
+    expect(explanation.referenceCoverage?.state).toBe("complete");
+    expect(explanation.omittedCountsLowerBounds.references).toBe(false);
   });
 
   it("skips reference collection when reference and snippet limits are zero", async () => {

@@ -1474,15 +1474,15 @@ index 1234567..abcdef0 100644
           diagnostics,
         });
 
-        // 6 references scanned total:
-        // - 1 in lib.ts (kept, eligible) -> impacted
-        // - 2 in unit1.test.ts & unit2.test.ts -> filteredTests
-        // - 1 in ignored/app3.ts -> filteredIgnored
-        // - 2 in app1.ts & app2.ts -> droppedByMaxRefs (maxRefs: 1)
-        expect(diagnostics.refsScanned).toBe(6);
-        expect(diagnostics.refsFilteredTests).toBe(2);
-        expect(diagnostics.refsFilteredIgnored).toBe(1);
-        expect(diagnostics.refsDroppedByMaxRefs).toBe(2);
+        // 11 references scanned total after import tokens are counted:
+        // - 1 in lib.ts (definition)
+        // - 4 in unit1.test.ts & unit2.test.ts (import + use each) -> filteredTests
+        // - 2 in ignored/app3.ts (import + use) -> filteredIgnored
+        // - 4 remaining eligible sites after maxRefs: 1 keeps the first -> droppedByMaxRefs
+        expect(diagnostics.refsScanned).toBe(11);
+        expect(diagnostics.refsFilteredTests).toBe(4);
+        expect(diagnostics.refsFilteredIgnored).toBe(2);
+        expect(diagnostics.refsDroppedByMaxRefs).toBe(4);
         expect(impacted.length).toBe(1);
         expect(
           diagnostics.refsFilteredTests +
@@ -1490,6 +1490,46 @@ index 1234567..abcdef0 100644
             diagnostics.refsDroppedByMaxRefs +
             impacted.length,
         ).toBe(diagnostics.refsScanned);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("classifies an unused proven import as importAlias impact", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-impact-unused-import-"));
+      try {
+        const libFile = normalizePath(path.join(root, "lib.ts"));
+        const consumerFile = normalizePath(path.join(root, "consumer.ts"));
+        await fsp.writeFile(libFile, "export function helper() { return 1; }\n", "utf8");
+        await fsp.writeFile(consumerFile, 'import { helper } from "./lib";\n', "utf8");
+        const index = await buildProjectIndexFromFiles(root, [libFile, consumerFile], { cache: "off" });
+        const def = index.byFile.get(fileIdentityKey(libFile))?.locals.find((local) => local.localName === "helper");
+        expect(def).toBeDefined();
+        const changedSymbol: ChangedSymbol = {
+          id: `${libFile}::helper::1::1` as SymbolHandle,
+          file: libFile,
+          name: "helper",
+          kind: SymbolKind.Function,
+          exported: true,
+          range: def!.range,
+        };
+        const fileChange: FileChange = {
+          path: libFile,
+          kind: "modified",
+          hunks: [
+            {
+              oldStart: 1,
+              newStart: 1,
+              lines: ["-export function helper() { return 1; }", "+export function helper() { return 2; }"],
+            },
+          ],
+        };
+        const impacted = await analyzeImpact(index, [changedSymbol], [fileChange], {
+          projectRoot: root,
+        });
+        const consumerImpact = impacted.find((item) => item.file === consumerFile);
+        expect(consumerImpact).toBeDefined();
+        expect(consumerImpact?.reasons).toContain("importAlias");
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

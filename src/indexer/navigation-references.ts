@@ -1,6 +1,6 @@
 import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import type { Range } from "../types.js";
+import type { FileId, Range } from "../types.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
@@ -9,7 +9,16 @@ import { readPhpNamespaceFromRange } from "./navigation-php.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
-import type { ExportEntry, ModuleIndex, ProjectIndex, ResolutionProvenance, SymbolDef } from "./types.js";
+import type {
+  ExportEntry,
+  ImportBindingRole,
+  ModuleIndex,
+  ProjectIndex,
+  ReferenceCoverage,
+  ReferenceCoverageReason,
+  ResolutionProvenance,
+  SymbolDef,
+} from "./types.js";
 import type { ImportBinding } from "./import-types.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 
@@ -162,12 +171,17 @@ async function collectNamedNodeReferences(
     ]);
     const canonicalSymbolName = parsed.sup.normalizeIdentifier(symbolName);
     const ranges: Range[] = [];
+    const moduleIndex = index.byFile.get(fileIdentityKey(fileId));
+    const importDeclarationKeys = importBindingDeclarationRangeKeys(moduleIndex);
     const walk = (node: SyntaxNodeLike): void => {
       if (
         identifierTypes.has(node.type) &&
         parsed.sup.normalizeIdentifier(sliceText(node, parsed.source)) === canonicalSymbolName
       ) {
-        ranges.push(toRange(node));
+        const range = toRange(node);
+        if (!importDeclarationKeys.has(rangeIdentityKey(range))) {
+          ranges.push(range);
+        }
       }
       for (const child of node.namedChildren) {
         walk(child);
@@ -200,11 +214,15 @@ export async function collectVerifiedNamedNodeReferences(
     parsed: ParsedFileContext,
   ) => Promise<{ status: string; definition?: SymbolDef; provenance?: ResolutionProvenance }>,
   maxVerified?: number,
+  includeReference?: (reference: VerifiedNamedNodeReference) => boolean,
 ): Promise<VerifiedNamedNodeReference[]> {
   const collected = await collectNamedNodeReferences(index, fileId, symbolName);
   if (!collected) return [];
   const { ranges, parsed } = collected;
   const verified: VerifiedNamedNodeReference[] = [];
+  const pushVerified = (reference: VerifiedNamedNodeReference): void => {
+    if (!includeReference || includeReference(reference)) verified.push(reference);
+  };
   for (const range of ranges) {
     if (maxVerified !== undefined && maxVerified > 0 && verified.length >= maxVerified) {
       break;
@@ -214,7 +232,7 @@ export async function collectVerifiedNamedNodeReferences(
       const reexported = resolveExport(index, exportFrom.entry.fromModule, exportFrom.entry.sourceSpecifier);
       if (reexported?.kind === "resolved") {
         if (sameDef(reexported.def, expectedDef, index.languageExtensions)) {
-          verified.push({ range, via: { reexport: true } });
+          pushVerified({ range, via: { reexport: true } });
         }
         continue;
       }
@@ -229,7 +247,7 @@ export async function collectVerifiedNamedNodeReferences(
     );
     if (resolved.status !== "ok" || !resolved.definition) continue;
     if (sameDef(resolved.definition, expectedDef, index.languageExtensions)) {
-      verified.push({
+      pushVerified({
         range,
         ...(exportFrom?.isExportFrom ? { via: { reexport: true } } : {}),
         ...(resolved.provenance ? { provenance: resolved.provenance } : {}),
@@ -450,4 +468,228 @@ export function getCachedReferenceCandidateFiles(
   const sorted = [...candidates.values()].sort((left, right) => left.localeCompare(right));
   cache.set(key, sorted);
   return sorted;
+}
+
+const COVERAGE_REASON_ORDER: ReferenceCoverageReason[] = ["parser_degraded", "unresolved_import", "truncated"];
+
+type ImportBindingRanges = {
+  importedRange: Range | undefined;
+  localRange: Range | undefined;
+};
+
+export function rangeIdentityKey(range: Range): string {
+  return `${range.start.line}:${range.start.column}:${range.start.index ?? ""}:${range.end.line}:${range.end.column}:${range.end.index ?? ""}`;
+}
+
+export function referenceSiteKey(file: string, range: Range): string {
+  return `${fileIdentityKey(file)}:${rangeIdentityKey(range)}`;
+}
+
+export function rangesEqual(left: Range | undefined, right: Range | undefined): boolean {
+  if (!left || !right) return false;
+  return rangeIdentityKey(left) === rangeIdentityKey(right);
+}
+
+function bindingTokenRanges(imp: ImportBinding): ImportBindingRanges {
+  if (imp.kind === "named") {
+    return { importedRange: imp.importedRange, localRange: imp.localRange };
+  }
+  if (imp.kind === "default" || imp.kind === "namespace") {
+    return { importedRange: undefined, localRange: imp.localRange };
+  }
+  return { importedRange: undefined, localRange: undefined };
+}
+
+export function importBindingReferenceSites(
+  imp: ImportBinding,
+): Array<{ range: Range; importBinding: ImportBindingRole }> {
+  const sites: Array<{ range: Range; importBinding: ImportBindingRole }> = [];
+  if (imp.kind === "named") {
+    const { importedRange, localRange } = bindingTokenRanges(imp);
+    if (importedRange) {
+      sites.push({ range: importedRange, importBinding: "imported" });
+    } else if (localRange && imp.local === imp.imported) {
+      sites.push({ range: localRange, importBinding: "imported" });
+    }
+    if (localRange && !rangesEqual(localRange, importedRange)) {
+      sites.push({ range: localRange, importBinding: "local" });
+    }
+  } else if (imp.kind === "default") {
+    const { localRange } = bindingTokenRanges(imp);
+    if (localRange) {
+      sites.push({ range: localRange, importBinding: "local" });
+    }
+  }
+  return sites;
+}
+
+export function importBindingIdentityVerificationSites(
+  imp: ImportBinding,
+): Array<{ range: Range; importBinding: ImportBindingRole }> {
+  const sites = importBindingReferenceSites(imp);
+  if (imp.kind !== "named" || imp.local === imp.imported) {
+    return sites;
+  }
+  const localSites = sites.filter((site) => site.importBinding === "local");
+  return localSites.length > 0 ? localSites : sites;
+}
+
+export function importBindingDeclarationRangeKeys(moduleIndex: ModuleIndex | undefined): Set<string> {
+  const keys = new Set<string>();
+  if (!moduleIndex) return keys;
+  for (const imp of moduleIndex.imports) {
+    const { importedRange, localRange } = bindingTokenRanges(imp);
+    if (importedRange) keys.add(rangeIdentityKey(importedRange));
+    if (localRange) keys.add(rangeIdentityKey(localRange));
+  }
+  return keys;
+}
+
+function structurallyExportsDefinition(
+  index: ProjectIndex,
+  moduleFile: string,
+  exportedName: string,
+  def: SymbolDef,
+  definitionExportedNames: readonly string[],
+  visited: Set<string> = new Set(),
+): boolean {
+  const normalizeIdentifier =
+    supportForFileWithoutHeaderSample(moduleFile, index.languageExtensions)?.normalizeIdentifier ?? ((name) => name);
+  const canonicalName = normalizeIdentifier(exportedName);
+  const fileKey = fileIdentityKey(moduleFile);
+  const visitKey = `${fileKey}::${canonicalName}`;
+  if (visited.has(visitKey)) return false;
+  visited.add(visitKey);
+  if (
+    fileKey === fileIdentityKey(def.file) &&
+    definitionExportedNames.some((name) => normalizeIdentifier(name) === canonicalName)
+  ) {
+    return true;
+  }
+  const moduleIndex = index.byFile.get(fileKey);
+  if (!moduleIndex) return false;
+  for (const entry of moduleIndex.exports) {
+    if (entry.type === "local") {
+      if (
+        normalizeIdentifier(entry.exportedAs) === canonicalName &&
+        sameDef(entry.target, def, index.languageExtensions)
+      ) {
+        return true;
+      }
+      continue;
+    }
+    if (entry.type === "reexport" && normalizeIdentifier(entry.exportedAs) === canonicalName) {
+      if (
+        structurallyExportsDefinition(
+          index,
+          entry.fromModule,
+          entry.sourceSpecifier || exportedName,
+          def,
+          definitionExportedNames,
+          visited,
+        )
+      ) {
+        return true;
+      }
+    } else if (
+      entry.type === "exportStar" &&
+      structurallyExportsDefinition(index, entry.fromModule, exportedName, def, definitionExportedNames, visited)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isUnresolvedIndexedImport(
+  index: ProjectIndex,
+  imp: ImportBinding,
+  def: SymbolDef,
+  exportedNames: readonly string[],
+): boolean {
+  if (typeof imp.resolved !== "string") return false;
+  let importedName: string;
+  if (imp.kind === "named") importedName = imp.imported;
+  else if (imp.kind === "default") importedName = "default";
+  else return false;
+  if (!structurallyExportsDefinition(index, imp.resolved, importedName, def, exportedNames)) return false;
+  return !importCanReferenceDefinition(index, imp, def, exportedNames);
+}
+
+function parserDegradedCandidateFiles(
+  index: ProjectIndex,
+  scannedFiles: readonly string[],
+): { files: FileId[]; hasUnlistedCandidate: boolean } {
+  const report = index.buildReport?.backend?.parser;
+  if (!report) return { files: [], hasUnlistedCandidate: false };
+  const scanned = new Set(scannedFiles.map((file) => fileIdentityKey(file)));
+  const listed = new Set(report.files.map((entry) => fileIdentityKey(entry.file)));
+  const affected: FileId[] = [];
+  const seen = new Set<string>();
+  for (const entry of report.files) {
+    const key = fileIdentityKey(entry.file);
+    if (!scanned.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    affected.push(entry.file);
+  }
+  let hasUnlistedCandidate = false;
+  if (report.total > report.files.length) {
+    for (const fileKey of scanned) {
+      if (listed.has(fileKey)) continue;
+      hasUnlistedCandidate = true;
+      break;
+    }
+  }
+  return { files: affected, hasUnlistedCandidate };
+}
+
+export function buildIndexedCandidateCoverage(args: {
+  index: ProjectIndex;
+  def: SymbolDef;
+  exportedNames: readonly string[];
+  candidateFiles: readonly string[];
+  scannedFiles: readonly string[];
+  truncated: boolean;
+}): ReferenceCoverage {
+  const { index, def, exportedNames, candidateFiles, scannedFiles, truncated } = args;
+  const reasons: ReferenceCoverageReason[] = [];
+  const affectedFiles: FileId[] = [];
+  const affectedSeen = new Set<string>();
+  const addAffected = (file: FileId): void => {
+    const key = fileIdentityKey(file);
+    if (affectedSeen.has(key)) return;
+    affectedSeen.add(key);
+    affectedFiles.push(file);
+  };
+
+  const degraded = parserDegradedCandidateFiles(index, scannedFiles);
+  if (degraded.files.length || degraded.hasUnlistedCandidate) {
+    reasons.push("parser_degraded");
+    for (const file of degraded.files) addAffected(file);
+  }
+
+  const unresolvedFiles: FileId[] = [];
+  for (const fileId of candidateFiles) {
+    const moduleIndex = index.byFile.get(fileIdentityKey(fileId));
+    if (!moduleIndex) continue;
+    if (moduleIndex.imports.some((imp) => isUnresolvedIndexedImport(index, imp, def, exportedNames))) {
+      unresolvedFiles.push(fileId);
+    }
+  }
+  if (unresolvedFiles.length) {
+    reasons.push("unresolved_import");
+    for (const file of unresolvedFiles) addAffected(file);
+  }
+
+  if (truncated) reasons.push("truncated");
+
+  if (!reasons.length) {
+    return { scope: "indexed_candidates", state: "complete" };
+  }
+  return {
+    scope: "indexed_candidates",
+    state: "partial",
+    reasons: COVERAGE_REASON_ORDER.filter((reason) => reasons.includes(reason)),
+    ...(affectedFiles.length ? { affectedFiles } : {}),
+  };
 }

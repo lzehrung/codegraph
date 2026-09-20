@@ -14,6 +14,23 @@ import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 
+type TokenRange = {
+  start: { line: number; column: number; index: number };
+  end: { line: number; column: number; index: number };
+};
+
+function positionForIndex(source: string, index: number): TokenRange["start"] {
+  const prefix = source.slice(0, index);
+  const lineStart = prefix.lastIndexOf("\n") + 1;
+  return { line: prefix.split("\n").length, column: index - lineStart + 1, index };
+}
+
+function rangeForToken(source: string, token: string): TokenRange {
+  const index = source.indexOf(token);
+  if (index < 0) throw new Error(`token not found: ${token}`);
+  return { start: positionForIndex(source, index), end: positionForIndex(source, index + token.length) };
+}
+
 const definition: LanguageTestDefinition = {
   id: "kotlin",
   samples: [
@@ -255,7 +272,7 @@ describe("Kotlin native identifier declarations", () => {
   });
 });
 
-describe("Kotlin semicolon-terminated text fallback imports", () => {
+describe("Kotlin text fallback imports", () => {
   it("extracts semicolon-terminated imports when native bindings are empty", async () => {
     expect(parseKotlinImportStatement("import a.b.C;")).toEqual({
       kind: "named",
@@ -265,10 +282,61 @@ describe("Kotlin semicolon-terminated text fallback imports", () => {
     });
 
     const bindings: ImportBinding[] = [];
+    const source = "import a.b.C;\nimport a.b.D as Alias;\n";
     await finalizeLanguageSpecificImports({
       file: "Consumer.kt",
       projectRoot: process.cwd(),
-      source: "import a.b.C;\nimport a.b.D as Alias;\n",
+      source,
+      languageId: "kotlin",
+      resolveFrom: async (from) => ({ external: from }),
+      pushBinding: (binding) => {
+        bindings.push(binding);
+      },
+      getBindings: () => bindings,
+      replaceBindings: (next) => {
+        bindings.splice(0, bindings.length, ...next);
+      },
+    });
+
+    const importedC = rangeForToken(source, "C");
+    const importedD = rangeForToken(source, "D");
+    const localAlias = rangeForToken(source, "Alias");
+    expect(bindings).toEqual([
+      {
+        kind: "named",
+        local: "C",
+        imported: "C",
+        from: "a.b.C",
+        importedRange: importedC,
+        localRange: importedC,
+        resolved: { external: "a.b.C" },
+        typeOnly: false,
+      },
+      {
+        kind: "named",
+        local: "Alias",
+        imported: "D",
+        from: "a.b.D",
+        explicitAlias: true,
+        importedRange: importedD,
+        localRange: localAlias,
+        resolved: { external: "a.b.D" },
+        typeOnly: false,
+      },
+    ]);
+    expect(source.slice(importedC.start.index, importedC.end.index)).toBe("C");
+    expect(source.slice(importedD.start.index, importedD.end.index)).toBe("D");
+    expect(source.slice(localAlias.start.index, localAlias.end.index)).toBe("Alias");
+    expect(localAlias.start.column).not.toBe(importedD.start.column);
+  });
+
+  it("extracts imports with nested comments around qualified-name separators", async () => {
+    const bindings: ImportBinding[] = [];
+    const source = "import pkg./* outer /* inner */ comment */Target as LocalTarget;\n";
+    await finalizeLanguageSpecificImports({
+      file: "Consumer.kt",
+      projectRoot: process.cwd(),
+      source,
       languageId: "kotlin",
       resolveFrom: async (from) => ({ external: from }),
       pushBinding: (binding) => {
@@ -281,22 +349,53 @@ describe("Kotlin semicolon-terminated text fallback imports", () => {
     });
 
     expect(bindings).toEqual([
-      {
+      expect.objectContaining({
         kind: "named",
-        local: "C",
-        imported: "C",
-        from: "a.b.C",
-        resolved: { external: "a.b.C" },
-        typeOnly: false,
+        imported: "Target",
+        local: "LocalTarget",
+        from: "pkg.Target",
+        importedRange: rangeForToken(source, "Target"),
+        localRange: rangeForToken(source, "LocalTarget"),
+        resolved: { external: "pkg.Target" },
+      }),
+    ]);
+  });
+
+  it("ignores import text in raw multiline strings before real imports", async () => {
+    const bindings: ImportBinding[] = [];
+    const source = [
+      '@file:Suppress("""',
+      '"',
+      "import fake.Decoy",
+      '""")',
+      "import real.Target as RealTarget",
+      "",
+    ].join("\n");
+    await finalizeLanguageSpecificImports({
+      file: "Consumer.kt",
+      projectRoot: process.cwd(),
+      source,
+      languageId: "kotlin",
+      resolveFrom: async (from) => ({ external: from }),
+      pushBinding: (binding) => {
+        bindings.push(binding);
       },
-      {
+      getBindings: () => bindings,
+      replaceBindings: (next) => {
+        bindings.splice(0, bindings.length, ...next);
+      },
+    });
+
+    expect(bindings).toEqual([
+      expect.objectContaining({
         kind: "named",
-        local: "Alias",
-        imported: "D",
-        from: "a.b.D",
-        resolved: { external: "a.b.D" },
-        typeOnly: false,
-      },
+        imported: "Target",
+        local: "RealTarget",
+        from: "real.Target",
+        importedRange: rangeForToken(source, "Target"),
+        localRange: rangeForToken(source, "RealTarget"),
+        resolved: { external: "real.Target" },
+      }),
     ]);
   });
 });

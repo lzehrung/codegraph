@@ -2,7 +2,7 @@ import type { MarkdownLinkCheckResult } from "../document-links/check.js";
 import type { CandidateTestFile } from "../impact/context.js";
 import type { CallCompatibilityHint, FileChange, MemberResolutionCoverage } from "../impact/types.js";
 import type { AnalysisSummary } from "../analysis-summary.js";
-import type { BuildReport, IncrementalBuildOptions, ProjectIndex } from "../indexer/types.js";
+import type { BuildReport, IncrementalBuildOptions, ProjectIndex, ReferenceCoverage } from "../indexer/types.js";
 import type { DuplicatePreparedAnalysis } from "../duplicates.js";
 import type { SqlReviewContext } from "../sql/review.js";
 import type { Edge, Range } from "../types.js";
@@ -36,6 +36,7 @@ export type ReviewSymbolSummary = {
   definitionSnippet?: string;
   diffSnippets?: string[];
   callsites?: ReviewSymbolCallsite[];
+  callsiteCoverage?: ReferenceCoverage;
 };
 
 export type ReviewChangedFileSummaries = {

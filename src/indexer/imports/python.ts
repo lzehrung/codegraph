@@ -1,16 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolvePythonModule } from "../../util/resolution.js";
-import { stripPythonCommentsAndStrings } from "../../util/comments.js";
+import { maskPythonCommentsAndStrings, stripPythonCommentsAndStrings } from "../../util/comments.js";
 import { PYTHON_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import type { NativeMatch } from "../../native/tree-sitter-native.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rust-test-modules.js";
 import type { ImportBindingSink, ResolvedImportTarget } from "./context.js";
+import { attributeNamedBindingRanges } from "./binding-ranges.js";
+import type { ImportBinding } from "../types.js";
 
 export type PythonImportExtractionContext = ImportBindingSink & {
   file: string;
   projectRoot: string;
   source: string;
+  getBindings: () => ImportBinding[];
 };
 
 function splitRelativeModuleSpec(moduleSpec: string): { relDots: number; mod: string | null } {
@@ -78,6 +81,7 @@ async function pushNamedImport(
   imported: string,
   local: string,
   moduleLevel: boolean,
+  explicitAlias: boolean,
 ): Promise<void> {
   const { relDots, mod } = splitRelativeModuleSpec(moduleSpec);
   const resolved = await resolvePythonModule(context.projectRoot, context.file, mod, relDots);
@@ -99,6 +103,7 @@ async function pushNamedImport(
     local,
     imported,
     from: moduleSpec,
+    ...(explicitAlias ? { explicitAlias: true } : {}),
     resolved,
     mechanism: "python",
     moduleLevel,
@@ -163,13 +168,13 @@ function isPythonModuleLevelImportPrefix(prefix: string): boolean {
   return true;
 }
 
-// `strippedSrc` has already had comments/strings deleted (not offset-preserving), so
-// `keywordStart` and every position derived from it are only meaningful within that same
-// string. `isPythonModuleLevelImportPrefix` re-strips its input, which is a harmless no-op
-// here since `strippedSrc` is already clean.
-function isModuleLevelKeywordInStrippedSource(strippedSrc: string, keywordStart: number): boolean {
-  const lineStart = strippedSrc.lastIndexOf("\n", keywordStart - 1) + 1;
-  return isPythonModuleLevelImportPrefix(strippedSrc.slice(lineStart, keywordStart));
+// `maskedSrc` has comments/strings blanked to same-length whitespace (offset-preserving), so
+// `keywordStart` and every position derived from it line up with the real source.
+// `isPythonModuleLevelImportPrefix` re-strips its input, which is a harmless no-op here
+// since `maskedSrc` is already comment/string-free content-wise.
+function isModuleLevelKeywordInStrippedSource(maskedSrc: string, keywordStart: number): boolean {
+  const lineStart = maskedSrc.lastIndexOf("\n", keywordStart - 1) + 1;
+  return isPythonModuleLevelImportPrefix(maskedSrc.slice(lineStart, keywordStart));
 }
 
 function normalizePythonImportStatement(statement: string): string {
@@ -182,15 +187,18 @@ async function collectPythonImportStatement(
   context: PythonImportExtractionContext,
   statement: string,
   moduleLevel: boolean,
+  statementStartIndex?: number,
 ): Promise<boolean> {
   const normalized = normalizePythonImportStatement(statement);
   const fromMatch = normalized.match(/^from\s+([^\s]+)\s+import\s+([\s\S]+)$/u);
   if (fromMatch) {
     const moduleSpec = fromMatch[1]!;
     const importedList = fromMatch[2]!.trim().replace(/^\(\s*|\s*\)$/g, "");
-    for (const item of importedList
+    const bindingCountBefore = context.getBindings().length;
+    for (const item of maskPythonCommentsAndStrings(importedList)
+      .replace(/^\(\s*|\s*\)$/g, "")
       .split(",")
-      .map((entry) => entry.trim())
+      .map((x) => x.trim())
       .filter(Boolean)) {
       if (item === "*") {
         await pushStarImport(context, moduleSpec, moduleLevel);
@@ -199,7 +207,27 @@ async function collectPythonImportStatement(
       const aliasMatch = item.match(PYTHON_NAMED_IMPORT_PATTERN);
       if (!aliasMatch) continue;
       const imported = aliasMatch[1]!;
-      await pushNamedImport(context, moduleSpec, imported, aliasMatch[2] ?? imported, moduleLevel);
+      await pushNamedImport(
+        context,
+        moduleSpec,
+        imported,
+        aliasMatch[2] ?? imported,
+        moduleLevel,
+        aliasMatch[2] !== undefined,
+      );
+    }
+    if (statementStartIndex !== undefined) {
+      // Mask comments and strings without changing UTF-16 offsets. Parenthesized import
+      // lists can contain comments before later specifiers, so truncating at the first `#`
+      // would discard valid binding tokens and fail the whole range batch.
+      const searchText = maskPythonCommentsAndStrings(statement);
+      attributeNamedBindingRanges({
+        bindings: context.getBindings(),
+        fromIndex: bindingCountBefore,
+        text: searchText,
+        textStartIndex: statementStartIndex,
+        source: context.source,
+      });
     }
     return true;
   }
@@ -229,22 +257,32 @@ export async function collectPythonImportsFromNativeMatches(
     const lineStart = context.source.lastIndexOf("\n", startIndex - 1) + 1;
     const prefix = context.source.slice(lineStart, startIndex);
     const moduleLevel = isPythonModuleLevelImportPrefix(prefix);
-    await collectPythonImportStatement(context, statementCapture.text, moduleLevel);
+    await collectPythonImportStatement(context, statementCapture.text, moduleLevel, startIndex);
   }
 }
 
 export async function collectPythonImportsFromSource(context: PythonImportExtractionContext): Promise<void> {
-  const pySrc = stripPythonCommentsAndStrings(context.source);
+  // Masked (not stripped): comment/string content becomes same-length whitespace instead of
+  // being deleted, so every `match.index`/group position below is an exact offset into
+  // `context.source` and named bindings can be range-attributed the same way the native
+  // match path is.
+  const pySrc = maskPythonCommentsAndStrings(context.source);
   // Boundary group 1 captures either the line's leading indentation or the `;` (plus any
   // following tabs/spaces) that separates this import from a completed simple statement on
   // the same physical line; a compound-suite header's `:` is not part of this alternation, so
   // `if x: import os` still is not recognized as a statement start here.
-  const fromLinePattern = /(^[\t ]*|;[\t ]*)from\s+([^\s]+)\s+import\s+([^\n;#]+)/gm;
+  const fromLinePattern = /(^[\t ]*|;[\t ]*)from\s+([^\s]+)\s+import\s+(\([\s\S]*?\)|[^\n;#]+)/gm;
   for (const match of pySrc.matchAll(fromLinePattern)) {
     const keywordStart = match.index + match[1]!.length;
     const mod = match[2]!.trim();
     const moduleLevel = isModuleLevelKeywordInStrippedSource(pySrc, keywordStart);
-    const items = match[3]!.split(",").map((item) => item.trim());
+    const listText = match[3]!;
+    const bindingListText = maskPythonCommentsAndStrings(listText);
+    const bindingCountBefore = context.getBindings().length;
+    const items = bindingListText
+      .replace(/^\(\s*|\s*\)$/g, "")
+      .split(",")
+      .map((item) => item.trim());
     for (const item of items) {
       if (item === "*") {
         await pushStarImport(context, mod, moduleLevel);
@@ -256,8 +294,18 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
       if (!aliasMatch) continue;
       const imported = aliasMatch[1]!;
       const local = aliasMatch[2] ?? imported;
-      await pushNamedImport(context, mod, imported, local, moduleLevel);
+      await pushNamedImport(context, mod, imported, local, moduleLevel, aliasMatch[2] !== undefined);
     }
+    // `listText` (group 3) always ends at the same position as `match[0]`, so its own start
+    // is a fixed offset back from the full match's end -- no extra re-scan needed.
+    const listStart = match.index + match[0].length - listText.length;
+    attributeNamedBindingRanges({
+      bindings: context.getBindings(),
+      fromIndex: bindingCountBefore,
+      text: listText,
+      textStartIndex: listStart,
+      source: context.source,
+    });
   }
 
   const importPattern = PYTHON_MODULE_IMPORT_PATTERN;

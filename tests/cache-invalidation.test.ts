@@ -44,6 +44,7 @@ import { getAllLanguages, getLanguageById } from "../src/languages/registry.js";
 import type { LanguageDefinition } from "../src/languages/types.js";
 import {
   clearImplementationFingerprintCache,
+  CORE_ALGORITHM_EPOCH,
   getImplementationFingerprint,
   getImplementationFingerprintForEpoch,
   LANGUAGE_BEHAVIOR_EPOCH,
@@ -286,7 +287,7 @@ async function rewriteProjectSnapshot(root: string, index: ProjectIndex): Promis
     root,
     { cache: "disk", threads: 1 },
     index,
-    buildCache.projectSnapshotFilesSignature(entries),
+    buildCache.projectSnapshotFilesSignature(entries, root),
   );
 }
 
@@ -558,6 +559,39 @@ describe("Cache invalidation and strict hashing", () => {
       else typescript.normalizeIdentifier = originalNormalizeIdentifier;
       clearImplementationFingerprintCache();
     }
+  });
+
+  it("invalidates cached indexing written under an older core algorithm epoch", async () => {
+    const root = await mkTmpDir("dg-cache-core-epoch-");
+    const entryPath = path.join(root, "entry.ts");
+    const file = normalize(path.resolve(entryPath));
+    await fsp.writeFile(entryPath, "export const current = 1;\n", "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    const stored = await readManifest(root);
+    // Keep the stored implementation fingerprint current so the only difference is the epoch,
+    // then attach an edge only a stale read could resurrect.
+    stored.buildOptions = { ...stored.buildOptions, coreAlgorithmEpoch: CORE_ALGORITHM_EPOCH - 1 };
+    stored.files = {
+      [file]: {
+        sig: "superseded-signature",
+        edges: [
+          { from: file, to: { type: "file" as const, path: normalize(path.join(root, "stale.ts")) }, raw: "./stale" },
+        ],
+      },
+    };
+    await fsp.writeFile(manifestPathFor(root), JSON.stringify(stored), "utf8");
+
+    const report: BuildReport = { timings: {} };
+    const rebuilt = await buildProjectIndexIncremental(root, { threads: 2, cache: "disk", report });
+
+    expect(report.manifest?.optionsMismatch).toContain("coreAlgorithm");
+    expect(rebuilt.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path.endsWith("/stale.ts"))).toBe(
+      false,
+    );
+    expect(moduleForPath(rebuilt, entryPath)?.locals.some((local) => local.localName === "current")).toBe(true);
+    const refreshed = await readManifest(root);
+    expect(refreshed.buildOptions?.coreAlgorithmEpoch).toBe(CORE_ALGORITHM_EPOCH);
   });
 
   it("uses one implementation fingerprint from bundled and unbundled entrypoints", async () => {
@@ -2008,6 +2042,88 @@ describe("Cache invalidation and strict hashing", () => {
 
     const moduleIndex = incremental.byFile.get(fileIdentityKey(normalize(filePath)));
     expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
+  });
+
+  it("rejects project snapshot import bindings with malformed token ranges", async () => {
+    const root = await mkTmpDir("dg-incremental-bad-project-snapshot-binding-ranges-");
+    const depPath = path.join(root, "dep.ts");
+    const filePath = path.join(root, "foo.ts");
+    await fsp.writeFile(depPath, `export const dep = 1;\n`, "utf8");
+    await fsp.writeFile(filePath, `import { dep as renamed } from "./dep";\nexport const snap = renamed;\n`, "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshot = (await readProjectSnapshot(snapshotPath)) as {
+      modules?: Array<{ file?: string; imports?: unknown[] }>;
+    };
+    embedSqliteModulesInSnapshot(root, snapshot);
+    const moduleSnapshot = snapshot.modules?.find((moduleIndex) => moduleIndex.file === "foo.ts");
+    if (!moduleSnapshot) throw new Error("expected foo.ts snapshot module");
+    // `importedRange` stays well-formed; only `localRange` is malformed, so rejection
+    // must come from the new range validation rather than a generic binding failure.
+    moduleSnapshot.imports = [
+      {
+        kind: "named",
+        local: "renamed",
+        imported: "dep",
+        from: "./dep",
+        importedRange: { start: { line: 1, column: 8 }, end: { line: 1, column: 11 } },
+        localRange: { start: { line: 1 }, end: { line: 1, column: 11 } },
+      },
+    ];
+    await writeProjectSnapshot(snapshotPath, snapshot);
+
+    const report: BuildReport = { timings: {} };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const incremental = await buildProjectIndexIncremental(root, { threads: 2, cache: "disk", report });
+      expect(
+        report.manifest?.corruptions?.some((entry) => entry.artifact.endsWith("project-index-snapshot.json")),
+      ).toBe(true);
+      const moduleIndex = incremental.byFile.get(fileIdentityKey(normalize(filePath)));
+      expect(moduleIndex?.imports.some((binding) => binding.kind === "named" && binding.local === "renamed")).toBe(
+        true,
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("rejects disk module cache entries with malformed token ranges", async () => {
+    const root = await mkTmpDir("dg-module-cache-binding-range-");
+    const depPath = path.join(root, "dep.ts");
+    const filePath = path.join(root, "entry.ts");
+    await fsp.writeFile(depPath, `export const dep = 1;\n`, "utf8");
+    await fsp.writeFile(filePath, `import { dep } from "./dep";\nexport const snap = dep;\n`, "utf8");
+
+    await buildProjectIndex(root, { threads: 1, cache: "disk" });
+    const normalizedFile = normalize(path.resolve(filePath));
+    const sig = readModuleCacheSignature(root, filePath);
+    if (!sig) throw new Error("missing disk module cache signature");
+    // Control read proves the signature/version/path wiring, so the later null is the
+    // range guard rejecting the payload rather than an unrelated cache miss.
+    expect(await buildCache.tryLoadFromCache(root, normalizedFile, sig, { cache: "disk" })).not.toBeNull();
+
+    buildCache.closeDiskCacheDatabase(root, { cache: "disk" });
+    const db = new DatabaseSync(diskCacheDbPathFor(root));
+    try {
+      const row = db.prepare("SELECT payload FROM module_cache WHERE file = ?").get(cacheFile(root, filePath)) as {
+        payload: Uint8Array;
+      };
+      const parsed = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as {
+        imports: Array<Record<string, unknown>>;
+      };
+      if (!parsed.imports[0]) throw new Error("expected a cached import binding");
+      parsed.imports[0].localRange = { start: { line: 1 }, end: { line: 1, column: 11 } };
+      db.prepare("UPDATE module_cache SET payload = ? WHERE file = ?").run(
+        brotliCompressSync(JSON.stringify(parsed)),
+        cacheFile(root, filePath),
+      );
+    } finally {
+      db.close();
+    }
+
+    expect(await buildCache.tryLoadFromCache(root, normalizedFile, sig, { cache: "disk" })).toBeNull();
   });
 
   it("falls back when project snapshot metadata fields are malformed", async () => {
@@ -3574,6 +3690,92 @@ describe("Cache invalidation and strict hashing", () => {
     }
     expect(report.cache?.misses ?? 0).toBe(0);
     expect(report.files?.cached).toBeGreaterThan(0);
+  });
+
+  it("rebases cached analysis report paths after moving a project tree", async () => {
+    const sourceRoot = await mkTmpDir("dg-cache-move-analysis-report-source-");
+    const movedRoot = `${sourceRoot}-moved`;
+    const entryFile = normalize(path.join(sourceRoot, "entry.ts"));
+    const dependencyFile = normalize(path.join(sourceRoot, "dependency.ts"));
+    await fsp.writeFile(entryFile, "export const entry = 1;\n", "utf8");
+    await fsp.writeFile(dependencyFile, "export const dependency = 1;\n", "utf8");
+
+    const initial = await buildProjectIndex(sourceRoot, { cache: "disk", threads: 1 });
+    initial.buildReport = {
+      timings: {},
+      backend: {
+        native: {
+          available: true,
+          enabled: false,
+          supportedLanguageIds: ["ts"],
+          filesUsed: 0,
+          filesFellBack: 1,
+          fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 1 },
+          byLanguage: {},
+          errors: [
+            {
+              file: entryFile,
+              languageId: "ts",
+              reason: "queryFailure",
+              message: "synthetic native failure",
+            },
+          ],
+        },
+        parser: {
+          total: 1,
+          byLanguage: { ts: 1 },
+          files: [{ file: dependencyFile, languageId: "ts", jsError: "synthetic parser failure" }],
+        },
+      },
+      graph: {
+        fallbackImportExtraction: {
+          total: 1,
+          byLanguage: { ts: 1 },
+          files: {
+            [entryFile]: { language: "ts", reason: "query-error" },
+          },
+        },
+      },
+    };
+    await rewriteProjectSnapshot(sourceRoot, initial);
+
+    const persisted = (await readProjectSnapshot(projectSnapshotPathFor(sourceRoot))) as {
+      analysisReport?: {
+        backend?: {
+          native?: { errors?: Array<{ file?: string }> };
+          parser?: { files?: Array<{ file?: string }> };
+        };
+        graph?: { fallbackImportExtraction?: { files?: Record<string, unknown> } };
+      };
+    };
+    expect(persisted.analysisReport?.backend?.native?.errors?.[0]?.file).toBe("entry.ts");
+    expect(persisted.analysisReport?.backend?.parser?.files?.[0]?.file).toBe("dependency.ts");
+    expect(Object.keys(persisted.analysisReport?.graph?.fallbackImportExtraction?.files ?? {})).toEqual(["entry.ts"]);
+
+    // Current-version snapshots written before this fix stored these diagnostics as absolute paths.
+    const persistedNativeError = persisted.analysisReport?.backend?.native?.errors?.[0];
+    const persistedParserFile = persisted.analysisReport?.backend?.parser?.files?.[0];
+    const persistedFallbackFiles = persisted.analysisReport?.graph?.fallbackImportExtraction?.files;
+    const persistedFallback = persistedFallbackFiles?.["entry.ts"];
+    if (!persistedNativeError || !persistedParserFile || !persistedFallbackFiles || !persistedFallback) {
+      throw new Error("Expected persisted analysis report paths");
+    }
+    persistedNativeError.file = entryFile;
+    persistedParserFile.file = dependencyFile;
+    delete persistedFallbackFiles["entry.ts"];
+    persistedFallbackFiles[entryFile] = persistedFallback;
+    await writeProjectSnapshot(projectSnapshotPathFor(sourceRoot), persisted);
+    buildCache.closeDiskCacheDatabase(sourceRoot, { cache: "disk" });
+
+    await renameProjectTree(sourceRoot, movedRoot);
+
+    const report: BuildReport = { timings: {} };
+    await buildProjectIndexIncremental(movedRoot, { cache: "disk", threads: 1, report });
+    expect(report.backend?.native.errors[0]?.file).toBe(normalize(path.join(movedRoot, "entry.ts")));
+    expect(report.backend?.parser?.files[0]?.file).toBe(normalize(path.join(movedRoot, "dependency.ts")));
+    expect(Object.keys(report.graph?.fallbackImportExtraction.files ?? {})).toEqual([
+      normalize(path.join(movedRoot, "entry.ts")),
+    ]);
   });
 
   it("reuses cached graph edges (not just modules) after moving a project tree", async () => {

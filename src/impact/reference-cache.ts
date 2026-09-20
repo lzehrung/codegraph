@@ -1,8 +1,15 @@
-import { findReferences } from "../indexer/navigation.js";
+import { findReferences, findUsageReferences } from "../indexer/navigation.js";
 import { ensureParsedContext } from "../indexer/parse-context.js";
 import { extractEnclosingBlock, extractLineContext } from "../indexer/reference-context.js";
 import { DEFAULT_REF_CONTEXT_LINES } from "../indexer/shared.js";
-import type { FindReferencesResult, ProjectIndex, Reference, SymbolDef } from "../indexer/types.js";
+import type {
+  FindReferencesResult,
+  ProjectIndex,
+  Reference,
+  ReferenceCoverage,
+  ReferenceCoverageReason,
+  SymbolDef,
+} from "../indexer/types.js";
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxTreeLike } from "../languages/types.js";
 import { fileIdentityKey } from "../util/paths.js";
@@ -21,20 +28,28 @@ type BaseReferenceEntry = {
 
 export type ReferenceLookupCache = {
   get(index: ProjectIndex, def: SymbolDef, options?: CachedReferenceOptions): Promise<FindReferencesResult>;
+  getUsages(index: ProjectIndex, def: SymbolDef, options?: CachedReferenceOptions): Promise<FindReferencesResult>;
 };
 
 export function createReferenceLookupCache(): ReferenceLookupCache {
   const cachesByIndex = new WeakMap<ProjectIndex, Map<string, BaseReferenceEntry[]>>();
+  const lookup = async (
+    mode: "all" | "usages",
+    index: ProjectIndex,
+    def: SymbolDef,
+    options?: CachedReferenceOptions,
+  ): Promise<FindReferencesResult> => {
+    const maxReferences = normalizeMaxReferences(options?.maxReferences);
+    const indexCache = getIndexReferenceCache(cachesByIndex, index);
+    const baseResult = await getBaseReferences(index, def, maxReferences, indexCache, mode);
+    const bounded = cloneReferenceResult(baseResult, maxReferences);
+    if (bounded.status !== "ok" || options?.context === undefined) return bounded;
+    await attachReferenceContext(index, bounded.references, options);
+    return bounded;
+  };
   return {
-    async get(index, def, options) {
-      const maxReferences = normalizeMaxReferences(options?.maxReferences);
-      const indexCache = getIndexReferenceCache(cachesByIndex, index);
-      const baseResult = await getBaseReferences(index, def, maxReferences, indexCache);
-      const bounded = cloneReferenceResult(baseResult, maxReferences);
-      if (bounded.status !== "ok" || options?.context === undefined) return bounded;
-      await attachReferenceContext(index, bounded.references, options);
-      return bounded;
-    },
+    get: (index, def, options) => lookup("all", index, def, options),
+    getUsages: (index, def, options) => lookup("usages", index, def, options),
   };
 }
 function getIndexReferenceCache(
@@ -54,12 +69,14 @@ function getBaseReferences(
   def: SymbolDef,
   maxReferences: number | undefined,
   cache: Map<string, BaseReferenceEntry[]>,
+  mode: "all" | "usages",
 ): Promise<FindReferencesResult> {
-  const key = referenceLookupKey(def);
+  const key = referenceLookupKey(def, mode);
   const entries = cache.get(key) ?? [];
   const reusable = entries.find((entry) => canReuseEntry(entry.maxReferences, maxReferences));
   if (reusable) return reusable.refs;
-  const refs = findReferences(index, { def }, maxReferences === undefined ? undefined : { maxReferences });
+  const finder = mode === "usages" ? findUsageReferences : findReferences;
+  const refs = finder(index, { def }, maxReferences === undefined ? undefined : { maxReferences });
   entries.push({ maxReferences, refs });
   cache.set(key, entries);
   return refs;
@@ -76,13 +93,38 @@ function normalizeMaxReferences(maxReferences: number | undefined): number | und
   return maxReferences;
 }
 
+const COVERAGE_REASON_ORDER: ReferenceCoverageReason[] = ["parser_degraded", "unresolved_import", "truncated"];
+
+function cloneCoverage(coverage: ReferenceCoverage): ReferenceCoverage {
+  return {
+    scope: coverage.scope,
+    state: coverage.state,
+    ...(coverage.reasons ? { reasons: [...coverage.reasons] } : {}),
+    ...(coverage.affectedFiles ? { affectedFiles: [...coverage.affectedFiles] } : {}),
+  };
+}
+
+function withTruncatedCoverage(coverage: ReferenceCoverage): ReferenceCoverage {
+  const reasons = new Set<ReferenceCoverageReason>(coverage.reasons ?? []);
+  reasons.add("truncated");
+  return {
+    scope: "indexed_candidates",
+    state: "partial",
+    reasons: COVERAGE_REASON_ORDER.filter((reason) => reasons.has(reason)),
+    ...(coverage.affectedFiles ? { affectedFiles: [...coverage.affectedFiles] } : {}),
+  };
+}
+
 function cloneReferenceResult(result: FindReferencesResult, maxReferences: number | undefined): FindReferencesResult {
   if (result.status !== "ok") return result;
+  const truncatedByBound = maxReferences !== undefined && result.references.length > maxReferences;
   const references = result.references.slice(0, maxReferences).map(cloneReference);
+  const baseCoverage = cloneCoverage(result.referenceCoverage);
   return {
     status: "ok",
     definition: result.definition,
     references,
+    referenceCoverage: truncatedByBound ? withTruncatedCoverage(baseCoverage) : baseCoverage,
     ...(result.provenance ? { provenance: result.provenance } : {}),
   };
 }
@@ -90,10 +132,10 @@ function cloneReferenceResult(result: FindReferencesResult, maxReferences: numbe
 function cloneReference(reference: Reference): Reference {
   return {
     file: reference.file,
-    range: reference.range,
+    range: { start: { ...reference.range.start }, end: { ...reference.range.end } },
     ...(reference.context !== undefined ? { context: reference.context } : {}),
-    ...(reference.via !== undefined ? { via: reference.via } : {}),
-    ...(reference.provenance !== undefined ? { provenance: reference.provenance } : {}),
+    ...(reference.via !== undefined ? { via: { ...reference.via } } : {}),
+    ...(reference.provenance !== undefined ? { provenance: { ...reference.provenance } } : {}),
   };
 }
 
@@ -126,8 +168,9 @@ async function attachReferenceContext(
   }
 }
 
-function referenceLookupKey(def: SymbolDef): string {
+function referenceLookupKey(def: SymbolDef, mode: "all" | "usages"): string {
   return JSON.stringify({
+    mode,
     file: def.file,
     name: def.localName,
     kind: def.kind,

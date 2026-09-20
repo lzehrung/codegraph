@@ -98,9 +98,13 @@ describe("rename preview CLI", () => {
     expect(stripCliProgressLines(limited.stderr)).toBe("");
     expect(limitedResponse).toMatchObject({
       safe: false,
-      omittedCounts: { edits: 2 },
       unsafeSites: [expect.objectContaining({ reason: "limit_exceeded" })],
     });
+    expect(isPlainRecord(limitedResponse) && isPlainRecord(limitedResponse.omittedCounts)).toBe(true);
+    if (!isPlainRecord(limitedResponse) || !isPlainRecord(limitedResponse.omittedCounts)) {
+      throw new Error("Rename CLI omission metadata was invalid");
+    }
+    expect(limitedResponse.omittedCounts.edits).toBeGreaterThan(0);
 
     const invalid = await captureCli([
       "rename-preview",

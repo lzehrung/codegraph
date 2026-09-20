@@ -407,6 +407,10 @@ codegraph grep 'eval\(' --ignore-case
 
 ```
 
+Successful `refs --json` results include `referenceCoverage`. `complete` means that every statically linked candidate known to the current index was checked and the search was not capped. `partial` includes one or more reasons: `parser_degraded`, `unresolved_import`, or `truncated`. This scope does not certify dynamic imports or bare imports that the index cannot associate with the target. Human-readable output prints a note only for partial coverage.
+
+Import declaration references include `via.importBinding`: `imported` identifies the source-side name, and `local` identifies a distinct alias or default binding. Target `provenance.resolution` and `provenance.confidence` describe definition selection only. They do not describe reference-search coverage.
+
 `grep --json` does not return a bare hit array; it returns an envelope `{ items, limit, totalSeen, truncated, omitted }` so callers can tell a complete result from a capped prefix. `limit` always means the effective cap that was applied: for text greps it is the effective `--max-hits` value (default 5000, capped at 200000), and for uncapped `--query` AST greps it is `null`. `truncated` is exact for text greps (the scan probes one hit past the effective limit, so a true count equal to the limit still reports `truncated: false`, including at the 200000 ceiling) and is always `false` for AST greps today. When text results are truncated, `totalSeen` and `omitted` are lower bounds from the bounded probe, not full corpus-wide counts. Human-readable grep output stays a plain streamed hit list.
 
 ### Symbol commands

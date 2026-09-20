@@ -25,14 +25,25 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Rust graph module scope, and Python module-level import detection.
  * Epoch 11 refreshes document-link extraction and fallback diagnostics.
  * Epoch 12 refreshes Rust `#[path]` module owner resolution.
+ * Epoch 13 adds exact import-binding token ranges to cached modules.
+ * Epoch 14 extends exact import-binding token ranges across native and reduced-mode
+ * language paths, fixes repeated-name attribution, and refreshes Zig lexical scope bindings.
+ * Epoch 15 preserves explicit same-spelling aliases, multiline Python imports,
+ * CommonJS destructuring defaults, and corrected declaration captures.
+ * Epoch 16 handles balanced CommonJS destructuring defaults and corrected bounded references.
+ * Epoch 17 corrects rename bounds, static member lookup, and aliased re-export coverage.
+ * Epoch 18 refreshes direct namespace-member resolution.
  */
-export const CORE_ALGORITHM_EPOCH = 12;
+export const CORE_ALGORITHM_EPOCH = 18;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
  * consistently across the CLI and library build shapes.
+ * Epoch 4 distinguishes TypeScript variable names from initializer references.
+ * Epoch 5 applies the same declaration-name boundary to JavaScript, Python, PHP, and Zig.
+ * Epoch 6 adds field and enum-member declarations and tightens PHP and Zig declarations.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 3;
+export const LANGUAGE_BEHAVIOR_EPOCH = 6;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];

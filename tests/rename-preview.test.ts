@@ -1,9 +1,10 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { previewRenameInSnapshot, previewRenameWithSession } from "../src/agent/rename-preview.js";
 import { createAgentSession, type AgentProjectSnapshot } from "../src/agent/session.js";
 import { workspaceSymbolsInSnapshot, workspaceSymbolsWithSession } from "../src/agent/workspace-symbols.js";
+import * as navigationModule from "../src/indexer/navigation.js";
 import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { isSymlinkUnavailable, mkTmpDir } from "./helpers/filesystem.js";
 import { fileIdentityKey } from "../src/util/paths.js";
@@ -79,6 +80,8 @@ describe("rename preview", () => {
     expect(result.safe).toBe(true);
     expect(result.conflicts).toEqual([]);
     expect(result.unsafeSites).toEqual([]);
+    // The core-supplied imported-name reference keeps the import edit kind without adding a
+    // duplicate legacy text-scan candidate.
     expect(result.edits.map((edit) => [edit.file, edit.oldText, edit.kind])).toEqual([
       ["consumer.ts", "service", "import"],
       ["consumer.ts", "service", "reference"],
@@ -211,6 +214,88 @@ describe("rename preview", () => {
     expect(result.unsafeSites.some((site) => site.reason === "limit_exceeded")).toBe(true);
   });
 
+  it("marks partial target-reference coverage unsafe", async () => {
+    const { root, session, target } = await renameFixture();
+    const findRenameReferences = navigationModule.findRenameReferences;
+    const referenceSpy = vi.spyOn(navigationModule, "findRenameReferences").mockImplementation(async (...args) => {
+      const result = await findRenameReferences(...args);
+      return result.status === "ok"
+        ? {
+            ...result,
+            referenceCoverage: {
+              scope: "indexed_candidates",
+              state: "partial",
+              reasons: ["parser_degraded"],
+            },
+          }
+        : result;
+    });
+    try {
+      const result = await previewRenameWithSession(session, {
+        root,
+        handle: target.handle,
+        newName: "renamedService",
+      });
+
+      expect(result.safe).toBe(false);
+      expect(result.unsafeSites).toContainEqual(
+        expect.objectContaining({
+          reason: "unresolved_reference",
+          provenance: expect.objectContaining({ reason: expect.stringContaining("parser_degraded") }),
+        }),
+      );
+    } finally {
+      referenceSpy.mockRestore();
+    }
+  });
+
+  it("marks partial implementation-member coverage unsafe", async () => {
+    const root = await mkTmpDir("cg-rename-partial-implementation-");
+    await fsp.writeFile(
+      path.join(root, "types.ts"),
+      ["export interface Contract { run(): void }", "export class Worker implements Contract { run(): void {} }"].join(
+        "\n",
+      ),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const snapshot = await session.loadProject();
+    const symbols = await workspaceSymbolsInSnapshot(snapshot, { query: "run" });
+    const target = symbols.symbols.find((symbol) => symbol.location.range.start.line === 1);
+    expect(target).toBeDefined();
+    const findRenameReferences = navigationModule.findRenameReferences;
+    const referenceSpy = vi
+      .spyOn(navigationModule, "findRenameReferences")
+      .mockImplementation(async (index, def, options) => {
+        const result = await findRenameReferences(index, def, options);
+        if (result.status !== "ok" || def.range.start.line !== 2) return result;
+        return {
+          ...result,
+          referenceCoverage: {
+            scope: "indexed_candidates",
+            state: "partial",
+            reasons: ["unresolved_import"],
+          },
+        };
+      });
+    try {
+      const result = await previewRenameInSnapshot(snapshot, {
+        root,
+        handle: target!.handle,
+        newName: "execute",
+      });
+
+      expect(result.safe).toBe(false);
+      expect(result.unsafeSites).toContainEqual(
+        expect.objectContaining({
+          reason: "unresolved_reference",
+          provenance: expect.objectContaining({ reason: expect.stringContaining("unresolved_import") }),
+        }),
+      );
+    } finally {
+      referenceSpy.mockRestore();
+    }
+  });
+
   it("adds bounded heuristic comment and string candidates only when requested", async () => {
     const { root, session, target } = await renameFixture();
     const defaultResult = await previewRenameWithSession(session, {
@@ -257,10 +342,104 @@ describe("rename preview", () => {
       newName: "renamedService",
     });
     expect(result.safe).toBe(true);
+    // The import's source-side token is edited exactly once with the import edit kind; the local
+    // alias declaration and its `localService()` use are untouched.
     expect(result.edits.map((edit) => [edit.file, edit.oldText, edit.kind])).toEqual([
       ["consumer.ts", "service", "import"],
       ["service.ts", "service", "definition"],
     ]);
+    expect(result.edits.some((edit) => edit.oldText === "localService")).toBe(false);
+  });
+  it("does not charge preserved alias sites against the edit limit", async () => {
+    const root = await mkTmpDir("cg-rename-alias-bound-");
+    await fsp.writeFile(path.join(root, "service.ts"), "export function service(): number { return 1; }\n");
+    await fsp.writeFile(
+      path.join(root, "consumer.ts"),
+      'import { service as localService } from "./service.js";\nexport const value = localService();\n',
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const symbols = await workspaceSymbolsWithSession(session, { root, query: "service", exportedOnly: true });
+
+    const result = await previewRenameWithSession(session, {
+      root,
+      handle: symbols.symbols[0]!.handle,
+      newName: "renamedService",
+      maxEdits: 2,
+    });
+
+    expect(result.safe).toBe(true);
+    expect(result.omittedCounts.edits).toBe(0);
+    expect(result.unsafeSites.some((site) => site.reason === "limit_exceeded")).toBe(false);
+    expect(result.edits.map((edit) => [edit.file, edit.oldText, edit.kind])).toEqual([
+      ["consumer.ts", "service", "import"],
+      ["service.ts", "service", "definition"],
+    ]);
+  });
+
+  it("preserves an explicit local alias that spells the same as its imported symbol", async () => {
+    const root = await mkTmpDir("cg-rename-same-alias-");
+    await fsp.writeFile(path.join(root, "service.ts"), "export function service(): number { return 1; }\n");
+    await fsp.writeFile(
+      path.join(root, "consumer.ts"),
+      'import { service as service } from "./service.js";\nexport const value = service();\n',
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const symbols = await workspaceSymbolsWithSession(session, { root, query: "service", exportedOnly: true });
+    const result = await previewRenameWithSession(session, {
+      root,
+      handle: symbols.symbols[0]!.handle,
+      newName: "renamedService",
+    });
+    expect(result.safe).toBe(true);
+    expect(result.edits.map((edit) => [edit.file, edit.range.start.line, edit.range.start.column, edit.kind])).toEqual([
+      ["consumer.ts", 1, 10, "import"],
+      ["service.ts", 1, 17, "definition"],
+    ]);
+  });
+
+  it("renames an unused aliased import's source token without touching the unused local alias", async () => {
+    const root = await mkTmpDir("cg-rename-unused-alias-");
+    await fsp.writeFile(path.join(root, "service.ts"), "export function service(): number { return 1; }\n");
+    await fsp.writeFile(
+      path.join(root, "consumer.ts"),
+      'import { service as localService } from "./service.js";\nexport const unrelated = 1;\n',
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const symbols = await workspaceSymbolsWithSession(session, { root, query: "service", exportedOnly: true });
+    const result = await previewRenameWithSession(session, {
+      root,
+      handle: symbols.symbols[0]!.handle,
+      newName: "renamedService",
+    });
+    expect(result.safe).toBe(true);
+    const consumerEdits = result.edits.filter((edit) => edit.file === "consumer.ts");
+    expect(consumerEdits).toHaveLength(1);
+    expect(consumerEdits[0]).toMatchObject({ oldText: "service", newText: "renamedService" });
+    expect(result.edits.some((edit) => edit.oldText === "localService")).toBe(false);
+  });
+
+  it("dedupes an unaliased named import to a single rename edit", async () => {
+    const root = await mkTmpDir("cg-rename-unaliased-dedup-");
+    await fsp.writeFile(path.join(root, "service.ts"), "export function service(): number { return 1; }\n");
+    await fsp.writeFile(
+      path.join(root, "consumer.ts"),
+      'import { service } from "./service.js";\nexport const value = service();\n',
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const symbols = await workspaceSymbolsWithSession(session, { root, query: "service", exportedOnly: true });
+    const result = await previewRenameWithSession(session, {
+      root,
+      handle: symbols.symbols[0]!.handle,
+      newName: "renamedService",
+    });
+    expect(result.safe).toBe(true);
+    // The import declaration's source token and the `service()` use resolve to the same
+    // unaliased binding; each site is edited exactly once, with no duplicate candidate from
+    // both the reference list and the legacy text-scan fallback.
+    const consumerImportEdits = result.edits.filter(
+      (edit) => edit.file === "consumer.ts" && edit.range.start.line === 1,
+    );
+    expect(consumerImportEdits).toHaveLength(1);
   });
 
   it("includes proven interface member implementations but excludes unrelated same-named methods", async () => {
@@ -380,6 +559,8 @@ describe("rename preview", () => {
     });
 
     expect(result.safe).toBe(true);
+    // The barrel-resolved imported-name reference keeps the import edit kind alongside the
+    // actual `service()` use.
     expect(result.edits.map((edit) => [edit.file, edit.oldText, edit.kind])).toEqual([
       ["consumer.ts", "service", "import"],
       ["consumer.ts", "service", "reference"],

@@ -22,6 +22,7 @@ import {
 import type { NativeQueryExecution, NativeQueryResults, NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import type { ModuleSpecifierResolutionKind } from "../util/specifiers.js";
 import type { ResolvedImportTarget } from "./imports/context.js";
+import { attributeNamedBindingRanges, maskImportBindingTrivia } from "./imports/binding-ranges.js";
 import { collectGraphOnlyImports } from "./imports/graph-only.js";
 import { collectJsTextImports, collectJsTextValueRequireImports } from "./imports/js-text-imports.js";
 import {
@@ -111,6 +112,7 @@ export async function collectImportsForFile(
       projectRoot,
       source: resolvedSource,
       pushBinding: (binding: ImportBinding) => imports.push(binding),
+      getBindings: () => imports,
     };
     if (resolvedNativeQueries) {
       await collectPythonImportsFromNativeMatches(context, resolvedNativeQueries.importBindings);
@@ -175,13 +177,25 @@ export async function collectImportsForFile(
     typeOnly: boolean,
     statementStartIndex?: number,
   ): Promise<boolean> => {
-    return await applyStatementImportOverride(
+    const bindingCountBefore = imports.length;
+    const handled = await applyStatementImportOverride(
       languageContext,
       statementOverrideState,
       stmtText,
       typeOnly,
       statementStartIndex,
     );
+    if (handled && statementStartIndex !== undefined) {
+      attributeNamedBindingRanges({
+        bindings: imports,
+        fromIndex: bindingCountBefore,
+        text: maskImportBindingTrivia(stmtText, resolvedSup.id),
+        textStartIndex: statementStartIndex,
+        source: resolvedSource,
+        alwaysAliased: resolvedSup.id === "csharp",
+      });
+    }
+    return handled;
   };
 
   const runFallback = async () => {

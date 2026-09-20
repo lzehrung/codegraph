@@ -250,6 +250,58 @@ function transformModule(root: string, module: ModuleIndex, toRelative: boolean)
   };
 }
 
+function transformSnapshotAnalysisReport(
+  root: string,
+  persistedProjectRoot: string,
+  report: SnapshotAnalysisReport,
+  toRelative: boolean,
+): SnapshotAnalysisReport {
+  const reportFile = (file: string): string => {
+    if (file === "unknown") return file;
+    if (
+      !toRelative &&
+      path.isAbsolute(file) &&
+      !isFilePathWithinRoot(root, file) &&
+      isFilePathWithinRoot(persistedProjectRoot, file)
+    ) {
+      return transformPath(root, cacheRelativePath(persistedProjectRoot, file), false);
+    }
+    return transformPath(root, file, toRelative);
+  };
+  const transformed: SnapshotAnalysisReport = {};
+  if (report.backend) {
+    const backend: BackendReport = {
+      ...report.backend,
+      native: {
+        ...report.backend.native,
+        errors: report.backend.native.errors.map((error) => ({ ...error, file: reportFile(error.file) })),
+      },
+    };
+    if (report.backend.parser) {
+      backend.parser = {
+        ...report.backend.parser,
+        files: report.backend.parser.files.map((entry) => ({
+          ...entry,
+          file: reportFile(entry.file),
+        })),
+      };
+    }
+    transformed.backend = backend;
+  }
+  if (report.graph) {
+    transformed.graph = {
+      ...report.graph,
+      fallbackImportExtraction: {
+        ...report.graph.fallbackImportExtraction,
+        files: Object.fromEntries(
+          Object.entries(report.graph.fallbackImportExtraction.files).map(([file, entry]) => [reportFile(file), entry]),
+        ),
+      },
+    };
+  }
+  return transformed;
+}
+
 function transformSnapshotPaths(
   payload: ProjectIndexSnapshotPayload,
   root: string,
@@ -266,7 +318,7 @@ function transformSnapshotPaths(
       signature,
     ]),
   );
-  return {
+  const transformed: ProjectIndexSnapshotPayload = {
     ...payload,
     graph: {
       nodes: payload.graph.nodes.map((node) => transformPath(root, node, toRelative)),
@@ -289,6 +341,15 @@ function transformSnapshotPaths(
     ...(bloomFilters ? { bloomFilters } : {}),
     fileSignatures,
   };
+  if (payload.analysisReport) {
+    transformed.analysisReport = transformSnapshotAnalysisReport(
+      root,
+      payload.projectRoot,
+      payload.analysisReport,
+      toRelative,
+    );
+  }
+  return transformed;
 }
 function migrateProjectSnapshotPayload(value: unknown, currentRoot: string): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
@@ -1743,18 +1804,25 @@ function isImportBinding(value: unknown): value is ImportBinding {
   ) {
     return false;
   }
-  if (binding.kind === "default") return typeof binding.local === "string";
+  if (binding.kind === "default") {
+    return typeof binding.local === "string" && isOptionalRange(binding.localRange);
+  }
   if (binding.kind === "named") {
     return (
       typeof binding.local === "string" &&
       typeof binding.imported === "string" &&
+      isOptionalBoolean(binding.explicitAlias) &&
+      isOptionalRange(binding.importedRange) &&
+      isOptionalRange(binding.localRange) &&
       (binding.phpImportType === undefined ||
         binding.phpImportType === "class" ||
         binding.phpImportType === "function" ||
         binding.phpImportType === "const")
     );
   }
-  if (binding.kind === "namespace") return typeof binding.localNS === "string";
+  if (binding.kind === "namespace") {
+    return typeof binding.localNS === "string" && isOptionalRange(binding.localRange);
+  }
   return binding.kind === "star";
 }
 
@@ -1809,6 +1877,10 @@ function isOptionalBoolean(value: unknown): boolean {
 
 function isOptionalNumber(value: unknown): boolean {
   return value === undefined || typeof value === "number";
+}
+
+function isOptionalRange(value: unknown): boolean {
+  return value === undefined || isRange(value);
 }
 
 function isSymbolKind(value: unknown): value is SymbolKind {

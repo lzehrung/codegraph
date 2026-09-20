@@ -68,6 +68,7 @@ const definition: LanguageTestDefinition = {
           column: 5,
           references: [
             { file: "package_exports/values.py", line: 1 },
+            { file: "package_exports/__init__.py", line: 1 },
             { file: "package_consumer.py", line: 1 },
             { file: "package_consumer.py", line: 3 },
           ],
@@ -94,6 +95,95 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("Python package __all__ alias import tokens", () => {
+  it("returns imported and local declaration tokens for the re-exported alias", async () => {
+    const root = path.resolve(process.cwd(), "tests", "samples", "python");
+    const valuesFile = path.join(root, "package_exports", "values.py").replace(/\\/g, "/");
+    const initFile = path.join(root, "package_exports", "__init__.py").replace(/\\/g, "/");
+    const consumerFile = path.join(root, "package_consumer.py").replace(/\\/g, "/");
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const result = await findReferences(index, { file: valuesFile, line: 1, column: 5 });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+
+    const initSource = await fsp.readFile(initFile, "utf8");
+    const consumerSource = await fsp.readFile(consumerFile, "utf8");
+    const sameFile = (left: string, right: string) => fileIdentityKey(left) === fileIdentityKey(right);
+    const tokenAt = (source: string, token: string, occurrence = 0) => {
+      let from = 0;
+      for (let index = 0; index <= occurrence; index += 1) {
+        const found = source.indexOf(token, from);
+        if (found < 0) throw new Error(`token not found: ${token}`);
+        if (index === occurrence) {
+          return {
+            column: found - (source.lastIndexOf("\n", found - 1) + 1) + 1,
+            index: found,
+            text: token,
+          };
+        }
+        from = found + 1;
+      }
+      throw new Error(`token not found: ${token}`);
+    };
+
+    const importedInit = result.references.find(
+      (reference) => sameFile(reference.file, initFile) && reference.via?.importBinding === "imported",
+    );
+    const localInit = result.references.find(
+      (reference) => sameFile(reference.file, initFile) && reference.via?.importBinding === "local",
+    );
+    const importedConsumer = result.references.find(
+      (reference) => sameFile(reference.file, consumerFile) && reference.via?.importBinding === "imported",
+    );
+    const localConsumer = result.references.find(
+      (reference) => sameFile(reference.file, consumerFile) && reference.via?.importBinding === "local",
+    );
+    const usage = result.references.find(
+      (reference) =>
+        sameFile(reference.file, consumerFile) &&
+        reference.range.start.line === 3 &&
+        reference.via?.importBinding === undefined,
+    );
+    const definition = result.references.find(
+      (reference) =>
+        sameFile(reference.file, valuesFile) &&
+        reference.range.start.line === 1 &&
+        reference.via?.importBinding === undefined,
+    );
+
+    const expectedImportedInit = tokenAt(initSource, "source_value");
+    const expectedLocalInit = tokenAt(initSource, "public_value");
+    const expectedImportedConsumer = tokenAt(consumerSource, "public_value");
+    const expectedLocalConsumer = tokenAt(consumerSource, "selected_value");
+    const expectedUsage = tokenAt(consumerSource, "selected_value", 1);
+
+    expect(importedInit?.range.start.column).toBe(expectedImportedInit.column);
+    expect(initSource.slice(importedInit!.range.start.index!, importedInit!.range.end.index!)).toBe("source_value");
+    expect(localInit?.range.start.column).toBe(expectedLocalInit.column);
+    expect(initSource.slice(localInit!.range.start.index!, localInit!.range.end.index!)).toBe("public_value");
+    expect(importedConsumer?.range.start.column).toBe(expectedImportedConsumer.column);
+    expect(consumerSource.slice(importedConsumer!.range.start.index!, importedConsumer!.range.end.index!)).toBe(
+      "public_value",
+    );
+    expect(localConsumer?.range.start.column).toBe(expectedLocalConsumer.column);
+    expect(consumerSource.slice(localConsumer!.range.start.index!, localConsumer!.range.end.index!)).toBe(
+      "selected_value",
+    );
+    expect(usage?.range.start.column).toBe(expectedUsage.column);
+    expect(definition).toBeDefined();
+    expect(localInit?.range.start.column).not.toBe(importedInit?.range.start.column);
+    expect(localConsumer?.range.start.column).not.toBe(importedConsumer?.range.start.column);
+
+    const uniqueSites = new Set(
+      result.references.map(
+        (reference) =>
+          `${fileIdentityKey(reference.file)}:${reference.range.start.line}:${reference.range.start.column}:${reference.range.end.column}`,
+      ),
+    );
+    expect(uniqueSites.size).toBe(result.references.length);
+  });
+});
 
 describe("Python stub discovery", () => {
   it("discovers and indexes .pyi declarations", async () => {
@@ -606,6 +696,29 @@ def keep(): pass
   });
 });
 
+describe("Python declaration-name field identity", () => {
+  it("finds a reference to an imported symbol used as a bare assignment initializer", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-decl-init-"));
+    const aFile = path.join(root, "a.py");
+    const bFile = path.join(root, "b.py");
+    await fsp.writeFile(aFile, "def helper():\n    return 1\n", "utf8");
+    await fsp.writeFile(bFile, "from a import helper as helper_alias\n\nresult = helper_alias\n", "utf8");
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const references = await findReferences(index, { file: bFile, line: 1, column: 25 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(references.references.map((entry) => entry.range.start.line)).toContain(3);
+      }
+      // Regression: the assignment target itself must still be a legitimate declaration.
+      const module = index.byFile.get(fileIdentityKey(bFile));
+      expect(module?.locals.map((entry) => entry.localName)).toContain("result");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Python native import bindings", () => {
   it("binds multiline, comma-separated, continued, relative, star, and future imports", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-native-imports-"));
@@ -685,6 +798,66 @@ describe("Python native import bindings", () => {
             (reference) => reference.file === consumerFile && reference.range.start.line === 12,
           ),
         ).toBe(true);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps multiline import bindings after comments in native and reduced modes", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-commented-import-"));
+    const dependency = path.join(root, "dependency.py").replace(/\\/g, "/");
+    const consumer = path.join(root, "consumer.py").replace(/\\/g, "/");
+    const source = [
+      "from dependency import (",
+      "    first,",
+      "    # the next binding must remain visible",
+      "    second as second,",
+      ")",
+      "second",
+      "",
+    ].join("\n");
+    await Promise.all([
+      fsp.writeFile(dependency, "first = 1\nsecond = 2\n", "utf8"),
+      fsp.writeFile(consumer, source, "utf8"),
+    ]);
+    try {
+      for (const native of ["auto", "off"] as const) {
+        const imports = await collectImportsForFile(consumer, root, { source, native });
+        const binding = imports.find(
+          (entry) => entry.kind === "named" && entry.imported === "second" && entry.local === "second",
+        );
+        expect(binding).toEqual(
+          expect.objectContaining({
+            kind: "named",
+            explicitAlias: true,
+            importedRange: expect.objectContaining({
+              start: expect.objectContaining({ line: 4, column: 5 }),
+            }),
+            localRange: expect.objectContaining({
+              start: expect.objectContaining({ line: 4, column: 15 }),
+            }),
+          }),
+        );
+        if (native === "off") continue;
+
+        const index = await buildProjectIndex(root, { cache: "off", native });
+        const references = await findReferences(index, { file: dependency, line: 2, column: 1 });
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") continue;
+        expect(
+          references.references.map((reference) => [
+            path.basename(reference.file),
+            reference.range.start.line,
+            reference.range.start.column,
+          ]),
+        ).toEqual(
+          expect.arrayContaining([
+            ["consumer.py", 4, 5],
+            ["consumer.py", 4, 15],
+            ["consumer.py", 6, 1],
+          ]),
+        );
       }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

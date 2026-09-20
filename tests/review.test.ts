@@ -138,7 +138,15 @@ describe("Review report", () => {
     );
     await fsp.writeFile(
       consumerFile,
-      [`import { greet } from './feature';`, ``, `export function run() {`, `  greet('world');`, `}`, ``].join("\n"),
+      [
+        `import { greet } from './feature';`,
+        ``,
+        `export function run() {`,
+        `  greet('world');`,
+        `  greet('again');`,
+        `}`,
+        ``,
+      ].join("\n"),
       "utf8",
     );
 
@@ -152,7 +160,7 @@ describe("Review report", () => {
     const report = await buildReviewReport(root, {
       files: [featureFile],
       includeSymbolDetails: true,
-      maxCallsites: 2,
+      maxCallsites: 1,
     });
     const featureSummary = report.changedFiles.find((entry) => entry.file === "src/feature.ts");
     expect(featureSummary).toBeDefined();
@@ -160,13 +168,17 @@ describe("Review report", () => {
     expect(greetSummary).toBeDefined();
     expect(greetSummary?.definitionSnippet).toContain("function greet");
     const callsites = greetSummary?.callsites ?? [];
-    expect(callsites.length).toBeGreaterThan(0);
-    expect(callsites.length).toBeLessThanOrEqual(2);
-    expect(
-      callsites.some(
-        (site) => site.file === "src/consumer.ts" && (site.range.start.line === 1 || site.range.start.line === 4),
-      ),
-    ).toBe(true);
+    expect(callsites).toEqual([
+      expect.objectContaining({
+        file: "src/consumer.ts",
+        range: expect.objectContaining({ start: expect.objectContaining({ line: 4 }) }),
+      }),
+    ]);
+    expect(greetSummary?.callsiteCoverage).toEqual({
+      scope: "indexed_candidates",
+      state: "partial",
+      reasons: ["truncated"],
+    });
   });
 
   it("includes call compatibility hints for changed TypeScript signatures", async () => {
@@ -2262,7 +2274,7 @@ describe("Review report", () => {
 
     let inFlight = 0;
     let maxInFlight = 0;
-    const findSpy = vi.spyOn(indexerNavigation, "findReferences").mockImplementation(async (_index, request) => {
+    const findSpy = vi.spyOn(indexerNavigation, "findUsageReferences").mockImplementation(async (_index, request) => {
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
       await Promise.resolve();
@@ -2272,6 +2284,7 @@ describe("Review report", () => {
         status: "ok",
         definition: request.def,
         references: [],
+        referenceCoverage: { scope: "indexed_candidates", state: "complete" },
       };
     });
 
@@ -2290,6 +2303,51 @@ describe("Review report", () => {
     }
   });
 
+  it("normalizes callsite coverage affected files relative to the project root", async () => {
+    const root = await mkTmpDir("dg-review-coverage-paths-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const featureFile = path.join(srcDir, "feature.ts");
+    const degradedFile = normalize(path.join(srcDir, "consumer.ts"));
+    await fsp.writeFile(featureFile, "export function feature() { return 1; }\n", "utf8");
+    await buildProjectIndex(root);
+
+    const findSpy = vi.spyOn(indexerNavigation, "findUsageReferences").mockImplementation(async (_index, request) => {
+      if (!("def" in request)) return { status: "not_found", reason: "missing def" };
+      return {
+        status: "ok",
+        definition: request.def,
+        references: [],
+        referenceCoverage: {
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["parser_degraded"],
+          affectedFiles: [degradedFile],
+        },
+      };
+    });
+
+    try {
+      const report = await buildReviewReport(root, {
+        files: [featureFile],
+        includeSymbolDetails: true,
+        maxCallsites: 1,
+      });
+      const feature = report.changedFiles.find((entry) => entry.file === "src/feature.ts");
+      const symbol = feature?.symbols.find((entry) => entry.name === "feature");
+
+      expect(symbol?.callsiteCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parser_degraded"],
+        affectedFiles: ["src/consumer.ts"],
+      });
+    } finally {
+      findSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("respects reference concurrency limits", async () => {
     const root = await mkTmpDir("dg-review-concurrency-");
     const srcDir = path.join(root, "src");
@@ -2304,7 +2362,7 @@ describe("Review report", () => {
     let inFlight = 0;
     let maxInFlight = 0;
 
-    const findSpy = vi.spyOn(indexerNavigation, "findReferences").mockImplementation(async () => {
+    const findSpy = vi.spyOn(indexerNavigation, "findUsageReferences").mockImplementation(async () => {
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
       await Promise.resolve();
@@ -2480,7 +2538,7 @@ describe("Review report", () => {
     await buildProjectIndex(root);
 
     const originalBuildProjectIndexIncremental = indexerBuild.buildProjectIndexIncremental;
-    const originalFindReferences = indexerNavigation.findReferences;
+    const originalFindUsageReferences = indexerNavigation.findUsageReferences;
     const capturedIndexOpts: Array<IncrementalBuildOptions | undefined> = [];
     const capturedReferenceLimits: number[] = [];
 
@@ -2491,11 +2549,11 @@ describe("Review report", () => {
         return await originalBuildProjectIndexIncremental(projectRoot, opts);
       });
 
-    const findSpy = vi.spyOn(indexerNavigation, "findReferences").mockImplementation(async (idx, req, opts) => {
+    const findSpy = vi.spyOn(indexerNavigation, "findUsageReferences").mockImplementation(async (idx, req, opts) => {
       if (opts?.maxReferences !== undefined) {
         capturedReferenceLimits.push(opts.maxReferences);
       }
-      return await originalFindReferences(idx, req, opts);
+      return await originalFindUsageReferences(idx, req, opts);
     });
 
     try {
@@ -2508,7 +2566,7 @@ describe("Review report", () => {
       expect(report.status).toBe("ok");
       expect(capturedIndexOpts.some((opts) => opts?.keepParsed)).toBe(true);
       expect(capturedReferenceLimits.length).toBeGreaterThan(0);
-      expect(capturedReferenceLimits.every((value) => value === 3)).toBe(true);
+      expect(capturedReferenceLimits.every((value) => value === 2)).toBe(true);
     } finally {
       findSpy.mockRestore();
       buildSpy.mockRestore();

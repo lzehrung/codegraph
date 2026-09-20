@@ -115,6 +115,7 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
       (function_declaration name: (identifier) @name)
       (generator_function_declaration name: (identifier) @name)
       (method_definition name: (property_identifier) @name)
+      (field_definition property: (property_identifier) @name)
       (class_declaration name: (identifier) @name)
       (variable_declarator name: (identifier) @name)
     `,
@@ -147,14 +148,21 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
     return "variable";
   },
   isDeclarationName: (node) => {
-    const p = node.parent?.type;
+    const parent = node.parent;
+    const p = parent?.type;
+    if (parent?.type === "variable_declarator") {
+      return parent.childForFieldName("name")?.id === node.id;
+    }
+    if (parent?.type === "field_definition") {
+      const name = parent.childForFieldName("name") ?? parent.childForFieldName("property");
+      return name?.id === node.id;
+    }
     return (
       !!p &&
       [
         "function_declaration",
         "generator_function_declaration",
         "class_declaration",
-        "variable_declarator",
         "import_specifier",
         "namespace_import",
         "import_clause",

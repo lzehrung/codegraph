@@ -14,6 +14,7 @@ export type ParsedRustImportStatement =
       from: string;
       imported: string;
       local: string;
+      explicitAlias?: true;
     }
   | {
       kind: "module";
@@ -507,6 +508,7 @@ function flattenRustUseTree(prefix: readonly string[], item: string): ParsedRust
       from,
       imported,
       local: alias ?? imported,
+      ...(alias !== undefined ? { explicitAlias: true } : {}),
     },
   ];
 }
@@ -528,6 +530,7 @@ export type ParsedPhpImportStatement =
       imported: string;
       local: string;
       importType: PhpImportType;
+      explicitAlias?: true;
     };
 
 export type PhpImportType = "class" | "function" | "const";
@@ -585,6 +588,7 @@ function parsePhpImportClause(rawClause: string, importType: PhpImportType): Par
         from: fullPath,
         imported,
         local: aliasMatch?.[2] ?? imported,
+        ...(aliasMatch ? { explicitAlias: true } : {}),
         importType: memberType,
       });
     }
@@ -603,6 +607,7 @@ function parsePhpImportClause(rawClause: string, importType: PhpImportType): Par
       from: fullPath,
       imported,
       local: aliasMatch?.[2] ?? imported,
+      ...(aliasMatch ? { explicitAlias: true } : {}),
       importType,
     },
   ];
@@ -794,6 +799,7 @@ export type ParsedKotlinImportStatement =
       from: string;
       imported: string;
       local: string;
+      explicitAlias?: true;
     }
   | {
       kind: "star";
@@ -819,6 +825,7 @@ export function parseKotlinImportStatement(stmtText: string): ParsedKotlinImport
     from: rawSpec,
     imported,
     local: match?.[2] ?? imported,
+    ...(match?.[2] !== undefined ? { explicitAlias: true } : {}),
   };
 }
 

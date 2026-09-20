@@ -9,10 +9,9 @@ import {
   type ProjectIndex,
   type BuildOptions,
   type BuildReport,
+  type FindReferencesResult,
   type GoToResult,
   type IncrementalBuildOptions,
-  type Reference,
-  type SymbolDef,
 } from "./indexer/types.js";
 import { buildProjectIndex, buildProjectIndexIncremental } from "./indexer/build-index.js";
 import { normalizeLanguageExtensions } from "./indexer/build-cache.js";
@@ -158,10 +157,10 @@ type SessionInputError = {
   error: string;
 };
 
-type SessionFindReferencesResult =
-  | { status: "ok"; definition: SymbolDef; references: Reference[] }
-  | { status: "not_found"; reason: string }
-  | SessionInputError;
+// Reuses the core result shape directly (rather than a hand-inlined "ok" variant) so new
+// fields such as `provenance` and `referenceCoverage` stay available through the session
+// wrapper without redeclaring them here.
+type SessionFindReferencesResult = FindReferencesResult | SessionInputError;
 
 type SessionGoToDefinitionResult = GoToResult | SessionInputError;
 

@@ -1,7 +1,6 @@
 import path from "node:path";
 import {
   JAVA_DOTTED_NAME_SOURCE,
-  KOTLIN_DOTTED_NAME_SOURCE,
   isRustItemStartBoundary,
   parseCsharpUsingDirective,
   parseJavaImportStatement,
@@ -17,6 +16,7 @@ import { GO_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../../util/ident
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { getPhpComposerImplicitFiles } from "../../util/resolution.js";
 import { extractRustModPathAttribute, resolveRustImportPath } from "../../util/resolution/rust.js";
+import { attributeNamedBindingRanges, maskImportBindingTrivia } from "./binding-ranges.js";
 import type { ImportBinding } from "../types.js";
 import type { ImportBindingSink, ImportResolver, ResolvedImportTarget } from "./context.js";
 
@@ -38,7 +38,9 @@ export function createStatementImportOverrideState(): StatementImportOverrideSta
   return { handledStatements: new Set() };
 }
 
-type ParsedJvmImportStatement = { kind: "star"; from: string } | { kind: "named"; from: string; imported: string };
+type ParsedJvmImportStatement =
+  | { kind: "star"; from: string }
+  | { kind: "named"; from: string; imported: string; explicitAlias?: boolean };
 
 function normalizeGoImports(context: LanguageSpecificImportContext): void {
   const imports = context.getBindings();
@@ -124,14 +126,24 @@ async function appendJavaTextImports(context: LanguageSpecificImportContext): Pr
     if (!imported) continue;
     const fromValue = isStatic ? parts.slice(0, -1).join(".") : rawSpec;
     const resolved = await context.resolveFrom(fromValue);
-    context.pushBinding({
+    const namedBinding: ImportBinding = {
       kind: "named",
       local: imported,
       imported,
       from: fromValue,
       resolved,
       typeOnly: false,
-    });
+    };
+    if (match.index !== undefined) {
+      attributeNamedBindingRanges({
+        bindings: [namedBinding],
+        fromIndex: 0,
+        text: maskImportBindingTrivia(match[0], context.languageId),
+        textStartIndex: match.index,
+        source: context.source,
+      });
+    }
+    context.pushBinding(namedBinding);
   }
 }
 
@@ -139,15 +151,18 @@ async function appendKotlinTextImports(context: LanguageSpecificImportContext): 
   if (context.languageId !== "kotlin" || context.getBindings().length) {
     return;
   }
+  const dottedNameWithTrivia = String.raw`${KOTLIN_IDENTIFIER_SOURCE}(?:\s*\.\s*${KOTLIN_IDENTIFIER_SOURCE})*`;
   const importPattern = new RegExp(
-    String.raw`^\s*import\s+(${KOTLIN_DOTTED_NAME_SOURCE}(?:\.\*)?)(?:\s+as\s+(${KOTLIN_IDENTIFIER_SOURCE}))?\s*;?\s*$`,
+    String.raw`^\s*import\s+(${dottedNameWithTrivia}(?:\s*\.\s*\*)?)(?:\s+as\s+(${KOTLIN_IDENTIFIER_SOURCE}))?\s*;?\s*$`,
     "gmu",
   );
-  for (const match of context.source.matchAll(importPattern)) {
+  const maskedSource = maskImportBindingTrivia(context.source, context.languageId);
+  for (const match of maskedSource.matchAll(importPattern)) {
     const rawSpec = match[1];
     if (!rawSpec) continue;
-    if (rawSpec.endsWith(".*")) {
-      const fromValue = rawSpec.slice(0, -2);
+    const normalizedSpec = rawSpec.replace(/\s+/gu, "");
+    if (normalizedSpec.endsWith(".*")) {
+      const fromValue = normalizedSpec.slice(0, -2);
       const resolved = await context.resolveFrom(fromValue);
       context.pushBinding({
         kind: "star",
@@ -158,18 +173,29 @@ async function appendKotlinTextImports(context: LanguageSpecificImportContext): 
       continue;
     }
 
-    const parts = rawSpec.split(".");
+    const parts = normalizedSpec.split(".");
     const imported = parts[parts.length - 1];
     if (!imported) continue;
-    const resolved = await context.resolveFrom(rawSpec);
-    context.pushBinding({
+    const resolved = await context.resolveFrom(normalizedSpec);
+    const namedBinding: ImportBinding = {
       kind: "named",
       local: match[2] ?? imported,
       imported,
-      from: rawSpec,
+      from: normalizedSpec,
+      ...(match[2] !== undefined ? { explicitAlias: true } : {}),
       resolved,
       typeOnly: false,
-    });
+    };
+    if (match.index !== undefined) {
+      attributeNamedBindingRanges({
+        bindings: [namedBinding],
+        fromIndex: 0,
+        text: maskImportBindingTrivia(match[0], context.languageId),
+        textStartIndex: match.index,
+        source: context.source,
+      });
+    }
+    context.pushBinding(namedBinding);
   }
 }
 
@@ -230,6 +256,7 @@ function pushCsharpOverride(
       local: parsed.alias,
       imported,
       from: fromValue,
+      explicitAlias: true,
       resolved,
       typeOnly,
     });
@@ -307,7 +334,7 @@ async function applyJvmStatementOverride<TParsed extends ParsedJvmImportStatemen
 
 async function pushJvmImportBinding(
   context: LanguageSpecificImportContext,
-  parsed: { kind: "star"; from: string } | { kind: "named"; from: string; imported: string },
+  parsed: { kind: "star"; from: string } | { kind: "named"; from: string; imported: string; explicitAlias?: boolean },
   local: string | undefined,
   typeOnly: boolean,
 ): Promise<boolean> {
@@ -327,6 +354,7 @@ async function pushJvmImportBinding(
     local: local ?? parsed.imported,
     imported: parsed.imported,
     from: parsed.from,
+    ...(parsed.explicitAlias ? { explicitAlias: true } : {}),
     resolved,
     typeOnly,
   });
@@ -456,7 +484,15 @@ function buildRustBinding(
   typeOnly: boolean,
 ): ImportBinding {
   if (parsed.kind === "member") {
-    return { kind: "named", local: parsed.local, imported: parsed.imported, from: parsed.from, resolved, typeOnly };
+    return {
+      kind: "named",
+      local: parsed.local,
+      imported: parsed.imported,
+      from: parsed.from,
+      ...(parsed.explicitAlias ? { explicitAlias: true } : {}),
+      resolved,
+      typeOnly,
+    };
   }
   if (parsed.kind === "module") {
     return { kind: "namespace", localNS: parsed.local, from: parsed.from, resolved, typeOnly };
@@ -494,7 +530,15 @@ async function appendRustTextImports(context: LanguageSpecificImportContext): Pr
     if (isRustCfgTestStatement(context.source, keywordText, keywordIndex)) continue;
     const parsedList = parseRustImportStatements(statement.text);
     if (!parsedList.length) continue;
+    const bindingCountBefore = context.getBindings().length;
     await pushParsedRustImports(context, parsedList, false, statement.start, seen);
+    attributeNamedBindingRanges({
+      bindings: context.getBindings(),
+      fromIndex: bindingCountBefore,
+      text: maskImportBindingTrivia(statement.text, context.languageId),
+      textStartIndex: statement.start,
+      source: context.source,
+    });
   }
 }
 
@@ -563,6 +607,7 @@ async function applyPhpStatementOverride(
       local: entry.local,
       imported: entry.imported,
       from: entry.from,
+      ...(entry.explicitAlias ? { explicitAlias: true } : {}),
       phpImportType: entry.importType,
       resolved,
       typeOnly,
@@ -584,17 +629,26 @@ export async function applyStatementImportOverride(
   const statementKey = statementImportOverrideKey(context.languageId, normalizedStmt, statementStartIndex);
   if (state.handledStatements.has(statementKey)) return true;
 
+  let parserStmt = normalizedStmt;
+  const canMaskStrings =
+    context.languageId !== "rust" && (context.languageId !== "php" || /^\s*use\b/i.test(normalizedStmt));
+  if (canMaskStrings) {
+    parserStmt = maskImportBindingTrivia(normalizedStmt, context.languageId);
+    if (context.languageId === "csharp" || context.languageId === "java" || context.languageId === "kotlin") {
+      parserStmt = parserStmt.replace(/\s*\.\s*/gu, ".");
+    }
+  }
   let handled = false;
   if (context.languageId === "csharp") {
-    handled = await applyCsharpStatementOverride(context, normalizedStmt, typeOnly);
+    handled = await applyCsharpStatementOverride(context, parserStmt, typeOnly);
   } else if (context.languageId === "java") {
-    handled = await applyJavaStatementOverride(context, normalizedStmt, typeOnly);
+    handled = await applyJavaStatementOverride(context, parserStmt, typeOnly);
   } else if (context.languageId === "kotlin") {
-    handled = await applyKotlinStatementOverride(context, normalizedStmt, typeOnly);
+    handled = await applyKotlinStatementOverride(context, parserStmt, typeOnly);
   } else if (context.languageId === "rust") {
     handled = await applyRustStatementOverride(context, normalizedStmt, typeOnly, statementStartIndex);
   } else if (context.languageId === "php") {
-    handled = await applyPhpStatementOverride(context, normalizedStmt, typeOnly);
+    handled = await applyPhpStatementOverride(context, parserStmt, typeOnly);
   }
 
   if (!handled) return false;
@@ -616,24 +670,29 @@ export function appendImplicitImportBinding(
     resolved: ResolvedImportTarget;
     typeOnly: boolean;
     stmtText: string;
+    /** UTF-16 start index of `stmtText` within the source file, when known. */
+    stmtStartIndex?: number;
+    source?: string;
     alias?: string;
     wildcard?: boolean;
   },
 ): void {
-  const { from, resolved, typeOnly, stmtText, alias, wildcard } = args;
+  const { from, resolved, typeOnly, stmtText, stmtStartIndex, source, alias, wildcard } = args;
+  const pushNamed = (binding: ImportBinding, alwaysAliased?: boolean): void =>
+    pushNamedImplicitBinding(context, binding, stmtText, stmtStartIndex, source, alwaysAliased);
   if (context.languageId === "java") {
     const parts = from.split(".");
     const last = parts[parts.length - 1];
     if (last === "*") {
       context.pushBinding({ kind: "star", from, resolved, typeOnly });
     } else if (last) {
-      context.pushBinding({ kind: "named", local: last, imported: last, from, resolved, typeOnly });
+      pushNamed({ kind: "named", local: last, imported: last, from, resolved, typeOnly });
     }
   } else if (context.languageId === "csharp") {
     if (alias) {
       const fromParts = from.split(".");
       const imported = fromParts[fromParts.length - 1] ?? alias;
-      context.pushBinding({ kind: "named", local: alias, imported, from, resolved, typeOnly });
+      pushNamed({ kind: "named", local: alias, imported, from, explicitAlias: true, resolved, typeOnly }, true);
     } else {
       context.pushBinding({ kind: "star", from, resolved, typeOnly });
     }
@@ -663,7 +722,7 @@ export function appendImplicitImportBinding(
       if (last === "*") {
         context.pushBinding({ kind: "star", from, resolved });
       } else {
-        context.pushBinding({ kind: "named", local: last, imported: last, from, resolved });
+        pushNamed({ kind: "named", local: last, imported: last, from, resolved });
       }
     }
   } else if (context.languageId === "kotlin") {
@@ -673,7 +732,15 @@ export function appendImplicitImportBinding(
       const parts = from.split(".");
       const imported = parts[parts.length - 1];
       if (imported)
-        context.pushBinding({ kind: "named", local: alias ?? imported, imported, from, resolved, typeOnly });
+        pushNamed({
+          kind: "named",
+          local: alias ?? imported,
+          imported,
+          from,
+          ...(alias !== undefined ? { explicitAlias: true } : {}),
+          resolved,
+          typeOnly,
+        });
     }
   } else if (context.languageId === "swift") {
     const parts = from.split(".");
@@ -683,11 +750,32 @@ export function appendImplicitImportBinding(
       context.pushBinding({ kind: "namespace", localNS: last, from, resolved, typeOnly });
       context.pushBinding({ kind: "star", from, resolved, typeOnly });
     } else {
-      context.pushBinding({ kind: "named", local: last, imported: last, from, resolved, typeOnly });
+      pushNamed({ kind: "named", local: last, imported: last, from, resolved, typeOnly });
     }
   } else if (context.languageId === "zig") {
     if (alias) context.pushBinding({ kind: "namespace", localNS: alias, from, resolved, typeOnly });
   } else if (context.languageId === "c" || context.languageId === "cpp") {
     context.pushBinding({ kind: "star", from, resolved, typeOnly });
   }
+}
+
+function pushNamedImplicitBinding(
+  context: LanguageSpecificImportContext,
+  binding: ImportBinding,
+  stmtText: string,
+  stmtStartIndex: number | undefined,
+  source: string | undefined,
+  alwaysAliased: boolean | undefined,
+): void {
+  if (stmtStartIndex !== undefined && source !== undefined) {
+    attributeNamedBindingRanges({
+      bindings: [binding],
+      fromIndex: 0,
+      text: maskImportBindingTrivia(stmtText, context.languageId),
+      textStartIndex: stmtStartIndex,
+      source,
+      ...(alwaysAliased !== undefined ? { alwaysAliased } : {}),
+    });
+  }
+  context.pushBinding(binding);
 }

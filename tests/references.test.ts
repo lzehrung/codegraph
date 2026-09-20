@@ -5,6 +5,7 @@ import fsp from "node:fs/promises";
 import * as indexer from "../src/indexer.js";
 import * as scopeModule from "../src/indexer/scope.js";
 import { getCachedReferenceCandidateFiles } from "../src/indexer/navigation-references.js";
+import { findUsageReferences } from "../src/indexer/navigation.js";
 import { createReferenceLookupCache } from "../src/impact/reference-cache.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import {
@@ -21,6 +22,67 @@ function expectReferenceAt(result: Awaited<ReturnType<typeof testFindReferences>
   expect(result.references.some((reference) => reference.file === file && reference.range.start.line === line)).toBe(
     true,
   );
+}
+
+function tokenColumn(line: string, token: string, occurrence = 0): number {
+  let fromIndex = 0;
+  for (let index = 0; index <= occurrence; index += 1) {
+    const found = line.indexOf(token, fromIndex);
+    if (found < 0) {
+      throw new Error(`Expected token ${token} in ${line}`);
+    }
+    if (index === occurrence) return found + 1;
+    fromIndex = found + token.length;
+  }
+  throw new Error(`Expected token ${token} in ${line}`);
+}
+
+function uniqueReferenceSiteCount(result: Awaited<ReturnType<typeof testFindReferences>>): number {
+  if (result.status !== "ok") return 0;
+  return new Set(
+    result.references.map(
+      (reference) =>
+        `${reference.file}:${reference.range.start.line}:${reference.range.start.column}:${reference.range.start.index}:${reference.range.end.line}:${reference.range.end.column}:${reference.range.end.index}`,
+    ),
+  ).size;
+}
+
+function findReferenceSite(
+  result: Awaited<ReturnType<typeof testFindReferences>>,
+  file: string,
+  line: number,
+  column: number,
+) {
+  if (result.status !== "ok") return undefined;
+  return result.references.find(
+    (reference) =>
+      reference.file === file && reference.range.start.line === line && reference.range.start.column === column,
+  );
+}
+
+function markCandidateParserDegraded(index: indexer.ProjectIndex, file: string): void {
+  const native = index.buildReport?.backend?.native ?? {
+    available: false,
+    enabled: false,
+    supportedLanguageIds: [],
+    filesUsed: 0,
+    filesFellBack: 0,
+    fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 0 },
+    byLanguage: {},
+    errors: [],
+  };
+  index.buildReport = {
+    timings: index.buildReport?.timings ?? {},
+    ...index.buildReport,
+    backend: {
+      native,
+      parser: {
+        total: 1,
+        byLanguage: { typescript: 1 },
+        files: [{ file, languageId: "typescript" }],
+      },
+    },
+  };
 }
 
 describe("Find References", () => {
@@ -83,6 +145,43 @@ describe("Find References", () => {
       });
       expect(cold.references).toContainEqual(expectedReexport);
       expect(warm.references).toContainEqual(expectedReexport);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("applies usage bounds after excluding re-export declarations", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-reexport-usage-bound-"));
+    try {
+      const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+      await fsp.writeFile(sourceFile, "export function target() { return 1; }\n", "utf8");
+      await fsp.writeFile(
+        consumerFile,
+        [
+          'export { target as first } from "./source";',
+          'export { target as second } from "./source";',
+          'import { target } from "./source";',
+          "target();",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+      const def = index.byFile.get(fileIdentityKey(sourceFile))?.locals.find((local) => local.localName === "target");
+      if (!def) throw new Error("Expected target definition");
+
+      const result = await findUsageReferences(index, { def }, { maxReferences: 1 });
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.references).toEqual([
+        expect.objectContaining({
+          file: consumerFile,
+          range: expect.objectContaining({ start: expect.objectContaining({ line: 4 }) }),
+        }),
+      ]);
+      expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -153,6 +252,9 @@ describe("Find References", () => {
       expectReferenceAt(result, schemaFile, 1);
       expectReferenceAt(result, alterFile, 1);
       expectReferenceAt(result, reportFile, 1);
+      if (result.status === "ok") {
+        expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
     });
 
     it("reuses SQL source and fact caches across repeated reference lookups", async () => {
@@ -484,6 +586,74 @@ describe("Find References", () => {
         await fsp.rm(root, { recursive: true, force: true });
       }
     });
+
+    it("keeps complete SQL coverage with the existing definition reference", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-unused-coverage-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        await fsp.writeFile(schemaFile, "CREATE TABLE unused_table (id integer);\n", "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile]);
+        const result = await indexer.findReferences(index, { file: schemaFile, line: 1, column: 16 });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(result.references).toHaveLength(1);
+        expect(result.references[0]?.file).toBe(schemaFile);
+        expect(result.references[0]?.range.start.line).toBe(1);
+        expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+    it("excludes SQL definitions and applies limits to usage-only reference scans", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-usage-bound-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(schemaFile, "CREATE TABLE users (id integer);\n", "utf8");
+        await fsp.writeFile(reportFile, "SELECT id FROM users;\nSELECT count(*) FROM users;\n", "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const result = await findUsageReferences(
+          index,
+          { file: schemaFile, line: 1, column: 16 },
+          { maxReferences: 1 },
+        );
+
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(result.references).toHaveLength(1);
+        expect(result.references[0]?.file).toBe(reportFile);
+        expect(result.references.some((reference) => reference.file === schemaFile)).toBe(false);
+        expect(result.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["truncated"],
+        });
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("marks a parser-degraded SQL candidate file as partial coverage", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-degraded-coverage-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(schemaFile, "CREATE TABLE users (id integer);\n", "utf8");
+        await fsp.writeFile(reportFile, "SELECT id FROM users;\n", "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+        markCandidateParserDegraded(index, reportFile);
+        const result = await indexer.findReferences(index, { file: schemaFile, line: 1, column: 16 });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expectReferenceAt(result, schemaFile, 1);
+        expect(result.referenceCoverage.state).toBe("partial");
+        expect(result.referenceCoverage.reasons).toEqual(["parser_degraded"]);
+        expect(result.referenceCoverage.affectedFiles).toEqual([reportFile]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("TypeScript enum references", () => {
@@ -500,14 +670,1036 @@ describe("Find References", () => {
         );
         const index = await createTestIndexFromFiles(root, [typesFile, consumerFile]);
 
+        const importedColumn = tokenColumn('import { Mode } from "./types";', "Mode");
+        const useColumn = tokenColumn("const selected = Mode.Light;", "Mode");
         const result = await testFindReferences(index, typesFile, 1, 13, [
           { file: typesFile, line: 1, column: 13 },
-          { file: consumerFile, line: 2, column: 18 },
+          { file: consumerFile, line: 1, column: importedColumn },
+          { file: consumerFile, line: 2, column: useColumn },
         ]);
 
         expect(result.status).toBe("ok");
         expectReferenceAt(result, typesFile, 1);
+        expectReferenceAt(result, consumerFile, 1);
         expectReferenceAt(result, consumerFile, 2);
+        if (result.status === "ok") {
+          const imported = result.references.find(
+            (reference) => reference.file === consumerFile && reference.range.start.line === 1,
+          );
+          expect(imported?.via?.importBinding).toBe("imported");
+          expect(imported?.via?.import).toBeDefined();
+          expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+    it("includes receiver-scan files in parser-degradation coverage", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-enum-member-coverage-"));
+      try {
+        const typesFile = path.join(root, "types.ts").replace(/\\/g, "/");
+        const barrelFile = path.join(root, "barrel.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(typesFile, "export enum Mode {\n  Light,\n}\n", "utf8");
+        await fsp.writeFile(barrelFile, 'export { Mode } from "./types";\n', "utf8");
+        await fsp.writeFile(
+          consumerFile,
+          ['import { Mode } from "./barrel";', "const selected = Mode.Light;", ""].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [typesFile, barrelFile, consumerFile]);
+        const def = index.byFile.get(fileIdentityKey(typesFile))?.locals.find((local) => local.localName === "Light");
+        if (!def) throw new Error("Expected enum member definition");
+        expect(getCachedReferenceCandidateFiles(index, def, [], false)).not.toContain(consumerFile);
+        markCandidateParserDegraded(index, consumerFile);
+
+        const result = await indexer.findReferences(index, { def });
+
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expectReferenceAt(result, consumerFile, 2);
+        expect(result.referenceCoverage.state).toBe("partial");
+        expect(result.referenceCoverage.reasons).toEqual(["parser_degraded"]);
+        expect(result.referenceCoverage.affectedFiles).toEqual([consumerFile]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("import binding references and coverage", () => {
+    it("counts a generic unused named import as an imported reference", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-only-refs-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export function target() { return 1; }\n", "utf8");
+        const consumerSource = 'import { target } from "./source";\n';
+        await fsp.writeFile(consumerFile, consumerSource, "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+        const importedColumn = tokenColumn('import { target } from "./source";', "target");
+        const result = await testFindReferences(index, sourceFile, 1, 17, [
+          { file: sourceFile, line: 1, column: 17 },
+          { file: consumerFile, line: 1, column: importedColumn },
+        ]);
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        const imported = result.references.find((reference) => reference.file === consumerFile);
+        expect(imported?.via?.importBinding).toBe("imported");
+        expect(imported?.via?.import).toBeDefined();
+        expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("returns imported and local tokens for an aliased named import", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-alias-refs-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export function target() { return 1; }\n", "utf8");
+        const importLine = 'import { target as localTarget } from "./source";';
+        await fsp.writeFile(consumerFile, [importLine, "localTarget();", ""].join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+        const importedColumn = tokenColumn(importLine, "target");
+        const localColumn = tokenColumn(importLine, "localTarget");
+        const useColumn = tokenColumn("localTarget();", "localTarget");
+        const result = await testFindReferences(index, sourceFile, 1, 17, [
+          { file: sourceFile, line: 1, column: 17 },
+          { file: consumerFile, line: 1, column: importedColumn },
+          { file: consumerFile, line: 1, column: localColumn },
+          { file: consumerFile, line: 2, column: useColumn },
+        ]);
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        const imported = result.references.find(
+          (reference) =>
+            reference.file === consumerFile &&
+            reference.range.start.line === 1 &&
+            reference.range.start.column === importedColumn,
+        );
+        const local = result.references.find(
+          (reference) =>
+            reference.file === consumerFile &&
+            reference.range.start.line === 1 &&
+            reference.range.start.column === localColumn,
+        );
+        const use = result.references.find(
+          (reference) => reference.file === consumerFile && reference.range.start.line === 2,
+        );
+        expect(imported?.via?.importBinding).toBe("imported");
+        expect(local?.via?.importBinding).toBe("local");
+        expect(use?.via?.import).toBeDefined();
+        expect(use?.via?.importBinding).toBeUndefined();
+        expect(uniqueReferenceSiteCount(result)).toBe(result.references.length);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("returns the imported token for a type-only import and its type uses", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-type-only-refs-"));
+      try {
+        const typesFile = path.join(root, "types.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(typesFile, 'export type Mode = "light" | "dark";\n', "utf8");
+        const importLine = 'import type { Mode } from "./types";';
+        const useLine = 'const value: Mode = "light";';
+        await fsp.writeFile(consumerFile, [importLine, useLine, ""].join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [typesFile, consumerFile]);
+        const importedColumn = tokenColumn(importLine, "Mode");
+        const useColumn = tokenColumn(useLine, "Mode");
+        const result = await testFindReferences(index, typesFile, 1, 13, [
+          { file: typesFile, line: 1, column: 13 },
+          { file: consumerFile, line: 1, column: importedColumn },
+          { file: consumerFile, line: 2, column: useColumn },
+        ]);
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        const imported = result.references.find(
+          (reference) => reference.file === consumerFile && reference.range.start.line === 1,
+        );
+        expect(imported?.via?.importBinding).toBe("imported");
+        expect(imported?.via?.import?.typeOnly).toBe(true);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("returns a default import local token after it resolves to the definition", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-default-refs-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export default function run() { return 1; }\n", "utf8");
+        const importLine = 'import run from "./source";';
+        await fsp.writeFile(consumerFile, [importLine, "run();", ""].join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+        const localColumn = tokenColumn(importLine, "run");
+        const useColumn = tokenColumn("run();", "run");
+        const result = await testFindReferences(index, sourceFile, 1, 25, [
+          { file: sourceFile, line: 1, column: 25 },
+          { file: consumerFile, line: 1, column: localColumn },
+          { file: consumerFile, line: 2, column: useColumn },
+        ]);
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        const local = result.references.find(
+          (reference) => reference.file === consumerFile && reference.range.start.line === 1,
+        );
+        expect(local?.via?.importBinding).toBe("local");
+        expect(local?.via?.import).toBeDefined();
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("unifies direct and barrel import tokens without duplicate ranges", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-barrel-refs-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const barrelFile = path.join(root, "barrel.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export function target() { return 1; }\n", "utf8");
+        await fsp.writeFile(barrelFile, 'export { target } from "./source";\n', "utf8");
+        const importLine = 'import { target } from "./barrel";';
+        await fsp.writeFile(consumerFile, [importLine, "target();", ""].join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, barrelFile, consumerFile]);
+        const result = await indexer.findReferences(index, { file: sourceFile, line: 1, column: 17 });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        const imported = result.references.find(
+          (reference) => reference.file === consumerFile && reference.range.start.line === 1,
+        );
+        const use = result.references.find(
+          (reference) => reference.file === consumerFile && reference.range.start.line === 2,
+        );
+        const reexport = result.references.find((reference) => reference.file === barrelFile);
+        expect(imported?.via?.importBinding).toBe("imported");
+        expect(imported?.via?.import).toBeDefined();
+        expect(use?.via?.import).toBeDefined();
+        expect(use?.via?.importBinding).toBeUndefined();
+        expect(reexport?.via?.reexport).toBe(true);
+        expect(uniqueReferenceSiteCount(result)).toBe(result.references.length);
+        const consumerImportSites = result.references.filter(
+          (reference) => reference.file === consumerFile && reference.range.start.line === 1,
+        );
+        expect(consumerImportSites).toHaveLength(1);
+        expect(result.referenceCoverage.state).toBe("complete");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not count a namespace import declaration as a per-export reference", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-namespace-refs-"));
+      try {
+        const typesFile = path.join(root, "types.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(typesFile, "export enum Mode {\n  Light,\n}\n", "utf8");
+        await fsp.writeFile(
+          consumerFile,
+          ['import * as shared from "./types";', "const selected = shared.Mode;", ""].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [typesFile, consumerFile]);
+        const result = await indexer.findReferences(index, { file: typesFile, line: 1, column: 13 });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(
+          result.references.some(
+            (reference) => reference.file === consumerFile && reference.via?.importBinding !== undefined,
+          ),
+        ).toBe(false);
+        const member = result.references.find(
+          (reference) => reference.file === consumerFile && reference.via?.namespaceMember === "Mode",
+        );
+        expect(member).toBeDefined();
+        expect(member?.range.start.line).toBe(2);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not attribute shadowed local uses to an imported binding", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-shadow-refs-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export function target() { return 1; }\n", "utf8");
+        await fsp.writeFile(
+          consumerFile,
+          [
+            'import { target } from "./source";',
+            "function wrap() {",
+            "  const target = 2;",
+            "  return target;",
+            "}",
+            "export const used = target;",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+        const result = await indexer.findReferences(index, { file: sourceFile, line: 1, column: 17 });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(
+          result.references.some((reference) => reference.file === consumerFile && reference.range.start.line === 3),
+        ).toBe(false);
+        expect(
+          result.references.some((reference) => reference.file === consumerFile && reference.range.start.line === 4),
+        ).toBe(false);
+        expectReferenceAt(result, consumerFile, 1);
+        expectReferenceAt(result, consumerFile, 6);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("marks parser-degraded candidate files as partial coverage", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-degraded-refs-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export function target() { return 1; }\n", "utf8");
+        await fsp.writeFile(consumerFile, 'import { target } from "./source";\ntarget();\n', "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+        markCandidateParserDegraded(index, consumerFile);
+        const result = await indexer.findReferences(index, { file: sourceFile, line: 1, column: 17 });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(result.referenceCoverage.state).toBe("partial");
+        expect(result.referenceCoverage.reasons).toEqual(["parser_degraded"]);
+        expect(result.referenceCoverage.affectedFiles).toEqual([consumerFile]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("marks coverage partial when the degraded-file report omits a candidate after its cap", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-capped-degraded-refs-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export function target() { return 1; }\n", "utf8");
+        await fsp.writeFile(consumerFile, 'import { target } from "./source";\ntarget();\n', "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+        markCandidateParserDegraded(index, path.join(root, "listed.ts").replace(/\\/g, "/"));
+        const parser = index.buildReport?.backend?.parser;
+        if (!parser) throw new Error("Expected parser degradation report");
+        parser.total = 21;
+        parser.files = Array.from({ length: 20 }, (_, entryIndex) => ({
+          file: path.join(root, `listed-${entryIndex}.ts`).replace(/\\/g, "/"),
+          languageId: "typescript",
+        }));
+
+        const result = await indexer.findReferences(index, { file: sourceFile, line: 1, column: 17 });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(result.referenceCoverage.state).toBe("partial");
+        expect(result.referenceCoverage.reasons).toEqual(["parser_degraded"]);
+        expect(result.referenceCoverage.affectedFiles).toBeUndefined();
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not lower coverage for an unrelated unresolved same-name import", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-unrelated-unresolved-refs-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const otherFile = path.join(root, "other.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export function Mode() { return 1; }\n", "utf8");
+        await fsp.writeFile(otherFile, 'import { Mode } from "not-a-real-package";\n', "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, otherFile]);
+        const result = await indexer.findReferences(index, { file: sourceFile, line: 1, column: 17 });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        expect(result.references.some((reference) => reference.file === otherFile)).toBe(false);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("reports unresolved_import only for a structurally linked unresolved name", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-linked-unresolved-refs-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export function target() { return 1; }\n", "utf8");
+        await fsp.writeFile(consumerFile, 'import { target } from "./source";\n', "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+        const sourceModule = index.byFile.get(fileIdentityKey(sourceFile));
+        const def = sourceModule?.locals.find((local) => local.localName === "target");
+        if (!sourceModule || !def) throw new Error("Expected source definition");
+        sourceModule.exports = [];
+        sourceModule.locals = sourceModule.locals.filter((local) => local.localName !== "target");
+        index.exportCache.clear();
+        const result = await indexer.findReferences(index, { def });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(result.referenceCoverage.state).toBe("partial");
+        expect(result.referenceCoverage.reasons).toEqual(["unresolved_import"]);
+        expect(result.referenceCoverage.affectedFiles).toEqual([consumerFile]);
+        expect(result.references.some((reference) => reference.file === consumerFile)).toBe(false);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+    it("reports unresolved imports through an aliased re-export chain", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-aliased-reexport-unresolved-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const barrelFile = path.join(root, "barrel.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export function target() { return 1; }\n", "utf8");
+        await fsp.writeFile(barrelFile, 'export { target as renamed } from "./source";\n', "utf8");
+        await fsp.writeFile(consumerFile, 'import { renamed } from "./barrel";\n', "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, barrelFile, consumerFile]);
+        const sourceModule = index.byFile.get(fileIdentityKey(sourceFile));
+        const def = sourceModule?.locals.find((local) => local.localName === "target");
+        if (!sourceModule || !def) throw new Error("Expected source definition");
+        sourceModule.exports = [];
+        sourceModule.locals = sourceModule.locals.filter((local) => local.localName !== "target");
+        index.exportCache.clear();
+
+        const result = await indexer.findReferences(index, { def });
+
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(result.referenceCoverage.state).toBe("partial");
+        expect(result.referenceCoverage.reasons).toContain("unresolved_import");
+        expect(result.referenceCoverage.affectedFiles).toContain(consumerFile);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not lower coverage for an unrelated alias on a barrel that also reaches the definition", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-aliased-reexport-unrelated-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const otherFile = path.join(root, "other.ts").replace(/\\/g, "/");
+        const barrelFile = path.join(root, "barrel.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export function target() { return 1; }\n", "utf8");
+        await fsp.writeFile(otherFile, "export function other() { return 2; }\n", "utf8");
+        await fsp.writeFile(
+          barrelFile,
+          ['export { target as renamed } from "./source";', 'export { other as target } from "./other";', ""].join(
+            "\n",
+          ),
+          "utf8",
+        );
+        await fsp.writeFile(consumerFile, 'import { target } from "./barrel";\ntarget();\n', "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, otherFile, barrelFile, consumerFile]);
+
+        const result = await indexer.findReferences(index, { file: sourceFile, line: 1, column: 17 });
+
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        expect(result.references.some((reference) => reference.file === consumerFile)).toBe(false);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("marks exact maxReferences truncation as partial coverage", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-truncation-refs-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export function target() { return 1; }\n", "utf8");
+        await fsp.writeFile(consumerFile, 'import { target } from "./source";\ntarget();\n', "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+        const result = await indexer.findReferences(
+          index,
+          { file: sourceFile, line: 1, column: 17 },
+          { maxReferences: 1 },
+        );
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(result.references).toHaveLength(1);
+        expect(result.referenceCoverage.state).toBe("partial");
+        expect(result.referenceCoverage.reasons).toEqual(["truncated"]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("preserves coverage when the reference cache bounds a complete result", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-import-cache-bound-refs-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export function target() { return 1; }\n", "utf8");
+        await fsp.writeFile(consumerFile, 'import { target } from "./source";\ntarget();\n', "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+        const def = index.byFile.get(fileIdentityKey(sourceFile))?.locals.find((local) => local.localName === "target");
+        if (!def) throw new Error("Expected target definition");
+        const cache = createReferenceLookupCache();
+        const unbounded = await cache.get(index, def);
+        const bounded = await cache.get(index, def, { maxReferences: 1 });
+        const unboundedAgain = await cache.get(index, def);
+        expect(unbounded.status).toBe("ok");
+        expect(bounded.status).toBe("ok");
+        expect(unboundedAgain.status).toBe("ok");
+        if (unbounded.status !== "ok" || bounded.status !== "ok" || unboundedAgain.status !== "ok") return;
+        expect(unbounded.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        expect(bounded.references).toHaveLength(1);
+        expect(bounded.referenceCoverage.state).toBe("partial");
+        expect(bounded.referenceCoverage.reasons).toEqual(["truncated"]);
+        expect(unboundedAgain.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        expect(unboundedAgain.references.length).toBeGreaterThan(1);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps complete indexed-candidate coverage for an unused export", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-unused-export-coverage-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export function unused() { return 1; }\n", "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile]);
+        const result = await indexer.findReferences(index, { file: sourceFile, line: 1, column: 17 });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(result.references).toHaveLength(1);
+        expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps complete coverage for an unused export when maxReferences is 1", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-unused-export-maxrefs-coverage-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export function unused() { return 1; }\n", "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile]);
+        const result = await indexer.findReferences(
+          index,
+          { file: sourceFile, line: 1, column: 17 },
+          { maxReferences: 1 },
+        );
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(result.references).toHaveLength(1);
+        expect(result.references[0]?.file).toBe(sourceFile);
+        expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("applies the import-binding contract to const enum owners", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-const-enum-import-refs-"));
+      try {
+        const typesFile = path.join(root, "types.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(typesFile, "export const enum Mode {\n  Light,\n}\n", "utf8");
+        const importLine = 'import { Mode } from "./types";';
+        const useLine = "const selected = Mode.Light;";
+        await fsp.writeFile(consumerFile, [importLine, useLine, ""].join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [typesFile, consumerFile]);
+        const importedColumn = tokenColumn(importLine, "Mode");
+        const useColumn = tokenColumn(useLine, "Mode");
+        const result = await testFindReferences(index, typesFile, 1, 19, [
+          { file: typesFile, line: 1, column: 19 },
+          { file: consumerFile, line: 1, column: importedColumn },
+          { file: consumerFile, line: 2, column: useColumn },
+        ]);
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        const imported = result.references.find(
+          (reference) => reference.file === consumerFile && reference.range.start.line === 1,
+        );
+        expect(imported?.via?.importBinding).toBe("imported");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("cross-language import binding references", () => {
+    const cases: Array<{
+      label: string;
+      files: Record<string, string>;
+      sourceFile: string;
+      consumerFile: string;
+      exportedName: string;
+      importedName: string;
+      importedOccurrence?: number;
+      localName?: string;
+      localOccurrence?: number;
+      definitionLine: number;
+      importLine: number;
+      usageLine: number;
+      usageName: string;
+    }> = [
+      {
+        label: "Java unaliased import",
+        files: {
+          "pkg/Target.java": ["package pkg;", "public class Target {}", ""].join("\n"),
+          "Consumer.java": ["import pkg.Target;", "class Consumer {", "  Target value;", "}", ""].join("\n"),
+        },
+        sourceFile: "pkg/Target.java",
+        consumerFile: "Consumer.java",
+        exportedName: "Target",
+        importedName: "Target",
+        definitionLine: 2,
+        importLine: 1,
+        usageLine: 3,
+        usageName: "Target",
+      },
+      {
+        label: "Kotlin explicit alias",
+        files: {
+          "pkg/Target.kt": ["package pkg", "class Target", ""].join("\n"),
+          "Consumer.kt": ["import pkg.Target as LocalTarget", "fun use() {", "  LocalTarget()", "}", ""].join("\n"),
+        },
+        sourceFile: "pkg/Target.kt",
+        consumerFile: "Consumer.kt",
+        exportedName: "Target",
+        importedName: "Target",
+        localName: "LocalTarget",
+        definitionLine: 2,
+        importLine: 1,
+        usageLine: 3,
+        usageName: "LocalTarget",
+      },
+      {
+        label: "Python explicit alias",
+        files: {
+          "source.py": ["def target():", "    return 1", ""].join("\n"),
+          "consumer.py": ["from source import target as local_target", "local_target()", ""].join("\n"),
+        },
+        sourceFile: "source.py",
+        consumerFile: "consumer.py",
+        exportedName: "target",
+        importedName: "target",
+        localName: "local_target",
+        definitionLine: 1,
+        importLine: 1,
+        usageLine: 2,
+        usageName: "local_target",
+      },
+      {
+        label: "PHP grouped alias",
+        files: {
+          "source.php": ["<?php", "namespace App;", "class Target", "{", "}", ""].join("\n"),
+          "consumer.php": [
+            "<?php",
+            "use App\\{Target /* Target */ as LocalTarget /* LocalTarget */};",
+            "$x = new LocalTarget();",
+            "",
+          ].join("\n"),
+        },
+        sourceFile: "source.php",
+        consumerFile: "consumer.php",
+        exportedName: "Target",
+        importedName: "Target",
+        localName: "LocalTarget",
+        definitionLine: 3,
+        importLine: 2,
+        usageLine: 3,
+        usageName: "LocalTarget",
+      },
+      {
+        label: "Rust grouped alias",
+        files: {
+          "source.rs": ["pub fn target() {}", ""].join("\n"),
+          "consumer.rs": [
+            "mod source;",
+            "use source::{target as local_target};",
+            "fn run() {",
+            "    local_target();",
+            "}",
+            "",
+          ].join("\n"),
+        },
+        sourceFile: "source.rs",
+        consumerFile: "consumer.rs",
+        exportedName: "target",
+        importedName: "target",
+        localName: "local_target",
+        definitionLine: 1,
+        importLine: 2,
+        usageLine: 4,
+        usageName: "local_target",
+      },
+      {
+        label: "C# alias using",
+        files: {
+          "Utils.cs": ["namespace Utils {", "  public class Target {}", "}", ""].join("\n"),
+          "Consumer.cs": ["using AliasType = Utils.Target;", "class Consumer {", "  AliasType value;", "}", ""].join(
+            "\n",
+          ),
+        },
+        sourceFile: "Utils.cs",
+        consumerFile: "Consumer.cs",
+        exportedName: "Target",
+        importedName: "Target",
+        localName: "AliasType",
+        definitionLine: 2,
+        importLine: 1,
+        usageLine: 3,
+        usageName: "AliasType",
+      },
+      {
+        label: "Swift dotted symbol import",
+        files: {
+          "Utils.swift": ["public struct Target {}", ""].join("\n"),
+          "Consumer.swift": [
+            "import struct Utils.Target /* outer /* inner */ Target */ // Target",
+            "func use() {",
+            "  Target()",
+            "}",
+            "",
+          ].join("\n"),
+        },
+        sourceFile: "Utils.swift",
+        consumerFile: "Consumer.swift",
+        exportedName: "Target",
+        importedName: "Target",
+        definitionLine: 1,
+        importLine: 1,
+        usageLine: 3,
+        usageName: "Target",
+      },
+      {
+        label: "JavaScript destructured CommonJS require",
+        files: {
+          "source.js": "export function target() { return 1; }\n",
+          "consumer.js": [
+            'const { target: localTarget /* target: localTarget */ } = require("./source");',
+            "localTarget();",
+            "",
+          ].join("\n"),
+        },
+        sourceFile: "source.js",
+        consumerFile: "consumer.js",
+        exportedName: "target",
+        importedName: "target",
+        localName: "localTarget",
+        definitionLine: 1,
+        importLine: 1,
+        usageLine: 2,
+        usageName: "localTarget",
+      },
+      {
+        label: "TypeScript same-spelling alias",
+        files: {
+          "source.ts": "export class Target {}\n",
+          "consumer.ts": ['import { Target as Target } from "./source";', "new Target();", ""].join("\n"),
+        },
+        sourceFile: "source.ts",
+        consumerFile: "consumer.ts",
+        exportedName: "Target",
+        importedName: "Target",
+        localName: "Target",
+        localOccurrence: 1,
+        definitionLine: 1,
+        importLine: 1,
+        usageLine: 2,
+        usageName: "Target",
+      },
+      {
+        label: "Python same-spelling alias",
+        files: {
+          "source.py": "class Target:\n    pass\n",
+          "consumer.py": ["from source import Target as Target", "Target()", ""].join("\n"),
+        },
+        sourceFile: "source.py",
+        consumerFile: "consumer.py",
+        exportedName: "Target",
+        importedName: "Target",
+        localName: "Target",
+        localOccurrence: 1,
+        definitionLine: 1,
+        importLine: 1,
+        usageLine: 2,
+        usageName: "Target",
+      },
+      {
+        label: "PHP same-spelling alias",
+        files: {
+          "source.php": ["<?php", "namespace App;", "class Target {}", ""].join("\n"),
+          "consumer.php": ["<?php", "use App\\Target as Target;", "new Target();", ""].join("\n"),
+        },
+        sourceFile: "source.php",
+        consumerFile: "consumer.php",
+        exportedName: "Target",
+        importedName: "Target",
+        localName: "Target",
+        localOccurrence: 1,
+        definitionLine: 3,
+        importLine: 2,
+        usageLine: 3,
+        usageName: "Target",
+      },
+      {
+        label: "Rust same-spelling alias",
+        files: {
+          "source.rs": "pub fn target() {}\n",
+          "consumer.rs": ["mod source;", "use source::target as target;", "fn run() { target(); }", ""].join("\n"),
+        },
+        sourceFile: "source.rs",
+        consumerFile: "consumer.rs",
+        exportedName: "target",
+        importedName: "target",
+        localName: "target",
+        localOccurrence: 1,
+        definitionLine: 1,
+        importLine: 2,
+        usageLine: 3,
+        usageName: "target",
+      },
+      {
+        label: "Kotlin same-spelling alias",
+        files: {
+          "pkg/Target.kt": ["package pkg", "class Target", ""].join("\n"),
+          "Consumer.kt": [
+            "import pkg./* outer /* inner */ Target */Target as Target // Target",
+            "fun use() { Target() }",
+            "",
+          ].join("\n"),
+        },
+        importedOccurrence: 1,
+        sourceFile: "pkg/Target.kt",
+        consumerFile: "Consumer.kt",
+        exportedName: "Target",
+        importedName: "Target",
+        localName: "Target",
+        localOccurrence: 2,
+        definitionLine: 2,
+        importLine: 1,
+        usageLine: 2,
+        usageName: "Target",
+      },
+      {
+        label: "C# same-spelling alias",
+        files: {
+          "Utils.cs": ["namespace Utils {", "  public class Target {}", "}", ""].join("\n"),
+          "Consumer.cs": ["using Target = Utils.Target;", "class Consumer { Target value; }", ""].join("\n"),
+        },
+        sourceFile: "Utils.cs",
+        consumerFile: "Consumer.cs",
+        exportedName: "Target",
+        importedName: "Target",
+        importedOccurrence: 1,
+        localName: "Target",
+        localOccurrence: 0,
+        definitionLine: 2,
+        importLine: 1,
+        usageLine: 2,
+        usageName: "Target",
+      },
+      {
+        label: "CommonJS same-spelling alias",
+        files: {
+          "source.js": "export function target() { return 1; }\n",
+          "consumer.js": ['const { target: target } = require("./source");', "target();", ""].join("\n"),
+        },
+        sourceFile: "source.js",
+        consumerFile: "consumer.js",
+        exportedName: "target",
+        importedName: "target",
+        localName: "target",
+        localOccurrence: 1,
+        definitionLine: 1,
+        importLine: 1,
+        usageLine: 2,
+        usageName: "target",
+      },
+    ];
+
+    for (const testCase of cases) {
+      it(`returns import declaration tokens for ${testCase.label}`, async () => {
+        const root = await fsp.mkdtemp(
+          path.join(os.tmpdir(), `cg-xl-import-${testCase.label.toLowerCase().replace(/\s+/g, "-")}-`),
+        );
+        try {
+          const written = new Map<string, string>();
+          for (const [relativePath, contents] of Object.entries(testCase.files)) {
+            const absolutePath = path.join(root, relativePath).replace(/\\/g, "/");
+            await fsp.mkdir(path.dirname(absolutePath), { recursive: true });
+            await fsp.writeFile(absolutePath, contents, "utf8");
+            written.set(relativePath, absolutePath);
+          }
+          const sourceFile = written.get(testCase.sourceFile);
+          const consumerFile = written.get(testCase.consumerFile);
+          if (!sourceFile || !consumerFile) throw new Error(`Expected files for ${testCase.label}`);
+
+          const sourceLine = (testCase.files[testCase.sourceFile] ?? "").split("\n")[testCase.definitionLine - 1] ?? "";
+          const importSource = (testCase.files[testCase.consumerFile] ?? "").split("\n")[testCase.importLine - 1] ?? "";
+          const usageSource = (testCase.files[testCase.consumerFile] ?? "").split("\n")[testCase.usageLine - 1] ?? "";
+          const definitionColumn = tokenColumn(sourceLine, testCase.exportedName);
+          const importedColumn = tokenColumn(importSource, testCase.importedName, testCase.importedOccurrence ?? 0);
+          const localColumn = testCase.localName
+            ? tokenColumn(importSource, testCase.localName, testCase.localOccurrence ?? 0)
+            : undefined;
+          const usageColumn = tokenColumn(usageSource, testCase.usageName);
+          const expected = [
+            { file: sourceFile, line: testCase.definitionLine, column: definitionColumn },
+            { file: consumerFile, line: testCase.importLine, column: importedColumn },
+            ...(localColumn === undefined
+              ? []
+              : [{ file: consumerFile, line: testCase.importLine, column: localColumn }]),
+            { file: consumerFile, line: testCase.usageLine, column: usageColumn },
+          ];
+
+          const index = await createTestIndexFromFiles(root, [...written.values()]);
+          const result = await testFindReferences(
+            index,
+            sourceFile,
+            testCase.definitionLine,
+            definitionColumn,
+            expected,
+          );
+
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") return;
+          const imported = findReferenceSite(result, consumerFile, testCase.importLine, importedColumn);
+          const usage = findReferenceSite(result, consumerFile, testCase.usageLine, usageColumn);
+          expect(imported?.via?.importBinding).toBe("imported");
+          expect(imported?.via?.import).toBeDefined();
+          if (localColumn !== undefined) {
+            const local = findReferenceSite(result, consumerFile, testCase.importLine, localColumn);
+            expect(local?.via?.importBinding).toBe("local");
+            expect(local?.via?.import).toBeDefined();
+            expect(local?.range.start.column).not.toBe(imported?.range.start.column);
+          } else {
+            expect(
+              result.references.some(
+                (reference) =>
+                  reference.file === consumerFile &&
+                  reference.range.start.line === testCase.importLine &&
+                  reference.via?.importBinding === "local",
+              ),
+            ).toBe(false);
+          }
+          expect(usage?.via?.import).toBeDefined();
+          expect(usage?.via?.importBinding).toBeUndefined();
+          expect(uniqueReferenceSiteCount(result)).toBe(result.references.length);
+        } finally {
+          await fsp.rm(root, { recursive: true, force: true });
+        }
+      });
+    }
+
+    it("keeps CommonJS default-value references out of the local binding declaration range", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cjs-binding-default-"));
+      try {
+        const sourceFile = path.join(root, "source.js").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.js").replace(/\\/g, "/");
+        const sourceLine = "export function target() { return 1; }";
+        const importLine = 'const { target: localTarget = localTarget } = require("./source");';
+        await fsp.writeFile(sourceFile, `${sourceLine}\n`, "utf8");
+        await fsp.writeFile(consumerFile, `${importLine}\nlocalTarget();\n`, "utf8");
+
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+        const result = await indexer.findReferences(index, {
+          file: sourceFile,
+          line: 1,
+          column: tokenColumn(sourceLine, "target"),
+        });
+
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        const importedColumn = tokenColumn(importLine, "target");
+        const localBindingColumn = tokenColumn(importLine, "localTarget");
+        const defaultReferenceColumn = tokenColumn(importLine, "localTarget", 1);
+        expect(findReferenceSite(result, consumerFile, 1, importedColumn)?.via?.importBinding).toBe("imported");
+        expect(findReferenceSite(result, consumerFile, 1, localBindingColumn)?.via?.importBinding).toBe("local");
+        expect(
+          result.references.some(
+            (reference) =>
+              reference.file === consumerFile &&
+              reference.range.start.line === 1 &&
+              reference.range.start.column === defaultReferenceColumn &&
+              reference.via?.importBinding !== undefined,
+          ),
+        ).toBe(false);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps grouped import aliases from claiming another binding's same-spelled token", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-xl-import-grouped-alias-collision-"));
+      try {
+        const sourceFile = path.join(root, "source.rs").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.rs").replace(/\\/g, "/");
+        const source = ["pub fn Bar() {}", "pub fn Baz() {}", ""].join("\n");
+        const importLine = "use source::{Bar /* Bar /* Bar */ Bar */ as X, Baz as Bar};";
+        const consumer = ["mod source;", importLine, "fn run() {", "    X();", "    Bar();", "}", ""].join("\n");
+        await fsp.writeFile(sourceFile, source, "utf8");
+        await fsp.writeFile(consumerFile, consumer, "utf8");
+
+        const barDefinitionColumn = tokenColumn("pub fn Bar() {}", "Bar");
+        const bazDefinitionColumn = tokenColumn("pub fn Baz() {}", "Baz");
+        const importedBarColumn = tokenColumn(importLine, "Bar");
+        const localXColumn = tokenColumn(importLine, "X");
+        const importedBazColumn = tokenColumn(importLine, "Baz");
+        const commentBarColumn = tokenColumn(importLine, "Bar", 1);
+        const localBarColumn = tokenColumn(importLine, "Bar", 4);
+        const usageXColumn = tokenColumn("    X();", "X");
+        const usageBarColumn = tokenColumn("    Bar();", "Bar");
+        expect(importedBarColumn).not.toBe(localBarColumn);
+
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+        const barResult = await testFindReferences(index, sourceFile, 1, barDefinitionColumn, [
+          { file: sourceFile, line: 1, column: barDefinitionColumn },
+          { file: consumerFile, line: 2, column: importedBarColumn },
+          { file: consumerFile, line: 2, column: localXColumn },
+          { file: consumerFile, line: 4, column: usageXColumn },
+        ]);
+        expect(barResult.status).toBe("ok");
+        if (barResult.status !== "ok") return;
+        const barImported = findReferenceSite(barResult, consumerFile, 2, importedBarColumn);
+        const barLocal = findReferenceSite(barResult, consumerFile, 2, localXColumn);
+        const barUsage = findReferenceSite(barResult, consumerFile, 4, usageXColumn);
+        expect(barImported?.via?.importBinding).toBe("imported");
+        expect(barImported?.via?.import).toMatchObject({ imported: "Bar", local: "X" });
+        expect(barLocal?.via?.importBinding).toBe("local");
+        expect(barLocal?.via?.import).toMatchObject({ imported: "Bar", local: "X" });
+        expect(barLocal?.range.start.column).not.toBe(barImported?.range.start.column);
+        expect(barUsage?.via?.import).toBeDefined();
+        expect(barUsage?.via?.importBinding).toBeUndefined();
+        expect(findReferenceSite(barResult, consumerFile, 2, localBarColumn)).toBeUndefined();
+        expect(findReferenceSite(barResult, consumerFile, 2, importedBazColumn)).toBeUndefined();
+        expect(findReferenceSite(barResult, consumerFile, 2, commentBarColumn)).toBeUndefined();
+        expect(uniqueReferenceSiteCount(barResult)).toBe(barResult.references.length);
+
+        const bazResult = await testFindReferences(index, sourceFile, 2, bazDefinitionColumn, [
+          { file: sourceFile, line: 2, column: bazDefinitionColumn },
+          { file: consumerFile, line: 2, column: importedBazColumn },
+          { file: consumerFile, line: 2, column: localBarColumn },
+          { file: consumerFile, line: 5, column: usageBarColumn },
+        ]);
+        expect(bazResult.status).toBe("ok");
+        if (bazResult.status !== "ok") return;
+        const bazImported = findReferenceSite(bazResult, consumerFile, 2, importedBazColumn);
+        const bazLocal = findReferenceSite(bazResult, consumerFile, 2, localBarColumn);
+        const bazUsage = findReferenceSite(bazResult, consumerFile, 5, usageBarColumn);
+        expect(bazImported?.via?.importBinding).toBe("imported");
+        expect(bazImported?.via?.import).toMatchObject({ imported: "Baz", local: "Bar" });
+        expect(bazLocal?.via?.importBinding).toBe("local");
+        expect(bazLocal?.via?.import).toMatchObject({ imported: "Baz", local: "Bar" });
+        expect(bazLocal?.range.start.column).not.toBe(bazImported?.range.start.column);
+        expect(bazUsage?.via?.import).toBeDefined();
+        expect(bazUsage?.via?.importBinding).toBeUndefined();
+        expect(findReferenceSite(bazResult, consumerFile, 2, importedBarColumn)).toBeUndefined();
+        expect(findReferenceSite(bazResult, consumerFile, 2, localXColumn)).toBeUndefined();
+        expect(findReferenceSite(bazResult, consumerFile, 2, commentBarColumn)).toBeUndefined();
+        expect(uniqueReferenceSiteCount(bazResult)).toBe(bazResult.references.length);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
@@ -1070,12 +2262,14 @@ describe("Find References", () => {
         const result = await indexer.findReferences(
           index,
           { file: buttonFile.replace(/\\/g, "/"), line: 1, column: 17 },
-          { context: "block", blockMaxLines: 50, maxReferences: 2 },
+          { context: "block", blockMaxLines: 50, maxReferences: 5 },
         );
 
         expect(result.status).toBe("ok");
         if (result.status === "ok") {
-          const appReference = result.references.find((reference) => reference.file === appFile.replace(/\\/g, "/"));
+          const appReference = result.references.find(
+            (reference) => reference.file === appFile.replace(/\\/g, "/") && reference.range.start.line === 8,
+          );
           expect(appReference?.context).toContain("function App()");
           expect(appReference?.context).toContain('<Button label="hi" />');
           expect(appReference?.context).not.toContain("function unrelated()");
@@ -2432,6 +3626,9 @@ describe("Find References", () => {
         expect(localResult.status).toBe("ok");
         if (localResult.status === "ok") {
           const expectedLocalSites = [
+            [mainFile, 1],
+            [mainFile, 3],
+            [mainFile, 3],
             ...testCase.localLines
               .slice(1)
               .filter((line) => line !== 31)
@@ -2497,6 +3694,7 @@ describe("Find References", () => {
                 reference.range.start.line,
               ]);
               expect(firstReferences).toEqual([
+                [consumerFile, 1],
                 [consumerFile, 2],
                 [entryFile, 1],
                 [entryFile, 2],

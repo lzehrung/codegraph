@@ -165,8 +165,11 @@ exports[`native semantic coverage > keeps native semantics stable for representa
   },
   "references": {
     "refs": [
+      "main.ts:1",
       "main.ts:11",
       "main.ts:16",
+      "main.ts:3",
+      "main.ts:3",
       "main.ts:7",
       "utils.ts:1",
     ],
@@ -184,8 +187,11 @@ exports[`native semantic coverage > keeps native semantics stable for representa
   },
   "references": {
     "refs": [
+      "main.js:1",
       "main.js:11",
       "main.js:16",
+      "main.js:3",
+      "main.js:3",
       "main.js:7",
       "utils.js:1",
       "utils.js:31",
@@ -204,6 +210,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
   },
   "references": {
     "refs": [
+      "App.tsx:2",
       "App.tsx:5",
       "utils.ts:3",
     ],
@@ -221,6 +228,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
   },
   "references": {
     "refs": [
+      "JsxImportApp.tsx:1",
       "JsxImportApp.tsx:4",
       "components/Button.tsx:5",
     ],
@@ -261,6 +269,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
       "main.py:11",
       "main.py:16",
       "main.py:3",
+      "main.py:3",
       "main.py:7",
       "utils.py:1",
       "utils.py:30",
@@ -280,7 +289,10 @@ exports[`native semantic coverage > keeps native semantics stable for representa
   "references": {
     "refs": [
       "package_consumer.py:1",
+      "package_consumer.py:1",
       "package_consumer.py:3",
+      "package_exports/__init__.py:1",
+      "package_exports/__init__.py:1",
       "package_exports/values.py:1",
     ],
     "status": "ok",
@@ -297,6 +309,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
   },
   "references": {
     "refs": [
+      "grouped-consumer.php:6",
       "grouped-consumer.php:6",
       "grouped-consumer.php:8",
       "src/Support/Toolbox.php:5",
@@ -1026,6 +1039,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
   },
   "references": {
     "refs": [
+      ".regressions/unicode_consumer.kt:3",
       ".regressions/unicode_consumer.kt:3",
       ".regressions/unicode_consumer.kt:6",
       ".regressions/unicode_def.kt:3",
