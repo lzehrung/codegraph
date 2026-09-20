@@ -405,4 +405,4 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 
 ## C/C++ resolution hints
 
-Configure repo-local include roots with `graph.resolutionHints` in `codegraph.config.json` or CLI `--resolution-hint`. Hints are root-confined, participate in cache identity, and improve candidate-test linkage for layouts such as Unreal-style `Private/.../Tests` includes.
+See [language parity](./language-parity.md#cc-resolution-hints) for `graph.resolutionHints` and `--resolution-hint` behavior.

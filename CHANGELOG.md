@@ -9,6 +9,14 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Fixed
+
+- The generated fixture test matrix is current again. `npm run bench:fixtures:check` failed on the cross-language `tests/languages/query-hygiene.test.ts` stem instead of comparing counts, so `docs/benchmarks/fixture-snapshot.md` reported 256 tests while the suites ran 477.
+
+### Changed
+
+- `docs/language-parity.md` now groups its capability notes by surface instead of one flat list, and corrects claims that no longer matched the code: `this.member` navigation resolves, TypeScript does not bind named function expressions, reduced-mode regex import recovery is JavaScript/TypeScript only, receiver member navigation includes Python while impact coverage still reports it as limited, `exports` publishes type members only for languages whose query captures them, and the SQL `PR impact mapping` and Vue/Svelte native-addon cells now state their conditions. Node.js, Java/Kotlin, and .NET project-name verdicts and the Gradle ignore default are fixed.
+
 ## [2.3.28] - 2026-09-20
 
 ### Fixed
