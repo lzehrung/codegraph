@@ -2731,4 +2731,124 @@ describe("SQL object-level impact mapping", () => {
       await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
+
+  it("impacts only the matching-schema reader when two schemas share a basename", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-impact-schema-basename-"));
+    try {
+      await fsp.mkdir(path.join(root, "db"), { recursive: true });
+      await fsp.writeFile(
+        path.join(root, "db", "schema.sql"),
+        [
+          "CREATE TABLE schema1.users (",
+          "  id integer primary key,",
+          "  email text",
+          ");",
+          "CREATE TABLE schema2.users (",
+          "  id integer primary key,",
+          "  email text",
+          ");",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(root, "db", "schema1-report.sql"),
+        "SELECT id, email FROM schema1.users;\n",
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(root, "db", "schema2-report.sql"),
+        "SELECT id, email FROM schema2.users;\n",
+        "utf8",
+      );
+
+      const index = await buildProjectIndex(root, { cache: "memory" });
+      const diffText = [
+        "diff --git a/db/schema.sql b/db/schema.sql",
+        "--- a/db/schema.sql",
+        "+++ b/db/schema.sql",
+        "@@ -3,1 +3,1 @@",
+        "-  email text",
+        "+  email text not null",
+        "",
+      ].join("\n");
+
+      const result = await analyzeImpactFromDiff(root, index, {
+        provider: "raw",
+        diffText,
+        includeTests: true,
+      });
+      if ("files" in result) {
+        throw new Error("Expected full impact report");
+      }
+
+      const schema1Users = result.changedSymbols.find((symbol) => symbol.name === "schema1.users");
+      expect(schema1Users).toEqual(
+        expect.objectContaining({
+          name: "schema1.users",
+          kind: SymbolKind.Table,
+          exported: true,
+        }),
+      );
+      expect(result.changedSymbols.some((symbol) => symbol.name === "schema2.users")).toBe(false);
+
+      const schema1Reader = result.impacted.find((item) => item.file === "db/schema1-report.sql");
+      expect(schema1Reader).toBeDefined();
+      expect(schema1Reader?.symbols).toEqual(expect.arrayContaining(["schema1.users"]));
+      expect(schema1Reader?.reasons).toEqual(expect.arrayContaining(["directRef"]));
+      expect(schema1Reader?.reasons).not.toEqual(["fileLevelChange"]);
+      expect(result.impacted.some((item) => item.file === "db/schema2-report.sql")).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("still maps an unqualified SQL change to an unqualified reader", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-impact-unqualified-reader-"));
+    try {
+      await fsp.mkdir(path.join(root, "db"), { recursive: true });
+      await fsp.writeFile(
+        path.join(root, "db", "schema.sql"),
+        ["CREATE TABLE users (", "  id integer primary key,", "  email text", ");", ""].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(path.join(root, "db", "report.sql"), "SELECT id, email FROM users;\n", "utf8");
+
+      const index = await buildProjectIndex(root, { cache: "memory" });
+      const diffText = [
+        "diff --git a/db/schema.sql b/db/schema.sql",
+        "--- a/db/schema.sql",
+        "+++ b/db/schema.sql",
+        "@@ -3,1 +3,1 @@",
+        "-  email text",
+        "+  email text not null",
+        "",
+      ].join("\n");
+
+      const result = await analyzeImpactFromDiff(root, index, {
+        provider: "raw",
+        diffText,
+        includeTests: true,
+      });
+      if ("files" in result) {
+        throw new Error("Expected full impact report");
+      }
+
+      const users = result.changedSymbols.find((symbol) => symbol.name === "users");
+      expect(users).toEqual(
+        expect.objectContaining({
+          name: "users",
+          kind: SymbolKind.Table,
+          exported: true,
+        }),
+      );
+      const reportItem = result.impacted.find((item) => item.file === "db/report.sql");
+      expect(reportItem).toBeDefined();
+      expect(reportItem?.symbols).toEqual(expect.arrayContaining(["users"]));
+      expect(reportItem?.reasons).toEqual(expect.arrayContaining(["directRef"]));
+      expect(reportItem?.reasons).not.toEqual(["fileLevelChange"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
 });

@@ -9,7 +9,7 @@ import { normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../languages.js";
 import { extractSqlFactsFromSource, sqlObjectBaseName } from "./extract-facts.js";
-import { pushSqlLookupValue, sqlObjectLookupKeys } from "./lookup.js";
+import { pushSqlLookupValue, sqlObjectNamesMatchConservatively } from "./lookup.js";
 import type { SqlFactKind, SqlStatementFact } from "./types.js";
 
 const SQL_FACT_READ_CONCURRENCY = 32;
@@ -174,11 +174,8 @@ export function sqlObjectNameFromEdgeRaw(raw: string | undefined): string | null
 export function sqlEdgeMatchesChangedObjects(raw: string | undefined, objectNames: ReadonlySet<string>): boolean {
   const objectName = sqlObjectNameFromEdgeRaw(raw);
   if (!objectName || !objectNames.size) return false;
-  const edgeKeys = sqlObjectLookupKeys(objectName);
   for (const name of objectNames) {
-    for (const key of sqlObjectLookupKeys(name)) {
-      if (edgeKeys.includes(key)) return true;
-    }
+    if (sqlObjectNamesMatchConservatively(objectName, name)) return true;
   }
   return false;
 }

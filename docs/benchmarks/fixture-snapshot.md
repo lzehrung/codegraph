@@ -6,7 +6,7 @@ Scope: this counts only the dedicated per-language smoke files, not a language's
 
 Regenerate with `npm run bench:fixtures`. Verify it is current with `npm run bench:fixtures:check`.
 
-Generated: 2026-09-20T13:48:08.125Z (Node v22.16.0)
+Generated: 2026-09-20T14:09:05.281Z (Node v22.16.0)
 
 Total: 496 tests, 0 failed.
 
