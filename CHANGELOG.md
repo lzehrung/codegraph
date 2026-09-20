@@ -15,6 +15,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - TypeScript and JavaScript receiver-member navigation now resolves enum members and valid static class fields without treating initializer reads, nested method locals, or type-only aliases as runtime class members. Declaration extraction also keeps Zig `extern const` variables, PHP constants with initializers, and Python destructuring targets accurate.
 - Successful reference results now report complete or partial indexed-candidate coverage separately from target-definition confidence, including parser, unresolved-import, and exact truncation reasons.
 - Detailed review summaries now apply callsite limits after excluding definition, import, and re-export declarations, report `callsiteCoverage` when the bounded usage scan is partial, and keep affected file paths project-relative.
+- Cached parser, native, and fallback-import diagnostics now rebase file paths when a project cache moves with its project tree.
 
 ## [2.3.27] - 2026-09-15
 

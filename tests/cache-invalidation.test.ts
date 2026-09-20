@@ -287,7 +287,7 @@ async function rewriteProjectSnapshot(root: string, index: ProjectIndex): Promis
     root,
     { cache: "disk", threads: 1 },
     index,
-    buildCache.projectSnapshotFilesSignature(entries),
+    buildCache.projectSnapshotFilesSignature(entries, root),
   );
 }
 
@@ -3690,6 +3690,92 @@ describe("Cache invalidation and strict hashing", () => {
     }
     expect(report.cache?.misses ?? 0).toBe(0);
     expect(report.files?.cached).toBeGreaterThan(0);
+  });
+
+  it("rebases cached analysis report paths after moving a project tree", async () => {
+    const sourceRoot = await mkTmpDir("dg-cache-move-analysis-report-source-");
+    const movedRoot = `${sourceRoot}-moved`;
+    const entryFile = normalize(path.join(sourceRoot, "entry.ts"));
+    const dependencyFile = normalize(path.join(sourceRoot, "dependency.ts"));
+    await fsp.writeFile(entryFile, "export const entry = 1;\n", "utf8");
+    await fsp.writeFile(dependencyFile, "export const dependency = 1;\n", "utf8");
+
+    const initial = await buildProjectIndex(sourceRoot, { cache: "disk", threads: 1 });
+    initial.buildReport = {
+      timings: {},
+      backend: {
+        native: {
+          available: true,
+          enabled: false,
+          supportedLanguageIds: ["ts"],
+          filesUsed: 0,
+          filesFellBack: 1,
+          fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 1 },
+          byLanguage: {},
+          errors: [
+            {
+              file: entryFile,
+              languageId: "ts",
+              reason: "queryFailure",
+              message: "synthetic native failure",
+            },
+          ],
+        },
+        parser: {
+          total: 1,
+          byLanguage: { ts: 1 },
+          files: [{ file: dependencyFile, languageId: "ts", jsError: "synthetic parser failure" }],
+        },
+      },
+      graph: {
+        fallbackImportExtraction: {
+          total: 1,
+          byLanguage: { ts: 1 },
+          files: {
+            [entryFile]: { language: "ts", reason: "query-error" },
+          },
+        },
+      },
+    };
+    await rewriteProjectSnapshot(sourceRoot, initial);
+
+    const persisted = (await readProjectSnapshot(projectSnapshotPathFor(sourceRoot))) as {
+      analysisReport?: {
+        backend?: {
+          native?: { errors?: Array<{ file?: string }> };
+          parser?: { files?: Array<{ file?: string }> };
+        };
+        graph?: { fallbackImportExtraction?: { files?: Record<string, unknown> } };
+      };
+    };
+    expect(persisted.analysisReport?.backend?.native?.errors?.[0]?.file).toBe("entry.ts");
+    expect(persisted.analysisReport?.backend?.parser?.files?.[0]?.file).toBe("dependency.ts");
+    expect(Object.keys(persisted.analysisReport?.graph?.fallbackImportExtraction?.files ?? {})).toEqual(["entry.ts"]);
+
+    // Current-version snapshots written before this fix stored these diagnostics as absolute paths.
+    const persistedNativeError = persisted.analysisReport?.backend?.native?.errors?.[0];
+    const persistedParserFile = persisted.analysisReport?.backend?.parser?.files?.[0];
+    const persistedFallbackFiles = persisted.analysisReport?.graph?.fallbackImportExtraction?.files;
+    const persistedFallback = persistedFallbackFiles?.["entry.ts"];
+    if (!persistedNativeError || !persistedParserFile || !persistedFallbackFiles || !persistedFallback) {
+      throw new Error("Expected persisted analysis report paths");
+    }
+    persistedNativeError.file = entryFile;
+    persistedParserFile.file = dependencyFile;
+    delete persistedFallbackFiles["entry.ts"];
+    persistedFallbackFiles[entryFile] = persistedFallback;
+    await writeProjectSnapshot(projectSnapshotPathFor(sourceRoot), persisted);
+    buildCache.closeDiskCacheDatabase(sourceRoot, { cache: "disk" });
+
+    await renameProjectTree(sourceRoot, movedRoot);
+
+    const report: BuildReport = { timings: {} };
+    await buildProjectIndexIncremental(movedRoot, { cache: "disk", threads: 1, report });
+    expect(report.backend?.native.errors[0]?.file).toBe(normalize(path.join(movedRoot, "entry.ts")));
+    expect(report.backend?.parser?.files[0]?.file).toBe(normalize(path.join(movedRoot, "dependency.ts")));
+    expect(Object.keys(report.graph?.fallbackImportExtraction.files ?? {})).toEqual([
+      normalize(path.join(movedRoot, "entry.ts")),
+    ]);
   });
 
   it("reuses cached graph edges (not just modules) after moving a project tree", async () => {
