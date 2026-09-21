@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-21T00:51:50.292Z",
+  "generatedAt": "2026-09-21T01:46:56.030Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.16.0",
-  "numTotalTests": 454,
+  "numTotalTests": 457,
   "numFailedTests": 0,
   "languages": [
     {
@@ -55,8 +55,8 @@
       "files": [
         "tests/languages/cpp.test.ts"
       ],
-      "tests": 19,
-      "passed": 19,
+      "tests": 21,
+      "passed": 21,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -220,8 +220,8 @@
       "files": [
         "tests/languages/rust.test.ts"
       ],
-      "tests": 64,
-      "passed": 64,
+      "tests": 65,
+      "passed": 65,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -323,8 +323,8 @@
       "tests/languages/import-from-captures.test.ts",
       "tests/languages/query-hygiene.test.ts"
     ],
-    "tests": 73,
-    "passed": 73,
+    "tests": 75,
+    "passed": 75,
     "failed": 0,
     "skipped": 0
   }

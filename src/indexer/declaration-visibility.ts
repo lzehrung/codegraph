@@ -18,6 +18,11 @@ export type DeclarationVisibilityRow = {
    * Unmarked items are module-local (Rust).
    */
   publicModifierTexts?: ReadonlySet<string>;
+  /**
+   * Compacted modifier text with this prefix is public unless also hidden.
+   * Covers Rust `pub(in path)` forms that cannot be listed exhaustively.
+   */
+  publicModifierPrefixes?: readonly string[];
   /** Modifier tokens that hide a declaration from module exports at any scope. */
   hiddenModifierTexts: ReadonlySet<string>;
   /** Extra hidden tokens that apply only outside a type body (C# `internal` at namespace scope). */
@@ -46,7 +51,8 @@ const RUST_ROW: DeclarationVisibilityRow = {
   ]),
   modifierNodeTypes: new Set(["visibility_modifier"]),
   publicModifierTexts: new Set(["pub", "pub(crate)", "pub(super)"]),
-  hiddenModifierTexts: new Set(),
+  publicModifierPrefixes: ["pub("],
+  hiddenModifierTexts: new Set(["pub(self)"]),
   inheritPublicFromParentTypes: new Set(["trait_item"]),
 };
 
@@ -189,15 +195,31 @@ function hasAnyToken(tokens: readonly string[], wanted: ReadonlySet<string>): bo
   return tokens.some((token) => wanted.has(token));
 }
 
+function compactedModifierTexts(texts: readonly string[]): string[] {
+  return texts.map((text) => text.replace(/\s+/g, ""));
+}
+
+function matchesPublicModifier(compacted: readonly string[], row: DeclarationVisibilityRow): boolean {
+  const publicTexts = row.publicModifierTexts;
+  if (!publicTexts) return false;
+  if (hasAnyToken(compacted, row.hiddenModifierTexts)) return false;
+  if (hasAnyToken(compacted, publicTexts)) return true;
+  const prefixes = row.publicModifierPrefixes;
+  if (!prefixes) return false;
+  return compacted.some((text) => prefixes.some((prefix) => text.startsWith(prefix)));
+}
+
 function isExportedByRow(declaration: SyntaxNodeLike, row: DeclarationVisibilityRow): boolean {
   const inherited =
     row.publicModifierTexts && row.inheritPublicFromParentTypes
       ? enclosingAncestor(declaration, row.inheritPublicFromParentTypes)
       : null;
   const target = inherited ?? declaration;
-  const tokens = modifierTokens(collectModifierTexts(target, row));
+  const texts = collectModifierTexts(target, row);
+  const compacted = compactedModifierTexts(texts);
+  const tokens = modifierTokens(texts);
   if (row.publicModifierTexts) {
-    return hasAnyToken(tokens, row.publicModifierTexts);
+    return matchesPublicModifier(compacted, row);
   }
   if (hasAnyToken(tokens, row.hiddenModifierTexts)) return false;
   if (

@@ -645,4 +645,49 @@ describe("C++20 modules", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves a module declared in a module-interface file extension", async () => {
+    for (const extension of [".cppm", ".ixx", ".mxx"]) {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-modules-interface-ext-"));
+      try {
+        const declaring = path.join(root, `widget${extension}`);
+        const importing = path.join(root, "main.cpp");
+        await fs.writeFile(declaring, "export module widget;\n", "utf8");
+        await fs.writeFile(importing, "import widget;\n", "utf8");
+
+        const index = await createTestIndexFromFiles(root, [declaring, importing]);
+        const fromMain = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(importing));
+
+        expect(fromMain, extension).toContainEqual(
+          expect.objectContaining({
+            from: importing.replace(/\\/g, "/"),
+            to: { type: "file", path: declaring.replace(/\\/g, "/") },
+          }),
+        );
+        expect(
+          fromMain.some((edge) => edge.to.type === "external" && edge.to.name === "widget"),
+          extension,
+        ).toBe(false);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("keeps a named module import external when only an unindexed extension declares it", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-modules-unindexed-ext-"));
+    const declaring = path.join(root, "widget.txt");
+    const importing = path.join(root, "main.cpp");
+    try {
+      await fs.writeFile(declaring, "export module widget;\n", "utf8");
+      await fs.writeFile(importing, "import widget;\n", "utf8");
+
+      const index = await createTestIndexFromFiles(root, [declaring, importing]);
+      const fromMain = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(importing));
+
+      expect(fromMain.map((edge) => edge.to)).toEqual([{ type: "external", name: "widget" }]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });

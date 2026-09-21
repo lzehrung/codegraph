@@ -15,7 +15,9 @@ import {
 
 export const CPP_DEF = createCFamilyLanguageDefinition({
   id: "cpp",
-  extensions: [".cc", ".cpp", ".cxx", ".c++", ".hpp", ".hh", ".hxx", ".ipp", ".tpp", ".inl"],
+  // Module-interface units use `.cppm`/`.ixx`/`.mxx` by convention; without them a declared
+  // `export module foo;` is never discovered, so a first-party `import foo;` stays external.
+  extensions: [".cc", ".cpp", ".cxx", ".c++", ".hpp", ".hh", ".hxx", ".ipp", ".tpp", ".inl", ".cppm", ".ixx", ".mxx"],
   includeFieldIdentifier: true,
   usesQueryDrivenLocals: true,
   membersAreImplicitlyInScope: true,

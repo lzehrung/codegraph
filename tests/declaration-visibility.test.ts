@@ -120,6 +120,242 @@ describe("declaration visibility module exports", () => {
     });
   });
 
+  it("publishes Rust pub(in path) and keeps pub(self) file-local, including spaced spellings", async () => {
+    await withTempRoot("cg-vis-rust-restricted-", async (root) => {
+      const src = path.join(root, "src");
+      await mkdir(src, { recursive: true });
+      const visFile = path.join(src, "vis.rs").replace(/\\/g, "/");
+      const consumerFile = path.join(src, "consumer.rs").replace(/\\/g, "/");
+      const visSelfDef = "pub(self) fn self_vis() {}";
+      const visSpacedSelfDef = "pub ( self ) fn spaced_self() {}";
+      const visInPathDef = "pub(in crate) fn in_path_vis() {}";
+      const visSelfStructDef = "pub(self) struct SelfStruct {}";
+      const visInPathStructDef = "pub(in crate) struct InPathStruct {}";
+      const visSelfConstDef = "pub(self) const SELF_CONST: i32 = 2;";
+      const visInPathConstDef = "pub(in crate) const IN_PATH_CONST: i32 = 3;";
+      const visSelfUse = "    self_vis();";
+      const visSpacedSelfUse = "    spaced_self();";
+      const visInPathUse = "    in_path_vis();";
+      const visSelfStructUse = "    let _ = SelfStruct {};";
+      const visInPathStructUse = "    let _ = InPathStruct {};";
+      const visSelfConstUse = "    let _ = SELF_CONST;";
+      const visInPathConstUse = "    let _ = IN_PATH_CONST;";
+      const consumerSelf = "    self_vis();";
+      const consumerSpacedSelf = "    spaced_self();";
+      const consumerInPath = "    in_path_vis();";
+      const consumerInPathStruct = "    let _ = InPathStruct {};";
+      const consumerInPathConst = "    let _ = IN_PATH_CONST;";
+      await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "vis-rust-restricted"\nversion = "0.1.0"\n');
+      await writeFile(path.join(src, "lib.rs"), "mod vis;\npub mod consumer;\n");
+      await writeFile(
+        visFile,
+        [
+          "pub fn exported() {}",
+          visSelfDef,
+          visSpacedSelfDef,
+          visInPathDef,
+          visSelfStructDef,
+          visInPathStructDef,
+          visSelfConstDef,
+          visInPathConstDef,
+          "",
+          "fn uses_local() {",
+          visSelfUse,
+          visSpacedSelfUse,
+          visInPathUse,
+          visSelfStructUse,
+          visInPathStructUse,
+          visSelfConstUse,
+          visInPathConstUse,
+          "}",
+          "",
+        ].join("\n"),
+      );
+      await writeFile(
+        consumerFile,
+        [
+          "use crate::vis::self_vis;",
+          "use crate::vis::spaced_self;",
+          "use crate::vis::in_path_vis;",
+          "use crate::vis::SelfStruct;",
+          "use crate::vis::InPathStruct;",
+          "use crate::vis::SELF_CONST;",
+          "use crate::vis::IN_PATH_CONST;",
+          "",
+          "fn run() {",
+          consumerSelf,
+          consumerSpacedSelf,
+          consumerInPath,
+          "    let _ = SelfStruct {};",
+          consumerInPathStruct,
+          "    let _ = SELF_CONST;",
+          consumerInPathConst,
+          "}",
+          "",
+        ].join("\n"),
+      );
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const visMod = index.byFile.get(fileIdentityKey(visFile));
+      const exported = localExportNames(visMod);
+      expect(exported).toEqual(expect.arrayContaining(["exported", "in_path_vis", "InPathStruct", "IN_PATH_CONST"]));
+      expect(exported).not.toContain("self_vis");
+      expect(exported).not.toContain("spaced_self");
+      expect(exported).not.toContain("SelfStruct");
+      expect(exported).not.toContain("SELF_CONST");
+      expect(visMod?.locals.map((local) => local.localName)).toEqual(
+        expect.arrayContaining([
+          "exported",
+          "self_vis",
+          "spaced_self",
+          "in_path_vis",
+          "SelfStruct",
+          "InPathStruct",
+          "SELF_CONST",
+          "IN_PATH_CONST",
+          "uses_local",
+        ]),
+      );
+
+      expect(resolveExport(index, visFile, "in_path_vis", { allowLocalFallback: false })?.kind).toBe("resolved");
+      expect(resolveExport(index, visFile, "InPathStruct", { allowLocalFallback: false })?.kind).toBe("resolved");
+      expect(resolveExport(index, visFile, "IN_PATH_CONST", { allowLocalFallback: false })?.kind).toBe("resolved");
+      expect(resolveExport(index, visFile, "self_vis", { allowLocalFallback: false })).toBeNull();
+      expect(resolveExport(index, visFile, "spaced_self", { allowLocalFallback: false })).toBeNull();
+      expect(resolveExport(index, visFile, "self_vis")).toBeNull();
+      expect(resolveExport(index, visFile, "spaced_self")).toBeNull();
+      expect(resolveExport(index, visFile, "SelfStruct")).toBeNull();
+      expect(resolveExport(index, visFile, "SELF_CONST")).toBeNull();
+
+      await testGoToDefinition(index, visFile, 11, tokenColumn(visSelfUse, "self_vis"), visFile, 2);
+      await testGoToDefinition(index, visFile, 12, tokenColumn(visSpacedSelfUse, "spaced_self"), visFile, 3);
+      await testGoToDefinition(index, visFile, 13, tokenColumn(visInPathUse, "in_path_vis"), visFile, 4);
+      const selfRefs = await findReferences(index, {
+        file: visFile,
+        line: 2,
+        column: tokenColumn(visSelfDef, "self_vis"),
+      });
+      expect(selfRefs.status).toBe("ok");
+      if (selfRefs.status === "ok") {
+        expect(selfRefs.references.map((reference) => reference.range.start.line).sort()).toEqual(
+          expect.arrayContaining([2, 11]),
+        );
+      }
+
+      await testGoToDefinition(index, consumerFile, 12, tokenColumn(consumerInPath, "in_path_vis"), visFile, 4);
+      await testGoToDefinition(index, consumerFile, 14, tokenColumn(consumerInPathStruct, "InPathStruct"), visFile, 6);
+      await testGoToDefinition(index, consumerFile, 16, tokenColumn(consumerInPathConst, "IN_PATH_CONST"), visFile, 8);
+      await testGoToDefinition(
+        index,
+        consumerFile,
+        10,
+        tokenColumn(consumerSelf, "self_vis"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+      await testGoToDefinition(
+        index,
+        consumerFile,
+        11,
+        tokenColumn(consumerSpacedSelf, "spaced_self"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+    });
+  });
+
+  it("exports crate-root and nested pub(crate), inline-mod pub items, and a pub use of pub(super)", async () => {
+    await withTempRoot("cg-vis-rust-lattice-", async (root) => {
+      const src = path.join(root, "src");
+      await mkdir(src, { recursive: true });
+      const visFile = path.join(src, "vis.rs").replace(/\\/g, "/");
+      const consumerFile = path.join(src, "consumer.rs").replace(/\\/g, "/");
+      const libFile = path.join(src, "lib.rs").replace(/\\/g, "/");
+      const nestedCrateDef = "pub(crate) fn nested_crate() {}";
+      const innerSuperDef = "        pub(super) fn inner_super() {}";
+      const innerSelfDef = "        pub(self) fn inner_self() {}";
+      const innerPrivDef = "        fn inner_priv() {}";
+      const innerInDef = "        pub(in crate::vis) fn inner_in() {}";
+      const consumerNestedCrate = "    nested_crate();";
+      const consumerRootCrate = "    root_crate();";
+      const consumerInnerSuper = "    inner_super();";
+      const consumerInnerSelf = "    inner_self();";
+      const consumerInnerIn = "    inner_in();";
+      await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "vis-rust-lattice"\nversion = "0.1.0"\n');
+      await writeFile(libFile, "mod vis;\npub mod consumer;\npub(crate) fn root_crate() {}\n");
+      await writeFile(
+        visFile,
+        [
+          nestedCrateDef,
+          "mod inner {",
+          "        pub fn inner_pub() {}",
+          innerSuperDef,
+          innerSelfDef,
+          innerPrivDef,
+          innerInDef,
+          "}",
+          "pub use inner::inner_super;",
+          "",
+        ].join("\n"),
+      );
+      await writeFile(
+        consumerFile,
+        [
+          "use crate::vis::nested_crate;",
+          "use crate::root_crate;",
+          "use crate::vis::inner_super;",
+          "use crate::vis::inner_self;",
+          "use crate::vis::inner_in;",
+          "use crate::vis::inner_pub;",
+          "",
+          "fn run() {",
+          consumerNestedCrate,
+          consumerRootCrate,
+          consumerInnerSuper,
+          consumerInnerSelf,
+          consumerInnerIn,
+          "    inner_pub();",
+          "}",
+          "",
+        ].join("\n"),
+      );
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const visMod = index.byFile.get(fileIdentityKey(visFile));
+      const libMod = index.byFile.get(fileIdentityKey(libFile));
+      const visExported = localExportNames(visMod);
+      expect(visExported).toEqual(expect.arrayContaining(["nested_crate", "inner_pub", "inner_super", "inner_in"]));
+      expect(visExported).not.toContain("inner_self");
+      expect(visExported).not.toContain("inner_priv");
+      expect(localExportNames(libMod)).toContain("root_crate");
+      expect(
+        (visMod?.exports ?? []).some((entry) => entry.type === "reexport" && entry.exportedAs === "inner_super"),
+      ).toBe(true);
+
+      expect(resolveExport(index, visFile, "nested_crate", { allowLocalFallback: false })?.kind).toBe("resolved");
+      expect(resolveExport(index, libFile, "root_crate", { allowLocalFallback: false })?.kind).toBe("resolved");
+      expect(resolveExport(index, visFile, "inner_in", { allowLocalFallback: false })?.kind).toBe("resolved");
+      expect(resolveExport(index, visFile, "inner_self", { allowLocalFallback: false })).toBeNull();
+      expect(resolveExport(index, visFile, "inner_priv")).toBeNull();
+
+      await testGoToDefinition(index, consumerFile, 9, tokenColumn(consumerNestedCrate, "nested_crate"), visFile, 1);
+      await testGoToDefinition(index, consumerFile, 10, tokenColumn(consumerRootCrate, "root_crate"), libFile, 3);
+      await testGoToDefinition(index, consumerFile, 11, tokenColumn(consumerInnerSuper, "inner_super"), visFile, 4);
+      await testGoToDefinition(index, consumerFile, 13, tokenColumn(consumerInnerIn, "inner_in"), visFile, 7);
+      await testGoToDefinition(
+        index,
+        consumerFile,
+        12,
+        tokenColumn(consumerInnerSelf, "inner_self"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+    });
+  });
+
   it("keeps a Java private method out of module exports while the public sibling stays importable", async () => {
     await withTempRoot("cg-vis-java-", async (root) => {
       const libFile = path.join(root, "demo", "Lib.java").replace(/\\/g, "/");

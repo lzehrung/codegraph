@@ -96,6 +96,27 @@ describe("C++20 module resolution across incremental rebuilds", () => {
     }
   });
 
+  it("resolves when a module-interface file adds the declaration to a warm tree", async () => {
+    const root = await mkTmpDir("cg-cpp-inc-interface-add-");
+    try {
+      const unrelated = path.join(root, "unrelated.cpp");
+      const iface = path.join(root, "iface.cppm");
+      const main = path.join(root, "main.cpp");
+      await fsp.writeFile(unrelated, "int unrelated_value = 0;\n", "utf8");
+      await fsp.writeFile(main, "import foo;\n", "utf8");
+      await buildProjectIndexIncremental(root, DISK_BUILD);
+
+      await fsp.writeFile(iface, "export module foo;\n", "utf8");
+      const warm = await buildProjectIndexIncremental(root, DISK_BUILD);
+      const targets = await expectWarmMatchesCold(root, main, warm);
+
+      expect(targets.some((target) => target.endsWith("/iface.cppm"))).toBe(true);
+      expect(targets).not.toContain("external:foo");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves to the survivor when one of two duplicate declarations is deleted", async () => {
     const root = await mkTmpDir("cg-cpp-inc-dupe-");
     try {
@@ -177,6 +198,28 @@ describe("C++20 module resolution across incremental rebuilds", () => {
       await buildProjectIndexIncremental(root, { ...DISK_BUILD, report });
 
       expectNoReprocessedFiles(report);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("follows a declaration that moves into a module-interface file", async () => {
+    const root = await mkTmpDir("cg-cpp-inc-interface-");
+    try {
+      const source = path.join(root, "source.cpp");
+      const iface = path.join(root, "iface.cppm");
+      const main = path.join(root, "main.cpp");
+      await fsp.writeFile(source, "export module foo;\n", "utf8");
+      await fsp.writeFile(main, "import foo;\n", "utf8");
+      await buildProjectIndexIncremental(root, DISK_BUILD);
+
+      await fsp.writeFile(source, "int source_value = 1;\n", "utf8");
+      await fsp.writeFile(iface, "export module foo;\n", "utf8");
+      const warm = await buildProjectIndexIncremental(root, DISK_BUILD);
+      const targets = await expectWarmMatchesCold(root, main, warm);
+
+      expect(targets.some((target) => target.endsWith("/iface.cppm"))).toBe(true);
+      expect(targets).not.toContain("external:foo");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

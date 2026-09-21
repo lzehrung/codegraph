@@ -14,7 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 import { isSymlinkUnavailable } from "../helpers/filesystem.js";
 import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
 import { chunkFile } from "../../src/chunking/chunk-file.js";
-import { buildProjectIndex, collectGraph, findReferences, goToDefinition } from "../../src/index.js";
+import { buildProjectIndex, collectGraph, findReferences, goToDefinition, resolveExport } from "../../src/index.js";
 import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { exportedNameOf } from "../helpers/narrow.js";
@@ -2242,9 +2242,9 @@ describe("Rust function-local items and re-export aliases", () => {
       expect(mod.locals.map((entry) => entry.localName)).toEqual(
         expect.arrayContaining(["outer", "Hidden", "LocalStruct", "kept_fn", "Kept", "Deep"]),
       );
-      // Rust export visibility: only `pub` items are module exports. The non-`pub` `fn outer`
-      // stays a file local (another module cannot `use` it), while the `pub fn` sibling and
-      // the `pub mod`'s nested item remain exported.
+      // Unmarked Rust items stay file-local. The non-pub fn outer is not a module export
+      // (another module cannot use it), while the pub fn sibling and the pub mod nested
+      // item remain exported.
       expect(exportedNames).toEqual(expect.arrayContaining(["kept_fn", "Kept", "Deep"]));
       expect(exportedNames).not.toContain("outer");
       expect(exportedNames).not.toContain("Hidden");
@@ -2285,6 +2285,69 @@ describe("Rust function-local items and re-export aliases", () => {
       const consumerImports = index.byFile.get(fileIdentityKey(consumerFile))?.imports ?? [];
       expect(consumerImports).toEqual([expect.objectContaining({ imported: "Baz", from: "crate::barrel" })]);
       expect(fileIdentityKey(String(consumerImports[0]?.resolved))).toBe(fileIdentityKey(barrelFile));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Rust restricted visibility forms", () => {
+  it("lets an importer bind pub(in crate) while pub(self) stays unresolved", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-vis-restricted-"));
+    const src = path.join(root, "src");
+    await mkdir(src, { recursive: true });
+    const visFile = path.join(src, "vis.rs").replace(/\\/g, "/");
+    const consumerFile = path.join(src, "consumer.rs").replace(/\\/g, "/");
+    const visInPathDef = "pub(in crate) fn in_path_vis() {}";
+    const visSelfDef = "pub(self) fn self_vis() {}";
+    const visSpacedSelfDef = "pub ( self ) fn spaced_self() {}";
+    const consumerInPath = "    in_path_vis();";
+    const consumerSelf = "    self_vis();";
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "rust-vis-restricted"\nversion = "0.1.0"\n');
+    await writeFile(path.join(src, "lib.rs"), "mod vis;\npub mod consumer;\n");
+    await writeFile(visFile, [visInPathDef, visSelfDef, visSpacedSelfDef, ""].join("\n"));
+    await writeFile(
+      consumerFile,
+      [
+        "use crate::vis::in_path_vis;",
+        "use crate::vis::self_vis;",
+        "use crate::vis::spaced_self;",
+        "",
+        "fn run() {",
+        consumerInPath,
+        consumerSelf,
+        "}",
+        "",
+      ].join("\n"),
+    );
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const visMod = index.byFile.get(fileIdentityKey(visFile));
+      const exported = (visMod?.exports ?? []).flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : []));
+      expect(exported).toContain("in_path_vis");
+      expect(exported).not.toContain("self_vis");
+      expect(exported).not.toContain("spaced_self");
+      expect(resolveExport(index, visFile, "in_path_vis", { allowLocalFallback: false })?.kind).toBe("resolved");
+      expect(resolveExport(index, visFile, "self_vis")).toBeNull();
+      expect(resolveExport(index, visFile, "spaced_self")).toBeNull();
+
+      const inPath = await goToDefinition(index, {
+        file: consumerFile,
+        line: 6,
+        column: consumerInPath.indexOf("in_path_vis") + 1,
+      });
+      expect(inPath.status).toBe("ok");
+      if (inPath.status === "ok") {
+        expect(fileIdentityKey(inPath.definition.file)).toBe(fileIdentityKey(visFile));
+        expect(inPath.definition.range.start.line).toBe(1);
+      }
+
+      const hidden = await goToDefinition(index, {
+        file: consumerFile,
+        line: 7,
+        column: consumerSelf.indexOf("self_vis") + 1,
+      });
+      expect(hidden.status).toBe("not_found");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

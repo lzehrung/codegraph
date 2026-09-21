@@ -35,6 +35,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - Zig container members no longer leak into file scope. A `struct`, `union`, or `enum` member function is reachable through `Self.helper()`, `@This().helper()`, or an instance, and a bare `helper()` call inside the container now emits no edge and navigates to `not_found`.
 - A file whose only line terminator is a lone carriage return reports real line numbers instead of placing every symbol on line 1.
 - A source file over the native byte limit reports a structured `sourceTooLarge` fallback reason in the build report instead of only a warning log, so the downgrade is visible to callers.
+- C++ modules declared in module-interface files (`.cppm`, `.ixx`, `.mxx`) now resolve. Neither the C++ language definition nor default discovery claimed those extensions, so the declaring file was never indexed, a first-party `import foo;` stayed external, and the declaration was invisible to incremental invalidation.
+- Rust `pub(in path)` items are module exports, and `pub(self)` stays file-local, including spaced spellings such as `pub ( self )`.
+- Extension-pattern manifest matches are deterministic. Two files matching `*.csproj` in one directory resolved by filesystem order, so the package root differed per machine and a cached index built on one disagreed with another. Selection now prefers a manifest whose name matches its directory, then falls back to name order, and Rust declaring-file candidates are sorted the same way.
+- Media sources survive document extraction. Markdown, MDX, and AsciiDoc dropped every `<source>` element along with image syntax, so a `<video><source src="./clip.webm">` lost its edge; only `srcset` candidates are excluded now.
 - The language-definition fingerprint recorded `membersAreImplicitlyInScope` with the wrong default, so a language flipping that field could reuse a stale cache.
 
 ### Changed
