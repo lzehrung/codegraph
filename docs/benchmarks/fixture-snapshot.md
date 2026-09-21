@@ -6,24 +6,24 @@ Scope: this counts only the dedicated per-language smoke files, not a language's
 
 Regenerate with `npm run bench:fixtures`. Verify it is current with `npm run bench:fixtures:check`.
 
-Generated: 2026-09-21T01:46:56.030Z (Node v22.16.0)
+Generated: 2026-09-21T03:15:51.198Z (Node v22.16.0)
 
-Total across the 28 language suites: 457 tests, 0 failed.
+Total across the 28 language suites: 465 tests, 0 failed.
 The tests/languages run also executed 75 tests in cross-language files that are not attributed to a language: `tests/languages/chunk-sfc.test.ts`, `tests/languages/cpp-module-incremental.test.ts`, `tests/languages/graph-captures.test.ts`, `tests/languages/import-from-captures.test.ts`, `tests/languages/query-hygiene.test.ts`.
 
 | Language         | Status  | Tests | Test file(s)                         |
 | ---------------- | ------- | ----- | ------------------------------------ |
 | AsciiDoc         | passing | 9     | `tests/languages/adoc.test.ts`       |
 | Astro            | passing | 6     | `tests/languages/astro.test.ts`      |
-| C                | passing | 17    | `tests/languages/c.test.ts`          |
+| C                | passing | 18    | `tests/languages/c.test.ts`          |
 | C#               | passing | 26    | `tests/languages/csharp.test.ts`     |
-| C++              | passing | 21    | `tests/languages/cpp.test.ts`        |
+| C++              | passing | 22    | `tests/languages/cpp.test.ts`        |
 | CSS              | passing | 7     | `tests/languages/css.test.ts`        |
 | Go               | passing | 14    | `tests/languages/go.test.ts`         |
 | Handlebars       | passing | 3     | `tests/languages/hbs.test.ts`        |
 | HTML             | passing | 8     | `tests/languages/html.test.ts`       |
 | Java             | passing | 24    | `tests/languages/java.test.ts`       |
-| JavaScript       | passing | 12    | `tests/languages/javascript.test.ts` |
+| JavaScript       | passing | 15    | `tests/languages/javascript.test.ts` |
 | Kotlin           | passing | 19    | `tests/languages/kotlin.test.ts`     |
 | Less             | passing | 7     | `tests/languages/less.test.ts`       |
 | Markdown         | passing | 16    | `tests/languages/markdown.test.ts`   |
@@ -35,11 +35,11 @@ The tests/languages run also executed 75 tests in cross-language files that are 
 | Rust             | passing | 65    | `tests/languages/rust.test.ts`       |
 | SCSS             | passing | 15    | `tests/languages/scss.test.ts`       |
 | SQL              | passing | 8     | `tests/languages/sql.test.ts`        |
-| Svelte           | passing | 10    | `tests/languages/svelte.test.ts`     |
+| Svelte           | passing | 11    | `tests/languages/svelte.test.ts`     |
 | Swift            | passing | 9     | `tests/languages/swift.test.ts`      |
 | TSX              | passing | 11    | `tests/languages/tsx.test.ts`        |
-| TypeScript       | passing | 16    | `tests/languages/typescript.test.ts` |
-| Vue              | passing | 11    | `tests/languages/vue.test.ts`        |
+| TypeScript       | passing | 17    | `tests/languages/typescript.test.ts` |
+| Vue              | passing | 12    | `tests/languages/vue.test.ts`        |
 | Zig              | passing | 12    | `tests/languages/zig.test.ts`        |
 
 This is fixture pass/fail, not a claimed-capability matrix. For claimed capability support per language, see [Language coverage parity matrix](../language-parity.md). For the fixture behind each named scenario, see [Scenario catalog](../scenario-catalog.md).

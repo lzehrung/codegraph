@@ -181,6 +181,42 @@ it("applies dynamic import heuristic adapters inside Svelte script blocks", asyn
   }
 });
 
+it("classifies a type-only import inside a Svelte script block", async () => {
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "cg-svelte-type-only-"));
+  const sourceFile = path.join(root, "Widget.svelte");
+  const typesFile = path.join(root, "types.ts");
+  const runtimeFile = path.join(root, "runtime.ts");
+  await Promise.all([
+    fs.promises.writeFile(
+      sourceFile,
+      '<script>\nimport type { Shape } from "./types";\nimport { runtime } from "./runtime";\n</script>\n',
+      "utf8",
+    ),
+    fs.promises.writeFile(typesFile, "export interface Shape { size: number }\n", "utf8"),
+    fs.promises.writeFile(runtimeFile, "export const runtime = 1;\n", "utf8"),
+  ]);
+
+  try {
+    const index = await createTestIndexFromFiles(root, [sourceFile, typesFile, runtimeFile]);
+    // The embedded script statement reaches the JS-family hook, so the statement-level
+    // `import type` clause is type-only while the sibling runtime import is not.
+    expect(
+      index.graph.edges
+        .filter((edge) => edge.typeOnly && fileIdentityKey(edge.from) === fileIdentityKey(sourceFile))
+        .map((edge) => (edge.to.type === "file" ? edge.to.path : edge.to.name)),
+    ).toEqual([typesFile.replace(/\\/g, "/")]);
+    const module = index.byFile.get(fileIdentityKey(sourceFile));
+    expect((module?.imports ?? []).filter((binding) => binding.typeOnly)).toEqual([
+      expect.objectContaining({ from: "./types", typeOnly: true }),
+    ]);
+    expect((module?.imports ?? []).filter((binding) => binding.from === "./runtime")).toEqual([
+      expect.objectContaining({ from: "./runtime", typeOnly: false }),
+    ]);
+  } finally {
+    await fs.promises.rm(root, { recursive: true, force: true });
+  }
+});
+
 it("preserves Svelte block content and original coordinates while extracting embedded dependencies", async () => {
   const sampleDir = path.resolve(process.cwd(), "tests", "samples", "svelte");
   const sourceFile = path.join(sampleDir, "sfc-blocks.svelte").replace(/\\/g, "/");

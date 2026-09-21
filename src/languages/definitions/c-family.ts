@@ -169,9 +169,11 @@ export function createCFamilyLanguageDefinition(options: CFamilyLanguageDefiniti
     createsFunctionScope: options.createsFunctionScope,
     createsBlockScope: (node) => node.type === "compound_statement",
     supportsCrossModuleSymbols: true,
-    // A name declared inside a function body is not a module export. The exports query cannot
-    // anchor on `translation_unit` because include guards nest every header declaration.
-    exportScopeBlockers: ["compound_statement"],
+    // A name declared inside a function body or a class/struct/union body is not a module
+    // export. C and C++ spell that type body `field_declaration_list`, not `class_body`.
+    // The exports query cannot anchor on `translation_unit` because include guards nest
+    // every header declaration.
+    exportScopeBlockers: ["compound_statement", "field_declaration_list"],
     usesQueryDrivenLocals: options.usesQueryDrivenLocals || false,
     ...(options.membersAreImplicitlyInScope !== undefined
       ? { membersAreImplicitlyInScope: options.membersAreImplicitlyInScope }

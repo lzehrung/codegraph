@@ -223,7 +223,7 @@ describe("C++ native queries", () => {
     }
   });
 
-  it("exports class and struct static members while hiding file-scope static functions", () => {
+  it("exports class and struct types while hiding file-scope static functions and in-class members", () => {
     const names = collectCppNames(
       "probe.cpp",
       [
@@ -234,8 +234,11 @@ describe("C++ native queries", () => {
       ].join("\n"),
     );
 
-    expect(names.exports).toEqual(expect.arrayContaining(["visible", "Foo", "method", "Bar"]));
+    expect(names.exports).toEqual(expect.arrayContaining(["visible", "Foo", "Bar"]));
     expect(names.exports).not.toContain("helper");
+    expect(names.exports).not.toContain("method");
+    expect(names.exports).not.toContain("member");
+    expect(names.exports).not.toContain("field");
     expect(names.locals).toEqual(
       expect.arrayContaining(["helper", "visible", "Foo", "member", "method", "Bar", "field"]),
     );
@@ -270,7 +273,6 @@ describe("C++ native queries", () => {
         "nsCounter",
         "NsPair",
         "Widget",
-        "method",
         "nestedFn",
         "outer",
         "leaf",
@@ -281,6 +283,7 @@ describe("C++ native queries", () => {
         "container",
       ]),
     );
+    expect(namespaced.exports).not.toContain("method");
     expect(namespaced.exports).not.toContain("hiddenHelper");
     expect(namespaced.exports).not.toContain("Local");
     expect(namespaced.exports).not.toContain("hidden");
@@ -331,6 +334,40 @@ describe("C++ native queries", () => {
     expect(names.exports.filter((name) => name === "Mode")).toEqual(["Mode"]);
     expect(names.exports).toEqual(expect.arrayContaining(["Mode", "ON"]));
     expect(names.locals).toEqual(expect.arrayContaining(["Mode", "ON"]));
+  });
+
+  it("keeps in-class members local while types, free functions, and out-of-line definitions stay exported", () => {
+    const inClass = collectCppNames(
+      "widget.cpp",
+      ["class Widget { int field_; void method(); };", "void ready() { return; }", "struct Point { int x; };"].join(
+        "\n",
+      ),
+    );
+    expect(inClass.exports.sort()).toEqual(["Point", "Widget", "ready"]);
+    expect(inClass.exports).not.toContain("field_");
+    expect(inClass.exports).not.toContain("method");
+    expect(inClass.exports).not.toContain("x");
+    expect(inClass.locals).toEqual(expect.arrayContaining(["Widget", "field_", "method", "ready", "Point", "x"]));
+
+    const namespaced = collectCppNames(
+      "probe.cpp",
+      [
+        "namespace api { void nsFn(); class Widget { void method(); }; }",
+        "template <class T> class Holder { void get(); };",
+        "template <class T> void compute(T value) {}",
+        "struct Outer { struct Inner { int x; }; };",
+      ].join("\n"),
+    );
+    expect(namespaced.exports).toEqual(expect.arrayContaining(["api", "nsFn", "Widget", "Holder", "compute", "Outer"]));
+    expect(namespaced.exports).not.toContain("method");
+    expect(namespaced.exports).not.toContain("get");
+    expect(namespaced.exports).not.toContain("Inner");
+    expect(namespaced.exports).not.toContain("x");
+    expect(namespaced.locals).toEqual(expect.arrayContaining(["method", "get", "Inner", "x"]));
+
+    const outlined = collectCppNames("probe.cpp", "class Widget { void method(); };\nvoid Widget::method() {}\n");
+    expect(outlined.exports).toEqual(expect.arrayContaining(["Widget", "method"]));
+    expect(outlined.locals).toEqual(expect.arrayContaining(["Widget", "method"]));
   });
 });
 

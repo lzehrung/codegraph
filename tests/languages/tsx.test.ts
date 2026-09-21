@@ -170,7 +170,11 @@ describe("TSX per-specifier type-only bindings", () => {
       const module = index.byFile.get(fileIdentityKey(consumer));
       const typeOnlyImports = (module?.imports ?? []).filter((binding) => binding.typeOnly);
       expect(typeOnlyImports).toEqual([expect.objectContaining({ from: "./types", typeOnly: true })]);
-      expect((module?.imports ?? []).find((binding) => binding.from === "./mod")?.typeOnly).toBeFalsy();
+      // Assert the binding exists and is runtime: `find(...)?.typeOnly` with `toBeFalsy` also
+      // passes when the default binding is missing entirely.
+      expect((module?.imports ?? []).filter((binding) => binding.from === "./mod")).toEqual([
+        expect.objectContaining({ from: "./mod", kind: "default", local: "type", typeOnly: false }),
+      ]);
 
       const fromConsumer = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(consumer));
       const typeOnlyTargets = fromConsumer

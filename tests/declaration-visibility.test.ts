@@ -747,7 +747,7 @@ describe("declaration visibility module exports", () => {
     });
   });
 
-  it("keeps C++ file-scope static names local while class and struct static members stay exported", async () => {
+  it("keeps C++ file-scope static names and in-class members local while types stay exported", async () => {
     await withTempRoot("cg-vis-cpp-", async (root) => {
       const visFile = path.join(root, "vis.cpp").replace(/\\/g, "/");
       const consumerFile = path.join(root, "consumer.cpp").replace(/\\/g, "/");
@@ -765,14 +765,17 @@ describe("declaration visibility module exports", () => {
       const index = await buildProjectIndex(root, { cache: "off" });
       const visMod = index.byFile.get(fileIdentityKey(visFile));
       const exported = localExportNames(visMod);
-      expect(exported).toEqual(expect.arrayContaining(["visible", "Foo", "method", "Bar"]));
+      expect(exported).toEqual(expect.arrayContaining(["visible", "Foo", "Bar"]));
+      expect(exported).not.toContain("method");
+      expect(exported).not.toContain("member");
+      expect(exported).not.toContain("field");
       expect(exported).not.toContain("helper");
       expect(visMod?.locals.map((local) => local.localName)).toEqual(
         expect.arrayContaining(["helper", "visible", "Foo", "member", "method", "Bar", "field"]),
       );
 
       expect(resolveExport(index, visFile, "visible", { allowLocalFallback: false })?.kind).toBe("resolved");
-      expect(resolveExport(index, visFile, "method", { allowLocalFallback: false })?.kind).toBe("resolved");
+      expect(resolveExport(index, visFile, "method", { allowLocalFallback: false })).toBeNull();
       expect(resolveExport(index, visFile, "helper", { allowLocalFallback: false })).toBeNull();
       expect(resolveExport(index, visFile, "helper")).toBeNull();
 
@@ -798,6 +801,97 @@ describe("declaration visibility module exports", () => {
         consumerFile,
         2,
         tokenColumn(consumerUse, "helper"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+    });
+  });
+
+  it("does not resolve a bare C++ in-class member from another file, with or without include", async () => {
+    await withTempRoot("cg-vis-cpp-members-", async (root) => {
+      const headerFile = path.join(root, "widget.hpp").replace(/\\/g, "/");
+      const unrelatedFile = path.join(root, "unrelated.cpp").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.cpp").replace(/\\/g, "/");
+      const headerSrc = [
+        "class Widget { int field_; void method(); };",
+        "void ready();",
+        "struct Point { int x; };",
+        "",
+      ].join("\n");
+      const unrelatedUse = "void use() { method(); field_; }";
+      const consumerReady = "  ready();";
+      const consumerWidget = "  Widget w;";
+      const consumerMethod = "  method();";
+      const consumerField = "  field_;";
+      await writeFile(headerFile, headerSrc, "utf8");
+      await writeFile(unrelatedFile, `${unrelatedUse}\n`, "utf8");
+      await writeFile(
+        consumerFile,
+        [
+          '#include "./widget.hpp"',
+          "void use() {",
+          consumerReady,
+          consumerWidget,
+          consumerMethod,
+          consumerField,
+          "}",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const headerMod = index.byFile.get(fileIdentityKey(headerFile));
+      const exported = localExportNames(headerMod);
+      expect(exported).toEqual(expect.arrayContaining(["Widget", "ready", "Point"]));
+      expect(exported).not.toContain("method");
+      expect(exported).not.toContain("field_");
+      expect(exported).not.toContain("x");
+      expect(headerMod?.locals.map((local) => local.localName)).toEqual(
+        expect.arrayContaining(["Widget", "field_", "method", "ready", "Point", "x"]),
+      );
+
+      expect(resolveExport(index, headerFile, "ready", { allowLocalFallback: false })?.kind).toBe("resolved");
+      expect(resolveExport(index, headerFile, "Widget", { allowLocalFallback: false })?.kind).toBe("resolved");
+      expect(resolveExport(index, headerFile, "method", { allowLocalFallback: false })).toBeNull();
+      expect(resolveExport(index, headerFile, "field_", { allowLocalFallback: false })).toBeNull();
+      expect(resolveExport(index, headerFile, "x", { allowLocalFallback: false })).toBeNull();
+
+      await testGoToDefinition(
+        index,
+        unrelatedFile,
+        1,
+        tokenColumn(unrelatedUse, "method"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+      await testGoToDefinition(
+        index,
+        unrelatedFile,
+        1,
+        tokenColumn(unrelatedUse, "field_"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+      await testGoToDefinition(index, consumerFile, 3, tokenColumn(consumerReady, "ready"), headerFile, 2);
+      await testGoToDefinition(index, consumerFile, 4, tokenColumn(consumerWidget, "Widget"), headerFile, 1);
+      await testGoToDefinition(
+        index,
+        consumerFile,
+        5,
+        tokenColumn(consumerMethod, "method"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+      await testGoToDefinition(
+        index,
+        consumerFile,
+        6,
+        tokenColumn(consumerField, "field_"),
         undefined,
         undefined,
         "not_found",

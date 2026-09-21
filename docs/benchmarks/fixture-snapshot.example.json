@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-21T01:46:56.030Z",
+  "generatedAt": "2026-09-21T03:15:51.198Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.16.0",
-  "numTotalTests": 457,
+  "numTotalTests": 465,
   "numFailedTests": 0,
   "languages": [
     {
@@ -33,8 +33,8 @@
       "files": [
         "tests/languages/c.test.ts"
       ],
-      "tests": 17,
-      "passed": 17,
+      "tests": 18,
+      "passed": 18,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -55,8 +55,8 @@
       "files": [
         "tests/languages/cpp.test.ts"
       ],
-      "tests": 21,
-      "passed": 21,
+      "tests": 22,
+      "passed": 22,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -121,8 +121,8 @@
       "files": [
         "tests/languages/javascript.test.ts"
       ],
-      "tests": 12,
-      "passed": 12,
+      "tests": 15,
+      "passed": 15,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -253,8 +253,8 @@
       "files": [
         "tests/languages/svelte.test.ts"
       ],
-      "tests": 10,
-      "passed": 10,
+      "tests": 11,
+      "passed": 11,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -286,8 +286,8 @@
       "files": [
         "tests/languages/typescript.test.ts"
       ],
-      "tests": 16,
-      "passed": 16,
+      "tests": 17,
+      "passed": 17,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -297,8 +297,8 @@
       "files": [
         "tests/languages/vue.test.ts"
       ],
-      "tests": 11,
-      "passed": 11,
+      "tests": 12,
+      "passed": 12,
       "failed": 0,
       "skipped": 0,
       "status": "passing"

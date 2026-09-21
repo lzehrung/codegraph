@@ -281,6 +281,14 @@ describe("C vs C++ query-driven locals", () => {
     expect(names.locals).toEqual(expect.arrayContaining(["Pair", "Mode", "ON", "guarded"]));
     expect(names.exports).not.toContain("a");
   });
+
+  it("keeps nested struct tags local while the outer struct stays exported", () => {
+    const names = collectCFamilyNames("probe.h", "struct Outer { struct Inner { int x; }; };", C_SUPPORT);
+    expect(names.exports).toEqual(expect.arrayContaining(["Outer"]));
+    expect(names.exports).not.toContain("Inner");
+    expect(names.exports).not.toContain("x");
+    expect(names.locals).toEqual(expect.arrayContaining(["Outer", "Inner", "x"]));
+  });
 });
 
 describe("export de-duplication for shadowed Kotlin vals", () => {
