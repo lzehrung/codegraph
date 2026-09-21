@@ -9,6 +9,13 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Fixed
+
+- C and C++ quoted includes resolve against the including file's directory, matching the language rule. `#include "lib.h"` and `#include "inc/lib.h"` previously stayed external unless written as `./lib.h`, so dependency edges, go-to-definition, and find references all failed for ordinary C/C++ layouts. C is also routed through the language import resolver for graph edges, which previously listed only C++.
+- C and C++ find references reports call sites. A C-family function name is registered in its enclosing scope through the declarator chain instead of a missing `name` field, so it no longer lands inside its own body scope; same-file references previously returned only the declaration while still reporting `referenceCoverage.state: "complete"`. Parameter bindings are unaffected.
+- Keyword receiver members navigate in every language that declares receiver keywords. `this.field`, `this->member`, and `self.target` previously returned `not_found` in C++, C#, Java, Kotlin, and Ruby, and resolved through the bare-name lexical path rather than member access in Swift.
+- `super.helper()`, `base.Helper()`, and `parent::helper()` resolve to the base declaration. A supertype keyword receiver previously searched the current type and returned a same-named override in the deriving class.
+
 ## [2.3.31] - 2026-09-21
 
 ### Changed
