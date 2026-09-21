@@ -49,6 +49,108 @@ export function readPhpNamespaceFromRange(tree: SyntaxTreeLike, source: string, 
   return readPhpNamespaceFromNode(tree, node, source);
 }
 
+/**
+ * Symbol kinds whose PHP names are case-insensitive: class-like declarations and
+ * namespaces (PHP resolves class, interface, trait, enum, function, and method names
+ * ASCII-case-insensitively; constants and variables stay case-sensitive).
+ */
+const PHP_CASE_INSENSITIVE_SYMBOL_KINDS: Record<string, true> = {
+  class: true,
+  interface: true,
+  trait: true,
+  type: true,
+  function: true,
+  method: true,
+  namespace: true,
+};
+
+/** Symbol kinds that PHP resolves case-sensitively, so a case variant is never the same symbol. */
+const PHP_CASE_SENSITIVE_SYMBOL_KINDS: Record<string, true> = {
+  constant: true,
+  variable: true,
+  default: true,
+};
+
+export function foldPhpIdentifierCase(value: string): string {
+  let folded = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    folded += code >= 65 && code <= 90 ? String.fromCharCode(code + 32) : value[index]!;
+  }
+  return folded;
+}
+
+export type PhpNameComparison = "equivalent" | "different" | "unverified";
+
+/**
+ * PHP reference-name comparator. Folds class, function, and namespace spelling
+ * ASCII-case-insensitively while keeping variables and constants exact. Stored names,
+ * ranges, and edit text always keep their source spelling; only comparisons fold.
+ *
+ * `caseSensitiveForm` marks a comparison the grammar already proves case-sensitive
+ * (a `variable_name` or `constant` node). `symbolKind` is the referenced symbol's
+ * `SymbolKind`; a kind outside both sets cannot be classified, so a case variant
+ * reports `"unverified"` instead of guessing.
+ */
+export function comparePhpReferenceNames(
+  reference: string,
+  symbol: string,
+  options?: { caseSensitiveForm?: boolean; symbolKind?: string },
+): PhpNameComparison {
+  if (reference === symbol) return "equivalent";
+  if (options?.caseSensitiveForm) return "different";
+  if (foldPhpIdentifierCase(reference) !== foldPhpIdentifierCase(symbol)) return "different";
+  if (options?.symbolKind && PHP_CASE_SENSITIVE_SYMBOL_KINDS[options.symbolKind]) return "different";
+  if (options?.symbolKind && PHP_CASE_INSENSITIVE_SYMBOL_KINDS[options.symbolKind]) return "equivalent";
+  return "unverified";
+}
+
+/**
+ * The absolute spelling a PHP reference resolves to, using the reference's own file
+ * namespace: `\Foo\Bar` is already absolute, `namespace\Foo` prefixes the current
+ * namespace, and a bare or partially qualified name is relative to the current namespace.
+ */
+export function canonicalPhpReferenceName(
+  rawName: string,
+  source: string,
+  tree: SyntaxTreeLike,
+  node: SyntaxNodeLike | null,
+): string | null {
+  const trimmed = rawName.trim();
+  if (!trimmed) return null;
+  if (/^\\+/.test(trimmed)) return trimmed.replace(/^\\+/, "");
+  const currentNamespace = readPhpNamespaceFromNode(tree, node, source);
+  if (trimmed.startsWith("namespace\\")) {
+    const suffix = trimmed.slice("namespace\\".length);
+    if (!suffix) return currentNamespace;
+    return currentNamespace ? `${currentNamespace}\\${suffix}` : suffix;
+  }
+  return currentNamespace ? `${currentNamespace}\\${trimmed}` : trimmed;
+}
+
+/**
+ * True when a reference node spells a namespace-qualified path (`App\Name`, `\App\Name`, or
+ * `namespace\Name`). A bare `name` is not a qualified path, so PHP could resolve it as a
+ * same-named constant rather than the class or function.
+ */
+export function isPhpQualifiedReferenceNode(node: SyntaxNodeLike | null): boolean {
+  return node?.type === "qualified_name" || node?.type === "relative_name";
+}
+
+/**
+ * True when a node sits inside a PHP `use`/`use function`/`use const` declaration. Import
+ * declaration tokens are reported by the import-binding path, so the qualified-name scan must
+ * not report the declaration's whole `App\Name` specifier as an additional reference site.
+ */
+export function isInsidePhpUseDeclaration(node: SyntaxNodeLike | null): boolean {
+  let current = node?.parent ?? null;
+  while (current) {
+    if (current.type === "namespace_use_declaration") return true;
+    current = current.parent;
+  }
+  return false;
+}
+
 export function getPhpQualifiedReference(node: SyntaxNodeLike | null, source: string): string | null {
   if (!node) return null;
   if (node.type === "qualified_name" || node.type === "relative_name") {

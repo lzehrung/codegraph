@@ -17,6 +17,7 @@ import {
 import {
   buildIndexedCandidateCoverage,
   buildPhpQualifiedNames,
+  describeReferenceStrategies,
   collectVerifiedNamedNodeReferences,
   type VerifiedNamedNodeReference,
   getCachedScope,
@@ -761,6 +762,14 @@ async function findReferencesInternal(
     candidateFiles,
     scannedFiles,
     truncated,
+    strategies: describeReferenceStrategies({
+      languageId: parsedContext.sup.id,
+      phpQualifiedNames,
+      sameFileOccurrence: {
+        applicable: parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp",
+        executed: localBinding !== undefined && localBinding.occurrences.length > 0,
+      },
+    }),
   });
 
   return {

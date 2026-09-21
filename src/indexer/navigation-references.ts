@@ -5,7 +5,14 @@ import { fileIdentityKey } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { sameDef } from "./reference-context.js";
-import { readPhpNamespaceFromRange } from "./navigation-php.js";
+import {
+  canonicalPhpReferenceName,
+  comparePhpReferenceNames,
+  foldPhpIdentifierCase,
+  isInsidePhpUseDeclaration,
+  isPhpQualifiedReferenceNode,
+  readPhpNamespaceFromRange,
+} from "./navigation-php.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
@@ -131,11 +138,15 @@ export function getCachedScope(
   index.scopeCache.set(fileKey, scopeIndex);
   return scopeIndex;
 }
-export async function buildPhpQualifiedNames(
-  index: ProjectIndex,
-  definitionFile: string,
-  def: SymbolDef,
-): Promise<string[]> {
+/**
+ * The authoritative PHP spellings of a definition: `Namespace\Name`, or the bare `Name` for a
+ * global-namespace declaration. These are the names a reference must resolve to, so they keep
+ * the declaration's own case. A global-namespace declaration is still addressable by its bare
+ * name and by the fully-qualified `\Name` spelling, so the global-name scan must run for it;
+ * returning `[]` here left a global PHP symbol on the importer-narrowed path, which never scans
+ * a consumer that has no `use` statement.
+ */
+async function readPhpDefinitionNames(index: ProjectIndex, definitionFile: string, def: SymbolDef): Promise<string[]> {
   try {
     const definitionParsed = await ensureParsedContext(
       definitionFile,
@@ -146,19 +157,76 @@ export async function buildPhpQualifiedNames(
       return [];
     }
     const phpNamespace = readPhpNamespaceFromRange(definitionParsed.tree, definitionParsed.source, def.range);
-    if (!phpNamespace) return [];
-    const qualifiedName = `${phpNamespace}\\${def.localName}`;
-    return [qualifiedName, `\\${qualifiedName}`];
+    return [phpNamespace ? `${phpNamespace}\\${def.localName}` : def.localName];
   } catch {
     return [];
   }
+}
+
+export async function buildPhpQualifiedNames(
+  index: ProjectIndex,
+  definitionFile: string,
+  def: SymbolDef,
+): Promise<string[]> {
+  const canonicalNames = await readPhpDefinitionNames(index, definitionFile, def);
+  if (!canonicalNames.length) return [];
+  // PHP class, function, and namespace names are ASCII-case-insensitive, but the per-file
+  // bloom filter is case-sensitive, so a case-variant consumer (e.g. `new \app\service()`)
+  // is dropped before collection unless a folded spelling is probed too. The folded local
+  // name is the identifier the bloom actually stores; the folded qualified forms cover a
+  // fully folded reference spelling.
+  const probes = new Set<string>();
+  for (const canonicalName of canonicalNames) {
+    const foldedName = foldPhpIdentifierCase(canonicalName);
+    probes.add(canonicalName);
+    probes.add(`\\${canonicalName}`);
+    probes.add(foldPhpIdentifierCase(def.localName));
+    probes.add(foldedName);
+    probes.add(`\\${foldedName}`);
+  }
+  return Array.from(probes);
+}
+
+function definitionIdentityKey(def: SymbolDef): string {
+  return `${fileIdentityKey(def.file)}:${def.range.start.index ?? `${def.range.start.line}:${def.range.start.column}`}`;
+}
+
+const phpCanonicalNamesCache = new WeakMap<ProjectIndex, Map<string, string[]>>();
+const phpNameEquivalenceGaps = new WeakMap<ProjectIndex, Set<string>>();
+
+async function phpCanonicalDefinitionNames(index: ProjectIndex, def: SymbolDef): Promise<string[]> {
+  let perIndex = phpCanonicalNamesCache.get(index);
+  if (!perIndex) {
+    perIndex = new Map();
+    phpCanonicalNamesCache.set(index, perIndex);
+  }
+  const key = definitionIdentityKey(def);
+  const cached = perIndex.get(key);
+  if (cached) return cached;
+  const canonicalNames = (await readPhpDefinitionNames(index, def.file, def)).map((name) => name.replace(/^\\+/, ""));
+  perIndex.set(key, canonicalNames);
+  return canonicalNames;
+}
+
+function markPhpNameEquivalenceGap(index: ProjectIndex, def: SymbolDef): void {
+  let gaps = phpNameEquivalenceGaps.get(index);
+  if (!gaps) {
+    gaps = new Set();
+    phpNameEquivalenceGaps.set(index, gaps);
+  }
+  gaps.add(definitionIdentityKey(def));
 }
 
 async function collectNamedNodeReferences(
   index: ProjectIndex,
   fileId: string,
   symbolName: string,
-): Promise<{ ranges: Range[]; parsed: ParsedFileContext } | null> {
+  symbolKind?: string,
+): Promise<{
+  matched: Array<{ range: Range; node: SyntaxNodeLike }>;
+  parsed: ParsedFileContext;
+  nameEquivalenceUnavailable: boolean;
+} | null> {
   try {
     const parsedEntry = index.parsed?.get(fileIdentityKey(fileId));
     const parsed = await ensureParsedContext(fileId, parsedEntry, index.languageExtensions);
@@ -170,17 +238,30 @@ async function collectNamedNodeReferences(
       "field_identifier",
     ]);
     const canonicalSymbolName = parsed.sup.normalizeIdentifier(symbolName);
-    const ranges: Range[] = [];
+    const isPhp = parsed.sup.id === "php";
+    const matched: Array<{ range: Range; node: SyntaxNodeLike }> = [];
+    let nameEquivalenceUnavailable = false;
     const moduleIndex = index.byFile.get(fileIdentityKey(fileId));
     const importDeclarationKeys = importBindingDeclarationRangeKeys(moduleIndex);
     const walk = (node: SyntaxNodeLike): void => {
-      if (
-        identifierTypes.has(node.type) &&
-        parsed.sup.normalizeIdentifier(sliceText(node, parsed.source)) === canonicalSymbolName
-      ) {
-        const range = toRange(node);
-        if (!importDeclarationKeys.has(rangeIdentityKey(range))) {
-          ranges.push(range);
+      if (identifierTypes.has(node.type)) {
+        const text = parsed.sup.normalizeIdentifier(sliceText(node, parsed.source));
+        let isMatch: boolean;
+        if (!isPhp) {
+          isMatch = text === canonicalSymbolName;
+        } else {
+          const comparison = comparePhpReferenceNames(text, canonicalSymbolName, {
+            caseSensitiveForm: node.type === "variable_name" || node.type === "constant",
+            ...(symbolKind ? { symbolKind } : {}),
+          });
+          if (comparison === "unverified") nameEquivalenceUnavailable = true;
+          isMatch = comparison === "equivalent";
+        }
+        if (isMatch) {
+          const range = toRange(node);
+          if (!importDeclarationKeys.has(rangeIdentityKey(range)) && !(isPhp && isInsidePhpUseDeclaration(node))) {
+            matched.push({ range, node });
+          }
         }
       }
       for (const child of node.namedChildren) {
@@ -188,7 +269,7 @@ async function collectNamedNodeReferences(
       }
     };
     walk(parsed.tree.rootNode);
-    return { ranges, parsed };
+    return { matched, parsed, nameEquivalenceUnavailable };
   } catch {
     return null;
   }
@@ -216,14 +297,16 @@ export async function collectVerifiedNamedNodeReferences(
   maxVerified?: number,
   includeReference?: (reference: VerifiedNamedNodeReference) => boolean,
 ): Promise<VerifiedNamedNodeReference[]> {
-  const collected = await collectNamedNodeReferences(index, fileId, symbolName);
+  const collected = await collectNamedNodeReferences(index, fileId, symbolName, expectedDef.kind);
   if (!collected) return [];
-  const { ranges, parsed } = collected;
+  const { matched, parsed, nameEquivalenceUnavailable } = collected;
+  if (nameEquivalenceUnavailable) markPhpNameEquivalenceGap(index, expectedDef);
+  const phpCanonicalNames = parsed.sup.id === "php" ? await phpCanonicalDefinitionNames(index, expectedDef) : undefined;
   const verified: VerifiedNamedNodeReference[] = [];
   const pushVerified = (reference: VerifiedNamedNodeReference): void => {
     if (!includeReference || includeReference(reference)) verified.push(reference);
   };
-  for (const range of ranges) {
+  for (const { range, node } of matched) {
     if (maxVerified !== undefined && maxVerified > 0 && verified.length >= maxVerified) {
       break;
     }
@@ -245,13 +328,42 @@ export async function collectVerifiedNamedNodeReferences(
       },
       parsed,
     );
-    if (resolved.status !== "ok" || !resolved.definition) continue;
-    if (sameDef(resolved.definition, expectedDef, index.languageExtensions)) {
-      pushVerified({
-        range,
-        ...(exportFrom?.isExportFrom ? { via: { reexport: true } } : {}),
-        ...(resolved.provenance ? { provenance: resolved.provenance } : {}),
-      });
+    if (resolved.status === "ok" && resolved.definition) {
+      if (sameDef(resolved.definition, expectedDef, index.languageExtensions)) {
+        pushVerified({
+          range,
+          ...(exportFrom?.isExportFrom ? { via: { reexport: true } } : {}),
+          ...(resolved.provenance ? { provenance: resolved.provenance } : {}),
+        });
+      }
+      continue;
+    }
+    // PHP class, function, and namespace names are ASCII-case-insensitive, so goto can miss a
+    // legal case-variant reference (it resolves the reference's own spelling through the export
+    // table). Accept the reference when its namespace-qualified spelling proves it names this
+    // definition; stored spellings are untouched.
+    if (phpCanonicalNames) {
+      const rawText = sliceText(node, parsed.source);
+      const canonical = canonicalPhpReferenceName(rawText, parsed.source, parsed.tree, node);
+      const matchedName = canonical
+        ? phpCanonicalNames.find(
+            (canonicalName) =>
+              comparePhpReferenceNames(canonical, canonicalName, { symbolKind: expectedDef.kind }) === "equivalent",
+          )
+        : undefined;
+      if (matchedName) {
+        // A qualified path proves the namespace, but a bare case-variant `name` could also be a
+        // same-named constant, so the equivalence is unproven for that form and coverage says so
+        // instead of silently returning a short list.
+        if (!isPhpQualifiedReferenceNode(node)) {
+          const lastSegment = matchedName.split("\\").pop() ?? matchedName;
+          const bareText = rawText.trim();
+          if (bareText !== lastSegment && foldPhpIdentifierCase(bareText) === foldPhpIdentifierCase(lastSegment)) {
+            markPhpNameEquivalenceGap(index, expectedDef);
+          }
+        }
+        pushVerified({ range, ...(exportFrom?.isExportFrom ? { via: { reexport: true } } : {}) });
+      }
     }
   }
   return verified;
@@ -393,7 +505,6 @@ function getIndexedReferenceCandidateFiles(
   def: SymbolDef,
   exportedNames: readonly string[],
 ): readonly string[] | undefined {
-  if (def.file.toLowerCase().endsWith(".php")) return undefined;
   if (!index.referenceCandidates) return undefined;
   const files = new Map<string, string>();
   for (const exportingFile of filesExportingDefinition(index, def, exportedNames)) {
@@ -470,7 +581,63 @@ export function getCachedReferenceCandidateFiles(
   return sorted;
 }
 
-const COVERAGE_REASON_ORDER: ReferenceCoverageReason[] = ["parser_degraded", "unresolved_import", "truncated"];
+/**
+ * The single precedence table for reference-coverage reasons, shared by the direct
+ * indexed-candidate builder and the bounded reference lookup cache. Existing reasons keep
+ * their established relative order so current expectations stay stable; the two strategy
+ * reasons sit after the file-level reasons they refine and before `truncated`, because a
+ * skipped collection strategy is a correctness gap while `truncated` only reflects the
+ * caller's own requested bound.
+ */
+export const REFERENCE_COVERAGE_REASON_ORDER: readonly ReferenceCoverageReason[] = [
+  "parser_degraded",
+  "unresolved_import",
+  "strategy_unavailable",
+  "name_equivalence_unavailable",
+  "truncated",
+];
+
+/**
+ * A reference-collection strategy a definition's language and shape require. Coverage reports
+ * `strategy_unavailable` when an applicable strategy never ran, so a reference set that is
+ * missing sites because a scan was skipped can no longer claim `state: "complete"`.
+ *
+ * Applicability is a capability fact about the definition's language, not a result fact: a
+ * strategy that legitimately produced nothing (an export with no same-file uses) is still
+ * `executed`, while a strategy the language cannot run is applicable-but-not-executed.
+ */
+export type ReferenceStrategyId = "same_file_occurrence" | "php_qualified_name";
+
+export type ReferenceStrategyReport = {
+  applicable: readonly ReferenceStrategyId[];
+  executed: readonly ReferenceStrategyId[];
+};
+
+export function describeReferenceStrategies(args: {
+  languageId: string;
+  /** PHP global/qualified probe names produced for the definition; empty for other languages. */
+  phpQualifiedNames: readonly string[];
+  /**
+   * Same-file occurrence scan facts, for a language whose scope layer cannot register the
+   * declaration's occurrences. Omit for languages that do register them; omitting a strategy
+   * never reports it as unavailable.
+   */
+  sameFileOccurrence?: { applicable: boolean; executed: boolean };
+}): ReferenceStrategyReport {
+  const applicable: ReferenceStrategyId[] = [];
+  const executed: ReferenceStrategyId[] = [];
+  if (args.sameFileOccurrence?.applicable) {
+    applicable.push("same_file_occurrence");
+    if (args.sameFileOccurrence.executed) executed.push("same_file_occurrence");
+  }
+  if (args.languageId === "php") {
+    // Every PHP definition is addressable by its global or namespace-qualified spelling, so
+    // the qualified-name scan is required; the receiver scan is not the PHP strategy.
+    applicable.push("php_qualified_name");
+    if (args.phpQualifiedNames.length) executed.push("php_qualified_name");
+  }
+  return { applicable, executed };
+}
 
 type ImportBindingRanges = {
   importedRange: Range | undefined;
@@ -650,8 +817,15 @@ export function buildIndexedCandidateCoverage(args: {
   candidateFiles: readonly string[];
   scannedFiles: readonly string[];
   truncated: boolean;
+  /**
+   * Reference strategies applicable to this definition and the subset that actually ran.
+   * Optional so existing callers compile unchanged; without it coverage keeps its historical
+   * file-count behavior. When supplied, an applicable strategy absent from `executed` reports
+   * `strategy_unavailable`.
+   */
+  strategies?: ReferenceStrategyReport;
 }): ReferenceCoverage {
-  const { index, def, exportedNames, candidateFiles, scannedFiles, truncated } = args;
+  const { index, def, exportedNames, candidateFiles, scannedFiles, truncated, strategies } = args;
   const reasons: ReferenceCoverageReason[] = [];
   const affectedFiles: FileId[] = [];
   const affectedSeen = new Set<string>();
@@ -681,6 +855,17 @@ export function buildIndexedCandidateCoverage(args: {
     for (const file of unresolvedFiles) addAffected(file);
   }
 
+  if (strategies) {
+    const executed = new Set(strategies.executed);
+    if (strategies.applicable.some((strategy) => !executed.has(strategy))) {
+      reasons.push("strategy_unavailable");
+    }
+  }
+
+  if (phpNameEquivalenceGaps.get(index)?.has(definitionIdentityKey(def))) {
+    reasons.push("name_equivalence_unavailable");
+  }
+
   if (truncated) reasons.push("truncated");
 
   if (!reasons.length) {
@@ -689,7 +874,7 @@ export function buildIndexedCandidateCoverage(args: {
   return {
     scope: "indexed_candidates",
     state: "partial",
-    reasons: COVERAGE_REASON_ORDER.filter((reason) => reasons.includes(reason)),
+    reasons: REFERENCE_COVERAGE_REASON_ORDER.filter((reason) => reasons.includes(reason)),
     ...(affectedFiles.length ? { affectedFiles } : {}),
   };
 }

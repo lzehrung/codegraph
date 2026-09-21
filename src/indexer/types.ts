@@ -429,7 +429,12 @@ export type GoToResult =
 
 export type ImportBindingRole = "imported" | "local";
 
-export type ReferenceCoverageReason = "parser_degraded" | "unresolved_import" | "truncated";
+export type ReferenceCoverageReason =
+  | "parser_degraded"
+  | "unresolved_import"
+  | "strategy_unavailable"
+  | "name_equivalence_unavailable"
+  | "truncated";
 
 export type ReferenceCoverage = {
   scope: "indexed_candidates";

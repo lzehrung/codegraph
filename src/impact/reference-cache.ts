@@ -1,4 +1,5 @@
 import { findReferences, findUsageReferences } from "../indexer/navigation.js";
+import { REFERENCE_COVERAGE_REASON_ORDER } from "../indexer/navigation-references.js";
 import { ensureParsedContext } from "../indexer/parse-context.js";
 import { extractEnclosingBlock, extractLineContext } from "../indexer/reference-context.js";
 import { DEFAULT_REF_CONTEXT_LINES } from "../indexer/shared.js";
@@ -93,8 +94,6 @@ function normalizeMaxReferences(maxReferences: number | undefined): number | und
   return maxReferences;
 }
 
-const COVERAGE_REASON_ORDER: ReferenceCoverageReason[] = ["parser_degraded", "unresolved_import", "truncated"];
-
 function cloneCoverage(coverage: ReferenceCoverage): ReferenceCoverage {
   return {
     scope: coverage.scope,
@@ -110,7 +109,7 @@ function withTruncatedCoverage(coverage: ReferenceCoverage): ReferenceCoverage {
   return {
     scope: "indexed_candidates",
     state: "partial",
-    reasons: COVERAGE_REASON_ORDER.filter((reason) => reasons.has(reason)),
+    reasons: REFERENCE_COVERAGE_REASON_ORDER.filter((reason) => reasons.has(reason)),
     ...(coverage.affectedFiles ? { affectedFiles: [...coverage.affectedFiles] } : {}),
   };
 }
