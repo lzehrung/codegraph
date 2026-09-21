@@ -1,6 +1,23 @@
 import path from "node:path";
+import { supportById } from "../languages.js";
 
 export const STYLESHEET_RESOLUTION_EXTENSIONS = [".css", ".scss", ".less"] as const;
+
+export const NON_IMPORTABLE_SOURCE_EXTENSIONS = new Set([".pyw", ".rbw", ".rake", ".gemspec"]);
+
+export function getImportableLanguageExtensions(languageId: string): string[] {
+  const matchExts = supportById(languageId)?.matchExts ?? [];
+  return matchExts.filter((ext) => !NON_IMPORTABLE_SOURCE_EXTENSIONS.has(ext));
+}
+
+export function getImportableLanguageGlobs(languageId: string): string[] {
+  return getImportableLanguageExtensions(languageId).map((ext) => `**/*${ext}`);
+}
+
+export function fileHasImportableLanguageExtension(filePath: string, languageId: string): boolean {
+  const lowerPath = filePath.toLowerCase().replace(/\\/g, "/");
+  return getImportableLanguageExtensions(languageId).some((ext) => lowerPath.endsWith(ext));
+}
 
 export const DEFAULT_RESOLUTION_EXTENSIONS = [
   ".ts",
@@ -17,12 +34,16 @@ export const DEFAULT_RESOLUTION_EXTENSIONS = [
   ".json",
   ...STYLESHEET_RESOLUTION_EXTENSIONS,
   ".php",
+  ".phtml",
+  ".php4",
+  ".php8",
   ".html",
   ".vue",
   ".svelte",
   ".go",
   ".java",
   ".cs",
+  ".csx",
   ".rb",
   ".rs",
   ".c",
@@ -39,6 +60,7 @@ export const DEFAULT_RESOLUTION_EXTENSIONS = [
   ".inl",
   ".kt",
   ".kts",
+  ".ktm",
   ".swift",
 ] as const;
 

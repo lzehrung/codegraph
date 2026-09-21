@@ -2,6 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { unquote } from "../ast.js";
+import { stripBom } from "../paths.js";
 import { fileExists } from "../workspace.js";
 import { findNearestFile } from "./files.js";
 
@@ -19,7 +20,7 @@ function stripInlineComment(line: string): string {
 async function parseGoMod(moduleRoot: string): Promise<GoModuleInfo | null> {
   const modPath = path.join(moduleRoot, "go.mod");
   if (!(await fileExists(modPath))) return null;
-  const raw = await fsp.readFile(modPath, "utf8");
+  const raw = stripBom(await fsp.readFile(modPath, "utf8"));
   const lines = raw.split(/\r?\n/);
   let modulePath: string | null = null;
   const replacements = new Map<string, string>();
@@ -53,7 +54,7 @@ async function parseGoMod(moduleRoot: string): Promise<GoModuleInfo | null> {
 }
 
 async function parseGoWork(goWorkPath: string): Promise<string[]> {
-  const content = await fsp.readFile(goWorkPath, "utf8");
+  const content = stripBom(await fsp.readFile(goWorkPath, "utf8"));
   const lines = content.split(/\r?\n/);
   const modules: string[] = [];
   let inUseBlock = false;
@@ -80,7 +81,7 @@ async function parseGoWork(goWorkPath: string): Promise<string[]> {
   return modules.filter(Boolean);
 }
 
-async function findGoPackageEntry(dirPath: string): Promise<string | null> {
+export async function findGoPackageEntry(dirPath: string): Promise<string | null> {
   try {
     const stat = await fsp.stat(dirPath);
     if (!stat.isDirectory()) return null;

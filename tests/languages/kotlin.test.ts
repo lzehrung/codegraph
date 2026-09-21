@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
-import { buildProjectIndex, findReferences } from "../../src/index.js";
+import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
 import { finalizeLanguageSpecificImports } from "../../src/indexer/imports/language-specific.js";
 import { parseKotlinImportStatement } from "../../src/languages/import-statement-parsers.js";
 import type { ImportBinding } from "../../src/indexer/types.js";
@@ -422,6 +422,98 @@ describe("Kotlin .ktm script files", () => {
       const index = await buildProjectIndex(root, { cache: "off" });
       const unresolved = getUnresolvedImports(index.graph, { projectRoot: root });
       expect(unresolved.map((entry) => entry.name)).toContain("com.example.unknown.Widget");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves an import of a package declared in a .ktm file", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-ktm-package-"));
+    const declaring = path.join(root, "models.ktm");
+    const importing = path.join(root, "main.kt");
+    try {
+      await fsp.writeFile(declaring, "package app.models\nclass Widget\n", "utf8");
+      await fsp.writeFile(importing, "import app.models.Widget\nfun use(): Widget = Widget()\n", "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const fromMain = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(importing));
+      expect(fromMain.map((edge) => edge.to)).toEqual([{ type: "file", path: declaring.replace(/\\/g, "/") }]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Kotlin receiver member navigation", () => {
+  it("resolves property and method navigation to the proven receiver, not a local or decoy member", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-receiver-nav-"));
+    const file = path.join(root, "box.kt").replace(/\\/g, "/");
+    const source = [
+      "class Box {",
+      "  val payload = 1",
+      "  fun ping(): Int = payload",
+      "}",
+      "class Decoy {",
+      "  val payload = 2",
+      "  fun ping(): Int = payload",
+      "}",
+      "fun use(box: Box) {",
+      "  val payload = 99",
+      "  val ping = 99",
+      "  val x = box.payload",
+      "  box.ping()",
+      "}",
+      "fun other(decoy: Decoy) {",
+      "  decoy.payload",
+      "  decoy.ping()",
+      "}",
+      "",
+    ].join("\n");
+    await fsp.writeFile(file, source, "utf8");
+    const columnOf = (line: number, token: string): number => {
+      const text = source.split("\n")[line - 1];
+      if (!text) throw new Error(`missing line ${line}`);
+      const index = text.indexOf(token);
+      if (index < 0) throw new Error(`token not found on line ${line}: ${token}`);
+      return index + 1;
+    };
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const boxPayload = await goToDefinition(index, { file, line: 12, column: columnOf(12, "payload") });
+      expect(boxPayload.status).toBe("ok");
+      if (boxPayload.status === "ok") expect(boxPayload.definition.range.start.line).toBe(2);
+
+      const boxPing = await goToDefinition(index, { file, line: 13, column: columnOf(13, "ping") });
+      expect(boxPing.status).toBe("ok");
+      if (boxPing.status === "ok") expect(boxPing.definition.range.start.line).toBe(3);
+
+      const decoyPayload = await goToDefinition(index, { file, line: 16, column: columnOf(16, "payload") });
+      expect(decoyPayload.status).toBe("ok");
+      if (decoyPayload.status === "ok") expect(decoyPayload.definition.range.start.line).toBe(6);
+
+      const localPayload = await goToDefinition(index, { file, line: 10, column: columnOf(10, "payload") });
+      expect(localPayload.status).toBe("ok");
+      if (localPayload.status === "ok") expect(localPayload.definition.range.start.line).toBe(10);
+
+      const payloadRefs = await findReferences(index, { file, line: 2, column: columnOf(2, "payload") });
+      expect(payloadRefs.status).toBe("ok");
+      if (payloadRefs.status === "ok") {
+        const payloadLines = payloadRefs.references.map((reference) => reference.range.start.line);
+        expect(payloadLines).toEqual(expect.arrayContaining([2, 3, 12]));
+        expect(payloadLines).not.toContain(6);
+        expect(payloadLines).not.toContain(10);
+        expect(payloadLines).not.toContain(16);
+      }
+
+      const pingRefs = await findReferences(index, { file, line: 3, column: columnOf(3, "ping") });
+      expect(pingRefs.status).toBe("ok");
+      if (pingRefs.status === "ok") {
+        const pingLines = pingRefs.references.map((reference) => reference.range.start.line);
+        expect(pingLines).toEqual(expect.arrayContaining([3, 13]));
+        expect(pingLines).not.toContain(7);
+        expect(pingLines).not.toContain(11);
+        expect(pingLines).not.toContain(17);
+      }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

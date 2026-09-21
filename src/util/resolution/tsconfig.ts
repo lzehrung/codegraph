@@ -1,11 +1,10 @@
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { createMatchPath } from "tsconfig-paths";
 import { logWithLevel, type LogLevel } from "../../logging.js";
 import { parseJsonc } from "../comments.js";
-import { fileIdentityKey, isFilePathWithinRoot } from "../paths.js";
+import { fileIdentityKey, isFilePathWithinRoot, stripBom } from "../paths.js";
 import { fileExists } from "../workspace.js";
 
 export type MatchPathFn = ReturnType<typeof createMatchPath>;
@@ -30,12 +29,7 @@ async function findNearestTsconfig(startFromFile: string, projectRoot: string): 
   let dir = path.dirname(startFromFile);
   while (isFilePathWithinRoot(resolvedProjectRoot, dir)) {
     const candidate = path.join(dir, "tsconfig.json");
-    try {
-      await fsp.access(candidate, fs.constants.R_OK);
-      return candidate;
-    } catch {
-      /* file not found: continue up */
-    }
+    if (await fileExists(candidate)) return candidate;
     if (fileIdentityKey(dir) === projectRootKey) break;
     const parent = path.dirname(dir);
     if (!isFilePathWithinRoot(resolvedProjectRoot, parent)) break;
@@ -112,7 +106,7 @@ async function loadTsconfigConfig(
   }
   seen.add(cfgKey);
 
-  const raw = await fsp.readFile(cfgPath, "utf8");
+  const raw = stripBom(await fsp.readFile(cfgPath, "utf8"));
   const json = parseJsonc<TsconfigJson>(raw);
   const cfgDir = path.dirname(cfgPath);
   const compilerOptions = json.compilerOptions;

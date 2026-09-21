@@ -198,17 +198,17 @@ const mode = process.argv[2] ?? "all";
 if (mode === "js") {
   runJavaScriptCoverage();
   writeCoverageIndex();
-  writeCoverageMarkdownReports({ rootDir, mode });
+  await writeCoverageMarkdownReports({ rootDir, mode });
 } else if (mode === "native") {
   runNativeCoverage();
   writeCoverageIndex();
-  writeCoverageMarkdownReports({ rootDir, mode });
+  await writeCoverageMarkdownReports({ rootDir, mode });
 } else if (mode === "all") {
   fs.rmSync(coverageDir, { recursive: true, force: true });
   runJavaScriptCoverage();
   runNativeCoverage();
   writeCoverageIndex();
-  writeCoverageMarkdownReports({ rootDir, mode });
+  await writeCoverageMarkdownReports({ rootDir, mode });
 } else {
   console.error("Usage: node ./scripts/coverage.mjs [js|native|all]");
   process.exit(1);

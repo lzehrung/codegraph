@@ -6,9 +6,9 @@ Source: `coverage/js/lcov.info`
 
 | Metric    |   Hit | Found | Coverage |
 | --------- | ----: | ----: | -------: |
-| Lines     | 33427 | 36868 |   90.67% |
-| Functions |  5406 |  5754 |   93.95% |
-| Branches  | 25652 | 32201 |   79.66% |
+| Lines     | 33991 | 37406 |   90.87% |
+| Functions |  5538 |  5886 |   94.09% |
+| Branches  | 25626 | 32187 |   79.62% |
 
 ## Least-covered Files
 
@@ -18,6 +18,7 @@ Source: `coverage/js/lcov.info`
 | `src/mcp/server.ts`                             |  0.00% |     0.00% |    0.00% |
 | `src/sqlite/raw-query-worker.ts`                |  0.00% |     0.00% |    0.00% |
 | `src/mcp/lifecycle-health.ts`                   | 37.50% |    16.67% |   33.33% |
+| `src/languages/graph-captures.ts`               | 45.45% |    50.00% |    0.00% |
 | `src/cli/explore.ts`                            | 62.50% |   100.00% |   50.00% |
 | `src/impact/call-compatibility/text-scanner.ts` | 66.04% |   100.00% |   70.75% |
 | `src/cli/bootstrap.ts`                          | 66.67% |    50.00% |      n/a |
@@ -28,28 +29,27 @@ Source: `coverage/js/lcov.info`
 | `src/cli/location.ts`                           | 75.00% |   100.00% |   50.00% |
 | `src/frameworks/angularjs.ts`                   | 75.64% |    88.46% |   57.27% |
 | `src/cli/install.ts`                            | 75.71% |    76.00% |   72.09% |
-| `src/native/execution.ts`                       | 75.86% |    87.50% |   73.77% |
 | `src/cli/mcp.ts`                                | 75.86% |    66.67% |   78.13% |
 | `src/cli/packet.ts`                             | 76.47% |    50.00% |   62.96% |
 | `src/cli.ts`                                    | 77.91% |    71.43% |   82.76% |
+| `src/native/execution.ts`                       | 78.16% |    87.50% |   75.41% |
 | `src/impact/report-shared.ts`                   | 78.95% |    82.76% |   50.00% |
-| `src/cli/index.ts`                              | 80.00% |   100.00% |   75.51% |
 
 ## Type-Only Or Re-Export Files
 
 These files have line records but no function or branch records, so they are tracked outside the runtime ranking.
 
-| File                                     |   Lines | Functions | Branches |
-| ---------------------------------------- | ------: | --------: | -------: |
-| `src/cli-bootstrap.ts`                   |   0.00% |       n/a |      n/a |
-| `src/languages/definitions/js-family.ts` | 100.00% |       n/a |      n/a |
-| `src/duplicate-identifier-ranges.ts`     | 100.00% |       n/a |      n/a |
-| `src/duplicate-keywords.ts`              | 100.00% |       n/a |      n/a |
-| `src/impact/types.ts`                    | 100.00% |       n/a |      n/a |
-| `src/languages/definitions/adoc.ts`      | 100.00% |       n/a |      n/a |
-| `src/languages/definitions/astro.ts`     | 100.00% |       n/a |      n/a |
-| `src/languages/definitions/css.ts`       | 100.00% |       n/a |      n/a |
-| `src/languages/definitions/hbs.ts`       | 100.00% |       n/a |      n/a |
-| `src/languages/definitions/html.ts`      | 100.00% |       n/a |      n/a |
+| File                                    |   Lines | Functions | Branches |
+| --------------------------------------- | ------: | --------: | -------: |
+| `src/cli-bootstrap.ts`                  |   0.00% |       n/a |      n/a |
+| `src/duplicate-identifier-ranges.ts`    | 100.00% |       n/a |      n/a |
+| `src/duplicate-keywords.ts`             | 100.00% |       n/a |      n/a |
+| `src/impact/types.ts`                   | 100.00% |       n/a |      n/a |
+| `src/languages/definitions/adoc.ts`     | 100.00% |       n/a |      n/a |
+| `src/languages/definitions/astro.ts`    | 100.00% |       n/a |      n/a |
+| `src/languages/definitions/css.ts`      | 100.00% |       n/a |      n/a |
+| `src/languages/definitions/hbs.ts`      | 100.00% |       n/a |      n/a |
+| `src/languages/definitions/less.ts`     | 100.00% |       n/a |      n/a |
+| `src/languages/definitions/markdown.ts` | 100.00% |       n/a |      n/a |
 
 Generated from LCOV by `node ./scripts/coverage-markdown.mjs`.

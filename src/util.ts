@@ -42,7 +42,7 @@ export type {
   ProjectFileRole,
   ProjectFileType,
 } from "./util/project-files.js";
-export { extractJsTsDynamicSpecifiers, extractJsTsSpecifiers, extractPythonSpecifiers } from "./util/specifiers.js";
+export { extractDynamicImportSpecifiers, extractJsTsSpecifiers, extractPythonSpecifiers } from "./util/specifiers.js";
 export type { ModuleSpecifier } from "./util/specifiers.js";
 export {
   fileExists,

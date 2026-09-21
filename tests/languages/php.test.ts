@@ -761,3 +761,47 @@ describe("PHP property_element and const_element initializer references", () => 
     }
   });
 });
+
+describe("PHP registered extension namespace resolution", () => {
+  it("resolves a class in a .phtml file through its namespace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-phtml-namespace-"));
+    const declaring = path.join(root, "widget.phtml");
+    const importing = path.join(root, "main.php");
+    try {
+      await writeFile(declaring, "<?php\nnamespace App\\View;\nclass Widget {}\n", "utf8");
+      await writeFile(importing, "<?php\nuse App\\View\\Widget;\n$widget = new Widget();\n", "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const fromMain = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(importing));
+      expect(fromMain.map((edge) => edge.to)).toEqual([{ type: "file", path: declaring.replace(/\\/g, "/") }]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("PHP nested function export exclusion", () => {
+  it("does not publish a function nested inside another function as a module export", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-nested-function-"));
+    const file = path.join(root, "nested.php");
+    const source = [
+      "<?php",
+      "function outer() {",
+      "  function inner() { return 1; }",
+      "  return inner();",
+      "}",
+      "",
+    ].join("\n");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const module = index.byFile.get(fileIdentityKey(file));
+      const exported = (module?.exports ?? []).flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : []));
+      expect(exported).toContain("outer");
+      // PHP only hoists nested function definitions to visibility when the outer function
+      // runs; the nested name is not a module export.
+      expect(exported).not.toContain("inner");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

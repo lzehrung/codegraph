@@ -1,7 +1,8 @@
 import path from "node:path";
 import { extractJsTsSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
 import { type Range } from "../types.js";
-import { extractHtmlAttributeSpecifiers } from "./html.js";
+import { DOCUMENT_HTML_FORMS, type DocumentHtmlForm } from "./html-forms.js";
+import { extractDocumentHtmlSpecifiers } from "./html.js";
 import {
   dedupeModuleSpecifiers,
   isObviouslyDynamicSpecifier,
@@ -15,7 +16,7 @@ const MAX_MARKDOWN_INLINE_LABEL_SCAN_LENGTH = Number.POSITIVE_INFINITY;
 
 export function extractMarkdownModuleSpecifiers(source: string): ModuleSpecifier[] {
   const sanitized = stripMarkdownCode(source);
-  return extractMarkdownModuleSpecifiersFromSanitized(sanitized);
+  return extractMarkdownModuleSpecifiersFromSanitized(sanitized, DOCUMENT_HTML_FORMS.markdown);
 }
 
 export type MarkdownLinkOccurrence =
@@ -128,7 +129,10 @@ export function extractMarkdownLinkOccurrences(source: string): MarkdownLinkOccu
   return out;
 }
 
-function extractMarkdownModuleSpecifiersFromSanitized(sanitized: string): ModuleSpecifier[] {
+function extractMarkdownModuleSpecifiersFromSanitized(
+  sanitized: string,
+  htmlForm: DocumentHtmlForm,
+): ModuleSpecifier[] {
   const referenceDefs = collectMarkdownReferenceDefinitions(sanitized);
   const out: ModuleSpecifier[] = [];
 
@@ -155,18 +159,14 @@ function extractMarkdownModuleSpecifiersFromSanitized(sanitized: string): Module
     if (normalized) out.push(normalized);
   }
 
-  out.push(
-    ...extractHtmlAttributeSpecifiers(sanitized, {
-      a: ["href"],
-    }),
-  );
+  out.push(...extractDocumentHtmlSpecifiers(sanitized, htmlForm));
 
   return dedupeModuleSpecifiers(out);
 }
 
 export function extractMdxModuleSpecifiers(source: string): ModuleSpecifier[] {
   const sanitized = stripMarkdownCode(source);
-  const out = extractMarkdownModuleSpecifiersFromSanitized(sanitized);
+  const out = extractMarkdownModuleSpecifiersFromSanitized(sanitized, DOCUMENT_HTML_FORMS.mdx);
   out.push(...markResolutionKind(extractJsTsSpecifiers(sanitized), "source"));
   return dedupeModuleSpecifiers(out);
 }

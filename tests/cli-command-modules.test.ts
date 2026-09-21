@@ -1149,7 +1149,7 @@ describe("CLI command modules", () => {
           supportedLanguageIds: ["typescript"],
           filesUsed: 3,
           filesFellBack: 0,
-          fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 0 },
+          fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 0, sourceTooLarge: 0 },
           byLanguage: {},
           errors: [],
           ...overrides,

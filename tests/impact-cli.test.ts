@@ -319,7 +319,7 @@ export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
         await fsp.mkdir(srcDir, { recursive: true });
         const serviceFile = path.join(srcDir, "service.ts");
         const consumerFile = path.join(srcDir, "consumer.ts");
-        const goFile = path.join(root, "helper.go");
+        const limitedFile = path.join(root, "helper.c");
         await fsp.writeFile(
           serviceFile,
           ["export class Service {", "  run(value: number, extra: number): number { return value; }", "}", ""].join(
@@ -337,7 +337,7 @@ export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
           ].join("\n"),
           "utf8",
         );
-        await fsp.writeFile(goFile, "package main\n\nfunc Helper(a string, b int) string {\n\treturn a\n}\n", "utf8");
+        await fsp.writeFile(limitedFile, "int helper(const char *a, int b) {\n  return b;\n}\n", "utf8");
 
         const diffText = [
           "diff --git a/src/service.ts b/src/service.ts",
@@ -347,16 +347,14 @@ export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
           "@@ -2,1 +2,1 @@",
           "-  run(value: number): number { return value; }",
           "+  run(value: number, extra: number): number { return value; }",
-          "diff --git a/helper.go b/helper.go",
+          "diff --git a/helper.c b/helper.c",
           "index 1234567..abcdef0 100644",
-          "--- a/helper.go",
-          "+++ b/helper.go",
-          "@@ -1,5 +1,5 @@",
-          " package main",
-          " ",
-          "-func Helper(a string) string {",
-          "+func Helper(a string, b int) string {",
-          " \treturn a",
+          "--- a/helper.c",
+          "+++ b/helper.c",
+          "@@ -1,3 +1,3 @@",
+          "-int helper(const char *a) {",
+          "+int helper(const char *a, int b) {",
+          "   return b;",
           " }",
           "",
         ].join("\n");
@@ -368,7 +366,7 @@ export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
 
         expect(stdout).toContain("resolution confidence: medium");
         expect(stdout).toContain(
-          "Note: limited receiver-call resolution for: go; consumers reached only through a receiver (e.g. obj.method()) may be missing from this report.",
+          "Note: limited receiver-call resolution for: c; consumers reached only through a receiver (e.g. obj.method()) may be missing from this report.",
         );
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
@@ -621,8 +619,8 @@ describe("review CLI output", () => {
           "utf8",
         );
         await fsp.writeFile(
-          path.join(root, "src", "helper.go"),
-          "package main\n\nfunc Helper(a string) string {\n\treturn a\n}\n",
+          path.join(root, "src", "helper.c"),
+          "int helper(const char *a) {\n  return 0;\n}\n",
           "utf8",
         );
         runGit(root, ["add", "."]);
@@ -635,8 +633,8 @@ describe("review CLI output", () => {
           "utf8",
         );
         await fsp.writeFile(
-          path.join(root, "src", "helper.go"),
-          "package main\n\nfunc Helper(a string, b int) string {\n\treturn a\n}\n",
+          path.join(root, "src", "helper.c"),
+          "int helper(const char *a, int b) {\n  return b;\n}\n",
           "utf8",
         );
         runGit(root, ["add", "."]);
@@ -648,7 +646,7 @@ describe("review CLI output", () => {
         });
 
         expect(result.stdout).toContain(
-          "limited receiver-call resolution: go (consumers reached only through a receiver, e.g. obj.method(), may be missing)",
+          "limited receiver-call resolution: c (consumers reached only through a receiver, e.g. obj.method(), may be missing)",
         );
       } finally {
         await fsp.rm(root, { recursive: true, force: true });

@@ -132,10 +132,6 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
                 "CREATE TABLE users (id integer);",
                 "(statement) @stmt",
             ),
-            "svelte" => (
-                "<script src=\"./dep.js\"></script>",
-                "(script_element (start_tag (attribute (attribute_name) @attr (#eq? @attr \"src\") (quoted_attribute_value (attribute_value) @mod)))) @stmt",
-            ),
             "swift" => (
                 "func helper() {}",
                 "(function_declaration name: (simple_identifier) @name)",
@@ -151,10 +147,6 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
             "tsx" => (
                 "export function Button() { return <div />; }",
                 "(function_declaration name: (identifier) @name)",
-            ),
-            "vue" => (
-                "<script src=\"./logic.ts\"></script>",
-                "(script_element (start_tag (attribute (attribute_name) @attr (#eq? @attr \"src\") (quoted_attribute_value (attribute_value) @mod)))) @stmt",
             ),
             other => panic!("missing smoke case for language id {other}"),
         }
@@ -178,11 +170,9 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
             "rust",
             "scss",
             "sql",
-            "svelte",
             "swift",
             "ts",
             "tsx",
-            "vue",
             "zig",
         ]
         .into_iter()
@@ -192,7 +182,7 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
     #[test]
     fn supported_language_ids_contains_expected_languages() {
         let supported = supported_language_ids();
-        for language_id in ["ts", "tsx", "js", "python", "php", "go", "rust", "vue", "svelte", "zig"] {
+        for language_id in ["ts", "tsx", "js", "python", "php", "go", "rust", "zig"] {
             assert!(
                 supported.iter().any(|entry| entry == language_id),
                 "expected supported languages to include {language_id}",

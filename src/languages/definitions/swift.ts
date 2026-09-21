@@ -1,5 +1,6 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
+import { isNameFieldOnParent, nodeTypeIn } from "./shared.js";
 
 export const SWIFT_DEF: LanguageDefinition = {
   id: "swift",
@@ -78,8 +79,12 @@ export const SWIFT_DEF: LanguageDefinition = {
     comments: ["comment", "multiline_comment"],
   },
   graph: {
+    // Pinned tree-sitter-swift: the path is always one `identifier` node, including
+    // dotted paths (`Foundation.NSString`). Kind keywords (`class`, `struct`, `func`,
+    // `enum`, `typealias`) are anonymous. `simple_identifier` is not a child of
+    // `import_declaration` (Impossible pattern). No alias or wildcard node.
     imports: `
-      (import_declaration (identifier) @mod) @stmt
+      (import_declaration (identifier) @from) @stmt
     `,
     exports: `
       (source_file (class_declaration declaration_kind: "class" name: (_) @name))
@@ -140,6 +145,7 @@ export const SWIFT_DEF: LanguageDefinition = {
       (macro_declaration (simple_identifier) @name)
       (operator_declaration [(custom_operator) (simple_identifier) (bang)] @name)
     `,
+    // Same path node as `imports`; Swift has no import alias or star token.
     importBindings: `
       (import_declaration (identifier) @from) @stmt
     `,
@@ -181,18 +187,28 @@ export const SWIFT_DEF: LanguageDefinition = {
   isDeclarationName: (node) => {
     const parent = node.parent;
     if (!parent) return false;
-    if (parent.type === "class_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
+    if (isNameFieldOnParent(node, ["class_declaration"])) return true;
+    // Extension names are wrapped in a user_type node
+    // (`extension Container { ... }` -> name: (user_type (type_identifier))).
     if (
       parent.type === "user_type" &&
       parent.parent?.type === "class_declaration" &&
       parent.parent.childForFieldName("name")?.id === parent.id
     )
       return true;
-    if (parent.type === "protocol_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
-    if (parent.type === "enum_entry" && parent.childForFieldName("name")?.id === node.id) return true;
-    if (parent.type === "function_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
-    if (parent.type === "typealias_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
-    if (parent.type === "associatedtype_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
+    if (
+      isNameFieldOnParent(node, [
+        "protocol_declaration",
+        "enum_entry",
+        "function_declaration",
+        "typealias_declaration",
+        "associatedtype_declaration",
+        "parameter",
+        "protocol_function_declaration",
+        "protocol_property_declaration",
+      ])
+    )
+      return true;
     if (parent.type === "macro_declaration" && node.type === "simple_identifier") return true;
     if (
       parent.type === "operator_declaration" &&
@@ -202,33 +218,29 @@ export const SWIFT_DEF: LanguageDefinition = {
     if (parent.type === "init_declaration" && node.type === "init") return true;
     if (parent.type === "deinit_declaration" && node.type === "deinit") return true;
     if (parent.type === "subscript_declaration" && node.type === "subscript") return true;
-    if (parent.type === "parameter" && parent.childForFieldName("name")?.id === node.id) return true;
-    if (parent.type === "protocol_function_declaration" && parent.childForFieldName("name")?.id === node.id)
-      return true;
-    if (parent.type === "protocol_property_declaration" && parent.childForFieldName("name")?.id === node.id)
-      return true;
-    if (
+    return (
       parent.type === "pattern" &&
       parent.childForFieldName("bound_identifier")?.id === node.id &&
       (parent.parent?.type === "property_declaration" || parent.parent?.type === "protocol_property_declaration")
-    )
-      return true;
-    return false;
+    );
   },
   scopeDeclarationNames: "all",
-  createsFunctionScope: (node) =>
-    node.type === "function_declaration" ||
-    node.type === "init_declaration" ||
-    node.type === "deinit_declaration" ||
-    node.type === "subscript_declaration",
-  createsBlockScope: (node) =>
-    node.type === "function_body" ||
-    node.type === "class_body" ||
-    node.type === "protocol_body" ||
-    node.type === "enum_class_body" ||
-    node.type === "catch_block" ||
-    node.type === "willset_didset_block",
+  createsFunctionScope: nodeTypeIn([
+    "function_declaration",
+    "init_declaration",
+    "deinit_declaration",
+    "subscript_declaration",
+  ]),
+  createsBlockScope: nodeTypeIn([
+    "function_body",
+    "class_body",
+    "protocol_body",
+    "enum_class_body",
+    "catch_block",
+    "willset_didset_block",
+  ]),
   supportsCrossModuleSymbols: true,
+  membersAreImplicitlyInScope: true,
   exportScopeBlockers: ["function_body", "lambda_literal"],
 };
 registerLanguage(SWIFT_DEF);

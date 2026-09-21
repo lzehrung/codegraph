@@ -1044,6 +1044,232 @@ nativeDescribe("receiver method call edge language parity", () => {
   });
 });
 
+nativeDescribe("receiver construction, reassignment, typed parameters, and static scope", () => {
+  it("records a PHP named receiver assigned from new", async () => {
+    const files: Record<string, string> = {
+      "box.php": [
+        "<?php",
+        "class Box { function helper() {} }",
+        "function run() { $box = new Box(); $box->helper(); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-php-named-", files);
+    const helper = nodeIn(graph, "box.php", "helper");
+    const run = nodeIn(graph, "box.php", "run");
+    expect(callsiteTexts(graph, helper, run, files)).toEqual(["helper"]);
+  });
+
+  it("does not attribute an unproven PHP receiver to an imported function of the same name", async () => {
+    const files: Record<string, string> = {
+      "lib.php": ["<?php", "namespace Imported;", "function helper() {}"].join("\n"),
+      "host.php": [
+        "<?php",
+        "use function Imported\\helper;",
+        "class Box { function helper() {} }",
+        "function run() { $unknown->helper(); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-php-misattr-", files);
+    const imported = nodeIn(graph, "lib.php", "helper");
+    const method = nodeIn(graph, "host.php", "helper");
+    const run = nodeIn(graph, "host.php", "run");
+    expect(callsiteTexts(graph, imported, run, files)).toBeNull();
+    expect(callsiteTexts(graph, method, run, files)).toBeNull();
+    expect(outgoingCallCount(graph, run)).toBe(0);
+  });
+
+  it("records a Zig struct-literal receiver", async () => {
+    const files: Record<string, string> = {
+      "box.zig": [
+        "const Box = struct {",
+        "    fn helper(self: Box) void {}",
+        "};",
+        "fn run() void { var box = Box{}; box.helper(); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-zig-literal-", files);
+    const helper = nodeIn(graph, "box.zig", "helper");
+    const run = nodeIn(graph, "box.zig", "run");
+    expect(callsiteTexts(graph, helper, run, files)).toEqual(["helper"]);
+  });
+
+  it("records a Ruby instance-variable receiver assigned from .new", async () => {
+    const files: Record<string, string> = {
+      "box.rb": [
+        "class Box",
+        "  def helper",
+        "  end",
+        "end",
+        "def run",
+        "  @box = Box.new",
+        "  @box.helper",
+        "end",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-rb-ivar-", files);
+    const helper = nodeIn(graph, "box.rb", "helper");
+    const run = nodeIn(graph, "box.rb", "run");
+    expect(callsiteTexts(graph, helper, run, files)).toEqual(["helper"]);
+  });
+
+  it("records typed-parameter receivers in languages that expose a parameter type", async () => {
+    const cases: { prefix: string; file: string; source: string; member: string; caller: string }[] = [
+      {
+        prefix: "cg-typed-ts-",
+        file: "run.ts",
+        member: "target",
+        caller: "run",
+        source: [
+          "export class Lib { target(): number { return 1; } }",
+          "export function run(box: Lib): number { return box.target(); }",
+        ].join("\n"),
+      },
+      {
+        prefix: "cg-typed-java-",
+        file: "Run.java",
+        member: "target",
+        caller: "run",
+        source: ["class Lib { void target() {} }", "class Host { void run(Lib box) { box.target(); } }"].join("\n"),
+      },
+      {
+        prefix: "cg-typed-php-",
+        file: "run.php",
+        member: "helper",
+        caller: "run",
+        source: ["<?php", "class Box { function helper() {} }", "function run(Box $box) { $box->helper(); }"].join(
+          "\n",
+        ),
+      },
+    ];
+    const missing: string[] = [];
+    for (const testCase of cases) {
+      const files: Record<string, string> = { [testCase.file]: testCase.source };
+      const graph = await buildFixture(testCase.prefix, files);
+      const caller = nodeIn(graph, testCase.file, testCase.caller);
+      const member = nodeIn(graph, testCase.file, testCase.member);
+      if (!callsiteTexts(graph, member, caller, files)) missing.push(testCase.file);
+    }
+    expect(missing, "typed-parameter receivers must resolve").toEqual([]);
+  });
+
+  it("leaves a reassigned receiver unresolved in JS, Java, and Go", async () => {
+    const cases: { prefix: string; file: string; source: string; member: string; caller: string }[] = [
+      {
+        prefix: "cg-reassign-ts-",
+        file: "run.ts",
+        member: "target",
+        caller: "run",
+        source: [
+          "export class Lib { target(): number { return 1; } }",
+          "export function other(): Lib { return new Lib(); }",
+          "export function run(): number { let l = new Lib(); l = other(); return l.target(); }",
+        ].join("\n"),
+      },
+      {
+        prefix: "cg-reassign-java-",
+        file: "Run.java",
+        member: "target",
+        caller: "run",
+        source: [
+          "class Lib { void target() {} }",
+          "class Host {",
+          "  Lib other() { return new Lib(); }",
+          "  void run() { Lib l = new Lib(); l = other(); l.target(); }",
+          "}",
+        ].join("\n"),
+      },
+      {
+        prefix: "cg-reassign-go-",
+        file: "run.go",
+        member: "Target",
+        caller: "Run",
+        source: [
+          "package run",
+          "type Lib struct{}",
+          "func (l Lib) Target() {}",
+          "func other() Lib { return Lib{} }",
+          "func Run() { l := Lib{}; l = other(); l.Target() }",
+        ].join("\n"),
+      },
+    ];
+    const invented: string[] = [];
+    for (const testCase of cases) {
+      const files: Record<string, string> = { [testCase.file]: testCase.source };
+      const graph = await buildFixture(testCase.prefix, files);
+      const caller = nodeIn(graph, testCase.file, testCase.caller);
+      const member = nodeIn(graph, testCase.file, testCase.member);
+      if (callsiteTexts(graph, member, caller, files)) invented.push(testCase.file);
+    }
+    expect(invented, "a reassigned receiver must resolve nothing").toEqual([]);
+  });
+
+  it("emits nothing for static and instance mismatches in C#, Java, and PHP", async () => {
+    const cases: {
+      prefix: string;
+      file: string;
+      source: string;
+      staticMember: string;
+      instanceMember: string;
+      caller: string;
+    }[] = [
+      {
+        prefix: "cg-static-cs-",
+        file: "Cfg.cs",
+        staticMember: "StaticMethod",
+        instanceMember: "InstanceMethod",
+        caller: "Run",
+        source: [
+          "class Cfg {",
+          "  public void InstanceMethod() {}",
+          "  public static void StaticMethod() {}",
+          "  public void Run() { var c = new Cfg(); c.StaticMethod(); Cfg.InstanceMethod(); }",
+          "}",
+        ].join("\n"),
+      },
+      {
+        prefix: "cg-static-java-",
+        file: "Cfg.java",
+        staticMember: "staticMethod",
+        instanceMember: "instanceMethod",
+        caller: "run",
+        source: [
+          "class Cfg {",
+          "  void instanceMethod() {}",
+          "  static void staticMethod() {}",
+          "  void run() { Cfg c = new Cfg(); c.staticMethod(); }",
+          "}",
+        ].join("\n"),
+      },
+      {
+        prefix: "cg-static-php-",
+        file: "cfg.php",
+        staticMember: "staticMethod",
+        instanceMember: "instanceMethod",
+        caller: "run",
+        source: [
+          "<?php",
+          "class Cfg {",
+          "    function instanceMethod() {}",
+          "    static function staticMethod() {}",
+          "    function run() { $c = new Cfg(); $c->staticMethod(); Cfg::instanceMethod(); }",
+          "}",
+        ].join("\n"),
+      },
+    ];
+    const leaked: string[] = [];
+    for (const testCase of cases) {
+      const files: Record<string, string> = { [testCase.file]: testCase.source };
+      const graph = await buildFixture(testCase.prefix, files);
+      const caller = nodeIn(graph, testCase.file, testCase.caller);
+      const staticMember = nodeIn(graph, testCase.file, testCase.staticMember);
+      const instanceMember = nodeIn(graph, testCase.file, testCase.instanceMember);
+      if (callsiteTexts(graph, staticMember, caller, files)) leaked.push(`${testCase.file}:static`);
+      if (callsiteTexts(graph, instanceMember, caller, files)) leaked.push(`${testCase.file}:instance`);
+    }
+    expect(leaked, "static and instance members must not cross-resolve").toEqual([]);
+  });
+});
+
 describe("emitReceiverCallEdges hierarchy walk", () => {
   const site = {
     file: "leaf.ts",

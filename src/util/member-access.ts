@@ -70,8 +70,16 @@ export function isMemberObjectIdentifier(nodeType: string): boolean {
     nodeType === "type_identifier" ||
     nodeType === "package_identifier" ||
     nodeType === "constant" ||
-    nodeType === "namespace_identifier"
+    nodeType === "namespace_identifier" ||
+    nodeType === "simple_identifier" ||
+    nodeType === "instance_variable" ||
+    nodeType === "class_variable"
   );
+}
+
+/** Identifier-like nodes that can name a receiver, including Ruby `@ivar`/`@@cvar`. */
+export function isReceiverNameNode(sup: LanguageSupport, nodeType: string): boolean {
+  return sup.nodeTypes.identifier.includes(nodeType) || isMemberObjectIdentifier(nodeType);
 }
 
 export function isMemberReferencePropertyIdentifier(sup: LanguageSupport, nodeType: string): boolean {
@@ -79,14 +87,18 @@ export function isMemberReferencePropertyIdentifier(sup: LanguageSupport, nodeTy
 }
 
 export function getNavigationExpressionProperty(sup: LanguageSupport, expr: SyntaxNodeLike): SyntaxNodeLike | null {
+  const suffix = expr.namedChildren.find((child) => child.type === "navigation_suffix") ?? expr.child(1);
+  if (!suffix) return null;
+  const fromSuffix =
+    suffix.childForFieldName("suffix") ??
+    suffix.childForFieldName("name") ??
+    suffix.namedChildren[0] ??
+    suffix.child(0);
+  if (fromSuffix) return fromSuffix;
   if (sup.id === "kotlin") {
     return expr.namedChildren[expr.namedChildren.length - 1] ?? expr.child(2);
   }
-  const suffix = expr.namedChildren.find((child) => child.type === "navigation_suffix") ?? expr.child(1);
-  if (!suffix) return null;
-  return (
-    suffix.childForFieldName("suffix") ?? suffix.childForFieldName("name") ?? suffix.namedChildren[0] ?? suffix.child(0)
-  );
+  return null;
 }
 
 /**

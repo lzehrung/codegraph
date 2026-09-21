@@ -62,7 +62,7 @@ const definition: LanguageTestDefinition = {
         },
         {
           from: "module-import.cpp",
-          to: { type: "external", name: "foo" },
+          to: { type: "file", path: "module-import.cpp" },
         },
       ],
       symbols: [
@@ -223,6 +223,27 @@ describe("C++ native queries", () => {
     }
   });
 
+  it("exports class and struct types while hiding file-scope static functions and in-class members", () => {
+    const names = collectCppNames(
+      "probe.cpp",
+      [
+        "static int helper() { return 0; }",
+        "int visible() { return 1; }",
+        "class Foo { public: static int member; static int method(); };",
+        "struct Bar { static int field; };",
+      ].join("\n"),
+    );
+
+    expect(names.exports).toEqual(expect.arrayContaining(["visible", "Foo", "Bar"]));
+    expect(names.exports).not.toContain("helper");
+    expect(names.exports).not.toContain("method");
+    expect(names.exports).not.toContain("member");
+    expect(names.exports).not.toContain("field");
+    expect(names.locals).toEqual(
+      expect.arrayContaining(["helper", "visible", "Foo", "member", "method", "Bar", "field"]),
+    );
+  });
+
   it("exports namespace, nested-namespace, and template declarations without leaking function-local names", () => {
     const namespaced = collectCppNames(
       "probe.cpp",
@@ -252,7 +273,6 @@ describe("C++ native queries", () => {
         "nsCounter",
         "NsPair",
         "Widget",
-        "method",
         "nestedFn",
         "outer",
         "leaf",
@@ -263,6 +283,7 @@ describe("C++ native queries", () => {
         "container",
       ]),
     );
+    expect(namespaced.exports).not.toContain("method");
     expect(namespaced.exports).not.toContain("hiddenHelper");
     expect(namespaced.exports).not.toContain("Local");
     expect(namespaced.exports).not.toContain("hidden");
@@ -313,6 +334,40 @@ describe("C++ native queries", () => {
     expect(names.exports.filter((name) => name === "Mode")).toEqual(["Mode"]);
     expect(names.exports).toEqual(expect.arrayContaining(["Mode", "ON"]));
     expect(names.locals).toEqual(expect.arrayContaining(["Mode", "ON"]));
+  });
+
+  it("keeps in-class members local while types, free functions, and out-of-line definitions stay exported", () => {
+    const inClass = collectCppNames(
+      "widget.cpp",
+      ["class Widget { int field_; void method(); };", "void ready() { return; }", "struct Point { int x; };"].join(
+        "\n",
+      ),
+    );
+    expect(inClass.exports.sort()).toEqual(["Point", "Widget", "ready"]);
+    expect(inClass.exports).not.toContain("field_");
+    expect(inClass.exports).not.toContain("method");
+    expect(inClass.exports).not.toContain("x");
+    expect(inClass.locals).toEqual(expect.arrayContaining(["Widget", "field_", "method", "ready", "Point", "x"]));
+
+    const namespaced = collectCppNames(
+      "probe.cpp",
+      [
+        "namespace api { void nsFn(); class Widget { void method(); }; }",
+        "template <class T> class Holder { void get(); };",
+        "template <class T> void compute(T value) {}",
+        "struct Outer { struct Inner { int x; }; };",
+      ].join("\n"),
+    );
+    expect(namespaced.exports).toEqual(expect.arrayContaining(["api", "nsFn", "Widget", "Holder", "compute", "Outer"]));
+    expect(namespaced.exports).not.toContain("method");
+    expect(namespaced.exports).not.toContain("get");
+    expect(namespaced.exports).not.toContain("Inner");
+    expect(namespaced.exports).not.toContain("x");
+    expect(namespaced.locals).toEqual(expect.arrayContaining(["method", "get", "Inner", "x"]));
+
+    const outlined = collectCppNames("probe.cpp", "class Widget { void method(); };\nvoid Widget::method() {}\n");
+    expect(outlined.exports).toEqual(expect.arrayContaining(["Widget", "method"]));
+    expect(outlined.locals).toEqual(expect.arrayContaining(["Widget", "method"]));
   });
 });
 
@@ -527,6 +582,54 @@ describe("C++ Unicode symbol ranges (C11)", () => {
 });
 
 describe("C++20 modules", () => {
+  it("resolves import widget without resolutionHints and keeps import std external", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-modules-no-hints-"));
+    const declaring = path.join(root, "widget.cpp");
+    const importing = path.join(root, "main.cpp");
+    try {
+      await fs.writeFile(declaring, "export module widget;\n", "utf8");
+      await fs.writeFile(importing, "import widget;\nimport std;\n", "utf8");
+
+      const index = await createTestIndexFromFiles(root, [declaring, importing]);
+      const fromMain = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(importing));
+
+      expect(fromMain).toContainEqual(
+        expect.objectContaining({
+          from: importing.replace(/\\/g, "/"),
+          to: { type: "file", path: declaring.replace(/\\/g, "/") },
+        }),
+      );
+      expect(fromMain).toContainEqual(
+        expect.objectContaining({
+          from: importing.replace(/\\/g, "/"),
+          to: { type: "external", name: "std" },
+        }),
+      );
+      expect(fromMain.some((edge) => edge.to.type === "external" && edge.to.name === "widget")).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a module declared in two files unresolved", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-modules-split-"));
+    const first = path.join(root, "alpha.cpp");
+    const second = path.join(root, "beta.cpp");
+    const importing = path.join(root, "main.cpp");
+    try {
+      await fs.writeFile(first, "export module shared;\n", "utf8");
+      await fs.writeFile(second, "export module shared;\n", "utf8");
+      await fs.writeFile(importing, "import shared;\n", "utf8");
+
+      const index = await createTestIndexFromFiles(root, [first, second, importing]);
+      const fromMain = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(importing));
+
+      expect(fromMain.map((edge) => edge.to)).toEqual([{ type: "external", name: "shared" }]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("indexes a module declaration and binds first-party imports without treating std as in-repo", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-modules-"));
     const declaring = path.join(root, "foo.cpp");
@@ -575,6 +678,51 @@ describe("C++20 modules", () => {
       expect(snapshot.fileGraph.edges.some((edge) => edge.to.type === "external" && edge.to.name === "foo")).toBe(
         false,
       );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a module declared in a module-interface file extension", async () => {
+    for (const extension of [".cppm", ".ixx", ".mxx"]) {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-modules-interface-ext-"));
+      try {
+        const declaring = path.join(root, `widget${extension}`);
+        const importing = path.join(root, "main.cpp");
+        await fs.writeFile(declaring, "export module widget;\n", "utf8");
+        await fs.writeFile(importing, "import widget;\n", "utf8");
+
+        const index = await createTestIndexFromFiles(root, [declaring, importing]);
+        const fromMain = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(importing));
+
+        expect(fromMain, extension).toContainEqual(
+          expect.objectContaining({
+            from: importing.replace(/\\/g, "/"),
+            to: { type: "file", path: declaring.replace(/\\/g, "/") },
+          }),
+        );
+        expect(
+          fromMain.some((edge) => edge.to.type === "external" && edge.to.name === "widget"),
+          extension,
+        ).toBe(false);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("keeps a named module import external when only an unindexed extension declares it", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-modules-unindexed-ext-"));
+    const declaring = path.join(root, "widget.txt");
+    const importing = path.join(root, "main.cpp");
+    try {
+      await fs.writeFile(declaring, "export module widget;\n", "utf8");
+      await fs.writeFile(importing, "import widget;\n", "utf8");
+
+      const index = await createTestIndexFromFiles(root, [declaring, importing]);
+      const fromMain = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(importing));
+
+      expect(fromMain.map((edge) => edge.to)).toEqual([{ type: "external", name: "widget" }]);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

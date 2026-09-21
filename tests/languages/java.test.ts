@@ -2,7 +2,17 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildProjectIndex } from "../../src/index.js";
+import { buildProjectIndex, findReferences } from "../../src/index.js";
+import type { SyntaxNodeLike } from "../../src/languages/types.js";
+
+function findFirstNodeByType(root: SyntaxNodeLike, type: string): SyntaxNodeLike | null {
+  if (root.type === type) return root;
+  for (const child of root.namedChildren) {
+    const found = findFirstNodeByType(child, type);
+    if (found) return found;
+  }
+  return null;
+}
 import { appendImplicitImportBinding } from "../../src/indexer/imports/language-specific.js";
 import type { ImportBinding } from "../../src/indexer/types.js";
 import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
@@ -435,5 +445,45 @@ describe("Java lowercase class import bindings", () => {
         typeOnly: false,
       },
     ]);
+  });
+});
+
+describe("Java constructor and spread-parameter declaration names", () => {
+  it("does not count a constructor declaration name as a reference to the class", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-constructor-name-"));
+    const file = path.join(root, "Probe.java");
+    const source = ["class A {", "  A(int x) {}", "  void call() { new A(1); }", "}", ""].join("\n");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root);
+      const refs = await findReferences(index, { file, line: 1, column: 7 });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        const lines = refs.references.map((reference) => reference.range.start.line);
+        // The constructor declaration name on line 2 is a declaration, not a use of `A`.
+        expect(lines).not.toContain(2);
+        expect(lines).toContain(3);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("recognizes a spread parameter's declared name as a declaration name", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-spread-param-"));
+    const file = path.join(root, "Spread.java");
+    try {
+      await writeFile(file, "class Spread { void m(int... rest) { } }\n", "utf8");
+      const parsed = await parseFile(file);
+      const spread = findFirstNodeByType(parsed.tree.rootNode, "spread_parameter");
+      if (!spread) throw new Error("spread_parameter node not found");
+      const declarator = spread.namedChildren.find((child) => child.type === "variable_declarator");
+      expect(declarator).toBeDefined();
+      // The `variable_declarator` under `spread_parameter` (`int... rest`) is a declared
+      // name, so impact classification treats edits to it as a definition change.
+      expect(parsed.sup.isDeclarationName(declarator!)).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

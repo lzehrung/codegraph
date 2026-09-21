@@ -1,9 +1,15 @@
 import type { LanguageDefinition, SyntaxNodeLike } from "../types.js";
 import { registerLanguage } from "../registry.js";
+import { classifyByParentType, hasParentType, isNameOrPropertyFieldOnParent, nodeTypeIn } from "./shared.js";
 import {
+  ECMASCRIPT_BLOCK_SCOPE_TYPES,
   ECMASCRIPT_CONTROL_SPLIT_POINTS,
   ECMASCRIPT_CORE_FUNCTION_BLOCKS,
+  ECMASCRIPT_DECLARATION_NAME_PARENTS,
+  ECMASCRIPT_FUNCTION_SCOPE_TYPES,
   ECMASCRIPT_MODULE_VAR_BLOCKS,
+  isEcmaScriptTypeOnlyStatement,
+  isEcmaScriptVariableDeclaratorName,
 } from "./js-family.js";
 
 function normalizeTypeScriptNativeQuery(kind: string, query: string): string {
@@ -69,17 +75,17 @@ const BASE_STRUCTURE = {
 
 const BASE_GRAPH = {
   imports: `
-    (import_statement (string) @mod) @stmt
+    (import_statement (string) @from) @stmt
     ;; import x = require("...") is represented via import_require_clause
-    (import_statement (import_require_clause (string) @mod)) @stmt
-    (export_statement (string) @mod) @stmt
-    (call_expression function: (import) arguments: (arguments (string) @mod)) @stmt
+    (import_statement (import_require_clause (string) @from)) @stmt
+    (export_statement (string) @from) @stmt
+    (call_expression function: (import) arguments: (arguments (string) @from)) @stmt
     ;; declare module "foo" {} — ambient module augmentations create a type-only
     ;; dependency on the named module and must appear in the file graph so that
     ;; changes to "foo" propagate to augmenting files (and vice-versa).
     ;; The inner node type is "module" (not "module_declaration"); its string
     ;; child uses field-name "name".
-    (ambient_declaration (module name: (string) @mod)) @stmt
+    (ambient_declaration (module name: (string) @from)) @stmt
   `,
   exports: `
     (export_statement) @stmt
@@ -103,6 +109,7 @@ const BASE_GRAPH = {
     (export_statement (export_clause (export_specifier "type"? @type_kw name: (identifier) @src !alias)) (string) @from) @stmt
     (export_statement (export_clause (export_specifier "type"? @type_kw name: (identifier) @src alias: (identifier) @alias))) @stmt
     (export_statement (export_clause (export_specifier "type"? @type_kw name: (identifier) @src !alias))) @stmt
+    (export_statement "*" @wild (string) @from) @stmt
     (export_statement (string) @from) @stmt
     (export_assignment (identifier) @ts_export_assign)
   `,
@@ -143,67 +150,51 @@ const BASE_HELPERS = {
     shorthandPropertyIdentifier: ["shorthand_property_identifier", "shorthand_property_identifier_pattern"],
     memberExpression: "member_expression",
   },
-  classifyDefinition: (n: SyntaxNodeLike) => {
-    const t = n.parent?.type;
-    if (t === "function_declaration") return "function";
-    if (t === "generator_function_declaration") return "function";
-    // A named function expression's own name is a function-kind binding, matching the
-    // declaration forms; the grammar spells the expression forms without the `_declaration`
-    // suffix (`function_expression`, `generator_function`).
-    if (t === "function_expression") return "function";
-    if (t === "generator_function") return "function";
-    if (t === "method_definition") return "function";
-    if (t === "method_signature") return "function";
-    if (t === "abstract_method_signature") return "function";
-    if (t === "function_signature") return "function";
-    if (t === "class_declaration") return "class";
-    if (t === "abstract_class_declaration") return "class";
-    if (t === "interface_declaration") return "interface";
-    if (t === "type_alias_declaration") return "type";
-    if (t === "enum_declaration" || t === "internal_module" || t === "module") return "type";
-    return "variable";
-  },
+  // A named function expression's own name is a function-kind binding, matching the
+  // declaration forms; the grammar spells the expression forms without the `_declaration`
+  // suffix (`function_expression`, `generator_function`).
+  classifyDefinition: classifyByParentType({
+    function_declaration: "function",
+    generator_function_declaration: "function",
+    function_expression: "function",
+    generator_function: "function",
+    method_definition: "function",
+    method_signature: "function",
+    abstract_method_signature: "function",
+    function_signature: "function",
+    class_declaration: "class",
+    abstract_class_declaration: "class",
+    interface_declaration: "interface",
+    type_alias_declaration: "type",
+    enum_declaration: "type",
+    internal_module: "type",
+    module: "type",
+  }),
   isDeclarationName: (node: SyntaxNodeLike) => {
     const parent = node.parent;
-    const p = parent?.type;
-    if (parent?.type === "variable_declarator") {
-      return parent.childForFieldName("name")?.id === node.id;
-    }
-    if (parent?.type === "public_field_definition" || parent?.type === "enum_assignment") {
-      const name = parent.childForFieldName("name") ?? parent.childForFieldName("property");
-      return name?.id === node.id;
-    }
+    if (isEcmaScriptVariableDeclaratorName(node)) return true;
+    if (isNameOrPropertyFieldOnParent(node, ["public_field_definition", "enum_assignment"])) return true;
     if (parent?.type === "enum_body") {
       return node.type === "property_identifier";
     }
-    return (
-      !!p &&
-      [
-        "generator_function_declaration",
-        "function_declaration",
-        "class_declaration",
-        "abstract_class_declaration",
-        "interface_declaration",
-        "type_alias_declaration",
-        "enum_declaration",
-        "function_signature",
-        "internal_module",
-        "module",
-        "import_specifier",
-        "namespace_import",
-        "import_clause",
-        "import_equals_declaration",
-        // Method names in classes and abstract method signatures: needed so
-        // that editing a method name is classified as a definition change.
-        "method_definition",
-        "method_signature",
-        "abstract_method_signature",
-        // A named function expression binds its own name inside its body:
-        // `const f = function inner() {}` and `$scope.refresh = function refresh() {}`.
-        "function_expression",
-        "generator_function",
-      ].includes(p)
-    );
+    return hasParentType(node, [
+      ...ECMASCRIPT_DECLARATION_NAME_PARENTS,
+      "abstract_class_declaration",
+      "interface_declaration",
+      "type_alias_declaration",
+      "enum_declaration",
+      "function_signature",
+      "internal_module",
+      "module",
+      "import_equals_declaration",
+      // Method names in classes and abstract method signatures: needed so
+      // that editing a method name is classified as a definition change.
+      "method_signature",
+      "abstract_method_signature",
+      // A named function expression binds its own name inside its body:
+      // `const f = function inner() {}` and `$scope.refresh = function refresh() {}`.
+      "generator_function",
+    ]);
   },
   // Scope construction has structural handling for the ordinary declaration forms. Ambient
   // overload signatures, `namespace X {}`, and a named function expression's own name are not
@@ -220,23 +211,10 @@ const BASE_HELPERS = {
       parent === "generator_function"
     );
   },
-  createsBlockScope: (n: SyntaxNodeLike) =>
-    n.type === "program" ||
-    n.type === "block" ||
-    n.type === "class_body" ||
-    n.type === "class_static_block" ||
-    n.type === "enum_body",
-  createsFunctionScope: (n: SyntaxNodeLike) =>
-    n.type === "generator_function_declaration" ||
-    n.type === "function_declaration" ||
-    n.type === "function" ||
-    n.type === "function_expression" ||
-    // A generator function expression has its own body scope: without this, its own name
-    // (registered above) and its parameters would land in the enclosing scope.
-    n.type === "generator_function" ||
-    n.type === "arrow_function" ||
-    n.type === "method_definition",
-  membersAreImplicitlyInScope: false,
+  createsBlockScope: nodeTypeIn([...ECMASCRIPT_BLOCK_SCOPE_TYPES, "enum_body"]),
+  // A generator function expression has its own body scope: without this, its own name
+  // (registered above) and its parameters would land in the enclosing scope.
+  createsFunctionScope: nodeTypeIn([...ECMASCRIPT_FUNCTION_SCOPE_TYPES, "generator_function"]),
   supportsCrossModuleSymbols: true,
 };
 
@@ -247,7 +225,7 @@ export const TYPESCRIPT_DEF: LanguageDefinition = {
   graph: BASE_GRAPH,
   supportsExportFromReferences: true,
   ...BASE_HELPERS,
-  isTypeOnly: (stmtText: string) => /\b(import|export)\s+type\b/.test(stmtText),
+  isTypeOnly: isEcmaScriptTypeOnlyStatement,
   native: {
     normalizeQuery: normalizeTypeScriptNativeQuery,
     authoritativeKinds: ["exports"],
@@ -270,7 +248,7 @@ export const TSX_DEF: LanguageDefinition = {
   graph: BASE_GRAPH,
   supportsExportFromReferences: true,
   ...BASE_HELPERS,
-  isTypeOnly: (stmtText: string) => /\b(import|export)\s+type\b/.test(stmtText),
+  isTypeOnly: isEcmaScriptTypeOnlyStatement,
   native: {
     normalizeQuery: normalizeTypeScriptNativeQuery,
     authoritativeKinds: ["exports"],

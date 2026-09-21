@@ -1,8 +1,21 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
+import { classifyByParentType, isNameFieldOnParent, nodeTypeIn } from "./shared.js";
 import { hasNonAsciiCodePoint, JAVA_IDENTIFIER_IGNORABLE_SOURCE } from "../../util/identifiers.js";
 
 const JAVA_IDENTIFIER_IGNORABLE_PATTERN = new RegExp(`[${JAVA_IDENTIFIER_IGNORABLE_SOURCE}]`, "gu");
+
+// Pinned tree-sitter-java `import_declaration` children:
+//   anonymous: "import", optional "static", trailing ";"
+//   named: `identifier` (bare `import Foo;`) or `scoped_identifier` (`import a.b.C;`),
+//          optional named `asterisk` (`import a.b.*;`, `import static a.B.*;`)
+// Optional `(asterisk)? @wild` yields one match per statement without a trailing `.`
+// end-anchor, which would treat `;` as a last-child miss if the engine counts anonymous
+// siblings. Java has no import alias.
+const JAVA_IMPORT_QUERY = `
+      (import_declaration (scoped_identifier) @from (asterisk)? @wild) @stmt
+      (import_declaration (identifier) @from (asterisk)? @wild) @stmt
+    `;
 
 export const JAVA_DEF: LanguageDefinition = {
   id: "java",
@@ -50,9 +63,7 @@ export const JAVA_DEF: LanguageDefinition = {
     comments: ["line_comment", "block_comment"],
   },
   graph: {
-    imports: `
-      (import_declaration . (_) @mod) @stmt
-    `,
+    imports: JAVA_IMPORT_QUERY,
     exports: `
       (class_declaration name: (identifier) @name)
       (record_declaration name: (identifier) @name)
@@ -76,42 +87,43 @@ export const JAVA_DEF: LanguageDefinition = {
       (spread_parameter (variable_declarator name: (identifier) @name))
       (receiver_parameter (identifier) @name)
     `,
-    importBindings: `
-      (import_declaration . (_) @from) @stmt
-    `,
+    importBindings: JAVA_IMPORT_QUERY,
   },
   nodeTypes: {
     identifier: ["identifier", "type_identifier"],
     memberExpression: "field_access",
   },
   supportsCrossModuleSymbols: true,
+  membersAreImplicitlyInScope: true,
   exportScopeBlockers: ["block", "constructor_body"],
-  classifyDefinition: (node) => {
-    const parent = node.parent;
-    if (!parent) return "variable";
-    if (parent.type === "method_declaration" || parent.type === "constructor_declaration") return "method";
-    if (parent.type === "class_declaration" || parent.type === "record_declaration") return "class";
-    if (parent.type === "interface_declaration" || parent.type === "annotation_type_declaration") return "interface";
-    if (parent.type === "enum_declaration") return "type";
-    return "variable";
-  },
-  createsFunctionScope: (node) => node.type === "method_declaration" || node.type === "constructor_declaration",
-  createsBlockScope: (node) => node.type === "block" || node.type === "class_body",
-  isDeclarationName: (node) => {
-    const p = node.parent;
-    if (!p) return false;
-    if (p.type === "class_declaration" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "record_declaration" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "interface_declaration" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "annotation_type_declaration" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "enum_declaration" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "enum_constant" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "method_declaration" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "variable_declarator" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "formal_parameter" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "receiver_parameter" && node.type === "identifier") return true;
-    return false;
-  },
+  classifyDefinition: classifyByParentType({
+    method_declaration: "method",
+    constructor_declaration: "method",
+    class_declaration: "class",
+    record_declaration: "class",
+    interface_declaration: "interface",
+    annotation_type_declaration: "interface",
+    enum_declaration: "type",
+  }),
+  createsFunctionScope: nodeTypeIn(["method_declaration", "constructor_declaration"]),
+  createsBlockScope: nodeTypeIn(["block", "class_body"]),
+  isDeclarationName: (node) =>
+    isNameFieldOnParent(node, [
+      "class_declaration",
+      "record_declaration",
+      "interface_declaration",
+      "annotation_type_declaration",
+      "enum_declaration",
+      "enum_constant",
+      "method_declaration",
+      "constructor_declaration",
+      "variable_declarator",
+      "formal_parameter",
+    ]) ||
+    // `spread_parameter` (`int... rest`) has no `name` field; its declared name is the
+    // `variable_declarator` child, so that node is the declaration name.
+    (node.type === "variable_declarator" && node.parent?.type === "spread_parameter") ||
+    (node.parent?.type === "receiver_parameter" && node.type === "identifier"),
   normalizeIdentifier: (name) =>
     hasNonAsciiCodePoint(name, true) ? name.replace(JAVA_IDENTIFIER_IGNORABLE_PATTERN, "") : name,
 };

@@ -2,7 +2,7 @@ import type { Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { parse as parseToml } from "smol-toml";
-import { isFilePathWithinRoot } from "../paths.js";
+import { isPhysicalPathWithinRoot, readUtf8WithoutBom } from "../paths.js";
 
 type TomlTable = Record<string, unknown>;
 
@@ -95,7 +95,7 @@ function explicitTargetPaths(parsed: TomlTable): string[] {
 
 async function parseCargoToml(cargoRoot: string): Promise<TomlTable | null> {
   try {
-    const raw = await fsp.readFile(path.join(cargoRoot, "Cargo.toml"), "utf8");
+    const raw = await readUtf8WithoutBom(path.join(cargoRoot, "Cargo.toml"));
     const parsed = parseToml(raw);
     return isTomlTable(parsed) ? parsed : null;
   } catch {
@@ -116,14 +116,7 @@ async function acceptCrateRoot(
   } catch {
     return null;
   }
-  if (!isFilePathWithinRoot(projectRoot, resolved)) return null;
-  try {
-    const realRoot = await fsp.realpath(projectRoot);
-    const realCandidate = await fsp.realpath(resolved);
-    if (!isFilePathWithinRoot(realRoot, realCandidate)) return null;
-  } catch {
-    return null;
-  }
+  if (!(await isPhysicalPathWithinRoot(projectRoot, resolved))) return null;
   return resolved;
 }
 
@@ -158,8 +151,17 @@ async function addAutodiscoveredDirectory(
       await addCrateRoot(roots, probed, path.join(directory, entry.name, "main.rs"), projectRoot, true);
       continue;
     }
-    if (entry.name.endsWith(".rs")) {
-      await addCrateRoot(roots, probed, path.join(directory, entry.name), projectRoot, true);
+    if (!entry.name.endsWith(".rs")) continue;
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isFile()) {
+      await addCrateRoot(roots, probed, entryPath, projectRoot, true);
+      continue;
+    }
+    try {
+      const st = await fsp.stat(entryPath);
+      if (st.isFile()) await addCrateRoot(roots, probed, entryPath, projectRoot, true);
+    } catch {
+      // Dangling or unreadable symlink: not a crate root.
     }
   }
 }

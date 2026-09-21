@@ -1,5 +1,6 @@
 import fsp from "node:fs/promises";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
+import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { extractAngularJsReferences, extractAngularJsRegistrations } from "../frameworks/angularjs.js";
 import type { Edge } from "../types.js";
 import { fileIdentityKey } from "../util/paths.js";
@@ -11,13 +12,21 @@ type AngularJsFileContext = {
   source: string;
 };
 
+// Languages whose source can hold AngularJS registrations. `.jsx`, `.mjs`, and `.cjs` resolve
+// to `js`, so filtering on the resolved language covers every JS-family file instead of a
+// literal-extension list.
+const ANGULAR_JS_LANGUAGE_IDS = new Set(["js", "ts", "tsx"]);
+
 export async function collectAngularJsFrameworkEdges(
   projectRoot: string,
   files: string[],
   workspaceConfig: WorkspaceConfig | undefined,
   parsed?: Map<string, ParsedFileContext>,
 ): Promise<Edge[]> {
-  const jsFiles = files.filter((file) => file.toLowerCase().endsWith(".js"));
+  const jsFiles = files.filter((file) => {
+    const support = supportForFileWithoutHeaderSample(file);
+    return support !== undefined && ANGULAR_JS_LANGUAGE_IDS.has(support.id);
+  });
   if (!jsFiles.length) return [];
 
   const contexts: AngularJsFileContext[] = [];

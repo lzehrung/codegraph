@@ -166,6 +166,7 @@ function resourceLimitFallback(
   task: NativeExtractTask,
   source: string,
   error: string,
+  reason: NativeFallbackReason,
   bloomFilter?: NativeBloomFilterPayload,
 ): NativeExtractResult {
   const includeSource = task.includeSourceInResult ?? true;
@@ -177,7 +178,7 @@ function resourceLimitFallback(
     compactResults: null,
     syntaxTree: null,
     ...(bloomFilter ? { bloomFilter } : {}),
-    fallbackReason: "queryFailure",
+    fallbackReason: reason,
     error,
   };
 }
@@ -250,7 +251,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
 
     const loaded = await loadSource(task);
     if (!loaded.ok) {
-      return resourceLimitFallback(task, loaded.source, loaded.error);
+      return resourceLimitFallback(task, loaded.source, loaded.error, "sourceTooLarge");
     }
     const includeSource = task.includeSourceInResult ?? true;
     const source = loaded.source;
@@ -337,7 +338,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (/max (node|depth) limit/i.test(message)) {
-        return resourceLimitFallback(task, source, message, bloomFilter);
+        return resourceLimitFallback(task, source, message, "queryFailure", bloomFilter);
       }
       return {
         filePath: task.filePath,

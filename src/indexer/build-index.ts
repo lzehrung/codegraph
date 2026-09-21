@@ -27,6 +27,7 @@ import {
   resolveSpecifier,
   type MatchPathFn,
 } from "../util/resolution.js";
+import { collectCppDeclaredModules } from "../util/resolution/cpp.js";
 import {
   fileIdentityKey,
   initializeFileIdentityCaseSensitivity,
@@ -88,6 +89,7 @@ import {
   writeModulesToCache,
   writeProjectIndexSnapshot,
   type FileSignature,
+  type IndexManifest,
   type ManifestFileEntry,
   type PendingModuleCacheWrite,
 } from "./build-cache.js";
@@ -164,6 +166,7 @@ function initParserBackendDegradationReport(
         unavailable: 0,
         unsupportedLanguage: 0,
         queryFailure: 0,
+        sourceTooLarge: 0,
       },
       byLanguage: {},
       errors: [],
@@ -205,6 +208,74 @@ function isConfinedFileReadError(error: unknown): boolean {
 }
 function createEmptyModuleIndex(file: string): ModuleIndex {
   return { file, exports: [], imports: [], locals: [] };
+}
+
+/**
+ * Declared-container index (container name to declaring files) rebuilt from already-loaded
+ * modules. Because `ModuleIndex.declaredContainers` is cached with the module, this reflects
+ * unchanged files from cache and changed files from their fresh parse without rereading source.
+ */
+function declaredContainerIndexFromModules(modules: Iterable<ModuleIndex>): Map<string, string[]> {
+  const byName = new Map<string, Set<string>>();
+  for (const mod of modules) {
+    if (!mod.declaredContainers?.length) continue;
+    const file = normalizePath(mod.file);
+    for (const name of mod.declaredContainers) {
+      let files = byName.get(name);
+      if (!files) {
+        files = new Set<string>();
+        byName.set(name, files);
+      }
+      files.add(file);
+    }
+  }
+  const index = new Map<string, string[]>();
+  for (const [name, files] of byName) {
+    index.set(
+      name,
+      [...files].sort((left, right) => left.localeCompare(right)),
+    );
+  }
+  return index;
+}
+
+/** Container names whose declaring-file set differs between two builds. */
+function declaredContainerNamesChanged(previous: Map<string, string[]>, next: Map<string, string[]>): Set<string> {
+  const changed = new Set<string>();
+  for (const name of new Set([...previous.keys(), ...next.keys()])) {
+    const previousFiles = previous.get(name) ?? [];
+    const nextFiles = next.get(name) ?? [];
+    if (previousFiles.length === nextFiles.length && previousFiles.every((file, i) => file === nextFiles[i])) {
+      continue;
+    }
+    changed.add(name);
+  }
+  return changed;
+}
+
+/**
+ * Files whose cached edges name a container declaration that changed. These consumers have no
+ * content change of their own, so signature and reverse-dependency invalidation cannot see
+ * them; the declared-container index has to.
+ */
+function collectDeclaredContainerConsumers(
+  trackedEntries: Record<string, ManifestFileEntry>,
+  changedNames: ReadonlySet<string>,
+): Set<string> {
+  const consumers = new Set<string>();
+  if (!changedNames.size) return consumers;
+  for (const [file, entry] of Object.entries(trackedEntries)) {
+    if (entry.edges.some((edge) => edge.raw !== undefined && changedNames.has(edge.raw))) {
+      consumers.add(file);
+    }
+  }
+  return consumers;
+}
+
+function manifestDeclaredContainerIndex(manifest: IndexManifest | null): Map<string, string[]> {
+  const entries = manifest?.declaredContainers;
+  if (!entries) return new Map();
+  return new Map(Object.entries(entries));
 }
 
 async function resolveCrossModuleSymbolExports(
@@ -274,9 +345,7 @@ async function buildIndexedModuleForFile(args: {
   const { source, sup, nativeQueries, embeddedBlocks } = prepared;
   let tree: SyntaxTreeLike | undefined;
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id),
-    nativeSourceLimitFallback =
-      prepared.nativeFallbackReason === "queryFailure" &&
-      !!prepared.nativeError?.startsWith("source exceeds native byte limit");
+    nativeSourceLimitFallback = prepared.nativeFallbackReason === "sourceTooLarge";
 
   if (prepared.syntaxTree) {
     const parsedTree = new ProjectedSyntaxTree(source, prepared.syntaxTree);
@@ -375,6 +444,10 @@ async function buildIndexedModuleForFile(args: {
     });
   }
   mod.imports = imports;
+  if (sup.id === "cpp") {
+    const declaredContainers = collectCppDeclaredModules(source);
+    if (declaredContainers.length) mod.declaredContainers = declaredContainers;
+  }
   await resolveCrossModuleSymbolExports(
     args.file,
     mod,
@@ -1220,6 +1293,7 @@ async function buildIndexFromFileListShared(
             files: manifestEntries,
             timings,
             manifestReport: report?.manifest,
+            declaredContainers: declaredContainerIndexFromModules(modules.values()),
             ...(helperOpts?.configHash ? { configHash: helperOpts.configHash } : {}),
             ...(helperOpts?.discoveryContext ? { discoveryContext: helperOpts.discoveryContext } : {}),
             ...(helperOpts?.transientFiles !== undefined ? { transientFiles: helperOpts.transientFiles } : {}),
@@ -1879,6 +1953,7 @@ export async function buildProjectIndexIncremental(
             manifestReport,
             allowEmpty: true,
             transientFiles,
+            declaredContainers: new Map(),
             configHash: currentConfigHashResult,
             discoveryContext,
             ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
@@ -2192,6 +2267,16 @@ export async function buildProjectIndexIncremental(
         ensureJsonModule(modules, jsonPath);
       }
       expandStarImports(modules, opts);
+      // The declared-container index is rebuilt from modules already in memory, so this costs no
+      // extra file reads. A container whose declaring-file set changed invalidates the consumers
+      // whose cached edges name it: their content is unchanged, so signature matching alone leaves
+      // them resolved against a declaration that moved, disappeared, appeared, or became ambiguous.
+      const declaredContainers = declaredContainerIndexFromModules(modules.values());
+      const declaredContainerConsumers = collectDeclaredContainerConsumers(
+        trackedEntries,
+        declaredContainerNamesChanged(manifestDeclaredContainerIndex(manifest), declaredContainers),
+      );
+      for (const file of declaredContainerConsumers) markAsChanged(file);
       const retainedTrackedEntries = Object.entries(trackedEntries).filter(([file]) => !deletedTrackedFiles.has(file));
       const cachedGraphEntries = resolverEnvironmentMatchesManifest
         ? new Map<string, ManifestFileEntry>(retainedTrackedEntries)
@@ -2289,6 +2374,7 @@ export async function buildProjectIndexIncremental(
             timings,
             manifestReport,
             transientFiles,
+            declaredContainers,
             configHash: currentConfigHashResult,
             discoveryContext,
             ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),

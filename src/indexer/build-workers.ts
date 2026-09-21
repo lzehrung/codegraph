@@ -235,7 +235,7 @@ function createOversizedNativeSourceFallback(
     source,
     sup: support,
     nativeQueries: null,
-    nativeFallbackReason: "queryFailure",
+    nativeFallbackReason: "sourceTooLarge",
     nativeError: `source exceeds native byte limit (${bytes} > ${DEFAULT_NATIVE_SOURCE_MAX_BYTES})`,
   };
 }

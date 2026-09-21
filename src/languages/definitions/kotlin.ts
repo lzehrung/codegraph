@@ -1,5 +1,20 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
+import { classifyByParentType, hasParentType, nodeTypeIn } from "./shared.js";
+
+/** Parent types whose direct `identifier` child is a declared name. */
+const KOTLIN_DECLARATION_NAME_PARENT_TYPES = [
+  "class_declaration",
+  "object_declaration",
+  "function_declaration",
+  "type_alias",
+  "variable_declaration",
+  "parameter",
+  "class_parameter",
+  "enum_entry",
+  "type_parameter",
+];
+
 export const KOTLIN_DEF: LanguageDefinition = {
   id: "kotlin",
   extensions: [".kt", ".kts", ".ktm"],
@@ -46,7 +61,7 @@ export const KOTLIN_DEF: LanguageDefinition = {
   },
   graph: {
     imports: `
-      (import (qualified_identifier) @mod) @stmt
+      (import (qualified_identifier) @from) @stmt
     `,
     exports: `
       (source_file
@@ -89,38 +104,20 @@ export const KOTLIN_DEF: LanguageDefinition = {
     propertyIdentifier: ["identifier"],
     memberExpression: "navigation_expression",
   },
-  classifyDefinition: (node) => {
-    const parent = node.parent;
-    if (!parent) return "variable";
-    if (parent.type === "class_declaration" || parent.type === "object_declaration") return "class";
-    if (parent.type === "function_declaration") return "function";
-    if (parent.type === "type_alias") return "type";
-    return "variable";
-  },
-  isDeclarationName: (node) => {
-    const parent = node.parent;
-    if (!parent) return false;
-    if (parent.type === "class_declaration" && node.type === "identifier") return true;
-    if (parent.type === "object_declaration" && node.type === "identifier") return true;
-    if (parent.type === "function_declaration" && node.type === "identifier") return true;
-    if (parent.type === "type_alias" && node.type === "identifier") return true;
-    if (parent.type === "variable_declaration" && node.type === "identifier") return true;
-    if (parent.type === "parameter" && node.type === "identifier") return true;
-    if (parent.type === "class_parameter" && node.type === "identifier") return true;
-    if (parent.type === "enum_entry" && node.type === "identifier") return true;
-    if (parent.type === "type_parameter" && node.type === "identifier") return true;
-    return false;
-  },
+  classifyDefinition: classifyByParentType({
+    class_declaration: "class",
+    object_declaration: "class",
+    function_declaration: "function",
+    type_alias: "type",
+  }),
+  // The Kotlin grammar exposes no `name` field on these declarations, so the declared
+  // name is identified by parent type with a plain `identifier` child.
+  isDeclarationName: (node) => node.type === "identifier" && hasParentType(node, KOTLIN_DECLARATION_NAME_PARENT_TYPES),
   scopeDeclarationNames: "all",
-  createsFunctionScope: (node) =>
-    node.type === "function_declaration" || node.type === "anonymous_function" || node.type === "lambda_literal",
-  createsBlockScope: (node) =>
-    node.type === "function_body" ||
-    node.type === "class_body" ||
-    node.type === "block" ||
-    node.type === "catch_block" ||
-    node.type === "finally_block",
+  createsFunctionScope: nodeTypeIn(["function_declaration", "anonymous_function", "lambda_literal"]),
+  createsBlockScope: nodeTypeIn(["function_body", "class_body", "block", "catch_block", "finally_block"]),
   supportsCrossModuleSymbols: true,
+  membersAreImplicitlyInScope: true,
   exportScopeBlockers: ["function_body", "lambda_literal", "anonymous_function"],
 };
 registerLanguage(KOTLIN_DEF);

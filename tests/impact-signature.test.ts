@@ -37,7 +37,7 @@ describe("impact signature hint", () => {
   it("extracts fixed arity for simple TypeScript functions", () => {
     const source = "export function helper(a: string, b: number) { return a + b; }";
     const signature = extractCallableSignature({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       symbolStartIndex: source.indexOf("helper"),
     });
@@ -48,7 +48,7 @@ describe("impact signature hint", () => {
   it("does not split commas inside TypeScript parameter type arguments", () => {
     const source = "export function helper(a: Map<string, number>, b: Set<string>) { return a; }";
     const signature = extractCallableSignature({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       symbolStartIndex: source.indexOf("helper"),
     });
@@ -59,7 +59,7 @@ describe("impact signature hint", () => {
   it("does not split function type commas or arrows inside TypeScript parameter type arguments", () => {
     const source = "export function helper(a: Transform<(x: Array<string>) => U, V>, b: string) { return b; }";
     const signature = extractCallableSignature({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       symbolStartIndex: source.indexOf("helper"),
     });
@@ -70,7 +70,7 @@ describe("impact signature hint", () => {
   it("skips generic constraints before TypeScript function parameters", () => {
     const source = "export function helper<T extends (x: string) => void>(a: string, b: number) { return b; }";
     const signature = extractCallableSignature({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       symbolStartIndex: source.indexOf("helper"),
     });
@@ -81,7 +81,7 @@ describe("impact signature hint", () => {
   it("skips variable function type annotations before arrow parameters", () => {
     const source = "export const helper: (x: string) => void = (a: string, b: number) => b;";
     const signature = extractCallableSignature({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       symbolStartIndex: source.indexOf("helper"),
     });
@@ -92,7 +92,7 @@ describe("impact signature hint", () => {
   it("does not treat destructuring defaults as optional object parameters", () => {
     const source = "export function helper({ a = 1 }: Options, b: string) { return b; }";
     const signature = extractCallableSignature({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       symbolStartIndex: source.indexOf("helper"),
     });
@@ -103,7 +103,7 @@ describe("impact signature hint", () => {
   it("ignores TypeScript this parameters in callable signatures", () => {
     const source = "export function helper(this: Console, a: string) { return a; }";
     const signature = extractCallableSignature({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       symbolStartIndex: source.indexOf("helper"),
     });
@@ -114,7 +114,7 @@ describe("impact signature hint", () => {
   it("does not count trailing parameter commas as parameters", () => {
     const source = "export function helper(a: string, b: number,) { return a + b; }";
     const signature = extractCallableSignature({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       symbolStartIndex: source.indexOf("helper"),
     });
@@ -125,7 +125,7 @@ describe("impact signature hint", () => {
   it("extracts minimum arity for optional and defaulted parameters", () => {
     const source = "export function helper(a: string, b = 1, c?: boolean) { return a; }";
     const signature = extractCallableSignature({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       symbolStartIndex: source.indexOf("helper"),
     });
@@ -136,7 +136,7 @@ describe("impact signature hint", () => {
   it("requires arguments through the last required parameter", () => {
     const source = "export function helper(a = 1, b: string) { return b; }";
     const signature = extractCallableSignature({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       symbolStartIndex: source.indexOf("helper"),
     });
@@ -147,7 +147,7 @@ describe("impact signature hint", () => {
   it("does not treat default comparison operators as TypeScript parameter type arguments", () => {
     const source = "export function helper(a = x < y, b = c > d) { return [a, b]; }";
     const signature = extractCallableSignature({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       symbolStartIndex: source.indexOf("helper"),
     });
@@ -158,7 +158,7 @@ describe("impact signature hint", () => {
   it("does not treat typed default comparisons as TypeScript parameter type arguments", () => {
     const source = "export function helper(a: Box<string> = x < y, b = c > d) { return [a, b]; }";
     const signature = extractCallableSignature({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       symbolStartIndex: source.indexOf("helper"),
     });
@@ -169,7 +169,7 @@ describe("impact signature hint", () => {
   it("marks rest signatures as unbounded", () => {
     const source = "export function helper(a: string, ...rest: string[]) { return rest; }";
     const signature = extractCallableSignature({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       symbolStartIndex: source.indexOf("helper"),
     });
@@ -191,7 +191,7 @@ describe("impact signature hint", () => {
   it("counts fixed callsite arguments", () => {
     const source = "helper(one, two, three);";
     const call = extractCallsiteArguments({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       calleeStartIndex: source.indexOf("helper"),
     });
@@ -202,7 +202,7 @@ describe("impact signature hint", () => {
   it("counts nested expressions as one argument each", () => {
     const source = "helper(fn(a, b), { x: [1, 2] });";
     const call = extractCallsiteArguments({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       calleeStartIndex: source.indexOf("helper"),
     });
@@ -213,7 +213,7 @@ describe("impact signature hint", () => {
   it("does not split commas inside TypeScript callsite type arguments", () => {
     const source = "helper(value as Map<string, number>, other);";
     const call = extractCallsiteArguments({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       calleeStartIndex: source.indexOf("helper"),
     });
@@ -224,7 +224,7 @@ describe("impact signature hint", () => {
   it("does not split commas inside nested TypeScript callsite type arguments", () => {
     const source = "helper(value as Foo<Bar<Baz, Qux>, Quux>, other);";
     const call = extractCallsiteArguments({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       calleeStartIndex: source.indexOf("helper"),
     });
@@ -235,7 +235,7 @@ describe("impact signature hint", () => {
   it("does not split commas inside JavaScript regex literal arguments", () => {
     const source = "helper(/[/,]/, other);";
     const call = extractCallsiteArguments({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       calleeStartIndex: source.indexOf("helper"),
     });
@@ -246,7 +246,7 @@ describe("impact signature hint", () => {
   it("counts a single JavaScript regex literal argument with a comma", () => {
     const source = "helper(/,/);";
     const call = extractCallsiteArguments({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       calleeStartIndex: source.indexOf("helper"),
     });
@@ -257,7 +257,7 @@ describe("impact signature hint", () => {
   it("does not split commas inside regex literals returned by arrow arguments", () => {
     const source = "helper(() => /,/);";
     const call = extractCallsiteArguments({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       calleeStartIndex: source.indexOf("helper"),
     });
@@ -268,7 +268,7 @@ describe("impact signature hint", () => {
   it("counts comparison expression callsite arguments separately", () => {
     const source = "helper(a < b, c > d);";
     const call = extractCallsiteArguments({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       calleeStartIndex: source.indexOf("helper"),
     });
@@ -279,7 +279,7 @@ describe("impact signature hint", () => {
   it("counts callsite arguments with apostrophes in comments", () => {
     const source = "helper(a /* user's value */, b);";
     const call = extractCallsiteArguments({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       calleeStartIndex: source.indexOf("helper"),
     });
@@ -290,7 +290,7 @@ describe("impact signature hint", () => {
   it("does not count trailing argument commas as arguments", () => {
     const source = 'helper("x",);';
     const call = extractCallsiteArguments({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       calleeStartIndex: source.indexOf("helper"),
     });
@@ -302,7 +302,7 @@ describe("impact signature hint", () => {
     const source = "helper<Map<string, Array<number>>>(value);";
     const calleeStartIndex = source.indexOf("helper");
     const call = extractCallsiteArguments({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       calleeStartIndex,
       calleeEndIndex: calleeStartIndex + "helper".length,
@@ -315,7 +315,7 @@ describe("impact signature hint", () => {
     const source = "helper < value > (arg);";
     const calleeStartIndex = source.indexOf("helper");
     const call = extractCallsiteArguments({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       calleeStartIndex,
       calleeEndIndex: calleeStartIndex + "helper".length,
@@ -328,7 +328,7 @@ describe("impact signature hint", () => {
     const source = "helper<T extends (x: Array<string>) => number>(value);";
     const calleeStartIndex = source.indexOf("helper");
     const call = extractCallsiteArguments({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       calleeStartIndex,
       calleeEndIndex: calleeStartIndex + "helper".length,
@@ -341,7 +341,7 @@ describe("impact signature hint", () => {
     const source = "helper<string>(value);";
     const calleeStartIndex = source.indexOf("helper");
     const call = extractCallsiteArguments({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       calleeStartIndex,
       calleeEndIndex: calleeStartIndex + "helper".length,
@@ -353,7 +353,7 @@ describe("impact signature hint", () => {
   it("returns null for spread arguments", () => {
     const source = "helper(...values);";
     const call = extractCallsiteArguments({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       calleeStartIndex: source.indexOf("helper"),
     });
@@ -365,7 +365,7 @@ describe("impact signature hint", () => {
     const source = "const value = helper;\nother();";
     const calleeStartIndex = source.indexOf("helper");
     const call = extractCallsiteArguments({
-      languageId: "typescript",
+      languageId: "ts",
       source,
       calleeStartIndex,
       calleeEndIndex: calleeStartIndex + "helper".length,

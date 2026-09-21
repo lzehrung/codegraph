@@ -266,4 +266,94 @@ describe("AngularJS framework characterization", () => {
       ),
     ).toBe(true);
   });
+
+  it("adds the same heuristic edges for a TypeScript AngularJS project as for JavaScript", async () => {
+    const root = frameworkSamplePath("graph-ts");
+
+    const graph = await collectGraph(root, [
+      normalizePath(path.join(root, "user-card.directive.ts")),
+      normalizePath(path.join(root, "user.service.ts")),
+      normalizePath(path.join(root, "user.controller.ts")),
+      normalizePath(path.join(root, "user-card.template.html")),
+    ]);
+
+    const directiveFile = normalizePath(path.join(root, "user-card.directive.ts"));
+    const serviceFile = normalizePath(path.join(root, "user.service.ts"));
+    const controllerFile = normalizePath(path.join(root, "user.controller.ts"));
+    const templateFile = normalizePath(path.join(root, "user-card.template.html"));
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === controllerFile &&
+          edge.to.type === "file" &&
+          normalizePath(edge.to.path) === serviceFile &&
+          edge.raw === "userService" &&
+          edge.resolved === "heuristic" &&
+          edge.confidence === 0.8,
+      ),
+    ).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === controllerFile && edge.to.type === "external" && edge.to.name === "$scope",
+      ),
+    ).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === controllerFile && edge.to.type === "external" && edge.to.name === "$state",
+      ),
+    ).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === directiveFile &&
+          edge.to.type === "file" &&
+          normalizePath(edge.to.path) === controllerFile &&
+          edge.raw === "UserCtrl",
+      ),
+    ).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === directiveFile &&
+          edge.to.type === "file" &&
+          normalizePath(edge.to.path) === templateFile &&
+          edge.raw === "./user-card.template.html",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not trigger AngularJS heuristics for a non-Angular TypeScript file", async () => {
+    const root = await mkTmpDir("cg-angularjs-ts-guard-");
+    await fsp.writeFile(
+      path.join(root, "page-config.ts"),
+      [
+        "export const page = createPage({",
+        "  controller: 'UserCtrl',",
+        "  templateUrl: './user-card.template.html',",
+        "});",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(path.join(root, "user.controller.ts"), "export function UserCtrl(): void {}\n", "utf8");
+    await fsp.writeFile(path.join(root, "user-card.template.html"), "<section></section>\n", "utf8");
+
+    const index = await buildProjectIndex(root);
+    const graph = await collectGraph(root, Array.from(index.byFile.keys()));
+    const configFile = normalizePath(path.join(root, "page-config.ts"));
+    const controllerFile = normalizePath(path.join(root, "user.controller.ts"));
+    const templateFile = normalizePath(path.join(root, "user-card.template.html"));
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === configFile && edge.to.type === "file" && normalizePath(edge.to.path) === controllerFile,
+      ),
+    ).toBe(false);
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === configFile && edge.to.type === "file" && normalizePath(edge.to.path) === templateFile,
+      ),
+    ).toBe(false);
+  });
 });

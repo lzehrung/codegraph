@@ -1,8 +1,10 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
+import { isNameFieldOnParent } from "./shared.js";
 
 export const RUBY_DEF: LanguageDefinition = {
   id: "ruby",
+  usesQueryDrivenLocals: true,
   extensions: [".rb", ".rbw", ".rake", ".gemspec"],
   structure: {
     blocks: [
@@ -32,7 +34,7 @@ export const RUBY_DEF: LanguageDefinition = {
   },
   graph: {
     imports: `
-      (call method: (identifier) @method arguments: (argument_list (string (string_content) @mod)) (#match? @method "^(require|require_relative|load|autoload)$")) @stmt
+      (call method: (identifier) @method arguments: (argument_list (string (string_content) @from)) (#match? @method "^(require|require_relative|load|autoload)$")) @stmt
     `,
     exports: `
       (class name: [(constant) (scope_resolution)] @name)
@@ -58,7 +60,14 @@ export const RUBY_DEF: LanguageDefinition = {
     memberExpression: "call",
   },
   supportsCrossModuleSymbols: true,
+  membersAreImplicitlyInScope: true,
+  // Query-driven locals capture the declared name inside a `class`, `module`, `method`, or
+  // `singleton_method`, so classification must read the parent type the same way the scope
+  // walker's structural handling does.
   classifyDefinition: (node) => {
+    const parentType = node.parent?.type;
+    if (parentType === "class" || parentType === "module") return "class";
+    if (parentType === "method" || parentType === "singleton_method") return "method";
     const assignment = node.parent;
     const value = assignment?.childForFieldName("right");
     if (
@@ -75,15 +84,8 @@ export const RUBY_DEF: LanguageDefinition = {
   scopeDeclarationNames: (node) => node.type === "constant" && node.parent?.type === "assignment",
   createsFunctionScope: (node) => node.type === "method" || node.type === "singleton_method",
   createsBlockScope: (node) => node.type === "do_block" || node.type === "block",
-  isDeclarationName: (node) => {
-    const p = node.parent;
-    if (!p) return false;
-    if (p.type === "class" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "module" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "method" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "singleton_method" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "assignment" && p.childForFieldName("left")?.id === node.id) return true;
-    return false;
-  },
+  isDeclarationName: (node) =>
+    isNameFieldOnParent(node, ["class", "module", "method", "singleton_method"]) ||
+    isNameFieldOnParent(node, ["assignment"], "left"),
 };
 registerLanguage(RUBY_DEF);

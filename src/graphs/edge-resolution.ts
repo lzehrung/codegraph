@@ -127,16 +127,28 @@ export async function resolveModuleSpecifierEdges(
     const res = await resolvePythonModule(context.projectRoot, context.file, isDotsOnly ? null : entry.spec, relDots);
     to = typeof res === "string" ? edgeToResolvedFile(res) : edgeToExternal(res.external);
   } else if (context.support.id === "java" || context.support.id === "kotlin") {
-    const packageTargets = await resolveJvmPackageImportPaths(context.projectRoot, entry.spec, context.support.id);
+    const packageTargets = await resolveJvmPackageImportPaths(
+      context.projectRoot,
+      entry.spec,
+      context.support.id,
+      context.file,
+    );
     if (packageTargets.length) {
       return packageTargets.map((targetPath) => withSpecifierMetadata(entry, edgeToResolvedFile(targetPath)));
     }
     to = await resolveImportSpecifierEdge(entry, context);
-  } else if (context.support.id === "go" || context.support.id === "php" || context.support.id === "rust") {
+  } else if (
+    context.support.id === "go" ||
+    context.support.id === "php" ||
+    context.support.id === "rust" ||
+    context.support.id === "cpp"
+  ) {
     to = await resolveImportSpecifierEdge(entry, context);
   } else if (["csharp", "ruby"].includes(context.support.id)) {
     const namespaceTargets =
-      context.support.id === "csharp" ? await resolveCsharpNamespaceImportPaths(context.projectRoot, entry.spec) : [];
+      context.support.id === "csharp"
+        ? await resolveCsharpNamespaceImportPaths(context.projectRoot, entry.spec, context.file)
+        : [];
     if (namespaceTargets.length) {
       return namespaceTargets.map((targetPath) => withSpecifierMetadata(entry, edgeToResolvedFile(targetPath)));
     }

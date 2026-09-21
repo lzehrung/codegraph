@@ -6,7 +6,7 @@ import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { createTestIndexFromFiles, findSymbolsByName } from "../test-utils.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
-import { findReferences, goToDefinition } from "../../src/index.js";
+import { buildProjectIndexFromFiles, findReferences, goToDefinition } from "../../src/index.js";
 
 const definition: LanguageTestDefinition = {
   id: "javascript",
@@ -219,6 +219,197 @@ describe("JavaScript class field navigation", () => {
       if (references.status === "ok") {
         expect(references.references.map((reference) => reference.range.start.line)).toContain(3);
       }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("JavaScript type-only import and export edges", () => {
+  it("marks import type statements as type-only import bindings", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-js-type-only-"));
+    const main = path.join(root, "main.js");
+    const types = path.join(root, "types.js");
+    try {
+      await writeFile(types, "export class Widget {}\n", "utf8");
+      await writeFile(main, 'import type { Widget } from "./types.js";\nexport type { Widget };\n', "utf8");
+      const index = await createTestIndexFromFiles(root, [types, main]);
+      const module = index.byFile.get(fileIdentityKey(main));
+      const typeOnlyImports = (module?.imports ?? []).filter((binding) => binding.typeOnly);
+      // JSDoc-typed `.js` projects use `import type`; the binding must be type-only, not a
+      // runtime dependency.
+      expect(typeOnlyImports).toEqual([expect.objectContaining({ from: "./types.js", typeOnly: true })]);
+      // The graph edge carries the type-only classification too.
+      const typeOnlyEdges = index.graph.edges.filter(
+        (edge) => edge.typeOnly && fileIdentityKey(edge.from) === fileIdentityKey(main),
+      );
+      expect(typeOnlyEdges).toEqual([
+        expect.objectContaining({
+          from: expect.any(String),
+          to: { type: "file", path: types.replace(/\\/g, "/") },
+          typeOnly: true,
+        }),
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps runtime imports and mixed clauses as runtime edges", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-js-runtime-imports-"));
+    const main = path.join(root, "main.js");
+    const types = path.join(root, "types.js");
+    try {
+      await writeFile(types, "export class Widget {}\nexport type Shape = { size: number };\n", "utf8");
+      // A side-effect import and a mixed clause (`{ type X }` without the statement-level
+      // `type` keyword) are runtime dependencies, matching TypeScript's rules.
+      await writeFile(
+        main,
+        ['import "./types.js";', 'import { type Widget } from "./types.js";', "const w = new Widget();", ""].join("\n"),
+        "utf8",
+      );
+      const index = await createTestIndexFromFiles(root, [types, main]);
+      const module = index.byFile.get(fileIdentityKey(main));
+      expect((module?.imports ?? []).filter((binding) => binding.typeOnly)).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a default import named type as a runtime edge", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-js-type-binding-"));
+    const types = path.join(root, "types.js");
+    const mod = path.join(root, "mod.js");
+    const other = path.join(root, "other.js");
+    const multiline = path.join(root, "multiline.js");
+    const runtime = path.join(root, "runtime.js");
+    const main = path.join(root, "main.js");
+    try {
+      await writeFile(types, "export class Widget {}\n", "utf8");
+      await writeFile(mod, "export default 1;\n", "utf8");
+      await writeFile(other, "export default 2;\nexport const helper = 1;\n", "utf8");
+      await writeFile(multiline, "export default 3;\n", "utf8");
+      await writeFile(runtime, "export default 4;\n", "utf8");
+      await writeFile(
+        main,
+        [
+          'import type { Widget } from "./types.js";',
+          'import type from "./mod.js";',
+          'import type, { helper } from "./other.js";',
+          "import",
+          'type from "./multiline.js";',
+          'import foo from "import type";',
+          'import runtime from "./runtime.js"; // import type { Widget }',
+          'import typeOf from "./runtime.js";',
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const index = await createTestIndexFromFiles(root, [types, mod, other, multiline, runtime, main]);
+      const module = index.byFile.get(fileIdentityKey(main));
+      const typeOnlyImports = (module?.imports ?? []).filter((binding) => binding.typeOnly);
+      expect(typeOnlyImports).toEqual([expect.objectContaining({ from: "./types.js", typeOnly: true })]);
+      expect((module?.imports ?? []).filter((binding) => binding.from === "./mod.js")).toEqual([
+        expect.objectContaining({ from: "./mod.js", kind: "default", local: "type", typeOnly: false }),
+      ]);
+
+      const fromMain = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(main));
+      const typeOnlyTargets = fromMain
+        .filter((edge) => edge.typeOnly)
+        .map((edge) => (edge.to.type === "file" ? edge.to.path : edge.to.name));
+      expect(typeOnlyTargets).toEqual([types.replace(/\\/g, "/")]);
+      expect(
+        fromMain.some(
+          (edge) => !edge.typeOnly && edge.to.type === "file" && fileIdentityKey(edge.to.path) === fileIdentityKey(mod),
+        ),
+      ).toBeTruthy();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks export type re-exports as type-only edges", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-js-type-only-exports-"));
+    const main = path.join(root, "main.js");
+    const types = path.join(root, "types.js");
+    const star = path.join(root, "star.js");
+    try {
+      await writeFile(types, "export class Widget {}\n", "utf8");
+      await writeFile(star, "export class Star {}\n", "utf8");
+      await writeFile(
+        main,
+        ['export type { Widget } from "./types.js";', 'export type * from "./star.js";', ""].join("\n"),
+        "utf8",
+      );
+      const index = await createTestIndexFromFiles(root, [types, star, main]);
+      const typeOnlyTargets = index.graph.edges
+        .filter((edge) => edge.typeOnly && fileIdentityKey(edge.from) === fileIdentityKey(main))
+        .map((edge) => (edge.to.type === "file" ? edge.to.path : edge.to.name))
+        .sort();
+      expect(typeOnlyTargets).toEqual([star, types].map((file) => file.replace(/\\/g, "/")).sort());
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("classifies a type-only clause that spans several lines", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-js-type-only-multiline-"));
+    const main = path.join(root, "main.js");
+    const types = path.join(root, "types.js");
+    try {
+      await writeFile(types, "export class Widget {}\n", "utf8");
+      await writeFile(main, 'import type {\n  Widget\n} from "./types.js";\n', "utf8");
+      const index = await createTestIndexFromFiles(root, [types, main]);
+      const module = index.byFile.get(fileIdentityKey(main));
+      expect((module?.imports ?? []).filter((binding) => binding.typeOnly)).toEqual([
+        expect.objectContaining({ from: "./types.js", typeOnly: true }),
+      ]);
+      const typeOnlyEdges = index.graph.edges.filter(
+        (edge) => edge.typeOnly && fileIdentityKey(edge.from) === fileIdentityKey(main),
+      );
+      expect(typeOnlyEdges).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("classifies type-only imports the same way without the native addon", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-js-type-only-reduced-"));
+    const main = path.join(root, "main.js");
+    const types = path.join(root, "types.js");
+    const mod = path.join(root, "mod.js");
+    const other = path.join(root, "other.js");
+    try {
+      await writeFile(types, "export class Widget {}\n", "utf8");
+      await writeFile(mod, "export default 1;\n", "utf8");
+      await writeFile(other, "export default 2;\nexport const helper = 1;\n", "utf8");
+      await writeFile(
+        main,
+        [
+          'import type { Widget } from "./types.js";',
+          'import type from "./mod.js";',
+          'import type, { helper } from "./other.js";',
+          'import foo from "import type";',
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const index = await buildProjectIndexFromFiles(root, [types, mod, other, main], { native: "off" });
+      const module = index.byFile.get(fileIdentityKey(main));
+      // The reduced text extractor must agree with the native capture path: only the
+      // statement-level `import type` clause is type-only.
+      expect((module?.imports ?? []).filter((binding) => binding.typeOnly)).toEqual([
+        expect.objectContaining({ from: "./types.js", typeOnly: true }),
+      ]);
+      expect((module?.imports ?? []).filter((binding) => binding.from === "./mod.js")).toEqual([
+        expect.objectContaining({ from: "./mod.js", kind: "default", local: "type", typeOnly: false }),
+      ]);
+      const fromMain = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(main));
+      expect(
+        fromMain.some(
+          (edge) => !edge.typeOnly && edge.to.type === "file" && fileIdentityKey(edge.to.path) === fileIdentityKey(mod),
+        ),
+      ).toBe(true);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

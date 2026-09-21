@@ -1,5 +1,6 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
+import { classifyByParentType, isNameFieldOnParent, matchesParentTypePairs, nodeTypeIn } from "./shared.js";
 
 export const GO_DEF: LanguageDefinition = {
   id: "go",
@@ -34,7 +35,7 @@ export const GO_DEF: LanguageDefinition = {
   },
   graph: {
     imports: `
-      (import_spec path: (interpreted_string_literal) @mod) @stmt
+      (import_spec path: (interpreted_string_literal) @from) @stmt
     `,
     exports: `
       (function_declaration name: (identifier) @name)
@@ -57,7 +58,9 @@ export const GO_DEF: LanguageDefinition = {
       (range_clause left: (expression_list (identifier) @name) (#not-eq? @name "_"))
     `,
     importBindings: `
+      (import_spec name: (dot) @wild path: (interpreted_string_literal) @from) @stmt
       (import_spec name: (package_identifier) @alias path: (interpreted_string_literal) @from) @stmt
+      (import_spec name: (blank_identifier) @alias path: (interpreted_string_literal) @from) @stmt
       (import_spec path: (interpreted_string_literal) @from) @stmt
     `,
   },
@@ -66,36 +69,32 @@ export const GO_DEF: LanguageDefinition = {
     memberExpression: "selector_expression",
   },
   supportsCrossModuleSymbols: true,
-  classifyDefinition: (node) => {
-    const parent = node.parent;
-    if (!parent) return "variable";
-    if (parent.type === "function_declaration" || parent.type === "method_declaration") return "function";
-    if (parent.type === "type_spec" && parent.childForFieldName("name")?.id === node.id) return "type";
-    if (parent.type === "type_parameter_declaration") return "type";
-    return "variable";
-  },
-  createsFunctionScope: (node) =>
-    node.type === "function_declaration" || node.type === "method_declaration" || node.type === "func_literal",
-  createsBlockScope: (node) => node.type === "block" || node.type === "for_statement",
-  membersAreImplicitlyInScope: false,
-  isDeclarationName: (node) => {
-    const p = node.parent;
-    if (!p) return false;
-    if (p.type === "function_declaration" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "method_declaration" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "type_spec" && p.childForFieldName("name")?.id === node.id) return true;
-    if ((p.type === "var_spec" || p.type === "const_spec") && node.type === "identifier") return true;
-    if (p.type === "type_parameter_declaration" && node.type === "identifier") return true;
-    if (p.type === "expression_list" && p.parent?.type === "short_var_declaration") return node.type === "identifier";
-    if (p.type === "expression_list" && p.parent?.type === "range_clause")
-      return node.type === "identifier" && node.text !== "_";
-    // Only parameter *names* — never type-position identifiers (e.g. builtin `int` or type param `T`).
-    if (p.type === "parameter_declaration" || p.type === "variadic_parameter_declaration") {
-      return node.type === "identifier";
-    }
-    if (p.type === "field_declaration" && node.type === "field_identifier") return true;
-    return false;
-  },
+  classifyDefinition: classifyByParentType({
+    function_declaration: "function",
+    method_declaration: "function",
+    type_spec: { kind: "type", nameField: "name" },
+    type_parameter_declaration: "type",
+  }),
+  createsFunctionScope: nodeTypeIn(["function_declaration", "method_declaration", "func_literal"]),
+  createsBlockScope: nodeTypeIn(["block", "for_statement"]),
+  isDeclarationName: (node) =>
+    isNameFieldOnParent(node, ["function_declaration", "method_declaration", "type_spec"]) ||
+    matchesParentTypePairs(node, [
+      ["var_spec", "identifier"],
+      ["const_spec", "identifier"],
+      ["type_parameter_declaration", "identifier"],
+      // Only parameter *names* — never type-position identifiers (e.g. builtin `int` or type param `T`).
+      ["parameter_declaration", "identifier"],
+      ["variadic_parameter_declaration", "identifier"],
+      ["field_declaration", "field_identifier"],
+    ]) ||
+    (node.parent?.type === "expression_list" &&
+      node.parent.parent?.type === "short_var_declaration" &&
+      node.type === "identifier") ||
+    (node.parent?.type === "expression_list" &&
+      node.parent.parent?.type === "range_clause" &&
+      node.type === "identifier" &&
+      node.text !== "_"),
   scopeDeclarationNames: (node) =>
     (node.type === "field_identifier" && node.parent?.type === "field_declaration") ||
     (node.type === "identifier" &&

@@ -49,7 +49,7 @@ function adaptDefinition(def: LanguageDefinition): LanguageSupport {
       def.scopeDeclarationNames === "all" ? () => true : (def.scopeDeclarationNames ?? (() => false)),
     createsBlockScope: def.createsBlockScope || (() => false),
     createsFunctionScope: def.createsFunctionScope || (() => false),
-    membersAreImplicitlyInScope: def.membersAreImplicitlyInScope ?? true,
+    membersAreImplicitlyInScope: def.membersAreImplicitlyInScope ?? false,
     supportsCrossModuleSymbols: def.supportsCrossModuleSymbols || false,
     isTypeOnly: def.isTypeOnly || (() => false),
     exportScopeBlockers: def.exportScopeBlockers ?? [],

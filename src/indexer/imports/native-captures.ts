@@ -6,8 +6,8 @@ import { maskJsLikeCommentsStringsAndRegex } from "../../util/comments.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { collectLineStartOffsets } from "../../util/lines.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rust-test-modules.js";
-import { parseGoImportAlias } from "../shared.js";
 import type { ImportBinding } from "../types.js";
+import { importCapture } from "../../languages/graph-captures.js";
 import type { ImportResolver, ResolvedImportTarget } from "./context.js";
 import { sourceRangeFromOffsets } from "./binding-ranges.js";
 import { appendImplicitImportBinding, type LanguageSpecificImportContext } from "./language-specific.js";
@@ -102,35 +102,13 @@ async function pushTextObjectPatternBindings(
 function pushNamespaceBinding(
   context: ImportCaptureExtractionContext,
   caps: Record<string, NativeCapture | undefined>,
-  stmtText: string,
   from: string,
   resolved: ResolvedImportTarget,
   typeOnly: boolean,
   byteIndexMap: ByteToStringIndexMap,
 ): void {
-  const namespaceCapture = caps["ns"];
+  const namespaceCapture = importCapture(caps, "ns");
   if (!namespaceCapture) return;
-  if (context.languageId === "go") {
-    const alias = parseGoImportAlias(stmtText);
-    if (alias === ".") {
-      context.pushBinding({
-        kind: "star",
-        from,
-        resolved,
-        typeOnly,
-      });
-    } else if (alias !== "_") {
-      context.pushBinding({
-        kind: "namespace",
-        localNS: alias ?? namespaceCapture.text,
-        from,
-        resolved,
-        typeOnly,
-      });
-    }
-    return;
-  }
-
   context.pushBinding({
     kind: "namespace",
     localNS: namespaceCapture.text,
@@ -154,7 +132,7 @@ async function pushStandardBindings(
 ): Promise<void> {
   if (!from) return;
   const resolved = await context.resolveFrom(from);
-  const defaultCapture = caps["def"];
+  const defaultCapture = importCapture(caps, "def");
   if (defaultCapture) {
     context.pushBinding({
       kind: "default",
@@ -166,7 +144,7 @@ async function pushStandardBindings(
     });
   }
 
-  pushNamespaceBinding(context, caps, stmtText, from, resolved, typeOnly, byteIndexMap);
+  pushNamespaceBinding(context, caps, from, resolved, typeOnly, byteIndexMap);
 
   const inames = capturesNamed(match, "iname");
   const aliases = capturesNamed(match, "alias");
@@ -188,15 +166,27 @@ async function pushStandardBindings(
     });
   }
 
-  if (!defaultCapture && !caps["ns"] && !inames.length && !patternCount) {
+  // CommonJS `pattern` / `req` stays language-specific: those captures are outside
+  // the import vocabulary and still feed object-destructure require bindings above.
+  if (importCapture(caps, "wild")) {
+    context.pushBinding({
+      kind: "star",
+      from,
+      resolved,
+      typeOnly,
+    });
+    return;
+  }
+
+  if (!defaultCapture && !importCapture(caps, "ns") && !inames.length && !patternCount) {
+    const alias = importCapture(caps, "alias")?.text;
     appendImplicitImportBinding(context.languageContext, {
       from,
       resolved,
       typeOnly,
       stmtText,
       ...(statementStartIndex !== undefined ? { stmtStartIndex: statementStartIndex, source: context.source } : {}),
-      ...(caps["alias"]?.text ? { alias: caps["alias"].text } : {}),
-      ...(caps["wild"] ? { wildcard: true } : {}),
+      ...(alias ? { alias } : {}),
     });
   }
 }
@@ -209,10 +199,10 @@ export async function collectNativeCaptureImportBindings(
   let lineStarts: number[] | undefined;
   for (const match of matches) {
     const caps = capturesByName(match);
-    const statementCapture = caps["stmt"];
+    const statementCapture = importCapture(caps, "stmt");
     const stmtText = statementCapture?.text ?? "";
     const statementTypeOnly = context.isTypeOnly(stmtText);
-    const typeOnly = caps["type_kw"] !== undefined || statementTypeOnly;
+    const typeOnly = importCapture(caps, "type_kw") !== undefined || statementTypeOnly;
     const statementStartIndex =
       statementCapture !== undefined
         ? utf8ByteOffsetToStringIndex(context.source, statementCapture.start.index)
@@ -220,7 +210,8 @@ export async function collectNativeCaptureImportBindings(
     if (await context.applyStatementOverride(stmtText, statementTypeOnly, statementStartIndex)) {
       continue;
     }
-    const from = caps["from"] ? unquote(caps["from"].text) : undefined;
+    const fromCapture = importCapture(caps, "from");
+    const from = fromCapture ? unquote(fromCapture.text) : undefined;
     const patterns = capturesNamed(match, "pattern");
     if (patterns.length) {
       const rangeLineStarts = lineStarts ?? collectLineStartOffsets(context.source);

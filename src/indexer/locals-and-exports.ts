@@ -19,10 +19,12 @@ import { SymbolKind } from "./types.js";
 import type { LanguageSupport } from "../languages.js";
 import { isPythonInstanceAttributeDeclaration } from "../languages/definitions/python.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import { importCapture } from "../languages/graph-captures.js";
 import type { ExportEntry, ImportBinding, ModuleIndex, SymbolDef } from "./types.js";
 import type { Range } from "../types.js";
 
 import { ECMASCRIPT_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE } from "../util/identifiers.js";
+import { isExportedDeclaration } from "./declaration-visibility.js";
 
 /**
  * Matches one `exportScopeBlockers` entry against an ancestor node. A plain entry compares the
@@ -66,10 +68,6 @@ const JS_FALLBACK_CJS_FUNCTION_PATTERN = new RegExp(
 const JS_FALLBACK_CJS_OBJECT_FUNCTION_PATTERN = new RegExp(
   String.raw`(${ECMASCRIPT_IDENTIFIER_SOURCE})\s*:\s*(function\b|\([^)]*\)\s*=>)`,
   "gu",
-);
-const JS_FALLBACK_TS_EXPORT_ASSIGN_PATTERN = new RegExp(
-  String.raw`^\s*export\s*=\s*(${ECMASCRIPT_IDENTIFIER_SOURCE})\s*;?\s*$`,
-  "u",
 );
 const JS_DEFAULT_FUNCTION_PATTERN = new RegExp(
   String.raw`\bexport\s+default\s+(?:async\s+)?function\b\s*\*?\s*(${ECMASCRIPT_IDENTIFIER_SOURCE})`,
@@ -709,11 +707,9 @@ export function collectLocalsAndExportsFromSource(
       exports.some((entry) => entry.type === "local" && entry.exportedAs === "default");
 
     const excludedCaptures: NativeCapture[] = [];
-    if (!treeForEnrichment) {
-      for (const match of matches) {
-        for (const capture of match.captures) {
-          if (capture.name === "export_scope" || capture.name === "private_declaration") excludedCaptures.push(capture);
-        }
+    for (const match of matches) {
+      for (const capture of match.captures) {
+        if (capture.name === "export_scope" || capture.name === "private_declaration") excludedCaptures.push(capture);
       }
     }
 
@@ -735,14 +731,9 @@ export function collectLocalsAndExportsFromSource(
       const map = capturesByName(match);
       const stmtText = map["stmt"]?.text ?? "";
 
-      if (support.id === "c" || support.id === "cpp") {
-        const declarationNode = nodeForCapture(map["declaration"]);
-        const hasStaticStorageClass = declarationNode?.namedChildren.some(
-          (child) => child.type === "storage_class_specifier" && child.text === "static",
-        );
-        if (hasStaticStorageClass) continue;
-      }
       if (isOutsideModuleScope(map["name"] ?? map["src"])) continue;
+      const exportNameNode = nodeForCapture(map["name"] ?? map["src"]);
+      if (exportNameNode && !isExportedDeclaration(support.id, exportNameNode)) continue;
       const isTypeOnly = support.isTypeOnly(stmtText);
 
       if (support.id === "python") {
@@ -800,7 +791,7 @@ export function collectLocalsAndExportsFromSource(
             sourceSpecifier: srcName,
             typeOnly: Boolean(map["type_kw"]) || isTypeOnly,
           });
-        } else if (/^\s*export\s*\*/.test(stmtText)) {
+        } else if (importCapture(map, "wild")) {
           exports.push({
             type: "exportStar",
             fromModule: from,
@@ -979,20 +970,6 @@ export function collectLocalsAndExportsFromSource(
         }
         continue;
       }
-      const tsExportAssignMatch =
-        support.id === "ts" || support.id === "tsx" ? JS_FALLBACK_TS_EXPORT_ASSIGN_PATTERN.exec(stmtText) : null;
-      if (tsExportAssignMatch) {
-        const ident = tsExportAssignMatch[1]!;
-        const local = locals.find((def) => def.localName === ident);
-        if (local) {
-          exports.push({
-            type: "local",
-            exportedAs: "default",
-            target: { ...local, kind: SymbolKind.Default },
-          });
-        }
-        continue;
-      }
       if (map["ts_export_assign"]) {
         const ident = map["ts_export_assign"].text;
         const local = locals.find((def) => def.localName === ident);
@@ -1008,6 +985,8 @@ export function collectLocalsAndExportsFromSource(
       const nameCapture = map["name"] ?? map["declarator"];
       if (nameCapture) {
         if (isOutsideModuleScope(nameCapture)) continue;
+        const visibilityNameNode = nodeForCapture(nameCapture);
+        if (visibilityNameNode && !isExportedDeclaration(support.id, visibilityNameNode)) continue;
         const nameText = map["declarator"]
           ? declaratorCaptureName(nameCapture, nodeForCapture(nameCapture))
           : nameCapture.text;
@@ -1098,6 +1077,15 @@ export function collectLocalsAndExportsFromSource(
           fromModule: binding.resolved,
           moduleSpecifier: binding.from,
         });
+      } else if (binding.kind === "star") {
+        if (!exports.some((entry) => entry.type === "exportStar" && entry.fromModule === binding.resolved)) {
+          exports.push({
+            type: "exportStar",
+            fromModule: binding.resolved,
+            moduleSpecifier: binding.from,
+            sourceSpecifier: binding.from,
+          });
+        }
       }
     }
   }

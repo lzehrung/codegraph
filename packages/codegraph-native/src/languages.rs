@@ -1,5 +1,9 @@
 use tree_sitter::Language;
 
+/// Language ids the addon can parse. Single-file components are deliberately absent: `vue` and
+/// `svelte` files are split by the TypeScript side (`src/languages/file-prep.ts`) into their
+/// script block (js/ts/tsx), template (html), and style (css/scss/less) support, and those block
+/// languages are what reach this addon. A `vue` or `svelte` parser here would never be asked for.
 pub(crate) const SUPPORTED_LANGUAGE_IDS: &[&str] = &[
     "c",
     "cpp",
@@ -17,11 +21,9 @@ pub(crate) const SUPPORTED_LANGUAGE_IDS: &[&str] = &[
     "rust",
     "scss",
     "sql",
-    "svelte",
     "swift",
     "ts",
     "tsx",
-    "vue",
     "zig",
 ];
 
@@ -46,11 +48,9 @@ pub(crate) fn language_for_id(language_id: &str) -> Option<Language> {
         "rust" => Some(tree_sitter_rust::LANGUAGE.into()),
         "scss" => Some(arborium_scss::language().into()),
         "sql" => Some(tree_sitter_sequel::LANGUAGE.into()),
-        "svelte" => Some(tree_sitter_svelte_next::LANGUAGE.into()),
         "swift" => Some(tree_sitter_swift::LANGUAGE.into()),
         "ts" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
         "tsx" => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
-        "vue" => Some(arborium_vue::language().into()),
         "zig" => Some(tree_sitter_zig::LANGUAGE.into()),
         _ => None,
     }

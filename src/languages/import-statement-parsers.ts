@@ -912,3 +912,113 @@ export function parseCsharpUsingDirective(stmtText: string): ParsedCsharpUsingDi
     isStatic: false,
   };
 }
+
+const RUST_IMPORT_KEYWORD_PATTERN = /^(?:pub(?:\s*\([^)]*\))?\s+)?(use|extern\s+crate|mod)\b/;
+
+/**
+ * Offset of the import keyword inside a scanned Rust statement, skipping leading whitespace,
+ * comments, and outer attributes. Returns -1 when no import keyword is present.
+ */
+export function rustImportKeywordOffset(text: string): number {
+  let index = 0;
+  while (index < text.length) {
+    if (/\s/.test(text[index]!)) {
+      index += 1;
+      continue;
+    }
+    const skipped = skipRustCommentOrLiteral(text, index);
+    if (skipped) {
+      index = skipped.end;
+      continue;
+    }
+    const attrEnd = skipRustOuterAttribute(text, index);
+    if (attrEnd !== null) {
+      index = attrEnd;
+      continue;
+    }
+    const match = text.slice(index).match(RUST_IMPORT_KEYWORD_PATTERN);
+    if (match) return index;
+    index += 1;
+  }
+  return -1;
+}
+
+/**
+ * Scans the whole source for `use`/`extern crate`/`mod` item statements. Comments, literals,
+ * macro token trees, and outer attributes are honoured, so a statement is never discovered
+ * inside trivia. Offsets are UTF-16 indices into `sourceText`.
+ *
+ * The scanner is shared by the indexer's Rust binding recovery and the graph path's Rust
+ * specifier recovery so the two consumers cannot drift apart.
+ */
+export function scanRustImportStatements(sourceText: string): Array<{ text: string; start: number }> {
+  const results: Array<{ text: string; start: number }> = [];
+  let index = 0;
+  while (index < sourceText.length) {
+    const skipped = skipRustCommentOrLiteral(sourceText, index) ?? skipRustMacroTokenTree(sourceText, index);
+    if (skipped) {
+      index = skipped.end;
+      continue;
+    }
+    if (/\s/.test(sourceText[index]!)) {
+      index += 1;
+      continue;
+    }
+
+    const statementStart = index;
+    let cursor = index;
+    for (;;) {
+      while (cursor < sourceText.length && /\s/.test(sourceText[cursor]!)) cursor += 1;
+      const trivia = skipRustCommentOrLiteral(sourceText, cursor);
+      if (trivia) {
+        cursor = trivia.end;
+        continue;
+      }
+      const attrEnd = skipRustOuterAttribute(sourceText, cursor);
+      if (attrEnd === null) break;
+      cursor = attrEnd;
+    }
+
+    const match = sourceText.slice(cursor).match(RUST_IMPORT_KEYWORD_PATTERN);
+    if (!match || !isRustItemStartBoundary(sourceText, cursor)) {
+      index = Math.max(index + 1, cursor);
+      continue;
+    }
+
+    let consumed = false;
+    let depth = 0;
+    for (let scan = statementStart; scan < sourceText.length; ) {
+      const inner = skipRustCommentOrLiteral(sourceText, scan) ?? skipRustMacroTokenTree(sourceText, scan);
+      if (inner) {
+        scan = inner.end;
+        continue;
+      }
+      const character = sourceText[scan];
+      if (character === "{") {
+        const head = sourceText.slice(statementStart, scan);
+        if (/\bmod\b/.test(head) && !/\buse\b/.test(head)) {
+          index = scan + 1;
+          consumed = true;
+          break;
+        }
+        depth += 1;
+        scan += 1;
+        continue;
+      }
+      if (character === "}") {
+        depth = Math.max(0, depth - 1);
+        scan += 1;
+        continue;
+      }
+      if (character === ";" && !depth) {
+        results.push({ text: sourceText.slice(statementStart, scan + 1), start: statementStart });
+        index = scan + 1;
+        consumed = true;
+        break;
+      }
+      scan += 1;
+    }
+    if (!consumed) index += 1;
+  }
+  return results;
+}

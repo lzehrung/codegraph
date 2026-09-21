@@ -1,6 +1,7 @@
 import { maskJsLikeCommentsStringsAndRegex, stripJsLikeComments } from "../../util/comments.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { collectLineStartOffsets, positionAtOffset } from "../../util/lines.js";
+import { isEcmaScriptTypeOnlyStatement } from "../../languages/definitions/js-family.js";
 import type { Range } from "../../types.js";
 import type { ImportBindingSink, ImportResolver } from "./context.js";
 
@@ -209,7 +210,6 @@ async function collectEsImports(
   maskedSource: string,
   lineStarts: readonly number[],
 ): Promise<void> {
-  const typeOnlyImport = /\bimport\s+type\b/;
   const fromPattern = /^\s*import\s+([^\n;]*?)\s+from\s+(["'])(?<module>[^"']+)\2/gm;
   for (const match of source.matchAll(fromPattern)) {
     if (!matchStartsInCode(maskedSource, match)) continue;
@@ -225,7 +225,10 @@ async function collectEsImports(
     const typePrefix = /^type\s+/.exec(trimmedClause);
     const clause = typePrefix ? trimmedClause.slice(typePrefix[0].length) : trimmedClause;
     const bodyStart = clauseStart < 0 ? -1 : clauseStart + leading + (typePrefix ? typePrefix[0].length : 0);
-    const typeOnly = typeOnlyImport.test(match[0]);
+    // Statement-level classification goes through the same hook the native capture path uses, so
+    // reduced-mode bindings cannot disagree with native bindings or graph edges. A default import
+    // of a binding named `type` and a specifier string containing `import type` stay runtime.
+    const typeOnly = isEcmaScriptTypeOnlyStatement(match[0]);
     const resolved = await context.resolveFrom(moduleSpecifier);
     const namespaceMatch = clause.match(NAMESPACE_IMPORT_PATTERN);
     if (namespaceMatch) {

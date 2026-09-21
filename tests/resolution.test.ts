@@ -6,6 +6,9 @@ import { buildProjectIndex, clearImportResolutionCaches, collectGraph, goToDefin
 import {
   loadNearestTsconfigFor,
   loadWorkspaceConfig,
+  resolveGoImportPath,
+  resolveImportSpecifier,
+  resolvePathLikeModule,
   resolvePythonModule,
   resolveSpecifier,
   resolveWorkspacePackage,
@@ -14,6 +17,7 @@ import { loadPhpComposerConfig } from "../src/util/resolution/php-composer.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { resolveExport } from "../src/indexer/navigation-resolve.js";
 import { createTestIndexFromFiles } from "./test-utils.js";
+import { tryCreateDirectorySymlink } from "./helpers/filesystem.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -297,6 +301,33 @@ describe("Import Resolution", () => {
     if (typeof resolved !== "string") {
       expect(resolved.external).toBe("@pkg");
     }
+  });
+
+  it("skips a directory named tsconfig.json and still loads paths from a parent file", async () => {
+    const root = await mkTmpDir("dg-resolve-tsconfig-named-dir-");
+    const srcDir = path.join(root, "src");
+    const appFile = path.join(srcDir, "app.ts");
+    const aliasFile = path.join(srcDir, "alias.ts");
+
+    await fsp.mkdir(path.join(srcDir, "tsconfig.json"), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          baseUrl: ".",
+          paths: { "@alias": ["src/alias.ts"] },
+        },
+      }),
+      "utf8",
+    );
+    await fsp.writeFile(aliasFile, "export const value = 1;\n", "utf8");
+    await fsp.writeFile(appFile, 'import { value } from "@alias";\nexport const result = value;\n', "utf8");
+
+    clearImportResolutionCaches();
+    const { matchPath } = await loadNearestTsconfigFor(appFile, root);
+    expect(matchPath).toBeDefined();
+    const resolvedAlias = await resolveSpecifier(appFile, "@alias", root, matchPath);
+    expect(String(resolvedAlias).replace(/\\/g, "/")).toBe(aliasFile.replace(/\\/g, "/"));
   });
 
   it("does not resolve node_modules packages to package directories without entry files", async () => {
@@ -1946,5 +1977,160 @@ describe("Import Resolution", () => {
         .sort(),
     ).toEqual(["@Widget", "Widget"]);
     expect(resolveExport(index, file, "Widget")).toBeNull();
+  });
+
+  it("resolves tsconfig paths when tsconfig.json starts with a UTF-8 BOM", async () => {
+    const root = await mkTmpDir("dg-resolve-tsconfig-bom-");
+    const buttonFile = path.join(root, "src", "components", "Button.ts");
+    const appFile = path.join(root, "src", "app.ts");
+
+    await fsp.mkdir(path.dirname(buttonFile), { recursive: true });
+    const tsconfig = JSON.stringify(
+      {
+        compilerOptions: {
+          baseUrl: ".",
+          paths: {
+            "@/*": ["src/*"],
+          },
+        },
+      },
+      null,
+      2,
+    );
+    await fsp.writeFile(path.join(root, "tsconfig.json"), `\uFEFF${tsconfig}`, "utf8");
+    await fsp.writeFile(buttonFile, "export function Button() { return 'ok'; }\n", "utf8");
+    await fsp.writeFile(
+      appFile,
+      'import { Button } from "@/components/Button";\nexport const result = Button();\n',
+      "utf8",
+    );
+
+    const { matchPath } = await loadNearestTsconfigFor(appFile, root);
+    expect(matchPath).toBeDefined();
+
+    const resolved = await resolveSpecifier(appFile, "@/components/Button", root, matchPath);
+    expect(typeof resolved).toBe("string");
+    if (typeof resolved === "string") {
+      expect(resolved.replace(/\\/g, "/")).toBe(buttonFile.replace(/\\/g, "/"));
+    }
+
+    const graph = await collectGraph(root, [appFile.replace(/\\/g, "/"), buttonFile.replace(/\\/g, "/")]);
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from.replace(/\\/g, "/").endsWith("src/app.ts") &&
+          edge.to.type === "file" &&
+          edge.to.path.replace(/\\/g, "/").endsWith("src/components/Button.ts"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps a first-party symlink target inside the root as a stable logical path", async () => {
+    const root = await mkTmpDir("dg-resolve-symlink-inside-");
+    const realDir = path.join(root, "real");
+    const aliasDir = path.join(root, "alias");
+    const mainFile = path.join(root, "main.ts");
+    const realIndex = path.join(realDir, "index.ts");
+
+    await fsp.mkdir(realDir, { recursive: true });
+    await fsp.writeFile(realIndex, "export const value = 1;\n", "utf8");
+    await fsp.writeFile(mainFile, 'import { value } from "./alias";\nexport const doubled = value * 2;\n', "utf8");
+
+    const linked = await tryCreateDirectorySymlink(realDir, aliasDir);
+    if (!linked) return;
+
+    const resolved = await resolveSpecifier(mainFile, "./alias", root);
+    expect(typeof resolved).toBe("string");
+    if (typeof resolved === "string") {
+      expect(resolved.replace(/\\/g, "/")).toBe(path.join(aliasDir, "index.ts").replace(/\\/g, "/"));
+      expect(resolved.replace(/\\/g, "/").includes("/alias/")).toBe(true);
+      expect(resolved.replace(/\\/g, "/").includes("/real/")).toBe(false);
+    }
+
+    const again = await resolveSpecifier(mainFile, "./alias", root);
+    expect(again).toBe(resolved);
+  });
+
+  it("rejects a first-party symlink whose physical target is outside the root", async () => {
+    const parent = await mkTmpDir("dg-resolve-symlink-outside-parent-");
+    const root = path.join(parent, "project");
+    const outsideDir = path.join(parent, "outside");
+    const aliasDir = path.join(root, "alias");
+    const mainFile = path.join(root, "main.ts");
+
+    await fsp.mkdir(root, { recursive: true });
+    await fsp.mkdir(outsideDir, { recursive: true });
+    await fsp.writeFile(path.join(outsideDir, "index.ts"), "export const secret = 1;\n", "utf8");
+    await fsp.writeFile(mainFile, 'import { secret } from "./alias";\nexport const leaked = secret;\n', "utf8");
+
+    const linked = await tryCreateDirectorySymlink(outsideDir, aliasDir);
+    if (!linked) return;
+
+    await expect(resolveSpecifier(mainFile, "./alias", root)).resolves.toEqual({ external: "./alias" });
+  });
+
+  it("resolves a Python namespace package directory that contains an importable module", async () => {
+    const root = await mkTmpDir("dg-resolve-python-namespace-dir-");
+    const pkgDir = path.join(root, "nspkg");
+    const fromFile = path.join(root, "main.py");
+
+    await fsp.mkdir(pkgDir, { recursive: true });
+    await fsp.writeFile(path.join(pkgDir, "mod.py"), "VALUE = 1\n", "utf8");
+    await fsp.writeFile(fromFile, "import nspkg\n", "utf8");
+
+    clearImportResolutionCaches();
+    await expect(resolvePythonModule(root, fromFile, "nspkg", 0)).resolves.toBe(pkgDir.replace(/\\/g, "/"));
+    await expect(resolvePathLikeModule(root, "nspkg")).resolves.toBeNull();
+  });
+
+  it("does not resolve a Python directory with no importable module content", async () => {
+    const root = await mkTmpDir("dg-resolve-python-empty-dir-");
+    const pkgDir = path.join(root, "emptypkg");
+    const fromFile = path.join(root, "main.py");
+
+    await fsp.mkdir(pkgDir, { recursive: true });
+    await fsp.writeFile(fromFile, "import emptypkg\n", "utf8");
+
+    clearImportResolutionCaches();
+    await expect(resolvePythonModule(root, fromFile, "emptypkg", 0)).resolves.toEqual({ external: "emptypkg" });
+    await expect(resolvePathLikeModule(root, "emptypkg")).resolves.toBeNull();
+
+    const graph = await collectGraph(root, [fromFile.replace(/\\/g, "/")]);
+    expect(graph.edges.filter((edge) => edge.to.type === "file")).toEqual([]);
+  });
+
+  it("resolves a Python package directory to __init__.py", async () => {
+    const root = await mkTmpDir("dg-resolve-python-init-dir-");
+    const pkgDir = path.join(root, "pkg");
+    const initFile = path.join(pkgDir, "__init__.py");
+    const fromFile = path.join(root, "main.py");
+
+    await fsp.mkdir(pkgDir, { recursive: true });
+    await fsp.writeFile(initFile, "VALUE = 1\n", "utf8");
+    await fsp.writeFile(fromFile, "import pkg\n", "utf8");
+
+    clearImportResolutionCaches();
+    await expect(resolvePythonModule(root, fromFile, "pkg", 0)).resolves.toBe(initFile.replace(/\\/g, "/"));
+  });
+
+  it("resolves a Go package directory to a source file in that directory", async () => {
+    const root = await mkTmpDir("dg-resolve-go-pkg-dir-");
+    const pkgDir = path.join(root, "foo");
+    const pkgFile = path.join(pkgDir, "foo.go");
+    const fromFile = path.join(root, "main.go");
+
+    await fsp.mkdir(pkgDir, { recursive: true });
+    await fsp.writeFile(path.join(root, "go.mod"), "module example.com/app\n\ngo 1.22\n", "utf8");
+    await fsp.writeFile(pkgFile, "package foo\n\nfunc Helper() {}\n", "utf8");
+    await fsp.writeFile(fromFile, 'package main\n\nimport "example.com/app/foo"\n', "utf8");
+
+    const resolved = await resolveGoImportPath(root, fromFile, "example.com/app/foo");
+    expect(resolved?.replace(/\\/g, "/")).toBe(pkgFile.replace(/\\/g, "/"));
+
+    const specifier = await resolveImportSpecifier(root, fromFile, "example.com/app/foo", "go");
+    expect(typeof specifier).toBe("string");
+    if (typeof specifier === "string") {
+      expect(specifier.replace(/\\/g, "/")).toBe(pkgFile.replace(/\\/g, "/"));
+    }
   });
 });

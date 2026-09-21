@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import {
@@ -11,7 +12,7 @@ import {
 } from "../../languages/import-statement-parsers.js";
 import { XID_IDENTIFIER_SOURCE } from "../identifiers.js";
 import { lruMapGet, lruMapSet } from "../lru-map.js";
-import { fileIdentityKey, isFilePathWithinRoot } from "../paths.js";
+import { fileIdentityKey, isPhysicalPathWithinRoot, readUtf8WithoutBom } from "../paths.js";
 import { fileExists } from "../workspace.js";
 import { rustCrateRootFiles } from "./cargo-targets.js";
 
@@ -407,14 +408,7 @@ async function isExistingAttributedPathInsideProject(
       return false;
     }
   }
-  if (!isFilePathWithinRoot(projectRoot, attributedPath)) return false;
-  try {
-    const realRoot = await fsp.realpath(projectRoot);
-    const realCandidate = await fsp.realpath(attributedPath);
-    return isFilePathWithinRoot(realRoot, realCandidate);
-  } catch {
-    return false;
-  }
+  return await isPhysicalPathWithinRoot(projectRoot, attributedPath);
 }
 
 function rustPathAttributeSignature(stat: { size: number; mtimeMs: number }): string {
@@ -465,7 +459,7 @@ async function loadRustPathAttributeScope(file: string): Promise<RustModuleScope
 
   const pending = (async (): Promise<RustModuleScope> => {
     try {
-      const source = await fsp.readFile(resolved, "utf8");
+      const source = await readUtf8WithoutBom(resolved);
       const attributes = extractRustModPathAttributeScopes(source);
       lruMapSet(rustPathAttributeCache, resolved, { signature, attributes }, MAX_RUST_PATH_ATTRIBUTE_CACHE_ENTRIES);
       return attributes;
@@ -647,6 +641,40 @@ async function getRustModuleTree(cargoRoot: string, projectRoot: string): Promis
   return await pending;
 }
 
+async function rustSourceFilesIn(dir: string): Promise<string[]> {
+  let entries: Dirent[] = [];
+  try {
+    entries = await fsp.readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const files: string[] = [];
+  for (const entry of entries) {
+    if (!entry.name.endsWith(".rs")) continue;
+    if (entry.isDirectory()) continue;
+    const abs = path.resolve(dir, entry.name);
+    if (entry.isFile()) {
+      files.push(abs);
+      continue;
+    }
+    try {
+      const st = await fsp.stat(abs);
+      if (st.isFile()) files.push(abs);
+    } catch {
+      // Dangling or unreadable symlink: not a source file.
+    }
+  }
+  // `readdir` order is filesystem-dependent; sort by file name so the declaring-file
+  // candidate order is identical on every platform.
+  return files.sort((a, b) => {
+    const aName = path.basename(a);
+    const bName = path.basename(b);
+    if (aName < bName) return -1;
+    if (aName > bName) return 1;
+    return 0;
+  });
+}
+
 async function rustDeclaringFileCandidates(fromFile: string, sourceRoot: string): Promise<string[]> {
   const files: string[] = [];
   const seen = new Set<string>();
@@ -654,15 +682,7 @@ async function rustDeclaringFileCandidates(fromFile: string, sourceRoot: string)
   const resolvedFrom = path.resolve(fromFile);
   let dir = path.dirname(resolvedFrom);
   for (let depth = 0; depth < 16; depth += 1) {
-    let entries: string[] = [];
-    try {
-      entries = await fsp.readdir(dir);
-    } catch {
-      entries = [];
-    }
-    for (const entry of entries) {
-      if (!entry.endsWith(".rs")) continue;
-      const abs = path.resolve(dir, entry);
+    for (const abs of await rustSourceFilesIn(dir)) {
       if (abs === resolvedFrom || seen.has(abs)) continue;
       seen.add(abs);
       files.push(abs);
@@ -672,15 +692,7 @@ async function rustDeclaringFileCandidates(fromFile: string, sourceRoot: string)
     if (parent === dir) break;
     if (!isWithinOrEqual(parent, root) && path.resolve(dir) !== root) {
       if (!seen.has(root)) {
-        let rootEntries: string[] = [];
-        try {
-          rootEntries = await fsp.readdir(root);
-        } catch {
-          rootEntries = [];
-        }
-        for (const entry of rootEntries) {
-          if (!entry.endsWith(".rs")) continue;
-          const abs = path.resolve(root, entry);
+        for (const abs of await rustSourceFilesIn(root)) {
           if (abs === resolvedFrom || seen.has(abs)) continue;
           seen.add(abs);
           files.push(abs);

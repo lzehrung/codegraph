@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
+import { languageHasDeclarationVisibility } from "./declaration-visibility.js";
 import type { FileId } from "../types.js";
 import { GO_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
@@ -66,6 +67,25 @@ export type ResolveExportOptions = {
 
 function moduleFor(index: ProjectIndex, file: FileId): ModuleIndex | undefined {
   return index.byFile.get(fileIdentityKey(file));
+}
+
+/**
+ * Languages with a visibility row already omitted hidden declarations from `exports`.
+ * Falling back to locals would re-bind those names across modules.
+ *
+ * Safe without a "was the export list computed?" check because locals and exports
+ * come from the same `collectLocalsAndExportsFromSource` pass. If a local candidate
+ * exists for the fallback to read, extraction ran and an absent name was filtered
+ * on purpose, including the all-hidden file whose computed export list is empty.
+ * If extraction did not run (reduced or graph-only, empty syntax tree), there are
+ * no locals either, so the fallback finds nothing and this guard is irrelevant.
+ * Reduced or graph-only extraction produces neither locals nor exports for rust,
+ * java, csharp, kotlin, or swift, so this guard needs no reduced-mode branch.
+ * Languages with no visibility row keep today's local fallback.
+ */
+function shouldSkipVisibilityLocalFallback(index: ProjectIndex, moduleEntry: ModuleIndex): boolean {
+  const languageId = supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions)?.id;
+  return languageId !== undefined && languageHasDeclarationVisibility(languageId);
 }
 
 function moduleNameLookup(index: ProjectIndex, file: FileId): ModuleNameLookup | undefined {
@@ -426,7 +446,7 @@ export function resolveExport(
     }
 
     const localFallbackCandidates: SymbolDef[] = [];
-    if (allowLocalFallback) {
+    if (allowLocalFallback && !shouldSkipVisibilityLocalFallback(index, moduleEntry)) {
       for (const local of names.locals.get(canonicalName) ?? []) {
         if (
           matchesPreferredKind(local) &&

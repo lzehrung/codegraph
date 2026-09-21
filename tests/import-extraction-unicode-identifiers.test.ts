@@ -520,16 +520,27 @@ describe("Unicode import parser seams", () => {
     ]);
   });
 
-  it("parses Unicode Python module names from native-query statement captures", () => {
+  it("parses Unicode Python module names from native-query path captures", () => {
     const support = supportById("python")!;
-    // Mirrors the shape collectModuleSpecifiersFromSource reads from a native compact
-    // imports execution: one match per statement, with the full statement text under a
-    // "stmt" capture.
+    // Native Python specifiers come from @from on the path-bearing node. Statement-text
+    // parsing remains reduced-mode recovery; `__future__` is the native-mode exception.
     const specs = collectModuleSpecifiersFromSource(support, "import café\u0301\nfrom pkg import x\n", {
       compactNativeImports: {
         imports: [
-          { patternIndex: 0, captures: [{ name: "stmt", text: "import café\u0301" }] },
-          { patternIndex: 0, captures: [{ name: "stmt", text: "from pkg import x" }] },
+          {
+            patternIndex: 0,
+            captures: [
+              { name: "stmt", text: "import café\u0301" },
+              { name: "from", text: "café\u0301" },
+            ],
+          },
+          {
+            patternIndex: 0,
+            captures: [
+              { name: "stmt", text: "from pkg import x" },
+              { name: "from", text: "pkg" },
+            ],
+          },
         ],
       },
     });

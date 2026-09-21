@@ -1,23 +1,26 @@
 import { registerLanguage } from "../registry.js";
+import { nodeTypeIn } from "./shared.js";
 import {
   cFamilyBlock,
-  cFamilyContainerTypes,
+  cFamilyContainerClassifyDefinition,
   cFamilyControlSplitPoints,
   cFamilyFunctionBlock,
+  cFamilyIsDeclarationName,
   cFamilyTypeIdentifierBlock,
   createCFamilyLanguageDefinition,
   findAncestor,
-  isFunctionDeclarator,
-  isInAncestorDeclarator,
   isInField,
-  isInParameterList,
+  isSpecifierNameField,
 } from "./c-family.js";
 
 export const CPP_DEF = createCFamilyLanguageDefinition({
   id: "cpp",
-  extensions: [".cc", ".cpp", ".cxx", ".c++", ".hpp", ".hh", ".hxx", ".ipp", ".tpp", ".inl"],
+  // Module-interface units use `.cppm`/`.ixx`/`.mxx` by convention; without them a declared
+  // `export module foo;` is never discovered, so a first-party `import foo;` stays external.
+  extensions: [".cc", ".cpp", ".cxx", ".c++", ".hpp", ".hh", ".hxx", ".ipp", ".tpp", ".inl", ".cppm", ".ixx", ".mxx"],
   includeFieldIdentifier: true,
   usesQueryDrivenLocals: true,
+  membersAreImplicitlyInScope: true,
   blocks: (functionNameQuery) => [
     cFamilyFunctionBlock(functionNameQuery),
     cFamilyTypeIdentifierBlock("class_specifier", "class"),
@@ -28,26 +31,9 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
     cFamilyBlock("type_definition", "declarator: (type_identifier) @chunk.name", "type"),
   ],
   splitPoints: [...cFamilyControlSplitPoints, "try_statement", "catch_clause"],
-  extraExportQueries: [
+  extraSymbolQueries: [
     `(class_specifier name: (type_identifier) @name)`,
     `(class_specifier name: (template_type name: (type_identifier) @name))`,
-    `(union_specifier name: (type_identifier) @name)`,
-    `(enumerator name: (identifier) @name)`,
-    `(namespace_definition name: (namespace_identifier) @name)`,
-    `(namespace_definition name: (nested_namespace_specifier (namespace_identifier) @name))`,
-    `(alias_declaration name: (type_identifier) @name)`,
-    `(concept_definition name: (identifier) @name)`,
-    `(preproc_def name: (identifier) @name)`,
-    `(preproc_function_def name: (identifier) @name)`,
-    `(class_specifier body: (field_declaration_list (field_declaration declarator: (function_declarator declarator: (field_identifier) @name))))`,
-    `(class_specifier body: (field_declaration_list (field_declaration declarator: (reference_declarator (function_declarator declarator: (operator_name) @name)))))`,
-    `(class_specifier body: (field_declaration_list (declaration declarator: (function_declarator declarator: (destructor_name) @name))))`,
-    `(module_declaration name: (module_name) @name)`,
-  ],
-  extraLocalQueries: [
-    `(class_specifier name: (type_identifier) @name)`,
-    `(class_specifier name: (template_type name: (type_identifier) @name))`,
-    `(enum_specifier name: (type_identifier) @name)`,
     `(union_specifier name: (type_identifier) @name)`,
     `(enumerator name: (identifier) @name)`,
     `(namespace_definition name: (namespace_identifier) @name)`,
@@ -88,25 +74,13 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
       (parent.type === "type_definition" && isInField(node, parent, "declarator"))
     )
       return "type";
-    const container = findAncestor(node, cFamilyContainerTypes);
-    if (container?.type === "function_definition") return "function";
-    if (container?.type === "declaration" && isFunctionDeclarator(node)) return "function";
-    // `typedef int (*Comparator)(int, int);` wraps the typedef name in a declarator chain, so the
-    // direct-parent check above cannot see it.
-    if (container?.type === "type_definition") return "type";
-    return "variable";
+    return cFamilyContainerClassifyDefinition(node);
   },
   isDeclarationName: (node) => {
+    if (isSpecifierNameField(node, ["class_specifier", "struct_specifier", "union_specifier", "enum_specifier"]))
+      return true;
     const parent = node.parent;
     if (!parent) return false;
-    if (
-      (parent.type === "class_specifier" ||
-        parent.type === "struct_specifier" ||
-        parent.type === "union_specifier" ||
-        parent.type === "enum_specifier") &&
-      isInField(node, parent, "name")
-    )
-      return true;
     if (parent.type === "namespace_definition" && isInField(node, parent, "name")) return true;
     if (parent.type === "module_declaration" && isInField(node, parent, "name")) return true;
     if (parent.type === "module_name") {
@@ -120,39 +94,22 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
     if (parent.type === "alias_declaration" && isInField(node, parent, "name")) return true;
     if (parent.type === "concept_definition" && isInField(node, parent, "name")) return true;
     if (
-      isInAncestorDeclarator(node, new Set(["parameter_declaration"])) ||
-      isInAncestorDeclarator(node, new Set(["field_declaration"])) ||
-      isInAncestorDeclarator(node, new Set(["init_declarator"])) ||
-      isInAncestorDeclarator(node, new Set(["type_definition"]))
-    )
-      return true;
-    if (isInAncestorDeclarator(node, new Set(["function_definition"])) && !isInParameterList(node)) return true;
-    if (isInAncestorDeclarator(node, new Set(["declaration"])) && !isInParameterList(node)) return true;
-    if (
       parent.type === "qualified_identifier" &&
       parent.parent?.type === "using_declaration" &&
       isInField(node, parent, "name")
     )
       return true;
-    if (parent.type === "enumerator" && isInField(node, parent, "name")) return true;
-    if (parent.type === "preproc_def" && isInField(node, parent, "name")) return true;
-    if (parent.type === "preproc_function_def" && isInField(node, parent, "name")) return true;
-    return false;
+    return cFamilyIsDeclarationName(node);
   },
-  createsFunctionScope: (node) => node.type === "function_definition" || node.type === "lambda_expression",
+  createsFunctionScope: nodeTypeIn(["function_definition", "lambda_expression"]),
 });
 
-const cppModuleImportQuery = `
-      (import_declaration name: (module_name) @mod) @stmt
-      (import_declaration header: (string_literal) @mod) @stmt
-      (import_declaration header: (system_lib_string) @mod) @stmt
-    `;
-const cppModuleBindingQuery = `
+const cppModuleQuery = `
       (import_declaration name: (module_name) @from) @stmt
       (import_declaration header: (string_literal) @from) @stmt
       (import_declaration header: (system_lib_string) @from) @stmt
     `;
-CPP_DEF.graph.imports += cppModuleImportQuery;
-CPP_DEF.graph.importBindings += cppModuleBindingQuery;
+CPP_DEF.graph.imports += cppModuleQuery;
+CPP_DEF.graph.importBindings += cppModuleQuery;
 
 registerLanguage(CPP_DEF);

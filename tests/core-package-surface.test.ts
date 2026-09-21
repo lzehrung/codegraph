@@ -7,6 +7,7 @@ import {
   isForbiddenCorePackagePath,
   stageCorePackage,
 } from "../scripts/stage-core-package-lib.mjs";
+import { stripJsLikeComments } from "../src/util/comments.js";
 
 const repoRoot = process.cwd();
 const distRoot = path.join(repoRoot, "dist");
@@ -53,7 +54,10 @@ describe("codegraph-core package surface", () => {
     const importPattern =
       /(?:import|export)\s+(?:type\s+)?(?:[^;]*?\s+from\s+)?["'](\.[^"']+)["']|import\(["'](\.[^"']+)["']\)/g;
     for (const relativePath of declarationFiles) {
-      const source = fs.readFileSync(path.join(distRoot, relativePath), "utf8");
+      // Declaration files keep their doc comments, and those comments quote import
+      // statements as prose examples. Strip comments only: string bodies must survive,
+      // because the specifier this scan resolves lives inside one.
+      const source = stripJsLikeComments(fs.readFileSync(path.join(distRoot, relativePath), "utf8"));
       for (const match of source.matchAll(importPattern)) {
         const specifier = match[1] ?? match[2];
         if (!specifier || !specifier.startsWith(".")) {

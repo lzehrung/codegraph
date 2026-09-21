@@ -4,7 +4,6 @@ import {
   parseKotlinImportStatement,
   parsePhpImportStatement,
   parseRustImportStatements,
-  type ParsedRustImportStatement,
 } from "../languages/import-statement-parsers.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
@@ -29,19 +28,13 @@ import {
   isGraphOnlyLanguage,
 } from "../document-links.js";
 import { sliceText, unquote } from "../util/ast.js";
-import { PYTHON_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { isRustCfgTestStatement, utf8ByteOffsetToStringIndex } from "../util/rust-test-modules.js";
+import { rustStatementStartIndex } from "../util/resolution/rust.js";
 import {
-  extractRustModPathAttribute,
-  rustGraphModuleSpecifier,
-  rustStatementStartIndex,
-} from "../util/resolution/rust.js";
-import {
-  extractJsTsSpecifiers,
-  extractPythonSpecifiers,
-  isJsTsTypeOnlySpecifierStatement,
-  type ModuleSpecifier,
-} from "../util/specifiers.js";
+  collectTextImportSpecifiers,
+  rustSpecifierForParsedImport,
+} from "../indexer/imports/text-import-extractors.js";
+import { extractJsTsSpecifiers, isJsTsTypeOnlySpecifierStatement, type ModuleSpecifier } from "../util/specifiers.js";
 
 export type FallbackImportExtractionReason =
   | "fast"
@@ -74,30 +67,6 @@ const HTML_LIKE_LANGUAGE_IDS = new Set(["html", "vue", "svelte"]);
 function isHtmlLikeLanguage(languageId: string, filePath?: string): boolean {
   if (HTML_LIKE_LANGUAGE_IDS.has(languageId)) return true;
   return !!filePath && filePath.toLowerCase().endsWith(".astro");
-}
-
-function rustSpecifierFromParsedImport(
-  parsed: ParsedRustImportStatement,
-  source: string,
-  statementStartIndex?: number,
-): ModuleSpecifier {
-  if (parsed.kind === "module" && !parsed.isExternCrate) {
-    const pathAttribute = parsed.pathAttribute ?? extractRustModPathAttribute(source, parsed.from, statementStartIndex);
-    return {
-      spec: rustGraphModuleSpecifier(source, parsed.from, statementStartIndex),
-      typeOnly: false,
-      ...(pathAttribute ? { pathAttribute } : {}),
-      ...(statementStartIndex !== undefined ? { statementStartIndex } : {}),
-    };
-  }
-  if (parsed.kind !== "member") {
-    return { spec: parsed.from, typeOnly: false };
-  }
-  const root = parsed.from.split("::", 1)[0] ?? "";
-  if (root === "crate" || root === "self" || root === "super") {
-    return { spec: parsed.from, raw: `${parsed.from}::${parsed.imported}`, typeOnly: false };
-  }
-  return { spec: parsed.from, typeOnly: false };
 }
 
 function extractPhpQualifiedSpecifiersFromTree(source: string, tree: SyntaxTreeLike): ModuleSpecifier[] {
@@ -269,18 +238,6 @@ function extractCssModuleSpecifiers(source: string): ModuleSpecifier[] {
   return out;
 }
 
-// Python module/package names are dotted sequences of PEP 3131 Unicode identifiers; a
-// per-segment character class (rather than Unicode letters/digits spanning the dots) keeps
-// a digit from matching directly after a `.` separator.
-const PYTHON_NATIVE_IMPORT_SPEC_PATTERN = new RegExp(
-  String.raw`^(${PYTHON_IDENTIFIER_SOURCE}(?:\.${PYTHON_IDENTIFIER_SOURCE})*)(?:\s+as\s+${PYTHON_IDENTIFIER_SOURCE})?$`,
-  "u",
-);
-const PYTHON_NATIVE_FROM_PATTERN = new RegExp(
-  String.raw`^\s*from\s+(\.*)(${PYTHON_IDENTIFIER_SOURCE}(?:\.${PYTHON_IDENTIFIER_SOURCE})*)?\s+import\b`,
-  "u",
-);
-
 export function mapNativeExecutionFallbackReason(
   languageId: string,
   nativeFallbackReason: NativeFallbackReason | undefined,
@@ -292,6 +249,11 @@ export function mapNativeExecutionFallbackReason(
   }
   if (nativeFallbackReason === "unsupportedLanguage") {
     return "unsupportedLanguage";
+  }
+  // An oversized source downgraded before execution is an availability limit, not an
+  // empty query result.
+  if (nativeFallbackReason === "sourceTooLarge") {
+    return "unavailable";
   }
   if (nativeFallbackReason === "unavailable" || !queryRan) {
     return supportsReducedModeRegexRecovery(languageId) ? "reduced-mode" : "unavailable";
@@ -350,73 +312,11 @@ export function collectModuleSpecifiersFromSource(
   const importFallbackReason = (queryFailed: boolean): FallbackImportExtractionReason =>
     mapNativeExecutionFallbackReason(support.id, nativeFallbackReason, queryFailed, resolvedNativeImports !== null);
 
-  if (support.id === "python") {
-    let queryFailed = false;
-    if (resolvedNativeImports !== null) {
-      try {
-        for (const match of resolvedNativeImports) {
-          const stmtText =
-            match.captures.find((capture) => capture.name === "stmt")?.text ?? match.captures[0]?.text ?? "";
-          if (!stmtText) continue;
-          const mImport = /^\s*import\s+([^\n#]+)/.exec(stmtText);
-          if (mImport) {
-            const list = (mImport[1] ?? "")
-              .split(",")
-              .map((entry) => entry.trim())
-              .filter(Boolean);
-            for (const spec of list) {
-              const parsed = spec.match(PYTHON_NATIVE_IMPORT_SPEC_PATTERN);
-              if (parsed?.[1]) out.push({ spec: parsed[1] });
-            }
-            continue;
-          }
-          const mFrom = PYTHON_NATIVE_FROM_PATTERN.exec(stmtText);
-          if (mFrom) {
-            const dots = mFrom[1] ?? "";
-            const name = mFrom[2] ?? "";
-            const mod = `${dots}${name}`;
-            if (mod) out.push({ spec: mod });
-          }
-        }
-      } catch {
-        queryFailed = true;
-        out.length = 0;
-      }
-    }
-    if ((queryFailed || !out.length) && shouldAttemptFallback) {
-      const extracted = extractPythonSpecifiers(source);
-      if (extracted.length) {
-        reportFallback(importFallbackReason(queryFailed));
-        for (const spec of extracted) out.push({ spec });
-      }
-    }
-    if (out.length || resolvedNativeImports !== null || queryFailed) {
-      return normalizeModuleSpecifiers(out);
-    }
-  }
-
+  // PHP keeps its tree-based qualified-usage scan (`new \Foo\Bar`, typed parameters); the
+  // import statements themselves come from the shared @from capture path below. Python needs
+  // no branch at all: its import queries capture @from, and the shared text-extractor tail
+  // covers the recovery path.
   if (support.id === "php") {
-    let queryFailed = false;
-    const phpMatches = resolvedNativeImports;
-    if (phpMatches) {
-      try {
-        for (const match of phpMatches) {
-          const stmtText =
-            match.captures.find((capture) => capture.name === "stmt")?.text ?? match.captures[0]?.text ?? "";
-          if (!stmtText) continue;
-          for (const parsed of parsePhpImportStatement(stmtText, opts?.file)) {
-            out.push({
-              spec: parsed.from,
-              typeOnly: false,
-              ...(parsed.kind === "named" ? { phpImportType: parsed.importType } : {}),
-            });
-          }
-        }
-      } catch {
-        queryFailed = true;
-        out.length = 0;
-      }
-    }
     const phpTree =
       opts?.tree ??
       (() => {
@@ -426,9 +326,6 @@ export function collectModuleSpecifiersFromSource(
     if (phpTree) {
       const qualifiedSpecifiers = extractPhpQualifiedSpecifiersFromTree(source, phpTree);
       if (qualifiedSpecifiers.length) out.push(...qualifiedSpecifiers);
-    }
-    if (out.length || phpMatches !== null || queryFailed) {
-      return normalizeModuleSpecifiers(out);
     }
   }
 
@@ -458,7 +355,13 @@ export function collectModuleSpecifiersFromSource(
           CompactCapture | NativeCapture | undefined
         >;
         const stmtText = capMap["stmt"]?.text ?? "";
-        const typeOnly = (support.id === "ts" || support.id === "tsx") && isJsTsTypeOnlySpecifierStatement(stmtText);
+        // TypeScript and TSX keep the dedicated statement parser (`declare module` and
+        // clause-shape rules the shared hook does not model); every other language decides
+        // through its `isTypeOnly` hook, so a new language needs no edit here.
+        const typeOnly =
+          support.id === "ts" || support.id === "tsx"
+            ? isJsTsTypeOnlySpecifierStatement(stmtText)
+            : support.isTypeOnly(stmtText);
         if (support.id === "kotlin") {
           const parsed = parseKotlinImportStatement(stmtText);
           if (parsed) out.push({ spec: parsed.from, typeOnly: false });
@@ -481,7 +384,7 @@ export function collectModuleSpecifiersFromSource(
             const rustSeen = makeSeenSet(out);
             appendUniqueSpecifiers(
               out,
-              parsedList.map((parsed) => rustSpecifierFromParsedImport(parsed, source, statementStartIndex)),
+              parsedList.map((parsed) => rustSpecifierForParsedImport(parsed, source, statementStartIndex)),
               rustSeen,
             );
             continue;
@@ -494,12 +397,32 @@ export function collectModuleSpecifiersFromSource(
             continue;
           }
         }
+        // PHP clause shapes have no single path node to capture: grouped `use Foo\{A, B}`
+        // expands per clause, `use function`/`use const` type the resolution, and a computed
+        // include needs its expression folded against the file. The statement parser handles
+        // all three from the @stmt text, like the Kotlin and Rust parsers above.
+        if (support.id === "php") {
+          for (const parsed of parsePhpImportStatement(stmtText, opts?.file)) {
+            out.push({
+              spec: parsed.from,
+              typeOnly: false,
+              ...(parsed.kind === "named" ? { phpImportType: parsed.importType } : {}),
+            });
+          }
+          continue;
+        }
+        // tree-sitter-python has no named node for the `__future__` module, so the import
+        // query cannot carry @from for it; the statement text is the only source for this path.
+        if (support.id === "python" && /^\s*from\s+__future__\b/.test(stmtText)) {
+          out.push({ spec: "__future__" });
+          continue;
+        }
         const stylesheetImport = support.id === "css" || support.id === "scss" || support.id === "less";
-        const isJsFamily = support.id === "js" || support.id === "jsx" || support.id === "ts" || support.id === "tsx";
+        const isJsFamily = support.id === "js" || support.id === "ts" || support.id === "tsx";
         // CommonJS require() and TS `import x = require(...)` both use the require condition.
         const exportCondition = isJsFamily && /\brequire\s*\(/.test(stmtText) ? ("require" as const) : undefined;
         for (const capture of match.captures) {
-          if (capture.name !== "mod") continue;
+          if (capture.name !== "from") continue;
           out.push({
             spec: unquote(capture.text),
             typeOnly,
@@ -529,6 +452,16 @@ export function collectModuleSpecifiersFromSource(
         }
       }
       appendTripleSlashReferencesForTs(support, source, out);
+      // Python's reduced-mode text registry still recovers when the native query ran and
+      // matched nothing (e.g. native off with empty compact results); the recovery must
+      // report query-empty instead of the authoritative early return dropping the imports.
+      if (support.id === "python" && (queryFailed || !out.length) && shouldAttemptFallback) {
+        const extracted = collectTextImportSpecifiers("python", source);
+        if (extracted.length) {
+          reportFallback(importFallbackReason(queryFailed));
+          appendUniqueSpecifiers(out, extracted, makeSeenSet(out));
+        }
+      }
       if (out.length || isNativeQueryAuthoritative(support, "imports")) {
         return normalizeModuleSpecifiers(out);
       }
@@ -585,6 +518,17 @@ export function collectModuleSpecifiersFromSource(
     appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
     if (out.length > beforeRecovery) {
       reportFallback(reducedRecoveryReason);
+    }
+  }
+  // The shared text extractor registry also serves the indexer's binding recovery, so a
+  // language recovers the same specifiers on both paths instead of only one.
+  if (!out.length) {
+    const textSpecifiers = collectTextImportSpecifiers(support.id, source, {
+      ...(opts?.file ? { file: opts.file } : {}),
+    });
+    if (textSpecifiers.length) {
+      reportFallback(reducedRecoveryReason);
+      appendUniqueSpecifiers(out, textSpecifiers, makeSeenSet(out));
     }
   }
   return normalizeModuleSpecifiers(out);

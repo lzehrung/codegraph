@@ -3710,7 +3710,7 @@ describe("Cache invalidation and strict hashing", () => {
           supportedLanguageIds: ["ts"],
           filesUsed: 0,
           filesFellBack: 1,
-          fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 1 },
+          fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 1, sourceTooLarge: 0 },
           byLanguage: {},
           errors: [
             {

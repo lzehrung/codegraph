@@ -96,7 +96,7 @@ export function attemptParsePreparedFileContext(context: PreparedFileContext): P
   if (nativeMode !== "off" && Buffer.byteLength(source, "utf8") > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
     return {
       parsed: null,
-      nativeFallbackReason: "queryFailure",
+      nativeFallbackReason: "sourceTooLarge",
       ...(context.nativeError ? { nativeError: context.nativeError } : {}),
     };
   }
@@ -170,7 +170,7 @@ export async function prepareFileForIndexing(
       ...(prep.embeddedBlocks ? { embeddedBlocks: prep.embeddedBlocks } : {}),
       ...(native ? { nativeMode: native } : {}),
       nativeQueries: null,
-      nativeFallbackReason: "queryFailure",
+      nativeFallbackReason: "sourceTooLarge",
       nativeError: `source exceeds native byte limit (${sourceBytes} > ${DEFAULT_NATIVE_SOURCE_MAX_BYTES})`,
     };
   }

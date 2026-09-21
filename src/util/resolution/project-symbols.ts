@@ -8,11 +8,16 @@ export type LanguageProjectSymbolIndex = {
   filesByPackageSymbol: Map<string, Map<string, string[]>>;
 };
 
-export async function listProjectLanguageFiles(projectRoot: string, patterns: string[]): Promise<string[]> {
+export type DeclaredContainer = {
+  name: string;
+  symbols?: Iterable<string>;
+};
+
+async function listProjectLanguageFiles(projectRoot: string, patterns: string[]): Promise<string[]> {
   return await listProjectFiles(projectRoot, patterns);
 }
 
-export function addProjectSymbolFile(
+function addProjectSymbolFile(
   index: LanguageProjectSymbolIndex,
   packageName: string,
   filePath: string,
@@ -34,7 +39,7 @@ export function addProjectSymbolFile(
   }
 }
 
-export function sortProjectSymbolIndex(index: LanguageProjectSymbolIndex): void {
+function sortProjectSymbolIndex(index: LanguageProjectSymbolIndex): void {
   for (const [packageName, files] of index.filesByPackage) {
     files.sort((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
     index.filesByPackage.set(packageName, files);
@@ -47,12 +52,24 @@ export function sortProjectSymbolIndex(index: LanguageProjectSymbolIndex): void 
   }
 }
 
-export async function buildProjectSymbolIndex<TEntry extends { packageName: string | null; symbols: Set<string> }>(
+function mergeDeclaredContainers(containers: readonly DeclaredContainer[]): Map<string, Set<string>> {
+  const merged = new Map<string, Set<string>>();
+  for (const container of containers) {
+    const symbols = merged.get(container.name) ?? new Set<string>();
+    if (container.symbols) {
+      for (const symbolName of container.symbols) symbols.add(symbolName);
+    }
+    merged.set(container.name, symbols);
+  }
+  return merged;
+}
+
+export async function buildDeclaredContainerIndex(
   projectRoot: string,
-  patterns: string[],
-  readIndexEntry: (filePath: string) => Promise<TEntry>,
+  globs: string[],
+  readContainers: (filePath: string) => Promise<readonly DeclaredContainer[]>,
 ): Promise<LanguageProjectSymbolIndex> {
-  const files = await listProjectLanguageFiles(projectRoot, patterns);
+  const files = await listProjectLanguageFiles(projectRoot, globs);
   const index: LanguageProjectSymbolIndex = {
     files,
     filesByPackage: new Map<string, string[]>(),
@@ -61,8 +78,8 @@ export async function buildProjectSymbolIndex<TEntry extends { packageName: stri
 
   const indexEntries = await mapLimitSemaphore(files, 8, async (filePath) => {
     try {
-      const entry = await readIndexEntry(filePath);
-      return { filePath, entry };
+      const containers = await readContainers(filePath);
+      return { filePath, containers };
     } catch {
       // Ignore unreadable files and keep indexing the project.
       return null;
@@ -70,8 +87,10 @@ export async function buildProjectSymbolIndex<TEntry extends { packageName: stri
   });
 
   for (const indexEntry of indexEntries) {
-    if (!indexEntry || indexEntry.entry.packageName === null) continue;
-    addProjectSymbolFile(index, indexEntry.entry.packageName, indexEntry.filePath, indexEntry.entry.symbols);
+    if (!indexEntry) continue;
+    for (const [containerName, symbols] of mergeDeclaredContainers(indexEntry.containers)) {
+      addProjectSymbolFile(index, containerName, indexEntry.filePath, symbols);
+    }
   }
 
   sortProjectSymbolIndex(index);

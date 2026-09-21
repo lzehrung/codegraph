@@ -213,6 +213,19 @@ describe("Markdown document-link masking", () => {
     expect(extractMarkdownLinkOccurrences(source)).toEqual([]);
   });
 
+  it("keeps media source src while dropping prose and raw image sources and fenced markup", () => {
+    const source = [
+      "![Diagram](./images/diagram.svg)",
+      '<img src="./image.png">',
+      '<video><source src="./clip.webm"></video>',
+      "```html",
+      '<video><source src="./fenced.webm"></video>',
+      "```",
+    ].join("\n");
+
+    expect(extractMarkdownModuleSpecifiers(source).map((entry) => entry.spec)).toEqual(["./clip.webm"]);
+  });
+
   it("creates file edges for nested list links and not for comments or front matter", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-md-mask-"));
     const files = {

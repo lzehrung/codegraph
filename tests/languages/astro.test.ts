@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { collectGraph } from "../../src/index.js";
@@ -70,4 +72,35 @@ it("prioritizes script candidates for extensionless Astro frontmatter imports", 
   const utilEdges = graph.edges.filter((edge) => edge.from === pageFile && edge.raw === "./util");
 
   expect(utilEdges).toEqual([{ from: pageFile, to: { type: "file", path: scriptFile }, raw: "./util" }]);
+});
+
+it("extracts Astro scoped style imports and url references as document edges", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-astro-style-"));
+  const pageFile = path.join(root, "page.astro");
+  const themeFile = path.join(root, "theme.css");
+  const backgroundFile = path.join(root, "bg.png");
+  try {
+    await fs.writeFile(
+      pageFile,
+      ["---", "---", "<style>", '  @import "./theme.css";', "  .hero { background: url(./bg.png); }", "</style>"].join(
+        "\n",
+      ),
+      "utf8",
+    );
+    await fs.writeFile(themeFile, ".hero {}\n", "utf8");
+    await fs.writeFile(backgroundFile, "", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedTheme = themeFile.replace(/\\/g, "/");
+    const normalizedBackground = backgroundFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedTheme, normalizedBackground]);
+    const edges = graph.edges.filter((edge) => edge.from === normalizedPage);
+
+    expect(edges).toEqual([
+      { from: normalizedPage, to: { type: "file", path: normalizedTheme }, raw: "./theme.css" },
+      { from: normalizedPage, to: { type: "file", path: normalizedBackground }, raw: "./bg.png" },
+    ]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });

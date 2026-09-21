@@ -102,4 +102,33 @@ describe("expandStarImports", () => {
     );
     expect(named).toEqual([expect.objectContaining({ kind: "named", local: "bar", imported: "bar" })]);
   });
+
+  it("expands only names present as local exports when the target lists any", () => {
+    const libFile = normalizePath("/tmp/cg-star-visibility.ts");
+    const consumerFile = normalizePath("/tmp/cg-star-visibility-consumer.ts");
+    const visible = symbol(libFile, "visible");
+    const hidden = symbol(libFile, "hidden");
+    const lib: ModuleIndex = {
+      file: libFile,
+      exports: [{ type: "local", exportedAs: "visible", target: visible }],
+      imports: [],
+      locals: [visible, hidden],
+    };
+    const consumer: ModuleIndex = {
+      file: consumerFile,
+      exports: [],
+      imports: [{ kind: "star", from: "./lib", resolved: libFile }],
+      locals: [],
+    };
+
+    expandStarImports(
+      new Map([
+        [fileIdentityKey(libFile), lib],
+        [fileIdentityKey(consumerFile), consumer],
+      ]),
+    );
+
+    expect(namedLocals(consumer)).toEqual(["visible"]);
+    expect(namedLocals(consumer)).not.toContain("hidden");
+  });
 });

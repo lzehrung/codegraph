@@ -24,13 +24,11 @@ tree-sitter-python = "0.25.0"
 tree-sitter-ruby = "0.23.1"
 tree-sitter-rust = "0.24.0"
 tree-sitter-sequel = "0.3.11"
-tree-sitter-svelte-next = "0.1.1"
 tree-sitter-swift = "0.7.1"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-zig = "1.1.2"
 arborium-c-sharp = "2.16.0"
 arborium-scss = "2.16.0"
-arborium-vue = "2.16.0"
 unicode-ident = "=1.0.14"
 
 [dev-dependencies]

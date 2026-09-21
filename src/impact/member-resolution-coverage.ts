@@ -1,5 +1,5 @@
 import { supportForFile } from "../languages.js";
-import { supportsReceiverMemberResolution } from "../indexer/navigation-goto.js";
+import { supportsReceiverMemberNavigation } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import type { ProjectIndex } from "../indexer/types.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { ChangedSymbol, MemberResolutionCoverage } from "./types.js";
@@ -30,7 +30,7 @@ export function computeMemberResolutionCoverage(
     const languageId = index.parsed?.get(fileKey)?.sup.id ?? supportForFile(symbol.file)?.id;
     if (!languageId) continue;
 
-    const hasVerifiedReceiverResolution = supportsReceiverMemberResolution(languageId);
+    const hasVerifiedReceiverResolution = supportsReceiverMemberNavigation(languageId);
     if (hasVerifiedReceiverResolution) {
       receiverAware.add(languageId);
     } else {

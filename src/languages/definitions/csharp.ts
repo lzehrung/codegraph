@@ -1,5 +1,6 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
+import { classifyByParentType, isNameFieldOnParent, nodeTypeIn } from "./shared.js";
 import { CSHARP_IDENTIFIER_FORMAT_SOURCE, hasNonAsciiCodePoint } from "../../util/identifiers.js";
 
 const CSHARP_IDENTIFIER_FORMAT_PATTERN = new RegExp(`[${CSHARP_IDENTIFIER_FORMAT_SOURCE}]`, "gu");
@@ -62,9 +63,11 @@ export const CSHARP_DEF: LanguageDefinition = {
     comments: ["comment"],
   },
   graph: {
+    // Path node is `identifier` | `qualified_name` | `alias_qualified_name` (`global::System`).
+    // An identifier/qualified_name alternation misses `alias_qualified_name`, so keep `(_)`.
     imports: `
-      (using_directive !name (_) @mod) @stmt
-      (using_directive name: (identifier) (_) @mod) @stmt
+      (using_directive !name (_) @from) @stmt
+      (using_directive name: (identifier) (_) @from) @stmt
     `,
     exports: `
       (class_declaration name: (identifier) @name)
@@ -83,6 +86,8 @@ export const CSHARP_DEF: LanguageDefinition = {
       (class_declaration name: (identifier) @name)
       (record_declaration name: (identifier) @name)
       (record_declaration (parameter_list (parameter name: (identifier) @name)))
+      (method_declaration (parameter_list (parameter name: (identifier) @name)))
+      (constructor_declaration (parameter_list (parameter name: (identifier) @name)))
       (struct_declaration name: (identifier) @name)
       (interface_declaration name: (identifier) @name)
       (enum_declaration name: (identifier) @name)
@@ -94,6 +99,8 @@ export const CSHARP_DEF: LanguageDefinition = {
       (variable_declarator name: (identifier) @name)
       (declaration_pattern name: (identifier) @name)
     `,
+    // extern alias has no path node in the grammar, so there is no @from.
+    // using path node: identifier | qualified_name | alias_qualified_name — keep `(_)`.
     importBindings: `
       (using_directive name: (identifier) @alias (_) @from) @stmt
       (using_directive !name (_) @from) @stmt
@@ -105,56 +112,44 @@ export const CSHARP_DEF: LanguageDefinition = {
     memberExpression: "member_access_expression",
   },
   supportsCrossModuleSymbols: true,
-  classifyDefinition: (node) => {
-    const parent = node.parent;
-    if (!parent) return "variable";
-    if (
-      parent.type === "method_declaration" ||
-      parent.type === "constructor_declaration" ||
-      parent.type === "destructor_declaration" ||
-      parent.type === "local_function_statement"
-    )
-      return "method";
-    if (
-      parent.type === "class_declaration" ||
-      parent.type === "record_declaration" ||
-      parent.type === "struct_declaration"
-    )
-      return "class";
-    if (parent.type === "interface_declaration") return "interface";
-    if (parent.type === "enum_declaration" || parent.type === "delegate_declaration") return "type";
-    return "variable";
-  },
-  createsFunctionScope: (node) =>
-    node.type === "method_declaration" ||
-    node.type === "constructor_declaration" ||
-    node.type === "destructor_declaration" ||
-    node.type === "local_function_statement",
-  createsBlockScope: (node) => node.type === "block" || node.type === "declaration_list",
-  isDeclarationName: (node) => {
-    const p = node.parent;
-    if (!p) return false;
-    if (
-      (p.type === "class_declaration" ||
-        p.type === "record_declaration" ||
-        p.type === "struct_declaration" ||
-        p.type === "interface_declaration" ||
-        p.type === "enum_declaration" ||
-        p.type === "delegate_declaration" ||
-        p.type === "enum_member_declaration" ||
-        p.type === "method_declaration" ||
-        p.type === "constructor_declaration" ||
-        p.type === "destructor_declaration" ||
-        p.type === "local_function_statement" ||
-        p.type === "property_declaration") &&
-      p.childForFieldName("name")?.id === node.id
-    )
-      return true;
-    if (p.type === "variable_declarator" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "parameter" && p.childForFieldName("name")?.id === node.id) return true;
-    if (p.type === "declaration_pattern" && p.childForFieldName("name")?.id === node.id) return true;
-    return false;
-  },
+  membersAreImplicitlyInScope: true,
+  classifyDefinition: classifyByParentType({
+    method_declaration: "method",
+    constructor_declaration: "method",
+    destructor_declaration: "method",
+    local_function_statement: "method",
+    class_declaration: "class",
+    record_declaration: "class",
+    struct_declaration: "class",
+    interface_declaration: "interface",
+    enum_declaration: "type",
+    delegate_declaration: "type",
+  }),
+  createsFunctionScope: nodeTypeIn([
+    "method_declaration",
+    "constructor_declaration",
+    "destructor_declaration",
+    "local_function_statement",
+  ]),
+  createsBlockScope: nodeTypeIn(["block", "declaration_list"]),
+  isDeclarationName: (node) =>
+    isNameFieldOnParent(node, [
+      "class_declaration",
+      "record_declaration",
+      "struct_declaration",
+      "interface_declaration",
+      "enum_declaration",
+      "delegate_declaration",
+      "enum_member_declaration",
+      "method_declaration",
+      "constructor_declaration",
+      "destructor_declaration",
+      "local_function_statement",
+      "property_declaration",
+      "variable_declarator",
+      "parameter",
+      "declaration_pattern",
+    ]),
   normalizeIdentifier: (name) => {
     const withoutVerbatimPrefix = name.startsWith("@") ? name.slice(1) : name;
     return hasNonAsciiCodePoint(withoutVerbatimPrefix)

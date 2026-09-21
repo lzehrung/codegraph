@@ -911,6 +911,7 @@ function mutableModuleIndex(mod: ModuleIndex): ModuleIndex {
     exports: [...mod.exports],
     imports: [...mod.imports],
     locals: [...mod.locals],
+    ...(mod.declaredContainers ? { declaredContainers: [...mod.declaredContainers] } : {}),
   };
 }
 

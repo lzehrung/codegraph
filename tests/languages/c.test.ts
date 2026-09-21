@@ -129,19 +129,23 @@ const definition: LanguageTestDefinition = {
 
 runLanguageTests(definition);
 
-function cFamilyIncludeCaptureTexts(source: string, support: LanguageSupport, name: "mod" | "from"): string[] {
+function cFamilyIncludeCaptureTexts(
+  source: string,
+  support: LanguageSupport,
+  kind: "imports" | "importBindings",
+): string[] {
   const results = getNativeQueryExecution(source, support).results;
-  const matches = name === "mod" ? results?.imports : results?.importBindings;
+  const matches = kind === "imports" ? results?.imports : results?.importBindings;
   return (matches ?? []).flatMap((match) =>
-    match.captures.filter((capture) => capture.name === name).map((capture) => capture.text),
+    match.captures.filter((capture) => capture.name === "from").map((capture) => capture.text),
   );
 }
 
 describe("C native queries", () => {
   it("keeps literal and identifier includes and rejects function-like include macros", async () => {
     const isolatedMacro = '#include MACRO("x.h")\n#define HAS_FOO 1\n';
-    expect(cFamilyIncludeCaptureTexts(isolatedMacro, C_SUPPORT, "mod")).toEqual([]);
-    expect(cFamilyIncludeCaptureTexts(isolatedMacro, C_SUPPORT, "from")).toEqual([]);
+    expect(cFamilyIncludeCaptureTexts(isolatedMacro, C_SUPPORT, "imports")).toEqual([]);
+    expect(cFamilyIncludeCaptureTexts(isolatedMacro, C_SUPPORT, "importBindings")).toEqual([]);
 
     const source = [
       '#include "x.h"',
@@ -155,11 +159,11 @@ describe("C native queries", () => {
     const expectedSpecs = ["x.h", "<stdio.h>", "HEADER"];
 
     for (const support of [C_SUPPORT, CPP_SUPPORT]) {
-      const mods = cFamilyIncludeCaptureTexts(source, support, "mod");
-      const froms = cFamilyIncludeCaptureTexts(source, support, "from");
-      expect(mods).toEqual(expectedCaptures);
+      const imports = cFamilyIncludeCaptureTexts(source, support, "imports");
+      const froms = cFamilyIncludeCaptureTexts(source, support, "importBindings");
+      expect(imports).toEqual(expectedCaptures);
       expect(froms).toEqual(expectedCaptures);
-      expect(mods).not.toContain("keep(void)");
+      expect(imports).not.toContain("keep(void)");
       expect(froms).not.toContain("keep(void)");
       expect(collectModuleSpecifiersFromSource(support, source).map((entry) => entry.spec)).toEqual(expectedSpecs);
     }
@@ -184,6 +188,7 @@ describe("C native queries", () => {
       "#ifndef DEMO_H",
       "#define DEMO_H",
       "static int helper;",
+      "static int helper_fn(void) { return 0; }",
       "int top;",
       "int f() { int sum = 0; return sum; }",
       "int static_count = 1;",
@@ -196,6 +201,8 @@ describe("C native queries", () => {
       .sort();
 
     expect(exported).toEqual(["DEMO_H", "f", "ready", "static_count", "top"]);
+    expect(exported).not.toContain("helper");
+    expect(exported).not.toContain("helper_fn");
   });
 });
 
@@ -274,6 +281,14 @@ describe("C vs C++ query-driven locals", () => {
     expect(names.locals).toEqual(expect.arrayContaining(["Pair", "Mode", "ON", "guarded"]));
     expect(names.exports).not.toContain("a");
   });
+
+  it("keeps nested struct tags local while the outer struct stays exported", () => {
+    const names = collectCFamilyNames("probe.h", "struct Outer { struct Inner { int x; }; };", C_SUPPORT);
+    expect(names.exports).toEqual(expect.arrayContaining(["Outer"]));
+    expect(names.exports).not.toContain("Inner");
+    expect(names.exports).not.toContain("x");
+    expect(names.locals).toEqual(expect.arrayContaining(["Outer", "Inner", "x"]));
+  });
 });
 
 describe("export de-duplication for shadowed Kotlin vals", () => {
@@ -344,6 +359,7 @@ describe("C native queries without a projected tree", () => {
       "#ifndef DEMO_H",
       "#define DEMO_H",
       "static int helper;",
+      "static int helper_fn(void) { return 0; }",
       "int /* static is only a comment */ top;",
       "int f() { int hidden; struct Inner { int x; }; return hidden; }",
       "int static_count = 1;",
@@ -363,6 +379,7 @@ describe("C native queries without a projected tree", () => {
     expect(noTree).not.toContain("Inner");
     expect(noTree).not.toContain("once");
     expect(noTree).not.toContain("helper");
+    expect(noTree).not.toContain("helper_fn");
   });
 
   it("keeps C++ namespace members when the tree is absent", () => {

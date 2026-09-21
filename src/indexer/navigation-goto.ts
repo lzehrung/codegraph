@@ -8,9 +8,19 @@ import {
   getMemberAccessParts,
   getNavigationExpressionProperty,
   isMemberAccessNode,
+  isReceiverNameNode,
   memberAccessTraversalTypes,
 } from "../util/member-access.js";
-import { CSHARP_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE } from "../util/identifiers.js";
+import {
+  declaresMembers,
+  hasStaticMemberDistinction,
+  isKeywordReceiver,
+  nearestMemberContainer,
+  receiverConstructorExpression,
+  supportsReceiverMemberNavigation,
+  unwrapNamedType,
+  type ReceiverMemberScope,
+} from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
@@ -23,12 +33,6 @@ import {
   type SymbolDef,
 } from "./types.js";
 
-const RUBY_CONSTANT_SOURCE = String.raw`(?=\p{Lu})${XID_IDENTIFIER_SOURCE}`;
-const CSHARP_CONSTANT_SOURCE = String.raw`(?=@?\p{Lu})${CSHARP_IDENTIFIER_SOURCE}`;
-const JAVA_CONSTANT_SOURCE = String.raw`(?=\p{Lu})${JAVA_IDENTIFIER_SOURCE}`;
-const RUST_CONSTANT_SOURCE = String.raw`(?=\p{Lu})${XID_IDENTIFIER_SOURCE}`;
-const IDENTIFIER_BOUNDARY_SOURCE = String.raw`[$_\p{ID_Continue}\u200c\u200d]`;
-
 export async function resolveMemberAccessDefinition(params: {
   index: ProjectIndex;
   mod: ModuleIndex;
@@ -39,17 +43,22 @@ export async function resolveMemberAccessDefinition(params: {
 }): Promise<GoToResult | null> {
   const { index, mod, node, source, sup, resolveLexicalBinding } = params;
   const parent = node.parent;
-  if (!parent || !sup.supportsCrossModuleSymbols || !isMemberAccessNode(sup, parent)) {
+  if (!parent || !sup.supportsCrossModuleSymbols) {
     return null;
   }
-
-  const memberNode = parent;
+  let memberNode: SyntaxNodeLike | null = null;
+  if (isMemberAccessNode(sup, parent)) {
+    memberNode = parent;
+  } else if (parent.parent && isMemberAccessNode(sup, parent.parent)) {
+    memberNode = parent.parent;
+  }
+  if (!memberNode) return null;
   const { object: obj, property: prop } = getMemberAccessParts(sup, memberNode);
   const optionalMemberTypes = memberAccessTraversalTypes(sup);
 
   const resolveExpression = async (expr: SyntaxNodeLike): Promise<ResolvedExport | null> => {
-    const exprIsId = sup.nodeTypes.identifier.includes(expr.type) && !isMemberAccessNode(sup, expr);
-    if (exprIsId || expr.type === "identifier" || expr.type === "type_identifier" || expr.type === "constant") {
+    const exprIsId = isReceiverNameNode(sup, expr.type) && !isMemberAccessNode(sup, expr);
+    if (exprIsId) {
       const lexicalBinding = resolveLexicalBinding?.(expr);
       if (lexicalBinding) return { kind: "resolved", def: lexicalBinding };
       const exprName = sliceText(expr, source);
@@ -161,11 +170,8 @@ export async function resolveMemberAccessDefinition(params: {
   }
 
   const receiverName = obj ? sliceText(obj, source) : "";
-  const implicitClassReceiver =
-    (isJsTsLanguage(sup.id) && receiverName === "this") ||
-    (sup.id === "php" && /^(?:\$this|self|static)$/.test(receiverName)) ||
-    (sup.id === "rust" && /^(?:self|Self)$/.test(receiverName));
-  if (obj && prop && node.id === prop.id && (supportsReceiverMemberResolution(sup.id) || implicitClassReceiver)) {
+  const implicitClassReceiver = isKeywordReceiver(sup.id, receiverName);
+  if (obj && prop && node.id === prop.id && (supportsReceiverMemberNavigation(sup.id) || implicitClassReceiver)) {
     const member = sliceText(prop, source);
     if (sup.id === "python") {
       const memberDef = await resolvePythonReceiverMember(
@@ -199,7 +205,7 @@ export async function resolveMemberAccessDefinition(params: {
       }
     }
 
-    const receiver = await resolveReceiverDefinition(obj, source, sup, resolveExpression);
+    const receiver = await resolveReceiverDefinition(obj, source, sup, resolveExpression, mod);
 
     if (receiver) {
       const objDef = receiver.def;
@@ -224,22 +230,19 @@ export async function resolveMemberAccessDefinition(params: {
         const targetModule = index.byFile.get(fileIdentityKey(objDef.file));
         if (targetModule) {
           const normalizeIdentifier = targetContext.sup.normalizeIdentifier;
+          const memberPredicate =
+            receiver.memberScope === "any"
+              ? undefined
+              : (local: SymbolDef) => matchesReceiverMemberScope(local, receiver.memberScope, targetContext, container);
           let memberDef: SymbolDef | undefined;
-          if (receiver.runtimeTypeOnly) {
+          if (receiver.runtimeTypeOnly || targetContext.sup.id === "java") {
             memberDef = findDirectLocalWithinNode(
               targetModule.locals,
               member,
               container,
               targetContext,
               normalizeIdentifier,
-            );
-          } else if (targetContext.sup.id === "java") {
-            memberDef = findDirectLocalWithinNode(
-              targetModule.locals,
-              member,
-              container,
-              targetContext,
-              normalizeIdentifier,
+              memberPredicate,
             );
           } else {
             memberDef = findReceiverMemberDefinition(
@@ -269,37 +272,13 @@ export async function resolveMemberAccessDefinition(params: {
 }
 
 function findEnclosingClassContainer(node: SyntaxNodeLike): SyntaxNodeLike | null {
-  let current = node.parent;
-  while (current) {
-    if (
-      current.type === "class_declaration" ||
-      current.type === "abstract_class_declaration" ||
-      current.type === "class_definition" ||
-      current.type === "impl_item"
-    ) {
-      return current;
-    }
-    current = current.parent;
-  }
-  return null;
+  return nearestMemberContainer(node);
 }
 
-export function supportsReceiverMemberResolution(languageId: string): boolean {
-  return (
-    languageId === "csharp" ||
-    languageId === "python" ||
-    languageId === "js" ||
-    languageId === "java" ||
-    languageId === "javascript" ||
-    languageId === "jsx" ||
-    languageId === "rust" ||
-    languageId === "ts" ||
-    languageId === "typescript" ||
-    languageId === "tsx"
-  );
-}
-
-type ReceiverMemberScope = "any" | "instance" | "static";
+export {
+  supportsReceiverCallEdges,
+  supportsReceiverMemberNavigation,
+} from "../graphs/symbol-graph-detailed/receiver-calls.js";
 
 type ResolvedReceiverDefinition = {
   def: SymbolDef;
@@ -307,428 +286,57 @@ type ResolvedReceiverDefinition = {
   runtimeTypeOnly?: true;
 };
 
+function memberDeclaringLocals(mod: ModuleIndex, typeName: string, normalize: (name: string) => string): SymbolDef[] {
+  const normalized = normalize(typeName);
+  return mod.locals.filter((local) => normalize(local.localName) === normalized && declaresMembers(local));
+}
+
 async function resolveReceiverDefinition(
   obj: SyntaxNodeLike,
   source: string,
   sup: LanguageSupport,
   resolveExpression: (expr: SyntaxNodeLike) => Promise<ResolvedExport | null>,
+  mod: ModuleIndex,
 ): Promise<ResolvedReceiverDefinition | null> {
   const constructor = receiverConstructorExpression(obj, source, sup);
   if (constructor) {
+    const typeName = sliceText(constructor, source);
+    const typedLocals = memberDeclaringLocals(mod, typeName, sup.normalizeIdentifier);
+    if (typedLocals.length === 1) {
+      return {
+        def: typedLocals[0]!,
+        memberScope: hasStaticMemberDistinction(sup.id) ? "instance" : "any",
+      };
+    }
     const result = await resolveExpression(constructor);
-    if (result?.kind === "resolved") {
+    if (result?.kind === "resolved" && declaresMembers(result.def)) {
       return {
         def: result.def,
-        memberScope: isJsTsLanguage(sup.id) ? "instance" : "any",
+        memberScope: hasStaticMemberDistinction(sup.id) ? "instance" : "any",
+      };
+    }
+    if (typedLocals[0]) {
+      return {
+        def: typedLocals[0],
+        memberScope: hasStaticMemberDistinction(sup.id) ? "instance" : "any",
       };
     }
   }
   const direct = await resolveExpression(obj);
-  if (isJsTsLanguage(sup.id) && sup.nodeTypes.identifier.includes(obj.type)) {
-    if (direct?.kind === "resolved" && direct.def.kind === SymbolKind.Class) {
-      return { def: direct.def, memberScope: "static" };
-    }
-    if (direct?.kind === "resolved" && direct.def.kind === SymbolKind.TypeAlias) {
+  if (direct?.kind === "resolved" && declaresMembers(direct.def)) {
+    if (isJsTsLanguage(sup.id) && direct.def.kind === SymbolKind.TypeAlias) {
       return { def: direct.def, memberScope: "any", runtimeTypeOnly: true };
     }
+    const memberScope = hasStaticMemberDistinction(sup.id) ? "static" : "any";
+    return { def: direct.def, memberScope };
+  }
+  if (isJsTsLanguage(sup.id) && isReceiverNameNode(sup, obj.type)) {
     return null;
   }
   if (direct?.kind === "resolved") {
     return { def: direct.def, memberScope: "any" };
   }
   return null;
-}
-
-/**
- * Resolves the node naming the type a receiver expression was constructed from, or
- * null when no constructor is proven for it. Shared with detailed symbol-graph call
- * extraction so `goto` and resolved `calls` edges accept the same receiver forms.
- */
-export function receiverConstructorExpression(
-  obj: SyntaxNodeLike,
-  source: string,
-  sup: LanguageSupport,
-): SyntaxNodeLike | null {
-  if (obj.type === "new_expression" || obj.type === "object_creation_expression") {
-    return constructorNameNode(obj, sup);
-  }
-  if (sup.id === "ruby" && obj.type === "call") {
-    const rubyConstructor = rubyNewReceiverNameNode(obj, source, sup);
-    if (rubyConstructor) return rubyConstructor;
-  }
-  if (!sup.nodeTypes.identifier.includes(obj.type)) {
-    return null;
-  }
-
-  const receiverName = sliceText(obj, source);
-  return findVisiblePriorNewConstructor(obj, receiverName, source, sup);
-}
-
-function constructorNameNode(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
-  const constructor = node.childForFieldName("constructor") ?? node.child(0);
-  if (constructor && sup.nodeTypes.identifier.includes(constructor.type)) {
-    return constructor;
-  }
-  for (const child of node.namedChildren) {
-    if (
-      sup.nodeTypes.identifier.includes(child.type) ||
-      child.type === "type_identifier" ||
-      child.type === "constant"
-    ) {
-      return child;
-    }
-  }
-  return null;
-}
-
-function rubyNewReceiverNameNode(node: SyntaxNodeLike, source: string, sup: LanguageSupport): SyntaxNodeLike | null {
-  if (!new RegExp(String.raw`^(?:${RUBY_CONSTANT_SOURCE})\.new$`, "u").test(sliceText(node, source))) return null;
-  return (
-    node.namedChildren.find((child) => sup.nodeTypes.identifier.includes(child.type) || child.type === "constant") ??
-    null
-  );
-}
-
-function rootOf(node: SyntaxNodeLike): SyntaxNodeLike {
-  let current = node;
-  while (current.parent) {
-    current = current.parent;
-  }
-  return current;
-}
-
-const BINDING_CONTAINER_TYPES = new Set([
-  "program",
-  "compilation_unit",
-  "source_file",
-  "statement_block",
-  "block",
-  "function_declaration",
-  "function_item",
-  "function_definition",
-  "function",
-  "function_expression",
-  "arrow_function",
-  "method_definition",
-  "method_declaration",
-  "method",
-]);
-
-const BINDING_DECLARATION_TYPES = new Set([
-  "variable_declarator",
-  "let_declaration",
-  "assignment",
-  "formal_parameter",
-  "required_parameter",
-  "optional_parameter",
-  "parameter_declaration",
-  "short_var_declaration",
-  "var_spec",
-]);
-
-function findVisiblePriorNewConstructor(
-  receiver: SyntaxNodeLike,
-  receiverName: string,
-  source: string,
-  sup: LanguageSupport,
-): SyntaxNodeLike | null {
-  let current: SyntaxNodeLike | null = receiver;
-  while (current) {
-    if (BINDING_CONTAINER_TYPES.has(current.type)) {
-      const constructor = findPriorNewConstructorInContainer(current, receiver, receiverName, source, sup);
-      if (constructor || bindingContainerDeclaresNameBefore(current, receiver, receiverName, source, sup)) {
-        return constructor;
-      }
-    }
-    current = current.parent;
-  }
-
-  return findPriorNewConstructorInContainer(rootOf(receiver), receiver, receiverName, source, sup);
-}
-
-function findPriorNewConstructorInContainer(
-  node: SyntaxNodeLike,
-  receiver: SyntaxNodeLike,
-  receiverName: string,
-  source: string,
-  sup: LanguageSupport,
-): SyntaxNodeLike | null {
-  let constructor: SyntaxNodeLike | null = null;
-  const visit = (current: SyntaxNodeLike): boolean => {
-    if (current.startIndex >= receiver.startIndex) {
-      return true;
-    }
-    if (current !== node && isSkippableBindingContainer(current, receiver)) {
-      return true;
-    }
-    if (current.type === "variable_declarator") {
-      const name = current.childForFieldName("name") ?? current.child(0);
-      const value = current.childForFieldName("value");
-      if (
-        name &&
-        value &&
-        (value.type === "new_expression" ||
-          value.type === "object_creation_expression" ||
-          sup.nodeTypes.identifier.includes(value.type)) &&
-        sup.nodeTypes.identifier.includes(name.type) &&
-        sliceText(name, source) === receiverName
-      ) {
-        const candidate = constructorNameNode(value, sup);
-        if (!candidate) {
-          return true;
-        }
-        if (constructor && sliceText(constructor, source) !== sliceText(candidate, source)) {
-          constructor = null;
-          return false;
-        }
-        constructor = candidate;
-      }
-    }
-    if (current.type === "assignment" || current.type === "let_declaration") {
-      const candidate = constructorFromAssignmentLike(current, receiverName, source, sup);
-      if (candidate) {
-        if (constructor && sliceText(constructor, source) !== sliceText(candidate, source)) {
-          constructor = null;
-          return false;
-        }
-        constructor = candidate;
-      }
-    }
-    if (
-      current.type === "local_variable_declaration" ||
-      current.type === "local_declaration_statement" ||
-      current.type === "variable_declaration"
-    ) {
-      const candidate = constructorFromTypedLocalDeclaration(current, receiverName, source, sup);
-      if (candidate) {
-        if (constructor && sliceText(constructor, source) !== sliceText(candidate, source)) {
-          constructor = null;
-          return false;
-        }
-        constructor = candidate;
-      }
-    }
-    if (sup.id === "go" && (current.type === "short_var_declaration" || current.type === "var_spec")) {
-      const candidate = constructorFromGoBinding(current, receiverName, source, sup);
-      if (candidate) {
-        if (constructor && sliceText(constructor, source) !== sliceText(candidate, source)) {
-          constructor = null;
-          return false;
-        }
-        constructor = candidate;
-      }
-    }
-    for (const child of current.namedChildren) {
-      if (!visit(child)) {
-        return false;
-      }
-    }
-    return true;
-  };
-  visit(node);
-  return constructor;
-}
-
-function constructorFromTypedLocalDeclaration(
-  node: SyntaxNodeLike,
-  receiverName: string,
-  source: string,
-  sup: LanguageSupport,
-): SyntaxNodeLike | null {
-  if (sup.id !== "csharp" && sup.id !== "java") return null;
-  const text = sliceText(node, source);
-  const typeNameSource = sup.id === "java" ? JAVA_CONSTANT_SOURCE : CSHARP_CONSTANT_SOURCE;
-  const match = text.match(
-    new RegExp(
-      String.raw`^\s*(${typeNameSource})\s+${escapeRegExp(receiverName)}\s*=\s*new\s+(${typeNameSource})(?![\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mn}\p{Mc}\p{Cf}])`,
-      "u",
-    ),
-  );
-  const typeName = match?.[2] ?? match?.[1];
-  return typeName ? findNamedChildText(node, typeName, source, sup) : null;
-}
-
-function bindingContainerDeclaresNameBefore(
-  node: SyntaxNodeLike,
-  receiver: SyntaxNodeLike,
-  receiverName: string,
-  source: string,
-  sup: LanguageSupport,
-): boolean {
-  const visit = (current: SyntaxNodeLike): boolean => {
-    if (current.startIndex >= receiver.startIndex) {
-      return false;
-    }
-    if (current !== node && isSkippableBindingContainer(current, receiver)) {
-      return false;
-    }
-    if (BINDING_DECLARATION_TYPES.has(current.type)) {
-      if (goBindingDeclaresName(current, receiverName, source, sup)) return true;
-      const name = current.childForFieldName("name") ?? current.child(0);
-      if (name && sup.nodeTypes.identifier.includes(name.type) && sliceText(name, source) === receiverName) {
-        return true;
-      }
-    }
-    for (const child of current.namedChildren) {
-      if (visit(child)) {
-        return true;
-      }
-    }
-    return false;
-  };
-  return visit(node);
-}
-
-function isSkippableBindingContainer(node: SyntaxNodeLike, receiver: SyntaxNodeLike): boolean {
-  return BINDING_CONTAINER_TYPES.has(node.type) && !nodeContainsIndex(node, receiver.startIndex);
-}
-
-function nodeContainsIndex(node: SyntaxNodeLike, index: number): boolean {
-  return node.startIndex <= index && node.endIndex >= index;
-}
-
-function constructorFromAssignmentLike(
-  node: SyntaxNodeLike,
-  receiverName: string,
-  source: string,
-  sup: LanguageSupport,
-): SyntaxNodeLike | null {
-  const text = sliceText(node, source);
-  if (
-    !new RegExp(
-      String.raw`(?<!${IDENTIFIER_BOUNDARY_SOURCE})${escapeRegExp(receiverName)}(?!${IDENTIFIER_BOUNDARY_SOURCE})`,
-      "u",
-    ).test(text)
-  )
-    return null;
-  if (sup.id === "ruby") {
-    const match = text.match(
-      new RegExp(
-        String.raw`^\s*${escapeRegExp(receiverName)}\s*=\s*(${RUBY_CONSTANT_SOURCE})\.new(?!${IDENTIFIER_BOUNDARY_SOURCE})`,
-        "u",
-      ),
-    );
-    if (!match?.[1]) return null;
-    return findNamedChildText(node, match[1], source, sup);
-  }
-  if (sup.id === "rust") {
-    const match = text.match(
-      new RegExp(
-        String.raw`^\s*(?:let\s+)?${escapeRegExp(receiverName)}\s*=\s*(${RUST_CONSTANT_SOURCE})(?!${IDENTIFIER_BOUNDARY_SOURCE})`,
-        "u",
-      ),
-    );
-    if (!match?.[1]) return null;
-    return findNamedChildText(node, match[1], source, sup);
-  }
-  if (sup.id === "python") {
-    return pythonConstructorFromAssignment(node, receiverName, source, sup);
-  }
-  return null;
-}
-
-function goBindingNameNodes(node: SyntaxNodeLike): SyntaxNodeLike[] {
-  if (node.type === "short_var_declaration") {
-    const left = node.childForFieldName("left");
-    return (left?.namedChildren ?? []).filter((child) => child.type === "identifier");
-  }
-  if (node.type === "var_spec") {
-    return (node.namedChildren ?? []).filter((child) => child.type === "identifier");
-  }
-  return [];
-}
-
-function goBindingDeclaresName(
-  node: SyntaxNodeLike,
-  receiverName: string,
-  source: string,
-  sup: LanguageSupport,
-): boolean {
-  if (sup.id !== "go") return false;
-  return goBindingNameNodes(node).some((name) => sliceText(name, source) === receiverName);
-}
-
-function constructorFromGoBinding(
-  node: SyntaxNodeLike,
-  receiverName: string,
-  source: string,
-  sup: LanguageSupport,
-): SyntaxNodeLike | null {
-  if (!goBindingDeclaresName(node, receiverName, source, sup)) return null;
-  if (node.type === "short_var_declaration") {
-    const left = node.childForFieldName("left");
-    const right = node.childForFieldName("right");
-    if (!left || !right) return null;
-    const names = (left.namedChildren ?? []).filter((child) => child.type === "identifier");
-    const values = right.namedChildren ?? [];
-    const index = names.findIndex((name) => sliceText(name, source) === receiverName);
-    if (index < 0) return null;
-    const value = values[index] ?? null;
-    return value ? goCompositeLiteralTypeName(value, source) : null;
-  }
-  if (node.type !== "var_spec") return null;
-  const value = node.childForFieldName("value");
-  if (value) {
-    const first = value.type === "expression_list" ? (value.namedChildren[0] ?? null) : value;
-    const fromValue = first ? goCompositeLiteralTypeName(first, source) : null;
-    if (fromValue) return fromValue;
-  }
-  const typeNode = node.childForFieldName("type");
-  return typeNode ? unwrapGoConstructorType(typeNode) : null;
-}
-
-function goCompositeLiteralTypeName(expr: SyntaxNodeLike, source: string): SyntaxNodeLike | null {
-  let current = expr;
-  if (current.type === "unary_expression") {
-    const operand = current.childForFieldName("operand");
-    if (!operand) return null;
-    const operator = current.childForFieldName("operator");
-    let isAddr = sliceText(current, source).startsWith("&");
-    if (operator) isAddr = sliceText(operator, source) === "&";
-    if (!isAddr) return null;
-    current = operand;
-  }
-  if (current.type !== "composite_literal") return null;
-  const typeNode = current.childForFieldName("type");
-  return typeNode ? unwrapGoConstructorType(typeNode) : null;
-}
-
-function unwrapGoConstructorType(node: SyntaxNodeLike): SyntaxNodeLike | null {
-  let current: SyntaxNodeLike | null = node;
-  while (current) {
-    if (current.type === "parenthesized_type" || current.type === "pointer_type") {
-      current = current.namedChildren[0] ?? null;
-      continue;
-    }
-    if (current.type === "generic_type") {
-      current = current.childForFieldName("type") ?? current.namedChildren[0] ?? null;
-      continue;
-    }
-    break;
-  }
-  return current?.type === "type_identifier" ? current : null;
-}
-
-function findNamedChildText(
-  node: SyntaxNodeLike,
-  name: string,
-  source: string,
-  sup: LanguageSupport,
-): SyntaxNodeLike | null {
-  const isNameNode = (candidate: SyntaxNodeLike): boolean =>
-    (sup.nodeTypes.identifier.includes(candidate.type) ||
-      candidate.type === "type_identifier" ||
-      candidate.type === "constant") &&
-    sliceText(candidate, source) === name;
-  const visit = (current: SyntaxNodeLike): SyntaxNodeLike | null => {
-    if (isNameNode(current)) return current;
-    for (const child of current.namedChildren) {
-      const hit = visit(child);
-      if (hit) return hit;
-    }
-    return null;
-  };
-  return visit(node);
 }
 
 async function resolveMemberDefinitionForBase(
@@ -779,16 +387,20 @@ function findReceiverMemberDefinition(
   const memberPredicate =
     memberScope === "any"
       ? undefined
-      : (local: SymbolDef) => hasStaticModifier(local, targetContext, container) === (memberScope === "static");
+      : (local: SymbolDef) => matchesReceiverMemberScope(local, memberScope, targetContext, container);
   const containerHit =
     memberScope === "any"
       ? findLocalWithinNode(locals, member, container, normalizeIdentifier)
       : findDirectLocalWithinNode(locals, member, container, targetContext, normalizeIdentifier, memberPredicate);
   if (containerHit) return containerHit;
-  if (targetContext.sup.id !== "rust") return undefined;
-
-  const implNode = findRustImplForType(targetContext.tree.rootNode, receiverDef.localName, targetContext.source);
-  return implNode ? findLocalWithinNode(locals, member, implNode, normalizeIdentifier) : undefined;
+  if (targetContext.sup.id === "rust") {
+    const implNode = findRustImplForType(targetContext.tree.rootNode, receiverDef.localName, targetContext.source);
+    return implNode ? findLocalWithinNode(locals, member, implNode, normalizeIdentifier) : undefined;
+  }
+  if (targetContext.sup.id === "go") {
+    return findGoReceiverMember(locals, member, receiverDef.localName, targetContext, normalizeIdentifier);
+  }
+  return undefined;
 }
 
 function findLocalWithinNode(
@@ -814,6 +426,31 @@ function findLocalWithinNode(
     );
   });
 }
+function matchesReceiverMemberScope(
+  local: SymbolDef,
+  memberScope: ReceiverMemberScope,
+  targetContext: ParsedFileContext,
+  container: SyntaxNodeLike,
+): boolean {
+  if (memberScope === "any") return true;
+  return hasStaticModifier(local, targetContext, container) === (memberScope === "static");
+}
+
+function nodeDeclaresStatic(node: SyntaxNodeLike, source: string): boolean {
+  if (node.type === "static" || node.type === "static_modifier") return true;
+  if (node.type === "storage_class_specifier" || node.type === "modifier" || node.type === "property_modifier") {
+    return sliceText(node, source).trim() === "static";
+  }
+  if (node.type === "modifiers") {
+    for (let childIndex = 0; ; childIndex += 1) {
+      const child = node.child(childIndex);
+      if (!child) break;
+      if (nodeDeclaresStatic(child, source)) return true;
+    }
+  }
+  return false;
+}
+
 function hasStaticModifier(local: SymbolDef, targetContext: ParsedFileContext, container: SyntaxNodeLike): boolean {
   const position = {
     row: local.range.start.line - 1,
@@ -824,7 +461,7 @@ function hasStaticModifier(local: SymbolDef, targetContext: ParsedFileContext, c
     for (let childIndex = 0; ; childIndex += 1) {
       const child = current.child(childIndex);
       if (!child) break;
-      if (child.type === "static") return true;
+      if (nodeDeclaresStatic(child, targetContext.source)) return true;
     }
     current = current.parent;
   }
@@ -920,21 +557,118 @@ function findRustImplForType(root: SyntaxNodeLike, typeName: string, source: str
   return found;
 }
 
-function pythonConstructorFromAssignment(
-  node: SyntaxNodeLike,
-  receiverName: string,
+const GO_EMBED_DEPTH = 16;
+
+function goMethodReceiverTypeName(methodNode: SyntaxNodeLike, source: string, sup: LanguageSupport): string | null {
+  const receiver = methodNode.childForFieldName("receiver");
+  if (!receiver) return null;
+  const parameter =
+    receiver.namedChildren.find((child) => child.type === "parameter_declaration") ?? receiver.namedChildren[0] ?? null;
+  const typeNode = parameter?.childForFieldName("type") ?? null;
+  if (!typeNode) return null;
+  const named = unwrapNamedType(typeNode, sup);
+  return named ? sliceText(named, source) : null;
+}
+
+function goTypeSpecNamed(
+  root: SyntaxNodeLike,
+  typeName: string,
   source: string,
-  sup: LanguageSupport,
+  normalizeIdentifier: (name: string) => string,
 ): SyntaxNodeLike | null {
-  const left = node.childForFieldName("left");
-  if (!left || !sup.nodeTypes.identifier.includes(left.type) || sliceText(left, source) !== receiverName) {
-    return null;
+  const normalized = normalizeIdentifier(typeName);
+  let found: SyntaxNodeLike | null = null;
+  const visit = (node: SyntaxNodeLike): boolean => {
+    if (node.type === "type_spec") {
+      const name = node.childForFieldName("name");
+      if (name && normalizeIdentifier(sliceText(name, source)) === normalized) {
+        found = node;
+        return false;
+      }
+    }
+    for (const child of node.namedChildren) {
+      if (!visit(child)) return false;
+    }
+    return true;
+  };
+  visit(root);
+  return found;
+}
+
+function goEmbeddedTypeNames(
+  typeName: string,
+  targetContext: ParsedFileContext,
+  normalizeIdentifier: (name: string) => string,
+): string[] {
+  const spec = goTypeSpecNamed(targetContext.tree.rootNode, typeName, targetContext.source, normalizeIdentifier);
+  if (!spec) return [];
+  const typeNode = spec.childForFieldName("type");
+  if (!typeNode) return [];
+  const names: string[] = [];
+  const visit = (node: SyntaxNodeLike): void => {
+    if (node.type === "field_declaration") {
+      if (node.childForFieldName("name")) return;
+      const fieldType = node.childForFieldName("type");
+      const named = fieldType ? unwrapNamedType(fieldType, targetContext.sup) : null;
+      if (named) names.push(sliceText(named, targetContext.source));
+      return;
+    }
+    for (const child of node.namedChildren) visit(child);
+  };
+  visit(typeNode);
+  return names;
+}
+
+function goMethodsNamedOnType(
+  locals: readonly SymbolDef[],
+  member: string,
+  typeName: string,
+  targetContext: ParsedFileContext,
+  normalizeIdentifier: (name: string) => string,
+): SymbolDef[] {
+  const matches: SymbolDef[] = [];
+  const visit = (node: SyntaxNodeLike): void => {
+    if (node.type === "method_declaration") {
+      const receiverType = goMethodReceiverTypeName(node, targetContext.source, targetContext.sup);
+      if (receiverType && normalizeIdentifier(receiverType) === normalizeIdentifier(typeName)) {
+        const local = findLocalWithinNode(locals, member, node, normalizeIdentifier);
+        if (local && !matches.includes(local)) matches.push(local);
+      }
+      return;
+    }
+    for (const child of node.namedChildren) visit(child);
+  };
+  visit(targetContext.tree.rootNode);
+  return matches;
+}
+
+function findGoReceiverMember(
+  locals: readonly SymbolDef[],
+  member: string,
+  typeName: string,
+  targetContext: ParsedFileContext,
+  normalizeIdentifier: (name: string) => string,
+): SymbolDef | undefined {
+  const visited = new Set<string>();
+  let level = [typeName];
+  for (let depth = 0; depth < GO_EMBED_DEPTH && level.length; depth += 1) {
+    const matches: SymbolDef[] = [];
+    const next: string[] = [];
+    for (const currentType of level) {
+      if (visited.has(currentType)) continue;
+      visited.add(currentType);
+      for (const method of goMethodsNamedOnType(locals, member, currentType, targetContext, normalizeIdentifier)) {
+        if (!matches.includes(method)) matches.push(method);
+      }
+      for (const embedded of goEmbeddedTypeNames(currentType, targetContext, normalizeIdentifier)) {
+        if (!visited.has(embedded) && !next.includes(embedded)) next.push(embedded);
+      }
+    }
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) return undefined;
+    level = next;
   }
-  const right = node.childForFieldName("right");
-  if (!right || right.type !== "call") return null;
-  const callee = right.childForFieldName("function") ?? right.namedChildren[0] ?? null;
-  if (!callee || !sup.nodeTypes.identifier.includes(callee.type)) return null;
-  return callee;
+  return undefined;
 }
 
 const PYTHON_SUPERTYPE_DEPTH = 16;

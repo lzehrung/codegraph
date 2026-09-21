@@ -1,5 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import * as prettier from "prettier";
+
+const repoPrettierConfigPath = fileURLToPath(new URL("../.prettierrc.json", import.meta.url));
 
 const reportConfigs = {
   js: {
@@ -310,7 +314,24 @@ function reportsForMode(mode) {
   return [reportConfigs[mode]];
 }
 
-function writeCoverageIndex(rootDir) {
+async function resolveRepoPrettierOptions() {
+  const options = await prettier.resolveConfig(repoPrettierConfigPath);
+  if (!options) {
+    throw new Error(`Unable to resolve Prettier config from ${repoPrettierConfigPath}`);
+  }
+  return options;
+}
+
+async function writeFormattedMarkdown(filePath, source, prettierOptions) {
+  const formatted = await prettier.format(source, {
+    ...prettierOptions,
+    filepath: filePath,
+  });
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, formatted, "utf8");
+}
+
+async function writeCoverageIndex(rootDir, prettierOptions) {
   const docsDir = path.join(rootDir, "docs", "coverage");
   const availableReports = [];
   for (const config of Object.values(reportConfigs)) {
@@ -350,18 +371,18 @@ function writeCoverageIndex(rootDir) {
   lines.push("");
 
   const indexPath = path.join(docsDir, "README.md");
-  fs.mkdirSync(docsDir, { recursive: true });
-  fs.writeFileSync(indexPath, lines.join("\n"), "utf8");
+  await writeFormattedMarkdown(indexPath, lines.join("\n"), prettierOptions);
   return indexPath;
 }
 
-export function writeCoverageMarkdownReports(options = {}) {
+export async function writeCoverageMarkdownReports(options = {}) {
   const rootDir = options.rootDir ?? process.cwd();
   const mode = options.mode ?? "all";
   if (!validModes.has(mode)) {
     throw new Error("Coverage Markdown mode must be one of: js, native, all");
   }
 
+  const prettierOptions = await resolveRepoPrettierOptions();
   const writtenPaths = [];
   for (const config of reportsForMode(mode)) {
     const lcovPath = path.join(rootDir, config.lcovPath);
@@ -373,11 +394,10 @@ export function writeCoverageMarkdownReports(options = {}) {
     const parsed = parseLcov(text, rootDir);
     const markdown = markdownForReport(config, parsed, rootDir);
     const markdownPath = path.join(rootDir, config.markdownPath);
-    fs.mkdirSync(path.dirname(markdownPath), { recursive: true });
-    fs.writeFileSync(markdownPath, markdown, "utf8");
+    await writeFormattedMarkdown(markdownPath, markdown, prettierOptions);
     writtenPaths.push(markdownPath);
   }
 
-  writtenPaths.push(writeCoverageIndex(rootDir));
+  writtenPaths.push(await writeCoverageIndex(rootDir, prettierOptions));
   return writtenPaths;
 }

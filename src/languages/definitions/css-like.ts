@@ -1,4 +1,17 @@
 import type { LanguageDefinition } from "../types.js";
+import { graphCapture } from "../graph-captures.js";
+
+const from = graphCapture("from");
+const stmt = graphCapture("stmt");
+
+const cssLikeImportQuery = `
+      (import_statement (string_value) ${from}) ${stmt}
+    `;
+
+const cssLikeLocalsQuery = `
+      (class_selector (class_name) @name)
+      (id_selector (id_name) @name)
+    `;
 
 export function cssLikeStructure(): LanguageDefinition["structure"] {
   return {
@@ -14,17 +27,10 @@ export function cssLikeStructure(): LanguageDefinition["structure"] {
 
 export function cssLikeGraph(): LanguageDefinition["graph"] {
   return {
-    imports: `
-      (import_statement (string_value) @mod) @stmt
-    `,
+    imports: cssLikeImportQuery,
     exports: "",
-    locals: `
-      (class_selector (class_name) @name)
-      (id_selector (id_name) @name)
-    `,
-    importBindings: `
-      (import_statement (string_value) @from) @stmt
-    `,
+    locals: cssLikeLocalsQuery,
+    importBindings: cssLikeImportQuery,
   };
 }
 

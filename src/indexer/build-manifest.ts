@@ -27,6 +27,25 @@ export function toManifestFileEntry(entry: GraphCacheEntry): ManifestFileEntry |
   };
 }
 
+/**
+ * Store the declared-container index with project-relative file paths, matching how manifest
+ * file keys are stored, so a relocated project root does not invalidate the index. Names and
+ * file lists are sorted for a stable serialized form.
+ */
+function serializeDeclaredContainers(
+  projectRoot: string,
+  index: Map<string, readonly string[]> | Record<string, readonly string[]>,
+): Record<string, string[]> {
+  const entries = index instanceof Map ? [...index] : Object.entries(index);
+  const serialized: Record<string, string[]> = {};
+  for (const [name, files] of entries.sort(([left], [right]) => left.localeCompare(right))) {
+    serialized[name] = files
+      .map((file) => cacheRelativePath(projectRoot, file))
+      .sort((left, right) => left.localeCompare(right));
+  }
+  return serialized;
+}
+
 function recordManifestTimingStep(timings: BuildReport["timings"] | undefined, name: string, startedAt: number): void {
   if (!timings) return;
   (timings.steps ??= []).push({ name, ms: Math.round(performance.now() - startedAt) });
@@ -42,6 +61,7 @@ export async function writeIndexManifestSnapshot(args: {
   allowEmpty?: boolean;
   transientFiles?: string[];
   symlinkDirectories?: string[];
+  declaredContainers?: Map<string, readonly string[]> | Record<string, readonly string[]>;
   resolverEnvironmentFingerprint?: string;
   /** When present, used verbatim instead of hashing config files again. */
   configHash?: { hash: string; error?: string };
@@ -74,6 +94,9 @@ export async function writeIndexManifestSnapshot(args: {
       ? { resolverEnvironmentFingerprint: args.resolverEnvironmentFingerprint }
       : {}),
     files: transformManifestEntries(args.projectRoot, files, true),
+    ...(args.declaredContainers !== undefined
+      ? { declaredContainers: serializeDeclaredContainers(args.projectRoot, args.declaredContainers) }
+      : {}),
     transientFiles: (args.transientFiles ?? []).map((file) =>
       path.relative(args.projectRoot, file).replace(/\\/g, "/"),
     ),

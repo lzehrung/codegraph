@@ -68,7 +68,7 @@ function markCandidateParserDegraded(index: indexer.ProjectIndex, file: string):
     supportedLanguageIds: [],
     filesUsed: 0,
     filesFellBack: 0,
-    fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 0 },
+    fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 0, sourceTooLarge: 0 },
     byLanguage: {},
     errors: [],
   };
@@ -2991,6 +2991,66 @@ describe("Find References", () => {
       expectReferenceAt(result, helperFile, 3);
       expectReferenceAt(result, consumerFile, 12);
     });
+
+    it("finds property and method navigation without same-named decoy or local uses", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-member-refs-"));
+      try {
+        const file = path.join(root, "box.kt").replace(/\\/g, "/");
+        const source = [
+          "class Box {",
+          "  val payload = 1",
+          "  fun ping(): Int = payload",
+          "}",
+          "class Decoy {",
+          "  val payload = 2",
+          "  fun ping(): Int = payload",
+          "}",
+          "fun use(box: Box) {",
+          "  val payload = 99",
+          "  val ping = 99",
+          "  val x = box.payload",
+          "  box.ping()",
+          "}",
+          "fun other(decoy: Decoy) {",
+          "  decoy.payload",
+          "  decoy.ping()",
+          "}",
+          "",
+        ].join("\n");
+        await fsp.writeFile(file, source, "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+        const columnOf = (line: number, token: string): number => {
+          const text = source.split("\n")[line - 1];
+          if (!text) throw new Error(`missing line ${line}`);
+          const indexOf = text.indexOf(token);
+          if (indexOf < 0) throw new Error(`token not found on line ${line}: ${token}`);
+          return indexOf + 1;
+        };
+
+        const payloadRefs = await testFindReferences(index, file, 2, columnOf(2, "payload"), 3);
+        expectReferenceAt(payloadRefs, file, 2);
+        expectReferenceAt(payloadRefs, file, 3);
+        expectReferenceAt(payloadRefs, file, 12);
+        if (payloadRefs.status === "ok") {
+          const payloadLines = payloadRefs.references.map((reference) => reference.range.start.line);
+          expect(payloadLines).not.toContain(6);
+          expect(payloadLines).not.toContain(10);
+          expect(payloadLines).not.toContain(16);
+        }
+
+        const pingRefs = await testFindReferences(index, file, 3, columnOf(3, "ping"), 2);
+        expectReferenceAt(pingRefs, file, 3);
+        expectReferenceAt(pingRefs, file, 13);
+        if (pingRefs.status === "ok") {
+          const pingLines = pingRefs.references.map((reference) => reference.range.start.line);
+          expect(pingLines).not.toContain(7);
+          expect(pingLines).not.toContain(11);
+          expect(pingLines).not.toContain(17);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("Swift", () => {
@@ -4161,6 +4221,30 @@ describe("Find References: Python receiver member resolution", () => {
     const { root, file, index } = await buildReceiverFixture();
     try {
       await testFindReferences(index, file, 56, columnOf(56, "shared"), 0, "not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: PHP unproven receiver is not a bare-name hit", () => {
+  it("does not treat $unknown->helper() as a reference to an imported helper", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-misattr-refs-"));
+    try {
+      const libFile = path.join(root, "lib.php").replace(/\\/g, "/");
+      const hostFile = path.join(root, "host.php").replace(/\\/g, "/");
+      await fsp.writeFile(libFile, ["<?php", "namespace Imported;", "function helper() {}", ""].join("\n"), "utf8");
+      const host = [
+        "<?php",
+        "use function Imported\\helper;",
+        "class Box { function helper() {} }",
+        "function run() { $unknown->helper(); }",
+        "",
+      ].join("\n");
+      await fsp.writeFile(hostFile, host, "utf8");
+      const index = await createTestIndexFromFiles(root, [libFile, hostFile]);
+      const helperColumn = host.split("\n")[3]!.indexOf("helper();") + 1;
+      await testFindReferences(index, hostFile, 4, helperColumn, 0, "not_found");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

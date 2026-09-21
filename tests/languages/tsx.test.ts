@@ -152,6 +152,39 @@ describe("TSX per-specifier type-only bindings", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps a default import named type as a runtime edge and binding", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-tsx-type-binding-"));
+    const mod = path.join(root, "mod.tsx");
+    const types = path.join(root, "types.tsx");
+    const consumer = path.join(root, "consumer.tsx");
+    try {
+      await writeFile(mod, "export default 1;\n", "utf8");
+      await writeFile(types, "export class Widget {}\n", "utf8");
+      await writeFile(
+        consumer,
+        ['import type from "./mod";', 'import type { Widget } from "./types";', ""].join("\n"),
+        "utf8",
+      );
+      const index = await createTestIndexFromFiles(root, [mod, types, consumer]);
+      const module = index.byFile.get(fileIdentityKey(consumer));
+      const typeOnlyImports = (module?.imports ?? []).filter((binding) => binding.typeOnly);
+      expect(typeOnlyImports).toEqual([expect.objectContaining({ from: "./types", typeOnly: true })]);
+      // Assert the binding exists and is runtime: `find(...)?.typeOnly` with `toBeFalsy` also
+      // passes when the default binding is missing entirely.
+      expect((module?.imports ?? []).filter((binding) => binding.from === "./mod")).toEqual([
+        expect.objectContaining({ from: "./mod", kind: "default", local: "type", typeOnly: false }),
+      ]);
+
+      const fromConsumer = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(consumer));
+      const typeOnlyTargets = fromConsumer
+        .filter((edge) => edge.typeOnly)
+        .map((edge) => (edge.to.type === "file" ? edge.to.path : edge.to.name));
+      expect(typeOnlyTargets).toEqual([types.replace(/\\/g, "/")]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("TSX declaration-only exports", () => {
