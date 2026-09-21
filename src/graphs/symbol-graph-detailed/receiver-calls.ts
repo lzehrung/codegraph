@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { findCommentEnd } from "../../impact/call-compatibility/text-scanner.js";
 import { SymbolKind, type SymbolDef } from "../../indexer/types.js";
 import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
@@ -86,6 +87,9 @@ const MEMBER_CONTAINER_TYPES: Record<string, true> = {
   struct_specifier: true,
   trait_declaration: true,
   trait_item: true,
+  // C/C++ unions declare members exactly like structs (tree-sitter-cpp captures
+  // union names and classifies them as classes).
+  union_specifier: true,
 };
 
 /** Nodes holding a call's argument list across the supported grammars. */
@@ -838,16 +842,151 @@ export function nearestMemberContainer(node: SyntaxNodeLike): SyntaxNodeLike | n
   return null;
 }
 
-/** Positional argument count of a call, ignoring comments. */
-export function callArgumentCount(callNode: SyntaxNodeLike): number {
-  const explicit = callNode.childForFieldName("arguments") ?? callNode.childForFieldName("argument_list");
-  let argumentNode =
-    explicit ?? (callNode.namedChildren ?? []).find((child) => CALL_ARGUMENT_NODE_TYPES[child.type]) ?? null;
+/** Positional argument count of a call, including Kotlin/Swift trailing lambdas. */
+export function callArgumentCount(callNode: SyntaxNodeLike, source: string): number {
+  // Kotlin wraps `pick(1) { }` in an outer call node whose only other child is the
+  // callee call; the trailing lambda belongs to the inner call's argument list.
+  let scope = callNode;
+  for (let wrapper = trailingLambdaWrapper(scope); wrapper; wrapper = trailingLambdaWrapper(scope)) {
+    scope = wrapper;
+  }
+
+  let argumentNode: SyntaxNodeLike | null =
+    callNode.childForFieldName("arguments") ??
+    callNode.childForFieldName("argument_list") ??
+    (callNode.namedChildren ?? []).find((child) => CALL_ARGUMENT_NODE_TYPES[child.type]) ??
+    null;
   if (argumentNode?.type === "call_suffix") {
     argumentNode = (argumentNode.namedChildren ?? []).find((child) => child.type === "value_arguments") ?? null;
   }
-  if (!argumentNode) return 0;
-  return (argumentNode.namedChildren ?? []).filter((argument) => argument.type !== "comment").length;
+  if (!argumentNode) {
+    // Swift allows a call suffix with only a trailing lambda (`pick { }`), and Kotlin
+    // `pick { }` keeps the lambda directly on the call node: no argument list exists.
+    const suffix = (callNode.namedChildren ?? []).find((child) => child.type === "call_suffix");
+    return ((suffix ?? scope).namedChildren ?? []).filter(
+      (child) => TRAILING_LAMBDA_NODE_TYPES[child.type] && child.startIndex >= callNode.startIndex,
+    ).length;
+  }
+
+  let count = (argumentNode.namedChildren ?? []).filter((argument) => argument.type !== "comment").length;
+  const trailingEnd = argumentNode.parent?.type === "call_suffix" ? argumentNode.parent.endIndex : scope.endIndex;
+  if (trailingEnd > argumentNode.endIndex && containsTrailingLambdaNode(scope, argumentNode.endIndex, trailingEnd)) {
+    count += countTrailingClosureArguments(source.slice(argumentNode.endIndex, trailingEnd)) ?? 0;
+  }
+  return count;
+}
+
+/** Trailing lambda nodes across the supported grammars. */
+const TRAILING_LAMBDA_NODE_TYPES: Record<string, true> = {
+  annotated_lambda: true, // Kotlin wraps the lambda on the outer call node.
+  lambda_literal: true, // Swift keeps trailing lambdas inside `call_suffix`.
+};
+
+/** Call nodes that can wrap a callee call plus a Kotlin trailing lambda. */
+const TRAILING_LAMBDA_WRAPPER_TYPES: Record<string, true> = {
+  call: true,
+  call_expression: true,
+};
+
+/**
+ * The outer call node attaching a trailing lambda to `node`, or null. The wrapper
+ * never carries its own argument list, which distinguishes it from a chained call.
+ */
+function trailingLambdaWrapper(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  const parent = node.parent;
+  if (!parent || !TRAILING_LAMBDA_WRAPPER_TYPES[parent.type]) return null;
+  const children = parent.namedChildren ?? [];
+  if (children.some((child) => CALL_ARGUMENT_NODE_TYPES[child.type])) return null;
+  return children.some((child) => TRAILING_LAMBDA_NODE_TYPES[child.type]) ? parent : null;
+}
+
+/** Whether a trailing lambda node overlaps `[start, end)` anywhere under `node`. */
+function containsTrailingLambdaNode(node: SyntaxNodeLike, start: number, end: number): boolean {
+  for (const child of node.namedChildren ?? []) {
+    if (child.endIndex <= start || child.startIndex >= end) continue;
+    if (TRAILING_LAMBDA_NODE_TYPES[child.type]) return true;
+    if (containsTrailingLambdaNode(child, start, end)) return true;
+  }
+  return false;
+}
+
+/**
+ * Counts the top-level `{ ... }` blocks in trailing call text, one per trailing
+ * closure, or null when the text is not a well-formed trailing-closure run.
+ * Shared with call-compatibility extraction so both paths count identically.
+ */
+export function countTrailingClosureArguments(text: string): number | null {
+  let startIndex = 0;
+  let count = 0;
+
+  while (startIndex < text.length) {
+    while (/\s/.test(text[startIndex] ?? "")) {
+      startIndex += 1;
+    }
+    if (startIndex === text.length) {
+      return count;
+    }
+    if (text[startIndex] !== "{") {
+      return null;
+    }
+
+    let braceDepth = 0;
+    let quote: string | null = null;
+    let escaped = false;
+    let closed = false;
+    for (let index = startIndex; index < text.length; index += 1) {
+      const char = text[index];
+      if (quote) {
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (char === "\\") {
+          escaped = true;
+          continue;
+        }
+        if (char === quote) {
+          quote = null;
+        }
+        continue;
+      }
+
+      const commentEnd = findCommentEnd(text, index);
+      if (commentEnd !== null) {
+        if (commentEnd < 0) {
+          return null;
+        }
+        index = commentEnd - 1;
+        continue;
+      }
+
+      if (char === '"' || char === "'" || char === "`") {
+        quote = char;
+        continue;
+      }
+      if (char === "{") {
+        braceDepth += 1;
+        continue;
+      }
+      if (char === "}") {
+        braceDepth -= 1;
+        if (braceDepth < 0) {
+          return null;
+        }
+        if (!braceDepth) {
+          startIndex = index + 1;
+          count += 1;
+          closed = true;
+          break;
+        }
+      }
+    }
+    if (!closed) {
+      return null;
+    }
+  }
+
+  return count;
 }
 
 function parseDefNodeId(id: string): { file: string; name: string; index: number } | null {

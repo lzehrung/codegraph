@@ -34,7 +34,10 @@ import {
 } from "./call-compatibility/text-scanner.js";
 
 import type { ReferenceLookupCache } from "./reference-cache.js";
-import { PARAMETER_LIST_NODE_TYPES } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import {
+  countTrailingClosureArguments,
+  PARAMETER_LIST_NODE_TYPES,
+} from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
   directSignatureParameterNode,
   findAncestorOfTypes,
@@ -168,6 +171,7 @@ const callableDeclarationTypes = new Set([
   "method",
   "singleton_method",
   "method_declaration",
+  "local_function_statement",
   "constructor_declaration",
   "init_declaration",
   "protocol_function_declaration",
@@ -554,80 +558,6 @@ const callExpressionTypes = new Set([
 ]);
 
 const argumentListTypes = new Set(["argument_list", "arguments", "value_arguments", "call_suffix"]);
-
-function countTrailingClosureArguments(text: string): number | null {
-  let startIndex = 0;
-  let count = 0;
-
-  while (startIndex < text.length) {
-    while (/\s/.test(text[startIndex] ?? "")) {
-      startIndex += 1;
-    }
-    if (startIndex === text.length) {
-      return count;
-    }
-    if (text[startIndex] !== "{") {
-      return null;
-    }
-
-    let braceDepth = 0;
-    let quote: string | null = null;
-    let escaped = false;
-    let closed = false;
-    for (let index = startIndex; index < text.length; index += 1) {
-      const char = text[index];
-      if (quote) {
-        if (escaped) {
-          escaped = false;
-          continue;
-        }
-        if (char === "\\") {
-          escaped = true;
-          continue;
-        }
-        if (char === quote) {
-          quote = null;
-        }
-        continue;
-      }
-
-      const commentEnd = findCommentEnd(text, index);
-      if (commentEnd !== null) {
-        if (commentEnd < 0) {
-          return null;
-        }
-        index = commentEnd - 1;
-        continue;
-      }
-
-      if (char === '"' || char === "'" || char === "`") {
-        quote = char;
-        continue;
-      }
-      if (char === "{") {
-        braceDepth += 1;
-        continue;
-      }
-      if (char === "}") {
-        braceDepth -= 1;
-        if (braceDepth < 0) {
-          return null;
-        }
-        if (!braceDepth) {
-          startIndex = index + 1;
-          count += 1;
-          closed = true;
-          break;
-        }
-      }
-    }
-    if (!closed) {
-      return null;
-    }
-  }
-
-  return count;
-}
 
 function findCallsiteArgumentText(
   request: ExtractCallsiteArgumentsRequest,

@@ -10,6 +10,7 @@ import { collectNodesByType, findFirstNodeByType, isIdentifierType } from "./ast
 import {
   CALL_ARGUMENT_NODE_TYPES,
   callArgumentCount,
+  PARAMETER_LIST_NODE_TYPES,
   classifyReceiver,
   declaresMembers,
   nearestMemberContainer,
@@ -39,6 +40,8 @@ type EdgePassContext = {
   receiverCalls: ReceiverCallCandidate[];
   /** Whether any indexed project file declares a callable with this name. */
   hasCallableNamed: (name: string) => boolean;
+  /** Registers a name the detailed pass proved callable (function-valued bindings). */
+  noteCallableName: (name: string) => void;
 };
 
 function ensureNode(context: EdgePassContext, def: SymbolDef): string {
@@ -62,18 +65,24 @@ function markImplementationTarget(
 function markMemberArity(context: EdgePassContext, id: string, declarationNode: SyntaxNodeLike): void {
   let parameters = declarationNode.childForFieldName("parameters");
   if (!parameters) {
-    for (const type of [
-      "formal_parameters",
-      "parameter_list",
-      "parameters",
-      "method_parameters",
-      "function_parameter_clause",
-    ]) {
+    // Shared with call-compatibility so the two arity sources never drift. Block and
+    // lambda parameter clauses are nested-scope shapes: a declaration's own clause
+    // never has to be searched for them (a Ruby `def` without parens must not adopt
+    // a nested block's parameters).
+    for (const type of Object.keys(PARAMETER_LIST_NODE_TYPES)) {
+      if (type === "block_parameters" || type === "lambda_parameters") continue;
       parameters = findFirstNodeByType(declarationNode, type);
       if (parameters) break;
     }
   }
-  if (!parameters) return;
+  if (!parameters) {
+    // Swift declarations have no parameter-clause node: parameters are direct children.
+    const directParameters = (declarationNode.namedChildren ?? []).filter((child) => child.type === "parameter");
+    if (!directParameters.length) return;
+    const node = context.nodes.get(id);
+    if (node) node.memberArity = directParameters.length;
+    return;
+  }
   const arity = (parameters.namedChildren ?? []).filter((child) => child.type !== "comment").length;
   const node = context.nodes.get(id);
   if (node) node.memberArity = arity;
@@ -223,6 +232,9 @@ function memberOwnerDef(
   if (context.sup.id === "go" && fn.node.type === "method_declaration") {
     return goMethodReceiverTypeDef(context, fn.node);
   }
+  // A C# local function belongs to its enclosing method scope, not the class the
+  // method declares, even though the class lexically contains it.
+  if (fn.node.type === "local_function_statement") return null;
   const owners = classNodes
     .filter(
       (candidate) => candidate.node.startIndex <= fn.node.startIndex && candidate.node.endIndex >= fn.node.endIndex,
@@ -315,6 +327,13 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
 
   for (const fn of functionNodes) {
     const fromId = ensureNode(context, fn.def);
+    const provenNode = context.nodes.get(fromId);
+    // Function-valued bindings (`const helper = () => 1`) keep their `variable` kind;
+    // the callable metadata records that this binding was proven to hold a function.
+    if (provenNode && provenNode.kind !== "function") {
+      provenNode.callable = true;
+      context.noteCallableName(fn.name);
+    }
     const seenAliases = new Set<string>();
     const nestedFunctions = new Set(
       functionNodes
@@ -387,7 +406,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
       if (!binding) return;
 
       const site = { file: context.moduleEntry.file, range: toRange(access.property) };
-      const argumentCount = callArgumentCount(node);
+      const argumentCount = callArgumentCount(node, context.source);
       if (binding.kind === "named-type") {
         const typeDef = resolveNamedType(context, binding.typeName, access.receiver);
         if (!typeDef) return;

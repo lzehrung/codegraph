@@ -72,6 +72,9 @@ export function collectDetailedDeclarations(
     "method",
     "protocol_function_declaration",
     "singleton_method",
+    // C# local functions are callable in their own right; ownership stays with the
+    // enclosing method, not the containing class.
+    "local_function_statement",
   ]);
   const typeNodeTypes = new Set([
     "class_declaration",
@@ -88,6 +91,9 @@ export function collectDetailedDeclarations(
     "struct_declaration",
     "class_specifier",
     "struct_specifier",
+    // C/C++ unions declare members like structs (cpp.ts captures and classifies
+    // union names as classes).
+    "union_specifier",
     // Go methods sit beside the type, not inside it. Collect the type_spec so
     // member_of can name the receiver type the same way class bodies do.
     "type_spec",

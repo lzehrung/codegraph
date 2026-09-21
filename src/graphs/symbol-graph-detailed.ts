@@ -139,7 +139,7 @@ export async function buildSymbolGraphDetailed(
   // APIs, which dominate real call sites. Built on first use because a scoped graph
   // may never reach a receiver call.
   let callableNames: Set<string> | undefined;
-  const hasCallableNamed = (name: string): boolean => {
+  const ensureCallableNames = (): Set<string> => {
     if (!callableNames) {
       callableNames = new Set<string>();
       for (const entry of index.byFile.values()) {
@@ -148,7 +148,14 @@ export async function buildSymbolGraphDetailed(
         }
       }
     }
-    return callableNames.has(name);
+    return callableNames;
+  };
+  const hasCallableNamed = (name: string): boolean => ensureCallableNames().has(name);
+  // Function-valued bindings (`const helper = () => 1`) index as variables, so the
+  // kind scan above cannot see them; the detailed pass mirrors each name it proves
+  // callable here as its files are processed.
+  const noteCallableName = (name: string): void => {
+    ensureCallableNames().add(name);
   };
 
   const optionFileKeys = opts?.files ? new Set(Array.from(opts.files, fileIdentityKey)) : undefined;
@@ -254,6 +261,7 @@ export async function buildSymbolGraphDetailed(
         recordEdge,
         receiverCalls,
         hasCallableNamed,
+        noteCallableName,
       };
       emitPythonDecoratorEdges(edgePassContext, tree.rootNode);
       emitFunctionBodyEdges(edgePassContext, functionNodes);

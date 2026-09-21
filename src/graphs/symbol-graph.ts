@@ -31,6 +31,8 @@ export type SymbolNode = {
   visibility?: SymbolVisibility;
   implementationTarget?: boolean;
   memberArity?: number;
+  /** The detailed pass proved this binding holds a function (e.g. `const f = () => 1`). */
+  callable?: true;
 };
 
 export type SymbolEdge = {
