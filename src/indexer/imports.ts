@@ -23,6 +23,7 @@ import type { NativeQueryExecution, NativeQueryResults, NativeRuntimeMode } from
 import type { ModuleSpecifierResolutionKind } from "../util/specifiers.js";
 import type { ResolvedImportTarget } from "./imports/context.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia } from "./imports/binding-ranges.js";
+import { IMPORT_BINDING_ROWS } from "./imports/import-binding-tables.js";
 import { collectGraphOnlyImports } from "./imports/graph-only.js";
 import { collectJsTextImports, collectJsTextValueRequireImports } from "./imports/js-text-imports.js";
 import {
@@ -192,7 +193,7 @@ export async function collectImportsForFile(
         text: maskImportBindingTrivia(stmtText, resolvedSup.id),
         textStartIndex: statementStartIndex,
         source: resolvedSource,
-        alwaysAliased: resolvedSup.id === "csharp",
+        alwaysAliased: IMPORT_BINDING_ROWS[resolvedSup.id]?.alwaysAliased === true,
       });
     }
     return handled;
