@@ -395,7 +395,10 @@ async function baseRefsFromContainer(
   const seen = new Set<string>();
   for (const name of names) {
     const def = resolveNamedMemberContainer(index, mod, name, sup.normalizeIdentifier);
-    if (!def) continue;
+    // `super`, `base`, and `parent` follow class ancestors only. A flat base list mixes the
+    // superclass with interfaces or protocols in C#, Kotlin, and Swift, so an interface member
+    // would otherwise answer a keyword that the language resolves against the base class.
+    if (!def || def.kind !== SymbolKind.Class) continue;
     const key = keywordClassKey(def);
     if (seen.has(key)) continue;
     seen.add(key);

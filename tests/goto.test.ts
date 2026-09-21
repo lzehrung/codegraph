@@ -3224,4 +3224,57 @@ describe("Supertype keyword member navigation", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("skips an interface base when a class ancestor declares the member", async () => {
+    // `base` follows class ancestors. C# lists the superclass and every interface in one
+    // `base_list`, so an interface declaration must never answer the keyword.
+    const source = [
+      "interface IShape {",
+      "  int Area();",
+      "}",
+      "class Base {",
+      "  public virtual int Area() { return 1; }",
+      "}",
+      "class Square : Base, IShape {",
+      "  public override int Area() { return base.Area(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cs-base-interface-goto-", { "shapes.cs": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["shapes.cs"]!,
+        line: 8,
+        column: columnOf(source, 8, "Area();"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.definition.range.start.line).toBe(5);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve base.Area() to an interface-only base", async () => {
+    const source = [
+      "interface IShape {",
+      "  int Area();",
+      "}",
+      "class Square : IShape {",
+      "  public int Area() { return base.Area(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cs-base-interface-only-goto-", { "shapes.cs": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["shapes.cs"]!,
+        line: 5,
+        column: columnOf(source, 5, "Area();"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
