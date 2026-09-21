@@ -74,6 +74,15 @@ const PHP_CASE_SENSITIVE_SYMBOL_KINDS: Record<string, true> = {
   [SymbolKind.Default]: true,
 };
 
+/**
+ * Whether PHP resolves this symbol kind's name case-insensitively. Bloom-filter narrowing
+ * stores each candidate file's identifiers with that file's own spelling, so a case-variant
+ * reference would be filtered out before collection ever runs.
+ */
+export function isPhpCaseInsensitiveSymbolKind(kind: string): boolean {
+  return PHP_CASE_INSENSITIVE_SYMBOL_KINDS[kind] === true;
+}
+
 export function foldPhpIdentifierCase(value: string): string {
   let folded = "";
   for (let index = 0; index < value.length; index += 1) {

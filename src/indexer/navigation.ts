@@ -12,6 +12,7 @@ import { createNavigationProvenance, okGoToResult } from "./navigation-provenanc
 import {
   getPhpQualifiedReference,
   inferPhpQualifiedReferenceImportType,
+  isPhpCaseInsensitiveSymbolKind,
   normalizePhpQualifiedReference,
 } from "./navigation-php.js";
 import {
@@ -446,7 +447,13 @@ async function findReferencesInternal(
   const phpQualifiedNames = await buildPhpQualifiedNames(index, definitionFile, def);
 
   let candidateFiles = getCachedReferenceCandidateFiles(index, def, exportedNames, !!phpQualifiedNames.length);
-  if (index.bloomFilters && phpQualifiedNames.length) {
+  // A bloom filter holds each candidate file's identifiers in that file's own spelling, and a
+  // probe can only test one spelling. PHP resolves class, interface, trait, enum, and function
+  // names case-insensitively, so `new \App\sErViCe()` stores `sErViCe` while the probe carries
+  // `Service`: narrowing would drop a legal reference. Skip it for those kinds and let the
+  // name comparator decide. Variables, properties, and constants stay case-sensitive and narrow.
+  const phpCaseInsensitiveDefinition = phpQualifiedNames.length > 0 && isPhpCaseInsensitiveSymbolKind(def.kind);
+  if (index.bloomFilters && phpQualifiedNames.length && !phpCaseInsensitiveDefinition) {
     candidateFiles = candidateFiles.filter((candidateFile) => {
       const module = index.byFile.get(fileIdentityKey(candidateFile));
       if (!module) return true;

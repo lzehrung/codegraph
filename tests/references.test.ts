@@ -4431,6 +4431,32 @@ describe("Find References: PHP trait case-insensitivity", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps a case-variant consumer past bloom-filter narrowing", async () => {
+    // Bloom filters hold each candidate file's identifiers in that file's own spelling, and a
+    // probe can only carry one spelling. A PHP class name is case-insensitive, so narrowing
+    // would drop `sErViCe` before the comparator ever sees it.
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-bloom-case-"));
+    try {
+      const serviceFile = path.join(root, "service.php").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+      await fsp.writeFile(
+        serviceFile,
+        ["<?php", "namespace App;", "class Service {", "  public function run() { return 1; }", "}", ""].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(consumerFile, ["<?php", "$svc = new \\App\\sErViCe();", ""].join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [serviceFile, consumerFile]);
+      expect(index.bloomFilters).toBeDefined();
+
+      const result = await indexer.findReferences(index, { file: serviceFile, line: 3, column: 7 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expectReferenceAt(result, consumerFile, 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Find References: same-file strategy execution", () => {
