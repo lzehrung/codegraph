@@ -78,7 +78,6 @@ export type DynamicImportCallShape = {
 };
 
 export type DynamicImportEntry = {
-  languageId: string;
   /** Matching text, blanking comments through the shared trivia lexer where needed; string
    * literals stay intact so folds can read their contents. */
   text: (source: string) => string;
@@ -131,6 +130,8 @@ const PYTHON_DYNAMIC_CALL_PREFIX_PATTERN = new RegExp(
   "gmu",
 );
 
+type DynamicImportLanguageId = "js" | "ts" | "python" | "ruby" | "php";
+
 /**
  * Builds the dynamic-import adapter table keyed by registered language id. Callers supply the
  * shared fold implementation; the per-file preparation and matching rules stay here with the
@@ -138,9 +139,8 @@ const PYTHON_DYNAMIC_CALL_PREFIX_PATTERN = new RegExp(
  */
 export function createDynamicImportEntries(
   folds: DynamicImportFoldHelpers,
-): Readonly<Record<string, DynamicImportEntry>> {
+): Readonly<Partial<Record<string, DynamicImportEntry>>> {
   const JS_TS_DYNAMIC_IMPORT_ENTRY: DynamicImportEntry = {
-    languageId: "js",
     // Comments are blanked before matching so a `require(...)` inside a comment cannot match;
     // string literals stay intact because the fold reads their contents.
     text: stripJsLikeComments,
@@ -161,7 +161,6 @@ export function createDynamicImportEntries(
   };
 
   const RUBY_DYNAMIC_IMPORT_ENTRY: DynamicImportEntry = {
-    languageId: "ruby",
     text: (source) => source,
     guard: (text) => buildTriviaMask(text, "ruby"),
     shapes: [
@@ -175,7 +174,6 @@ export function createDynamicImportEntries(
   };
 
   const PHP_DYNAMIC_IMPORT_ENTRY: DynamicImportEntry = {
-    languageId: "php",
     text: (source) => source,
     guard: (text) => buildTriviaMask(text, "php"),
     shapes: [
@@ -190,7 +188,6 @@ export function createDynamicImportEntries(
   };
 
   const PYTHON_DYNAMIC_IMPORT_ENTRY: DynamicImportEntry = {
-    languageId: "python",
     text: (source) => source,
     guard: (text) => buildTriviaMask(text, "python"),
     prepare: (source) => {
@@ -205,11 +202,12 @@ export function createDynamicImportEntries(
     ],
   };
 
-  return {
+  const entries = {
     js: JS_TS_DYNAMIC_IMPORT_ENTRY,
     ts: JS_TS_DYNAMIC_IMPORT_ENTRY,
     python: PYTHON_DYNAMIC_IMPORT_ENTRY,
     ruby: RUBY_DYNAMIC_IMPORT_ENTRY,
     php: PHP_DYNAMIC_IMPORT_ENTRY,
-  };
+  } satisfies Record<DynamicImportLanguageId, DynamicImportEntry>;
+  return entries;
 }
