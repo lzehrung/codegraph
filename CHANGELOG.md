@@ -9,6 +9,13 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Fixed
+
+- Kotlin and Swift member calls resolve when the member name is overloaded. Member arity was never computed for either language, because the arity pass kept a private parameter-node list that omitted Kotlin's `function_value_parameters`, and Swift declarations carry bare `parameter` children with no clause node. Exact arity is the only overload discriminator, so every ambiguous receiver call was dropped. Kotlin and Swift trailing closures now also count as arguments, matching what call-compatibility already reported for the same source.
+- C++ union member functions get an owner, so receiver calls through a union resolve. A changed C# local function reports its own arity instead of the enclosing method's. Call hierarchy accepts a proven function-valued binding such as `const helper = () => 1` rather than rejecting it as an invalid target.
+- PHP references find global-namespace symbols and case-variant spellings. A consumer without a `use` statement was never treated as a candidate file, and PHP class, function, and namespace names were compared case-sensitively although the language is not.
+- `referenceCoverage` no longer reports `complete` when a reference strategy the definition's language requires never ran. It reports `partial` with the new `strategy_unavailable` or `name_equivalence_unavailable` reason, which `rename.safe` and impact consume.
+
 ## [2.3.31] - 2026-09-21
 
 ### Changed
