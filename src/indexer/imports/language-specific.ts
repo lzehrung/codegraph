@@ -147,9 +147,8 @@ export async function finalizeLanguageSpecificImports(context: LanguageSpecificI
 }
 
 function masksStatementTrivia(row: ImportBindingRow, normalizedStmt: string): boolean {
-  if (row.maskTrivia === true) return true;
   if (row.maskTrivia === "use-keyword") return /^\s*use\b/i.test(normalizedStmt);
-  return false;
+  return row.maskTrivia ?? false;
 }
 
 function parserTextForStatement(row: ImportBindingRow, languageId: string, normalizedStmt: string): string {

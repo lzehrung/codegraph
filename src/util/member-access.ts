@@ -60,7 +60,7 @@ export function memberAccessTraversalTypes(sup: LanguageSupport): Set<string> {
 export function isMemberAccessNode(sup: LanguageSupport, node: SyntaxNodeLike): boolean {
   return (
     node.type === memberExpressionTypeFor(sup) ||
-    GENERIC_MEMBER_ACCESS_TYPES[node.type] === true ||
+    GENERIC_MEMBER_ACCESS_TYPES[node.type] ||
     (MEMBER_ACCESS_ROWS[sup.id]?.extraMemberAccessTypes?.includes(node.type) ?? false)
   );
 }

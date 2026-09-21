@@ -193,7 +193,7 @@ export async function collectImportsForFile(
         text: maskImportBindingTrivia(stmtText, resolvedSup.id),
         textStartIndex: statementStartIndex,
         source: resolvedSource,
-        alwaysAliased: IMPORT_BINDING_ROWS[resolvedSup.id]?.alwaysAliased === true,
+        alwaysAliased: IMPORT_BINDING_ROWS[resolvedSup.id]?.alwaysAliased,
       });
     }
     return handled;
