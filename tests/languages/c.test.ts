@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,6 +8,8 @@ import { collectImportsForFile } from "../../src/indexer.js";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
 import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js";
 
+import { buildProjectIndex, buildScopeIndexFromSource, findReferences, goToDefinition } from "../../src/index.js";
+import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -140,6 +142,179 @@ function cFamilyIncludeCaptureTexts(
     match.captures.filter((capture) => capture.name === "from").map((capture) => capture.text),
   );
 }
+
+describe("C quoted include resolution and same-file references", () => {
+  it("resolves bare and subdirectory quoted includes while preserving explicit and angle forms", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-quoted-includes-"));
+    const siblingHeader = path.join(root, "lib.h");
+    const nestedHeader = path.join(root, "inc", "lib.h");
+    const bareFile = path.join(root, "main-bare.c");
+    const nestedFile = path.join(root, "main-subdirectory.c");
+    const relativeFile = path.join(root, "main-relative.c");
+    const angleFile = path.join(root, "main-angle.c");
+    const bareSource = '#include "lib.h"\nint main(void) { return helper(1); }\n';
+    const nestedSource = '#include "inc/lib.h"\nint main(void) { return nested_helper(1); }\n';
+    const relativeSource = '#include "./lib.h"\nint main(void) { return helper(1); }\n';
+    try {
+      await mkdir(path.dirname(nestedHeader), { recursive: true });
+      await Promise.all([
+        writeFile(siblingHeader, "int helper(int a);\n", "utf8"),
+        writeFile(nestedHeader, "int nested_helper(int a);\n", "utf8"),
+        writeFile(bareFile, bareSource, "utf8"),
+        writeFile(nestedFile, nestedSource, "utf8"),
+        writeFile(relativeFile, relativeSource, "utf8"),
+        writeFile(angleFile, "#include <lib.h>\nint main(void) { return 0; }\n", "utf8"),
+      ]);
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const importTarget = (file: string) => index.byFile.get(fileIdentityKey(file))?.imports[0]?.resolved;
+      expect(importTarget(bareFile)).toBe(normalizePath(siblingHeader));
+      expect(importTarget(nestedFile)).toBe(normalizePath(nestedHeader));
+      expect(importTarget(relativeFile)).toBe(normalizePath(siblingHeader));
+      expect(importTarget(angleFile)).toEqual({ external: "<lib.h>" });
+
+      const bareCallColumn = bareSource.split("\n")[1]!.indexOf("helper") + 1;
+      const bareGoto = await goToDefinition(index, { file: bareFile, line: 2, column: bareCallColumn });
+      expect(bareGoto.status).toBe("ok");
+      if (bareGoto.status === "ok") {
+        expect(bareGoto.definition.file).toBe(normalizePath(siblingHeader));
+        expect(bareGoto.definition.range.start.line).toBe(1);
+      }
+
+      const siblingRefs = await findReferences(index, { file: siblingHeader, line: 1, column: 5 });
+      expect(siblingRefs.status).toBe("ok");
+      if (siblingRefs.status === "ok") {
+        expect(
+          siblingRefs.references.map((reference) => ({
+            file: normalizePath(reference.file),
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          })),
+        ).toEqual(
+          expect.arrayContaining([
+            { file: normalizePath(siblingHeader), line: 1, column: 5 },
+            { file: normalizePath(bareFile), line: 2, column: bareCallColumn },
+          ]),
+        );
+      }
+
+      const nestedCallColumn = nestedSource.split("\n")[1]!.indexOf("nested_helper") + 1;
+      const nestedGoto = await goToDefinition(index, { file: nestedFile, line: 2, column: nestedCallColumn });
+      expect(nestedGoto.status).toBe("ok");
+      if (nestedGoto.status === "ok") {
+        expect(nestedGoto.definition.file).toBe(normalizePath(nestedHeader));
+        expect(nestedGoto.definition.range.start.line).toBe(1);
+      }
+
+      const nestedRefs = await findReferences(index, { file: nestedHeader, line: 1, column: 5 });
+      expect(nestedRefs.status).toBe("ok");
+      if (nestedRefs.status === "ok") {
+        expect(
+          nestedRefs.references.map((reference) => ({
+            file: normalizePath(reference.file),
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          })),
+        ).toEqual(
+          expect.arrayContaining([
+            { file: normalizePath(nestedHeader), line: 1, column: 5 },
+            { file: normalizePath(nestedFile), line: 2, column: nestedCallColumn },
+          ]),
+        );
+      }
+
+      const relativeCallColumn = relativeSource.split("\n")[1]!.indexOf("helper") + 1;
+      const relativeGoto = await goToDefinition(index, { file: relativeFile, line: 2, column: relativeCallColumn });
+      expect(relativeGoto.status).toBe("ok");
+      if (relativeGoto.status === "ok") {
+        expect(relativeGoto.definition.file).toBe(normalizePath(siblingHeader));
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("attaches C calls to one enclosing function binding despite a local decoy", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-same-file-refs-"));
+    const file = path.join(root, "main.c");
+    const source = [
+      "int helper(void) { return 1; }",
+      "int run(void) { return helper(); }",
+      "int decoy_host(void) {",
+      "  int helper = 2;",
+      "  return helper;",
+      "}",
+      "",
+    ].join("\n");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const scope = buildScopeIndexFromSource(file, source, C_SUPPORT);
+      const functionBindings = scope.all.filter((binding) => binding.kind === "function");
+      expect(functionBindings.map((binding) => binding.def?.start.index).sort((left, right) => left! - right!)).toEqual(
+        [source.indexOf("helper"), source.indexOf("run"), source.indexOf("decoy_host")].sort(
+          (left, right) => left - right,
+        ),
+      );
+
+      const callColumn = source.split("\n")[1]!.indexOf("helper") + 1;
+      const gotoResult = await goToDefinition(index, { file, line: 2, column: callColumn });
+      expect(gotoResult.status).toBe("ok");
+      if (gotoResult.status === "ok") {
+        expect(gotoResult.definition.range.start.line).toBe(1);
+        expect(gotoResult.definition.range.start.column).toBe(5);
+      }
+
+      const refs = await findReferences(index, { file, line: 1, column: 5 });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(
+          refs.references.map((reference) => ({
+            file: normalizePath(reference.file),
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          })),
+        ).toEqual([
+          { file: normalizePath(file), line: 1, column: 5 },
+          { file: normalizePath(file), line: 2, column: callColumn },
+        ]);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps parameters navigable after the function name registers in the enclosing scope", async () => {
+    // The declarator chain that carries a C function name also carries its parameter list, so a
+    // fix that hides `function_declarator` from the child walk silently drops every parameter
+    // binding while function-name references keep working.
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-parameter-scope-"));
+    const file = path.join(root, "main.c");
+    const source = ["int helper(int value) {", "  return value + 1;", "}", ""].join("\n");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const scope = buildScopeIndexFromSource(file, source, C_SUPPORT);
+      expect(scope.all.filter((binding) => binding.kind === "param").map((binding) => binding.name)).toEqual(["value"]);
+
+      const useColumn = source.split("\n")[1]!.indexOf("value") + 1;
+      const gotoResult = await goToDefinition(index, { file, line: 2, column: useColumn });
+      expect(gotoResult.status).toBe("ok");
+      if (gotoResult.status === "ok") {
+        expect(gotoResult.definition.range.start.line).toBe(1);
+        expect(gotoResult.definition.localName).toBe("value");
+      }
+
+      const refs = await findReferences(index, { file, line: 1, column: source.indexOf("value") + 1 });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual([1, 2]);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("C native queries", () => {
   it("keeps literal and identifier includes and rejects function-like include macros", async () => {

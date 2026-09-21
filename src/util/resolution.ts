@@ -218,6 +218,31 @@ export async function resolveImportSpecifier(
     if (cppHit) return cppHit;
     if (isCppNamedModuleSpecifier(spec)) return { external: spec };
   }
+  if (
+    (languageId === "c" || languageId === "cpp") &&
+    !(spec.startsWith("<") && spec.endsWith(">")) &&
+    !spec.startsWith(".") &&
+    !spec.startsWith("/")
+  ) {
+    const quotedIncludeHit = await resolveSpecifier(
+      fromFile,
+      `./${spec}`,
+      projectRoot,
+      opts?.matchPath,
+      opts?.workspaceConfig,
+      {
+        resolveNodeModules: !!opts?.resolveNodeModules,
+        ...(opts?.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+        ...(opts?.resolutionKind ? { resolutionKind: opts.resolutionKind } : {}),
+        ...(opts?.resolutionKind === "stylesheet"
+          ? { resolutionExtensions: STYLESHEET_RESOLUTION_EXTENSIONS }
+          : {}),
+        ...(opts?.allowScssPartialResolution ? { allowScssPartialResolution: true } : {}),
+        ...(opts?.exportCondition ? { exportCondition: opts.exportCondition } : {}),
+      },
+    );
+    if (typeof quotedIncludeHit === "string") return quotedIncludeHit;
+  }
   if (languageId === "rust") {
     const statementStartIndex = opts?.statementStartIndex;
     const pathAttribute = statementStartIndex !== undefined ? opts?.pathAttribute : undefined;
