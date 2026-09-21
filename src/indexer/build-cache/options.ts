@@ -49,8 +49,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * the graph edge resolver, registers C-family function names in the enclosing scope through the
  * declarator chain so same-file call sites become references, and resolves keyword and supertype
  * receiver members for every language that declares receiver keywords.
+ * Epoch 22 resolves a keyword receiver through direct members and declared ancestors, and
+ * binds a quoted C/C++ include to the exact includer-relative file only.
  */
-export const CORE_ALGORITHM_EPOCH = 21;
+export const CORE_ALGORITHM_EPOCH = 22;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

@@ -2,7 +2,14 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { GRAPH_ONLY_RESOLUTION_EXTENSIONS } from "./graph-only-extensions.js";
-import { confineResolvedPath, fileIdentityKey, isFilePathWithinRoot, normalizeResolutionHints } from "./paths.js";
+import {
+  confineResolvedPath,
+  fileIdentityKey,
+  isFilePathWithinRoot,
+  normalizeResolutionHints,
+  readUtf8WithoutBom,
+} from "./paths.js";
+import { maskTrivia } from "./trivia.js";
 import {
   DEFAULT_RESOLUTION_EXTENSIONS,
   STYLESHEET_RESOLUTION_EXTENSIONS,
@@ -48,6 +55,58 @@ function getResolveSpecifierCacheEntry(key: string): FileId | { external: string
 function setResolveSpecifierCacheEntry(key: string, value: FileId | { external: string }): void {
   lruMapSet(resolveSpecifierCache, key, value, MAX_RESOLVE_SPECIFIER_CACHE_ENTRIES);
 }
+
+const MAX_C_FAMILY_QUOTED_INCLUDE_CACHE_ENTRIES = 10_000;
+const cFamilyQuotedIncludeCache = new Map<string, ReadonlySet<string>>();
+
+function isCFamilyQuotedIncludeLiteral(text: string | undefined): boolean {
+  if (!text) return false;
+  const trimmed = text.trim();
+  if (trimmed.length < 2) return false;
+  return trimmed.startsWith('"') && trimmed.endsWith('"');
+}
+
+function cFamilyQuotedIncludeRelativePath(spec: string): string {
+  if (isCFamilyQuotedIncludeLiteral(spec)) return spec.trim().slice(1, -1);
+  return spec;
+}
+
+function collectCFamilyQuotedIncludeSpecs(source: string, languageId: string): Set<string> {
+  const masked = maskTrivia(source, languageId, { maskStrings: false });
+  const specs = new Set<string>();
+  const pattern = new RegExp(String.raw`(?:^|[\n\r])[ \t]*#[ \t]*include[ \t]+"([^"]*)"`, "g");
+  for (const match of masked.matchAll(pattern)) {
+    const value = match[1];
+    if (value !== undefined) specs.add(value);
+  }
+  return specs;
+}
+
+async function cFamilyQuotedIncludeSpecsInFile(fromFile: string, languageId: string): Promise<ReadonlySet<string>> {
+  const cacheKey = fileIdentityKey(path.resolve(fromFile));
+  const cached = lruMapGet(cFamilyQuotedIncludeCache, cacheKey);
+  if (cached) return cached;
+  let specs: Set<string>;
+  try {
+    specs = collectCFamilyQuotedIncludeSpecs(await readUtf8WithoutBom(fromFile), languageId);
+  } catch {
+    specs = new Set();
+  }
+  lruMapSet(cFamilyQuotedIncludeCache, cacheKey, specs, MAX_C_FAMILY_QUOTED_INCLUDE_CACHE_ENTRIES);
+  return specs;
+}
+
+async function isCFamilyQuotedInclude(
+  fromFile: string,
+  spec: string,
+  languageId: string,
+  raw: string | undefined,
+): Promise<boolean> {
+  if (isCFamilyQuotedIncludeLiteral(raw) || isCFamilyQuotedIncludeLiteral(spec)) return true;
+  if (raw !== undefined) return false;
+  return (await cFamilyQuotedIncludeSpecsInFile(fromFile, languageId)).has(spec);
+}
+
 export type FileId = string;
 
 export {
@@ -183,6 +242,7 @@ export async function resolveImportSpecifier(
     exportCondition?: ModuleSpecifierExportCondition;
     pathAttribute?: string;
     statementStartIndex?: number;
+    raw?: string;
   },
 ): Promise<FileId | { external: string }> {
   if (languageId === "go") {
@@ -213,34 +273,24 @@ export async function resolveImportSpecifier(
     );
     if (phpHit) return phpHit;
   }
-  if (languageId === "cpp") {
-    const cppHit = await confineLanguageHit(projectRoot, await resolveCppImportPath(projectRoot, spec), spec);
-    if (cppHit) return cppHit;
-    if (isCppNamedModuleSpecifier(spec)) return { external: spec };
+  if (languageId === "c" || languageId === "cpp") {
+    const isAngleInclude = spec.startsWith("<") && spec.endsWith(">");
+    const isExplicitPath = spec.startsWith(".") || spec.startsWith("/");
+    const isQuotedInclude =
+      !isAngleInclude && !isExplicitPath && (await isCFamilyQuotedInclude(fromFile, spec, languageId, opts?.raw));
+    if (isQuotedInclude) {
+      const quotedIncludeHit = await acceptFirstPartyFile(
+        projectRoot,
+        path.resolve(path.dirname(fromFile), cFamilyQuotedIncludeRelativePath(spec)),
+      );
+      if (quotedIncludeHit) return quotedIncludeHit;
+    } else if (languageId === "cpp") {
+      const cppHit = await confineLanguageHit(projectRoot, await resolveCppImportPath(projectRoot, spec), spec);
+      if (cppHit) return cppHit;
+      if (isCppNamedModuleSpecifier(spec)) return { external: spec };
+    }
   }
-  if (
-    (languageId === "c" || languageId === "cpp") &&
-    !(spec.startsWith("<") && spec.endsWith(">")) &&
-    !spec.startsWith(".") &&
-    !spec.startsWith("/")
-  ) {
-    const quotedIncludeHit = await resolveSpecifier(
-      fromFile,
-      `./${spec}`,
-      projectRoot,
-      opts?.matchPath,
-      opts?.workspaceConfig,
-      {
-        resolveNodeModules: !!opts?.resolveNodeModules,
-        ...(opts?.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
-        ...(opts?.resolutionKind ? { resolutionKind: opts.resolutionKind } : {}),
-        ...(opts?.resolutionKind === "stylesheet" ? { resolutionExtensions: STYLESHEET_RESOLUTION_EXTENSIONS } : {}),
-        ...(opts?.allowScssPartialResolution ? { allowScssPartialResolution: true } : {}),
-        ...(opts?.exportCondition ? { exportCondition: opts.exportCondition } : {}),
-      },
-    );
-    if (typeof quotedIncludeHit === "string") return quotedIncludeHit;
-  }
+
   if (languageId === "rust") {
     const statementStartIndex = opts?.statementStartIndex;
     const pathAttribute = statementStartIndex !== undefined ? opts?.pathAttribute : undefined;
@@ -429,6 +479,7 @@ export async function resolveSpecifier(
 
 export function clearImportResolutionCaches(): void {
   resolveSpecifierCache.clear();
+  cFamilyQuotedIncludeCache.clear();
   clearPythonResolutionCache();
   clearFileExistsCache();
   clearJvmResolutionCaches();

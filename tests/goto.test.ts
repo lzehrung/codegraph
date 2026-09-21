@@ -3124,6 +3124,90 @@ describe("Keyword-receiver member navigation", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+  it("resolves C# this members without selecting method-local or nested-class declarations", async () => {
+    const source = [
+      "class Box {",
+      "  public void Run() { int helper = 0; this.helper(); }",
+      "  class Nested { public void target() {} }",
+      "  public void RunNested() { this.target(); }",
+      "  public void helper() {}",
+      "  public void target() {}",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cs-this-direct-goto-", { "Box.cs": source });
+    try {
+      await expectMemberAccess(index, paths["Box.cs"]!, 2, columnOf(source, 2, "helper()"), 5);
+      await expectMemberAccess(index, paths["Box.cs"]!, 4, columnOf(source, 4, "target()"), 6);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves TypeScript this members through unique ancestors and rejects same-depth ambiguity", async () => {
+    const source = [
+      "class Base {",
+      "  helper(): number { return 1; }",
+      "}",
+      "class Left {",
+      "  helper(): number { return 2; }",
+      "}",
+      "class Right {",
+      "  helper(): number { return 3; }",
+      "}",
+      "class Derived extends Base {",
+      "  run(): number { return this.helper(); }",
+      "}",
+      "class Ambiguous extends Left, Right {",
+      "  run(): number { return this.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-this-ancestor-goto-", { "Box.ts": source });
+    try {
+      await expectMemberAccess(index, paths["Box.ts"]!, 11, columnOf(source, 11, "helper()"), 2);
+      const result = await goToDefinition(index, {
+        file: paths["Box.ts"]!,
+        line: 14,
+        column: columnOf(source, 14, "helper()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps instance and type receiver member scopes separate", async () => {
+    const csharp = [
+      "class Box {",
+      "  public static void helper() {}",
+      "  public void Run() { this.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const php = [
+      "<?php",
+      "class Box {",
+      "  public static function helper() {}",
+      "  public function run() { static::helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const csharpFix = await buildFiles("cg-cs-this-static-goto-", { "Box.cs": csharp });
+    const phpFix = await buildFiles("cg-php-static-goto-", { "Box.php": php });
+    try {
+      const csharpResult = await goToDefinition(csharpFix.index, {
+        file: csharpFix.paths["Box.cs"]!,
+        line: 3,
+        column: columnOf(csharp, 3, "helper()"),
+      });
+      expect(csharpResult.status).toBe("not_found");
+      await expectMemberAccess(phpFix.index, phpFix.paths["Box.php"]!, 4, columnOf(php, 4, "helper()"), 3);
+    } finally {
+      await fsp.rm(csharpFix.root, { recursive: true, force: true });
+      await fsp.rm(phpFix.root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Supertype keyword member navigation", () => {

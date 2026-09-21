@@ -15,6 +15,8 @@
 export type ReceiverKeywords = {
   /** Keywords naming the type that declares the calling member. */
   own: readonly string[];
+  /** Own-type keywords that name an instance rather than the type itself. */
+  instanceOwn: readonly string[];
   /** Keywords naming a supertype of the declaring type. */
   supertype: readonly string[];
 };
@@ -76,8 +78,8 @@ const CPP_QUALIFIED_ACCESS_SHAPE: MemberAccessShape = {
   property: { field: "name", fallbackIndex: 2 },
 };
 
-const THIS_SUPER_RECEIVERS: ReceiverKeywords = { own: ["this"], supertype: ["super"] };
-const SELF_RECEIVERS: ReceiverKeywords = { own: ["self"], supertype: ["super"] };
+const THIS_SUPER_RECEIVERS: ReceiverKeywords = { own: ["this"], instanceOwn: ["this"], supertype: ["super"] };
+const SELF_RECEIVERS: ReceiverKeywords = { own: ["self"], instanceOwn: ["self"], supertype: ["super"] };
 
 export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
   adoc: { omittedReason: "AsciiDoc document format; embedded code blocks parse as their own language." },
@@ -89,12 +91,12 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
   },
   cpp: {
     memberAccessShapes: [C_FIELD_ACCESS_SHAPE, CPP_QUALIFIED_ACCESS_SHAPE],
-    receiverKeywords: { own: ["this"], supertype: [] },
+    receiverKeywords: { own: ["this"], instanceOwn: ["this"], supertype: [] },
   },
   css: { omittedReason: "Style language; no member-access concept." },
   csharp: {
     memberAccessShapes: [{ object: { index: 0 }, property: { index: 2 } }],
-    receiverKeywords: { own: ["this"], supertype: ["base"] },
+    receiverKeywords: { own: ["this"], instanceOwn: ["this"], supertype: ["base"] },
     baseListNodeTypes: ["base_list"],
   },
   go: {
@@ -103,7 +105,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
     memberAccessShapes: [{ nodeTypes: ["qualified_type"], object: { namedIndex: 0 }, property: { namedIndex: 1 } }],
     // Go has no receiver keyword: a method call's receiver is an ordinary value. The row still
     // exists so go receivers must be proven rather than falling back to a bare name.
-    receiverKeywords: { own: [], supertype: [] },
+    receiverKeywords: { own: [], instanceOwn: [], supertype: [] },
   },
   hbs: { omittedReason: "Handlebars document format; embedded scripts parse as their own language." },
   html: { omittedReason: "Document format; embedded scripts parse as their own language." },
@@ -154,7 +156,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
         property: { field: "name", fallbackIndex: 2 },
       },
     ],
-    receiverKeywords: { own: ["$this", "self", "static"], supertype: ["parent"] },
+    receiverKeywords: { own: ["$this", "self", "static"], instanceOwn: ["$this"], supertype: ["parent"] },
     baseListNodeTypes: ["base_clause"],
   },
   python: {
@@ -162,7 +164,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
     memberAccessShapes: [
       { object: { field: "object", fallbackIndex: 0 }, property: { field: "attribute", fallbackIndex: 2 } },
     ],
-    receiverKeywords: { own: ["self", "cls"], supertype: [] },
+    receiverKeywords: { own: ["self", "cls"], instanceOwn: ["self"], supertype: [] },
   },
   rst: { omittedReason: "reStructuredText document format; embedded code blocks parse as their own language." },
   ruby: {
@@ -176,7 +178,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
       // Ruby models every other member access as a `call` node with receiver and method fields.
       { object: { field: "receiver", fallbackIndex: 0 }, property: { field: "method", fallbackIndex: 2 } },
     ],
-    receiverKeywords: { own: ["self"], supertype: [] },
+    receiverKeywords: { own: ["self"], instanceOwn: ["self"], supertype: [] },
   },
   rust: {
     memberAccessShapes: [
@@ -186,7 +188,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
         property: { field: "name", fallbackIndex: 2 },
       },
     ],
-    receiverKeywords: { own: ["self", "Self"], supertype: [] },
+    receiverKeywords: { own: ["self", "Self"], instanceOwn: ["self"], supertype: [] },
   },
   scss: { omittedReason: "Style language; no member-access concept." },
   svelte: { omittedReason: "Svelte component format; script blocks parse as js/ts and templates as html." },
@@ -213,7 +215,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
   vue: { omittedReason: "Vue component format; script blocks parse as js/ts and templates as html." },
   zig: {
     memberAccessOmittedReason: "No per-language extraction today; the shared generic default is zig's behavior.",
-    receiverKeywords: { own: ["self"], supertype: [] },
+    receiverKeywords: { own: ["self"], instanceOwn: ["self"], supertype: [] },
   },
 };
 
@@ -238,6 +240,17 @@ export function keywordReceiverKind(languageId: string, receiverName: string): "
   if (keywords.own.includes(receiverName)) return "own";
   if (keywords.supertype.includes(receiverName)) return "supertype";
   return null;
+}
+
+/**
+ * Instance-own keywords (`this`, `$this`) require instance members.
+ * Other own keywords name the declaring type and may still bind instance members
+ * (PHP `self::` / `static::` late static binding), so they do not force a static-only filter.
+ */
+export function ownReceiverMemberScope(languageId: string, receiverName: string): "instance" | "any" | null {
+  const keywords = MEMBER_ACCESS_ROWS[languageId]?.receiverKeywords;
+  if (!keywords?.own.includes(receiverName)) return null;
+  return keywords.instanceOwn.includes(receiverName) ? "instance" : "any";
 }
 
 export function isKeywordReceiver(languageId: string, receiverName: string): boolean {

@@ -234,6 +234,52 @@ describe("C quoted include resolution and same-file references", () => {
     }
   });
 
+  it("does not resolve an identifier include macro to a sibling decoy file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-include-macro-decoy-"));
+    const decoy = path.join(root, "HEADER");
+    const file = path.join(root, "main.c");
+    const source = ['#define HEADER "x.h"', "#include HEADER", "int main(void) { return 0; }", ""].join("\n");
+    try {
+      await writeFile(decoy, "int decoy(void);\n", "utf8");
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const imports = index.byFile.get(fileIdentityKey(file))?.imports ?? [];
+      expect(imports.map((entry) => entry.from)).toEqual(["HEADER"]);
+      expect(imports.map((entry) => entry.resolved)).toEqual([{ external: "HEADER" }]);
+      expect(imports.map((entry) => entry.resolved)).not.toContain(normalizePath(decoy));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a quoted extensionless include to the exact sibling file and not a same-stem script", async () => {
+    const hitRoot = await mkdtemp(path.join(os.tmpdir(), "cg-c-quoted-config-hit-"));
+    const missRoot = await mkdtemp(path.join(os.tmpdir(), "cg-c-quoted-config-miss-"));
+    try {
+      const configFile = path.join(hitRoot, "config");
+      const hitFile = path.join(hitRoot, "main.c");
+      await writeFile(configFile, "int cfg(void);\n", "utf8");
+      await writeFile(hitFile, '#include "config"\nint main(void) { return 0; }\n', "utf8");
+      const hitIndex = await buildProjectIndex(hitRoot, { cache: "off" });
+      expect(hitIndex.byFile.get(fileIdentityKey(hitFile))?.imports[0]?.resolved).toBe(normalizePath(configFile));
+
+      const missFile = path.join(missRoot, "main.c");
+      const tsDecoy = path.join(missRoot, "config.ts");
+      const jsDecoy = path.join(missRoot, "config.js");
+      await writeFile(tsDecoy, "export const decoy = 1;\n", "utf8");
+      await writeFile(jsDecoy, "export const decoy = 2;\n", "utf8");
+      await writeFile(missFile, '#include "config"\nint main(void) { return 0; }\n', "utf8");
+      const missIndex = await buildProjectIndex(missRoot, { cache: "off" });
+      const resolved = missIndex.byFile.get(fileIdentityKey(missFile))?.imports[0]?.resolved;
+      expect(resolved).toEqual({ external: "config" });
+      expect(resolved).not.toBe(normalizePath(tsDecoy));
+      expect(resolved).not.toBe(normalizePath(jsDecoy));
+    } finally {
+      await rm(hitRoot, { recursive: true, force: true });
+      await rm(missRoot, { recursive: true, force: true });
+    }
+  });
+
   it("attaches C calls to one enclosing function binding despite a local decoy", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-same-file-refs-"));
     const file = path.join(root, "main.c");

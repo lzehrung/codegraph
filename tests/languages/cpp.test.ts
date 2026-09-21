@@ -585,6 +585,52 @@ describe("C++ quoted include resolution", () => {
     }
   });
 
+  it("does not resolve an identifier include macro to a sibling decoy file", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-include-macro-decoy-"));
+    const decoy = path.join(root, "HEADER");
+    const file = path.join(root, "main.cpp");
+    const source = ['#define HEADER "x.h"', "#include HEADER", "int main() { return 0; }", ""].join("\n");
+    try {
+      await fs.writeFile(decoy, "int decoy();\n", "utf8");
+      await fs.writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const imports = index.byFile.get(fileIdentityKey(file))?.imports ?? [];
+      expect(imports.map((entry) => entry.from)).toEqual(["HEADER"]);
+      expect(imports.map((entry) => entry.resolved)).toEqual([{ external: "HEADER" }]);
+      expect(imports.map((entry) => entry.resolved)).not.toContain(normalizePath(decoy));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a quoted extensionless include to the exact sibling file and not a same-stem script", async () => {
+    const hitRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-quoted-config-hit-"));
+    const missRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-quoted-config-miss-"));
+    try {
+      const configFile = path.join(hitRoot, "config");
+      const hitFile = path.join(hitRoot, "main.cpp");
+      await fs.writeFile(configFile, "int cfg();\n", "utf8");
+      await fs.writeFile(hitFile, '#include "config"\nint main() { return 0; }\n', "utf8");
+      const hitIndex = await buildProjectIndex(hitRoot, { cache: "off" });
+      expect(hitIndex.byFile.get(fileIdentityKey(hitFile))?.imports[0]?.resolved).toBe(normalizePath(configFile));
+
+      const missFile = path.join(missRoot, "main.cpp");
+      const tsDecoy = path.join(missRoot, "config.ts");
+      const jsDecoy = path.join(missRoot, "config.js");
+      await fs.writeFile(tsDecoy, "export const decoy = 1;\n", "utf8");
+      await fs.writeFile(jsDecoy, "export const decoy = 2;\n", "utf8");
+      await fs.writeFile(missFile, '#include "config"\nint main() { return 0; }\n', "utf8");
+      const missIndex = await buildProjectIndex(missRoot, { cache: "off" });
+      const resolved = missIndex.byFile.get(fileIdentityKey(missFile))?.imports[0]?.resolved;
+      expect(resolved).toEqual({ external: "config" });
+      expect(resolved).not.toBe(normalizePath(tsDecoy));
+      expect(resolved).not.toBe(normalizePath(jsDecoy));
+    } finally {
+      await fs.rm(hitRoot, { recursive: true, force: true });
+      await fs.rm(missRoot, { recursive: true, force: true });
+    }
+  });
+
   it("attaches C++ free, in-class, and out-of-line member calls exactly once", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-same-file-refs-"));
     const file = path.join(root, "main.cpp");
