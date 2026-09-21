@@ -830,7 +830,7 @@ describe("PHP parent:: member navigation", () => {
       if (result.status !== "ok") return;
       expect(result.definition.range.start.line).toBe(3);
       expect(result.definition.range.start.line).not.toBe(6);
-      expect(result.provenance.resolution).toBe("member-access");
+      expect(result.provenance?.resolution).toBe("member-access");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -3020,7 +3020,7 @@ describe("Keyword-receiver member navigation", () => {
     expect(result.status).toBe("ok");
     if (result.status !== "ok") return;
     expect(result.definition.range.start.line).toBe(expectedLine);
-    expect(result.provenance.resolution).toBe("member-access");
+    expect(result.provenance?.resolution).toBe("member-access");
   }
 
   it("resolves C++ this-> method and field through member-access", async () => {
@@ -3097,7 +3097,9 @@ describe("Keyword-receiver member navigation", () => {
   });
 
   it("resolves Ruby self. method through member-access", async () => {
-    const source = ["class Box", "  def target", "  end", "  def run", "    self.target", "  end", "end", ""].join("\n");
+    const source = ["class Box", "  def target", "  end", "  def run", "    self.target", "  end", "end", ""].join(
+      "\n",
+    );
     const { root, paths, index } = await buildFiles("cg-rb-self-goto-", { "box.rb": source });
     try {
       await expectMemberAccess(index, paths["box.rb"]!, 5, columnOf(source, 5, "target"), 2);
@@ -3169,7 +3171,7 @@ describe("Supertype keyword member navigation", () => {
       if (result.status !== "ok") return;
       expect(result.definition.range.start.line).toBe(2);
       expect(result.definition.range.start.line).not.toBe(5);
-      expect(result.provenance.resolution).toBe("member-access");
+      expect(result.provenance?.resolution).toBe("member-access");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
