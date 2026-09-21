@@ -6,9 +6,9 @@ Source: `coverage/js/lcov.info`
 
 | Metric    |   Hit | Found | Coverage |
 | --------- | ----: | ----: | -------: |
-| Lines     | 33991 | 37406 |   90.87% |
-| Functions |  5538 |  5886 |   94.09% |
-| Branches  | 25626 | 32187 |   79.62% |
+| Lines     | 33987 | 37402 |   90.87% |
+| Functions |  5561 |  5909 |   94.11% |
+| Branches  | 25528 | 32085 |   79.56% |
 
 ## Least-covered Files
 
@@ -39,17 +39,17 @@ Source: `coverage/js/lcov.info`
 
 These files have line records but no function or branch records, so they are tracked outside the runtime ranking.
 
-| File                                    |   Lines | Functions | Branches |
-| --------------------------------------- | ------: | --------: | -------: |
-| `src/cli-bootstrap.ts`                  |   0.00% |       n/a |      n/a |
-| `src/duplicate-identifier-ranges.ts`    | 100.00% |       n/a |      n/a |
-| `src/duplicate-keywords.ts`             | 100.00% |       n/a |      n/a |
-| `src/impact/types.ts`                   | 100.00% |       n/a |      n/a |
-| `src/languages/definitions/adoc.ts`     | 100.00% |       n/a |      n/a |
-| `src/languages/definitions/astro.ts`    | 100.00% |       n/a |      n/a |
-| `src/languages/definitions/css.ts`      | 100.00% |       n/a |      n/a |
-| `src/languages/definitions/hbs.ts`      | 100.00% |       n/a |      n/a |
-| `src/languages/definitions/less.ts`     | 100.00% |       n/a |      n/a |
-| `src/languages/definitions/markdown.ts` | 100.00% |       n/a |      n/a |
+| File                                                  |   Lines | Functions | Branches |
+| ----------------------------------------------------- | ------: | --------: | -------: |
+| `src/cli-bootstrap.ts`                                |   0.00% |       n/a |      n/a |
+| `src/impact/call-compatibility/providers/profiles.ts` | 100.00% |       n/a |      n/a |
+| `src/duplicate-identifier-ranges.ts`                  | 100.00% |       n/a |      n/a |
+| `src/duplicate-keywords.ts`                           | 100.00% |       n/a |      n/a |
+| `src/impact/types.ts`                                 | 100.00% |       n/a |      n/a |
+| `src/languages/definitions/adoc.ts`                   | 100.00% |       n/a |      n/a |
+| `src/languages/definitions/astro.ts`                  | 100.00% |       n/a |      n/a |
+| `src/languages/definitions/css.ts`                    | 100.00% |       n/a |      n/a |
+| `src/languages/definitions/hbs.ts`                    | 100.00% |       n/a |      n/a |
+| `src/languages/definitions/less.ts`                   | 100.00% |       n/a |      n/a |
 
 Generated from LCOV by `node ./scripts/coverage-markdown.mjs`.
