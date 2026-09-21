@@ -234,9 +234,7 @@ export async function resolveImportSpecifier(
         resolveNodeModules: !!opts?.resolveNodeModules,
         ...(opts?.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
         ...(opts?.resolutionKind ? { resolutionKind: opts.resolutionKind } : {}),
-        ...(opts?.resolutionKind === "stylesheet"
-          ? { resolutionExtensions: STYLESHEET_RESOLUTION_EXTENSIONS }
-          : {}),
+        ...(opts?.resolutionKind === "stylesheet" ? { resolutionExtensions: STYLESHEET_RESOLUTION_EXTENSIONS } : {}),
         ...(opts?.allowScssPartialResolution ? { allowScssPartialResolution: true } : {}),
         ...(opts?.exportCondition ? { exportCondition: opts.exportCondition } : {}),
       },

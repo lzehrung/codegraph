@@ -13,7 +13,13 @@ import { parseSyntaxTree, runQuery } from "@lzehrung/codegraph-native";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
 import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js";
 import type { LanguageSupport } from "../../src/languages.js";
-import { buildProjectIndex, buildScopeIndexFromSource, findReferences, goToDefinition, listSymbols } from "../../src/index.js";
+import {
+  buildProjectIndex,
+  buildScopeIndexFromSource,
+  findReferences,
+  goToDefinition,
+  listSymbols,
+} from "../../src/index.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 
@@ -608,9 +614,7 @@ describe("C++ quoted include resolution", () => {
         ),
       ).toEqual([]);
       expect(
-        functionBindings.filter(
-          (binding) => binding.def?.start.index === source.indexOf("A::f") + "A::".length,
-        ),
+        functionBindings.filter((binding) => binding.def?.start.index === source.indexOf("A::f") + "A::".length),
       ).toHaveLength(1);
 
       const freeCallColumn = source.split("\n")[1]!.indexOf("free_helper") + 1;
@@ -658,9 +662,9 @@ describe("C++ quoted include resolution", () => {
       });
       expect(outOfLineRefs.status).toBe("ok");
       if (outOfLineRefs.status === "ok") {
-        expect(
-          outOfLineRefs.references.map((reference) => reference.range.start.line),
-        ).toEqual(expect.arrayContaining([10, 11]));
+        expect(outOfLineRefs.references.map((reference) => reference.range.start.line)).toEqual(
+          expect.arrayContaining([10, 11]),
+        );
       }
     } finally {
       await fs.rm(root, { recursive: true, force: true });
