@@ -664,7 +664,15 @@ async function rustSourceFilesIn(dir: string): Promise<string[]> {
       // Dangling or unreadable symlink: not a source file.
     }
   }
-  return files;
+  // `readdir` order is filesystem-dependent; sort by file name so the declaring-file
+  // candidate order is identical on every platform.
+  return files.sort((a, b) => {
+    const aName = path.basename(a);
+    const bName = path.basename(b);
+    if (aName < bName) return -1;
+    if (aName > bName) return 1;
+    return 0;
+  });
 }
 
 async function rustDeclaringFileCandidates(fromFile: string, sourceRoot: string): Promise<string[]> {

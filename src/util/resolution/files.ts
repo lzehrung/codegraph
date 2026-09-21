@@ -44,12 +44,34 @@ async function findExtensionManifestInDir(dir: string, suffix: string): Promise<
   } catch {
     return null;
   }
+  const matches: string[] = [];
   for (const entry of entries) {
     if (!entry.name.toLowerCase().endsWith(suffix)) continue;
     const fullPath = path.join(dir, entry.name);
-    if (await direntIsManifestFile(entry, fullPath)) return fullPath;
+    if (await direntIsManifestFile(entry, fullPath)) matches.push(entry.name);
   }
-  return null;
+  const first = sortManifestMatches(dir, suffix, matches)[0];
+  if (!first) return null;
+  return path.join(dir, first);
+}
+
+/**
+ * Deterministic tie-break for a directory holding several extension-manifest matches.
+ * `readdir` order is filesystem- and locale-dependent (`*.csproj` can match both `App.csproj`
+ * and `App.Core.csproj`), so the winner must not depend on it. Prefer the manifest whose stem
+ * equals the directory name, because the primary project file is conventionally named after its
+ * directory; then fall back to code-unit name order, which is identical on every platform.
+ */
+function sortManifestMatches(dir: string, suffix: string, names: string[]): string[] {
+  const dirName = path.basename(dir).toLowerCase();
+  return names.sort((a, b) => {
+    const aPreferred = a.slice(0, a.length - suffix.length).toLowerCase() === dirName;
+    const bPreferred = b.slice(0, b.length - suffix.length).toLowerCase() === dirName;
+    if (aPreferred !== bPreferred) return aPreferred ? -1 : 1;
+    if (a < b) return -1;
+    if (a > b) return 1;
+    return 0;
+  });
 }
 
 export async function findNearestFile(startDir: string, stopDir: string, fileName: string): Promise<string | null> {

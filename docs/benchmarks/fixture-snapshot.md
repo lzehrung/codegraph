@@ -6,9 +6,9 @@ Scope: this counts only the dedicated per-language smoke files, not a language's
 
 Regenerate with `npm run bench:fixtures`. Verify it is current with `npm run bench:fixtures:check`.
 
-Generated: 2026-09-21T00:07:48.845Z (Node v22.16.0)
+Generated: 2026-09-21T00:51:50.292Z (Node v22.16.0)
 
-Total across the 28 language suites: 453 tests, 0 failed.
+Total across the 28 language suites: 454 tests, 0 failed.
 The tests/languages run also executed 73 tests in cross-language files that are not attributed to a language: `tests/languages/chunk-sfc.test.ts`, `tests/languages/cpp-module-incremental.test.ts`, `tests/languages/graph-captures.test.ts`, `tests/languages/import-from-captures.test.ts`, `tests/languages/query-hygiene.test.ts`.
 
 | Language         | Status  | Tests | Test file(s)                         |
@@ -24,7 +24,7 @@ The tests/languages run also executed 73 tests in cross-language files that are 
 | HTML             | passing | 8     | `tests/languages/html.test.ts`       |
 | Java             | passing | 24    | `tests/languages/java.test.ts`       |
 | JavaScript       | passing | 12    | `tests/languages/javascript.test.ts` |
-| Kotlin           | passing | 18    | `tests/languages/kotlin.test.ts`     |
+| Kotlin           | passing | 19    | `tests/languages/kotlin.test.ts`     |
 | Less             | passing | 7     | `tests/languages/less.test.ts`       |
 | Markdown         | passing | 16    | `tests/languages/markdown.test.ts`   |
 | MDX              | passing | 5     | `tests/languages/mdx.test.ts`        |

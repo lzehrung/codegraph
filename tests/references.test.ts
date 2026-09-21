@@ -2991,6 +2991,66 @@ describe("Find References", () => {
       expectReferenceAt(result, helperFile, 3);
       expectReferenceAt(result, consumerFile, 12);
     });
+
+    it("finds property and method navigation without same-named decoy or local uses", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-member-refs-"));
+      try {
+        const file = path.join(root, "box.kt").replace(/\\/g, "/");
+        const source = [
+          "class Box {",
+          "  val payload = 1",
+          "  fun ping(): Int = payload",
+          "}",
+          "class Decoy {",
+          "  val payload = 2",
+          "  fun ping(): Int = payload",
+          "}",
+          "fun use(box: Box) {",
+          "  val payload = 99",
+          "  val ping = 99",
+          "  val x = box.payload",
+          "  box.ping()",
+          "}",
+          "fun other(decoy: Decoy) {",
+          "  decoy.payload",
+          "  decoy.ping()",
+          "}",
+          "",
+        ].join("\n");
+        await fsp.writeFile(file, source, "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+        const columnOf = (line: number, token: string): number => {
+          const text = source.split("\n")[line - 1];
+          if (!text) throw new Error(`missing line ${line}`);
+          const indexOf = text.indexOf(token);
+          if (indexOf < 0) throw new Error(`token not found on line ${line}: ${token}`);
+          return indexOf + 1;
+        };
+
+        const payloadRefs = await testFindReferences(index, file, 2, columnOf(2, "payload"), 3);
+        expectReferenceAt(payloadRefs, file, 2);
+        expectReferenceAt(payloadRefs, file, 3);
+        expectReferenceAt(payloadRefs, file, 12);
+        if (payloadRefs.status === "ok") {
+          const payloadLines = payloadRefs.references.map((reference) => reference.range.start.line);
+          expect(payloadLines).not.toContain(6);
+          expect(payloadLines).not.toContain(10);
+          expect(payloadLines).not.toContain(16);
+        }
+
+        const pingRefs = await testFindReferences(index, file, 3, columnOf(3, "ping"), 2);
+        expectReferenceAt(pingRefs, file, 3);
+        expectReferenceAt(pingRefs, file, 13);
+        if (pingRefs.status === "ok") {
+          const pingLines = pingRefs.references.map((reference) => reference.range.start.line);
+          expect(pingLines).not.toContain(7);
+          expect(pingLines).not.toContain(11);
+          expect(pingLines).not.toContain(17);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("Swift", () => {

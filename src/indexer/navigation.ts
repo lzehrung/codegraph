@@ -287,7 +287,7 @@ function isUnresolvedReceiverMemberProperty(sup: LanguageSupport, node: SyntaxNo
       (grandparent.type === "call_expression" ||
         grandparent.type === "call" ||
         grandparent.type === "method_invocation");
-    if (called === false) return false;
+    if (!called) return false;
   }
   return true;
 }

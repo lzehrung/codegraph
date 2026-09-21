@@ -143,6 +143,27 @@ describe("monorepo resolution boundaries", () => {
     expect(local.map(posix).sort()).toEqual([posix(libA), posix(libB)].sort());
   });
 
+  it("selects the same *.csproj regardless of directory creation order", async () => {
+    const manifest = '<Project Sdk="Microsoft.NET.Sdk"></Project>\n';
+    const first = await mkTmpDir("dg-mono-csharp-order-first-");
+    const second = await mkTmpDir("dg-mono-csharp-order-second-");
+    const firstProject = path.join(first, "App");
+    const secondProject = path.join(second, "App");
+
+    await writeFile(path.join(firstProject, "App.csproj"), manifest);
+    await writeFile(path.join(firstProject, "App.Core.csproj"), manifest);
+    await writeFile(path.join(secondProject, "App.Core.csproj"), manifest);
+    await writeFile(path.join(secondProject, "App.csproj"), manifest);
+
+    const firstChoice = await findNearestManifest(firstProject, first, CSHARP_PACKAGE_MANIFEST_NAMES);
+    const secondChoice = await findNearestManifest(secondProject, second, CSHARP_PACKAGE_MANIFEST_NAMES);
+
+    // The directory-named manifest wins in both trees, so a cached package root cannot depend
+    // on `readdir` order or on which file happened to be written first.
+    expect(posix(firstChoice ?? "")).toBe(posix(path.join(firstProject, "App.csproj")));
+    expect(posix(secondChoice ?? "")).toBe(posix(path.join(secondProject, "App.csproj")));
+  });
+
   it("binds a PHP namespace to the nearest composer.json, not a sibling", async () => {
     const root = await mkTmpDir("dg-mono-php-");
     const pkgA = path.join(root, "packages", "a");

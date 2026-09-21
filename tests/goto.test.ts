@@ -1381,6 +1381,50 @@ describe("Go to Definition", () => {
 
       await testGoToDefinition(index, consumerFile, 12, 10, helperFile, 3);
     });
+
+    it("resolves property and method navigation on a typed receiver", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-member-goto-"));
+      try {
+        const file = path.join(root, "box.kt").replace(/\\/g, "/");
+        const source = [
+          "class Box {",
+          "  val payload = 1",
+          "  fun ping(): Int = payload",
+          "}",
+          "class Decoy {",
+          "  val payload = 2",
+          "  fun ping(): Int = payload",
+          "}",
+          "fun use(box: Box) {",
+          "  val payload = 99",
+          "  val ping = 99",
+          "  val x = box.payload",
+          "  box.ping()",
+          "}",
+          "fun other(decoy: Decoy) {",
+          "  decoy.payload",
+          "  decoy.ping()",
+          "}",
+          "",
+        ].join("\n");
+        await fsp.writeFile(file, source, "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+        const columnOf = (line: number, token: string): number => {
+          const text = source.split("\n")[line - 1];
+          if (!text) throw new Error(`missing line ${line}`);
+          const indexOf = text.indexOf(token);
+          if (indexOf < 0) throw new Error(`token not found on line ${line}: ${token}`);
+          return indexOf + 1;
+        };
+
+        await testGoToDefinition(index, file, 12, columnOf(12, "payload"), file, 2);
+        await testGoToDefinition(index, file, 13, columnOf(13, "ping"), file, 3);
+        await testGoToDefinition(index, file, 16, columnOf(16, "payload"), file, 6);
+        await testGoToDefinition(index, file, 10, columnOf(10, "payload"), file, 10);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("Swift", () => {
