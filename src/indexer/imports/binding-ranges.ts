@@ -58,7 +58,7 @@ export function attributeNamedBindingRanges(args: {
    * tokens sharing the same spelling (currently just C#'s `using Alias = Namespace.Path;`).
    * Every other producer's `local === imported` really means "one token, no alias".
    */
-  alwaysAliased?: boolean;
+  alwaysAliased?: boolean | undefined;
 }): void {
   const { bindings, fromIndex, text, textStartIndex, source, alwaysAliased } = args;
   const slots = buildRoleSlots(bindings, fromIndex, alwaysAliased);

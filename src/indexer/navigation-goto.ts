@@ -11,13 +11,12 @@ import {
   isReceiverNameNode,
   memberAccessTraversalTypes,
 } from "../util/member-access.js";
+import { isKeywordReceiver, supportsReceiverMemberNavigation } from "../util/member-access-tables.js";
 import {
   declaresMembers,
   hasStaticMemberDistinction,
-  isKeywordReceiver,
   nearestMemberContainer,
   receiverConstructorExpression,
-  supportsReceiverMemberNavigation,
   unwrapNamedType,
   type ReceiverMemberScope,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
@@ -275,10 +274,7 @@ function findEnclosingClassContainer(node: SyntaxNodeLike): SyntaxNodeLike | nul
   return nearestMemberContainer(node);
 }
 
-export {
-  supportsReceiverCallEdges,
-  supportsReceiverMemberNavigation,
-} from "../graphs/symbol-graph-detailed/receiver-calls.js";
+export { supportsReceiverCallEdges, supportsReceiverMemberNavigation } from "../util/member-access-tables.js";
 
 type ResolvedReceiverDefinition = {
   def: SymbolDef;

@@ -1,6 +1,6 @@
 import { supportForFile } from "../languages.js";
-import { supportsReceiverMemberNavigation } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import type { ProjectIndex } from "../indexer/types.js";
+import { supportsReceiverMemberNavigation } from "../util/member-access-tables.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { ChangedSymbol, MemberResolutionCoverage } from "./types.js";
 

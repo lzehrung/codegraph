@@ -1,32 +1,17 @@
 import path from "node:path";
-import {
-  parseCsharpUsingDirective,
-  parseJavaImportStatement,
-  parseKotlinImportStatement,
-  parsePhpImportStatement,
-  parseRustImportStatements,
-  rustImportKeywordOffset,
-  type ParsedRustImportStatement,
-} from "../../languages/import-statement-parsers.js";
-import { CSHARP_IDENTIFIER_SOURCE, GO_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
-import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
+import { GO_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { getPhpComposerImplicitFiles } from "../../util/resolution.js";
-import { resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
-import { extractRustModPathAttribute, resolveRustImportPath } from "../../util/resolution/rust.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia } from "./binding-ranges.js";
+import {
+  IMPORT_BINDING_ROWS,
+  type ImplicitImportBindingArgs,
+  type ImportBindingRow,
+  type LanguageSpecificImportContext,
+} from "./import-binding-tables.js";
 import { collectTextImportBindingRequests, hasTextImportBindings } from "./text-import-extractors.js";
 import type { ImportBinding } from "../types.js";
-import type { ImportBindingSink, ImportResolver, ResolvedImportTarget } from "./context.js";
 
-export type LanguageSpecificImportContext = ImportBindingSink & {
-  file: string;
-  projectRoot: string;
-  source: string;
-  languageId: string;
-  resolveFrom: ImportResolver;
-  getBindings: () => ImportBinding[];
-  replaceBindings: (bindings: ImportBinding[]) => void;
-};
+export type { LanguageSpecificImportContext } from "./import-binding-tables.js";
 
 export type StatementImportOverrideState = {
   handledStatements: Set<string>;
@@ -35,10 +20,6 @@ export type StatementImportOverrideState = {
 export function createStatementImportOverrideState(): StatementImportOverrideState {
   return { handledStatements: new Set() };
 }
-
-type ParsedJvmImportStatement =
-  | { kind: "star"; from: string }
-  | { kind: "named"; from: string; imported: string; explicitAlias?: boolean };
 
 function normalizeGoImports(context: LanguageSpecificImportContext): void {
   const imports = context.getBindings();
@@ -105,7 +86,8 @@ function normalizeGoImports(context: LanguageSpecificImportContext): void {
  */
 async function appendTextImportBindings(context: LanguageSpecificImportContext): Promise<void> {
   if (!hasTextImportBindings(context.languageId)) return;
-  if (context.languageId !== "rust" && context.getBindings().length) return;
+  const row = IMPORT_BINDING_ROWS[context.languageId];
+  if (!row?.rescanTextBindings && context.getBindings().length) return;
   const state = createStatementImportOverrideState();
   for (const request of collectTextImportBindingRequests(context.languageId, context.source, {
     file: context.file,
@@ -119,7 +101,7 @@ async function appendTextImportBindings(context: LanguageSpecificImportContext):
       text: maskImportBindingTrivia(request.raw, context.languageId),
       textStartIndex: request.start,
       source: context.source,
-      ...(context.languageId === "csharp" ? { alwaysAliased: true } : {}),
+      ...(row?.alwaysAliased ? { alwaysAliased: true } : {}),
     });
   }
 }
@@ -164,291 +146,27 @@ export async function finalizeLanguageSpecificImports(context: LanguageSpecificI
   await appendPhpComposerImplicitImports(context);
 }
 
-function pushCsharpOverride(
-  context: LanguageSpecificImportContext,
-  parsed: NonNullable<ReturnType<typeof parseCsharpUsingDirective>>,
-  typeOnly: boolean,
-  fromValue: string,
-  resolved: ResolvedImportTarget,
-): void {
-  if (parsed.alias) {
-    const fromParts = parsed.from.split(".");
-    const imported = fromParts[fromParts.length - 1] ?? parsed.alias;
-    context.pushBinding({
-      kind: "named",
-      local: parsed.alias,
-      imported,
-      from: fromValue,
-      explicitAlias: true,
-      resolved,
-      typeOnly,
-    });
-    return;
-  }
-
-  context.pushBinding({
-    kind: "star",
-    from: fromValue,
-    resolved,
-    typeOnly,
-  });
+function masksStatementTrivia(row: ImportBindingRow, normalizedStmt: string): boolean {
+  if (row.maskTrivia === "use-keyword") return /^\s*use\b/i.test(normalizedStmt);
+  return row.maskTrivia ?? false;
 }
 
-const CSHARP_EXTERN_ALIAS_PATTERN = new RegExp(String.raw`^extern\s+alias\s+(${CSHARP_IDENTIFIER_SOURCE})\s*;$`, "u");
-
-async function applyCsharpStatementOverride(
-  context: LanguageSpecificImportContext,
-  normalizedStmt: string,
-  typeOnly: boolean,
-): Promise<boolean> {
-  const externAlias = normalizedStmt.match(CSHARP_EXTERN_ALIAS_PATTERN)?.[1];
-  if (externAlias) {
-    // `extern alias X;` names a compiler-provided alias for an assembly's extern alias. It has no
-    // first-party or package target, so it stays an unresolved namespace binding and produces no
-    // dependency edge: the graph query does not treat it as an import specifier.
-    context.pushBinding({ kind: "namespace", localNS: externAlias, from: externAlias });
-    return true;
-  }
-
-  const parsed = parseCsharpUsingDirective(normalizedStmt);
-  if (!parsed) return false;
-
-  // A target that is itself a declared namespace is a namespace alias, even when the alias is
-  // written in alias form. Resolving it here keeps the local name a namespace so member
-  // navigation can reach the declaring file instead of treating the last segment as a type.
-  // A namespace split across several files has no single target, so it keeps the local alias
-  // as an unresolved namespace rather than claiming one of the declaring files.
-  const namespaceTargets = await resolveCsharpNamespaceImportPaths(context.projectRoot, parsed.from, context.file);
-  if (parsed.alias && namespaceTargets.length) {
-    context.pushBinding({
-      kind: "namespace",
-      localNS: parsed.alias,
-      from: parsed.from,
-      ...(namespaceTargets.length === 1 ? { resolved: namespaceTargets[0]!.replace(/\\/g, "/") } : {}),
-      typeOnly,
-    });
-    return true;
-  }
-
-  let fromValue = parsed.from;
-  let resolved = await context.resolveFrom(fromValue);
-  if (typeof resolved !== "string" && namespaceTargets.length === 1) {
-    resolved = namespaceTargets[0]!.replace(/\\/g, "/");
-  }
-  if (parsed.alias) {
-    const fromParts = parsed.from.split(".");
-    if (typeof resolved !== "string" && fromParts.length > 1) {
-      const fallbackFrom = fromParts.slice(0, -1).join(".");
-      if (fallbackFrom) {
-        const fallbackResolved = await context.resolveFrom(fallbackFrom);
-        if (typeof fallbackResolved === "string") {
-          fromValue = fallbackFrom;
-          resolved = fallbackResolved;
-        }
-      }
-    }
-  }
-  pushCsharpOverride(context, parsed, typeOnly, fromValue, resolved);
-  return true;
+function parserTextForStatement(row: ImportBindingRow, languageId: string, normalizedStmt: string): string {
+  if (!masksStatementTrivia(row, normalizedStmt)) return normalizedStmt;
+  let parserStmt = maskImportBindingTrivia(normalizedStmt, languageId);
+  if (row.normalizeDots) parserStmt = parserStmt.replace(/\s*\.\s*/gu, ".");
+  return parserStmt;
 }
 
-async function applyJavaStatementOverride(
-  context: LanguageSpecificImportContext,
-  normalizedStmt: string,
-  typeOnly: boolean,
-): Promise<boolean> {
-  return await applyJvmStatementOverride(context, normalizedStmt, typeOnly, parseJavaImportStatement, (parsed) => {
-    if (parsed.kind === "named") return parsed.imported;
-    return undefined;
-  });
-}
-
-async function applyKotlinStatementOverride(
-  context: LanguageSpecificImportContext,
-  normalizedStmt: string,
-  typeOnly: boolean,
-): Promise<boolean> {
-  return await applyJvmStatementOverride(context, normalizedStmt, typeOnly, parseKotlinImportStatement, (parsed) => {
-    if (parsed.kind === "named") return parsed.local;
-    return undefined;
-  });
-}
-
-async function applyJvmStatementOverride<TParsed extends ParsedJvmImportStatement>(
-  context: LanguageSpecificImportContext,
-  normalizedStmt: string,
-  typeOnly: boolean,
-  parseStatement: (statement: string) => TParsed | null,
-  localNameFor: (parsed: TParsed) => string | undefined,
-): Promise<boolean> {
-  const parsed = parseStatement(normalizedStmt);
-  if (!parsed) return false;
-  return await pushJvmImportBinding(context, parsed, localNameFor(parsed), typeOnly);
-}
-
-async function pushJvmImportBinding(
-  context: LanguageSpecificImportContext,
-  parsed: { kind: "star"; from: string } | { kind: "named"; from: string; imported: string; explicitAlias?: boolean },
-  local: string | undefined,
-  typeOnly: boolean,
-): Promise<boolean> {
-  const resolved = await context.resolveFrom(parsed.from);
-  if (parsed.kind === "star") {
-    context.pushBinding({
-      kind: "star",
-      from: parsed.from,
-      resolved,
-      typeOnly,
-    });
-    return true;
-  }
-
-  context.pushBinding({
-    kind: "named",
-    local: local ?? parsed.imported,
-    imported: parsed.imported,
-    from: parsed.from,
-    ...(parsed.explicitAlias ? { explicitAlias: true } : {}),
-    resolved,
-    typeOnly,
-  });
-  return true;
-}
-
-async function applyRustStatementOverride(
-  context: LanguageSpecificImportContext,
-  normalizedStmt: string,
-  typeOnly: boolean,
-  statementStartIndex?: number,
-): Promise<boolean> {
-  if (isRustTestOnlyStatement(context, normalizedStmt, statementStartIndex)) return true;
-
-  const parsedList = parseRustImportStatements(normalizedStmt);
-  if (!parsedList.length) return false;
-  const seen = new Set(context.getBindings().map(rustBindingKey));
-  await pushParsedRustImports(context, parsedList, typeOnly, statementStartIndex, seen);
-  return true;
-}
-
-async function resolveRustParsedFrom(
-  context: LanguageSpecificImportContext,
-  from: string,
-  pathAttribute?: string,
-  statementStartIndex?: number,
-): Promise<ResolvedImportTarget> {
-  if (pathAttribute) {
-    const attributed = await resolveRustImportPath(
-      context.projectRoot,
-      context.file,
-      from,
-      pathAttribute,
-      statementStartIndex,
-    );
-    if (attributed) return attributed.replace(/\\/g, "/");
-    return { external: from };
-  }
-  return context.resolveFrom(from);
-}
-
-function rustBindingKey(binding: ImportBinding): string {
-  const resolved = JSON.stringify(binding.resolved);
-  if (binding.kind === "named") return `named:${binding.local}:${binding.imported}:${binding.from}:${resolved}`;
-  if (binding.kind === "namespace") return `namespace:${binding.localNS}:${binding.from}:${resolved}`;
-  if (binding.kind === "star") return `star:${binding.from}:${resolved}`;
-  return JSON.stringify(binding);
-}
-
-function buildRustBinding(
-  parsed: ParsedRustImportStatement,
-  resolved: ResolvedImportTarget,
-  typeOnly: boolean,
-): ImportBinding {
-  if (parsed.kind === "member") {
-    return {
-      kind: "named",
-      local: parsed.local,
-      imported: parsed.imported,
-      from: parsed.from,
-      ...(parsed.explicitAlias ? { explicitAlias: true } : {}),
-      resolved,
-      typeOnly,
-    };
-  }
-  if (parsed.kind === "module") {
-    return { kind: "namespace", localNS: parsed.local, from: parsed.from, resolved, typeOnly };
-  }
-  return { kind: "star", from: parsed.from, resolved, typeOnly };
-}
-
-async function pushParsedRustImports(
-  context: LanguageSpecificImportContext,
-  parsedList: ReturnType<typeof parseRustImportStatements>,
-  typeOnly: boolean,
-  statementStartIndex: number | undefined,
-  seen: Set<string>,
-): Promise<void> {
-  const statementPathAttribute = extractRustModPathAttribute(context.source, undefined, statementStartIndex);
-  for (const parsed of parsedList) {
-    const pathAttribute =
-      parsed.kind === "module" && !parsed.isExternCrate ? (parsed.pathAttribute ?? statementPathAttribute) : undefined;
-    const resolved = await resolveRustParsedFrom(context, parsed.from, pathAttribute, statementStartIndex);
-    const binding = buildRustBinding(parsed, resolved, typeOnly);
-    const key = rustBindingKey(binding);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    context.pushBinding(binding);
-  }
-}
-
-function isRustTestOnlyStatement(
-  context: LanguageSpecificImportContext,
+function statementImportOverrideKey(
+  row: ImportBindingRow,
   normalizedStmt: string,
   statementStartIndex?: number,
-): boolean {
-  if (context.languageId !== "rust") return false;
-  if (statementStartIndex !== undefined) {
-    const keywordOffset = rustImportKeywordOffset(context.source.slice(statementStartIndex));
-    const keywordIndex = keywordOffset >= 0 ? statementStartIndex + keywordOffset : statementStartIndex;
-    const keywordText = keywordOffset >= 0 ? context.source.slice(keywordIndex) : normalizedStmt;
-    return isRustCfgTestStatement(context.source, keywordText, keywordIndex);
+): string {
+  if (row.statementKeyUsesOffset && statementStartIndex !== undefined) {
+    return `${normalizedStmt}@${statementStartIndex}`;
   }
-  return isRustCfgTestStatement(context.source, normalizedStmt, statementStartIndex);
-}
-
-async function applyPhpStatementOverride(
-  context: LanguageSpecificImportContext,
-  normalizedStmt: string,
-  typeOnly: boolean,
-): Promise<boolean> {
-  const parsed = parsePhpImportStatement(normalizedStmt, context.file);
-  if (!parsed.length) return false;
-
-  for (const entry of parsed) {
-    if (entry.kind === "include") {
-      const resolved = await context.resolveFrom(entry.from);
-      context.pushBinding({
-        kind: "star",
-        from: entry.from,
-        resolved,
-        typeOnly,
-        mechanism: "php",
-      });
-      continue;
-    }
-    const resolved = await context.resolveFrom(entry.from, entry.importType);
-    context.pushBinding({
-      kind: "named",
-      local: entry.local,
-      imported: entry.imported,
-      from: entry.from,
-      ...(entry.explicitAlias ? { explicitAlias: true } : {}),
-      phpImportType: entry.importType,
-      resolved,
-      typeOnly,
-      mechanism: "php",
-    });
-  }
-  return true;
+  return normalizedStmt;
 }
 
 export async function applyStatementImportOverride(
@@ -460,156 +178,27 @@ export async function applyStatementImportOverride(
 ): Promise<boolean> {
   const normalizedStmt = stmtText.trim();
   if (!normalizedStmt) return false;
-  const statementKey = statementImportOverrideKey(context.languageId, normalizedStmt, statementStartIndex);
+  const row = IMPORT_BINDING_ROWS[context.languageId];
+  const applyStatement = row?.applyStatement;
+  if (!row || !applyStatement) return false;
+
+  const statementKey = statementImportOverrideKey(row, normalizedStmt, statementStartIndex);
   if (state.handledStatements.has(statementKey)) return true;
 
-  let parserStmt = normalizedStmt;
-  const canMaskStrings =
-    context.languageId !== "rust" && (context.languageId !== "php" || /^\s*use\b/i.test(normalizedStmt));
-  if (canMaskStrings) {
-    parserStmt = maskImportBindingTrivia(normalizedStmt, context.languageId);
-    if (context.languageId === "csharp" || context.languageId === "java" || context.languageId === "kotlin") {
-      parserStmt = parserStmt.replace(/\s*\.\s*/gu, ".");
-    }
-  }
-  let handled = false;
-  if (context.languageId === "csharp") {
-    handled = await applyCsharpStatementOverride(context, parserStmt, typeOnly);
-  } else if (context.languageId === "java") {
-    handled = await applyJavaStatementOverride(context, parserStmt, typeOnly);
-  } else if (context.languageId === "kotlin") {
-    handled = await applyKotlinStatementOverride(context, parserStmt, typeOnly);
-  } else if (context.languageId === "rust") {
-    handled = await applyRustStatementOverride(context, normalizedStmt, typeOnly, statementStartIndex);
-  } else if (context.languageId === "php") {
-    handled = await applyPhpStatementOverride(context, parserStmt, typeOnly);
-  }
-
+  const handled = await applyStatement(
+    context,
+    parserTextForStatement(row, context.languageId, normalizedStmt),
+    typeOnly,
+    statementStartIndex,
+  );
   if (!handled) return false;
   state.handledStatements.add(statementKey);
   return true;
 }
 
-function statementImportOverrideKey(languageId: string, normalizedStmt: string, statementStartIndex?: number): string {
-  if (languageId === "rust" && statementStartIndex !== undefined) {
-    return `${normalizedStmt}@${statementStartIndex}`;
-  }
-  return normalizedStmt;
-}
-
 export function appendImplicitImportBinding(
   context: LanguageSpecificImportContext,
-  args: {
-    from: string;
-    resolved: ResolvedImportTarget;
-    typeOnly: boolean;
-    stmtText: string;
-    /** UTF-16 start index of `stmtText` within the source file, when known. */
-    stmtStartIndex?: number;
-    source?: string;
-    alias?: string;
-    wildcard?: boolean;
-  },
+  args: ImplicitImportBindingArgs,
 ): void {
-  const { from, resolved, typeOnly, stmtText, stmtStartIndex, source, alias, wildcard } = args;
-  const pushNamed = (binding: ImportBinding, alwaysAliased?: boolean): void =>
-    pushNamedImplicitBinding(context, binding, stmtText, stmtStartIndex, source, alwaysAliased);
-  if (context.languageId === "java") {
-    const parts = from.split(".");
-    const last = parts[parts.length - 1];
-    if (last === "*") {
-      context.pushBinding({ kind: "star", from, resolved, typeOnly });
-    } else if (last) {
-      pushNamed({ kind: "named", local: last, imported: last, from, resolved, typeOnly });
-    }
-  } else if (context.languageId === "csharp") {
-    if (alias) {
-      const fromParts = from.split(".");
-      const imported = fromParts[fromParts.length - 1] ?? alias;
-      pushNamed({ kind: "named", local: alias, imported, from, explicitAlias: true, resolved, typeOnly }, true);
-    } else {
-      context.pushBinding({ kind: "star", from, resolved, typeOnly });
-    }
-  } else if (context.languageId === "ruby") {
-    context.pushBinding({ kind: "star", from, resolved });
-  } else if (context.languageId === "go") {
-    const goAlias = alias;
-    if (goAlias === "_") return;
-    if (goAlias === ".") {
-      context.pushBinding({ kind: "star", from, resolved });
-      return;
-    }
-    if (goAlias) {
-      context.pushBinding({ kind: "namespace", localNS: goAlias, from, resolved });
-      return;
-    }
-    const parts = from.replace(/"/g, "").split("/");
-    const last = parts[parts.length - 1];
-    if (last) context.pushBinding({ kind: "namespace", localNS: last, from, resolved });
-  } else if (context.languageId === "rust") {
-    if (stmtText.startsWith("mod ")) {
-      context.pushBinding({ kind: "namespace", localNS: from, from, resolved });
-    } else {
-      const parts = from.split("::");
-      const last = parts[parts.length - 1];
-      if (!last) return;
-      if (last === "*") {
-        context.pushBinding({ kind: "star", from, resolved });
-      } else {
-        pushNamed({ kind: "named", local: last, imported: last, from, resolved });
-      }
-    }
-  } else if (context.languageId === "kotlin") {
-    if (wildcard || from.endsWith(".*")) {
-      context.pushBinding({ kind: "star", from, resolved, typeOnly });
-    } else {
-      const parts = from.split(".");
-      const imported = parts[parts.length - 1];
-      if (imported)
-        pushNamed({
-          kind: "named",
-          local: alias ?? imported,
-          imported,
-          from,
-          ...(alias !== undefined ? { explicitAlias: true } : {}),
-          resolved,
-          typeOnly,
-        });
-    }
-  } else if (context.languageId === "swift") {
-    const parts = from.split(".");
-    const last = parts[parts.length - 1];
-    if (!last) return;
-    if (parts.length === 1) {
-      context.pushBinding({ kind: "namespace", localNS: last, from, resolved, typeOnly });
-      context.pushBinding({ kind: "star", from, resolved, typeOnly });
-    } else {
-      pushNamed({ kind: "named", local: last, imported: last, from, resolved, typeOnly });
-    }
-  } else if (context.languageId === "zig") {
-    if (alias) context.pushBinding({ kind: "namespace", localNS: alias, from, resolved, typeOnly });
-  } else if (context.languageId === "c" || context.languageId === "cpp") {
-    context.pushBinding({ kind: "star", from, resolved, typeOnly });
-  }
-}
-
-function pushNamedImplicitBinding(
-  context: LanguageSpecificImportContext,
-  binding: ImportBinding,
-  stmtText: string,
-  stmtStartIndex: number | undefined,
-  source: string | undefined,
-  alwaysAliased: boolean | undefined,
-): void {
-  if (stmtStartIndex !== undefined && source !== undefined) {
-    attributeNamedBindingRanges({
-      bindings: [binding],
-      fromIndex: 0,
-      text: maskImportBindingTrivia(stmtText, context.languageId),
-      textStartIndex: stmtStartIndex,
-      source,
-      ...(alwaysAliased !== undefined ? { alwaysAliased } : {}),
-    });
-  }
-  context.pushBinding(binding);
+  IMPORT_BINDING_ROWS[context.languageId]?.appendImplicit?.(context, args);
 }

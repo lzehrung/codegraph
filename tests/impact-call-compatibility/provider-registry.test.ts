@@ -3,12 +3,15 @@ import { describe, expect, it } from "vitest";
 import "../../src/languages/all.js";
 import { GRAPH_ONLY_LANGUAGE_IDS } from "../../src/document-links/language-ids.js";
 import {
+  callCompatibilityLanguageIdDeclarations,
   callCompatibilityProviders,
+  getCallCompatibilityLanguageProfile,
   getCallCompatibilityProvider,
   getCallCompatibilitySupportedLanguages,
   isCallCompatibilityLanguageSupported,
 } from "../../src/impact/call-compatibility/providers/index.js";
-import { getAllLanguages } from "../../src/languages/registry.js";
+import { CALL_COMPATIBILITY_LANGUAGE_PROFILES } from "../../src/impact/call-compatibility/providers/profiles.js";
+import { getAllLanguages, getLanguageById } from "../../src/languages/registry.js";
 
 /**
  * Registered languages that have no callable function signatures for the structural extractor.
@@ -54,5 +57,23 @@ describe("call compatibility provider registry", () => {
     expect(isCallCompatibilityLanguageSupported("markdown")).toBeFalsy();
     expect(isCallCompatibilityLanguageSupported("css")).toBeFalsy();
     expect(isCallCompatibilityLanguageSupported("sql")).toBeFalsy();
+  });
+
+  it("keys the profile table to exactly the declared call-compatibility languages", () => {
+    expect(Object.keys(CALL_COMPATIBILITY_LANGUAGE_PROFILES).sort()).toEqual(
+      [...callCompatibilityLanguageIdDeclarations].sort(),
+    );
+    for (const languageId of Object.keys(CALL_COMPATIBILITY_LANGUAGE_PROFILES)) {
+      expect(getLanguageById(languageId), `${languageId} is not a registered language`).toBeDefined();
+    }
+  });
+
+  it("resolves one profile for every supported language and none for unsupported ids", () => {
+    for (const languageId of getCallCompatibilitySupportedLanguages()) {
+      expect(getCallCompatibilityLanguageProfile(languageId), `${languageId} has no profile`).not.toBeNull();
+    }
+    for (const languageId of ["javascript", "typescript", "jsx", "markdown"]) {
+      expect(getCallCompatibilityLanguageProfile(languageId)).toBeNull();
+    }
   });
 });

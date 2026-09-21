@@ -4,6 +4,7 @@ import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import { sliceText } from "../../util/ast.js";
 import { XID_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
+import { MEMBER_ACCESS_ROWS } from "../../util/member-access-tables.js";
 import {
   getMemberAccessParts,
   getNavigationExpressionProperty,
@@ -33,33 +34,7 @@ export type ReceiverCallCandidate = {
   memberScope?: ReceiverMemberScope;
 };
 
-/** Receiver spellings that denote the type declaring the calling member, per language. */
-type ReceiverKeywords = { own: readonly string[]; supertype: readonly string[] };
-
-const THIS_SUPER_RECEIVERS: ReceiverKeywords = { own: ["this"], supertype: ["super"] };
-const SELF_RECEIVERS: ReceiverKeywords = { own: ["self"], supertype: ["super"] };
-
-const RECEIVER_KEYWORDS: Record<string, ReceiverKeywords> = {
-  cpp: { own: ["this"], supertype: [] },
-  csharp: { own: ["this"], supertype: ["base"] },
-  go: { own: [], supertype: [] },
-  java: THIS_SUPER_RECEIVERS,
-  js: THIS_SUPER_RECEIVERS,
-  kotlin: THIS_SUPER_RECEIVERS,
-  php: { own: ["$this", "self", "static"], supertype: ["parent"] },
-  python: { own: ["self", "cls"], supertype: [] },
-  ruby: { own: ["self"], supertype: [] },
-  rust: { own: ["self", "Self"], supertype: [] },
-  swift: SELF_RECEIVERS,
-  ts: THIS_SUPER_RECEIVERS,
-  tsx: THIS_SUPER_RECEIVERS,
-  zig: { own: ["self"], supertype: [] },
-};
-
 const INSTANCE_RECEIVER_KEYWORDS = new Set(["this", "$this"]);
-
-/** Every language that declares receiver keywords, guarded by the registry-consistency test. */
-export const receiverKeywordLanguageIds: readonly string[] = Object.keys(RECEIVER_KEYWORDS);
 
 /** Languages whose grammar distinguishes static members from instance members. */
 const STATIC_MEMBER_LANGUAGES: Record<string, true> = {
@@ -75,22 +50,6 @@ const STATIC_MEMBER_LANGUAGES: Record<string, true> = {
 
 /** Every language with a static-member distinction, guarded by the registry-consistency test. */
 export const staticMemberLanguageIds: readonly string[] = Object.keys(STATIC_MEMBER_LANGUAGES);
-
-/** Languages that emit proven receiver `calls` edges from the shared keyword table. */
-export function supportsReceiverCallEdges(languageId: string): boolean {
-  return RECEIVER_KEYWORDS[languageId] !== undefined;
-}
-
-/** Languages where goto and references require proven receivers and do not fall back to a bare name. */
-export function supportsReceiverMemberNavigation(languageId: string): boolean {
-  return RECEIVER_KEYWORDS[languageId] !== undefined;
-}
-
-export function isKeywordReceiver(languageId: string, receiverName: string): boolean {
-  const keywords = RECEIVER_KEYWORDS[languageId];
-  if (!keywords) return false;
-  return keywords.own.includes(receiverName) || keywords.supertype.includes(receiverName);
-}
 
 export function hasStaticMemberDistinction(languageId: string): boolean {
   return STATIC_MEMBER_LANGUAGES[languageId] !== undefined;
@@ -821,7 +780,7 @@ export function classifyReceiver(
   cacheScope: number,
   accessNode: SyntaxNodeLike,
 ): ReceiverBinding | null {
-  const keywords = RECEIVER_KEYWORDS[sup.id];
+  const keywords = MEMBER_ACCESS_ROWS[sup.id]?.receiverKeywords;
   const text = sliceText(receiver, source).trim();
   if (!text) return null;
   if (keywords?.own.includes(text)) return { kind: "own-type", memberScope: ownTypeMemberScope(text) };
