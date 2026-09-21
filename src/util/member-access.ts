@@ -1,6 +1,7 @@
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { sliceText, unquote } from "./ast.js";
+import { MEMBER_ACCESS_ROWS, type MemberAccessChild } from "./member-access-tables.js";
 
 export type MemberAccessParts = {
   object: SyntaxNodeLike | null;
@@ -12,11 +13,29 @@ export type MemberAccessChain = {
   names: string[];
 };
 
+/**
+ * Member-access node types accepted for every language. The list is deliberately wider than any
+ * one grammar: node types are language-scoped in practice, so an over-broad shared list cannot
+ * cross-match between two parses.
+ */
+const GENERIC_MEMBER_ACCESS_TYPES: Record<string, true> = {
+  member_access_expression: true,
+  qualified_name: true,
+  field_access: true,
+  method_invocation: true,
+  scoped_identifier: true,
+  scoped_type_identifier: true,
+  qualified_identifier: true,
+  call: true,
+  scope_resolution: true,
+  field_expression: true,
+  attribute: true,
+  navigation_expression: true,
+};
+
 export function memberExpressionTypeFor(sup: LanguageSupport): string {
   if (sup.nodeTypes.memberExpression) return sup.nodeTypes.memberExpression;
-  if (sup.id === "python") return "attribute";
-  if (sup.id === "ruby") return "call";
-  return "member_expression";
+  return MEMBER_ACCESS_ROWS[sup.id]?.memberExpressionType ?? "member_expression";
 }
 
 export function memberPropertyIdentifierTypes(sup: LanguageSupport): string[] {
@@ -34,33 +53,15 @@ export function memberAccessTraversalTypes(sup: LanguageSupport): Set<string> {
     "subscript_expression",
     "optional_chain",
   ]);
-  if (sup.id === "go") types.add("qualified_type");
-  if (sup.id === "python") types.add("attribute");
-  if (sup.id === "kotlin" || sup.id === "swift") types.add("navigation_expression");
+  for (const nodeType of MEMBER_ACCESS_ROWS[sup.id]?.extraTraversalTypes ?? []) types.add(nodeType);
   return types;
 }
 
 export function isMemberAccessNode(sup: LanguageSupport, node: SyntaxNodeLike): boolean {
-  const memberExpressionType = memberExpressionTypeFor(sup);
   return (
-    node.type === memberExpressionType ||
-    (sup.id === "go" && node.type === "qualified_type") ||
-    (sup.id === "php" &&
-      (node.type === "member_call_expression" ||
-        node.type === "nullsafe_member_call_expression" ||
-        node.type === "scoped_call_expression")) ||
-    node.type === "member_access_expression" ||
-    node.type === "qualified_name" ||
-    node.type === "field_access" ||
-    node.type === "method_invocation" ||
-    node.type === "scoped_identifier" ||
-    node.type === "scoped_type_identifier" ||
-    node.type === "qualified_identifier" ||
-    node.type === "call" ||
-    node.type === "scope_resolution" ||
-    node.type === "field_expression" ||
-    node.type === "attribute" ||
-    node.type === "navigation_expression"
+    node.type === memberExpressionTypeFor(sup) ||
+    GENERIC_MEMBER_ACCESS_TYPES[node.type] === true ||
+    (MEMBER_ACCESS_ROWS[sup.id]?.extraMemberAccessTypes?.includes(node.type) ?? false)
   );
 }
 
@@ -95,77 +96,37 @@ export function getNavigationExpressionProperty(sup: LanguageSupport, expr: Synt
     suffix.namedChildren[0] ??
     suffix.child(0);
   if (fromSuffix) return fromSuffix;
-  if (sup.id === "kotlin") {
+  if (MEMBER_ACCESS_ROWS[sup.id]?.navigationFallbackLastChild) {
     return expr.namedChildren[expr.namedChildren.length - 1] ?? expr.child(2);
   }
   return null;
 }
 
 /**
- * Builds {@link MemberAccessParts} from a member-access node by tree-sitter
- * field name, falling back to positional children (object → child 0,
- * property → child 2) when a field is absent.
+ * Extracts one member-access child by tree-sitter field name, falling back to a positional child
+ * when the field is absent, or reading it directly by (named) child index.
  *
  * Most languages model member access as `<object>.<property>`, so per-language
- * branches only supply their field names instead of repeating this shape.
+ * rows in `./member-access-tables.ts` only supply their field names instead of
+ * repeating this shape.
  */
-function fieldParts(node: SyntaxNodeLike, objectField: string, propertyField: string): MemberAccessParts {
-  return {
-    object: node.childForFieldName(objectField) ?? node.child(0),
-    property: node.childForFieldName(propertyField) ?? node.child(2),
-  };
+function shapeChild(memberNode: SyntaxNodeLike, child: MemberAccessChild): SyntaxNodeLike | null {
+  if ("field" in child) return memberNode.childForFieldName(child.field) ?? memberNode.child(child.fallbackIndex);
+  if ("index" in child) return memberNode.child(child.index);
+  return memberNode.namedChildren[child.namedIndex] ?? memberNode.child(child.namedIndex);
 }
 
 export function getMemberAccessParts(sup: LanguageSupport, memberNode: SyntaxNodeLike): MemberAccessParts {
-  if (sup.id === "c" || sup.id === "cpp") {
-    if (memberNode.type === "field_expression") return fieldParts(memberNode, "argument", "field");
-    if (memberNode.type === "qualified_identifier") return fieldParts(memberNode, "scope", "name");
-  }
-  if (sup.id === "python") {
-    return fieldParts(memberNode, "object", "attribute");
-  }
-  if (sup.id === "csharp") {
-    return {
-      object: memberNode.child(0),
-      property: memberNode.child(2),
-    };
-  }
-  if (sup.id === "java") {
-    if (memberNode.type === "method_invocation") {
-      return fieldParts(memberNode, "object", "name");
-    }
-    if (memberNode.type === "scoped_identifier" || memberNode.type === "scoped_type_identifier") {
-      return fieldParts(memberNode, "scope", "name");
-    }
-  }
-  if (sup.id === "ruby") {
-    if (memberNode.type === "scope_resolution") {
-      return fieldParts(memberNode, "scope", "name");
-    }
-    return fieldParts(memberNode, "receiver", "method");
-  }
-  if (sup.id === "php") {
-    if (memberNode.type === "member_call_expression" || memberNode.type === "nullsafe_member_call_expression") {
-      return fieldParts(memberNode, "object", "name");
-    }
-    if (memberNode.type === "scoped_call_expression") {
-      return fieldParts(memberNode, "scope", "name");
-    }
-  }
-  if (sup.id === "rust" && memberNode.type === "scoped_identifier") {
-    return fieldParts(memberNode, "path", "name");
-  }
-  if (sup.id === "go" && memberNode.type === "qualified_type") {
-    return {
-      object: memberNode.namedChildren[0] ?? memberNode.child(0),
-      property: memberNode.namedChildren[1] ?? memberNode.child(1),
-    };
-  }
-  if ((sup.id === "kotlin" || sup.id === "swift") && memberNode.type === "navigation_expression") {
-    return {
-      object: memberNode.namedChildren[0] ?? memberNode.child(0),
-      property: getNavigationExpressionProperty(sup, memberNode),
-    };
+  // A shape without `nodeTypes` is the language's catch-all and must be its row's last entry.
+  const shape = MEMBER_ACCESS_ROWS[sup.id]?.memberAccessShapes?.find(
+    (candidate) => candidate.nodeTypes === undefined || candidate.nodeTypes.includes(memberNode.type),
+  );
+  if (shape) {
+    const property =
+      "navigation" in shape.property
+        ? getNavigationExpressionProperty(sup, memberNode)
+        : shapeChild(memberNode, shape.property);
+    return { object: shapeChild(memberNode, shape.object), property };
   }
   return {
     object: memberNode.childForFieldName("object") ?? memberNode.child(0),

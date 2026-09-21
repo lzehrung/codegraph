@@ -6,12 +6,10 @@ import {
   callCompatibilityLanguageIds,
   getCallCompatibilityProvider,
 } from "../src/impact/call-compatibility/providers/index.js";
-import {
-  receiverKeywordLanguageIds,
-  staticMemberLanguageIds,
-} from "../src/graphs/symbol-graph-detailed/receiver-calls.js";
+import { staticMemberLanguageIds } from "../src/graphs/symbol-graph-detailed/receiver-calls.js";
 import { isJsTsLanguage, jsFamilyLanguageIdDeclarations } from "../src/languages/js-family.js";
 import { getAllLanguages } from "../src/languages/registry.js";
+import { receiverKeywordLanguageIds } from "../src/util/member-access-tables.js";
 
 const registeredLanguageIds = new Set(getAllLanguages().map((definition) => definition.id));
 
