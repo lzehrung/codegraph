@@ -9,6 +9,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Changed
+
+- Per-language member access, dynamic import folding, import binding, and call-compatibility behavior now lives in typed registries keyed by language id. Registry consistency tests reject missing or stale rows, with no change to indexing results.
+
 ## [2.3.30] - 2026-09-21
 
 ### Added
