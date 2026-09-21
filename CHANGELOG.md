@@ -9,6 +9,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [2.3.31] - 2026-09-21
+
 ### Changed
 
 - Per-language member access, dynamic import folding, import binding, and call-compatibility behavior now lives in typed registries keyed by language id. Registry consistency tests reject missing or stale rows, with no change to indexing results.
@@ -560,7 +562,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.30...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.31...HEAD
+[2.3.31]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.31
 [2.3.30]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.30
 [2.3.29]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.29
 [2.3.28]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.28
