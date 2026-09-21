@@ -767,7 +767,11 @@ async function findReferencesInternal(
       phpQualifiedNames,
       sameFileOccurrence: {
         applicable: parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp",
-        executed: localBinding !== undefined && localBinding.occurrences.length > 0,
+        // `executed` means the scan ran, not that it found uses. Deriving it from
+        // `occurrences.length` would report `partial` for any C or C++ definition that simply
+        // has no same-file uses. The scan can only run against a located scope binding, so that
+        // is the honest signal.
+        executed: localBinding !== undefined,
       },
     }),
   });

@@ -1,6 +1,7 @@
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { sliceText } from "../util/ast.js";
+import { SymbolKind } from "./types.js";
 
 function readPhpNamespaceName(namespaceNode: SyntaxNodeLike, source: string): string | null {
   const namespaceName =
@@ -50,25 +51,27 @@ export function readPhpNamespaceFromRange(tree: SyntaxTreeLike, source: string, 
 }
 
 /**
- * Symbol kinds whose PHP names are case-insensitive: class-like declarations and
- * namespaces (PHP resolves class, interface, trait, enum, function, and method names
- * ASCII-case-insensitively; constants and variables stay case-sensitive).
+ * Symbol kinds whose PHP names are case-insensitive. Keyed by `SymbolKind`, which is what
+ * `SymbolDef.kind` carries: PHP's richer classifier vocabulary (`trait`, `method`, `namespace`,
+ * `constant`) never reaches here, because `toKind` in `locals-and-exports.ts` maps it down.
+ * PHP resolves class, interface, trait, enum, and function/method names ASCII-case-insensitively;
+ * a trait is classified as `class` and an enum as `type` so both land here.
  */
 const PHP_CASE_INSENSITIVE_SYMBOL_KINDS: Record<string, true> = {
-  class: true,
-  interface: true,
-  trait: true,
-  type: true,
-  function: true,
-  method: true,
-  namespace: true,
+  [SymbolKind.Class]: true,
+  [SymbolKind.Interface]: true,
+  [SymbolKind.TypeAlias]: true,
+  [SymbolKind.Function]: true,
 };
 
-/** Symbol kinds that PHP resolves case-sensitively, so a case variant is never the same symbol. */
+/**
+ * Symbol kinds that PHP resolves case-sensitively, so a case variant is never the same symbol.
+ * Constants and enum cases collapse into `variable` alongside `$variables`, and all three are
+ * case-sensitive in PHP, so the single bucket is correct rather than merely convenient.
+ */
 const PHP_CASE_SENSITIVE_SYMBOL_KINDS: Record<string, true> = {
-  constant: true,
-  variable: true,
-  default: true,
+  [SymbolKind.Variable]: true,
+  [SymbolKind.Default]: true,
 };
 
 export function foldPhpIdentifierCase(value: string): string {

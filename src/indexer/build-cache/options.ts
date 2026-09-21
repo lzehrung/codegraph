@@ -60,8 +60,10 @@ export const CORE_ALGORITHM_EPOCH = 20;
  * parameter locals, Java constructor and spread-parameter declaration names, PHP block
  * scope, Ruby query-driven locals, JavaScript type-only imports, and Ruby and PHP
  * dynamic-import heuristics.
+ * Epoch 9 classifies a PHP trait as `class` so it reaches `SymbolKind.Class` like a Rust
+ * trait, instead of collapsing to `variable` through the indexer's kind mapping.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 8;
+export const LANGUAGE_BEHAVIOR_EPOCH = 9;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];

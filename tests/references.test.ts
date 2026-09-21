@@ -4401,6 +4401,58 @@ describe("Find References: PHP global-namespace symbols", () => {
   });
 });
 
+describe("Find References: PHP trait case-insensitivity", () => {
+  it("matches a case-variant trait reference across files", async () => {
+    // A PHP trait is class-like and its name is case-insensitive. The indexer's kind mapping has
+    // no `trait` entry, so classifying it as anything other than `class` collapses it to
+    // `variable`, which the comparator treats as case-sensitive and the reference is lost.
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-trait-case-"));
+    try {
+      const traitFile = path.join(root, "trait.php").replace(/\\/g, "/");
+      const useFile = path.join(root, "use.php").replace(/\\/g, "/");
+      await fsp.writeFile(
+        traitFile,
+        ["<?php", "namespace App;", "trait Greets {", "  public function hello() { return 1; }", "}", ""].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(useFile, ["<?php", "namespace App;", "class Host { use greets; }", ""].join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [traitFile, useFile]);
+
+      const declared = index.byFile
+        .get(fileIdentityKey(traitFile))
+        ?.locals.find((local) => local.localName === "Greets");
+      expect(declared?.kind).toBe("class");
+
+      const result = await indexer.findReferences(index, { file: traitFile, line: 3, column: 7 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expectReferenceAt(result, useFile, 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: same-file strategy execution", () => {
+  it("keeps coverage complete for a C definition that simply has no same-file uses", async () => {
+    // `executed` records that the same-file scan ran, not that it found uses. Deriving it from
+    // the occurrence count downgrades every unused C or C++ declaration to partial.
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-c-zero-use-coverage-"));
+    try {
+      const file = path.join(root, "lonely.c").replace(/\\/g, "/");
+      await fsp.writeFile(file, "int lonely(void) { return 1; }\n", "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+
+      const result = await indexer.findReferences(index, { file, line: 1, column: 5 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Find References: reference coverage honesty", () => {
   it("reports partial coverage when an applicable strategy never ran", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-coverage-strategy-"));

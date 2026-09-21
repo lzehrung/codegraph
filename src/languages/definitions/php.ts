@@ -112,7 +112,10 @@ export const PHP_DEF: LanguageDefinition = {
   classifyDefinition: classifyByParentType({
     class_declaration: "class",
     interface_declaration: "interface",
-    trait_declaration: "trait",
+    // A trait is class-like and must reach `SymbolKind.Class`, matching Rust's `trait_item`.
+    // The indexer's kind mapping has no `trait` entry, so any other spelling collapses to
+    // `variable`, which makes PHP's case-insensitive trait names compare case-sensitively.
+    trait_declaration: "class",
     enum_declaration: "type",
     enum_case: "constant",
     function_definition: "function",
