@@ -18,7 +18,7 @@
 /**
  * Tag/attribute pairs every format that walks embedded HTML shares. This is the
  * HTML document walker's own table; the graph's HTML path uses it verbatim, and
- * a format narrows it only through `optOuts`.
+ * a format narrows it only through `attributes`/`optOuts`.
  */
 export const SHARED_HTML_TAG_ATTRS: Record<string, string[]> = {
   script: ["src"],
@@ -38,19 +38,26 @@ export interface DocumentHtmlForm {
   inlineScript: boolean;
   inlineStyle: boolean;
   /**
-   * One-line reason for each omitted shared tag or pass, keyed by the omitted
-   * name (`attributes`, a tag name, `inlineScript`, or `inlineStyle`).
+   * One-line reason for each omitted shared tag, attribute, or pass. Keys name
+   * the omission: `attributes`, a tag name when the whole tag is dropped,
+   * `<tag>.<attribute>` when only that attribute is dropped, or `inlineScript`
+   * / `inlineStyle`. A test asserts every omission from the shared table has a
+   * key here, so an opt-out cannot flip silently.
    */
   optOuts: Record<string, string>;
 }
 
 export type DocumentHtmlFormId = "html" | "astro" | "hbs" | "markdown" | "mdx" | "adoc" | "rst";
 
-function attributesExcept(omittedTags: readonly string[]): Record<string, string[]> {
+function attributesExcept(
+  omittedTags: readonly string[],
+  omittedAttributes: Record<string, readonly string[]> = {},
+): Record<string, string[]> {
   const out: Record<string, string[]> = {};
   for (const [tag, attributeNames] of Object.entries(SHARED_HTML_TAG_ATTRS)) {
     if (omittedTags.includes(tag)) continue;
-    out[tag] = attributeNames;
+    const omitted = omittedAttributes[tag] ?? [];
+    out[tag] = attributeNames.filter((attributeName) => !omitted.includes(attributeName));
   }
   return out;
 }
@@ -61,15 +68,19 @@ function attributesExcept(omittedTags: readonly string[]): Record<string, string
  * prose formats keep from their own image syntax: `![alt](src)`, `!image(...)`,
  * and their equivalents are deliberately not dependency edges, so the raw image
  * forms are not either.
+ *
+ * Only image sources are dropped. A `source` element's `srcset` candidates are
+ * image sources, covered by that exclusion, but its `src` is ordinary media
+ * (`<video><source src="./clip.webm">`), which HTML itself reports, so it stays.
  */
 function htmlFormExceptImageSources(imageSyntax: string): DocumentHtmlForm {
   return {
-    attributes: attributesExcept(["img", "source"]),
+    attributes: attributesExcept(["img"], { source: ["srcset"] }),
     inlineScript: true,
     inlineStyle: true,
     optOuts: {
       img: `${imageSyntax} is deliberately not a dependency edge, so a raw img form is not one either`,
-      source: "source srcset candidates are image sources, covered by the same image exclusion",
+      "source.srcset": "source srcset candidates are image sources, covered by the same image exclusion",
     },
   };
 }

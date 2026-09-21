@@ -74,4 +74,15 @@ describe("MDX document-link masking", () => {
       { spec: "./components/Card.tsx", resolutionKind: "source" },
     ]);
   });
+
+  it("keeps media source src while dropping raw image sources", () => {
+    const source = [
+      'import "./setup.ts";',
+      "![Diagram](./images/diagram.svg)",
+      '<img src="./image.png">',
+      '<video><source src="./clip.webm"></video>',
+    ].join("\n");
+
+    expect(extractMdxModuleSpecifiers(source).map((entry) => entry.spec)).toEqual(["./clip.webm", "./setup.ts"]);
+  });
 });

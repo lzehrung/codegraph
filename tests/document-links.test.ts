@@ -883,8 +883,16 @@ describe("document format HTML forms", () => {
       if (form.attributes === null) {
         omitted.push("attributes");
       } else {
-        for (const tag of Object.keys(SHARED_HTML_TAG_ATTRS)) {
-          if (!(tag in form.attributes)) omitted.push(tag);
+        for (const [tag, sharedAttributes] of Object.entries(SHARED_HTML_TAG_ATTRS)) {
+          const formAttributes = form.attributes[tag];
+          if (!formAttributes) {
+            omitted.push(tag);
+            continue;
+          }
+          for (const attributeName of sharedAttributes) {
+            if (formAttributes.includes(attributeName)) continue;
+            omitted.push(`${tag}.${attributeName}`);
+          }
         }
       }
       if (!form.inlineScript) omitted.push("inlineScript");
@@ -966,7 +974,7 @@ describe("document format HTML forms", () => {
     ]);
   });
 
-  it("walks embedded HTML in Markdown except image sources, and keeps markdown exclusions", () => {
+  it("walks embedded HTML in Markdown, keeping media source src while dropping image sources", () => {
     const source = [
       "[Guide](./guide.md)",
       "![Diagram](./images/diagram.svg)",
@@ -976,6 +984,8 @@ describe("document format HTML forms", () => {
       '<script>import "./inline.ts";</script>',
       '<style>@import "./theme.css";</style>',
       '<img src="./image.png">',
+      '<img srcset="./image@2x.png 2x">',
+      '<video><source src="./clip.webm"></video>',
       '<picture><source srcset="./wide.avif 1x"></picture>',
       '<!-- <a href="./commented.html">Commented</a> -->',
       "```html",
@@ -989,6 +999,7 @@ describe("document format HTML forms", () => {
       "./raw.html",
       "./styles.css",
       "./app.js",
+      "./clip.webm",
       "./inline.ts",
       "./theme.css",
     ]);
@@ -998,13 +1009,16 @@ describe("document format HTML forms", () => {
     const source = [
       'import Card from "./components/Card.tsx";',
       "[Guide](./guide.md)",
+      "![Diagram](./images/diagram.svg)",
       '<script src="./app.js"></script>',
       '<img src="./image.png">',
+      '<video><source src="./clip.webm"></video>',
     ].join("\n");
 
     expect(extractMdxModuleSpecifiers(source).map((entry) => entry.spec)).toEqual([
       "./guide.md",
       "./app.js",
+      "./clip.webm",
       "./components/Card.tsx",
     ]);
   });
@@ -1015,7 +1029,9 @@ describe("document format HTML forms", () => {
       '<a href="./guide.adoc">Guide</a>',
       '<link rel="stylesheet" href="./styles.css">',
       '<script src="./app.js"></script>',
+      "image::diagram.svg[Diagram]",
       '<img src="./image.png">',
+      '<video><source src="./clip.webm"></video>',
       "----",
       '<a href="./listing.adoc">Listing</a>',
       "----",
@@ -1029,6 +1045,7 @@ describe("document format HTML forms", () => {
       "./guide.adoc",
       "./styles.css",
       "./app.js",
+      "./clip.webm",
     ]);
   });
 

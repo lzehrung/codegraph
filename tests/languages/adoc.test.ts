@@ -128,3 +128,22 @@ describe("AsciiDoc conditional includes", () => {
     ]);
   });
 });
+
+describe("AsciiDoc embedded HTML media sources", () => {
+  it("keeps media source src while dropping raw image sources and listing markup", () => {
+    const source = [
+      "include::partials/live.adoc[]",
+      "image::diagram.svg[Diagram]",
+      '<img src="./image.png">',
+      '<video><source src="./clip.webm"></video>',
+      "----",
+      '<video><source src="./listing.webm"></video>',
+      "----",
+    ].join("\n");
+
+    expect(extractAsciidocModuleSpecifiers(source).map((entry) => entry.spec)).toEqual([
+      "./partials/live.adoc",
+      "./clip.webm",
+    ]);
+  });
+});

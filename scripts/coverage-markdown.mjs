@@ -6,7 +6,7 @@ const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const mode = process.argv[2] ?? "all";
 
 try {
-  const writtenPaths = writeCoverageMarkdownReports({ rootDir, mode });
+  const writtenPaths = await writeCoverageMarkdownReports({ rootDir, mode });
   for (const filePath of writtenPaths) {
     console.log(filePath);
   }
