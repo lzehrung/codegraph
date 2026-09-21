@@ -9,6 +9,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [2.3.30] - 2026-09-21
+
 ### Added
 
 - JavaScript class inheritance is extracted. `class Child extends Base` now emits `extends` edges from the JavaScript grammar's `class_heritage` node, so supertypes, subtypes, implementations, and `super.m()` call edges work in `.js` files instead of returning empty results.
@@ -554,7 +556,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.29...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.30...HEAD
+[2.3.30]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.30
 [2.3.29]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.29
 [2.3.28]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.28
 [2.3.27]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.27
