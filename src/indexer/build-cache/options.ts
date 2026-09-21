@@ -45,8 +45,12 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * a leading BOM no longer discards tsconfig path mappings, lone-CR sources report
  * real line numbers, and cached modules persist `declaredContainers` so a consumer
  * whose declaring file changed elsewhere is re-resolved on an incremental build.
+ * Epoch 21 resolves C and C++ quoted includes relative to the including file, routes C through
+ * the graph edge resolver, registers C-family function names in the enclosing scope through the
+ * declarator chain so same-file call sites become references, and resolves keyword and supertype
+ * receiver members for every language that declares receiver keywords.
  */
-export const CORE_ALGORITHM_EPOCH = 20;
+export const CORE_ALGORITHM_EPOCH = 21;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
