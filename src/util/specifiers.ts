@@ -1,7 +1,14 @@
 import path from "node:path";
 import { buildJsLikeLiteralMask, stripJsLikeComments, stripPythonCommentsAndStrings } from "./comments.js";
+import {
+  createDynamicImportEntries,
+  type DynamicBase,
+  type DynamicImportPreparation,
+  type DynamicImportShapeContext,
+  type FoldedPath,
+  type PathFoldProfile,
+} from "./dynamic-import-tables.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE, PYTHON_IDENTIFIER_SOURCE } from "./identifiers.js";
-import { buildTriviaMask } from "./trivia.js";
 import { normalizePath } from "./paths.js";
 
 export type ModuleSpecifierResolutionKind = "document" | "source" | "stylesheet";
@@ -108,43 +115,7 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
   return out;
 }
 
-type DynamicBase = "fileDir" | "filePath" | "project";
 type ParsedDynamicToken = { kind: "base"; base: DynamicBase } | { kind: "literal"; value: string };
-type FoldedPath = { base: DynamicBase; segments: string[] };
-
-/**
- * Per-language inputs to the shared constant-path fold: the base tokens that root a computed
- * path and the join-style helper calls that combine a base with literal segments. Tokens are
- * compared after whitespace removal, so `dirname(__FILE__)` and `process.cwd()` fold like
- * identifiers. Languages without a concatenation operator only fold join-helper arguments.
- */
-type PathFoldProfile = {
-  bases: Readonly<Record<string, DynamicBase>>;
-  joinHelpers: readonly string[];
-  /** Top-level concatenation operator between constant parts (PHP `.`). */
-  concat?: string;
-};
-
-const JS_PATH_FOLD_PROFILE: PathFoldProfile = {
-  bases: {
-    __dirname: "fileDir",
-    __filename: "filePath",
-    "import.meta.url": "filePath",
-    "process.cwd()": "project",
-  },
-  joinHelpers: ["path.join", "path.resolve"],
-};
-
-const RUBY_PATH_FOLD_PROFILE: PathFoldProfile = {
-  bases: { __dir__: "fileDir" },
-  joinHelpers: ["File.join"],
-};
-
-const PHP_PATH_FOLD_PROFILE: PathFoldProfile = {
-  bases: { __DIR__: "fileDir", "dirname(__FILE__)": "fileDir" },
-  joinHelpers: [],
-  concat: ".",
-};
 
 function parseQuotedStringToken(token: string): string | null {
   const trimmed = token.trim();
@@ -320,40 +291,6 @@ function resolveFoldedPathByConcatenation(folded: FoldedPath, fromFile: string):
   return buildRelativeSpecifier(fromFile, path.join(path.dirname(fromFile), ...folded.segments));
 }
 
-type DynamicImportPreparation = {
-  /** Python importlib alias tables collected once per file. */
-  pythonImportlibAliases?: Set<string>;
-  pythonImportModuleAliases?: Set<string>;
-};
-
-type DynamicImportShapeContext = {
-  /** The text the shape's pattern ran over (comment-blanked for the JS family). */
-  text: string;
-  match: RegExpMatchArray;
-  fromFile: string;
-  projectRoot: string;
-  preparation: DynamicImportPreparation;
-};
-
-type DynamicImportCallShape = {
-  /** Pattern over the entry's matching text; capture 1 holds the foldable argument, or the
-   * fold reads the argument from the match end (Python's escape-aware literal reader). */
-  pattern: RegExp;
-  fold: (context: DynamicImportShapeContext) => string | null;
-};
-
-type DynamicImportEntry = {
-  languageId: string;
-  /** Matching text, blanking comments through the shared trivia lexer where needed; string
-   * literals stay intact so folds can read their contents. */
-  text: (source: string) => string;
-  /** Non-code guard over the matching text; matches starting inside trivia are skipped. */
-  guard: (text: string) => Uint8Array | undefined;
-  /** Per-file preparation, evaluated once per extraction. */
-  prepare?: (source: string) => DynamicImportPreparation;
-  shapes: readonly DynamicImportCallShape[];
-};
-
 function foldCapturedPath(
   profile: PathFoldProfile,
   resolve: (folded: FoldedPath, fromFile: string, projectRoot: string) => string | null,
@@ -363,64 +300,6 @@ function foldCapturedPath(
     return folded ? resolve(folded, fromFile, projectRoot) : null;
   };
 }
-
-const JS_DYNAMIC_PATH_CALL_PATTERN =
-  /(?<!["'`])\b(?:require|import)\s*\(\s*(path\.(?:join|resolve)\s*\((?:[^()]|\([^()]*\))*\))\s*\)/g;
-const JS_DYNAMIC_URL_CALL_PATTERN = /(?<!["'`])\b(?:require|import)\s*\(\s*(new\s+URL\s*\([^)]*\))\s*\)/g;
-const RUBY_REQUIRE_FILE_JOIN_PATTERN =
-  /(?<![\p{XID_Continue}])require\s*\(?\s*(File\.join\s*\((?:[^()]|\([^()]*\))*\))/gu;
-const PHP_COMPUTED_INCLUDE_PATTERN =
-  /(?<![\p{XID_Continue}$])(?:include_once|include|require_once|require)\b\s*\(?\s*([^;\r\n]*?)\s*\)?\s*;/gu;
-
-const JS_TS_DYNAMIC_IMPORT_ENTRY: DynamicImportEntry = {
-  languageId: "js",
-  // Comments are blanked before matching so a `require(...)` inside a comment cannot match;
-  // string literals stay intact because the fold reads their contents.
-  text: stripJsLikeComments,
-  guard: buildJsLikeLiteralMask,
-  shapes: [
-    {
-      pattern: JS_DYNAMIC_PATH_CALL_PATTERN,
-      fold: foldCapturedPath(JS_PATH_FOLD_PROFILE, resolveFoldedPathAgainstBase),
-    },
-    {
-      pattern: JS_DYNAMIC_URL_CALL_PATTERN,
-      fold: ({ match, fromFile }) => {
-        const folded = foldNewUrlArgument(match[1] ?? "", JS_PATH_FOLD_PROFILE);
-        return folded ? resolveFoldedPathAgainstFileDir(folded, fromFile) : null;
-      },
-    },
-  ],
-};
-
-const RUBY_DYNAMIC_IMPORT_ENTRY: DynamicImportEntry = {
-  languageId: "ruby",
-  text: (source) => source,
-  guard: (text) => buildTriviaMask(text, "ruby"),
-  shapes: [
-    {
-      // Only the computed `require File.join(__dir__, ...)` form is folded here; bare-string
-      // requires flow through the static pipeline and `$LOAD_PATH` lookups stay external.
-      pattern: RUBY_REQUIRE_FILE_JOIN_PATTERN,
-      fold: foldCapturedPath(RUBY_PATH_FOLD_PROFILE, resolveFoldedPathByConcatenation),
-    },
-  ],
-};
-
-const PHP_DYNAMIC_IMPORT_ENTRY: DynamicImportEntry = {
-  languageId: "php",
-  text: (source) => source,
-  guard: (text) => buildTriviaMask(text, "php"),
-  shapes: [
-    {
-      // Computed `include`/`require` whose path is a constant chain rooted at `__DIR__` (or
-      // the legacy `dirname(__FILE__)`); plain string operands stay with the static pipeline
-      // and the include-path search stays external.
-      pattern: PHP_COMPUTED_INCLUDE_PATTERN,
-      fold: foldCapturedPath(PHP_PATH_FOLD_PROFILE, resolveFoldedPathByConcatenation),
-    },
-  ],
-};
 
 // Python module/package names are dotted sequences of PEP 3131 Unicode identifiers; a
 // per-segment character class (rather than Unicode letters/digits spanning the dots) keeps
@@ -434,10 +313,6 @@ const PYTHON_IMPORTLIB_ALIAS_PATTERN = new RegExp(
 const PYTHON_IMPORT_MODULE_ALIAS_PATTERN = new RegExp(
   String.raw`^import_module(?:\s+as\s+(${PYTHON_IDENTIFIER_SOURCE}))?$`,
   "u",
-);
-const PYTHON_DYNAMIC_CALL_PREFIX_PATTERN = new RegExp(
-  String.raw`(?<![._\p{XID_Continue}])(${PYTHON_IDENTIFIER_SOURCE})(?:\s*\.\s*(${PYTHON_IDENTIFIER_SOURCE}))?\s*\(\s*(?:name\s*=\s*)?`,
-  "gmu",
 );
 const PYTHON_DYNAMIC_MODULE_PATTERN = new RegExp(String.raw`^\.*${PYTHON_DOTTED_NAME_SOURCE}$`, "u");
 const PYTHON_FROM_IMPORTLIB_PATTERN = /^\s*from\s+importlib\s+import\s+(?:\(([\s\S]*?)\)|([^\r\n;]+))/gmu;
@@ -618,29 +493,15 @@ function foldPythonDynamicModuleArgument(
   return spec;
 }
 
-const PYTHON_DYNAMIC_IMPORT_ENTRY: DynamicImportEntry = {
-  languageId: "python",
-  text: (source) => source,
-  guard: (text) => buildTriviaMask(text, "python"),
-  prepare: (source) => {
-    const { importlibAliases, importModuleAliases } = collectPythonDynamicImportAliases(source);
-    return { pythonImportlibAliases: importlibAliases, pythonImportModuleAliases: importModuleAliases };
-  },
-  shapes: [
-    {
-      pattern: PYTHON_DYNAMIC_CALL_PREFIX_PATTERN,
-      fold: ({ text, match, preparation }) => foldPythonDynamicModuleArgument(text, match, preparation),
-    },
-  ],
-};
-
-const DYNAMIC_IMPORT_SPECIFIER_EXTRACTORS: Readonly<Record<string, DynamicImportEntry>> = {
-  js: JS_TS_DYNAMIC_IMPORT_ENTRY,
-  ts: JS_TS_DYNAMIC_IMPORT_ENTRY,
-  python: PYTHON_DYNAMIC_IMPORT_ENTRY,
-  ruby: RUBY_DYNAMIC_IMPORT_ENTRY,
-  php: PHP_DYNAMIC_IMPORT_ENTRY,
-};
+const DYNAMIC_IMPORT_SPECIFIER_EXTRACTORS = createDynamicImportEntries({
+  foldCapturedPath,
+  foldNewUrlArgument,
+  resolveFoldedPathAgainstBase,
+  resolveFoldedPathAgainstFileDir,
+  resolveFoldedPathByConcatenation,
+  foldPythonDynamicModuleArgument,
+  collectPythonDynamicImportAliases,
+});
 
 /**
  * Shared adapter boundary for opt-in dynamic import heuristics. A language entry supplies only
