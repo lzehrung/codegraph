@@ -1,4 +1,4 @@
-import { supportForFile } from "../languages.js";
+import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { FileId } from "../types.js";
 import { SymbolKind, type BuildOptions, type ModuleIndex, type SymbolDef } from "./types.js";
@@ -70,7 +70,9 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
       if (imp.kind !== "star" || typeof imp.resolved !== "string") continue;
       const target = modules.get(fileIdentityKey(imp.resolved));
       if (!target) continue;
-      const targetSupport = supportForFile(imp.resolved, opts?.languageExtensions);
+      // Only stylesheet and Ruby membership is asked below, and C and C++ answer both the same,
+      // so a `.h` target must not pay for a header sample read here.
+      const targetSupport = supportForFileWithoutHeaderSample(imp.resolved, opts?.languageExtensions);
       const exportedSymbols = symbolsForStarImport(
         target,
         !!targetSupport && STYLESHEET_LANGUAGE_IDS.has(targetSupport.id),
