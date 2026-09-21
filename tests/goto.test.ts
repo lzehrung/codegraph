@@ -2985,3 +2985,241 @@ describe("Receiver construction, reassignment, typed parameters, and static scop
     }
   });
 });
+
+describe("Keyword-receiver member navigation", () => {
+  function columnOf(source: string, line: number, token: string): number {
+    const lines = source.split("\n");
+    const index = lines[line - 1]!.indexOf(token);
+    if (index < 0) throw new Error(`Expected token ${token} on fixture line ${line}`);
+    return index + 1;
+  }
+
+  async function buildFiles(
+    prefix: string,
+    files: Record<string, string>,
+  ): Promise<{ root: string; paths: Record<string, string>; index: ProjectIndex }> {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
+    const paths: Record<string, string> = {};
+    for (const [name, source] of Object.entries(files)) {
+      const file = path.join(root, name).replace(/\\/g, "/");
+      await fsp.mkdir(path.dirname(file), { recursive: true });
+      await fsp.writeFile(file, source, "utf8");
+      paths[name] = file;
+    }
+    return { root, paths, index: await createTestIndexFromFiles(root, Object.values(paths)) };
+  }
+
+  async function expectMemberAccess(
+    index: ProjectIndex,
+    file: string,
+    line: number,
+    column: number,
+    expectedLine: number,
+  ): Promise<void> {
+    const result = await goToDefinition(index, { file, line, column });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.definition.range.start.line).toBe(expectedLine);
+    expect(result.provenance.resolution).toBe("member-access");
+  }
+
+  it("resolves C++ this-> method and field through member-access", async () => {
+    const source = [
+      "class Box {",
+      " public:",
+      "  int field = 1;",
+      "  int target() { return 1; }",
+      "  int run() { return this->field + this->target(); }",
+      "};",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cpp-this-goto-", { "box.cpp": source });
+    try {
+      await expectMemberAccess(index, paths["box.cpp"]!, 5, columnOf(source, 5, "field"), 3);
+      await expectMemberAccess(index, paths["box.cpp"]!, 5, columnOf(source, 5, "target()"), 4);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves C# this. method and field through member-access", async () => {
+    const source = [
+      "class Box {",
+      "  public int field = 1;",
+      "  public int Target() { return 1; }",
+      "  public int Run() { return this.field + this.Target(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cs-this-goto-", { "Box.cs": source });
+    try {
+      await expectMemberAccess(index, paths["Box.cs"]!, 4, columnOf(source, 4, "field"), 2);
+      await expectMemberAccess(index, paths["Box.cs"]!, 4, columnOf(source, 4, "Target()"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Java this. method and field through member-access", async () => {
+    const source = [
+      "class Box {",
+      "  int field = 1;",
+      "  int target() { return 1; }",
+      "  int run() { return this.field + this.target(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-java-this-goto-", { "Box.java": source });
+    try {
+      await expectMemberAccess(index, paths["Box.java"]!, 4, columnOf(source, 4, "field"), 2);
+      await expectMemberAccess(index, paths["Box.java"]!, 4, columnOf(source, 4, "target()"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Kotlin this. method and field through member-access", async () => {
+    const source = [
+      "class Box {",
+      "  val field = 1",
+      "  fun target(): Int = 1",
+      "  fun run(): Int = this.field + this.target()",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-kt-this-goto-", { "Box.kt": source });
+    try {
+      await expectMemberAccess(index, paths["Box.kt"]!, 4, columnOf(source, 4, "field"), 2);
+      await expectMemberAccess(index, paths["Box.kt"]!, 4, columnOf(source, 4, "target()"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Ruby self. method through member-access", async () => {
+    const source = ["class Box", "  def target", "  end", "  def run", "    self.target", "  end", "end", ""].join("\n");
+    const { root, paths, index } = await buildFiles("cg-rb-self-goto-", { "box.rb": source });
+    try {
+      await expectMemberAccess(index, paths["box.rb"]!, 5, columnOf(source, 5, "target"), 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Swift self. method through member-access", async () => {
+    const source = [
+      "class Box {",
+      "  var field = 1",
+      "  func target() -> Int { return 1 }",
+      "  func run() -> Int { return self.target() }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-swift-self-goto-", { "Box.swift": source });
+    try {
+      await expectMemberAccess(index, paths["Box.swift"]!, 4, columnOf(source, 4, "target()"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Supertype keyword member navigation", () => {
+  function columnOf(source: string, line: number, token: string): number {
+    const lines = source.split("\n");
+    const index = lines[line - 1]!.indexOf(token);
+    if (index < 0) throw new Error(`Expected token ${token} on fixture line ${line}`);
+    return index + 1;
+  }
+
+  async function buildFiles(
+    prefix: string,
+    files: Record<string, string>,
+  ): Promise<{ root: string; paths: Record<string, string>; index: ProjectIndex }> {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
+    const paths: Record<string, string> = {};
+    for (const [name, source] of Object.entries(files)) {
+      const file = path.join(root, name).replace(/\\/g, "/");
+      await fsp.mkdir(path.dirname(file), { recursive: true });
+      await fsp.writeFile(file, source, "utf8");
+      paths[name] = file;
+    }
+    return { root, paths, index: await createTestIndexFromFiles(root, Object.values(paths)) };
+  }
+
+  it("resolves TypeScript super.helper() to the base declaration, not the derived override", async () => {
+    const source = [
+      "class Base {",
+      "  helper(): number { return 1; }",
+      "}",
+      "class Derived extends Base {",
+      "  helper(): number { return 2; }",
+      "  run(): number { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-super-goto-", { "box.ts": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["box.ts"]!,
+        line: 6,
+        column: columnOf(source, 6, "helper()"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.definition.range.start.line).toBe(2);
+      expect(result.definition.range.start.line).not.toBe(5);
+      expect(result.provenance.resolution).toBe("member-access");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fall back to a same-named module-level function for super.missing()", async () => {
+    const source = [
+      "function missing(): number { return 0; }",
+      "class Base {}",
+      "class Derived extends Base {",
+      "  run(): number { return super.missing(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-super-missing-goto-", { "box.ts": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["box.ts"]!,
+        line: 4,
+        column: columnOf(source, 4, "missing()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve super.helper() when two same-level ancestors declare helper", async () => {
+    const source = [
+      "class Left {",
+      "  helper(): number { return 1; }",
+      "}",
+      "class Right {",
+      "  helper(): number { return 2; }",
+      "}",
+      "class Derived extends Left, Right {",
+      "  run(): number { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-super-ambiguous-goto-", { "box.ts": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["box.ts"]!,
+        line: 8,
+        column: columnOf(source, 8, "helper()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});

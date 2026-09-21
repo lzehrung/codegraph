@@ -11,7 +11,11 @@ import {
   isReceiverNameNode,
   memberAccessTraversalTypes,
 } from "../util/member-access.js";
-import { isKeywordReceiver, supportsReceiverMemberNavigation } from "../util/member-access-tables.js";
+import {
+  keywordReceiverKind,
+  MEMBER_ACCESS_ROWS,
+  supportsReceiverMemberNavigation,
+} from "../util/member-access-tables.js";
 import {
   declaresMembers,
   hasStaticMemberDistinction,
@@ -31,6 +35,14 @@ import {
   type ResolvedExport,
   type SymbolDef,
 } from "./types.js";
+
+/**
+ * One bound for every receiver-hierarchy walk in this module: keyword `super`/`parent` lookup,
+ * Go struct embedding, and Python base classes. Each walk keeps its own visited set, so this is a
+ * resource bound rather than a cycle guard; keeping a single constant stops the three walks from
+ * drifting to different semantic cutoffs.
+ */
+const RECEIVER_HIERARCHY_DEPTH = 16;
 
 export async function resolveMemberAccessDefinition(params: {
   index: ProjectIndex;
@@ -169,8 +181,8 @@ export async function resolveMemberAccessDefinition(params: {
   }
 
   const receiverName = obj ? sliceText(obj, source) : "";
-  const implicitClassReceiver = isKeywordReceiver(sup.id, receiverName);
-  if (obj && prop && node.id === prop.id && (supportsReceiverMemberNavigation(sup.id) || implicitClassReceiver)) {
+  const receiverKind = keywordReceiverKind(sup.id, receiverName);
+  if (obj && prop && node.id === prop.id && supportsReceiverMemberNavigation(sup.id)) {
     const member = sliceText(prop, source);
     if (sup.id === "python") {
       const memberDef = await resolvePythonReceiverMember(
@@ -190,7 +202,7 @@ export async function resolveMemberAccessDefinition(params: {
         confidence: "medium",
       });
     }
-    if (!sup.membersAreImplicitlyInScope && implicitClassReceiver) {
+    if (receiverKind === "own") {
       const classContainer = findEnclosingClassContainer(node);
       const memberDef = classContainer
         ? findLocalWithinNode(mod.locals, member, classContainer, sup.normalizeIdentifier)
@@ -202,6 +214,14 @@ export async function resolveMemberAccessDefinition(params: {
           confidence: "medium",
         });
       }
+    } else if (receiverKind === "supertype") {
+      const memberDef = await resolveKeywordSupertypeMember(index, mod, node, member, source, sup);
+      if (!memberDef) return null;
+      return okGoToResult(index, memberDef, {
+        via: { exportedName: member },
+        resolution: "member-access",
+        confidence: "medium",
+      });
     }
 
     const receiver = await resolveReceiverDefinition(obj, source, sup, resolveExpression, mod);
@@ -272,6 +292,166 @@ export async function resolveMemberAccessDefinition(params: {
 
 function findEnclosingClassContainer(node: SyntaxNodeLike): SyntaxNodeLike | null {
   return nearestMemberContainer(node);
+}
+
+type KeywordClassRef = {
+  def: SymbolDef;
+  container: SyntaxNodeLike;
+  context: ParsedFileContext;
+  module: ModuleIndex;
+};
+
+function keywordClassKey(def: SymbolDef): string {
+  const start = def.range.start;
+  return `${fileIdentityKey(def.file)}:${start.index ?? `${start.line}:${start.column}`}`;
+}
+
+function keywordContainerKey(file: string, container: SyntaxNodeLike): string {
+  return `${fileIdentityKey(file)}:${container.startIndex}:${container.endIndex}`;
+}
+
+function collectDeclaredBaseTypeNames(container: SyntaxNodeLike, source: string, sup: LanguageSupport): string[] {
+  const nodeTypes = MEMBER_ACCESS_ROWS[sup.id]?.baseListNodeTypes;
+  if (!nodeTypes || nodeTypes.length === 0) return [];
+  const typeSet = new Set(nodeTypes);
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const addName = (node: SyntaxNodeLike): void => {
+    const text = sliceText(node, source);
+    if (!text || seen.has(text)) return;
+    seen.add(text);
+    names.push(text);
+  };
+  const collectFrom = (node: SyntaxNodeLike): void => {
+    const unwrapped = unwrapNamedType(node, sup);
+    if (unwrapped) {
+      addName(unwrapped);
+      return;
+    }
+    for (const child of node.namedChildren) collectFrom(child);
+  };
+  const consider = (node: SyntaxNodeLike): void => {
+    if (typeSet.has(node.type)) collectFrom(node);
+  };
+  for (const child of container.namedChildren) {
+    consider(child);
+    if (typeSet.has(child.type)) continue;
+    for (const grand of child.namedChildren) consider(grand);
+  }
+  return names;
+}
+
+function resolveNamedMemberContainer(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  name: string,
+  normalize: (name: string) => string,
+): SymbolDef | undefined {
+  const typedLocals = memberDeclaringLocals(mod, name, normalize);
+  const topLevel = typedLocals.filter((local) => !local.isMember);
+  const candidates = topLevel.length ? topLevel : typedLocals;
+  if (candidates.length === 1) return candidates[0];
+  if (candidates.length > 1) return undefined;
+
+  for (const imp of mod.imports) {
+    if (imp.kind === "named" && imp.local === name) {
+      const result = resolveImported(index, imp, imp.imported);
+      if (result && !("namespace" in result) && declaresMembers(result)) return result;
+    }
+    if (imp.kind === "star") {
+      const result = resolveImported(index, imp, name);
+      if (result && !("namespace" in result) && declaresMembers(result)) return result;
+    }
+  }
+  const exported = resolveExport(index, mod.file, name, { allowLocalFallback: false });
+  if (exported?.kind === "resolved" && declaresMembers(exported.def)) return exported.def;
+  return undefined;
+}
+
+async function keywordClassRefFromDef(index: ProjectIndex, def: SymbolDef): Promise<KeywordClassRef | null> {
+  const module = index.byFile.get(fileIdentityKey(def.file));
+  if (!module) return null;
+  const context = await ensureParsedContext(def.file, undefined, index.languageExtensions);
+  const start = def.range.start;
+  const position = {
+    row: start.line - 1,
+    column: start.column - 1,
+  };
+  const nameNode = context.tree.rootNode.descendantForPosition(position, position);
+  const container = nearestMemberContainer(nameNode);
+  if (!container) return null;
+  return { def, container, context, module };
+}
+
+async function baseRefsFromContainer(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  container: SyntaxNodeLike,
+  source: string,
+  sup: LanguageSupport,
+): Promise<KeywordClassRef[]> {
+  const names = collectDeclaredBaseTypeNames(container, source, sup);
+  const refs: KeywordClassRef[] = [];
+  const seen = new Set<string>();
+  for (const name of names) {
+    const def = resolveNamedMemberContainer(index, mod, name, sup.normalizeIdentifier);
+    if (!def) continue;
+    const key = keywordClassKey(def);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const ref = await keywordClassRefFromDef(index, def);
+    if (ref) refs.push(ref);
+  }
+  return refs;
+}
+
+async function resolveKeywordSupertypeMember(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  node: SyntaxNodeLike,
+  member: string,
+  source: string,
+  sup: LanguageSupport,
+): Promise<SymbolDef | undefined> {
+  const container = findEnclosingClassContainer(node);
+  if (!container) return undefined;
+  let level = await baseRefsFromContainer(index, mod, container, source, sup);
+  if (level.length === 0) return undefined;
+  const visited = new Set<string>([
+    keywordContainerKey(mod.file, container),
+    ...level.map((base) => keywordContainerKey(base.def.file, base.container)),
+  ]);
+  for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {
+    const matches: SymbolDef[] = [];
+    const seenMatch = new Set<string>();
+    for (const base of level) {
+      const hit = findLocalWithinNode(base.module.locals, member, base.container, base.context.sup.normalizeIdentifier);
+      if (!hit) continue;
+      const key = keywordClassKey(hit);
+      if (seenMatch.has(key)) continue;
+      seenMatch.add(key);
+      matches.push(hit);
+    }
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) return undefined;
+    const next: KeywordClassRef[] = [];
+    for (const base of level) {
+      for (const parent of await baseRefsFromContainer(
+        index,
+        base.module,
+        base.container,
+        base.context.source,
+        base.context.sup,
+      )) {
+        const key = keywordContainerKey(parent.def.file, parent.container);
+        if (visited.has(key)) continue;
+        visited.add(key);
+        next.push(parent);
+      }
+    }
+    level = next;
+  }
+  return undefined;
 }
 
 export { supportsReceiverCallEdges, supportsReceiverMemberNavigation } from "../util/member-access-tables.js";
@@ -553,8 +733,6 @@ function findRustImplForType(root: SyntaxNodeLike, typeName: string, source: str
   return found;
 }
 
-const GO_EMBED_DEPTH = 16;
-
 function goMethodReceiverTypeName(methodNode: SyntaxNodeLike, source: string, sup: LanguageSupport): string | null {
   const receiver = methodNode.childForFieldName("receiver");
   if (!receiver) return null;
@@ -647,7 +825,7 @@ function findGoReceiverMember(
 ): SymbolDef | undefined {
   const visited = new Set<string>();
   let level = [typeName];
-  for (let depth = 0; depth < GO_EMBED_DEPTH && level.length; depth += 1) {
+  for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {
     const matches: SymbolDef[] = [];
     const next: string[] = [];
     for (const currentType of level) {
@@ -666,8 +844,6 @@ function findGoReceiverMember(
   }
   return undefined;
 }
-
-const PYTHON_SUPERTYPE_DEPTH = 16;
 
 type PythonClassRef = {
   def: SymbolDef;
@@ -890,7 +1066,7 @@ async function lookupPythonClassMember(
 
   let level = await pythonBaseClassRefs(index, start);
   const visited = new Set<string>([pythonClassKey(start.def), ...level.map((base) => pythonClassKey(base.def))]);
-  for (let depth = 0; depth < PYTHON_SUPERTYPE_DEPTH && level.length; depth += 1) {
+  for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {
     const matches: SymbolDef[] = [];
     const seenMatch = new Set<string>();
     for (const base of level) {

@@ -55,6 +55,12 @@ export type MemberAccessRow = {
   receiverKeywords?: ReceiverKeywords;
   /** Why the language declares no receiver keywords. */
   receiverKeywordsOmittedReason?: string;
+  /**
+   * Node types that list declared base types on a class-like declaration. Used by
+   * `super`/`parent`/`base` member navigation; omitted when the language has no
+   * supertype receiver keyword.
+   */
+  baseListNodeTypes?: readonly string[];
 };
 
 /** C models dotted access as `field_expression`; C++ also exposes scoped `qualified_identifier`. */
@@ -89,6 +95,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
   csharp: {
     memberAccessShapes: [{ object: { index: 0 }, property: { index: 2 } }],
     receiverKeywords: { own: ["this"], supertype: ["base"] },
+    baseListNodeTypes: ["base_list"],
   },
   go: {
     extraTraversalTypes: ["qualified_type"],
@@ -114,11 +121,13 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
       },
     ],
     receiverKeywords: THIS_SUPER_RECEIVERS,
+    baseListNodeTypes: ["superclass"],
   },
   js: {
     memberAccessOmittedReason:
       "The shared generic default already reads member_expression's object and property fields.",
     receiverKeywords: THIS_SUPER_RECEIVERS,
+    baseListNodeTypes: ["class_heritage"],
   },
   kotlin: {
     memberAccessShapes: [
@@ -126,6 +135,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
     ],
     navigationFallbackLastChild: true,
     receiverKeywords: THIS_SUPER_RECEIVERS,
+    baseListNodeTypes: ["delegation_specifiers"],
   },
   less: { omittedReason: "Style language; no member-access concept." },
   markdown: { omittedReason: "Document format; fenced code blocks parse as their own language." },
@@ -145,6 +155,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
       },
     ],
     receiverKeywords: { own: ["$this", "self", "static"], supertype: ["parent"] },
+    baseListNodeTypes: ["base_clause"],
   },
   python: {
     memberExpressionType: "attribute",
@@ -185,16 +196,19 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
       { nodeTypes: ["navigation_expression"], object: { namedIndex: 0 }, property: { navigation: true } },
     ],
     receiverKeywords: SELF_RECEIVERS,
+    baseListNodeTypes: ["inheritance_specifier"],
   },
   ts: {
     memberAccessOmittedReason:
       "The shared generic default already reads member_expression's object and property fields.",
     receiverKeywords: THIS_SUPER_RECEIVERS,
+    baseListNodeTypes: ["extends_clause"],
   },
   tsx: {
     memberAccessOmittedReason:
       "The shared generic default already reads member_expression's object and property fields.",
     receiverKeywords: THIS_SUPER_RECEIVERS,
+    baseListNodeTypes: ["extends_clause"],
   },
   vue: { omittedReason: "Vue component format; script blocks parse as js/ts and templates as html." },
   zig: {
@@ -218,8 +232,14 @@ export function supportsReceiverMemberNavigation(languageId: string): boolean {
   return MEMBER_ACCESS_ROWS[languageId]?.receiverKeywords !== undefined;
 }
 
-export function isKeywordReceiver(languageId: string, receiverName: string): boolean {
+export function keywordReceiverKind(languageId: string, receiverName: string): "own" | "supertype" | null {
   const keywords = MEMBER_ACCESS_ROWS[languageId]?.receiverKeywords;
-  if (!keywords) return false;
-  return keywords.own.includes(receiverName) || keywords.supertype.includes(receiverName);
+  if (!keywords) return null;
+  if (keywords.own.includes(receiverName)) return "own";
+  if (keywords.supertype.includes(receiverName)) return "supertype";
+  return null;
+}
+
+export function isKeywordReceiver(languageId: string, receiverName: string): boolean {
+  return keywordReceiverKind(languageId, receiverName) !== null;
 }
