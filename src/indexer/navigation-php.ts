@@ -80,7 +80,7 @@ const PHP_CASE_SENSITIVE_SYMBOL_KINDS: Record<string, true> = {
  * reference would be filtered out before collection ever runs.
  */
 export function isPhpCaseInsensitiveSymbolKind(kind: string): boolean {
-  return PHP_CASE_INSENSITIVE_SYMBOL_KINDS[kind] === true;
+  return !!PHP_CASE_INSENSITIVE_SYMBOL_KINDS[kind];
 }
 
 export function foldPhpIdentifierCase(value: string): string {

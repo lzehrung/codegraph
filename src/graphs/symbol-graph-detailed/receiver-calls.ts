@@ -910,6 +910,19 @@ function containsTrailingLambdaNode(node: SyntaxNodeLike, start: number, end: nu
   return false;
 }
 
+/** End index after a Swift trailing-closure label and its colon, or null when absent. */
+function trailingClosureLabelEnd(text: string, startIndex: number): number | null {
+  if (text[startIndex] === "`") {
+    const escapedEnd = text.indexOf("`", startIndex + 1);
+    if (escapedEnd < 0 || text[escapedEnd + 1] !== ":") return null;
+    return escapedEnd + 2;
+  }
+  const identifier = /^[_\p{ID_Start}][_\p{ID_Continue}]*/u.exec(text.slice(startIndex));
+  if (!identifier) return null;
+  const colonIndex = startIndex + identifier[0].length;
+  return text[colonIndex] === ":" ? colonIndex + 1 : null;
+}
+
 /**
  * Counts the top-level `{ ... }` blocks in trailing call text, one per trailing
  * closure, or null when the text is not a well-formed trailing-closure run.
@@ -927,7 +940,13 @@ export function countTrailingClosureArguments(text: string): number | null {
       return count;
     }
     if (text[startIndex] !== "{") {
-      return null;
+      const labelEnd = trailingClosureLabelEnd(text, startIndex);
+      if (labelEnd === null) return null;
+      startIndex = labelEnd;
+      while (/\s/.test(text[startIndex] ?? "")) {
+        startIndex += 1;
+      }
+      if (text[startIndex] !== "{") return null;
     }
 
     let braceDepth = 0;

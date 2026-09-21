@@ -78,9 +78,10 @@ function markMemberArity(context: EdgePassContext, id: string, declarationNode: 
   if (!parameters) {
     // Swift declarations have no parameter-clause node: parameters are direct children.
     const directParameters = (declarationNode.namedChildren ?? []).filter((child) => child.type === "parameter");
-    if (!directParameters.length) return;
-    const node = context.nodes.get(id);
-    if (node) node.memberArity = directParameters.length;
+    if (context.sup.id === "swift") {
+      const node = context.nodes.get(id);
+      if (node) node.memberArity = directParameters.length;
+    }
     return;
   }
   const arity = (parameters.namedChildren ?? []).filter((child) => child.type !== "comment").length;
@@ -208,6 +209,11 @@ export function emitPythonDecoratorEdges(context: EdgePassContext, rootNode: Syn
   addDecoratorUses(rootNode);
 }
 
+/** Whether a function declaration can participate in class member lookup and ownership. */
+function isClassMemberFunction(fn: DetailedFunctionNode): boolean {
+  return fn.node.type !== "local_function_statement";
+}
+
 export function emitMemberOwnershipEdges(
   context: EdgePassContext,
   functionNodes: DetailedFunctionNode[],
@@ -229,12 +235,10 @@ function memberOwnerDef(
   fn: DetailedFunctionNode,
   classNodes: DetailedClassNode[],
 ): SymbolDef | null {
+  if (!isClassMemberFunction(fn)) return null;
   if (context.sup.id === "go" && fn.node.type === "method_declaration") {
     return goMethodReceiverTypeDef(context, fn.node);
   }
-  // A C# local function belongs to its enclosing method scope, not the class the
-  // method declares, even though the class lexically contains it.
-  if (fn.node.type === "local_function_statement") return null;
   const owners = classNodes
     .filter(
       (candidate) => candidate.node.startIndex <= fn.node.startIndex && candidate.node.endIndex >= fn.node.endIndex,
@@ -314,6 +318,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
     if (!membersByContainer) {
       membersByContainer = new Map();
       for (const candidate of functionNodes) {
+        if (!isClassMemberFunction(candidate)) continue;
         const owner = nearestMemberContainer(candidate.node);
         if (!owner) continue;
         const members = membersByContainer.get(owner.startIndex);

@@ -1576,6 +1576,24 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     expect(callsiteTexts(graph, overloads[0]!.id, caller, files)).toBeNull();
   });
 
+  it("records the zero-parameter Swift overload for a self-receiver call", async () => {
+    const files: Record<string, string> = {
+      "swzero.swift": [
+        "class SwZero {",
+        "  func pick() -> Int { return 0 }",
+        "  func pick(_ value: Int) -> Int { return value }",
+        "  func caller() -> Int { return self.pick() }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-swift-zero-overload-", files);
+    const caller = nodeIn(graph, "swzero.swift", "caller");
+    const overloads = overloadMembers(graph, "swzero.swift", "pick");
+    expect(overloads.map((node) => node.memberArity)).toEqual([0, 1]);
+    expect(callsiteTexts(graph, overloads[0]!.id, caller, files)).toEqual(["pick"]);
+    expect(callsiteTexts(graph, overloads[1]!.id, caller, files)).toBeNull();
+  });
+
   it("counts a Swift trailing closure as a call argument", async () => {
     const files: Record<string, string> = {
       "swtrail.swift": [
@@ -1590,6 +1608,24 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     const caller = nodeIn(graph, "swtrail.swift", "caller");
     const overloads = overloadMembers(graph, "swtrail.swift", "pick");
     expect(overloads.map((node) => node.memberArity)).toEqual([1, 2]);
+    expect(callsiteTexts(graph, overloads[1]!.id, caller, files)).toEqual(["pick"]);
+    expect(callsiteTexts(graph, overloads[0]!.id, caller, files)).toBeNull();
+  });
+
+  it("counts labeled Swift trailing closures as call arguments", async () => {
+    const files: Record<string, string> = {
+      "swtrail-labeled.swift": [
+        "class SwTrailLabeled {",
+        "  func pick(_ value: Int, _ first: () -> Int) -> Int { return value }",
+        "  func pick(_ value: Int, _ first: () -> Int, second: () -> Int) -> Int { return value }",
+        "  func caller() -> Int { return self.pick(1) { 2 } second: { 3 } }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-swift-labeled-trailing-", files);
+    const caller = nodeIn(graph, "swtrail-labeled.swift", "caller");
+    const overloads = overloadMembers(graph, "swtrail-labeled.swift", "pick");
+    expect(overloads.map((node) => node.memberArity)).toEqual([2, 3]);
     expect(callsiteTexts(graph, overloads[1]!.id, caller, files)).toEqual(["pick"]);
     expect(callsiteTexts(graph, overloads[0]!.id, caller, files)).toBeNull();
   });
@@ -1659,6 +1695,36 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     const inner = nodeIn(graph, "Local.cs", "Inner");
     const memberOfTargets = graph.edges.filter((edge) => edge.label === "member_of" && edge.from === inner);
     expect(memberOfTargets).toEqual([]);
+  });
+
+  it("resolves a C# this receiver to a member instead of a same-named local function", async () => {
+    const files: Record<string, string> = {
+      "LocalMember.cs": [
+        "class LocalMember {",
+        "    public int Inner() { return 0; }",
+        "    public int Outer() {",
+        "        int Inner(int value) { return value; }",
+        "        return this.Inner();",
+        "    }",
+        "    public int Invalid() {",
+        "        int OnlyLocal() { return 0; }",
+        "        return this.OnlyLocal();",
+        "    }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cs-local-member-", files);
+    const outer = nodeIn(graph, "LocalMember.cs", "Outer");
+    const invalid = nodeIn(graph, "LocalMember.cs", "Invalid");
+    const members = membersOwnedBy(graph, "LocalMember", "Inner");
+    expect(members).toHaveLength(1);
+    const member = members[0]!;
+    const local = overloadMembers(graph, "LocalMember.cs", "Inner").find((node) => node.id !== member);
+    expect(local).toBeDefined();
+    expect(graph.edges.filter((edge) => edge.label === "member_of" && edge.from === local?.id)).toEqual([]);
+    expect(callsiteTexts(graph, member, outer, files)).toEqual(["Inner"]);
+    expect(callsiteTexts(graph, local!.id, outer, files)).toBeNull();
+    expect(outgoingCallCount(graph, invalid)).toBe(0);
   });
 
   it("treats function-valued variables as callable targets in call hierarchy", async () => {

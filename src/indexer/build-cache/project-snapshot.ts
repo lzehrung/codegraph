@@ -65,7 +65,8 @@ const BLOOM_FILTER_MAX_SIZE = 1_000_000;
 const BLOOM_FILTER_MIN_HASH_COUNT = 1;
 const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 // v5: nodes carry Kotlin and Swift memberArity plus the proven-callable marker.
-export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 5;
+// v6: Swift ownership/arity fixes change persisted detailed-graph edges and memberArity.
+export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 6;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";
@@ -1293,7 +1294,8 @@ function isSymbolNode(value: unknown): value is SymbolNode {
     isOptionalNonnegativeFiniteNumber(node.complexity) &&
     (node.visibility === undefined || isSymbolVisibility(node.visibility)) &&
     (node.implementationTarget === undefined || typeof node.implementationTarget === "boolean") &&
-    isOptionalNonnegativeInteger(node.memberArity)
+    isOptionalNonnegativeInteger(node.memberArity) &&
+    (node.callable === undefined || (typeof node.callable === "boolean" && node.callable))
   );
 }
 

@@ -4256,6 +4256,55 @@ describe("Find References: PHP unproven receiver is not a bare-name hit", () => 
   });
 });
 
+describe("Find References: PHP fallback syntax", () => {
+  it("does not treat an unproven member call as a reference to Box::helper", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-box-member-refs-"));
+    try {
+      const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+      const sourceLine = "<?php class Box { function helper() {} }";
+      const consumerLine = "<?php $unknown->helper();";
+      await fsp.writeFile(sourceFile, `${sourceLine}\n`, "utf8");
+      await fsp.writeFile(consumerFile, `${consumerLine}\n`, "utf8");
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+      const result = await testFindReferences(index, sourceFile, 1, tokenColumn(sourceLine, "helper"), 1);
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expectReferenceAt(result, sourceFile, 1);
+      expect(result.references.some((reference) => reference.file === consumerFile)).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat a bare function call as a reference to a same-named class", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-class-function-refs-"));
+    try {
+      const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+      const sourceLine = "<?php class helper {}";
+      const consumerLines = ["<?php", "helper();", "new helper();", ""];
+      await fsp.writeFile(sourceFile, `${sourceLine}\n`, "utf8");
+      await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+      const result = await testFindReferences(index, sourceFile, 1, tokenColumn(sourceLine, "helper"), 2);
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expectReferenceAt(result, sourceFile, 1);
+      expect(
+        result.references.some((reference) => reference.file === consumerFile && reference.range.start.line === 2),
+      ).toBe(false);
+      expectReferenceAt(result, consumerFile, 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Find References: PHP global-namespace symbols", () => {
   it("finds a no-use consumer reference for a global-namespace class", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-global-class-refs-"));

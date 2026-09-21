@@ -105,6 +105,7 @@ type MutableDetailedSymbolGraphSidecar = {
       file: string;
       name: string;
       complexity?: number;
+      callable?: true;
     }>;
     edges: Array<{
       from: string;
@@ -544,6 +545,44 @@ describe("agent session", () => {
       expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
       expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
     }
+  });
+
+  it("rejects a sidecar node whose callable marker is not literal true", async () => {
+    const root = await mkGitRepo();
+    await createAgentSession({ root }).loadProject();
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+    const original = await fs.readFile(sidecarPath);
+
+    const writeCallable = async (callable: unknown) => {
+      await fs.writeFile(sidecarPath, original);
+      const sidecar = (await readDetailedSidecar(sidecarPath)) as MutableDetailedSymbolGraphSidecar;
+      const node = sidecar.graph.nodes[0];
+      if (!node) throw new Error("expected at least one persisted symbol node");
+      (node as { callable?: unknown }).callable = callable;
+      refreshDetailedSidecarHash(sidecar);
+      await writeDetailedSidecar(sidecarPath, sidecar);
+    };
+
+    await writeCallable("true");
+    const malformedSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const rebuilt = await createAgentSession({ root }).loadProject();
+    expect(malformedSpy).toHaveBeenCalledTimes(1);
+    expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
+    malformedSpy.mockRestore();
+
+    await writeCallable(true);
+    const literalSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const loadedLiteral = await createAgentSession({ root }).loadProject();
+    expect(literalSpy).not.toHaveBeenCalled();
+    expect(loadedLiteral.symbolGraph.nodes.size).toBeGreaterThan(0);
+    literalSpy.mockRestore();
+
+    await fs.writeFile(sidecarPath, original);
+    const absentSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const loadedAbsent = await createAgentSession({ root }).loadProject();
+    expect(absentSpy).not.toHaveBeenCalled();
+    expect(loadedAbsent.symbolGraph.nodes.size).toBeGreaterThan(0);
+    absentSpy.mockRestore();
   });
 
   it("loads a valid sidecar from disk without re-verifying its self-reported graphHash", async () => {

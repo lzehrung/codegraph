@@ -407,7 +407,7 @@ codegraph grep 'eval\(' --ignore-case
 
 ```
 
-Successful `refs --json` results include `referenceCoverage`. `complete` means that every statically linked candidate known to the current index was checked and the search was not capped. `partial` includes one or more reasons: `parser_degraded`, `unresolved_import`, or `truncated`. This scope does not certify dynamic imports or bare imports that the index cannot associate with the target. Human-readable output prints a note only for partial coverage.
+Successful `refs --json` results include `referenceCoverage`. `complete` means that every statically linked candidate known to the current index was checked and the search was not capped. `partial` includes one or more reasons in this fixed order: `parser_degraded`, `unresolved_import`, `strategy_unavailable`, `name_equivalence_unavailable`, then `truncated`. `strategy_unavailable` means that a reference-collection strategy that the definition's language requires never ran. `name_equivalence_unavailable` means that a name-equivalence decision could not be verified. This scope does not certify dynamic imports or bare imports that the index cannot associate with the target. Human-readable output prints a note only for partial coverage.
 
 Import declaration references include `via.importBinding`: `imported` identifies the source-side name, and `local` identifies a distinct alias or default binding. Target `provenance.resolution` and `provenance.confidence` describe definition selection only. They do not describe reference-search coverage.
 

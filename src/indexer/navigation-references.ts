@@ -9,10 +9,12 @@ import {
   canonicalPhpReferenceName,
   comparePhpReferenceNames,
   foldPhpIdentifierCase,
+  inferPhpQualifiedReferenceImportType,
   isInsidePhpUseDeclaration,
   isPhpQualifiedReferenceNode,
   readPhpNamespaceFromRange,
 } from "./navigation-php.js";
+import { getMemberAccessParts, isMemberAccessNode } from "../util/member-access.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
@@ -216,6 +218,60 @@ function markPhpNameEquivalenceGap(index: ProjectIndex, def: SymbolDef): void {
   }
   gaps.add(definitionIdentityKey(def));
 }
+function matchesPhpFallbackDefinition(
+  node: SyntaxNodeLike,
+  parsed: ParsedFileContext,
+  expectedDef: SymbolDef,
+): boolean {
+  if (expectedDef.isMember) return false;
+  const parent = node.parent;
+  if (parent && isMemberAccessNode(parsed.sup, parent)) {
+    const property = getMemberAccessParts(parsed.sup, parent).property;
+    if (
+      property &&
+      (property === node ||
+        (property.id !== undefined && property.id === node.id) ||
+        (property.startIndex === node.startIndex && property.endIndex === node.endIndex))
+    ) {
+      return false;
+    }
+  }
+
+  let referenceKind = inferPhpQualifiedReferenceImportType(node);
+  if (!referenceKind) {
+    const right = parent?.childForFieldName("right");
+    if (
+      parent?.type === "binary_expression" &&
+      right &&
+      right.startIndex === node.startIndex &&
+      right.endIndex === node.endIndex &&
+      parent.childForFieldName("operator")?.text === "instanceof"
+    ) {
+      referenceKind = "class";
+    } else {
+      let current = parent;
+      while (current) {
+        if (
+          current.type === "named_type" ||
+          current.type === "base_clause" ||
+          current.type === "class_interface_clause" ||
+          current.type === "use_declaration" ||
+          current.type === "catch_clause"
+        ) {
+          referenceKind = "class";
+          break;
+        }
+        current = current.parent;
+      }
+    }
+  }
+
+  if (expectedDef.kind === "function") return referenceKind === "function";
+  if (expectedDef.kind === "class" || expectedDef.kind === "interface" || expectedDef.kind === "type") {
+    return referenceKind === "class";
+  }
+  return false;
+}
 
 async function collectNamedNodeReferences(
   index: ProjectIndex,
@@ -338,11 +394,10 @@ export async function collectVerifiedNamedNodeReferences(
       }
       continue;
     }
-    // PHP class, function, and namespace names are ASCII-case-insensitive, so goto can miss a
-    // legal case-variant reference (it resolves the reference's own spelling through the export
-    // table). Accept the reference when its namespace-qualified spelling proves it names this
-    // definition; stored spellings are untouched.
-    if (phpCanonicalNames) {
+    // PHP names are case-insensitive, but a namespace spelling alone cannot prove a member or
+    // distinguish a class reference from a function call. Restrict the fallback to syntax whose
+    // role matches the namespace-level definition.
+    if (phpCanonicalNames && matchesPhpFallbackDefinition(node, parsed, expectedDef)) {
       const rawText = sliceText(node, parsed.source);
       const canonical = canonicalPhpReferenceName(rawText, parsed.source, parsed.tree, node);
       const matchedName = canonical
