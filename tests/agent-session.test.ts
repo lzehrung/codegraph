@@ -6,6 +6,7 @@ import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } 
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION } from "../src/indexer/build-cache/project-snapshot.js";
 import { buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import {
   AGENT_FRESHNESS_CHECK_INTERVAL_MS,
@@ -331,7 +332,7 @@ describe("agent session", () => {
     };
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
-    expect(sidecar.version).toBe(4);
+    expect(sidecar.version).toBe(DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION);
     expect(sidecar.projectRoot).toBe(normalizePath(root));
     expect(sidecar.implementationFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(sidecar.projectSnapshotIdentity).toBe(cold.index.projectSnapshotIdentity);
@@ -425,7 +426,7 @@ describe("agent session", () => {
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
     expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
-    expect(refreshed.version).toBe(4);
+    expect(refreshed.version).toBe(DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION);
   });
 
   it("does not publish an identity or sidecar when the project snapshot write fails", async () => {
@@ -587,7 +588,7 @@ describe("agent session", () => {
     const refreshed = (await readDetailedSidecar(sidecarPath)) as { version: number };
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
-    expect(refreshed.version).toBe(4);
+    expect(refreshed.version).toBe(DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION);
   });
 
   it("invalidates module, project snapshot, and detailed sidecar on core epoch drift", async () => {
