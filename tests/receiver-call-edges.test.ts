@@ -1755,10 +1755,11 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
       "arrow.tsx": ["const helper = (): number => 1;", "export function Caller(): number { return helper(); }"].join(
         "\n",
       ),
+      "assign.js": ["let helper;", "helper = () => 1;", "function caller() { return helper(); }"].join("\n"),
       "plain.js": ["const data = 1;", "function reader() { return data; }"].join("\n"),
     };
     const graph = await buildFixture("cg-receiver-arrow-", files);
-    for (const file of ["arrow.js", "arrow.ts", "arrow.tsx"]) {
+    for (const file of ["arrow.js", "arrow.ts", "arrow.tsx", "assign.js"]) {
       const helper = anyNodeIn(graph, file, "helper");
       expect(graph.nodes.get(helper)?.kind).toBe("variable");
       expect(graph.nodes.get(helper)?.callable).toBe(true);
@@ -1769,5 +1770,28 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     expect(graph.nodes.get(data)?.callable).toBeUndefined();
     expect(findCallHierarchy(graph, data, "incoming").status).toBe("invalid_target");
     expect(findCallHierarchy(graph, data, "outgoing").status).toBe("invalid_target");
+  });
+
+  it("does not mark a scalar binding callable from a same-named member assignment", async () => {
+    const files: Record<string, string> = {
+      "collide.js": [
+        "const helper = 1;",
+        "const bound = () => 1;",
+        "const obj = {};",
+        "obj.helper = () => 1;",
+        "function caller() { return bound(); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-member-assign-scalar-", files);
+    const helper = anyNodeIn(graph, "collide.js", "helper");
+    expect(graph.nodes.get(helper)?.kind).toBe("variable");
+    expect(graph.nodes.get(helper)?.callable).toBeUndefined();
+    expect(findCallHierarchy(graph, helper, "incoming").status).toBe("invalid_target");
+    expect(findCallHierarchy(graph, helper, "outgoing").status).toBe("invalid_target");
+    const bound = anyNodeIn(graph, "collide.js", "bound");
+    expect(graph.nodes.get(bound)?.kind).toBe("variable");
+    expect(graph.nodes.get(bound)?.callable).toBe(true);
+    const caller = nodeIn(graph, "collide.js", "caller");
+    expect(callsiteTexts(graph, bound, caller, files)).toEqual(["bound"]);
   });
 });

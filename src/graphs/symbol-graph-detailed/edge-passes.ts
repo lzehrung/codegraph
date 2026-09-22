@@ -293,6 +293,40 @@ function resolveNamedType(context: EdgePassContext, name: string, node: SyntaxNo
   return typed.length === 1 ? typed[0]! : null;
 }
 
+/**
+ * Collection can attach an arrow to any same-name local when the binding site is
+ * not that local (`obj.helper = () => 1` beside `const helper = 1`). Prove that
+ * this function is the value of `fn.def` itself: the declarator name is that
+ * definition, or an identifier assignment resolves to it. Member and pattern
+ * left-hand sides do not prove a local binding.
+ */
+function provesCallableBinding(context: EdgePassContext, fn: DetailedFunctionNode): boolean {
+  const parent = fn.node.parent;
+  if (!parent) return false;
+  const start = fn.def.range.start.index;
+  const end = fn.def.range.end.index;
+  if (start === undefined || end === undefined) return false;
+
+  if (parent.type === "variable_declarator" && parent.childForFieldName("value") === fn.node) {
+    const bindingName = parent.childForFieldName("name");
+    return (
+      !!bindingName &&
+      isIdentifierType(context.sup, bindingName.type) &&
+      bindingName.startIndex === start &&
+      bindingName.endIndex === end
+    );
+  }
+
+  if (parent.type === "assignment_expression" && parent.childForFieldName("right") === fn.node) {
+    const left = parent.childForFieldName("left");
+    if (!left || !isIdentifierType(context.sup, left.type)) return false;
+    const resolved = context.resolveIdentifier(sliceText(left, context.source), left);
+    return !!resolved && defNodeId(resolved) === defNodeId(fn.def);
+  }
+
+  return false;
+}
+
 export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: DetailedFunctionNode[]): void {
   const callNodeTypes = new Set<string>([
     "call_expression",
@@ -335,7 +369,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
     const provenNode = context.nodes.get(fromId);
     // Function-valued bindings (`const helper = () => 1`) keep their `variable` kind;
     // the callable metadata records that this binding was proven to hold a function.
-    if (provenNode && provenNode.kind !== "function") {
+    if (provenNode && provenNode.kind !== "function" && provesCallableBinding(context, fn)) {
       provenNode.callable = true;
       context.noteCallableName(fn.name);
     }

@@ -8,13 +8,13 @@ import { sameDef } from "./reference-context.js";
 import {
   canonicalPhpReferenceNames,
   comparePhpReferenceNames,
-  foldPhpIdentifierCase,
   getPhpQualifiedReference,
   inferPhpQualifiedReferenceImportType,
   isInsidePhpUseDeclaration,
   isPhpQualifiedReferenceNode,
   phpLastIdentifierSegment,
   readPhpNamespaceFromRange,
+  selectFirstExistingPhpCanonicalName,
 } from "./navigation-php.js";
 import { getMemberAccessParts, isMemberAccessNode } from "../util/member-access.js";
 import { isKeywordReceiver } from "../util/member-access-tables.js";
@@ -34,7 +34,7 @@ import {
   type SymbolDef,
 } from "./types.js";
 import type { ImportBinding } from "./import-types.js";
-import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../util/identifiers.js";
+import { ECMASCRIPT_IDENTIFIER_SOURCE, foldPhpIdentifierCase } from "../util/identifiers.js";
 
 const EXPORT_FROM_PATTERN = new RegExp(String.raw`\bexport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*(["'])([^"']+)\2`, "gu");
 const NAMESPACE_EXPORT_PATTERN = new RegExp(
@@ -186,6 +186,7 @@ function definitionIdentityKey(def: SymbolDef): string {
 
 const phpCanonicalNamesCache = new WeakMap<ProjectIndex, Map<string, string[]>>();
 const phpNameEquivalenceGaps = new WeakMap<ProjectIndex, Set<string>>();
+const phpIndexedNamesByKindCache = new WeakMap<ProjectIndex, Map<string, string[]>>();
 
 async function phpCanonicalDefinitionNames(index: ProjectIndex, def: SymbolDef): Promise<string[]> {
   let perIndex = phpCanonicalNamesCache.get(index);
@@ -199,6 +200,31 @@ async function phpCanonicalDefinitionNames(index: ProjectIndex, def: SymbolDef):
   const canonicalNames = (await readPhpDefinitionNames(index, def.file, def)).map((name) => name.replace(/^\\+/, ""));
   perIndex.set(key, canonicalNames);
   return canonicalNames;
+}
+
+async function phpIndexedCanonicalNames(index: ProjectIndex, kind: SymbolKind): Promise<string[]> {
+  let perIndex = phpIndexedNamesByKindCache.get(index);
+  if (!perIndex) {
+    perIndex = new Map();
+    phpIndexedNamesByKindCache.set(index, perIndex);
+  }
+  const cached = perIndex.get(kind);
+  if (cached) return cached;
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const moduleIndex of index.byFile.values()) {
+    for (const local of moduleIndex.locals) {
+      if (local.kind !== kind || local.isMember) continue;
+      for (const canonicalName of await phpCanonicalDefinitionNames(index, local)) {
+        const folded = foldPhpIdentifierCase(canonicalName);
+        if (seen.has(folded)) continue;
+        seen.add(folded);
+        names.push(canonicalName);
+      }
+    }
+  }
+  perIndex.set(kind, names);
+  return names;
 }
 
 function markPhpNameEquivalenceGap(index: ProjectIndex, def: SymbolDef): void {
@@ -481,6 +507,10 @@ export async function collectVerifiedNamedNodeReferences(
   const { matched, parsed, nameEquivalenceUnavailable } = collected;
   if (nameEquivalenceUnavailable) markPhpNameEquivalenceGap(index, expectedDef);
   const phpCanonicalNames = parsed.sup.id === "php" ? await phpCanonicalDefinitionNames(index, expectedDef) : undefined;
+  const phpExistingFunctionNames =
+    phpCanonicalNames && expectedDef.kind === SymbolKind.Function
+      ? await phpIndexedCanonicalNames(index, expectedDef.kind)
+      : undefined;
   const verified: VerifiedNamedNodeReference[] = [];
   const pushVerified = (reference: VerifiedNamedNodeReference): void => {
     if (!includeReference || includeReference(reference)) verified.push(reference);
@@ -537,12 +567,16 @@ export async function collectVerifiedNamedNodeReferences(
         ...(imports ? { imports } : {}),
         ...(role ? { role } : {}),
       });
-      const matchedCanonical = phpCanonicalNames.find((canonicalName) =>
-        candidates.some(
-          (candidate) =>
-            comparePhpReferenceNames(candidate, canonicalName, { symbolKind: expectedDef.kind }) === "equivalent",
-        ),
-      );
+      const existingNames = phpExistingFunctionNames ?? phpCanonicalNames;
+      const selectedCandidate = selectFirstExistingPhpCanonicalName(candidates, existingNames, expectedDef.kind);
+      let matchedCanonical: string | undefined;
+      if (selectedCandidate) {
+        matchedCanonical = phpCanonicalNames.find(
+          (canonicalName) =>
+            comparePhpReferenceNames(selectedCandidate, canonicalName, { symbolKind: expectedDef.kind }) ===
+            "equivalent",
+        );
+      }
       if (matchedCanonical) {
         // A qualified path proves the namespace, but a bare case-variant `name` could also be a
         // same-named constant, so the equivalence is unproven for that form and coverage says so
@@ -727,7 +761,14 @@ export function getCachedReferenceCandidateFiles(
   hasGlobalNameReferences: boolean,
 ): string[] {
   if (hasGlobalNameReferences) {
-    return Array.from(index.byFile.values(), (module) => module.file).sort((left, right) => left.localeCompare(right));
+    // Callers only set this for a PHP definition (`buildPhpQualifiedNames` returns names for no
+    // other language), and PHP's global-namespace fallback can be referenced from any PHP file
+    // without an import, so the import-graph narrowing below cannot apply. Every other language
+    // is still a sound, source-free rejection: a PHP symbol can never be referenced from a file
+    // whose own language a different parser owns.
+    return Array.from(index.byFile.values(), (module) => module.file)
+      .filter((file) => supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id === "php")
+      .sort((left, right) => left.localeCompare(right));
   }
 
   let cache = referenceCandidateCache.get(index);

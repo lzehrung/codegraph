@@ -151,6 +151,21 @@ describe("buildBloomFilterFromSource", () => {
     expect(filter.mightContain(PHP_SUPPORT.normalizeIdentifier(identifier))).toBe(true);
   });
 
+  test("stores a case-folded variant of PHP identifiers so a case-variant probe still matches", () => {
+    const filter = buildBloomFilterFromSource("<?php namespace App; class Service {}", PHP_SUPPORT);
+
+    expect(filter.mightContain("Service")).toBe(true);
+    expect(filter.mightContain("service")).toBe(true);
+    expect(filter.mightContain("sErViCe")).toBe(false);
+  });
+
+  test("does not fold identifiers for a case-sensitive language", () => {
+    const filter = buildBloomFilterFromSource("class Service {}", JS_SUPPORT);
+
+    expect(filter.mightContain("Service")).toBe(true);
+    expect(filter.mightContain("service")).toBe(false);
+  });
+
   test("matches Java identifiers beginning with currency symbols", () => {
     const identifier = "\u00a5currency";
     const filter = buildBloomFilterFromSource(`class ${identifier} {}`, JAVA_SUPPORT);

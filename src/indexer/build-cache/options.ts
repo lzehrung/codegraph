@@ -45,8 +45,13 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * a leading BOM no longer discards tsconfig path mappings, lone-CR sources report
  * real line numbers, and cached modules persist `declaredContainers` so a consumer
  * whose declaring file changed elsewhere is re-resolved on an incremental build.
+ * Epoch 21 restricts PHP global-namespace reference candidates to PHP files and stores
+ * PHP bloom-filter identifiers both in their own spelling and ASCII-case-folded, so
+ * case-insensitive PHP references (class, interface, trait, enum, function) are narrowed
+ * correctly instead of walking every indexed file. A persisted bloom filter built before
+ * this epoch lacks the folded entries and must be discarded, not reused.
  */
-export const CORE_ALGORITHM_EPOCH = 20;
+export const CORE_ALGORITHM_EPOCH = 21;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

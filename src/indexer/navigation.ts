@@ -14,6 +14,7 @@ import {
   inferPhpQualifiedReferenceImportType,
   isPhpCaseInsensitiveSymbolKind,
   normalizePhpQualifiedReference,
+  phpLastIdentifierSegment,
 } from "./navigation-php.js";
 import {
   buildIndexedCandidateCoverage,
@@ -40,6 +41,7 @@ import { type FileId, type Range } from "../types.js";
 import { loadNearestTsconfigFor, resolveImportSpecifier } from "../util/resolution.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
+import { foldPhpIdentifierCase } from "../util/identifiers.js";
 import {
   getMemberAccessParts,
   isMemberAccessNode,
@@ -449,11 +451,13 @@ async function findReferencesInternal(
   let candidateFiles = getCachedReferenceCandidateFiles(index, def, exportedNames, !!phpQualifiedNames.length);
   // A bloom filter holds each candidate file's identifiers in that file's own spelling, and a
   // probe can only test one spelling. PHP resolves class, interface, trait, enum, and function
-  // names case-insensitively, so `new \App\sErViCe()` stores `sErViCe` while the probe carries
-  // `Service`: narrowing would drop a legal reference. Skip it for those kinds and let the
-  // name comparator decide. Variables, properties, and constants stay case-sensitive and narrow.
+  // names case-insensitively, so `new \App\sErViCe()` must still match a `Service` definition.
+  // `buildBloomFilterFromSource` stores every PHP file's identifiers both in their own spelling
+  // and ASCII-case-folded, so folding the probe's last identifier segment here narrows those
+  // kinds exactly instead of skipping narrowing and walking every indexed PHP file. Variables,
+  // properties, and constants stay case-sensitive and probe with their own spelling.
   const phpCaseInsensitiveDefinition = phpQualifiedNames.length && isPhpCaseInsensitiveSymbolKind(def.kind);
-  if (index.bloomFilters && phpQualifiedNames.length && !phpCaseInsensitiveDefinition) {
+  if (index.bloomFilters && phpQualifiedNames.length) {
     candidateFiles = candidateFiles.filter((candidateFile) => {
       const module = index.byFile.get(fileIdentityKey(candidateFile));
       if (!module) return true;
@@ -465,12 +469,13 @@ async function findReferencesInternal(
         supportForFileWithoutHeaderSample(candidateFile, index.languageExtensions)?.normalizeIdentifier ??
         ((name) => name);
       const aliases = getCandidateReferenceNames(module, definitionFile, exportedNameSet);
-      if (!aliases.length) {
-        return [...exportedNames, ...phpQualifiedNames].some((candidateName) =>
-          filter.mightContain(normalizeIdentifier(candidateName)),
+      const probeNames = aliases.length ? aliases : [...exportedNames, ...phpQualifiedNames];
+      if (phpCaseInsensitiveDefinition) {
+        return probeNames.some((candidateName) =>
+          filter.mightContain(foldPhpIdentifierCase(normalizeIdentifier(phpLastIdentifierSegment(candidateName)))),
         );
       }
-      return aliases.some((alias) => filter.mightContain(normalizeIdentifier(alias)));
+      return probeNames.some((candidateName) => filter.mightContain(normalizeIdentifier(candidateName)));
     });
   }
 
@@ -770,7 +775,12 @@ async function findReferencesInternal(
       languageId: parsedContext.sup.id,
       phpQualifiedNames,
       sameFileOccurrence: {
-        applicable: parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp",
+        // Only C/C++ function definitions need this strategy: their names self-scope-register,
+        // so sibling same-file call sites stay invisible to the scope layer. Parameters and
+        // local variables already collect every same-file occurrence lexically, so marking the
+        // strategy applicable for them would report a false `strategy_unavailable`.
+        applicable:
+          (parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp") && def.kind === SymbolKind.Function,
         // `executed` means the required enclosing/module scan ran, not that it found uses. A
         // binding that exists only inside the function's own scope cannot see sibling calls.
         executed: sameFileOccurrenceExecuted(scope, localBinding),

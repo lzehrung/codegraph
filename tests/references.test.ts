@@ -4721,6 +4721,46 @@ describe("Find References: PHP use-alias and global-function fallback", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("binds a namespaced case-variant call to the namespaced function, not the global fallback", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-ns-fn-precedence-"));
+    try {
+      const clientFile = path.join(root, "client.php").replace(/\\/g, "/");
+      const globalFile = path.join(root, "global.php").replace(/\\/g, "/");
+      const clientLines = ["<?php", "namespace Client;", "function helper() { return 1; }", "HELPER();", ""];
+      const globalLine = "<?php function Helper() { return 2; }";
+      await fsp.writeFile(clientFile, clientLines.join("\n"), "utf8");
+      await fsp.writeFile(globalFile, `${globalLine}\n`, "utf8");
+      const index = await createTestIndexFromFiles(root, [clientFile, globalFile]);
+
+      const namespaced = await indexer.findReferences(index, {
+        file: clientFile,
+        line: 3,
+        column: tokenColumn(clientLines[2]!, "helper"),
+      });
+      expect(namespaced.status).toBe("ok");
+      if (namespaced.status === "ok") {
+        expectReferenceAt(namespaced, clientFile, 3);
+        expectReferenceAt(namespaced, clientFile, 4);
+        expect(namespaced.references.some((reference) => reference.file === globalFile)).toBe(false);
+      }
+
+      const global = await indexer.findReferences(index, {
+        file: globalFile,
+        line: 1,
+        column: tokenColumn(globalLine, "Helper"),
+      });
+      expect(global.status).toBe("ok");
+      if (global.status === "ok") {
+        expectReferenceAt(global, globalFile, 1);
+        expect(
+          global.references.some((reference) => reference.file === clientFile && reference.range.start.line === 4),
+        ).toBe(false);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Find References: PHP method case-insensitivity", () => {
@@ -4797,7 +4837,7 @@ describe("Find References: C/C++ enclosing-scope occurrence strategy", () => {
 });
 
 describe("Find References: PHP candidate walk count", () => {
-  it("walks each PHP candidate file once regardless of accepted spellings", async () => {
+  it("walks the admitted PHP candidate file once and never walks a decoy with no matching identifier", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-walk-once-"));
     try {
       const serviceFile = path.join(root, "service.php").replace(/\\/g, "/");
@@ -4819,7 +4859,65 @@ describe("Find References: PHP candidate walk count", () => {
         if (result.status !== "ok") return;
         expectReferenceAt(result, consumerFile, 2);
         expect(walkSpy.mock.calls.filter((call) => call[1] === consumerFile)).toHaveLength(1);
-        expect(walkSpy.mock.calls.filter((call) => call[1] === decoyFile)).toHaveLength(1);
+        // `decoy.php` never spells the class name in any case variant, so the case-folded
+        // identifier prefilter must reject it before the AST walk ever runs.
+        expect(walkSpy.mock.calls.filter((call) => call[1] === decoyFile)).toHaveLength(0);
+      } finally {
+        walkSpy.mockRestore();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds the candidate walk across many unrelated PHP and non-PHP decoys", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-walk-bounded-"));
+    try {
+      const serviceFile = path.join(root, "service.php").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+      await fsp.writeFile(
+        serviceFile,
+        ["<?php", "namespace App;", "class Service {", "  public function run() { return 1; }", "}", ""].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(consumerFile, ["<?php", "$svc = new \\App\\sErViCe();", ""].join("\n"), "utf8");
+
+      const phpDecoyFiles: string[] = [];
+      for (let i = 0; i < 12; i += 1) {
+        const decoyFile = path.join(root, `decoy${i}.php`).replace(/\\/g, "/");
+        await fsp.writeFile(decoyFile, ["<?php", `function unrelated${i}() { return ${i}; }`, ""].join("\n"), "utf8");
+        phpDecoyFiles.push(decoyFile);
+      }
+
+      // Non-PHP decoys, one of which spells the exact class name: language alone must reject
+      // them, since a PHP symbol can never be referenced from a file a different parser owns.
+      const nonPhpDecoyFiles: string[] = [];
+      for (let i = 0; i < 5; i += 1) {
+        const decoyFile = path.join(root, `decoy${i}.ts`).replace(/\\/g, "/");
+        await fsp.writeFile(decoyFile, [`export function unrelated${i}() { return ${i}; }`, ""].join("\n"), "utf8");
+        nonPhpDecoyFiles.push(decoyFile);
+      }
+      const exactNameDecoyFile = path.join(root, "exact-name-decoy.ts").replace(/\\/g, "/");
+      await fsp.writeFile(exactNameDecoyFile, ["export class Service {}", ""].join("\n"), "utf8");
+      nonPhpDecoyFiles.push(exactNameDecoyFile);
+
+      const index = await createTestIndexFromFiles(root, [
+        serviceFile,
+        consumerFile,
+        ...phpDecoyFiles,
+        ...nonPhpDecoyFiles,
+      ]);
+
+      const walkSpy = vi.spyOn(navigationReferences, "collectVerifiedNamedNodeReferences");
+      try {
+        const result = await indexer.findReferences(index, { file: serviceFile, line: 3, column: 7 });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expectReferenceAt(result, consumerFile, 2);
+        expect(walkSpy.mock.calls.filter((call) => call[1] === consumerFile)).toHaveLength(1);
+        for (const decoyFile of [...phpDecoyFiles, ...nonPhpDecoyFiles]) {
+          expect(walkSpy.mock.calls.some((call) => call[1] === decoyFile)).toBe(false);
+        }
       } finally {
         walkSpy.mockRestore();
       }

@@ -2,6 +2,7 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import type { ImportBinding } from "./import-types.js";
 import { sliceText } from "../util/ast.js";
+import { foldPhpIdentifierCase } from "../util/identifiers.js";
 import { SymbolKind } from "./types.js";
 
 function readPhpNamespaceName(namespaceNode: SyntaxNodeLike, source: string): string | null {
@@ -84,15 +85,6 @@ export function isPhpCaseInsensitiveSymbolKind(kind: string): boolean {
   return !!PHP_CASE_INSENSITIVE_SYMBOL_KINDS[kind];
 }
 
-export function foldPhpIdentifierCase(value: string): string {
-  let folded = "";
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    folded += code >= 65 && code <= 90 ? String.fromCharCode(code + 32) : value[index]!;
-  }
-  return folded;
-}
-
 export type PhpNameComparison = "equivalent" | "different" | "unverified";
 
 /**
@@ -155,8 +147,9 @@ function phpUseAliasTarget(
  * namespace: `\Foo\Bar` is already absolute, `namespace\Foo` prefixes the current
  * namespace, and a bare or partially qualified name is relative to the current namespace.
  * The first segment of a relative name is resolved against `use` aliases ASCII-case-insensitively
- * before the current namespace is prefixed. Unqualified function names also keep the global
- * fallback spelling; class names do not.
+ * before the current namespace is prefixed. Unqualified function names keep an ordered list:
+ * `CurrentNamespace\name`, then the global `name`. Class names do not fall back. Consumers must
+ * take the first existing candidate; the list is not an unordered set of equivalents.
  */
 export function canonicalPhpReferenceNames(
   rawName: string,
@@ -189,6 +182,25 @@ export function canonicalPhpReferenceNames(
     return [relative, trimmed];
   }
   return [relative];
+}
+
+/**
+ * PHP unqualified function lookup is `CurrentNamespace\\name`, then global `name`.
+ * Walk `candidates` in that order and return the first name that already exists.
+ */
+export function selectFirstExistingPhpCanonicalName(
+  candidates: readonly string[],
+  existingNames: readonly string[],
+  symbolKind: string,
+): string | null {
+  for (const candidate of candidates) {
+    for (const existingName of existingNames) {
+      if (comparePhpReferenceNames(candidate, existingName, { symbolKind }) === "equivalent") {
+        return candidate;
+      }
+    }
+  }
+  return null;
 }
 
 export function canonicalPhpReferenceName(

@@ -83,3 +83,19 @@ export const GO_IDENTIFIER_SOURCE = String.raw`[\p{L}_][\p{L}\p{Nd}_]*`;
  * (No), and combining marks are not part of the Kotlin grammar.
  */
 export const KOTLIN_IDENTIFIER_SOURCE = String.raw`[\p{L}_][\p{L}\p{Nd}_]*`;
+
+/**
+ * ASCII-only case fold for a PHP identifier. PHP resolves class, interface, trait, and
+ * function names case-insensitively but only across the ASCII range; non-ASCII bytes in a
+ * PHP identifier are passed through unchanged. Shared by PHP name comparison and by the
+ * bloom filter, which stores both a PHP file's raw identifier spellings and their folded
+ * form so a case-variant reference can still be probed with a single folded lookup.
+ */
+export function foldPhpIdentifierCase(value: string): string {
+  let folded = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    folded += code >= 65 && code <= 90 ? String.fromCharCode(code + 32) : value[index]!;
+  }
+  return folded;
+}

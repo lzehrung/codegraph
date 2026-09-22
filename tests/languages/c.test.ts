@@ -4,10 +4,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { C_SUPPORT, CPP_SUPPORT, KOTLIN_SUPPORT, type LanguageSupport } from "../../src/languages.js";
 import { collectModuleSpecifiersFromSource } from "../../src/graphs.js";
+import { findReferences } from "../../src/index.js";
 import { collectImportsForFile } from "../../src/indexer.js";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
 import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js";
 
+import { createTestIndexFromFiles } from "../test-utils.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -393,5 +395,94 @@ describe("C native queries without a projected tree", () => {
     expect(noTree).not.toContain("Local");
     expect(noTree).not.toContain("lambda_hidden");
     expect(noTree).toContain("run");
+  });
+});
+
+describe("C/C++ reference coverage", () => {
+  it("reports complete coverage for parameter and local references and keeps unscannable function queries partial", async () => {
+    const source = [
+      "int add(int left, int right) {",
+      "  int sum = left + right;",
+      "  return sum;",
+      "}",
+      "",
+      "int run(void) {",
+      "  return add(1, 2);",
+      "}",
+      "",
+    ].join("\n");
+    const lines = source.split("\n");
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-ref-coverage-"));
+    try {
+      const cFile = path.join(root, "probe.c");
+      const cppFile = path.join(root, "probe.cpp");
+      await writeFile(cFile, source, "utf8");
+      await writeFile(cppFile, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [cFile, cppFile]);
+
+      for (const file of [cFile, cppFile]) {
+        // A parameter's every same-file use is collected lexically, so coverage is complete.
+        const paramRefs = await findReferences(index, { file, line: 1, column: lines[0]!.indexOf("left") + 1 });
+        expect(paramRefs.status).toBe("ok");
+        if (paramRefs.status === "ok") {
+          expect(paramRefs.references.map((reference) => reference.range.start.line)).toEqual([1, 2]);
+          expect(paramRefs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        }
+
+        const localRefs = await findReferences(index, { file, line: 2, column: lines[1]!.indexOf("sum") + 1 });
+        expect(localRefs.status).toBe("ok");
+        if (localRefs.status === "ok") {
+          expect(localRefs.references.map((reference) => reference.range.start.line)).toEqual([2, 3]);
+          expect(localRefs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        }
+
+        // A function name self-scope-registers, so the same-file call at line 7 stays
+        // uncollected and coverage must stay partial instead of claiming complete.
+        const functionRefs = await findReferences(index, { file, line: 1, column: lines[0]!.indexOf("add") + 1 });
+        expect(functionRefs.status).toBe("ok");
+        if (functionRefs.status === "ok") {
+          expect(functionRefs.references.map((reference) => reference.range.start.line)).toEqual([1]);
+          expect(functionRefs.referenceCoverage).toEqual({
+            scope: "indexed_candidates",
+            state: "partial",
+            reasons: ["strategy_unavailable"],
+          });
+        }
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports complete coverage for a function declared with a file-scope prototype", async () => {
+    const source = [
+      "int add(int left, int right);",
+      "",
+      "int run(void) {",
+      "  return add(1, 2);",
+      "}",
+      "",
+      "int add(int left, int right) {",
+      "  return left + right;",
+      "}",
+      "",
+    ].join("\n");
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-proto-coverage-"));
+    try {
+      const file = path.join(root, "probe.c");
+      await writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+
+      const prototypeRefs = await findReferences(index, { file, line: 1, column: 5 });
+      expect(prototypeRefs.status).toBe("ok");
+      if (prototypeRefs.status === "ok") {
+        expect(prototypeRefs.references.map((reference) => reference.range.start.line)).toEqual([1, 4]);
+        expect(prototypeRefs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
