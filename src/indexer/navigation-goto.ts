@@ -5,17 +5,30 @@ import type { SyntaxNodeLike } from "../languages/types.js";
 import { sliceText } from "../util/ast.js";
 import { fileIdentityKey } from "../util/paths.js";
 import {
+  collectMemberAccessChain,
   getMemberAccessParts,
   getNavigationExpressionProperty,
   isMemberAccessNode,
   isReceiverNameNode,
   memberAccessTraversalTypes,
 } from "../util/member-access.js";
-import { isKeywordReceiver, supportsReceiverMemberNavigation } from "../util/member-access-tables.js";
 import {
+  keywordReceiverKind,
+  MEMBER_ACCESS_ROWS,
+  supportsReceiverMemberNavigation,
+} from "../util/member-access-tables.js";
+import { declarationMemberArity } from "../graphs/symbol-graph-detailed/ast.js";
+import {
+  CALL_ARGUMENT_NODE_TYPES,
+  callArgumentCount,
+  cppOutOfLineClassName,
+  declarationNodeIsStatic,
   declaresMembers,
   hasStaticMemberDistinction,
   nearestMemberContainer,
+  keywordReceiverCrossesDynamicBoundary,
+  isUnprovenHeritageExpression,
+  keywordReceiverMemberScope,
   receiverConstructorExpression,
   unwrapNamedType,
   type ReceiverMemberScope,
@@ -31,6 +44,14 @@ import {
   type ResolvedExport,
   type SymbolDef,
 } from "./types.js";
+
+/**
+ * One bound for every receiver-hierarchy walk in this module: keyword `super`/`parent` lookup,
+ * Go struct embedding, and Python base classes. Each walk keeps its own visited set, so this is a
+ * resource bound rather than a cycle guard; keeping a single constant stops the three walks from
+ * drifting to different semantic cutoffs.
+ */
+const RECEIVER_HIERARCHY_DEPTH = 16;
 
 export async function resolveMemberAccessDefinition(params: {
   index: ProjectIndex;
@@ -169,8 +190,8 @@ export async function resolveMemberAccessDefinition(params: {
   }
 
   const receiverName = obj ? sliceText(obj, source) : "";
-  const implicitClassReceiver = isKeywordReceiver(sup.id, receiverName);
-  if (obj && prop && node.id === prop.id && (supportsReceiverMemberNavigation(sup.id) || implicitClassReceiver)) {
+  const receiverKind = keywordReceiverKind(sup.id, receiverName);
+  if (obj && prop && node.id === prop.id && supportsReceiverMemberNavigation(sup.id)) {
     const member = sliceText(prop, source);
     if (sup.id === "python") {
       const memberDef = await resolvePythonReceiverMember(
@@ -190,11 +211,20 @@ export async function resolveMemberAccessDefinition(params: {
         confidence: "medium",
       });
     }
-    if (!sup.membersAreImplicitlyInScope && implicitClassReceiver) {
-      const classContainer = findEnclosingClassContainer(node);
-      const memberDef = classContainer
-        ? findLocalWithinNode(mod.locals, member, classContainer, sup.normalizeIdentifier)
-        : undefined;
+    if (receiverKind && keywordReceiverCrossesDynamicBoundary(sup, node)) {
+      return null;
+    }
+    const keywordScope = receiverKind ? keywordReceiverMemberScope(sup, receiverName, node, source) : "any";
+    if (receiverKind === "own") {
+      const memberDef = await resolveKeywordReceiverMember(
+        index,
+        mod,
+        node,
+        member,
+        keywordScope,
+        false,
+        keywordCallArgumentCount(memberNode, source),
+      );
       if (memberDef) {
         return okGoToResult(index, memberDef, {
           via: { exportedName: member },
@@ -202,6 +232,41 @@ export async function resolveMemberAccessDefinition(params: {
           confidence: "medium",
         });
       }
+      const outOfLineClassName = cppOutOfLineClassName(node, source, sup);
+      if (outOfLineClassName) {
+        const outOfLineMember = await resolveKeywordReceiverMember(
+          index,
+          mod,
+          node,
+          member,
+          keywordScope,
+          false,
+          keywordCallArgumentCount(memberNode, source),
+          { name: outOfLineClassName, support: sup },
+        );
+        if (outOfLineMember) {
+          return okGoToResult(index, outOfLineMember, {
+            resolution: "exact",
+            confidence: "high",
+          });
+        }
+      }
+    } else if (receiverKind === "supertype") {
+      const memberDef = await resolveKeywordReceiverMember(
+        index,
+        mod,
+        node,
+        member,
+        keywordScope,
+        true,
+        keywordCallArgumentCount(memberNode, source),
+      );
+      if (!memberDef) return null;
+      return okGoToResult(index, memberDef, {
+        via: { exportedName: member },
+        resolution: "member-access",
+        confidence: "medium",
+      });
     }
 
     const receiver = await resolveReceiverDefinition(obj, source, sup, resolveExpression, mod);
@@ -272,6 +337,348 @@ export async function resolveMemberAccessDefinition(params: {
 
 function findEnclosingClassContainer(node: SyntaxNodeLike): SyntaxNodeLike | null {
   return nearestMemberContainer(node);
+}
+
+type KeywordClassRef = {
+  file: string;
+  container: SyntaxNodeLike;
+  context: ParsedFileContext;
+  module: ModuleIndex;
+};
+
+function keywordClassKey(def: SymbolDef): string {
+  const start = def.range.start;
+  return `${fileIdentityKey(def.file)}:${start.index ?? `${start.line}:${start.column}`}`;
+}
+
+function keywordContainerKey(file: string, container: SyntaxNodeLike): string {
+  return `${fileIdentityKey(file)}:${container.startIndex}:${container.endIndex}`;
+}
+
+type DeclaredBaseType =
+  | { kind: "simple"; name: string; invoked?: boolean }
+  | { kind: "qualified"; base: string; path: readonly string[]; invoked?: boolean };
+
+function peelTypeWrappers(node: SyntaxNodeLike): SyntaxNodeLike {
+  let current: SyntaxNodeLike | null = node;
+  while (current) {
+    if (
+      current.type === "type_annotation" ||
+      current.type === "named_type" ||
+      current.type === "user_type" ||
+      current.type === "type" ||
+      current.type === "parenthesized_type" ||
+      current.type === "pointer_type" ||
+      current.type === "reference_type" ||
+      current.type === "optional_type" ||
+      current.type === "nullable_type" ||
+      current.type === "generic_type" ||
+      current.type === "generic_name"
+    ) {
+      current = current.childForFieldName("type") ?? current.namedChildren[0] ?? null;
+      continue;
+    }
+    break;
+  }
+  return current ?? node;
+}
+
+function isSimpleTypeNameNode(node: SyntaxNodeLike, sup: LanguageSupport): boolean {
+  return isReceiverNameNode(sup, node.type) || node.type === "type_identifier" || node.type === "name";
+}
+
+function collectDeclaredBaseTypes(container: SyntaxNodeLike, source: string, sup: LanguageSupport): DeclaredBaseType[] {
+  const nodeTypes = MEMBER_ACCESS_ROWS[sup.id]?.baseListNodeTypes;
+  if (!nodeTypes || nodeTypes.length === 0) return [];
+  const typeSet = new Set(nodeTypes);
+  const bases: DeclaredBaseType[] = [];
+  const seen = new Set<string>();
+  const addSimple = (name: string, invoked: boolean): void => {
+    if (!name || seen.has(name)) return;
+    seen.add(name);
+    bases.push(invoked ? { kind: "simple", name, invoked } : { kind: "simple", name });
+  };
+  const addQualified = (base: string, path: string[], invoked: boolean): void => {
+    if (!base || path.length === 0) return;
+    const key = `${base}.${path.join(".")}`;
+
+    if (seen.has(key)) return;
+    seen.add(key);
+    bases.push(invoked ? { kind: "qualified", base, path, invoked } : { kind: "qualified", base, path });
+  };
+  const collectType = (node: SyntaxNodeLike, invoked: boolean): void => {
+    const core = peelTypeWrappers(node);
+    if (core.type === "constructor_invocation") {
+      // Kotlin writes the superclass as a constructor invocation (`Base()`); its callees are
+      // superclass entries, while bare types in the same base list are interfaces.
+      for (const child of core.namedChildren) {
+        if (child.type === "value_arguments") continue;
+        collectType(child, true);
+      }
+      return;
+    }
+    // A computed heritage expression can name the runtime base factory rather than a class.
+    // Its descendants do not prove an inheritance edge.
+    if (isUnprovenHeritageExpression(core)) return;
+    const unwrapped = unwrapNamedType(core, sup);
+    if (unwrapped) {
+      addSimple(sliceText(unwrapped, source), invoked);
+      return;
+    }
+    if (isMemberAccessNode(sup, core)) {
+      const chain = collectMemberAccessChain({ sup, source, chainNode: core });
+      if (chain && isSimpleTypeNameNode(chain.base, sup) && chain.names.length) {
+        addQualified(sliceText(chain.base, source), [...chain.names].reverse(), invoked);
+      }
+      return;
+    }
+    if (memberAccessTraversalTypes(sup).has(core.type)) return;
+    for (const child of core.namedChildren) {
+      if (child.type === "type_arguments") continue;
+      collectType(child, invoked);
+    }
+  };
+  const consider = (node: SyntaxNodeLike): void => {
+    if (typeSet.has(node.type)) collectType(node, false);
+  };
+  for (const child of container.namedChildren) {
+    consider(child);
+    if (typeSet.has(child.type)) continue;
+    for (const grand of child.namedChildren) consider(grand);
+  }
+  return bases;
+}
+
+function asClassMemberContainer(index: ProjectIndex, def: SymbolDef): SymbolDef | undefined {
+  if (def.kind === SymbolKind.Class) return def;
+  if (def.kind !== SymbolKind.Default) return undefined;
+  const module = index.byFile.get(fileIdentityKey(def.file));
+  if (!module) return undefined;
+  const sameRange = module.locals.filter(
+    (local) =>
+      local.kind === SymbolKind.Class &&
+      local.range.start.line === def.range.start.line &&
+      local.range.start.column === def.range.start.column,
+  );
+  if (sameRange.length === 1) return sameRange[0];
+  const sameName = module.locals.filter(
+    (local) => local.kind === SymbolKind.Class && local.localName === def.localName,
+  );
+  return sameName.length === 1 ? sameName[0] : undefined;
+}
+
+function importedClassDef(
+  index: ProjectIndex,
+  result: SymbolDef | { namespace: string } | null,
+): SymbolDef | undefined {
+  if (!result || "namespace" in result) return undefined;
+  return asClassMemberContainer(index, result);
+}
+
+function resolveNamedMemberContainer(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  name: string,
+  normalize: (name: string) => string,
+): SymbolDef | undefined {
+  const typedLocals = memberDeclaringLocals(mod, name, normalize);
+  const topLevel = typedLocals.filter((local) => !local.isMember);
+  const candidates = topLevel.length ? topLevel : typedLocals;
+  if (candidates.length === 1) return candidates[0];
+  if (candidates.length > 1) return undefined;
+
+  for (const imp of mod.imports) {
+    if (imp.kind === "named" && imp.local === name) {
+      const classDef = importedClassDef(index, resolveImported(index, imp, imp.imported));
+      if (classDef) return classDef;
+    }
+    if (imp.kind === "default" && imp.local === name) {
+      const classDef = importedClassDef(index, resolveImported(index, imp, "default"));
+      if (classDef) return classDef;
+    }
+    if (imp.kind === "star") {
+      const classDef = importedClassDef(index, resolveImported(index, imp, name));
+      if (classDef) return classDef;
+    }
+  }
+  const exported = resolveExport(index, mod.file, name, { allowLocalFallback: false });
+  if (exported?.kind === "resolved") return asClassMemberContainer(index, exported.def);
+  return undefined;
+}
+
+function resolveQualifiedMemberContainer(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  baseName: string,
+  path: readonly string[],
+  normalize: (name: string) => string,
+): SymbolDef | undefined {
+  if (path.length === 0) return undefined;
+  const namespaceImports = mod.imports.filter(
+    (imp) => imp.kind === "namespace" && normalize(imp.localNS) === normalize(baseName),
+  );
+  if (namespaceImports.length !== 1) return undefined;
+  const resolved = namespaceImports[0]!.resolved;
+  let file = typeof resolved === "string" ? resolved : undefined;
+  if (!file) return undefined;
+  for (let partIndex = 0; partIndex < path.length; partIndex += 1) {
+    const part = path[partIndex]!;
+    const last = partIndex === path.length - 1;
+    const hit = resolveExport(index, file, part, { allowLocalFallback: false });
+    if (!hit) return undefined;
+    if (hit.kind === "namespace") {
+      if (last) return undefined;
+      file = hit.file;
+      continue;
+    }
+    if (!last) return undefined;
+    return asClassMemberContainer(index, hit.def);
+  }
+  return undefined;
+}
+
+async function keywordClassRefFromDef(index: ProjectIndex, def: SymbolDef): Promise<KeywordClassRef | null> {
+  const module = index.byFile.get(fileIdentityKey(def.file));
+  if (!module) return null;
+  const context = await ensureParsedContext(def.file, undefined, index.languageExtensions);
+  const start = def.range.start;
+  const position = {
+    row: start.line - 1,
+    column: start.column - 1,
+  };
+  const nameNode = context.tree.rootNode.descendantForPosition(position, position);
+  const container = nearestMemberContainer(nameNode);
+  if (!container) return null;
+  return { file: def.file, container, context, module };
+}
+
+async function keywordClassRefFromNode(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  node: SyntaxNodeLike,
+): Promise<KeywordClassRef | null> {
+  const context = await ensureParsedContext(mod.file, undefined, index.languageExtensions);
+  const memberNode = context.tree.rootNode.descendantForPosition(node.startPosition, node.startPosition);
+  const container = findEnclosingClassContainer(memberNode);
+  if (!container) return null;
+  return { file: mod.file, container, context, module: mod };
+}
+
+async function baseRefsFromContainer(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  container: SyntaxNodeLike,
+  source: string,
+  sup: LanguageSupport,
+): Promise<KeywordClassRef[]> {
+  const bases = collectDeclaredBaseTypes(container, source, sup);
+  const refs: KeywordClassRef[] = [];
+  const seen = new Set<string>();
+  for (const base of bases) {
+    const def =
+      base.kind === "simple"
+        ? resolveNamedMemberContainer(index, mod, base.name, sup.normalizeIdentifier)
+        : resolveQualifiedMemberContainer(index, mod, base.base, base.path, sup.normalizeIdentifier);
+    // `super`, `base`, and `parent` follow class ancestors only. A flat base list mixes the
+    // superclass with interfaces or protocols in C#, Kotlin, and Swift, so an interface member
+    // would otherwise answer a keyword that the language resolves against the base class.
+    if (!def || def.kind !== SymbolKind.Class) continue;
+    // Kotlin classifies interfaces as SymbolKind.Class too, so the superclass is identified
+    // syntactically: `Base()` is a constructor invocation, while bare delegation-specifier
+    // entries (`Face`, `by` delegations) are interfaces. Interface-only super lookup stays
+    // unresolved.
+    if (sup.id === "kotlin" && !base.invoked) continue;
+    const key = keywordClassKey(def);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const ref = await keywordClassRefFromDef(index, def);
+    if (ref) refs.push(ref);
+  }
+  return refs;
+}
+
+async function resolveKeywordReceiverMember(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  node: SyntaxNodeLike,
+  member: string,
+  memberScope: ReceiverMemberScope,
+  startAtAncestor: boolean,
+  knownArgumentCount?: number,
+  explicitClass?: { name: string; support: LanguageSupport },
+): Promise<SymbolDef | undefined> {
+  const explicitClassDef = explicitClass
+    ? resolveNamedMemberContainer(index, mod, explicitClass.name, explicitClass.support.normalizeIdentifier)
+    : undefined;
+  const current = explicitClassDef
+    ? await keywordClassRefFromDef(index, explicitClassDef)
+    : await keywordClassRefFromNode(index, mod, node);
+  if (!current) return undefined;
+  let level = startAtAncestor
+    ? await baseRefsFromContainer(index, current.module, current.container, current.context.source, current.context.sup)
+    : [current];
+  if (level.length === 0) return undefined;
+  const visited = new Set<string>([
+    keywordContainerKey(current.file, current.container),
+    ...level.map((candidate) => keywordContainerKey(candidate.file, candidate.container)),
+  ]);
+  for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {
+    const matches: SymbolDef[] = [];
+    for (const candidate of level) {
+      const memberPredicate =
+        memberScope === "any"
+          ? undefined
+          : (local: SymbolDef) =>
+              matchesReceiverMemberScope(local, memberScope, candidate.context, candidate.container);
+      appendDirectKeywordMembers(
+        candidate.module.locals,
+        member,
+        candidate.container,
+        candidate.context,
+        candidate.context.sup.normalizeIdentifier,
+        memberPredicate,
+        matches,
+      );
+    }
+    const seenMatch = new Set<string>();
+    const uniqueMatches: SymbolDef[] = [];
+    for (const match of matches) {
+      const key = keywordClassKey(match);
+      if (seenMatch.has(key)) continue;
+      seenMatch.add(key);
+      uniqueMatches.push(match);
+    }
+    if (uniqueMatches.length === 1) return uniqueMatches[0];
+    if (uniqueMatches.length > 1) {
+      // A known call argument count narrows same-named overloads on one type before the
+      // unique-shallowest rule. Zero remaining matches after that filter descend; more than
+      // one remaining match is unresolved ambiguity and must not continue to a shared ancestor.
+      if (knownArgumentCount === undefined) return undefined;
+      const arityMatches: SymbolDef[] = [];
+      for (const match of uniqueMatches) {
+        if ((await keywordMemberDeclarationArity(index, match)) === knownArgumentCount) arityMatches.push(match);
+      }
+      if (arityMatches.length === 1) return arityMatches[0];
+      if (arityMatches.length > 1) return undefined;
+    }
+    const next: KeywordClassRef[] = [];
+    for (const candidate of level) {
+      for (const parent of await baseRefsFromContainer(
+        index,
+        candidate.module,
+        candidate.container,
+        candidate.context.source,
+        candidate.context.sup,
+      )) {
+        const key = keywordContainerKey(parent.file, parent.container);
+        if (visited.has(key)) continue;
+        visited.add(key);
+        next.push(parent);
+      }
+    }
+    level = next;
+  }
+  return undefined;
 }
 
 export { supportsReceiverCallEdges, supportsReceiverMemberNavigation } from "../util/member-access-tables.js";
@@ -432,19 +839,43 @@ function matchesReceiverMemberScope(
   return hasStaticModifier(local, targetContext, container) === (memberScope === "static");
 }
 
-function nodeDeclaresStatic(node: SyntaxNodeLike, source: string): boolean {
-  if (node.type === "static" || node.type === "static_modifier") return true;
-  if (node.type === "storage_class_specifier" || node.type === "modifier" || node.type === "property_modifier") {
-    return sliceText(node, source).trim() === "static";
+const KEYWORD_CALLEE_FIELD_NAMES = ["function", "callee", "called_expression", "expression"];
+
+/**
+ * Positional argument count of the call wrapping a keyword receiver's member access, or
+ * undefined when the access is not an invocation with a known argument list. Reuses the shared
+ * `callArgumentCount` scanner.
+ */
+function keywordCallArgumentCount(memberNode: SyntaxNodeLike, source: string): number | undefined {
+  const carriesArguments = (node: SyntaxNodeLike): boolean =>
+    Boolean(node.childForFieldName("arguments") ?? node.childForFieldName("argument_list")) ||
+    (node.namedChildren ?? []).some((child) => CALL_ARGUMENT_NODE_TYPES[child.type]);
+  if (carriesArguments(memberNode)) return callArgumentCount(memberNode, source) ?? undefined;
+  const parent = memberNode.parent;
+  if (!parent || !carriesArguments(parent)) return undefined;
+  for (const fieldName of KEYWORD_CALLEE_FIELD_NAMES) {
+    if (parent.childForFieldName(fieldName) === memberNode) return callArgumentCount(parent, source) ?? undefined;
   }
-  if (node.type === "modifiers") {
-    for (let childIndex = 0; ; childIndex += 1) {
-      const child = node.child(childIndex);
-      if (!child) break;
-      if (nodeDeclaresStatic(child, source)) return true;
-    }
+  return (parent.namedChildren ?? [])[0] === memberNode ? (callArgumentCount(parent, source) ?? undefined) : undefined;
+}
+
+/** Declared positional parameter count of a keyword-receiver candidate member. */
+async function keywordMemberDeclarationArity(index: ProjectIndex, def: SymbolDef): Promise<number | undefined> {
+  const context = await ensureParsedContext(def.file, undefined, index.languageExtensions);
+  const start = def.range.start;
+  const position = {
+    row: start.line - 1,
+    column: start.column - 1,
+  };
+  const nameNode = context.tree.rootNode.descendantForPosition(position, position);
+  const container = nearestMemberContainer(nameNode);
+  let current: SyntaxNodeLike | null = nameNode;
+  while (current && current !== container) {
+    const arity = declarationMemberArity(current, context.sup.id);
+    if (arity !== undefined) return arity;
+    current = current.parent;
   }
-  return false;
+  return undefined;
 }
 
 function hasStaticModifier(local: SymbolDef, targetContext: ParsedFileContext, container: SyntaxNodeLike): boolean {
@@ -454,11 +885,7 @@ function hasStaticModifier(local: SymbolDef, targetContext: ParsedFileContext, c
   };
   let current: SyntaxNodeLike | null = targetContext.tree.rootNode.descendantForPosition(position, position);
   while (current && current !== container) {
-    for (let childIndex = 0; ; childIndex += 1) {
-      const child = current.child(childIndex);
-      if (!child) break;
-      if (nodeDeclaresStatic(child, targetContext.source)) return true;
-    }
+    if (declarationNodeIsStatic(current, targetContext.source)) return true;
     current = current.parent;
   }
   return false;
@@ -534,6 +961,56 @@ function findDirectLocalWithinNode(
   return undefined;
 }
 
+function appendDirectKeywordMembers(
+  locals: readonly SymbolDef[],
+  member: string,
+  container: SyntaxNodeLike,
+  targetContext: ParsedFileContext,
+  normalizeIdentifier: (name: string) => string,
+  predicate: ((local: SymbolDef) => boolean) | undefined,
+  matches: SymbolDef[],
+): void {
+  const containerStart = container.startIndex;
+  const containerEnd = container.endIndex;
+  const normalizedMember = normalizeIdentifier(member);
+  for (const local of locals) {
+    const startIndex = local.range.start.index;
+    const endIndex = local.range.end.index;
+    if (
+      normalizeIdentifier(local.localName) !== normalizedMember ||
+      startIndex === undefined ||
+      endIndex === undefined ||
+      startIndex < containerStart ||
+      endIndex > containerEnd
+    ) {
+      continue;
+    }
+    const start = local.range.start;
+    const position = {
+      row: start.line - 1,
+      column: start.column - 1,
+    };
+    const declarationNode = targetContext.tree.rootNode.descendantForPosition(position, position);
+    if (!isDirectKeywordMemberDeclaration(declarationNode, container) || (predicate && !predicate(local))) {
+      continue;
+    }
+    matches.push(local);
+  }
+}
+
+function isDirectKeywordMemberDeclaration(declarationNode: SyntaxNodeLike, container: SyntaxNodeLike): boolean {
+  if (nearestMemberContainer(declarationNode) !== container) return false;
+  let current: SyntaxNodeLike | null = declarationNode;
+  while (current && current !== container) {
+    const isMethodBody =
+      (current.type === "block" || current.type === "compound_statement" || current.type === "statement_block") &&
+      current.parent !== container;
+    if (isMethodBody) return false;
+    current = current.parent;
+  }
+  return current === container;
+}
+
 function findRustImplForType(root: SyntaxNodeLike, typeName: string, source: string): SyntaxNodeLike | null {
   let found: SyntaxNodeLike | null = null;
   const visit = (node: SyntaxNodeLike): boolean => {
@@ -552,8 +1029,6 @@ function findRustImplForType(root: SyntaxNodeLike, typeName: string, source: str
   visit(root);
   return found;
 }
-
-const GO_EMBED_DEPTH = 16;
 
 function goMethodReceiverTypeName(methodNode: SyntaxNodeLike, source: string, sup: LanguageSupport): string | null {
   const receiver = methodNode.childForFieldName("receiver");
@@ -647,7 +1122,7 @@ function findGoReceiverMember(
 ): SymbolDef | undefined {
   const visited = new Set<string>();
   let level = [typeName];
-  for (let depth = 0; depth < GO_EMBED_DEPTH && level.length; depth += 1) {
+  for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {
     const matches: SymbolDef[] = [];
     const next: string[] = [];
     for (const currentType of level) {
@@ -666,8 +1141,6 @@ function findGoReceiverMember(
   }
   return undefined;
 }
-
-const PYTHON_SUPERTYPE_DEPTH = 16;
 
 type PythonClassRef = {
   def: SymbolDef;
@@ -890,7 +1363,7 @@ async function lookupPythonClassMember(
 
   let level = await pythonBaseClassRefs(index, start);
   const visited = new Set<string>([pythonClassKey(start.def), ...level.map((base) => pythonClassKey(base.def))]);
-  for (let depth = 0; depth < PYTHON_SUPERTYPE_DEPTH && level.length; depth += 1) {
+  for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {
     const matches: SymbolDef[] = [];
     const seenMatch = new Set<string>();
     for (const base of level) {

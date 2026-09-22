@@ -15,6 +15,25 @@ export type ModuleSpecifierResolutionKind = "document" | "source" | "stylesheet"
 
 export type ModuleSpecifierExportCondition = "import" | "require";
 
+/**
+ * How one C/C++ `#include`/`import` occurrence spells its target. The specifier text alone
+ * cannot prove this: `#include "HEADER"` and `#include HEADER` both extract `HEADER`, so the
+ * form has to travel with the occurrence instead of being inferred from the file's spellings.
+ */
+export type CFamilyIncludeForm = "literal" | "angle" | "macro";
+
+/**
+ * Classifies one C/C++ include's raw source text: `"..."` is a string-literal include, `<...>` a
+ * system-header include, and anything else an identifier macro. Empty text has no form.
+ */
+export function cFamilyIncludeFormFromText(text: string | undefined): CFamilyIncludeForm | undefined {
+  const trimmed = text?.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) return "literal";
+  if (trimmed.startsWith("<") && trimmed.endsWith(">")) return "angle";
+  return "macro";
+}
+
 export type ModuleSpecifier = {
   spec: string;
   raw?: string;
@@ -27,6 +46,7 @@ export type ModuleSpecifier = {
   confidence?: number;
   pathAttribute?: string;
   statementStartIndex?: number;
+  includeForm?: CFamilyIncludeForm;
 };
 
 const JS_TS_NAMED_TYPE_SPECIFIER_PATTERN = new RegExp(

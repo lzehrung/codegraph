@@ -53,6 +53,7 @@ function declaredNodeTypeLists(row: MemberAccessRow): Array<{ field: string; typ
   if (row.memberExpressionType) lists.push({ field: "memberExpressionType", types: [row.memberExpressionType] });
   if (row.extraTraversalTypes) lists.push({ field: "extraTraversalTypes", types: row.extraTraversalTypes });
   if (row.extraMemberAccessTypes) lists.push({ field: "extraMemberAccessTypes", types: row.extraMemberAccessTypes });
+  if (row.baseListNodeTypes) lists.push({ field: "baseListNodeTypes", types: row.baseListNodeTypes });
   const shapes = row.memberAccessShapes ?? [];
   for (const [index, shape] of shapes.entries()) {
     if (shape.nodeTypes) lists.push({ field: `memberAccessShapes[${index}] nodeTypes`, types: shape.nodeTypes });

@@ -103,6 +103,7 @@ async function resolveImportSpecifierEdge(
     ...(entry.exportCondition ? { exportCondition: entry.exportCondition } : {}),
     ...(entry.pathAttribute ? { pathAttribute: entry.pathAttribute } : {}),
     ...(entry.statementStartIndex !== undefined ? { statementStartIndex: entry.statementStartIndex } : {}),
+    ...(entry.includeForm ? { includeForm: entry.includeForm } : {}),
   });
   return typeof res === "string" ? edgeToResolvedFile(res) : edgeToExternal(entry.raw ?? res.external);
 }
@@ -141,6 +142,9 @@ export async function resolveModuleSpecifierEdges(
     context.support.id === "go" ||
     context.support.id === "php" ||
     context.support.id === "rust" ||
+    // C and C++ share the quoted-include rule, so both must reach the language resolver or a
+    // bare `#include "lib.h"` stays external in the graph while navigation resolves it.
+    context.support.id === "c" ||
     context.support.id === "cpp"
   ) {
     to = await resolveImportSpecifierEdge(entry, context);

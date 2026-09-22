@@ -802,6 +802,48 @@ async function createTypeScriptNormalizationCase(): Promise<SemanticExpectation>
   };
 }
 
+async function createImportedSuperclassMemberCase(kind: "ts" | "js"): Promise<SemanticExpectation> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-native-${kind}-super-imported-`));
+  tempDirs.push(root);
+  const baseFile = path.join(root, `base.${kind}`);
+  const derivedFile = path.join(root, `derived.${kind}`);
+  const typed = kind === "ts";
+  const base = [
+    "export default class Base {",
+    typed ? "  helper(): number { return 1; }" : "  helper() { return 1; }",
+    "}",
+    "",
+  ].join("\n");
+  const derived = [
+    'import Base from "./base";',
+    "class Derived extends Base {",
+    typed ? "  helper(): number { return 2; }" : "  helper() { return 2; }",
+    typed ? "  run(): number { return super.helper(); }" : "  run() { return super.helper(); }",
+    "}",
+    "",
+  ].join("\n");
+  await fsp.writeFile(baseFile, base, "utf8");
+  await fsp.writeFile(derivedFile, derived, "utf8");
+  const callColumn = derived.split("\n")[3]!.indexOf("helper()") + 1;
+  const defColumn = base.split("\n")[1]!.indexOf("helper()") + 1;
+  return {
+    root,
+    files: [baseFile, derivedFile],
+    goto: {
+      file: derivedFile,
+      line: 4,
+      column: callColumn,
+      expectedStatus: "ok",
+    },
+    references: {
+      file: baseFile,
+      line: 2,
+      column: defColumn,
+      expectedStatus: "ok",
+    },
+  };
+}
+
 nativeDescribe("native semantic coverage", () => {
   it("keeps native semantics stable for representative language fixtures", async () => {
     const cases: SemanticExpectation[] = [
@@ -1342,6 +1384,32 @@ nativeDescribe("native semantic coverage", () => {
   it("keeps native semantics stable for normalization-sensitive TypeScript export assignment", async () => {
     const testCase = await createTypeScriptNormalizationCase();
     await expectNativeSemantics(testCase);
+  });
+
+  it("keeps native TypeScript and JavaScript semantics aligned for an imported superclass member", async () => {
+    const tsCase = await createImportedSuperclassMemberCase("ts");
+    const jsCase = await createImportedSuperclassMemberCase("js");
+    const snapshots: Array<{ gotoLine: number | undefined; refLines: string[] }> = [];
+    for (const [kind, testCase] of [
+      ["ts", tsCase],
+      ["js", jsCase],
+    ] as const) {
+      const nativeIndex = await buildSemanticIndex(testCase, "native");
+      const nativeGoto = await normalizeGoto(nativeIndex, testCase.goto);
+      const nativeRefs = await normalizeReferences(nativeIndex, testCase.references);
+      const gotoSnapshot = stableGotoSnapshot(testCase.root, nativeGoto);
+      const refsSnapshot = stableReferencesSnapshot(testCase.root, nativeRefs);
+      expect(gotoSnapshot).toEqual({ status: "ok", file: `base.${kind}`, line: 2 });
+      expect(refsSnapshot).toEqual({
+        status: "ok",
+        refs: [`base.${kind}:2`, `derived.${kind}:4`].sort(),
+      });
+      snapshots.push({
+        gotoLine: gotoSnapshot.status === "ok" ? gotoSnapshot.line : undefined,
+        refLines: refsSnapshot.status === "ok" ? refsSnapshot.refs.map((ref) => ref.replace(/^[^:]+:/, "")).sort() : [],
+      });
+    }
+    expect(snapshots[0]).toEqual(snapshots[1]);
   });
 
   it("keeps native semantics stable for Rust path-attribute crate resolution", async () => {

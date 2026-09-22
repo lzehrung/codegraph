@@ -805,3 +805,34 @@ describe("PHP nested function export exclusion", () => {
     }
   });
 });
+
+describe("PHP parent:: member navigation", () => {
+  it("resolves parent::helper() to the base declaration, not the derived override", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-parent-goto-"));
+    const file = path.join(root, "box.php");
+    const source = [
+      "<?php",
+      "class Base {",
+      "  function helper() { return 1; }",
+      "}",
+      "class Derived extends Base {",
+      "  function helper() { return 2; }",
+      "  function run() { return parent::helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const column = source.split("\n")[6]!.indexOf("helper()") + 1;
+      const result = await goToDefinition(index, { file, line: 7, column });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.definition.range.start.line).toBe(3);
+      expect(result.definition.range.start.line).not.toBe(6);
+      expect(result.provenance?.resolution).toBe("member-access");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

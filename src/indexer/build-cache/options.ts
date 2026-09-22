@@ -45,13 +45,27 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * a leading BOM no longer discards tsconfig path mappings, lone-CR sources report
  * real line numbers, and cached modules persist `declaredContainers` so a consumer
  * whose declaring file changed elsewhere is re-resolved on an incremental build.
- * Epoch 21 restricts PHP global-namespace reference candidates to PHP files and stores
- * PHP bloom-filter identifiers both in their own spelling and ASCII-case-folded, so
- * case-insensitive PHP references (class, interface, trait, enum, function) are narrowed
- * correctly instead of walking every indexed file. A persisted bloom filter built before
- * this epoch lacks the folded entries and must be discarded, not reused.
+ * Epoch 21 resolves C and C++ quoted includes relative to the including file, routes C through
+ * the graph edge resolver, registers C-family function names in the enclosing scope through the
+ * declarator chain so same-file call sites become references, and resolves keyword and supertype
+ * receiver members for every language that declares receiver keywords.
+ * Epoch 22 resolves a keyword receiver through direct members and declared ancestors, and
+ * binds a quoted C/C++ include to the exact includer-relative file only.
+ * Epoch 23 derives keyword receiver scope from static context, preserves Kotlin's superclass
+ * relation, and filters overloaded keyword receiver members by known call arity.
+ * Epoch 24 preserves reduced-mode C-family include forms per occurrence, registers C++ functions
+ * with reference return types in their enclosing scope, rejects JavaScript and TypeScript `this`
+ * across dynamic function boundaries, and stops an ambiguous shallow ancestor lookup instead of
+ * selecting a shared grandparent.
+ * Epoch 25 shares C function occurrences between a file-scope prototype and its definition.
+ * Epoch 26 preserves distinct C++ redeclarations and marks their name-only occurrence sets partial.
+ * Epoch 27 preserves receiver boundaries and static scope across goto, references, and call
+ * edges; rejects computed heritage expressions; and validates deferred calls against exact edges.
+ * Epoch 28 restricts PHP global-namespace reference candidates to PHP files and stores PHP
+ * bloom-filter identifiers in both their original and ASCII-case-folded spelling so
+ * case-insensitive PHP references are narrowed correctly.
  */
-export const CORE_ALGORITHM_EPOCH = 21;
+export const CORE_ALGORITHM_EPOCH = 28;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -65,8 +79,10 @@ export const CORE_ALGORITHM_EPOCH = 21;
  * parameter locals, Java constructor and spread-parameter declaration names, PHP block
  * scope, Ruby query-driven locals, JavaScript type-only imports, and Ruby and PHP
  * dynamic-import heuristics.
- * Epoch 9 classifies a PHP trait as `class` so it reaches `SymbolKind.Class` like a Rust
- * trait, instead of collapsing to `variable` through the indexer's kind mapping.
+ * Epoch 9 classifies a PHP trait as `class` so it reaches SymbolKind.Class and matches Rust. It
+ * also classifies JavaScript and TypeScript method declarations, private properties, and static
+ * blocks for receiver-aware member resolution, and records Python and Ruby keyword receiver
+ * members in the owning class scope.
  */
 export const LANGUAGE_BEHAVIOR_EPOCH = 9;
 

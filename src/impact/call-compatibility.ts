@@ -34,10 +34,8 @@ import {
 } from "./call-compatibility/text-scanner.js";
 
 import type { ReferenceLookupCache } from "./reference-cache.js";
-import {
-  countTrailingClosureArguments,
-  PARAMETER_LIST_NODE_TYPES,
-} from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { PARAMETER_LIST_NODE_TYPES } from "../graphs/symbol-graph-detailed/ast.js";
+import { countTrailingClosureArguments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
   directSignatureParameterNode,
   findAncestorOfTypes,

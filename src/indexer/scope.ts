@@ -3,12 +3,37 @@ import { getNativeSyntaxTreeExecution, type NativeRuntimeMode } from "../native/
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import { declarationKindToBindingKind } from "./declarations.js";
 import type { LanguageSupport } from "../languages.js";
-import { scopeNodesFor } from "./scope-nodes.js";
+import { scopeNodesFor, type ScopeNodeRow } from "./scope-nodes.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { ImportBinding } from "./types.js";
 import type { Binding, BindingKind, Scope, ScopeIndex } from "./scope-types.js";
 
 export type { Binding, BindingKind, Scope, ScopeIndex };
+
+const FUNCTION_DECLARATOR_NAME_TYPES: Record<string, true> = {
+  identifier: true,
+  field_identifier: true,
+  qualified_identifier: true,
+  destructor_name: true,
+  operator_name: true,
+};
+
+function declaredNameNode(node: SyntaxNodeLike, row: ScopeNodeRow): SyntaxNodeLike | null {
+  const directName = node.childForFieldName("name");
+  if (directName) return directName;
+  if (!row.functionNameTypes?.has(node.type)) return null;
+
+  let current = node.childForFieldName("declarator");
+  for (let depth = 0; current && depth < 8; depth++) {
+    const name = current.childForFieldName("name");
+    if (name && FUNCTION_DECLARATOR_NAME_TYPES[name.type]) return name;
+    if (FUNCTION_DECLARATOR_NAME_TYPES[current.type]) return current;
+    current =
+      current.childForFieldName("declarator") ??
+      (current.type === "reference_declarator" ? (current.namedChildren[0] ?? null) : null);
+  }
+  return null;
+}
 
 export function buildScopeIndexFromSource(
   file: string,
@@ -37,6 +62,21 @@ export function buildScopeIndexFromSource(
   const stack: Scope[] = [rootScope];
   const allScopes: Scope[] = [rootScope];
   const extraBindings: Binding[] = [];
+  const extraFunctionBindingSpans = new Set<string>();
+  const preserveExtraFunctionBinding = (binding: Binding): void => {
+    const start = binding.def?.start.index;
+    const end = binding.def?.end.index;
+    const key = `${binding.canonicalName}:${start ?? ""}:${end ?? ""}`;
+    if (extraFunctionBindingSpans.has(key)) return;
+    extraFunctionBindingSpans.add(key);
+    extraBindings.push(binding);
+  };
+  /**
+   * Name nodes already registered before their construct's own scope was pushed. Keyed by source
+   * span rather than `node.id`, which the projected tree leaves optional.
+   */
+  const preRegisteredNameSpans = new Set<string>();
+  const nameSpanKey = (node: SyntaxNodeLike): string => `${node.startIndex}:${node.endIndex}`;
 
   const normalizeIdentifier = support.normalizeIdentifier;
   const buildBinding = (nameNode: SyntaxNodeLike, kind: BindingKind): Binding => {
@@ -89,6 +129,23 @@ export function buildScopeIndexFromSource(
 
   const addBinding = (target: Scope, nameNode: SyntaxNodeLike, kind: BindingKind): void => {
     const binding = buildBinding(nameNode, kind);
+    const existing = target.map.get(binding.canonicalName);
+    if (kind === "function" && existing?.kind === "function") {
+      if (support.id === "c") {
+        // C prototypes and their definitions are declarations of one function. Keep each
+        // declaration addressable while sharing the occurrence list collected for that name.
+        binding.occurrences = existing.occurrences;
+        preserveExtraFunctionBinding(binding);
+        return;
+      }
+      if (support.id === "cpp") {
+        // C++ overloads cannot safely share occurrences by name alone. Preserve every
+        // declaration, but mark each colliding binding as incomplete instead.
+        existing.occurrencesComplete = false;
+        binding.occurrencesComplete = false;
+        preserveExtraFunctionBinding(existing);
+      }
+    }
     target.map.set(binding.canonicalName, binding);
   };
 
@@ -296,8 +353,13 @@ export function buildScopeIndexFromSource(
     // sibling statements in the enclosing method, unlike a JS named function expression's
     // self-only visibility, which the language's `scopeDeclarationNames` hook handles instead.
     if (row.functionNameTypes?.has(node.type)) {
-      const name = node.childForFieldName("name");
+      const name = declaredNameNode(node, row);
       if (name && (support.membersAreImplicitlyInScope || !isMemberFunction(node))) {
+        // The declarator chain that carries a C-family function name also carries its parameter
+        // list, so the child walk must still descend into it. Remember the exact name node instead
+        // and skip only that node below, which keeps one binding per function without hiding
+        // `function_declarator > parameter_list` from parameter registration.
+        preRegisteredNameSpans.add(nameSpanKey(name));
         if (row.hoistedFunctionTypes?.has(node.type)) addHoistedDecl(name, "function");
         else addDecl(name, "function");
       }
@@ -397,7 +459,8 @@ export function buildScopeIndexFromSource(
       scopeDeclarationNames(node) &&
       idSet.has(node.type) &&
       support.isDeclarationName(node) &&
-      !isScopedEnumeratorName(node)
+      !isScopedEnumeratorName(node) &&
+      !preRegisteredNameSpans.has(nameSpanKey(node))
     ) {
       const kind = isParamNode(node) ? "param" : declarationKindToBindingKind(support.classifyDefinition(node));
       addDeclSkippingTypeScope(node, kind);

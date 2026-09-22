@@ -13,7 +13,13 @@ import { parseSyntaxTree, runQuery } from "@lzehrung/codegraph-native";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
 import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js";
 import type { LanguageSupport } from "../../src/languages.js";
-import { findReferences, goToDefinition, listSymbols } from "../../src/index.js";
+import {
+  buildProjectIndex,
+  buildScopeIndexFromSource,
+  findReferences,
+  goToDefinition,
+  listSymbols,
+} from "../../src/index.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 
@@ -480,6 +486,400 @@ describe("C++ classification and same-file navigation", () => {
             { line: 13, column: 1 },
           ]),
         );
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C++ quoted include resolution", () => {
+  it("resolves bare and subdirectory quoted includes while preserving explicit and angle forms", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-quoted-includes-"));
+    const siblingHeader = path.join(root, "lib.h");
+    const nestedHeader = path.join(root, "inc", "lib.h");
+    const bareFile = path.join(root, "main-bare.cpp");
+    const nestedFile = path.join(root, "main-subdirectory.cpp");
+    const relativeFile = path.join(root, "main-relative.cpp");
+    const angleFile = path.join(root, "main-angle.cpp");
+    const bareSource = '#include "lib.h"\nint main() { return helper(1); }\n';
+    const nestedSource = '#include "inc/lib.h"\nint main() { return nested_helper(1); }\n';
+    const relativeSource = '#include "./lib.h"\nint main() { return helper(1); }\n';
+    try {
+      await fs.mkdir(path.dirname(nestedHeader), { recursive: true });
+      await Promise.all([
+        fs.writeFile(siblingHeader, "int helper(int a);\n", "utf8"),
+        fs.writeFile(nestedHeader, "int nested_helper(int a);\n", "utf8"),
+        fs.writeFile(bareFile, bareSource, "utf8"),
+        fs.writeFile(nestedFile, nestedSource, "utf8"),
+        fs.writeFile(relativeFile, relativeSource, "utf8"),
+        fs.writeFile(angleFile, "#include <lib.h>\nint main() { return 0; }\n", "utf8"),
+      ]);
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const importTarget = (file: string) => index.byFile.get(fileIdentityKey(file))?.imports[0]?.resolved;
+
+      expect(importTarget(bareFile)).toBe(normalizePath(siblingHeader));
+      expect(importTarget(nestedFile)).toBe(normalizePath(nestedHeader));
+      expect(importTarget(relativeFile)).toBe(normalizePath(siblingHeader));
+      expect(importTarget(angleFile)).toEqual({ external: "<lib.h>" });
+
+      const bareCallColumn = bareSource.split("\n")[1]!.indexOf("helper") + 1;
+      const bareGoto = await goToDefinition(index, { file: bareFile, line: 2, column: bareCallColumn });
+      expect(bareGoto.status).toBe("ok");
+      if (bareGoto.status === "ok") {
+        expect(bareGoto.definition.file).toBe(normalizePath(siblingHeader));
+        expect(bareGoto.definition.range.start.line).toBe(1);
+      }
+
+      const siblingRefs = await findReferences(index, { file: siblingHeader, line: 1, column: 5 });
+      expect(siblingRefs.status).toBe("ok");
+      if (siblingRefs.status === "ok") {
+        expect(
+          siblingRefs.references.map((reference) => ({
+            file: normalizePath(reference.file),
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          })),
+        ).toEqual(
+          expect.arrayContaining([
+            { file: normalizePath(siblingHeader), line: 1, column: 5 },
+            { file: normalizePath(bareFile), line: 2, column: bareCallColumn },
+          ]),
+        );
+      }
+
+      const nestedCallColumn = nestedSource.split("\n")[1]!.indexOf("nested_helper") + 1;
+      const nestedGoto = await goToDefinition(index, { file: nestedFile, line: 2, column: nestedCallColumn });
+      expect(nestedGoto.status).toBe("ok");
+      if (nestedGoto.status === "ok") {
+        expect(nestedGoto.definition.file).toBe(normalizePath(nestedHeader));
+        expect(nestedGoto.definition.range.start.line).toBe(1);
+      }
+
+      const nestedRefs = await findReferences(index, { file: nestedHeader, line: 1, column: 5 });
+      expect(nestedRefs.status).toBe("ok");
+      if (nestedRefs.status === "ok") {
+        expect(
+          nestedRefs.references.map((reference) => ({
+            file: normalizePath(reference.file),
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          })),
+        ).toEqual(
+          expect.arrayContaining([
+            { file: normalizePath(nestedHeader), line: 1, column: 5 },
+            { file: normalizePath(nestedFile), line: 2, column: nestedCallColumn },
+          ]),
+        );
+      }
+
+      const relativeCallColumn = relativeSource.split("\n")[1]!.indexOf("helper") + 1;
+      const relativeGoto = await goToDefinition(index, { file: relativeFile, line: 2, column: relativeCallColumn });
+      expect(relativeGoto.status).toBe("ok");
+      if (relativeGoto.status === "ok") {
+        expect(relativeGoto.definition.file).toBe(normalizePath(siblingHeader));
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve an identifier include macro to a sibling decoy file", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-include-macro-decoy-"));
+    const decoy = path.join(root, "HEADER");
+    const file = path.join(root, "main.cpp");
+    const source = ['#define HEADER "x.h"', "#include HEADER", "int main() { return 0; }", ""].join("\n");
+    try {
+      await fs.writeFile(decoy, "int decoy();\n", "utf8");
+      await fs.writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const imports = index.byFile.get(fileIdentityKey(file))?.imports ?? [];
+      expect(imports.map((entry) => entry.from)).toEqual(["HEADER"]);
+      expect(imports.map((entry) => entry.resolved)).toEqual([{ external: "HEADER" }]);
+      expect(imports.map((entry) => entry.resolved)).not.toContain(normalizePath(decoy));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("classifies a quoted and a macro include of the same text per occurrence", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-include-form-per-occurrence-"));
+    const header = path.join(root, "HEADER");
+    const file = path.join(root, "main.cpp");
+    const source = ['#include "HEADER"', "#include HEADER", "int main() { return 0; }", ""].join("\n");
+    try {
+      await fs.writeFile(header, "int decoy();\n", "utf8");
+      await fs.writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const imports = index.byFile.get(fileIdentityKey(file))?.imports ?? [];
+      expect(imports.map((entry) => entry.from)).toEqual(["HEADER", "HEADER"]);
+      expect(imports.map((entry) => entry.resolved)).toEqual([normalizePath(header), { external: "HEADER" }]);
+
+      const fileEdges = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file));
+      expect(fileEdges).toContainEqual(expect.objectContaining({ to: { type: "file", path: normalizePath(header) } }));
+      expect(fileEdges).toContainEqual(expect.objectContaining({ to: { type: "external", name: "HEADER" } }));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves an angle include through resolution hints and keeps it external without them", async () => {
+    const hintRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-angle-hints-"));
+    const plainRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-angle-no-hints-"));
+    try {
+      const hintDir = path.join(hintRoot, "include");
+      const hintHeader = path.join(hintDir, "lib.h");
+      const hintFile = path.join(hintRoot, "main.cpp");
+      const source = "#include <lib.h>\nint main() { return helper(1); }\n";
+      await fs.mkdir(hintDir, { recursive: true });
+      await fs.writeFile(hintHeader, "int helper(int a);\n", "utf8");
+      await fs.writeFile(hintFile, source, "utf8");
+
+      const index = await buildProjectIndex(hintRoot, { cache: "off", graph: { resolutionHints: ["include"] } });
+      expect(index.byFile.get(fileIdentityKey(hintFile))?.imports[0]?.resolved).toBe(normalizePath(hintHeader));
+      expect(
+        index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(hintFile)),
+      ).toContainEqual(expect.objectContaining({ to: { type: "file", path: normalizePath(hintHeader) } }));
+
+      const callColumn = source.split("\n")[1]!.indexOf("helper") + 1;
+      const gotoResult = await goToDefinition(index, { file: hintFile, line: 2, column: callColumn });
+      expect(gotoResult.status).toBe("ok");
+      if (gotoResult.status === "ok") {
+        expect(gotoResult.definition.file).toBe(normalizePath(hintHeader));
+      }
+      const refs = await findReferences(index, { file: hintHeader, line: 1, column: 5 });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => normalizePath(reference.file))).toEqual(
+          expect.arrayContaining([normalizePath(hintHeader), normalizePath(hintFile)]),
+        );
+      }
+
+      const plainFile = path.join(plainRoot, "main.cpp");
+      await fs.writeFile(plainFile, source, "utf8");
+      const plainIndex = await buildProjectIndex(plainRoot, { cache: "off" });
+      expect(plainIndex.byFile.get(fileIdentityKey(plainFile))?.imports[0]?.resolved).toEqual({ external: "<lib.h>" });
+      expect(
+        plainIndex.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(plainFile)),
+      ).toContainEqual(expect.objectContaining({ to: { type: "external", name: "<lib.h>" } }));
+    } finally {
+      await fs.rm(hintRoot, { recursive: true, force: true });
+      await fs.rm(plainRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a quoted extensionless include to the exact sibling file and not a same-stem script", async () => {
+    const hitRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-quoted-config-hit-"));
+    const missRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-quoted-config-miss-"));
+    try {
+      const configFile = path.join(hitRoot, "config");
+      const hitFile = path.join(hitRoot, "main.cpp");
+      await fs.writeFile(configFile, "int cfg();\n", "utf8");
+      await fs.writeFile(hitFile, '#include "config"\nint main() { return 0; }\n', "utf8");
+      const hitIndex = await buildProjectIndex(hitRoot, { cache: "off" });
+      expect(hitIndex.byFile.get(fileIdentityKey(hitFile))?.imports[0]?.resolved).toBe(normalizePath(configFile));
+
+      const missFile = path.join(missRoot, "main.cpp");
+      const tsDecoy = path.join(missRoot, "config.ts");
+      const jsDecoy = path.join(missRoot, "config.js");
+      await fs.writeFile(tsDecoy, "export const decoy = 1;\n", "utf8");
+      await fs.writeFile(jsDecoy, "export const decoy = 2;\n", "utf8");
+      await fs.writeFile(missFile, '#include "config"\nint main() { return 0; }\n', "utf8");
+      const missIndex = await buildProjectIndex(missRoot, { cache: "off" });
+      const resolved = missIndex.byFile.get(fileIdentityKey(missFile))?.imports[0]?.resolved;
+      expect(resolved).toEqual({ external: "config" });
+      expect(resolved).not.toBe(normalizePath(tsDecoy));
+      expect(resolved).not.toBe(normalizePath(jsDecoy));
+    } finally {
+      await fs.rm(hitRoot, { recursive: true, force: true });
+      await fs.rm(missRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an unresolved quoted include external when hints, workspace, and node_modules could bind decoys", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-quoted-config-decoys-"));
+    try {
+      const file = path.join(root, "main.cpp");
+      await fs.writeFile(file, '#include "config"\nint main() { return 0; }\n', "utf8");
+      await fs.writeFile(path.join(root, "config.ts"), "export const decoy = 1;\n", "utf8");
+      await fs.mkdir(path.join(root, "config"), { recursive: true });
+      await fs.writeFile(path.join(root, "config", "index.ts"), "export const decoy = 2;\n", "utf8");
+      await fs.mkdir(path.join(root, "node_modules", "config"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "node_modules", "config", "package.json"),
+        JSON.stringify({ name: "config", main: "index.ts" }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "node_modules", "config", "index.ts"), "export const decoy = 3;\n", "utf8");
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ private: true, workspaces: ["packages/*"] }),
+        "utf8",
+      );
+      await fs.mkdir(path.join(root, "packages", "config"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "packages", "config", "package.json"),
+        JSON.stringify({ name: "config", main: "index.ts" }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "packages", "config", "index.ts"), "export const decoy = 4;\n", "utf8");
+
+      const index = await buildProjectIndex(root, {
+        cache: "off",
+        graph: { resolutionHints: ["."], resolveNodeModules: true },
+      });
+      const resolved = index.byFile.get(fileIdentityKey(file))?.imports[0]?.resolved;
+      expect(resolved).toEqual({ external: "config" });
+      const fileEdges = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file));
+      expect(fileEdges).toContainEqual(expect.objectContaining({ to: { type: "external", name: "config" } }));
+      expect(fileEdges.some((edge) => edge.to.type === "file")).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a quoted include through an exact file in a configured include root", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-quoted-config-hint-"));
+    try {
+      const includeDir = path.join(root, "include");
+      const hintFile = path.join(includeDir, "config");
+      const file = path.join(root, "main.cpp");
+      await fs.mkdir(includeDir, { recursive: true });
+      await fs.writeFile(hintFile, "int cfg();\n", "utf8");
+      await fs.writeFile(file, '#include "config"\nint main() { return 0; }\n', "utf8");
+
+      const index = await buildProjectIndex(root, { cache: "off", graph: { resolutionHints: ["include"] } });
+      expect(index.byFile.get(fileIdentityKey(file))?.imports[0]?.resolved).toBe(normalizePath(hintFile));
+      const fileEdges = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file));
+      expect(fileEdges).toContainEqual(
+        expect.objectContaining({ to: { type: "file", path: normalizePath(hintFile) } }),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("attaches C++ free, in-class, and out-of-line member calls exactly once", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-same-file-refs-"));
+    const file = path.join(root, "main.cpp");
+    const source = [
+      "int free_helper() { return 1; }",
+      "int use_free() { return free_helper(); }",
+      "",
+      "class A {",
+      "public:",
+      "  int member() { return 2; }",
+      "  int use_member() { return this->member(); }",
+      "  static void f();",
+      "};",
+      "void A::f() {}",
+      "int use_f() { A::f(); return 0; }",
+      "",
+    ].join("\n");
+    try {
+      await fs.writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const scope = buildScopeIndexFromSource(file, source, CPP_SUPPORT);
+      const functionBindings = scope.all.filter((binding) => binding.kind === "function");
+      const functionDefinitionIndexes = functionBindings.map((binding) => binding.def?.start.index);
+      expect(
+        functionDefinitionIndexes.filter(
+          (definitionIndex, index) => functionDefinitionIndexes.indexOf(definitionIndex) !== index,
+        ),
+      ).toEqual([]);
+      expect(
+        functionBindings.filter((binding) => binding.def?.start.index === source.indexOf("A::f") + "A::".length),
+      ).toHaveLength(1);
+
+      const freeCallColumn = source.split("\n")[1]!.indexOf("free_helper") + 1;
+      const freeRefs = await findReferences(index, { file, line: 1, column: 5 });
+      expect(freeRefs.status).toBe("ok");
+      if (freeRefs.status === "ok") {
+        expect(
+          freeRefs.references.map((reference) => ({
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          })),
+        ).toEqual([
+          { line: 1, column: 5 },
+          { line: 2, column: freeCallColumn },
+        ]);
+      }
+
+      const memberDefinition = source.split("\n")[5]!;
+      const memberCallColumn = source.split("\n")[6]!.lastIndexOf("member") + 1;
+      const memberRefs = await findReferences(index, {
+        file,
+        line: 6,
+        column: memberDefinition.indexOf("member") + 1,
+      });
+      expect(memberRefs.status).toBe("ok");
+      if (memberRefs.status === "ok") {
+        expect(
+          memberRefs.references.map((reference) => ({
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          })),
+        ).toEqual(
+          expect.arrayContaining([
+            { line: 6, column: memberDefinition.indexOf("member") + 1 },
+            { line: 7, column: memberCallColumn },
+          ]),
+        );
+      }
+
+      const outOfLineDefinition = source.split("\n")[9]!;
+      const outOfLineRefs = await findReferences(index, {
+        file,
+        line: 10,
+        column: outOfLineDefinition.lastIndexOf("f") + 1,
+      });
+      expect(outOfLineRefs.status).toBe("ok");
+      if (outOfLineRefs.status === "ok") {
+        expect(outOfLineRefs.references.map((reference) => reference.range.start.line)).toEqual(
+          expect.arrayContaining([10, 11]),
+        );
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C++ reference-returning free functions", () => {
+  it("resolves a sibling call to a free function with a reference return type", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-ref-return-free-"));
+    const file = path.join(root, "main.cpp");
+    const source = [
+      "int& free_ref() { static int value = 1; return value; }",
+      "int use_value() { return free_ref(); }",
+      "",
+    ].join("\n");
+    try {
+      await fs.writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const defColumn = source.split("\n")[0]!.indexOf("free_ref") + 1;
+      const callColumn = source.split("\n")[1]!.indexOf("free_ref") + 1;
+      const gotoResult = await goToDefinition(index, { file, line: 2, column: callColumn });
+      expect(gotoResult.status).toBe("ok");
+      if (gotoResult.status === "ok") {
+        expect(fileIdentityKey(gotoResult.definition.file)).toBe(fileIdentityKey(file));
+        expect(gotoResult.definition.range.start.line).toBe(1);
+        expect(gotoResult.definition.range.start.column).toBe(defColumn);
+      }
+      const refs = await findReferences(index, { file, line: 1, column: defColumn });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(
+          refs.references.map((reference) => ({
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          })),
+        ).toEqual([
+          { line: 1, column: defColumn },
+          { line: 2, column: callColumn },
+        ]);
       }
     } finally {
       await fs.rm(root, { recursive: true, force: true });

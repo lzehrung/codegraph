@@ -3,6 +3,12 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId, Range } from "../types.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
+import { getMemberAccessParts, isMemberAccessNode } from "../util/member-access.js";
+import {
+  classifyReceiver,
+  declaresMembers,
+  receiverConstructorExpression,
+} from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { sameDef } from "./reference-context.js";
 import {
@@ -16,9 +22,7 @@ import {
   readPhpNamespaceFromRange,
   selectFirstExistingPhpCanonicalName,
 } from "./navigation-php.js";
-import { getMemberAccessParts, isMemberAccessNode } from "../util/member-access.js";
 import { isKeywordReceiver } from "../util/member-access-tables.js";
-import { receiverConstructorExpression } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
@@ -485,22 +489,58 @@ export type VerifiedNamedNodeReference = {
   provenance?: ResolutionProvenance;
   via?: { reexport: true };
 };
+type ReferenceDefinitionResolver = (
+  params: { file: string; line: number; column: number },
+  parsed: ParsedFileContext,
+) => Promise<{ status: string; definition?: SymbolDef; provenance?: ResolutionProvenance }>;
+
+async function receiverProofUnavailable(
+  fileId: FileId,
+  parsed: ParsedFileContext,
+  range: Range,
+  resolveDefinition: ReferenceDefinitionResolver,
+): Promise<boolean> {
+  const position = {
+    row: range.start.line - 1,
+    column: range.start.column - 1,
+  };
+  const nameNode = parsed.tree.rootNode.descendantForPosition(position, position);
+  let current: SyntaxNodeLike | null = nameNode.parent;
+  while (current) {
+    if (isMemberAccessNode(parsed.sup, current)) {
+      const { object, property } = getMemberAccessParts(parsed.sup, current);
+      if (!object || !property || property.startIndex !== range.start.index) return false;
+      const receiver = classifyReceiver(parsed.sup, object, parsed.source, new Map(), current.startIndex, current);
+      if (receiver) return false;
+      const receiverRange = toRange(object);
+      const resolvedReceiver = await resolveDefinition(
+        {
+          file: fileId,
+          line: receiverRange.start.line,
+          column: receiverRange.start.column,
+        },
+        parsed,
+      );
+      return !(
+        resolvedReceiver.status === "ok" &&
+        resolvedReceiver.definition &&
+        declaresMembers(resolvedReceiver.definition)
+      );
+    }
+    current = current.parent;
+  }
+  return false;
+}
 
 export async function collectVerifiedNamedNodeReferences(
   index: ProjectIndex,
   fileId: string,
   symbolName: string,
   expectedDef: SymbolDef,
-  resolveDefinition: (
-    params: {
-      file: string;
-      line: number;
-      column: number;
-    },
-    parsed: ParsedFileContext,
-  ) => Promise<{ status: string; definition?: SymbolDef; provenance?: ResolutionProvenance }>,
+  resolveDefinition: ReferenceDefinitionResolver,
   maxVerified?: number,
   includeReference?: (reference: VerifiedNamedNodeReference) => boolean,
+  onReceiverProofUnavailable?: (file: FileId) => void,
 ): Promise<VerifiedNamedNodeReference[]> {
   const collected = await collectNamedNodeReferences(index, fileId, symbolName, expectedDef.kind);
   if (!collected) return [];
@@ -546,6 +586,9 @@ export async function collectVerifiedNamedNodeReferences(
         });
       }
       continue;
+    }
+    if (onReceiverProofUnavailable && (await receiverProofUnavailable(fileId, parsed, range, resolveDefinition))) {
+      onReceiverProofUnavailable(fileId);
     }
     if (parsed.sup.id === "php" && expectedDef.isMember) {
       const memberMatch = await phpCaseInsensitiveReceiverMemberMatch(index, fileId, node, parsed, expectedDef);
@@ -1057,8 +1100,18 @@ export function buildIndexedCandidateCoverage(args: {
    * `strategy_unavailable`.
    */
   strategies?: ReferenceStrategyReport;
+  strategyUnavailableFiles?: readonly FileId[];
 }): ReferenceCoverage {
-  const { index, def, exportedNames, candidateFiles, scannedFiles, truncated, strategies } = args;
+  const {
+    index,
+    def,
+    exportedNames,
+    candidateFiles,
+    scannedFiles,
+    truncated,
+    strategies,
+    strategyUnavailableFiles = [],
+  } = args;
   const reasons: ReferenceCoverageReason[] = [];
   const affectedFiles: FileId[] = [];
   const affectedSeen = new Set<string>();
@@ -1086,6 +1139,10 @@ export function buildIndexedCandidateCoverage(args: {
   if (unresolvedFiles.length) {
     reasons.push("unresolved_import");
     for (const file of unresolvedFiles) addAffected(file);
+  }
+  if (strategyUnavailableFiles.length) {
+    reasons.push("strategy_unavailable");
+    for (const file of strategyUnavailableFiles) addAffected(file);
   }
 
   if (strategies) {

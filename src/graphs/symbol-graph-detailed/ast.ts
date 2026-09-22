@@ -204,6 +204,44 @@ export function findFirstNodeByType(node: SyntaxNodeLike, type: string): SyntaxN
   }
   return null;
 }
+/**
+ * Parameter-list nodes shared by receiver classification and declaration arity. The union keeps
+ * Kotlin `function_value_parameters` and Ruby `block_parameters` recognized; declaration arity
+ * excludes the block and lambda forms because they belong to nested scopes.
+ */
+export const PARAMETER_LIST_NODE_TYPES: Record<string, true> = {
+  block_parameters: true,
+  formal_parameters: true,
+  function_parameter_clause: true,
+  function_value_parameters: true,
+  lambda_parameters: true,
+  method_parameters: true,
+  parameter_list: true,
+  parameters: true,
+};
+
+/**
+ * Positional parameter count of a member/function declaration node, or undefined when the node
+ * declares no parameter list. Swift exposes parameters as direct declaration children, so its
+ * language id is required to distinguish a zero-parameter declaration from an unknown shape.
+ * Shared by the receiver-call edge pass and keyword receiver navigation so overload selection
+ * uses one arity scanner.
+ */
+export function declarationMemberArity(declarationNode: SyntaxNodeLike, languageId?: string): number | undefined {
+  let parameters = declarationNode.childForFieldName("parameters");
+  if (!parameters) {
+    for (const type of Object.keys(PARAMETER_LIST_NODE_TYPES)) {
+      if (type === "block_parameters" || type === "lambda_parameters") continue;
+      parameters = findFirstNodeByType(declarationNode, type);
+      if (parameters) break;
+    }
+  }
+  if (!parameters) {
+    if (languageId !== "swift") return undefined;
+    return (declarationNode.namedChildren ?? []).filter((child) => child.type === "parameter").length;
+  }
+  return (parameters.namedChildren ?? []).filter((child) => child.type !== "comment").length;
+}
 
 export function collectNodesByType(node: SyntaxNodeLike, type: string, out: SyntaxNodeLike[]): void {
   for (const child of node.namedChildren ?? []) {

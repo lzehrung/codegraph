@@ -307,6 +307,7 @@ function extractRubyImports(source: string, sink: TextImportSink): void {
 }
 
 const C_INCLUDE_PATTERN = /^[\t ]*#[\t ]*include[\t ]+/gmu;
+const C_INCLUDE_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*/;
 
 function extractCIncludeImports(source: string, sink: TextImportSink): void {
   if (!source.includes("#")) return;
@@ -316,15 +317,31 @@ function extractCIncludeImports(source: string, sink: TextImportSink): void {
     if (match.index === undefined) continue;
     const from = match.index + match[0].length;
     const to = lineEndAt(commentsOnly, from);
-    const quoted = scanQuotedValues(commentsOnly, from, to, ['"'])[0];
-    if (quoted) {
-      const spec = quoted.value.trim();
-      if (spec) sink.specifier({ spec, typeOnly: false });
+    // Every occurrence is classified by its own first token: the specifier text cannot prove
+    // the form (`#include "HEADER"` and `#include HEADER` both spell `HEADER`), and a
+    // function-like macro invocation must not leak the string it expands to.
+    let cursor = from;
+    while (cursor < to && (commentsOnly[cursor] === " " || commentsOnly[cursor] === "\t")) cursor += 1;
+    const token = commentsOnly[cursor];
+    if (token === '"') {
+      const literal = scanQuotedValues(commentsOnly, cursor, to, ['"'])[0];
+      const spec = literal?.value.trim();
+      if (spec) sink.specifier({ spec, typeOnly: false, includeForm: "literal" });
       continue;
     }
-    const angle = /^[\t ]*<([^>\n]+)>/.exec(commentsOnly.slice(from, to));
-    const spec = angle?.[1]?.trim();
-    if (spec) sink.specifier({ spec, typeOnly: false });
+    if (token === "<") {
+      const angle = /^<([^>\n]+)>/.exec(commentsOnly.slice(cursor, to));
+      const spec = angle?.[1]?.trim();
+      if (spec) sink.specifier({ spec, typeOnly: false, includeForm: "angle" });
+      continue;
+    }
+    const identifier = C_INCLUDE_IDENTIFIER_PATTERN.exec(commentsOnly.slice(cursor, to));
+    if (!identifier) continue;
+    // A lone identifier is an object-like macro include. Anything after it, above all the
+    // argument list of a function-like `MACRO("x.h")`, is not the include path, so the
+    // occurrence yields no specifier instead of the string nested in the invocation.
+    if (commentsOnly.slice(cursor + identifier[0].length, to).trim()) continue;
+    sink.specifier({ spec: identifier[0], typeOnly: false, includeForm: "macro" });
   }
 }
 

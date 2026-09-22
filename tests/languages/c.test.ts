@@ -1,15 +1,15 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { C_SUPPORT, CPP_SUPPORT, KOTLIN_SUPPORT, type LanguageSupport } from "../../src/languages.js";
 import { collectModuleSpecifiersFromSource } from "../../src/graphs.js";
-import { findReferences } from "../../src/index.js";
+import { buildProjectIndex, buildScopeIndexFromSource, findReferences, goToDefinition } from "../../src/index.js";
 import { collectImportsForFile } from "../../src/indexer.js";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
 import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js";
 
-import { createTestIndexFromFiles } from "../test-utils.js";
+import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -142,6 +142,354 @@ function cFamilyIncludeCaptureTexts(
     match.captures.filter((capture) => capture.name === "from").map((capture) => capture.text),
   );
 }
+
+describe("C quoted include resolution and same-file references", () => {
+  it("resolves bare and subdirectory quoted includes while preserving explicit and angle forms", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-quoted-includes-"));
+    const siblingHeader = path.join(root, "lib.h");
+    const nestedHeader = path.join(root, "inc", "lib.h");
+    const bareFile = path.join(root, "main-bare.c");
+    const nestedFile = path.join(root, "main-subdirectory.c");
+    const relativeFile = path.join(root, "main-relative.c");
+    const angleFile = path.join(root, "main-angle.c");
+    const bareSource = '#include "lib.h"\nint main(void) { return helper(1); }\n';
+    const nestedSource = '#include "inc/lib.h"\nint main(void) { return nested_helper(1); }\n';
+    const relativeSource = '#include "./lib.h"\nint main(void) { return helper(1); }\n';
+    try {
+      await mkdir(path.dirname(nestedHeader), { recursive: true });
+      await Promise.all([
+        writeFile(siblingHeader, "int helper(int a);\n", "utf8"),
+        writeFile(nestedHeader, "int nested_helper(int a);\n", "utf8"),
+        writeFile(bareFile, bareSource, "utf8"),
+        writeFile(nestedFile, nestedSource, "utf8"),
+        writeFile(relativeFile, relativeSource, "utf8"),
+        writeFile(angleFile, "#include <lib.h>\nint main(void) { return 0; }\n", "utf8"),
+      ]);
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const importTarget = (file: string) => index.byFile.get(fileIdentityKey(file))?.imports[0]?.resolved;
+      expect(importTarget(bareFile)).toBe(normalizePath(siblingHeader));
+      expect(importTarget(nestedFile)).toBe(normalizePath(nestedHeader));
+      expect(importTarget(relativeFile)).toBe(normalizePath(siblingHeader));
+      expect(importTarget(angleFile)).toEqual({ external: "<lib.h>" });
+
+      const bareCallColumn = bareSource.split("\n")[1]!.indexOf("helper") + 1;
+      const bareGoto = await goToDefinition(index, { file: bareFile, line: 2, column: bareCallColumn });
+      expect(bareGoto.status).toBe("ok");
+      if (bareGoto.status === "ok") {
+        expect(bareGoto.definition.file).toBe(normalizePath(siblingHeader));
+        expect(bareGoto.definition.range.start.line).toBe(1);
+      }
+
+      const siblingRefs = await findReferences(index, { file: siblingHeader, line: 1, column: 5 });
+      expect(siblingRefs.status).toBe("ok");
+      if (siblingRefs.status === "ok") {
+        expect(
+          siblingRefs.references.map((reference) => ({
+            file: normalizePath(reference.file),
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          })),
+        ).toEqual(
+          expect.arrayContaining([
+            { file: normalizePath(siblingHeader), line: 1, column: 5 },
+            { file: normalizePath(bareFile), line: 2, column: bareCallColumn },
+          ]),
+        );
+      }
+
+      const nestedCallColumn = nestedSource.split("\n")[1]!.indexOf("nested_helper") + 1;
+      const nestedGoto = await goToDefinition(index, { file: nestedFile, line: 2, column: nestedCallColumn });
+      expect(nestedGoto.status).toBe("ok");
+      if (nestedGoto.status === "ok") {
+        expect(nestedGoto.definition.file).toBe(normalizePath(nestedHeader));
+        expect(nestedGoto.definition.range.start.line).toBe(1);
+      }
+
+      const nestedRefs = await findReferences(index, { file: nestedHeader, line: 1, column: 5 });
+      expect(nestedRefs.status).toBe("ok");
+      if (nestedRefs.status === "ok") {
+        expect(
+          nestedRefs.references.map((reference) => ({
+            file: normalizePath(reference.file),
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          })),
+        ).toEqual(
+          expect.arrayContaining([
+            { file: normalizePath(nestedHeader), line: 1, column: 5 },
+            { file: normalizePath(nestedFile), line: 2, column: nestedCallColumn },
+          ]),
+        );
+      }
+
+      const relativeCallColumn = relativeSource.split("\n")[1]!.indexOf("helper") + 1;
+      const relativeGoto = await goToDefinition(index, { file: relativeFile, line: 2, column: relativeCallColumn });
+      expect(relativeGoto.status).toBe("ok");
+      if (relativeGoto.status === "ok") {
+        expect(relativeGoto.definition.file).toBe(normalizePath(siblingHeader));
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve an identifier include macro to a sibling decoy file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-include-macro-decoy-"));
+    const decoy = path.join(root, "HEADER");
+    const file = path.join(root, "main.c");
+    const source = ['#define HEADER "x.h"', "#include HEADER", "int main(void) { return 0; }", ""].join("\n");
+    try {
+      await writeFile(decoy, "int decoy(void);\n", "utf8");
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const imports = index.byFile.get(fileIdentityKey(file))?.imports ?? [];
+      expect(imports.map((entry) => entry.from)).toEqual(["HEADER"]);
+      expect(imports.map((entry) => entry.resolved)).toEqual([{ external: "HEADER" }]);
+      expect(imports.map((entry) => entry.resolved)).not.toContain(normalizePath(decoy));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("classifies a quoted and a macro include of the same text per occurrence", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-include-form-per-occurrence-"));
+    const header = path.join(root, "HEADER");
+    const file = path.join(root, "main.c");
+    const source = ['#include "HEADER"', "#include HEADER", "int main(void) { return 0; }", ""].join("\n");
+    try {
+      await writeFile(header, "int decoy(void);\n", "utf8");
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const imports = index.byFile.get(fileIdentityKey(file))?.imports ?? [];
+      expect(imports.map((entry) => entry.from)).toEqual(["HEADER", "HEADER"]);
+      expect(imports.map((entry) => entry.resolved)).toEqual([normalizePath(header), { external: "HEADER" }]);
+
+      const fileEdges = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file));
+      expect(fileEdges).toContainEqual(expect.objectContaining({ to: { type: "file", path: normalizePath(header) } }));
+      expect(fileEdges).toContainEqual(expect.objectContaining({ to: { type: "external", name: "HEADER" } }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves an angle include through resolution hints and keeps it external without them", async () => {
+    const hintRoot = await mkdtemp(path.join(os.tmpdir(), "cg-c-angle-hints-"));
+    const plainRoot = await mkdtemp(path.join(os.tmpdir(), "cg-c-angle-no-hints-"));
+    try {
+      const hintDir = path.join(hintRoot, "include");
+      const hintHeader = path.join(hintDir, "lib.h");
+      const hintFile = path.join(hintRoot, "main.c");
+      const source = "#include <lib.h>\nint main(void) { return helper(1); }\n";
+      await mkdir(hintDir, { recursive: true });
+      await writeFile(hintHeader, "int helper(int a);\n", "utf8");
+      await writeFile(hintFile, source, "utf8");
+
+      const index = await buildProjectIndex(hintRoot, { cache: "off", graph: { resolutionHints: ["include"] } });
+      expect(index.byFile.get(fileIdentityKey(hintFile))?.imports[0]?.resolved).toBe(normalizePath(hintHeader));
+      expect(
+        index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(hintFile)),
+      ).toContainEqual(expect.objectContaining({ to: { type: "file", path: normalizePath(hintHeader) } }));
+
+      const callColumn = source.split("\n")[1]!.indexOf("helper") + 1;
+      const gotoResult = await goToDefinition(index, { file: hintFile, line: 2, column: callColumn });
+      expect(gotoResult.status).toBe("ok");
+      if (gotoResult.status === "ok") {
+        expect(gotoResult.definition.file).toBe(normalizePath(hintHeader));
+      }
+      const refs = await findReferences(index, { file: hintHeader, line: 1, column: 5 });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => normalizePath(reference.file))).toEqual(
+          expect.arrayContaining([normalizePath(hintHeader), normalizePath(hintFile)]),
+        );
+      }
+
+      const plainFile = path.join(plainRoot, "main.c");
+      await writeFile(plainFile, source, "utf8");
+      const plainIndex = await buildProjectIndex(plainRoot, { cache: "off" });
+      expect(plainIndex.byFile.get(fileIdentityKey(plainFile))?.imports[0]?.resolved).toEqual({ external: "<lib.h>" });
+      expect(
+        plainIndex.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(plainFile)),
+      ).toContainEqual(expect.objectContaining({ to: { type: "external", name: "<lib.h>" } }));
+    } finally {
+      await rm(hintRoot, { recursive: true, force: true });
+      await rm(plainRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a quoted extensionless include to the exact sibling file and not a same-stem script", async () => {
+    const hitRoot = await mkdtemp(path.join(os.tmpdir(), "cg-c-quoted-config-hit-"));
+    const missRoot = await mkdtemp(path.join(os.tmpdir(), "cg-c-quoted-config-miss-"));
+    try {
+      const configFile = path.join(hitRoot, "config");
+      const hitFile = path.join(hitRoot, "main.c");
+      await writeFile(configFile, "int cfg(void);\n", "utf8");
+      await writeFile(hitFile, '#include "config"\nint main(void) { return 0; }\n', "utf8");
+      const hitIndex = await buildProjectIndex(hitRoot, { cache: "off" });
+      expect(hitIndex.byFile.get(fileIdentityKey(hitFile))?.imports[0]?.resolved).toBe(normalizePath(configFile));
+
+      const missFile = path.join(missRoot, "main.c");
+      const tsDecoy = path.join(missRoot, "config.ts");
+      const jsDecoy = path.join(missRoot, "config.js");
+      await writeFile(tsDecoy, "export const decoy = 1;\n", "utf8");
+      await writeFile(jsDecoy, "export const decoy = 2;\n", "utf8");
+      await writeFile(missFile, '#include "config"\nint main(void) { return 0; }\n', "utf8");
+      const missIndex = await buildProjectIndex(missRoot, { cache: "off" });
+      const resolved = missIndex.byFile.get(fileIdentityKey(missFile))?.imports[0]?.resolved;
+      expect(resolved).toEqual({ external: "config" });
+      expect(resolved).not.toBe(normalizePath(tsDecoy));
+      expect(resolved).not.toBe(normalizePath(jsDecoy));
+    } finally {
+      await rm(hitRoot, { recursive: true, force: true });
+      await rm(missRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an unresolved quoted include external when hints, workspace, and node_modules could bind decoys", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-quoted-config-decoys-"));
+    try {
+      const file = path.join(root, "main.c");
+      await writeFile(file, '#include "config"\nint main(void) { return 0; }\n', "utf8");
+      await writeFile(path.join(root, "config.ts"), "export const decoy = 1;\n", "utf8");
+      await mkdir(path.join(root, "config"), { recursive: true });
+      await writeFile(path.join(root, "config", "index.ts"), "export const decoy = 2;\n", "utf8");
+      await mkdir(path.join(root, "node_modules", "config"), { recursive: true });
+      await writeFile(
+        path.join(root, "node_modules", "config", "package.json"),
+        JSON.stringify({ name: "config", main: "index.ts" }),
+        "utf8",
+      );
+      await writeFile(path.join(root, "node_modules", "config", "index.ts"), "export const decoy = 3;\n", "utf8");
+      await writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ private: true, workspaces: ["packages/*"] }),
+        "utf8",
+      );
+      await mkdir(path.join(root, "packages", "config"), { recursive: true });
+      await writeFile(
+        path.join(root, "packages", "config", "package.json"),
+        JSON.stringify({ name: "config", main: "index.ts" }),
+        "utf8",
+      );
+      await writeFile(path.join(root, "packages", "config", "index.ts"), "export const decoy = 4;\n", "utf8");
+
+      const index = await buildProjectIndex(root, {
+        cache: "off",
+        graph: { resolutionHints: ["."], resolveNodeModules: true },
+      });
+      const resolved = index.byFile.get(fileIdentityKey(file))?.imports[0]?.resolved;
+      expect(resolved).toEqual({ external: "config" });
+      const fileEdges = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file));
+      expect(fileEdges).toContainEqual(expect.objectContaining({ to: { type: "external", name: "config" } }));
+      expect(fileEdges.some((edge) => edge.to.type === "file")).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a quoted include through an exact file in a configured include root", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-quoted-config-hint-"));
+    try {
+      const includeDir = path.join(root, "include");
+      const hintFile = path.join(includeDir, "config");
+      const file = path.join(root, "main.c");
+      await mkdir(includeDir, { recursive: true });
+      await writeFile(hintFile, "int cfg(void);\n", "utf8");
+      await writeFile(file, '#include "config"\nint main(void) { return 0; }\n', "utf8");
+
+      const index = await buildProjectIndex(root, { cache: "off", graph: { resolutionHints: ["include"] } });
+      expect(index.byFile.get(fileIdentityKey(file))?.imports[0]?.resolved).toBe(normalizePath(hintFile));
+      const fileEdges = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file));
+      expect(fileEdges).toContainEqual(
+        expect.objectContaining({ to: { type: "file", path: normalizePath(hintFile) } }),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("attaches C calls to one enclosing function binding despite a local decoy", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-same-file-refs-"));
+    const file = path.join(root, "main.c");
+    const source = [
+      "int helper(void) { return 1; }",
+      "int run(void) { return helper(); }",
+      "int decoy_host(void) {",
+      "  int helper = 2;",
+      "  return helper;",
+      "}",
+      "",
+    ].join("\n");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const scope = buildScopeIndexFromSource(file, source, C_SUPPORT);
+      const functionBindings = scope.all.filter((binding) => binding.kind === "function");
+      expect(functionBindings.map((binding) => binding.def?.start.index).sort((left, right) => left! - right!)).toEqual(
+        [source.indexOf("helper"), source.indexOf("run"), source.indexOf("decoy_host")].sort(
+          (left, right) => left - right,
+        ),
+      );
+
+      const callColumn = source.split("\n")[1]!.indexOf("helper") + 1;
+      const gotoResult = await goToDefinition(index, { file, line: 2, column: callColumn });
+      expect(gotoResult.status).toBe("ok");
+      if (gotoResult.status === "ok") {
+        expect(gotoResult.definition.range.start.line).toBe(1);
+        expect(gotoResult.definition.range.start.column).toBe(5);
+      }
+
+      const refs = await findReferences(index, { file, line: 1, column: 5 });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(
+          refs.references.map((reference) => ({
+            file: normalizePath(reference.file),
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          })),
+        ).toEqual([
+          { file: normalizePath(file), line: 1, column: 5 },
+          { file: normalizePath(file), line: 2, column: callColumn },
+        ]);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps parameters navigable after the function name registers in the enclosing scope", async () => {
+    // The declarator chain that carries a C function name also carries its parameter list, so a
+    // fix that hides `function_declarator` from the child walk silently drops every parameter
+    // binding while function-name references keep working.
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-parameter-scope-"));
+    const file = path.join(root, "main.c");
+    const source = ["int helper(int value) {", "  return value + 1;", "}", ""].join("\n");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const scope = buildScopeIndexFromSource(file, source, C_SUPPORT);
+      expect(scope.all.filter((binding) => binding.kind === "param").map((binding) => binding.name)).toEqual(["value"]);
+
+      const useColumn = source.split("\n")[1]!.indexOf("value") + 1;
+      const gotoResult = await goToDefinition(index, { file, line: 2, column: useColumn });
+      expect(gotoResult.status).toBe("ok");
+      if (gotoResult.status === "ok") {
+        expect(gotoResult.definition.range.start.line).toBe(1);
+        expect(gotoResult.definition.localName).toBe("value");
+      }
+
+      const refs = await findReferences(index, { file, line: 1, column: source.indexOf("value") + 1 });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual([1, 2]);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("C native queries", () => {
   it("keeps literal and identifier includes and rejects function-like include macros", async () => {
@@ -398,88 +746,72 @@ describe("C native queries without a projected tree", () => {
   });
 });
 
-describe("C/C++ reference coverage", () => {
-  it("reports complete coverage for parameter and local references and keeps unscannable function queries partial", async () => {
-    const source = [
-      "int add(int left, int right) {",
-      "  int sum = left + right;",
-      "  return sum;",
-      "}",
-      "",
-      "int run(void) {",
-      "  return add(1, 2);",
-      "}",
-      "",
-    ].join("\n");
-    const lines = source.split("\n");
-
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-ref-coverage-"));
+describe("C function redeclarations", () => {
+  it("shares call occurrences between a function prototype and definition", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-prototype-references-"));
     try {
-      const cFile = path.join(root, "probe.c");
-      const cppFile = path.join(root, "probe.cpp");
-      await writeFile(cFile, source, "utf8");
-      await writeFile(cppFile, source, "utf8");
-      const index = await createTestIndexFromFiles(root, [cFile, cppFile]);
+      const file = path.join(root, "probe.c").replace(/\\/g, "/");
+      const source = [
+        "int add(int left, int right);",
+        "",
+        "int run(void) {",
+        "  return add(1, 2);",
+        "}",
+        "",
+        "int add(int left, int right) {",
+        "  return left + right;",
+        "}",
+        "",
+      ].join("\n");
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
 
-      for (const file of [cFile, cppFile]) {
-        // A parameter's every same-file use is collected lexically, so coverage is complete.
-        const paramRefs = await findReferences(index, { file, line: 1, column: lines[0]!.indexOf("left") + 1 });
-        expect(paramRefs.status).toBe("ok");
-        if (paramRefs.status === "ok") {
-          expect(paramRefs.references.map((reference) => reference.range.start.line)).toEqual([1, 2]);
-          expect(paramRefs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
-        }
+      const prototypeReferences = await findReferences(index, { file, line: 1, column: 5 });
+      expect(prototypeReferences.status).toBe("ok");
+      if (prototypeReferences.status === "ok") {
+        expect(prototypeReferences.references.map((reference) => reference.range.start.line).sort()).toEqual([1, 4]);
+        expect(prototypeReferences.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
 
-        const localRefs = await findReferences(index, { file, line: 2, column: lines[1]!.indexOf("sum") + 1 });
-        expect(localRefs.status).toBe("ok");
-        if (localRefs.status === "ok") {
-          expect(localRefs.references.map((reference) => reference.range.start.line)).toEqual([2, 3]);
-          expect(localRefs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
-        }
-
-        // A function name self-scope-registers, so the same-file call at line 7 stays
-        // uncollected and coverage must stay partial instead of claiming complete.
-        const functionRefs = await findReferences(index, { file, line: 1, column: lines[0]!.indexOf("add") + 1 });
-        expect(functionRefs.status).toBe("ok");
-        if (functionRefs.status === "ok") {
-          expect(functionRefs.references.map((reference) => reference.range.start.line)).toEqual([1]);
-          expect(functionRefs.referenceCoverage).toEqual({
-            scope: "indexed_candidates",
-            state: "partial",
-            reasons: ["strategy_unavailable"],
-          });
-        }
+      const definitionReferences = await findReferences(index, { file, line: 7, column: 5 });
+      expect(definitionReferences.status).toBe("ok");
+      if (definitionReferences.status === "ok") {
+        expect(definitionReferences.references.map((reference) => reference.range.start.line).sort()).toEqual([4, 7]);
+        expect(definitionReferences.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
       }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it("reports complete coverage for a function declared with a file-scope prototype", async () => {
-    const source = [
-      "int add(int left, int right);",
-      "",
-      "int run(void) {",
-      "  return add(1, 2);",
-      "}",
-      "",
-      "int add(int left, int right) {",
-      "  return left + right;",
-      "}",
-      "",
-    ].join("\n");
-
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-proto-coverage-"));
+  it("preserves distinct occurrence sets for C++ redeclarations", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-cpp-redeclaration-references-"));
     try {
-      const file = path.join(root, "probe.c");
+      const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+      const source = [
+        "int add(int left, int right);",
+        "int helper(void) { return add(1, 2); }",
+        "int add(int left, int right) { return left + right; }",
+        "int run(void) { return add(3, 4); }",
+        "",
+      ].join("\n");
       await writeFile(file, source, "utf8");
-      const index = await createTestIndexFromFiles(root, [file]);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const scope = buildScopeIndexFromSource(file, source, CPP_SUPPORT);
+      const bindings = scope.bindings.get("add") ?? [];
+      expect(bindings).toHaveLength(2);
+      expect(bindings.every((binding) => binding.occurrencesComplete === false)).toBe(true);
 
-      const prototypeRefs = await findReferences(index, { file, line: 1, column: 5 });
-      expect(prototypeRefs.status).toBe("ok");
-      if (prototypeRefs.status === "ok") {
-        expect(prototypeRefs.references.map((reference) => reference.range.start.line)).toEqual([1, 4]);
-        expect(prototypeRefs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      const prototypeReferences = await findReferences(index, { file, line: 1, column: 5 });
+      expect(prototypeReferences.status).toBe("ok");
+      if (prototypeReferences.status === "ok") {
+        expect(prototypeReferences.references.map((reference) => reference.range.start.line)).toEqual([1, 2]);
+      }
+
+      const definitionReferences = await findReferences(index, { file, line: 3, column: 5 });
+      expect(definitionReferences.status).toBe("ok");
+      if (definitionReferences.status === "ok") {
+        expect(definitionReferences.references.map((reference) => reference.range.start.line)).toEqual([3, 4]);
       }
     } finally {
       await rm(root, { recursive: true, force: true });

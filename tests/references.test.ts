@@ -12,7 +12,7 @@ import {
   REFERENCE_COVERAGE_REASON_ORDER,
 } from "../src/indexer/navigation-references.js";
 import { findUsageReferences } from "../src/indexer/navigation.js";
-import type { ProjectIndex } from "../src/index.js";
+import { goToDefinition, type ProjectIndex } from "../src/index.js";
 import { createReferenceLookupCache } from "../src/impact/reference-cache.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import {
@@ -4233,6 +4233,93 @@ describe("Find References: Python receiver member resolution", () => {
   });
 });
 
+describe("Find References: keyword receiver scope and coverage", () => {
+  it("keeps TypeScript static and instance members separate for the same spelling", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-keyword-scope-refs-"));
+    try {
+      const file = path.join(root, "box.ts").replace(/\\/g, "/");
+      const source = [
+        "class StaticBox {",
+        "  static run(): void {}",
+        "  callInstance(): void { this.run(); }",
+        "  static callStatic(): void { this.run(); }",
+        "}",
+        "class InstanceBox {",
+        "  run(): void {}",
+        "  callInstance(): void { this.run(); }",
+        "  static callStatic(): void { this.run(); }",
+        "}",
+      ].join("\n");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+
+      const staticRefs = await testFindReferences(index, file, 2, source.split("\n")[1]!.indexOf("run") + 1, 2);
+      if (staticRefs.status === "ok") {
+        expect(staticRefs.references.map((reference) => reference.range.start.line)).toEqual([2, 4]);
+        expect(staticRefs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+
+      const instanceRefs = await testFindReferences(index, file, 7, source.split("\n")[6]!.indexOf("run") + 1, 2);
+      if (instanceRefs.status === "ok") {
+        expect(instanceRefs.references.map((reference) => reference.range.start.line)).toEqual([7, 8]);
+        expect(instanceRefs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial coverage when JavaScript dynamic this prevents receiver proof", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-js-dynamic-this-refs-"));
+    try {
+      const file = path.join(root, "box.js").replace(/\\/g, "/");
+      const source = [
+        "class Box {",
+        "  helper() {}",
+        "  run() {",
+        "    function nested() { this.helper(); }",
+        "    const arrow = () => this.helper();",
+        "  }",
+        "}",
+      ].join("\n");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const refs = await testFindReferences(index, file, 2, source.split("\n")[1]!.indexOf("helper") + 1, 2);
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual([2, 5]);
+        expect(refs.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["strategy_unavailable"],
+          affectedFiles: [file],
+        });
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds an inherited C++ member from an out-of-line this call", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-out-of-line-refs-"));
+    try {
+      const file = path.join(root, "box.cpp").replace(/\\/g, "/");
+      const source = [
+        "class Base { public: void helper() {} };",
+        "class Child : public Base { public: void run(); };",
+        "void Child::run() { this->helper(); }",
+      ].join("\n");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const refs = await testFindReferences(index, file, 1, source.split("\n")[0]!.indexOf("helper") + 1, 2);
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual([1, 3]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Find References: PHP unproven receiver is not a bare-name hit", () => {
   it("does not treat $unknown->helper() as a reference to an imported helper", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-misattr-refs-"));
@@ -4819,7 +4906,7 @@ describe("Find References: PHP method case-insensitivity", () => {
 });
 
 describe("Find References: C/C++ enclosing-scope occurrence strategy", () => {
-  it("reports partial coverage for a function-scope binding and complete coverage for an unused enclosing binding", async () => {
+  it("reports complete coverage for function definitions and unused enclosing declarations", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-c-enclosing-coverage-"));
     try {
       const file = path.join(root, "pair.c").replace(/\\/g, "/");
@@ -4840,11 +4927,7 @@ describe("Find References: C/C++ enclosing-scope occurrence strategy", () => {
       });
       expect(functionScope.status).toBe("ok");
       if (functionScope.status === "ok") {
-        expect(functionScope.referenceCoverage).toEqual({
-          scope: "indexed_candidates",
-          state: "partial",
-          reasons: ["strategy_unavailable"],
-        });
+        expect(functionScope.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
       }
 
       const enclosing = await indexer.findReferences(index, {
@@ -4949,6 +5032,85 @@ describe("Find References: PHP candidate walk count", () => {
       }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: imported superclass member through super", () => {
+  function columnOf(source: string, line: number, token: string): number {
+    const lines = source.split("\n");
+    const index = lines[line - 1]!.indexOf(token);
+    if (index < 0) throw new Error(`Expected token ${token} on fixture line ${line}`);
+    return index + 1;
+  }
+
+  it("includes the super.helper() call as a reference to the imported base member", async () => {
+    for (const kind of ["ts", "js"] as const) {
+      const typed = kind === "ts";
+      const base = [
+        "export default class Base {",
+        typed ? "  helper(): number { return 1; }" : "  helper() { return 1; }",
+        "}",
+        "",
+      ].join("\n");
+      const derived = [
+        'import Base from "./base";',
+        "class Derived extends Base {",
+        typed ? "  helper(): number { return 2; }" : "  helper() { return 2; }",
+        typed ? "  run(): number { return super.helper(); }" : "  run() { return super.helper(); }",
+        "}",
+        "",
+      ].join("\n");
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-${kind}-super-imported-refs-`));
+      const baseFile = path.join(root, `base.${kind}`).replace(/\\/g, "/");
+      const derivedFile = path.join(root, `derived.${kind}`).replace(/\\/g, "/");
+      try {
+        await fsp.writeFile(baseFile, base, "utf8");
+        await fsp.writeFile(derivedFile, derived, "utf8");
+        const index = await createTestIndexFromFiles(root, [baseFile, derivedFile]);
+        const defColumn = columnOf(base, 2, "helper()");
+        const callColumn = columnOf(derived, 4, "helper()");
+        const overrideColumn = columnOf(derived, 3, "helper()");
+
+        const gotoFromCall = await goToDefinition(index, { file: derivedFile, line: 4, column: callColumn });
+        expect(gotoFromCall.status).toBe("ok");
+        if (gotoFromCall.status === "ok") {
+          expect(fileIdentityKey(gotoFromCall.definition.file)).toBe(fileIdentityKey(baseFile));
+          expect(gotoFromCall.definition.range.start.line).toBe(2);
+          expect(gotoFromCall.definition.range.start.column).toBe(defColumn);
+          expect(gotoFromCall.provenance?.resolution).toBe("member-access");
+        }
+
+        const fromDef = await testFindReferences(index, baseFile, 2, defColumn, [
+          { file: baseFile, line: 2, column: defColumn },
+          { file: derivedFile, line: 4, column: callColumn },
+        ]);
+        if (fromDef.status === "ok") {
+          expect(
+            fromDef.references.some(
+              (reference) =>
+                fileIdentityKey(reference.file) === fileIdentityKey(derivedFile) &&
+                reference.range.start.line === 3 &&
+                reference.range.start.column === overrideColumn,
+            ),
+          ).toBe(false);
+        }
+
+        const fromCall = await testFindReferences(index, derivedFile, 4, callColumn, [
+          { file: baseFile, line: 2, column: defColumn },
+          { file: derivedFile, line: 4, column: callColumn },
+        ]);
+        if (fromCall.status === "ok") {
+          expect(
+            fromCall.references.some(
+              (reference) =>
+                fileIdentityKey(reference.file) === fileIdentityKey(derivedFile) && reference.range.start.line === 3,
+            ),
+          ).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
     }
   });
 });

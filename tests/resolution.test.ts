@@ -2133,4 +2133,121 @@ describe("Import Resolution", () => {
       expect(specifier.replace(/\\/g, "/")).toBe(pkgFile.replace(/\\/g, "/"));
     }
   });
+
+  it.each(["c", "cpp"] as const)(
+    "keeps an unresolved literal %s include external despite decoys",
+    async (languageId) => {
+      const root = await mkTmpDir(`dg-resolve-c-family-literal-decoys-${languageId}-`);
+      const sourceFile = path.join(root, languageId === "c" ? "main.c" : "main.cpp");
+      const configDir = path.join(root, "config");
+      const nodeModulesDir = path.join(root, "node_modules", "config");
+      const workspaceDir = path.join(root, "packages", "config");
+
+      await fsp.mkdir(configDir, { recursive: true });
+      await fsp.mkdir(nodeModulesDir, { recursive: true });
+      await fsp.mkdir(workspaceDir, { recursive: true });
+      await fsp.writeFile(sourceFile, '#include "config"\n', "utf8");
+      await fsp.writeFile(path.join(root, "config.ts"), "export const decoy = 1;\n", "utf8");
+      await fsp.writeFile(path.join(configDir, "index.ts"), "export const decoy = 2;\n", "utf8");
+      await fsp.writeFile(
+        path.join(nodeModulesDir, "package.json"),
+        JSON.stringify({ name: "config", main: "index.ts" }),
+        "utf8",
+      );
+      await fsp.writeFile(path.join(nodeModulesDir, "index.ts"), "export const decoy = 3;\n", "utf8");
+      await fsp.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ private: true, workspaces: ["packages/*"] }),
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(workspaceDir, "package.json"),
+        JSON.stringify({ name: "config", main: "index.ts" }),
+        "utf8",
+      );
+      await fsp.writeFile(path.join(workspaceDir, "index.ts"), "export const decoy = 4;\n", "utf8");
+      await fsp.writeFile(
+        path.join(root, "tsconfig.json"),
+        JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { config: ["config.ts"] } } }),
+        "utf8",
+      );
+
+      clearImportResolutionCaches();
+      const { matchPath } = await loadNearestTsconfigFor(sourceFile, root);
+      const workspaceConfig = await loadWorkspaceConfig(root);
+
+      await expect(
+        resolveImportSpecifier(root, sourceFile, "config", languageId, {
+          includeForm: "literal",
+          ...(matchPath ? { matchPath } : {}),
+          ...(workspaceConfig ? { workspaceConfig } : {}),
+          resolveNodeModules: true,
+          resolutionHints: ["."],
+        }),
+      ).resolves.toEqual({ external: "config" });
+    },
+  );
+
+  it.each(["c", "cpp"] as const)(
+    "resolves an exact literal %s include inside a configured include root",
+    async (languageId) => {
+      const root = await mkTmpDir(`dg-resolve-c-family-literal-hint-${languageId}-`);
+      const sourceFile = path.join(root, languageId === "c" ? "main.c" : "main.cpp");
+      const includeDir = path.join(root, "include");
+      const hintFile = path.join(includeDir, "config");
+
+      await fsp.mkdir(includeDir, { recursive: true });
+      await fsp.writeFile(hintFile, "int cfg(void);\n", "utf8");
+      await fsp.writeFile(sourceFile, '#include "config"\n', "utf8");
+
+      clearImportResolutionCaches();
+      const resolved = await resolveImportSpecifier(root, sourceFile, "config", languageId, {
+        includeForm: "literal",
+        resolutionHints: ["include"],
+      });
+      expect(typeof resolved).toBe("string");
+      expect(String(resolved).replace(/\\/g, "/")).toBe(hintFile.replace(/\\/g, "/"));
+    },
+  );
+
+  it.each(["c", "cpp"] as const)("keeps a macro %s include external despite decoys", async (languageId) => {
+    const root = await mkTmpDir(`dg-resolve-c-family-macro-decoys-${languageId}-`);
+    const sourceFile = path.join(root, languageId === "c" ? "main.c" : "main.cpp");
+    const nodeModulesDir = path.join(root, "node_modules", "HEADER");
+    const workspaceDir = path.join(root, "packages", "HEADER");
+
+    await fsp.mkdir(nodeModulesDir, { recursive: true });
+    await fsp.mkdir(workspaceDir, { recursive: true });
+    await fsp.writeFile(sourceFile, ['#define HEADER "x.h"', "#include HEADER", ""].join("\n"), "utf8");
+    await fsp.writeFile(path.join(root, "HEADER.ts"), "export const decoy = 1;\n", "utf8");
+    await fsp.writeFile(
+      path.join(nodeModulesDir, "package.json"),
+      JSON.stringify({ name: "HEADER", main: "index.ts" }),
+      "utf8",
+    );
+    await fsp.writeFile(path.join(nodeModulesDir, "index.ts"), "export const decoy = 2;\n", "utf8");
+    await fsp.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ private: true, workspaces: ["packages/*"] }),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(workspaceDir, "package.json"),
+      JSON.stringify({ name: "HEADER", main: "index.ts" }),
+      "utf8",
+    );
+    await fsp.writeFile(path.join(workspaceDir, "index.ts"), "export const decoy = 3;\n", "utf8");
+
+    clearImportResolutionCaches();
+    const workspaceConfig = await loadWorkspaceConfig(root);
+
+    await expect(
+      resolveImportSpecifier(root, sourceFile, "HEADER", languageId, {
+        includeForm: "macro",
+        ...(workspaceConfig ? { workspaceConfig } : {}),
+        resolveNodeModules: true,
+        resolutionHints: ["."],
+      }),
+    ).resolves.toEqual({ external: "HEADER" });
+  });
 });

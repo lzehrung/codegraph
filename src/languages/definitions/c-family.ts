@@ -40,6 +40,9 @@ export function cFunctionNameQuery(captureName: string, includeFieldIdentifier: 
     patterns.push(
       `(function_declarator declarator: (parenthesized_declarator (pointer_declarator declarator: (${identifierType}) @${captureName})))`,
     );
+    if (includeFieldIdentifier) {
+      patterns.push(`(reference_declarator (function_declarator declarator: (${identifierType}) @${captureName}))`);
+    }
   }
   if (includeFieldIdentifier) {
     patterns.push(
