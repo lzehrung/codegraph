@@ -799,11 +799,20 @@ async function findReferencesInternal(
 
 function sameFileOccurrenceExecuted(scope: ScopeIndex, binding: Binding | undefined): boolean {
   if (!binding) return false;
+  let mapped = false;
+  let hasEnclosingFunctionBinding = false;
   for (const candidate of scope.allScopes) {
-    if (candidate.kind === "function") continue;
-    if (candidate.map.get(binding.canonicalName) === binding) return true;
+    const scopedBinding = candidate.map.get(binding.canonicalName);
+    if (scopedBinding === binding) {
+      mapped = true;
+      if (candidate.kind !== "function") return true;
+    } else if (candidate.kind !== "function" && scopedBinding?.kind === "function") {
+      hasEnclosingFunctionBinding = true;
+    }
   }
-  return false;
+  // C prototypes and definitions share occurrences through an extra binding that is not the
+  // scope map's canonical entry. That extra declaration still proves the enclosing scan ran.
+  return !mapped && binding.kind === "function" && hasEnclosingFunctionBinding;
 }
 
 function shouldScanVerifiedReferences(
