@@ -4483,9 +4483,9 @@ describe("Find References: PHP trait case-insensitivity", () => {
   });
 
   it("keeps a case-variant consumer past bloom-filter narrowing", async () => {
-    // Bloom filters hold each candidate file's identifiers in that file's own spelling, and a
-    // probe can only carry one spelling. A PHP class name is case-insensitive, so narrowing
-    // would drop `sErViCe` before the comparator ever sees it.
+    // PHP bloom filters store each identifier in its source spelling and ASCII-case-folded.
+    // Candidate narrowing must fold a case-insensitive class probe the same way so the
+    // comparator can verify `sErViCe` against `Service`.
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-bloom-case-"));
     try {
       const serviceFile = path.join(root, "service.php").replace(/\\/g, "/");
@@ -4678,6 +4678,32 @@ describe("Find References: PHP use-alias and global-function fallback", () => {
 
       expect(result.status).toBe("ok");
       if (result.status !== "ok") return;
+      expectReferenceAt(result, clientFile, 4);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a qualified function through a plain namespace alias", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-qualified-function-alias-"));
+    try {
+      const functionFile = path.join(root, "helper.php").replace(/\\/g, "/");
+      const clientFile = path.join(root, "client.php").replace(/\\/g, "/");
+      const functionLines = ["<?php", "namespace Vendor\\Sub;", "function Helper() { return 1; }", ""];
+      const clientLines = ["<?php", "namespace Client;", "use Vendor\\Sub;", "$value = sub\\hElPeR();", ""];
+      await fsp.writeFile(functionFile, functionLines.join("\n"), "utf8");
+      await fsp.writeFile(clientFile, clientLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [functionFile, clientFile]);
+
+      const result = await indexer.findReferences(index, {
+        file: functionFile,
+        line: 3,
+        column: tokenColumn(functionLines[2]!, "Helper"),
+      });
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expectReferenceAt(result, functionFile, 3);
       expectReferenceAt(result, clientFile, 4);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

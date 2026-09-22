@@ -78,8 +78,8 @@ const PHP_CASE_SENSITIVE_SYMBOL_KINDS: Record<string, true> = {
 
 /**
  * Whether PHP resolves this symbol kind's name case-insensitively. Bloom-filter narrowing
- * stores each candidate file's identifiers with that file's own spelling, so a case-variant
- * reference would be filtered out before collection ever runs.
+ * uses this classification to fold the probe for class-like and function names while
+ * variables, properties, and constants keep their exact spelling.
  */
 export function isPhpCaseInsensitiveSymbolKind(kind: string): boolean {
   return !!PHP_CASE_INSENSITIVE_SYMBOL_KINDS[kind];
@@ -173,7 +173,7 @@ export function canonicalPhpReferenceNames(
   const separator = trimmed.indexOf("\\");
   const firstSegment = separator < 0 ? trimmed : trimmed.slice(0, separator);
   const remainder = separator < 0 ? "" : trimmed.slice(separator + 1);
-  const aliasTarget = phpUseAliasTarget(firstSegment, options?.imports, options?.role);
+  const aliasTarget = phpUseAliasTarget(firstSegment, options?.imports, separator < 0 ? options?.role : "class");
   if (aliasTarget) {
     return [remainder ? `${aliasTarget}\\${remainder}` : aliasTarget];
   }
