@@ -262,7 +262,7 @@ export async function resolveMemberAccessDefinition(params: {
         true,
         keywordCallArgumentCount(memberNode, source),
       );
-      if (!memberDef) return null;
+      if (!memberDef) return { status: "not_found", reason: "No matching supertype member definition" };
       return okGoToResult(index, memberDef, {
         via: { exportedName: member },
         resolution: "member-access",
@@ -388,12 +388,17 @@ function isSimpleTypeNameNode(node: SyntaxNodeLike, sup: LanguageSupport): boole
   return isReceiverNameNode(sup, node.type) || node.type === "type_identifier" || node.type === "name";
 }
 
-function collectDeclaredBaseTypes(container: SyntaxNodeLike, source: string, sup: LanguageSupport): DeclaredBaseType[] {
-  const nodeTypes = MEMBER_ACCESS_ROWS[sup.id]?.baseListNodeTypes;
-  if (!nodeTypes || nodeTypes.length === 0) return [];
-  const typeSet = new Set(nodeTypes);
+function collectDeclaredBaseTypes(
+  container: SyntaxNodeLike,
+  source: string,
+  sup: LanguageSupport,
+  superclassOnly = false,
+): DeclaredBaseType[] {
+  const ancestry = MEMBER_ACCESS_ROWS[sup.id]?.receiverAncestry;
+  if (!ancestry || (ancestry.clauses.length === 0 && !ancestry.mixinCalls?.length)) return [];
   const bases: DeclaredBaseType[] = [];
   const seen = new Set<string>();
+  let usedFirstMatch = false;
   const addSimple = (name: string, invoked: boolean): void => {
     if (!name || seen.has(name)) return;
     seen.add(name);
@@ -440,11 +445,29 @@ function collectDeclaredBaseTypes(container: SyntaxNodeLike, source: string, sup
     }
   };
   const consider = (node: SyntaxNodeLike): void => {
-    if (typeSet.has(node.type)) collectType(node, false);
+    for (const rule of ancestry.clauses) {
+      if (node.type !== rule.nodeType) continue;
+      if (superclassOnly && !rule.supertype) continue;
+      if (superclassOnly && rule.supertype === "first-match") {
+        if (usedFirstMatch) continue;
+        usedFirstMatch = true;
+      }
+      let target = node;
+      if (superclassOnly && rule.supertype === "first-child") {
+        target = target.namedChildren[0] ?? target;
+      }
+      collectType(target, false);
+    }
+    if (superclassOnly || node.type !== "call" || !ancestry.mixinCalls?.length) return;
+    if (node.childForFieldName("receiver")) return;
+    const methodNode = node.childForFieldName("method");
+    const methodName = methodNode ? sliceText(methodNode, source) : undefined;
+    if (!methodName || !ancestry.mixinCalls.includes(methodName)) return;
+    const args = node.childForFieldName("arguments");
+    if (args) collectType(args, false);
   };
   for (const child of container.namedChildren) {
     consider(child);
-    if (typeSet.has(child.type)) continue;
     for (const grand of child.namedChildren) consider(grand);
   }
   return bases;
@@ -574,7 +597,7 @@ async function baseRefsFromContainer(
   sup: LanguageSupport,
   superclassOnly: boolean,
 ): Promise<KeywordClassRef[]> {
-  const bases = collectDeclaredBaseTypes(container, source, sup);
+  const bases = collectDeclaredBaseTypes(container, source, sup, superclassOnly);
   const refs: KeywordClassRef[] = [];
   const seen = new Set<string>();
   const normalize = (name: string): string => {
@@ -587,9 +610,16 @@ async function baseRefsFromContainer(
         ? resolveNamedMemberContainer(index, mod, base.name, normalize)
         : resolveQualifiedMemberContainer(index, mod, base.base, base.path, normalize);
     if (!def) continue;
+    const ref = await keywordClassRefFromDef(index, def);
+    if (!ref) continue;
     // `super`, `base`, and `parent` follow class ancestors only. An own receiver also inherits
     // interface or protocol members, so apply the class-only filter only to supertype lookup.
-    if (superclassOnly && def.kind !== SymbolKind.Class) continue;
+    const interfaceLike =
+      ref.container.type === "interface_declaration" ||
+      ref.container.type === "protocol_declaration" ||
+      ref.container.type === "trait_item" ||
+      /^(?:interface|protocol|trait)\b/.test(sliceText(ref.container, ref.context.source).trimStart());
+    if (superclassOnly && (def.kind !== SymbolKind.Class || interfaceLike)) continue;
     // Kotlin classifies interfaces as SymbolKind.Class too, so the superclass is identified
     // syntactically: `Base()` is a constructor invocation, while bare delegation-specifier
     // entries (`Face`, `by` delegations) are interfaces. Interface-only super lookup stays
@@ -598,8 +628,7 @@ async function baseRefsFromContainer(
     const key = keywordClassKey(def);
     if (seen.has(key)) continue;
     seen.add(key);
-    const ref = await keywordClassRefFromDef(index, def);
-    if (ref) refs.push(ref);
+    refs.push(ref);
   }
   return refs;
 }

@@ -4,7 +4,13 @@ import type { SyntaxNodeLike } from "../../languages/types.js";
 import { sliceText, toRange } from "../../util/ast.js";
 import { getMemberAccessParts } from "../../util/member-access.js";
 import { foldPhpIdentifierCase } from "../../util/identifiers.js";
-import { keywordReceiverKind } from "../../util/member-access-tables.js";
+import {
+  MEMBER_ACCESS_ROWS,
+  keywordReceiverKind,
+  type ReceiverAncestorClause,
+  type ReceiverAncestorEmbed,
+  type ReceiverAncestryRelation,
+} from "../../util/member-access-tables.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { defNodeId, nodeForDef, type SymbolGraph } from "../symbol-graph.js";
 import type { DetailedClassNode, DetailedFunctionNode } from "./ast.js";
@@ -695,104 +701,10 @@ function collectDirectCallsExcludingNestedScopes(node: SyntaxNodeLike, out: Synt
   }
 }
 
-type InheritanceRelation = "extends" | "implements" | "trait" | "mixin";
-
-/** `superclass-first` extends the first non-interface specifier and conforms to every later one. */
-type BaseClauseLabel = InheritanceRelation | "superclass-first";
-
-/** One clause form that names base types on a class-like declaration. */
-type BaseClauseRule = {
-  /** Node type naming the clause. */
-  type: string;
-  label: BaseClauseLabel;
-  /** Descend into this field of the clause before collecting specifiers. */
-  field?: string;
-  /** Treat every matching clause separately, so its specifier index restarts at zero. */
-  each?: boolean;
-};
-
-/**
- * Go embeds a member type rather than naming a base clause: an interface embeds
- * `type_elem` members, a struct embeds unnamed `field_declaration` members, and
- * each embedded type is a conformance relation.
- */
-type EmbedRule = {
-  /** Direct declared type node that carries the embedded members. */
-  body: string;
-  /** Child list node that holds the members, when the body is not already the list. */
-  memberList?: string;
-  /** Member node type that may carry an embedded type. */
-  member: string;
-  /** Field of the member holding the embedded type; the member itself when omitted. */
-  typeField?: string;
-  /** Only members with no name field embed. */
-  nameless?: boolean;
-};
-
-type InheritanceRuleSet = {
-  clauses: readonly BaseClauseRule[];
-  embeds?: readonly EmbedRule[];
-  /** Ruby module-inclusion calls in the class body whose arguments are mixins. */
-  mixinCalls?: readonly string[];
-};
-
-const TYPESCRIPT_INHERITANCE_RULES: InheritanceRuleSet = {
-  clauses: [
-    // The value field is the superclass expression; the sibling type_arguments
-    // field holds super-call type arguments, which are not base types.
-    { type: "extends_clause", label: "extends", field: "value" },
-    { type: "implements_clause", label: "implements" },
-  ],
-};
-
-/**
- * Per-language class hierarchy forms. The grammar and the language runtime are
- * the only sources of these node names: JavaScript emits `class_heritage` for
- * `extends`, while TypeScript emits `extends_clause` and `implements_clause`.
- */
-const INHERITANCE_RULES: Record<string, InheritanceRuleSet> = {
-  js: { clauses: [{ type: "class_heritage", label: "extends" }] },
-  ts: TYPESCRIPT_INHERITANCE_RULES,
-  tsx: TYPESCRIPT_INHERITANCE_RULES,
-  java: {
-    clauses: [
-      { type: "superclass", label: "extends" },
-      { type: "super_interfaces", label: "implements" },
-    ],
-  },
-  csharp: { clauses: [{ type: "base_list", label: "superclass-first" }] },
-  kotlin: { clauses: [{ type: "delegation_specifiers", label: "superclass-first" }] },
-  swift: { clauses: [{ type: "inheritance_specifier", label: "superclass-first", each: true }] },
-  python: { clauses: [{ type: "argument_list", label: "extends" }] },
-  php: {
-    clauses: [
-      { type: "base_clause", label: "extends" },
-      { type: "class_interface_clause", label: "implements" },
-      { type: "use_declaration", label: "trait", each: true },
-    ],
-  },
-  ruby: {
-    clauses: [{ type: "superclass", label: "extends" }],
-    mixinCalls: ["include", "extend", "prepend"],
-  },
-  cpp: { clauses: [{ type: "base_class_clause", label: "extends" }] },
-  go: {
-    clauses: [],
-    embeds: [
-      { body: "interface_type", member: "type_elem" },
-      {
-        body: "struct_type",
-        memberList: "field_declaration_list",
-        member: "field_declaration",
-        typeField: "type",
-        nameless: true,
-      },
-    ],
-  },
-};
+type InheritanceRelation = ReceiverAncestryRelation;
 
 function baseClauseRelation(
-  label: BaseClauseLabel,
+  label: ReceiverAncestorClause["relation"],
   target: SymbolDef,
   index: number,
   interfaceIds: Set<string>,
@@ -807,7 +719,7 @@ function recordEmbedRelations(
   context: EdgePassContext,
   fromId: string,
   declaration: SyntaxNodeLike,
-  embeds: readonly EmbedRule[],
+  embeds: readonly ReceiverAncestorEmbed[],
 ): void {
   const declaredType = declaration.childForFieldName("type");
   if (!declaredType) return;
@@ -826,7 +738,7 @@ function recordEmbedRelations(
 }
 
 export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: DetailedClassNode[]): void {
-  const rules = INHERITANCE_RULES[context.sup.id];
+  const rules = MEMBER_ACCESS_ROWS[context.sup.id]?.receiverAncestry;
   if (!rules) return;
 
   const interfaceIds = new Set(
@@ -848,15 +760,15 @@ export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: 
     for (const rule of rules.clauses) {
       const clauses: SyntaxNodeLike[] = [];
       if (rule.each) {
-        collectNodesByType(cls.node, rule.type, clauses);
+        collectNodesByType(cls.node, rule.nodeType, clauses);
       } else {
-        const found = findFirstNodeByType(cls.node, rule.type);
+        const found = findFirstNodeByType(cls.node, rule.nodeType);
         if (found) clauses.push(found);
       }
       for (const clause of clauses) {
         const specifiers = rule.field ? (clause.childForFieldName(rule.field) ?? clause) : clause;
         recordIdentifierRelations(context, fromId, specifiers, (target, index) =>
-          baseClauseRelation(rule.label, target, index, interfaceIds),
+          baseClauseRelation(rule.relation, target, index, interfaceIds),
         );
       }
     }

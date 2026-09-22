@@ -53,7 +53,15 @@ function declaredNodeTypeLists(row: MemberAccessRow): Array<{ field: string; typ
   if (row.memberExpressionType) lists.push({ field: "memberExpressionType", types: [row.memberExpressionType] });
   if (row.extraTraversalTypes) lists.push({ field: "extraTraversalTypes", types: row.extraTraversalTypes });
   if (row.extraMemberAccessTypes) lists.push({ field: "extraMemberAccessTypes", types: row.extraMemberAccessTypes });
-  if (row.baseListNodeTypes) lists.push({ field: "baseListNodeTypes", types: row.baseListNodeTypes });
+  for (const [index, clause] of (row.receiverAncestry?.clauses ?? []).entries()) {
+    lists.push({ field: `receiverAncestry.clauses[${index}]`, types: [clause.nodeType] });
+  }
+  for (const [index, embed] of (row.receiverAncestry?.embeds ?? []).entries()) {
+    lists.push({
+      field: `receiverAncestry.embeds[${index}]`,
+      types: [embed.body, ...(embed.memberList ? [embed.memberList] : []), embed.member],
+    });
+  }
   const shapes = row.memberAccessShapes ?? [];
   for (const [index, shape] of shapes.entries()) {
     if (shape.nodeTypes) lists.push({ field: `memberAccessShapes[${index}] nodeTypes`, types: shape.nodeTypes });
@@ -70,6 +78,7 @@ function declaredCapabilityFields(row: MemberAccessRow): string[] {
   if (row.memberAccessShapes) fields.push("memberAccessShapes");
   if (row.navigationFallbackLastChild) fields.push("navigationFallbackLastChild");
   if (row.receiverKeywords) fields.push("receiverKeywords");
+  if (row.receiverAncestry) fields.push("receiverAncestry");
   if (row.memberAccessOmittedReason) fields.push("memberAccessOmittedReason");
   if (row.receiverKeywordsOmittedReason) fields.push("receiverKeywordsOmittedReason");
   return fields;

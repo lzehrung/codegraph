@@ -1,8 +1,8 @@
 /**
- * Per-language member-access and receiver-shape tables for `./member-access.ts` and the receiver
- * pass in `../graphs/symbol-graph-detailed/receiver-calls.ts`. Rows are keyed by language id,
- * following the trivia-table precedent in `./trivia-tables.ts`: the walkers keep the algorithm,
- * the table keeps the per-language node types, extraction shapes, and receiver keywords.
+ * Per-language member-access, receiver, and ancestry tables for `./member-access.ts`, keyword
+ * navigation, and the detailed graph passes. Rows are keyed by language id, following the
+ * trivia-table precedent in `./trivia-tables.ts`: walkers keep the algorithms; this table keeps
+ * the per-language node types, extraction shapes, receiver keywords, and ancestry forms.
  *
  * Every registered language has a row. A document, style, or data format row carries only
  * `omittedReason`; a source-language row declares each capability it has and names a one-line
@@ -38,6 +38,39 @@ export type MemberAccessShape = {
   property: MemberAccessChild | { navigation: true };
 };
 
+export type ReceiverAncestryRelation = "extends" | "implements" | "trait" | "mixin";
+
+export type ReceiverAncestorClause = {
+  /** Syntax node that contains one or more declared ancestors. */
+  nodeType: string;
+  /** Detailed-graph edge label, or superclass-first classification for mixed base lists. */
+  relation: ReceiverAncestryRelation | "superclass-first";
+  /** Descend into this field before collecting ancestors. */
+  field?: string;
+  /** Treat every matching clause separately. */
+  each?: boolean;
+  /**
+   * Which ancestors a `super`/`parent`/`base` receiver may address. Own-type receivers use every
+   * declaration in the clause.
+   */
+  supertype?: "all" | "first-child" | "first-match";
+};
+
+export type ReceiverAncestorEmbed = {
+  body: string;
+  memberList?: string;
+  member: string;
+  typeField?: string;
+  nameless?: boolean;
+};
+
+export type ReceiverAncestry = {
+  clauses: readonly ReceiverAncestorClause[];
+  embeds?: readonly ReceiverAncestorEmbed[];
+  /** Call names that add mixins to the declaring type, such as Ruby `include` and `prepend`. */
+  mixinCalls?: readonly string[];
+};
+
 export type MemberAccessRow = {
   /** Why the language has no member-access capability at all; only document, style, and data formats set it. */
   omittedReason?: string;
@@ -57,12 +90,8 @@ export type MemberAccessRow = {
   receiverKeywords?: ReceiverKeywords;
   /** Why the language declares no receiver keywords. */
   receiverKeywordsOmittedReason?: string;
-  /**
-   * Node types that list declared base types on a class-like declaration. Used by
-   * `super`/`parent`/`base` member navigation; omitted when the language has no
-   * supertype receiver keyword.
-   */
-  baseListNodeTypes?: readonly string[];
+  /** Language syntax that declares ancestors visible to own-type and supertype receivers. */
+  receiverAncestry?: ReceiverAncestry;
 };
 
 /** C models dotted access as `field_expression`; C++ also exposes scoped `qualified_identifier`. */
@@ -92,13 +121,15 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
   cpp: {
     memberAccessShapes: [C_FIELD_ACCESS_SHAPE, CPP_QUALIFIED_ACCESS_SHAPE],
     receiverKeywords: { own: ["this"], instanceOwn: ["this"], supertype: [] },
-    baseListNodeTypes: ["base_class_clause"],
+    receiverAncestry: { clauses: [{ nodeType: "base_class_clause", relation: "extends" }] },
   },
   css: { omittedReason: "Style language; no member-access concept." },
   csharp: {
     memberAccessShapes: [{ object: { index: 0 }, property: { index: 2 } }],
     receiverKeywords: { own: ["this"], instanceOwn: ["this"], supertype: ["base"] },
-    baseListNodeTypes: ["base_list"],
+    receiverAncestry: {
+      clauses: [{ nodeType: "base_list", relation: "superclass-first", supertype: "first-child" }],
+    },
   },
   go: {
     extraTraversalTypes: ["qualified_type"],
@@ -107,6 +138,19 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
     // Go has no receiver keyword: a method call's receiver is an ordinary value. The row still
     // exists so go receivers must be proven rather than falling back to a bare name.
     receiverKeywords: { own: [], instanceOwn: [], supertype: [] },
+    receiverAncestry: {
+      clauses: [],
+      embeds: [
+        { body: "interface_type", member: "type_elem" },
+        {
+          body: "struct_type",
+          memberList: "field_declaration_list",
+          member: "field_declaration",
+          typeField: "type",
+          nameless: true,
+        },
+      ],
+    },
   },
   hbs: { omittedReason: "Handlebars document format; embedded scripts parse as their own language." },
   html: { omittedReason: "Document format; embedded scripts parse as their own language." },
@@ -124,13 +168,18 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
       },
     ],
     receiverKeywords: THIS_SUPER_RECEIVERS,
-    baseListNodeTypes: ["superclass"],
+    receiverAncestry: {
+      clauses: [
+        { nodeType: "superclass", relation: "extends", supertype: "all" },
+        { nodeType: "super_interfaces", relation: "implements" },
+      ],
+    },
   },
   js: {
     memberAccessOmittedReason:
       "The shared generic default already reads member_expression's object and property fields.",
     receiverKeywords: THIS_SUPER_RECEIVERS,
-    baseListNodeTypes: ["class_heritage"],
+    receiverAncestry: { clauses: [{ nodeType: "class_heritage", relation: "extends", supertype: "all" }] },
   },
   kotlin: {
     memberAccessShapes: [
@@ -138,7 +187,9 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
     ],
     navigationFallbackLastChild: true,
     receiverKeywords: THIS_SUPER_RECEIVERS,
-    baseListNodeTypes: ["delegation_specifiers"],
+    receiverAncestry: {
+      clauses: [{ nodeType: "delegation_specifiers", relation: "superclass-first", supertype: "first-child" }],
+    },
   },
   less: { omittedReason: "Style language; no member-access concept." },
   markdown: { omittedReason: "Document format; fenced code blocks parse as their own language." },
@@ -158,7 +209,13 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
       },
     ],
     receiverKeywords: { own: ["$this", "self", "static"], instanceOwn: ["$this"], supertype: ["parent"] },
-    baseListNodeTypes: ["base_clause"],
+    receiverAncestry: {
+      clauses: [
+        { nodeType: "base_clause", relation: "extends", supertype: "all" },
+        { nodeType: "class_interface_clause", relation: "implements" },
+        { nodeType: "use_declaration", relation: "trait", each: true },
+      ],
+    },
   },
   python: {
     memberExpressionType: "attribute",
@@ -166,6 +223,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
       { object: { field: "object", fallbackIndex: 0 }, property: { field: "attribute", fallbackIndex: 2 } },
     ],
     receiverKeywords: { own: ["self", "cls"], instanceOwn: ["self"], supertype: [] },
+    receiverAncestry: { clauses: [{ nodeType: "argument_list", relation: "extends" }] },
   },
   rst: { omittedReason: "reStructuredText document format; embedded code blocks parse as their own language." },
   ruby: {
@@ -180,6 +238,10 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
       { object: { field: "receiver", fallbackIndex: 0 }, property: { field: "method", fallbackIndex: 2 } },
     ],
     receiverKeywords: { own: ["self"], instanceOwn: ["self"], supertype: [] },
+    receiverAncestry: {
+      clauses: [{ nodeType: "superclass", relation: "extends" }],
+      mixinCalls: ["include", "extend", "prepend"],
+    },
   },
   rust: {
     memberAccessShapes: [
@@ -199,19 +261,38 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
       { nodeTypes: ["navigation_expression"], object: { namedIndex: 0 }, property: { navigation: true } },
     ],
     receiverKeywords: SELF_RECEIVERS,
-    baseListNodeTypes: ["inheritance_specifier"],
+    receiverAncestry: {
+      clauses: [
+        {
+          nodeType: "inheritance_specifier",
+          relation: "superclass-first",
+          each: true,
+          supertype: "first-match",
+        },
+      ],
+    },
   },
   ts: {
     memberAccessOmittedReason:
       "The shared generic default already reads member_expression's object and property fields.",
     receiverKeywords: THIS_SUPER_RECEIVERS,
-    baseListNodeTypes: ["extends_clause"],
+    receiverAncestry: {
+      clauses: [
+        { nodeType: "extends_clause", relation: "extends", field: "value", supertype: "all" },
+        { nodeType: "implements_clause", relation: "implements" },
+      ],
+    },
   },
   tsx: {
     memberAccessOmittedReason:
       "The shared generic default already reads member_expression's object and property fields.",
     receiverKeywords: THIS_SUPER_RECEIVERS,
-    baseListNodeTypes: ["extends_clause"],
+    receiverAncestry: {
+      clauses: [
+        { nodeType: "extends_clause", relation: "extends", field: "value", supertype: "all" },
+        { nodeType: "implements_clause", relation: "implements" },
+      ],
+    },
   },
   vue: { omittedReason: "Vue component format; script blocks parse as js/ts and templates as html." },
   zig: {

@@ -34,6 +34,7 @@ import { collectNativeCaptureImportBindings } from "./imports/native-captures.js
 import { collectPythonImportsFromNativeMatches, collectPythonImportsFromSource } from "./imports/python.js";
 import type { LanguageSupport } from "../languages.js";
 import type { ImportBinding } from "./types.js";
+import { collectTextImportSpecifiers } from "./imports/text-import-extractors.js";
 
 export async function collectImportsForFile(
   file: string,
@@ -211,6 +212,20 @@ export async function collectImportsForFile(
       resolveFrom,
       pushBinding: (binding) => imports.push(binding),
     });
+    if (resolvedSup.id === "c" || resolvedSup.id === "cpp") {
+      for (const specifier of collectTextImportSpecifiers(resolvedSup.id, resolvedSource, { file })) {
+        imports.push({
+          kind: "star",
+          from: specifier.spec,
+          resolved: await resolveFrom(
+            specifier.spec,
+            undefined,
+            specifier.includeForm ? { includeForm: specifier.includeForm } : undefined,
+          ),
+          typeOnly: !!specifier.typeOnly,
+        });
+      }
+    }
   };
 
   const runValueRequireFallback = async () => {

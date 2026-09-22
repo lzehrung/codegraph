@@ -66,8 +66,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * case-insensitive PHP references are narrowed correctly.
  * Epoch 29 uses exact configured-root matching for C-family angle includes and applies PHP
  * method-name case folding to receiver call edges.
+ * Epoch 30 restores reduced-mode C-family include bindings when native import capture is unavailable
+ * and shares one ancestry model across keyword-receiver navigation and detailed graph edges.
  */
-export const CORE_ALGORITHM_EPOCH = 29;
+export const CORE_ALGORITHM_EPOCH = 30;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

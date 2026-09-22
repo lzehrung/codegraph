@@ -3078,6 +3078,30 @@ describe("Keyword-receiver member navigation", () => {
     }
   });
 
+  it("resolves Java this members through interfaces but keeps super on the class chain", async () => {
+    const source = [
+      "class Base {}",
+      "interface Face { default int target() { return 1; } }",
+      "class Box extends Base implements Face {",
+      "  int own() { return this.target(); }",
+      "  int inherited() { return super.target(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-java-interface-goto-", { "Box.java": source });
+    try {
+      await expectMemberAccess(index, paths["Box.java"]!, 4, columnOf(source, 4, "target()"), 2);
+      const result = await goToDefinition(index, {
+        file: paths["Box.java"]!,
+        line: 5,
+        column: columnOf(source, 5, "target()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves Kotlin this. method and field through member-access", async () => {
     const source = [
       "class Box {",
@@ -3103,6 +3127,46 @@ describe("Keyword-receiver member navigation", () => {
     const { root, paths, index } = await buildFiles("cg-rb-self-goto-", { "box.rb": source });
     try {
       await expectMemberAccess(index, paths["box.rb"]!, 5, columnOf(source, 5, "target"), 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves PHP $this members through used traits", async () => {
+    const source = [
+      "<?php",
+      "trait Greeter { function target() {} }",
+      "class Box {",
+      "  use Greeter;",
+      "  function run() { $this->target(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-php-trait-goto-", { "box.php": source });
+    try {
+      await expectMemberAccess(index, paths["box.php"]!, 5, columnOf(source, 5, "target()"), 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Ruby self members through included mixins", async () => {
+    const source = [
+      "module Greeter",
+      "  def target",
+      "  end",
+      "end",
+      "class Box",
+      "  include Greeter",
+      "  def run",
+      "    self.target",
+      "  end",
+      "end",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ruby-mixin-goto-", { "box.rb": source });
+    try {
+      await expectMemberAccess(index, paths["box.rb"]!, 8, columnOf(source, 8, "target"), 2);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -3546,6 +3610,34 @@ describe("Supertype keyword member navigation", () => {
       expect(result.definition.range.start.line).toBe(2);
       expect(result.definition.range.start.line).not.toBe(5);
       expect(result.provenance?.resolution).toBe("member-access");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Swift super on the class ancestor and excludes protocols", async () => {
+    const source = [
+      "protocol Face { func helper() -> Int }",
+      "class Base { func helper() -> Int { return 1 } }",
+      "class Derived: Base, Face {",
+      "  override func helper() -> Int { return 2 }",
+      "  func run() -> Int { return super.helper() }",
+      "}",
+      "class ProtocolOnly: Face {",
+      "  func helper() -> Int { return 3 }",
+      "  func run() -> Int { return super.helper() }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-swift-super-goto-", { "box.swift": source });
+    try {
+      await expectMemberAccess(index, paths["box.swift"]!, 5, columnOf(source, 5, "helper()"), 2);
+      const protocolOnly = await goToDefinition(index, {
+        file: paths["box.swift"]!,
+        line: 9,
+        column: columnOf(source, 9, "helper()"),
+      });
+      expect(protocolOnly.status).toBe("not_found");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
