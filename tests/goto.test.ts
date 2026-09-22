@@ -3208,6 +3208,153 @@ describe("Keyword-receiver member navigation", () => {
       await fsp.rm(phpFix.root, { recursive: true, force: true });
     }
   });
+
+  it("resolves TypeScript static this to static members while instance contexts stay instance-only", async () => {
+    const source = [
+      "class Box {",
+      "  static helper(): number { return 1; }",
+      "  member(): number { return 2; }",
+      "  static run(): number { return this.helper(); }",
+      "  static run2(): number { return this.member(); }",
+      "  run(): number { return this.member(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-static-this-goto-", { "Box.ts": source });
+    try {
+      await expectMemberAccess(index, paths["Box.ts"]!, 4, columnOf(source, 4, "helper()"), 2);
+      const instanceMemberFromStatic = await goToDefinition(index, {
+        file: paths["Box.ts"]!,
+        line: 5,
+        column: columnOf(source, 5, "member()"),
+      });
+      expect(instanceMemberFromStatic.status).toBe("not_found");
+      await expectMemberAccess(index, paths["Box.ts"]!, 6, columnOf(source, 6, "member()"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Swift static and class self to type members while instance self stays instance-only", async () => {
+    const source = [
+      "class Box {",
+      "  static func a() -> Int { return 1 }",
+      "  class func b() -> Int { return 2 }",
+      "  func c() -> Int { return 3 }",
+      "  static func runA() -> Int { return self.a() }",
+      "  class func runB() -> Int { return self.b() }",
+      "  func runC() -> Int { return self.c() }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-swift-static-self-goto-", { "Box.swift": source });
+    try {
+      await expectMemberAccess(index, paths["Box.swift"]!, 5, columnOf(source, 5, "a()"), 2);
+      await expectMemberAccess(index, paths["Box.swift"]!, 6, columnOf(source, 6, "b()"), 3);
+      await expectMemberAccess(index, paths["Box.swift"]!, 7, columnOf(source, 7, "c()"), 4);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects TypeScript this overloads by known call argument count", async () => {
+    const source = [
+      "class Box {",
+      "  helper(): number { return 1; }",
+      "  helper(x: number): number { return 2; }",
+      "  run(): number { return this.helper(); }",
+      "  run2(x: number): number { return this.helper(x); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-this-overload-goto-", { "Box.ts": source });
+    try {
+      await expectMemberAccess(index, paths["Box.ts"]!, 4, columnOf(source, 4, "helper()"), 2);
+      await expectMemberAccess(index, paths["Box.ts"]!, 5, columnOf(source, 5, "helper(x)"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an unknown argument count ambiguous for this overloads", async () => {
+    const source = [
+      "class Box {",
+      "  helper(): number { return 1; }",
+      "  helper(x: number): number { return 2; }",
+      "  run(): number { const fn = this.helper; return fn(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-this-overload-unknown-goto-", { "Box.ts": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["Box.ts"]!,
+        line: 4,
+        column: columnOf(source, 4, "helper;"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects Java this overloads by known call argument count", async () => {
+    const source = [
+      "class Box {",
+      "  void helper() {}",
+      "  void helper(int a) {}",
+      "  void run() { this.helper(); }",
+      "  void run2(int a) { this.helper(a); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-java-this-overload-goto-", { "Box.java": source });
+    try {
+      await expectMemberAccess(index, paths["Box.java"]!, 4, columnOf(source, 4, "helper()"), 2);
+      await expectMemberAccess(index, paths["Box.java"]!, 5, columnOf(source, 5, "helper(a)"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects C# this overloads by known call argument count", async () => {
+    const source = [
+      "class Box {",
+      "  public void Helper() {}",
+      "  public void Helper(int a) {}",
+      "  public void Run() { this.Helper(); }",
+      "  public void Run2(int a) { this.Helper(a); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cs-this-overload-goto-", { "Box.cs": source });
+    try {
+      await expectMemberAccess(index, paths["Box.cs"]!, 4, columnOf(source, 4, "Helper()"), 2);
+      await expectMemberAccess(index, paths["Box.cs"]!, 5, columnOf(source, 5, "Helper(a)"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects C++ this-> overloads by known call argument count", async () => {
+    const source = [
+      "class Box {",
+      " public:",
+      "  void helper() {}",
+      "  void helper(int a) {}",
+      "  void run() { this->helper(); }",
+      "  void run2(int a) { this->helper(a); }",
+      "};",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cpp-this-overload-goto-", { "box.cpp": source });
+    try {
+      await expectMemberAccess(index, paths["box.cpp"]!, 5, columnOf(source, 5, "helper()"), 3);
+      await expectMemberAccess(index, paths["box.cpp"]!, 6, columnOf(source, 6, "helper(a)"), 4);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Supertype keyword member navigation", () => {
@@ -3231,6 +3378,20 @@ describe("Supertype keyword member navigation", () => {
       paths[name] = file;
     }
     return { root, paths, index: await createTestIndexFromFiles(root, Object.values(paths)) };
+  }
+
+  async function expectMemberAccess(
+    index: ProjectIndex,
+    file: string,
+    line: number,
+    column: number,
+    expectedLine: number,
+  ): Promise<void> {
+    const result = await goToDefinition(index, { file, line, column });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.definition.range.start.line).toBe(expectedLine);
+    expect(result.provenance?.resolution).toBe("member-access");
   }
 
   it("resolves TypeScript super.helper() to the base declaration, not the derived override", async () => {
@@ -3493,6 +3654,132 @@ describe("Supertype keyword member navigation", () => {
       await fsp.rm(unresolvedFix.root, { recursive: true, force: true });
       await fsp.rm(missingFix.root, { recursive: true, force: true });
       await fsp.rm(ambiguousFix.root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects TypeScript super overloads by known call argument count", async () => {
+    const source = [
+      "class Base {",
+      "  helper(): number { return 1; }",
+      "  helper(x: number): number { return 2; }",
+      "}",
+      "class Derived extends Base {",
+      "  run(): number { return super.helper(); }",
+      "  run2(x: number): number { return super.helper(x); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-super-overload-goto-", { "box.ts": source });
+    try {
+      await expectMemberAccess(index, paths["box.ts"]!, 6, columnOf(source, 6, "helper()"), 2);
+      await expectMemberAccess(index, paths["box.ts"]!, 7, columnOf(source, 7, "helper(x)"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects Java super overloads by known call argument count", async () => {
+    const source = [
+      "class Base {",
+      "  void helper() {}",
+      "  void helper(int a) {}",
+      "}",
+      "class Derived extends Base {",
+      "  void run() { super.helper(); }",
+      "  void run2(int a) { super.helper(a); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-java-super-overload-goto-", { "Box.java": source });
+    try {
+      await expectMemberAccess(index, paths["Box.java"]!, 6, columnOf(source, 6, "helper()"), 2);
+      await expectMemberAccess(index, paths["Box.java"]!, 7, columnOf(source, 7, "helper(a)"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects C# base overloads by known call argument count", async () => {
+    const source = [
+      "class Base {",
+      "  public void Helper() {}",
+      "  public void Helper(int a) {}",
+      "}",
+      "class Derived : Base {",
+      "  public void Run() { base.Helper(); }",
+      "  public void Run2(int a) { base.Helper(a); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cs-base-overload-goto-", { "Box.cs": source });
+    try {
+      await expectMemberAccess(index, paths["Box.cs"]!, 6, columnOf(source, 6, "Helper()"), 2);
+      await expectMemberAccess(index, paths["Box.cs"]!, 7, columnOf(source, 7, "Helper(a)"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("follows the Kotlin constructor-invocation superclass over a same-kind interface base", async () => {
+    // `Base()` and `Face` both classify as SymbolKind.Class, so `super` must identify the
+    // superclass syntactically: the delegation-specifier entry written as a constructor
+    // invocation. The interface entry never answers the keyword.
+    const source = [
+      "interface Face {",
+      "  fun helper(): Int {",
+      "    return 3",
+      "  }",
+      "}",
+      "open class Base {",
+      "  open fun helper(): Int {",
+      "    return 1",
+      "  }",
+      "}",
+      "class Derived : Base(), Face {",
+      "  override fun helper(): Int {",
+      "    return 2",
+      "  }",
+      "  fun run(): Int {",
+      "    return super.helper()",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-kt-super-class-goto-", { "box.kt": source });
+    try {
+      await expectMemberAccess(index, paths["box.kt"]!, 16, columnOf(source, 16, "helper()"), 7);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve a Kotlin super member through an interface-only base list", async () => {
+    const source = [
+      "interface Face {",
+      "  fun helper(): Int {",
+      "    return 3",
+      "  }",
+      "}",
+      "class OnlyFace : Face {",
+      "  override fun helper(): Int {",
+      "    return 4",
+      "  }",
+      "  fun run(): Int {",
+      "    return super.helper()",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-kt-super-interface-only-goto-", { "box.kt": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["box.kt"]!,
+        line: 11,
+        column: columnOf(source, 11, "helper()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
     }
   });
 });

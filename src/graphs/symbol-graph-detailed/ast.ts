@@ -199,6 +199,32 @@ export function findFirstNodeByType(node: SyntaxNodeLike, type: string): SyntaxN
   return null;
 }
 
+/** Parameter-list node types scanned when a member declaration exposes no `parameters` field. */
+const DECLARATION_PARAMETER_FALLBACK_TYPES = [
+  "formal_parameters",
+  "parameter_list",
+  "parameters",
+  "method_parameters",
+  "function_parameter_clause",
+];
+
+/**
+ * Positional parameter count of a member/function declaration node, or undefined when the node
+ * declares no parameter list. Shared by the receiver-call edge pass and keyword receiver
+ * navigation so overload selection uses one arity scanner.
+ */
+export function declarationMemberArity(declarationNode: SyntaxNodeLike): number | undefined {
+  let parameters = declarationNode.childForFieldName("parameters");
+  if (!parameters) {
+    for (const type of DECLARATION_PARAMETER_FALLBACK_TYPES) {
+      parameters = findFirstNodeByType(declarationNode, type);
+      if (parameters) break;
+    }
+  }
+  if (!parameters) return undefined;
+  return (parameters.namedChildren ?? []).filter((child) => child.type !== "comment").length;
+}
+
 export function collectNodesByType(node: SyntaxNodeLike, type: string, out: SyntaxNodeLike[]): void {
   for (const child of node.namedChildren ?? []) {
     if (child.type === type) out.push(child);

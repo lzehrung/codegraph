@@ -6,7 +6,7 @@ import { getMemberAccessParts } from "../../util/member-access.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { defNodeId, nodeForDef, type SymbolGraph } from "../symbol-graph.js";
 import type { DetailedClassNode, DetailedFunctionNode } from "./ast.js";
-import { collectNodesByType, findFirstNodeByType, isIdentifierType } from "./ast.js";
+import { collectNodesByType, declarationMemberArity, findFirstNodeByType, isIdentifierType } from "./ast.js";
 import {
   CALL_ARGUMENT_NODE_TYPES,
   callArgumentCount,
@@ -60,21 +60,8 @@ function markImplementationTarget(
   if (node) node.implementationTarget = true;
 }
 function markMemberArity(context: EdgePassContext, id: string, declarationNode: SyntaxNodeLike): void {
-  let parameters = declarationNode.childForFieldName("parameters");
-  if (!parameters) {
-    for (const type of [
-      "formal_parameters",
-      "parameter_list",
-      "parameters",
-      "method_parameters",
-      "function_parameter_clause",
-    ]) {
-      parameters = findFirstNodeByType(declarationNode, type);
-      if (parameters) break;
-    }
-  }
-  if (!parameters) return;
-  const arity = (parameters.namedChildren ?? []).filter((child) => child.type !== "comment").length;
+  const arity = declarationMemberArity(declarationNode);
+  if (arity === undefined) return;
   const node = context.nodes.get(id);
   if (node) node.memberArity = arity;
 }

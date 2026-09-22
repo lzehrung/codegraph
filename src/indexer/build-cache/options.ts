@@ -51,8 +51,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * receiver members for every language that declares receiver keywords.
  * Epoch 22 resolves a keyword receiver through direct members and declared ancestors, and
  * binds a quoted C/C++ include to the exact includer-relative file only.
+ * Epoch 23 derives keyword receiver scope from static context, preserves Kotlin's superclass
+ * relation, and filters overloaded keyword receiver members by known call arity.
  */
-export const CORE_ALGORITHM_EPOCH = 22;
+export const CORE_ALGORITHM_EPOCH = 23;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

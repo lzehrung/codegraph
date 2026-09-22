@@ -697,6 +697,69 @@ describe("C++ quoted include resolution", () => {
     }
   });
 
+  it("keeps an unresolved quoted include external when hints, workspace, and node_modules could bind decoys", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-quoted-config-decoys-"));
+    try {
+      const file = path.join(root, "main.cpp");
+      await fs.writeFile(file, '#include "config"\nint main() { return 0; }\n', "utf8");
+      await fs.writeFile(path.join(root, "config.ts"), "export const decoy = 1;\n", "utf8");
+      await fs.mkdir(path.join(root, "config"), { recursive: true });
+      await fs.writeFile(path.join(root, "config", "index.ts"), "export const decoy = 2;\n", "utf8");
+      await fs.mkdir(path.join(root, "node_modules", "config"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "node_modules", "config", "package.json"),
+        JSON.stringify({ name: "config", main: "index.ts" }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "node_modules", "config", "index.ts"), "export const decoy = 3;\n", "utf8");
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ private: true, workspaces: ["packages/*"] }),
+        "utf8",
+      );
+      await fs.mkdir(path.join(root, "packages", "config"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "packages", "config", "package.json"),
+        JSON.stringify({ name: "config", main: "index.ts" }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "packages", "config", "index.ts"), "export const decoy = 4;\n", "utf8");
+
+      const index = await buildProjectIndex(root, {
+        cache: "off",
+        graph: { resolutionHints: ["."], resolveNodeModules: true },
+      });
+      const resolved = index.byFile.get(fileIdentityKey(file))?.imports[0]?.resolved;
+      expect(resolved).toEqual({ external: "config" });
+      const fileEdges = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file));
+      expect(fileEdges).toContainEqual(expect.objectContaining({ to: { type: "external", name: "config" } }));
+      expect(fileEdges.some((edge) => edge.to.type === "file")).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a quoted include through an exact file in a configured include root", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-quoted-config-hint-"));
+    try {
+      const includeDir = path.join(root, "include");
+      const hintFile = path.join(includeDir, "config");
+      const file = path.join(root, "main.cpp");
+      await fs.mkdir(includeDir, { recursive: true });
+      await fs.writeFile(hintFile, "int cfg();\n", "utf8");
+      await fs.writeFile(file, '#include "config"\nint main() { return 0; }\n', "utf8");
+
+      const index = await buildProjectIndex(root, { cache: "off", graph: { resolutionHints: ["include"] } });
+      expect(index.byFile.get(fileIdentityKey(file))?.imports[0]?.resolved).toBe(normalizePath(hintFile));
+      const fileEdges = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file));
+      expect(fileEdges).toContainEqual(
+        expect.objectContaining({ to: { type: "file", path: normalizePath(hintFile) } }),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("attaches C++ free, in-class, and out-of-line member calls exactly once", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-same-file-refs-"));
     const file = path.join(root, "main.cpp");

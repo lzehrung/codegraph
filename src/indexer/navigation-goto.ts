@@ -18,7 +18,10 @@ import {
   ownReceiverMemberScope,
   supportsReceiverMemberNavigation,
 } from "../util/member-access-tables.js";
+import { declarationMemberArity } from "../graphs/symbol-graph-detailed/ast.js";
 import {
+  CALL_ARGUMENT_NODE_TYPES,
+  callArgumentCount,
   declaresMembers,
   hasStaticMemberDistinction,
   nearestMemberContainer,
@@ -205,10 +208,23 @@ export async function resolveMemberAccessDefinition(params: {
       });
     }
     if (receiverKind === "own") {
-      const memberScope = hasStaticMemberDistinction(sup.id)
+      const keywordScope = hasStaticMemberDistinction(sup.id)
         ? (ownReceiverMemberScope(sup.id, receiverName) ?? "any")
         : "any";
-      const memberDef = await resolveKeywordReceiverMember(index, mod, node, member, memberScope, false);
+      // JS/TS `this` and Swift `self` name the type from inside a static or class member, so the
+      // enclosing declaration upgrades the keyword from instance scope to type scope. Instance
+      // contexts keep resolving instance members only.
+      const memberScope =
+        keywordScope === "instance" && nodeInStaticMemberContext(node, source) ? "static" : keywordScope;
+      const memberDef = await resolveKeywordReceiverMember(
+        index,
+        mod,
+        node,
+        member,
+        memberScope,
+        false,
+        keywordCallArgumentCount(memberNode),
+      );
       if (memberDef) {
         return okGoToResult(index, memberDef, {
           via: { exportedName: member },
@@ -217,7 +233,15 @@ export async function resolveMemberAccessDefinition(params: {
         });
       }
     } else if (receiverKind === "supertype") {
-      const memberDef = await resolveKeywordReceiverMember(index, mod, node, member, "any", true);
+      const memberDef = await resolveKeywordReceiverMember(
+        index,
+        mod,
+        node,
+        member,
+        "any",
+        true,
+        keywordCallArgumentCount(memberNode),
+      );
       if (!memberDef) return null;
       return okGoToResult(index, memberDef, {
         via: { exportedName: member },
@@ -312,7 +336,9 @@ function keywordContainerKey(file: string, container: SyntaxNodeLike): string {
   return `${fileIdentityKey(file)}:${container.startIndex}:${container.endIndex}`;
 }
 
-type DeclaredBaseType = { kind: "simple"; name: string } | { kind: "qualified"; base: string; path: readonly string[] };
+type DeclaredBaseType =
+  | { kind: "simple"; name: string; invoked?: boolean }
+  | { kind: "qualified"; base: string; path: readonly string[]; invoked?: boolean };
 
 function peelTypeWrappers(node: SyntaxNodeLike): SyntaxNodeLike {
   let current: SyntaxNodeLike | null = node;
@@ -348,40 +374,49 @@ function collectDeclaredBaseTypes(container: SyntaxNodeLike, source: string, sup
   const typeSet = new Set(nodeTypes);
   const bases: DeclaredBaseType[] = [];
   const seen = new Set<string>();
-  const addSimple = (name: string): void => {
+  const addSimple = (name: string, invoked: boolean): void => {
     if (!name || seen.has(name)) return;
     seen.add(name);
-    bases.push({ kind: "simple", name });
+    bases.push(invoked ? { kind: "simple", name, invoked } : { kind: "simple", name });
   };
-  const addQualified = (base: string, path: string[]): void => {
+  const addQualified = (base: string, path: string[], invoked: boolean): void => {
     if (!base || path.length === 0) return;
     const key = `${base}.${path.join(".")}`;
     if (seen.has(key)) return;
     seen.add(key);
-    bases.push({ kind: "qualified", base, path });
+    bases.push(invoked ? { kind: "qualified", base, path, invoked } : { kind: "qualified", base, path });
   };
-  const collectType = (node: SyntaxNodeLike): void => {
+  const collectType = (node: SyntaxNodeLike, invoked: boolean): void => {
     const core = peelTypeWrappers(node);
+    if (core.type === "constructor_invocation") {
+      // Kotlin writes the superclass as a constructor invocation (`Base()`); its callees are
+      // superclass entries, while bare types in the same base list are interfaces.
+      for (const child of core.namedChildren) {
+        if (child.type === "value_arguments") continue;
+        collectType(child, true);
+      }
+      return;
+    }
     const unwrapped = unwrapNamedType(core, sup);
     if (unwrapped) {
-      addSimple(sliceText(unwrapped, source));
+      addSimple(sliceText(unwrapped, source), invoked);
       return;
     }
     if (isMemberAccessNode(sup, core)) {
       const chain = collectMemberAccessChain({ sup, source, chainNode: core });
       if (chain && isSimpleTypeNameNode(chain.base, sup) && chain.names.length) {
-        addQualified(sliceText(chain.base, source), [...chain.names].reverse());
+        addQualified(sliceText(chain.base, source), [...chain.names].reverse(), invoked);
       }
       return;
     }
     if (memberAccessTraversalTypes(sup).has(core.type)) return;
     for (const child of core.namedChildren) {
       if (child.type === "type_arguments") continue;
-      collectType(child);
+      collectType(child, invoked);
     }
   };
   const consider = (node: SyntaxNodeLike): void => {
-    if (typeSet.has(node.type)) collectType(node);
+    if (typeSet.has(node.type)) collectType(node, false);
   };
   for (const child of container.namedChildren) {
     consider(child);
@@ -525,6 +560,11 @@ async function baseRefsFromContainer(
     // superclass with interfaces or protocols in C#, Kotlin, and Swift, so an interface member
     // would otherwise answer a keyword that the language resolves against the base class.
     if (!def || def.kind !== SymbolKind.Class) continue;
+    // Kotlin classifies interfaces as SymbolKind.Class too, so the superclass is identified
+    // syntactically: `Base()` is a constructor invocation, while bare delegation-specifier
+    // entries (`Face`, `by` delegations) are interfaces. Interface-only super lookup stays
+    // unresolved.
+    if (sup.id === "kotlin" && !base.invoked) continue;
     const key = keywordClassKey(def);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -541,6 +581,7 @@ async function resolveKeywordReceiverMember(
   member: string,
   memberScope: ReceiverMemberScope,
   startAtAncestor: boolean,
+  knownArgumentCount?: number,
 ): Promise<SymbolDef | undefined> {
   const current = await keywordClassRefFromNode(index, mod, node);
   if (!current) return undefined;
@@ -571,15 +612,24 @@ async function resolveKeywordReceiverMember(
       );
     }
     const seenMatch = new Set<string>();
-    let uniqueMatch: SymbolDef | undefined;
+    const uniqueMatches: SymbolDef[] = [];
     for (const match of matches) {
       const key = keywordClassKey(match);
       if (seenMatch.has(key)) continue;
       seenMatch.add(key);
-      if (uniqueMatch) return undefined;
-      uniqueMatch = match;
+      uniqueMatches.push(match);
     }
-    if (uniqueMatch) return uniqueMatch;
+    if (uniqueMatches.length === 1) return uniqueMatches[0];
+    if (uniqueMatches.length > 1 && knownArgumentCount !== undefined) {
+      // A known call argument count narrows same-named overloads on one type before the
+      // shallowest-ambiguity rule; an unknown count (or an arity that still matches several
+      // overloads) stays ambiguous.
+      const arityMatches: SymbolDef[] = [];
+      for (const match of uniqueMatches) {
+        if ((await keywordMemberDeclarationArity(index, match)) === knownArgumentCount) arityMatches.push(match);
+      }
+      if (arityMatches.length === 1) return arityMatches[0];
+    }
     const next: KeywordClassRef[] = [];
     for (const candidate of level) {
       for (const parent of await baseRefsFromContainer(
@@ -763,6 +813,16 @@ function nodeDeclaresStatic(node: SyntaxNodeLike, source: string): boolean {
   if (node.type === "storage_class_specifier" || node.type === "modifier" || node.type === "property_modifier") {
     return sliceText(node, source).trim() === "static";
   }
+  if (node.type === "class") {
+    // Swift writes `class func` type members with a bare `class` token. A class declaration's
+    // own `class` keyword sits under the container node, never under a member declaration.
+    const parentType = node.parent?.type;
+    return (
+      parentType === "function_declaration" ||
+      parentType === "property_declaration" ||
+      parentType === "subscript_declaration"
+    );
+  }
   if (node.type === "modifiers") {
     for (let childIndex = 0; ; childIndex += 1) {
       const child = node.child(childIndex);
@@ -771,6 +831,64 @@ function nodeDeclaresStatic(node: SyntaxNodeLike, source: string): boolean {
     }
   }
   return false;
+}
+
+/**
+ * Whether the member declaration enclosing `node` carries a `static` (or Swift `class`)
+ * modifier. Keyword receivers like `this` and `self` denote the type from such a member.
+ */
+function nodeInStaticMemberContext(node: SyntaxNodeLike, source: string): boolean {
+  const container = nearestMemberContainer(node);
+  if (!container) return false;
+  let current: SyntaxNodeLike | null = node;
+  while (current && current !== container) {
+    for (let childIndex = 0; ; childIndex += 1) {
+      const child = current.child(childIndex);
+      if (!child) break;
+      if (nodeDeclaresStatic(child, source)) return true;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
+const KEYWORD_CALLEE_FIELD_NAMES = ["function", "callee", "called_expression", "expression"];
+
+/**
+ * Positional argument count of the call wrapping a keyword receiver's member access, or
+ * undefined when the access is not an invocation with a known argument list. Reuses the shared
+ * `callArgumentCount` scanner.
+ */
+function keywordCallArgumentCount(memberNode: SyntaxNodeLike): number | undefined {
+  const carriesArguments = (node: SyntaxNodeLike): boolean =>
+    Boolean(node.childForFieldName("arguments") ?? node.childForFieldName("argument_list")) ||
+    (node.namedChildren ?? []).some((child) => CALL_ARGUMENT_NODE_TYPES[child.type]);
+  if (carriesArguments(memberNode)) return callArgumentCount(memberNode);
+  const parent = memberNode.parent;
+  if (!parent || !carriesArguments(parent)) return undefined;
+  for (const fieldName of KEYWORD_CALLEE_FIELD_NAMES) {
+    if (parent.childForFieldName(fieldName) === memberNode) return callArgumentCount(parent);
+  }
+  return (parent.namedChildren ?? [])[0] === memberNode ? callArgumentCount(parent) : undefined;
+}
+
+/** Declared positional parameter count of a keyword-receiver candidate member. */
+async function keywordMemberDeclarationArity(index: ProjectIndex, def: SymbolDef): Promise<number | undefined> {
+  const context = await ensureParsedContext(def.file, undefined, index.languageExtensions);
+  const start = def.range.start;
+  const position = {
+    row: start.line - 1,
+    column: start.column - 1,
+  };
+  const nameNode = context.tree.rootNode.descendantForPosition(position, position);
+  const container = nearestMemberContainer(nameNode);
+  let current: SyntaxNodeLike | null = nameNode;
+  while (current && current !== container) {
+    const arity = declarationMemberArity(current);
+    if (arity !== undefined) return arity;
+    current = current.parent;
+  }
+  return undefined;
 }
 
 function hasStaticModifier(local: SymbolDef, targetContext: ParsedFileContext, container: SyntaxNodeLike): boolean {

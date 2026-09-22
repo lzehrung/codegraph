@@ -92,6 +92,30 @@ async function resolveCFamilyAngleIncludeFromHints(
   return null;
 }
 
+/**
+ * A quoted include is exact and C-family-only. A configured include root is combined with the
+ * include's inner path verbatim: no extension, index, alias, workspace, or package probing, so a
+ * missing `#include "config"` can never bind a `config.ts`, `config/index.ts`, workspace package,
+ * or node_modules match.
+ */
+async function resolveCFamilyQuotedIncludeFromHints(
+  projectRoot: string,
+  innerPath: string,
+  resolutionHints: string[] | undefined,
+): Promise<FileId | null> {
+  const inner = innerPath.trim();
+  if (!inner) return null;
+  for (const hint of normalizeResolutionHints(resolutionHints)) {
+    const baseDir = path.isAbsolute(hint) ? hint : path.resolve(projectRoot, hint);
+    if (!isFilePathWithinRoot(projectRoot, baseDir)) continue;
+    const base = path.resolve(baseDir, inner);
+    if (!isFilePathWithinRoot(projectRoot, base)) continue;
+    const hit = await acceptFirstPartyFile(projectRoot, base);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 export type FileId = string;
 
 export {
@@ -269,12 +293,22 @@ export async function resolveImportSpecifier(
     }
     const isQuotedInclude = form === "literal" || (form === undefined && isCFamilyQuotedIncludeLiteral(spec));
     if (isQuotedInclude) {
-      const quotedIncludeHit = await acceptFirstPartyFile(
-        projectRoot,
-        path.resolve(path.dirname(fromFile), cFamilyQuotedIncludeRelativePath(spec)),
-      );
-      if (quotedIncludeHit) return quotedIncludeHit;
-    } else if (languageId === "cpp") {
+      const inner = cFamilyQuotedIncludeRelativePath(spec);
+      const siblingHit = await acceptFirstPartyFile(projectRoot, path.resolve(path.dirname(fromFile), inner));
+      if (siblingHit) return siblingHit;
+      const hintHit = await resolveCFamilyQuotedIncludeFromHints(projectRoot, inner, opts?.resolutionHints);
+      if (hintHit) return hintHit;
+      // A literal include never reaches generic extension/index/package/path-alias resolution:
+      // the exact include is either first-party or external under its raw spelling.
+      return { external: spec };
+    }
+    if (languageId === "c" && form === "macro") {
+      // C has no module imports, so `#include HEADER` always names a macro, never a first-party
+      // file or package. C++ bare identifiers may instead be module specifiers and are handled
+      // by the named-module branch below.
+      return { external: spec };
+    }
+    if (languageId === "cpp") {
       const cppHit = await confineLanguageHit(projectRoot, await resolveCppImportPath(projectRoot, spec), spec);
       if (cppHit) return cppHit;
       if (isCppNamedModuleSpecifier(spec)) return { external: spec };
