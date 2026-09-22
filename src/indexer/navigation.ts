@@ -798,7 +798,7 @@ async function findReferencesInternal(
 }
 
 function sameFileOccurrenceExecuted(scope: ScopeIndex, binding: Binding | undefined): boolean {
-  if (!binding) return false;
+  if (!binding || binding.occurrencesComplete === false) return false;
   let mapped = false;
   let hasEnclosingFunctionBinding = false;
   for (const candidate of scope.allScopes) {

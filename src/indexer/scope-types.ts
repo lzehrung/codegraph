@@ -23,6 +23,8 @@ export type Binding = {
   def?: Range;
   node?: SyntaxNodeLike;
   occurrences: Range[];
+  /** False when same-scope overloads or redeclarations prevent exact occurrence ownership. */
+  occurrencesComplete?: boolean;
   import?: ScopeImportBinding;
 };
 
