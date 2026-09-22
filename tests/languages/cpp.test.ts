@@ -847,6 +847,46 @@ describe("C++ quoted include resolution", () => {
   });
 });
 
+describe("C++ reference-returning free functions", () => {
+  it("resolves a sibling call to a free function with a reference return type", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-ref-return-free-"));
+    const file = path.join(root, "main.cpp");
+    const source = [
+      "int& free_ref() { static int value = 1; return value; }",
+      "int use_value() { return free_ref(); }",
+      "",
+    ].join("\n");
+    try {
+      await fs.writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const defColumn = source.split("\n")[0]!.indexOf("free_ref") + 1;
+      const callColumn = source.split("\n")[1]!.indexOf("free_ref") + 1;
+      const gotoResult = await goToDefinition(index, { file, line: 2, column: callColumn });
+      expect(gotoResult.status).toBe("ok");
+      if (gotoResult.status === "ok") {
+        expect(fileIdentityKey(gotoResult.definition.file)).toBe(fileIdentityKey(file));
+        expect(gotoResult.definition.range.start.line).toBe(1);
+        expect(gotoResult.definition.range.start.column).toBe(defColumn);
+      }
+      const refs = await findReferences(index, { file, line: 1, column: defColumn });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(
+          refs.references.map((reference) => ({
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          })),
+        ).toEqual([
+          { line: 1, column: defColumn },
+          { line: 2, column: callColumn },
+        ]);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("C++ configured include roots", () => {
   it("loads Gunship-shaped resolution hints and ranks linked and changed tests", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-gunship-"));

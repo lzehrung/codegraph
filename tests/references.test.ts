@@ -6,7 +6,7 @@ import * as indexer from "../src/indexer.js";
 import * as scopeModule from "../src/indexer/scope.js";
 import { getCachedReferenceCandidateFiles } from "../src/indexer/navigation-references.js";
 import { findUsageReferences } from "../src/indexer/navigation.js";
-import type { ProjectIndex } from "../src/index.js";
+import { goToDefinition, type ProjectIndex } from "../src/index.js";
 import { createReferenceLookupCache } from "../src/impact/reference-cache.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import {
@@ -4247,6 +4247,85 @@ describe("Find References: PHP unproven receiver is not a bare-name hit", () => 
       await testFindReferences(index, hostFile, 4, helperColumn, 0, "not_found");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: imported superclass member through super", () => {
+  function columnOf(source: string, line: number, token: string): number {
+    const lines = source.split("\n");
+    const index = lines[line - 1]!.indexOf(token);
+    if (index < 0) throw new Error(`Expected token ${token} on fixture line ${line}`);
+    return index + 1;
+  }
+
+  it("includes the super.helper() call as a reference to the imported base member", async () => {
+    for (const kind of ["ts", "js"] as const) {
+      const typed = kind === "ts";
+      const base = [
+        "export default class Base {",
+        typed ? "  helper(): number { return 1; }" : "  helper() { return 1; }",
+        "}",
+        "",
+      ].join("\n");
+      const derived = [
+        'import Base from "./base";',
+        "class Derived extends Base {",
+        typed ? "  helper(): number { return 2; }" : "  helper() { return 2; }",
+        typed ? "  run(): number { return super.helper(); }" : "  run() { return super.helper(); }",
+        "}",
+        "",
+      ].join("\n");
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-${kind}-super-imported-refs-`));
+      const baseFile = path.join(root, `base.${kind}`).replace(/\\/g, "/");
+      const derivedFile = path.join(root, `derived.${kind}`).replace(/\\/g, "/");
+      try {
+        await fsp.writeFile(baseFile, base, "utf8");
+        await fsp.writeFile(derivedFile, derived, "utf8");
+        const index = await createTestIndexFromFiles(root, [baseFile, derivedFile]);
+        const defColumn = columnOf(base, 2, "helper()");
+        const callColumn = columnOf(derived, 4, "helper()");
+        const overrideColumn = columnOf(derived, 3, "helper()");
+
+        const gotoFromCall = await goToDefinition(index, { file: derivedFile, line: 4, column: callColumn });
+        expect(gotoFromCall.status).toBe("ok");
+        if (gotoFromCall.status === "ok") {
+          expect(fileIdentityKey(gotoFromCall.definition.file)).toBe(fileIdentityKey(baseFile));
+          expect(gotoFromCall.definition.range.start.line).toBe(2);
+          expect(gotoFromCall.definition.range.start.column).toBe(defColumn);
+          expect(gotoFromCall.provenance?.resolution).toBe("member-access");
+        }
+
+        const fromDef = await testFindReferences(index, baseFile, 2, defColumn, [
+          { file: baseFile, line: 2, column: defColumn },
+          { file: derivedFile, line: 4, column: callColumn },
+        ]);
+        if (fromDef.status === "ok") {
+          expect(
+            fromDef.references.some(
+              (reference) =>
+                fileIdentityKey(reference.file) === fileIdentityKey(derivedFile) &&
+                reference.range.start.line === 3 &&
+                reference.range.start.column === overrideColumn,
+            ),
+          ).toBe(false);
+        }
+
+        const fromCall = await testFindReferences(index, derivedFile, 4, callColumn, [
+          { file: baseFile, line: 2, column: defColumn },
+          { file: derivedFile, line: 4, column: callColumn },
+        ]);
+        if (fromCall.status === "ok") {
+          expect(
+            fromCall.references.some(
+              (reference) =>
+                fileIdentityKey(reference.file) === fileIdentityKey(derivedFile) && reference.range.start.line === 3,
+            ),
+          ).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
     }
   });
 });

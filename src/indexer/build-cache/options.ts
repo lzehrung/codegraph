@@ -53,8 +53,12 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * binds a quoted C/C++ include to the exact includer-relative file only.
  * Epoch 23 derives keyword receiver scope from static context, preserves Kotlin's superclass
  * relation, and filters overloaded keyword receiver members by known call arity.
+ * Epoch 24 preserves reduced-mode C-family include forms per occurrence, registers C++ functions
+ * with reference return types in their enclosing scope, rejects JavaScript and TypeScript `this`
+ * across dynamic function boundaries, and stops an ambiguous shallow ancestor lookup instead of
+ * selecting a shared grandparent.
  */
-export const CORE_ALGORITHM_EPOCH = 23;
+export const CORE_ALGORITHM_EPOCH = 24;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -67,7 +71,6 @@ export const CORE_ALGORITHM_EPOCH = 23;
  * Epoch 8 makes implicit member scope opt-in per language, adds C# method and constructor
  * parameter locals, Java constructor and spread-parameter declaration names, PHP block
  * scope, Ruby query-driven locals, JavaScript type-only imports, and Ruby and PHP
- * dynamic-import heuristics.
  */
 export const LANGUAGE_BEHAVIOR_EPOCH = 8;
 

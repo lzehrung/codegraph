@@ -208,6 +208,12 @@ export async function resolveMemberAccessDefinition(params: {
       });
     }
     if (receiverKind === "own") {
+      // JS/TS/TSX `this` is dynamic across ordinary/named functions. An arrow keeps the
+      // enclosing method's `this`, including static/type receivers; a nested `function`
+      // does not, so class-member lookup through that boundary is unproven.
+      if (isJsTsLanguage(sup.id) && jsTsOwnKeywordCrossesDynamicThis(node)) {
+        return null;
+      }
       const keywordScope = hasStaticMemberDistinction(sup.id)
         ? (ownReceiverMemberScope(sup.id, receiverName) ?? "any")
         : "any";
@@ -620,15 +626,17 @@ async function resolveKeywordReceiverMember(
       uniqueMatches.push(match);
     }
     if (uniqueMatches.length === 1) return uniqueMatches[0];
-    if (uniqueMatches.length > 1 && knownArgumentCount !== undefined) {
+    if (uniqueMatches.length > 1) {
       // A known call argument count narrows same-named overloads on one type before the
-      // shallowest-ambiguity rule; an unknown count (or an arity that still matches several
-      // overloads) stays ambiguous.
+      // unique-shallowest rule. Zero remaining matches after that filter descend; more than
+      // one remaining match is unresolved ambiguity and must not continue to a shared ancestor.
+      if (knownArgumentCount === undefined) return undefined;
       const arityMatches: SymbolDef[] = [];
       for (const match of uniqueMatches) {
         if ((await keywordMemberDeclarationArity(index, match)) === knownArgumentCount) arityMatches.push(match);
       }
       if (arityMatches.length === 1) return arityMatches[0];
+      if (arityMatches.length > 1) return undefined;
     }
     const next: KeywordClassRef[] = [];
     for (const candidate of level) {
@@ -846,6 +854,38 @@ function nodeInStaticMemberContext(node: SyntaxNodeLike, source: string): boolea
       const child = current.child(childIndex);
       if (!child) break;
       if (nodeDeclaresStatic(child, source)) return true;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
+/**
+ * Functions whose `this` is their own call-site receiver. The first such node on the path
+ * owns `this`: a direct class `method_definition` keeps class-member lookup, while a nested
+ * object method or ordinary function makes that lookup unproven. `arrow_function` is omitted
+ * because it preserves the enclosing lexical `this`.
+ */
+const JS_TS_DYNAMIC_THIS_FUNCTION_TYPES: Record<string, true> = {
+  function: true,
+  function_declaration: true,
+  function_expression: true,
+  generator_function: true,
+  generator_function_declaration: true,
+  method_definition: true,
+};
+
+function jsTsOwnKeywordCrossesDynamicThis(node: SyntaxNodeLike): boolean {
+  const container = nearestMemberContainer(node);
+  if (!container) return false;
+  let current: SyntaxNodeLike | null = node.parent;
+  while (current && current !== container) {
+    if (JS_TS_DYNAMIC_THIS_FUNCTION_TYPES[current.type]) {
+      const directlyOwnedClassMethod =
+        current.type === "method_definition" &&
+        current.parent?.type === "class_body" &&
+        current.parent.parent?.startIndex === container.startIndex;
+      return !directlyOwnedClassMethod;
     }
     current = current.parent;
   }

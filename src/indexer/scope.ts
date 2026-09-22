@@ -28,7 +28,9 @@ function declaredNameNode(node: SyntaxNodeLike, row: ScopeNodeRow): SyntaxNodeLi
     const name = current.childForFieldName("name");
     if (name && FUNCTION_DECLARATOR_NAME_TYPES[name.type]) return name;
     if (FUNCTION_DECLARATOR_NAME_TYPES[current.type]) return current;
-    current = current.childForFieldName("declarator");
+    current =
+      current.childForFieldName("declarator") ??
+      (current.type === "reference_declarator" ? (current.namedChildren[0] ?? null) : null);
   }
   return null;
 }

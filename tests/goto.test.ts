@@ -3177,6 +3177,35 @@ describe("Keyword-receiver member navigation", () => {
     }
   });
 
+  it("does not resolve this.member when shallow bases are ambiguous even with a shared grandparent", async () => {
+    const source = [
+      "class Grand {",
+      "  helper(): number { return 0; }",
+      "}",
+      "class Left extends Grand {",
+      "  helper(): number { return 1; }",
+      "}",
+      "class Right extends Grand {",
+      "  helper(): number { return 2; }",
+      "}",
+      "class Ambiguous extends Left, Right {",
+      "  run(): number { return this.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-this-grandparent-goto-", { "Box.ts": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["Box.ts"]!,
+        line: 11,
+        column: columnOf(source, 11, "helper()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps instance and type receiver member scopes separate", async () => {
     const csharp = [
       "class Box {",
@@ -3232,6 +3261,88 @@ describe("Keyword-receiver member navigation", () => {
       await expectMemberAccess(index, paths["Box.ts"]!, 6, columnOf(source, 6, "member()"), 3);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve this.member across a nested ordinary function and keeps lexical this through arrows", async () => {
+    const source = [
+      "class Box {",
+      "  helper(): number { return 1; }",
+      "  static helperStatic(): number { return 2; }",
+      "  run(): number {",
+      "    function inner() { return this.helper(); }",
+      "    const expr = function named() { return this.helper(); };",
+      "    const object = { nested() { return this.helper(); } };",
+      "    const arrow = () => this.helper();",
+      "    const nested = () => { const innerArrow = () => this.helper(); return innerArrow(); };",
+      "    return arrow() + nested();",
+      "  }",
+      "  static runStatic(): number {",
+      "    function inner() { return this.helperStatic(); }",
+      "    const arrow = () => this.helperStatic();",
+      "    return arrow();",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const js = source.replaceAll(": number", "");
+    const tsx = [
+      "class Box {",
+      "  helper() { return 1; }",
+      "  run() {",
+      "    function inner() { return <span>{this.helper()}</span>; }",
+      "    const object = { nested() { return <span>{this.helper()}</span>; } };",
+      "    const arrow = () => <span>{this.helper()}</span>;",
+      "    return arrow();",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const tsFix = await buildFiles("cg-ts-this-nested-fn-goto-", { "Box.ts": source });
+    const jsFix = await buildFiles("cg-js-this-nested-fn-goto-", { "box.js": js });
+    const tsxFix = await buildFiles("cg-tsx-this-nested-fn-goto-", { "Box.tsx": tsx });
+    try {
+      for (const { index, file, helperLine } of [
+        { index: tsFix.index, file: tsFix.paths["Box.ts"]!, helperLine: 2 },
+        { index: jsFix.index, file: jsFix.paths["box.js"]!, helperLine: 2 },
+      ]) {
+        const inner = await goToDefinition(index, { file, line: 5, column: columnOf(source, 5, "helper()") });
+        expect(inner.status).toBe("not_found");
+        const named = await goToDefinition(index, { file, line: 6, column: columnOf(source, 6, "helper()") });
+        expect(named.status).toBe("not_found");
+        const objectMethod = await goToDefinition(index, {
+          file,
+          line: 7,
+          column: columnOf(source, 7, "helper()"),
+        });
+        expect(objectMethod.status).toBe("not_found");
+        await expectMemberAccess(index, file, 8, columnOf(source, 8, "helper()"), helperLine);
+        await expectMemberAccess(index, file, 9, columnOf(source, 9, "helper()"), helperLine);
+        const staticInner = await goToDefinition(index, {
+          file,
+          line: 13,
+          column: columnOf(source, 13, "helperStatic()"),
+        });
+        expect(staticInner.status).toBe("not_found");
+        await expectMemberAccess(index, file, 14, columnOf(source, 14, "helperStatic()"), 3);
+      }
+      const innerTsx = await goToDefinition(tsxFix.index, {
+        file: tsxFix.paths["Box.tsx"]!,
+        line: 4,
+        column: columnOf(tsx, 4, "helper()"),
+      });
+      expect(innerTsx.status).toBe("not_found");
+      const objectMethodTsx = await goToDefinition(tsxFix.index, {
+        file: tsxFix.paths["Box.tsx"]!,
+        line: 5,
+        column: columnOf(tsx, 5, "helper()"),
+      });
+      expect(objectMethodTsx.status).toBe("not_found");
+      await expectMemberAccess(tsxFix.index, tsxFix.paths["Box.tsx"]!, 6, columnOf(tsx, 6, "helper()"), 2);
+    } finally {
+      await fsp.rm(tsFix.root, { recursive: true, force: true });
+      await fsp.rm(jsFix.root, { recursive: true, force: true });
+      await fsp.rm(tsxFix.root, { recursive: true, force: true });
     }
   });
 
@@ -3470,6 +3581,35 @@ describe("Supertype keyword member navigation", () => {
     }
   });
 
+  it("does not resolve super.helper() through a shared grandparent when direct bases are ambiguous", async () => {
+    const source = [
+      "class Grand {",
+      "  helper(): number { return 0; }",
+      "}",
+      "class Left extends Grand {",
+      "  helper(): number { return 1; }",
+      "}",
+      "class Right extends Grand {",
+      "  helper(): number { return 2; }",
+      "}",
+      "class Derived extends Left, Right {",
+      "  run(): number { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-super-grandparent-goto-", { "box.ts": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["box.ts"]!,
+        line: 11,
+        column: columnOf(source, 11, "helper()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("skips an interface base when a class ancestor declares the member", async () => {
     // `base` follows class ancestors. C# lists the superclass and every interface in one
     // `base_list`, so an interface declaration must never answer the keyword.
@@ -3580,6 +3720,36 @@ describe("Supertype keyword member navigation", () => {
       expect(result.status).toBe("ok");
       if (result.status !== "ok") return;
       expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(paths["base.ts"]!));
+      expect(result.definition.range.start.line).toBe(2);
+      expect(result.provenance?.resolution).toBe("member-access");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves JavaScript super.helper() through a default-import base", async () => {
+    const base = ["export default class Base {", "  helper() { return 1; }", "}", ""].join("\n");
+    const derived = [
+      'import Base from "./base";',
+      "class Derived extends Base {",
+      "  helper() { return 2; }",
+      "  run() { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-js-super-default-goto-", {
+      "base.js": base,
+      "derived.js": derived,
+    });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["derived.js"]!,
+        line: 4,
+        column: columnOf(derived, 4, "helper()"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(paths["base.js"]!));
       expect(result.definition.range.start.line).toBe(2);
       expect(result.provenance?.resolution).toBe("member-access");
     } finally {
