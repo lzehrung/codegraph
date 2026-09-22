@@ -91,9 +91,17 @@ export async function buildSymbolGraphDetailed(
     edgeCount++;
     return true;
   };
-  const recordEdge = (fromId: string, toId: string, label?: string, site?: SymbolGraph["edges"][number]["site"]) => {
+  const edgeKey = (
+    fromId: string,
+    toId: string,
+    label?: string,
+    site?: SymbolGraph["edges"][number]["site"],
+  ): string => {
     const siteKey = site ? `${site.file}:${site.range.start.index ?? ""}:${site.range.end.index ?? ""}` : "";
-    const key = `${fromId}->${toId}::${label ?? ""}::${siteKey}`;
+    return `${fromId}->${toId}::${label ?? ""}::${siteKey}`;
+  };
+  const recordEdge = (fromId: string, toId: string, label?: string, site?: SymbolGraph["edges"][number]["site"]) => {
+    const key = edgeKey(fromId, toId, label, site);
     if (added.has(key)) return true;
     added.add(key);
     return maybePushEdge(fromId, toId, label, site);
@@ -292,7 +300,9 @@ export async function buildSymbolGraphDetailed(
       logWithLevel(opts?.logLevel, "warn", `Warning: Failed to build detailed symbol edges for ${file}:`, error);
     }
   }
-  emitReceiverCallEdges({ nodes, edges }, receiverCalls, recordEdge, receiverMemberScopes);
+  const removedReceiverEdges = emitReceiverCallEdges({ nodes, edges }, receiverCalls, recordEdge, receiverMemberScopes);
+  edgeCount -= removedReceiverEdges.length;
+  for (const edge of removedReceiverEdges) added.delete(edgeKey(edge.from, edge.to, edge.label, edge.site));
   emitMemberImplementationEdges({ nodes, edges }, recordEdge);
 
   if (skippedSyntaxTreeFiles > 0) {

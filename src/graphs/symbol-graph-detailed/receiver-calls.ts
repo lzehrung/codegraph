@@ -1168,8 +1168,8 @@ export function emitReceiverCallEdges(
   candidates: readonly ReceiverCallCandidate[],
   recordEdge: (fromId: string, toId: string, label?: string, site?: SymbolGraph["edges"][number]["site"]) => boolean,
   memberScopes: ReadonlyMap<string, ReceiverMemberScope> = new Map(),
-): void {
-  if (!candidates.length) return;
+): SymbolGraph["edges"][number][] {
+  if (!candidates.length) return [];
 
   const membersByOwner = new Map<string, string[]>();
   const ownerByMember = new Map<string, string>();
@@ -1256,11 +1256,20 @@ export function emitReceiverCallEdges(
       rejectedCallSites.add(siteKey);
     }
   }
+  const removed: SymbolGraph["edges"][number][] = [];
   if (rejectedCallSites.size) {
-    graph.edges = graph.edges.filter(
-      (edge) => edge.label !== "calls" || !edge.site || !rejectedCallSites.has(callSiteKey(edge.from, edge.site)),
-    );
+    let writeIndex = 0;
+    for (const edge of graph.edges) {
+      if (edge.label === "calls" && edge.site && rejectedCallSites.has(callSiteKey(edge.from, edge.site))) {
+        removed.push(edge);
+        continue;
+      }
+      graph.edges[writeIndex] = edge;
+      writeIndex += 1;
+    }
+    graph.edges.length = writeIndex;
   }
+  return removed;
 }
 
 type MemberTargetLookup = { status: "none" } | { status: "unique"; memberId: string } | { status: "ambiguous" };

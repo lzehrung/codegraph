@@ -1627,22 +1627,21 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
       { from: "leaf.go", to: "base.run" },
     ]);
   });
-  it("removes an exact call edge when deferred receiver proof resolves a different callee", () => {
-    const graph: SymbolGraph = {
-      nodes: new Map([
-        ["Mid", node("Mid", "Mid", { kind: "class" })],
-        ["leaf.go", node("leaf.go", "go")],
-        ["mid.run", node("mid.run", "run", { memberArity: 0 })],
-        ["wrong.run", node("wrong.run", "run", { memberArity: 0 })],
-      ]),
-      edges: [
-        { from: "leaf.go", to: "Mid", label: "member_of" },
-        { from: "mid.run", to: "Mid", label: "member_of" },
-        { from: "leaf.go", to: "wrong.run", label: "calls", site },
-      ],
-    };
-    expect(recordedCalls(graph, candidate())).toEqual([]);
-    expect(graph.edges.some((edge) => edge.label === "calls" && edge.from === "leaf.go")).toBe(false);
+  it("removes rejected exact edges from the caller's shared edge array", () => {
+    const nodes = new Map([
+      ["Mid", node("Mid", "Mid", { kind: "class" })],
+      ["leaf.go", node("leaf.go", "go")],
+      ["mid.run", node("mid.run", "run", { memberArity: 0 })],
+      ["wrong.run", node("wrong.run", "run", { memberArity: 0 })],
+    ]);
+    const edges: SymbolGraph["edges"] = [
+      { from: "leaf.go", to: "Mid", label: "member_of" },
+      { from: "mid.run", to: "Mid", label: "member_of" },
+      { from: "leaf.go", to: "wrong.run", label: "calls", site },
+    ];
+    const removed = emitReceiverCallEdges({ nodes, edges }, [candidate()], () => true);
+    expect(edges.some((edge) => edge.label === "calls" && edge.from === "leaf.go")).toBe(false);
+    expect(removed.map((edge) => edge.to)).toEqual(["wrong.run"]);
   });
 });
 
