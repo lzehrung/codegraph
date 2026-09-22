@@ -92,6 +92,7 @@ const MEMBER_CONTAINER_TYPES: Record<string, true> = {
   struct_specifier: true,
   trait_declaration: true,
   trait_item: true,
+  type_alias_declaration: true,
   // C/C++ unions declare members exactly like structs (tree-sitter-cpp captures
   // union names and classifies them as classes).
   union_specifier: true,
@@ -871,12 +872,10 @@ export function keywordReceiverMemberScope(
   source: string,
 ): ReceiverMemberScope {
   if (!hasStaticMemberDistinction(sup.id)) return "any";
+  if (nodeInStaticMemberContext(node, source)) return "static";
   const kind = keywordReceiverKind(sup.id, receiverName);
-  if (kind === "supertype") {
-    return nodeInStaticMemberContext(node, source) ? "static" : "instance";
-  }
-  const keywordScope = ownReceiverMemberScope(sup.id, receiverName) ?? "any";
-  return keywordScope === "instance" && nodeInStaticMemberContext(node, source) ? "static" : keywordScope;
+  if (kind === "supertype") return "instance";
+  return ownReceiverMemberScope(sup.id, receiverName) ?? "any";
 }
 
 /**

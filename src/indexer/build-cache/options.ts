@@ -68,8 +68,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * method-name case folding to receiver call edges.
  * Epoch 30 restores reduced-mode C-family include bindings when native import capture is unavailable
  * and shares one ancestry model across keyword-receiver navigation and detailed graph edges.
+ * Epoch 31 distinguishes imported Kotlin interfaces from constructor-invoked classes, preserves
+ * static PHP keyword scope, and resolves members through imported interface and type-alias bases.
  */
-export const CORE_ALGORITHM_EPOCH = 30;
+export const CORE_ALGORITHM_EPOCH = 31;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

@@ -473,30 +473,28 @@ function collectDeclaredBaseTypes(
   return bases;
 }
 
-function asClassMemberContainer(index: ProjectIndex, def: SymbolDef): SymbolDef | undefined {
-  if (def.kind === SymbolKind.Class) return def;
+function asMemberContainer(index: ProjectIndex, def: SymbolDef): SymbolDef | undefined {
+  if (declaresMembers(def)) return def;
   if (def.kind !== SymbolKind.Default) return undefined;
   const module = index.byFile.get(fileIdentityKey(def.file));
   if (!module) return undefined;
   const sameRange = module.locals.filter(
     (local) =>
-      local.kind === SymbolKind.Class &&
+      declaresMembers(local) &&
       local.range.start.line === def.range.start.line &&
       local.range.start.column === def.range.start.column,
   );
   if (sameRange.length === 1) return sameRange[0];
-  const sameName = module.locals.filter(
-    (local) => local.kind === SymbolKind.Class && local.localName === def.localName,
-  );
+  const sameName = module.locals.filter((local) => declaresMembers(local) && local.localName === def.localName);
   return sameName.length === 1 ? sameName[0] : undefined;
 }
 
-function importedClassDef(
+function importedMemberContainer(
   index: ProjectIndex,
   result: SymbolDef | { namespace: string } | null,
 ): SymbolDef | undefined {
   if (!result || "namespace" in result) return undefined;
-  return asClassMemberContainer(index, result);
+  return asMemberContainer(index, result);
 }
 
 function resolveNamedMemberContainer(
@@ -514,20 +512,20 @@ function resolveNamedMemberContainer(
 
   for (const imp of mod.imports) {
     if (imp.kind === "named" && normalize(imp.local) === normalizedName) {
-      const classDef = importedClassDef(index, resolveImported(index, imp, imp.imported));
-      if (classDef) return classDef;
+      const container = importedMemberContainer(index, resolveImported(index, imp, imp.imported));
+      if (container) return container;
     }
     if (imp.kind === "default" && normalize(imp.local) === normalizedName) {
-      const classDef = importedClassDef(index, resolveImported(index, imp, "default"));
-      if (classDef) return classDef;
+      const container = importedMemberContainer(index, resolveImported(index, imp, "default"));
+      if (container) return container;
     }
     if (imp.kind === "star") {
-      const classDef = importedClassDef(index, resolveImported(index, imp, name));
-      if (classDef) return classDef;
+      const container = importedMemberContainer(index, resolveImported(index, imp, name));
+      if (container) return container;
     }
   }
   const exported = resolveExport(index, mod.file, name, { allowLocalFallback: false });
-  if (exported?.kind === "resolved") return asClassMemberContainer(index, exported.def);
+  if (exported?.kind === "resolved") return asMemberContainer(index, exported.def);
   return undefined;
 }
 
@@ -557,7 +555,7 @@ function resolveQualifiedMemberContainer(
       continue;
     }
     if (!last) return undefined;
-    return asClassMemberContainer(index, hit.def);
+    return asMemberContainer(index, hit.def);
   }
   return undefined;
 }

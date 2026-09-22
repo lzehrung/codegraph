@@ -811,6 +811,37 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(callsiteTexts(graph, faceShared[0]!, go, files)).toBeNull();
   });
 
+  it("keeps an imported Kotlin interface out of the plain-super class chain", async () => {
+    const files: Record<string, string> = {
+      "face.kt": ["package sample", "interface Face {", "  fun helper(): Int { return 1 }", "}"].join("\n"),
+      "child.kt": [
+        "package sample",
+        "import sample.Face",
+        "class Child : Face {",
+        "  fun own(): Int { return this.helper() }",
+        "  fun parent(): Int { return super.helper() }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-kt-imported-interface-", files);
+    const face = [...graph.nodes.values()].find(
+      (node) => node.name === "Face" && path.basename(node.file) === "face.kt",
+    );
+    const child = [...graph.nodes.values()].find((node) => node.name === "Child");
+    expect(face).toBeDefined();
+    expect(child).toBeDefined();
+    const ancestry = graph.edges.filter((edge) => edge.from === child!.id && edge.to === face!.id);
+    expect(ancestry.map((edge) => edge.label)).toEqual(["implements"]);
+
+    const helper = graph.edges
+      .filter((edge) => edge.label === "member_of" && edge.to === face!.id)
+      .map((edge) => edge.from)
+      .filter((id) => graph.nodes.get(id)?.name === "helper");
+    expect(helper).toHaveLength(1);
+    expect(callsiteTexts(graph, helper[0]!, nodeIn(graph, "child.kt", "own"), files)).toEqual(["helper"]);
+    expect(callsiteTexts(graph, helper[0]!, nodeIn(graph, "child.kt", "parent"), files)).toBeNull();
+  });
+
   it("records a Swift super call on the class ancestor when a protocol declares the same name", async () => {
     const files: Record<string, string> = {
       "sup.swift": [
@@ -1373,6 +1404,26 @@ nativeDescribe("receiver construction, reassignment, typed parameters, and stati
       if (callsiteTexts(graph, instanceMember, caller, files)) leaked.push(`${testCase.file}:instance`);
     }
     expect(leaked, "static and instance members must not cross-resolve").toEqual([]);
+  });
+
+  it("keeps PHP self and static calls in a static method on static members", async () => {
+    const files: Record<string, string> = {
+      "scope.php": [
+        "<?php",
+        "class Scope {",
+        "    function instanceOnly() {}",
+        "    static function staticOnly() {}",
+        "    static function run() { self::instanceOnly(); static::staticOnly(); }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-php-static-keywords-", files);
+    const run = nodeIn(graph, "scope.php", "run");
+    const instanceOnly = nodeIn(graph, "scope.php", "instanceOnly");
+    const staticOnly = nodeIn(graph, "scope.php", "staticOnly");
+    expect(callsiteTexts(graph, instanceOnly, run, files)).toBeNull();
+    expect(callsiteTexts(graph, staticOnly, run, files)).toEqual(["staticOnly"]);
+    expect(outgoingCallCount(graph, run)).toBe(1);
   });
 });
 

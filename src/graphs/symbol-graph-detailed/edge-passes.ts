@@ -675,7 +675,11 @@ function recordIdentifierRelations(
   context: EdgePassContext,
   fromId: string,
   container: SyntaxNodeLike,
-  relationForTarget: (target: SymbolDef, index: number) => "extends" | "implements" | "trait" | "mixin",
+  relationForTarget: (
+    target: SymbolDef,
+    index: number,
+    identifier: SyntaxNodeLike,
+  ) => "extends" | "implements" | "trait" | "mixin",
 ): void {
   const identifiers: SyntaxNodeLike[] = [];
   collectBaseSpecifierIdentifiers(container, context.sup, identifiers);
@@ -686,7 +690,7 @@ function recordIdentifierRelations(
     const targetId = defNodeId(target);
     if (seen.has(targetId)) continue;
     seen.add(targetId);
-    recordDefEdge(context, fromId, target, relationForTarget(target, index), identifier);
+    recordDefEdge(context, fromId, target, relationForTarget(target, index, identifier), identifier);
   }
 }
 
@@ -708,8 +712,18 @@ function baseClauseRelation(
   target: SymbolDef,
   index: number,
   interfaceIds: Set<string>,
+  identifier: SyntaxNodeLike,
+  kotlin: boolean,
 ): InheritanceRelation {
   if (label !== "superclass-first") return label;
+  if (kotlin) {
+    let current = identifier.parent;
+    while (current && current.type !== "delegation_specifiers") {
+      if (current.type === "constructor_invocation") return "extends";
+      current = current.parent;
+    }
+    return "implements";
+  }
   if (interfaceIds.has(defNodeId(target)) || index > 0) return "implements";
   return "extends";
 }
@@ -767,8 +781,8 @@ export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: 
       }
       for (const clause of clauses) {
         const specifiers = rule.field ? (clause.childForFieldName(rule.field) ?? clause) : clause;
-        recordIdentifierRelations(context, fromId, specifiers, (target, index) =>
-          baseClauseRelation(rule.relation, target, index, interfaceIds),
+        recordIdentifierRelations(context, fromId, specifiers, (target, index, identifier) =>
+          baseClauseRelation(rule.relation, target, index, interfaceIds, identifier, context.sup.id === "kotlin"),
         );
       }
     }

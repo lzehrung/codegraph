@@ -3529,6 +3529,63 @@ describe("Keyword-receiver member navigation", () => {
     }
   });
 
+  it("resolves a member through an imported named type alias", async () => {
+    const namedFace = ["export type NamedFace = {", "  fromAlias(): number", "}", ""].join("\n");
+    const child = [
+      'import { NamedFace } from "./named-face";',
+      "class AliasChild implements NamedFace {",
+      "  run(): number { return this.fromAlias() }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-imported-type-alias-goto-", {
+      "named-face.ts": namedFace,
+      "child.ts": child,
+    });
+    try {
+      await testGoToDefinition(
+        index,
+        paths["child.ts"]!,
+        3,
+        columnOf(child, 3, "fromAlias()"),
+        paths["named-face.ts"]!,
+        2,
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a member through an imported Java interface", async () => {
+    const face = ["package api;", "public interface Face {", "  default int helper() { return 1; }", "}", ""].join(
+      "\n",
+    );
+    const child = [
+      "package app;",
+      "import api.Face;",
+      "class Child implements Face {",
+      "  int run() { return this.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-java-imported-interface-goto-", {
+      "api/Face.java": face,
+      "app/Child.java": child,
+    });
+    try {
+      await testGoToDefinition(
+        index,
+        paths["app/Child.java"]!,
+        4,
+        columnOf(child, 4, "helper()"),
+        paths["api/Face.java"]!,
+        3,
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("selects C++ this-> overloads by known call argument count", async () => {
     const source = [
       "class Box {",
