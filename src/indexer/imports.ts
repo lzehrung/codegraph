@@ -20,8 +20,7 @@ import {
   isNativeQueryAuthoritative,
 } from "../native/tree-sitter-native.js";
 import type { NativeQueryExecution, NativeQueryResults, NativeRuntimeMode } from "../native/tree-sitter-native.js";
-import type { ModuleSpecifierResolutionKind } from "../util/specifiers.js";
-import type { ResolvedImportTarget } from "./imports/context.js";
+import type { ImportResolverOptions, ResolvedImportTarget } from "./imports/context.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia } from "./imports/binding-ranges.js";
 import { IMPORT_BINDING_ROWS } from "./imports/import-binding-tables.js";
 import { collectGraphOnlyImports } from "./imports/graph-only.js";
@@ -135,9 +134,11 @@ export async function collectImportsForFile(
   const resolveFrom = async (
     from: string,
     phpImportType?: "class" | "function" | "const",
-    resolutionKind?: ModuleSpecifierResolutionKind,
+    resolverOpts?: ImportResolverOptions,
   ): Promise<ResolvedImportTarget> => {
-    const cacheKey = `${from}\0${phpImportType ?? ""}\0${resolutionKind ?? ""}`;
+    const resolutionKind = resolverOpts?.resolutionKind;
+    const includeForm = resolverOpts?.includeForm;
+    const cacheKey = `${from}\0${phpImportType ?? ""}\0${resolutionKind ?? ""}\0${includeForm ?? ""}`;
     const cached = resolvedImportCache.get(cacheKey);
     if (cached) return await cached;
     const resolutionHints = opts?.graphOptions?.resolutionHints;
@@ -149,6 +150,7 @@ export async function collectImportsForFile(
         ...(resolutionHints ? { resolutionHints } : {}),
         ...(phpImportType ? { phpImportType } : {}),
         ...(resolutionKind ? { resolutionKind } : {}),
+        ...(includeForm ? { includeForm } : {}),
         ...(resolvedSup.id === "scss" && resolutionKind === "stylesheet" ? { allowScssPartialResolution: true } : {}),
       });
       return typeof result === "string" ? result.replace(/\\/g, "/") : result;
@@ -161,8 +163,11 @@ export async function collectImportsForFile(
     projectRoot,
     source: resolvedSource,
     languageId: resolvedSup.id,
-    resolveFrom: (from: string, phpImportType?: "class" | "function" | "const") =>
-      resolveFrom(from, phpImportType, stylesheetLanguage ? "stylesheet" : undefined),
+    resolveFrom: (from: string, phpImportType?: "class" | "function" | "const", resolverOpts?: ImportResolverOptions) =>
+      resolveFrom(from, phpImportType, {
+        ...(stylesheetLanguage ? { resolutionKind: "stylesheet" as const } : {}),
+        ...resolverOpts,
+      }),
     pushBinding: (binding: ImportBinding) => imports.push(binding),
     getBindings: () => imports,
     replaceBindings: (bindings: ImportBinding[]) => imports.splice(0, imports.length, ...bindings),
@@ -285,7 +290,11 @@ export async function collectImportsForFile(
       imports.push({
         kind: "star",
         from: specifier.spec,
-        resolved: await resolveFrom(specifier.spec, undefined, specifier.resolutionKind),
+        resolved: await resolveFrom(
+          specifier.spec,
+          undefined,
+          specifier.resolutionKind ? { resolutionKind: specifier.resolutionKind } : undefined,
+        ),
         ...(specifier.typeOnly ? { typeOnly: true } : {}),
       });
     }

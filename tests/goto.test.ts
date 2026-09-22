@@ -3361,4 +3361,138 @@ describe("Supertype keyword member navigation", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves TypeScript super.helper() through a namespace-imported qualified base", async () => {
+    const imported = ["export class Base {", "  helper(): number { return 1; }", "}", ""].join("\n");
+    const derived = [
+      'import * as ns from "./imported";',
+      "class Base {",
+      "  helper(): number { return 0; }",
+      "}",
+      "class Derived extends ns.Base {",
+      "  helper(): number { return 2; }",
+      "  run(): number { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-super-ns-goto-", {
+      "imported.ts": imported,
+      "derived.ts": derived,
+    });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["derived.ts"]!,
+        line: 7,
+        column: columnOf(derived, 7, "helper()"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(paths["imported.ts"]!));
+      expect(result.definition.range.start.line).toBe(2);
+      expect(result.definition.range.start.line).not.toBe(3);
+      expect(result.provenance?.resolution).toBe("member-access");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves TypeScript super.helper() through a default-import base", async () => {
+    const base = ["export default class Base {", "  helper(): number { return 1; }", "}", ""].join("\n");
+    const derived = [
+      'import Base from "./base";',
+      "class Derived extends Base {",
+      "  helper(): number { return 2; }",
+      "  run(): number { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-super-default-goto-", {
+      "base.ts": base,
+      "derived.ts": derived,
+    });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["derived.ts"]!,
+        line: 4,
+        column: columnOf(derived, 4, "helper()"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(paths["base.ts"]!));
+      expect(result.definition.range.start.line).toBe(2);
+      expect(result.provenance?.resolution).toBe("member-access");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fall back to a simple-name Base decoy when a qualified base is unresolved or ambiguous", async () => {
+    const empty = ["export const value = 1;", ""].join("\n");
+    const left = ["export class Base {", "  helper(): number { return 1; }", "}", ""].join("\n");
+    const right = ["export class Base {", "  helper(): number { return 2; }", "}", ""].join("\n");
+    const unresolved = [
+      'import * as ns from "./empty";',
+      "class Base {",
+      "  helper(): number { return 0; }",
+      "}",
+      "class Derived extends ns.Base {",
+      "  run(): number { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const missingQualifier = [
+      "class Base {",
+      "  helper(): number { return 0; }",
+      "}",
+      "class Derived extends ns.Base {",
+      "  run(): number { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const ambiguous = [
+      'import * as ns from "./left";',
+      'import * as ns from "./right";',
+      "class Base {",
+      "  helper(): number { return 0; }",
+      "}",
+      "class Derived extends ns.Base {",
+      "  run(): number { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const unresolvedFix = await buildFiles("cg-ts-super-unresolved-qual-goto-", {
+      "empty.ts": empty,
+      "derived.ts": unresolved,
+    });
+    const missingFix = await buildFiles("cg-ts-super-missing-qual-goto-", { "derived.ts": missingQualifier });
+    const ambiguousFix = await buildFiles("cg-ts-super-ambiguous-qual-goto-", {
+      "left.ts": left,
+      "right.ts": right,
+      "derived.ts": ambiguous,
+    });
+    try {
+      const unresolvedResult = await goToDefinition(unresolvedFix.index, {
+        file: unresolvedFix.paths["derived.ts"]!,
+        line: 6,
+        column: columnOf(unresolved, 6, "helper()"),
+      });
+      expect(unresolvedResult.status).toBe("not_found");
+      const missingResult = await goToDefinition(missingFix.index, {
+        file: missingFix.paths["derived.ts"]!,
+        line: 5,
+        column: columnOf(missingQualifier, 5, "helper()"),
+      });
+      expect(missingResult.status).toBe("not_found");
+      const ambiguousResult = await goToDefinition(ambiguousFix.index, {
+        file: ambiguousFix.paths["derived.ts"]!,
+        line: 7,
+        column: columnOf(ambiguous, 7, "helper()"),
+      });
+      expect(ambiguousResult.status).toBe("not_found");
+    } finally {
+      await fsp.rm(unresolvedFix.root, { recursive: true, force: true });
+      await fsp.rm(missingFix.root, { recursive: true, force: true });
+      await fsp.rm(ambiguousFix.root, { recursive: true, force: true });
+    }
+  });
 });

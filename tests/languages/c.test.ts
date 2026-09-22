@@ -252,6 +252,72 @@ describe("C quoted include resolution and same-file references", () => {
     }
   });
 
+  it("classifies a quoted and a macro include of the same text per occurrence", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-include-form-per-occurrence-"));
+    const header = path.join(root, "HEADER");
+    const file = path.join(root, "main.c");
+    const source = ['#include "HEADER"', "#include HEADER", "int main(void) { return 0; }", ""].join("\n");
+    try {
+      await writeFile(header, "int decoy(void);\n", "utf8");
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const imports = index.byFile.get(fileIdentityKey(file))?.imports ?? [];
+      expect(imports.map((entry) => entry.from)).toEqual(["HEADER", "HEADER"]);
+      expect(imports.map((entry) => entry.resolved)).toEqual([normalizePath(header), { external: "HEADER" }]);
+
+      const fileEdges = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file));
+      expect(fileEdges).toContainEqual(expect.objectContaining({ to: { type: "file", path: normalizePath(header) } }));
+      expect(fileEdges).toContainEqual(expect.objectContaining({ to: { type: "external", name: "HEADER" } }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves an angle include through resolution hints and keeps it external without them", async () => {
+    const hintRoot = await mkdtemp(path.join(os.tmpdir(), "cg-c-angle-hints-"));
+    const plainRoot = await mkdtemp(path.join(os.tmpdir(), "cg-c-angle-no-hints-"));
+    try {
+      const hintDir = path.join(hintRoot, "include");
+      const hintHeader = path.join(hintDir, "lib.h");
+      const hintFile = path.join(hintRoot, "main.c");
+      const source = "#include <lib.h>\nint main(void) { return helper(1); }\n";
+      await mkdir(hintDir, { recursive: true });
+      await writeFile(hintHeader, "int helper(int a);\n", "utf8");
+      await writeFile(hintFile, source, "utf8");
+
+      const index = await buildProjectIndex(hintRoot, { cache: "off", graph: { resolutionHints: ["include"] } });
+      expect(index.byFile.get(fileIdentityKey(hintFile))?.imports[0]?.resolved).toBe(normalizePath(hintHeader));
+      expect(
+        index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(hintFile)),
+      ).toContainEqual(expect.objectContaining({ to: { type: "file", path: normalizePath(hintHeader) } }));
+
+      const callColumn = source.split("\n")[1]!.indexOf("helper") + 1;
+      const gotoResult = await goToDefinition(index, { file: hintFile, line: 2, column: callColumn });
+      expect(gotoResult.status).toBe("ok");
+      if (gotoResult.status === "ok") {
+        expect(gotoResult.definition.file).toBe(normalizePath(hintHeader));
+      }
+      const refs = await findReferences(index, { file: hintHeader, line: 1, column: 5 });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => normalizePath(reference.file))).toEqual(
+          expect.arrayContaining([normalizePath(hintHeader), normalizePath(hintFile)]),
+        );
+      }
+
+      const plainFile = path.join(plainRoot, "main.c");
+      await writeFile(plainFile, source, "utf8");
+      const plainIndex = await buildProjectIndex(plainRoot, { cache: "off" });
+      expect(plainIndex.byFile.get(fileIdentityKey(plainFile))?.imports[0]?.resolved).toEqual({ external: "<lib.h>" });
+      expect(
+        plainIndex.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(plainFile)),
+      ).toContainEqual(expect.objectContaining({ to: { type: "external", name: "<lib.h>" } }));
+    } finally {
+      await rm(hintRoot, { recursive: true, force: true });
+      await rm(plainRoot, { recursive: true, force: true });
+    }
+  });
+
   it("resolves a quoted extensionless include to the exact sibling file and not a same-stem script", async () => {
     const hitRoot = await mkdtemp(path.join(os.tmpdir(), "cg-c-quoted-config-hit-"));
     const missRoot = await mkdtemp(path.join(os.tmpdir(), "cg-c-quoted-config-miss-"));

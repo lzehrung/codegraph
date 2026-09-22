@@ -319,12 +319,12 @@ function extractCIncludeImports(source: string, sink: TextImportSink): void {
     const quoted = scanQuotedValues(commentsOnly, from, to, ['"'])[0];
     if (quoted) {
       const spec = quoted.value.trim();
-      if (spec) sink.specifier({ spec, typeOnly: false });
+      if (spec) sink.specifier({ spec, typeOnly: false, includeForm: "literal" });
       continue;
     }
     const angle = /^[\t ]*<([^>\n]+)>/.exec(commentsOnly.slice(from, to));
     const spec = angle?.[1]?.trim();
-    if (spec) sink.specifier({ spec, typeOnly: false });
+    if (spec) sink.specifier({ spec, typeOnly: false, includeForm: "angle" });
   }
 }
 

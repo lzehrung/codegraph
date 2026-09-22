@@ -103,6 +103,7 @@ async function resolveImportSpecifierEdge(
     ...(entry.exportCondition ? { exportCondition: entry.exportCondition } : {}),
     ...(entry.pathAttribute ? { pathAttribute: entry.pathAttribute } : {}),
     ...(entry.statementStartIndex !== undefined ? { statementStartIndex: entry.statementStartIndex } : {}),
+    ...(entry.includeForm ? { includeForm: entry.includeForm } : {}),
   });
   return typeof res === "string" ? edgeToResolvedFile(res) : edgeToExternal(entry.raw ?? res.external);
 }

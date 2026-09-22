@@ -2,14 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { GRAPH_ONLY_RESOLUTION_EXTENSIONS } from "./graph-only-extensions.js";
-import {
-  confineResolvedPath,
-  fileIdentityKey,
-  isFilePathWithinRoot,
-  normalizeResolutionHints,
-  readUtf8WithoutBom,
-} from "./paths.js";
-import { maskTrivia } from "./trivia.js";
+import { confineResolvedPath, fileIdentityKey, isFilePathWithinRoot, normalizeResolutionHints } from "./paths.js";
 import {
   DEFAULT_RESOLUTION_EXTENSIONS,
   STYLESHEET_RESOLUTION_EXTENSIONS,
@@ -33,7 +26,11 @@ import { clearPhpResolutionCaches, resolvePhpImportPath } from "./resolution/php
 import { clearPythonResolutionCache } from "./resolution/python.js";
 import { resolveRustImportPath } from "./resolution/rust.js";
 import { clearTsconfigCache, type MatchPathFn } from "./resolution/tsconfig.js";
-import type { ModuleSpecifierExportCondition, ModuleSpecifierResolutionKind } from "./specifiers.js";
+import type {
+  CFamilyIncludeForm,
+  ModuleSpecifierExportCondition,
+  ModuleSpecifierResolutionKind,
+} from "./specifiers.js";
 import type { PackageExportConditionMode } from "./package-exports.js";
 import { lruMapGet, lruMapSet } from "./lru-map.js";
 export { resolveGoImportPath } from "./resolution/go.js";
@@ -56,9 +53,6 @@ function setResolveSpecifierCacheEntry(key: string, value: FileId | { external: 
   lruMapSet(resolveSpecifierCache, key, value, MAX_RESOLVE_SPECIFIER_CACHE_ENTRIES);
 }
 
-const MAX_C_FAMILY_QUOTED_INCLUDE_CACHE_ENTRIES = 10_000;
-const cFamilyQuotedIncludeCache = new Map<string, ReadonlySet<string>>();
-
 function isCFamilyQuotedIncludeLiteral(text: string | undefined): boolean {
   if (!text) return false;
   const trimmed = text.trim();
@@ -71,40 +65,31 @@ function cFamilyQuotedIncludeRelativePath(spec: string): string {
   return spec;
 }
 
-function collectCFamilyQuotedIncludeSpecs(source: string, languageId: string): Set<string> {
-  const masked = maskTrivia(source, languageId, { maskStrings: false });
-  const specs = new Set<string>();
-  const pattern = new RegExp(String.raw`(?:^|[\n\r])[ \t]*#[ \t]*include[ \t]+"([^"]*)"`, "g");
-  for (const match of masked.matchAll(pattern)) {
-    const value = match[1];
-    if (value !== undefined) specs.add(value);
-  }
-  return specs;
-}
-
-async function cFamilyQuotedIncludeSpecsInFile(fromFile: string, languageId: string): Promise<ReadonlySet<string>> {
-  const cacheKey = fileIdentityKey(path.resolve(fromFile));
-  const cached = lruMapGet(cFamilyQuotedIncludeCache, cacheKey);
-  if (cached) return cached;
-  let specs: Set<string>;
-  try {
-    specs = collectCFamilyQuotedIncludeSpecs(await readUtf8WithoutBom(fromFile), languageId);
-  } catch {
-    specs = new Set();
-  }
-  lruMapSet(cFamilyQuotedIncludeCache, cacheKey, specs, MAX_C_FAMILY_QUOTED_INCLUDE_CACHE_ENTRIES);
-  return specs;
-}
-
-async function isCFamilyQuotedInclude(
-  fromFile: string,
+/**
+ * Angle includes stay external unless a configured resolution hint proves a first-party file.
+ * Only the bracketed inner path feeds the hint lookup, and the includer's directory is never
+ * consulted: `#include <lib.h>` is not a relative include.
+ */
+async function resolveCFamilyAngleIncludeFromHints(
+  projectRoot: string,
   spec: string,
-  languageId: string,
-  raw: string | undefined,
-): Promise<boolean> {
-  if (isCFamilyQuotedIncludeLiteral(raw) || isCFamilyQuotedIncludeLiteral(spec)) return true;
-  if (raw !== undefined) return false;
-  return (await cFamilyQuotedIncludeSpecsInFile(fromFile, languageId)).has(spec);
+  resolutionHints: string[] | undefined,
+): Promise<FileId | null> {
+  // Native captures keep `<lib.h>`; the reduced-mode text extractor already strips the brackets.
+  const inner = spec.startsWith("<") && spec.endsWith(">") ? spec.slice(1, -1).trim() : spec.trim();
+  if (!inner) return null;
+  for (const hint of normalizeResolutionHints(resolutionHints)) {
+    const baseDir = path.isAbsolute(hint) ? hint : path.resolve(projectRoot, hint);
+    if (!isFilePathWithinRoot(projectRoot, baseDir)) continue;
+    const base = path.resolve(baseDir, inner);
+    if (!isFilePathWithinRoot(projectRoot, base)) continue;
+    const hit = await acceptFirstPartyFile(
+      projectRoot,
+      await findFirstExistingResolutionCandidate(base, DEFAULT_RESOLUTION_EXTENSIONS),
+    );
+    if (hit) return hit;
+  }
+  return null;
 }
 
 export type FileId = string;
@@ -242,7 +227,7 @@ export async function resolveImportSpecifier(
     exportCondition?: ModuleSpecifierExportCondition;
     pathAttribute?: string;
     statementStartIndex?: number;
-    raw?: string;
+    includeForm?: CFamilyIncludeForm;
   },
 ): Promise<FileId | { external: string }> {
   if (languageId === "go") {
@@ -274,10 +259,15 @@ export async function resolveImportSpecifier(
     if (phpHit) return phpHit;
   }
   if (languageId === "c" || languageId === "cpp") {
-    const isAngleInclude = spec.startsWith("<") && spec.endsWith(">");
-    const isExplicitPath = spec.startsWith(".") || spec.startsWith("/");
-    const isQuotedInclude =
-      !isAngleInclude && !isExplicitPath && (await isCFamilyQuotedInclude(fromFile, spec, languageId, opts?.raw));
+    // Include form is per occurrence: `#include "HEADER"` and `#include HEADER` both extract
+    // the specifier `HEADER`, so a file-wide spelling set cannot classify either occurrence.
+    const form = opts?.includeForm;
+    const isAngleInclude = form === "angle" || (form === undefined && spec.startsWith("<") && spec.endsWith(">"));
+    if (isAngleInclude) {
+      const angleHit = await resolveCFamilyAngleIncludeFromHints(projectRoot, spec, opts?.resolutionHints);
+      return angleHit ?? { external: spec };
+    }
+    const isQuotedInclude = form === "literal" || (form === undefined && isCFamilyQuotedIncludeLiteral(spec));
     if (isQuotedInclude) {
       const quotedIncludeHit = await acceptFirstPartyFile(
         projectRoot,
@@ -479,7 +469,6 @@ export async function resolveSpecifier(
 
 export function clearImportResolutionCaches(): void {
   resolveSpecifierCache.clear();
-  cFamilyQuotedIncludeCache.clear();
   clearPythonResolutionCache();
   clearFileExistsCache();
   clearJvmResolutionCaches();

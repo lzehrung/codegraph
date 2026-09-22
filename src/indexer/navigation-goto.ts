@@ -5,6 +5,7 @@ import type { SyntaxNodeLike } from "../languages/types.js";
 import { sliceText } from "../util/ast.js";
 import { fileIdentityKey } from "../util/paths.js";
 import {
+  collectMemberAccessChain,
   getMemberAccessParts,
   getNavigationExpressionProperty,
   isMemberAccessNode,
@@ -311,35 +312,109 @@ function keywordContainerKey(file: string, container: SyntaxNodeLike): string {
   return `${fileIdentityKey(file)}:${container.startIndex}:${container.endIndex}`;
 }
 
-function collectDeclaredBaseTypeNames(container: SyntaxNodeLike, source: string, sup: LanguageSupport): string[] {
+type DeclaredBaseType = { kind: "simple"; name: string } | { kind: "qualified"; base: string; path: readonly string[] };
+
+function peelTypeWrappers(node: SyntaxNodeLike): SyntaxNodeLike {
+  let current: SyntaxNodeLike | null = node;
+  while (current) {
+    if (
+      current.type === "type_annotation" ||
+      current.type === "named_type" ||
+      current.type === "user_type" ||
+      current.type === "type" ||
+      current.type === "parenthesized_type" ||
+      current.type === "pointer_type" ||
+      current.type === "reference_type" ||
+      current.type === "optional_type" ||
+      current.type === "nullable_type" ||
+      current.type === "generic_type" ||
+      current.type === "generic_name"
+    ) {
+      current = current.childForFieldName("type") ?? current.namedChildren[0] ?? null;
+      continue;
+    }
+    break;
+  }
+  return current ?? node;
+}
+
+function isSimpleTypeNameNode(node: SyntaxNodeLike, sup: LanguageSupport): boolean {
+  return isReceiverNameNode(sup, node.type) || node.type === "type_identifier" || node.type === "name";
+}
+
+function collectDeclaredBaseTypes(container: SyntaxNodeLike, source: string, sup: LanguageSupport): DeclaredBaseType[] {
   const nodeTypes = MEMBER_ACCESS_ROWS[sup.id]?.baseListNodeTypes;
   if (!nodeTypes || nodeTypes.length === 0) return [];
   const typeSet = new Set(nodeTypes);
-  const names: string[] = [];
+  const bases: DeclaredBaseType[] = [];
   const seen = new Set<string>();
-  const addName = (node: SyntaxNodeLike): void => {
-    const text = sliceText(node, source);
-    if (!text || seen.has(text)) return;
-    seen.add(text);
-    names.push(text);
+  const addSimple = (name: string): void => {
+    if (!name || seen.has(name)) return;
+    seen.add(name);
+    bases.push({ kind: "simple", name });
   };
-  const collectFrom = (node: SyntaxNodeLike): void => {
-    const unwrapped = unwrapNamedType(node, sup);
+  const addQualified = (base: string, path: string[]): void => {
+    if (!base || path.length === 0) return;
+    const key = `${base}.${path.join(".")}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    bases.push({ kind: "qualified", base, path });
+  };
+  const collectType = (node: SyntaxNodeLike): void => {
+    const core = peelTypeWrappers(node);
+    const unwrapped = unwrapNamedType(core, sup);
     if (unwrapped) {
-      addName(unwrapped);
+      addSimple(sliceText(unwrapped, source));
       return;
     }
-    for (const child of node.namedChildren) collectFrom(child);
+    if (isMemberAccessNode(sup, core)) {
+      const chain = collectMemberAccessChain({ sup, source, chainNode: core });
+      if (chain && isSimpleTypeNameNode(chain.base, sup) && chain.names.length) {
+        addQualified(sliceText(chain.base, source), [...chain.names].reverse());
+      }
+      return;
+    }
+    if (memberAccessTraversalTypes(sup).has(core.type)) return;
+    for (const child of core.namedChildren) {
+      if (child.type === "type_arguments") continue;
+      collectType(child);
+    }
   };
   const consider = (node: SyntaxNodeLike): void => {
-    if (typeSet.has(node.type)) collectFrom(node);
+    if (typeSet.has(node.type)) collectType(node);
   };
   for (const child of container.namedChildren) {
     consider(child);
     if (typeSet.has(child.type)) continue;
     for (const grand of child.namedChildren) consider(grand);
   }
-  return names;
+  return bases;
+}
+
+function asClassMemberContainer(index: ProjectIndex, def: SymbolDef): SymbolDef | undefined {
+  if (def.kind === SymbolKind.Class) return def;
+  if (def.kind !== SymbolKind.Default) return undefined;
+  const module = index.byFile.get(fileIdentityKey(def.file));
+  if (!module) return undefined;
+  const sameRange = module.locals.filter(
+    (local) =>
+      local.kind === SymbolKind.Class &&
+      local.range.start.line === def.range.start.line &&
+      local.range.start.column === def.range.start.column,
+  );
+  if (sameRange.length === 1) return sameRange[0];
+  const sameName = module.locals.filter(
+    (local) => local.kind === SymbolKind.Class && local.localName === def.localName,
+  );
+  return sameName.length === 1 ? sameName[0] : undefined;
+}
+
+function importedClassDef(
+  index: ProjectIndex,
+  result: SymbolDef | { namespace: string } | null,
+): SymbolDef | undefined {
+  if (!result || "namespace" in result) return undefined;
+  return asClassMemberContainer(index, result);
 }
 
 function resolveNamedMemberContainer(
@@ -356,16 +431,51 @@ function resolveNamedMemberContainer(
 
   for (const imp of mod.imports) {
     if (imp.kind === "named" && imp.local === name) {
-      const result = resolveImported(index, imp, imp.imported);
-      if (result && !("namespace" in result) && declaresMembers(result)) return result;
+      const classDef = importedClassDef(index, resolveImported(index, imp, imp.imported));
+      if (classDef) return classDef;
+    }
+    if (imp.kind === "default" && imp.local === name) {
+      const classDef = importedClassDef(index, resolveImported(index, imp, "default"));
+      if (classDef) return classDef;
     }
     if (imp.kind === "star") {
-      const result = resolveImported(index, imp, name);
-      if (result && !("namespace" in result) && declaresMembers(result)) return result;
+      const classDef = importedClassDef(index, resolveImported(index, imp, name));
+      if (classDef) return classDef;
     }
   }
   const exported = resolveExport(index, mod.file, name, { allowLocalFallback: false });
-  if (exported?.kind === "resolved" && declaresMembers(exported.def)) return exported.def;
+  if (exported?.kind === "resolved") return asClassMemberContainer(index, exported.def);
+  return undefined;
+}
+
+function resolveQualifiedMemberContainer(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  baseName: string,
+  path: readonly string[],
+  normalize: (name: string) => string,
+): SymbolDef | undefined {
+  if (path.length === 0) return undefined;
+  const namespaceImports = mod.imports.filter(
+    (imp) => imp.kind === "namespace" && normalize(imp.localNS) === normalize(baseName),
+  );
+  if (namespaceImports.length !== 1) return undefined;
+  const resolved = namespaceImports[0]!.resolved;
+  let file = typeof resolved === "string" ? resolved : undefined;
+  if (!file) return undefined;
+  for (let partIndex = 0; partIndex < path.length; partIndex += 1) {
+    const part = path[partIndex]!;
+    const last = partIndex === path.length - 1;
+    const hit = resolveExport(index, file, part, { allowLocalFallback: false });
+    if (!hit) return undefined;
+    if (hit.kind === "namespace") {
+      if (last) return undefined;
+      file = hit.file;
+      continue;
+    }
+    if (!last) return undefined;
+    return asClassMemberContainer(index, hit.def);
+  }
   return undefined;
 }
 
@@ -403,11 +513,14 @@ async function baseRefsFromContainer(
   source: string,
   sup: LanguageSupport,
 ): Promise<KeywordClassRef[]> {
-  const names = collectDeclaredBaseTypeNames(container, source, sup);
+  const bases = collectDeclaredBaseTypes(container, source, sup);
   const refs: KeywordClassRef[] = [];
   const seen = new Set<string>();
-  for (const name of names) {
-    const def = resolveNamedMemberContainer(index, mod, name, sup.normalizeIdentifier);
+  for (const base of bases) {
+    const def =
+      base.kind === "simple"
+        ? resolveNamedMemberContainer(index, mod, base.name, sup.normalizeIdentifier)
+        : resolveQualifiedMemberContainer(index, mod, base.base, base.path, sup.normalizeIdentifier);
     // `super`, `base`, and `parent` follow class ancestors only. A flat base list mixes the
     // superclass with interfaces or protocols in C#, Kotlin, and Swift, so an interface member
     // would otherwise answer a keyword that the language resolves against the base class.
