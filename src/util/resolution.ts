@@ -77,28 +77,15 @@ async function resolveCFamilyAngleIncludeFromHints(
 ): Promise<FileId | null> {
   // Native captures keep `<lib.h>`; the reduced-mode text extractor already strips the brackets.
   const inner = spec.startsWith("<") && spec.endsWith(">") ? spec.slice(1, -1).trim() : spec.trim();
-  if (!inner) return null;
-  for (const hint of normalizeResolutionHints(resolutionHints)) {
-    const baseDir = path.isAbsolute(hint) ? hint : path.resolve(projectRoot, hint);
-    if (!isFilePathWithinRoot(projectRoot, baseDir)) continue;
-    const base = path.resolve(baseDir, inner);
-    if (!isFilePathWithinRoot(projectRoot, base)) continue;
-    const hit = await acceptFirstPartyFile(
-      projectRoot,
-      await findFirstExistingResolutionCandidate(base, DEFAULT_RESOLUTION_EXTENSIONS),
-    );
-    if (hit) return hit;
-  }
-  return null;
+  return resolveCFamilyExactIncludeFromHints(projectRoot, inner, resolutionHints);
 }
 
 /**
- * A quoted include is exact and C-family-only. A configured include root is combined with the
- * include's inner path verbatim: no extension, index, alias, workspace, or package probing, so a
- * missing `#include "config"` can never bind a `config.ts`, `config/index.ts`, workspace package,
- * or node_modules match.
+ * A configured C-family include root is combined with the include's inner path verbatim:
+ * no extension or index probing. This keeps quoted and angle includes from binding script
+ * files whose basename happens to match the header spelling.
  */
-async function resolveCFamilyQuotedIncludeFromHints(
+async function resolveCFamilyExactIncludeFromHints(
   projectRoot: string,
   innerPath: string,
   resolutionHints: string[] | undefined,
@@ -296,7 +283,7 @@ export async function resolveImportSpecifier(
       const inner = cFamilyQuotedIncludeRelativePath(spec);
       const siblingHit = await acceptFirstPartyFile(projectRoot, path.resolve(path.dirname(fromFile), inner));
       if (siblingHit) return siblingHit;
-      const hintHit = await resolveCFamilyQuotedIncludeFromHints(projectRoot, inner, opts?.resolutionHints);
+      const hintHit = await resolveCFamilyExactIncludeFromHints(projectRoot, inner, opts?.resolutionHints);
       if (hintHit) return hintHit;
       // A literal include never reaches generic extension/index/package/path-alias resolution:
       // the exact include is either first-party or external under its raw spelling.

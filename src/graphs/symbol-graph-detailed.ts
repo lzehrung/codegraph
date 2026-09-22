@@ -1,4 +1,5 @@
 import { isUnsupportedParserInputError, prepareSourceInput } from "../languages/file-prep.js";
+import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
@@ -12,6 +13,7 @@ import { findClosestScopeBinding, getOrBuildScopeIndex } from "../indexer/naviga
 import { SymbolKind, type ProjectIndex, type ResolvedExport, type SymbolDef } from "../indexer/types.js";
 import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
+import { foldPhpIdentifierCase } from "../util/identifiers.js";
 import { buildSymbolGraph, type SymbolGraph } from "./symbol-graph.js";
 import { collectDetailedDeclarations } from "./symbol-graph-detailed/ast.js";
 import {
@@ -139,28 +141,34 @@ export async function buildSymbolGraphDetailed(
 
   const receiverCalls: ReceiverCallCandidate[] = [];
   const receiverMemberScopes = new Map<string, ReceiverMemberScope>();
-  // Every receiver call resolves to a callable declared somewhere in the project, so
-  // this set short-circuits receiver typing for calls into runtime and dependency
-  // APIs, which dominate real call sites. Built on first use because a scoped graph
-  // may never reach a receiver call.
-  let callableNames: Set<string> | undefined;
-  const ensureCallableNames = (): Set<string> => {
+  // Receiver calls into runtime and dependency APIs dominate real call sites. Build these
+  // indexes lazily so a scoped graph that has no receiver calls pays no allocation cost.
+  let callableNames: { exact: Set<string>; phpFolded: Set<string> } | undefined;
+  const ensureCallableNames = (): { exact: Set<string>; phpFolded: Set<string> } => {
     if (!callableNames) {
-      callableNames = new Set<string>();
+      callableNames = { exact: new Set(), phpFolded: new Set() };
       for (const entry of index.byFile.values()) {
+        const isPhp = supportForFileWithoutHeaderSample(entry.file, index.languageExtensions)?.id === "php";
         for (const local of entry.locals) {
-          if (local.kind === SymbolKind.Function) callableNames.add(local.localName);
+          if (local.kind !== SymbolKind.Function) continue;
+          callableNames.exact.add(local.localName);
+          if (isPhp) callableNames.phpFolded.add(foldPhpIdentifierCase(local.localName));
         }
       }
     }
     return callableNames;
   };
-  const hasCallableNamed = (name: string): boolean => ensureCallableNames().has(name);
+  const hasCallableNamed = (name: string, phpCaseInsensitive = false): boolean => {
+    const names = ensureCallableNames();
+    return phpCaseInsensitive ? names.phpFolded.has(foldPhpIdentifierCase(name)) : names.exact.has(name);
+  };
   // Function-valued bindings (`const helper = () => 1`) index as variables, so the
   // kind scan above cannot see them; the detailed pass mirrors each name it proves
   // callable here as its files are processed.
-  const noteCallableName = (name: string): void => {
-    ensureCallableNames().add(name);
+  const noteCallableName = (name: string, phpCaseInsensitive = false): void => {
+    const names = ensureCallableNames();
+    names.exact.add(name);
+    if (phpCaseInsensitive) names.phpFolded.add(foldPhpIdentifierCase(name));
   };
 
   const optionFileKeys = opts?.files ? new Set(Array.from(opts.files, fileIdentityKey)) : undefined;

@@ -366,10 +366,10 @@ nativeDescribe("receiver method call edges", () => {
         "    static function shared() {}",
         "    function run() {",
         "        php_free();",
-        "        $this->helper();",
-        "        self::helper();",
-        "        static::shared();",
-        "        Example::shared();",
+        "        $this->HELPER();",
+        "        self::HeLpEr();",
+        "        static::SHARED();",
+        "        Example::ShArEd();",
         "    }",
         "}",
       ].join("\n"),
@@ -379,8 +379,8 @@ nativeDescribe("receiver method call edges", () => {
     const shared = nodeIn(graph, "example.php", "shared");
     const free = nodeIn(graph, "example.php", "php_free");
     const run = nodeIn(graph, "example.php", "run");
-    expect(callsiteTexts(graph, helper, run, files)).toEqual(["helper", "helper"]);
-    expect(callsiteTexts(graph, shared, run, files)).toEqual(["shared", "shared"]);
+    expect(callsiteTexts(graph, helper, run, files)).toEqual(["HELPER", "HeLpEr"]);
+    expect(callsiteTexts(graph, shared, run, files)).toEqual(["SHARED", "ShArEd"]);
     expect(callsiteTexts(graph, free, run, files)).toEqual(["php_free"]);
   });
 

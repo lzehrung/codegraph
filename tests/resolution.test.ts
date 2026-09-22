@@ -2188,6 +2188,34 @@ describe("Import Resolution", () => {
     },
   );
 
+  it.each(["c", "cpp"] as const)("uses exact-file matching for extensionless angle %s includes", async (languageId) => {
+    const root = await mkTmpDir(`dg-resolve-c-family-angle-decoys-${languageId}-`);
+    const sourceFile = path.join(root, languageId === "c" ? "main.c" : "main.cpp");
+    const includeDir = path.join(root, "include");
+    const exactFile = path.join(includeDir, "exact");
+
+    await fsp.mkdir(path.join(includeDir, "config"), { recursive: true });
+    await fsp.writeFile(sourceFile, "#include <config>\n", "utf8");
+    await fsp.writeFile(path.join(includeDir, "config.ts"), "export const decoy = 1;\n", "utf8");
+    await fsp.writeFile(path.join(includeDir, "config", "index.ts"), "export const decoy = 2;\n", "utf8");
+    await fsp.writeFile(exactFile, "int exact(void);\n", "utf8");
+
+    clearImportResolutionCaches();
+    await expect(
+      resolveImportSpecifier(root, sourceFile, "config", languageId, {
+        includeForm: "angle",
+        resolutionHints: ["include"],
+      }),
+    ).resolves.toEqual({ external: "config" });
+
+    const resolved = await resolveImportSpecifier(root, sourceFile, "exact", languageId, {
+      includeForm: "angle",
+      resolutionHints: ["include"],
+    });
+    expect(typeof resolved).toBe("string");
+    expect(String(resolved).replace(/\\/g, "/")).toBe(exactFile.replace(/\\/g, "/"));
+  });
+
   it.each(["c", "cpp"] as const)(
     "resolves an exact literal %s include inside a configured include root",
     async (languageId) => {

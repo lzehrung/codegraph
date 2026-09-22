@@ -5,7 +5,7 @@ import type { LanguageSupport } from "../../languages.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import { sliceText } from "../../util/ast.js";
-import { XID_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
+import { foldPhpIdentifierCase, XID_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { keywordReceiverKind, ownReceiverMemberScope } from "../../util/member-access-tables.js";
 import {
   getMemberAccessParts,
@@ -30,6 +30,8 @@ export type ReceiverCallCandidate = {
   /** Resolve only through supertypes, for explicit `parent`/`super`/`base` receivers. */
   viaSupertypes: boolean;
   memberName: string;
+  /** Match the member name with PHP's ASCII case-insensitive method rule. */
+  caseInsensitiveMemberName?: boolean;
   /**
    * Argument count, used only to separate same-named overloads on one type.
    * `null` means the call shape is unknown, so arity-based resolution is omitted.
@@ -1281,7 +1283,11 @@ function provenMemberTarget(
   for (const ownerId of owners) {
     for (const memberId of membersByOwner.get(ownerId) ?? []) {
       const node = graph.nodes.get(memberId);
-      if (!node || node.kind !== "function" || node.name !== candidate.memberName) continue;
+      if (!node || node.kind !== "function") continue;
+      const nameMatches = candidate.caseInsensitiveMemberName
+        ? foldPhpIdentifierCase(node.name) === foldPhpIdentifierCase(candidate.memberName)
+        : node.name === candidate.memberName;
+      if (!nameMatches) continue;
       if (memberScope !== "any" && memberScopes.get(memberId) !== memberScope) continue;
       matches.add(memberId);
     }

@@ -3,6 +3,7 @@ import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import { sliceText, toRange } from "../../util/ast.js";
 import { getMemberAccessParts } from "../../util/member-access.js";
+import { foldPhpIdentifierCase } from "../../util/identifiers.js";
 import { keywordReceiverKind } from "../../util/member-access-tables.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { defNodeId, nodeForDef, type SymbolGraph } from "../symbol-graph.js";
@@ -45,9 +46,9 @@ type EdgePassContext = {
   /** Proven static or instance scope for callable members, keyed by graph node id. */
   receiverMemberScopes: Map<string, ReceiverMemberScope>;
   /** Whether any indexed project file declares a callable with this name. */
-  hasCallableNamed: (name: string) => boolean;
+  hasCallableNamed: (name: string, phpCaseInsensitive?: boolean) => boolean;
   /** Registers a name the detailed pass proved callable (function-valued bindings). */
-  noteCallableName: (name: string) => void;
+  noteCallableName: (name: string, phpCaseInsensitive?: boolean) => void;
 };
 
 function ensureNode(context: EdgePassContext, def: SymbolDef): string {
@@ -360,7 +361,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
     // the callable metadata records that this binding was proven to hold a function.
     if (provenNode && provenNode.kind !== "function" && provesCallableBinding(context, fn)) {
       provenNode.callable = true;
-      context.noteCallableName(fn.name);
+      context.noteCallableName(fn.name, context.sup.id === "php");
     }
     const seenAliases = new Set<string>();
     const nestedFunctions = new Set(
@@ -422,7 +423,8 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
      */
     const recordReceiverCall = (node: SyntaxNodeLike, access: ReceiverCallAccess): void => {
       const memberName = sliceText(access.property, context.source);
-      if (!memberName || !context.hasCallableNamed(memberName)) return;
+      const phpCaseInsensitive = context.sup.id === "php";
+      if (!memberName || !context.hasCallableNamed(memberName, phpCaseInsensitive)) return;
       const binding = classifyReceiver(
         context.sup,
         access.receiver,
@@ -446,6 +448,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
           argumentCount,
           site,
           memberScope: binding.memberScope,
+          caseInsensitiveMemberName: phpCaseInsensitive,
         });
         return;
       }
@@ -453,7 +456,11 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
         const container = nearestMemberContainer(fn.node);
         const declared = container
           ? lexicalMembers(container).filter((candidate) => {
-              if (candidate.def.localName !== memberName) return false;
+              const candidateName = candidate.def.localName;
+              const nameMatches = phpCaseInsensitive
+                ? foldPhpIdentifierCase(candidateName) === foldPhpIdentifierCase(memberName)
+                : candidateName === memberName;
+              if (!nameMatches) return false;
               if (binding.memberScope === "any") return true;
               return declarationNodeIsStatic(candidate.node, context.source) === (binding.memberScope === "static");
             })
@@ -485,6 +492,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
         argumentCount,
         site,
         memberScope: binding.memberScope,
+        caseInsensitiveMemberName: phpCaseInsensitive,
       });
     };
 

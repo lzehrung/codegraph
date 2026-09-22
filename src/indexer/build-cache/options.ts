@@ -64,8 +64,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 28 restricts PHP global-namespace reference candidates to PHP files and stores PHP
  * bloom-filter identifiers in both their original and ASCII-case-folded spelling so
  * case-insensitive PHP references are narrowed correctly.
+ * Epoch 29 uses exact configured-root matching for C-family angle includes and applies PHP
+ * method-name case folding to receiver call edges.
  */
-export const CORE_ALGORITHM_EPOCH = 28;
+export const CORE_ALGORITHM_EPOCH = 29;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
