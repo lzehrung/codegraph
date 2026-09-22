@@ -92,6 +92,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
   cpp: {
     memberAccessShapes: [C_FIELD_ACCESS_SHAPE, CPP_QUALIFIED_ACCESS_SHAPE],
     receiverKeywords: { own: ["this"], instanceOwn: ["this"], supertype: [] },
+    baseListNodeTypes: ["base_class_clause"],
   },
   css: { omittedReason: "Style language; no member-access concept." },
   csharp: {

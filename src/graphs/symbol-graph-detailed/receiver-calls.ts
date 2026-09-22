@@ -1,10 +1,11 @@
 import { readFileSync } from "node:fs";
 import { SymbolKind, type SymbolDef } from "../../indexer/types.js";
 import type { LanguageSupport } from "../../languages.js";
+import { isJsTsLanguage } from "../../languages/js-family.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import { sliceText } from "../../util/ast.js";
 import { XID_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
-import { MEMBER_ACCESS_ROWS } from "../../util/member-access-tables.js";
+import { keywordReceiverKind, ownReceiverMemberScope } from "../../util/member-access-tables.js";
 import {
   getMemberAccessParts,
   getNavigationExpressionProperty,
@@ -33,8 +34,6 @@ export type ReceiverCallCandidate = {
   /** Required static/instance scope; omitted candidates are classified from `site`. */
   memberScope?: ReceiverMemberScope;
 };
-
-const INSTANCE_RECEIVER_KEYWORDS = new Set(["this", "$this"]);
 
 /** Languages whose grammar distinguishes static members from instance members. */
 const STATIC_MEMBER_LANGUAGES: Record<string, true> = {
@@ -103,6 +102,17 @@ const HIERARCHY_LABELS: Record<string, true> = {
   mixin: true,
   trait: true,
 };
+const UNPROVEN_HERITAGE_EXPRESSION_TYPES = new Set([
+  "binary_expression",
+  "call_expression",
+  "new_expression",
+  "subscript_expression",
+  "ternary_expression",
+]);
+
+export function isUnprovenHeritageExpression(node: SyntaxNodeLike): boolean {
+  return UNPROVEN_HERITAGE_EXPRESSION_TYPES.has(node.type);
+}
 
 /**
  * Nodes that bind a value name across the supported grammars: locals, parameters,
@@ -763,8 +773,116 @@ export function receiverConstructorExpression(
   return findVisiblePriorConstructor(obj, receiverName, source, sup);
 }
 
-function ownTypeMemberScope(receiverName: string): ReceiverMemberScope {
-  return INSTANCE_RECEIVER_KEYWORDS.has(receiverName) ? "instance" : "any";
+export function cppOutOfLineClassName(node: SyntaxNodeLike, source: string, sup: LanguageSupport): string | null {
+  if (sup.id !== "cpp") return null;
+  let current: SyntaxNodeLike | null = node;
+  while (current) {
+    if (current.type === "function_definition") {
+      let declarator = current.childForFieldName("declarator");
+      while (declarator) {
+        if (declarator.type === "qualified_identifier") {
+          const scope = declarator.childForFieldName("scope");
+          if (!scope) return null;
+          const rightmostScopeName = scope.childForFieldName("name") ?? scope;
+          return sliceText(rightmostScopeName, source);
+        }
+        const nested = declarator.childForFieldName("declarator");
+        if (!nested || nested.id === declarator.id) break;
+        declarator = nested;
+      }
+      return null;
+    }
+    current = current.parent;
+  }
+  return null;
+}
+export function nodeDeclaresStatic(node: SyntaxNodeLike, source: string): boolean {
+  if (node.type === "static" || node.type === "static_modifier") return true;
+  if (node.type === "storage_class_specifier" || node.type === "modifier" || node.type === "property_modifier") {
+    return sliceText(node, source).trim() === "static";
+  }
+  if (node.type === "class") {
+    const parentType = node.parent?.type;
+    return (
+      parentType === "function_declaration" ||
+      parentType === "property_declaration" ||
+      parentType === "subscript_declaration"
+    );
+  }
+  if (node.type === "modifiers") {
+    for (let childIndex = 0; ; childIndex += 1) {
+      const child = node.child(childIndex);
+      if (!child) break;
+      if (nodeDeclaresStatic(child, source)) return true;
+    }
+  }
+  return false;
+}
+export function declarationNodeIsStatic(node: SyntaxNodeLike, source: string): boolean {
+  if (nodeDeclaresStatic(node, source)) return true;
+  for (let childIndex = 0; ; childIndex += 1) {
+    const child = node.child(childIndex);
+    if (!child) return false;
+    if (nodeDeclaresStatic(child, source)) return true;
+  }
+}
+
+function nodeInStaticMemberContext(node: SyntaxNodeLike, source: string): boolean {
+  const container = nearestMemberContainer(node);
+  if (!container) return false;
+  let current: SyntaxNodeLike | null = node;
+  while (current && current !== container) {
+    if (declarationNodeIsStatic(current, source)) return true;
+    current = current.parent;
+  }
+  return false;
+}
+
+const JS_TS_DYNAMIC_THIS_FUNCTION_TYPES: Record<string, true> = {
+  function: true,
+  function_declaration: true,
+  function_expression: true,
+  generator_function: true,
+  generator_function_declaration: true,
+  method_definition: true,
+};
+
+/**
+ * Ordinary JS/TS functions and object-literal methods own `this`/`super`; arrows preserve the
+ * enclosing class member's receiver. Crossing one of those dynamic boundaries makes the class
+ * receiver unproven.
+ */
+export function keywordReceiverCrossesDynamicBoundary(sup: LanguageSupport, node: SyntaxNodeLike): boolean {
+  if (!isJsTsLanguage(sup.id)) return false;
+  const container = nearestMemberContainer(node);
+  if (!container) return false;
+  let current: SyntaxNodeLike | null = node.parent;
+  while (current && current !== container) {
+    if (JS_TS_DYNAMIC_THIS_FUNCTION_TYPES[current.type]) {
+      const directlyOwnedClassMethod =
+        current.type === "method_definition" &&
+        current.parent?.type === "class_body" &&
+        current.parent.parent?.startIndex === container.startIndex;
+      return !directlyOwnedClassMethod;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
+export function keywordReceiverMemberScope(
+  sup: LanguageSupport,
+  receiverName: string,
+  node: SyntaxNodeLike,
+  source: string,
+): ReceiverMemberScope {
+  if (!hasStaticMemberDistinction(sup.id)) return "any";
+  const kind = keywordReceiverKind(sup.id, receiverName);
+  if (kind === "supertype") {
+    return nodeInStaticMemberContext(node, source) ? "static" : "instance";
+  }
+  const keywordScope = ownReceiverMemberScope(sup.id, receiverName) ?? "any";
+  return keywordScope === "instance" && nodeInStaticMemberContext(node, source) ? "static" : keywordScope;
 }
 
 /**
@@ -780,11 +898,14 @@ export function classifyReceiver(
   cacheScope: number,
   accessNode: SyntaxNodeLike,
 ): ReceiverBinding | null {
-  const keywords = MEMBER_ACCESS_ROWS[sup.id]?.receiverKeywords;
   const text = sliceText(receiver, source).trim();
   if (!text) return null;
-  if (keywords?.own.includes(text)) return { kind: "own-type", memberScope: ownTypeMemberScope(text) };
-  if (keywords?.supertype.includes(text)) return { kind: "supertype", memberScope: "any" };
+  const keywordKind = keywordReceiverKind(sup.id, text);
+  if (keywordKind) {
+    if (keywordReceiverCrossesDynamicBoundary(sup, accessNode)) return null;
+    const memberScope = keywordReceiverMemberScope(sup, text, accessNode, source);
+    return keywordKind === "own" ? { kind: "own-type", memberScope } : { kind: "supertype", memberScope };
+  }
 
   const receiverIsName = isReceiverNameNode(sup, receiver.type);
 
@@ -850,17 +971,6 @@ export function callArgumentCount(callNode: SyntaxNodeLike): number {
   return (argumentNode.namedChildren ?? []).filter((argument) => argument.type !== "comment").length;
 }
 
-function parseDefNodeId(id: string): { file: string; name: string; index: number } | null {
-  const indexSep = id.lastIndexOf("::");
-  if (indexSep <= 0) return null;
-  const index = Number(id.slice(indexSep + 2));
-  if (!Number.isFinite(index)) return null;
-  const rest = id.slice(0, indexSep);
-  const nameSep = rest.lastIndexOf("::");
-  if (nameSep <= 0) return null;
-  return { file: rest.slice(0, nameSep), name: rest.slice(nameSep + 2), index };
-}
-
 function loadSource(file: string, cache: Map<string, string>): string {
   const cached = cache.get(file);
   if (cached !== undefined) return cached;
@@ -872,19 +982,6 @@ function loadSource(file: string, cache: Map<string, string>): string {
     cache.set(file, "");
     return "";
   }
-}
-
-function memberIdLooksStatic(memberId: string, sourceCache: Map<string, string>): boolean {
-  const parsed = parseDefNodeId(memberId);
-  if (!parsed) return false;
-  const source = loadSource(parsed.file, sourceCache);
-  if (!source) return false;
-  const beforeBrace = source.lastIndexOf("{", parsed.index);
-  const beforeSemi = source.lastIndexOf(";", parsed.index);
-  const beforeClose = source.lastIndexOf("}", parsed.index);
-  const declStart = Math.max(beforeBrace, beforeSemi, beforeClose);
-  const prefix = source.slice(declStart + 1, parsed.index);
-  return /(?:^|[^\w$])static(?:$|[^\w$])/.test(prefix) || /(?:^|[^\w$])def\s+self\s*\./.test(prefix);
 }
 
 function inferCallMemberScope(
@@ -899,11 +996,14 @@ function inferCallMemberScope(
   if (/::\s*$/.test(before)) return "static";
   if (/\?->\s*$/.test(before) || /->\s*$/.test(before)) return "instance";
   if (/\)\s*\.\s*$/.test(before)) return "instance";
-  // HeritageEdges does not yet copy classifyReceiver.memberScope onto candidates.
-  // A lowercase dotted receiver is an instance value (`c.StaticMethod()`), not a type.
+  // Older serialized candidates lack memberScope. Infer the common dotted-receiver cases.
   if (/(?:^|[^A-Za-z0-9_$])[a-z_][A-Za-z0-9_]*\s*\.\s*$/.test(before)) return "instance";
   if (/(?:^|[^A-Za-z0-9_$])[A-Z][A-Za-z0-9_]*\s*\.\s*$/.test(before)) return "static";
   return "any";
+}
+function callSiteKey(callerId: string, site: ReceiverCallCandidate["site"]): string {
+  const { start, end } = site.range;
+  return `${callerId}\u0000${site.file}\u0000${start.line}:${start.column}:${start.index ?? ""}-${end.line}:${end.column}:${end.index ?? ""}`;
 }
 
 /**
@@ -915,6 +1015,7 @@ export function emitReceiverCallEdges(
   graph: SymbolGraph,
   candidates: readonly ReceiverCallCandidate[],
   recordEdge: (fromId: string, toId: string, label?: string, site?: SymbolGraph["edges"][number]["site"]) => boolean,
+  memberScopes: ReadonlyMap<string, ReceiverMemberScope> = new Map(),
 ): void {
   if (!candidates.length) return;
 
@@ -944,20 +1045,51 @@ export function emitReceiverCallEdges(
     return (classAncestorsByOwner.get(ownerId) ?? []).filter((id) => graph.nodes.get(id)?.kind === "class");
   };
 
+  const callTargetsBySite = new Map<string, Set<string>>();
+  for (const edge of graph.edges) {
+    if (edge.label !== "calls" || !edge.site) continue;
+    const key = callSiteKey(edge.from, edge.site);
+    const targets = callTargetsBySite.get(key);
+    if (targets) targets.add(edge.to);
+    else callTargetsBySite.set(key, new Set([edge.to]));
+  }
+  const rejectedCallSites = new Set<string>();
+
   const sourceCache = new Map<string, string>();
   for (const candidate of candidates) {
+    const siteKey = callSiteKey(candidate.callerId, candidate.site);
+    const existingTargets = callTargetsBySite.get(siteKey) ?? new Set<string>();
+    if (existingTargets.size > 1) {
+      rejectedCallSites.add(siteKey);
+      continue;
+    }
     const owner = candidate.ownerId ?? ownerByMember.get(candidate.callerId);
     if (!owner) continue;
     const memberScope = candidate.memberScope ?? inferCallMemberScope(candidate.site, sourceCache);
     let level = candidate.viaSupertypes ? nextOwners(owner, true) : [owner];
     const visited = new Set<string>(level);
+    let receiverDisposition: "none" | "resolved" | "ambiguous" = "none";
     for (let depth = 0; depth < MAX_SUPERTYPE_DEPTH && level.length; depth += 1) {
-      const lookup = provenMemberTarget(graph, membersByOwner, level, candidate, memberScope, sourceCache);
+      const lookup = provenMemberTarget(graph, membersByOwner, level, candidate, memberScope, memberScopes);
       if (lookup.status === "unique") {
-        recordEdge(candidate.callerId, lookup.memberId, "calls", candidate.site);
+        receiverDisposition = "resolved";
+        const combinedTargets = new Set(existingTargets);
+        combinedTargets.add(lookup.memberId);
+        if (combinedTargets.size === 1) {
+          if (existingTargets.size === 0 && recordEdge(candidate.callerId, lookup.memberId, "calls", candidate.site)) {
+            existingTargets.add(lookup.memberId);
+            callTargetsBySite.set(siteKey, existingTargets);
+          }
+        } else {
+          rejectedCallSites.add(siteKey);
+        }
         break;
       }
-      if (lookup.status === "ambiguous") break;
+      if (lookup.status === "ambiguous") {
+        receiverDisposition = "ambiguous";
+        if (existingTargets.size) rejectedCallSites.add(siteKey);
+        break;
+      }
       const next: string[] = [];
       for (const ownerId of level) {
         for (const supertype of nextOwners(ownerId, candidate.viaSupertypes)) {
@@ -968,6 +1100,14 @@ export function emitReceiverCallEdges(
       }
       level = next;
     }
+    if (receiverDisposition === "none" && existingTargets.size) {
+      rejectedCallSites.add(siteKey);
+    }
+  }
+  if (rejectedCallSites.size) {
+    graph.edges = graph.edges.filter(
+      (edge) => edge.label !== "calls" || !edge.site || !rejectedCallSites.has(callSiteKey(edge.from, edge.site)),
+    );
   }
 }
 
@@ -981,19 +1121,18 @@ type MemberTargetLookup = { status: "none" } | { status: "unique"; memberId: str
  */
 function provenMemberTarget(
   graph: SymbolGraph,
-  membersByOwner: ReadonlyMap<string, string[]>,
+  membersByOwner: ReadonlyMap<string, readonly string[]>,
   owners: readonly string[],
   candidate: ReceiverCallCandidate,
   memberScope: ReceiverMemberScope,
-  sourceCache: Map<string, string>,
+  memberScopes: ReadonlyMap<string, ReceiverMemberScope>,
 ): MemberTargetLookup {
   const matches = new Set<string>();
   for (const ownerId of owners) {
     for (const memberId of membersByOwner.get(ownerId) ?? []) {
       const node = graph.nodes.get(memberId);
       if (!node || node.kind !== "function" || node.name !== candidate.memberName) continue;
-      if (memberScope === "static" && !memberIdLooksStatic(memberId, sourceCache)) continue;
-      if (memberScope === "instance" && memberIdLooksStatic(memberId, sourceCache)) continue;
+      if (memberScope !== "any" && memberScopes.get(memberId) !== memberScope) continue;
       matches.add(memberId);
     }
   }

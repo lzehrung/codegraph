@@ -424,12 +424,6 @@ async function findReferencesInternal(
     (binding) => binding.def && binding.def.start.index === def.range.start.index,
   );
   pushRef({ file: definitionFile, range: def.range });
-  if (localBinding) {
-    for (const occurrence of localBinding.occurrences) {
-      if (hasReachedCollectionLimit()) break;
-      pushRef({ file: definitionFile, range: occurrence });
-    }
-  }
 
   const exportedNames: string[] = [];
   for (const entry of mod.exports) {
@@ -443,6 +437,13 @@ async function findReferencesInternal(
 
   const exportedNameSet = new Set(exportedNames);
   const phpQualifiedNames = await buildPhpQualifiedNames(index, definitionFile, def);
+  const scansReceiverReferences = shouldScanVerifiedReferences(def, phpQualifiedNames, parsedContext);
+  if (localBinding && !scansReceiverReferences) {
+    for (const occurrence of localBinding.occurrences) {
+      if (hasReachedCollectionLimit()) break;
+      pushRef({ file: definitionFile, range: occurrence });
+    }
+  }
 
   let candidateFiles = getCachedReferenceCandidateFiles(index, def, exportedNames, !!phpQualifiedNames.length);
   if (index.bloomFilters && phpQualifiedNames.length) {
@@ -687,8 +688,9 @@ async function findReferencesInternal(
     }
   }
 
+  const receiverProofUnavailableFiles = new Map<string, FileId>();
   const receiverScannedFiles: FileId[] = [];
-  if (shouldScanVerifiedReferences(def, phpQualifiedNames, parsedContext)) {
+  if (scansReceiverReferences) {
     for (const fileId of Array.from(index.byFile.values(), (module) => module.file).sort((left, right) =>
       left.localeCompare(right),
     )) {
@@ -709,6 +711,7 @@ async function findReferencesInternal(
         (params, parsed) => goToDefinition(index, params, parsed),
         remainingReferences,
         verifiedReferenceFilter(fileId),
+        (unavailableFile) => receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
       );
       for (const { range, provenance, via } of ranges) {
         if (hasReachedCollectionLimit()) break;
@@ -761,6 +764,7 @@ async function findReferencesInternal(
     candidateFiles,
     scannedFiles,
     truncated,
+    strategyUnavailableFiles: [...receiverProofUnavailableFiles.values()],
   });
 
   return {

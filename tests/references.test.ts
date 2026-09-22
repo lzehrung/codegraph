@@ -4227,6 +4227,93 @@ describe("Find References: Python receiver member resolution", () => {
   });
 });
 
+describe("Find References: keyword receiver scope and coverage", () => {
+  it("keeps TypeScript static and instance members separate for the same spelling", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-keyword-scope-refs-"));
+    try {
+      const file = path.join(root, "box.ts").replace(/\\/g, "/");
+      const source = [
+        "class StaticBox {",
+        "  static run(): void {}",
+        "  callInstance(): void { this.run(); }",
+        "  static callStatic(): void { this.run(); }",
+        "}",
+        "class InstanceBox {",
+        "  run(): void {}",
+        "  callInstance(): void { this.run(); }",
+        "  static callStatic(): void { this.run(); }",
+        "}",
+      ].join("\n");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+
+      const staticRefs = await testFindReferences(index, file, 2, source.split("\n")[1]!.indexOf("run") + 1, 2);
+      if (staticRefs.status === "ok") {
+        expect(staticRefs.references.map((reference) => reference.range.start.line)).toEqual([2, 4]);
+        expect(staticRefs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+
+      const instanceRefs = await testFindReferences(index, file, 7, source.split("\n")[6]!.indexOf("run") + 1, 2);
+      if (instanceRefs.status === "ok") {
+        expect(instanceRefs.references.map((reference) => reference.range.start.line)).toEqual([7, 8]);
+        expect(instanceRefs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial coverage when JavaScript dynamic this prevents receiver proof", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-js-dynamic-this-refs-"));
+    try {
+      const file = path.join(root, "box.js").replace(/\\/g, "/");
+      const source = [
+        "class Box {",
+        "  helper() {}",
+        "  run() {",
+        "    function nested() { this.helper(); }",
+        "    const arrow = () => this.helper();",
+        "  }",
+        "}",
+      ].join("\n");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const refs = await testFindReferences(index, file, 2, source.split("\n")[1]!.indexOf("helper") + 1, 2);
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual([2, 5]);
+        expect(refs.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["strategy_unavailable"],
+          affectedFiles: [file],
+        });
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds an inherited C++ member from an out-of-line this call", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-out-of-line-refs-"));
+    try {
+      const file = path.join(root, "box.cpp").replace(/\\/g, "/");
+      const source = [
+        "class Base { public: void helper() {} };",
+        "class Child : public Base { public: void run(); };",
+        "void Child::run() { this->helper(); }",
+      ].join("\n");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const refs = await testFindReferences(index, file, 1, source.split("\n")[0]!.indexOf("helper") + 1, 2);
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual([1, 3]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Find References: PHP unproven receiver is not a bare-name hit", () => {
   it("does not treat $unknown->helper() as a reference to an imported helper", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-misattr-refs-"));

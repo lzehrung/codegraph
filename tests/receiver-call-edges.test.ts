@@ -120,6 +120,108 @@ nativeDescribe("receiver method call edges", () => {
     expect(callsiteTexts(graph, plain, viaThis, TS_REPORTER_FIXTURE)).toEqual(["plain"]);
   });
 
+  it("keeps JavaScript arrow this calls on the class while rejecting nested dynamic this", async () => {
+    const files: Record<string, string> = {
+      "box.js": [
+        "export class Box {",
+        "  helper() {}",
+        "  run() {",
+        "    function nested() { this.helper(); }",
+        "    const arrow = () => this.helper();",
+        "    arrow();",
+        "  }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-js-this-boundary-", files);
+    const helper = nodeIn(graph, "box.js", "helper");
+    const arrow = [...graph.nodes.values()].find((node) => node.name === "arrow")?.id;
+    expect(arrow).toBeDefined();
+    const sites = graph.edges
+      .filter((edge) => edge.label === "calls" && edge.from === arrow && edge.to === helper)
+      .map((edge) => edge.site?.range.start.line);
+    expect(sites).toEqual([5]);
+  });
+
+  it("walks TypeScript inheritance when this names no member on the derived class", async () => {
+    const files: Record<string, string> = {
+      "base.ts": "export class Base { helper(): void {} }\n",
+      "derived.ts": [
+        'import { Base } from "./base";',
+        "export class Derived extends Base { run(): void { this.helper(); } }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-ts-inherited-", files);
+    const helper = nodeIn(graph, "base.ts", "helper");
+    const run = nodeIn(graph, "derived.ts", "run");
+    expect(callsiteTexts(graph, helper, run, files)).toEqual(["helper"]);
+  });
+
+  it("does not turn names inside a computed TypeScript extends expression into inheritance", async () => {
+    const files: Record<string, string> = {
+      "box.ts": [
+        "class Base { helper(): void {} }",
+        "function mixin<T>(base: T): T { return base; }",
+        "class Derived extends mixin(Base) { run(): void { super.helper(); } }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-ts-computed-base-", files);
+    const helper = nodeIn(graph, "box.ts", "helper");
+    const run = nodeIn(graph, "box.ts", "run");
+    const base = [...graph.nodes.values()].find((node) => node.name === "Base" && node.kind === "class");
+    const derived = [...graph.nodes.values()].find((node) => node.name === "Derived" && node.kind === "class");
+    expect(base).toBeDefined();
+    expect(derived).toBeDefined();
+    expect(
+      graph.edges.some((edge) => edge.label === "extends" && edge.from === derived?.id && edge.to === base?.id),
+    ).toBe(false);
+    expect(callsiteTexts(graph, helper, run, files)).toBeNull();
+  });
+
+  it("uses the enclosing TypeScript and Swift member to scope keyword receivers", async () => {
+    const cases = [
+      {
+        prefix: "cg-receiver-ts-static-this-",
+        file: "box.ts",
+        source: [
+          "class Box {",
+          "  static load(): void {}",
+          "  static boot(): void { this.load(); }",
+          "  run(): void { this.load(); }",
+          "}",
+        ].join("\n"),
+        target: "load",
+        staticCaller: "boot",
+        instanceCaller: "run",
+      },
+      {
+        prefix: "cg-receiver-swift-static-self-",
+        file: "Box.swift",
+        source: [
+          "class Box {",
+          "  class func load() {}",
+          "  class func boot() { self.load() }",
+          "  func run() { self.load() }",
+          "}",
+        ].join("\n"),
+        target: "load",
+        staticCaller: "boot",
+        instanceCaller: "run",
+      },
+    ];
+    const failures: string[] = [];
+    for (const testCase of cases) {
+      const files = { [testCase.file]: testCase.source };
+      const graph = await buildFixture(testCase.prefix, files);
+      const target = nodeIn(graph, testCase.file, testCase.target);
+      const staticCaller = nodeIn(graph, testCase.file, testCase.staticCaller);
+      const instanceCaller = nodeIn(graph, testCase.file, testCase.instanceCaller);
+      if (!callsiteTexts(graph, target, staticCaller, files)) failures.push(`${testCase.file}:static`);
+      if (callsiteTexts(graph, target, instanceCaller, files)) failures.push(`${testCase.file}:instance`);
+    }
+    expect(failures).toEqual([]);
+  });
+
   it("keeps the free-function control case resolved", async () => {
     const graph = await buildFixture("cg-receiver-ts-free-", TS_REPORTER_FIXTURE);
     const targetFn = nodeIn(graph, "lib2.ts", "targetFn");
@@ -633,7 +735,8 @@ nativeDescribe("receiver method call edge language parity", () => {
     const files: Record<string, string> = {
       "box.cpp": [
         "class CppBase { public: void cpp_helper() {} };",
-        "class CppChild : public CppBase { public: void cpp_run() { this->cpp_helper(); } };",
+        "class CppChild : public CppBase { public: void cpp_run(); };",
+        "void CppChild::cpp_run() { this->cpp_helper(); }",
       ].join("\n"),
     };
     const graph = await buildFixture("cg-receiver-cpp-", files);
@@ -1520,5 +1623,22 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
     expect(recordedCalls(graph, candidate({ ownerId: "Child", viaSupertypes: true }))).toEqual([
       { from: "leaf.go", to: "base.run" },
     ]);
+  });
+  it("removes an exact call edge when deferred receiver proof resolves a different callee", () => {
+    const graph: SymbolGraph = {
+      nodes: new Map([
+        ["Mid", node("Mid", "Mid", { kind: "class" })],
+        ["leaf.go", node("leaf.go", "go")],
+        ["mid.run", node("mid.run", "run", { memberArity: 0 })],
+        ["wrong.run", node("wrong.run", "run", { memberArity: 0 })],
+      ]),
+      edges: [
+        { from: "leaf.go", to: "Mid", label: "member_of" },
+        { from: "mid.run", to: "Mid", label: "member_of" },
+        { from: "leaf.go", to: "wrong.run", label: "calls", site },
+      ],
+    };
+    expect(recordedCalls(graph, candidate())).toEqual([]);
+    expect(graph.edges.some((edge) => edge.label === "calls" && edge.from === "leaf.go")).toBe(false);
   });
 });

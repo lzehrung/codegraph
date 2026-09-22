@@ -24,7 +24,11 @@ import {
 } from "./symbol-graph-detailed/edge-passes.js";
 import { buildImportAliasMaps } from "./symbol-graph-detailed/import-aliases.js";
 import { createMemberChainResolver } from "./symbol-graph-detailed/member-chains.js";
-import { emitReceiverCallEdges, type ReceiverCallCandidate } from "./symbol-graph-detailed/receiver-calls.js";
+import {
+  emitReceiverCallEdges,
+  type ReceiverCallCandidate,
+  type ReceiverMemberScope,
+} from "./symbol-graph-detailed/receiver-calls.js";
 
 type BuildDetailedSymbolGraphOptions = {
   scope?: "all" | "imported";
@@ -134,6 +138,7 @@ export async function buildSymbolGraphDetailed(
     resolveExportDef(file, exportedName);
 
   const receiverCalls: ReceiverCallCandidate[] = [];
+  const receiverMemberScopes = new Map<string, ReceiverMemberScope>();
   // Every receiver call resolves to a callable declared somewhere in the project, so
   // this set short-circuits receiver typing for calls into runtime and dependency
   // APIs, which dominate real call sites. Built on first use because a scoped graph
@@ -253,6 +258,7 @@ export async function buildSymbolGraphDetailed(
         resolveMemberChainTarget,
         recordEdge,
         receiverCalls,
+        receiverMemberScopes,
         hasCallableNamed,
       };
       emitPythonDecoratorEdges(edgePassContext, tree.rootNode);
@@ -270,7 +276,7 @@ export async function buildSymbolGraphDetailed(
       logWithLevel(opts?.logLevel, "warn", `Warning: Failed to build detailed symbol edges for ${file}:`, error);
     }
   }
-  emitReceiverCallEdges({ nodes, edges }, receiverCalls, recordEdge);
+  emitReceiverCallEdges({ nodes, edges }, receiverCalls, recordEdge, receiverMemberScopes);
   emitMemberImplementationEdges({ nodes, edges }, recordEdge);
 
   if (skippedSyntaxTreeFiles > 0) {

@@ -3533,6 +3533,30 @@ describe("Supertype keyword member navigation", () => {
     }
   });
 
+  it("does not infer a superclass from inside a computed TypeScript extends expression", async () => {
+    const source = [
+      "class Base {",
+      "  helper(): number { return 1; }",
+      "}",
+      "function mixin<T>(base: T): T { return base; }",
+      "class Derived extends mixin(Base) {",
+      "  run(): number { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-computed-super-goto-", { "box.ts": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["box.ts"]!,
+        line: 6,
+        column: columnOf(source, 6, "helper()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not fall back to a same-named module-level function for super.missing()", async () => {
     const source = [
       "function missing(): number { return 0; }",

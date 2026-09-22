@@ -747,7 +747,7 @@ if (refs.status === "ok") {
 }
 ```
 
-A successful `FindReferencesResult` always includes `referenceCoverage`. `complete` means that every statically linked candidate known to the current index was checked and the search was not capped. `partial` reports `parser_degraded`, `unresolved_import`, or `truncated`, with `affectedFiles` when a known file caused the incomplete scan. The `indexed_candidates` scope does not certify dynamic imports or bare imports that the index cannot associate with the target. Definition-selection `provenance` does not imply complete reference coverage.
+A successful `FindReferencesResult` always includes `referenceCoverage`. `complete` means that every statically linked candidate known to the current index was checked and the search was not capped. `partial` reports `parser_degraded`, `unresolved_import`, `strategy_unavailable`, or `truncated`, with `affectedFiles` when a known file caused the incomplete scan. `strategy_unavailable` means that an applicable reference strategy could not prove all candidate sites, such as a member access with an unknown receiver type. The `indexed_candidates` scope does not certify dynamic imports or bare imports that the index cannot associate with the target. Definition-selection `provenance` does not imply complete reference coverage.
 
 The result keeps the definition site as a reference. Import declarations are also references. `Reference.via.importBinding` is `imported` for the source-side name and `local` for a distinct alias or default binding. The root and `indexer` entry points export `ImportBindingRole`, `ReferenceCoverage`, and `ReferenceCoverageReason`.
 

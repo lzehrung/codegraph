@@ -15,16 +15,20 @@ import {
 import {
   keywordReceiverKind,
   MEMBER_ACCESS_ROWS,
-  ownReceiverMemberScope,
   supportsReceiverMemberNavigation,
 } from "../util/member-access-tables.js";
 import { declarationMemberArity } from "../graphs/symbol-graph-detailed/ast.js";
 import {
   CALL_ARGUMENT_NODE_TYPES,
   callArgumentCount,
+  cppOutOfLineClassName,
+  declarationNodeIsStatic,
   declaresMembers,
   hasStaticMemberDistinction,
   nearestMemberContainer,
+  keywordReceiverCrossesDynamicBoundary,
+  isUnprovenHeritageExpression,
+  keywordReceiverMemberScope,
   receiverConstructorExpression,
   unwrapNamedType,
   type ReceiverMemberScope,
@@ -207,27 +211,17 @@ export async function resolveMemberAccessDefinition(params: {
         confidence: "medium",
       });
     }
+    if (receiverKind && keywordReceiverCrossesDynamicBoundary(sup, node)) {
+      return null;
+    }
+    const keywordScope = receiverKind ? keywordReceiverMemberScope(sup, receiverName, node, source) : "any";
     if (receiverKind === "own") {
-      // JS/TS/TSX `this` is dynamic across ordinary/named functions. An arrow keeps the
-      // enclosing method's `this`, including static/type receivers; a nested `function`
-      // does not, so class-member lookup through that boundary is unproven.
-      if (isJsTsLanguage(sup.id) && jsTsOwnKeywordCrossesDynamicThis(node)) {
-        return null;
-      }
-      const keywordScope = hasStaticMemberDistinction(sup.id)
-        ? (ownReceiverMemberScope(sup.id, receiverName) ?? "any")
-        : "any";
-      // JS/TS `this` and Swift `self` name the type from inside a static or class member, so the
-      // enclosing declaration upgrades the keyword from instance scope to type scope. Instance
-      // contexts keep resolving instance members only.
-      const memberScope =
-        keywordScope === "instance" && nodeInStaticMemberContext(node, source) ? "static" : keywordScope;
       const memberDef = await resolveKeywordReceiverMember(
         index,
         mod,
         node,
         member,
-        memberScope,
+        keywordScope,
         false,
         keywordCallArgumentCount(memberNode),
       );
@@ -238,13 +232,32 @@ export async function resolveMemberAccessDefinition(params: {
           confidence: "medium",
         });
       }
+      const outOfLineClassName = cppOutOfLineClassName(node, source, sup);
+      if (outOfLineClassName) {
+        const outOfLineMember = await resolveKeywordReceiverMember(
+          index,
+          mod,
+          node,
+          member,
+          keywordScope,
+          false,
+          keywordCallArgumentCount(memberNode),
+          { name: outOfLineClassName, support: sup },
+        );
+        if (outOfLineMember) {
+          return okGoToResult(index, outOfLineMember, {
+            resolution: "exact",
+            confidence: "high",
+          });
+        }
+      }
     } else if (receiverKind === "supertype") {
       const memberDef = await resolveKeywordReceiverMember(
         index,
         mod,
         node,
         member,
-        "any",
+        keywordScope,
         true,
         keywordCallArgumentCount(memberNode),
       );
@@ -388,6 +401,7 @@ function collectDeclaredBaseTypes(container: SyntaxNodeLike, source: string, sup
   const addQualified = (base: string, path: string[], invoked: boolean): void => {
     if (!base || path.length === 0) return;
     const key = `${base}.${path.join(".")}`;
+
     if (seen.has(key)) return;
     seen.add(key);
     bases.push(invoked ? { kind: "qualified", base, path, invoked } : { kind: "qualified", base, path });
@@ -403,6 +417,9 @@ function collectDeclaredBaseTypes(container: SyntaxNodeLike, source: string, sup
       }
       return;
     }
+    // A computed heritage expression can name the runtime base factory rather than a class.
+    // Its descendants do not prove an inheritance edge.
+    if (isUnprovenHeritageExpression(core)) return;
     const unwrapped = unwrapNamedType(core, sup);
     if (unwrapped) {
       addSimple(sliceText(unwrapped, source), invoked);
@@ -588,8 +605,14 @@ async function resolveKeywordReceiverMember(
   memberScope: ReceiverMemberScope,
   startAtAncestor: boolean,
   knownArgumentCount?: number,
+  explicitClass?: { name: string; support: LanguageSupport },
 ): Promise<SymbolDef | undefined> {
-  const current = await keywordClassRefFromNode(index, mod, node);
+  const explicitClassDef = explicitClass
+    ? resolveNamedMemberContainer(index, mod, explicitClass.name, explicitClass.support.normalizeIdentifier)
+    : undefined;
+  const current = explicitClassDef
+    ? await keywordClassRefFromDef(index, explicitClassDef)
+    : await keywordClassRefFromNode(index, mod, node);
   if (!current) return undefined;
   let level = startAtAncestor
     ? await baseRefsFromContainer(index, current.module, current.container, current.context.source, current.context.sup)
@@ -816,82 +839,6 @@ function matchesReceiverMemberScope(
   return hasStaticModifier(local, targetContext, container) === (memberScope === "static");
 }
 
-function nodeDeclaresStatic(node: SyntaxNodeLike, source: string): boolean {
-  if (node.type === "static" || node.type === "static_modifier") return true;
-  if (node.type === "storage_class_specifier" || node.type === "modifier" || node.type === "property_modifier") {
-    return sliceText(node, source).trim() === "static";
-  }
-  if (node.type === "class") {
-    // Swift writes `class func` type members with a bare `class` token. A class declaration's
-    // own `class` keyword sits under the container node, never under a member declaration.
-    const parentType = node.parent?.type;
-    return (
-      parentType === "function_declaration" ||
-      parentType === "property_declaration" ||
-      parentType === "subscript_declaration"
-    );
-  }
-  if (node.type === "modifiers") {
-    for (let childIndex = 0; ; childIndex += 1) {
-      const child = node.child(childIndex);
-      if (!child) break;
-      if (nodeDeclaresStatic(child, source)) return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Whether the member declaration enclosing `node` carries a `static` (or Swift `class`)
- * modifier. Keyword receivers like `this` and `self` denote the type from such a member.
- */
-function nodeInStaticMemberContext(node: SyntaxNodeLike, source: string): boolean {
-  const container = nearestMemberContainer(node);
-  if (!container) return false;
-  let current: SyntaxNodeLike | null = node;
-  while (current && current !== container) {
-    for (let childIndex = 0; ; childIndex += 1) {
-      const child = current.child(childIndex);
-      if (!child) break;
-      if (nodeDeclaresStatic(child, source)) return true;
-    }
-    current = current.parent;
-  }
-  return false;
-}
-
-/**
- * Functions whose `this` is their own call-site receiver. The first such node on the path
- * owns `this`: a direct class `method_definition` keeps class-member lookup, while a nested
- * object method or ordinary function makes that lookup unproven. `arrow_function` is omitted
- * because it preserves the enclosing lexical `this`.
- */
-const JS_TS_DYNAMIC_THIS_FUNCTION_TYPES: Record<string, true> = {
-  function: true,
-  function_declaration: true,
-  function_expression: true,
-  generator_function: true,
-  generator_function_declaration: true,
-  method_definition: true,
-};
-
-function jsTsOwnKeywordCrossesDynamicThis(node: SyntaxNodeLike): boolean {
-  const container = nearestMemberContainer(node);
-  if (!container) return false;
-  let current: SyntaxNodeLike | null = node.parent;
-  while (current && current !== container) {
-    if (JS_TS_DYNAMIC_THIS_FUNCTION_TYPES[current.type]) {
-      const directlyOwnedClassMethod =
-        current.type === "method_definition" &&
-        current.parent?.type === "class_body" &&
-        current.parent.parent?.startIndex === container.startIndex;
-      return !directlyOwnedClassMethod;
-    }
-    current = current.parent;
-  }
-  return false;
-}
-
 const KEYWORD_CALLEE_FIELD_NAMES = ["function", "callee", "called_expression", "expression"];
 
 /**
@@ -938,11 +885,7 @@ function hasStaticModifier(local: SymbolDef, targetContext: ParsedFileContext, c
   };
   let current: SyntaxNodeLike | null = targetContext.tree.rootNode.descendantForPosition(position, position);
   while (current && current !== container) {
-    for (let childIndex = 0; ; childIndex += 1) {
-      const child = current.child(childIndex);
-      if (!child) break;
-      if (nodeDeclaresStatic(child, targetContext.source)) return true;
-    }
+    if (declarationNodeIsStatic(current, targetContext.source)) return true;
     current = current.parent;
   }
   return false;

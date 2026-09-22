@@ -93,7 +93,12 @@ function normalizeMaxReferences(maxReferences: number | undefined): number | und
   return maxReferences;
 }
 
-const COVERAGE_REASON_ORDER: ReferenceCoverageReason[] = ["parser_degraded", "unresolved_import", "truncated"];
+const COVERAGE_REASON_ORDER: ReferenceCoverageReason[] = [
+  "parser_degraded",
+  "unresolved_import",
+  "strategy_unavailable",
+  "truncated",
+];
 
 function cloneCoverage(coverage: ReferenceCoverage): ReferenceCoverage {
   return {

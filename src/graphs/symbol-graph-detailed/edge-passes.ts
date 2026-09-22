@@ -3,6 +3,7 @@ import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import { sliceText, toRange } from "../../util/ast.js";
 import { getMemberAccessParts } from "../../util/member-access.js";
+import { keywordReceiverKind } from "../../util/member-access-tables.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { defNodeId, nodeForDef, type SymbolGraph } from "../symbol-graph.js";
 import type { DetailedClassNode, DetailedFunctionNode } from "./ast.js";
@@ -11,12 +12,16 @@ import {
   CALL_ARGUMENT_NODE_TYPES,
   callArgumentCount,
   classifyReceiver,
+  declarationNodeIsStatic,
+  cppOutOfLineClassName,
   declaresMembers,
+  isUnprovenHeritageExpression,
   nearestMemberContainer,
   receiverCallAccess,
   type ReceiverCallAccess,
-  type ReceiverProof,
   type ReceiverCallCandidate,
+  type ReceiverMemberScope,
+  type ReceiverProof,
 } from "./receiver-calls.js";
 
 type EdgePassContext = {
@@ -37,6 +42,8 @@ type EdgePassContext = {
   recordEdge: (fromId: string, toId: string, label?: string, site?: SymbolGraph["edges"][number]["site"]) => boolean;
   /** Receiver calls whose target needs the completed graph; resolved after every module. */
   receiverCalls: ReceiverCallCandidate[];
+  /** Proven static or instance scope for callable members, keyed by graph node id. */
+  receiverMemberScopes: Map<string, ReceiverMemberScope>;
   /** Whether any indexed project file declares a callable with this name. */
   hasCallableNamed: (name: string) => boolean;
 };
@@ -197,6 +204,10 @@ export function emitMemberOwnershipEdges(
     const memberId = ensureNode(context, fn.def);
     markImplementationTarget(context, memberId, fn.node, fn.def);
     markMemberArity(context, memberId, fn.node);
+    context.receiverMemberScopes.set(
+      memberId,
+      declarationNodeIsStatic(fn.node, context.source) ? "static" : "instance",
+    );
     recordDefEdge(context, memberId, ownerDef, "member_of");
   }
 }
@@ -282,8 +293,8 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
     "struct_expression",
     "composite_literal",
   ]);
-  // Receiver typing and lexical member lookup are only needed once a receiver call
-  // fails the cheaper identifier and import-chain resolution, so both are lazy.
+  // Receiver typing and lexical member lookup are initialized only for receiver calls.
+  const receiverProofs = new Map<string, ReceiverProof>();
   let membersByContainer: Map<number, DetailedFunctionNode[]> | undefined;
   const lexicalMembers = (container: SyntaxNodeLike): DetailedFunctionNode[] => {
     if (!membersByContainer) {
@@ -298,7 +309,6 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
     }
     return membersByContainer.get(container.startIndex) ?? [];
   };
-  const receiverProofs = new Map<string, ReceiverProof>();
 
   for (const fn of functionNodes) {
     const fromId = ensureNode(context, fn.def);
@@ -385,27 +395,46 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
           memberName,
           argumentCount,
           site,
+          memberScope: binding.memberScope,
         });
         return;
       }
-
       if (binding.kind === "own-type") {
         const container = nearestMemberContainer(fn.node);
         const declared = container
-          ? lexicalMembers(container).filter((candidate) => candidate.def.localName === memberName)
+          ? lexicalMembers(container).filter((candidate) => {
+              if (candidate.def.localName !== memberName) return false;
+              if (binding.memberScope === "any") return true;
+              return declarationNodeIsStatic(candidate.node, context.source) === (binding.memberScope === "static");
+            })
           : [];
         if (declared.length === 1) {
           recordDefEdge(context, fromId, declared[0]!.def, "calls", access.property);
-          return;
         }
       }
+
+      const receiverContainer = nearestMemberContainer(access.accessNode);
+      const receiverContainerName = receiverContainer?.childForFieldName("name");
+      let receiverOwnerDef = receiverContainerName
+        ? context.moduleEntry.locals.find(
+            (local) => local.range.start.index === receiverContainerName.startIndex && declaresMembers(local),
+          )
+        : undefined;
+      if (!receiverOwnerDef && binding.kind === "own-type") {
+        const outOfLineClassName = cppOutOfLineClassName(fn.node, context.source, context.sup);
+        if (outOfLineClassName) {
+          receiverOwnerDef = resolveNamedType(context, outOfLineClassName, fn.node) ?? undefined;
+        }
+      }
+
       context.receiverCalls.push({
         callerId: fromId,
-        ownerId: null,
+        ownerId: receiverOwnerDef ? ensureNode(context, receiverOwnerDef) : null,
         viaSupertypes: binding.kind === "supertype",
         memberName,
         argumentCount,
         site,
+        memberScope: binding.memberScope,
       });
     };
 
@@ -418,7 +447,12 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
     const resolveCallTarget = (node: SyntaxNodeLike, callee: SyntaxNodeLike | null): void => {
       const access = receiverCallAccess(context.sup, node, callee);
       if (access) {
-        if (!tryResolveChain(context, access.accessNode, fromId, "calls")) recordReceiverCall(node, access);
+        const receiverName = sliceText(access.receiver, context.source);
+        if (keywordReceiverKind(context.sup.id, receiverName)) {
+          recordReceiverCall(node, access);
+        } else if (!tryResolveChain(context, access.accessNode, fromId, "calls")) {
+          recordReceiverCall(node, access);
+        }
         return;
       }
       if (callee) tryResolveNode(context, callee, fromId, "calls");
@@ -563,6 +597,7 @@ function narrowBaseSpecifierNode(node: SyntaxNodeLike): SyntaxNodeLike {
 
 /** Collect one type identifier per direct base or interface specifier. */
 function collectBaseSpecifierIdentifiers(node: SyntaxNodeLike, sup: LanguageSupport, out: SyntaxNodeLike[]): void {
+  if (isUnprovenHeritageExpression(node)) return;
   if (BASE_TYPE_IGNORED_TYPES[node.type]) return;
   const narrowed = narrowBaseSpecifierNode(node);
   if (isIdentifierType(sup, narrowed.type) || narrowed.type === "type_identifier") {
