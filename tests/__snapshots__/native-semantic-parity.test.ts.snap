@@ -331,7 +331,6 @@ exports[`native semantic coverage > keeps native semantics stable for representa
       "bracketed-consumer.php:3",
       "bracketed-consumer.php:5",
       "bracketed-qualified-consumer.php:3",
-      "bracketed-qualified-consumer.php:3",
       "multi-namespace/Library.php:8",
     ],
     "status": "ok",
