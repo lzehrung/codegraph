@@ -57,8 +57,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * with reference return types in their enclosing scope, rejects JavaScript and TypeScript `this`
  * across dynamic function boundaries, and stops an ambiguous shallow ancestor lookup instead of
  * selecting a shared grandparent.
+ * Epoch 25 shares C function occurrences between a file-scope prototype and its definition.
  */
-export const CORE_ALGORITHM_EPOCH = 24;
+export const CORE_ALGORITHM_EPOCH = 25;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

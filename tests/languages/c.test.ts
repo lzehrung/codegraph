@@ -745,3 +745,42 @@ describe("C native queries without a projected tree", () => {
     expect(noTree).toContain("run");
   });
 });
+
+describe("C function redeclarations", () => {
+  it("shares call occurrences between a function prototype and definition", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-prototype-references-"));
+    try {
+      const file = path.join(root, "probe.c").replace(/\\/g, "/");
+      const source = [
+        "int add(int left, int right);",
+        "",
+        "int run(void) {",
+        "  return add(1, 2);",
+        "}",
+        "",
+        "int add(int left, int right) {",
+        "  return left + right;",
+        "}",
+        "",
+      ].join("\n");
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const prototypeReferences = await findReferences(index, { file, line: 1, column: 5 });
+      expect(prototypeReferences.status).toBe("ok");
+      if (prototypeReferences.status === "ok") {
+        expect(prototypeReferences.references.map((reference) => reference.range.start.line).sort()).toEqual([1, 4]);
+        expect(prototypeReferences.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+
+      const definitionReferences = await findReferences(index, { file, line: 7, column: 5 });
+      expect(definitionReferences.status).toBe("ok");
+      if (definitionReferences.status === "ok") {
+        expect(definitionReferences.references.map((reference) => reference.range.start.line).sort()).toEqual([4, 7]);
+        expect(definitionReferences.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

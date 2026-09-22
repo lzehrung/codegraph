@@ -120,6 +120,14 @@ export function buildScopeIndexFromSource(
 
   const addBinding = (target: Scope, nameNode: SyntaxNodeLike, kind: BindingKind): void => {
     const binding = buildBinding(nameNode, kind);
+    const existing = target.map.get(binding.canonicalName);
+    if (support.id === "c" && kind === "function" && existing?.kind === "function") {
+      // C prototypes and their definitions are declarations of one function. Keep each
+      // declaration addressable while sharing the occurrence list collected for that name.
+      binding.occurrences = existing.occurrences;
+      extraBindings.push(binding);
+      return;
+    }
     target.map.set(binding.canonicalName, binding);
   };
 
