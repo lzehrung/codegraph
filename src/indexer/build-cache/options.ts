@@ -71,8 +71,10 @@ export const CORE_ALGORITHM_EPOCH = 24;
  * Epoch 8 makes implicit member scope opt-in per language, adds C# method and constructor
  * parameter locals, Java constructor and spread-parameter declaration names, PHP block
  * scope, Ruby query-driven locals, JavaScript type-only imports, and Ruby and PHP
+ * dynamic-import heuristics.
+ * Epoch 9 captures C++ functions whose return type is a reference.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 8;
+export const LANGUAGE_BEHAVIOR_EPOCH = 9;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];
