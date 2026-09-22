@@ -845,6 +845,63 @@ describe("C++ quoted include resolution", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps qualified out-of-line members out of free-function scope", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-out-of-line-scope-"));
+    const file = path.join(root, "main.cpp");
+    const lines = [
+      "int f() { return 1; }",
+      "class A { public: static int f(); };",
+      "int A::f() { return 2; }",
+      "int use_free() { return f(); }",
+      "int use_member() { return A::f(); }",
+      "",
+    ];
+    try {
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const freeCall = await goToDefinition(index, {
+        file,
+        line: 4,
+        column: lines[3]!.indexOf("f()") + 1,
+      });
+      expect(freeCall.status).toBe("ok");
+      if (freeCall.status === "ok") {
+        expect(freeCall.definition.range.start.line).toBe(1);
+      }
+
+      const memberCall = await goToDefinition(index, {
+        file,
+        line: 5,
+        column: lines[4]!.lastIndexOf("f()") + 1,
+      });
+      expect(memberCall.status).toBe("ok");
+      if (memberCall.status === "ok") {
+        expect(memberCall.definition.range.start.line).toBe(2);
+      }
+
+      const freeReferences = await findReferences(index, { file, line: 1, column: lines[0]!.indexOf("f()") + 1 });
+      expect(freeReferences.status).toBe("ok");
+      if (freeReferences.status === "ok") {
+        expect(freeReferences.references.map((reference) => reference.range.start.line)).toEqual([1, 4]);
+      }
+
+      const memberReferences = await findReferences(index, {
+        file,
+        line: 3,
+        column: lines[2]!.lastIndexOf("f()") + 1,
+      });
+      expect(memberReferences.status).toBe("ok");
+      if (memberReferences.status === "ok") {
+        expect(memberReferences.references.map((reference) => reference.range.start.line)).toEqual(
+          expect.arrayContaining([3, 5]),
+        );
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("C++ reference-returning free functions", () => {

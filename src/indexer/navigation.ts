@@ -64,6 +64,7 @@ import {
 import { findSqlReferences, goToSqlDefinition } from "../sql/navigation.js";
 
 export { resolveExport, resolveImported } from "./navigation-resolve.js";
+const CPP_MEMBER_CONTAINER_TYPES = new Set(["class_specifier", "struct_specifier", "union_specifier"]);
 
 function phpImportTypeAtPosition(
   imports: readonly ImportBinding[],
@@ -941,6 +942,7 @@ function isReceiverMemberDefinition(def: SymbolDef, parsedContext: ParsedFileCon
     column: start.column - 1,
   };
   let current: SyntaxNodeLike | null = parsedContext.tree.rootNode.descendantForPosition(position, position);
+  let sawCppFunction = false;
   let sawRustImplFunction = false;
   while (current) {
     if (
@@ -951,6 +953,10 @@ function isReceiverMemberDefinition(def: SymbolDef, parsedContext: ParsedFileCon
       current.type === "method"
     ) {
       return true;
+    }
+    if (parsedContext.sup.id === "cpp") {
+      if (current.type === "function_definition") sawCppFunction = true;
+      if (sawCppFunction && CPP_MEMBER_CONTAINER_TYPES.has(current.type)) return true;
     }
     if (parsedContext.sup.id === "rust" && current.type === "function_item") {
       sawRustImplFunction = true;

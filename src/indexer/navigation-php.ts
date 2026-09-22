@@ -270,9 +270,22 @@ export function normalizePhpQualifiedReference(
   return `${currentNamespace}\\${relativeSuffix}`;
 }
 
+const PHP_CLASS_REFERENCE_CONTEXTS = new Set(["named_type", "base_clause", "class_interface_clause"]);
+
+function containsNode(container: SyntaxNodeLike, node: SyntaxNodeLike): boolean {
+  return container.startIndex <= node.startIndex && container.endIndex >= node.endIndex;
+}
+
 export function inferPhpQualifiedReferenceImportType(node: SyntaxNodeLike): "class" | "function" | undefined {
   let current: SyntaxNodeLike | null = node;
   while (current) {
+    if (PHP_CLASS_REFERENCE_CONTEXTS.has(current.type)) {
+      return "class";
+    }
+    if (current.type === "attribute") {
+      const attributeName = current.childForFieldName("name") ?? current.namedChildren[0];
+      if (attributeName && containsNode(attributeName, node)) return "class";
+    }
     if (current.type === "object_creation_expression") {
       return "class";
     }

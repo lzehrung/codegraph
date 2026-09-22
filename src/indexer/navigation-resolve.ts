@@ -526,20 +526,26 @@ export function resolveImported(
   const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile) return null;
 
-  let preferredKind: SymbolKind | undefined;
+  const preferredKinds: SymbolKind[] = [];
   if (imp.kind === "named") {
     if (imp.phpImportType === "function") {
-      preferredKind = SymbolKind.Function;
+      preferredKinds.push(SymbolKind.Function);
     } else if (imp.phpImportType === "class") {
-      preferredKind = SymbolKind.Class;
+      preferredKinds.push(SymbolKind.Class, SymbolKind.Interface, SymbolKind.TypeAlias);
     } else if (imp.phpImportType === "const") {
-      preferredKind = SymbolKind.Variable;
+      preferredKinds.push(SymbolKind.Variable);
     }
   }
 
-  const hit = resolveExport(index, targetFile, exportedName, {
-    ...(preferredKind ? { preferredKind } : {}),
-  });
+  let hit: ResolvedExport | null = null;
+  if (preferredKinds.length) {
+    for (const preferredKind of preferredKinds) {
+      hit = resolveExport(index, targetFile, exportedName, { preferredKind });
+      if (hit) break;
+    }
+  } else {
+    hit = resolveExport(index, targetFile, exportedName);
+  }
   if (hit?.kind === "resolved") return hit.def;
   if (hit?.kind === "namespace") return { namespace: hit.file };
 

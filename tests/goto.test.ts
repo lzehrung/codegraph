@@ -920,6 +920,63 @@ describe("Go to Definition", () => {
       }
     });
 
+    it("resolves same-spelled aliases as classes in PHP type contexts", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-alias-type-contexts-"));
+      try {
+        const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+        const sourceLines = [
+          "<?php",
+          "namespace App;",
+          "class BaseType {}",
+          "interface ContractType {}",
+          "#[\\Attribute] class RouteType {}",
+          "class ProblemType extends \\Exception {}",
+          "function baseFunction() {}",
+          "function contractFunction() {}",
+          "function routeFunction() {}",
+          "function problemFunction() {}",
+          "",
+        ];
+        const consumerLines = [
+          "<?php",
+          "namespace Client;",
+          "use App\\BaseType as BaseAlias;",
+          "use function App\\baseFunction as BaseAlias;",
+          "use App\\ContractType as ContractAlias;",
+          "use function App\\contractFunction as ContractAlias;",
+          "use App\\RouteType as RouteAlias;",
+          "use function App\\routeFunction as RouteAlias;",
+          "use App\\ProblemType as ProblemAlias;",
+          "use function App\\problemFunction as ProblemAlias;",
+          "function accepts(BASEALIAS $value): basealias { return $value; }",
+          "class Child extends BASEALIAS implements contractalias {}",
+          "#[routealias]",
+          "class Marked {}",
+          "try {} catch (PROBLEMALIAS $error) {}",
+          "",
+        ];
+        await fsp.writeFile(sourceFile, sourceLines.join("\n"), "utf8");
+        await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+        for (const [line, token, fromEnd, expectedLine] of [
+          [11, "BASEALIAS", false, 3],
+          [11, "basealias", true, 3],
+          [12, "BASEALIAS", false, 3],
+          [12, "contractalias", false, 4],
+          [13, "routealias", false, 5],
+          [15, "PROBLEMALIAS", false, 6],
+        ] as const) {
+          const sourceLine = consumerLines[line - 1]!;
+          const tokenIndex = fromEnd ? sourceLine.lastIndexOf(token) : sourceLine.indexOf(token);
+          await testGoToDefinition(index, consumerFile, line, tokenIndex + 1, sourceFile, expectedLine);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("resolves typed, untyped, and static properties to their declarations", async () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "php");
       const propertiesFile = path.join(samplePath, "properties.php").replace(/\\/g, "/");

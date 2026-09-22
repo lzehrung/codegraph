@@ -5,6 +5,7 @@ import { declarationKindToBindingKind } from "./declarations.js";
 import type { LanguageSupport } from "../languages.js";
 import { scopeNodesFor, type ScopeNodeRow } from "./scope-nodes.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import type { Range } from "../types.js";
 import type { ImportBinding } from "./types.js";
 import type { Binding, BindingKind, Scope, ScopeIndex } from "./scope-types.js";
 
@@ -31,6 +32,20 @@ function declaredNameNode(node: SyntaxNodeLike, row: ScopeNodeRow): SyntaxNodeLi
     current =
       current.childForFieldName("declarator") ??
       (current.type === "reference_declarator" ? (current.namedChildren[0] ?? null) : null);
+  }
+  return null;
+}
+
+function qualifiedCppIdentifierForName(nameNode: SyntaxNodeLike, boundary?: SyntaxNodeLike): SyntaxNodeLike | null {
+  let current = nameNode.parent;
+  while (current && current !== boundary) {
+    if (current.type === "qualified_identifier") {
+      const memberName = current.childForFieldName("name");
+      const containsName =
+        memberName && memberName.startIndex <= nameNode.startIndex && memberName.endIndex >= nameNode.endIndex;
+      if (containsName && current.parent?.type !== "qualified_identifier") return current;
+    }
+    current = current.parent;
   }
   return null;
 }
@@ -62,6 +77,8 @@ export function buildScopeIndexFromSource(
   const stack: Scope[] = [rootScope];
   const allScopes: Scope[] = [rootScope];
   const extraBindings: Binding[] = [];
+  const cppQualifiedMemberBindings = new Map<string, Binding[]>();
+  const cppQualifiedMemberOccurrences = new Map<string, Array<{ range: Range; fallback?: Binding }>>();
   const extraFunctionBindingSpans = new Set<string>();
   const preserveExtraFunctionBinding = (binding: Binding): void => {
     const start = binding.def?.start.index;
@@ -348,6 +365,7 @@ export function buildScopeIndexFromSource(
   };
 
   const walk = (node: SyntaxNodeLike) => {
+    let scopedFunctionName: { node: SyntaxNodeLike; qualifiedKey: string } | null = null;
     // A name-registering node puts its name in the *current* (enclosing) scope before the push
     // below creates the node's own scope. C# local functions need that: they are callable from
     // sibling statements in the enclosing method, unlike a JS named function expression's
@@ -360,8 +378,17 @@ export function buildScopeIndexFromSource(
         // and skip only that node below, which keeps one binding per function without hiding
         // `function_declarator > parameter_list` from parameter registration.
         preRegisteredNameSpans.add(nameSpanKey(name));
-        if (row.hoistedFunctionTypes?.has(node.type)) addHoistedDecl(name, "function");
-        else addDecl(name, "function");
+        const qualifiedName = support.id === "cpp" ? qualifiedCppIdentifierForName(name, node) : null;
+        if (qualifiedName) {
+          scopedFunctionName = {
+            node: name,
+            qualifiedKey: sliceText(qualifiedName, source).replace(/\s+/gu, ""),
+          };
+        } else if (row.hoistedFunctionTypes?.has(node.type)) {
+          addHoistedDecl(name, "function");
+        } else {
+          addDecl(name, "function");
+        }
       }
     }
     if (row.classNameTypes?.has(node.type)) {
@@ -391,6 +418,7 @@ export function buildScopeIndexFromSource(
     }
 
     let pushed = false;
+    const createsCppMemberScope = support.id === "cpp" && node.type === "field_declaration_list";
     if (support.createsFunctionScope(node)) {
       const scope: Scope = {
         kind: "function",
@@ -401,11 +429,20 @@ export function buildScopeIndexFromSource(
       stack.push(scope);
       allScopes.push(scope);
       pushed = true;
+      if (scopedFunctionName) {
+        addDecl(scopedFunctionName.node, "function");
+        const binding = scope.map.get(normalizeIdentifier(sliceText(scopedFunctionName.node, source)));
+        if (binding) {
+          const bindings = cppQualifiedMemberBindings.get(scopedFunctionName.qualifiedKey) ?? [];
+          bindings.push(binding);
+          cppQualifiedMemberBindings.set(scopedFunctionName.qualifiedKey, bindings);
+        }
+      }
 
       const params = node.childForFieldName("parameters");
       if (params) addPatternDecls(params, "param");
       collectHoistedDeclarations(node);
-    } else if (support.createsBlockScope(node)) {
+    } else if (support.createsBlockScope(node) || createsCppMemberScope) {
       if (!row.moduleRootTypes?.has(node.type)) {
         const scope: Scope = {
           kind: "block",
@@ -467,9 +504,18 @@ export function buildScopeIndexFromSource(
     }
 
     if (idSet.has(node.type) && !support.isDeclarationName(node)) {
-      const binding = lookup(sliceText(node, source));
-      if (binding) {
-        binding.occurrences.push(toRange(node));
+      const qualifiedName = support.id === "cpp" ? qualifiedCppIdentifierForName(node) : null;
+      if (qualifiedName) {
+        const key = sliceText(qualifiedName, source).replace(/\s+/gu, "");
+        const occurrences = cppQualifiedMemberOccurrences.get(key) ?? [];
+        const fallback = lookup(sliceText(node, source));
+        occurrences.push({ range: toRange(node), ...(fallback ? { fallback } : {}) });
+        cppQualifiedMemberOccurrences.set(key, occurrences);
+      } else {
+        const binding = lookup(sliceText(node, source));
+        if (binding) {
+          binding.occurrences.push(toRange(node));
+        }
       }
     }
 
@@ -492,6 +538,21 @@ export function buildScopeIndexFromSource(
 
   collectHoistedDeclarations(tree.rootNode);
   walk(tree.rootNode);
+  for (const [key, memberBindings] of cppQualifiedMemberBindings) {
+    if (memberBindings.length !== 1) {
+      for (const binding of memberBindings) binding.occurrencesComplete = false;
+      continue;
+    }
+    memberBindings[0]!.occurrences.push(
+      ...(cppQualifiedMemberOccurrences.get(key) ?? []).map((occurrence) => occurrence.range),
+    );
+  }
+  for (const [key, occurrences] of cppQualifiedMemberOccurrences) {
+    if (cppQualifiedMemberBindings.has(key)) continue;
+    for (const occurrence of occurrences) {
+      occurrence.fallback?.occurrences.push(occurrence.range);
+    }
+  }
 
   const bindings = new Map<string, Binding[]>();
   const all: Binding[] = [];
