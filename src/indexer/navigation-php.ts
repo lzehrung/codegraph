@@ -1,5 +1,6 @@
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
+import type { ImportBinding } from "./import-types.js";
 import { sliceText } from "../util/ast.js";
 import { SymbolKind } from "./types.js";
 
@@ -117,27 +118,87 @@ export function comparePhpReferenceNames(
   return "unverified";
 }
 
+export function phpLastIdentifierSegment(name: string): string {
+  const trimmed = name.trim().replace(/^\\+/, "");
+  const suffix = trimmed.startsWith("namespace\\") ? trimmed.slice("namespace\\".length) : trimmed;
+  const parts = suffix.split("\\");
+  return parts[parts.length - 1] ?? suffix;
+}
+
+export type PhpCanonicalNameOptions = {
+  imports?: readonly ImportBinding[];
+  role?: "class" | "function";
+};
+
+function phpUseAliasTarget(
+  firstSegment: string,
+  imports: readonly ImportBinding[] | undefined,
+  role: "class" | "function" | undefined,
+): string | null {
+  if (!imports) return null;
+  const folded = foldPhpIdentifierCase(firstSegment);
+  for (const imp of imports) {
+    if (imp.kind !== "named" || imp.mechanism !== "php") continue;
+    if (role === "function") {
+      if (imp.phpImportType !== "function") continue;
+    } else if (imp.phpImportType && imp.phpImportType !== "class") {
+      continue;
+    }
+    if (foldPhpIdentifierCase(imp.local) !== folded) continue;
+    return imp.from.replace(/^\\+/, "");
+  }
+  return null;
+}
+
 /**
  * The absolute spelling a PHP reference resolves to, using the reference's own file
  * namespace: `\Foo\Bar` is already absolute, `namespace\Foo` prefixes the current
  * namespace, and a bare or partially qualified name is relative to the current namespace.
+ * The first segment of a relative name is resolved against `use` aliases ASCII-case-insensitively
+ * before the current namespace is prefixed. Unqualified function names also keep the global
+ * fallback spelling; class names do not.
  */
+export function canonicalPhpReferenceNames(
+  rawName: string,
+  source: string,
+  tree: SyntaxTreeLike,
+  node: SyntaxNodeLike | null,
+  options?: PhpCanonicalNameOptions,
+): string[] {
+  const trimmed = rawName.trim();
+  if (!trimmed) return [];
+  if (/^\\+/.test(trimmed)) {
+    const absolute = trimmed.replace(/^\\+/, "");
+    return absolute ? [absolute] : [];
+  }
+  const currentNamespace = readPhpNamespaceFromNode(tree, node, source);
+  if (trimmed.startsWith("namespace\\")) {
+    const suffix = trimmed.slice("namespace\\".length);
+    if (!suffix) return currentNamespace ? [currentNamespace] : [];
+    return [currentNamespace ? `${currentNamespace}\\${suffix}` : suffix];
+  }
+  const separator = trimmed.indexOf("\\");
+  const firstSegment = separator < 0 ? trimmed : trimmed.slice(0, separator);
+  const remainder = separator < 0 ? "" : trimmed.slice(separator + 1);
+  const aliasTarget = phpUseAliasTarget(firstSegment, options?.imports, options?.role);
+  if (aliasTarget) {
+    return [remainder ? `${aliasTarget}\\${remainder}` : aliasTarget];
+  }
+  const relative = currentNamespace ? `${currentNamespace}\\${trimmed}` : trimmed;
+  if (options?.role === "function" && currentNamespace && separator < 0) {
+    return [relative, trimmed];
+  }
+  return [relative];
+}
+
 export function canonicalPhpReferenceName(
   rawName: string,
   source: string,
   tree: SyntaxTreeLike,
   node: SyntaxNodeLike | null,
+  options?: PhpCanonicalNameOptions,
 ): string | null {
-  const trimmed = rawName.trim();
-  if (!trimmed) return null;
-  if (/^\\+/.test(trimmed)) return trimmed.replace(/^\\+/, "");
-  const currentNamespace = readPhpNamespaceFromNode(tree, node, source);
-  if (trimmed.startsWith("namespace\\")) {
-    const suffix = trimmed.slice("namespace\\".length);
-    if (!suffix) return currentNamespace;
-    return currentNamespace ? `${currentNamespace}\\${suffix}` : suffix;
-  }
-  return currentNamespace ? `${currentNamespace}\\${trimmed}` : trimmed;
+  return canonicalPhpReferenceNames(rawName, source, tree, node, options)[0] ?? null;
 }
 
 /**

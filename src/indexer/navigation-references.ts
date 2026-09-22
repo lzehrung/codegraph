@@ -6,27 +6,32 @@ import { sliceText, toRange } from "../util/ast.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { sameDef } from "./reference-context.js";
 import {
-  canonicalPhpReferenceName,
+  canonicalPhpReferenceNames,
   comparePhpReferenceNames,
   foldPhpIdentifierCase,
+  getPhpQualifiedReference,
   inferPhpQualifiedReferenceImportType,
   isInsidePhpUseDeclaration,
   isPhpQualifiedReferenceNode,
+  phpLastIdentifierSegment,
   readPhpNamespaceFromRange,
 } from "./navigation-php.js";
 import { getMemberAccessParts, isMemberAccessNode } from "../util/member-access.js";
+import { isKeywordReceiver } from "../util/member-access-tables.js";
+import { receiverConstructorExpression } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
-import type {
-  ExportEntry,
-  ImportBindingRole,
-  ModuleIndex,
-  ProjectIndex,
-  ReferenceCoverage,
-  ReferenceCoverageReason,
-  ResolutionProvenance,
-  SymbolDef,
+import {
+  SymbolKind,
+  type ExportEntry,
+  type ImportBindingRole,
+  type ModuleIndex,
+  type ProjectIndex,
+  type ReferenceCoverage,
+  type ReferenceCoverageReason,
+  type ResolutionProvenance,
+  type SymbolDef,
 } from "./types.js";
 import type { ImportBinding } from "./import-types.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../util/identifiers.js";
@@ -170,23 +175,9 @@ export async function buildPhpQualifiedNames(
   definitionFile: string,
   def: SymbolDef,
 ): Promise<string[]> {
-  const canonicalNames = await readPhpDefinitionNames(index, definitionFile, def);
-  if (!canonicalNames.length) return [];
-  // PHP class, function, and namespace names are ASCII-case-insensitive, but the per-file
-  // bloom filter is case-sensitive, so a case-variant consumer (e.g. `new \app\service()`)
-  // is dropped before collection unless a folded spelling is probed too. The folded local
-  // name is the identifier the bloom actually stores; the folded qualified forms cover a
-  // fully folded reference spelling.
-  const probes = new Set<string>();
-  for (const canonicalName of canonicalNames) {
-    const foldedName = foldPhpIdentifierCase(canonicalName);
-    probes.add(canonicalName);
-    probes.add(`\\${canonicalName}`);
-    probes.add(foldPhpIdentifierCase(def.localName));
-    probes.add(foldedName);
-    probes.add(`\\${foldedName}`);
-  }
-  return Array.from(probes);
+  // Keep one canonical spelling. Case-variant consumers are admitted during the single AST
+  // walk by comparePhpReferenceNames; extra folded probes would multiply whole-file scans.
+  return readPhpDefinitionNames(index, definitionFile, def);
 }
 
 function definitionIdentityKey(def: SymbolDef): string {
@@ -218,6 +209,127 @@ function markPhpNameEquivalenceGap(index: ProjectIndex, def: SymbolDef): void {
   }
   gaps.add(definitionIdentityKey(def));
 }
+
+const PHP_OWN_RECEIVER_KEYWORDS = new Set(["$this", "self", "static"]);
+
+const PHP_TYPE_CONTAINER_TYPES = new Set([
+  "class_declaration",
+  "interface_declaration",
+  "trait_declaration",
+  "enum_declaration",
+]);
+
+async function phpOwnerInfo(
+  index: ProjectIndex,
+  def: SymbolDef,
+): Promise<{ owner: SymbolDef; containerStart: number; containerEnd: number } | null> {
+  const module = index.byFile.get(fileIdentityKey(def.file));
+  if (!module) return null;
+  const parsed = await ensureParsedContext(
+    def.file,
+    index.parsed?.get(fileIdentityKey(def.file)),
+    index.languageExtensions,
+  );
+  const start = def.range.start;
+  const position = { row: Math.max(0, start.line - 1), column: Math.max(0, start.column - 1) };
+  let current: SyntaxNodeLike | null = parsed.tree.rootNode.descendantForPosition(position, position);
+  while (current) {
+    if (PHP_TYPE_CONTAINER_TYPES.has(current.type)) {
+      const nameNode = current.childForFieldName("name");
+      const className = nameNode ? sliceText(nameNode, parsed.source) : null;
+      if (!className) return null;
+      const owner =
+        module.locals.find(
+          (local) =>
+            local.localName === className &&
+            (local.kind === SymbolKind.Class ||
+              local.kind === SymbolKind.Interface ||
+              local.kind === SymbolKind.TypeAlias),
+        ) ?? null;
+      if (!owner) return null;
+      return { owner, containerStart: current.startIndex, containerEnd: current.endIndex };
+    }
+    current = current.parent;
+  }
+  return null;
+}
+
+function phpMemberAccessProperty(
+  node: SyntaxNodeLike,
+  parsed: ParsedFileContext,
+): { object: SyntaxNodeLike; property: SyntaxNodeLike; parent: SyntaxNodeLike } | null {
+  const parent = node.parent;
+  if (!parent || !isMemberAccessNode(parsed.sup, parent)) return null;
+  const parts = getMemberAccessParts(parsed.sup, parent);
+  if (!parts.property || !parts.object) return null;
+  const isProperty =
+    parts.property === node ||
+    (parts.property.id !== undefined && parts.property.id === node.id) ||
+    (parts.property.startIndex === node.startIndex && parts.property.endIndex === node.endIndex);
+  if (!isProperty) return null;
+  if (parts.object.startIndex === parts.property.startIndex) return null;
+  return { object: parts.object, property: parts.property, parent };
+}
+
+async function phpCaseInsensitiveReceiverMemberMatch(
+  index: ProjectIndex,
+  fileId: string,
+  node: SyntaxNodeLike,
+  parsed: ParsedFileContext,
+  expectedDef: SymbolDef,
+): Promise<"matched" | "unverified" | "skip"> {
+  const access = phpMemberAccessProperty(node, parsed);
+  if (!access) return "skip";
+  const propertyText = sliceText(access.property, parsed.source);
+  const comparison = comparePhpReferenceNames(propertyText, expectedDef.localName, {
+    symbolKind: expectedDef.kind,
+  });
+  if (comparison !== "equivalent") return "skip";
+  const exactSpelling = propertyText === expectedDef.localName;
+  const ownerInfo = await phpOwnerInfo(index, expectedDef);
+  if (!ownerInfo) return exactSpelling ? "skip" : "unverified";
+  const owner = ownerInfo.owner;
+
+  const receiverName = sliceText(access.object, parsed.source);
+  if (PHP_OWN_RECEIVER_KEYWORDS.has(receiverName)) {
+    if (
+      fileIdentityKey(fileId) === fileIdentityKey(expectedDef.file) &&
+      node.startIndex >= ownerInfo.containerStart &&
+      node.startIndex <= ownerInfo.containerEnd
+    ) {
+      return "matched";
+    }
+    return exactSpelling ? "skip" : "unverified";
+  }
+  if (isKeywordReceiver(parsed.sup.id, receiverName)) {
+    return exactSpelling ? "skip" : "unverified";
+  }
+
+  const constructor = receiverConstructorExpression(access.object, parsed.source, parsed.sup);
+  const typeNode = constructor ?? (access.parent.type === "scoped_call_expression" ? access.object : null);
+  if (!typeNode) return exactSpelling ? "skip" : "unverified";
+
+  const ownerNames = await phpCanonicalDefinitionNames(index, owner);
+  const imports = index.byFile.get(fileIdentityKey(fileId))?.imports;
+  const typeNames = canonicalPhpReferenceNames(
+    sliceText(typeNode, parsed.source),
+    parsed.source,
+    parsed.tree,
+    typeNode,
+    {
+      ...(imports ? { imports } : {}),
+      role: "class",
+    },
+  );
+  const matchesOwner = typeNames.some((typeName) =>
+    ownerNames.some(
+      (ownerName) => comparePhpReferenceNames(typeName, ownerName, { symbolKind: SymbolKind.Class }) === "equivalent",
+    ),
+  );
+  if (matchesOwner) return "matched";
+  return "skip";
+}
+
 function matchesPhpFallbackDefinition(
   node: SyntaxNodeLike,
   parsed: ParsedFileContext,
@@ -266,8 +378,12 @@ function matchesPhpFallbackDefinition(
     }
   }
 
-  if (expectedDef.kind === "function") return referenceKind === "function";
-  if (expectedDef.kind === "class" || expectedDef.kind === "interface" || expectedDef.kind === "type") {
+  if (expectedDef.kind === SymbolKind.Function) return referenceKind === "function";
+  if (
+    expectedDef.kind === SymbolKind.Class ||
+    expectedDef.kind === SymbolKind.Interface ||
+    expectedDef.kind === SymbolKind.TypeAlias
+  ) {
     return referenceKind === "class";
   }
   return false;
@@ -305,8 +421,15 @@ async function collectNamedNodeReferences(
         let isMatch: boolean;
         if (!isPhp) {
           isMatch = text === canonicalSymbolName;
+        } else if (
+          (node.type === "name" || node.type === "namespace_name") &&
+          isPhpQualifiedReferenceNode(node.parent)
+        ) {
+          isMatch = false;
         } else {
-          const comparison = comparePhpReferenceNames(text, canonicalSymbolName, {
+          const comparisonText =
+            node.type === "qualified_name" || node.type === "relative_name" ? phpLastIdentifierSegment(text) : text;
+          const comparison = comparePhpReferenceNames(comparisonText, phpLastIdentifierSegment(canonicalSymbolName), {
             caseSensitiveForm: node.type === "variable_name" || node.type === "constant",
             ...(symbolKind ? { symbolKind } : {}),
           });
@@ -394,25 +517,39 @@ export async function collectVerifiedNamedNodeReferences(
       }
       continue;
     }
+    if (parsed.sup.id === "php" && expectedDef.isMember) {
+      const memberMatch = await phpCaseInsensitiveReceiverMemberMatch(index, fileId, node, parsed, expectedDef);
+      if (memberMatch === "matched") {
+        pushVerified({ range, ...(exportFrom?.isExportFrom ? { via: { reexport: true } } : {}) });
+      } else if (memberMatch === "unverified") {
+        markPhpNameEquivalenceGap(index, expectedDef);
+      }
+      continue;
+    }
     // PHP names are case-insensitive, but a namespace spelling alone cannot prove a member or
     // distinguish a class reference from a function call. Restrict the fallback to syntax whose
     // role matches the namespace-level definition.
     if (phpCanonicalNames && matchesPhpFallbackDefinition(node, parsed, expectedDef)) {
-      const rawText = sliceText(node, parsed.source);
-      const canonical = canonicalPhpReferenceName(rawText, parsed.source, parsed.tree, node);
-      const matchedName = canonical
-        ? phpCanonicalNames.find(
-            (canonicalName) =>
-              comparePhpReferenceNames(canonical, canonicalName, { symbolKind: expectedDef.kind }) === "equivalent",
-          )
-        : undefined;
-      if (matchedName) {
+      const rawText = getPhpQualifiedReference(node, parsed.source) ?? sliceText(node, parsed.source);
+      const imports = index.byFile.get(fileIdentityKey(fileId))?.imports;
+      const role = inferPhpQualifiedReferenceImportType(node);
+      const candidates = canonicalPhpReferenceNames(rawText, parsed.source, parsed.tree, node, {
+        ...(imports ? { imports } : {}),
+        ...(role ? { role } : {}),
+      });
+      const matchedCanonical = phpCanonicalNames.find((canonicalName) =>
+        candidates.some(
+          (candidate) =>
+            comparePhpReferenceNames(candidate, canonicalName, { symbolKind: expectedDef.kind }) === "equivalent",
+        ),
+      );
+      if (matchedCanonical) {
         // A qualified path proves the namespace, but a bare case-variant `name` could also be a
         // same-named constant, so the equivalence is unproven for that form and coverage says so
         // instead of silently returning a short list.
         if (!isPhpQualifiedReferenceNode(node)) {
-          const lastSegment = matchedName.split("\\").pop() ?? matchedName;
-          const bareText = rawText.trim();
+          const lastSegment = matchedCanonical.split("\\").pop() ?? matchedCanonical;
+          const bareText = sliceText(node, parsed.source).trim();
           if (bareText !== lastSegment && foldPhpIdentifierCase(bareText) === foldPhpIdentifierCase(lastSegment)) {
             markPhpNameEquivalenceGap(index, expectedDef);
           }

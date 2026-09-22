@@ -28,8 +28,11 @@ export type ReceiverCallCandidate = {
   /** Resolve only through supertypes, for explicit `parent`/`super`/`base` receivers. */
   viaSupertypes: boolean;
   memberName: string;
-  /** Argument count, used only to separate same-named overloads on one type. */
-  argumentCount: number;
+  /**
+   * Argument count, used only to separate same-named overloads on one type.
+   * `null` means the call shape is unknown, so arity-based resolution is omitted.
+   */
+  argumentCount: number | null;
   site: NonNullable<SymbolGraph["edges"][number]["site"]>;
   /** Required static/instance scope; omitted candidates are classified from `site`. */
   memberScope?: ReceiverMemberScope;
@@ -843,7 +846,7 @@ export function nearestMemberContainer(node: SyntaxNodeLike): SyntaxNodeLike | n
 }
 
 /** Positional argument count of a call, including Kotlin/Swift trailing lambdas. */
-export function callArgumentCount(callNode: SyntaxNodeLike, source: string): number {
+export function callArgumentCount(callNode: SyntaxNodeLike, source: string): number | null {
   // Kotlin wraps `pick(1) { }` in an outer call node whose only other child is the
   // callee call; the trailing lambda belongs to the inner call's argument list.
   let scope = callNode;
@@ -871,7 +874,11 @@ export function callArgumentCount(callNode: SyntaxNodeLike, source: string): num
   let count = (argumentNode.namedChildren ?? []).filter((argument) => argument.type !== "comment").length;
   const trailingEnd = argumentNode.parent?.type === "call_suffix" ? argumentNode.parent.endIndex : scope.endIndex;
   if (trailingEnd > argumentNode.endIndex && containsTrailingLambdaNode(scope, argumentNode.endIndex, trailingEnd)) {
-    count += countTrailingClosureArguments(source.slice(argumentNode.endIndex, trailingEnd)) ?? 0;
+    const trailing = countTrailingClosureArguments(source.slice(argumentNode.endIndex, trailingEnd));
+    // A null scan means the trailing-closure count is unknown, so the whole call
+    // arity is unknown rather than the parenthesized count alone.
+    if (trailing === null) return null;
+    count += trailing;
   }
   return count;
 }
@@ -1160,7 +1167,10 @@ function provenMemberTarget(
     const [memberId] = matches;
     return { status: "unique", memberId: memberId! };
   }
-  const byArity = [...matches].filter((memberId) => graph.nodes.get(memberId)?.memberArity === candidate.argumentCount);
+  const byArity =
+    candidate.argumentCount === null
+      ? []
+      : [...matches].filter((memberId) => graph.nodes.get(memberId)?.memberArity === candidate.argumentCount);
   if (byArity.length === 1) return { status: "unique", memberId: byArity[0]! };
   return { status: "ambiguous" };
 }

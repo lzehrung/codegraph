@@ -35,7 +35,7 @@ import {
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
 import { extractEnclosingBlock, extractLineContext, rangeContains, sameDef } from "./reference-context.js";
 import { DEFAULT_REF_CONTEXT_LINES } from "./shared.js";
-import { type ScopeIndex } from "./scope.js";
+import { type Binding, type ScopeIndex } from "./scope.js";
 import { type FileId, type Range } from "../types.js";
 import { loadNearestTsconfigFor, resolveImportSpecifier } from "../util/resolution.js";
 import { fileIdentityKey } from "../util/paths.js";
@@ -676,21 +676,18 @@ async function findReferencesInternal(
 
     if (phpQualifiedNames.length) {
       const remainingReferences = remainingCollectionSlots();
-      for (const candidateName of [...exportedNames, ...phpQualifiedNames]) {
+      const ranges = await collectVerifiedNamedNodeReferences(
+        index,
+        fileId,
+        def.localName,
+        def,
+        (params, parsed) => goToDefinition(index, params, parsed),
+        remainingReferences,
+        verifiedReferenceFilter(fileId),
+      );
+      for (const { range, provenance, via } of ranges) {
         if (hasReachedCollectionLimit()) break;
-        const ranges = await collectVerifiedNamedNodeReferences(
-          index,
-          fileId,
-          candidateName,
-          def,
-          (params, parsed) => goToDefinition(index, params, parsed),
-          remainingReferences,
-          verifiedReferenceFilter(fileId),
-        );
-        for (const { range, provenance, via } of ranges) {
-          if (hasReachedCollectionLimit()) break;
-          pushRef({ file: fileId, range, ...(via ? { via } : {}), ...(provenance ? { provenance } : {}) });
-        }
+        pushRef({ file: fileId, range, ...(via ? { via } : {}), ...(provenance ? { provenance } : {}) });
       }
     }
   }
@@ -774,11 +771,9 @@ async function findReferencesInternal(
       phpQualifiedNames,
       sameFileOccurrence: {
         applicable: parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp",
-        // `executed` means the scan ran, not that it found uses. Deriving it from
-        // `occurrences.length` would report `partial` for any C or C++ definition that simply
-        // has no same-file uses. The scan can only run against a located scope binding, so that
-        // is the honest signal.
-        executed: localBinding !== undefined,
+        // `executed` means the required enclosing/module scan ran, not that it found uses. A
+        // binding that exists only inside the function's own scope cannot see sibling calls.
+        executed: sameFileOccurrenceExecuted(scope, localBinding),
       },
     }),
   });
@@ -790,6 +785,15 @@ async function findReferencesInternal(
     referenceCoverage,
     ...(provenance ? { provenance } : {}),
   };
+}
+
+function sameFileOccurrenceExecuted(scope: ScopeIndex, binding: Binding | undefined): boolean {
+  if (!binding) return false;
+  for (const candidate of scope.allScopes) {
+    if (candidate.kind === "function") continue;
+    if (candidate.map.get(binding.canonicalName) === binding) return true;
+  }
+  return false;
 }
 
 function shouldScanVerifiedReferences(

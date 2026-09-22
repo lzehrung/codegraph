@@ -1648,6 +1648,27 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     expect(callsiteTexts(graph, overloads[0]!.id, caller, files)).toBeNull();
   });
 
+  it("omits arity resolution when the trailing-closure count is unknown", async () => {
+    // The comment between the labeled trailing closures makes the shared scanner
+    // return null: the call shape is unknown, so no arity may be fabricated. A
+    // fabricated parenthesized-only count of 1 would wrongly pick the arity-1 member.
+    const files: Record<string, string> = {
+      "swtrail-unknown.swift": [
+        "class SwTrailUnknown {",
+        "  func pick(_ value: Int) -> Int { return value }",
+        "  func pick(_ value: Int, _ first: () -> Int, second: () -> Int) -> Int { return value }",
+        "  func caller() -> Int { return self.pick(1) { 2 } /* mid */ second: { 3 } }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-swift-unknown-trailing-", files);
+    const caller = nodeIn(graph, "swtrail-unknown.swift", "caller");
+    const overloads = overloadMembers(graph, "swtrail-unknown.swift", "pick");
+    expect(overloads.map((node) => node.memberArity)).toEqual([1, 3]);
+    expect(callsiteTexts(graph, overloads[0]!.id, caller, files)).toBeNull();
+    expect(callsiteTexts(graph, overloads[1]!.id, caller, files)).toBeNull();
+  });
+
   it("records union member ownership and receiver calls in C++", async () => {
     const files: Record<string, string> = {
       "union.cpp": [
