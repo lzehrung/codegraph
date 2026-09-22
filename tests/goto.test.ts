@@ -3447,6 +3447,24 @@ describe("Keyword-receiver member navigation", () => {
     }
   });
 
+  it("resolves an inherited Kotlin interface member through this", async () => {
+    const source = [
+      "interface Face {",
+      "  fun helper(): Int { return 3 }",
+      "}",
+      "class Derived : Face {",
+      "  fun run(): Int { return this.helper() }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-kt-this-interface-goto-", { "box.kt": source });
+    try {
+      await expectMemberAccess(index, paths["box.kt"]!, 5, columnOf(source, 5, "helper()"), 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("selects C++ this-> overloads by known call argument count", async () => {
     const source = [
       "class Box {",
@@ -3909,6 +3927,62 @@ describe("Supertype keyword member navigation", () => {
     try {
       await expectMemberAccess(index, paths["Box.cs"]!, 6, columnOf(source, 6, "Helper()"), 2);
       await expectMemberAccess(index, paths["Box.cs"]!, 7, columnOf(source, 7, "Helper(a)"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves PHP parent members through case-variant local class and method names", async () => {
+    const source = [
+      "<?php",
+      "class Base { function helper() { return 1; } }",
+      "class Derived extends bAsE {",
+      "  function run() { return parent::HELPER(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-php-parent-case-goto-", { "box.php": source });
+    try {
+      await expectMemberAccess(index, paths["box.php"]!, 4, columnOf(source, 4, "HELPER()"), 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves PHP parent members through a case-variant imported alias", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-parent-alias-case-goto-"));
+    const baseFile = path.join(root, "src", "Base.php").replace(/\\/g, "/");
+    const derivedFile = path.join(root, "Derived.php").replace(/\\/g, "/");
+    const base = ["<?php", "namespace App;", "class Base {", "  function helper() { return 1; }", "}", ""].join("\n");
+    const derived = [
+      "<?php",
+      "namespace Client;",
+      "use App\\Base as ParentBase;",
+      "class Derived extends pArEnTbAsE {",
+      "  function run() { return parent::HELPER(); }",
+      "}",
+      "",
+    ].join("\n");
+    try {
+      await fsp.mkdir(path.dirname(baseFile), { recursive: true });
+      await fsp.writeFile(
+        path.join(root, "composer.json"),
+        JSON.stringify({ autoload: { "psr-4": { "App\\": "src/" } } }),
+        "utf8",
+      );
+      await fsp.writeFile(baseFile, base, "utf8");
+      await fsp.writeFile(derivedFile, derived, "utf8");
+      const index = await createTestIndexFromPath(root);
+      const result = await goToDefinition(index, {
+        file: derivedFile,
+        line: 5,
+        column: columnOf(derived, 5, "HELPER()"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(baseFile));
+      expect(result.definition.range.start.line).toBe(4);
+      expect(result.provenance?.resolution).toBe("member-access");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

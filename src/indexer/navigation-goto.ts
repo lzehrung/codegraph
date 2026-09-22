@@ -3,6 +3,7 @@ import { isJsTsLanguage } from "../languages/js-family.js";
 import { isPythonReceiverAttributeAssignmentName } from "../languages/definitions/python.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { sliceText } from "../util/ast.js";
+import { foldPhpIdentifierCase } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
 import {
   collectMemberAccessChain,
@@ -486,13 +487,14 @@ function resolveNamedMemberContainer(
   const candidates = topLevel.length ? topLevel : typedLocals;
   if (candidates.length === 1) return candidates[0];
   if (candidates.length > 1) return undefined;
+  const normalizedName = normalize(name);
 
   for (const imp of mod.imports) {
-    if (imp.kind === "named" && imp.local === name) {
+    if (imp.kind === "named" && normalize(imp.local) === normalizedName) {
       const classDef = importedClassDef(index, resolveImported(index, imp, imp.imported));
       if (classDef) return classDef;
     }
-    if (imp.kind === "default" && imp.local === name) {
+    if (imp.kind === "default" && normalize(imp.local) === normalizedName) {
       const classDef = importedClassDef(index, resolveImported(index, imp, "default"));
       if (classDef) return classDef;
     }
@@ -570,24 +572,29 @@ async function baseRefsFromContainer(
   container: SyntaxNodeLike,
   source: string,
   sup: LanguageSupport,
+  superclassOnly: boolean,
 ): Promise<KeywordClassRef[]> {
   const bases = collectDeclaredBaseTypes(container, source, sup);
   const refs: KeywordClassRef[] = [];
   const seen = new Set<string>();
+  const normalize = (name: string): string => {
+    const normalized = sup.normalizeIdentifier(name);
+    return sup.id === "php" ? foldPhpIdentifierCase(normalized) : normalized;
+  };
   for (const base of bases) {
     const def =
       base.kind === "simple"
-        ? resolveNamedMemberContainer(index, mod, base.name, sup.normalizeIdentifier)
-        : resolveQualifiedMemberContainer(index, mod, base.base, base.path, sup.normalizeIdentifier);
-    // `super`, `base`, and `parent` follow class ancestors only. A flat base list mixes the
-    // superclass with interfaces or protocols in C#, Kotlin, and Swift, so an interface member
-    // would otherwise answer a keyword that the language resolves against the base class.
-    if (!def || def.kind !== SymbolKind.Class) continue;
+        ? resolveNamedMemberContainer(index, mod, base.name, normalize)
+        : resolveQualifiedMemberContainer(index, mod, base.base, base.path, normalize);
+    if (!def) continue;
+    // `super`, `base`, and `parent` follow class ancestors only. An own receiver also inherits
+    // interface or protocol members, so apply the class-only filter only to supertype lookup.
+    if (superclassOnly && def.kind !== SymbolKind.Class) continue;
     // Kotlin classifies interfaces as SymbolKind.Class too, so the superclass is identified
     // syntactically: `Base()` is a constructor invocation, while bare delegation-specifier
     // entries (`Face`, `by` delegations) are interfaces. Interface-only super lookup stays
-    // unresolved.
-    if (sup.id === "kotlin" && !base.invoked) continue;
+    // unresolved, while an own receiver can inherit their default members.
+    if (superclassOnly && sup.id === "kotlin" && !base.invoked) continue;
     const key = keywordClassKey(def);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -608,14 +615,24 @@ async function resolveKeywordReceiverMember(
   explicitClass?: { name: string; support: LanguageSupport },
 ): Promise<SymbolDef | undefined> {
   const explicitClassDef = explicitClass
-    ? resolveNamedMemberContainer(index, mod, explicitClass.name, explicitClass.support.normalizeIdentifier)
+    ? resolveNamedMemberContainer(index, mod, explicitClass.name, (name) => {
+        const normalized = explicitClass.support.normalizeIdentifier(name);
+        return explicitClass.support.id === "php" ? foldPhpIdentifierCase(normalized) : normalized;
+      })
     : undefined;
   const current = explicitClassDef
     ? await keywordClassRefFromDef(index, explicitClassDef)
     : await keywordClassRefFromNode(index, mod, node);
   if (!current) return undefined;
   let level = startAtAncestor
-    ? await baseRefsFromContainer(index, current.module, current.container, current.context.source, current.context.sup)
+    ? await baseRefsFromContainer(
+        index,
+        current.module,
+        current.container,
+        current.context.source,
+        current.context.sup,
+        true,
+      )
     : [current];
   if (level.length === 0) return undefined;
   const visited = new Set<string>([
@@ -635,7 +652,10 @@ async function resolveKeywordReceiverMember(
         member,
         candidate.container,
         candidate.context,
-        candidate.context.sup.normalizeIdentifier,
+        (name) => {
+          const normalized = candidate.context.sup.normalizeIdentifier(name);
+          return candidate.context.sup.id === "php" ? foldPhpIdentifierCase(normalized) : normalized;
+        },
         memberPredicate,
         matches,
       );
@@ -669,6 +689,7 @@ async function resolveKeywordReceiverMember(
         candidate.container,
         candidate.context.source,
         candidate.context.sup,
+        startAtAncestor,
       )) {
         const key = keywordContainerKey(parent.file, parent.container);
         if (visited.has(key)) continue;

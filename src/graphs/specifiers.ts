@@ -35,7 +35,7 @@ import {
   rustSpecifierForParsedImport,
 } from "../indexer/imports/text-import-extractors.js";
 import {
-  cFamilyIncludeFormFromText,
+  cFamilyImportFormFromText,
   extractJsTsSpecifiers,
   isJsTsTypeOnlySpecifierStatement,
   type ModuleSpecifier,
@@ -432,7 +432,7 @@ export function collectModuleSpecifiersFromSource(
         const exportCondition = isJsFamily && /\brequire\s*\(/.test(stmtText) ? ("require" as const) : undefined;
         for (const capture of match.captures) {
           if (capture.name !== "from") continue;
-          const includeForm = isCFamily ? cFamilyIncludeFormFromText(capture.text) : undefined;
+          const includeForm = isCFamily ? cFamilyImportFormFromText(stmtText, capture.text) : undefined;
           out.push({
             spec: unquote(capture.text),
             typeOnly,

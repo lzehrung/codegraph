@@ -5,7 +5,7 @@ import { unquote } from "../../util/ast.js";
 import { maskJsLikeCommentsStringsAndRegex } from "../../util/comments.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { collectLineStartOffsets } from "../../util/lines.js";
-import { cFamilyIncludeFormFromText, type CFamilyIncludeForm } from "../../util/specifiers.js";
+import { cFamilyImportFormFromText, type CFamilyIncludeForm } from "../../util/specifiers.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rust-test-modules.js";
 import type { ImportBinding } from "../types.js";
 import { importCapture } from "../../languages/graph-captures.js";
@@ -214,11 +214,11 @@ export async function collectNativeCaptureImportBindings(
     }
     const fromCapture = importCapture(caps, "from");
     const from = fromCapture ? unquote(fromCapture.text) : undefined;
-    // The extracted `from` drops the delimiters, so the occurrence's literal/angle/macro form
-    // is carried separately; otherwise `#include "HEADER"` and `#include HEADER` are identical.
+    // The extracted `from` drops delimiters, so an occurrence's literal/angle/macro form travels
+    // separately. A bare C++ module import also has an unquoted target, but it is not an include.
     const includeForm =
       context.languageId === "c" || context.languageId === "cpp"
-        ? cFamilyIncludeFormFromText(fromCapture?.text)
+        ? cFamilyImportFormFromText(stmtText, fromCapture?.text)
         : undefined;
     const patterns = capturesNamed(match, "pattern");
     if (patterns.length) {

@@ -302,10 +302,9 @@ export async function resolveImportSpecifier(
       // the exact include is either first-party or external under its raw spelling.
       return { external: spec };
     }
-    if (languageId === "c" && form === "macro") {
-      // C has no module imports, so `#include HEADER` always names a macro, never a first-party
-      // file or package. C++ bare identifiers may instead be module specifiers and are handled
-      // by the named-module branch below.
+    if (form === "macro") {
+      // A preprocessor macro include is never a C++ module import. Named C++ `import HEADER`
+      // declarations have no include form and continue through the module branch below.
       return { external: spec };
     }
     if (languageId === "cpp") {

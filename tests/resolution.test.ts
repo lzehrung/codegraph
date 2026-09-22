@@ -2215,10 +2215,12 @@ describe("Import Resolution", () => {
     const sourceFile = path.join(root, languageId === "c" ? "main.c" : "main.cpp");
     const nodeModulesDir = path.join(root, "node_modules", "HEADER");
     const workspaceDir = path.join(root, "packages", "HEADER");
+    const moduleFile = path.join(root, "declaring.cpp");
 
     await fsp.mkdir(nodeModulesDir, { recursive: true });
     await fsp.mkdir(workspaceDir, { recursive: true });
     await fsp.writeFile(sourceFile, ['#define HEADER "x.h"', "#include HEADER", ""].join("\n"), "utf8");
+    await fsp.writeFile(moduleFile, "export module HEADER;\n", "utf8");
     await fsp.writeFile(path.join(root, "HEADER.ts"), "export const decoy = 1;\n", "utf8");
     await fsp.writeFile(
       path.join(nodeModulesDir, "package.json"),
@@ -2240,6 +2242,15 @@ describe("Import Resolution", () => {
 
     clearImportResolutionCaches();
     const workspaceConfig = await loadWorkspaceConfig(root);
+    if (languageId === "cpp") {
+      await expect(
+        resolveImportSpecifier(root, sourceFile, "HEADER", languageId, {
+          ...(workspaceConfig ? { workspaceConfig } : {}),
+          resolveNodeModules: true,
+          resolutionHints: ["."],
+        }),
+      ).resolves.toBe(moduleFile.replace(/\\/g, "/"));
+    }
 
     await expect(
       resolveImportSpecifier(root, sourceFile, "HEADER", languageId, {

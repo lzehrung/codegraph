@@ -272,6 +272,7 @@ async function phpOwnerInfo(
         module.locals.find(
           (local) =>
             local.localName === className &&
+            local.range.start.index === nameNode?.startIndex &&
             (local.kind === SymbolKind.Class ||
               local.kind === SymbolKind.Interface ||
               local.kind === SymbolKind.TypeAlias),
@@ -394,6 +395,7 @@ function matchesPhpFallbackDefinition(
       let current = parent;
       while (current) {
         if (
+          current.type === "attribute" ||
           current.type === "named_type" ||
           current.type === "base_clause" ||
           current.type === "class_interface_clause" ||

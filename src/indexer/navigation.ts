@@ -441,7 +441,7 @@ async function findReferencesInternal(
 
   const exportedNameSet = new Set(exportedNames);
   const phpQualifiedNames = await buildPhpQualifiedNames(index, definitionFile, def);
-  const scansReceiverReferences = shouldScanVerifiedReferences(def, phpQualifiedNames, parsedContext);
+  const scansReceiverReferences = shouldScanVerifiedReferences(def, parsedContext);
   if (localBinding && !scansReceiverReferences) {
     for (const occurrence of localBinding.occurrences) {
       if (hasReachedCollectionLimit()) break;
@@ -707,10 +707,13 @@ async function findReferencesInternal(
       if (hasReachedCollectionLimit()) break;
       receiverScannedFiles.push(fileId);
       const filter = index.bloomFilters?.get(fileIdentityKey(fileId));
-      // Bloom filters contain names normalized by the candidate file's language, so probes must use that rule.
+      const candidateSupport = supportForFileWithoutHeaderSample(fileId, index.languageExtensions);
+      // Bloom filters store folded PHP identifiers in addition to their source spelling.
+      const normalizedName = candidateSupport?.normalizeIdentifier(def.localName) ?? def.localName;
       const canonicalName =
-        supportForFileWithoutHeaderSample(fileId, index.languageExtensions)?.normalizeIdentifier(def.localName) ??
-        def.localName;
+        candidateSupport?.id === "php" && isPhpCaseInsensitiveSymbolKind(def.kind)
+          ? foldPhpIdentifierCase(normalizedName)
+          : normalizedName;
       if (filter && !filter.mightContain(canonicalName)) continue;
       const remainingReferences = remainingCollectionSlots();
       const ranges = await collectVerifiedNamedNodeReferences(
@@ -819,12 +822,8 @@ function sameFileOccurrenceExecuted(scope: ScopeIndex, binding: Binding | undefi
   return !mapped && binding.kind === "function" && hasEnclosingFunctionBinding;
 }
 
-function shouldScanVerifiedReferences(
-  def: SymbolDef,
-  phpQualifiedNames: readonly string[],
-  parsedContext: ParsedFileContext,
-): boolean {
-  if (phpQualifiedNames.length) return false;
+function shouldScanVerifiedReferences(def: SymbolDef, parsedContext: ParsedFileContext): boolean {
+  if (parsedContext.sup.id === "php" && !isPhpCaseInsensitiveSymbolKind(def.kind)) return false;
   if (!supportsReceiverMemberNavigation(parsedContext.sup.id)) return false;
   return isReceiverMemberDefinition(def, parsedContext);
 }

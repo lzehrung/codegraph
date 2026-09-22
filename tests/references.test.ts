@@ -4362,6 +4362,12 @@ describe("Find References: PHP fallback syntax", () => {
       if (result.status !== "ok") return;
       expectReferenceAt(result, sourceFile, 1);
       expect(result.references.some((reference) => reference.file === consumerFile)).toBe(false);
+      expect(result.referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["strategy_unavailable"],
+        affectedFiles: [consumerFile],
+      });
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -4899,6 +4905,53 @@ describe("Find References: PHP method case-insensitivity", () => {
       expectReferenceAt(result, file, 3);
       expectReferenceAt(result, file, 6);
       expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("uses the source range to select a same-named PHP method owner", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-method-owner-range-"));
+    try {
+      const file = path.join(root, "service.php").replace(/\\/g, "/");
+      const lines = [
+        "<?php",
+        "namespace One {",
+        "  class Box { function run() {} }",
+        "}",
+        "namespace Two {",
+        "  class Box { function run() {} }",
+        "}",
+        "namespace Consumer {",
+        "  $box = new \\Two\\Box();",
+        "  $box->RUN();",
+        "}",
+        "",
+      ];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      await testFindReferences(index, file, 6, tokenColumn(lines[5]!, "run"), [
+        { file, line: 6, column: tokenColumn(lines[5]!, "run") },
+        { file, line: 10, column: tokenColumn(lines[9]!, "RUN") },
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("treats PHP attributes as class references without matching same-named functions", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-attribute-class-refs-"));
+    try {
+      const sourceFile = path.join(root, "route.php").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+      const sourceLines = ["<?php", "namespace App;", "class Route {}", ""];
+      const consumerLines = ["<?php", "#[\\app\\route]", "class Controller {}", "function route() {}", "route();", ""];
+      await fsp.writeFile(sourceFile, sourceLines.join("\n"), "utf8");
+      await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+      await testFindReferences(index, sourceFile, 3, tokenColumn(sourceLines[2]!, "Route"), [
+        { file: sourceFile, line: 3, column: tokenColumn(sourceLines[2]!, "Route") },
+        { file: consumerFile, line: 2, column: tokenColumn(consumerLines[1]!, "\\app\\route") },
+      ]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

@@ -34,6 +34,20 @@ export function cFamilyIncludeFormFromText(text: string | undefined): CFamilyInc
   return "macro";
 }
 
+/**
+ * Classifies a C/C++ import-query capture without confusing a named C++ module import with a
+ * preprocessor macro include. Quoted and angle targets keep their form for both `#include` and
+ * C++ header-unit imports; an unquoted target is a macro only when its statement is an include.
+ */
+export function cFamilyImportFormFromText(
+  statementText: string | undefined,
+  targetText: string | undefined,
+): CFamilyIncludeForm | undefined {
+  const form = cFamilyIncludeFormFromText(targetText);
+  if (form !== "macro") return form;
+  return /^\s*#\s*include\b/u.test(statementText ?? "") ? "macro" : undefined;
+}
+
 export type ModuleSpecifier = {
   spec: string;
   raw?: string;
