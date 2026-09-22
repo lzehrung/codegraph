@@ -783,4 +783,38 @@ describe("C function redeclarations", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("preserves distinct occurrence sets for C++ redeclarations", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-cpp-redeclaration-references-"));
+    try {
+      const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+      const source = [
+        "int add(int left, int right);",
+        "int helper(void) { return add(1, 2); }",
+        "int add(int left, int right) { return left + right; }",
+        "int run(void) { return add(3, 4); }",
+        "",
+      ].join("\n");
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const scope = buildScopeIndexFromSource(file, source, CPP_SUPPORT);
+      const bindings = scope.bindings.get("add") ?? [];
+      expect(bindings).toHaveLength(2);
+      expect(bindings.every((binding) => binding.occurrencesComplete === false)).toBe(true);
+
+      const prototypeReferences = await findReferences(index, { file, line: 1, column: 5 });
+      expect(prototypeReferences.status).toBe("ok");
+      if (prototypeReferences.status === "ok") {
+        expect(prototypeReferences.references.map((reference) => reference.range.start.line)).toEqual([1, 2]);
+      }
+
+      const definitionReferences = await findReferences(index, { file, line: 3, column: 5 });
+      expect(definitionReferences.status).toBe("ok");
+      if (definitionReferences.status === "ok") {
+        expect(definitionReferences.references.map((reference) => reference.range.start.line)).toEqual([3, 4]);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

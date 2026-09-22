@@ -58,8 +58,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * across dynamic function boundaries, and stops an ambiguous shallow ancestor lookup instead of
  * selecting a shared grandparent.
  * Epoch 25 shares C function occurrences between a file-scope prototype and its definition.
+ * Epoch 26 preserves distinct C++ redeclarations and marks their name-only occurrence sets partial.
  */
-export const CORE_ALGORITHM_EPOCH = 25;
+export const CORE_ALGORITHM_EPOCH = 26;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
