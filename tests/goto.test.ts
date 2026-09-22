@@ -873,6 +873,53 @@ describe("Go to Definition", () => {
         expect(result.definition.range.start.line).toBe(5);
       }
     });
+    it("keeps PHP class, function, and constant aliases in separate symbol namespaces", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-alias-role-goto-"));
+      try {
+        const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+        const sourceLines = [
+          "<?php",
+          "namespace App;",
+          "class Service {}",
+          "function helper() { return 1; }",
+          "const TOKEN = 1;",
+          "",
+        ];
+        const consumerLines = [
+          "<?php",
+          "namespace Client;",
+          "use App\\Service as Alias;",
+          "use function App\\helper as Alias;",
+          "use const App\\TOKEN as Alias;",
+          "$service = new ALIAS();",
+          "$value = ALIAS();",
+          "$constant = Alias;",
+          "$wrong = ALIAS;",
+          "",
+        ];
+        await fsp.writeFile(sourceFile, sourceLines.join("\n"), "utf8");
+        await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+        const aliasColumn = (line: number): number => consumerLines[line - 1]!.lastIndexOf("Alias") + 1;
+
+        await testGoToDefinition(index, consumerFile, 6, consumerLines[5]!.indexOf("ALIAS") + 1, sourceFile, 3);
+        await testGoToDefinition(index, consumerFile, 7, consumerLines[6]!.indexOf("ALIAS") + 1, sourceFile, 4);
+        await testGoToDefinition(index, consumerFile, 8, aliasColumn(8), sourceFile, 5);
+        await testGoToDefinition(
+          index,
+          consumerFile,
+          9,
+          consumerLines[8]!.indexOf("ALIAS") + 1,
+          undefined,
+          undefined,
+          "not_found",
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("resolves typed, untyped, and static properties to their declarations", async () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "php");
       const propertiesFile = path.join(samplePath, "properties.php").replace(/\\/g, "/");
@@ -3037,6 +3084,38 @@ describe("Keyword-receiver member navigation", () => {
     try {
       await expectMemberAccess(index, paths["box.cpp"]!, 5, columnOf(source, 5, "field"), 3);
       await expectMemberAccess(index, paths["box.cpp"]!, 5, columnOf(source, 5, "target()"), 4);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a C++ static call to its class declaration when its implementation is out of line", async () => {
+    const header = ["class Box {", " public:", "  static int make(int value);", "  int run(int value);", "};", ""].join(
+      "\n",
+    );
+    const implementation = [
+      '#include "box.hpp"',
+      "int Box::make(int value) { return value; }",
+      "int Box::run(int value) { return make(value); }",
+      "",
+    ].join("\n");
+    const consumer = ['#include "box.hpp"', "int use() { return Box::make(1); }", ""].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cpp-out-of-line-goto-", {
+      "box.hpp": header,
+      "box.cpp": implementation,
+      "use.cpp": consumer,
+    });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["use.cpp"]!,
+        line: 2,
+        column: columnOf(consumer, 2, "make"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.definition.file).toBe(paths["box.hpp"]);
+      expect(result.definition.range.start.line).toBe(3);
+      expect(result.provenance?.resolution).toBe("member-access");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

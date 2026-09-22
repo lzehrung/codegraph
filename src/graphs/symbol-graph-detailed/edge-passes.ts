@@ -1,6 +1,6 @@
 import type { ModuleIndex, ProjectIndex, SymbolDef } from "../../indexer/types.js";
 import type { LanguageSupport } from "../../languages.js";
-import type { SyntaxNodeLike } from "../../languages/types.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { sliceText, toRange } from "../../util/ast.js";
 import { getMemberAccessParts } from "../../util/member-access.js";
 import { foldPhpIdentifierCase } from "../../util/identifiers.js";
@@ -55,6 +55,8 @@ type EdgePassContext = {
   hasCallableNamed: (name: string, phpCaseInsensitive?: boolean) => boolean;
   /** Registers a name the detailed pass proved callable (function-valued bindings). */
   noteCallableName: (name: string, phpCaseInsensitive?: boolean) => void;
+  /** Loads syntax needed to recover declaration metadata for cross-file member definitions. */
+  loadParsedFile: (file: string) => Promise<{ source: string; tree: SyntaxTreeLike } | null>;
 };
 
 function ensureNode(context: EdgePassContext, def: SymbolDef): string {
@@ -66,9 +68,10 @@ function markImplementationTarget(
   context: EdgePassContext,
   id: string,
   declarationNode: SyntaxNodeLike,
+  declarationSource: string,
   def: SymbolDef,
 ): void {
-  const declaration = sliceText(declarationNode, context.source);
+  const declaration = sliceText(declarationNode, declarationSource);
   const nameIndex = declaration.indexOf(def.localName);
   const prefix = nameIndex >= 0 ? declaration.slice(0, nameIndex) : declaration;
   if (!/\b(?:abstract|virtual|override)\b/.test(prefix)) return;
@@ -207,46 +210,142 @@ function isClassMemberFunction(fn: DetailedFunctionNode): boolean {
   return fn.node.type !== "local_function_statement";
 }
 
-export function emitMemberOwnershipEdges(
+export async function emitMemberOwnershipEdges(
   context: EdgePassContext,
   functionNodes: DetailedFunctionNode[],
   classNodes: DetailedClassNode[],
-): void {
+): Promise<void> {
   for (const fn of functionNodes) {
-    const ownerDef = memberOwnerDef(context, fn, classNodes);
-    if (!ownerDef) continue;
+    const owner = memberOwner(context, fn, classNodes);
+    if (!owner) continue;
     const memberId = ensureNode(context, fn.def);
-    markImplementationTarget(context, memberId, fn.node, fn.def);
-    markMemberArity(context, memberId, fn.node);
-    context.receiverMemberScopes.set(
+    const outOfLineDeclaration = owner.cppOutOfLine
+      ? await cppOutOfLineMemberDeclaration(context, fn, owner.def)
+      : null;
+    markImplementationTarget(
+      context,
       memberId,
-      declarationNodeIsStatic(fn.node, context.source) ? "static" : "instance",
+      outOfLineDeclaration?.node ?? fn.node,
+      outOfLineDeclaration?.source ?? context.source,
+      fn.def,
     );
-    recordDefEdge(context, memberId, ownerDef, "member_of");
+    markMemberArity(context, memberId, fn.node);
+    const memberScope = memberScopeForDefinition(context, fn, owner.cppOutOfLine, outOfLineDeclaration);
+    context.receiverMemberScopes.set(memberId, memberScope);
+    recordDefEdge(context, memberId, owner.def, "member_of");
   }
 }
 
-/** Lexical class body, or the named Go receiver type for an out-of-line method. */
-function memberOwnerDef(
+function memberScopeForDefinition(
+  context: EdgePassContext,
+  fn: DetailedFunctionNode,
+  cppOutOfLine: boolean,
+  outOfLineDeclaration: MemberDeclarationSource | null,
+): ReceiverMemberScope {
+  if (outOfLineDeclaration) {
+    return declarationNodeIsStatic(outOfLineDeclaration.node, outOfLineDeclaration.source) ? "static" : "instance";
+  }
+  if (cppOutOfLine) return "any";
+  return declarationNodeIsStatic(fn.node, context.source) ? "static" : "instance";
+}
+
+type MemberOwner = { def: SymbolDef; cppOutOfLine: boolean };
+
+/** Lexical type body, named Go receiver type, or named C++ out-of-line owner. */
+function memberOwner(
   context: EdgePassContext,
   fn: DetailedFunctionNode,
   classNodes: DetailedClassNode[],
-): SymbolDef | null {
+): MemberOwner | null {
   if (!isClassMemberFunction(fn)) return null;
   if (context.sup.id === "go" && fn.node.type === "method_declaration") {
-    return goMethodReceiverTypeDef(context, fn.node);
+    const def = goMethodReceiverTypeDef(context, fn.node);
+    return def ? { def, cppOutOfLine: false } : null;
   }
   const owners = classNodes
     .filter(
       (candidate) => candidate.node.startIndex <= fn.node.startIndex && candidate.node.endIndex >= fn.node.endIndex,
     )
     .sort((left, right) => left.node.endIndex - left.node.startIndex - (right.node.endIndex - right.node.startIndex));
-  if (owners[0]?.def) return owners[0].def;
+  if (owners[0]?.def) return { def: owners[0].def, cppOutOfLine: false };
+  if (context.sup.id === "cpp") {
+    const ownerName = cppOutOfLineClassName(fn.node, context.source, context.sup);
+    const def = ownerName ? resolveNamedType(context, ownerName, fn.node) : null;
+    return def ? { def, cppOutOfLine: true } : null;
+  }
   if (context.sup.id !== "zig") return null;
   const container = nearestMemberContainer(fn.node);
   if (container?.type !== "struct_declaration") return null;
   const name = container.parent?.namedChildren.find((child) => child.type === "identifier");
-  return name ? resolveNamedType(context, sliceText(name, context.source), name) : null;
+  const def = name ? resolveNamedType(context, sliceText(name, context.source), name) : null;
+  return def ? { def, cppOutOfLine: false } : null;
+}
+
+type MemberDeclarationSource = { node: SyntaxNodeLike; source: string };
+
+function sameSyntaxNode(left: SyntaxNodeLike | null, right: SyntaxNodeLike): boolean {
+  if (!left) return false;
+  if (left.id !== undefined && right.id !== undefined) return left.id === right.id;
+  return left.type === right.type && left.startIndex === right.startIndex && left.endIndex === right.endIndex;
+}
+
+function functionDeclaratorName(node: SyntaxNodeLike, context: EdgePassContext): SyntaxNodeLike | null {
+  const functionDeclarator = findFirstNodeByType(node, "function_declarator");
+  let current = functionDeclarator?.childForFieldName("declarator") ?? null;
+  while (current) {
+    if (isIdentifierType(context.sup, current.type)) return current;
+    const name = current.childForFieldName("name");
+    if (name && isIdentifierType(context.sup, name.type)) return name;
+    const nested = current.childForFieldName("declarator");
+    if (!nested || nested.id === current.id) return null;
+    current = nested;
+  }
+  return null;
+}
+
+function collectCppMemberDeclarations(
+  node: SyntaxNodeLike,
+  ownerNode: SyntaxNodeLike,
+  fn: DetailedFunctionNode,
+  context: EdgePassContext,
+  source: string,
+  expectedArity: number | undefined,
+  out: SyntaxNodeLike[],
+): void {
+  if (node.type === "field_declaration" && sameSyntaxNode(nearestMemberContainer(node), ownerNode)) {
+    const nameNode = functionDeclaratorName(node, context);
+    const arity = declarationMemberArity(node, context.sup.id);
+    if (
+      nameNode &&
+      context.sup.normalizeIdentifier(sliceText(nameNode, source)) ===
+        context.sup.normalizeIdentifier(fn.def.localName) &&
+      arity === expectedArity
+    ) {
+      out.push(node);
+    }
+    return;
+  }
+  for (const child of node.namedChildren) {
+    collectCppMemberDeclarations(child, ownerNode, fn, context, source, expectedArity, out);
+  }
+}
+
+async function cppOutOfLineMemberDeclaration(
+  context: EdgePassContext,
+  fn: DetailedFunctionNode,
+  ownerDef: SymbolDef,
+): Promise<MemberDeclarationSource | null> {
+  const parsed = await context.loadParsedFile(ownerDef.file);
+  const startIndex = ownerDef.range.start.index;
+  const endIndex = ownerDef.range.end.index;
+  if (!parsed || startIndex === undefined || endIndex === undefined) return null;
+  const nameNode = parsed.tree.rootNode.descendantForIndex(startIndex, endIndex);
+  const ownerNode = nearestMemberContainer(nameNode);
+  if (!ownerNode) return null;
+  const expectedArity = declarationMemberArity(fn.node, context.sup.id);
+  const declarations: SyntaxNodeLike[] = [];
+  collectCppMemberDeclarations(ownerNode, ownerNode, fn, context, parsed.source, expectedArity, declarations);
+  return declarations.length === 1 ? { node: declarations[0]!, source: parsed.source } : null;
 }
 
 /** Receiver type of `func (b *T) M()` / `func (b T) M()`, unwrapped through pointers. */
@@ -287,7 +386,9 @@ function resolveNamedType(context: EdgePassContext, name: string, node: SyntaxNo
   const typed = context.moduleEntry.locals.filter(
     (local) => context.sup.normalizeIdentifier(local.localName) === normalized && declaresMembers(local),
   );
-  return typed.length === 1 ? typed[0]! : null;
+  if (typed.length === 1) return typed[0]!;
+  const imported = context.aliasToTargetDef.get(name);
+  return imported && declaresMembers(imported) ? imported : null;
 }
 
 /**
@@ -769,7 +870,7 @@ export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: 
 
   for (const cls of classNodes) {
     const fromId = ensureNode(context, cls.def);
-    markImplementationTarget(context, fromId, cls.node, cls.def);
+    markImplementationTarget(context, fromId, cls.node, context.source, cls.def);
 
     for (const rule of rules.clauses) {
       const clauses: SyntaxNodeLike[] = [];

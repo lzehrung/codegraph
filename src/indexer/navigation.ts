@@ -53,6 +53,8 @@ import {
   type FindReferencesResult,
   type GoToRequest,
   type GoToResult,
+  type ImportBinding,
+  type ModuleIndex,
   type ProjectIndex,
   type Reference,
   type ResolutionProvenance,
@@ -62,6 +64,61 @@ import {
 import { findSqlReferences, goToSqlDefinition } from "../sql/navigation.js";
 
 export { resolveExport, resolveImported } from "./navigation-resolve.js";
+
+function phpImportTypeAtPosition(
+  imports: readonly ImportBinding[],
+  line: number,
+  column: number,
+): "class" | "function" | "const" | undefined {
+  for (const imp of imports) {
+    if (imp.kind !== "named" || imp.mechanism !== "php") continue;
+    if (
+      importBindingReferenceSites(imp).some((site) => rangeContains(site.range, { row: line + 1, column: column + 1 }))
+    ) {
+      return imp.phpImportType ?? "class";
+    }
+  }
+  return undefined;
+}
+
+function phpImportMatchesDefinition(imp: ImportBinding, def: SymbolDef): boolean {
+  if (imp.kind !== "named" || imp.mechanism !== "php") return true;
+  const importType = imp.phpImportType ?? "class";
+  if (importType === "function") return def.kind === SymbolKind.Function;
+  if (importType === "const") return def.kind === SymbolKind.Variable;
+  return def.kind === SymbolKind.Class || def.kind === SymbolKind.Interface || def.kind === SymbolKind.TypeAlias;
+}
+
+async function resolvePhpAliasDefinition(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  file: FileId,
+  localName: string,
+  importType: "class" | "function" | "const",
+): Promise<{ def: SymbolDef; targetFile: FileId } | null> {
+  const normalizeLocalName = importType === "const" ? (name: string) => name : foldPhpIdentifierCase;
+  const comparableLocalName = normalizeLocalName(localName);
+  const matches = mod.imports.filter(
+    (imp): imp is Extract<ImportBinding, { kind: "named" }> =>
+      imp.kind === "named" &&
+      imp.mechanism === "php" &&
+      (imp.phpImportType ?? "class") === importType &&
+      normalizeLocalName(imp.local) === comparableLocalName,
+  );
+  if (matches.length !== 1) return null;
+  const imp = matches[0]!;
+  let targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
+  if (!targetFile && index.projectRoot) {
+    const resolved = await resolveImportSpecifier(index.projectRoot, file, imp.from, "php", {
+      phpImportType: importType,
+    });
+    if (typeof resolved === "string") targetFile = resolved;
+  }
+  if (!targetFile) return null;
+  const resolved = resolveImported(index, { ...imp, resolved: targetFile }, imp.imported);
+  if (!resolved || "namespace" in resolved) return null;
+  return { def: resolved, targetFile };
+}
 
 export async function goToDefinition(
   index: ProjectIndex,
@@ -114,6 +171,11 @@ export async function goToDefinition(
       name = sliceText(declNameNode, source);
     }
   }
+
+  const phpImportType =
+    sup.id === "php"
+      ? (phpImportTypeAtPosition(mod.imports, pos.row, pos.column) ?? inferPhpQualifiedReferenceImportType(node))
+      : undefined;
 
   if (node && sup.supportsExportFromReferences && index.projectRoot) {
     const exportFrom = exportFromIdentifier(index, file, toRange(node), context);
@@ -182,24 +244,26 @@ export async function goToDefinition(
   if (sup.id === "php" && phpQualifiedReference && index.projectRoot) {
     const normalizedQualifiedReference = normalizePhpQualifiedReference(phpQualifiedReference, source, tree, node);
     if (normalizedQualifiedReference?.includes("\\")) {
-      const phpImportType = inferPhpQualifiedReferenceImportType(node);
+      const qualifiedImportType = phpImportType;
       const resolvedTarget = await resolveImportSpecifier(
         index.projectRoot,
         file,
         normalizedQualifiedReference,
         "php",
         {
-          ...(phpImportType ? { phpImportType } : {}),
+          ...(qualifiedImportType ? { phpImportType: qualifiedImportType } : {}),
         },
       );
       if (typeof resolvedTarget === "string") {
         const exportedName = normalizedQualifiedReference.split("\\").filter(Boolean).pop() ?? null;
         if (exportedName) {
           let preferredKind: SymbolKind | undefined;
-          if (phpImportType === "function") {
+          if (qualifiedImportType === "function") {
             preferredKind = SymbolKind.Function;
-          } else if (phpImportType === "class") {
+          } else if (qualifiedImportType === "class") {
             preferredKind = SymbolKind.Class;
+          } else if (qualifiedImportType === "const") {
+            preferredKind = SymbolKind.Variable;
           }
           const hit = resolveExport(index, resolvedTarget, exportedName, {
             ...(preferredKind ? { preferredKind } : {}),
@@ -217,6 +281,16 @@ export async function goToDefinition(
   }
 
   if (name) {
+    if (sup.id === "php") {
+      const alias = await resolvePhpAliasDefinition(index, mod, file, name, phpImportType ?? "const");
+      if (alias) {
+        return okGoToResult(index, alias.def, {
+          via: { importedFrom: alias.targetFile, exportedName: alias.def.localName },
+          resolution: "import",
+          confidence: "high",
+        });
+      }
+    }
     const scopeIndex = getOrBuildScopeIndex(index, file, source, sup, mod, tree);
     const local = findClosestBinding(scopeIndex, file, name, node, sup);
     if (local) {
@@ -535,6 +609,7 @@ async function findReferencesInternal(
       const bindingMatchesDefinition = async (): Promise<boolean> => {
         if (verifiedBindingMatches !== undefined) return verifiedBindingMatches;
         verifiedBindingMatches = false;
+        if (!phpImportMatchesDefinition(imp, def)) return verifiedBindingMatches;
         const parsed = await ensureCandidateParsed();
         for (const verificationSite of importBindingIdentityVerificationSites(imp)) {
           const resolved = await goToDefinition(
@@ -566,6 +641,26 @@ async function findReferencesInternal(
             range: site.range,
             via: { import: imp, importBinding: site.importBinding },
           });
+        }
+        if (!hasReachedCollectionLimit() && imp.kind === "named") {
+          const ranges = await collectVerifiedNamedNodeReferences(
+            index,
+            fileId,
+            imp.local,
+            def,
+            (params, parsed) => goToDefinition(index, params, parsed),
+            remainingCollectionSlots(),
+            verifiedReferenceFilter(fileId),
+          );
+          for (const { range, provenance, via } of ranges) {
+            if (hasReachedCollectionLimit()) break;
+            pushRef({
+              file: fileId,
+              range,
+              via: { import: imp, ...(via ?? {}) },
+              ...(provenance ? { provenance } : {}),
+            });
+          }
         }
         continue;
       }
@@ -640,7 +735,10 @@ async function findReferencesInternal(
               via: { import: imp, importBinding: site.importBinding },
             });
           }
-          if (fileIdentityKey(targetFile) !== fileIdentityKey(definitionFile)) {
+          if (
+            fileIdentityKey(targetFile) !== fileIdentityKey(definitionFile) ||
+            (imp.kind === "named" && imp.mechanism === "php")
+          ) {
             const remainingReferences = remainingCollectionSlots();
             const ranges = await collectVerifiedNamedNodeReferences(
               index,

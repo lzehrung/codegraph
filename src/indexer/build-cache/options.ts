@@ -70,8 +70,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * and shares one ancestry model across keyword-receiver navigation and detailed graph edges.
  * Epoch 31 distinguishes imported Kotlin interfaces from constructor-invoked classes, preserves
  * static PHP keyword scope, and resolves members through imported interface and type-alias bases.
+ * Epoch 32 resolves reduced-mode C++ header-unit imports and keeps PHP class, function, and
+ * constant imports in their separate symbol namespaces during navigation and reference scans.
  */
-export const CORE_ALGORITHM_EPOCH = 31;
+export const CORE_ALGORITHM_EPOCH = 32;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

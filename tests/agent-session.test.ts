@@ -577,6 +577,13 @@ describe("agent session", () => {
     expect(loadedLiteral.symbolGraph.nodes.size).toBeGreaterThan(0);
     literalSpy.mockRestore();
 
+    await writeCallable(false);
+    const falseSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const rebuiltFalse = await createAgentSession({ root }).loadProject();
+    expect(falseSpy).toHaveBeenCalledTimes(1);
+    expect(rebuiltFalse.symbolGraph.nodes.size).toBeGreaterThan(0);
+    falseSpy.mockRestore();
+
     await fs.writeFile(sidecarPath, original);
     const absentSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
     const loadedAbsent = await createAgentSession({ root }).loadProject();

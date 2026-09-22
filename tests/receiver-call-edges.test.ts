@@ -37,8 +37,18 @@ async function buildFixture(prefix: string, files: Record<string, string>): Prom
 }
 
 /** Function members named `memberName` owned by the type named `ownerName`. */
-function membersOwnedBy(graph: DetailedSymbolGraph, ownerName: string, memberName: string): string[] {
-  const owners = [...graph.nodes.values()].filter((node) => node.name === ownerName && node.kind !== "function");
+function membersOwnedBy(
+  graph: DetailedSymbolGraph,
+  ownerName: string,
+  memberName: string,
+  ownerFile?: string,
+): string[] {
+  const owners = [...graph.nodes.values()].filter(
+    (node) =>
+      node.name === ownerName &&
+      node.kind !== "function" &&
+      (ownerFile === undefined || path.basename(node.file) === ownerFile),
+  );
   expect(owners, `expected exactly one ${ownerName} type`).toHaveLength(1);
   const ownerId = owners[0]!.id;
   return graph.edges
@@ -746,6 +756,34 @@ nativeDescribe("receiver method call edge language parity", () => {
     const helper = nodeIn(graph, "box.cpp", "cpp_helper");
     const run = nodeIn(graph, "box.cpp", "cpp_run");
     expect(callsiteTexts(graph, helper, run, files)).toEqual(["cpp_helper"]);
+  });
+
+  it("owns C++ out-of-line definitions and preserves declaration scope", async () => {
+    const files: Record<string, string> = {
+      "box.hpp": "class Box { public: static int make(int value); virtual int run(int value); };",
+      "box.cpp": [
+        '#include "box.hpp"',
+        "int Box::make(int value) { return value; }",
+        "int Box::run(int value) { return value; }",
+      ].join("\n"),
+      "use.cpp": [
+        '#include "box.hpp"',
+        "int use_static() { return Box::make(1); }",
+        "int invalid_instance() { return Box::run(1); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cpp-out-of-line-", files);
+    const make = nodeIn(graph, "box.cpp", "make");
+    const run = nodeIn(graph, "box.cpp", "run");
+    const useStatic = nodeIn(graph, "use.cpp", "use_static");
+    const invalidInstance = nodeIn(graph, "use.cpp", "invalid_instance");
+    expect(membersOwnedBy(graph, "Box", "make", "box.hpp")).toEqual([make]);
+    expect(membersOwnedBy(graph, "Box", "run", "box.hpp")).toEqual([run]);
+    expect(graph.nodes.get(make)?.memberArity).toBe(1);
+    expect(graph.nodes.get(run)?.memberArity).toBe(1);
+    expect(graph.nodes.get(run)?.implementationTarget).toBe(true);
+    expect(callsiteTexts(graph, make, useStatic, files)).toEqual(["make"]);
+    expect(outgoingCallCount(graph, invalidInstance)).toBe(0);
   });
 
   it("records calls edges for Ruby self receivers, including unique mixins", async () => {
@@ -1694,6 +1732,27 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
     expect(edges.some((edge) => edge.label === "calls" && edge.from === "leaf.go")).toBe(false);
     expect(removed.map((edge) => edge.to)).toEqual(["wrong.run"]);
   });
+
+  it("removes all pre-existing exact edges when the call site is ambiguous", () => {
+    const nodes = new Map([
+      ["Mid", node("Mid", "Mid", { kind: "class" })],
+      ["leaf.go", node("leaf.go", "go")],
+      ["mid.run", node("mid.run", "run", { memberArity: 0 })],
+      ["wrong.first", node("wrong.first", "run", { memberArity: 0 })],
+      ["wrong.second", node("wrong.second", "run", { memberArity: 0 })],
+    ]);
+    const edges: SymbolGraph["edges"] = [
+      { from: "leaf.go", to: "Mid", label: "member_of" },
+      { from: "mid.run", to: "Mid", label: "member_of" },
+      { from: "leaf.go", to: "wrong.first", label: "calls", site },
+      { from: "leaf.go", to: "wrong.second", label: "calls", site },
+    ];
+
+    const removed = emitReceiverCallEdges({ nodes, edges }, [candidate()], () => true);
+
+    expect(edges.some((edge) => edge.label === "calls" && edge.from === "leaf.go")).toBe(false);
+    expect(removed.map((edge) => edge.to).sort()).toEqual(["wrong.first", "wrong.second"]);
+  });
 });
 
 nativeDescribe("receiver call arity and callable metadata regressions", () => {
@@ -1788,7 +1847,7 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
         "class SwTrailLabeled {",
         "  func pick(_ value: Int, _ first: () -> Int) -> Int { return value }",
         "  func pick(_ value: Int, _ first: () -> Int, second: () -> Int) -> Int { return value }",
-        "  func caller() -> Int { return self.pick(1) { 2 } second: { 3 } }",
+        '  func caller() -> Int { return self.pick(1) { let text = "}"; /* { */ return text.count } second: { 3 } }',
         "}",
       ].join("\n"),
     };

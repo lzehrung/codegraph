@@ -1463,4 +1463,68 @@ describe("reduced-mode C-family include form extraction", () => {
       }
     },
   );
+
+  it("classifies C++ header units without treating named modules as file specifiers", () => {
+    const source = [
+      'import "local.hpp";',
+      "export import <system.hpp>;",
+      "import widgets.core;",
+      "import HEADER;",
+      '// import "commented.hpp";',
+      'const char *text = "import \\"string.hpp\\";";',
+      "",
+    ].join("\n");
+
+    expect(reducedIncludeSpecifiers("cpp", source, "main.cpp")).toEqual([
+      { spec: "local.hpp", includeForm: "literal" },
+      { spec: "system.hpp", includeForm: "angle" },
+    ]);
+  });
+
+  it("resolves a reduced-mode C++ header-unit import as a literal file", async () => {
+    const root = await mkTmpDir("cg-reduced-header-unit-");
+    try {
+      const headerFile = path.join(root, "header.hpp");
+      const sourceFile = path.join(root, "main.cpp");
+      const declaration = "int helper() { return 1; }\n";
+      const source = 'import "header.hpp";\nint run() { return helper(); }\n';
+      await fsp.writeFile(headerFile, declaration, "utf8");
+      await fsp.writeFile(sourceFile, source, "utf8");
+
+      const index = await buildProjectIndexFromFiles(root, [headerFile, sourceFile]);
+      const sourceModule = index.byFile.get(fileIdentityKey(sourceFile));
+      const support = supportById("cpp");
+      expect(sourceModule).toBeDefined();
+      expect(support).toBeDefined();
+      if (!sourceModule || !support) return;
+      sourceModule.imports = await collectImportsForFile(sourceFile, root, {
+        source,
+        sup: support,
+        native: "off",
+      });
+
+      const definition = await goToDefinition(index, {
+        file: sourceFile,
+        line: 2,
+        column: source.split("\n")[1]!.indexOf("helper") + 1,
+      });
+      expect(definition.status).toBe("ok");
+      if (definition.status === "ok") {
+        expect(fileIdentityKey(definition.definition.file)).toBe(fileIdentityKey(headerFile));
+      }
+
+      const references = await findReferences(index, { file: headerFile, line: 1, column: 5 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(
+          references.references.some(
+            (reference) =>
+              fileIdentityKey(reference.file) === fileIdentityKey(sourceFile) && reference.range.start.line === 2,
+          ),
+        ).toBe(true);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

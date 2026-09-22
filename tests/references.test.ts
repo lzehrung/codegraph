@@ -4451,15 +4451,20 @@ describe("Find References: PHP global-namespace symbols", () => {
       const useFile = path.join(root, "use.php").replace(/\\/g, "/");
       const serviceLine = "<?php namespace App; class Service { function run() { return 1; } }";
       await fsp.writeFile(serviceFile, `${serviceLine}\n`, "utf8");
-      await fsp.writeFile(useFile, "<?php $svc = new \\app\\service();\n", "utf8");
+      await fsp.writeFile(
+        useFile,
+        ["<?php", "$svc = new \\app\\service();", "$match = $svc instanceof \\APP\\SERVICE;", ""].join("\n"),
+        "utf8",
+      );
       const index = await createTestIndexFromFiles(root, [serviceFile, useFile]);
 
-      const result = await testFindReferences(index, serviceFile, 1, tokenColumn(serviceLine, "Service"), 2);
+      const result = await testFindReferences(index, serviceFile, 1, tokenColumn(serviceLine, "Service"), 3);
 
       expect(result.status).toBe("ok");
       if (result.status !== "ok") return;
       expectReferenceAt(result, serviceFile, 1);
-      expectReferenceAt(result, useFile, 1);
+      expectReferenceAt(result, useFile, 2);
+      expectReferenceAt(result, useFile, 3);
       expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
@@ -4483,6 +4488,75 @@ describe("Find References: PHP global-namespace symbols", () => {
       expectReferenceAt(result, serviceFile, 1);
       expectReferenceAt(result, useFile, 1);
       expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps class, function, and constant aliases in separate PHP symbol namespaces", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-alias-role-refs-"));
+    try {
+      const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+      const sourceLines = [
+        "<?php",
+        "namespace App;",
+        "class Service {}",
+        "function helper() { return 1; }",
+        "const TOKEN = 1;",
+        "",
+      ];
+      const consumerLines = [
+        "<?php",
+        "namespace Client;",
+        "use App\\Service as Alias;",
+        "use function App\\helper as Alias;",
+        "use const App\\TOKEN as Alias;",
+        "$service = new ALIAS();",
+        "$value = ALIAS();",
+        "$constant = Alias;",
+        "$wrong = ALIAS;",
+        "",
+      ];
+      await fsp.writeFile(sourceFile, sourceLines.join("\n"), "utf8");
+      await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+      await testFindReferences(index, sourceFile, 3, tokenColumn(sourceLines[2]!, "Service"), [
+        { file: sourceFile, line: 3, column: tokenColumn(sourceLines[2]!, "Service") },
+        { file: consumerFile, line: 3, column: tokenColumn(consumerLines[2]!, "Service") },
+        { file: consumerFile, line: 3, column: tokenColumn(consumerLines[2]!, "Alias") },
+        { file: consumerFile, line: 6, column: tokenColumn(consumerLines[5]!, "ALIAS") },
+      ]);
+      await testFindReferences(index, sourceFile, 4, tokenColumn(sourceLines[3]!, "helper"), [
+        { file: sourceFile, line: 4, column: tokenColumn(sourceLines[3]!, "helper") },
+        { file: consumerFile, line: 4, column: tokenColumn(consumerLines[3]!, "helper") },
+        { file: consumerFile, line: 4, column: tokenColumn(consumerLines[3]!, "Alias") },
+        { file: consumerFile, line: 7, column: tokenColumn(consumerLines[6]!, "ALIAS") },
+      ]);
+      await testFindReferences(index, sourceFile, 5, tokenColumn(sourceLines[4]!, "TOKEN"), [
+        { file: sourceFile, line: 5, column: tokenColumn(sourceLines[4]!, "TOKEN") },
+        { file: consumerFile, line: 5, column: tokenColumn(consumerLines[4]!, "TOKEN") },
+        { file: consumerFile, line: 5, column: tokenColumn(consumerLines[4]!, "Alias") },
+        { file: consumerFile, line: 8, column: tokenColumn(consumerLines[7]!, "Alias") },
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps namespaced PHP constants case-sensitive", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-constant-case-refs-"));
+    try {
+      const file = path.join(root, "constants.php").replace(/\\/g, "/");
+      const lines = ["<?php", "namespace App;", "const TOKEN = 1;", "$value = TOKEN;", "$other = token;", ""];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+
+      await testFindReferences(index, file, 3, tokenColumn(lines[2]!, "TOKEN"), [
+        { file, line: 3, column: tokenColumn(lines[2]!, "TOKEN") },
+        { file, line: 4, column: tokenColumn(lines[3]!, "TOKEN") },
+      ]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

@@ -10,6 +10,7 @@ import {
 } from "../native/tree-sitter-native.js";
 import { resolveExport } from "../indexer/navigation-resolve.js";
 import { findClosestScopeBinding, getOrBuildScopeIndex } from "../indexer/navigation-local.js";
+import { ensureParsedContext, type ParsedFileContext } from "../indexer/parse-context.js";
 import { SymbolKind, type ProjectIndex, type ResolvedExport, type SymbolDef } from "../indexer/types.js";
 import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
@@ -149,6 +150,15 @@ export async function buildSymbolGraphDetailed(
 
   const receiverCalls: ReceiverCallCandidate[] = [];
   const receiverMemberScopes = new Map<string, ReceiverMemberScope>();
+  const ownershipParsedContexts = new Map<string, Promise<ParsedFileContext | null>>();
+  const loadParsedFile = (file: string): Promise<ParsedFileContext | null> => {
+    const fileKey = fileIdentityKey(file);
+    const cached = ownershipParsedContexts.get(fileKey);
+    if (cached) return cached;
+    const pending = ensureParsedContext(file, index.parsed?.get(fileKey), index.languageExtensions).catch(() => null);
+    ownershipParsedContexts.set(fileKey, pending);
+    return pending;
+  };
   // Receiver calls into runtime and dependency APIs dominate real call sites. Build these
   // indexes lazily so a scoped graph that has no receiver calls pays no allocation cost.
   let callableNames: { exact: Set<string>; phpFolded: Set<string> } | undefined;
@@ -217,6 +227,7 @@ export async function buildSymbolGraphDetailed(
       if (!sup || src === undefined || !tree) {
         throw new Error(`Failed to parse ${file}`);
       }
+      ownershipParsedContexts.set(fileIdentityKey(file), Promise.resolve({ source: src, tree, sup }));
 
       const { aliasToTargetDef, aliasToTargetModule } = buildImportAliasMaps(
         index,
@@ -284,10 +295,11 @@ export async function buildSymbolGraphDetailed(
         receiverMemberScopes,
         hasCallableNamed,
         noteCallableName,
+        loadParsedFile,
       };
       emitPythonDecoratorEdges(edgePassContext, tree.rootNode);
       emitFunctionBodyEdges(edgePassContext, functionNodes);
-      emitMemberOwnershipEdges(edgePassContext, functionNodes, classNodes);
+      await emitMemberOwnershipEdges(edgePassContext, functionNodes, classNodes);
       emitClassInheritanceEdges(edgePassContext, classNodes);
       emitRustImplEdges(edgePassContext, tree.rootNode);
     } catch (error) {

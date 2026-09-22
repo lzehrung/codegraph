@@ -591,6 +591,54 @@ const definition: LanguageTestDefinition = {
 
 runLanguageTests(definition);
 
+describe("PHP import symbol namespaces", () => {
+  it("resolves each same-spelled alias declaration by its import role", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-alias-role-declarations-"));
+    const sourceFile = path.join(root, "source.php");
+    const consumerFile = path.join(root, "consumer.php");
+    const source = [
+      "<?php",
+      "namespace App;",
+      "class Service {}",
+      "function helper() { return 1; }",
+      "const TOKEN = 1;",
+      "",
+    ].join("\n");
+    const consumerLines = [
+      "<?php",
+      "namespace Client;",
+      "use App\\Service as Alias;",
+      "use function App\\helper as Alias;",
+      "use const App\\TOKEN as Alias;",
+      "",
+    ];
+
+    try {
+      await writeFile(sourceFile, source, "utf8");
+      await writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+      for (const [line, expectedLine] of [
+        [3, 3],
+        [4, 4],
+        [5, 5],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: consumerFile,
+          line,
+          column: consumerLines[line - 1]!.lastIndexOf("Alias") + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") continue;
+        expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(sourceFile));
+        expect(result.definition.range.start.line).toBe(expectedLine);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("PHP enum interface conformance", () => {
   it("emits an implements edge and returns the enum from implementation lookup", async () => {
     const sampleDir = path.resolve(process.cwd(), "tests", "samples", "php");
