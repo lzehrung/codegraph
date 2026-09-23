@@ -140,7 +140,7 @@ exports[`native semantic coverage > keeps native semantics stable for an explici
 exports[`native semantic coverage > keeps native semantics stable for normalization-sensitive TypeScript export assignment 1`] = `
 {
   "goto": {
-    "file": "module.ts",
+    "file": "module.model.ts",
     "line": 3,
     "status": "ok",
   },
@@ -148,8 +148,8 @@ exports[`native semantic coverage > keeps native semantics stable for normalizat
     "refs": [
       "consumer.ts:1",
       "consumer.ts:2",
-      "module.ts:3",
-      "module.ts:4",
+      "module.model.ts:3",
+      "module.model.ts:4",
     ],
     "status": "ok",
   },

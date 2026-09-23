@@ -197,7 +197,7 @@ describe("TypeScript declaration-only symbols", () => {
 describe("TypeScript enum and field member navigation", () => {
   it("resolves enum members and class fields without treating initializer reads as declarations", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-members-"));
-    const apiFile = path.join(root, "api.ts").replace(/\\/g, "/");
+    const apiFile = path.join(root, "api.model.ts").replace(/\\/g, "/");
     const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
     const apiSource = [
       "export enum Mode {",
@@ -214,7 +214,7 @@ describe("TypeScript enum and field member navigation", () => {
       "",
     ].join("\n");
     const consumerSource = [
-      'import { Mode, Box } from "./api";',
+      'import { Mode, Box } from "./api.model";',
       "const selected = Mode.Light;",
       "const copy = Box.value;",
       "const made = Box.create();",

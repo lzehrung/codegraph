@@ -84,8 +84,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 38 preserves C++ overload groups and resolves qualified namespace/type paths exactly.
  * Epoch 39 treats a sole C/C++ void parameter as zero arity and resolves PHP class-like and
  * function exports with PHP's ASCII case-insensitive name rules.
+ * Epoch 40 treats an unknown trailing suffix in a module specifier as part of the
+ * extensionless stem, so imports such as `./statement-config.model` can resolve `.ts`.
  */
-export const CORE_ALGORITHM_EPOCH = 39;
+export const CORE_ALGORITHM_EPOCH = 40;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

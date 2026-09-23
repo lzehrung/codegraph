@@ -759,7 +759,7 @@ async function createRustPathOwnerRawIdentCase(): Promise<SemanticExpectation> {
 async function createTypeScriptNormalizationCase(): Promise<SemanticExpectation> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-semantic-"));
   tempDirs.push(root);
-  const moduleFile = path.join(root, "module.ts");
+  const moduleFile = path.join(root, "module.model.ts");
   const consumerFile = path.join(root, "consumer.ts");
 
   await fsp.writeFile(
@@ -774,7 +774,9 @@ async function createTypeScriptNormalizationCase(): Promise<SemanticExpectation>
   );
   await fsp.writeFile(
     consumerFile,
-    ["import assigned = require('./module');", "const instance = new assigned();", "console.log(instance);"].join("\n"),
+    ["import assigned = require('./module.model');", "const instance = new assigned();", "console.log(instance);"].join(
+      "\n",
+    ),
     "utf8",
   );
 

@@ -83,7 +83,8 @@ export function getResolutionExtensions(resolutionExtensions?: readonly string[]
 export function listResolutionCandidates(base: string, resolutionExtensions?: readonly string[]): string[] {
   const extensions = getResolutionExtensions(resolutionExtensions);
   const baseExt = path.extname(base).toLowerCase();
-  if (!baseExt) {
+  const hasExplicitExtension = baseExt in EXPLICIT_SPECIFIER_EXTENSION_FAMILIES || extensions.includes(baseExt);
+  if (!hasExplicitExtension) {
     return Array.from(
       new Set([
         base,

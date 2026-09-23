@@ -664,31 +664,33 @@ describe("Find References", () => {
   });
 
   describe("TypeScript enum references", () => {
-    it("finds references to exported enum declarations", async () => {
+    it("finds cross-file enum references through extensionless dotted TypeScript specifiers", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-enum-refs-"));
       try {
-        const typesFile = path.join(root, "types.ts").replace(/\\/g, "/");
-        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
-        await fsp.writeFile(typesFile, "export enum Mode {\n  Light,\n  Dark,\n}\n", "utf8");
-        await fsp.writeFile(
-          consumerFile,
-          ['import { Mode } from "./types";', "const selected = Mode.Light;", ""].join("\n"),
-          "utf8",
-        );
+        const typesFile = path.join(root, "statement-fund-col-groups.model.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "statement-config.model.ts").replace(/\\/g, "/");
+        await fsp.writeFile(typesFile, "export enum FundColGroupType {\n  BreakOut,\n  Other,\n}\n", "utf8");
+        const importLine = 'import { FundColGroupType } from "./statement-fund-col-groups.model";';
+        const typeUseLine = "export interface Config { group: FundColGroupType }";
+        const valueUseLine = "export const selected = FundColGroupType.BreakOut;";
+        await fsp.writeFile(consumerFile, [importLine, typeUseLine, valueUseLine, ""].join("\n"), "utf8");
         const index = await createTestIndexFromFiles(root, [typesFile, consumerFile]);
 
-        const importedColumn = tokenColumn('import { Mode } from "./types";', "Mode");
-        const useColumn = tokenColumn("const selected = Mode.Light;", "Mode");
+        const importedColumn = tokenColumn(importLine, "FundColGroupType");
+        const typeUseColumn = tokenColumn(typeUseLine, "FundColGroupType");
+        const valueUseColumn = tokenColumn(valueUseLine, "FundColGroupType");
         const result = await testFindReferences(index, typesFile, 1, 13, [
           { file: typesFile, line: 1, column: 13 },
           { file: consumerFile, line: 1, column: importedColumn },
-          { file: consumerFile, line: 2, column: useColumn },
+          { file: consumerFile, line: 2, column: typeUseColumn },
+          { file: consumerFile, line: 3, column: valueUseColumn },
         ]);
 
         expect(result.status).toBe("ok");
         expectReferenceAt(result, typesFile, 1);
         expectReferenceAt(result, consumerFile, 1);
         expectReferenceAt(result, consumerFile, 2);
+        expectReferenceAt(result, consumerFile, 3);
         if (result.status === "ok") {
           const imported = result.references.find(
             (reference) => reference.file === consumerFile && reference.range.start.line === 1,

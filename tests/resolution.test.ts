@@ -160,6 +160,27 @@ describe("Import Resolution", () => {
     expect(helperImport!.resolved).toBe(path.join(root, "utils.js").replace(/\\/g, "/"));
   });
 
+  it("resolves dotted stems while preserving exact-file precedence", async () => {
+    const root = await mkTmpDir("dg-resolve-dotted-stem-");
+    const importer = path.join(root, "main.ts");
+    const dottedStemFile = path.join(root, "target.model.ts");
+    const exactFile = path.join(root, "target.model");
+    try {
+      await fsp.writeFile(importer, "", "utf8");
+      await fsp.writeFile(dottedStemFile, "export const target = 1;\n", "utf8");
+
+      await expect(resolveSpecifier(importer, "./target.model", root)).resolves.toBe(
+        dottedStemFile.replace(/\\/g, "/"),
+      );
+
+      await fsp.writeFile(exactFile, "exact target\n", "utf8");
+      clearImportResolutionCaches();
+      await expect(resolveSpecifier(importer, "./target.model", root)).resolves.toBe(exactFile.replace(/\\/g, "/"));
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves directory imports to index files instead of directory paths", async () => {
     const root = await mkTmpDir("dg-resolve-directory-index-");
     const mainFile = path.join(root, "main.ts");
