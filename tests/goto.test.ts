@@ -3587,6 +3587,33 @@ describe("Keyword-receiver member navigation", () => {
     }
   });
 
+  it("stops ancestor lookup when shallow overloads reject a known argument count", async () => {
+    const source = [
+      "class Grand {",
+      "  helper(): number { return 0; }",
+      "}",
+      "class Base extends Grand {",
+      "  helper(x: number): number { return x; }",
+      "  helper(x: number, y: number): number { return x + y; }",
+      "}",
+      "class Child extends Base {",
+      "  run(): number { return this.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-this-overload-shadow-goto-", { "Box.ts": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["Box.ts"]!,
+        line: 9,
+        column: columnOf(source, 9, "helper()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps an unknown argument count ambiguous for this overloads", async () => {
     const source = [
       "class Box {",

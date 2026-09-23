@@ -4351,6 +4351,34 @@ describe("Find References: keyword receiver scope and coverage", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("uses free-function references for namespace-qualified C++ definitions", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-namespace-function-refs-"));
+    try {
+      const file = path.join(root, "free.cpp").replace(/\\/g, "/");
+      const source = [
+        "namespace tools { int run(); }",
+        "int tools::run() { return 1; }",
+        "int call() { return tools::run(); }",
+        "int unrelated(auto& value) { return value.run(); }",
+      ].join("\n");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const refs = await testFindReferences(index, file, 2, source.split("\n")[1]!.indexOf("run") + 1, 2);
+      if (refs.status === "ok") {
+        const lines = refs.references.map((reference) => reference.range.start.line);
+        expect(lines).toContain(3);
+        expect(lines).not.toContain(4);
+        expect(refs.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["strategy_unavailable"],
+        });
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Find References: PHP unproven receiver is not a bare-name hit", () => {

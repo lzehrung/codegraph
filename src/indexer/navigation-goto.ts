@@ -698,15 +698,14 @@ async function resolveKeywordReceiverMember(
     if (uniqueMatches.length === 1) return uniqueMatches[0];
     if (uniqueMatches.length > 1) {
       // A known call argument count narrows same-named overloads on one type before the
-      // unique-shallowest rule. Zero remaining matches after that filter descend; more than
-      // one remaining match is unresolved ambiguity and must not continue to a shared ancestor.
+      // unique-shallowest rule. Any remaining ambiguity or a known-incompatible overload
+      // set stops here; neither case can resolve to a hidden declaration on an ancestor.
       if (knownArgumentCount === undefined) return undefined;
       const arityMatches: SymbolDef[] = [];
       for (const match of uniqueMatches) {
         if ((await keywordMemberDeclarationArity(index, match)) === knownArgumentCount) arityMatches.push(match);
       }
-      if (arityMatches.length === 1) return arityMatches[0];
-      if (arityMatches.length > 1) return undefined;
+      return arityMatches.length === 1 ? arityMatches[0] : undefined;
     }
     const next: KeywordClassRef[] = [];
     for (const candidate of level) {

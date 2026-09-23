@@ -802,6 +802,24 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(outgoingCallCount(graph, invalidInstance)).toBe(0);
   });
 
+  it("keeps namespace-qualified C++ free functions out of class ownership", async () => {
+    const files: Record<string, string> = {
+      "free.cpp": [
+        "class Holder { public: using tools = int; };",
+        "namespace tools { int run(); }",
+        "int tools::run() { return 1; }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cpp-namespace-owner-", files);
+    const ownershipEdges = graph.edges.filter(
+      (edge) =>
+        edge.label === "member_of" &&
+        graph.nodes.get(edge.from)?.name === "run" &&
+        graph.nodes.get(edge.to)?.name === "tools",
+    );
+    expect(ownershipEdges).toEqual([]);
+  });
+
   it("records calls edges for Ruby self receivers, including unique mixins", async () => {
     const files: Record<string, string> = {
       "box.rb": [

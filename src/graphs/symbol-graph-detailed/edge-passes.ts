@@ -25,6 +25,7 @@ import {
   declaresMembers,
   isUnprovenHeritageExpression,
   nearestMemberContainer,
+  isCppMemberContainerDefinition,
   receiverCallAccess,
   type ReceiverCallAccess,
   type ReceiverCallCandidate,
@@ -215,7 +216,7 @@ export async function emitMemberOwnershipEdges(
   classNodes: DetailedClassNode[],
 ): Promise<void> {
   for (const fn of functionNodes) {
-    const owner = memberOwner(context, fn, classNodes);
+    const owner = await memberOwner(context, fn, classNodes);
     if (!owner) continue;
     const memberId = ensureNode(context, fn.def);
     const outOfLineDeclaration = owner.cppOutOfLine
@@ -255,11 +256,11 @@ function memberScopeForDefinition(
 type MemberOwner = { def: SymbolDef; cppOutOfLine: boolean };
 
 /** Lexical type body, named Go receiver type, or named C++ out-of-line owner. */
-function memberOwner(
+async function memberOwner(
   context: EdgePassContext,
   fn: DetailedFunctionNode,
   classNodes: DetailedClassNode[],
-): MemberOwner | null {
+): Promise<MemberOwner | null> {
   if (!isClassMemberFunction(fn)) return null;
   if (context.sup.id === "go" && fn.node.type === "method_declaration") {
     const def = goMethodReceiverTypeDef(context, fn.node);
@@ -274,7 +275,9 @@ function memberOwner(
   if (context.sup.id === "cpp") {
     const ownerName = cppOutOfLineClassName(fn.node, context.source, context.sup);
     const def = ownerName ? resolveNamedType(context, ownerName, fn.node) : null;
-    return def ? { def, cppOutOfLine: true } : null;
+    if (!def) return null;
+    const parsed = await context.loadParsedFile(def.file);
+    return parsed && isCppMemberContainerDefinition(parsed.tree, def) ? { def, cppOutOfLine: true } : null;
   }
   if (context.sup.id !== "zig") return null;
   const container = nearestMemberContainer(fn.node);

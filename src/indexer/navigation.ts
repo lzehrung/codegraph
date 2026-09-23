@@ -53,6 +53,7 @@ import {
   cppOutOfLineClassName,
   cppOutOfLineMemberDeclarationNode,
   declaresMembers,
+  isCppMemberContainerDefinition,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
   type FindReferencesResult,
@@ -509,7 +510,7 @@ async function findReferencesInternal(
   );
   pushRef({ file: definitionFile, range: def.range });
   const definitionNameNode = syntaxNodeForDefinition(parsedContext, def);
-  const cppReceiverOwner = cppOutOfLineReceiverOwner(index, mod, def, parsedContext, definitionNameNode);
+  const cppReceiverOwner = await cppOutOfLineReceiverOwner(index, mod, def, parsedContext, definitionNameNode);
   const receiverMemberDefinition = isReceiverMemberDefinition(def, parsedContext, !!cppReceiverOwner);
   const equivalentReceiverDefinitions = cppReceiverOwner
     ? await cppOutOfLineEquivalentDefinitions(index, def, parsedContext, definitionNameNode, cppReceiverOwner)
@@ -943,18 +944,24 @@ function syntaxNodeForDefinition(parsedContext: ParsedFileContext, def: SymbolDe
   return parsedContext.tree.rootNode.descendantForPosition(position, position);
 }
 
-function cppOutOfLineReceiverOwner(
+async function cppOutOfLineReceiverOwner(
   index: ProjectIndex,
   mod: ModuleIndex,
   def: SymbolDef,
   parsedContext: ParsedFileContext,
   definitionNameNode: SyntaxNodeLike,
-): SymbolDef | null {
+): Promise<SymbolDef | null> {
   if (parsedContext.sup.id !== "cpp" || def.kind !== SymbolKind.Function) return null;
   const ownerName = cppOutOfLineClassName(definitionNameNode, parsedContext.source, parsedContext.sup);
   if (!ownerName) return null;
   const owner = resolveNamedDefinition(index, mod, def.file, parsedContext.sup, ownerName);
-  return owner?.status === "ok" && declaresMembers(owner.definition) ? owner.definition : null;
+  if (owner?.status !== "ok" || !declaresMembers(owner.definition)) return null;
+  const ownerParsed = await ensureParsedContext(
+    owner.definition.file,
+    index.parsed?.get(fileIdentityKey(owner.definition.file)),
+    index.languageExtensions,
+  );
+  return isCppMemberContainerDefinition(ownerParsed.tree, owner.definition) ? owner.definition : null;
 }
 
 async function cppOutOfLineEquivalentDefinitions(

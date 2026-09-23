@@ -77,8 +77,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 34 links C++ out-of-line definitions to their in-class declarations for ownership,
  * calls, and references, and indexes JavaScript and TypeScript function-valued fields as
  * callable members independently of file order.
+ * Epoch 35 requires a parsed class, struct, or union before assigning C++ out-of-line member
+ * ownership and stops ancestor lookup when shallow overloads reject a known call arity.
  */
-export const CORE_ALGORITHM_EPOCH = 34;
+export const CORE_ALGORITHM_EPOCH = 35;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

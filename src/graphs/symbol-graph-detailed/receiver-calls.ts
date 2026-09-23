@@ -3,7 +3,7 @@ import { findCommentEnd } from "../../impact/call-compatibility/text-scanner.js"
 import { SymbolKind, type SymbolDef } from "../../indexer/types.js";
 import type { LanguageSupport } from "../../languages.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
-import type { SyntaxNodeLike } from "../../languages/types.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { sliceText } from "../../util/ast.js";
 import { foldPhpIdentifierCase, XID_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { keywordReceiverKind, ownReceiverMemberScope } from "../../util/member-access-tables.js";
@@ -95,6 +95,12 @@ const MEMBER_CONTAINER_TYPES: Record<string, true> = {
   type_alias_declaration: true,
   // C/C++ unions declare members exactly like structs (tree-sitter-cpp captures
   // union names and classifies them as classes).
+  union_specifier: true,
+};
+
+const CPP_MEMBER_CONTAINER_TYPES: Record<string, true> = {
+  class_specifier: true,
+  struct_specifier: true,
   union_specifier: true,
 };
 
@@ -1031,6 +1037,19 @@ export function classifyReceiver(
 /** Whether a resolved definition can declare callable members. */
 export function declaresMembers(def: SymbolDef): boolean {
   return def.kind === SymbolKind.Class || def.kind === SymbolKind.Interface || def.kind === SymbolKind.TypeAlias;
+}
+
+/** Whether a C++ definition denotes a class, struct, or union that can own methods. */
+export function isCppMemberContainerDefinition(tree: SyntaxTreeLike, def: SymbolDef): boolean {
+  const position = {
+    row: Math.max(0, def.range.start.line - 1),
+    column: Math.max(0, def.range.start.column - 1),
+  };
+  const nameNode = tree.rootNode.descendantForPosition(position, position);
+  const container = nearestMemberContainer(nameNode);
+  if (!container || CPP_MEMBER_CONTAINER_TYPES[container.type] === undefined) return false;
+  const containerName = container.childForFieldName("name");
+  return containerName?.startPosition.row === position.row && containerName.startPosition.column === position.column;
 }
 
 /** Nearest enclosing declaration that lexically owns `node` as a member. */
