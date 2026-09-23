@@ -15,7 +15,7 @@ import {
   isReceiverNameNode,
 } from "../../util/member-access.js";
 import type { SymbolGraph } from "../symbol-graph.js";
-import { PARAMETER_LIST_NODE_TYPES } from "./ast.js";
+import { declarationMemberArity, findFirstNodeByType, isIdentifierType, PARAMETER_LIST_NODE_TYPES } from "./ast.js";
 
 /**
  * A receiver method call whose target could not be proven from the calling module
@@ -791,6 +791,97 @@ export function cppOutOfLineClassName(node: SyntaxNodeLike, source: string, sup:
   }
   return null;
 }
+function sameSyntaxNode(left: SyntaxNodeLike | null, right: SyntaxNodeLike): boolean {
+  if (!left) return false;
+  if (left.id !== undefined && right.id !== undefined) return left.id === right.id;
+  return left.type === right.type && left.startIndex === right.startIndex && left.endIndex === right.endIndex;
+}
+
+function cppFunctionDeclaratorName(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
+  const functionDeclarator =
+    node.type === "function_declarator" ? node : findFirstNodeByType(node, "function_declarator");
+  let current = functionDeclarator?.childForFieldName("declarator") ?? null;
+  while (current) {
+    if (isIdentifierType(sup, current.type) || current.type === "operator_name" || current.type === "destructor_name") {
+      return current;
+    }
+    const name = current.childForFieldName("name");
+    if (
+      name &&
+      (isIdentifierType(sup, name.type) || name.type === "operator_name" || name.type === "destructor_name")
+    ) {
+      return name;
+    }
+    const nested = current.childForFieldName("declarator");
+    if (!nested || nested.id === current.id) return null;
+    current = nested;
+  }
+  return null;
+}
+
+function cppMemberArityFromAncestor(node: SyntaxNodeLike): number | undefined {
+  let current: SyntaxNodeLike | null = node;
+  while (current) {
+    const arity = declarationMemberArity(current, "cpp");
+    if (arity !== undefined) return arity;
+    current = current.parent;
+  }
+  return undefined;
+}
+
+function collectCppMemberDeclarations(
+  node: SyntaxNodeLike,
+  ownerNode: SyntaxNodeLike,
+  localName: string,
+  ownerSource: string,
+  sup: LanguageSupport,
+  expectedArity: number | undefined,
+  out: Array<{ node: SyntaxNodeLike; nameNode: SyntaxNodeLike }>,
+): void {
+  if (
+    (node.type === "field_declaration" || node.type === "declaration") &&
+    sameSyntaxNode(nearestMemberContainer(node), ownerNode)
+  ) {
+    const nameNode = cppFunctionDeclaratorName(node, sup);
+    if (
+      nameNode &&
+      sup.normalizeIdentifier(sliceText(nameNode, ownerSource)) === sup.normalizeIdentifier(localName) &&
+      declarationMemberArity(node, sup.id) === expectedArity
+    ) {
+      out.push({ node, nameNode });
+    }
+    return;
+  }
+  for (const child of node.namedChildren) {
+    collectCppMemberDeclarations(child, ownerNode, localName, ownerSource, sup, expectedArity, out);
+  }
+}
+
+export type CppOutOfLineMemberDeclaration = {
+  node: SyntaxNodeLike;
+  nameNode: SyntaxNodeLike;
+};
+
+/**
+ * Finds the unique in-class declaration corresponding to a C++ out-of-line member
+ * definition. Name and arity must both match so overloads do not collapse.
+ */
+export function cppOutOfLineMemberDeclarationNode(
+  definitionNameNode: SyntaxNodeLike,
+  localName: string,
+  ownerNameNode: SyntaxNodeLike,
+  ownerSource: string,
+  sup: LanguageSupport,
+): CppOutOfLineMemberDeclaration | null {
+  if (sup.id !== "cpp") return null;
+  const ownerNode = nearestMemberContainer(ownerNameNode);
+  if (!ownerNode) return null;
+  const expectedArity = cppMemberArityFromAncestor(definitionNameNode);
+  const declarations: CppOutOfLineMemberDeclaration[] = [];
+  collectCppMemberDeclarations(ownerNode, ownerNode, localName, ownerSource, sup, expectedArity, declarations);
+  return declarations.length === 1 ? declarations[0]! : null;
+}
+
 export function nodeDeclaresStatic(node: SyntaxNodeLike, source: string): boolean {
   if (node.type === "static" || node.type === "static_modifier") return true;
   if (node.type === "storage_class_specifier" || node.type === "modifier" || node.type === "property_modifier") {
@@ -1291,7 +1382,7 @@ function provenMemberTarget(
   for (const ownerId of owners) {
     for (const memberId of membersByOwner.get(ownerId) ?? []) {
       const node = graph.nodes.get(memberId);
-      if (!node || node.kind !== "function") continue;
+      if (!node || (node.kind !== "function" && !node.callable)) continue;
       const nameMatches = candidate.caseInsensitiveMemberName
         ? foldPhpIdentifierCase(node.name) === foldPhpIdentifierCase(candidate.memberName)
         : node.name === candidate.memberName;

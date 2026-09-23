@@ -6,9 +6,9 @@ Scope: this counts only the dedicated per-language smoke files, not a language's
 
 Regenerate with `npm run bench:fixtures`. Verify it is current with `npm run bench:fixtures:check`.
 
-Generated: 2026-09-22T13:52:03.959Z (Node v22.16.0)
+Generated: 2026-09-23T01:08:27.136Z (Node v22.16.0)
 
-Total across the 28 language suites: 486 tests, 0 failed.
+Total across the 28 language suites: 488 tests, 0 failed.
 The tests/languages run also executed 75 tests in cross-language files that are not attributed to a language: `tests/languages/chunk-sfc.test.ts`, `tests/languages/cpp-module-incremental.test.ts`, `tests/languages/graph-captures.test.ts`, `tests/languages/import-from-captures.test.ts`, `tests/languages/query-hygiene.test.ts`.
 
 | Language         | Status  | Tests | Test file(s)                         |
@@ -17,7 +17,7 @@ The tests/languages run also executed 75 tests in cross-language files that are 
 | Astro            | passing | 6     | `tests/languages/astro.test.ts`      |
 | C                | passing | 29    | `tests/languages/c.test.ts`          |
 | C#               | passing | 26    | `tests/languages/csharp.test.ts`     |
-| C++              | passing | 31    | `tests/languages/cpp.test.ts`        |
+| C++              | passing | 32    | `tests/languages/cpp.test.ts`        |
 | CSS              | passing | 7     | `tests/languages/css.test.ts`        |
 | Go               | passing | 14    | `tests/languages/go.test.ts`         |
 | Handlebars       | passing | 3     | `tests/languages/hbs.test.ts`        |
@@ -28,7 +28,7 @@ The tests/languages run also executed 75 tests in cross-language files that are 
 | Less             | passing | 7     | `tests/languages/less.test.ts`       |
 | Markdown         | passing | 16    | `tests/languages/markdown.test.ts`   |
 | MDX              | passing | 5     | `tests/languages/mdx.test.ts`        |
-| PHP              | passing | 55    | `tests/languages/php.test.ts`        |
+| PHP              | passing | 56    | `tests/languages/php.test.ts`        |
 | Python           | passing | 35    | `tests/languages/python.test.ts`     |
 | reStructuredText | passing | 4     | `tests/languages/rst.test.ts`        |
 | Ruby             | passing | 13    | `tests/languages/ruby.test.ts`       |

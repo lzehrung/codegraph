@@ -760,11 +760,21 @@ nativeDescribe("receiver method call edge language parity", () => {
 
   it("owns C++ out-of-line definitions and preserves declaration scope", async () => {
     const files: Record<string, string> = {
-      "box.hpp": "class Box { public: static int make(int value); virtual int run(int value); };",
+      "box.hpp": [
+        "class Box {",
+        "public:",
+        "  static int make(int value);",
+        "  virtual int run(int value);",
+        "  virtual ~Box();",
+        "  virtual int operator()(int value);",
+        "};",
+      ].join("\n"),
       "box.cpp": [
         '#include "box.hpp"',
         "int Box::make(int value) { return value; }",
         "int Box::run(int value) { return value; }",
+        "Box::~Box() {}",
+        "int Box::operator()(int value) { return value; }",
       ].join("\n"),
       "use.cpp": [
         '#include "box.hpp"',
@@ -775,13 +785,19 @@ nativeDescribe("receiver method call edge language parity", () => {
     const graph = await buildFixture("cg-receiver-cpp-out-of-line-", files);
     const make = nodeIn(graph, "box.cpp", "make");
     const run = nodeIn(graph, "box.cpp", "run");
+    const destructor = nodeIn(graph, "box.cpp", "~Box");
+    const callOperator = nodeIn(graph, "box.cpp", "operator()");
     const useStatic = nodeIn(graph, "use.cpp", "use_static");
     const invalidInstance = nodeIn(graph, "use.cpp", "invalid_instance");
     expect(membersOwnedBy(graph, "Box", "make", "box.hpp")).toEqual([make]);
     expect(membersOwnedBy(graph, "Box", "run", "box.hpp")).toEqual([run]);
+    expect(membersOwnedBy(graph, "Box", "~Box", "box.hpp")).toEqual([destructor]);
+    expect(membersOwnedBy(graph, "Box", "operator()", "box.hpp")).toEqual([callOperator]);
     expect(graph.nodes.get(make)?.memberArity).toBe(1);
     expect(graph.nodes.get(run)?.memberArity).toBe(1);
     expect(graph.nodes.get(run)?.implementationTarget).toBe(true);
+    expect(graph.nodes.get(destructor)?.implementationTarget).toBe(true);
+    expect(graph.nodes.get(callOperator)?.implementationTarget).toBe(true);
     expect(callsiteTexts(graph, make, useStatic, files)).toEqual(["make"]);
     expect(outgoingCallCount(graph, invalidInstance)).toBe(0);
   });
@@ -2001,6 +2017,30 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     expect(findCallHierarchy(graph, data, "outgoing").status).toBe("invalid_target");
   });
 
+  it("resolves receiver calls to function-valued fields declared in later files", async () => {
+    const files: Record<string, string> = {
+      "a-consumer.ts": [
+        'import { Box } from "./z-box";',
+        "export function caller(box: Box): number { return box.helper(); }",
+      ].join("\n"),
+      "z-box.ts": [
+        "export class Box {",
+        "  helper = (): number => 1;",
+        "  static shared = (): number => 2;",
+        "  static staticCaller(): number { return this.shared(); }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-callable-field-order-", files);
+    const helper = anyNodeIn(graph, "z-box.ts", "helper");
+    expect(graph.nodes.get(helper)?.callable).toBe(true);
+    const caller = nodeIn(graph, "a-consumer.ts", "caller");
+    expect(callsiteTexts(graph, helper, caller, files)).toEqual(["helper"]);
+    const shared = anyNodeIn(graph, "z-box.ts", "shared");
+    expect(graph.nodes.get(shared)?.callable).toBe(true);
+    const staticCaller = nodeIn(graph, "z-box.ts", "staticCaller");
+    expect(callsiteTexts(graph, shared, staticCaller, files)).toEqual(["shared"]);
+  });
   it("does not mark a scalar binding callable from a same-named member assignment", async () => {
     const files: Record<string, string> = {
       "collide.js": [

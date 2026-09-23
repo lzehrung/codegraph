@@ -74,8 +74,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * constant imports in their separate symbol namespaces during navigation and reference scans.
  * Epoch 33 keeps C++ class members in member scope and classifies PHP type-position aliases before
  * selecting among separate import namespaces.
+ * Epoch 34 links C++ out-of-line definitions to their in-class declarations for ownership,
+ * calls, and references, and indexes JavaScript and TypeScript function-valued fields as
+ * callable members independently of file order.
  */
-export const CORE_ALGORITHM_EPOCH = 33;
+export const CORE_ALGORITHM_EPOCH = 34;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

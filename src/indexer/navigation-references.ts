@@ -543,6 +543,7 @@ export async function collectVerifiedNamedNodeReferences(
   maxVerified?: number,
   includeReference?: (reference: VerifiedNamedNodeReference) => boolean,
   onReceiverProofUnavailable?: (file: FileId) => void,
+  equivalentDefinitions: readonly SymbolDef[] = [],
 ): Promise<VerifiedNamedNodeReference[]> {
   const collected = await collectNamedNodeReferences(index, fileId, symbolName, expectedDef.kind);
   if (!collected) return [];
@@ -554,6 +555,25 @@ export async function collectVerifiedNamedNodeReferences(
       ? await phpIndexedCanonicalNames(index, expectedDef.kind)
       : undefined;
   const verified: VerifiedNamedNodeReference[] = [];
+  const matchesExpectedDefinition = (definition: SymbolDef): boolean =>
+    sameDef(definition, expectedDef, index.languageExtensions) ||
+    equivalentDefinitions.some((equivalent) => sameDef(definition, equivalent, index.languageExtensions));
+  const candidateFileKey = fileIdentityKey(fileId);
+  const equivalentDefinitionsInFile = equivalentDefinitions.filter(
+    (equivalent) => fileIdentityKey(equivalent.file) === candidateFileKey,
+  );
+  const isEquivalentDeclarationRange = (range: Range): boolean =>
+    equivalentDefinitionsInFile.some((equivalent) => {
+      const startMatches =
+        range.start.index !== undefined && equivalent.range.start.index !== undefined
+          ? range.start.index === equivalent.range.start.index
+          : range.start.line === equivalent.range.start.line && range.start.column === equivalent.range.start.column;
+      const endMatches =
+        range.end.index !== undefined && equivalent.range.end.index !== undefined
+          ? range.end.index === equivalent.range.end.index
+          : range.end.line === equivalent.range.end.line && range.end.column === equivalent.range.end.column;
+      return startMatches && endMatches;
+    });
   const pushVerified = (reference: VerifiedNamedNodeReference): void => {
     if (!includeReference || includeReference(reference)) verified.push(reference);
   };
@@ -561,11 +581,15 @@ export async function collectVerifiedNamedNodeReferences(
     if (maxVerified !== undefined && maxVerified > 0 && verified.length >= maxVerified) {
       break;
     }
+    if (isEquivalentDeclarationRange(range)) {
+      pushVerified({ range });
+      continue;
+    }
     const exportFrom = exportFromIdentifier(index, fileId, range, parsed);
     if (exportFrom?.entry) {
       const reexported = resolveExport(index, exportFrom.entry.fromModule, exportFrom.entry.sourceSpecifier);
       if (reexported?.kind === "resolved") {
-        if (sameDef(reexported.def, expectedDef, index.languageExtensions)) {
+        if (matchesExpectedDefinition(reexported.def)) {
           pushVerified({ range, via: { reexport: true } });
         }
         continue;
@@ -580,7 +604,7 @@ export async function collectVerifiedNamedNodeReferences(
       parsed,
     );
     if (resolved.status === "ok" && resolved.definition) {
-      if (sameDef(resolved.definition, expectedDef, index.languageExtensions)) {
+      if (matchesExpectedDefinition(resolved.definition)) {
         pushVerified({
           range,
           ...(exportFrom?.isExportFrom ? { via: { reexport: true } } : {}),

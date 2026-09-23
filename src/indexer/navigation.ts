@@ -50,6 +50,11 @@ import {
   isReceiverNameNode,
 } from "../util/member-access.js";
 import {
+  cppOutOfLineClassName,
+  cppOutOfLineMemberDeclarationNode,
+  declaresMembers,
+} from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import {
   type FindReferencesResult,
   type GoToRequest,
   type GoToResult,
@@ -503,6 +508,12 @@ async function findReferencesInternal(
     (binding) => binding.def && binding.def.start.index === def.range.start.index,
   );
   pushRef({ file: definitionFile, range: def.range });
+  const definitionNameNode = syntaxNodeForDefinition(parsedContext, def);
+  const cppReceiverOwner = cppOutOfLineReceiverOwner(index, mod, def, parsedContext, definitionNameNode);
+  const receiverMemberDefinition = isReceiverMemberDefinition(def, parsedContext, !!cppReceiverOwner);
+  const equivalentReceiverDefinitions = cppReceiverOwner
+    ? await cppOutOfLineEquivalentDefinitions(index, def, parsedContext, definitionNameNode, cppReceiverOwner)
+    : [];
 
   const exportedNames: string[] = [];
   for (const entry of mod.exports) {
@@ -510,13 +521,13 @@ async function findReferencesInternal(
       exportedNames.push(entry.exportedAs);
     }
   }
-  if (!exportedNames.length && shouldUseLocalNameAsExportFallback(def, parsedContext)) {
+  if (!exportedNames.length && !receiverMemberDefinition) {
     exportedNames.push(def.localName);
   }
 
   const exportedNameSet = new Set(exportedNames);
   const phpQualifiedNames = await buildPhpQualifiedNames(index, definitionFile, def);
-  const scansReceiverReferences = shouldScanVerifiedReferences(def, parsedContext);
+  const scansReceiverReferences = shouldScanVerifiedReferences(def, parsedContext, receiverMemberDefinition);
   if (localBinding && !scansReceiverReferences) {
     for (const occurrence of localBinding.occurrences) {
       if (hasReachedCollectionLimit()) break;
@@ -824,6 +835,7 @@ async function findReferencesInternal(
         remainingReferences,
         verifiedReferenceFilter(fileId),
         (unavailableFile) => receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
+        equivalentReceiverDefinitions,
       );
       for (const { range, provenance, via } of ranges) {
         if (hasReachedCollectionLimit()) break;
@@ -921,27 +933,76 @@ function sameFileOccurrenceExecuted(scope: ScopeIndex, binding: Binding | undefi
   return !mapped && binding.kind === "function" && hasEnclosingFunctionBinding;
 }
 
-function shouldScanVerifiedReferences(def: SymbolDef, parsedContext: ParsedFileContext): boolean {
-  if (parsedContext.sup.id === "php" && !isPhpCaseInsensitiveSymbolKind(def.kind)) return false;
-  if (!supportsReceiverMemberNavigation(parsedContext.sup.id)) return false;
-  return isReceiverMemberDefinition(def, parsedContext);
-}
-
-function shouldUseLocalNameAsExportFallback(def: SymbolDef, parsedContext: ParsedFileContext): boolean {
-  return !isReceiverMemberDefinition(def, parsedContext);
-}
-
-function isReceiverMemberDefinition(def: SymbolDef, parsedContext: ParsedFileContext): boolean {
-  if (def.isMember) return true;
-  if (def.kind !== SymbolKind.Function) {
-    return false;
-  }
-  const start = def.range.start;
+function syntaxNodeForDefinition(parsedContext: ParsedFileContext, def: SymbolDef): SyntaxNodeLike {
   const position = {
-    row: start.line - 1,
-    column: start.column - 1,
+    row: def.range.start.line - 1,
+    column: def.range.start.column - 1,
   };
-  let current: SyntaxNodeLike | null = parsedContext.tree.rootNode.descendantForPosition(position, position);
+  return parsedContext.tree.rootNode.descendantForPosition(position, position);
+}
+
+function cppOutOfLineReceiverOwner(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  def: SymbolDef,
+  parsedContext: ParsedFileContext,
+  definitionNameNode: SyntaxNodeLike,
+): SymbolDef | null {
+  if (parsedContext.sup.id !== "cpp" || def.kind !== SymbolKind.Function) return null;
+  const ownerName = cppOutOfLineClassName(definitionNameNode, parsedContext.source, parsedContext.sup);
+  if (!ownerName) return null;
+  const owner = resolveNamedDefinition(index, mod, def.file, parsedContext.sup, ownerName);
+  return owner?.status === "ok" && declaresMembers(owner.definition) ? owner.definition : null;
+}
+
+async function cppOutOfLineEquivalentDefinitions(
+  index: ProjectIndex,
+  def: SymbolDef,
+  parsedContext: ParsedFileContext,
+  definitionNameNode: SyntaxNodeLike,
+  owner: SymbolDef,
+): Promise<SymbolDef[]> {
+  const ownerModule = index.byFile.get(fileIdentityKey(owner.file));
+  if (!ownerModule) return [];
+  const ownerParsed = await ensureParsedContext(
+    owner.file,
+    index.parsed?.get(fileIdentityKey(owner.file)),
+    index.languageExtensions,
+  );
+  const ownerNameNode = syntaxNodeForDefinition(ownerParsed, owner);
+  const declaration = cppOutOfLineMemberDeclarationNode(
+    definitionNameNode,
+    def.localName,
+    ownerNameNode,
+    ownerParsed.source,
+    parsedContext.sup,
+  );
+  if (!declaration) return [];
+  const normalizedName = parsedContext.sup.normalizeIdentifier(def.localName);
+  return ownerModule.locals.filter(
+    (candidate) =>
+      parsedContext.sup.normalizeIdentifier(candidate.localName) === normalizedName &&
+      candidate.range.start.index === declaration.nameNode.startIndex,
+  );
+}
+
+function shouldScanVerifiedReferences(
+  def: SymbolDef,
+  parsedContext: ParsedFileContext,
+  receiverMemberDefinition: boolean,
+): boolean {
+  if (parsedContext.sup.id === "php" && !isPhpCaseInsensitiveSymbolKind(def.kind)) return false;
+  return supportsReceiverMemberNavigation(parsedContext.sup.id) && receiverMemberDefinition;
+}
+
+function isReceiverMemberDefinition(
+  def: SymbolDef,
+  parsedContext: ParsedFileContext,
+  hasCppOutOfLineOwner: boolean,
+): boolean {
+  if (def.isMember || hasCppOutOfLineOwner) return true;
+  if (def.kind !== SymbolKind.Function) return false;
+  let current: SyntaxNodeLike | null = syntaxNodeForDefinition(parsedContext, def);
   let sawCppFunction = false;
   let sawRustImplFunction = false;
   while (current) {
@@ -961,12 +1022,8 @@ function isReceiverMemberDefinition(def: SymbolDef, parsedContext: ParsedFileCon
     if (parsedContext.sup.id === "rust" && current.type === "function_item") {
       sawRustImplFunction = true;
     }
-    if (sawRustImplFunction && current.type === "impl_item") {
-      return true;
-    }
-    if (current.type === "function_declaration" || current.type === "program") {
-      return false;
-    }
+    if (sawRustImplFunction && current.type === "impl_item") return true;
+    if (current.type === "function_declaration" || current.type === "program") return false;
     current = current.parent;
   }
   return false;

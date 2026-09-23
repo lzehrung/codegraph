@@ -293,7 +293,6 @@ export async function buildSymbolGraphDetailed(
         recordEdge,
         receiverCalls,
         receiverMemberScopes,
-        hasCallableNamed,
         noteCallableName,
         loadParsedFile,
       };
@@ -312,7 +311,17 @@ export async function buildSymbolGraphDetailed(
       logWithLevel(opts?.logLevel, "warn", `Warning: Failed to build detailed symbol edges for ${file}:`, error);
     }
   }
-  const removedReceiverEdges = emitReceiverCallEdges({ nodes, edges }, receiverCalls, recordEdge, receiverMemberScopes);
+  // Function-valued bindings are proven while each file is processed. Apply the callable-name
+  // prefilter only after that pass so receiver calls do not depend on file iteration order.
+  const callableReceiverCalls = receiverCalls.filter((candidate) =>
+    hasCallableNamed(candidate.memberName, candidate.caseInsensitiveMemberName),
+  );
+  const removedReceiverEdges = emitReceiverCallEdges(
+    { nodes, edges },
+    callableReceiverCalls,
+    recordEdge,
+    receiverMemberScopes,
+  );
   edgeCount -= removedReceiverEdges.length;
   for (const edge of removedReceiverEdges) added.delete(edgeKey(edge.from, edge.to, edge.label, edge.site));
   emitMemberImplementationEdges({ nodes, edges }, recordEdge);

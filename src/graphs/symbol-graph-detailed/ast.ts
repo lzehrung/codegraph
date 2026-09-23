@@ -28,6 +28,7 @@ export type DetailedDeclarationPassResult = {
 
 export const isIdentifierType = (sup: LanguageSupport, type: string): boolean =>
   Array.isArray(sup.nodeTypes?.identifier) && sup.nodeTypes.identifier.includes(type);
+const FUNCTION_NAME_NODE_TYPES = new Set(["identifier", "field_identifier", "operator_name", "destructor_name"]);
 
 /** C and C++ put the function name in a nested declarator, not a `name` field. */
 function functionNameNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
@@ -35,15 +36,15 @@ function functionNameNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
   if (named) return named;
   let current = node.childForFieldName("declarator");
   while (current) {
-    if (current.type === "identifier" || current.type === "field_identifier") return current;
+    if (FUNCTION_NAME_NODE_TYPES.has(current.type)) return current;
+    const name = current.childForFieldName("name");
+    if (name && FUNCTION_NAME_NODE_TYPES.has(name.type)) return name;
     const nested = current.childForFieldName("declarator");
     if (nested) {
       current = nested;
       continue;
     }
-    return (
-      current.namedChildren.find((child) => child.type === "identifier" || child.type === "field_identifier") ?? null
-    );
+    return current.namedChildren.find((child) => FUNCTION_NAME_NODE_TYPES.has(child.type)) ?? null;
   }
   return node.childForFieldName("type");
 }
@@ -137,8 +138,12 @@ export function collectDetailedDeclarations(
         const def = findDefinition(name, nameNode!);
         if (def) classNodes.push({ name, node, def });
       }
-    } else if (node.type === "variable_declarator") {
-      const nameNode = node.childForFieldName("name");
+    } else if (
+      node.type === "variable_declarator" ||
+      node.type === "public_field_definition" ||
+      node.type === "field_definition"
+    ) {
+      const nameNode = node.childForFieldName("name") ?? node.childForFieldName("property");
       const valueNode = node.childForFieldName("value");
       if (nameNode && valueNode) {
         if (valueNode.type === "string") {

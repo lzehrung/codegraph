@@ -4318,6 +4318,38 @@ describe("Find References: keyword receiver scope and coverage", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("finds typed receiver calls for an out-of-line C++ definition", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-out-of-line-target-refs-"));
+    try {
+      const headerFile = path.join(root, "box.hpp").replace(/\\/g, "/");
+      const implementationFile = path.join(root, "box.cpp").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "use.cpp").replace(/\\/g, "/");
+      const header = "class Box { public: int run(int run); };";
+      const implementation = ['#include "box.hpp"', "int Box::run(int run) { return run; }"].join("\n");
+      const consumer = ['#include "box.hpp"', "int use(Box& box) { return box.run(1); }"].join("\n");
+      await fsp.writeFile(headerFile, header, "utf8");
+      await fsp.writeFile(implementationFile, implementation, "utf8");
+      await fsp.writeFile(consumerFile, consumer, "utf8");
+      const index = await createTestIndexFromFiles(root, [headerFile, implementationFile, consumerFile]);
+      const refs = await testFindReferences(
+        index,
+        implementationFile,
+        2,
+        implementation.split("\n")[1]!.indexOf("run") + 1,
+        3,
+      );
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => path.basename(reference.file)).sort()).toEqual([
+          "box.cpp",
+          "box.hpp",
+          "use.cpp",
+        ]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Find References: PHP unproven receiver is not a bare-name hit", () => {

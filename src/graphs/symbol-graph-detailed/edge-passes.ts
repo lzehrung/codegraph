@@ -21,6 +21,7 @@ import {
   classifyReceiver,
   declarationNodeIsStatic,
   cppOutOfLineClassName,
+  cppOutOfLineMemberDeclarationNode,
   declaresMembers,
   isUnprovenHeritageExpression,
   nearestMemberContainer,
@@ -51,8 +52,6 @@ type EdgePassContext = {
   receiverCalls: ReceiverCallCandidate[];
   /** Proven static or instance scope for callable members, keyed by graph node id. */
   receiverMemberScopes: Map<string, ReceiverMemberScope>;
-  /** Whether any indexed project file declares a callable with this name. */
-  hasCallableNamed: (name: string, phpCaseInsensitive?: boolean) => boolean;
   /** Registers a name the detailed pass proved callable (function-valued bindings). */
   noteCallableName: (name: string, phpCaseInsensitive?: boolean) => void;
   /** Loads syntax needed to recover declaration metadata for cross-file member definitions. */
@@ -246,7 +245,11 @@ function memberScopeForDefinition(
     return declarationNodeIsStatic(outOfLineDeclaration.node, outOfLineDeclaration.source) ? "static" : "instance";
   }
   if (cppOutOfLine) return "any";
-  return declarationNodeIsStatic(fn.node, context.source) ? "static" : "instance";
+  const declarationNode =
+    fn.node.parent?.type === "public_field_definition" || fn.node.parent?.type === "field_definition"
+      ? fn.node.parent
+      : fn.node;
+  return declarationNodeIsStatic(declarationNode, context.source) ? "static" : "instance";
 }
 
 type MemberOwner = { def: SymbolDef; cppOutOfLine: boolean };
@@ -283,53 +286,6 @@ function memberOwner(
 
 type MemberDeclarationSource = { node: SyntaxNodeLike; source: string };
 
-function sameSyntaxNode(left: SyntaxNodeLike | null, right: SyntaxNodeLike): boolean {
-  if (!left) return false;
-  if (left.id !== undefined && right.id !== undefined) return left.id === right.id;
-  return left.type === right.type && left.startIndex === right.startIndex && left.endIndex === right.endIndex;
-}
-
-function functionDeclaratorName(node: SyntaxNodeLike, context: EdgePassContext): SyntaxNodeLike | null {
-  const functionDeclarator = findFirstNodeByType(node, "function_declarator");
-  let current = functionDeclarator?.childForFieldName("declarator") ?? null;
-  while (current) {
-    if (isIdentifierType(context.sup, current.type)) return current;
-    const name = current.childForFieldName("name");
-    if (name && isIdentifierType(context.sup, name.type)) return name;
-    const nested = current.childForFieldName("declarator");
-    if (!nested || nested.id === current.id) return null;
-    current = nested;
-  }
-  return null;
-}
-
-function collectCppMemberDeclarations(
-  node: SyntaxNodeLike,
-  ownerNode: SyntaxNodeLike,
-  fn: DetailedFunctionNode,
-  context: EdgePassContext,
-  source: string,
-  expectedArity: number | undefined,
-  out: SyntaxNodeLike[],
-): void {
-  if (node.type === "field_declaration" && sameSyntaxNode(nearestMemberContainer(node), ownerNode)) {
-    const nameNode = functionDeclaratorName(node, context);
-    const arity = declarationMemberArity(node, context.sup.id);
-    if (
-      nameNode &&
-      context.sup.normalizeIdentifier(sliceText(nameNode, source)) ===
-        context.sup.normalizeIdentifier(fn.def.localName) &&
-      arity === expectedArity
-    ) {
-      out.push(node);
-    }
-    return;
-  }
-  for (const child of node.namedChildren) {
-    collectCppMemberDeclarations(child, ownerNode, fn, context, source, expectedArity, out);
-  }
-}
-
 async function cppOutOfLineMemberDeclaration(
   context: EdgePassContext,
   fn: DetailedFunctionNode,
@@ -339,13 +295,15 @@ async function cppOutOfLineMemberDeclaration(
   const startIndex = ownerDef.range.start.index;
   const endIndex = ownerDef.range.end.index;
   if (!parsed || startIndex === undefined || endIndex === undefined) return null;
-  const nameNode = parsed.tree.rootNode.descendantForIndex(startIndex, endIndex);
-  const ownerNode = nearestMemberContainer(nameNode);
-  if (!ownerNode) return null;
-  const expectedArity = declarationMemberArity(fn.node, context.sup.id);
-  const declarations: SyntaxNodeLike[] = [];
-  collectCppMemberDeclarations(ownerNode, ownerNode, fn, context, parsed.source, expectedArity, declarations);
-  return declarations.length === 1 ? { node: declarations[0]!, source: parsed.source } : null;
+  const ownerNameNode = parsed.tree.rootNode.descendantForIndex(startIndex, endIndex);
+  const declaration = cppOutOfLineMemberDeclarationNode(
+    fn.node,
+    fn.def.localName,
+    ownerNameNode,
+    parsed.source,
+    context.sup,
+  );
+  return declaration ? { node: declaration.node, source: parsed.source } : null;
 }
 
 /** Receiver type of `func (b *T) M()` / `func (b T) M()`, unwrapped through pointers. */
@@ -405,17 +363,24 @@ function provesCallableBinding(context: EdgePassContext, fn: DetailedFunctionNod
   const end = fn.def.range.end.index;
   if (start === undefined || end === undefined) return false;
 
-  if (parent.type === "variable_declarator" && parent.childForFieldName("value") === fn.node) {
-    const bindingName = parent.childForFieldName("name");
+  const sameNodeRange = (candidate: SyntaxNodeLike | null): boolean =>
+    !!candidate && candidate.startIndex === fn.node.startIndex && candidate.endIndex === fn.node.endIndex;
+  if (
+    (parent.type === "variable_declarator" ||
+      parent.type === "public_field_definition" ||
+      parent.type === "field_definition") &&
+    sameNodeRange(parent.childForFieldName("value"))
+  ) {
+    const bindingName = parent.childForFieldName("name") ?? parent.childForFieldName("property");
     return (
       !!bindingName &&
-      isIdentifierType(context.sup, bindingName.type) &&
+      (isIdentifierType(context.sup, bindingName.type) || context.propertyIdentifierTypes.includes(bindingName.type)) &&
       bindingName.startIndex === start &&
       bindingName.endIndex === end
     );
   }
 
-  if (parent.type === "assignment_expression" && parent.childForFieldName("right") === fn.node) {
+  if (parent.type === "assignment_expression" && sameNodeRange(parent.childForFieldName("right"))) {
     const left = parent.childForFieldName("left");
     if (!left || !isIdentifierType(context.sup, left.type)) return false;
     const resolved = context.resolveIdentifier(sliceText(left, context.source), left);
@@ -462,6 +427,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
   };
 
   for (const fn of functionNodes) {
+    const phpCaseInsensitive = context.sup.id === "php";
     const fromId = ensureNode(context, fn.def);
     const provenNode = context.nodes.get(fromId);
     // Function-valued bindings (`const helper = () => 1`) keep their `variable` kind;
@@ -530,8 +496,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
      */
     const recordReceiverCall = (node: SyntaxNodeLike, access: ReceiverCallAccess): void => {
       const memberName = sliceText(access.property, context.source);
-      const phpCaseInsensitive = context.sup.id === "php";
-      if (!memberName || !context.hasCallableNamed(memberName, phpCaseInsensitive)) return;
+      if (!memberName) return;
       const binding = classifyReceiver(
         context.sup,
         access.receiver,
@@ -613,9 +578,14 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
       const access = receiverCallAccess(context.sup, node, callee);
       if (access) {
         const receiverName = sliceText(access.receiver, context.source);
-        if (keywordReceiverKind(context.sup.id, receiverName)) {
-          recordReceiverCall(node, access);
-        } else if (!tryResolveChain(context, access.accessNode, fromId, "calls")) {
+        const typeScopedCppCall =
+          context.sup.id === "cpp" &&
+          context.source.slice(access.receiver.endIndex, access.property.startIndex).includes("::");
+        if (
+          keywordReceiverKind(context.sup.id, receiverName) ||
+          typeScopedCppCall ||
+          !tryResolveChain(context, access.accessNode, fromId, "calls")
+        ) {
           recordReceiverCall(node, access);
         }
         return;
