@@ -4345,6 +4345,7 @@ describe("Find References: keyword receiver scope and coverage", () => {
           "box.hpp",
           "use.cpp",
         ]);
+        expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
       }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

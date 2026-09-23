@@ -892,12 +892,14 @@ async function findReferencesInternal(
       languageId: parsedContext.sup.id,
       phpQualifiedNames,
       sameFileOccurrence: {
-        // Only C/C++ function definitions need this strategy: their names self-scope-register,
-        // so sibling same-file call sites stay invisible to the scope layer. Parameters and
-        // local variables already collect every same-file occurrence lexically, so marking the
-        // strategy applicable for them would report a false `strategy_unavailable`.
+        // Only non-member C/C++ function definitions need this strategy: their names
+        // self-scope-register, so sibling same-file call sites stay invisible to the scope
+        // layer. Receiver members use the receiver/equivalent-declaration scan instead.
+        // Parameters and local variables already collect every same-file occurrence lexically.
         applicable:
-          (parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp") && def.kind === SymbolKind.Function,
+          (parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp") &&
+          def.kind === SymbolKind.Function &&
+          !receiverMemberDefinition,
         // `executed` means the required enclosing/module scan ran, not that it found uses. A
         // binding that exists only inside the function's own scope cannot see sibling calls.
         executed: sameFileOccurrenceExecuted(scope, localBinding),
