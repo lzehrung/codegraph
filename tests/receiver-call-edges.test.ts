@@ -802,6 +802,18 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(outgoingCallCount(graph, invalidInstance)).toBe(0);
   });
 
+  it("uses the full namespace path for C++ out-of-line ownership", async () => {
+    const files: Record<string, string> = {
+      "a.hpp": "namespace a { class Box { public: int run(); }; }",
+      "b.hpp": "namespace b { class Box { public: int run(); }; }",
+      "b.cpp": ['#include "a.hpp"', '#include "b.hpp"', "int b::Box::run() { return 1; }"].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cpp-qualified-owner-", files);
+    const run = nodeIn(graph, "b.cpp", "run");
+    expect(membersOwnedBy(graph, "Box", "run", "a.hpp")).toEqual([]);
+    expect(membersOwnedBy(graph, "Box", "run", "b.hpp")).toEqual([run]);
+  });
+
   it("keeps namespace-qualified C++ free functions out of class ownership", async () => {
     const files: Record<string, string> = {
       "free.cpp": [

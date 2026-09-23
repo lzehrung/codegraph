@@ -1,4 +1,5 @@
 import type { ModuleIndex, ProjectIndex, SymbolDef } from "../../indexer/types.js";
+import { resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp.js";
 import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { sliceText, toRange } from "../../util/ast.js";
@@ -20,12 +21,11 @@ import {
   callArgumentCount,
   classifyReceiver,
   declarationNodeIsStatic,
-  cppOutOfLineClassName,
+  cppOutOfLineOwnerPath,
   cppOutOfLineMemberDeclarationNode,
   declaresMembers,
   isUnprovenHeritageExpression,
   nearestMemberContainer,
-  isCppMemberContainerDefinition,
   receiverCallAccess,
   type ReceiverCallAccess,
   type ReceiverCallCandidate,
@@ -273,11 +273,11 @@ async function memberOwner(
     .sort((left, right) => left.node.endIndex - left.node.startIndex - (right.node.endIndex - right.node.startIndex));
   if (owners[0]?.def) return { def: owners[0].def, cppOutOfLine: false };
   if (context.sup.id === "cpp") {
-    const ownerName = cppOutOfLineClassName(fn.node, context.source, context.sup);
-    const def = ownerName ? resolveNamedType(context, ownerName, fn.node) : null;
-    if (!def) return null;
-    const parsed = await context.loadParsedFile(def.file);
-    return parsed && isCppMemberContainerDefinition(parsed.tree, def) ? { def, cppOutOfLine: true } : null;
+    const ownerPath = cppOutOfLineOwnerPath(fn.node, context.source, context.sup);
+    const def = ownerPath
+      ? await resolveCppQualifiedMemberContainer(context.index, context.moduleEntry, ownerPath, context.loadParsedFile)
+      : null;
+    return def ? { def, cppOutOfLine: true } : null;
   }
   if (context.sup.id !== "zig") return null;
   const container = nearestMemberContainer(fn.node);
@@ -547,17 +547,11 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
 
       const receiverContainer = nearestMemberContainer(access.accessNode);
       const receiverContainerName = receiverContainer?.childForFieldName("name");
-      let receiverOwnerDef = receiverContainerName
+      const receiverOwnerDef = receiverContainerName
         ? context.moduleEntry.locals.find(
             (local) => local.range.start.index === receiverContainerName.startIndex && declaresMembers(local),
           )
         : undefined;
-      if (!receiverOwnerDef && binding.kind === "own-type") {
-        const outOfLineClassName = cppOutOfLineClassName(fn.node, context.source, context.sup);
-        if (outOfLineClassName) {
-          receiverOwnerDef = resolveNamedType(context, outOfLineClassName, fn.node) ?? undefined;
-        }
-      }
 
       context.receiverCalls.push({
         callerId: fromId,

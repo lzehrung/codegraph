@@ -4352,6 +4352,43 @@ describe("Find References: keyword receiver scope and coverage", () => {
     }
   });
 
+  it("uses the full namespace path for C++ out-of-line member references", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-qualified-owner-refs-"));
+    try {
+      const aHeader = path.join(root, "a.hpp").replace(/\\/g, "/");
+      const bHeader = path.join(root, "b.hpp").replace(/\\/g, "/");
+      const implementationFile = path.join(root, "b.cpp").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "use.cpp").replace(/\\/g, "/");
+      await fsp.writeFile(aHeader, "namespace a { class Box { public: int run(); }; }", "utf8");
+      await fsp.writeFile(bHeader, "namespace b { class Box { public: int run(); }; }", "utf8");
+      const implementation = ['#include "a.hpp"', '#include "b.hpp"', "int b::Box::run() { return 1; }"].join("\n");
+      const consumer = [
+        '#include "a.hpp"',
+        '#include "b.hpp"',
+        "int use_a(a::Box& box) { return box.run(); }",
+        "int use_b(b::Box& box) { return box.run(); }",
+      ].join("\n");
+      await fsp.writeFile(implementationFile, implementation, "utf8");
+      await fsp.writeFile(consumerFile, consumer, "utf8");
+      const index = await createTestIndexFromFiles(root, [aHeader, bHeader, implementationFile, consumerFile]);
+      const refs = await testFindReferences(
+        index,
+        implementationFile,
+        3,
+        implementation.split("\n")[2]!.indexOf("run") + 1,
+        3,
+      );
+      if (refs.status === "ok") {
+        const sites = refs.references
+          .map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`)
+          .sort();
+        expect(sites).toEqual(["b.cpp:3", "b.hpp:1", "use.cpp:4"]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("uses free-function references for namespace-qualified C++ definitions", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-namespace-function-refs-"));
     try {

@@ -4,6 +4,7 @@ import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js"
 import { resolveMemberAccessDefinition, supportsReceiverMemberNavigation } from "./navigation-goto.js";
 import {
   findClosestBinding,
+  findClosestScopeBinding,
   findDeclarationNameNode,
   getOrBuildScopeIndex,
   resolveNamedDefinition,
@@ -42,6 +43,7 @@ import { loadNearestTsconfigFor, resolveImportSpecifier } from "../util/resoluti
 import { fileIdentityKey } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
+import { declarationMemberArity } from "../graphs/symbol-graph-detailed/ast.js";
 import {
   getMemberAccessParts,
   isMemberAccessNode,
@@ -50,11 +52,12 @@ import {
   isReceiverNameNode,
 } from "../util/member-access.js";
 import {
-  cppOutOfLineClassName,
+  callArgumentCount,
+  cppOutOfLineOwnerPath,
+  cppOutOfLineMemberName,
   cppOutOfLineMemberDeclarationNode,
-  declaresMembers,
-  isCppMemberContainerDefinition,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
 import {
   type FindReferencesResult,
   type GoToRequest,
@@ -125,6 +128,64 @@ async function resolvePhpAliasDefinition(
   const resolved = resolveImported(index, { ...imp, resolved: targetFile }, imp.imported);
   if (!resolved || "namespace" in resolved) return null;
   return { def: resolved, targetFile };
+}
+
+function cppBindingDefinition(file: FileId, binding: Binding): SymbolDef | null {
+  if (!binding.def) return null;
+  return {
+    file,
+    localName: binding.name,
+    kind: SymbolKind.Function,
+    range: binding.def,
+  };
+}
+
+function cppBindingArity(binding: Binding): number | undefined {
+  let current = binding.node ?? null;
+  while (current) {
+    const arity = declarationMemberArity(current, "cpp");
+    if (arity !== undefined) return arity;
+    if (current.type === "function_definition" || current.type === "program") return undefined;
+    current = current.parent;
+  }
+  return undefined;
+}
+
+function cppCallArgumentCount(node: SyntaxNodeLike, source: string): number | null {
+  let current = node.parent;
+  while (current) {
+    if (current.type === "call_expression") {
+      const callee = current.childForFieldName("function");
+      if (callee && callee.startIndex <= node.startIndex && callee.endIndex >= node.endIndex) {
+        return callArgumentCount(current, source);
+      }
+    }
+    if (current.type === "function_definition" || current.type === "program") return null;
+    current = current.parent;
+  }
+  return null;
+}
+
+/**
+ * Undefined means the lexical binding is not a C++ collision. Null means it is
+ * ambiguous after declaration-site and known-call-arity checks.
+ */
+function resolveCppCollidingBinding(
+  file: FileId,
+  binding: Binding,
+  node: SyntaxNodeLike,
+  source: string,
+): SymbolDef | null | undefined {
+  const collisions = binding.sameScopeFunctionBindings;
+  if (!collisions || collisions.length < 2) return undefined;
+  const declaration = collisions.find(
+    (candidate) => candidate.node?.startIndex === node.startIndex && candidate.node?.endIndex === node.endIndex,
+  );
+  if (declaration) return cppBindingDefinition(file, declaration);
+  const argumentCount = cppCallArgumentCount(node, source);
+  if (argumentCount === null) return null;
+  const matches = collisions.filter((candidate) => cppBindingArity(candidate) === argumentCount);
+  return matches.length === 1 ? cppBindingDefinition(file, matches[0]!) : null;
 }
 
 export async function goToDefinition(
@@ -289,6 +350,16 @@ export async function goToDefinition(
       }
     }
     const scopeIndex = getOrBuildScopeIndex(index, file, source, sup, mod, tree);
+    const closestBinding = findClosestScopeBinding(scopeIndex, name, node, sup);
+    const cppCollision =
+      sup.id === "cpp" && closestBinding ? resolveCppCollidingBinding(file, closestBinding, node, source) : undefined;
+    if (cppCollision !== undefined) {
+      if (!cppCollision) return { status: "not_found", reason: "Ambiguous C++ overload" };
+      return okGoToResult(index, cppCollision, {
+        resolution: "exact",
+        confidence: "high",
+      });
+    }
     const local = findClosestBinding(scopeIndex, file, name, node, sup);
     if (local) {
       return okGoToResult(index, local, {
@@ -493,17 +564,21 @@ async function findReferencesInternal(
     refs.push(ref);
   };
 
-  const normalizedLocalName = parsedContext.sup.normalizeIdentifier(def.localName);
+  const definitionNameNode = syntaxNodeForDefinition(parsedContext, def);
+  const cppReceiverOwner = await cppOutOfLineReceiverOwner(index, mod, def, parsedContext, definitionNameNode);
+  const cppMemberName = cppReceiverOwner
+    ? cppOutOfLineMemberName(definitionNameNode, parsedContext.source, parsedContext.sup)
+    : null;
+  const referenceDef = cppMemberName && cppMemberName !== def.localName ? { ...def, localName: cppMemberName } : def;
+  const normalizedLocalName = parsedContext.sup.normalizeIdentifier(referenceDef.localName);
   const localBindings = scope.bindings.get(normalizedLocalName) ?? [];
   const localBinding = localBindings.find(
     (binding) => binding.def && binding.def.start.index === def.range.start.index,
   );
   pushRef({ file: definitionFile, range: def.range });
-  const definitionNameNode = syntaxNodeForDefinition(parsedContext, def);
-  const cppReceiverOwner = await cppOutOfLineReceiverOwner(index, mod, def, parsedContext, definitionNameNode);
   const receiverMemberDefinition = isReceiverMemberDefinition(def, parsedContext, !!cppReceiverOwner);
   const equivalentReceiverDefinitions = cppReceiverOwner
-    ? await cppOutOfLineEquivalentDefinitions(index, def, parsedContext, definitionNameNode, cppReceiverOwner)
+    ? await cppOutOfLineEquivalentDefinitions(index, referenceDef, parsedContext, definitionNameNode, cppReceiverOwner)
     : [];
 
   const exportedNames: string[] = [];
@@ -526,7 +601,7 @@ async function findReferencesInternal(
     }
   }
 
-  let candidateFiles = getCachedReferenceCandidateFiles(index, def, exportedNames, !!phpQualifiedNames.length);
+  let candidateFiles = getCachedReferenceCandidateFiles(index, referenceDef, exportedNames, !!phpQualifiedNames.length);
   // A bloom filter holds each candidate file's identifiers in that file's own spelling, and a
   // probe can only test one spelling. PHP resolves class, interface, trait, enum, and function
   // names case-insensitively, so `new \App\sErViCe()` must still match a `Service` definition.
@@ -786,8 +861,8 @@ async function findReferencesInternal(
       const ranges = await collectVerifiedNamedNodeReferences(
         index,
         fileId,
-        def.localName,
-        def,
+        referenceDef.localName,
+        referenceDef,
         (params, parsed) => goToDefinition(index, params, parsed),
         remainingReferences,
         verifiedReferenceFilter(fileId),
@@ -810,7 +885,7 @@ async function findReferencesInternal(
       const filter = index.bloomFilters?.get(fileIdentityKey(fileId));
       const candidateSupport = supportForFileWithoutHeaderSample(fileId, index.languageExtensions);
       // Bloom filters store folded PHP identifiers in addition to their source spelling.
-      const normalizedName = candidateSupport?.normalizeIdentifier(def.localName) ?? def.localName;
+      const normalizedName = candidateSupport?.normalizeIdentifier(referenceDef.localName) ?? referenceDef.localName;
       const canonicalName =
         candidateSupport?.id === "php" && isPhpCaseInsensitiveSymbolKind(def.kind)
           ? foldPhpIdentifierCase(normalizedName)
@@ -820,8 +895,8 @@ async function findReferencesInternal(
       const ranges = await collectVerifiedNamedNodeReferences(
         index,
         fileId,
-        def.localName,
-        def,
+        referenceDef.localName,
+        referenceDef,
         (params, parsed) => goToDefinition(index, params, parsed),
         remainingReferences,
         verifiedReferenceFilter(fileId),
@@ -942,16 +1017,8 @@ async function cppOutOfLineReceiverOwner(
   definitionNameNode: SyntaxNodeLike,
 ): Promise<SymbolDef | null> {
   if (parsedContext.sup.id !== "cpp" || def.kind !== SymbolKind.Function) return null;
-  const ownerName = cppOutOfLineClassName(definitionNameNode, parsedContext.source, parsedContext.sup);
-  if (!ownerName) return null;
-  const owner = resolveNamedDefinition(index, mod, def.file, parsedContext.sup, ownerName);
-  if (owner?.status !== "ok" || !declaresMembers(owner.definition)) return null;
-  const ownerParsed = await ensureParsedContext(
-    owner.definition.file,
-    index.parsed?.get(fileIdentityKey(owner.definition.file)),
-    index.languageExtensions,
-  );
-  return isCppMemberContainerDefinition(ownerParsed.tree, owner.definition) ? owner.definition : null;
+  const ownerPath = cppOutOfLineOwnerPath(definitionNameNode, parsedContext.source, parsedContext.sup);
+  return ownerPath ? await resolveCppQualifiedMemberContainer(index, mod, ownerPath) : null;
 }
 
 async function cppOutOfLineEquivalentDefinitions(

@@ -1467,6 +1467,50 @@ describe("Go to Definition", () => {
 
       await testGoToDefinition(index, usageFile, 4, 12, namespaceFile, 4);
     });
+
+    it("selects same-scope C++ overloads by call argument count", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-local-overload-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "int pick();",
+          "int pick(int value);",
+          "int zero() { return pick(); }",
+          "int one() { return pick(1); }",
+          "int choose(int value);",
+          "int choose(double value);",
+          "int unresolved() { return choose(1); }",
+          "",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        await testGoToDefinition(index, file, 3, lines[2]!.indexOf("pick") + 1, file, 1);
+        await testGoToDefinition(index, file, 4, lines[3]!.indexOf("pick") + 1, file, 2);
+        const ambiguous = await goToDefinition(index, {
+          file,
+          line: 7,
+          column: lines[6]!.indexOf("choose") + 1,
+        });
+        expect(ambiguous).toEqual({ status: "not_found", reason: "Ambiguous C++ overload" });
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("returns safely for an incomplete C++ base clause", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-incomplete-base-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const source = "class Derived : public { int run() { return this->missing(); } };\n";
+        await fsp.writeFile(file, source, "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        await testGoToDefinition(index, file, 1, source.indexOf("missing") + 1, undefined, undefined, "not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("Kotlin", () => {
@@ -4045,6 +4089,21 @@ describe("Supertype keyword member navigation", () => {
         column: columnOf(source, 5, "Area();"),
       });
       expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves C++ this members through an exact namespace-qualified base", async () => {
+    const source = [
+      "namespace decoy { class Base { public: int inherited() { return 0; } }; }",
+      "namespace ns { class Base { public: int inherited() { return 1; } }; }",
+      "class Derived : public ns::Base { public: int use() { return this->inherited(); } };",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cpp-qualified-base-goto-", { "derived.cpp": source });
+    try {
+      await expectMemberAccess(index, paths["derived.cpp"]!, 3, columnOf(source, 3, "inherited()"), 2);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

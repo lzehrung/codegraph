@@ -157,9 +157,13 @@ export function buildScopeIndexFromSource(
       }
       if (support.id === "cpp") {
         // C++ overloads cannot safely share occurrences by name alone. Preserve every
-        // declaration, but mark each colliding binding as incomplete instead.
-        existing.occurrencesComplete = false;
-        binding.occurrencesComplete = false;
+        // declaration, but keep the collision group so navigation can select by call arity.
+        const collisions = existing.sameScopeFunctionBindings ?? [existing];
+        collisions.push(binding);
+        for (const collision of collisions) {
+          collision.occurrencesComplete = false;
+          collision.sameScopeFunctionBindings = collisions;
+        }
         preserveExtraFunctionBinding(existing);
       }
     }

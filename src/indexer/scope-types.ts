@@ -25,6 +25,8 @@ export type Binding = {
   occurrences: Range[];
   /** False when same-scope overloads or redeclarations prevent exact occurrence ownership. */
   occurrencesComplete?: boolean;
+  /** Same-scope function declarations that collide by name and need semantic disambiguation. */
+  sameScopeFunctionBindings?: Binding[];
   import?: ScopeImportBinding;
 };
 

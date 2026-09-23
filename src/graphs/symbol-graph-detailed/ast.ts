@@ -37,7 +37,8 @@ function functionNameNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
   let current = node.childForFieldName("declarator");
   while (current) {
     if (FUNCTION_NAME_NODE_TYPES.has(current.type)) return current;
-    const name = current.childForFieldName("name");
+    let name = current.childForFieldName("name");
+    while (name?.childForFieldName("name")) name = name.childForFieldName("name");
     if (name && FUNCTION_NAME_NODE_TYPES.has(name.type)) return name;
     const nested = current.childForFieldName("declarator");
     if (nested) {

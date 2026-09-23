@@ -557,7 +557,7 @@ function bindingValueExpression(node: SyntaxNodeLike): SyntaxNodeLike | null {
 
 function declaredTypeNameNode(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
   const typeField = node.childForFieldName("type");
-  if (typeField) return unwrapNamedType(typeField, sup);
+  if (typeField) return unwrapNamedType(typeField, sup) ?? typeField;
   const typedChild = node.namedChildren.find(
     (child) =>
       child.type === "named_type" ||
@@ -565,7 +565,7 @@ function declaredTypeNameNode(node: SyntaxNodeLike, sup: LanguageSupport): Synta
       child.type === "type_annotation" ||
       child.type === "type",
   );
-  if (typedChild) return unwrapNamedType(typedChild, sup);
+  if (typedChild) return unwrapNamedType(typedChild, sup) ?? typedChild;
   const ids = node.namedChildren.filter(
     (child) => isReceiverNameNode(sup, child.type) || child.type === "type_identifier" || child.type === "name",
   );
@@ -774,7 +774,35 @@ export function receiverConstructorExpression(
   return findVisiblePriorConstructor(obj, receiverName, source, sup);
 }
 
-export function cppOutOfLineClassName(node: SyntaxNodeLike, source: string, sup: LanguageSupport): string | null {
+/** Identifier segments in a C++ qualified name, excluding template arguments. */
+export function cppQualifiedNameSegments(node: SyntaxNodeLike, source: string): string[] {
+  const text = sliceText(node, source);
+  const segments: string[] = [];
+  let segmentStart = 0;
+  let templateDepth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "<") {
+      templateDepth += 1;
+      continue;
+    }
+    if (char === ">") {
+      templateDepth = Math.max(0, templateDepth - 1);
+      continue;
+    }
+    if (char !== ":" || text[index + 1] !== ":" || templateDepth !== 0) continue;
+    const segment = text.slice(segmentStart, index).trim();
+    if (segment) segments.push(segment.replace(/<.*$/u, "").trim());
+    segmentStart = index + 2;
+    index += 1;
+  }
+  const finalSegment = text.slice(segmentStart).trim();
+  if (finalSegment) segments.push(finalSegment.replace(/<.*$/u, "").trim());
+  return segments.filter(Boolean);
+}
+
+/** Exact namespace/type path that qualifies a C++ out-of-line function definition. */
+export function cppOutOfLineOwnerPath(node: SyntaxNodeLike, source: string, sup: LanguageSupport): string[] | null {
   if (sup.id !== "cpp") return null;
   let current: SyntaxNodeLike | null = node;
   while (current) {
@@ -782,16 +810,41 @@ export function cppOutOfLineClassName(node: SyntaxNodeLike, source: string, sup:
       let declarator = current.childForFieldName("declarator");
       while (declarator) {
         if (declarator.type === "qualified_identifier") {
-          const scope = declarator.childForFieldName("scope");
-          if (!scope) return null;
-          const rightmostScopeName = scope.childForFieldName("name") ?? scope;
-          return sliceText(rightmostScopeName, source);
+          const path = cppQualifiedNameSegments(declarator, source);
+          path.pop();
+          if (!sliceText(declarator, source).trimStart().startsWith("::")) {
+            const namespaces: string[][] = [];
+            let parent = current.parent;
+            while (parent) {
+              if (parent.type === "namespace_definition") {
+                const name = parent.childForFieldName("name");
+                if (name) namespaces.push(cppQualifiedNameSegments(name, source));
+              }
+              parent = parent.parent;
+            }
+            for (const namespace of namespaces.reverse()) path.unshift(...namespace);
+          }
+          return path.length ? path : null;
         }
         const nested = declarator.childForFieldName("declarator");
         if (!nested || nested.id === declarator.id) break;
         declarator = nested;
       }
       return null;
+    }
+    current = current.parent;
+  }
+  return null;
+}
+
+/** Unqualified member name from a C++ out-of-line function definition. */
+export function cppOutOfLineMemberName(node: SyntaxNodeLike, source: string, sup: LanguageSupport): string | null {
+  if (sup.id !== "cpp") return null;
+  let current: SyntaxNodeLike | null = node;
+  while (current) {
+    if (current.type === "function_definition") {
+      const nameNode = cppFunctionDeclaratorName(current, sup);
+      return nameNode ? sliceText(nameNode, source) : null;
     }
     current = current.parent;
   }
@@ -811,7 +864,8 @@ function cppFunctionDeclaratorName(node: SyntaxNodeLike, sup: LanguageSupport): 
     if (isIdentifierType(sup, current.type) || current.type === "operator_name" || current.type === "destructor_name") {
       return current;
     }
-    const name = current.childForFieldName("name");
+    let name = current.childForFieldName("name");
+    while (name?.childForFieldName("name")) name = name.childForFieldName("name");
     if (
       name &&
       (isIdentifierType(sup, name.type) || name.type === "operator_name" || name.type === "destructor_name")

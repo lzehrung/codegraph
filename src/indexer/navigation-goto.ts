@@ -22,7 +22,8 @@ import { declarationMemberArity } from "../graphs/symbol-graph-detailed/ast.js";
 import {
   CALL_ARGUMENT_NODE_TYPES,
   callArgumentCount,
-  cppOutOfLineClassName,
+  cppOutOfLineOwnerPath,
+  cppQualifiedNameSegments,
   declarationNodeIsStatic,
   declaresMembers,
   hasStaticMemberDistinction,
@@ -35,6 +36,7 @@ import {
   type ReceiverMemberScope,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
+import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
 import {
@@ -233,8 +235,11 @@ export async function resolveMemberAccessDefinition(params: {
           confidence: "medium",
         });
       }
-      const outOfLineClassName = cppOutOfLineClassName(node, source, sup);
-      if (outOfLineClassName) {
+      const outOfLineOwnerPath = cppOutOfLineOwnerPath(node, source, sup);
+      const outOfLineOwner = outOfLineOwnerPath
+        ? await resolveCppQualifiedMemberContainer(index, mod, outOfLineOwnerPath)
+        : null;
+      if (outOfLineOwner) {
         const outOfLineMember = await resolveKeywordReceiverMember(
           index,
           mod,
@@ -243,7 +248,7 @@ export async function resolveMemberAccessDefinition(params: {
           keywordScope,
           false,
           keywordCallArgumentCount(memberNode, source),
-          { name: outOfLineClassName, support: sup },
+          outOfLineOwner,
         );
         if (outOfLineMember) {
           return okGoToResult(index, outOfLineMember, {
@@ -270,7 +275,7 @@ export async function resolveMemberAccessDefinition(params: {
       });
     }
 
-    const receiver = await resolveReceiverDefinition(obj, source, sup, resolveExpression, mod);
+    const receiver = await resolveReceiverDefinition(index, obj, source, sup, resolveExpression, mod);
 
     if (receiver) {
       const objDef = receiver.def;
@@ -388,6 +393,22 @@ function isSimpleTypeNameNode(node: SyntaxNodeLike, sup: LanguageSupport): boole
   return isReceiverNameNode(sup, node.type) || node.type === "type_identifier" || node.type === "name";
 }
 
+function parseCppBaseType(node: SyntaxNodeLike, source: string): { base: string; path: string[] } | null {
+  let current = node;
+  while (
+    current.type === "base_class_clause" ||
+    current.type === "access_specifier" ||
+    current.type === "virtual_specifier" ||
+    current.type === "type_descriptor"
+  ) {
+    const nested = current.namedChildren.at(-1);
+    if (!nested || nested.id === current.id) break;
+    current = nested;
+  }
+  const names = cppQualifiedNameSegments(current, source);
+  return names.length > 1 ? { base: names[0]!, path: names.slice(1) } : null;
+}
+
 function collectDeclaredBaseTypes(
   container: SyntaxNodeLike,
   source: string,
@@ -426,6 +447,13 @@ function collectDeclaredBaseTypes(
     // A computed heritage expression can name the runtime base factory rather than a class.
     // Its descendants do not prove an inheritance edge.
     if (isUnprovenHeritageExpression(core)) return;
+    if (sup.id === "cpp") {
+      const qualified = parseCppBaseType(core, source);
+      if (qualified) {
+        addQualified(qualified.base, qualified.path, invoked);
+        return;
+      }
+    }
     const unwrapped = unwrapNamedType(core, sup);
     if (unwrapped) {
       addSimple(sliceText(unwrapped, source), invoked);
@@ -529,14 +557,18 @@ function resolveNamedMemberContainer(
   return undefined;
 }
 
-function resolveQualifiedMemberContainer(
+async function resolveQualifiedMemberContainer(
   index: ProjectIndex,
   mod: ModuleIndex,
   baseName: string,
   path: readonly string[],
   normalize: (name: string) => string,
-): SymbolDef | undefined {
+  sup: LanguageSupport,
+): Promise<SymbolDef | undefined> {
   if (path.length === 0) return undefined;
+  if (sup.id === "cpp") {
+    return (await resolveCppQualifiedMemberContainer(index, mod, [baseName, ...path])) ?? undefined;
+  }
   const namespaceImports = mod.imports.filter(
     (imp) => imp.kind === "namespace" && normalize(imp.localNS) === normalize(baseName),
   );
@@ -606,7 +638,7 @@ async function baseRefsFromContainer(
     const def =
       base.kind === "simple"
         ? resolveNamedMemberContainer(index, mod, base.name, normalize)
-        : resolveQualifiedMemberContainer(index, mod, base.base, base.path, normalize);
+        : await resolveQualifiedMemberContainer(index, mod, base.base, base.path, normalize, sup);
     if (!def) continue;
     const ref = await keywordClassRefFromDef(index, def);
     if (!ref) continue;
@@ -639,14 +671,8 @@ async function resolveKeywordReceiverMember(
   memberScope: ReceiverMemberScope,
   startAtAncestor: boolean,
   knownArgumentCount?: number,
-  explicitClass?: { name: string; support: LanguageSupport },
+  explicitClassDef?: SymbolDef,
 ): Promise<SymbolDef | undefined> {
-  const explicitClassDef = explicitClass
-    ? resolveNamedMemberContainer(index, mod, explicitClass.name, (name) => {
-        const normalized = explicitClass.support.normalizeIdentifier(name);
-        return explicitClass.support.id === "php" ? foldPhpIdentifierCase(normalized) : normalized;
-      })
-    : undefined;
   const current = explicitClassDef
     ? await keywordClassRefFromDef(index, explicitClassDef)
     : await keywordClassRefFromNode(index, mod, node);
@@ -742,6 +768,7 @@ function memberDeclaringLocals(mod: ModuleIndex, typeName: string, normalize: (n
 }
 
 async function resolveReceiverDefinition(
+  index: ProjectIndex,
   obj: SyntaxNodeLike,
   source: string,
   sup: LanguageSupport,
@@ -750,6 +777,18 @@ async function resolveReceiverDefinition(
 ): Promise<ResolvedReceiverDefinition | null> {
   const constructor = receiverConstructorExpression(obj, source, sup);
   if (constructor) {
+    if (sup.id === "cpp") {
+      const qualifiedType = cppQualifiedNameSegments(constructor, source);
+      if (qualifiedType.length > 1) {
+        const def = await resolveCppQualifiedMemberContainer(index, mod, qualifiedType);
+        if (def) {
+          return {
+            def,
+            memberScope: hasStaticMemberDistinction(sup.id) ? "instance" : "any",
+          };
+        }
+      }
+    }
     const typeName = sliceText(constructor, source);
     const typedLocals = memberDeclaringLocals(mod, typeName, sup.normalizeIdentifier);
     if (typedLocals.length === 1) {

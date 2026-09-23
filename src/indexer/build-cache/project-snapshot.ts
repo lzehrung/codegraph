@@ -68,7 +68,8 @@ const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 // v6: Swift ownership/arity fixes change persisted detailed-graph edges and memberArity.
 // v7: callable-binding proof corrections change persisted callable flags and call edges.
 // v8: receiver edge reconciliation, Kotlin ancestry, and static receiver scope change persisted graph edges.
-export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 8;
+// v9: exact C++ qualified ownership changes persisted member ownership and receiver call edges.
+export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 9;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";
