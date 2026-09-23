@@ -64,6 +64,7 @@ export type ResolveExportOptions = {
   preferredKind?: SymbolKind;
   allowLocalFallback?: boolean;
 };
+const PHP_CLASS_NAMESPACE_KINDS = [SymbolKind.Class, SymbolKind.Interface, SymbolKind.TypeAlias] as const;
 
 function moduleFor(index: ProjectIndex, file: FileId): ModuleIndex | undefined {
   return index.byFile.get(fileIdentityKey(file));
@@ -474,6 +475,29 @@ export function resolveExport(
   return resolveFromFile(file, exportedName);
 }
 
+/** Resolves a PHP symbol through its separate class, function, or constant import namespace. */
+export function resolvePhpExportByImportType(
+  index: ProjectIndex,
+  targetFile: FileId,
+  exportedName: string,
+  importType: "class" | "function" | "const" | undefined,
+): ResolvedExport | null {
+  if (importType === "class") {
+    for (const preferredKind of PHP_CLASS_NAMESPACE_KINDS) {
+      const hit = resolveExport(index, targetFile, exportedName, { preferredKind });
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (importType === "function") {
+    return resolveExport(index, targetFile, exportedName, { preferredKind: SymbolKind.Function });
+  }
+  if (importType === "const") {
+    return resolveExport(index, targetFile, exportedName, { preferredKind: SymbolKind.Variable });
+  }
+  return resolveExport(index, targetFile, exportedName);
+}
+
 function collectExportedNames(
   index: ProjectIndex,
   file: FileId,
@@ -526,26 +550,10 @@ export function resolveImported(
   const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile) return null;
 
-  const preferredKinds: SymbolKind[] = [];
-  if (imp.kind === "named") {
-    if (imp.phpImportType === "function") {
-      preferredKinds.push(SymbolKind.Function);
-    } else if (imp.phpImportType === "class") {
-      preferredKinds.push(SymbolKind.Class, SymbolKind.Interface, SymbolKind.TypeAlias);
-    } else if (imp.phpImportType === "const") {
-      preferredKinds.push(SymbolKind.Variable);
-    }
-  }
-
-  let hit: ResolvedExport | null = null;
-  if (preferredKinds.length) {
-    for (const preferredKind of preferredKinds) {
-      hit = resolveExport(index, targetFile, exportedName, { preferredKind });
-      if (hit) break;
-    }
-  } else {
-    hit = resolveExport(index, targetFile, exportedName);
-  }
+  const hit =
+    imp.kind === "named" && imp.phpImportType
+      ? resolvePhpExportByImportType(index, targetFile, exportedName, imp.phpImportType)
+      : resolveExport(index, targetFile, exportedName);
   if (hit?.kind === "resolved") return hit.def;
   if (hit?.kind === "namespace") return { namespace: hit.file };
 

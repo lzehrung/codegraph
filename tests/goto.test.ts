@@ -977,6 +977,39 @@ describe("Go to Definition", () => {
       }
     });
 
+    it("resolves imported and fully qualified PHP interfaces and enums through the class namespace", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-qualified-class-namespace-"));
+      try {
+        const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+        const sourceLines = ["<?php", "namespace App;", "interface Contract {}", "enum State { case Ready; }"];
+        const consumerLines = [
+          "<?php",
+          "use App\\Contract as ContractAlias;",
+          "use App\\State as StateAlias;",
+          "class QualifiedChild implements \\App\\Contract {}",
+          "class ImportedChild implements ContractAlias {}",
+          "function accepts(\\App\\State $state): StateAlias { return $state; }",
+        ];
+        await fsp.writeFile(sourceFile, sourceLines.join("\n"), "utf8");
+        await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+        for (const [line, token, fromEnd, expectedLine] of [
+          [4, "Contract", false, 3],
+          [5, "ContractAlias", false, 3],
+          [6, "State", false, 4],
+          [6, "StateAlias", true, 4],
+        ] as const) {
+          const sourceLine = consumerLines[line - 1]!;
+          const tokenIndex = fromEnd ? sourceLine.lastIndexOf(token) : sourceLine.indexOf(token);
+          await testGoToDefinition(index, consumerFile, line, tokenIndex + 1, sourceFile, expectedLine);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("resolves typed, untyped, and static properties to their declarations", async () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "php");
       const propertiesFile = path.join(samplePath, "properties.php").replace(/\\/g, "/");

@@ -33,7 +33,7 @@ import {
   rangeIdentityKey,
   referenceSiteKey,
 } from "./navigation-references.js";
-import { resolveExport, resolveImported } from "./navigation-resolve.js";
+import { resolveExport, resolveImported, resolvePhpExportByImportType } from "./navigation-resolve.js";
 import { extractEnclosingBlock, extractLineContext, rangeContains, sameDef } from "./reference-context.js";
 import { DEFAULT_REF_CONTEXT_LINES } from "./shared.js";
 import { type Binding, type ScopeIndex } from "./scope.js";
@@ -264,17 +264,7 @@ export async function goToDefinition(
       if (typeof resolvedTarget === "string") {
         const exportedName = normalizedQualifiedReference.split("\\").filter(Boolean).pop() ?? null;
         if (exportedName) {
-          let preferredKind: SymbolKind | undefined;
-          if (qualifiedImportType === "function") {
-            preferredKind = SymbolKind.Function;
-          } else if (qualifiedImportType === "class") {
-            preferredKind = SymbolKind.Class;
-          } else if (qualifiedImportType === "const") {
-            preferredKind = SymbolKind.Variable;
-          }
-          const hit = resolveExport(index, resolvedTarget, exportedName, {
-            ...(preferredKind ? { preferredKind } : {}),
-          });
+          const hit = resolvePhpExportByImportType(index, resolvedTarget, exportedName, qualifiedImportType);
           if (hit?.kind === "resolved") {
             return okGoToResult(index, hit.def, {
               via: { importedFrom: resolvedTarget, exportedName },
