@@ -82,8 +82,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 36 resolves PHP class-namespace imports across class, interface, trait, and enum definitions.
  * Epoch 37 rejects incomplete C++ overload occurrence bindings when reporting references.
  * Epoch 38 preserves C++ overload groups and resolves qualified namespace/type paths exactly.
+ * Epoch 39 treats a sole C/C++ void parameter as zero arity and resolves PHP class-like and
+ * function exports with PHP's ASCII case-insensitive name rules.
  */
-export const CORE_ALGORITHM_EPOCH = 38;
+export const CORE_ALGORITHM_EPOCH = 39;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

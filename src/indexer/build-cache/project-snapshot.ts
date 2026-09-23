@@ -69,7 +69,8 @@ const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 // v7: callable-binding proof corrections change persisted callable flags and call edges.
 // v8: receiver edge reconciliation, Kotlin ancestry, and static receiver scope change persisted graph edges.
 // v9: exact C++ qualified ownership changes persisted member ownership and receiver call edges.
-export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 9;
+// v10: C/C++ void-parameter arity changes persisted memberArity and call edges.
+export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 10;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";

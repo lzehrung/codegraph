@@ -80,22 +80,22 @@ describe("import binding regressions", () => {
     expect(simplified).toContainEqual({
       kind: "named",
       local: "SupportToolbox",
-      imported: "Toolbox",
-      from: "App\\Support\\Toolbox",
+      imported: "tOoLbOx",
+      from: "aPp\\sUpPoRt\\tOoLbOx",
       resolved: toolboxTarget,
     });
     expect(simplified).toContainEqual({
       kind: "named",
-      local: "support_helper",
-      imported: "support_helper",
-      from: "App\\Support\\support_helper",
+      local: "SuPpOrT_hElPeR",
+      imported: "SuPpOrT_hElPeR",
+      from: "aPp\\sUpPoRt\\SuPpOrT_hElPeR",
       resolved: helperTarget,
     });
     expect(simplified).toContainEqual({
       kind: "named",
       local: "DEFAULT_NAME",
       imported: "DEFAULT_NAME",
-      from: "App\\Support\\DEFAULT_NAME",
+      from: "aPp\\sUpPoRt\\DEFAULT_NAME",
       resolved: constantTarget,
     });
   });

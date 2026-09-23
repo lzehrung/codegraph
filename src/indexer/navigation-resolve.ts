@@ -3,7 +3,12 @@ import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { languageHasDeclarationVisibility } from "./declaration-visibility.js";
 import type { FileId } from "../types.js";
-import { GO_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../util/identifiers.js";
+import {
+  foldPhpIdentifierCase,
+  GO_IDENTIFIER_SOURCE,
+  JAVA_IDENTIFIER_SOURCE,
+  KOTLIN_IDENTIFIER_SOURCE,
+} from "../util/identifiers.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import {
   type ExportEntry,
@@ -475,6 +480,52 @@ export function resolveExport(
   return resolveFromFile(file, exportedName);
 }
 
+function resolvePhpCaseInsensitiveExport(
+  index: ProjectIndex,
+  targetFile: FileId,
+  exportedName: string,
+  preferredKind: SymbolKind,
+): ResolvedExport | null {
+  const exactExport = resolveExport(index, targetFile, exportedName, { preferredKind, allowLocalFallback: false });
+  if (exactExport) return exactExport;
+
+  const moduleEntry = moduleFor(index, targetFile);
+  if (!moduleEntry) return null;
+  const foldedName = foldPhpIdentifierCase(exportedName);
+  const resolveUnique = (sourceSpellings: Set<string>, allowLocalFallback: boolean): ResolvedExport | null => {
+    const matches: ResolvedExport[] = [];
+    for (const sourceSpelling of sourceSpellings) {
+      const hit = resolveExport(index, targetFile, sourceSpelling, { preferredKind, allowLocalFallback });
+      if (hit && !matches.some((candidate) => sameResolvedExport(index, candidate, hit))) {
+        matches.push(hit);
+      }
+    }
+    return matches.length === 1 ? matches[0]! : null;
+  };
+
+  const exportSpellings = new Set<string>();
+  for (const entry of moduleEntry.exports) {
+    if (
+      entry.type === "local" &&
+      entry.target.kind === preferredKind &&
+      foldPhpIdentifierCase(entry.exportedAs) === foldedName
+    ) {
+      exportSpellings.add(entry.exportedAs);
+    }
+  }
+  if (exportSpellings.size) return resolveUnique(exportSpellings, false);
+
+  const exactLocal = resolveExport(index, targetFile, exportedName, { preferredKind });
+  if (exactLocal) return exactLocal;
+  const localSpellings = new Set<string>();
+  for (const local of moduleEntry.locals) {
+    if (local.kind === preferredKind && foldPhpIdentifierCase(local.localName) === foldedName) {
+      localSpellings.add(local.localName);
+    }
+  }
+  return resolveUnique(localSpellings, true);
+}
+
 /** Resolves a PHP symbol through its separate class, function, or constant import namespace. */
 export function resolvePhpExportByImportType(
   index: ProjectIndex,
@@ -484,13 +535,13 @@ export function resolvePhpExportByImportType(
 ): ResolvedExport | null {
   if (importType === "class") {
     for (const preferredKind of PHP_CLASS_NAMESPACE_KINDS) {
-      const hit = resolveExport(index, targetFile, exportedName, { preferredKind });
+      const hit = resolvePhpCaseInsensitiveExport(index, targetFile, exportedName, preferredKind);
       if (hit) return hit;
     }
     return null;
   }
   if (importType === "function") {
-    return resolveExport(index, targetFile, exportedName, { preferredKind: SymbolKind.Function });
+    return resolvePhpCaseInsensitiveExport(index, targetFile, exportedName, SymbolKind.Function);
   }
   if (importType === "const") {
     return resolveExport(index, targetFile, exportedName, { preferredKind: SymbolKind.Variable });

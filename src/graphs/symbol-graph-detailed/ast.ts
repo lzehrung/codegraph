@@ -246,7 +246,18 @@ export function declarationMemberArity(declarationNode: SyntaxNodeLike, language
     if (languageId !== "swift") return undefined;
     return (declarationNode.namedChildren ?? []).filter((child) => child.type === "parameter").length;
   }
-  return (parameters.namedChildren ?? []).filter((child) => child.type !== "comment").length;
+  const positionalParameters = (parameters.namedChildren ?? []).filter((child) => child.type !== "comment");
+  if ((languageId === "c" || languageId === "cpp") && positionalParameters.length === 1) {
+    const parameterParts = positionalParameters[0]!.namedChildren.filter((child) => child.type !== "comment");
+    if (
+      parameterParts.length === 1 &&
+      parameterParts[0]?.type === "primitive_type" &&
+      parameterParts[0].text === "void"
+    ) {
+      return 0;
+    }
+  }
+  return positionalParameters.length;
 }
 
 export function collectNodesByType(node: SyntaxNodeLike, type: string, out: SyntaxNodeLike[]): void {

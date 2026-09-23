@@ -890,7 +890,7 @@ describe("Go to Definition", () => {
           "<?php",
           "namespace Client;",
           "use App\\Service as Alias;",
-          "use function App\\helper as Alias;",
+          "use function App\\HELPER as Alias;",
           "use const App\\TOKEN as Alias;",
           "$service = new ALIAS();",
           "$value = ALIAS();",
@@ -982,23 +982,23 @@ describe("Go to Definition", () => {
       try {
         const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
         const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
-        const sourceLines = ["<?php", "namespace App;", "interface Contract {}", "enum State { case Ready; }"];
+        const sourceLines = ["<?php", "namespace App\\Domain;", "interface Contract {}", "enum State { case Ready; }"];
         const consumerLines = [
           "<?php",
-          "use App\\Contract as ContractAlias;",
-          "use App\\State as StateAlias;",
-          "class QualifiedChild implements \\App\\Contract {}",
+          "use aPp\\dOmAiN\\cOnTrAcT as ContractAlias;",
+          "use APP\\DOMAIN\\sTaTe as StateAlias;",
+          "class QualifiedChild implements \\App\\domain\\CONTRACT {}",
           "class ImportedChild implements ContractAlias {}",
-          "function accepts(\\App\\State $state): StateAlias { return $state; }",
+          "function accepts(\\app\\Domain\\state $state): StateAlias { return $state; }",
         ];
         await fsp.writeFile(sourceFile, sourceLines.join("\n"), "utf8");
         await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
         const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
 
         for (const [line, token, fromEnd, expectedLine] of [
-          [4, "Contract", false, 3],
+          [4, "CONTRACT", false, 3],
           [5, "ContractAlias", false, 3],
-          [6, "State", false, 4],
+          [6, "state", false, 4],
           [6, "StateAlias", true, 4],
         ] as const) {
           const sourceLine = consumerLines[line - 1]!;
@@ -1473,7 +1473,7 @@ describe("Go to Definition", () => {
       try {
         const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
         const lines = [
-          "int pick();",
+          "int pick(void);",
           "int pick(int value);",
           "int zero() { return pick(); }",
           "int one() { return pick(1); }",

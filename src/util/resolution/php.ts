@@ -16,7 +16,7 @@ import {
 } from "./project-symbols.js";
 import { getImportableLanguageExtensions, getImportableLanguageGlobs } from "../resolution-candidates.js";
 import { confineResolvedPath, readUtf8WithoutBom } from "../paths.js";
-import { PHP_IDENTIFIER_SOURCE } from "../identifiers.js";
+import { foldPhpIdentifierCase, PHP_IDENTIFIER_SOURCE } from "../identifiers.js";
 import { PHP_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRoot } from "./files.js";
 
 const PHP_IDENTIFIER_PATTERN = new RegExp(PHP_IDENTIFIER_SOURCE, "uy");
@@ -73,7 +73,7 @@ async function getPhpProjectSymbolIndex(indexRoot: string): Promise<LanguageProj
     buildDeclaredContainerIndex(indexRoot, getImportableLanguageGlobs("php"), async (filePath) => {
       const entry = await readPhpSymbolIndex(filePath);
       return entry.packageEntries.map((packageEntry) => ({
-        name: packageEntry.packageName,
+        name: foldPhpIdentifierCase(packageEntry.packageName),
         symbols: packageEntry.symbols,
       }));
     }),
@@ -448,6 +448,23 @@ async function resolvePhpSymbolImportPath(
 ): Promise<string | null> {
   const normalizedSpec = spec.replace(/^\\+/, "");
   const projectIndex = await getPhpProjectSymbolIndex(indexRoot ?? projectRoot);
+  const packageCandidateFiles = (packageName: string): string[] =>
+    projectIndex.filesByPackage.get(foldPhpIdentifierCase(packageName)) ?? [];
+  const symbolCandidateFiles = (packageName: string, symbolName: string): string[] => {
+    const filesBySymbol = projectIndex.filesByPackageSymbol.get(foldPhpIdentifierCase(packageName));
+    if (!filesBySymbol) return [];
+    if (preferredKind === "const" || !preferredKind) {
+      return filesBySymbol.get(symbolName) ?? [];
+    }
+
+    const foldedName = foldPhpIdentifierCase(symbolName);
+    const candidates = new Set<string>();
+    for (const [candidateName, files] of filesBySymbol) {
+      if (foldPhpIdentifierCase(candidateName) !== foldedName) continue;
+      for (const file of files) candidates.add(file);
+    }
+    return [...candidates];
+  };
   const pickCandidate = async (candidates: string[], symbolName?: string): Promise<string | null> => {
     for (const candidate of candidates) {
       const resolvedCandidate = await confineResolvedPath(projectRoot, candidate);
@@ -459,15 +476,24 @@ async function resolvePhpSymbolImportPath(
         return resolvedCandidate;
       }
       const entry = await readPhpSymbolIndex(resolvedCandidate);
-      const symbolKinds = entry.kindsBySymbol.get(symbolName);
-      if (symbolKinds?.has(preferredKind)) {
+      let hasPreferredKind = entry.kindsBySymbol.get(symbolName)?.has(preferredKind) ?? false;
+      if (!hasPreferredKind && preferredKind !== "const") {
+        const foldedName = foldPhpIdentifierCase(symbolName);
+        for (const [candidateName, candidateKinds] of entry.kindsBySymbol) {
+          if (foldPhpIdentifierCase(candidateName) === foldedName && candidateKinds.has(preferredKind)) {
+            hasPreferredKind = true;
+            break;
+          }
+        }
+      }
+      if (hasPreferredKind) {
         return resolvedCandidate;
       }
     }
     return null;
   };
 
-  const exactNamespaceFiles = projectIndex.filesByPackage.get(normalizedSpec) ?? [];
+  const exactNamespaceFiles = packageCandidateFiles(normalizedSpec);
   const exactNamespaceHit = await pickCandidate(exactNamespaceFiles);
   if (exactNamespaceHit) {
     return exactNamespaceHit;
@@ -475,7 +501,7 @@ async function resolvePhpSymbolImportPath(
 
   const parts = normalizedSpec.split("\\").filter(Boolean);
   if (parts.length === 1) {
-    const globalFiles = projectIndex.filesByPackageSymbol.get("")?.get(parts[0]!) ?? [];
+    const globalFiles = symbolCandidateFiles("", parts[0]!);
     return await pickCandidate(globalFiles, parts[0]);
   }
 
@@ -485,13 +511,13 @@ async function resolvePhpSymbolImportPath(
 
   const importedName = parts[parts.length - 1]!;
   const packageName = parts.slice(0, -1).join("\\");
-  const symbolFiles = projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
+  const symbolFiles = symbolCandidateFiles(packageName, importedName);
   const symbolHit = await pickCandidate(symbolFiles, importedName);
   if (symbolHit) {
     return symbolHit;
   }
 
-  const packageFiles = projectIndex.filesByPackage.get(packageName) ?? [];
+  const packageFiles = packageCandidateFiles(packageName);
   return await pickCandidate(packageFiles, importedName);
 }
 

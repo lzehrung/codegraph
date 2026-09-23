@@ -4598,7 +4598,7 @@ describe("Find References: PHP global-namespace symbols", () => {
       const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
       const sourceLines = [
         "<?php",
-        "namespace App;",
+        "namespace App\\Domain;",
         "class Service {}",
         "function helper() { return 1; }",
         "const TOKEN = 1;",
@@ -4607,9 +4607,9 @@ describe("Find References: PHP global-namespace symbols", () => {
       const consumerLines = [
         "<?php",
         "namespace Client;",
-        "use App\\Service as Alias;",
-        "use function App\\helper as Alias;",
-        "use const App\\TOKEN as Alias;",
+        "use aPp\\dOmAiN\\sErViCe as Alias;",
+        "use function APP\\DOMAIN\\HELPER as Alias;",
+        "use const App\\domain\\TOKEN as Alias;",
         "$service = new ALIAS();",
         "$value = ALIAS();",
         "$constant = Alias;",
@@ -4622,13 +4622,13 @@ describe("Find References: PHP global-namespace symbols", () => {
 
       await testFindReferences(index, sourceFile, 3, tokenColumn(sourceLines[2]!, "Service"), [
         { file: sourceFile, line: 3, column: tokenColumn(sourceLines[2]!, "Service") },
-        { file: consumerFile, line: 3, column: tokenColumn(consumerLines[2]!, "Service") },
+        { file: consumerFile, line: 3, column: tokenColumn(consumerLines[2]!, "sErViCe") },
         { file: consumerFile, line: 3, column: tokenColumn(consumerLines[2]!, "Alias") },
         { file: consumerFile, line: 6, column: tokenColumn(consumerLines[5]!, "ALIAS") },
       ]);
       await testFindReferences(index, sourceFile, 4, tokenColumn(sourceLines[3]!, "helper"), [
         { file: sourceFile, line: 4, column: tokenColumn(sourceLines[3]!, "helper") },
-        { file: consumerFile, line: 4, column: tokenColumn(consumerLines[3]!, "helper") },
+        { file: consumerFile, line: 4, column: tokenColumn(consumerLines[3]!, "HELPER") },
         { file: consumerFile, line: 4, column: tokenColumn(consumerLines[3]!, "Alias") },
         { file: consumerFile, line: 7, column: tokenColumn(consumerLines[6]!, "ALIAS") },
       ]);

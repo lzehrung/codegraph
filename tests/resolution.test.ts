@@ -1132,7 +1132,7 @@ describe("Import Resolution", () => {
     }
   });
 
-  it("resolves fully-qualified PHP class references without use statements", async () => {
+  it("resolves case-variant fully-qualified PHP class references without use statements", async () => {
     const root = await mkTmpDir("dg-resolve-php-qualified-");
     const srcDir = path.join(root, "src", "Domain");
     const consumerFile = path.join(root, "consumer.php");
@@ -1149,7 +1149,7 @@ describe("Import Resolution", () => {
       ["<?php", "", "namespace App\\Domain;", "", "class Service {}", ""].join("\n"),
       "utf8",
     );
-    await fsp.writeFile(consumerFile, ["<?php", "", "$service = new App\\Domain\\Service();", ""].join("\n"), "utf8");
+    await fsp.writeFile(consumerFile, ["<?php", "", "$service = new aPp\\dOmAiN\\sErViCe();", ""].join("\n"), "utf8");
 
     const index = await buildProjectIndex(root);
     const result = await goToDefinition(index, {
