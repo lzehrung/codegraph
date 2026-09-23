@@ -519,7 +519,7 @@ async function findReferencesInternal(
   const exportedNameSet = new Set(exportedNames);
   const phpQualifiedNames = await buildPhpQualifiedNames(index, definitionFile, def);
   const scansReceiverReferences = shouldScanVerifiedReferences(def, parsedContext, receiverMemberDefinition);
-  if (localBinding && !scansReceiverReferences) {
+  if (localBinding && localBinding.occurrencesComplete !== false && !scansReceiverReferences) {
     for (const occurrence of localBinding.occurrences) {
       if (hasReachedCollectionLimit()) break;
       pushRef({ file: definitionFile, range: occurrence });

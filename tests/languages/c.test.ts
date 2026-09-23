@@ -784,7 +784,7 @@ describe("C function redeclarations", () => {
     }
   });
 
-  it("preserves distinct occurrence sets for C++ redeclarations", async () => {
+  it("does not expose incomplete C++ redeclaration occurrences", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-cpp-redeclaration-references-"));
     try {
       const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
@@ -805,13 +805,61 @@ describe("C function redeclarations", () => {
       const prototypeReferences = await findReferences(index, { file, line: 1, column: 5 });
       expect(prototypeReferences.status).toBe("ok");
       if (prototypeReferences.status === "ok") {
-        expect(prototypeReferences.references.map((reference) => reference.range.start.line)).toEqual([1, 2]);
+        expect(prototypeReferences.references.map((reference) => reference.range.start.line)).toEqual([1]);
+        expect(prototypeReferences.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["strategy_unavailable"],
+        });
       }
 
       const definitionReferences = await findReferences(index, { file, line: 3, column: 5 });
       expect(definitionReferences.status).toBe("ok");
       if (definitionReferences.status === "ok") {
-        expect(definitionReferences.references.map((reference) => reference.range.start.line)).toEqual([3, 4]);
+        expect(definitionReferences.references.map((reference) => reference.range.start.line)).toEqual([3]);
+        expect(definitionReferences.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["strategy_unavailable"],
+        });
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not assign same-file calls to C++ overloads by name alone", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-cpp-overload-references-"));
+    try {
+      const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+      const source = [
+        "int pick();",
+        "int pick(int value);",
+        "int zero(void) { return pick(); }",
+        "int one(void) { return pick(1); }",
+        "",
+      ].join("\n");
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const zeroArityReferences = await findReferences(index, { file, line: 1, column: 5 });
+      const oneArityReferences = await findReferences(index, { file, line: 2, column: 5 });
+      expect(zeroArityReferences.status).toBe("ok");
+      expect(oneArityReferences.status).toBe("ok");
+      if (zeroArityReferences.status === "ok" && oneArityReferences.status === "ok") {
+        expect([
+          zeroArityReferences.references.map((reference) => reference.range.start.line),
+          oneArityReferences.references.map((reference) => reference.range.start.line),
+        ]).toEqual([[1], [2]]);
+        expect(zeroArityReferences.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["strategy_unavailable"],
+        });
+        expect(oneArityReferences.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["strategy_unavailable"],
+        });
       }
     } finally {
       await rm(root, { recursive: true, force: true });
