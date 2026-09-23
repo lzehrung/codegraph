@@ -8,7 +8,9 @@ import {
   getNativeSyntaxTreeExecution,
   isNativeRequiredUnavailableError,
 } from "../native/tree-sitter-native.js";
-import { resolveExport } from "../indexer/navigation-resolve.js";
+import { resolveExport, resolvePhpExportByImportType } from "../indexer/navigation-resolve.js";
+import { resolveCppCollidingBinding } from "../indexer/navigation-cpp.js";
+import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
 import { findClosestScopeBinding, getOrBuildScopeIndex } from "../indexer/navigation-local.js";
 import { ensureParsedContext, type ParsedFileContext } from "../indexer/parse-context.js";
 import { SymbolKind, type ProjectIndex, type ResolvedExport, type SymbolDef } from "../indexer/types.js";
@@ -256,8 +258,10 @@ export async function buildSymbolGraphDetailed(
       const scopeIndex = getOrBuildScopeIndex(index, file, src, sup, moduleEntry, tree);
       const resolveIdentifier = (name: string, node: SyntaxNodeLike): SymbolDef | null => {
         const binding = findClosestScopeBinding(scopeIndex, name, node, sup);
-        if (binding) {
-          if (!binding.def) return aliasToTargetDef.get(binding.name) ?? null;
+        const cppCollision =
+          sup.id === "cpp" && binding ? resolveCppCollidingBinding(file, binding, node, src) : undefined;
+        if (cppCollision !== undefined) return cppCollision;
+        if (binding?.def) {
           return (
             moduleEntry.locals.find(
               (local) =>
@@ -267,6 +271,15 @@ export async function buildSymbolGraphDetailed(
             ) ?? null
           );
         }
+        if (sup.id === "php") {
+          const importType = inferPhpQualifiedReferenceImportType(node) ?? "const";
+          const phpImport = findPhpImportAlias(moduleEntry.imports, name, importType);
+          if (phpImport && typeof phpImport.resolved === "string") {
+            const resolved = resolvePhpExportByImportType(index, phpImport.resolved, phpImport.imported, importType);
+            if (resolved?.kind === "resolved") return resolved.def;
+          }
+        }
+        if (binding) return aliasToTargetDef.get(binding.name) ?? null;
 
         const localCandidates = moduleEntry.locals.filter(
           (local) => sup.normalizeIdentifier(local.localName) === sup.normalizeIdentifier(name),

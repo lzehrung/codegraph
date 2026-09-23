@@ -32,13 +32,15 @@ import {
   isUnprovenHeritageExpression,
   keywordReceiverMemberScope,
   receiverConstructorExpression,
+  supportsReceiverMemberOverloads,
   unwrapNamedType,
   type ReceiverMemberScope,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
-import { resolveExport, resolveImported } from "./navigation-resolve.js";
+import { findPhpImportAlias } from "./navigation-php.js";
+import { resolveExport, resolveImported, resolvePhpExportByImportType } from "./navigation-resolve.js";
 import {
   SymbolKind,
   type GoToResult,
@@ -85,18 +87,23 @@ export async function resolveMemberAccessDefinition(params: {
       const lexicalBinding = resolveLexicalBinding?.(expr);
       if (lexicalBinding) return { kind: "resolved", def: lexicalBinding };
       const exprName = sliceText(expr, source);
-      const imp = mod.imports.find(
-        (candidate) =>
-          (candidate.kind === "named" && candidate.local === exprName) ||
-          (candidate.kind === "default" && candidate.local === exprName) ||
-          (candidate.kind === "namespace" && candidate.localNS === exprName),
-      );
+      const imp =
+        sup.id === "php"
+          ? findPhpImportAlias(mod.imports, exprName, "class")
+          : mod.imports.find((candidate) => {
+              if (candidate.kind === "named" || candidate.kind === "default") return candidate.local === exprName;
+              return candidate.kind === "namespace" && candidate.localNS === exprName;
+            });
       if (imp) {
         if (imp.kind === "namespace") {
           return {
             kind: "namespace",
             file: typeof imp.resolved === "string" ? imp.resolved.replace(/\\/g, "/") : imp.resolved?.external || "",
           };
+        }
+        if (sup.id === "php" && imp.kind === "named" && typeof imp.resolved === "string") {
+          const result = resolvePhpExportByImportType(index, imp.resolved, imp.imported, "class");
+          if (result) return result;
         }
         const result = resolveImported(index, imp, imp.kind === "named" ? imp.imported : "default");
         if (result) {
@@ -107,7 +114,14 @@ export async function resolveMemberAccessDefinition(params: {
         }
       }
 
-      const local = mod.locals.find((candidate) => candidate.localName === exprName);
+      const local = mod.locals.find((candidate) => {
+        if (candidate.localName === exprName) return true;
+        return (
+          sup.id === "php" &&
+          declaresMembers(candidate) &&
+          foldPhpIdentifierCase(candidate.localName) === foldPhpIdentifierCase(exprName)
+        );
+      });
       if (local) return { kind: "resolved", def: local };
 
       for (const starImport of mod.imports.filter((candidate) => candidate.kind === "star")) {
@@ -226,7 +240,7 @@ export async function resolveMemberAccessDefinition(params: {
         member,
         keywordScope,
         false,
-        keywordCallArgumentCount(memberNode, source),
+        keywordCallArgumentCount(memberNode, source, sup.id),
       );
       if (memberDef) {
         return okGoToResult(index, memberDef, {
@@ -247,7 +261,7 @@ export async function resolveMemberAccessDefinition(params: {
           member,
           keywordScope,
           false,
-          keywordCallArgumentCount(memberNode, source),
+          keywordCallArgumentCount(memberNode, source, sup.id),
           outOfLineOwner,
         );
         if (outOfLineMember) {
@@ -265,7 +279,7 @@ export async function resolveMemberAccessDefinition(params: {
         member,
         keywordScope,
         true,
-        keywordCallArgumentCount(memberNode, source),
+        keywordCallArgumentCount(memberNode, source, sup.id),
       );
       if (!memberDef) return { status: "not_found", reason: "No matching supertype member definition" };
       return okGoToResult(index, memberDef, {
@@ -721,7 +735,12 @@ async function resolveKeywordReceiverMember(
       seenMatch.add(key);
       uniqueMatches.push(match);
     }
-    if (uniqueMatches.length === 1) return uniqueMatches[0];
+    if (uniqueMatches.length === 1) {
+      const match = uniqueMatches[0]!;
+      if (knownArgumentCount === undefined) return match;
+      const arity = await keywordMemberDeclarationArity(index, match);
+      return arity === undefined || arity === knownArgumentCount ? match : undefined;
+    }
     if (uniqueMatches.length > 1) {
       // A known call argument count narrows same-named overloads on one type before the
       // unique-shallowest rule. Any remaining ambiguity or a known-incompatible overload
@@ -932,7 +951,8 @@ const KEYWORD_CALLEE_FIELD_NAMES = ["function", "callee", "called_expression", "
  * undefined when the access is not an invocation with a known argument list. Reuses the shared
  * `callArgumentCount` scanner.
  */
-function keywordCallArgumentCount(memberNode: SyntaxNodeLike, source: string): number | undefined {
+function keywordCallArgumentCount(memberNode: SyntaxNodeLike, source: string, languageId: string): number | undefined {
+  if (!supportsReceiverMemberOverloads(languageId)) return undefined;
   const carriesArguments = (node: SyntaxNodeLike): boolean =>
     Boolean(node.childForFieldName("arguments") ?? node.childForFieldName("argument_list")) ||
     (node.namedChildren ?? []).some((child) => CALL_ARGUMENT_NODE_TYPES[child.type]);

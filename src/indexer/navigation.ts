@@ -11,6 +11,7 @@ import {
 } from "./navigation-local.js";
 import { createNavigationProvenance, okGoToResult } from "./navigation-provenance.js";
 import {
+  findPhpImportAlias,
   getPhpQualifiedReference,
   inferPhpQualifiedReferenceImportType,
   isPhpCaseInsensitiveSymbolKind,
@@ -37,13 +38,12 @@ import {
 import { resolveExport, resolveImported, resolvePhpExportByImportType } from "./navigation-resolve.js";
 import { extractEnclosingBlock, extractLineContext, rangeContains, sameDef } from "./reference-context.js";
 import { DEFAULT_REF_CONTEXT_LINES } from "./shared.js";
-import { type Binding, type ScopeIndex } from "./scope.js";
+import type { Binding, ScopeIndex } from "./scope.js";
 import { type FileId, type Range } from "../types.js";
 import { loadNearestTsconfigFor, resolveImportSpecifier } from "../util/resolution.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
-import { declarationMemberArity } from "../graphs/symbol-graph-detailed/ast.js";
 import {
   getMemberAccessParts,
   isMemberAccessNode,
@@ -52,12 +52,11 @@ import {
   isReceiverNameNode,
 } from "../util/member-access.js";
 import {
-  callArgumentCount,
   cppOutOfLineOwnerPath,
   cppOutOfLineMemberName,
   cppOutOfLineMemberDeclarationNode,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
-import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
+import { resolveCppCollidingBinding, resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
 import {
   type FindReferencesResult,
   type GoToRequest,
@@ -106,17 +105,8 @@ async function resolvePhpAliasDefinition(
   localName: string,
   importType: "class" | "function" | "const",
 ): Promise<{ def: SymbolDef; targetFile: FileId } | null> {
-  const normalizeLocalName = importType === "const" ? (name: string) => name : foldPhpIdentifierCase;
-  const comparableLocalName = normalizeLocalName(localName);
-  const matches = mod.imports.filter(
-    (imp): imp is Extract<ImportBinding, { kind: "named" }> =>
-      imp.kind === "named" &&
-      imp.mechanism === "php" &&
-      (imp.phpImportType ?? "class") === importType &&
-      normalizeLocalName(imp.local) === comparableLocalName,
-  );
-  if (matches.length !== 1) return null;
-  const imp = matches[0]!;
+  const imp = findPhpImportAlias(mod.imports, localName, importType);
+  if (!imp) return null;
   let targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile && index.projectRoot) {
     const resolved = await resolveImportSpecifier(index.projectRoot, file, imp.from, "php", {
@@ -128,64 +118,6 @@ async function resolvePhpAliasDefinition(
   const resolved = resolveImported(index, { ...imp, resolved: targetFile }, imp.imported);
   if (!resolved || "namespace" in resolved) return null;
   return { def: resolved, targetFile };
-}
-
-function cppBindingDefinition(file: FileId, binding: Binding): SymbolDef | null {
-  if (!binding.def) return null;
-  return {
-    file,
-    localName: binding.name,
-    kind: SymbolKind.Function,
-    range: binding.def,
-  };
-}
-
-function cppBindingArity(binding: Binding): number | undefined {
-  let current = binding.node ?? null;
-  while (current) {
-    const arity = declarationMemberArity(current, "cpp");
-    if (arity !== undefined) return arity;
-    if (current.type === "function_definition" || current.type === "program") return undefined;
-    current = current.parent;
-  }
-  return undefined;
-}
-
-function cppCallArgumentCount(node: SyntaxNodeLike, source: string): number | null {
-  let current = node.parent;
-  while (current) {
-    if (current.type === "call_expression") {
-      const callee = current.childForFieldName("function");
-      if (callee && callee.startIndex <= node.startIndex && callee.endIndex >= node.endIndex) {
-        return callArgumentCount(current, source);
-      }
-    }
-    if (current.type === "function_definition" || current.type === "program") return null;
-    current = current.parent;
-  }
-  return null;
-}
-
-/**
- * Undefined means the lexical binding is not a C++ collision. Null means it is
- * ambiguous after declaration-site and known-call-arity checks.
- */
-function resolveCppCollidingBinding(
-  file: FileId,
-  binding: Binding,
-  node: SyntaxNodeLike,
-  source: string,
-): SymbolDef | null | undefined {
-  const collisions = binding.sameScopeFunctionBindings;
-  if (!collisions || collisions.length < 2) return undefined;
-  const declaration = collisions.find(
-    (candidate) => candidate.node?.startIndex === node.startIndex && candidate.node?.endIndex === node.endIndex,
-  );
-  if (declaration) return cppBindingDefinition(file, declaration);
-  const argumentCount = cppCallArgumentCount(node, source);
-  if (argumentCount === null) return null;
-  const matches = collisions.filter((candidate) => cppBindingArity(candidate) === argumentCount);
-  return matches.length === 1 ? cppBindingDefinition(file, matches[0]!) : null;
 }
 
 export async function goToDefinition(

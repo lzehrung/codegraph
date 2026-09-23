@@ -920,6 +920,23 @@ describe("Go to Definition", () => {
       }
     });
 
+    it("resolves PHP static members through a case-variant imported alias", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-static-alias-case-goto-"));
+      try {
+        const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+        const sourceLines = ["<?php", "namespace App;", "class Service {", "  public static function run() {}", "}"];
+        const consumerLines = ["<?php", "use App\\Service as Foo;", "fOo::run();"];
+        await fsp.writeFile(sourceFile, sourceLines.join("\n"), "utf8");
+        await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+        await testGoToDefinition(index, consumerFile, 3, consumerLines[2]!.indexOf("run") + 1, sourceFile, 4);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("resolves same-spelled aliases as classes in PHP type contexts", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-alias-type-contexts-"));
       try {
@@ -3691,6 +3708,32 @@ describe("Keyword-receiver member navigation", () => {
     }
   });
 
+  it("stops ancestor lookup when one shallow member rejects a known argument count", async () => {
+    const source = [
+      "class Grand {",
+      "  helper(): number { return 0; }",
+      "}",
+      "class Base extends Grand {",
+      "  helper(x: number): number { return x; }",
+      "}",
+      "class Child extends Base {",
+      "  run(): number { return this.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-this-single-shadow-goto-", { "Box.ts": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["Box.ts"]!,
+        line: 8,
+        column: columnOf(source, 8, "helper()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps an unknown argument count ambiguous for this overloads", async () => {
     const source = [
       "class Box {",
@@ -4104,6 +4147,20 @@ describe("Supertype keyword member navigation", () => {
     const { root, paths, index } = await buildFiles("cg-cpp-qualified-base-goto-", { "derived.cpp": source });
     try {
       await expectMemberAccess(index, paths["derived.cpp"]!, 3, columnOf(source, 3, "inherited()"), 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves C++ this members through an unqualified base", async () => {
+    const source = [
+      "class Base { public: int inherited() { return 1; } };",
+      "class Derived : public Base { public: int use() { return this->inherited(); } };",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cpp-unqualified-base-goto-", { "derived.cpp": source });
+    try {
+      await expectMemberAccess(index, paths["derived.cpp"]!, 2, columnOf(source, 2, "inherited()"), 1);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

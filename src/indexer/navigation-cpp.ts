@@ -1,14 +1,75 @@
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { declarationMemberArity } from "../graphs/symbol-graph-detailed/ast.js";
+import { callArgumentCount, cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { fileIdentityKey } from "../util/paths.js";
+import type { FileId } from "../types.js";
 import { ensureParsedContext } from "./parse-context.js";
-import type { ModuleIndex, ProjectIndex, SymbolDef } from "./types.js";
+import type { Binding } from "./scope-types.js";
+import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
 
 const CPP_MEMBER_CONTAINER_TYPES = new Set(["class_specifier", "struct_specifier", "union_specifier"]);
 type CppParsedFile = { source: string; tree: SyntaxTreeLike };
 type CppParsedFileLoader = (file: string) => Promise<CppParsedFile | null>;
 
 const resolutionCache = new WeakMap<ProjectIndex, Map<string, Promise<SymbolDef | null>>>();
+
+function cppBindingDefinition(file: FileId, binding: Binding): SymbolDef | null {
+  if (!binding.def) return null;
+  return {
+    file,
+    localName: binding.name,
+    kind: SymbolKind.Function,
+    range: binding.def,
+  };
+}
+
+function cppBindingArity(binding: Binding): number | undefined {
+  let current = binding.node ?? null;
+  while (current) {
+    const arity = declarationMemberArity(current, "cpp");
+    if (arity !== undefined) return arity;
+    if (current.type === "function_definition" || current.type === "program") return undefined;
+    current = current.parent;
+  }
+  return undefined;
+}
+
+function cppCallArgumentCount(node: SyntaxNodeLike, source: string): number | null {
+  let current = node.parent;
+  while (current) {
+    if (current.type === "call_expression") {
+      const callee = current.childForFieldName("function");
+      if (callee && callee.startIndex <= node.startIndex && callee.endIndex >= node.endIndex) {
+        return callArgumentCount(current, source);
+      }
+    }
+    if (current.type === "function_definition" || current.type === "program") return null;
+    current = current.parent;
+  }
+  return null;
+}
+
+/**
+ * Undefined means the lexical binding is not a C++ collision. Null means it is
+ * ambiguous after declaration-site and known-call-arity checks.
+ */
+export function resolveCppCollidingBinding(
+  file: FileId,
+  binding: Binding,
+  node: SyntaxNodeLike,
+  source: string,
+): SymbolDef | null | undefined {
+  const collisions = binding.sameScopeFunctionBindings;
+  if (!collisions || collisions.length < 2) return undefined;
+  const declaration = collisions.find(
+    (candidate) => candidate.node?.startIndex === node.startIndex && candidate.node?.endIndex === node.endIndex,
+  );
+  if (declaration) return cppBindingDefinition(file, declaration);
+  const argumentCount = cppCallArgumentCount(node, source);
+  if (argumentCount === null) return null;
+  const matches = collisions.filter((candidate) => cppBindingArity(candidate) === argumentCount);
+  return matches.length === 1 ? cppBindingDefinition(file, matches[0]!) : null;
+}
 
 function cppMemberContainerForDefinition(tree: SyntaxTreeLike, def: SymbolDef): SyntaxNodeLike | null {
   const position = {

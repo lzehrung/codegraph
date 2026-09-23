@@ -27,6 +27,7 @@ import {
   isUnprovenHeritageExpression,
   nearestMemberContainer,
   receiverCallAccess,
+  supportsReceiverMemberOverloads,
   type ReceiverCallAccess,
   type ReceiverCallCandidate,
   type ReceiverMemberScope,
@@ -511,7 +512,9 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
       if (!binding) return;
 
       const site = { file: context.moduleEntry.file, range: toRange(access.property) };
-      const argumentCount = callArgumentCount(node, context.source);
+      const argumentCount = supportsReceiverMemberOverloads(context.sup.id)
+        ? callArgumentCount(node, context.source)
+        : null;
       if (binding.kind === "named-type") {
         const typeDef = resolveNamedType(context, binding.typeName, access.receiver);
         if (!typeDef) return;

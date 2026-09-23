@@ -54,6 +54,21 @@ const STATIC_MEMBER_LANGUAGES: Record<string, true> = {
   tsx: true,
 };
 
+const MEMBER_OVERLOAD_LANGUAGE_IDS: Record<string, true> = {
+  cpp: true,
+  csharp: true,
+  java: true,
+  kotlin: true,
+  swift: true,
+  ts: true,
+  tsx: true,
+};
+
+/** Whether member lookup uses call arity to select or reject same-name declarations. */
+export function supportsReceiverMemberOverloads(languageId: string): boolean {
+  return !!MEMBER_OVERLOAD_LANGUAGE_IDS[languageId];
+}
+
 /** Every language with a static-member distinction, guarded by the registry-consistency test. */
 export const staticMemberLanguageIds: readonly string[] = Object.keys(STATIC_MEMBER_LANGUAGES);
 
@@ -1467,7 +1482,11 @@ function provenMemberTarget(
   if (!matches.size) return { status: "none" };
   if (matches.size === 1) {
     const [memberId] = matches;
-    return { status: "unique", memberId: memberId! };
+    const memberArity = graph.nodes.get(memberId!)?.memberArity;
+    if (candidate.argumentCount === null || memberArity === undefined || memberArity === candidate.argumentCount) {
+      return { status: "unique", memberId: memberId! };
+    }
+    return { status: "ambiguous" };
   }
   const byArity =
     candidate.argumentCount === null

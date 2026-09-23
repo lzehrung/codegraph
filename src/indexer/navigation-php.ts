@@ -142,6 +142,24 @@ function phpUseAliasTarget(
   return null;
 }
 
+/** Finds one PHP import alias in its language-defined symbol namespace. */
+export function findPhpImportAlias(
+  imports: readonly ImportBinding[],
+  localName: string,
+  importType: "class" | "function" | "const",
+): Extract<ImportBinding, { kind: "named" }> | null {
+  const normalize = importType === "const" ? (name: string) => name : foldPhpIdentifierCase;
+  const comparableName = normalize(localName);
+  const matches = imports.filter(
+    (imp): imp is Extract<ImportBinding, { kind: "named" }> =>
+      imp.kind === "named" &&
+      imp.mechanism === "php" &&
+      (imp.phpImportType ?? "class") === importType &&
+      normalize(imp.local) === comparableName,
+  );
+  return matches.length === 1 ? matches[0]! : null;
+}
+
 /**
  * The absolute spelling a PHP reference resolves to, using the reference's own file
  * namespace: `\Foo\Bar` is already absolute, `namespace\Foo` prefixes the current

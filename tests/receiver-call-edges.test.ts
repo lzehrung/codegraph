@@ -394,6 +394,17 @@ nativeDescribe("receiver method call edges", () => {
     expect(callsiteTexts(graph, free, run, files)).toEqual(["php_free"]);
   });
 
+  it("records PHP static calls through case-variant imported aliases", async () => {
+    const files: Record<string, string> = {
+      "source.php": ["<?php", "namespace App;", "class Service { public static function run() {} }"].join("\n"),
+      "consumer.php": ["<?php", "use aPp\\sErViCe as Foo;", "function boot() { fOo::run(); }"].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-php-alias-case-", files);
+    const run = nodeIn(graph, "source.php", "run");
+    const boot = nodeIn(graph, "consumer.php", "boot");
+    expect(callsiteTexts(graph, run, boot, files)).toEqual(["run"]);
+  });
+
   it("records PHP nullsafe receiver calls", async () => {
     const files: Record<string, string> = {
       "ns.php": [
@@ -620,6 +631,24 @@ nativeDescribe("receiver method call edge language parity", () => {
     for (const memberId of [...midShared, ...grandShared]) {
       expect(callsiteTexts(graph, memberId, go, files)).toBeNull();
     }
+  });
+
+  it("does not walk past one shallow member whose arity rejects the call", async () => {
+    const files: Record<string, string> = {
+      "single.java": [
+        "class GrandSingle { void shared() {} }",
+        "class MidSingle extends GrandSingle { void shared(int value) {} }",
+        "class LeafSingle extends MidSingle { void go() { this.shared(); } }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-java-single-", files);
+    const go = nodeIn(graph, "single.java", "go");
+    const midShared = membersOwnedBy(graph, "MidSingle", "shared");
+    const grandShared = membersOwnedBy(graph, "GrandSingle", "shared");
+    expect(midShared).toHaveLength(1);
+    expect(grandShared).toHaveLength(1);
+    expect(callsiteTexts(graph, midShared[0]!, go, files)).toBeNull();
+    expect(callsiteTexts(graph, grandShared[0]!, go, files)).toBeNull();
   });
 
   it("records the arity-unique overload at the shallowest type instead of a deeper unique member", async () => {
@@ -1815,6 +1844,30 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     return matches[0]!.id;
   };
 
+  it("selects same-scope C++ free-function overloads by call argument count", async () => {
+    const files: Record<string, string> = {
+      "free.cpp": [
+        "int pick(void) { return 0; }",
+        "int pick(int value) { return value; }",
+        "int callZero() { return pick(); }",
+        "int callOne() { return pick(1); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-cpp-free-overload-call-", files);
+    const overloads = overloadMembers(graph, "free.cpp", "pick");
+    const callZero = nodeIn(graph, "free.cpp", "callZero");
+    const callOne = nodeIn(graph, "free.cpp", "callOne");
+    const overloadIds = new Set(overloads.map((node) => node.id));
+    const targetsFor = (callerId: string): string[] =>
+      graph.edges
+        .filter((edge) => edge.label === "calls" && edge.from === callerId && overloadIds.has(edge.to))
+        .map((edge) => edge.to);
+    const zeroTargets = targetsFor(callZero);
+    const oneTargets = targetsFor(callOne);
+    expect(zeroTargets).toHaveLength(1);
+    expect(oneTargets).toHaveLength(1);
+    expect(new Set([...zeroTargets, ...oneTargets])).toEqual(overloadIds);
+  });
   it("records the two-parameter Kotlin overload for a this-receiver call", async () => {
     const files: Record<string, string> = {
       "ktover.kt": [
