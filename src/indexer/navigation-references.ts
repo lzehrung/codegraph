@@ -380,35 +380,7 @@ function matchesPhpFallbackDefinition(
     }
   }
 
-  let referenceKind = inferPhpQualifiedReferenceImportType(node);
-  if (!referenceKind) {
-    const right = parent?.childForFieldName("right");
-    if (
-      parent?.type === "binary_expression" &&
-      right &&
-      right.startIndex === node.startIndex &&
-      right.endIndex === node.endIndex &&
-      parent.childForFieldName("operator")?.text === "instanceof"
-    ) {
-      referenceKind = "class";
-    } else {
-      let current = parent;
-      while (current) {
-        if (
-          current.type === "attribute" ||
-          current.type === "named_type" ||
-          current.type === "base_clause" ||
-          current.type === "class_interface_clause" ||
-          current.type === "use_declaration" ||
-          current.type === "catch_clause"
-        ) {
-          referenceKind = "class";
-          break;
-        }
-        current = current.parent;
-      }
-    }
-  }
+  const referenceKind = inferPhpQualifiedReferenceImportType(node);
 
   if (expectedDef.kind === SymbolKind.Function) return referenceKind === "function";
   if (

@@ -40,7 +40,7 @@ import {
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
-import { findPhpImportAlias } from "./navigation-php.js";
+import { comparePhpReferenceNames, findPhpImportAlias } from "./navigation-php.js";
 import { resolveExport, resolveImported, resolvePhpExportByImportType } from "./navigation-resolve.js";
 import {
   SymbolKind,
@@ -314,10 +314,7 @@ export async function resolveMemberAccessDefinition(params: {
       if (container) {
         const targetModule = index.byFile.get(fileIdentityKey(objDef.file));
         if (targetModule) {
-          const normalizeIdentifier = (name: string): string => {
-            const normalized = targetContext.sup.normalizeIdentifier(name);
-            return targetContext.sup.id === "php" ? foldPhpIdentifierCase(normalized) : normalized;
-          };
+          const normalizeIdentifier = targetContext.sup.normalizeIdentifier;
           const memberPredicate =
             receiver.memberScope === "any"
               ? undefined
@@ -735,10 +732,7 @@ async function resolveKeywordReceiverMember(
         member,
         candidate.container,
         candidate.context,
-        (name) => {
-          const normalized = candidate.context.sup.normalizeIdentifier(name);
-          return candidate.context.sup.id === "php" ? foldPhpIdentifierCase(normalized) : normalized;
-        },
+        candidate.context.sup.normalizeIdentifier,
         memberPredicate,
         matches,
       );
@@ -1068,6 +1062,8 @@ function hasStaticModifier(local: SymbolDef, targetContext: ParsedFileContext, c
   };
   let current: SyntaxNodeLike | null = targetContext.tree.rootNode.descendantForPosition(position, position);
   while (current && current !== container) {
+    if (targetContext.sup.id === "php" && (current.type === "const_declaration" || current.type === "enum_case"))
+      return true;
     if (declarationNodeIsStatic(current, targetContext.source)) return true;
     current = current.parent;
   }
@@ -1097,6 +1093,19 @@ const NESTED_MEMBER_LOCAL_CONTAINERS = new Set([
   "statement_block",
 ]);
 
+function matchesReceiverMemberName(
+  local: SymbolDef,
+  normalizedMember: string,
+  targetContext: ParsedFileContext,
+  normalizeIdentifier: (name: string) => string,
+): boolean {
+  const localName = normalizeIdentifier(local.localName);
+  if (targetContext.sup.id === "php") {
+    return comparePhpReferenceNames(normalizedMember, localName, { symbolKind: local.kind }) === "equivalent";
+  }
+  return localName === normalizedMember;
+}
+
 function findDirectLocalsWithinNode(
   locals: readonly SymbolDef[],
   member: string,
@@ -1113,7 +1122,7 @@ function findDirectLocalsWithinNode(
     const startIndex = local.range.start.index;
     const endIndex = local.range.end.index;
     if (
-      normalizeIdentifier(local.localName) !== normalizedMember ||
+      !matchesReceiverMemberName(local, normalizedMember, targetContext, normalizeIdentifier) ||
       startIndex === undefined ||
       endIndex === undefined ||
       startIndex < containerStart ||
@@ -1175,7 +1184,7 @@ function appendDirectKeywordMembers(
     const startIndex = local.range.start.index;
     const endIndex = local.range.end.index;
     if (
-      normalizeIdentifier(local.localName) !== normalizedMember ||
+      !matchesReceiverMemberName(local, normalizedMember, targetContext, normalizeIdentifier) ||
       startIndex === undefined ||
       endIndex === undefined ||
       startIndex < containerStart ||

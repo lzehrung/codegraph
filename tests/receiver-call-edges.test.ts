@@ -5,6 +5,7 @@ import { buildSymbolGraphDetailed, type DetailedSymbolGraph } from "../src/graph
 import {
   emitReceiverCallEdges,
   type ReceiverCallCandidate,
+  type ReceiverMemberScope,
 } from "../src/graphs/symbol-graph-detailed/receiver-calls.js";
 import type { SymbolGraph, SymbolNode } from "../src/graphs/symbol-graph.js";
 import { findCallHierarchy } from "../src/indexer/call-hierarchy.js";
@@ -866,6 +867,114 @@ nativeDescribe("receiver method call edge language parity", () => {
     ).toHaveLength(0);
   });
 
+  it("records one canonical C++ target for this and typed out-of-line receivers", async () => {
+    const files: Record<string, string> = {
+      "box.hpp": ["class Box {", "public:", "  int run();", "  int relay();", "};"].join("\n"),
+      "box.cpp": [
+        '#include "box.hpp"',
+        "int Box::run() { return 1; }",
+        "int Box::relay() { return this->run(); }",
+      ].join("\n"),
+      "use.cpp": ['#include "box.hpp"', "int call(Box& box) { return box.run(); }"].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cpp-canonical-run-", files);
+    const run = nodeIn(graph, "box.hpp", "run");
+    const relay = nodeIn(graph, "box.hpp", "relay");
+    const call = nodeIn(graph, "use.cpp", "call");
+    expect(membersOwnedBy(graph, "Box", "run", "box.hpp")).toEqual([run]);
+    expect(membersOwnedBy(graph, "Box", "relay", "box.hpp")).toEqual([relay]);
+    expect(callsiteTexts(graph, run, relay, files)).toEqual(["run"]);
+    expect(callsiteTexts(graph, run, call, files)).toEqual(["run"]);
+    expect(
+      [...graph.nodes.values()].filter(
+        (node) => path.basename(node.file) === "box.cpp" && ["run", "relay"].includes(node.name),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("selects a unique C++ default-argument member and keeps overlapping defaults unresolved", async () => {
+    const uniqueFiles: Record<string, string> = {
+      "unique.cpp": [
+        "class UniqueBox {",
+        "public:",
+        "  int run(int value = 0);",
+        "};",
+        "int UniqueBox::run(int value) { return value; }",
+        "int callZero(UniqueBox& box) { return box.run(); }",
+        "int callOne(UniqueBox& box) { return box.run(1); }",
+      ].join("\n"),
+    };
+    const uniqueGraph = await buildFixture("cg-receiver-cpp-default-unique-", uniqueFiles);
+    const uniqueRun = nodeIn(uniqueGraph, "unique.cpp", "run");
+    const callZero = nodeIn(uniqueGraph, "unique.cpp", "callZero");
+    const callOne = nodeIn(uniqueGraph, "unique.cpp", "callOne");
+    expect(membersOwnedBy(uniqueGraph, "UniqueBox", "run")).toEqual([uniqueRun]);
+    expect(callsiteTexts(uniqueGraph, uniqueRun, callZero, uniqueFiles)).toEqual(["run"]);
+    expect(callsiteTexts(uniqueGraph, uniqueRun, callOne, uniqueFiles)).toEqual(["run"]);
+
+    const overlapFiles: Record<string, string> = {
+      "overlap.cpp": [
+        "class OverlapBox {",
+        "public:",
+        "  int run();",
+        "  int run(int value = 0);",
+        "};",
+        "int OverlapBox::run() { return 0; }",
+        "int OverlapBox::run(int value) { return value; }",
+        "int call(OverlapBox& box) { return box.run(); }",
+      ].join("\n"),
+    };
+    const overlapGraph = await buildFixture("cg-receiver-cpp-default-overlap-", overlapFiles);
+    const caller = nodeIn(overlapGraph, "overlap.cpp", "call");
+    expect(outgoingCallCount(overlapGraph, caller)).toBe(0);
+  });
+
+  it("accepts a unique C++ variadic member across extra arguments", async () => {
+    const files: Record<string, string> = {
+      "variadic.cpp": [
+        "class VarBox {",
+        "public:",
+        "  int run(int first, ...);",
+        "};",
+        "int VarBox::run(int first, ...) { return first; }",
+        "int callOne(VarBox& box) { return box.run(1); }",
+        "int callTwo(VarBox& box) { return box.run(1, 2); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cpp-variadic-", files);
+    const run = nodeIn(graph, "variadic.cpp", "run");
+    const callOne = nodeIn(graph, "variadic.cpp", "callOne");
+    const callTwo = nodeIn(graph, "variadic.cpp", "callTwo");
+    expect(callsiteTexts(graph, run, callOne, files)).toEqual(["run"]);
+    expect(callsiteTexts(graph, run, callTwo, files)).toEqual(["run"]);
+  });
+
+  it("groups named and anonymous C++ pointer members and keeps reference-qualifier overloads distinct", async () => {
+    const files: Record<string, string> = {
+      "shape.cpp": [
+        "class ShapeBox {",
+        "public:",
+        "  int pointer(int*);",
+        "  int refs(int&);",
+        "  int refs(int&&);",
+        "};",
+        "int ShapeBox::pointer(int* value) { return 0; }",
+        "int ShapeBox::refs(int& value) { return 1; }",
+        "int ShapeBox::refs(int&& value) { return 2; }",
+        "int callPtr(ShapeBox& box) { return box.pointer(nullptr); }",
+        "int callRefs(ShapeBox& box) { return box.refs(1); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cpp-shape-fingerprint-", files);
+    const pointer = nodeIn(graph, "shape.cpp", "pointer");
+    const callPtr = nodeIn(graph, "shape.cpp", "callPtr");
+    const callRefs = nodeIn(graph, "shape.cpp", "callRefs");
+    expect(membersOwnedBy(graph, "ShapeBox", "pointer")).toEqual([pointer]);
+    expect(membersOwnedBy(graph, "ShapeBox", "refs")).toHaveLength(2);
+    expect(callsiteTexts(graph, pointer, callPtr, files)).toEqual(["pointer"]);
+    expect(outgoingCallCount(graph, callRefs)).toBe(0);
+  });
+
   it("uses the full namespace path for C++ out-of-line ownership", async () => {
     const files: Record<string, string> = {
       "a.hpp": "namespace a { class Box { public: int run(); }; }",
@@ -894,6 +1003,20 @@ nativeDescribe("receiver method call edge language parity", () => {
         graph.nodes.get(edge.to)?.name === "tools",
     );
     expect(ownershipEdges).toEqual([]);
+  });
+
+  it("does not record a C++ calls edge for a bare name imported from a namespace", async () => {
+    const files: Record<string, string> = {
+      "api.hpp": "namespace tools { int run(); }",
+      "main.cpp": ['#include "api.hpp"', "int f() { return run(); }", "int g() { return tools::run(); }"].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cpp-namespace-bare-", files);
+    const run = nodeIn(graph, "api.hpp", "run");
+    const f = nodeIn(graph, "main.cpp", "f");
+    const g = nodeIn(graph, "main.cpp", "g");
+    expect(callsiteTexts(graph, run, f, files)).toBeNull();
+    expect(outgoingCallCount(graph, f)).toBe(0);
+    expect(callsiteTexts(graph, run, g, files)).toEqual(["run"]);
   });
 
   it("records calls edges for Ruby self receivers, including unique mixins", async () => {
@@ -1625,6 +1748,49 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
       ...overrides,
     };
   }
+
+  it("collapses aliased declaration and definition members to one receiver target", () => {
+    const graph: SymbolGraph = {
+      nodes: new Map([
+        ["Box", node("Box", "Box", { kind: "class" })],
+        ["caller", node("caller", "call")],
+        ["run.decl", node("run.decl", "run", { memberArity: 0 })],
+        ["run.def", node("run.def", "run", { memberArity: 0 })],
+      ]),
+      edges: [
+        { from: "caller", to: "Box", label: "member_of" },
+        { from: "run.decl", to: "Box", label: "member_of" },
+        { from: "run.def", to: "Box", label: "member_of" },
+      ],
+    };
+    const aliases = new Map([["run.def", "run.decl"]]);
+    const scopes = new Map<string, ReceiverMemberScope>([
+      ["run.decl", "instance"],
+      ["run.def", "instance"],
+    ]);
+    const recorded: Array<{ from: string; to: string }> = [];
+    emitReceiverCallEdges(
+      graph,
+      [
+        {
+          callerId: "caller",
+          ownerId: "Box",
+          viaSupertypes: false,
+          memberName: "run",
+          argumentCount: 0,
+          site,
+          memberScope: "instance",
+        },
+      ],
+      (from, to, label) => {
+        if (label === "calls") recorded.push({ from, to });
+        return true;
+      },
+      scopes,
+      aliases,
+    );
+    expect(recorded).toEqual([{ from: "caller", to: "run.decl" }]);
+  });
 
   it("does not record a deeper unique member when the shallowest level is ambiguous", () => {
     const graph: SymbolGraph = {

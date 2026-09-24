@@ -165,6 +165,12 @@ describe("buildBloomFilterFromSource", () => {
     expect(filter.mightContain("Service")).toBe(true);
     expect(filter.mightContain("service")).toBe(false);
   });
+  test("does not fold identifiers for Python", () => {
+    const filter = buildBloomFilterFromSource("class Service: pass", PY_SUPPORT);
+
+    expect(filter.mightContain("Service")).toBe(true);
+    expect(filter.mightContain("service")).toBe(false);
+  });
 
   test("matches Java identifiers beginning with currency symbols", () => {
     const identifier = "\u00a5currency";

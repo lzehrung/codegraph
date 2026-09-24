@@ -4766,6 +4766,97 @@ describe("Find References: PHP global-namespace symbols", () => {
     }
   });
 
+  it("keeps instanceof, catch, and constructor-argument aliases in their PHP namespaces", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-alias-type-contexts-"));
+    try {
+      const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+      const sourceLines = [
+        "<?php",
+        "namespace App\\Domain;",
+        "class Service {}",
+        "function helper() { return 1; }",
+        "const TOKEN = 1;",
+        "",
+      ];
+      const consumerLines = [
+        "<?php",
+        "namespace Client;",
+        "use App\\Domain\\Service as Alias;",
+        "use function App\\Domain\\helper as Alias;",
+        "use const App\\Domain\\TOKEN as Alias;",
+        "$service = new Alias();",
+        "$withArg = new Alias(Alias);",
+        "$is = $service instanceof Alias;",
+        "try { throw $service; } catch (Alias $e) {}",
+        "$value = Alias();",
+        "$constant = Alias;",
+        "",
+      ];
+      await fsp.writeFile(sourceFile, sourceLines.join("\n"), "utf8");
+      await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+      await testFindReferences(index, sourceFile, 3, tokenColumn(sourceLines[2]!, "Service"), [
+        { file: sourceFile, line: 3, column: tokenColumn(sourceLines[2]!, "Service") },
+        { file: consumerFile, line: 3, column: tokenColumn(consumerLines[2]!, "Service") },
+        { file: consumerFile, line: 3, column: tokenColumn(consumerLines[2]!, "Alias") },
+        { file: consumerFile, line: 6, column: tokenColumn(consumerLines[5]!, "Alias") },
+        { file: consumerFile, line: 7, column: tokenColumn(consumerLines[6]!, "Alias") },
+        { file: consumerFile, line: 8, column: tokenColumn(consumerLines[7]!, "Alias") },
+        { file: consumerFile, line: 9, column: tokenColumn(consumerLines[8]!, "Alias") },
+      ]);
+      await testFindReferences(index, sourceFile, 4, tokenColumn(sourceLines[3]!, "helper"), [
+        { file: sourceFile, line: 4, column: tokenColumn(sourceLines[3]!, "helper") },
+        { file: consumerFile, line: 4, column: tokenColumn(consumerLines[3]!, "helper") },
+        { file: consumerFile, line: 4, column: tokenColumn(consumerLines[3]!, "Alias") },
+        { file: consumerFile, line: 10, column: tokenColumn(consumerLines[9]!, "Alias") },
+      ]);
+      await testFindReferences(index, sourceFile, 5, tokenColumn(sourceLines[4]!, "TOKEN"), [
+        { file: sourceFile, line: 5, column: tokenColumn(sourceLines[4]!, "TOKEN") },
+        { file: consumerFile, line: 5, column: tokenColumn(consumerLines[4]!, "TOKEN") },
+        { file: consumerFile, line: 5, column: tokenColumn(consumerLines[4]!, "Alias") },
+        { file: consumerFile, line: 7, column: tokenColumn(consumerLines[6]!, "Alias", 1) },
+        { file: consumerFile, line: 11, column: tokenColumn(consumerLines[10]!, "Alias") },
+      ]);
+
+      const instanceofHit = await goToDefinition(index, {
+        file: consumerFile,
+        line: 8,
+        column: tokenColumn(consumerLines[7]!, "Alias"),
+      });
+      expect(instanceofHit.status).toBe("ok");
+      if (instanceofHit.status === "ok") {
+        expect(fileIdentityKey(instanceofHit.definition.file)).toBe(fileIdentityKey(sourceFile));
+        expect(instanceofHit.definition.range.start.line).toBe(3);
+      }
+
+      const catchHit = await goToDefinition(index, {
+        file: consumerFile,
+        line: 9,
+        column: tokenColumn(consumerLines[8]!, "Alias"),
+      });
+      expect(catchHit.status).toBe("ok");
+      if (catchHit.status === "ok") {
+        expect(fileIdentityKey(catchHit.definition.file)).toBe(fileIdentityKey(sourceFile));
+        expect(catchHit.definition.range.start.line).toBe(3);
+      }
+
+      const argumentHit = await goToDefinition(index, {
+        file: consumerFile,
+        line: 7,
+        column: tokenColumn(consumerLines[6]!, "Alias", 1),
+      });
+      expect(argumentHit.status).toBe("ok");
+      if (argumentHit.status === "ok") {
+        expect(fileIdentityKey(argumentHit.definition.file)).toBe(fileIdentityKey(sourceFile));
+        expect(argumentHit.definition.range.start.line).toBe(5);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps namespaced PHP constants case-sensitive", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-constant-case-refs-"));
     try {
@@ -4891,6 +4982,38 @@ describe("Find References: PHP trait case-insensitivity", () => {
       expect(result.status).toBe("ok");
       if (result.status !== "ok") return;
       expectReferenceAt(result, consumerFile, 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps namespaced PHP property consumers through exact-case Bloom narrowing", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-property-bloom-"));
+    try {
+      const definition = path.join(root, "box.php").replace(/\\/g, "/");
+      const consumer = path.join(root, "use.php").replace(/\\/g, "/");
+      const declaration = "class Box { public $field; }";
+      await fsp.writeFile(definition, `<?php\nnamespace App;\n${declaration}\n`);
+      await fsp.writeFile(
+        consumer,
+        ["<?php", "namespace Client;", "use App\\Box;", "$box = new Box();", "$box->field;", "$box->FIELD;"].join("\n"),
+      );
+      for (const useBloomFilters of [true, false]) {
+        const index = await indexer.buildProjectIndexFromFiles(root, [definition, consumer], { useBloomFilters });
+        const result = await indexer.findReferences(index, {
+          file: definition,
+          line: 3,
+          column: declaration.indexOf("field") + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected PHP property references");
+        expect(
+          result.references
+            .filter((ref) => fileIdentityKey(ref.file) === fileIdentityKey(consumer))
+            .map((ref) => ref.range.start.line),
+        ).toEqual([5]);
+        expect(result.referenceCoverage.state).toBe("complete");
+      }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

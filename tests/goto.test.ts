@@ -846,6 +846,52 @@ describe("Go to Definition", () => {
   });
 
   describe("PHP", () => {
+    it("folds PHP method names but keeps property and constant names exact", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-member-case-goto-"));
+      try {
+        const file = path.join(root, "probe.php").replace(/\\/g, "/");
+        const lines = [
+          "<?php",
+          "class Box {",
+          "  public $field;",
+          "  public const Limit = 1;",
+          "  public function run() {}",
+          "  public function relay() { $this->RUN(); return $this->FIELD; }",
+          "  public static function read() { return self::limit; }",
+          "}",
+          "$svc = new Box();",
+          "$svc->RUN();",
+          "$svc->field;",
+          "$svc->FIELD;",
+          "Box::Limit;",
+          "Box::limit;",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+        for (const [line, name, targetLine] of [
+          [6, "RUN", 5],
+          [6, "FIELD", undefined],
+          [7, "limit", undefined],
+          [10, "RUN", 5],
+          [11, "field", 3],
+          [12, "FIELD", undefined],
+          [13, "Limit", 4],
+          [14, "limit", undefined],
+        ] as const) {
+          const result = await goToDefinition(index, { file, line, column: lines[line - 1]!.lastIndexOf(name) + 1 });
+          if (targetLine === undefined) {
+            expect(result.status, `${line}:${name}`).toBe("not_found");
+          } else {
+            expect(result.status, `${line}:${name}`).toBe("ok");
+            if (result.status !== "ok") throw new Error("Expected a PHP member definition");
+            expect(result.definition.range.start.line).toBe(targetLine);
+          }
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("should find definition of imported function", async () => {
       const index = await createTestIndex("php");
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "php");
@@ -958,7 +1004,7 @@ describe("Go to Definition", () => {
         const sourceLines = [
           "<?php",
           "namespace App;",
-          "class BaseType {}",
+          "class BaseType { public $field; }",
           "interface ContractType {}",
           "#[\\Attribute] class RouteType {}",
           "class ProblemType extends \\Exception {}",
@@ -966,6 +1012,7 @@ describe("Go to Definition", () => {
           "function contractFunction() {}",
           "function routeFunction() {}",
           "function problemFunction() {}",
+          "const TOKEN = 1;",
           "",
         ];
         const consumerLines = [
@@ -984,6 +1031,12 @@ describe("Go to Definition", () => {
           "#[routealias]",
           "class Marked {}",
           "try {} catch (PROBLEMALIAS $error) {}",
+          "use const App\\TOKEN as BaseAlias;",
+          "$value = new BaseAlias(BaseAlias);",
+          "$is = $value instanceof BaseAlias;",
+          "$function = BaseAlias();",
+          "$value->field;",
+          "$value->FIELD;",
           "",
         ];
         await fsp.writeFile(sourceFile, sourceLines.join("\n"), "utf8");
@@ -997,11 +1050,25 @@ describe("Go to Definition", () => {
           [12, "contractalias", false, 4],
           [13, "routealias", false, 5],
           [15, "PROBLEMALIAS", false, 6],
+          [17, "BaseAlias", false, 3],
+          [17, "BaseAlias", true, 11],
+          [18, "BaseAlias", false, 3],
+          [19, "BaseAlias", false, 7],
         ] as const) {
           const sourceLine = consumerLines[line - 1]!;
           const tokenIndex = fromEnd ? sourceLine.lastIndexOf(token) : sourceLine.indexOf(token);
           await testGoToDefinition(index, consumerFile, line, tokenIndex + 1, sourceFile, expectedLine);
         }
+        await testGoToDefinition(index, consumerFile, 20, consumerLines[19]!.indexOf("field") + 1, sourceFile, 3);
+        expect(
+          (
+            await goToDefinition(index, {
+              file: consumerFile,
+              line: 21,
+              column: consumerLines[20]!.indexOf("FIELD") + 1,
+            })
+          ).status,
+        ).toBe("not_found");
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
@@ -1554,7 +1621,93 @@ describe("Go to Definition", () => {
         await testGoToDefinition(index, file, 4, lines[3]!.lastIndexOf("add") + 1, file, 3);
         await testGoToDefinition(index, file, 7, lines[6]!.lastIndexOf("defaults") + 1, file, 5);
         await testGoToDefinition(index, file, 10, lines[9]!.lastIndexOf("spread") + 1, file, 8);
-        await testGoToDefinition(index, file, 13, lines[12]!.lastIndexOf("log") + 1, file, 12);
+        const overlappingLog = await goToDefinition(index, {
+          file,
+          line: 13,
+          column: lines[12]!.lastIndexOf("log") + 1,
+        });
+        expect(overlappingLog.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not rank overlapping C++ default-argument overloads", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-default-overlap-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "int f();",
+          "int f(int value = 0);",
+          "int zero() { return f(); }",
+          "int one() { return f(1); }",
+          "",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        const ambiguous = await goToDefinition(index, {
+          file,
+          line: 3,
+          column: lines[2]!.lastIndexOf("f()") + 1,
+        });
+        expect(ambiguous.status).toBe("not_found");
+        await testGoToDefinition(index, file, 4, lines[3]!.lastIndexOf("f(") + 1, file, 2);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      {
+        name: "unnamed pointer parameters",
+        declarations: ["int pick(int*);", "int pick(int* value) { return 1; }"],
+        call: "pick(nullptr)",
+        targetLine: 2,
+      },
+      {
+        name: "renamed reference parameters",
+        declarations: ["int pick(int&);", "int pick(int& value) { return value; }"],
+        call: "pick(value)",
+        targetLine: 2,
+      },
+      {
+        name: "nested callback parameter names",
+        declarations: ["int pick(void (*)(int));", "int pick(void (*callback)(int value)) { return 1; }"],
+        call: "pick(nullptr)",
+        targetLine: 2,
+      },
+      {
+        name: "distinct reference operators",
+        declarations: ["int pick(int& value);", "int pick(int&& value);"],
+        call: "pick(value)",
+        targetLine: undefined,
+      },
+      {
+        name: "distinct array-bound operators",
+        declarations: ["int pick(int (*value)[2+3]) { return 1; }", "int pick(int (*value)[2*3]) { return 2; }"],
+        call: "pick(nullptr)",
+        targetLine: undefined,
+      },
+    ])("preserves C++ callable identity for $name", async ({ declarations, call, targetLine }) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-signature-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [...declarations, `int use(int& value) { return ${call}; }`];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+        const result = await goToDefinition(index, {
+          file,
+          line: 3,
+          column: lines[2]!.indexOf("pick") + 1,
+        });
+        if (targetLine === undefined) {
+          expect(result.status).toBe("not_found");
+        } else {
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") throw new Error("Expected one C++ callable entity");
+          expect(result.definition.range.start.line).toBe(targetLine);
+        }
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

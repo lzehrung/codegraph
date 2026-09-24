@@ -686,7 +686,9 @@ async function findReferencesInternal(
           filter.mightContain(foldPhpIdentifierCase(normalizeIdentifier(phpLastIdentifierSegment(candidateName)))),
         );
       }
-      return probeNames.some((candidateName) => filter.mightContain(normalizeIdentifier(candidateName)));
+      return probeNames.some((candidateName) =>
+        filter.mightContain(normalizeIdentifier(phpLastIdentifierSegment(candidateName))),
+      );
     });
   }
 
@@ -1121,7 +1123,7 @@ async function cppInClassMemberEquivalentDefinitions(
     for (const entry of module.exports) {
       if (
         entry.type !== "local" ||
-        (entry.qualifiedAs ?? entry.exportedAs) !== qualifiedName ||
+        entry.exportedAs !== qualifiedName ||
         entry.target.kind !== SymbolKind.Function ||
         sameDef(entry.target, def, index.languageExtensions)
       ) {
@@ -1200,7 +1202,7 @@ async function cppNamespaceFunctionEquivalentDefinitions(
     for (const entry of module.exports) {
       if (
         entry.type !== "local" ||
-        (entry.qualifiedAs ?? entry.exportedAs) !== qualifiedName ||
+        entry.exportedAs !== qualifiedName ||
         entry.target.kind !== SymbolKind.Function ||
         sameDef(entry.target, def, index.languageExtensions)
       ) {

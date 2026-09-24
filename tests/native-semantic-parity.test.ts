@@ -247,7 +247,7 @@ async function normalizeSqlFacts(
   return normalized;
 }
 
-async function expectNativeSemantics(expectation: SemanticExpectation): Promise<void> {
+async function expectNativeSemantics(expectation: SemanticExpectation): Promise<ProjectIndex> {
   const nativeIndex = await buildSemanticIndex(expectation, "native");
 
   normalizeSymbols(nativeIndex, expectation.symbols);
@@ -332,6 +332,7 @@ async function expectNativeSemantics(expectation: SemanticExpectation): Promise<
   } else {
     expect(nativeReferences).toEqual({ status: "not_found" });
   }
+  return nativeIndex;
 }
 
 async function createRustPathAttributeCase(): Promise<SemanticExpectation> {
@@ -850,15 +851,20 @@ async function createCppCallableRedeclarationCase(): Promise<SemanticExpectation
   const headerFile = path.join(root, "api.hpp");
   const implementationFile = path.join(root, "api.cpp");
   const consumerFile = path.join(root, "consumer.cpp");
-  await fsp.writeFile(headerFile, "namespace left { int run(int value); }\n", "utf8");
+  await fsp.writeFile(headerFile, "namespace left { int run(int*); }\n", "utf8");
   await fsp.writeFile(
     implementationFile,
-    ['#include "api.hpp"', "int left::run(int value) { return value; }", ""].join("\n"),
+    ['#include "api.hpp"', "int left::run(int* value) { return *value; }", ""].join("\n"),
     "utf8",
   );
   await fsp.writeFile(
     consumerFile,
-    ['#include "api.hpp"', "int call() { return left::run(1); }", ""].join("\n"),
+    [
+      '#include "api.hpp"',
+      "int call() { return left::run(nullptr); }",
+      "int invalid() { return run(nullptr); }",
+      "",
+    ].join("\n"),
     "utf8",
   );
   return {
@@ -1377,7 +1383,84 @@ nativeDescribe("native semantic coverage", () => {
   }, 120_000);
 
   it("keeps C++ callable redeclarations connected across files", async () => {
-    await expectNativeSemantics(await createCppCallableRedeclarationCase());
+    const fixture = await createCppCallableRedeclarationCase();
+    const index = await expectNativeSemantics(fixture);
+    expect(
+      await normalizeGoto(index, {
+        file: fixture.files[2]!,
+        line: 3,
+        column: 24,
+        expectedStatus: "not_found",
+      }),
+    ).toEqual({ status: "not_found" });
+  });
+
+  it("keeps PHP type operands separate from same-spelled argument aliases", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-php-alias-roles-"));
+    tempDirs.push(root);
+    const source = normalizeFile(path.join(root, "source.php"));
+    const consumer = normalizeFile(path.join(root, "consumer.php"));
+    await fsp.writeFile(
+      source,
+      ["<?php namespace App;", "class Service { public $field; }", "function helper() {}", "const TOKEN = 1;"].join(
+        "\n",
+      ),
+    );
+    const lines = [
+      "<?php namespace Client;",
+      "use App\\Service as Alias;",
+      "use function App\\helper as Alias;",
+      "use const App\\TOKEN as Alias;",
+      "$value = new Alias(Alias);",
+      "$is = $value instanceof Alias;",
+      "try {} catch (Alias $error) {}",
+      "Alias();",
+      "$value->field;",
+      "$value->FIELD;",
+    ];
+    await fsp.writeFile(consumer, lines.join("\n"));
+    await withNativeRuntimeModeAsync("native", async () => {
+      const index = await buildProjectIndexFromFiles(root, [source, consumer]);
+      for (const [line, fromEnd, targetLine] of [
+        [5, false, 2],
+        [5, true, 4],
+        [6, false, 2],
+        [7, false, 2],
+        [8, false, 3],
+      ] as const) {
+        const text = lines[line - 1]!;
+        const column = (fromEnd ? text.lastIndexOf("Alias") : text.indexOf("Alias")) + 1;
+        const result = await goToDefinition(index, { file: consumer, line, column });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected a PHP alias definition");
+        expect(normalizeFile(result.definition.file)).toBe(source);
+        expect(result.definition.range.start.line).toBe(targetLine);
+      }
+      const refs = await findReferences(index, { file: source, line: 4, column: 7 });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Expected PHP constant references");
+      expect(
+        refs.references
+          .filter((ref) => normalizeFile(ref.file) === consumer)
+          .map((ref) => [ref.range.start.line, ref.range.start.column]),
+      ).toEqual([
+        [4, lines[3]!.indexOf("TOKEN") + 1],
+        [4, lines[3]!.indexOf("Alias") + 1],
+        [5, lines[4]!.lastIndexOf("Alias") + 1],
+      ]);
+      const propertyRefs = await findReferences(index, {
+        file: source,
+        line: 2,
+        column: "class Service { public $field; }".indexOf("field") + 1,
+      });
+      expect(propertyRefs.status).toBe("ok");
+      if (propertyRefs.status !== "ok") throw new Error("Expected PHP property references");
+      expect(
+        propertyRefs.references
+          .filter((ref) => normalizeFile(ref.file) === consumer)
+          .map((ref) => ref.range.start.line),
+      ).toEqual([9]);
+    });
   });
 
   it("scss go-to-definition resolves indexed declaration locals", async () => {

@@ -44,6 +44,7 @@ Checklist for landing a new first-class source language without drifting from re
 - Keep dynamic or ambiguous cases conservative. Prefer `external` or `not_found` over false-positive navigation.
 - When a runtime loader call can be statically mapped through the existing source module resolver, add a bounded adapter and path-fold profile in `src/util/dynamic-import-tables.ts`. The shared runner in `src/util/specifiers.ts` executes the registered adapter. The adapter must avoid executing source, mask comments and strings, mark candidates as heuristic, and ignore computed values it cannot prove. Do not route reflection or runtime plugin APIs through this path unless they have a proven source-file mapping.
 - If the language allows more than one package or namespace surface in a single file, model the symbol index per package/namespace entry instead of assuming one file maps to one package.
+- Store each externally visible name in `ExportEntry.exportedAs` and the declaration's short name in `target.localName`. Represent visible aliases as separate entries. Do not add a second lookup-name field that every consumer must interpret.
 
 ### Sort vs expand
 
@@ -67,6 +68,8 @@ Checklist for landing a new first-class source language without drifting from re
 - Add native semantic coverage in `tests/native-semantic-parity.test.ts`.
 - Add native parser ownership coverage in `tests/native-parser-ownership.test.ts` when the language uses the native runtime.
 - Add reduced-mode safety or recovery coverage when the language has graph-only or regex fallback behavior.
+- Use one fixture to check that extraction, `goToDefinition`, `findReferences`, and `buildSymbolGraphDetailed` agree on symbol identity. Include a same-spelled declaration that must not match, plus cold and persisted-cache results when derived data changes.
+- Check the native grammar's actual child fields and tokens before writing a language rule. Named-child walks omit operators; a valid parse can still classify a declaration as a different construct.
 
 ## 8. Update public docs in the same change
 

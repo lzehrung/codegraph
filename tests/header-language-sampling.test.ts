@@ -189,7 +189,7 @@ describe("header language classification", () => {
 
     expect(built.reads).toBe(headerCount);
     // The single remaining sample still drives the parser: C++ syntax yields C++ symbols.
-    expect(exportedNames(built.value, "widget0.h")).toEqual(["Widget", "widgets"]);
+    expect(exportedNames(built.value, "widget0.h")).toEqual(["widgets", "widgets::Widget"]);
     expect(exportedNames(built.value, "schema.sql")).toEqual(["widgets"]);
   });
 

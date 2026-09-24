@@ -1,5 +1,6 @@
 import type { ProjectIndex, ResolvedExport } from "../indexer/types.js";
 import { resolveExport, resolveModuleExports } from "../indexer/navigation-resolve.js";
+import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { FileId, Range } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 
@@ -121,12 +122,19 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
   };
 
   const addDefinitionEdge = (aliasId: string, targetFile: FileId, exportedName: string, label: string): boolean => {
-    const resolutionKey = `${fileIdentityKey(targetFile)}::${exportedName}`;
+    const languageId = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions)?.id;
+    const allowLocalFallback = languageId !== "c" && languageId !== "cpp";
+    const resolutionKey = `${fileIdentityKey(targetFile)}::${exportedName}::${allowLocalFallback ? "local" : "export"}`;
     let resolved: ResolvedExport | null;
     if (exportResolutions.has(resolutionKey)) {
       resolved = exportResolutions.get(resolutionKey)!;
     } else {
-      resolved = resolveExport(index, targetFile, exportedName);
+      resolved = resolveExport(
+        index,
+        targetFile,
+        exportedName,
+        allowLocalFallback ? undefined : { allowLocalFallback: false },
+      );
       exportResolutions.set(resolutionKey, resolved);
     }
     if (!resolved || resolved.kind !== "resolved") return false;

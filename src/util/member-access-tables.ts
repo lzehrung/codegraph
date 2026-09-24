@@ -195,7 +195,12 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
   markdown: { omittedReason: "Document format; fenced code blocks parse as their own language." },
   mdx: { omittedReason: "MDX document format; scripts parse as js/ts and templates as html." },
   php: {
-    extraMemberAccessTypes: ["member_call_expression", "nullsafe_member_call_expression", "scoped_call_expression"],
+    extraMemberAccessTypes: [
+      "member_call_expression",
+      "nullsafe_member_call_expression",
+      "scoped_call_expression",
+      "class_constant_access_expression",
+    ],
     memberAccessShapes: [
       {
         nodeTypes: ["member_call_expression", "nullsafe_member_call_expression"],
@@ -206,6 +211,11 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
         nodeTypes: ["scoped_call_expression"],
         object: { field: "scope", fallbackIndex: 0 },
         property: { field: "name", fallbackIndex: 2 },
+      },
+      {
+        nodeTypes: ["class_constant_access_expression"],
+        object: { namedIndex: 0 },
+        property: { namedIndex: 1 },
       },
     ],
     receiverKeywords: { own: ["$this", "self", "static"], instanceOwn: ["$this"], supertype: ["parent"] },

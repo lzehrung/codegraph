@@ -637,6 +637,95 @@ describe("PHP import symbol namespaces", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  it("resolves instanceof, catch, and constructor-argument aliases by PHP import role", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-alias-type-contexts-"));
+    const sourceFile = path.join(root, "source.php");
+    const consumerFile = path.join(root, "consumer.php");
+    const source = [
+      "<?php",
+      "namespace App;",
+      "class Service { public $field; }",
+      "function helper() { return 1; }",
+      "const TOKEN = 1;",
+      "",
+    ].join("\n");
+    const consumerLines = [
+      "<?php",
+      "namespace Client;",
+      "use App\\Service as Alias;",
+      "use function App\\helper as Alias;",
+      "use const App\\TOKEN as Alias;",
+      "$service = new Alias();",
+      "$withArg = new Alias(Alias);",
+      "$is = $service instanceof Alias;",
+      "try { throw $service; } catch (Alias $e) {}",
+      "$value = Alias();",
+      "$constant = Alias;",
+      "$service->field;",
+      "$service->FIELD;",
+      "",
+    ];
+
+    try {
+      await writeFile(sourceFile, source, "utf8");
+      await writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+      const cases: Array<{ line: number; column: number; expectedLine: number }> = [
+        { line: 6, column: consumerLines[5]!.indexOf("Alias") + 1, expectedLine: 3 },
+        { line: 7, column: consumerLines[6]!.indexOf("Alias") + 1, expectedLine: 3 },
+        { line: 7, column: consumerLines[6]!.lastIndexOf("Alias") + 1, expectedLine: 5 },
+        { line: 8, column: consumerLines[7]!.indexOf("Alias") + 1, expectedLine: 3 },
+        { line: 9, column: consumerLines[8]!.indexOf("Alias") + 1, expectedLine: 3 },
+        { line: 10, column: consumerLines[9]!.indexOf("Alias") + 1, expectedLine: 4 },
+        { line: 11, column: consumerLines[10]!.indexOf("Alias") + 1, expectedLine: 5 },
+      ];
+      for (const { line, column, expectedLine } of cases) {
+        const result = await goToDefinition(index, { file: consumerFile, line, column });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") continue;
+        expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(sourceFile));
+        expect(result.definition.range.start.line).toBe(expectedLine);
+      }
+
+      const classRefs = await findReferences(index, {
+        file: sourceFile,
+        line: 3,
+        column: "class Service {}".indexOf("Service") + 1,
+      });
+      expect(classRefs.status).toBe("ok");
+      if (classRefs.status === "ok") {
+        expect(
+          classRefs.references.some(
+            (reference) =>
+              fileIdentityKey(reference.file) === fileIdentityKey(consumerFile) && reference.range.start.line === 8,
+          ),
+        ).toBe(true);
+        expect(
+          classRefs.references.some(
+            (reference) =>
+              fileIdentityKey(reference.file) === fileIdentityKey(consumerFile) &&
+              reference.range.start.line === 7 &&
+              reference.range.start.column === consumerLines[6]!.lastIndexOf("Alias") + 1,
+          ),
+        ).toBe(false);
+      }
+      const propertyRefs = await findReferences(index, {
+        file: sourceFile,
+        line: 3,
+        column: "class Service { public $field; }".indexOf("field") + 1,
+      });
+      expect(propertyRefs.status).toBe("ok");
+      if (propertyRefs.status !== "ok") throw new Error("Expected PHP property references");
+      expect(
+        propertyRefs.references
+          .filter((ref) => fileIdentityKey(ref.file) === fileIdentityKey(consumerFile))
+          .map((ref) => ref.range.start.line),
+      ).toEqual([12]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("PHP enum interface conformance", () => {

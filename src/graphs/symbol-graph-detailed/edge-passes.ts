@@ -1,4 +1,5 @@
 import type { ModuleIndex, ProjectIndex, SymbolDef } from "../../indexer/types.js";
+import { cppCallableShapeForNode, type CppCallableShape } from "../../indexer/cpp-callables.js";
 import { resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp.js";
 import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
@@ -32,6 +33,7 @@ import {
   type ReceiverCallAccess,
   type ReceiverCallCandidate,
   type ReceiverMemberScope,
+  type MemberArityRange,
   type ReceiverProof,
 } from "./receiver-calls.js";
 
@@ -55,6 +57,8 @@ type EdgePassContext = {
   receiverCalls: ReceiverCallCandidate[];
   /** Proven static or instance scope for callable members, keyed by graph node id. */
   receiverMemberScopes: Map<string, ReceiverMemberScope>;
+  /** Accepted argument-count range for C++ members, keyed by graph node id. */
+  receiverMemberArities: Map<string, MemberArityRange>;
   /** Definition-node ids that collapse into their declaration-node id. */
   nodeAliases: Map<string, string>;
   /** Registers a name the detailed pass proved callable (function-valued bindings). */
@@ -87,6 +91,37 @@ function markMemberArity(context: EdgePassContext, id: string, declarationNode: 
   if (arity === undefined) return;
   const node = context.nodes.get(id);
   if (node) node.memberArity = arity;
+}
+
+function cppShapeNode(node: SyntaxNodeLike): SyntaxNodeLike {
+  return node.type === "function_declarator" ? node : (findFirstNodeByType(node, "function_declarator") ?? node);
+}
+
+function mergeCppCallableShapes(...shapes: Array<CppCallableShape | null | undefined>): MemberArityRange | undefined {
+  const present = shapes.filter((shape): shape is CppCallableShape => !!shape);
+  if (!present.length) return undefined;
+  let min = present[0]!.minArity;
+  let max = present[0]!.maxArity;
+  for (const shape of present.slice(1)) {
+    min = Math.min(min, shape.minArity);
+    if (max === null || shape.maxArity === null) max = null;
+    else max = Math.max(max, shape.maxArity);
+  }
+  return { min, max };
+}
+
+function recordMemberLookupIdentity(
+  context: EdgePassContext,
+  definitionId: string,
+  memberId: string,
+  memberScope: ReceiverMemberScope,
+  arityRange: MemberArityRange | undefined,
+): void {
+  context.receiverMemberScopes.set(definitionId, memberScope);
+  if (memberId !== definitionId) context.receiverMemberScopes.set(memberId, memberScope);
+  if (!arityRange) return;
+  context.receiverMemberArities.set(definitionId, arityRange);
+  if (memberId !== definitionId) context.receiverMemberArities.set(memberId, arityRange);
 }
 
 function recordDefEdge(
@@ -251,10 +286,18 @@ export async function emitMemberOwnershipEdges(
       outOfLineDeclaration?.source ?? context.source,
       fn.def,
     );
-    markMemberArity(context, definitionId, fn.node);
-    if (memberId === definitionId) markMemberArity(context, memberId, outOfLineDeclaration?.node ?? fn.node);
+    const arityNode = outOfLineDeclaration?.node ?? fn.node;
+    markMemberArity(context, definitionId, arityNode);
+    if (memberId !== definitionId) markMemberArity(context, memberId, arityNode);
     const memberScope = memberScopeForDefinition(context, fn, owner.cppOutOfLine, outOfLineDeclaration);
-    context.receiverMemberScopes.set(definitionId, memberScope);
+    const arityRange =
+      context.sup.id === "cpp"
+        ? mergeCppCallableShapes(
+            cppCallableShapeForNode(cppShapeNode(fn.node)),
+            outOfLineDeclaration ? cppCallableShapeForNode(cppShapeNode(outOfLineDeclaration.node)) : undefined,
+          )
+        : undefined;
+    recordMemberLookupIdentity(context, definitionId, memberId, memberScope, arityRange);
     recordDefEdge(context, definitionId, owner.def, "member_of");
   }
 }

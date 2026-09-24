@@ -16,6 +16,7 @@ import type { LanguageSupport } from "../../src/languages.js";
 import {
   buildProjectIndex,
   buildScopeIndexFromSource,
+  buildSymbolGraphDetailed,
   findReferences,
   goToDefinition,
   listSymbols,
@@ -199,7 +200,7 @@ describe("C++ native queries", () => {
     const names = collectCppNames("probe.cpp", source);
 
     expect(names.exports).toEqual(
-      expect.arrayContaining(["FOO", "outer", "inner", "U", "f", "~A", "operator+=", "foo"]),
+      expect.arrayContaining(["FOO", "outer", "outer::inner", "U", "A::f", "A::~A", "A::operator+=", "foo"]),
     );
     expect(names.exports).not.toContain("module");
     expect(names.exports).not.toContain("std");
@@ -213,6 +214,8 @@ describe("C++ native queries", () => {
       "static int helper;",
       "int static_count = 1;",
       "int ready() { static int once = 0; class Local {}; enum Hidden { Secret }; return once; }",
+      "namespace tools { int scoped_run(); }",
+      "void local_alias() { using tools::scoped_run; }",
     ].join("\n");
     try {
       await fs.writeFile(file, source, "utf8");
@@ -220,7 +223,7 @@ describe("C++ native queries", () => {
       const module = index.byFile.get(fileIdentityKey(file));
       const exportedNames = module?.exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : []));
 
-      expect(exportedNames?.sort()).toEqual(["ready", "static_count"]);
+      expect(exportedNames?.sort()).toEqual(["local_alias", "ready", "static_count", "tools", "tools::scoped_run"]);
       expect(module?.locals.map((entry) => entry.localName)).toEqual(
         expect.arrayContaining(["Local", "Hidden", "Secret"]),
       );
@@ -274,21 +277,24 @@ describe("C++ native queries", () => {
     expect(namespaced.exports).toEqual(
       expect.arrayContaining([
         "api",
-        "nsDefined",
-        "nsPrototype",
-        "nsCounter",
-        "NsPair",
-        "Widget",
-        "nestedFn",
+        "api::nsDefined",
+        "api::nsPrototype",
+        "api::nsCounter",
+        "api::NsPair",
+        "api::Widget",
+        "api::inner::nestedFn",
         "outer",
-        "leaf",
-        "nestedFn17",
+        "outer::leaf",
+        "outer::leaf::nestedFn17",
         "tmplPrototype",
         "tmplDefined",
-        "nsTmpl",
+        "api::nsTmpl",
         "container",
       ]),
     );
+    expect(
+      namespaced.exports.filter((name) => ["nsDefined", "nsPrototype", "nestedFn", "nestedFn17"].includes(name)),
+    ).toEqual([]);
     expect(namespaced.exports).not.toContain("method");
     expect(namespaced.exports).not.toContain("hiddenHelper");
     expect(namespaced.exports).not.toContain("Local");
@@ -364,7 +370,9 @@ describe("C++ native queries", () => {
         "struct Outer { struct Inner { int x; }; };",
       ].join("\n"),
     );
-    expect(namespaced.exports).toEqual(expect.arrayContaining(["api", "nsFn", "Widget", "Holder", "compute", "Outer"]));
+    expect(namespaced.exports).toEqual(
+      expect.arrayContaining(["api", "api::nsFn", "api::Widget", "Holder", "compute", "Outer"]),
+    );
     expect(namespaced.exports).not.toContain("method");
     expect(namespaced.exports).not.toContain("get");
     expect(namespaced.exports).not.toContain("Inner");
@@ -372,12 +380,68 @@ describe("C++ native queries", () => {
     expect(namespaced.locals).toEqual(expect.arrayContaining(["method", "get", "Inner", "x"]));
 
     const outlined = collectCppNames("probe.cpp", "class Widget { void method(); };\nvoid Widget::method() {}\n");
-    expect(outlined.exports).toEqual(expect.arrayContaining(["Widget", "method"]));
+    expect(outlined.exports).toEqual(expect.arrayContaining(["Widget", "Widget::method"]));
     expect(outlined.locals).toEqual(expect.arrayContaining(["Widget", "method"]));
   });
 });
 
 describe("C++ classification and same-file navigation", () => {
+  it("keeps callable identity consistent across navigation, references, and calls", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-callable-identity-"));
+    const file = path.join(root, "probe.cpp");
+    const lines = [
+      "int pointer(int*);",
+      "int pointer(int* value) { return 1; }",
+      "int use_pointer() { return pointer(nullptr); }",
+      "int reference(int& value);",
+      "int reference(int&& value);",
+      "int use_reference(int& value) { return reference(value); }",
+      "namespace tools { int run(); int run() { return 1; } }",
+      "namespace alias { using tools::run; }",
+      "int via_alias() { return alias::run(); }",
+    ];
+    try {
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const pointer = await goToDefinition(index, {
+        file,
+        line: 3,
+        column: lines[2]!.lastIndexOf("pointer") + 1,
+      });
+      expect(pointer.status).toBe("ok");
+      if (pointer.status !== "ok") throw new Error("Expected the pointer function definition");
+      expect(pointer.definition.range.start.line).toBe(2);
+      for (const [line, expectedLines] of [
+        [1, [1, 2, 3]],
+        [4, [4]],
+        [5, [5]],
+      ] as const) {
+        const refs = await findReferences(index, { file, line, column: 5 });
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") throw new Error("Expected C++ declaration references");
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual(expectedLines);
+      }
+      const alias = await goToDefinition(index, { file, line: 9, column: lines[8]!.indexOf("run") + 1 });
+      expect(alias.status).toBe("ok");
+      if (alias.status !== "ok") throw new Error("Expected the aliased callable definition");
+      expect(alias.definition.range.start.line).toBe(7);
+      const graph = await buildSymbolGraphDetailed(index);
+      const nodes = [...graph.nodes.values()];
+      expect(nodes.filter((node) => node.name === "pointer")).toHaveLength(1);
+      expect(nodes.filter((node) => node.name === "reference")).toHaveLength(2);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls")
+          .map((edge) => [graph.nodes.get(edge.from)?.name, graph.nodes.get(edge.to)?.name]),
+      ).toEqual([
+        ["use_pointer", "pointer"],
+        ["via_alias", "run"],
+      ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("classifies nested namespaces and unions, and resolves concepts and macros", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-classify-"));
     const file = path.join(root, "probe.cpp");

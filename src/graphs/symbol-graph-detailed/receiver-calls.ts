@@ -327,6 +327,12 @@ export function receiverCallAccess(
 
 export type ReceiverMemberScope = "any" | "instance" | "static";
 
+/** Inclusive accepted argument count for one C++ callable entity. `max: null` is variadic. */
+export type MemberArityRange = {
+  min: number;
+  max: number | null;
+};
+
 export type ReceiverBinding =
   | { kind: "own-type"; memberScope: ReceiverMemberScope }
   | { kind: "supertype"; memberScope: ReceiverMemberScope }
@@ -1346,6 +1352,8 @@ export function emitReceiverCallEdges(
   candidates: readonly ReceiverCallCandidate[],
   recordEdge: (fromId: string, toId: string, label?: string, site?: SymbolGraph["edges"][number]["site"]) => boolean,
   memberScopes: ReadonlyMap<string, ReceiverMemberScope> = new Map(),
+  nodeAliases: ReadonlyMap<string, string> = new Map(),
+  memberArities: ReadonlyMap<string, MemberArityRange> = new Map(),
 ): SymbolGraph["edges"][number][] {
   if (!candidates.length) return [];
 
@@ -1400,7 +1408,16 @@ export function emitReceiverCallEdges(
     const visited = new Set<string>(level);
     let receiverDisposition: "none" | "resolved" | "ambiguous" = "none";
     for (let depth = 0; depth < MAX_SUPERTYPE_DEPTH && level.length; depth += 1) {
-      const lookup = provenMemberTarget(graph, membersByOwner, level, candidate, memberScope, memberScopes);
+      const lookup = provenMemberTarget(
+        graph,
+        membersByOwner,
+        level,
+        candidate,
+        memberScope,
+        memberScopes,
+        nodeAliases,
+        memberArities,
+      );
       if (lookup.status === "unique") {
         receiverDisposition = "resolved";
         const combinedTargets = new Set(existingTargets);
@@ -1452,6 +1469,29 @@ export function emitReceiverCallEdges(
 
 type MemberTargetLookup = { status: "none" } | { status: "unique"; memberId: string } | { status: "ambiguous" };
 
+function canonicalMemberId(id: string, aliases: ReadonlyMap<string, string>): string {
+  let current = id;
+  const seen = new Set<string>();
+  while (aliases.has(current) && !seen.has(current)) {
+    seen.add(current);
+    current = aliases.get(current)!;
+  }
+  return current;
+}
+
+function memberArityMatches(
+  graph: SymbolGraph,
+  memberId: string,
+  argumentCount: number | null,
+  memberArities: ReadonlyMap<string, MemberArityRange>,
+): boolean {
+  if (argumentCount === null) return true;
+  const range = memberArities.get(memberId);
+  if (range) return argumentCount >= range.min && (range.max === null || argumentCount <= range.max);
+  const memberArity = graph.nodes.get(memberId)?.memberArity;
+  return memberArity === undefined || memberArity === argumentCount;
+}
+
 /**
  * The single callable member named by `candidate` across `owners`.
  * `none` means this depth has no name match and the walk may continue.
@@ -1465,25 +1505,28 @@ function provenMemberTarget(
   candidate: ReceiverCallCandidate,
   memberScope: ReceiverMemberScope,
   memberScopes: ReadonlyMap<string, ReceiverMemberScope>,
+  nodeAliases: ReadonlyMap<string, string>,
+  memberArities: ReadonlyMap<string, MemberArityRange>,
 ): MemberTargetLookup {
   const matches = new Set<string>();
   for (const ownerId of owners) {
     for (const memberId of membersByOwner.get(ownerId) ?? []) {
-      const node = graph.nodes.get(memberId);
+      const canonicalId = canonicalMemberId(memberId, nodeAliases);
+      const node = graph.nodes.get(memberId) ?? graph.nodes.get(canonicalId);
       if (!node || (node.kind !== "function" && !node.callable)) continue;
       const nameMatches = candidate.caseInsensitiveMemberName
         ? foldPhpIdentifierCase(node.name) === foldPhpIdentifierCase(candidate.memberName)
         : node.name === candidate.memberName;
       if (!nameMatches) continue;
-      if (memberScope !== "any" && memberScopes.get(memberId) !== memberScope) continue;
-      matches.add(memberId);
+      const scope = memberScopes.get(memberId) ?? memberScopes.get(canonicalId);
+      if (memberScope !== "any" && scope !== memberScope) continue;
+      matches.add(canonicalId);
     }
   }
   if (!matches.size) return { status: "none" };
   if (matches.size === 1) {
     const [memberId] = matches;
-    const memberArity = graph.nodes.get(memberId!)?.memberArity;
-    if (candidate.argumentCount === null || memberArity === undefined || memberArity === candidate.argumentCount) {
+    if (memberArityMatches(graph, memberId!, candidate.argumentCount, memberArities)) {
       return { status: "unique", memberId: memberId! };
     }
     return { status: "ambiguous" };
@@ -1491,7 +1534,7 @@ function provenMemberTarget(
   const byArity =
     candidate.argumentCount === null
       ? []
-      : [...matches].filter((memberId) => graph.nodes.get(memberId)?.memberArity === candidate.argumentCount);
+      : [...matches].filter((memberId) => memberArityMatches(graph, memberId, candidate.argumentCount, memberArities));
   if (byArity.length === 1) return { status: "unique", memberId: byArity[0]! };
   return { status: "ambiguous" };
 }

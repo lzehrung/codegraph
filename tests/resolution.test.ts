@@ -2,7 +2,14 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { buildProjectIndex, clearImportResolutionCaches, collectGraph, goToDefinition } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildSymbolGraphDetailed,
+  clearImportResolutionCaches,
+  collectGraph,
+  findReferences,
+  goToDefinition,
+} from "../src/index.js";
 import {
   loadNearestTsconfigFor,
   loadWorkspaceConfig,
@@ -15,7 +22,7 @@ import {
 } from "../src/util.js";
 import { loadPhpComposerConfig } from "../src/util/resolution/php-composer.js";
 import { fileIdentityKey } from "../src/util/paths.js";
-import { resolveExport } from "../src/indexer/navigation-resolve.js";
+import { resolveExport, resolveModuleExports } from "../src/indexer/navigation-resolve.js";
 import { createTestIndexFromFiles } from "./test-utils.js";
 import { tryCreateDirectorySymlink } from "./helpers/filesystem.js";
 
@@ -2257,6 +2264,167 @@ describe("Import Resolution", () => {
       expect(String(resolved).replace(/\\/g, "/")).toBe(hintFile.replace(/\\/g, "/"));
     },
   );
+
+  it("keeps C++ namespace exports and local using declarations out of bare import lookup", async () => {
+    const root = await mkTmpDir("cg-cpp-import-scope-");
+    const header = path.join(root, "api.hpp").replace(/\\/g, "/");
+    const consumer = path.join(root, "use.cpp").replace(/\\/g, "/");
+    const source = [
+      '#include "api.hpp"',
+      "int invalid() { return run(); }",
+      "int valid() { return tools::run(); }",
+      "int plain() { return global(); }",
+      "int invalid_scoped() { return scoped_run(); }",
+      "int exposed_call() { return exposed(); }",
+      "int alias_call() { return alias::run(); }",
+      "int inline_call() { return versioned(); }",
+      "int qualified_inline_call() { return v1::versioned(); }",
+      "int nested_inline_call() { return outer::visible(); }",
+      "int invalid_nested_inline_call() { return visible(); }",
+    ];
+    try {
+      await fsp.writeFile(
+        header,
+        [
+          "namespace tools {",
+          "int run();",
+          "int scoped_run();",
+          "int exposed();",
+          "}",
+          "int global();",
+          "using tools::exposed;",
+          "inline void local() { using tools::scoped_run; }",
+          "namespace alias { using tools::run; }",
+          "inline namespace v1 { int versioned(); }",
+          "namespace outer { inline namespace v2 { int visible(); } }",
+        ].join("\n"),
+      );
+      await fsp.writeFile(consumer, source.join("\n"));
+      const index = await createTestIndexFromFiles(root, [header, consumer]);
+      for (const [line, name, definitionLine] of [
+        [2, "run", undefined],
+        [3, "run", 2],
+        [4, "global", 6],
+        [5, "scoped_run", undefined],
+        [6, "exposed", 4],
+        [7, "run", 2],
+        [8, "versioned", 10],
+        [9, "versioned", 10],
+        [10, "visible", 11],
+        [11, "visible", undefined],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: consumer,
+          line,
+          column: source[line - 1]!.indexOf(`${name}()`) + 1,
+        });
+        if (definitionLine === undefined) {
+          expect(result.status).toBe("not_found");
+        } else {
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") throw new Error("Expected a visible C++ export");
+          expect(result.definition.file).toBe(header);
+          expect(result.definition.range.start.line).toBe(definitionLine);
+        }
+      }
+      const references = await findReferences(index, { file: header, line: 2, column: 5 });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected namespace function references");
+      expect(
+        references.references
+          .filter((reference) => reference.file === consumer)
+          .map((reference) => reference.range.start.line),
+      ).toEqual([3, 7]);
+      const exports = resolveModuleExports(index, header, { allowLocalFallback: false });
+      expect([...exports.keys()].sort()).toEqual(
+        [
+          "tools",
+          "tools::run",
+          "tools::scoped_run",
+          "tools::exposed",
+          "global",
+          "exposed",
+          "local",
+          "alias",
+          "alias::run",
+          "v1",
+          "v1::versioned",
+          "versioned",
+          "outer",
+          "outer::v2",
+          "outer::v2::visible",
+          "outer::visible",
+        ].sort(),
+      );
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.file === consumer)
+          .map((edge) => [graph.nodes.get(edge.from)?.name, graph.nodes.get(edge.to)?.name])
+          .sort(),
+      ).toEqual([
+        ["alias_call", "run"],
+        ["exposed_call", "exposed"],
+        ["inline_call", "versioned"],
+        ["nested_inline_call", "visible"],
+        ["plain", "global"],
+        ["qualified_inline_call", "versioned"],
+        ["valid", "run"],
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves C++ exports and using aliases for one callable redeclaration group", async () => {
+    const root = await mkTmpDir("dg-cpp-export-redeclaration-");
+    try {
+      const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+      const lines = [
+        "namespace tools {",
+        "int run();",
+        "int run() { return 1; }",
+        "int pick(int);",
+        "int pick(double);",
+        "}",
+        "namespace alias { using tools::run; using tools::pick; }",
+        "int via_alias() { return alias::run(); }",
+        "int direct() { return tools::run(); }",
+        "int ambiguous() { return alias::pick(1); }",
+      ];
+      await fsp.writeFile(file, lines.join("\n"));
+      const index = await createTestIndexFromFiles(root, [file]);
+      for (const line of [8, 9]) {
+        const result = await goToDefinition(index, { file, line, column: lines[line - 1]!.indexOf("run") + 1 });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected one callable entity");
+        expect(result.definition.range.start.line).toBe(3);
+      }
+      expect((await goToDefinition(index, { file, line: 10, column: lines[9]!.indexOf("pick") + 1 })).status).toBe(
+        "not_found",
+      );
+      const exported = resolveModuleExports(index, file, { allowLocalFallback: false });
+      expect(exported.get("tools::run")?.kind).toBe("resolved");
+      expect(exported.get("alias::run")?.kind).toBe("resolved");
+      expect(exported.has("tools::pick")).toBe(false);
+      const refs = await findReferences(index, { file, line: 2, column: 5 });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Expected callable references");
+      expect(refs.references.map((ref) => ref.range.start.line)).toEqual(expect.arrayContaining([2, 3, 8, 9]));
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls")
+          .map((edge) => [graph.nodes.get(edge.from)?.name, graph.nodes.get(edge.to)?.name])
+          .sort(),
+      ).toEqual([
+        ["direct", "run"],
+        ["via_alias", "run"],
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 
   it.each(["c", "cpp"] as const)("keeps a macro %s include external despite decoys", async (languageId) => {
     const root = await mkTmpDir(`dg-resolve-c-family-macro-decoys-${languageId}-`);

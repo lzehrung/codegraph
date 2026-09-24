@@ -26,6 +26,7 @@ import type { Range } from "../types.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { isExportedDeclaration } from "./declaration-visibility.js";
 import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { cppCallableIsDefinition, cppCallableShapeForNode } from "./cpp-callables.js";
 
 /**
  * Matches one `exportScopeBlockers` entry against an ancestor node. A plain entry compares the
@@ -139,7 +140,12 @@ function isTypeMemberDeclaration(node: SyntaxNodeLike): boolean {
   }
   return false;
 }
-function cppQualifiedExportName(nameNode: SyntaxNodeLike, source: string, name: string): string {
+function cppQualifiedExportName(
+  nameNode: SyntaxNodeLike,
+  source: string,
+  name: string,
+  omitInlineNamespaces = false,
+): string {
   const namespaceSegments: string[][] = [];
   let qualifiedSegments: string[] | null = null;
   let current: SyntaxNodeLike | null = nameNode;
@@ -156,8 +162,16 @@ function cppQualifiedExportName(nameNode: SyntaxNodeLike, source: string, name: 
       }
       const declaresNamespaceSegment =
         namespaceName.startIndex <= nameNode.startIndex && namespaceName.endIndex >= nameNode.endIndex;
-      if (declaresNamespaceSegment) return name;
-      namespaceSegments.unshift(cppQualifiedNameSegments(namespaceName, source));
+      if (declaresNamespaceSegment) {
+        qualifiedSegments =
+          namespaceName.type === "nested_namespace_specifier"
+            ? namespaceName.namedChildren
+                .filter((child) => child.type === "namespace_identifier" && child.endIndex <= nameNode.endIndex)
+                .map((child) => sliceText(child, source))
+            : [name];
+      } else if (!omitInlineNamespaces || current.child(0)?.type !== "inline") {
+        namespaceSegments.unshift(cppQualifiedNameSegments(namespaceName, source));
+      }
     }
     current = current.parent;
   }
@@ -213,7 +227,7 @@ function declaratorCaptureName(capture: NativeCapture, node?: SyntaxNodeLike): s
 
 function localExportDedupeKey(entry: Extract<ExportEntry, { type: "local" }>, languageId: string): string {
   if (languageId === "c") return entry.exportedAs;
-  return `${entry.exportedAs}\0${entry.qualifiedAs ?? ""}\0${entry.target.localName}\0${entry.target.range.start.index ?? 0}\0${entry.target.range.end.index ?? 0}`;
+  return `${entry.exportedAs}\0${entry.target.localName}\0${entry.target.range.start.index ?? 0}\0${entry.target.range.end.index ?? 0}`;
 }
 
 function dedupeExportEntries(entries: ExportEntry[], languageId: string): ExportEntry[] {
@@ -1030,17 +1044,26 @@ export function collectLocalsAndExportsFromSource(
           ) ?? locals.find((def) => def.localName === nameText);
         if (local) {
           const isDefaultExport = /^\s*export\s+default\b/.test(stmtText);
-          const qualifiedAs =
+          const exportedName =
             support.id === "cpp" && visibilityNameNode
               ? cppQualifiedExportName(visibilityNameNode, source, nameText)
               : nameText;
           if (!isDefaultExport) {
             exports.push({
               type: "local",
-              exportedAs: nameText,
-              ...(qualifiedAs !== nameText ? { qualifiedAs } : {}),
+              exportedAs: exportedName,
               target: local,
             });
+            if (support.id === "cpp" && visibilityNameNode && exportedName !== nameText) {
+              const visibleAs = cppQualifiedExportName(visibilityNameNode, source, nameText, true);
+              if (visibleAs !== exportedName) {
+                exports.push({
+                  type: "local",
+                  exportedAs: visibleAs,
+                  target: local,
+                });
+              }
+            }
           }
           if (isDefaultExport && !hasDefaultExport()) {
             exports.push({
@@ -1093,7 +1116,37 @@ export function collectLocalsAndExportsFromSource(
 
   if (support.id === "cpp") {
     const treeForUsingDeclarations = ensureTree();
+    if (treeForUsingDeclarations) {
+      const callableExports = new Map<string, { index: number; isDefinition: boolean }>();
+      let retainedCount = 0;
+      for (const entry of exports) {
+        if (entry.type === "local" && entry.target.kind === SymbolKind.Function) {
+          const { start, end } = entry.target.range;
+          const nameNode = treeForUsingDeclarations.rootNode.descendantForPosition(
+            { row: start.line - 1, column: start.column - 1 },
+            { row: end.line - 1, column: end.column - 1 },
+          );
+          const shape = cppCallableShapeForNode(nameNode);
+          if (shape) {
+            const key = `${entry.exportedAs}\0${shape.signature}`;
+            const isDefinition = cppCallableIsDefinition(nameNode);
+            const existing = callableExports.get(key);
+            if (existing) {
+              if (isDefinition && !existing.isDefinition) {
+                exports[existing.index] = entry;
+                existing.isDefinition = true;
+              }
+              continue;
+            }
+            callableExports.set(key, { index: retainedCount, isDefinition });
+          }
+        }
+        exports[retainedCount++] = entry;
+      }
+      exports.length = retainedCount;
+    }
     const visitUsingDeclaration = (node: SyntaxNodeLike): void => {
+      if (support.exportScopeBlockers.some((blocker) => matchesExportScopeBlocker(node, blocker))) return;
       if (node.type === "using_declaration") {
         const qualified =
           node.namedChildren.find((child) => child.type === "qualified_identifier") ??
@@ -1113,27 +1166,25 @@ export function collectLocalsAndExportsFromSource(
             current = current.parent;
           }
           const localName = importedSegments.at(-1);
-          const qualifiedAs = localName ? [...namespaceSegments.flat(), localName].join("::") : "";
+          const exportedName = localName ? [...namespaceSegments.flat(), localName].join("::") : "";
           const targets = exports.filter(
             (entry): entry is Extract<ExportEntry, { type: "local" }> =>
-              entry.type === "local" && (entry.qualifiedAs === importedName || entry.exportedAs === importedName),
+              entry.type === "local" && entry.exportedAs === importedName,
           );
           if (
             localName &&
-            qualifiedAs &&
+            exportedName &&
             targets.length === 1 &&
             !exports.some(
               (entry) =>
                 entry.type === "local" &&
-                entry.exportedAs === localName &&
-                entry.qualifiedAs === qualifiedAs &&
+                entry.exportedAs === exportedName &&
                 entry.target.range.start.index === targets[0]!.target.range.start.index,
             )
           ) {
             exports.push({
               type: "local",
-              exportedAs: localName,
-              ...(qualifiedAs !== localName ? { qualifiedAs } : {}),
+              exportedAs: exportedName,
               target: targets[0]!.target,
             });
           }

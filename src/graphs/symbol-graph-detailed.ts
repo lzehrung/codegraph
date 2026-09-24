@@ -8,7 +8,7 @@ import {
   getNativeSyntaxTreeExecution,
   isNativeRequiredUnavailableError,
 } from "../native/tree-sitter-native.js";
-import { cppBindingIsDefinition, cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
+import { cppCallableIsDefinition, cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
 import { resolveExport, resolvePhpExportByImportType } from "../indexer/navigation-resolve.js";
 import { resolveCppCallableBindings, resolveCppCollidingBinding } from "../indexer/navigation-cpp.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
@@ -41,6 +41,7 @@ import {
   emitReceiverCallEdges,
   type ReceiverCallCandidate,
   type ReceiverMemberScope,
+  type MemberArityRange,
 } from "./symbol-graph-detailed/receiver-calls.js";
 
 type BuildDetailedSymbolGraphOptions = {
@@ -80,7 +81,7 @@ function recordCallableDeclarationAliases(
 ): void {
   const recordGroup = (group: readonly Binding[]): void => {
     if (group.length < 2) return;
-    const canonicalBinding = group.find((binding) => !cppBindingIsDefinition(binding)) ?? group[0]!;
+    const canonicalBinding = group.find((binding) => !cppCallableIsDefinition(binding.node)) ?? group[0]!;
     const canonicalDef = symbolDefForBinding(moduleEntry, canonicalBinding);
     if (!canonicalDef) return;
     const canonicalId = defNodeId(canonicalDef);
@@ -200,9 +201,9 @@ export async function buildSymbolGraphDetailed(
       file = normalizePath(targetDef.file);
     }
 
-    if (targetDef) {
-      return targetDef;
-    }
+    if (targetDef) return targetDef;
+    const languageId = supportForFileWithoutHeaderSample(file ?? startFile, index.languageExtensions)?.id;
+    if (languageId === "c" || languageId === "cpp") return null;
 
     const fileKey = typeof file === "string" ? fileIdentityKey(file) : null;
     const moduleEntry = fileKey ? index.byFile.get(fileKey) : undefined;
@@ -215,6 +216,7 @@ export async function buildSymbolGraphDetailed(
 
   const receiverCalls: ReceiverCallCandidate[] = [];
   const receiverMemberScopes = new Map<string, ReceiverMemberScope>();
+  const receiverMemberArities = new Map<string, MemberArityRange>();
   const nodeAliases = new Map<string, string>();
   const ownershipParsedContexts = new Map<string, Promise<ParsedFileContext | null>>();
   const loadParsedFile = (file: string): Promise<ParsedFileContext | null> => {
@@ -301,6 +303,12 @@ export async function buildSymbolGraphDetailed(
         resolveExportNamespace,
         resolveExportFrom,
       );
+      if (sup.id === "c" || sup.id === "cpp") {
+        for (const [alias, def] of [...aliasToTargetDef]) {
+          const exported = resolveExport(index, def.file, alias, { allowLocalFallback: false });
+          if (exported?.kind !== "resolved") aliasToTargetDef.delete(alias);
+        }
+      }
 
       const { functionNodes, classNodes, constStringOf } = collectDetailedDeclarations(
         tree.rootNode,
@@ -377,6 +385,7 @@ export async function buildSymbolGraphDetailed(
         recordEdge,
         receiverCalls,
         receiverMemberScopes,
+        receiverMemberArities,
         nodeAliases,
         noteCallableName,
         loadParsedFile,
@@ -406,6 +415,8 @@ export async function buildSymbolGraphDetailed(
     callableReceiverCalls,
     recordEdge,
     receiverMemberScopes,
+    nodeAliases,
+    receiverMemberArities,
   );
   edgeCount -= removedReceiverEdges.length;
   for (const edge of removedReceiverEdges) added.delete(edgeKey(edge.from, edge.to, edge.label, edge.site));

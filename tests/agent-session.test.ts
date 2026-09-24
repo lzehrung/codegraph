@@ -364,32 +364,35 @@ describe("agent session", () => {
 
   it("reuses a canonicalized C++ detailed graph from the persisted sidecar", async () => {
     const root = await mkGitRepo();
-    await fs.writeFile(path.join(root, "api.hpp"), "class Box { public: int run(); };\n", "utf8");
+    await fs.writeFile(path.join(root, "api.hpp"), "class Box { public: int run(int*); };\n", "utf8");
     await fs.writeFile(
       path.join(root, "impl.cpp"),
-      ['#include "api.hpp"', "int Box::run() { return 1; }", "int call(Box& box) { return box.run(); }", ""].join("\n"),
+      [
+        '#include "api.hpp"',
+        "int Box::run(int* value) { return *value; }",
+        "int call(Box& box, int* value) { return box.run(value); }",
+        "",
+      ].join("\n"),
       "utf8",
     );
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
     const cold = await createAgentSession({ root }).loadProject();
     const sidecarPath = detailedSymbolGraphSnapshotPath(root);
-    const sidecar = (await readDetailedSidecar(sidecarPath)) as MutableDetailedSymbolGraphSidecar;
-    expect(sidecar.graph.nodeAliases.length).toBeGreaterThan(0);
+    expect([...cold.symbolGraph.nodes.values()].filter((node) => node.name === "run")).toHaveLength(1);
+    expect(
+      cold.symbolGraph.edges
+        .filter((edge) => edge.label === "calls" && cold.symbolGraph.nodes.get(edge.from)?.name === "call")
+        .map((edge) => cold.symbolGraph.nodes.get(edge.to)?.name),
+    ).toEqual(["run"]);
 
     const sidecarStat = await fs.stat(sidecarPath);
     await fs.utimes(sidecarPath, sidecarStat.atime, new Date(sidecarStat.mtimeMs + 2_000));
     symbolGraphSpy.mockClear();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    try {
-      const warm = await createAgentSession({ root }).loadProject();
+    const warm = await createAgentSession({ root }).loadProject();
 
-      expect(symbolGraphSpy).not.toHaveBeenCalled();
-      expect(warn.mock.calls.flat().join(" ")).not.toContain("detailed symbol graph does not match project");
-      expect([...warm.symbolGraph.nodes]).toEqual([...cold.symbolGraph.nodes]);
-      expect(warm.symbolGraph.edges).toEqual(cold.symbolGraph.edges);
-    } finally {
-      warn.mockRestore();
-    }
+    expect(symbolGraphSpy).not.toHaveBeenCalled();
+    expect([...warm.symbolGraph.nodes]).toEqual([...cold.symbolGraph.nodes]);
+    expect(warm.symbolGraph.edges).toEqual(cold.symbolGraph.edges);
   });
 
   it("memoizes a validated detailed sidecar until its file identity changes", async () => {

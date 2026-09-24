@@ -289,14 +289,51 @@ export function normalizePhpQualifiedReference(
 }
 
 const PHP_CLASS_REFERENCE_CONTEXTS = new Set(["named_type", "base_clause", "class_interface_clause"]);
+const PHP_CALL_EXPRESSION_TYPES = new Set(["function_call_expression", "call_expression"]);
+const PHP_SCOPED_CLASS_EXPRESSION_TYPES = new Set([
+  "scoped_call_expression",
+  "scoped_property_access_expression",
+  "class_constant_access_expression",
+]);
 
 function containsNode(container: SyntaxNodeLike, node: SyntaxNodeLike): boolean {
   return container.startIndex <= node.startIndex && container.endIndex >= node.endIndex;
 }
 
+function phpArgumentsNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  return (
+    node.childForFieldName("arguments") ??
+    node.childForFieldName("argument_list") ??
+    node.namedChildren.find((child) => child.type === "arguments") ??
+    null
+  );
+}
+
+function phpScopedClassOperand(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  return (
+    node.childForFieldName("scope") ??
+    node.childForFieldName("object") ??
+    node.childForFieldName("class") ??
+    node.namedChildren[0] ??
+    null
+  );
+}
+
+function isPhpInstanceofTypeOperand(expression: SyntaxNodeLike, node: SyntaxNodeLike): boolean {
+  const operator = expression.childForFieldName("operator");
+  if (operator?.text !== "instanceof" && operator?.type !== "instanceof") return false;
+  const right = expression.childForFieldName("right");
+  return !!right && containsNode(right, node);
+}
+
 export function inferPhpQualifiedReferenceImportType(node: SyntaxNodeLike): "class" | "function" | undefined {
   let current: SyntaxNodeLike | null = node;
   while (current) {
+    const argumentsNode = phpArgumentsNode(current);
+    if (current !== node && argumentsNode && containsNode(argumentsNode, node)) {
+      current = current.parent;
+      continue;
+    }
     if (PHP_CLASS_REFERENCE_CONTEXTS.has(current.type)) {
       return "class";
     }
@@ -307,14 +344,38 @@ export function inferPhpQualifiedReferenceImportType(node: SyntaxNodeLike): "cla
     if (current.type === "object_creation_expression") {
       return "class";
     }
-    if (current.type === "function_call_expression" || current.type === "call_expression") {
+    if (PHP_CALL_EXPRESSION_TYPES.has(current.type)) {
       return "function";
     }
-    if (
-      current.type === "scoped_call_expression" ||
-      current.type === "scoped_property_access_expression" ||
-      current.type === "class_constant_access_expression"
-    ) {
+    if (PHP_SCOPED_CLASS_EXPRESSION_TYPES.has(current.type)) {
+      const object = phpScopedClassOperand(current);
+      if (object && containsNode(object, node)) return "class";
+    }
+    if (current.type === "catch_clause") {
+      const body =
+        current.childForFieldName("body") ??
+        current.namedChildren.find((child) => child.type === "compound_statement") ??
+        null;
+      if (body && containsNode(body, node)) {
+        current = current.parent;
+        continue;
+      }
+      const variable = current.childForFieldName("name");
+      if (variable && containsNode(variable, node)) {
+        current = current.parent;
+        continue;
+      }
+      const typeNode = current.childForFieldName("type");
+      if (typeNode) {
+        if (containsNode(typeNode, node)) return "class";
+      } else if (node.type !== "variable_name") {
+        return "class";
+      }
+    }
+    if (current.type === "use_declaration") {
+      return "class";
+    }
+    if (current.type === "binary_expression" && isPhpInstanceofTypeOperand(current, node)) {
       return "class";
     }
     current = current.parent;

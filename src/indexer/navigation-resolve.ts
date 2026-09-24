@@ -110,13 +110,10 @@ function moduleNameLookup(index: ProjectIndex, file: FileId): ModuleNameLookup |
       const locals = new Map<string, SymbolDef[]>();
       for (const entry of moduleEntry.exports) {
         if (entry.type === "local") {
-          const exportNames = entry.qualifiedAs ? [entry.exportedAs, entry.qualifiedAs] : [entry.exportedAs];
-          for (const exportName of exportNames) {
-            const canonicalName = normalizeIdentifier(exportName);
-            const entries = localExports.get(canonicalName) ?? [];
-            entries.push(entry.target);
-            localExports.set(canonicalName, entries);
-          }
+          const canonicalName = normalizeIdentifier(entry.exportedAs);
+          const entries = localExports.get(canonicalName) ?? [];
+          entries.push(entry.target);
+          localExports.set(canonicalName, entries);
         } else if (entry.type === "namespaceReexport") {
           const canonicalName = normalizeIdentifier(entry.exportedAs);
           const entries = namespaceReexports.get(canonicalName) ?? [];
