@@ -751,6 +751,10 @@ A successful `FindReferencesResult` always includes `referenceCoverage`. `comple
 
 The result keeps the definition site as a reference. Import declarations are also references. `Reference.via.importBinding` is `imported` for the source-side name and `local` for a distinct alias or default binding. The root and `indexer` entry points export `ImportBindingRole`, `ReferenceCoverage`, and `ReferenceCoverageReason`.
 
+Implicit candidates also include same-directory package/namespace peers used by `goToDefinition`, plus C# partial and Swift extension members with the same full owner identity. This source-unit relation is not compiler build-target inference. Incomplete unit membership reports `strategy_unavailable`; proven results remain available. See [language parity](./language-parity.md#navigation-and-references) for the directory and visibility limits.
+
+`resolveExport` accepts an optional `referenceIndex` for implicit C# lookup at a UTF-16 use-site offset in the initial file. `goToDefinition` supplies it automatically so one namespace block cannot make a type visible in another block.
+
 C symbol lookup keeps tag and ordinary identifier namespaces separate:
 
 - `goToDefinition` and `findReferences` select the namespace from source syntax, including uses through header includes.
@@ -1001,6 +1005,8 @@ for (const item of report.impacted.slice(0, 5)) {
 ### Call Compatibility Hints
 
 Changed symbols can include `callCompatibility` when a provider-backed callable signature changed and codegraph resolved high-confidence callsites. These hints compare argument counts only; they are deterministic review leads, not type checking or overload analysis.
+
+Signature extraction and `buildSymbolGraphDetailed` share accepted argument ranges. Defaults and variadics affect the range; generic type commas, Java explicit receivers, and Ruby block capture do not add positional arguments. Python bound and unbound instance calls use different receiver counts. Unknown spread lengths, including Kotlin `*values`, remain unknown.
 
 Use them to prioritize follow-up review:
 

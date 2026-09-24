@@ -327,7 +327,7 @@ export function receiverCallAccess(
 
 export type ReceiverMemberScope = "any" | "instance" | "static";
 
-/** Inclusive accepted argument count for one C++ callable entity. `max: null` is variadic. */
+/** Inclusive accepted argument count for one callable member. `max: null` is variadic. */
 export type MemberArityRange = {
   min: number;
   max: number | null;
@@ -1101,12 +1101,40 @@ export function classifyReceiver(
   const property = getMemberAccessParts(sup, accessNode).property;
   const between = property ? source.slice(receiver.endIndex, property.startIndex) : "";
   const typeScoped = TYPE_SCOPED_ACCESS_TYPES[accessNode.type] === true || between.includes("::");
-  if (receiver.type !== "type_identifier" && !typeScoped) return null;
+  if (receiver.type !== "type_identifier" && !typeScoped) {
+    // A capitalized bare name is type proof only where the language's construction
+    // conventions already type `Box()` as a Box (Python, Kotlin, Swift, Rust). The
+    // named type must still resolve to a members-declaring definition before any
+    // call edge is recorded, so a name alone never invents a target.
+    if (!capitalizedTypeReceiverName(sup, receiver, text)) return null;
+    return {
+      kind: "named-type",
+      typeName: text,
+      memberScope: UNBOUND_INSTANCE_CALL_LANGUAGE_IDS[sup.id] ? "any" : "static",
+    };
+  }
   return {
     kind: "named-type",
     typeName: text,
     memberScope: hasStaticMemberDistinction(sup.id) && typeScoped ? "static" : "any",
   };
+}
+
+/**
+ * Languages whose runtime allows an instance member to be invoked through a type
+ * name (`Box.instanceMethod(args)` is a real unbound call), so a type-named
+ * receiver restricts nothing about static versus instance members.
+ */
+const UNBOUND_INSTANCE_CALL_LANGUAGE_IDS: Record<string, true> = {
+  python: true,
+};
+
+/** Whether a receiver name is capitalized like a type in a capitalized-name language. */
+function capitalizedTypeReceiverName(sup: LanguageSupport, receiver: SyntaxNodeLike, text: string): boolean {
+  if (LANGUAGE_CONSTRUCTION_FORMS[sup.id]?.capitalizedCall !== true) return false;
+  if (!isReceiverNameNode(sup, receiver.type)) return false;
+  const first = text[0];
+  return !!first && first === first.toUpperCase() && first !== first.toLowerCase();
 }
 
 /** Whether a resolved definition can declare callable members. */
@@ -1354,6 +1382,7 @@ export function emitReceiverCallEdges(
   memberScopes: ReadonlyMap<string, ReceiverMemberScope> = new Map(),
   nodeAliases: ReadonlyMap<string, string> = new Map(),
   memberArities: ReadonlyMap<string, MemberArityRange> = new Map(),
+  ownerAnchors: ReadonlyMap<string, string> = new Map(),
 ): SymbolGraph["edges"][number][] {
   if (!candidates.length) return [];
 
@@ -1401,8 +1430,11 @@ export function emitReceiverCallEdges(
       rejectedCallSites.add(siteKey);
       continue;
     }
-    const owner = candidate.ownerId ?? ownerByMember.get(candidate.callerId);
-    if (!owner) continue;
+    const rawOwner = candidate.ownerId ?? ownerByMember.get(candidate.callerId);
+    if (!rawOwner) continue;
+    // Shared-owner anchors redirect Swift extension owners to their extended type
+    // so lookup starts on the whole type identity's member set.
+    const owner = ownerAnchors.get(rawOwner) ?? rawOwner;
     const memberScope = candidate.memberScope ?? inferCallMemberScope(candidate.site, sourceCache);
     let level = candidate.viaSupertypes ? nextOwners(owner, true) : [owner];
     const visited = new Set<string>(level);

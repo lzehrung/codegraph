@@ -11,6 +11,17 @@ import { getCachedReferenceCandidateFiles } from "../indexer/navigation-referenc
 import type { Binding } from "../indexer/scope-types.js";
 import { SymbolKind, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
+import {
+  CALLABLE_DECLARATION_NODE_TYPES,
+  CALLABLE_VARIABLE_VALUE_NODE_TYPES,
+  getCallableArity,
+  getCallableArityFromParameterText,
+  getCallableDeclarationKind,
+  getCallArgumentCount,
+  getCallArgumentCountFromArgumentText,
+  type CallableBinding,
+  type CallableDeclarationKind,
+} from "../languages/callable-arity.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { sliceText, toRange } from "../util/ast.js";
@@ -21,7 +32,6 @@ import {
   getCallCompatibilitySupportedLanguages,
   registerCallCompatibilityExtractors,
 } from "./call-compatibility/providers/index.js";
-import type { CallCompatibilityLanguageProfile } from "./call-compatibility/providers/profiles.js";
 import type {
   CallableSignature,
   CallsiteArguments,
@@ -30,25 +40,13 @@ import type {
 } from "./call-compatibility/types.js";
 
 import {
-  type AngleMode,
-  findOpeningParen,
   findSignatureOpeningParen,
-  findCommentEnd,
   findCallOpeningParen,
   findBalancedParentheses,
-  canStartRegexLiteral,
-  findRegexLiteralEnd,
-  splitTopLevelCommaGroups,
 } from "./call-compatibility/text-scanner.js";
 
 import type { ReferenceLookupCache } from "./reference-cache.js";
-import { PARAMETER_LIST_NODE_TYPES } from "../graphs/symbol-graph-detailed/ast.js";
-import { countTrailingClosureArguments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
-import {
-  directSignatureParameterNode,
-  findAncestorOfTypes,
-  findFirstDescendantOfTypes,
-} from "./signature-node-utils.js";
+import { findAncestorOfTypes } from "./signature-node-utils.js";
 import type { CallCompatibilityHint, ChangedSymbol, ImpactDiagnostics } from "./types.js";
 import {
   canStartReferenceLookup,
@@ -67,447 +65,52 @@ export type {
   ExtractCallsiteArgumentsRequest,
 } from "./call-compatibility/types.js";
 
-interface SignatureParameterText {
-  text: string;
-  skipFirstReceiver: boolean;
-}
-
-interface CallsiteArgumentText {
-  text: string;
-  trailingArgumentCount: number;
-}
-
 function referenceScanLimitForCallsites(maxRefs: number): number {
   return Math.max(maxRefs + 50, maxRefs * 4);
 }
 
-function hasTopLevelEquals(text: string): boolean {
-  let parenDepth = 0;
-  let bracketDepth = 0;
-  let braceDepth = 0;
-  let angleDepth = 0;
-  let quote: string | null = null;
-  let escaped = false;
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-
-    if (quote) {
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (char === "\\") {
-        escaped = true;
-        continue;
-      }
-      if (char === quote) {
-        quote = null;
-      }
-      continue;
-    }
-
-    const commentEnd = findCommentEnd(text, index);
-    if (commentEnd !== null) {
-      if (commentEnd < 0) {
-        return false;
-      }
-      index = commentEnd - 1;
-      continue;
-    }
-
-    if (char === '"' || char === "'" || char === "`") {
-      quote = char;
-      continue;
-    }
-    if (char === "(") {
-      parenDepth += 1;
-      continue;
-    }
-    if (char === ")") {
-      parenDepth -= 1;
-      if (parenDepth < 0) {
-        return false;
-      }
-      continue;
-    }
-    if (char === "[") {
-      bracketDepth += 1;
-      continue;
-    }
-    if (char === "]") {
-      bracketDepth -= 1;
-      if (bracketDepth < 0) {
-        return false;
-      }
-      continue;
-    }
-    if (char === "{") {
-      braceDepth += 1;
-      continue;
-    }
-    if (char === "}") {
-      braceDepth -= 1;
-      if (braceDepth < 0) {
-        return false;
-      }
-      continue;
-    }
-    const atTopLevel = !parenDepth && !bracketDepth && !braceDepth;
-    if (char === "<" && atTopLevel) {
-      angleDepth += 1;
-      continue;
-    }
-    if (char === ">" && text[index - 1] !== "=" && atTopLevel && angleDepth) {
-      angleDepth -= 1;
-      continue;
-    }
-    if (char === "=" && text[index + 1] !== ">" && atTopLevel && !angleDepth) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-const callableDeclarationTypes = new Set([
-  "function_declaration",
-  "function_declarator",
-  "function_definition",
-  "function_item",
-  "method",
-  "singleton_method",
-  "method_declaration",
-  "local_function_statement",
-  "constructor_declaration",
-  "init_declaration",
-  "protocol_function_declaration",
-  "arrow_function",
-  "function",
-  "function_expression",
-  "variable_declarator",
-  "declaration",
-]);
-
-const callableVariableValueTypes = new Set(["arrow_function", "function_expression", "function"]);
-
-const parameterListTypes = new Set(Object.keys(PARAMETER_LIST_NODE_TYPES));
-
-function shouldSkipFirstReceiverParameter(
-  profile: CallCompatibilityLanguageProfile,
-  declaration: SyntaxNodeLike,
-): boolean {
-  if (profile.receiver.skipFirst !== "class-methods") {
-    return true;
-  }
-  let current = declaration.parent;
-  while (current) {
-    if (profile.receiver.methodScopeTypes.includes(current.type)) {
-      return true;
-    }
-    if (profile.receiver.nonMethodScopeTypes.includes(current.type)) {
-      return false;
-    }
-    current = current.parent;
-  }
-  return false;
-}
-
-function findSignatureParameterText(
-  request: ExtractCallableSignatureRequest,
-  profile: CallCompatibilityLanguageProfile,
-): SignatureParameterText | null {
-  if (!request.tree) {
-    return null;
-  }
-
-  const node = request.tree.rootNode.descendantForIndex(request.symbolStartIndex, request.symbolStartIndex);
-  const declaration = findAncestorOfTypes(node, callableDeclarationTypes);
-  if (!declaration) {
-    return null;
-  }
-  const skipFirstReceiver = shouldSkipFirstReceiverParameter(profile, declaration);
-
-  let params = directSignatureParameterNode(declaration);
-  if (!params && declaration.type === "variable_declarator") {
-    const valueNode = declaration.childForFieldName("value");
-    if (!valueNode || !callableVariableValueTypes.has(valueNode.type)) {
-      return null;
-    }
-    params = directSignatureParameterNode(valueNode) ?? findFirstDescendantOfTypes(valueNode, parameterListTypes);
-  }
-  if (!params) {
-    params = findFirstDescendantOfTypes(declaration, parameterListTypes);
-  }
-  if (!params) {
-    const directParameterChildType = profile.directParameterChildType;
-    if (directParameterChildType !== null) {
-      const parameterNodes = declaration.namedChildren.filter((child) => child.type === directParameterChildType);
-      const first = parameterNodes[0];
-      const last = parameterNodes[parameterNodes.length - 1];
-      if (first && last) {
-        return {
-          text: request.source.slice(first.startIndex, last.endIndex),
-          skipFirstReceiver,
-        };
-      }
-    }
-    return { text: "", skipFirstReceiver };
-  }
-
-  const text = request.source.slice(params.startIndex, params.endIndex).trim();
-  if (text.startsWith("(") && text.endsWith(")")) {
-    return { text: text.slice(1, -1), skipFirstReceiver };
-  }
-  return { text, skipFirstReceiver };
-}
-
-function isReceiverParameter(
-  profile: CallCompatibilityLanguageProfile,
-  parameter: string,
-  index: number,
-  skipFirstReceiver: boolean,
-): boolean {
-  if (!skipFirstReceiver) {
-    return false;
-  }
-  const trimmed = parameter.trim();
-  if (!index) {
-    if (profile.receiver.firstPositionExact.includes(trimmed)) {
-      return true;
-    }
-    if (profile.receiver.firstPositionTypedPrefixes.some((prefix) => trimmed.startsWith(prefix))) {
-      return true;
-    }
-  }
-  const thisKeyword = profile.receiver.thisKeyword;
-  if (thisKeyword !== null) {
-    const colonIndex = trimmed.indexOf(":");
-    const namePortion = colonIndex >= 0 ? trimmed.slice(0, colonIndex).trim() : trimmed;
-    return namePortion === thisKeyword;
-  }
-  return false;
-}
-
-function hasTopLevelEllipsis(text: string): boolean {
-  let parenDepth = 0;
-  let bracketDepth = 0;
-  let braceDepth = 0;
-  let angleDepth = 0;
-  let quote: string | null = null;
-  let escaped = false;
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-
-    if (quote) {
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (char === "\\") {
-        escaped = true;
-        continue;
-      }
-      if (char === quote) {
-        quote = null;
-      }
-      continue;
-    }
-
-    const commentEnd = findCommentEnd(text, index);
-    if (commentEnd !== null) {
-      if (commentEnd < 0) {
-        return false;
-      }
-      index = commentEnd - 1;
-      continue;
-    }
-
-    if (canStartRegexLiteral(text, index, 0)) {
-      const regexEnd = findRegexLiteralEnd(text, index);
-      if (regexEnd === null || regexEnd < 0) {
-        return false;
-      }
-      index = regexEnd - 1;
-      continue;
-    }
-
-    if (char === '"' || char === "'" || char === "`") {
-      quote = char;
-      continue;
-    }
-    if (char === "(") {
-      parenDepth += 1;
-      continue;
-    }
-    if (char === ")") {
-      parenDepth -= 1;
-      if (parenDepth < 0) {
-        return false;
-      }
-      continue;
-    }
-    if (char === "[") {
-      bracketDepth += 1;
-      continue;
-    }
-    if (char === "]") {
-      bracketDepth -= 1;
-      if (bracketDepth < 0) {
-        return false;
-      }
-      continue;
-    }
-    if (char === "{") {
-      braceDepth += 1;
-      continue;
-    }
-    if (char === "}") {
-      braceDepth -= 1;
-      if (braceDepth < 0) {
-        return false;
-      }
-      continue;
-    }
-    const atDelimiterTopLevel = !parenDepth && !bracketDepth && !braceDepth;
-    if (char === "<" && atDelimiterTopLevel) {
-      angleDepth += 1;
-      continue;
-    }
-    if (char === ">" && angleDepth && atDelimiterTopLevel && text[index - 1] !== "=") {
-      angleDepth -= 1;
-      continue;
-    }
-    if (!angleDepth && atDelimiterTopLevel && text.startsWith("...", index)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function isRestParameter(profile: CallCompatibilityLanguageProfile, parameter: string): boolean {
-  const trimmed = parameter.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (hasTopLevelEllipsis(trimmed)) {
-    return true;
-  }
-  if (profile.restPrefixes.some((prefix) => trimmed.startsWith(prefix))) {
-    return true;
-  }
-  return profile.restWordPatterns.some((pattern) => pattern.test(trimmed));
-}
-
-function isOptionalParameter(profile: CallCompatibilityLanguageProfile, parameter: string): boolean {
-  const trimmed = parameter.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const nameMarker = profile.optionalNameMarker;
-  if (nameMarker !== null) {
-    const colonIndex = trimmed.indexOf(":");
-    const namePortion = colonIndex >= 0 ? trimmed.slice(0, colonIndex) : trimmed;
-    if (namePortion.includes(nameMarker)) {
-      return true;
-    }
-  }
-  if (profile.keywordParameterValuePattern?.test(trimmed)) {
-    return true;
-  }
-  return hasTopLevelEquals(trimmed);
-}
-
-function parameterSlotCount(profile: CallCompatibilityLanguageProfile, parameter: string): number {
-  const trimmed = parameter.trim();
-  if (!trimmed) {
-    return 0;
-  }
-  if (profile.zeroSlotParameters.includes(trimmed)) {
-    return 0;
-  }
-  return 1;
-}
-
-function signatureFromParameterText(
-  profile: CallCompatibilityLanguageProfile,
-  parameterText: string,
-  angleMode: AngleMode,
-  skipFirstReceiver = true,
-): CallableSignature | null {
-  const parameters = splitTopLevelCommaGroups(parameterText, angleMode, profile.signatureCommaScanDetectsRegexLiterals);
-  if (!parameters) {
-    return null;
-  }
-
-  let minArgs = 0;
-  let maxArgs = 0;
-  let positionalArgCount = 0;
-  let hasRest = false;
-
-  parameters.forEach((parameter, index) => {
-    const trimmed = parameter.trim();
-    if (
-      !trimmed ||
-      profile.parameterSeparators.includes(trimmed) ||
-      isReceiverParameter(profile, trimmed, index, skipFirstReceiver)
-    ) {
-      return;
-    }
-    if (isRestParameter(profile, trimmed)) {
-      hasRest = true;
-      return;
-    }
-    if (profile.keywordParameterPattern?.test(trimmed)) {
-      maxArgs += 1;
-      if (!isOptionalParameter(profile, trimmed)) {
-        minArgs += 1;
-      }
-      return;
-    }
-    const slotCount = parameterSlotCount(profile, trimmed);
-    if (!slotCount) {
-      return;
-    }
-    positionalArgCount += slotCount;
-    maxArgs += slotCount;
-    if (!isOptionalParameter(profile, trimmed)) {
-      minArgs = positionalArgCount;
-    }
-  });
-
-  return { minArgs, maxArgs: hasRest ? null : maxArgs, confidence: "high" };
-}
+const callableDeclarationTypes: ReadonlySet<string> = new Set(Object.keys(CALLABLE_DECLARATION_NODE_TYPES));
 
 function extractCallableSignatureFromProvider(request: ExtractCallableSignatureRequest): CallableSignature | null {
   const profile = getCallCompatibilityLanguageProfile(request.languageId);
   if (!profile) {
     return null;
   }
-
-  const astParameterText = findSignatureParameterText(request, profile);
-  if (astParameterText !== null) {
-    return signatureFromParameterText(
-      profile,
-      astParameterText.text,
-      "type-context",
-      astParameterText.skipFirstReceiver,
-    );
+  const binding = request.binding ?? "bound";
+  if (request.tree) {
+    const node = request.tree.rootNode.descendantForIndex(request.symbolStartIndex, request.symbolStartIndex);
+    const declaration = findAncestorOfTypes(node, callableDeclarationTypes);
+    if (declaration) {
+      const arity = getCallableArity({ languageId: request.languageId, source: request.source, declaration, binding });
+      if (arity) {
+        return { ...arity, confidence: "high" };
+      }
+      // A tree-proven declaration with no provable parameter structure is unknown, except a
+      // variable declarator whose value is not callable: that shape always fell back to the
+      // source scan, and the fallback must not change for it.
+      const valueNode = declaration.type === "variable_declarator" ? declaration.childForFieldName("value") : null;
+      const fallsThroughToSource =
+        declaration.type === "variable_declarator" &&
+        (!valueNode || !CALLABLE_VARIABLE_VALUE_NODE_TYPES[valueNode.type]);
+      if (!fallsThroughToSource) {
+        return null;
+      }
+    }
   }
-
   if (!profile.sourceFallback) {
     return null;
   }
-
   const openIndex = findSignatureOpeningParen(request.source, request.symbolStartIndex);
   const balanced = findBalancedParentheses(request.source, openIndex);
   if (!balanced) {
     return null;
   }
-
-  return signatureFromParameterText(profile, balanced.inner, "type-context");
+  const arity = getCallableArityFromParameterText({
+    languageId: request.languageId,
+    parameterText: balanced.inner,
+    binding,
+  });
+  return arity ? { ...arity, confidence: "high" } : null;
 }
 
 function extractCallsiteArgumentsFromProvider(request: ExtractCallsiteArgumentsRequest): CallsiteArguments | null {
@@ -515,23 +118,24 @@ function extractCallsiteArgumentsFromProvider(request: ExtractCallsiteArgumentsR
   if (!profile) {
     return null;
   }
-
-  const astArgumentText = findCallsiteArgumentText(request, profile);
-  if (astArgumentText !== null) {
-    return callsiteFromArgumentText(profile, astArgumentText.text, astArgumentText.trailingArgumentCount);
+  const callNode = request.tree ? locateCallsiteCallNode(request) : null;
+  if (callNode) {
+    const argCount = getCallArgumentCount({ languageId: request.languageId, source: request.source, call: callNode });
+    return argCount === null ? null : { argCount, confidence: "high" };
   }
-
   if (!profile.sourceFallback) {
     return null;
   }
-
   const openIndex = findCallOpeningParen(request.source, request.calleeStartIndex, request.calleeEndIndex);
   const balanced = findBalancedParentheses(request.source, openIndex);
   if (!balanced) {
     return null;
   }
-
-  return callsiteFromArgumentText(profile, balanced.inner);
+  const argCount = getCallArgumentCountFromArgumentText({
+    languageId: request.languageId,
+    argumentText: balanced.inner,
+  });
+  return argCount === null ? null : { argCount, confidence: "high" };
 }
 
 registerCallCompatibilityExtractors({
@@ -555,25 +159,31 @@ export function extractCallsiteArguments(request: ExtractCallsiteArgumentsReques
   return provider.extractCallsite(request);
 }
 
-const callExpressionTypes = new Set([
-  "call_expression",
-  "call",
-  "method_invocation",
-  "invocation_expression",
-  "function_call_expression",
-  "object_creation_expression",
-]);
+/**
+ * Call node types recognized at a callee range. PHP member and scoped call forms stay excluded:
+ * callsite extraction for them remains the documented limitation it was before the shared arity
+ * facts existed, so no caller sees a newly counted or newly dropped callsite here.
+ */
+const CALL_EXPRESSION_NODE_TYPES: Record<string, true> = {
+  call: true,
+  call_expression: true,
+  function_call_expression: true,
+  invocation_expression: true,
+  method_invocation: true,
+  object_creation_expression: true,
+};
 
-const argumentListTypes = new Set(["argument_list", "arguments", "value_arguments", "call_suffix"]);
+const callExpressionTypes: ReadonlySet<string> = new Set(Object.keys(CALL_EXPRESSION_NODE_TYPES));
 
-function findCallsiteArgumentText(
-  request: ExtractCallsiteArgumentsRequest,
-  profile: CallCompatibilityLanguageProfile,
-): CallsiteArgumentText | null {
+/**
+ * Locate and validate the call node for a callee range. The callee must sit inside the call's
+ * target expression, so a non-callee reference inside a call (an argument, for example) is not a
+ * callsite, and a trailing-closure wrapper call counts as the callsite.
+ */
+function locateCallsiteCallNode(request: ExtractCallsiteArgumentsRequest): SyntaxNodeLike | null {
   if (!request.tree) {
     return null;
   }
-
   const endIndex = request.calleeEndIndex ?? request.calleeStartIndex;
   const node = request.tree.rootNode.descendantForIndex(request.calleeStartIndex, endIndex);
   let callNode = findAncestorOfTypes(node, callExpressionTypes);
@@ -596,72 +206,7 @@ function findCallsiteArgumentText(
   if (!targetNode || request.calleeStartIndex < targetNode.startIndex || endIndex > targetNode.endIndex) {
     return null;
   }
-
-  const argumentNode =
-    callNode.childForFieldName("arguments") ??
-    callNode.namedChildren.find((child) => argumentListTypes.has(child.type)) ??
-    findFirstDescendantOfTypes(callNode, argumentListTypes);
-  if (argumentNode) {
-    let text = request.source.slice(argumentNode.startIndex, argumentNode.endIndex).trim();
-    let trailingArgumentCount = 0;
-    const callSuffix =
-      argumentNode.type === "call_suffix"
-        ? argumentNode
-        : findFirstDescendantOfTypes(callNode, new Set(["call_suffix"]));
-    const valueArguments =
-      argumentNode.type === "value_arguments"
-        ? argumentNode
-        : findFirstDescendantOfTypes(callSuffix ?? argumentNode, new Set(["value_arguments"]));
-    if (valueArguments) {
-      const trailingEndIndex = callSuffix?.endIndex ?? callNode.endIndex;
-      const trailingText = request.source.slice(valueArguments.endIndex, trailingEndIndex).trim();
-      const count = countTrailingClosureArguments(trailingText);
-      if (count === null) {
-        return null;
-      }
-      text = request.source.slice(valueArguments.startIndex, valueArguments.endIndex).trim();
-      trailingArgumentCount = count;
-    }
-    if (text.startsWith("(") && text.endsWith(")")) {
-      return { text: text.slice(1, -1), trailingArgumentCount };
-    }
-    return { text, trailingArgumentCount };
-  }
-
-  if (profile.callsiteParenthesesFallback) {
-    const openIndex = findOpeningParen(request.source, callNode.startIndex);
-    const balanced = findBalancedParentheses(request.source, openIndex);
-    return balanced ? { text: balanced.inner, trailingArgumentCount: 0 } : null;
-  }
-
-  return null;
-}
-
-function hasUncountableSpreadArgument(profile: CallCompatibilityLanguageProfile, arg: string): boolean {
-  const trimmed = arg.trim();
-  if (trimmed.startsWith("...")) {
-    return true;
-  }
-  return profile.spreadPrefixes.some((prefix) => trimmed.startsWith(prefix));
-}
-
-function callsiteFromArgumentText(
-  profile: CallCompatibilityLanguageProfile,
-  argumentText: string,
-  trailingArgumentCount = 0,
-): CallsiteArguments | null {
-  const args = splitTopLevelCommaGroups(argumentText, "type-context");
-  if (!args) {
-    return null;
-  }
-
-  for (const arg of args) {
-    if (hasUncountableSpreadArgument(profile, arg)) {
-      return null;
-    }
-  }
-
-  return { argCount: args.length + trailingArgumentCount, confidence: "high" };
+  return callNode;
 }
 
 function isCallableChangedSymbol(symbol: ChangedSymbol): boolean {
@@ -1032,16 +577,111 @@ function incrementSkippedReason(diagnostics: ImpactDiagnostics["callCompatibilit
   diagnostics.skippedByReason[reason] = (diagnostics.skippedByReason[reason] ?? 0) + 1;
 }
 
+/** Declaration containers whose `name` field names the receiver type at a member call. */
+const OWNER_CONTAINER_TYPES: Record<string, true> = {
+  class_declaration: true,
+  class_definition: true,
+  class_specifier: true,
+  impl_item: true,
+  interface_declaration: true,
+  object_declaration: true,
+  struct_specifier: true,
+  trait_item: true,
+};
+
+function ownerTypeNameOf(declaration: SyntaxNodeLike, source: string): string | null {
+  let current = declaration.parent;
+  while (current) {
+    if (OWNER_CONTAINER_TYPES[current.type]) {
+      const name = current.childForFieldName("name");
+      return name ? sliceText(name, source) : null;
+    }
+    current = current.parent;
+  }
+  return null;
+}
+
+/**
+ * Resolve which receiver binding form a callsite uses. Python bare calls reach the plain function
+ * and pass the receiver explicitly; Python member calls on a provably class-valued receiver do the
+ * same only for instance methods, because class and static methods bind (or declare) no instance
+ * receiver. Rust `Type::target(...)` calls are unbound UFCS forms. Everything else supplies the
+ * receiver through the call form.
+ */
+function callBindingForm(input: {
+  languageId: string;
+  callNode: SyntaxNodeLike;
+  source: string;
+  parsedCallsite: ParsedFileContext;
+  file: string;
+  index: ProjectIndex;
+  declarationKind: CallableDeclarationKind | null;
+  ownerTypeName: string | null;
+}): CallableBinding {
+  const { languageId, callNode, source, parsedCallsite, file, index, declarationKind, ownerTypeName } = input;
+  const callee = callTargetNode(callNode);
+  if (languageId === "rust") {
+    return callee?.type === "scoped_identifier" ? "unbound" : "bound";
+  }
+  if (languageId !== "python" || !callee) {
+    return "bound";
+  }
+  if (callee.type === "identifier") {
+    return "unbound";
+  }
+  if (callee.type !== "attribute") {
+    return "bound";
+  }
+  const receiver = callee.namedChildren[0] ?? null;
+  if (!receiver) {
+    return "bound";
+  }
+  const receiverText = sliceText(receiver, source).trim();
+  if (receiverText === "self" || receiverText === "cls" || receiverText === "super()") {
+    return "bound";
+  }
+  if (declarationKind !== "instance-method") {
+    return "bound";
+  }
+  if (ownerTypeName && receiverText === ownerTypeName) {
+    return "unbound";
+  }
+  if (receiver.type === "identifier") {
+    const module = index.byFile.get(fileIdentityKey(file));
+    if (module) {
+      const resolved = resolveNamedDefinition(index, module, file, parsedCallsite.sup, receiverText);
+      if (resolved?.status === "ok" && resolved.definition.kind === SymbolKind.Class) {
+        return "unbound";
+      }
+    }
+  }
+  return "bound";
+}
+
 async function buildCallCompatibilityHintForReference(input: {
   index: ProjectIndex;
   changedSymbol: ChangedSymbol;
   signature: CallableSignature;
+  unboundSignature: CallableSignature | null;
+  declarationKind: CallableDeclarationKind | null;
+  ownerTypeName: string | null;
   ref: Reference;
   callerRangeIndex: CallerRangeIndex;
   diagnostics?: ImpactDiagnostics["callCompatibility"] | undefined;
   projectRoot?: string | undefined;
 }): Promise<CallCompatibilityHint | null> {
-  const { index, changedSymbol, signature, ref, callerRangeIndex, diagnostics, projectRoot } = input;
+  const {
+    index,
+    changedSymbol,
+    signature,
+    unboundSignature,
+    declarationKind,
+    ownerTypeName,
+    ref,
+    callerRangeIndex,
+    diagnostics,
+    projectRoot,
+  } = input;
   if (
     fileIdentityKey(ref.file) === fileIdentityKey(changedSymbol.file) &&
     sameRangeStart(ref.range, changedSymbol.range)
@@ -1078,7 +718,32 @@ async function buildCallCompatibilityHintForReference(input: {
     return null;
   }
 
-  const compatibility = classifyCompatibility(signature, actual);
+  // Pick the arity for the call form: an unbound call passes the receiver as its first argument,
+  // so it must be compared against the receiver-inclusive range instead of the bound one.
+  let expected = signature;
+  const hasDistinctUnboundForm =
+    unboundSignature !== null &&
+    (unboundSignature.minArgs !== signature.minArgs || unboundSignature.maxArgs !== signature.maxArgs);
+  if (hasDistinctUnboundForm) {
+    const callNode = parsedCallsite.tree ? locateCallsiteCallNode(callsiteRequest) : null;
+    const binding = callNode
+      ? callBindingForm({
+          languageId: parsedCallsite.sup.id,
+          callNode,
+          source: parsedCallsite.source,
+          parsedCallsite,
+          file: ref.file,
+          index,
+          declarationKind,
+          ownerTypeName,
+        })
+      : "bound";
+    if (binding === "unbound" && unboundSignature) {
+      expected = unboundSignature;
+    }
+  }
+
+  const compatibility = classifyCompatibility(expected, actual);
   const callerSymbolId = findCallerSymbolId(callerRangeIndex, ref);
   const callsiteFile = projectRoot ? path.relative(projectRoot, ref.file).replace(/\\/g, "/") : ref.file;
   return {
@@ -1087,7 +752,7 @@ async function buildCallCompatibilityHintForReference(input: {
     callsiteFile,
     callsiteRange: ref.range,
     ...(callerSymbolId ? { callerSymbolId } : {}),
-    expected: signature,
+    expected,
     actual,
   };
 }
@@ -1158,6 +823,21 @@ export async function attachCallCompatibilityHints(
       incrementSkippedReason(diagnostics, "signature_unknown");
       continue;
     }
+    // Receiver-bearing declarations accept different argument counts per call form: a bound call
+    // never passes the receiver, an unbound call does. Both arities are merged below so prototype
+    // defaults apply to each.
+    const unboundSignature = extractCallableSignature({
+      languageId: parsedDefinition.sup.id,
+      source: parsedDefinition.source,
+      symbolStartIndex: changedSymbol.range.start.index ?? 0,
+      tree: parsedDefinition.tree,
+      binding: "unbound",
+    });
+    const hasDistinctUnboundForm =
+      unboundSignature !== null &&
+      (unboundSignature.minArgs !== signature.minArgs || unboundSignature.maxArgs !== signature.maxArgs);
+    const arityTargets: CallableSignature[] =
+      hasDistinctUnboundForm && unboundSignature ? [signature, unboundSignature] : [signature];
     const cppBinding = changedCppCallableBinding(index, changedSymbol, parsedDefinition);
     const equivalentBindings = cppBinding ? cppEquivalentCallableBindings(cppBinding) : undefined;
     const hasOverloads =
@@ -1200,14 +880,28 @@ export async function attachCallCompatibilityHints(
         const node = parsed.tree.rootNode.descendantForIndex(startIndex, startIndex);
         const shape = cppCallableShapeForNode(node);
         if (!shape) continue;
-        signature.minArgs = Math.min(signature.minArgs, shape.minArity);
-        if (signature.maxArgs === null || shape.maxArity === null) {
-          signature.maxArgs = null;
-        } else {
-          signature.maxArgs = Math.max(signature.maxArgs, shape.maxArity);
+        for (const target of arityTargets) {
+          target.minArgs = Math.min(target.minArgs, shape.minArity);
+          if (target.maxArgs === null || shape.maxArity === null) {
+            target.maxArgs = null;
+          } else {
+            target.maxArgs = Math.max(target.maxArgs, shape.maxArity);
+          }
         }
       }
     }
+
+    const changedStartIndex = changedSymbol.range.start.index;
+    const declarationNode =
+      changedStartIndex === undefined ? null : callableDeclarationAt(parsedDefinition.tree, changedStartIndex);
+    const declarationKind = declarationNode
+      ? getCallableDeclarationKind({
+          languageId: parsedDefinition.sup.id,
+          source: parsedDefinition.source,
+          declaration: declarationNode,
+        })
+      : null;
+    const ownerTypeName = declarationNode ? ownerTypeNameOf(declarationNode, parsedDefinition.source) : null;
 
     const referenceScanLimit = referenceScanLimitForCallsites(options.maxRefs);
     if (options.workBudget) {
@@ -1236,6 +930,9 @@ export async function attachCallCompatibilityHints(
         index,
         changedSymbol,
         signature,
+        unboundSignature: hasDistinctUnboundForm ? unboundSignature : null,
+        declarationKind,
+        ownerTypeName,
         ref,
         callerRangeIndex,
         diagnostics,

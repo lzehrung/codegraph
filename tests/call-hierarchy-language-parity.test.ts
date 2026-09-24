@@ -92,4 +92,105 @@ nativeDescribe("call hierarchy language parity", () => {
       expect(source.slice(callsite?.range.start.index, callsite?.range.end.index)).toBe(expected.callee);
     }
   });
+
+  it("returns accepted-arity receiver calls through call hierarchy and keeps over-arity calls out", async () => {
+    const root = await mkTmpDir("cg-call-arity-parity-");
+    roots.push(root);
+    const fixtures: Record<string, string> = {
+      "arity.ts": [
+        "class Box {",
+        "  tsTarget(value = 1) { return value; }",
+        "  tsCaller() { return this.tsTarget(); }",
+        "  tsBad() { return this.tsTarget(1, 2); }",
+        "}",
+      ].join("\n"),
+      "arity.tsx": [
+        "class Box {",
+        "  tsxTarget(value = 1) { return value; }",
+        "  tsxCaller() { return this.tsxTarget(); }",
+        "}",
+      ].join("\n"),
+      "Arity.cs": [
+        "class Box {",
+        "  int CsTarget(int value = 1) { return value; }",
+        "  int CsCaller() { return this.CsTarget(); }",
+        "}",
+      ].join("\n"),
+      "Arity.java": [
+        "class Box {",
+        "  int javaTarget(int... values) { return 1; }",
+        "  int javaCaller() { return this.javaTarget(1, 2); }",
+        "}",
+      ].join("\n"),
+      "ArityRecv.java": [
+        "class Box {",
+        "  int recvTarget(Box this, int value) { return value; }",
+        "  int recvCaller() { return this.recvTarget(1); }",
+        "}",
+      ].join("\n"),
+      "arity.kt": [
+        "class Box {",
+        "  fun ktTarget(value: Int = 1): Int { return value }",
+        "  fun ktCaller(): Int { return this.ktTarget() }",
+        "  fun ktBad(): Int { return this.ktTarget(1, 2) }",
+        "}",
+      ].join("\n"),
+      "arity.swift": [
+        "class Box {",
+        "  func swiftTarget(_ value: Int = 1) -> Int { return value }",
+        "  func swiftCaller() -> Int { return self.swiftTarget() }",
+        "}",
+      ].join("\n"),
+      "arity.py": [
+        "class Box:",
+        "    @staticmethod",
+        "    def py_target(self):",
+        "        return self",
+        "    def py_caller(self):",
+        "        return Box.py_target(1)",
+      ].join("\n"),
+    };
+    for (const [file, source] of Object.entries(fixtures)) await fs.writeFile(path.join(root, file), source);
+
+    const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+    const graph = await buildSymbolGraphDetailed(index);
+    const nodesByName = new Map([...graph.nodes.values()].map((node) => [node.name, node]));
+
+    const proven: ProvenCall[] = [
+      { file: "arity.ts", caller: "tsCaller", callee: "tsTarget" },
+      { file: "arity.tsx", caller: "tsxCaller", callee: "tsxTarget" },
+      { file: "Arity.cs", caller: "CsCaller", callee: "CsTarget" },
+      { file: "Arity.java", caller: "javaCaller", callee: "javaTarget" },
+      { file: "ArityRecv.java", caller: "recvCaller", callee: "recvTarget" },
+      { file: "arity.kt", caller: "ktCaller", callee: "ktTarget" },
+      { file: "arity.swift", caller: "swiftCaller", callee: "swiftTarget" },
+      { file: "arity.py", caller: "py_caller", callee: "py_target" },
+    ];
+    for (const expected of proven) {
+      const caller = nodesByName.get(expected.caller);
+      const callee = nodesByName.get(expected.callee);
+      expect(caller, `${expected.caller} was not indexed`).toBeDefined();
+      expect(callee, `${expected.callee} was not indexed`).toBeDefined();
+      const result = findCallHierarchy(graph, caller!.id, "outgoing");
+      expect(result.status, `${expected.file} hierarchy status`).toBe("ok");
+      if (result.status !== "ok") continue;
+      const relation = result.entries.find((entry) => entry.symbolId === callee!.id);
+      expect(relation, `${expected.caller} -> ${expected.callee} was not extracted`).toBeDefined();
+      expect(relation?.depth).toBe(1);
+    }
+
+    const invalid: ProvenCall[] = [
+      { file: "arity.ts", caller: "tsBad", callee: "tsTarget" },
+      { file: "arity.kt", caller: "ktBad", callee: "ktTarget" },
+    ];
+    for (const expected of invalid) {
+      const caller = nodesByName.get(expected.caller);
+      const callee = nodesByName.get(expected.callee);
+      const result = findCallHierarchy(graph, caller!.id, "outgoing");
+      expect(result.status, `${expected.file} invalid-arity hierarchy status`).toBe("ok");
+      if (result.status !== "ok") continue;
+      const relation = result.entries.find((entry) => entry.symbolId === callee!.id);
+      expect(relation, `${expected.caller} must not resolve an over-arity ${expected.callee}`).toBeUndefined();
+    }
+  });
 });

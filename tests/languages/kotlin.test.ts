@@ -8,7 +8,8 @@ import { finalizeLanguageSpecificImports } from "../../src/indexer/imports/langu
 import { parseKotlinImportStatement } from "../../src/languages/import-statement-parsers.js";
 import type { ImportBinding } from "../../src/indexer/types.js";
 import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
-import { fileIdentityKey } from "../../src/util/paths.js";
+import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
+import { columnOf as columnInLines, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
@@ -514,6 +515,71 @@ describe("Kotlin receiver member navigation", () => {
         expect(pingLines).not.toContain(11);
         expect(pingLines).not.toContain(17);
       }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Kotlin same-package sibling classes", () => {
+  // #378: same-package Kotlin classes have implicit visibility, so a sibling class used as a
+  // return type and constructed with a capitalized call must resolve and be referenced without
+  // any import, while a same-named class in another package must stay out of both results.
+  const targetLines = ["package p", "", "class Target"];
+  const useLines = ["package p", "", "class Use {", "  fun make(): Target = Target()", "}"];
+  const decoyTargetLines = ["package q", "", "class Target"];
+  const decoyUseLines = ["package q", "", "class UseDecoy {", "  fun make(): Target = Target()", "}"];
+
+  it("resolves sibling return types and constructor calls and excludes the other package", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-package-peer-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "p/Target.kt": `${targetLines.join("\n")}\n`,
+        "p/Use.kt": `${useLines.join("\n")}\n`,
+        "q/Target.kt": `${decoyTargetLines.join("\n")}\n`,
+        "q/UseDecoy.kt": `${decoyUseLines.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const targetPath = paths["p/Target.kt"]!;
+      const usePath = paths["p/Use.kt"]!;
+      const decoyPath = paths["q/Target.kt"]!;
+
+      for (const [line, token] of [
+        [4, "Target"],
+        [4, "Target()"],
+      ] as const) {
+        const goto = await goToDefinition(index, {
+          file: usePath,
+          line,
+          column: columnInLines(useLines, line, token),
+        });
+        expect(goto.status, `Use.kt:${line} must resolve`).toBe("ok");
+        if (goto.status !== "ok") throw new Error("Expected the same-package class declaration");
+        expect(normalizePath(goto.definition.file)).toBe(targetPath);
+        expect(goto.definition.range.start.line).toBe(3);
+      }
+
+      const references = await findReferences(index, {
+        file: targetPath,
+        line: 3,
+        column: columnInLines(targetLines, 3, "Target"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected same-package class references");
+      const sites = references.references.map(
+        (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
+      );
+      expect(sites).toContain(`${usePath}:4`);
+      expect(references.references.some((reference) => normalizePath(reference.file) === decoyPath)).toBe(false);
+
+      const decoyReferences = await findReferences(index, {
+        file: decoyPath,
+        line: 3,
+        column: columnInLines(decoyTargetLines, 3, "Target"),
+      });
+      expect(decoyReferences.status).toBe("ok");
+      if (decoyReferences.status !== "ok") throw new Error("Expected decoy package references");
+      expect(decoyReferences.references.some((reference) => normalizePath(reference.file) === usePath)).toBe(false);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

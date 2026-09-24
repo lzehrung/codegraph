@@ -5862,3 +5862,339 @@ describe("Find References: imported superclass member through super", () => {
     }
   });
 });
+
+describe("Find References: implicit compilation-unit peers", () => {
+  it("includes a Go same-package sibling call without an import and excludes a same-spelling package in another directory", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-go-unit-peer-refs-"));
+    try {
+      await fsp.mkdir(path.join(root, "other"), { recursive: true });
+      const packageFile = path.join(root, "a.go").replace(/\\/g, "/");
+      const siblingFile = path.join(root, "b.go").replace(/\\/g, "/");
+      const decoyFile = path.join(root, "other", "c.go").replace(/\\/g, "/");
+      const sharedDeclaration = "func Shared() int { return 1 }";
+      const siblingUse = "func Use() int { return Shared() }";
+      const decoyUse = "func Other() int { return Shared() }";
+      await fsp.writeFile(packageFile, ["package p", sharedDeclaration, ""].join("\n"), "utf8");
+      await fsp.writeFile(siblingFile, ["package p", siblingUse, ""].join("\n"), "utf8");
+      await fsp.writeFile(decoyFile, ["package p", decoyUse, ""].join("\n"), "utf8");
+
+      const index = await createTestIndexFromFiles(root, [packageFile, siblingFile, decoyFile]);
+      const result = await testFindReferences(index, packageFile, 2, tokenColumn(sharedDeclaration, "Shared"), [
+        { file: packageFile, line: 2, column: tokenColumn(sharedDeclaration, "Shared") },
+        { file: siblingFile, line: 2, column: tokenColumn(siblingUse, "Shared") },
+      ]);
+      if (result.status === "ok") {
+        expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+
+      // The same package spelling in another directory is a different Go package: its bare
+      // call neither lands in the reference set nor resolves to this package's function.
+      const decoyGoto = await goToDefinition(index, {
+        file: decoyFile,
+        line: 2,
+        column: tokenColumn(decoyUse, "Shared"),
+      });
+      expect(decoyGoto.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps implicit C# type references inside the use site's namespace", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-use-namespace-"));
+    try {
+      const targetFile = path.join(root, "Target.cs").replace(/\\/g, "/");
+      const useFile = path.join(root, "Use.cs").replace(/\\/g, "/");
+      const declaration = "namespace P { public class Target {} }";
+      const uses = [
+        "namespace P { class Allowed { Target Make() => new Target(); } }",
+        "namespace Q { class Rejected { Target Make() => new Target(); } }",
+        "class GlobalRejected { Target Make() => new Target(); }",
+      ];
+      await fsp.writeFile(targetFile, declaration, "utf8");
+      await fsp.writeFile(useFile, uses.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [targetFile, useFile]);
+      for (let line = 1; line <= uses.length; line += 1) {
+        const result = await goToDefinition(index, {
+          file: useFile,
+          line,
+          column: tokenColumn(uses[line - 1]!, "Target"),
+        });
+        expect(result.status).toBe(line === 1 ? "ok" : "not_found");
+        if (result.status === "ok") expect(result.definition.file).toBe(targetFile);
+      }
+      await testFindReferences(index, targetFile, 1, tokenColumn(declaration, "Target"), [
+        { file: targetFile, line: 1, column: tokenColumn(declaration, "Target") },
+        { file: useFile, line: 1, column: tokenColumn(uses[0]!, "Target") },
+        { file: useFile, line: 1, column: uses[0]!.lastIndexOf("Target") + 1 },
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("includes Java same-package sibling uses at the return type and constructor and rejects a same-named class outside the package", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-java-unit-peer-refs-"));
+    try {
+      const targetFile = path.join(root, "Target.java").replace(/\\/g, "/");
+      const useFile = path.join(root, "Use.java").replace(/\\/g, "/");
+      const decoyFile = path.join(root, "Decoy.java").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "Consumer.java").replace(/\\/g, "/");
+      const targetDeclaration = "public class Target {}";
+      const uses = "class Use { Target make() { return new Target(); } }";
+      const consumerUses = "class Consumer { Target make() { return new Target(); } }";
+      await fsp.writeFile(targetFile, ["package p;", targetDeclaration, ""].join("\n"), "utf8");
+      await fsp.writeFile(useFile, ["package p;", uses, ""].join("\n"), "utf8");
+      await fsp.writeFile(decoyFile, ["package q;", "public class Target {}", ""].join("\n"), "utf8");
+      await fsp.writeFile(consumerFile, ["package q;", consumerUses, ""].join("\n"), "utf8");
+
+      const index = await createTestIndexFromFiles(root, [targetFile, useFile, decoyFile, consumerFile]);
+      const result = await testFindReferences(index, targetFile, 2, tokenColumn(targetDeclaration, "Target"), [
+        { file: targetFile, line: 2, column: tokenColumn(targetDeclaration, "Target") },
+        { file: useFile, line: 2, column: tokenColumn(uses, "Target", 0) },
+        { file: useFile, line: 2, column: tokenColumn(uses, "Target", 1) },
+      ]);
+      if (result.status === "ok") {
+        expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+
+      // A same-named class in another package is a separate unit: its consumers resolve to
+      // their own declaration and never join this one's reference set.
+      for (const occurrence of [0, 1]) {
+        const consumerGoto = await goToDefinition(index, {
+          file: consumerFile,
+          line: 2,
+          column: tokenColumn(consumerUses, "Target", occurrence),
+        });
+        expect(consumerGoto.status).toBe("ok");
+        if (consumerGoto.status === "ok") {
+          expect(consumerGoto.definition.file).toBe(decoyFile);
+        }
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("includes Kotlin same-package sibling uses at the return type and constructor and rejects a same-named class outside the package", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-unit-peer-refs-"));
+    try {
+      const targetFile = path.join(root, "Target.kt").replace(/\\/g, "/");
+      const useFile = path.join(root, "Use.kt").replace(/\\/g, "/");
+      const decoyFile = path.join(root, "Decoy.kt").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "Consumer.kt").replace(/\\/g, "/");
+      const uses = "class Use { fun make(): Target = Target() }";
+      const consumerUses = "class Consumer { fun make(): Target = Target() }";
+      await fsp.writeFile(targetFile, ["package p", "class Target", ""].join("\n"), "utf8");
+      await fsp.writeFile(useFile, ["package p", uses, ""].join("\n"), "utf8");
+      await fsp.writeFile(decoyFile, ["package q", "class Target", ""].join("\n"), "utf8");
+      await fsp.writeFile(consumerFile, ["package q", consumerUses, ""].join("\n"), "utf8");
+
+      const index = await createTestIndexFromFiles(root, [targetFile, useFile, decoyFile, consumerFile]);
+      const result = await testFindReferences(index, targetFile, 2, tokenColumn("class Target", "Target"), [
+        { file: targetFile, line: 2, column: tokenColumn("class Target", "Target") },
+        { file: useFile, line: 2, column: tokenColumn(uses, "Target", 0) },
+        { file: useFile, line: 2, column: tokenColumn(uses, "Target", 1) },
+      ]);
+      if (result.status === "ok") {
+        expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+
+      const consumerGoto = await goToDefinition(index, {
+        file: consumerFile,
+        line: 2,
+        column: tokenColumn(consumerUses, "Target", 0),
+      });
+      expect(consumerGoto.status).toBe("ok");
+      if (consumerGoto.status === "ok") {
+        expect(consumerGoto.definition.file).toBe(decoyFile);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("includes C# same-namespace sibling uses at the return type and constructor and rejects a same-named class outside the namespace", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-unit-peer-refs-"));
+    try {
+      const targetFile = path.join(root, "Target.cs").replace(/\\/g, "/");
+      const useFile = path.join(root, "Use.cs").replace(/\\/g, "/");
+      const decoyFile = path.join(root, "Decoy.cs").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "Consumer.cs").replace(/\\/g, "/");
+      const targetDeclaration = "namespace P; public class Target {}";
+      const uses = "namespace P; public class Use { Target Make() => new Target(); }";
+      const consumerUses = "namespace Q; public class Consumer { Target Make() => new Target(); }";
+      await fsp.writeFile(targetFile, `${targetDeclaration}\n`, "utf8");
+      await fsp.writeFile(useFile, `${uses}\n`, "utf8");
+      await fsp.writeFile(decoyFile, "namespace Q; public class Target {}\n", "utf8");
+      await fsp.writeFile(consumerFile, `${consumerUses}\n`, "utf8");
+
+      const index = await createTestIndexFromFiles(root, [targetFile, useFile, decoyFile, consumerFile]);
+      const result = await testFindReferences(index, targetFile, 1, tokenColumn(targetDeclaration, "Target"), [
+        { file: targetFile, line: 1, column: tokenColumn(targetDeclaration, "Target") },
+        { file: useFile, line: 1, column: tokenColumn(uses, "Target", 0) },
+        { file: useFile, line: 1, column: tokenColumn(uses, "Target", 1) },
+      ]);
+      if (result.status === "ok") {
+        expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+
+      const consumerGoto = await goToDefinition(index, {
+        file: consumerFile,
+        line: 1,
+        column: tokenColumn(consumerUses, "Target", 0),
+      });
+      expect(consumerGoto.status).toBe("ok");
+      if (consumerGoto.status === "ok") {
+        expect(consumerGoto.definition.file).toBe(decoyFile);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps same-file C# namespace regions separate when one file declares several namespaces", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-multispace-refs-"));
+    try {
+      const boxFile = path.join(root, "Box.cs").replace(/\\/g, "/");
+      const useFile = path.join(root, "Use.cs").replace(/\\/g, "/");
+      const firstDeclaration = "namespace P { public class Target { } }";
+      const secondDeclaration = "namespace Q { public class Target { } }";
+      const uses = "namespace P; class Use { Target Make() => new Target(); }";
+      await fsp.writeFile(boxFile, [firstDeclaration, secondDeclaration, ""].join("\n"), "utf8");
+      await fsp.writeFile(useFile, `${uses}\n`, "utf8");
+
+      const index = await createTestIndexFromFiles(root, [boxFile, useFile]);
+      const inNamespaceP = await testFindReferences(index, boxFile, 1, tokenColumn(firstDeclaration, "Target"), [
+        { file: boxFile, line: 1, column: tokenColumn(firstDeclaration, "Target") },
+        { file: useFile, line: 1, column: tokenColumn(uses, "Target", 0) },
+        { file: useFile, line: 1, column: tokenColumn(uses, "Target", 1) },
+      ]);
+      expect(inNamespaceP.status).toBe("ok");
+
+      // The same short name in the file's other namespace is not visible from `namespace P`,
+      // so those uses never join its reference set and navigate to the visible declaration.
+      const inNamespaceQ = await testFindReferences(index, boxFile, 2, tokenColumn(secondDeclaration, "Target"), [
+        { file: boxFile, line: 2, column: tokenColumn(secondDeclaration, "Target") },
+      ]);
+      expect(inNamespaceQ.status).toBe("ok");
+
+      const useGoto = await goToDefinition(index, {
+        file: useFile,
+        line: 1,
+        column: tokenColumn(uses, "Target", 0),
+      });
+      expect(useGoto.status).toBe("ok");
+      if (useGoto.status === "ok") {
+        expect(useGoto.definition.file).toBe(boxFile);
+        expect(useGoto.definition.range.start.line).toBe(1);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("includes Swift same-module sibling calls and reports complete coverage for a flat module", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-unit-peer-refs-"));
+    try {
+      const apiFile = path.join(root, "Api.swift").replace(/\\/g, "/");
+      const useFile = path.join(root, "Use.swift").replace(/\\/g, "/");
+      const declaration = "func target(_ value: Int) -> Int { return value }";
+      const call = "func caller() -> Int { return target(1) }";
+      await fsp.writeFile(apiFile, `${declaration}\n`, "utf8");
+      await fsp.writeFile(useFile, `${call}\n`, "utf8");
+
+      const index = await createTestIndexFromFiles(root, [apiFile, useFile]);
+      const result = await testFindReferences(index, apiFile, 1, tokenColumn(declaration, "target"), [
+        { file: apiFile, line: 1, column: tokenColumn(declaration, "target") },
+        { file: useFile, line: 1, column: tokenColumn(call, "target") },
+      ]);
+      if (result.status === "ok") {
+        expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a Swift same-named function in another directory separate and reports partial coverage", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-unit-decoy-refs-"));
+    try {
+      await fsp.mkdir(path.join(root, "sub"), { recursive: true });
+      const apiFile = path.join(root, "Api.swift").replace(/\\/g, "/");
+      const useFile = path.join(root, "Use.swift").replace(/\\/g, "/");
+      const decoyFile = path.join(root, "sub", "Decoy.swift").replace(/\\/g, "/");
+      const subFile = path.join(root, "sub", "Sub.swift").replace(/\\/g, "/");
+      const declaration = "func target(_ value: Int) -> Int { return value }";
+      const call = "func caller() -> Int { return target(1) }";
+      const subCall = "func subCaller() -> Int { return target(2) }";
+      await fsp.writeFile(apiFile, `${declaration}\n`, "utf8");
+      await fsp.writeFile(useFile, `${call}\n`, "utf8");
+      await fsp.writeFile(decoyFile, "func target(_ value: Int) -> Int { return 2 }\n", "utf8");
+      await fsp.writeFile(subFile, `${subCall}\n`, "utf8");
+
+      const index = await createTestIndexFromFiles(root, [apiFile, useFile, decoyFile, subFile]);
+      const result = await testFindReferences(index, apiFile, 1, tokenColumn(declaration, "target"), [
+        { file: apiFile, line: 1, column: tokenColumn(declaration, "target") },
+        { file: useFile, line: 1, column: tokenColumn(call, "target") },
+      ]);
+      if (result.status === "ok") {
+        // Swift module membership is not declared in source, so the sibling directory keeps
+        // the unit boundary unproven even though the proven peer results are retained.
+        expect(result.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["strategy_unavailable"],
+        });
+      }
+
+      // The other directory resolves within its own unit: its call joins its own declaration.
+      const subGoto = await goToDefinition(index, {
+        file: subFile,
+        line: 1,
+        column: tokenColumn(subCall, "target"),
+      });
+      expect(subGoto.status).toBe("ok");
+      if (subGoto.status === "ok") {
+        expect(subGoto.definition.file).toBe(decoyFile);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("retains proven JVM package results while reporting partial coverage when the package exists in another directory", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-jvm-unit-incomplete-refs-"));
+    try {
+      await fsp.mkdir(path.join(root, "other"), { recursive: true });
+      const targetFile = path.join(root, "Target.java").replace(/\\/g, "/");
+      const useFile = path.join(root, "Use.java").replace(/\\/g, "/");
+      const extraFile = path.join(root, "other", "Extra.java").replace(/\\/g, "/");
+      const targetDeclaration = "public class Target {}";
+      const uses = "class Use { Target make() { return new Target(); } }";
+      await fsp.writeFile(targetFile, ["package p;", targetDeclaration, ""].join("\n"), "utf8");
+      await fsp.writeFile(useFile, ["package p;", uses, ""].join("\n"), "utf8");
+      await fsp.writeFile(
+        extraFile,
+        ["package p;", "class Extra { Target make() { return new Target(); } }", ""].join("\n"),
+        "utf8",
+      );
+
+      const index = await createTestIndexFromFiles(root, [targetFile, useFile, extraFile]);
+      const result = await testFindReferences(index, targetFile, 2, tokenColumn(targetDeclaration, "Target"), [
+        { file: targetFile, line: 2, column: tokenColumn(targetDeclaration, "Target") },
+        { file: useFile, line: 2, column: tokenColumn(uses, "Target", 0) },
+        { file: useFile, line: 2, column: tokenColumn(uses, "Target", 1) },
+      ]);
+      if (result.status === "ok") {
+        expect(result.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["strategy_unavailable"],
+        });
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});

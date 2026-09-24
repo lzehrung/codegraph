@@ -4,10 +4,18 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runQuery } from "@lzehrung/codegraph-native";
 import { CSHARP_SUPPORT } from "../../src/languages.js";
-import { fileIdentityKey } from "../../src/util/paths.js";
+import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
-import { buildProjectIndexFromFiles, goToDefinition, listSymbols, type ProjectIndex } from "../../src/index.js";
+import {
+  buildProjectIndexFromFiles,
+  buildSymbolGraphDetailed,
+  findReferences,
+  goToDefinition,
+  listSymbols,
+  type ProjectIndex,
+} from "../../src/index.js";
+import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
@@ -749,6 +757,180 @@ describe("C# method parameters as locals", () => {
         expect(goto.definition.localName).toBe("name");
         expect(goto.definition.range.start.line).toBe(2);
       }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C# same-namespace sibling visibility", () => {
+  // #378: a type declared in the same namespace is visible without a using directive, so the
+  // sibling type must resolve and be referenced, while a same-named type in another namespace
+  // must stay out of both results.
+  const targetLines = ["namespace P;", "public class Target {}"];
+  const useLines = ["namespace P;", "public class Use {", "  Target Make() => new Target();", "}"];
+  const decoyTargetLines = ["namespace Q;", "public class Target {}"];
+  const decoyUseLines = ["namespace Q;", "public class UseDecoy {", "  Target Make() => new Target();", "}"];
+
+  it("resolves sibling return types and constructors and excludes the other namespace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-peer-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "Target.cs": `${targetLines.join("\n")}\n`,
+        "Use.cs": `${useLines.join("\n")}\n`,
+        "Q/DecoyTarget.cs": `${decoyTargetLines.join("\n")}\n`,
+        "Q/DecoyUse.cs": `${decoyUseLines.join("\n")}\n`,
+      });
+      const index = await buildProjectIndexFromFiles(root, [
+        paths["Target.cs"]!,
+        paths["Use.cs"]!,
+        paths["Q/DecoyTarget.cs"]!,
+        paths["Q/DecoyUse.cs"]!,
+      ]);
+      const targetPath = paths["Target.cs"]!;
+      const usePath = paths["Use.cs"]!;
+
+      for (const token of ["Target", "Target()"]) {
+        const goto = await goToDefinition(index, {
+          file: usePath,
+          line: 3,
+          column: columnOf(useLines, 3, token),
+        });
+        expect(goto.status, `Use.cs:3 ${token} must resolve`).toBe("ok");
+        if (goto.status !== "ok") throw new Error("Expected the same-namespace class declaration");
+        expect(normalizePath(goto.definition.file)).toBe(targetPath);
+        expect(goto.definition.range.start.line).toBe(2);
+      }
+
+      const references = await findReferences(index, {
+        file: targetPath,
+        line: 2,
+        column: columnOf(targetLines, 2, "Target"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected same-namespace class references");
+      expect(
+        references.references.map((reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`),
+      ).toContain(`${usePath}:3`);
+      expect(references.references.some((reference) => normalizePath(reference.file) === paths["Q/DecoyUse.cs"])).toBe(
+        false,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the other namespace out of a sibling reference scan", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-decoy-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "Target.cs": `${targetLines.join("\n")}\n`,
+        "Use.cs": `${useLines.join("\n")}\n`,
+        "Q/DecoyTarget.cs": `${decoyTargetLines.join("\n")}\n`,
+        "Q/DecoyUse.cs": `${decoyUseLines.join("\n")}\n`,
+      });
+      const index = await buildProjectIndexFromFiles(root, [
+        paths["Target.cs"]!,
+        paths["Use.cs"]!,
+        paths["Q/DecoyTarget.cs"]!,
+        paths["Q/DecoyUse.cs"]!,
+      ]);
+      const references = await findReferences(index, {
+        file: paths["Target.cs"]!,
+        line: 2,
+        column: columnOf(targetLines, 2, "Target"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected same-namespace class references");
+      expect(references.references.some((reference) => normalizePath(reference.file) === paths["Q/DecoyUse.cs"])).toBe(
+        false,
+      );
+      const decoyReferences = await findReferences(index, {
+        file: paths["Q/DecoyTarget.cs"]!,
+        line: 2,
+        column: columnOf(decoyTargetLines, 2, "Target"),
+      });
+      expect(decoyReferences.status).toBe("ok");
+      if (decoyReferences.status !== "ok") throw new Error("Expected decoy namespace references");
+      expect(decoyReferences.references.some((reference) => normalizePath(reference.file) === paths["Use.cs"])).toBe(
+        false,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C# partial class members across files", () => {
+  // #378: members declared in one part file are the same owner as the call site in the other part
+  // file, so navigation, references, and the detailed graph must all connect them.
+  const partALines = ["namespace P;", "public partial class Box {", "  public void Helper() {}", "}"];
+  const partBLines = ["namespace P;", "public partial class Box {", "  void Use() {", "    this.Helper();", "  }", "}"];
+  const decoyLines = [
+    "namespace Q;",
+    "public partial class Box {",
+    "  public void Helper() {}",
+    "  void DecoyUse() {",
+    "    this.Helper();",
+    "  }",
+    "}",
+  ];
+
+  it("connects navigation, references, and calls to the declaring part", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-owner-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "Box.A.cs": `${partALines.join("\n")}\n`,
+        "Box.B.cs": `${partBLines.join("\n")}\n`,
+        "Q/Box.Decoy.cs": `${decoyLines.join("\n")}\n`,
+      });
+      const index = await buildProjectIndexFromFiles(root, [
+        paths["Box.A.cs"]!,
+        paths["Box.B.cs"]!,
+        paths["Q/Box.Decoy.cs"]!,
+      ]);
+      const partAPath = paths["Box.A.cs"]!;
+      const partBPath = paths["Box.B.cs"]!;
+      const decoyPath = paths["Q/Box.Decoy.cs"]!;
+
+      const goto = await goToDefinition(index, {
+        file: partBPath,
+        line: 4,
+        column: columnOf(partBLines, 4, "Helper"),
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected the partial-class member declaration");
+      expect(normalizePath(goto.definition.file)).toBe(partAPath);
+      expect(goto.definition.range.start.line).toBe(3);
+
+      const references = await findReferences(index, {
+        file: partAPath,
+        line: 3,
+        column: columnOf(partALines, 3, "Helper"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected partial-class member references");
+      const sites = references.references.map(
+        (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
+      );
+      expect(sites).toContain(`${partBPath}:4`);
+      expect(references.references.some((reference) => normalizePath(reference.file) === decoyPath)).toBe(false);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const useNode = [...graph.nodes.values()].find(
+        (node) => node.name === "Use" && normalizePath(node.file) === partBPath,
+      );
+      expect(useNode).toBeDefined();
+      const callTargets: string[] = [];
+      for (const edge of graph.edges) {
+        if (edge.label !== "calls" || edge.from !== useNode!.id) continue;
+        const node = graph.nodes.get(edge.to);
+        if (node) {
+          callTargets.push(`${normalizePath(node.file)}::${node.name}`);
+        }
+      }
+      expect(callTargets).toContain(`${partAPath}::Helper`);
+      expect(callTargets.some((target) => target.startsWith(`${decoyPath}::`))).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

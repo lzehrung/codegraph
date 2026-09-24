@@ -312,6 +312,24 @@ export async function resolveImportSpecifier(
     return { external: spec };
   }
 
+  if (
+    languageId === "zig" &&
+    spec.endsWith(".zig") &&
+    !spec.startsWith(".") &&
+    !spec.startsWith("/") &&
+    !/^[A-Za-z]:[\\/]/.test(spec)
+  ) {
+    // Bare api.zig names a sibling file. Reuse specifier resolution for path/root confinement.
+    // Packages std and build_options have no .zig suffix and stay external below.
+    const zigHit = await resolveSpecifier(fromFile, "./" + spec, projectRoot, opts?.matchPath, opts?.workspaceConfig, {
+      resolveNodeModules: !!opts?.resolveNodeModules,
+      ...(opts?.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+      ...(opts?.resolutionKind ? { resolutionKind: opts.resolutionKind } : {}),
+      ...(opts?.exportCondition ? { exportCondition: opts.exportCondition } : {}),
+    });
+    if (typeof zigHit === "string") return zigHit;
+  }
+
   const resolutionKind = opts?.resolutionKind;
   return resolveSpecifier(fromFile, spec, projectRoot, opts?.matchPath, opts?.workspaceConfig, {
     resolveNodeModules: !!opts?.resolveNodeModules,

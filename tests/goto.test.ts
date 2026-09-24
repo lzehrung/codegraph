@@ -5112,3 +5112,401 @@ describe("Supertype keyword member navigation", () => {
     }
   });
 });
+
+describe("Shared-owner member navigation (C# partials, Swift extensions, Zig imports)", () => {
+  function columnOf(source: string, line: number, token: string): number {
+    const lines = source.split("\n");
+    const index = lines[line - 1]!.indexOf(token);
+    if (index < 0) throw new Error(`Expected token ${token} on fixture line ${line}`);
+    return index + 1;
+  }
+
+  async function buildFiles(
+    prefix: string,
+    files: Record<string, string>,
+  ): Promise<{ root: string; paths: Record<string, string>; index: ProjectIndex }> {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
+    const paths: Record<string, string> = {};
+    for (const [name, source] of Object.entries(files)) {
+      const file = path.join(root, name).replace(/\\/g, "/");
+      await fsp.mkdir(path.dirname(file), { recursive: true });
+      await fsp.writeFile(file, source, "utf8");
+      paths[name] = file;
+    }
+    return { root, paths, index: await createTestIndexFromFiles(root, Object.values(paths)) };
+  }
+
+  it("resolves a C# this member declared in another partial part", async () => {
+    const a = [
+      "namespace App {",
+      "  public partial class Box {",
+      "    public void Ping() {}",
+      "    public void Run() { this.Pong(); }",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const b = ["namespace App {", "  public partial class Box {", "    public void Pong() {}", "  }", "}", ""].join(
+      "\n",
+    );
+    const { root, paths, index } = await buildFiles("cg-csharp-partial-goto-", { "A.cs": a, "B.cs": b });
+    try {
+      await testGoToDefinition(index, paths["A.cs"]!, 4, columnOf(a, 4, "Pong();"), paths["B.cs"]!, 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a C# named receiver member declared in another partial part", async () => {
+    const a = [
+      "namespace App {",
+      "  public partial class Box {",
+      "    public void Ping() {}",
+      "  }",
+      "  class Consumer {",
+      "    void Run() {",
+      "      var box = new Box();",
+      "      box.Pong();",
+      "    }",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const b = ["namespace App {", "  public partial class Box {", "    public void Pong() {}", "  }", "}", ""].join(
+      "\n",
+    );
+    const { root, paths, index } = await buildFiles("cg-csharp-partial-named-goto-", {
+      "A.cs": a,
+      "B.cs": b,
+    });
+    try {
+      await testGoToDefinition(index, paths["A.cs"]!, 8, columnOf(a, 8, "Pong();"), paths["B.cs"]!, 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers the same-namespace C# partial over wrong-namespace and non-partial decoys", async () => {
+    const a = [
+      "namespace App {",
+      "  public partial class Box {",
+      "    public void Run() { this.Pong(); }",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const b = ["namespace App {", "  public partial class Box {", "    public void Pong() {}", "  }", "}", ""].join(
+      "\n",
+    );
+    const c = ["namespace Other {", "  public partial class Box {", "    public void Pong() {}", "  }", "}", ""].join(
+      "\n",
+    );
+    const e = ["namespace App {", "  public class Box {", "    public void Pong() {}", "  }", "}", ""].join("\n");
+    const { root, paths, index } = await buildFiles("cg-csharp-partial-decoy-goto-", {
+      "A.cs": a,
+      "B.cs": b,
+      "C.cs": c,
+      "E.cs": e,
+    });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["A.cs"]!,
+        line: 3,
+        column: columnOf(a, 3, "Pong();"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.definition.file).toBe(paths["B.cs"]!);
+      expect(result.definition.range.start.line).toBe(3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve a C# member to a non-partial same-named owner", async () => {
+    const a = [
+      "namespace App {",
+      "  public partial class Box {",
+      "    public void Run() { this.Missing(); }",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const e = ["namespace App {", "  public class Box {", "    public void Missing() {}", "  }", "}", ""].join("\n");
+    const { root, paths, index } = await buildFiles("cg-csharp-nonpartial-decoy-goto-", {
+      "A.cs": a,
+      "E.cs": e,
+    });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["A.cs"]!,
+        line: 3,
+        column: columnOf(a, 3, "Missing();"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a Swift self member declared in an extension", async () => {
+    const a = ["class Box {", "  func ping() {}", "  func run() { self.pong() }", "}"].join("\n");
+    const b = ["extension Box {", "  func pong() {}", "}"].join("\n");
+    const { root, paths, index } = await buildFiles("cg-swift-ext-goto-", { "A.swift": a, "B.swift": b });
+    try {
+      await testGoToDefinition(index, paths["A.swift"]!, 3, columnOf(a, 3, "pong()"), paths["B.swift"]!, 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a Swift named receiver member declared in an extension", async () => {
+    const a = ["class Box {", "  func ping() {}", "}", "func run() {", "  let box = Box()", "  box.pong()", "}"].join(
+      "\n",
+    );
+    const b = ["extension Box {", "  func pong() {}", "}"].join("\n");
+    const { root, paths, index } = await buildFiles("cg-swift-ext-named-goto-", {
+      "A.swift": a,
+      "B.swift": b,
+    });
+    try {
+      await testGoToDefinition(index, paths["A.swift"]!, 6, columnOf(a, 6, "pong()"), paths["B.swift"]!, 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve a Swift member to an unrelated same-named non-extension owner", async () => {
+    const a = ["class Box {", "  func run() { self.pong() }", "}"].join("\n");
+    const c = ["class Box {", "  func pong() {}", "}"].join("\n");
+    const { root, paths, index } = await buildFiles("cg-swift-unrelated-decoy-goto-", {
+      "A.swift": a,
+      "C.swift": c,
+    });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["A.swift"]!,
+        line: 2,
+        column: columnOf(a, 2, "pong()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Zig @import functions with zero and one argument", async () => {
+    const helpers = ["pub fn helper() i32 { return 42; }", "pub fn helperArg(x: i32) i32 { return x; }", ""].join("\n");
+    const main = [
+      'const h = @import("./helpers.zig");',
+      "pub fn run() void {",
+      "    const a = h.helper();",
+      "    const b = h.helperArg(1);",
+      "    _ = a; _ = b;",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-zig-import-arity-goto-", {
+      "main.zig": main,
+      "helpers.zig": helpers,
+    });
+    try {
+      await testGoToDefinition(index, paths["main.zig"]!, 3, columnOf(main, 3, "helper();"), paths["helpers.zig"]!, 1);
+      await testGoToDefinition(
+        index,
+        paths["main.zig"]!,
+        4,
+        columnOf(main, 4, "helperArg(1)"),
+        paths["helpers.zig"]!,
+        2,
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a bare Zig @import specifier to its sibling file", async () => {
+    const api = [
+      "pub fn target(value: i32) i32 {",
+      "    return value;",
+      "}",
+      "",
+      "pub fn zero_target() i32 {",
+      "    return 0;",
+      "}",
+      "",
+    ].join("\n");
+    const use = [
+      'const api = @import("api.zig");',
+      "",
+      "pub fn caller() i32 {",
+      "    return api.target(1);",
+      "}",
+      "",
+      "pub fn zeroCaller() i32 {",
+      "    return api.zero_target();",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-zig-import-bare-goto-", {
+      "use.zig": use,
+      "api.zig": api,
+    });
+    try {
+      await testGoToDefinition(index, paths["use.zig"]!, 4, columnOf(use, 4, "target(1)"), paths["api.zig"]!, 1);
+      await testGoToDefinition(index, paths["use.zig"]!, 8, columnOf(use, 8, "zero_target()"), paths["api.zig"]!, 5);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Zig pub @import members reachable and excludes non-pub names from exports and navigation", async () => {
+    const api = [
+      "pub fn visible() i32 { return 1; }",
+      "fn hidden() i32 { return 2; }",
+      "pub const flag: i32 = 3;",
+      "const secret: i32 = 4;",
+      "",
+    ].join("\n");
+    const use = [
+      'const api = @import("api.zig");',
+      "pub fn caller() i32 {",
+      "    return api.visible();",
+      "}",
+      "pub fn hiddenCaller() i32 {",
+      "    return api.hidden();",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-zig-import-pub-goto-", {
+      "use.zig": use,
+      "api.zig": api,
+    });
+    try {
+      const apiMod = index.byFile.get(fileIdentityKey(paths["api.zig"]!));
+      const exported = (apiMod?.exports ?? []).flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : []));
+      expect(exported).toEqual(expect.arrayContaining(["visible", "flag"]));
+      expect(exported).not.toContain("hidden");
+      expect(exported).not.toContain("secret");
+
+      await testGoToDefinition(index, paths["use.zig"]!, 3, columnOf(use, 3, "visible()"), paths["api.zig"]!, 1);
+      const hidden = await goToDefinition(index, {
+        file: paths["use.zig"]!,
+        line: 6,
+        column: columnOf(use, 6, "hidden()"),
+      });
+      expect(hidden.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Zig @import ownership on the importing alias with a same-named local decoy", async () => {
+    const helpers = ["pub fn helper() i32 { return 42; }", ""].join("\n");
+    const main = [
+      'const h = @import("./helpers.zig");',
+      "fn helper() i32 { return 7; }",
+      "pub fn run() void {",
+      "    const a = h.helper();",
+      "    _ = a;",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-zig-import-owner-goto-", {
+      "main.zig": main,
+      "helpers.zig": helpers,
+    });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["main.zig"]!,
+        line: 4,
+        column: columnOf(main, 4, "helper();"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.definition.file).toBe(paths["helpers.zig"]!);
+      expect(result.definition.range.start.line).toBe(1);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects the innermost Zig @import alias and keeps the outer same-named binding outside that scope", async () => {
+    const helpers = ["pub fn helper() i32 { return 42; }", ""].join("\n");
+    const wrong = ["pub fn helper() i32 { return 7; }", ""].join("\n");
+    const main = [
+      'const h = @import("./wrong.zig");',
+      "pub fn run() i32 {",
+      '    const h = @import("./helpers.zig");',
+      "    return h.helper();",
+      "}",
+      "",
+      "pub fn outer() i32 {",
+      "    return h.helper();",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-zig-import-nested-goto-", {
+      "main.zig": main,
+      "helpers.zig": helpers,
+      "wrong.zig": wrong,
+    });
+    try {
+      const nested = await goToDefinition(index, {
+        file: paths["main.zig"]!,
+        line: 4,
+        column: columnOf(main, 4, "helper();"),
+      });
+      expect(nested.status).toBe("ok");
+      if (nested.status !== "ok") return;
+      expect(nested.definition.file).toBe(paths["helpers.zig"]!);
+      expect(nested.definition.range.start.line).toBe(1);
+
+      const outer = await goToDefinition(index, {
+        file: paths["main.zig"]!,
+        line: 8,
+        column: columnOf(main, 8, "helper();"),
+      });
+      expect(outer.status).toBe("ok");
+      if (outer.status !== "ok") return;
+      expect(outer.definition.file).toBe(paths["wrong.zig"]!);
+      expect(outer.definition.range.start.line).toBe(1);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects C# this overloads by shared callable ranges", async () => {
+    const source = [
+      "class Box {",
+      "  void Foo() {}",
+      "  void Foo(int x) {}",
+      "  void RunZero() { this.Foo(); }",
+      "  void RunOne() { this.Foo(1); }",
+      "}",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-csharp-overload-range-goto-", { "A.cs": source });
+    try {
+      await testGoToDefinition(index, paths["A.cs"]!, 4, columnOf(source, 4, "Foo();"), paths["A.cs"]!, 2);
+      await testGoToDefinition(index, paths["A.cs"]!, 5, columnOf(source, 5, "Foo(1)"), paths["A.cs"]!, 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts a C# default-argument range shared with overload selection", async () => {
+    const source = [
+      "class Box {",
+      "  void Foo() {}",
+      "  void Foo(int x, int y = 0) {}",
+      "  void Run() { this.Foo(1); }",
+      "}",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-csharp-default-range-goto-", { "A.cs": source });
+    try {
+      await testGoToDefinition(index, paths["A.cs"]!, 4, columnOf(source, 4, "Foo(1)"), paths["A.cs"]!, 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});

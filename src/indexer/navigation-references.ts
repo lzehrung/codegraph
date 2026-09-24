@@ -23,6 +23,7 @@ import {
   selectFirstExistingPhpCanonicalName,
 } from "./navigation-php.js";
 import { isKeywordReceiver } from "../util/member-access-tables.js";
+import { getCompilationUnitPeers } from "./compilation-units.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
@@ -843,6 +844,15 @@ export function getCachedReferenceCandidateFiles(
 
   const candidates = new Map<string, string>();
   if (def.isMember) candidates.set(fileIdentityKey(def.file), def.file);
+  // Files sharing the definition's compilation unit can name it without any import edge (Go and
+  // JVM packages, C# namespaces, Swift modules), so they bypass the import filter below. The
+  // unit relation is the same proven visibility fact bare-name resolution uses, keeping the
+  // candidate universe and resolution in agreement.
+  for (const unitPeer of getCompilationUnitPeers(index, def.file).files) {
+    if (fileIdentityKey(unitPeer) !== fileIdentityKey(def.file)) {
+      candidates.set(fileIdentityKey(unitPeer), unitPeer);
+    }
+  }
   const candidateFileEntries =
     getIndexedReferenceCandidateFiles(index, def, exportedNames, languageId) ??
     Array.from(index.byFile.values(), (module) => module.file);
@@ -900,7 +910,7 @@ export const REFERENCE_COVERAGE_REASON_ORDER: readonly ReferenceCoverageReason[]
  * strategy that legitimately produced nothing (an export with no same-file uses) is still
  * `executed`, while a strategy the language cannot run is applicable-but-not-executed.
  */
-export type ReferenceStrategyId = "same_file_occurrence" | "php_qualified_name";
+export type ReferenceStrategyId = "same_file_occurrence" | "php_qualified_name" | "implicit_unit_peers";
 
 export type ReferenceStrategyReport = {
   applicable: readonly ReferenceStrategyId[];
@@ -917,12 +927,23 @@ export function describeReferenceStrategies(args: {
    * never reports it as unavailable.
    */
   sameFileOccurrence?: { applicable: boolean; executed: boolean };
+  /**
+   * Implicit compilation-unit peer enumeration, for languages whose files can name each
+   * other's top-level declarations without imports. `executed` is true only when the unit
+   * boundary is proven complete, so a unit that may extend beyond the enumerated peers
+   * reports `strategy_unavailable` instead of implying full candidate coverage.
+   */
+  implicitUnitPeers?: { applicable: boolean; executed: boolean };
 }): ReferenceStrategyReport {
   const applicable: ReferenceStrategyId[] = [];
   const executed: ReferenceStrategyId[] = [];
   if (args.sameFileOccurrence?.applicable) {
     applicable.push("same_file_occurrence");
     if (args.sameFileOccurrence.executed) executed.push("same_file_occurrence");
+  }
+  if (args.implicitUnitPeers?.applicable) {
+    applicable.push("implicit_unit_peers");
+    if (args.implicitUnitPeers.executed) executed.push("implicit_unit_peers");
   }
   if (args.languageId === "php") {
     // Every PHP definition is addressable by its global or namespace-qualified spelling, so

@@ -275,6 +275,16 @@ export function declarationMemberArity(declarationNode: SyntaxNodeLike, language
   if (languageId === "c" || languageId === "cpp") {
     positionalParameters = positionalParameters.filter((child) => !isVariadicParameterMarker(child));
   }
+  if (languageId === "kotlin") {
+    // kotlin-ng keeps default values as bare `expression` siblings and `vararg` as
+    // `parameter_modifiers` beside the parameter they modify; only `parameter`
+    // nodes occupy positional argument slots.
+    positionalParameters = positionalParameters.filter((child) => child.type === "parameter");
+  }
+  if (languageId === "java") {
+    // An explicit receiver parameter (`Box this`) is not a call argument.
+    positionalParameters = positionalParameters.filter((child) => child.type !== "receiver_parameter");
+  }
   if ((languageId === "c" || languageId === "cpp") && positionalParameters.length === 1) {
     const parameterParts = positionalParameters[0]!.namedChildren.filter((child) => child.type !== "comment");
     if (

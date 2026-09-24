@@ -23,6 +23,7 @@ export function createMemberChainResolver(args: {
   constStringOf: Map<string, string>;
   aliasToTargetModule: Map<string, string>;
   resolveMemberPathFromModule: (startFile: string, names: string[]) => SymbolDef | null;
+  resolveNamespaceAlias?: (alias: string, useNode: SyntaxNodeLike) => string | undefined;
 }): MemberChainResolver {
   const memberExpressionType = memberExpressionTypeFor(args.sup);
   const propertyIdentifierTypes = memberPropertyIdentifierTypes(args.sup);
@@ -37,7 +38,9 @@ export function createMemberChainResolver(args: {
     });
     if (!chain || !isIdentifierType(args.sup, chain.base.type)) return null;
     const alias = sliceText(chain.base, args.source);
-    const targetFile = args.aliasToTargetModule.get(alias);
+    const targetFile = args.resolveNamespaceAlias
+      ? args.resolveNamespaceAlias(alias, chain.base)
+      : args.aliasToTargetModule.get(alias);
     if (!targetFile) return null;
     return args.resolveMemberPathFromModule(targetFile, chain.names);
   };

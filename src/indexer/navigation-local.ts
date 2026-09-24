@@ -155,6 +155,7 @@ export function resolveNamedDefinition(
   support: LanguageSupport,
   name: string,
   cNamespace?: "tag" | "ordinary",
+  referenceIndex?: number,
 ): GoToResult | null {
   const normalizedName = support.normalizeIdentifier(name);
   const requiresExplicitReceiver = !support.membersAreImplicitlyInScope;
@@ -176,6 +177,7 @@ export function resolveNamedDefinition(
         : resolveExport(index, file, name, {
             allowLocalFallback: support.membersAreImplicitlyInScope,
             ...(cNamespace ? { cNamespace } : {}),
+            ...(support.id === "csharp" && referenceIndex !== undefined ? { referenceIndex } : {}),
           });
   }
   if (hit?.kind === "resolved" && (!requiresExplicitReceiver || !hit.def.isMember)) {

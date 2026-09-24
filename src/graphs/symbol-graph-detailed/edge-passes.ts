@@ -3,7 +3,9 @@ import { cppCallableShapeForNode, type CppCallableShape } from "../../indexer/cp
 import { resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../../indexer/navigation-php.js";
 import { resolvePhpExportByImportType } from "../../indexer/navigation-resolve.js";
+import { resolveSharedOwnerContainers, type SharedOwnerContainer } from "../../indexer/navigation-goto.js";
 import type { LanguageSupport } from "../../languages.js";
+import { getCallableArity, getCallArgumentCount } from "../../languages/callable-arity.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { sliceText, toRange } from "../../util/ast.js";
 import { getMemberAccessParts } from "../../util/member-access.js";
@@ -21,7 +23,6 @@ import type { DetailedClassNode, DetailedFunctionNode } from "./ast.js";
 import { collectNodesByType, declarationMemberArity, findFirstNodeByType, isIdentifierType } from "./ast.js";
 import {
   CALL_ARGUMENT_NODE_TYPES,
-  callArgumentCount,
   classifyReceiver,
   declarationNodeIsStatic,
   cppOutOfLineOwnerPath,
@@ -59,8 +60,16 @@ type EdgePassContext = {
   receiverCalls: ReceiverCallCandidate[];
   /** Proven static or instance scope for callable members, keyed by graph node id. */
   receiverMemberScopes: Map<string, ReceiverMemberScope>;
-  /** Accepted argument-count range for C++ members, keyed by graph node id. */
+  /** Accepted argument-count range for arity-selected members, keyed by graph node id. */
   receiverMemberArities: Map<string, MemberArityRange>;
+  /**
+   * Memoized shared-owner peer defs, keyed by owner file and container span. The map is
+   * shared across the per-file passes, so the owner file must stay in the key: two files
+   * can declare same-spanned containers (identical partial bodies) whose peer sets differ.
+   */
+  sharedOwnerPeers: Map<string, Promise<SharedOwnerPeer[]>>;
+  /** Swift extension def id mapped to its extended-type def id for receiver lookup. */
+  sharedOwnerAnchors: Map<string, string>;
   /** Definition-node ids that collapse into their declaration-node id. */
   nodeAliases: Map<string, string>;
   /** Registers a name the detailed pass proved callable (function-valued bindings). */
@@ -110,6 +119,23 @@ function mergeCppCallableShapes(...shapes: Array<CppCallableShape | null | undef
     else max = Math.max(max, shape.maxArity);
   }
   return { min, max };
+}
+
+/**
+ * Accepted explicit-argument range of a member declaration from the shared callable
+ * facts (default parameters, varargs, explicit receivers), or undefined when the
+ * declaration shape is unknown or the language does not select members by call arity.
+ * Bound calls never pass the receiver as an argument, so the shared bound default is
+ * the graph's call form.
+ */
+function acceptedMemberArityRange(
+  context: EdgePassContext,
+  declarationNode: SyntaxNodeLike,
+  source: string,
+): MemberArityRange | undefined {
+  if (!supportsReceiverMemberOverloads(context.sup.id)) return undefined;
+  const arity = getCallableArity({ languageId: context.sup.id, source, declaration: declarationNode });
+  return arity ? { min: arity.minArgs, max: arity.maxArgs } : undefined;
 }
 
 function recordMemberLookupIdentity(
@@ -307,10 +333,72 @@ export async function emitMemberOwnershipEdges(
             cppCallableShapeForNode(cppShapeNode(fn.node)),
             outOfLineDeclaration ? cppCallableShapeForNode(cppShapeNode(outOfLineDeclaration.node)) : undefined,
           )
-        : undefined;
+        : acceptedMemberArityRange(context, arityNode, outOfLineDeclaration?.source ?? context.source);
     recordMemberLookupIdentity(context, definitionId, memberId, memberScope, arityRange);
     recordDefEdge(context, definitionId, owner.def, "member_of");
+    await emitSharedOwnerMembershipEdges(context, owner, definitionId);
   }
+}
+
+/**
+ * Swift `extension` declarations contribute their members to the extended type
+ * identity. This mirrors the declaration-kind check in navigation-goto's
+ * shared-owner relation; owner identity comparison stays in that relation.
+ */
+function isSwiftExtensionDeclaration(container: SyntaxNodeLike, source: string): boolean {
+  const kind = container.childForFieldName("declaration_kind");
+  return !!kind && sliceText(kind, source).trim() === "extension";
+}
+
+/** Owner def of a shared-owner container, matched by its declaration name range. */
+function sharedOwnerPeerDef(peer: SharedOwnerContainer): SharedOwnerPeer | null {
+  const nameNode = peer.container.childForFieldName("name");
+  if (!nameNode) return null;
+  const def = peer.module.locals.find(
+    (local) => declaresMembers(local) && local.range.start.index === nameNode.startIndex,
+  );
+  return def ? { def, isExtension: isSwiftExtensionDeclaration(peer.container, peer.context.source) } : null;
+}
+
+/**
+ * C# partial declarations and Swift extensions declare members of one type
+ * identity. Each member joins every same-identity owner def in its compilation
+ * unit so receiver lookups see complete member sets, while same-named types in
+ * other namespaces or nested paths stay separate. Swift extension defs anchor to
+ * their extended type so receiver lookups start on the full member set.
+ */
+async function emitSharedOwnerMembershipEdges(
+  context: EdgePassContext,
+  owner: MemberOwner,
+  definitionId: string,
+): Promise<void> {
+  const container = owner.container;
+  if (!container) return;
+  if (context.sup.id !== "csharp" && context.sup.id !== "swift") return;
+  const isExtension = context.sup.id === "swift" && isSwiftExtensionDeclaration(container, context.source);
+  // Swift base types already own their full member set; only extensions and C#
+  // partials reach across owner declarations. Non-partial C# containers resolve
+  // to no peers inside the shared-owner relation.
+  if (context.sup.id === "swift" && !isExtension) return;
+  const cacheKey = `${fileIdentityKey(context.moduleEntry.file)}\u0000${container.startIndex}\u0000${container.endIndex}`;
+  let peers = context.sharedOwnerPeers.get(cacheKey);
+  if (!peers) {
+    peers = resolveSharedOwnerContainers({
+      index: context.index,
+      ownerFile: context.moduleEntry.file,
+      ownerContainer: container,
+      ownerSource: context.source,
+      languageId: context.sup.id,
+    }).then((resolved) =>
+      resolved.map((peer) => sharedOwnerPeerDef(peer)).filter((peer): peer is SharedOwnerPeer => !!peer),
+    );
+    context.sharedOwnerPeers.set(cacheKey, peers);
+  }
+  const peerDefs = await peers;
+  for (const peer of peerDefs) recordDefEdge(context, definitionId, peer.def, "member_of");
+  if (!isExtension) return;
+  const anchor = peerDefs.find((peer) => !peer.isExtension);
+  context.sharedOwnerAnchors.set(defNodeId(owner.def), defNodeId(anchor ? anchor.def : owner.def));
 }
 
 function memberScopeForDefinition(
@@ -330,7 +418,10 @@ function memberScopeForDefinition(
   return declarationNodeIsStatic(declarationNode, context.source) ? "static" : "instance";
 }
 
-type MemberOwner = { def: SymbolDef; cppOutOfLine: boolean };
+type MemberOwner = { def: SymbolDef; container: SyntaxNodeLike | null; cppOutOfLine: boolean };
+
+/** Peer owner defs sharing one type identity, with the container's Swift extension kind. */
+export type SharedOwnerPeer = { def: SymbolDef; isExtension: boolean };
 
 /** Lexical type body, named Go receiver type, or named C++ out-of-line owner. */
 async function memberOwner(
@@ -341,27 +432,27 @@ async function memberOwner(
   if (!isClassMemberFunction(fn)) return null;
   if (context.sup.id === "go" && fn.node.type === "method_declaration") {
     const def = goMethodReceiverTypeDef(context, fn.node);
-    return def ? { def, cppOutOfLine: false } : null;
+    return def ? { def, container: null, cppOutOfLine: false } : null;
   }
   const owners = classNodes
     .filter(
       (candidate) => candidate.node.startIndex <= fn.node.startIndex && candidate.node.endIndex >= fn.node.endIndex,
     )
     .sort((left, right) => left.node.endIndex - left.node.startIndex - (right.node.endIndex - right.node.startIndex));
-  if (owners[0]?.def) return { def: owners[0].def, cppOutOfLine: false };
+  if (owners[0]?.def) return { def: owners[0].def, container: owners[0].node, cppOutOfLine: false };
   if (context.sup.id === "cpp") {
     const ownerPath = cppOutOfLineOwnerPath(fn.node, context.source, context.sup);
     const def = ownerPath
       ? await resolveCppQualifiedMemberContainer(context.index, context.moduleEntry, ownerPath, context.loadParsedFile)
       : null;
-    return def ? { def, cppOutOfLine: true } : null;
+    return def ? { def, container: null, cppOutOfLine: true } : null;
   }
   if (context.sup.id !== "zig") return null;
   const container = nearestMemberContainer(fn.node);
   if (container?.type !== "struct_declaration") return null;
   const name = container.parent?.namedChildren.find((child) => child.type === "identifier");
   const def = name ? resolveNamedType(context, sliceText(name, context.source), name) : null;
-  return def ? { def, cppOutOfLine: false } : null;
+  return def ? { def, container, cppOutOfLine: false } : null;
 }
 
 type MemberDeclarationSource = { node: SyntaxNodeLike; nameNode: SyntaxNodeLike; source: string };
@@ -606,8 +697,10 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
       if (!binding) return;
 
       const site = { file: context.moduleEntry.file, range: toRange(access.property) };
+      // Shared call-count facts treat unproven spread expansions as unknown (null),
+      // so overload selection never fabricates an argument count.
       const argumentCount = supportsReceiverMemberOverloads(context.sup.id)
-        ? callArgumentCount(node, context.source)
+        ? getCallArgumentCount({ languageId: context.sup.id, source: context.source, call: node })
         : null;
       if (binding.kind === "named-type") {
         const typeDef = resolveNamedType(context, binding.typeName, access.receiver);

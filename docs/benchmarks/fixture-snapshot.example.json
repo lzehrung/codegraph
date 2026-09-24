@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-24T13:00:42.115Z",
+  "generatedAt": "2026-09-24T20:09:40.000Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.16.0",
-  "numTotalTests": 505,
+  "numTotalTests": 515,
   "numFailedTests": 0,
   "languages": [
     {
@@ -44,8 +44,8 @@
       "files": [
         "tests/languages/csharp.test.ts"
       ],
-      "tests": 26,
-      "passed": 26,
+      "tests": 29,
+      "passed": 29,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -77,8 +77,8 @@
       "files": [
         "tests/languages/go.test.ts"
       ],
-      "tests": 14,
-      "passed": 14,
+      "tests": 16,
+      "passed": 16,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -110,8 +110,8 @@
       "files": [
         "tests/languages/java.test.ts"
       ],
-      "tests": 24,
-      "passed": 24,
+      "tests": 25,
+      "passed": 25,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -132,8 +132,8 @@
       "files": [
         "tests/languages/kotlin.test.ts"
       ],
-      "tests": 19,
-      "passed": 19,
+      "tests": 20,
+      "passed": 20,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -264,8 +264,8 @@
       "files": [
         "tests/languages/swift.test.ts"
       ],
-      "tests": 9,
-      "passed": 9,
+      "tests": 11,
+      "passed": 11,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -308,8 +308,8 @@
       "files": [
         "tests/languages/zig.test.ts"
       ],
-      "tests": 12,
-      "passed": 12,
+      "tests": 13,
+      "passed": 13,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -317,14 +317,15 @@
   ],
   "unattributed": {
     "files": [
+      "tests/languages/callable-consumer-matrix.test.ts",
       "tests/languages/chunk-sfc.test.ts",
       "tests/languages/cpp-module-incremental.test.ts",
       "tests/languages/graph-captures.test.ts",
       "tests/languages/import-from-captures.test.ts",
       "tests/languages/query-hygiene.test.ts"
     ],
-    "tests": 76,
-    "passed": 76,
+    "tests": 93,
+    "passed": 93,
     "failed": 0,
     "skipped": 0
   }

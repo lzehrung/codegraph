@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
+  buildProjectIndex,
   buildProjectIndexFromFiles,
+  buildProjectIndexIncremental,
   buildSymbolGraph,
   buildSymbolGraphDetailed,
   extractSqlFactsFromSource,
@@ -1976,5 +1978,188 @@ nativeDescribe("native semantic coverage", () => {
         expectedStatus: "not_found",
       },
     });
+  });
+
+  it("keeps cross-unit peers and shared owners consistent across a disk-cache reload", async () => {
+    // #378: implicit package/module peers (Go, Java-like, C#, Swift, Zig) and shared owners
+    // (C# partial classes, Swift extensions) must resolve, be referenced, and produce the same
+    // detailed call edges before and after a persisted index reload.
+    type PeerCase = {
+      name: string;
+      files: Record<string, string[]>;
+      goto: { file: string; line: number; token: string; expectedFile: string; expectedLine: number };
+      references: { file: string; line: number; token: string; expectedSites: string[]; decoyFile: string };
+      edge: { caller: string; callerFile: string; expectedTarget: string };
+    };
+    const peerCases: PeerCase[] = [
+      {
+        name: "Go same-package sibling function",
+        files: {
+          "go/a.go": ["package p", "", "func Shared() int { return 1 }"],
+          "go/b.go": ["package p", "", "func Use() int { return Shared() }"],
+          "go/decoy/decoy.go": [
+            "package q",
+            "",
+            "func Shared() int { return 2 }",
+            "",
+            "func UseDecoy() int { return Shared() }",
+          ],
+        },
+        goto: { file: "go/b.go", line: 3, token: "Shared", expectedFile: "go/a.go", expectedLine: 3 },
+        references: {
+          file: "go/a.go",
+          line: 3,
+          token: "Shared",
+          expectedSites: ["go/a.go:3", "go/b.go:3"],
+          decoyFile: "go/decoy/decoy.go",
+        },
+        edge: { caller: "Use", callerFile: "go/b.go", expectedTarget: "go/a.go::Shared" },
+      },
+      {
+        name: "C# partial class members in two files",
+        files: {
+          "csharp/A.cs": ["namespace P;", "public partial class Box {", "  public void Helper() {}", "}"],
+          "csharp/B.cs": [
+            "namespace P;",
+            "public partial class Box {",
+            "  void Use() {",
+            "    this.Helper();",
+            "  }",
+            "}",
+          ],
+          "csharp/decoy/Box.cs": ["namespace Q;", "public partial class Box {", "  public void Helper() {}", "}"],
+        },
+        goto: { file: "csharp/B.cs", line: 4, token: "Helper", expectedFile: "csharp/A.cs", expectedLine: 3 },
+        references: {
+          file: "csharp/A.cs",
+          line: 3,
+          token: "Helper",
+          expectedSites: ["csharp/A.cs:3", "csharp/B.cs:4"],
+          decoyFile: "csharp/decoy/Box.cs",
+        },
+        edge: { caller: "Use", callerFile: "csharp/B.cs", expectedTarget: "csharp/A.cs::Helper" },
+      },
+      {
+        name: "Swift extension member over a base type in another file",
+        files: {
+          "swift/A.swift": ["struct Box {", "  func helper() {}", "}"],
+          "swift/B.swift": ["extension Box {", "  func use() { self.helper() }", "}"],
+          "swift/Decoy.swift": ["struct Other {", "  func helper() {}", "}"],
+        },
+        goto: { file: "swift/B.swift", line: 2, token: "helper", expectedFile: "swift/A.swift", expectedLine: 2 },
+        references: {
+          file: "swift/A.swift",
+          line: 2,
+          token: "helper",
+          expectedSites: ["swift/A.swift:2", "swift/B.swift:2"],
+          decoyFile: "swift/Decoy.swift",
+        },
+        edge: { caller: "use", callerFile: "swift/B.swift", expectedTarget: "swift/A.swift::helper" },
+      },
+      {
+        name: "Zig imported function through @import",
+        files: {
+          "zig/api.zig": ["pub fn target(value: i32) i32 {", "    return value;", "}"],
+          "zig/decoy.zig": ["pub fn target(value: i32) i32 {", "    return value;", "}"],
+          "zig/use.zig": [
+            'const api = @import("api.zig");',
+            "",
+            "pub fn caller() i32 {",
+            "    return api.target(1);",
+            "}",
+          ],
+        },
+        goto: { file: "zig/use.zig", line: 4, token: "target", expectedFile: "zig/api.zig", expectedLine: 1 },
+        references: {
+          file: "zig/api.zig",
+          line: 1,
+          token: "target",
+          expectedSites: ["zig/api.zig:1", "zig/use.zig:4"],
+          decoyFile: "zig/decoy.zig",
+        },
+        edge: { caller: "caller", callerFile: "zig/use.zig", expectedTarget: "zig/api.zig::target" },
+      },
+    ];
+
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-cross-unit-reload-"));
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-cross-unit-cache-"));
+    tempDirs.push(root, cacheDir);
+    for (const peerCase of peerCases) {
+      for (const [relative, lines] of Object.entries(peerCase.files)) {
+        const absolute = path.join(root, relative);
+        await fsp.mkdir(path.dirname(absolute), { recursive: true });
+        await fsp.writeFile(absolute, `${lines.join("\n")}\n`, "utf8");
+      }
+    }
+    const buildOptions = { cache: "disk", cacheDir, threads: 1 } as const;
+    const cold = await buildProjectIndex(root, buildOptions);
+    const warm = await buildProjectIndexIncremental(root, buildOptions);
+
+    const columnAt = (lines: readonly string[], line: number, token: string): number => {
+      const text = lines[line - 1] ?? "";
+      const at = text.indexOf(token);
+      if (at < 0) throw new Error(`token ${token} not found on line ${line}: ${text}`);
+      return at + 1;
+    };
+    const callTargetsOf = async (index: ProjectIndex, caller: string, callerFile: string): Promise<string[]> => {
+      const graph = await buildSymbolGraphDetailed(index);
+      const callerPath = normalizeFile(path.join(root, callerFile));
+      const callerNode = [...graph.nodes.values()].find(
+        (node) => node.name === caller && normalizeFile(node.file) === callerPath,
+      );
+      expect(callerNode, `${caller} must be indexed`).toBeDefined();
+      const targets: string[] = [];
+      for (const edge of graph.edges) {
+        if (edge.label !== "calls" || edge.from !== callerNode!.id) continue;
+        const node = graph.nodes.get(edge.to);
+        if (node) {
+          targets.push(`${relativeFile(root, node.file)}::${node.name}`);
+        }
+      }
+      return targets.sort();
+    };
+
+    for (const peerCase of peerCases) {
+      const gotoLines = peerCase.files[peerCase.goto.file]!;
+      const goto = await goToDefinition(cold, {
+        file: normalizeFile(path.join(root, peerCase.goto.file)),
+        line: peerCase.goto.line,
+        column: columnAt(gotoLines, peerCase.goto.line, peerCase.goto.token),
+      });
+      expect(goto.status, `${peerCase.name}: navigation`).toBe("ok");
+      if (goto.status !== "ok") throw new Error(`${peerCase.name}: navigation did not resolve`);
+      expect(relativeFile(root, goto.definition.file), `${peerCase.name}: navigation target file`).toBe(
+        peerCase.goto.expectedFile,
+      );
+      expect(goto.definition.range.start.line, `${peerCase.name}: navigation target line`).toBe(
+        peerCase.goto.expectedLine,
+      );
+
+      const referenceLines = peerCase.files[peerCase.references.file]!;
+      const referenceRequest = {
+        file: normalizeFile(path.join(root, peerCase.references.file)),
+        line: peerCase.references.line,
+        column: columnAt(referenceLines, peerCase.references.line, peerCase.references.token),
+        expectedStatus: "ok" as const,
+      };
+      const coldReferences = stableReferencesSnapshot(root, await normalizeReferences(cold, referenceRequest));
+      expect(coldReferences.status, `${peerCase.name}: references`).toBe("ok");
+      if (coldReferences.status !== "ok") throw new Error(`${peerCase.name}: references did not resolve`);
+      for (const site of peerCase.references.expectedSites) {
+        expect(coldReferences.refs, `${peerCase.name}: missing reference ${site}`).toContain(site);
+      }
+      expect(
+        coldReferences.refs.some((site) => site.startsWith(`${peerCase.references.decoyFile}:`)),
+        `${peerCase.name}: decoy must stay out of the reference set`,
+      ).toBe(false);
+
+      const warmReferences = stableReferencesSnapshot(root, await normalizeReferences(warm, referenceRequest));
+      expect(warmReferences, `${peerCase.name}: warm reload references`).toEqual(coldReferences);
+
+      const coldTargets = await callTargetsOf(cold, peerCase.edge.caller, peerCase.edge.callerFile);
+      expect(coldTargets, `${peerCase.name}: cold call edge`).toContain(peerCase.edge.expectedTarget);
+      const warmTargets = await callTargetsOf(warm, peerCase.edge.caller, peerCase.edge.callerFile);
+      expect(warmTargets, `${peerCase.name}: warm call edge`).toEqual(coldTargets);
+    }
   });
 });

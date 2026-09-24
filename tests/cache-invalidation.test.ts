@@ -56,7 +56,11 @@ import * as resolverEnvironment from "../src/indexer/build-cache/resolver-enviro
 vi.mock("node:zlib", { spy: true });
 import { runGit } from "./helpers/git.js";
 import { createTempProjectRoot, mkTmpDir } from "./helpers/filesystem.js";
-import type { SnapshotComparableSignature } from "../src/indexer/build-cache/project-snapshot.js";
+import {
+  DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION,
+  type SnapshotComparableSignature,
+} from "../src/indexer/build-cache/project-snapshot.js";
+import type { SymbolGraph } from "../src/graphs/symbol-graph.js";
 
 /** Newest mtime under a file or directory, used to detect a `dist` build older than its sources. */
 async function newestMtimeMs(entry: string): Promise<number> {
@@ -273,6 +277,21 @@ async function writeProjectSnapshot(snapshotPath: string, snapshot: unknown): Pr
     brotliCompressSync(JSON.stringify(snapshot), { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } }),
   );
 }
+
+/** Persisted `file::name` targets of the `calls` edges emitted from the named callable. */
+function detailedCallTargets(graph: SymbolGraph, fromName: string): string[] {
+  const targets: string[] = [];
+  for (const edge of graph.edges) {
+    if (edge.label !== "calls") continue;
+    const from = graph.nodes.get(edge.from);
+    if (!from || from.name !== fromName) continue;
+    const to = graph.nodes.get(edge.to);
+    if (!to) continue;
+    targets.push(`${normalize(to.file)}::${to.name}`);
+  }
+  return targets;
+}
+
 async function projectSnapshotTempNames(root: string): Promise<string[]> {
   const cacheDir = path.dirname(projectSnapshotPathFor(root));
   const snapshotName = path.basename(projectSnapshotPathFor(root));
@@ -1990,6 +2009,107 @@ describe("Cache invalidation and strict hashing", () => {
       debugSpy.mockRestore();
       warnSpy.mockRestore();
     }
+  });
+
+  it("rejects a previous-version detailed symbol graph sidecar as invalidation, not corruption", async () => {
+    const root = await mkTmpDir("dg-detailed-sidecar-previous-version-");
+    await fsp.writeFile(path.join(root, "entry.ts"), "export function detailedSnapshot() { return 1; }\n", "utf8");
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const graph = await buildSymbolGraphDetailed(index);
+    await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, graph);
+
+    const sidecarPath = path.join(root, ".codegraph", "cache", "index-v1", "detailed-symbol-graph.json");
+    const sidecar = await readProjectSnapshot(sidecarPath);
+    sidecar.version = DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION - 1;
+    await writeProjectSnapshot(sidecarPath, sidecar);
+    const report: BuildReport = { timings: {} };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    try {
+      const loaded = await buildCache.tryLoadDetailedSymbolGraphSnapshot(
+        root,
+        { cache: "disk", logLevel: "debug" },
+        index,
+        report,
+      );
+
+      expect(loaded).toBeNull();
+      expect(report.manifest?.corruptions).toBeUndefined();
+      expect(debugSpy.mock.calls.flat().join(" ")).toContain("Cache artifact invalidated");
+      expect(warnSpy.mock.calls.flat().join(" ")).not.toContain("Corrupt cache artifact");
+    } finally {
+      debugSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+
+    // Recovery persists the current schema again instead of leaving the stale version behind.
+    const rebuilt = await buildSymbolGraphDetailed(index);
+    await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, rebuilt);
+    const refreshed = await readProjectSnapshot(sidecarPath);
+    expect(refreshed.version).toBe(DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION);
+  });
+
+  it("rejects a detailed symbol graph sidecar built from stale input after a signature change", async () => {
+    const root = await mkTmpDir("dg-detailed-sidecar-stale-input-");
+    const entryPath = path.join(root, "entry.ts");
+    await fsp.writeFile(
+      entryPath,
+      [
+        "export class Box {",
+        "  target(value = 1) { return value; }",
+        "  zeroArgCaller() { return this.target(); }",
+        "  oneArgCaller() { return this.target(1); }",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const staleIndex = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const staleGraph = await buildSymbolGraphDetailed(staleIndex);
+    const targetId = `${normalize(entryPath)}::target`;
+    expect(detailedCallTargets(staleGraph, "zeroArgCaller")).toContain(targetId);
+    await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, staleIndex, staleGraph);
+
+    // Removing the default invalidates the persisted zero-argument edge. The sidecar on disk
+    // predates the change and must be rejected against the rebuilt index.
+    await fsp.writeFile(
+      entryPath,
+      [
+        "export class Box {",
+        "  target(value: number) { return value; }",
+        "  zeroArgCaller() { return this.target(); }",
+        "  oneArgCaller() { return this.target(1); }",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const freshIndex = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1 });
+    expect(freshIndex.projectSnapshotIdentity).not.toBe(staleIndex.projectSnapshotIdentity);
+
+    const report: BuildReport = { timings: {} };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    try {
+      const loaded = await buildCache.tryLoadDetailedSymbolGraphSnapshot(
+        root,
+        { cache: "disk", logLevel: "debug" },
+        freshIndex,
+        report,
+      );
+
+      expect(loaded).toBeNull();
+      expect(report.manifest?.corruptions).toBeUndefined();
+      expect(debugSpy.mock.calls.flat().join(" ")).toContain("Cache artifact invalidated");
+      expect(warnSpy.mock.calls.flat().join(" ")).not.toContain("Corrupt cache artifact");
+    } finally {
+      debugSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+
+    const freshGraph = await buildSymbolGraphDetailed(freshIndex);
+    expect(detailedCallTargets(freshGraph, "zeroArgCaller")).not.toContain(targetId);
+    expect(detailedCallTargets(freshGraph, "oneArgCaller")).toContain(targetId);
   });
 
   it("falls back when project snapshot symbol entries are malformed", async () => {

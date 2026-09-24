@@ -8,8 +8,11 @@ import {
   getNativeSyntaxTreeExecution,
   isNativeRequiredUnavailableError,
 } from "../native/tree-sitter-native.js";
+import { IMPLICIT_UNIT_LANGUAGES } from "../indexer/compilation-units.js";
 import { cppCallableIsDefinition, cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
 import { resolveExport, resolvePhpExportByImportType } from "../indexer/navigation-resolve.js";
+import { languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
+import { innermostNamespaceImport } from "../indexer/navigation-goto.js";
 import {
   cppUsingDeclarationTarget,
   resolveCppCallableBindings,
@@ -40,6 +43,7 @@ import {
   emitMemberImplementationEdges,
   emitPythonDecoratorEdges,
   emitRustImplEdges,
+  type SharedOwnerPeer,
 } from "./symbol-graph-detailed/edge-passes.js";
 import { buildImportAliasMaps } from "./symbol-graph-detailed/import-aliases.js";
 import { createMemberChainResolver } from "./symbol-graph-detailed/member-chains.js";
@@ -209,7 +213,8 @@ export async function buildSymbolGraphDetailed(
 
     if (targetDef) return targetDef;
     const languageId = supportForFileWithoutHeaderSample(file ?? startFile, index.languageExtensions)?.id;
-    if (languageId === "c" || languageId === "cpp") return null;
+    if (languageId === "c" || languageId === "cpp" || (languageId && languageHasDeclarationVisibility(languageId)))
+      return null;
 
     const fileKey = typeof file === "string" ? fileIdentityKey(file) : null;
     const moduleEntry = fileKey ? index.byFile.get(fileKey) : undefined;
@@ -223,6 +228,8 @@ export async function buildSymbolGraphDetailed(
   const receiverCalls: ReceiverCallCandidate[] = [];
   const receiverMemberScopes = new Map<string, ReceiverMemberScope>();
   const receiverMemberArities = new Map<string, MemberArityRange>();
+  const sharedOwnerPeers = new Map<string, Promise<SharedOwnerPeer[]>>();
+  const sharedOwnerAnchors = new Map<string, string>();
   const nodeAliases = new Map<string, string>();
   const ownershipParsedContexts = new Map<string, Promise<ParsedFileContext | null>>();
   const loadParsedFile = (file: string): Promise<ParsedFileContext | null> => {
@@ -332,6 +339,16 @@ export async function buildSymbolGraphDetailed(
         constStringOf,
         aliasToTargetModule,
         resolveMemberPathFromModule,
+        ...(sup.id === "zig"
+          ? {
+              resolveNamespaceAlias: (alias: string, useNode: SyntaxNodeLike): string | undefined => {
+                const binding = findClosestScopeBinding(scopeIndex, alias, useNode, sup);
+                if (binding && binding.kind !== "namespace") return undefined;
+                const imported = innermostNamespaceImport(moduleEntry.imports, alias, useNode);
+                return typeof imported?.resolved === "string" ? imported.resolved : undefined;
+              },
+            }
+          : {}),
       });
       const { memberExpressionType, optionalMemberTypes, propertyIdentifierTypes, resolveMemberChainTarget } =
         memberResolver;
@@ -417,7 +434,21 @@ export async function buildSymbolGraphDetailed(
             ? resolveCppExportedCallables(index, [only], node, src, loadCppParsedFile)
             : only;
         }
-        return resolveCppAliasTarget(aliasToTargetDef.get(name), node);
+        const aliasTarget = resolveCppAliasTarget(aliasToTargetDef.get(name), node);
+        if (aliasTarget) return aliasTarget;
+        // A bare name owned by no scope binding or local declaration can still name a
+        // sibling declaration of the file's implicit compilation unit (Go/JVM package,
+        // C# namespace, Swift module). Resolve it through the same proven peer relation
+        // navigation uses rather than a project-wide name scan, so the graph and
+        // navigation agree on the target. The C# use site is pinned to its namespace
+        // region by `referenceIndex`; every other unit language reads its whole unit.
+        if (localCandidates.length === 0 && IMPLICIT_UNIT_LANGUAGES[sup.id]) {
+          const resolved = resolveExport(index, file, name, {
+            ...(sup.id === "csharp" ? { referenceIndex: node.startIndex } : {}),
+          });
+          if (resolved?.kind === "resolved") return resolved.def;
+        }
+        return null;
       };
 
       const edgePassContext = {
@@ -439,6 +470,8 @@ export async function buildSymbolGraphDetailed(
         receiverCalls,
         receiverMemberScopes,
         receiverMemberArities,
+        sharedOwnerPeers,
+        sharedOwnerAnchors,
         nodeAliases,
         noteCallableName,
         loadParsedFile,
@@ -470,6 +503,7 @@ export async function buildSymbolGraphDetailed(
     receiverMemberScopes,
     nodeAliases,
     receiverMemberArities,
+    sharedOwnerAnchors,
   );
   edgeCount -= removedReceiverEdges.length;
   for (const edge of removedReceiverEdges) added.delete(edgeKey(edge.from, edge.to, edge.label, edge.site));

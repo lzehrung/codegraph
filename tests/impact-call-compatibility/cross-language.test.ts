@@ -47,6 +47,20 @@ describe("cross-language call compatibility extraction", () => {
     ["helper.cpp", "void helper(const char* a, int b = 1) {}\n", 1, 2],
     ["helper.cpp", "template <typename... Ts> void helper(std::tuple<Ts...> values) {}\n", 1, 1],
     ["helper.zig", "fn helper(a: []const u8, b: i32) void {}\n", 2, 2],
+    // #378 signature rows: node-structured parameters and sibling defaults.
+    ["helper.py", "class Helper:\n    @staticmethod\n    def helper(self):\n        return 1\n", 1, 1],
+    ["helper.py", "class Helper:\n    def helper(receiver, value):\n        return value\n", 1, 1],
+    ["helper.py", "class Helper:\n    @classmethod\n    def helper(cls, value):\n        return value\n", 1, 1],
+    ["helper.rb", "def helper(cls)\nend\n", 1, 1],
+    ["helper.rb", "def helper(&block)\nend\n", 0, 0],
+    ["helper.swift", "func helper(_ value: Int = 1) -> Int { return value }\n", 0, 1],
+    ["helper.swift", "func helper(a: Int = 1, b: Int) {}\n", 2, 2],
+    ["Helper.java", "class Helper { int helper(Map<String, Integer> value) { return 1; } }\n", 1, 1],
+    ["Box.java", "class Box { int helper(Box this, int value) { return value; } }\n", 1, 1],
+    ["Helper.cs", "class Helper { void helper(Dictionary<string, int> value) {} }\n", 1, 1],
+    ["lib.rs", "trait Runner { fn helper(&self, value: i32); }\n", 1, 1],
+    ["helper.kt", "fun helper(value: Int = 1): Int { return value }\n", 0, 1],
+    ["helper.go", "package main\nfunc helper(a, b string) {}\n", 2, 2],
   ])("extracts callable signatures for %s", (fileName, source, minArgs, maxArgs) => {
     const parsed = parseFixture(fileName, source);
     const signature = extractCallableSignature({
@@ -75,6 +89,11 @@ describe("cross-language call compatibility extraction", () => {
     ["call.c", 'void run(){ helper("x", 1); }\n', "helper", 2],
     ["call.cpp", 'void run(){ helper<int>("x"); }\n', "helper", 1],
     ["call.zig", 'fn run() void { helper("x", 1); }\n', "helper", 2],
+    // #378 callsite rows and boundaries.
+    ["call.kt", "fun run(){ helper() }\n", "helper", 0],
+    ["call.rb", "helper()\n", "helper", 0],
+    ["call.py", "class Helper:\n    def caller(self):\n        return self.helper()\n", "helper", 0],
+    ["Call.java", "class Call { void run(){ this.helper(1); } }\n", "helper", 1],
   ])("extracts callsite arguments for %s", (fileName, source, calleeName, argCount) => {
     const parsed = parseFixture(fileName, source);
     const calleeStartIndex = source.indexOf(calleeName);
@@ -94,6 +113,7 @@ describe("cross-language call compatibility extraction", () => {
     ["call.php", "<?php helper(...$values);\n"],
     ["call.rb", "helper(*values)\n"],
     ["call.ts", "helper(...values);\n"],
+    ["call.kt", "fun run(){ helper(*values) }\n"],
   ])("returns null for uncountable spread callsites in %s", (fileName, source) => {
     const parsed = parseFixture(fileName, source);
     const call = extractCallsiteArguments({

@@ -2,7 +2,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildProjectIndex } from "../../src/index.js";
+import { buildProjectIndex, buildSymbolGraphDetailed, findReferences, goToDefinition } from "../../src/index.js";
+import { normalizePath } from "../../src/util/paths.js";
+import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
@@ -310,5 +312,132 @@ describe("Go Unicode symbol ranges (C11)", () => {
       source: "package widget\n\n// café ☕ prüfung\n/* über */ func créer() int {\n\treturn 1\n}\n",
       symbolName: "créer",
     });
+  });
+});
+
+describe("Go same-package peer visibility", () => {
+  // #378: a call to a sibling declared in the same Go package, with no import at all, must be
+  // found through the package compilation unit and must not leak into a same-named declaration
+  // in another package.
+  const sharedLines = ["package p", "", "func Shared() int { return 1 }"];
+  const useLines = ["package p", "", "func Use() int { return Shared() }"];
+  const decoyLines = ["package q", "", "func Shared() int { return 2 }", "", "func UseDecoy() int { return Shared() }"];
+  const subLines = ["package sub", "", "func Helper() int { return 3 }"];
+  const aliasedLines = [
+    "package p",
+    "",
+    'import subpkg "example.test/peers/sub"',
+    "",
+    "func AliasUse() int { return subpkg.Helper() }",
+  ];
+
+  it("resolves and references a sibling call without an import and excludes the other package", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-go-package-peer-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "a.go": `${sharedLines.join("\n")}\n`,
+        "b.go": `${useLines.join("\n")}\n`,
+        "decoy/decoy.go": `${decoyLines.join("\n")}\n`,
+        "sub/sub.go": `${subLines.join("\n")}\n`,
+        "aliased.go": `${aliasedLines.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const sharedPath = paths["a.go"]!;
+      const usePath = paths["b.go"]!;
+      const decoyPath = paths["decoy/decoy.go"]!;
+
+      const goto = await goToDefinition(index, {
+        file: usePath,
+        line: 3,
+        column: columnOf(useLines, 3, "Shared"),
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected the same-package sibling declaration");
+      expect(normalizePath(goto.definition.file)).toBe(sharedPath);
+      expect(goto.definition.range.start.line).toBe(3);
+
+      const references = await findReferences(index, {
+        file: sharedPath,
+        line: 3,
+        column: columnOf(sharedLines, 3, "Shared"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected same-package sibling references");
+      const sites = references.references.map(
+        (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
+      );
+      expect(sites).toContain(`${sharedPath}:3`);
+      expect(sites).toContain(`${usePath}:3`);
+      expect(references.references.some((reference) => normalizePath(reference.file) === decoyPath)).toBe(false);
+
+      const decoyReferences = await findReferences(index, {
+        file: decoyPath,
+        line: 3,
+        column: columnOf(decoyLines, 3, "Shared"),
+      });
+      expect(decoyReferences.status).toBe("ok");
+      if (decoyReferences.status !== "ok") throw new Error("Expected decoy package references");
+      expect(
+        decoyReferences.references.some(
+          (reference) => normalizePath(reference.file) === usePath || normalizePath(reference.file) === sharedPath,
+        ),
+      ).toBe(false);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const useNode = [...graph.nodes.values()].find(
+        (node) => node.name === "Use" && normalizePath(node.file) === usePath,
+      );
+      expect(useNode).toBeDefined();
+      const callTargets: string[] = [];
+      for (const edge of graph.edges) {
+        if (edge.label !== "calls" || edge.from !== useNode!.id) continue;
+        const node = graph.nodes.get(edge.to);
+        if (node) {
+          callTargets.push(`${normalizePath(node.file)}::${node.name}`);
+        }
+      }
+      expect(callTargets).toContain(`${sharedPath}::Shared`);
+      expect(callTargets.some((target) => target.startsWith(`${decoyPath}::`))).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves an aliased sibling package import through its alias", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-go-package-alias-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "go.mod": "module example.test/peers\n\ngo 1.22\n",
+        "a.go": `${sharedLines.join("\n")}\n`,
+        "sub/sub.go": `${subLines.join("\n")}\n`,
+        "aliased.go": `${aliasedLines.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const subPath = paths["sub/sub.go"]!;
+      const aliasedPath = paths["aliased.go"]!;
+
+      const goto = await goToDefinition(index, {
+        file: aliasedPath,
+        line: 5,
+        column: columnOf(aliasedLines, 5, "Helper"),
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected the aliased package declaration");
+      expect(normalizePath(goto.definition.file)).toBe(subPath);
+      expect(goto.definition.range.start.line).toBe(3);
+
+      const references = await findReferences(index, {
+        file: subPath,
+        line: 3,
+        column: columnOf(subLines, 3, "Helper"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected aliased package references");
+      expect(
+        references.references.map((reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`),
+      ).toContain(`${aliasedPath}:5`);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

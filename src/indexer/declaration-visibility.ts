@@ -136,12 +136,31 @@ const C_FAMILY_ROW: DeclarationVisibilityRow = {
   typeContainerTypes: new Set(["class_specifier", "struct_specifier", "union_specifier"]),
 };
 
+/**
+ * Zig `pub` is an anonymous keyword child of the declaration (tree-sitter-zig 1.1.2),
+ * not a named modifier node. Unmarked top-level items stay module-local, matching
+ * `@import` visibility. `export` without `pub` is C ABI only and is not a Zig export.
+ */
+const ZIG_ROW: DeclarationVisibilityRow = {
+  declarationTypes: new Set([
+    "function_declaration",
+    "variable_declaration",
+    "using_namespace_declaration",
+    "test_declaration",
+    "comptime_declaration",
+  ]),
+  modifierNodeTypes: new Set(["pub"]),
+  publicModifierTexts: new Set(["pub"]),
+  hiddenModifierTexts: new Set(),
+};
+
 const VISIBILITY_BY_LANGUAGE: Record<string, DeclarationVisibilityRow> = {
   rust: RUST_ROW,
   java: JAVA_ROW,
   csharp: CSHARP_ROW,
   kotlin: KOTLIN_ROW,
   swift: SWIFT_ROW,
+  zig: ZIG_ROW,
   c: C_FAMILY_ROW,
   cpp: C_FAMILY_ROW,
 };
@@ -156,7 +175,10 @@ function collectModifierTexts(declaration: SyntaxNodeLike, row: DeclarationVisib
   const visit = (node: SyntaxNodeLike): void => {
     if (row.modifierNodeTypes.has(node.type) && node.text) texts.push(node.text.trim());
   };
-  for (const child of declaration.namedChildren) {
+  // Zig `pub` is unnamed. Named-only walks miss it; other languages still match named modifiers.
+  for (let index = 0; ; index += 1) {
+    const child = declaration.child(index);
+    if (!child) break;
     visit(child);
     for (const grand of child.namedChildren) visit(grand);
   }

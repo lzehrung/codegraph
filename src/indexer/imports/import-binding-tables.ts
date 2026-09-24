@@ -12,6 +12,7 @@ import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
 import { extractRustModPathAttribute, resolveRustImportPath } from "../../util/resolution/rust.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia } from "./binding-ranges.js";
+import type { Range } from "../../types.js";
 import type { ImportBinding } from "../types.js";
 import type { ImportBindingSink, ImportResolver, ResolvedImportTarget } from "./context.js";
 
@@ -48,6 +49,8 @@ export type ImplicitImportBindingArgs = {
   stmtStartIndex?: number;
   source?: string;
   alias?: string;
+  /** UTF-16 range of the captured alias token, when the native alias capture proved it. */
+  localRange?: Range;
   wildcard?: boolean;
 };
 
@@ -545,9 +548,17 @@ function appendSwiftImplicitBinding(
 
 function appendZigImplicitBinding(
   context: LanguageSpecificImportContext,
-  { from, resolved, typeOnly, alias }: ImplicitImportBindingArgs,
+  { from, resolved, typeOnly, alias, localRange }: ImplicitImportBindingArgs,
 ): void {
-  if (alias) context.pushBinding({ kind: "namespace", localNS: alias, from, resolved, typeOnly });
+  if (!alias) return;
+  context.pushBinding({
+    kind: "namespace",
+    localNS: alias,
+    from,
+    resolved,
+    typeOnly,
+    ...(localRange ? { localRange } : {}),
+  });
 }
 
 function appendIncludeStarImplicitBinding(

@@ -2,7 +2,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildProjectIndex, findReferences } from "../../src/index.js";
+import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
+import { normalizePath } from "../../src/util/paths.js";
+import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import type { SyntaxNodeLike } from "../../src/languages/types.js";
 
 function findFirstNodeByType(root: SyntaxNodeLike, type: string): SyntaxNodeLike | null {
@@ -445,6 +447,80 @@ describe("Java lowercase class import bindings", () => {
         typeOnly: false,
       },
     ]);
+  });
+});
+
+describe("Java same-package sibling classes", () => {
+  // #378: same-package classes have implicit visibility in Java, so a sibling class used as a
+  // return type and constructed with `new` must resolve and be referenced without any import,
+  // while a same-named class in another package must stay out of both results.
+  const targetLines = ["package p;", "", "public class Target {}"];
+  const useLines = ["package p;", "", "class Use {", "  Target make() {", "    return new Target();", "  }", "}"];
+  const decoyTargetLines = ["package q;", "", "public class Target {}"];
+  const decoyUseLines = [
+    "package q;",
+    "",
+    "class UseDecoy {",
+    "  Target make() {",
+    "    return new Target();",
+    "  }",
+    "}",
+  ];
+
+  it("resolves sibling return types and constructors and excludes the other package", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-package-peer-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "p/Target.java": `${targetLines.join("\n")}\n`,
+        "p/Use.java": `${useLines.join("\n")}\n`,
+        "q/Target.java": `${decoyTargetLines.join("\n")}\n`,
+        "q/UseDecoy.java": `${decoyUseLines.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const targetPath = paths["p/Target.java"]!;
+      const usePath = paths["p/Use.java"]!;
+      const decoyPath = paths["q/Target.java"]!;
+
+      for (const [line, token] of [
+        [4, "Target"],
+        [5, "Target"],
+      ] as const) {
+        const goto = await goToDefinition(index, {
+          file: usePath,
+          line,
+          column: columnOf(useLines, line, token),
+        });
+        expect(goto.status, `Use.java:${line} must resolve`).toBe("ok");
+        if (goto.status !== "ok") throw new Error("Expected the same-package class declaration");
+        expect(normalizePath(goto.definition.file)).toBe(targetPath);
+        expect(goto.definition.range.start.line).toBe(3);
+      }
+
+      const references = await findReferences(index, {
+        file: targetPath,
+        line: 3,
+        column: columnOf(targetLines, 3, "Target"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected same-package class references");
+      const sites = references.references.map(
+        (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
+      );
+      expect(sites).toContain(`${usePath}:4`);
+      expect(sites).toContain(`${usePath}:5`);
+      expect(references.references.some((reference) => normalizePath(reference.file) === decoyPath)).toBe(false);
+
+      const decoyReferences = await findReferences(index, {
+        file: decoyPath,
+        line: 3,
+        column: columnOf(decoyTargetLines, 3, "Target"),
+      });
+      expect(decoyReferences.status).toBe("ok");
+      if (decoyReferences.status !== "ok") throw new Error("Expected decoy package references");
+      expect(decoyReferences.references.some((reference) => normalizePath(reference.file) === usePath)).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

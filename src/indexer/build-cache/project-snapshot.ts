@@ -72,7 +72,8 @@ const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 // v9: exact C++ qualified ownership changes persisted member ownership and receiver call edges.
 // v10: C/C++ void-parameter arity changes persisted memberArity and call edges.
 // v11: canonical C/C++ declaration aliases preserve base-graph compatibility across cache loads.
-export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 11;
+// v12: shared callable ranges, cross-file ownership, and Zig visibility change detailed call edges.
+export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 12;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";

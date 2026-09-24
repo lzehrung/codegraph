@@ -2,9 +2,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildProjectIndex } from "../../src/index.js";
+import { buildProjectIndex, buildSymbolGraphDetailed, findReferences, goToDefinition } from "../../src/index.js";
 import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
+import { normalizePath } from "../../src/util/paths.js";
 import { exportedNameOf } from "../helpers/narrow.js";
+import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
@@ -253,5 +255,141 @@ describe("Swift Unicode symbol ranges (C11)", () => {
       source: "// café ☕ prüfung\n/* über */ func créer() -> Int {\n\treturn 1\n}\n",
       symbolName: "créer",
     });
+  });
+});
+
+describe("Swift same-module and shared-owner visibility", () => {
+  // #378: Swift files in one module see each other's top-level declarations without an import,
+  // and an extension in another file is the same owner as the type it extends.
+  it("resolves a same-module sibling function and excludes a same-named member elsewhere", async () => {
+    const apiLines = ["func target(_ value: Int) -> Int { return value }"];
+    const useLines = ["func caller() -> Int { return target(1) }"];
+    const decoyLines = [
+      "class Decoy {",
+      "  func target(_ value: Int) -> Int { return 0 }",
+      "}",
+      "",
+      "func decoyCaller(d: Decoy) -> Int { return d.target(1) }",
+    ];
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-module-peer-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "Api.swift": `${apiLines.join("\n")}\n`,
+        "Use.swift": `${useLines.join("\n")}\n`,
+        "Decoy.swift": `${decoyLines.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const apiPath = paths["Api.swift"]!;
+      const usePath = paths["Use.swift"]!;
+      const decoyPath = paths["Decoy.swift"]!;
+
+      const goto = await goToDefinition(index, {
+        file: usePath,
+        line: 1,
+        column: columnOf(useLines, 1, "target"),
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected the same-module function declaration");
+      expect(normalizePath(goto.definition.file)).toBe(apiPath);
+      expect(goto.definition.range.start.line).toBe(1);
+
+      const references = await findReferences(index, {
+        file: apiPath,
+        line: 1,
+        column: columnOf(apiLines, 1, "target"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected same-module function references");
+      const sites = references.references.map(
+        (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
+      );
+      expect(sites).toContain(`${usePath}:1`);
+      expect(references.references.some((reference) => normalizePath(reference.file) === decoyPath)).toBe(false);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const callerNode = [...graph.nodes.values()].find(
+        (node) => node.name === "caller" && normalizePath(node.file) === usePath,
+      );
+      expect(callerNode).toBeDefined();
+      const callTargets: string[] = [];
+      for (const edge of graph.edges) {
+        if (edge.label !== "calls" || edge.from !== callerNode!.id) continue;
+        const node = graph.nodes.get(edge.to);
+        if (node) {
+          callTargets.push(`${normalizePath(node.file)}::${node.name}`);
+        }
+      }
+      expect(callTargets).toContain(`${apiPath}::target`);
+      expect(callTargets.some((target) => target.startsWith(`${decoyPath}::`))).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("connects an extension member call to the base type in another file", async () => {
+    const baseLines = ["struct Box {", "  func helper() {}", "}"];
+    const extensionLines = ["extension Box {", "  func use() { self.helper() }", "}"];
+    const decoyLines = [
+      "struct Other {",
+      "  func helper() {}",
+      "}",
+      "",
+      "extension Other {",
+      "  func useOther() { self.helper() }",
+      "}",
+    ];
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-extension-owner-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "A.swift": `${baseLines.join("\n")}\n`,
+        "B.swift": `${extensionLines.join("\n")}\n`,
+        "C.swift": `${decoyLines.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const basePath = paths["A.swift"]!;
+      const extensionPath = paths["B.swift"]!;
+      const decoyPath = paths["C.swift"]!;
+
+      const goto = await goToDefinition(index, {
+        file: extensionPath,
+        line: 2,
+        column: columnOf(extensionLines, 2, "helper"),
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected the extended-type member declaration");
+      expect(normalizePath(goto.definition.file)).toBe(basePath);
+      expect(goto.definition.range.start.line).toBe(2);
+
+      const references = await findReferences(index, {
+        file: basePath,
+        line: 2,
+        column: columnOf(baseLines, 2, "helper"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected extended-type member references");
+      const sites = references.references.map(
+        (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
+      );
+      expect(sites).toContain(`${extensionPath}:2`);
+      expect(references.references.some((reference) => normalizePath(reference.file) === decoyPath)).toBe(false);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const useNode = [...graph.nodes.values()].find(
+        (node) => node.name === "use" && normalizePath(node.file) === extensionPath,
+      );
+      expect(useNode).toBeDefined();
+      const callTargets: string[] = [];
+      for (const edge of graph.edges) {
+        if (edge.label !== "calls" || edge.from !== useNode!.id) continue;
+        const node = graph.nodes.get(edge.to);
+        if (node) {
+          callTargets.push(`${normalizePath(node.file)}::${node.name}`);
+        }
+      }
+      expect(callTargets).toContain(`${basePath}::helper`);
+      expect(callTargets.some((target) => target.startsWith(`${decoyPath}::`))).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

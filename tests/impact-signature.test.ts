@@ -1,6 +1,16 @@
 import { describe, it, expect } from "vitest";
 import { buildProjectIndex, analyzeImpactFromDiff } from "../src/index.js";
 import { extractCallableSignature, extractCallsiteArguments } from "../src/impact/call-compatibility.js";
+import {
+  CALLABLE_DECLARATION_NODE_TYPES,
+  getCallableArity,
+  getCallArgumentCount,
+  getCallableDeclarationKind,
+} from "../src/languages/callable-arity.js";
+import { supportForFile } from "../src/languages.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../src/languages/types.js";
+import { ProjectedSyntaxTree } from "../src/native/projected-tree.js";
+import { getNativeSyntaxTreeExecution } from "../src/native/tree-sitter-native.js";
 import type { CallCompatibilityHint, CompactImpactReport, ImpactReport } from "../src/impact/types.js";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -405,6 +415,314 @@ describe("impact signature hint", () => {
       const impact = report.impacted.find((item) => item.file === "consumer.ts");
       expect(impact).toBeDefined();
       expect(impact?.explain?.hints).toContain("signatureChanged");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+});
+
+const CALL_NODE_TYPES: Record<string, true> = {
+  call: true,
+  call_expression: true,
+  function_call_expression: true,
+  invocation_expression: true,
+  method_invocation: true,
+  object_creation_expression: true,
+  scoped_call_expression: true,
+  member_call_expression: true,
+};
+
+function parseFixture(fileName: string, source: string): { languageId: string; tree: SyntaxTreeLike } {
+  const support = supportForFile(fileName);
+  if (!support) {
+    throw new Error(`No language support for ${fileName}`);
+  }
+  const execution = getNativeSyntaxTreeExecution(source, support, "auto");
+  if (!execution.tree) {
+    throw new Error(`Native parse failed for ${fileName}: ${execution.error ?? "unknown error"}`);
+  }
+  return { languageId: support.id, tree: new ProjectedSyntaxTree(source, execution.tree) };
+}
+
+function findAncestorOfType(node: SyntaxNodeLike | null, types: Record<string, true>): SyntaxNodeLike | null {
+  let current = node;
+  while (current) {
+    if (types[current.type]) {
+      return current;
+    }
+    current = current.parent;
+  }
+  return null;
+}
+
+/** First occurrence of `marker` whose ancestor matches `types`, so class-name hits never win. */
+function findTypedNodeAt(
+  tree: SyntaxTreeLike,
+  source: string,
+  marker: string,
+  types: Record<string, true>,
+): SyntaxNodeLike {
+  let at = source.indexOf(marker);
+  while (at >= 0) {
+    const node = tree.rootNode.descendantForIndex(at, at);
+    const match = findAncestorOfType(node, types);
+    if (match) {
+      return match;
+    }
+    at = source.indexOf(marker, at + 1);
+  }
+  throw new Error(`No ${Object.keys(types).join("/")} node at ${marker}`);
+}
+
+describe("shared callable arity facts (#378 signature rows)", () => {
+  type ArityRow = [string, string, string, [number, number | null], [number, number | null], string];
+  const arityRows: ArityRow[] = [
+    // file, source, marker, bound, unbound, kind
+    [
+      "box.py",
+      "class Box:\n    @staticmethod\n    def target(self):\n        return 1\n",
+      "target",
+      [1, 1],
+      [1, 1],
+      "static-method",
+    ],
+    [
+      "box.py",
+      "class Box:\n    def target(receiver, value):\n        return value\n",
+      "target",
+      [1, 1],
+      [2, 2],
+      "instance-method",
+    ],
+    [
+      "box.py",
+      "class Box:\n    @classmethod\n    def target(cls, value):\n        return value\n",
+      "target",
+      [1, 1],
+      [2, 2],
+      "class-method",
+    ],
+    ["mod.py", "def target(self, a, b):\n    return a\n", "target", [3, 3], [3, 3], "function"],
+    ["box.rb", "def target(cls)\nend\n", "target", [1, 1], [1, 1], "function"],
+    ["box.rb", "def target(&block)\nend\n", "target", [0, 0], [0, 0], "function"],
+    ["box.rb", "def target(value, &block)\nend\n", "target", [1, 1], [1, 1], "function"],
+    ["box.swift", "func target(_ value: Int = 1) -> Int { return value }\n", "target", [0, 1], [0, 1], "function"],
+    ["box.swift", "func target(a: Int = 1, b: Int) {}\n", "target", [2, 2], [2, 2], "function"],
+    [
+      "Box.java",
+      "class Box { int target(Map<String, Integer> value) { return 1; } }",
+      "target",
+      [1, 1],
+      [1, 1],
+      "function",
+    ],
+    [
+      "Box.java",
+      "class Box { int target(Map<String, Integer> first, int second) { return 1; } }",
+      "target",
+      [2, 2],
+      [2, 2],
+      "function",
+    ],
+    [
+      "Box.java",
+      "class Box { int target(Box this, int value) { return value; } }",
+      "target",
+      [1, 1],
+      [2, 2],
+      "instance-method",
+    ],
+    [
+      "Box.cs",
+      "class Box { int Target(Dictionary<string, int> value) { return 1; } }",
+      "Target",
+      [1, 1],
+      [1, 1],
+      "function",
+    ],
+    ["lib.rs", "trait Runner { fn target(&self, value: i32); }\n", "target", [1, 1], [2, 2], "instance-method"],
+    ["box.kt", "fun target(value: Int = 1): Int { return value }\n", "target", [0, 1], [0, 1], "function"],
+    ["a.go", "package p\nfunc target(a, b string) {}\n", "target", [2, 2], [2, 2], "function"],
+  ];
+  it.each(arityRows)("measures %s %s with bound %s", (fileName, source, marker, bound, unbound, kind) => {
+    const parsed = parseFixture(fileName, source);
+    const declaration = findTypedNodeAt(parsed.tree, source, marker, CALLABLE_DECLARATION_NODE_TYPES);
+
+    const boundArity = getCallableArity({
+      languageId: parsed.languageId,
+      source,
+      declaration,
+      binding: "bound",
+    });
+    expect(boundArity ? [boundArity.minArgs, boundArity.maxArgs] : null).toEqual(bound);
+
+    const unboundArity = getCallableArity({
+      languageId: parsed.languageId,
+      source,
+      declaration,
+      binding: "unbound",
+    });
+    expect(unboundArity ? [unboundArity.minArgs, unboundArity.maxArgs] : null).toEqual(unbound);
+
+    expect(getCallableDeclarationKind({ languageId: parsed.languageId, source, declaration })).toBe(kind);
+
+    const publicSignature = extractCallableSignature({
+      languageId: parsed.languageId,
+      source,
+      symbolStartIndex: source.indexOf(marker),
+      tree: parsed.tree,
+    });
+    expect(publicSignature ? [publicSignature.minArgs, publicSignature.maxArgs] : null).toEqual(bound);
+  });
+});
+
+describe("shared callsite argument facts (#378 rows)", () => {
+  type CallRow = [string, string, string, number | null];
+  const callRows: CallRow[] = [
+    // file, source, marker, expected count (null = unknown)
+    ["call.kt", "class Box { fun caller(): Int = this.target(*values) }\n", "this.target", null],
+    ["call.kt", "fun run(){ helper(1) { } }\n", "helper", 2],
+    ["call.kt", "fun run(){ helper() }\n", "helper", 0],
+    ["call.swift", "func run(){ helper(1) { } }\n", "helper", 2],
+    ["call.rb", "helper()\n", "helper", 0],
+    ["call.rb", "helper(1) { }\n", "helper", 1],
+    [
+      "Call.java",
+      "class Call { int target(Box this, int value) { return value; } int caller() { return this.target(1, 2); } }",
+      "this.target",
+      2,
+    ],
+  ];
+  it.each(callRows)("counts %s %s as %s", (fileName, source, marker, expected) => {
+    const parsed = parseFixture(fileName, source);
+    const call = findTypedNodeAt(parsed.tree, source, marker, CALL_NODE_TYPES);
+    const count = getCallArgumentCount({ languageId: parsed.languageId, source, call });
+    expect(count).toBe(expected);
+  });
+});
+
+describe("impact call-form binding (#378 consumer behavior)", () => {
+  it.each([
+    {
+      label: "accepts bound instance calls without counting the receiver",
+      fileName: "box.py",
+      after:
+        "class Box:\n    def target(self, value):\n        return value\n    def caller(self):\n        return self.target(1)\n",
+      beforeSignature: "    def target(self, value, extra):",
+      afterSignature: "    def target(self, value):",
+      callsiteNeedle: "self.target(1)",
+      expectedStatus: "compatible",
+    },
+    {
+      label: "accepts unbound instance calls that pass the receiver",
+      fileName: "box.py",
+      after:
+        "class Box:\n    def target(self, value):\n        return value\n    def caller(self):\n        return Box.target(self, 1)\n",
+      beforeSignature: "    def target(self, value, extra):",
+      afterSignature: "    def target(self, value):",
+      callsiteNeedle: "Box.target(self, 1)",
+      expectedStatus: "compatible",
+    },
+    {
+      label: "still flags bound calls below the minimum",
+      fileName: "box.py",
+      after:
+        "class Box:\n    def target(self, value):\n        return value\n    def caller(self):\n        return self.target()\n",
+      beforeSignature: "    def target(self, value, extra):",
+      afterSignature: "    def target(self, value):",
+      callsiteNeedle: "self.target()",
+      expectedStatus: "likely_mismatch",
+    },
+    {
+      label: "never drops a static method receiver parameter",
+      fileName: "box.py",
+      after:
+        "class Box:\n    @staticmethod\n    def target(self, value):\n        return value\n    def caller(self):\n        return Box.target(1, 2)\n",
+      beforeSignature: "    def target(self):",
+      afterSignature: "    def target(self, value):",
+      callsiteNeedle: "Box.target(1, 2)",
+      expectedStatus: "compatible",
+    },
+    {
+      label: "binds the class receiver at classmethod calls",
+      fileName: "box.py",
+      after:
+        "class Box:\n    @classmethod\n    def target(cls, value):\n        return value\n    def caller(self):\n        return Box.target(1)\n",
+      beforeSignature: "    def target(cls):",
+      afterSignature: "    def target(cls, value):",
+      callsiteNeedle: "Box.target(1)",
+      expectedStatus: "compatible",
+    },
+    {
+      label: "does not count a Java explicit receiver as an argument",
+      fileName: "Box.java",
+      after:
+        "class Box { int target(Box this, int value) { return value; } int caller() { return this.target(1); } }\n",
+      beforeSignature: "class Box { int target(Box this) { return 1; } int caller() { return this.target(1); } }",
+      afterSignature:
+        "class Box { int target(Box this, int value) { return value; } int caller() { return this.target(1); } }",
+      callsiteNeedle: "this.target(1)",
+      expectedStatus: "compatible",
+    },
+    {
+      label: "still flags Java calls above the maximum",
+      fileName: "Box.java",
+      after:
+        "class Box { int target(Box this, int value) { return value; } int caller() { return this.target(1, 2); } }\n",
+      beforeSignature: "class Box { int target(Box this) { return 1; } int caller() { return this.target(1, 2); } }",
+      afterSignature:
+        "class Box { int target(Box this, int value) { return value; } int caller() { return this.target(1, 2); } }",
+      callsiteNeedle: "this.target(1, 2)",
+      expectedStatus: "likely_mismatch",
+    },
+    {
+      label: "does not count Ruby block capture as a positional slot",
+      fileName: "box.rb",
+      after: "def target(*args, &block)\n  1\nend\n\ndef caller\n  target()\nend\n",
+      beforeSignature: "def target(&block)",
+      afterSignature: "def target(*args, &block)",
+      callsiteNeedle: "target()",
+      expectedStatus: "compatible",
+    },
+    {
+      label: "reports unknown for Kotlin spread calls instead of a mismatch",
+      fileName: "box.kt",
+      after: "fun target(value: Int, extra: Int) { }\n\nfun caller(values: IntArray) { target(*values) }\n",
+      beforeSignature: "fun target(value: Int) { }",
+      afterSignature: "fun target(value: Int, extra: Int) { }",
+      callsiteNeedle: "target(*values)",
+      expectedStatus: null,
+    },
+  ])("$label", async ({ fileName, after, beforeSignature, afterSignature, callsiteNeedle, expectedStatus }) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-form-"));
+    try {
+      const targetFile = path.join(root, fileName).replace(/\\/g, "/");
+      await fsp.writeFile(targetFile, after, "utf8");
+      const index = await buildProjectIndex(root, { cache: "memory" });
+      const changedLine = after.split("\n").findIndex((line) => line === afterSignature) + 1;
+      expect(changedLine).toBeGreaterThan(0);
+      const diffText = `diff --git a/${fileName} b/${fileName}
+--- a/${fileName}
++++ b/${fileName}
+@@ -${changedLine},1 +${changedLine},1 @@
+-${beforeSignature}
++${afterSignature}
+`;
+
+      const result = await analyzeImpactFromDiff(root, index, {
+        provider: "raw",
+        diffText,
+        includeTests: true,
+      });
+
+      if ("files" in result) {
+        throw new Error("Expected non-compact impact report");
+      }
+      const changed = result.changedSymbols.find((symbol) => symbol.name === "target");
+      expect(changed).toBeDefined();
+      const callsiteLine = after.split("\n").findIndex((line) => line.includes(callsiteNeedle)) + 1;
+      const hint = changed?.callCompatibility?.find((item) => item.callsiteRange.start.line === callsiteLine);
+      expect(hint ? hint.status : null).toBe(expectedStatus);
     } finally {
       await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }

@@ -2,6 +2,7 @@ import { cTagRole } from "../languages/definitions/c.js";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
+import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
 import { resolveMemberAccessDefinition, supportsReceiverMemberNavigation } from "./navigation-goto.js";
 import {
   findClosestBinding,
@@ -391,7 +392,7 @@ export async function goToDefinition(
     if (sup.supportsCrossModuleSymbols) {
       let cNamespace: "tag" | "ordinary" | undefined;
       if (sup.id === "c") cNamespace = cTagRole(node) ? "tag" : "ordinary";
-      const resolvedName = resolveNamedDefinition(index, mod, file, sup, name, cNamespace);
+      const resolvedName = resolveNamedDefinition(index, mod, file, sup, name, cNamespace, node.startIndex);
       if (resolvedName) {
         return resolvedName;
       }
@@ -711,6 +712,15 @@ async function findReferencesInternal(
         .map((candidateFile) => [fileIdentityKey(candidateFile), candidateFile]),
     ).values(),
   ].sort((left, right) => left.localeCompare(right));
+  // Candidates that share a compilation unit with the definition (or an equivalent
+  // declaration) can name it without an import edge; the per-candidate scan below treats
+  // them as bare-name reference sources in addition to the import-derived branches.
+  const unitPeerKeys = new Set<string>();
+  for (const candidate of [referenceDef, ...equivalentDefinitions]) {
+    for (const unitPeer of getCompilationUnitPeers(index, candidate.file).files) {
+      unitPeerKeys.add(fileIdentityKey(unitPeer));
+    }
+  }
   // A bloom filter holds each candidate file's identifiers in that file's own spelling, and a
   // probe can only test one spelling. PHP resolves class, interface, trait, enum, and function
   // names case-insensitively, so `new \App\sErViCe()` must still match a `Service` definition.
@@ -990,6 +1000,32 @@ async function findReferencesInternal(
       }
     }
 
+    // A unit peer names the definition directly (Go and JVM package siblings, C# namespace
+    // peers, Swift module siblings), with no import binding to attribute. The single bare-name
+    // scan keeps reference sites in agreement with what bare-name resolution can prove.
+    if (
+      !definition.isMember &&
+      fileIdentityKey(fileId) !== fileIdentityKey(definitionFile) &&
+      unitPeerKeys.has(fileIdentityKey(fileId)) &&
+      !hasReachedCollectionLimit()
+    ) {
+      const ranges = await collectVerifiedNamedNodeReferences(
+        index,
+        fileId,
+        referenceDef.localName,
+        definition,
+        (params, parsed) => goToDefinition(index, params, parsed),
+        remainingCollectionSlots(),
+        verifiedReferenceFilter(fileId),
+        undefined,
+        equivalentDefinitions,
+      );
+      for (const { range, provenance, via } of ranges) {
+        if (hasReachedCollectionLimit()) break;
+        pushRef({ file: fileId, range, ...(via ? { via } : {}), ...(provenance ? { provenance } : {}) });
+      }
+    }
+
     if (phpQualifiedNames.length) {
       const remainingReferences = remainingCollectionSlots();
       const ranges = await collectVerifiedNamedNodeReferences(
@@ -1081,6 +1117,7 @@ async function findReferencesInternal(
   }
 
   const scannedFiles = [definitionFile, ...candidateFiles, ...receiverScannedFiles];
+  const implicitUnitLanguage = !definition.isMember && IMPLICIT_UNIT_LANGUAGES[parsedContext.sup.id];
   const referenceCoverage = buildIndexedCandidateCoverage({
     index,
     def: definition,
@@ -1100,6 +1137,11 @@ async function findReferencesInternal(
         applicable: requiresSameFileVerifiedScan,
         executed: sameFileVerifiedScanExecuted,
       },
+      // An unproven compilation-unit boundary means the peer universe may extend beyond the
+      // enumerated files, so coverage must not imply that every possible consumer was scanned.
+      ...(implicitUnitLanguage
+        ? { implicitUnitPeers: { applicable: true, executed: getCompilationUnitPeers(index, definitionFile).complete } }
+        : {}),
     }),
     strategyUnavailableFiles: [...receiverProofUnavailableFiles.values()],
   });
