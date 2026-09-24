@@ -331,6 +331,68 @@ describe("Impact Analyzer Edge Cases", () => {
       }
     });
 
+    it.each(["unique", "overloaded", "defaulted"] as const)(
+      "keeps C++ redeclaration hints correct for %s callables",
+      async (kind) => {
+        const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-impact-cpp-redeclaration-"));
+        try {
+          const overloaded = kind === "overloaded";
+          const defaulted = kind === "defaulted";
+          const declaration = defaulted ? "int helper(int a, int b = 0);" : "int helper(int a, int b);";
+          const declarations = [declaration, "int helper(int a, int b) { return a; }"];
+          const source = [
+            ...declarations,
+            ...(overloaded ? ["int helper(int a, int b, int c = 0);"] : []),
+            "int fixed() { return helper(1, 2); }",
+            "int fewer() { return helper(1); }",
+          ].join("\n");
+          await fsp.writeFile(path.join(root, "main.cpp"), source, "utf8");
+          const index = await buildProjectIndex(root, { cache: "memory" });
+          const result = await analyzeImpactFromDiff(root, index, {
+            provider: "raw",
+            diffText: [
+              "diff --git a/main.cpp b/main.cpp",
+              "--- a/main.cpp",
+              "+++ b/main.cpp",
+              "@@ -1,2 +1,2 @@",
+              "-int helper(int a);",
+              "-int helper(int a) { return a; }",
+              ...declarations.map((line) => `+${line}`),
+              "",
+            ].join("\n"),
+            includeTests: true,
+            maxRefs: 2,
+          });
+          if ("files" in result) throw new Error("Expected full impact report");
+          const shortCallStatus = defaulted ? "compatible" : "likely_mismatch";
+          const expectedHints = overloaded
+            ? undefined
+            : [
+                { line: 3, status: "compatible" },
+                { line: 4, status: shortCallStatus },
+              ];
+          expect(
+            result.changedSymbols
+              .filter((symbol) => symbol.name === "helper")
+              .map((symbol) => ({
+                declarationLine: symbol.range.start.line,
+                hints: symbol.callCompatibility
+                  ?.map((hint) => ({
+                    line: hint.callsiteRange.start.line,
+                    status: hint.status,
+                  }))
+                  .sort((left, right) => left.line - right.line),
+              })),
+          ).toEqual([
+            { declarationLine: 1, hints: expectedHints },
+            { declarationLine: 2, hints: expectedHints },
+          ]);
+        } finally {
+          await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        }
+      },
+    );
+
     it.each([
       {
         label: "Python",

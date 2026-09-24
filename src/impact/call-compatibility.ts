@@ -2,8 +2,13 @@ import path from "node:path";
 import { findUsageReferences, goToDefinition } from "../indexer/navigation.js";
 import { ensureParsedContext, type ParsedFileContext } from "../indexer/parse-context.js";
 import { findClosestScopeBinding, getOrBuildScopeIndex, resolveNamedDefinition } from "../indexer/navigation-local.js";
-import { cppCallableIsDefinition, cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
+import {
+  cppBindingCallableShape,
+  cppCallableIsDefinition,
+  cppEquivalentCallableBindings,
+} from "../indexer/cpp-callables.js";
 import { getCachedReferenceCandidateFiles } from "../indexer/navigation-references.js";
+import type { Binding } from "../indexer/scope-types.js";
 import { SymbolKind, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
@@ -694,12 +699,24 @@ function sameOverloadContainer(left: SyntaxNodeLike | null, right: SyntaxNodeLik
   return left.parent.id === right.parent.id;
 }
 
+function changedCppCallableBinding(
+  index: ProjectIndex,
+  changedSymbol: ChangedSymbol,
+  parsed: ParsedFileContext,
+): Binding | undefined {
+  if (parsed.sup.id !== "cpp") return undefined;
+  const module = index.byFile.get(fileIdentityKey(changedSymbol.file));
+  if (!module) return undefined;
+  const scope = getOrBuildScopeIndex(index, module.file, parsed.source, parsed.sup, module, parsed.tree);
+  return scope.bindings
+    .get(parsed.sup.normalizeIdentifier(changedSymbol.name))
+    ?.find((binding) => binding.kind === "function" && binding.def && sameRangeStart(binding.def, changedSymbol.range));
+}
+
 function hasSameFileOverloadCandidates(
   index: ProjectIndex,
   changedSymbol: ChangedSymbol,
-  languageId: string,
-  source: string,
-  tree: SyntaxTreeLike,
+  parsed: ParsedFileContext,
 ): boolean {
   const module = index.byFile.get(fileIdentityKey(changedSymbol.file));
   if (!module) {
@@ -710,6 +727,7 @@ function hasSameFileOverloadCandidates(
   if (changedStartIndex === undefined) {
     return false;
   }
+  const { source, tree, sup } = parsed;
   const changedDeclaration = callableDeclarationAt(tree, changedStartIndex);
 
   for (const local of module.locals) {
@@ -725,7 +743,7 @@ function hasSameFileOverloadCandidates(
       continue;
     }
     const signature = extractCallableSignature({
-      languageId,
+      languageId: sup.id,
       source,
       symbolStartIndex,
       tree,
@@ -879,16 +897,20 @@ async function collectVerifiedCallsiteReferences(
   maxRefs: number,
   shouldIncludeReference: (file: string) => boolean,
   diagnostics: ImpactDiagnostics["callCompatibility"] | undefined,
-  languageId: string,
+  parsedDefinition: ParsedFileContext,
+  equivalentBindings: readonly Binding[] | undefined,
   excludedReferences: ReadonlySet<string>,
 ): Promise<Reference[]> {
   const refs: Reference[] = [];
   const seen = new Set<string>();
+  const languageId = parsedDefinition.sup.id;
+  const canonical =
+    equivalentBindings?.find((candidate) => cppCallableIsDefinition(candidate.node)) ?? equivalentBindings?.[0];
   const def: SymbolDef = {
     file: changedSymbol.file,
     localName: changedSymbol.name,
     kind: changedSymbol.kind,
-    range: changedSymbol.range,
+    range: canonical?.def ?? changedSymbol.range,
   };
   let candidateFiles: Set<string> | undefined;
   if ((languageId === "c" || languageId === "cpp") && changedSymbol.kind === SymbolKind.Function) {
@@ -1131,17 +1153,29 @@ export async function attachCallCompatibilityHints(
       incrementSkippedReason(diagnostics, "signature_unknown");
       continue;
     }
-    if (
-      hasSameFileOverloadCandidates(
-        index,
-        changedSymbol,
-        parsedDefinition.sup.id,
-        parsedDefinition.source,
-        parsedDefinition.tree,
-      )
-    ) {
+    const cppBinding = changedCppCallableBinding(index, changedSymbol, parsedDefinition);
+    const equivalentBindings = cppBinding ? cppEquivalentCallableBindings(cppBinding) : undefined;
+    const hasOverloads =
+      cppBinding && equivalentBindings
+        ? equivalentBindings.length !== (cppBinding.sameScopeFunctionBindings?.length ?? 1)
+        : hasSameFileOverloadCandidates(index, changedSymbol, parsedDefinition);
+    if (hasOverloads) {
       incrementSkippedReason(diagnostics, "overload_set");
       continue;
+    }
+    // Default arguments can live on a prototype rather than its definition.
+    // Both sites describe the same accepted range.
+    if (equivalentBindings) {
+      for (const binding of equivalentBindings) {
+        const shape = cppBindingCallableShape(binding);
+        if (!shape) continue;
+        signature.minArgs = Math.min(signature.minArgs, shape.minArity);
+        if (signature.maxArgs === null || shape.maxArity === null) {
+          signature.maxArgs = null;
+        } else {
+          signature.maxArgs = Math.max(signature.maxArgs, shape.maxArity);
+        }
+      }
     }
 
     const referenceScanLimit = referenceScanLimitForCallsites(options.maxRefs);
@@ -1214,7 +1248,8 @@ export async function attachCallCompatibilityHints(
           verifiedScanLimit,
           shouldIncludeReference,
           diagnostics,
-          parsedDefinition.sup.id,
+          parsedDefinition,
+          equivalentBindings,
           seenRefs,
         );
         for (const ref of verifiedCallsites) {
