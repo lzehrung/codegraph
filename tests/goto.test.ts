@@ -920,18 +920,31 @@ describe("Go to Definition", () => {
       }
     });
 
-    it("resolves PHP static members through a case-variant imported alias", async () => {
-      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-static-alias-case-goto-"));
+    it("resolves PHP members through a case-variant imported receiver type", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-member-alias-case-goto-"));
       try {
         const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
         const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
-        const sourceLines = ["<?php", "namespace App;", "class Service {", "  public static function run() {}", "}"];
-        const consumerLines = ["<?php", "use App\\Service as Foo;", "fOo::run();"];
+        const sourceLines = [
+          "<?php",
+          "namespace App;",
+          "class Service {",
+          "  public static function Run() {}",
+          "  public function Go() {}",
+          "}",
+        ];
+        const consumerLines = [
+          "<?php",
+          "use App\\Service as Foo;",
+          "fOo::run();",
+          "function invoke(FOO $service) { $service->go(); }",
+        ];
         await fsp.writeFile(sourceFile, sourceLines.join("\n"), "utf8");
         await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
         const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
 
         await testGoToDefinition(index, consumerFile, 3, consumerLines[2]!.indexOf("run") + 1, sourceFile, 4);
+        await testGoToDefinition(index, consumerFile, 4, consumerLines[3]!.indexOf("go") + 1, sourceFile, 5);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
@@ -1510,6 +1523,84 @@ describe("Go to Definition", () => {
           column: lines[6]!.indexOf("choose") + 1,
         });
         expect(ambiguous).toEqual({ status: "not_found", reason: "Ambiguous C++ overload" });
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("groups C++ redeclarations and accepts default and variadic arguments", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-callable-shape-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "int add(int left, int right);",
+          "int add(double value);",
+          "int add(int left, int right) { return left + right; }",
+          "int call_add() { return add(1, 2); }",
+          "int defaults(int left, int right = 0);",
+          "int defaults(int first, int second, int third);",
+          "int call_default() { return defaults(1); }",
+          "int spread(int first, ...);",
+          "int spread();",
+          "int call_spread() { return spread(1, 2, 3); }",
+          "int log(const char* format, ...);",
+          "int log(int code);",
+          "int call_log() { return log(1); }",
+          "",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        await testGoToDefinition(index, file, 4, lines[3]!.lastIndexOf("add") + 1, file, 3);
+        await testGoToDefinition(index, file, 7, lines[6]!.lastIndexOf("defaults") + 1, file, 5);
+        await testGoToDefinition(index, file, 10, lines[9]!.lastIndexOf("spread") + 1, file, 8);
+        await testGoToDefinition(index, file, 13, lines[12]!.lastIndexOf("log") + 1, file, 12);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("links namespace-qualified free definitions to bare and qualified calls", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-namespace-definition-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "namespace tools { int run(); int call() { return run(); } }",
+          "int tools::run() { return 1; }",
+          "int outside() { return tools::run(); }",
+          "",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        await testGoToDefinition(index, file, 1, lines[0]!.lastIndexOf("run();") + 1, file, 2);
+        await testGoToDefinition(index, file, 3, lines[2]!.lastIndexOf("run();") + 1, file, 2);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("models named, unnamed, inline, and nested C++ namespaces", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-namespace-scope-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "namespace named { int isolated() { return 1; } }",
+          "namespace { int hidden() { return 2; } }",
+          "inline namespace v1 { int versioned() { return 3; } }",
+          "namespace outer::inner { int nested() { return 4; } }",
+          "int use_hidden() { return hidden(); }",
+          "int use_versioned() { return versioned(); }",
+          "int use_nested() { return outer::inner::nested(); }",
+          "int invalid_bare() { return isolated(); }",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        await testGoToDefinition(index, file, 5, lines[4]!.lastIndexOf("hidden") + 1, file, 2);
+        await testGoToDefinition(index, file, 6, lines[5]!.lastIndexOf("versioned") + 1, file, 3);
+        await testGoToDefinition(index, file, 7, lines[6]!.lastIndexOf("nested") + 1, file, 4);
+        await testGoToDefinition(index, file, 8, lines[7]!.indexOf("isolated") + 1, undefined, undefined, "not_found");
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
@@ -3871,7 +3962,7 @@ describe("Keyword-receiver member navigation", () => {
 
   it("selects C++ this-> overloads by known call argument count", async () => {
     const source = [
-      "class Box {",
+      "struct Box {",
       " public:",
       "  void helper() {}",
       "  void helper(int a) {}",
@@ -4161,6 +4252,21 @@ describe("Supertype keyword member navigation", () => {
     const { root, paths, index } = await buildFiles("cg-cpp-unqualified-base-goto-", { "derived.cpp": source });
     try {
       await expectMemberAccess(index, paths["derived.cpp"]!, 2, columnOf(source, 2, "inherited()"), 1);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves C++ members through every base in a base clause", async () => {
+    const source = [
+      "class Left { public: int left_only() { return 1; } };",
+      "class Right { public: int right_only() { return 2; } };",
+      "class Derived : public Left, public Right { public: int use() { return this->right_only(); } };",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cpp-multiple-base-goto-", { "derived.cpp": source });
+    try {
+      await expectMemberAccess(index, paths["derived.cpp"]!, 3, columnOf(source, 3, "right_only()"), 2);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

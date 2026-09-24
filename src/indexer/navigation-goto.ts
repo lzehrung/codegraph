@@ -19,6 +19,7 @@ import {
   supportsReceiverMemberNavigation,
 } from "../util/member-access-tables.js";
 import { declarationMemberArity } from "../graphs/symbol-graph-detailed/ast.js";
+import { cppCallableShapeForNode } from "./cpp-callables.js";
 import {
   CALL_ARGUMENT_NODE_TYPES,
   callArgumentCount,
@@ -313,14 +314,18 @@ export async function resolveMemberAccessDefinition(params: {
       if (container) {
         const targetModule = index.byFile.get(fileIdentityKey(objDef.file));
         if (targetModule) {
-          const normalizeIdentifier = targetContext.sup.normalizeIdentifier;
+          const normalizeIdentifier = (name: string): string => {
+            const normalized = targetContext.sup.normalizeIdentifier(name);
+            return targetContext.sup.id === "php" ? foldPhpIdentifierCase(normalized) : normalized;
+          };
           const memberPredicate =
             receiver.memberScope === "any"
               ? undefined
               : (local: SymbolDef) => matchesReceiverMemberScope(local, receiver.memberScope, targetContext, container);
+          const knownArgumentCount = keywordCallArgumentCount(memberNode, source, sup.id);
           let memberDef: SymbolDef | undefined;
           if (receiver.runtimeTypeOnly || targetContext.sup.id === "java") {
-            memberDef = findDirectLocalWithinNode(
+            const candidates = findDirectLocalsWithinNode(
               targetModule.locals,
               member,
               container,
@@ -328,8 +333,10 @@ export async function resolveMemberAccessDefinition(params: {
               normalizeIdentifier,
               memberPredicate,
             );
+            memberDef = await selectReceiverMemberCandidates(index, candidates, knownArgumentCount);
           } else {
-            memberDef = findReceiverMemberDefinition(
+            memberDef = await findReceiverMemberDefinition(
+              index,
               targetModule.locals,
               member,
               objDef,
@@ -337,6 +344,7 @@ export async function resolveMemberAccessDefinition(params: {
               targetContext,
               normalizeIdentifier,
               receiver.memberScope,
+              knownArgumentCount,
             );
           }
 
@@ -420,7 +428,7 @@ function parseCppBaseType(node: SyntaxNodeLike, source: string): { base: string;
     current = nested;
   }
   const names = cppQualifiedNameSegments(current, source);
-  return names.length > 1 ? { base: names[0]!, path: names.slice(1) } : null;
+  return names.length ? { base: names[0]!, path: names.slice(1) } : null;
 }
 
 function collectDeclaredBaseTypes(
@@ -461,10 +469,18 @@ function collectDeclaredBaseTypes(
     // A computed heritage expression can name the runtime base factory rather than a class.
     // Its descendants do not prove an inheritance edge.
     if (isUnprovenHeritageExpression(core)) return;
+    if (sup.id === "cpp" && core.type === "base_class_clause") {
+      for (const child of core.namedChildren) {
+        if (child.type === "access_specifier" || child.type === "virtual_specifier") continue;
+        collectType(child, invoked);
+      }
+      return;
+    }
     if (sup.id === "cpp") {
       const qualified = parseCppBaseType(core, source);
       if (qualified) {
-        addQualified(qualified.base, qualified.path, invoked);
+        if (qualified.path.length) addQualified(qualified.base, qualified.path, invoked);
+        else addSimple(qualified.base, invoked);
         return;
       }
     }
@@ -727,30 +743,10 @@ async function resolveKeywordReceiverMember(
         matches,
       );
     }
-    const seenMatch = new Set<string>();
-    const uniqueMatches: SymbolDef[] = [];
-    for (const match of matches) {
-      const key = keywordClassKey(match);
-      if (seenMatch.has(key)) continue;
-      seenMatch.add(key);
-      uniqueMatches.push(match);
-    }
-    if (uniqueMatches.length === 1) {
-      const match = uniqueMatches[0]!;
-      if (knownArgumentCount === undefined) return match;
-      const arity = await keywordMemberDeclarationArity(index, match);
-      return arity === undefined || arity === knownArgumentCount ? match : undefined;
-    }
-    if (uniqueMatches.length > 1) {
-      // A known call argument count narrows same-named overloads on one type before the
-      // unique-shallowest rule. Any remaining ambiguity or a known-incompatible overload
-      // set stops here; neither case can resolve to a hidden declaration on an ancestor.
-      if (knownArgumentCount === undefined) return undefined;
-      const arityMatches: SymbolDef[] = [];
-      for (const match of uniqueMatches) {
-        if ((await keywordMemberDeclarationArity(index, match)) === knownArgumentCount) arityMatches.push(match);
-      }
-      return arityMatches.length === 1 ? arityMatches[0] : undefined;
+    const uniqueMatches = uniqueReceiverMemberCandidates(matches);
+    if (uniqueMatches.length) {
+      const allowUniqueArityMismatch = !startAtAncestor && depth === 0;
+      return await selectReceiverMemberCandidates(index, uniqueMatches, knownArgumentCount, allowUniqueArityMismatch);
     }
     const next: KeywordClassRef[] = [];
     for (const candidate of level) {
@@ -816,6 +812,16 @@ async function resolveReceiverDefinition(
         memberScope: hasStaticMemberDistinction(sup.id) ? "instance" : "any",
       };
     }
+    if (sup.id === "php") {
+      const normalizeTypeName = (name: string): string => foldPhpIdentifierCase(sup.normalizeIdentifier(name));
+      const namedContainer = resolveNamedMemberContainer(index, mod, typeName, normalizeTypeName);
+      if (namedContainer) {
+        return {
+          def: namedContainer,
+          memberScope: hasStaticMemberDistinction(sup.id) ? "instance" : "any",
+        };
+      }
+    }
     const result = await resolveExpression(constructor);
     if (result?.kind === "resolved" && declaresMembers(result.def)) {
       return {
@@ -873,7 +879,8 @@ async function resolveMemberDefinitionForBase(
   );
   if (directHit) return directHit;
   if (targetContext.sup.id === "java") return undefined;
-  return findReceiverMemberDefinition(
+  return await findReceiverMemberDefinition(
+    index,
     targetModule.locals,
     member,
     baseDef,
@@ -883,7 +890,8 @@ async function resolveMemberDefinitionForBase(
   );
 }
 
-function findReceiverMemberDefinition(
+async function findReceiverMemberDefinition(
+  index: ProjectIndex,
   locals: readonly SymbolDef[],
   member: string,
   receiverDef: SymbolDef,
@@ -891,16 +899,23 @@ function findReceiverMemberDefinition(
   targetContext: ParsedFileContext,
   normalizeIdentifier: (name: string) => string,
   memberScope: ReceiverMemberScope = "any",
-): SymbolDef | undefined {
+  knownArgumentCount?: number,
+): Promise<SymbolDef | undefined> {
   const memberPredicate =
     memberScope === "any"
       ? undefined
       : (local: SymbolDef) => matchesReceiverMemberScope(local, memberScope, targetContext, container);
-  const containerHit =
-    memberScope === "any"
-      ? findLocalWithinNode(locals, member, container, normalizeIdentifier)
-      : findDirectLocalWithinNode(locals, member, container, targetContext, normalizeIdentifier, memberPredicate);
-  if (containerHit) return containerHit;
+  const containerMatches = findDirectLocalsWithinNode(
+    locals,
+    member,
+    container,
+    targetContext,
+    normalizeIdentifier,
+    memberPredicate,
+  );
+  if (containerMatches.length) {
+    return await selectReceiverMemberCandidates(index, containerMatches, knownArgumentCount);
+  }
   if (targetContext.sup.id === "rust") {
     const implNode = findRustImplForType(targetContext.tree.rootNode, receiverDef.localName, targetContext.source);
     return implNode ? findLocalWithinNode(locals, member, implNode, normalizeIdentifier) : undefined;
@@ -911,17 +926,17 @@ function findReceiverMemberDefinition(
   return undefined;
 }
 
-function findLocalWithinNode(
+function findLocalsWithinNode(
   locals: readonly SymbolDef[],
   member: string,
   node: SyntaxNodeLike,
   normalizeIdentifier: (name: string) => string = (name) => name,
   predicate?: (local: SymbolDef) => boolean,
-): SymbolDef | undefined {
+): SymbolDef[] {
   const containerStart = node.startIndex;
   const containerEnd = node.endIndex;
   const normalizedMember = normalizeIdentifier(member);
-  return locals.find((local) => {
+  return locals.filter((local) => {
     const startIndex = local.range.start.index;
     const endIndex = local.range.end.index;
     return (
@@ -933,6 +948,16 @@ function findLocalWithinNode(
       (!predicate || predicate(local))
     );
   });
+}
+
+function findLocalWithinNode(
+  locals: readonly SymbolDef[],
+  member: string,
+  node: SyntaxNodeLike,
+  normalizeIdentifier: (name: string) => string = (name) => name,
+  predicate?: (local: SymbolDef) => boolean,
+): SymbolDef | undefined {
+  return findLocalsWithinNode(locals, member, node, normalizeIdentifier, predicate)[0];
 }
 function matchesReceiverMemberScope(
   local: SymbolDef,
@@ -984,6 +1009,58 @@ async function keywordMemberDeclarationArity(index: ProjectIndex, def: SymbolDef
   return undefined;
 }
 
+async function receiverMemberAcceptsArgumentCount(
+  index: ProjectIndex,
+  def: SymbolDef,
+  argumentCount: number,
+): Promise<boolean | undefined> {
+  const context = await ensureParsedContext(def.file, undefined, index.languageExtensions);
+  const start = def.range.start;
+  const position = {
+    row: start.line - 1,
+    column: start.column - 1,
+  };
+  const nameNode = context.tree.rootNode.descendantForPosition(position, position);
+  if (context.sup.id === "cpp") {
+    const shape = cppCallableShapeForNode(nameNode);
+    return shape
+      ? argumentCount >= shape.minArity && (shape.maxArity === null || argumentCount <= shape.maxArity)
+      : undefined;
+  }
+  const arity = await keywordMemberDeclarationArity(index, def);
+  return arity === undefined ? undefined : arity === argumentCount;
+}
+
+function uniqueReceiverMemberCandidates(candidates: readonly SymbolDef[]): SymbolDef[] {
+  const seen = new Set<string>();
+  const unique: SymbolDef[] = [];
+  for (const candidate of candidates) {
+    const key = keywordClassKey(candidate);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(candidate);
+  }
+  return unique;
+}
+
+async function selectReceiverMemberCandidates(
+  index: ProjectIndex,
+  candidates: readonly SymbolDef[],
+  knownArgumentCount?: number,
+  allowUniqueArityMismatch = true,
+): Promise<SymbolDef | undefined> {
+  const unique = uniqueReceiverMemberCandidates(candidates);
+  if (unique.length === 1 && (allowUniqueArityMismatch || knownArgumentCount === undefined)) return unique[0];
+  if (knownArgumentCount === undefined) return undefined;
+  const matches: SymbolDef[] = [];
+  for (const candidate of unique) {
+    if ((await receiverMemberAcceptsArgumentCount(index, candidate, knownArgumentCount)) !== false) {
+      matches.push(candidate);
+    }
+  }
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 function hasStaticModifier(local: SymbolDef, targetContext: ParsedFileContext, container: SyntaxNodeLike): boolean {
   const position = {
     row: local.range.start.line - 1,
@@ -998,6 +1075,9 @@ function hasStaticModifier(local: SymbolDef, targetContext: ParsedFileContext, c
 }
 
 const NESTED_MEMBER_LOCAL_CONTAINERS = new Set([
+  "formal_parameters",
+  "parameter_list",
+  "parameters",
   "block",
   "class",
   "class_declaration",
@@ -1017,14 +1097,15 @@ const NESTED_MEMBER_LOCAL_CONTAINERS = new Set([
   "statement_block",
 ]);
 
-function findDirectLocalWithinNode(
+function findDirectLocalsWithinNode(
   locals: readonly SymbolDef[],
   member: string,
   container: SyntaxNodeLike,
   targetContext: ParsedFileContext,
   normalizeIdentifier: (name: string) => string,
   predicate?: (local: SymbolDef) => boolean,
-): SymbolDef | undefined {
+): SymbolDef[] {
+  const matches: SymbolDef[] = [];
   const containerStart = container.startIndex;
   const containerEnd = container.endIndex;
   const normalizedMember = normalizeIdentifier(member);
@@ -1062,9 +1143,20 @@ function findDirectLocalWithinNode(
       isDeclarationParent = false;
       current = current.parent;
     }
-    if (current && (!predicate || predicate(local))) return local;
+    if (current && (!predicate || predicate(local))) matches.push(local);
   }
-  return undefined;
+  return matches;
+}
+
+function findDirectLocalWithinNode(
+  locals: readonly SymbolDef[],
+  member: string,
+  container: SyntaxNodeLike,
+  targetContext: ParsedFileContext,
+  normalizeIdentifier: (name: string) => string,
+  predicate?: (local: SymbolDef) => boolean,
+): SymbolDef | undefined {
+  return findDirectLocalsWithinNode(locals, member, container, targetContext, normalizeIdentifier, predicate)[0];
 }
 
 function appendDirectKeywordMembers(

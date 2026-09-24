@@ -65,8 +65,10 @@ function nodeIn(graph: DetailedSymbolGraph, file: string, name: string): string 
   const matches = [...graph.nodes.values()].filter(
     (node) => node.name === name && path.basename(node.file) === file && node.kind === "function",
   );
-  expect(matches, `expected exactly one ${name} function in ${file}`).toHaveLength(1);
-  return matches[0]!.id;
+  const preferred = matches.filter((node) => node.implementationTarget || node.memberArity !== undefined);
+  const candidates = preferred.length ? preferred : matches;
+  expect(candidates, `expected exactly one ${name} function in ${file}`).toHaveLength(1);
+  return candidates[0]!.id;
 }
 
 /** Package-level function that is not a `member_of` any type. */
@@ -787,6 +789,29 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(callsiteTexts(graph, helper, run, files)).toEqual(["cpp_helper"]);
   });
 
+  it("uses one graph node for C and C++ function declarations with definitions", async () => {
+    const files: Record<string, string> = {
+      "probe.c": [
+        "int c_run(int value);",
+        "int c_run(int value) { return value; }",
+        "int c_call() { return c_run(1); }",
+      ].join("\n"),
+      "probe.cpp": [
+        "int cpp_run(int value);",
+        "int cpp_run(int value) { return value; }",
+        "int cpp_call() { return cpp_run(1); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-function-declaration-graph-", files);
+    const cRun = nodeIn(graph, "probe.c", "c_run");
+    const cCall = nodeIn(graph, "probe.c", "c_call");
+    const cppRun = nodeIn(graph, "probe.cpp", "cpp_run");
+    const cppCall = nodeIn(graph, "probe.cpp", "cpp_call");
+
+    expect(callsiteTexts(graph, cRun, cCall, files)).toEqual(["c_run"]);
+    expect(callsiteTexts(graph, cppRun, cppCall, files)).toEqual(["cpp_run"]);
+  });
+
   it("owns C++ out-of-line definitions and preserves declaration scope", async () => {
     const files: Record<string, string> = {
       "box.hpp": [
@@ -796,6 +821,7 @@ nativeDescribe("receiver method call edge language parity", () => {
         "  virtual int run(int value);",
         "  virtual ~Box();",
         "  virtual int operator()(int value);",
+        "  virtual Box& operator+=(int value);",
         "};",
       ].join("\n"),
       "box.cpp": [
@@ -804,6 +830,7 @@ nativeDescribe("receiver method call edge language parity", () => {
         "int Box::run(int value) { return value; }",
         "Box::~Box() {}",
         "int Box::operator()(int value) { return value; }",
+        "Box& Box::operator+=(int value) { return *this; }",
       ].join("\n"),
       "use.cpp": [
         '#include "box.hpp"',
@@ -812,23 +839,31 @@ nativeDescribe("receiver method call edge language parity", () => {
       ].join("\n"),
     };
     const graph = await buildFixture("cg-receiver-cpp-out-of-line-", files);
-    const make = nodeIn(graph, "box.cpp", "make");
-    const run = nodeIn(graph, "box.cpp", "run");
-    const destructor = nodeIn(graph, "box.cpp", "~Box");
+    const make = nodeIn(graph, "box.hpp", "make");
+    const run = nodeIn(graph, "box.hpp", "run");
+    const destructor = nodeIn(graph, "box.hpp", "~Box");
     const callOperator = nodeIn(graph, "box.cpp", "operator()");
+    const addOperator = nodeIn(graph, "box.hpp", "operator+=");
     const useStatic = nodeIn(graph, "use.cpp", "use_static");
     const invalidInstance = nodeIn(graph, "use.cpp", "invalid_instance");
     expect(membersOwnedBy(graph, "Box", "make", "box.hpp")).toEqual([make]);
     expect(membersOwnedBy(graph, "Box", "run", "box.hpp")).toEqual([run]);
     expect(membersOwnedBy(graph, "Box", "~Box", "box.hpp")).toEqual([destructor]);
     expect(membersOwnedBy(graph, "Box", "operator()", "box.hpp")).toEqual([callOperator]);
+    expect(membersOwnedBy(graph, "Box", "operator+=", "box.hpp")).toEqual([addOperator]);
     expect(graph.nodes.get(make)?.memberArity).toBe(1);
     expect(graph.nodes.get(run)?.memberArity).toBe(1);
     expect(graph.nodes.get(run)?.implementationTarget).toBe(true);
     expect(graph.nodes.get(destructor)?.implementationTarget).toBe(true);
     expect(graph.nodes.get(callOperator)?.implementationTarget).toBe(true);
+    expect(graph.nodes.get(addOperator)?.implementationTarget).toBe(true);
     expect(callsiteTexts(graph, make, useStatic, files)).toEqual(["make"]);
     expect(outgoingCallCount(graph, invalidInstance)).toBe(0);
+    expect(
+      [...graph.nodes.values()].filter(
+        (node) => path.basename(node.file) === "box.cpp" && ["make", "run", "~Box", "operator+="].includes(node.name),
+      ),
+    ).toHaveLength(0);
   });
 
   it("uses the full namespace path for C++ out-of-line ownership", async () => {
@@ -838,7 +873,7 @@ nativeDescribe("receiver method call edge language parity", () => {
       "b.cpp": ['#include "a.hpp"', '#include "b.hpp"', "int b::Box::run() { return 1; }"].join("\n"),
     };
     const graph = await buildFixture("cg-receiver-cpp-qualified-owner-", files);
-    const run = nodeIn(graph, "b.cpp", "run");
+    const run = nodeIn(graph, "b.hpp", "run");
     expect(membersOwnedBy(graph, "Box", "run", "a.hpp")).toEqual([]);
     expect(membersOwnedBy(graph, "Box", "run", "b.hpp")).toEqual([run]);
   });

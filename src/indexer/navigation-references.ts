@@ -851,6 +851,7 @@ export function getCachedReferenceCandidateFiles(
   if (cached) return cached;
 
   const candidates = new Map<string, string>();
+  if (def.isMember) candidates.set(fileIdentityKey(def.file), def.file);
   const candidateFileEntries =
     getIndexedReferenceCandidateFiles(index, def, exportedNames) ??
     Array.from(index.byFile.values(), (module) => module.file);

@@ -8,16 +8,24 @@ import {
   getNativeSyntaxTreeExecution,
   isNativeRequiredUnavailableError,
 } from "../native/tree-sitter-native.js";
+import { cppBindingIsDefinition, cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
 import { resolveExport, resolvePhpExportByImportType } from "../indexer/navigation-resolve.js";
-import { resolveCppCollidingBinding } from "../indexer/navigation-cpp.js";
+import { resolveCppCallableBindings, resolveCppCollidingBinding } from "../indexer/navigation-cpp.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
-import { findClosestScopeBinding, getOrBuildScopeIndex } from "../indexer/navigation-local.js";
+import { findClosestScopeBinding, getOrBuildScopeIndex, resolveNamedDefinition } from "../indexer/navigation-local.js";
 import { ensureParsedContext, type ParsedFileContext } from "../indexer/parse-context.js";
-import { SymbolKind, type ProjectIndex, type ResolvedExport, type SymbolDef } from "../indexer/types.js";
+import {
+  SymbolKind,
+  type ModuleIndex,
+  type ProjectIndex,
+  type ResolvedExport,
+  type SymbolDef,
+} from "../indexer/types.js";
+import type { Binding } from "../indexer/scope-types.js";
 import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
-import { buildSymbolGraph, type SymbolGraph } from "./symbol-graph.js";
+import { buildSymbolGraph, defNodeId, type SymbolGraph } from "./symbol-graph.js";
 import { collectDetailedDeclarations } from "./symbol-graph-detailed/ast.js";
 import {
   emitClassInheritanceEdges,
@@ -50,6 +58,61 @@ export type DetailedSymbolGraph = SymbolGraph & {
   limits?: { edges: number };
   omittedCounts?: { edges: number };
 };
+
+function symbolDefForBinding(moduleEntry: ModuleIndex, binding: Binding): SymbolDef | null {
+  const bindingRange = binding.def;
+  if (!bindingRange) return null;
+  return (
+    moduleEntry.locals.find(
+      (candidate) =>
+        candidate.kind === SymbolKind.Function &&
+        candidate.range.start.index === bindingRange.start.index &&
+        candidate.range.end.index === bindingRange.end.index,
+    ) ?? null
+  );
+}
+
+function recordCallableDeclarationAliases(
+  moduleEntry: ModuleIndex,
+  languageId: string,
+  bindings: readonly Binding[],
+  nodeAliases: Map<string, string>,
+): void {
+  const recordGroup = (group: readonly Binding[]): void => {
+    if (group.length < 2) return;
+    const canonicalBinding = group.find((binding) => !cppBindingIsDefinition(binding)) ?? group[0]!;
+    const canonicalDef = symbolDefForBinding(moduleEntry, canonicalBinding);
+    if (!canonicalDef) return;
+    const canonicalId = defNodeId(canonicalDef);
+    for (const binding of group) {
+      const def = symbolDefForBinding(moduleEntry, binding);
+      if (!def) continue;
+      const id = defNodeId(def);
+      if (id !== canonicalId) nodeAliases.set(id, canonicalId);
+    }
+  };
+
+  if (languageId === "c") {
+    const byName = new Map<string, Binding[]>();
+    for (const binding of bindings) {
+      if (binding.kind !== "function" || !binding.def) continue;
+      const group = byName.get(binding.canonicalName) ?? [];
+      group.push(binding);
+      byName.set(binding.canonicalName, group);
+    }
+    for (const group of byName.values()) recordGroup(group);
+    return;
+  }
+  if (languageId !== "cpp") return;
+
+  const handled = new Set<Binding>();
+  for (const binding of bindings) {
+    if (binding.kind !== "function" || handled.has(binding)) continue;
+    const group = cppEquivalentCallableBindings(binding);
+    for (const candidate of group) handled.add(candidate);
+    recordGroup(group);
+  }
+}
 
 export async function buildSymbolGraphDetailed(
   index: ProjectIndex,
@@ -152,6 +215,7 @@ export async function buildSymbolGraphDetailed(
 
   const receiverCalls: ReceiverCallCandidate[] = [];
   const receiverMemberScopes = new Map<string, ReceiverMemberScope>();
+  const nodeAliases = new Map<string, string>();
   const ownershipParsedContexts = new Map<string, Promise<ParsedFileContext | null>>();
   const loadParsedFile = (file: string): Promise<ParsedFileContext | null> => {
     const fileKey = fileIdentityKey(file);
@@ -256,8 +320,15 @@ export async function buildSymbolGraphDetailed(
         memberResolver;
 
       const scopeIndex = getOrBuildScopeIndex(index, file, src, sup, moduleEntry, tree);
+      recordCallableDeclarationAliases(moduleEntry, sup.id, scopeIndex.all, nodeAliases);
       const resolveIdentifier = (name: string, node: SyntaxNodeLike): SymbolDef | null => {
         const binding = findClosestScopeBinding(scopeIndex, name, node, sup);
+        if (sup.id === "cpp" && name.includes("::")) {
+          const qualifiedBindings = scopeIndex.cppQualifiedFunctionBindings.get(name);
+          if (qualifiedBindings) return resolveCppCallableBindings(file, qualifiedBindings, node, src);
+          const qualifiedDefinition = resolveNamedDefinition(index, moduleEntry, file, sup, name);
+          if (qualifiedDefinition?.status === "ok") return qualifiedDefinition.definition;
+        }
         const cppCollision =
           sup.id === "cpp" && binding ? resolveCppCollidingBinding(file, binding, node, src) : undefined;
         if (cppCollision !== undefined) return cppCollision;
@@ -306,6 +377,7 @@ export async function buildSymbolGraphDetailed(
         recordEdge,
         receiverCalls,
         receiverMemberScopes,
+        nodeAliases,
         noteCallableName,
         loadParsedFile,
       };
@@ -337,6 +409,52 @@ export async function buildSymbolGraphDetailed(
   );
   edgeCount -= removedReceiverEdges.length;
   for (const edge of removedReceiverEdges) added.delete(edgeKey(edge.from, edge.to, edge.label, edge.site));
+  const canonicalNodeId = (id: string): string => {
+    let current = id;
+    const seen = new Set<string>();
+    while (nodeAliases.has(current) && !seen.has(current)) {
+      seen.add(current);
+      current = nodeAliases.get(current)!;
+    }
+    return current;
+  };
+  for (const [aliasId] of nodeAliases) {
+    const canonicalId = canonicalNodeId(aliasId);
+    nodeAliases.set(aliasId, canonicalId);
+    if (canonicalId === aliasId) continue;
+    const aliasNode = nodes.get(aliasId);
+    const canonicalNode = nodes.get(canonicalId);
+    if (aliasNode && canonicalNode) {
+      if (!canonicalNode.docstring && aliasNode.docstring) canonicalNode.docstring = aliasNode.docstring;
+      canonicalNode.lineSpan = Math.max(canonicalNode.lineSpan ?? 0, aliasNode.lineSpan ?? 0);
+      canonicalNode.complexity = Math.max(canonicalNode.complexity ?? 0, aliasNode.complexity ?? 0);
+      if (aliasNode.callable) canonicalNode.callable = true;
+      if (aliasNode.implementationTarget) canonicalNode.implementationTarget = true;
+      if (canonicalNode.memberArity === undefined && aliasNode.memberArity !== undefined) {
+        canonicalNode.memberArity = aliasNode.memberArity;
+      }
+    }
+    nodes.delete(aliasId);
+  }
+  if (nodeAliases.size) {
+    const reconciledEdges: SymbolGraph["edges"] = [];
+    const reconciledEdgeKeys = new Set<string>();
+    for (const edge of edges) {
+      const reconciled = {
+        ...edge,
+        from: canonicalNodeId(edge.from),
+        to: canonicalNodeId(edge.to),
+      };
+      const key = edgeKey(reconciled.from, reconciled.to, reconciled.label, reconciled.site);
+      if (reconciledEdgeKeys.has(key)) continue;
+      reconciledEdgeKeys.add(key);
+      reconciledEdges.push(reconciled);
+    }
+    edges.splice(0, edges.length, ...reconciledEdges);
+    added.clear();
+    for (const edge of edges) added.add(edgeKey(edge.from, edge.to, edge.label, edge.site));
+    edgeCount = edges.length;
+  }
   emitMemberImplementationEdges({ nodes, edges }, recordEdge);
 
   if (skippedSyntaxTreeFiles > 0) {
@@ -347,7 +465,7 @@ export async function buildSymbolGraphDetailed(
     );
   }
 
-  return {
+  const graph: DetailedSymbolGraph = {
     nodes,
     edges,
     ...(configuredMaxEdges !== undefined
@@ -358,4 +476,6 @@ export async function buildSymbolGraphDetailed(
         }
       : {}),
   };
+  if (nodeAliases.size) Object.defineProperty(graph, "nodeAliases", { value: nodeAliases });
+  return graph;
 }

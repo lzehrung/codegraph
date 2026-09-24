@@ -667,28 +667,27 @@ describe("Find References", () => {
     it("finds references to exported enum declarations", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-enum-refs-"));
       try {
-        const typesFile = path.join(root, "types.ts").replace(/\\/g, "/");
-        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
-        await fsp.writeFile(typesFile, "export enum Mode {\n  Light,\n  Dark,\n}\n", "utf8");
-        await fsp.writeFile(
-          consumerFile,
-          ['import { Mode } from "./types";', "const selected = Mode.Light;", ""].join("\n"),
-          "utf8",
-        );
+        const typesFile = path.join(root, "statement-fund-col-groups.model.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "statement-config.model.ts").replace(/\\/g, "/");
+        await fsp.writeFile(typesFile, "export enum FundColGroupType {\n  BreakOut,\n  Other,\n}\n", "utf8");
+        const importLine = 'import { FundColGroupType } from "./statement-fund-col-groups.model";';
+        const typeUseLine = "interface Config { group: FundColGroupType }";
+        const valueUseLine = "const selected = FundColGroupType.BreakOut;";
+        await fsp.writeFile(consumerFile, [importLine, typeUseLine, valueUseLine, ""].join("\n"), "utf8");
         const index = await createTestIndexFromFiles(root, [typesFile, consumerFile]);
 
-        const importedColumn = tokenColumn('import { Mode } from "./types";', "Mode");
-        const useColumn = tokenColumn("const selected = Mode.Light;", "Mode");
         const result = await testFindReferences(index, typesFile, 1, 13, [
           { file: typesFile, line: 1, column: 13 },
-          { file: consumerFile, line: 1, column: importedColumn },
-          { file: consumerFile, line: 2, column: useColumn },
+          { file: consumerFile, line: 1, column: tokenColumn(importLine, "FundColGroupType") },
+          { file: consumerFile, line: 2, column: tokenColumn(typeUseLine, "FundColGroupType") },
+          { file: consumerFile, line: 3, column: tokenColumn(valueUseLine, "FundColGroupType") },
         ]);
 
         expect(result.status).toBe("ok");
         expectReferenceAt(result, typesFile, 1);
         expectReferenceAt(result, consumerFile, 1);
         expectReferenceAt(result, consumerFile, 2);
+        expectReferenceAt(result, consumerFile, 3);
         if (result.status === "ok") {
           const imported = result.references.find(
             (reference) => reference.file === consumerFile && reference.range.start.line === 1,
@@ -697,6 +696,11 @@ describe("Find References", () => {
           expect(imported?.via?.import).toBeDefined();
           expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
         }
+
+        await testFindReferences(index, typesFile, 2, 3, [
+          { file: typesFile, line: 2, column: 3 },
+          { file: consumerFile, line: 3, column: tokenColumn(valueUseLine, "BreakOut") },
+        ]);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
@@ -812,15 +816,18 @@ describe("Find References", () => {
         const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
         await fsp.writeFile(typesFile, 'export type Mode = "light" | "dark";\n', "utf8");
         const importLine = 'import type { Mode } from "./types";';
+        const aliasLine = "type Alias = Mode;";
         const useLine = 'const value: Mode = "light";';
-        await fsp.writeFile(consumerFile, [importLine, useLine, ""].join("\n"), "utf8");
+        await fsp.writeFile(consumerFile, [importLine, aliasLine, useLine, ""].join("\n"), "utf8");
         const index = await createTestIndexFromFiles(root, [typesFile, consumerFile]);
         const importedColumn = tokenColumn(importLine, "Mode");
+        const aliasColumn = tokenColumn(aliasLine, "Mode");
         const useColumn = tokenColumn(useLine, "Mode");
         const result = await testFindReferences(index, typesFile, 1, 13, [
           { file: typesFile, line: 1, column: 13 },
           { file: consumerFile, line: 1, column: importedColumn },
-          { file: consumerFile, line: 2, column: useColumn },
+          { file: consumerFile, line: 2, column: aliasColumn },
+          { file: consumerFile, line: 3, column: useColumn },
         ]);
         expect(result.status).toBe("ok");
         if (result.status !== "ok") return;
@@ -4347,6 +4354,15 @@ describe("Find References: keyword receiver scope and coverage", () => {
         ]);
         expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
       }
+      const declarationRefs = await testFindReferences(index, headerFile, 1, header.indexOf("run") + 1, 3);
+      if (declarationRefs.status === "ok") {
+        expect(declarationRefs.references.map((reference) => path.basename(reference.file)).sort()).toEqual([
+          "box.cpp",
+          "box.hpp",
+          "use.cpp",
+        ]);
+        expect(declarationRefs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -4389,6 +4405,33 @@ describe("Find References: keyword receiver scope and coverage", () => {
     }
   });
 
+  it("groups a C++ prototype and definition without merging an overload", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-overload-entity-refs-"));
+    try {
+      const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+      const lines = [
+        "int add(int left, int right);",
+        "int add(double value);",
+        "int add(int left, int right) { return left + right; }",
+        "int call_pair() { return add(1, 2); }",
+        "int call_double() { return add(1.0); }",
+      ];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const refs = await testFindReferences(index, file, 3, lines[2]!.indexOf("add") + 1, 3);
+
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual([1, 3, 4]);
+        expect(refs.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "complete",
+        });
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("uses free-function references for namespace-qualified C++ definitions", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-namespace-function-refs-"));
     try {
@@ -4408,9 +4451,89 @@ describe("Find References: keyword receiver scope and coverage", () => {
         expect(lines).not.toContain(4);
         expect(refs.referenceCoverage).toEqual({
           scope: "indexed_candidates",
-          state: "partial",
-          reasons: ["strategy_unavailable"],
+          state: "complete",
         });
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps same-named C++ namespace functions disjoint", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-namespace-identity-refs-"));
+    try {
+      const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+      const lines = [
+        "namespace left { int run(); }",
+        "namespace right { int run(); }",
+        "int left::run() { return 1; }",
+        "int right::run() { return 2; }",
+        "int call() { return left::run() + right::run(); }",
+      ];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const left = await testFindReferences(index, file, 1, lines[0]!.indexOf("run") + 1, 3);
+      const right = await testFindReferences(index, file, 2, lines[1]!.indexOf("run") + 1, 3);
+
+      if (left.status === "ok") {
+        expect(left.references.map((reference) => reference.range.start.line)).toEqual([1, 3, 5]);
+      }
+      if (right.status === "ok") {
+        expect(right.references.map((reference) => reference.range.start.line)).toEqual([2, 4, 5]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("tracks explicit C++ template member definitions by their nested name", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-template-member-refs-"));
+    try {
+      const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+      const lines = [
+        "class Box { public: template <class T> static int run(T value); };",
+        "template <> int Box::run<int>(int value) { return value; }",
+        "int call() { return Box::run<int>(1); }",
+      ];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const refs = await testFindReferences(index, file, 2, lines[1]!.indexOf("run") + 1, 3);
+      const declarationRefs = await testFindReferences(index, file, 1, lines[0]!.indexOf("run") + 1, 3);
+
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual([1, 2, 3]);
+      }
+      if (declarationRefs.status === "ok") {
+        expect(declarationRefs.references.map((reference) => reference.range.start.line)).toEqual([1, 2, 3]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("links C++ destructor and operator declarations with out-of-line definitions in both directions", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-special-member-refs-"));
+    try {
+      const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+      const lines = [
+        "class A { public: ~A(); A& operator+=(int value); };",
+        "A::~A() {}",
+        "A& A::operator+=(int value) { return *this; }",
+      ];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const cases = [
+        { line: 1, column: lines[0]!.indexOf("~A") + 1, expected: [1, 2] },
+        { line: 2, column: lines[1]!.indexOf("~A") + 1, expected: [1, 2] },
+        { line: 1, column: lines[0]!.indexOf("operator") + 1, expected: [1, 3] },
+        { line: 3, column: lines[2]!.indexOf("operator") + 1, expected: [1, 3] },
+      ];
+      for (const probe of cases) {
+        const refs = await testFindReferences(index, file, probe.line, probe.column, 2);
+        if (refs.status === "ok") {
+          expect(refs.references.map((reference) => reference.range.start.line)).toEqual(probe.expected);
+          expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        }
       }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

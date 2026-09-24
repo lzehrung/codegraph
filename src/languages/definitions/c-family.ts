@@ -244,6 +244,7 @@ export function cFamilyContainerClassifyDefinition(node: SyntaxNodeLike): string
   const container = findAncestor(node, cFamilyContainerTypes);
   if (container?.type === "function_definition") return "function";
   if (container?.type === "declaration" && isFunctionDeclarator(node)) return "function";
+  if (container?.type === "field_declaration" && isFunctionDeclarator(node)) return "function";
   if (container?.type === "type_definition") return "type";
   return "variable";
 }

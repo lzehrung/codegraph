@@ -84,8 +84,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 38 preserves C++ overload groups and resolves qualified namespace/type paths exactly.
  * Epoch 39 treats a sole C/C++ void parameter as zero arity and resolves PHP class-like and
  * function exports with PHP's ASCII case-insensitive name rules.
+ * Epoch 40 preserves PHP import roles in dependency extraction and groups C++ callable
+ * redeclarations by signature for overload resolution and reference ownership.
+ * Epoch 41 resolves extensionless relative imports whose basenames contain dots.
  */
-export const CORE_ALGORITHM_EPOCH = 39;
+export const CORE_ALGORITHM_EPOCH = 41;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -103,8 +106,9 @@ export const CORE_ALGORITHM_EPOCH = 39;
  * also classifies JavaScript and TypeScript method declarations, private properties, and static
  * blocks for receiver-aware member resolution, and records Python and Ruby keyword receiver
  * members in the owning class scope.
+ * Epoch 10 classifies C++ class, struct, and union declarations as receiver members.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 9;
+export const LANGUAGE_BEHAVIOR_EPOCH = 10;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];

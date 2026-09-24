@@ -1,5 +1,23 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`native semantic coverage > keeps C++ callable redeclarations connected across files 1`] = `
+{
+  "goto": {
+    "file": "api.hpp",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "api.cpp:2",
+      "api.hpp:1",
+      "consumer.cpp:2",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
 exports[`native semantic coverage > keeps native SQL ambiguous basename fallback as an explicit non-result 1`] = `
 {
   "goto": {
@@ -22,6 +40,7 @@ exports[`native semantic coverage > keeps native semantics stable for Rust #[pat
     "refs": [
       "src/real.rs:3",
       "src/shared.rs:1",
+      "src/shared.rs:2",
       "src/shared.rs:3",
     ],
     "status": "ok",
@@ -58,6 +77,7 @@ exports[`native semantic coverage > keeps native semantics stable for a conventi
     "refs": [
       "custom/owner.rs:3",
       "src/shared.rs:1",
+      "src/shared.rs:2",
       "src/shared.rs:3",
     ],
     "status": "ok",
@@ -76,6 +96,7 @@ exports[`native semantic coverage > keeps native semantics stable for a custom R
     "refs": [
       "custom/root.rs:3",
       "src/shared.rs:1",
+      "src/shared.rs:2",
       "src/shared.rs:3",
     ],
     "status": "ok",
@@ -93,6 +114,7 @@ exports[`native semantic coverage > keeps native semantics stable for a raw-iden
   "references": {
     "refs": [
       "src/shared.rs:1",
+      "src/shared.rs:2",
       "src/shared.rs:3",
       "src/type.rs:3",
     ],
@@ -112,6 +134,7 @@ exports[`native semantic coverage > keeps native semantics stable for an explici
     "refs": [
       "src/lib.rs:3",
       "src/shared.rs:1",
+      "src/shared.rs:2",
       "src/shared.rs:3",
     ],
     "status": "ok",
@@ -130,6 +153,7 @@ exports[`native semantic coverage > keeps native semantics stable for an explici
     "refs": [
       "src/bin/tool.rs:3",
       "src/shared.rs:1",
+      "src/shared.rs:2",
       "src/shared.rs:3",
     ],
     "status": "ok",
@@ -1136,6 +1160,7 @@ exports[`native semantic coverage > keeps native semantics stable when Rust auto
     "refs": [
       "src/real.rs:3",
       "src/shared.rs:1",
+      "src/shared.rs:2",
       "src/shared.rs:3",
     ],
     "status": "ok",
@@ -1165,6 +1190,7 @@ exports[`native semantic coverage > keeps native semantics stable without treati
     "refs": [
       "src/aaa_owner.rs:3",
       "src/shared.rs:1",
+      "src/shared.rs:2",
       "src/shared.rs:3",
     ],
     "status": "ok",

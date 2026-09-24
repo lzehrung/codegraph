@@ -844,6 +844,32 @@ async function createImportedSuperclassMemberCase(kind: "ts" | "js"): Promise<Se
   };
 }
 
+async function createCppCallableRedeclarationCase(): Promise<SemanticExpectation> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-cpp-callable-redeclaration-"));
+  tempDirs.push(root);
+  const headerFile = path.join(root, "api.hpp");
+  const implementationFile = path.join(root, "api.cpp");
+  const consumerFile = path.join(root, "consumer.cpp");
+  await fsp.writeFile(headerFile, "namespace left { int run(int value); }\n", "utf8");
+  await fsp.writeFile(
+    implementationFile,
+    ['#include "api.hpp"', "int left::run(int value) { return value; }", ""].join("\n"),
+    "utf8",
+  );
+  await fsp.writeFile(
+    consumerFile,
+    ['#include "api.hpp"', "int call() { return left::run(1); }", ""].join("\n"),
+    "utf8",
+  );
+  return {
+    root,
+    files: [headerFile, implementationFile, consumerFile],
+    symbols: [{ file: headerFile, names: ["left", "run"] }],
+    goto: { file: consumerFile, line: 2, column: 27, expectedStatus: "ok" },
+    references: { file: headerFile, line: 1, column: 22, expectedStatus: "ok" },
+  };
+}
+
 nativeDescribe("native semantic coverage", () => {
   it("keeps native semantics stable for representative language fixtures", async () => {
     const cases: SemanticExpectation[] = [
@@ -1349,6 +1375,10 @@ nativeDescribe("native semantic coverage", () => {
     // This serial fixture matrix is CPU-bound. Under parallel native CI on Windows,
     // deterministic assertions can exceed 60 seconds, so retain headroom for host variance.
   }, 120_000);
+
+  it("keeps C++ callable redeclarations connected across files", async () => {
+    await expectNativeSemantics(await createCppCallableRedeclarationCase());
+  });
 
   it("scss go-to-definition resolves indexed declaration locals", async () => {
     await expectNativeSemantics(

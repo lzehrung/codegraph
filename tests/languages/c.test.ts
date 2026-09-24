@@ -769,14 +769,16 @@ describe("C function redeclarations", () => {
       const prototypeReferences = await findReferences(index, { file, line: 1, column: 5 });
       expect(prototypeReferences.status).toBe("ok");
       if (prototypeReferences.status === "ok") {
-        expect(prototypeReferences.references.map((reference) => reference.range.start.line).sort()).toEqual([1, 4]);
+        expect(prototypeReferences.references.map((reference) => reference.range.start.line).sort()).toEqual([1, 4, 7]);
         expect(prototypeReferences.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
       }
 
       const definitionReferences = await findReferences(index, { file, line: 7, column: 5 });
       expect(definitionReferences.status).toBe("ok");
       if (definitionReferences.status === "ok") {
-        expect(definitionReferences.references.map((reference) => reference.range.start.line).sort()).toEqual([4, 7]);
+        expect(definitionReferences.references.map((reference) => reference.range.start.line).sort()).toEqual([
+          1, 4, 7,
+        ]);
         expect(definitionReferences.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
       }
     } finally {
@@ -784,7 +786,7 @@ describe("C function redeclarations", () => {
     }
   });
 
-  it("does not expose incomplete C++ redeclaration occurrences", async () => {
+  it("shares C++ redeclaration occurrences", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-cpp-redeclaration-references-"));
     try {
       const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
@@ -797,30 +799,24 @@ describe("C function redeclarations", () => {
       ].join("\n");
       await writeFile(file, source, "utf8");
       const index = await buildProjectIndex(root, { cache: "off" });
-      const scope = buildScopeIndexFromSource(file, source, CPP_SUPPORT);
-      const bindings = scope.bindings.get("add") ?? [];
-      expect(bindings).toHaveLength(2);
-      expect(bindings.every((binding) => binding.occurrencesComplete === false)).toBe(true);
 
       const prototypeReferences = await findReferences(index, { file, line: 1, column: 5 });
       expect(prototypeReferences.status).toBe("ok");
       if (prototypeReferences.status === "ok") {
-        expect(prototypeReferences.references.map((reference) => reference.range.start.line)).toEqual([1]);
+        expect(prototypeReferences.references.map((reference) => reference.range.start.line)).toEqual([1, 2, 3, 4]);
         expect(prototypeReferences.referenceCoverage).toEqual({
           scope: "indexed_candidates",
-          state: "partial",
-          reasons: ["strategy_unavailable"],
+          state: "complete",
         });
       }
 
       const definitionReferences = await findReferences(index, { file, line: 3, column: 5 });
       expect(definitionReferences.status).toBe("ok");
       if (definitionReferences.status === "ok") {
-        expect(definitionReferences.references.map((reference) => reference.range.start.line)).toEqual([3]);
+        expect(definitionReferences.references.map((reference) => reference.range.start.line)).toEqual([1, 2, 3, 4]);
         expect(definitionReferences.referenceCoverage).toEqual({
           scope: "indexed_candidates",
-          state: "partial",
-          reasons: ["strategy_unavailable"],
+          state: "complete",
         });
       }
     } finally {
@@ -828,7 +824,7 @@ describe("C function redeclarations", () => {
     }
   });
 
-  it("does not assign same-file calls to C++ overloads by name alone", async () => {
+  it("assigns same-file C++ overload calls by callable shape", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-cpp-overload-references-"));
     try {
       const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
@@ -849,16 +845,17 @@ describe("C function redeclarations", () => {
         expect([
           zeroArityReferences.references.map((reference) => reference.range.start.line),
           oneArityReferences.references.map((reference) => reference.range.start.line),
-        ]).toEqual([[1], [2]]);
+        ]).toEqual([
+          [1, 3],
+          [2, 4],
+        ]);
         expect(zeroArityReferences.referenceCoverage).toEqual({
           scope: "indexed_candidates",
-          state: "partial",
-          reasons: ["strategy_unavailable"],
+          state: "complete",
         });
         expect(oneArityReferences.referenceCoverage).toEqual({
           scope: "indexed_candidates",
-          state: "partial",
-          reasons: ["strategy_unavailable"],
+          state: "complete",
         });
       }
     } finally {

@@ -83,7 +83,11 @@ export function getResolutionExtensions(resolutionExtensions?: readonly string[]
 export function listResolutionCandidates(base: string, resolutionExtensions?: readonly string[]): string[] {
   const extensions = getResolutionExtensions(resolutionExtensions);
   const baseExt = path.extname(base).toLowerCase();
-  if (!baseExt) {
+  // A final dotted segment can be part of an extensionless basename (for example, `statement.model`).
+  // Only a configured source extension makes the specifier explicit enough to stop suffix probing.
+  const hasKnownExtension =
+    !!baseExt && (extensions.includes(baseExt) || Object.hasOwn(EXPLICIT_SPECIFIER_EXTENSION_FAMILIES, baseExt));
+  if (!hasKnownExtension) {
     return Array.from(
       new Set([
         base,

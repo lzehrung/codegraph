@@ -119,6 +119,7 @@ type MutableDetailedSymbolGraphSidecar = {
         };
       };
     }>;
+    nodeAliases: Array<[string, string]>;
   };
 };
 function refreshDetailedSidecarHash(sidecar: MutableDetailedSymbolGraphSidecar): void {
@@ -329,7 +330,7 @@ describe("agent session", () => {
       projectRoot: string;
       implementationFingerprint: string;
       projectSnapshotIdentity: string;
-      graph: { nodes: unknown[]; edges: unknown[] };
+      graph: { nodes: unknown[]; edges: unknown[]; nodeAliases: unknown[] };
     };
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
@@ -345,7 +346,7 @@ describe("agent session", () => {
       "projectSnapshotIdentity",
       "version",
     ]);
-    expect(Object.keys(sidecar.graph).sort()).toEqual(["edges", "nodes"]);
+    expect(Object.keys(sidecar.graph).sort()).toEqual(["edges", "nodeAliases", "nodes"]);
 
     symbolGraphSpy.mockClear();
     const warmSession = createAgentSession({ root });
@@ -359,6 +360,36 @@ describe("agent session", () => {
     expect(warm.symbolGraph.edges).toEqual(cold.symbolGraph.edges);
     expect(cold.symbolGraph.edges.some((edge) => edge.label === "extends")).toBe(true);
     expect(cold.symbolGraph.edges.some((edge) => edge.label === "member_of")).toBe(true);
+  });
+
+  it("reuses a canonicalized C++ detailed graph from the persisted sidecar", async () => {
+    const root = await mkGitRepo();
+    await fs.writeFile(path.join(root, "api.hpp"), "class Box { public: int run(); };\n", "utf8");
+    await fs.writeFile(
+      path.join(root, "impl.cpp"),
+      ['#include "api.hpp"', "int Box::run() { return 1; }", "int call(Box& box) { return box.run(); }", ""].join("\n"),
+      "utf8",
+    );
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const cold = await createAgentSession({ root }).loadProject();
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+    const sidecar = (await readDetailedSidecar(sidecarPath)) as MutableDetailedSymbolGraphSidecar;
+    expect(sidecar.graph.nodeAliases.length).toBeGreaterThan(0);
+
+    const sidecarStat = await fs.stat(sidecarPath);
+    await fs.utimes(sidecarPath, sidecarStat.atime, new Date(sidecarStat.mtimeMs + 2_000));
+    symbolGraphSpy.mockClear();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const warm = await createAgentSession({ root }).loadProject();
+
+      expect(symbolGraphSpy).not.toHaveBeenCalled();
+      expect(warn.mock.calls.flat().join(" ")).not.toContain("detailed symbol graph does not match project");
+      expect([...warm.symbolGraph.nodes]).toEqual([...cold.symbolGraph.nodes]);
+      expect(warm.symbolGraph.edges).toEqual(cold.symbolGraph.edges);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("memoizes a validated detailed sidecar until its file identity changes", async () => {

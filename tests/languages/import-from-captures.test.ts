@@ -56,4 +56,15 @@ describe("native import specifiers from @from", () => {
     const specs = collectModuleSpecifiersFromSource(PHP_SUPPORT, source, { nativeQueries }).map((entry) => entry.spec);
     for (const spec of captured) expect(specs).toContain(spec);
   });
+
+  it("keeps same-spelled PHP imports from separate symbol namespaces", () => {
+    const source = ["<?php", "use App\\Shared;", "use function App\\Shared;", "use const App\\Shared;", ""].join("\n");
+    const nativeQueries = getNativeQueryExecution(source, PHP_SUPPORT).results;
+    const imports = collectModuleSpecifiersFromSource(PHP_SUPPORT, source, { nativeQueries })
+      .filter((entry) => entry.spec === "App\\Shared")
+      .map((entry) => entry.phpImportType)
+      .sort();
+
+    expect(imports).toEqual(["class", "const", "function"]);
+  });
 });

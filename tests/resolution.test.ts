@@ -160,6 +160,26 @@ describe("Import Resolution", () => {
     expect(helperImport!.resolved).toBe(path.join(root, "utils.js").replace(/\\/g, "/"));
   });
 
+  it("resolves extensionless TypeScript imports whose basenames contain dots", async () => {
+    const root = await mkTmpDir("cg-resolve-dotted-basename-");
+    try {
+      const sourceFile = path.join(root, "statement-fund-col-groups.model.ts");
+      const importerFile = path.join(root, "statement-config.model.ts");
+      await fsp.writeFile(sourceFile, "export enum FundColGroupType { BreakOut }\n", "utf8");
+      await fsp.writeFile(
+        importerFile,
+        'import { FundColGroupType } from "./statement-fund-col-groups.model";\n',
+        "utf8",
+      );
+
+      const resolved = await resolveSpecifier(importerFile, "./statement-fund-col-groups.model", root);
+
+      expect(resolved).toBe(sourceFile.replace(/\\/g, "/"));
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves directory imports to index files instead of directory paths", async () => {
     const root = await mkTmpDir("dg-resolve-directory-index-");
     const mainFile = path.join(root, "main.ts");

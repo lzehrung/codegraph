@@ -23,6 +23,7 @@ import {
   declarationNodeIsStatic,
   cppOutOfLineOwnerPath,
   cppOutOfLineMemberDeclarationNode,
+  cppQualifiedNameSegments,
   declaresMembers,
   isUnprovenHeritageExpression,
   nearestMemberContainer,
@@ -54,6 +55,8 @@ type EdgePassContext = {
   receiverCalls: ReceiverCallCandidate[];
   /** Proven static or instance scope for callable members, keyed by graph node id. */
   receiverMemberScopes: Map<string, ReceiverMemberScope>;
+  /** Definition-node ids that collapse into their declaration-node id. */
+  nodeAliases: Map<string, string>;
   /** Registers a name the detailed pass proved callable (function-valued bindings). */
   noteCallableName: (name: string, phpCaseInsensitive?: boolean) => void;
   /** Loads syntax needed to recover declaration metadata for cross-file member definitions. */
@@ -113,7 +116,11 @@ function tryResolveChain(context: EdgePassContext, node: SyntaxNodeLike, fromId?
 
 /** Records an edge for a resolvable target node. Returns whether a target was resolved. */
 function tryResolveNode(context: EdgePassContext, node: SyntaxNodeLike, fromId: string, label: string): boolean {
-  if (isIdentifierType(context.sup, node.type) || node.type === "type_identifier") {
+  if (
+    isIdentifierType(context.sup, node.type) ||
+    node.type === "type_identifier" ||
+    (context.sup.id === "cpp" && (node.type === "operator_name" || node.type === "destructor_name"))
+  ) {
     const name = sliceText(node, context.source);
     const target = context.resolveIdentifier(name, node);
     if (target) {
@@ -219,10 +226,24 @@ export async function emitMemberOwnershipEdges(
   for (const fn of functionNodes) {
     const owner = await memberOwner(context, fn, classNodes);
     if (!owner) continue;
-    const memberId = ensureNode(context, fn.def);
     const outOfLineDeclaration = owner.cppOutOfLine
       ? await cppOutOfLineMemberDeclaration(context, fn, owner.def)
       : null;
+    const definitionId = ensureNode(context, fn.def);
+    let memberDef = fn.def;
+    if (outOfLineDeclaration) {
+      const declarationModule = context.index.byFile.get(fileIdentityKey(owner.def.file));
+      const declarationDef = declarationModule?.locals.find(
+        (candidate) =>
+          candidate.localName === fn.def.localName &&
+          candidate.kind === fn.def.kind &&
+          candidate.range.start.index === outOfLineDeclaration.nameNode.startIndex &&
+          candidate.range.end.index === outOfLineDeclaration.nameNode.endIndex,
+      );
+      if (declarationDef) memberDef = declarationDef;
+    }
+    const memberId = ensureNode(context, memberDef);
+    if (definitionId !== memberId) context.nodeAliases.set(definitionId, memberId);
     markImplementationTarget(
       context,
       memberId,
@@ -230,10 +251,11 @@ export async function emitMemberOwnershipEdges(
       outOfLineDeclaration?.source ?? context.source,
       fn.def,
     );
-    markMemberArity(context, memberId, fn.node);
+    markMemberArity(context, definitionId, fn.node);
+    if (memberId === definitionId) markMemberArity(context, memberId, outOfLineDeclaration?.node ?? fn.node);
     const memberScope = memberScopeForDefinition(context, fn, owner.cppOutOfLine, outOfLineDeclaration);
-    context.receiverMemberScopes.set(memberId, memberScope);
-    recordDefEdge(context, memberId, owner.def, "member_of");
+    context.receiverMemberScopes.set(definitionId, memberScope);
+    recordDefEdge(context, definitionId, owner.def, "member_of");
   }
 }
 
@@ -288,7 +310,7 @@ async function memberOwner(
   return def ? { def, cppOutOfLine: false } : null;
 }
 
-type MemberDeclarationSource = { node: SyntaxNodeLike; source: string };
+type MemberDeclarationSource = { node: SyntaxNodeLike; nameNode: SyntaxNodeLike; source: string };
 
 async function cppOutOfLineMemberDeclaration(
   context: EdgePassContext,
@@ -307,7 +329,7 @@ async function cppOutOfLineMemberDeclaration(
     parsed.source,
     context.sup,
   );
-  return declaration ? { node: declaration.node, source: parsed.source } : null;
+  return declaration ? { node: declaration.node, nameNode: declaration.nameNode, source: parsed.source } : null;
 }
 
 /** Receiver type of `func (b *T) M()` / `func (b T) M()`, unwrapped through pointers. */
@@ -581,6 +603,14 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
         const typeScopedCppCall =
           context.sup.id === "cpp" &&
           context.source.slice(access.receiver.endIndex, access.property.startIndex).includes("::");
+        if (typeScopedCppCall) {
+          const qualifiedName = cppQualifiedNameSegments(access.accessNode, context.source).join("::");
+          const qualifiedTarget = context.resolveIdentifier(qualifiedName, access.property);
+          if (qualifiedTarget) {
+            recordDefEdge(context, fromId, qualifiedTarget, "calls", access.property);
+            return;
+          }
+        }
         if (
           keywordReceiverKind(context.sup.id, receiverName) ||
           typeScopedCppCall ||

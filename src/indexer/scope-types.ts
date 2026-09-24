@@ -41,4 +41,5 @@ export type ScopeIndex = {
   bindings: Map<string, Binding[]>;
   all: Binding[];
   allScopes: Scope[];
+  cppQualifiedFunctionBindings: Map<string, Binding[]>;
 };

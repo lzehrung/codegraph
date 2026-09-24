@@ -110,10 +110,13 @@ function moduleNameLookup(index: ProjectIndex, file: FileId): ModuleNameLookup |
       const locals = new Map<string, SymbolDef[]>();
       for (const entry of moduleEntry.exports) {
         if (entry.type === "local") {
-          const canonicalName = normalizeIdentifier(entry.exportedAs);
-          const entries = localExports.get(canonicalName) ?? [];
-          entries.push(entry.target);
-          localExports.set(canonicalName, entries);
+          const exportNames = entry.qualifiedAs ? [entry.exportedAs, entry.qualifiedAs] : [entry.exportedAs];
+          for (const exportName of exportNames) {
+            const canonicalName = normalizeIdentifier(exportName);
+            const entries = localExports.get(canonicalName) ?? [];
+            entries.push(entry.target);
+            localExports.set(canonicalName, entries);
+          }
         } else if (entry.type === "namespaceReexport") {
           const canonicalName = normalizeIdentifier(entry.exportedAs);
           const entries = namespaceReexports.get(canonicalName) ?? [];
@@ -393,6 +396,22 @@ export function resolveExport(
       const result: ResolvedExport = { kind: "resolved", def: target };
       index.exportCache.set(key, result);
       return result;
+    }
+    if (localCandidates.length > 1) {
+      const support = supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions);
+      if (support?.id === "c") {
+        const tagCandidates = localCandidates.filter((candidate) => candidate.kind === SymbolKind.Class);
+        const typedefCandidates = localCandidates.filter((candidate) => candidate.kind === SymbolKind.TypeAlias);
+        if (
+          tagCandidates.length === 1 &&
+          typedefCandidates.length === 1 &&
+          localCandidates.length === tagCandidates.length + typedefCandidates.length
+        ) {
+          const result: ResolvedExport = { kind: "resolved", def: tagCandidates[0]! };
+          index.exportCache.set(key, result);
+          return result;
+        }
+      }
     }
     if (localCandidates.length) {
       index.exportCache.set(key, null);

@@ -841,7 +841,7 @@ export function cppOutOfLineOwnerPath(node: SyntaxNodeLike, source: string, sup:
           }
           return path.length ? path : null;
         }
-        const nested = declarator.childForFieldName("declarator");
+        const nested = declarator.childForFieldName("declarator") ?? declarator.namedChildren.at(-1);
         if (!nested || nested.id === declarator.id) break;
         declarator = nested;
       }

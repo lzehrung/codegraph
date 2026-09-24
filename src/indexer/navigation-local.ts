@@ -5,7 +5,14 @@ import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { buildScopeIndexFromSource, type Binding, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
-import { SymbolKind, type GoToResult, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
+import {
+  SymbolKind,
+  type GoToResult,
+  type ModuleIndex,
+  type ProjectIndex,
+  type ResolvedExport,
+  type SymbolDef,
+} from "./types.js";
 
 export function findDeclarationNameNode(
   sup: LanguageSupport,
@@ -139,10 +146,14 @@ export function resolveNamedDefinition(
           !entry.target.isMember,
       )
     : undefined;
-  const hit =
-    directExport && directExport.type === "local"
-      ? { kind: "resolved" as const, def: directExport.target }
-      : resolveExport(index, file, name, { allowLocalFallback: support.membersAreImplicitlyInScope });
+  const suppressCppUnqualifiedLocalExport = support.id === "cpp" && !name.includes("::");
+  let hit: ResolvedExport | null = null;
+  if (!suppressCppUnqualifiedLocalExport) {
+    hit =
+      directExport && directExport.type === "local"
+        ? { kind: "resolved", def: directExport.target }
+        : resolveExport(index, file, name, { allowLocalFallback: support.membersAreImplicitlyInScope });
+  }
   if (hit?.kind === "resolved" && (!requiresExplicitReceiver || !hit.def.isMember)) {
     return okGoToResult(index, hit.def, {
       via: { exportedName: name },

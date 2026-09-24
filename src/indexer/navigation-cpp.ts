@@ -1,9 +1,9 @@
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import { declarationMemberArity } from "../graphs/symbol-graph-detailed/ast.js";
-import { callArgumentCount, cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { FileId } from "../types.js";
 import { ensureParsedContext } from "./parse-context.js";
+import { cppSelectCallableBinding } from "./cpp-callables.js";
 import type { Binding } from "./scope-types.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
 
@@ -23,30 +23,14 @@ function cppBindingDefinition(file: FileId, binding: Binding): SymbolDef | null 
   };
 }
 
-function cppBindingArity(binding: Binding): number | undefined {
-  let current = binding.node ?? null;
-  while (current) {
-    const arity = declarationMemberArity(current, "cpp");
-    if (arity !== undefined) return arity;
-    if (current.type === "function_definition" || current.type === "program") return undefined;
-    current = current.parent;
-  }
-  return undefined;
-}
-
-function cppCallArgumentCount(node: SyntaxNodeLike, source: string): number | null {
-  let current = node.parent;
-  while (current) {
-    if (current.type === "call_expression") {
-      const callee = current.childForFieldName("function");
-      if (callee && callee.startIndex <= node.startIndex && callee.endIndex >= node.endIndex) {
-        return callArgumentCount(current, source);
-      }
-    }
-    if (current.type === "function_definition" || current.type === "program") return null;
-    current = current.parent;
-  }
-  return null;
+export function resolveCppCallableBindings(
+  file: FileId,
+  bindings: readonly Binding[],
+  node: SyntaxNodeLike,
+  source: string,
+): SymbolDef | null {
+  const target = cppSelectCallableBinding(bindings, node, source);
+  return target ? cppBindingDefinition(file, target) : null;
 }
 
 /**
@@ -61,14 +45,7 @@ export function resolveCppCollidingBinding(
 ): SymbolDef | null | undefined {
   const collisions = binding.sameScopeFunctionBindings;
   if (!collisions || collisions.length < 2) return undefined;
-  const declaration = collisions.find(
-    (candidate) => candidate.node?.startIndex === node.startIndex && candidate.node?.endIndex === node.endIndex,
-  );
-  if (declaration) return cppBindingDefinition(file, declaration);
-  const argumentCount = cppCallArgumentCount(node, source);
-  if (argumentCount === null) return null;
-  const matches = collisions.filter((candidate) => cppBindingArity(candidate) === argumentCount);
-  return matches.length === 1 ? cppBindingDefinition(file, matches[0]!) : null;
+  return resolveCppCallableBindings(file, collisions, node, source);
 }
 
 function cppMemberContainerForDefinition(tree: SyntaxTreeLike, def: SymbolDef): SyntaxNodeLike | null {

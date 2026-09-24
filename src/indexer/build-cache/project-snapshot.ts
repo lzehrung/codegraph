@@ -70,7 +70,8 @@ const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 // v8: receiver edge reconciliation, Kotlin ancestry, and static receiver scope change persisted graph edges.
 // v9: exact C++ qualified ownership changes persisted member ownership and receiver call edges.
 // v10: C/C++ void-parameter arity changes persisted memberArity and call edges.
-export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 10;
+// v11: canonical C/C++ declaration aliases preserve base-graph compatibility across cache loads.
+export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 11;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";
@@ -109,6 +110,7 @@ const transformedSnapshotCache = new Map<string, TransformedSnapshotCacheEntry>(
 const transformedSnapshotModulesCache = new Map<string, TransformedSnapshotModulesCacheEntry>();
 const hydratedSnapshotModulesCache = new Map<string, HydratedSnapshotModulesCacheEntry>();
 const detailedSymbolGraphCache = new Map<string, DetailedSymbolGraphCacheEntry>();
+const EMPTY_DETAILED_SYMBOL_GRAPH_ALIASES: ReadonlyMap<string, string> = new Map();
 
 type HydratedSnapshotModulesCacheEntry = {
   identity: SnapshotFileIdentity;
@@ -124,6 +126,7 @@ type DetailedSymbolGraphSnapshotPayload = {
   graph: {
     nodes: SymbolNode[];
     edges: SymbolEdge[];
+    nodeAliases: Array<[string, string]>;
   };
   graphHash: string;
 };
@@ -393,6 +396,10 @@ function transformDetailedGraph(
           }
         : {}),
     })),
+    nodeAliases: graph.nodeAliases.map(([aliasId, canonicalId]) => [
+      transformHandle(root, aliasId, toRelative),
+      transformHandle(root, canonicalId, toRelative),
+    ]),
   };
 }
 
@@ -487,12 +494,26 @@ function freezeSnapshotPayload<T>(value: T): T {
   return value;
 }
 
-function materializeDetailedSymbolGraph(payload: DetailedSymbolGraphSnapshotPayload["graph"]): SymbolGraph {
-  const graph = structuredClone(payload);
-  return {
-    nodes: new Map(graph.nodes.map((node) => [node.id, node])),
-    edges: graph.edges,
+type CanonicalizedSymbolGraph = SymbolGraph & {
+  nodeAliases?: ReadonlyMap<string, string>;
+};
+
+function detailedSymbolGraphAliases(graph: SymbolGraph): ReadonlyMap<string, string> {
+  return (graph as CanonicalizedSymbolGraph).nodeAliases ?? EMPTY_DETAILED_SYMBOL_GRAPH_ALIASES;
+}
+
+function materializeDetailedSymbolGraph(
+  payload: DetailedSymbolGraphSnapshotPayload["graph"],
+): CanonicalizedSymbolGraph {
+  const serialized = structuredClone(payload);
+  const graph: CanonicalizedSymbolGraph = {
+    nodes: new Map(serialized.nodes.map((node) => [node.id, node])),
+    edges: serialized.edges,
   };
+  if (serialized.nodeAliases.length) {
+    Object.defineProperty(graph, "nodeAliases", { value: new Map(serialized.nodeAliases) });
+  }
+  return graph;
 }
 
 function decodeSnapshotPayload(compressed: Buffer): unknown {
@@ -1108,6 +1129,7 @@ export async function writeDetailedSymbolGraphSnapshot(
   graph: SymbolGraph,
 ): Promise<void> {
   if ((opts?.cache ?? "off") !== "disk" || !index.projectSnapshotIdentity) return;
+  const nodeAliases = [...detailedSymbolGraphAliases(graph)];
   const payload = {
     version: DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION,
     projectRoot: serializedProjectRoot(projectRoot),
@@ -1118,6 +1140,7 @@ export async function writeDetailedSymbolGraphSnapshot(
       {
         nodes: [...graph.nodes.values()],
         edges: graph.edges,
+        nodeAliases,
       },
       projectRoot,
       true,
@@ -1140,6 +1163,7 @@ export async function writeDetailedSymbolGraphSnapshot(
       graph: {
         nodes: [...graph.nodes.values()],
         edges: graph.edges,
+        nodeAliases,
       },
     });
   } catch {
@@ -1244,6 +1268,7 @@ function detailedSymbolGraphContentHash(projectSnapshotIdentity: string, graph: 
     JSON.stringify({
       nodes: [...graph.nodes.values()],
       edges: graph.edges,
+      nodeAliases: [...detailedSymbolGraphAliases(graph)],
     }),
   );
   return hash.digest("hex");
@@ -1265,21 +1290,30 @@ function isDetailedSymbolGraphSnapshotPayload(value: unknown): value is Detailed
     !Array.isArray(payload.graph.nodes) ||
     !payload.graph.nodes.every(isSymbolNode) ||
     !Array.isArray(payload.graph.edges) ||
-    !payload.graph.edges.every(isSymbolEdge)
+    !payload.graph.edges.every(isSymbolEdge) ||
+    !Array.isArray(payload.graph.nodeAliases) ||
+    !payload.graph.nodeAliases.every(isDetailedSymbolGraphAlias)
   ) {
     return false;
   }
-  // `graphHash` is still written at snapshot-write time (its format is validated above) but
-  // no longer re-verified here on load: recomputing it means re-stringifying the whole
-  // graph and re-hashing it, measured at ~36ms on an 11MB sidecar, and it is a
-  // self-consistency check on this file's own bytes, not a check against the current
-  // project. The atomic temp-file-then-rename write (`writeDetailedSymbolGraphSnapshot`
-  // below) already rules out a torn/partial write, and
-  // `isDetailedSymbolGraphCompatibleWithProject` independently re-derives the basic symbol
-  // graph and checks that this sidecar is a superset of it: every basic node and edge is
-  // present, extra edges between valid nodes are kept, and extra nodes must still be
-  // symbols from the current index.
-  return new Set(payload.graph.nodes.map((node) => node.id)).size === payload.graph.nodes.length;
+  // `graphHash` remains serialized and shape-validated, but load does not re-stringify and
+  // re-hash the full graph. The atomic write prevents partial data, and compatibility with the
+  // current project is re-derived structurally below.
+  return (
+    new Set(payload.graph.nodes.map((node) => node.id)).size === payload.graph.nodes.length &&
+    new Set(payload.graph.nodeAliases.map(([aliasId]) => aliasId)).size === payload.graph.nodeAliases.length
+  );
+}
+
+function isDetailedSymbolGraphAlias(value: unknown): value is [string, string] {
+  return (
+    Array.isArray(value) &&
+    value.length === 2 &&
+    typeof value[0] === "string" &&
+    !!value[0] &&
+    typeof value[1] === "string" &&
+    !!value[1]
+  );
 }
 
 function isSymbolNode(value: unknown): value is SymbolNode {
@@ -1385,6 +1419,13 @@ function sameSymbolNodeSemantics(actual: SymbolNode, expected: SymbolNode): bool
     actual.complexity === expected.complexity
   );
 }
+function mergeCanonicalSymbolNode(canonical: SymbolNode, alias: SymbolNode): SymbolNode {
+  const merged = { ...canonical };
+  if (!merged.docstring && alias.docstring) merged.docstring = alias.docstring;
+  merged.lineSpan = Math.max(merged.lineSpan ?? 0, alias.lineSpan ?? 0);
+  merged.complexity = Math.max(merged.complexity ?? 0, alias.complexity ?? 0);
+  return merged;
+}
 
 function indexDefinesSymbolNode(index: ProjectIndex, node: SymbolNode): boolean {
   const moduleEntry = index.byFile.get(fileIdentityKey(node.file));
@@ -1429,7 +1470,31 @@ async function isDetailedSymbolGraphCompatibleWithProject(
   }
 
   const base = await buildSymbolGraph(index);
-  for (const [id, expected] of base.nodes) {
+  const nodeAliases = detailedSymbolGraphAliases(graph);
+  const expectedNodes = nodeAliases.size ? new Map(base.nodes) : base.nodes;
+  for (const [aliasId, canonicalId] of nodeAliases) {
+    if (
+      aliasId === canonicalId ||
+      graph.nodes.has(aliasId) ||
+      nodeAliases.has(canonicalId) ||
+      !graph.nodes.has(canonicalId)
+    ) {
+      return false;
+    }
+    const aliasNode = base.nodes.get(aliasId);
+    const canonicalNode = expectedNodes.get(canonicalId);
+    if (
+      !aliasNode ||
+      !canonicalNode ||
+      aliasNode.name !== canonicalNode.name ||
+      aliasNode.kind !== canonicalNode.kind
+    ) {
+      return false;
+    }
+    expectedNodes.set(canonicalId, mergeCanonicalSymbolNode(canonicalNode, aliasNode));
+  }
+  for (const [id, expected] of expectedNodes) {
+    if (nodeAliases.has(id)) continue;
     const actual = graph.nodes.get(id);
     if (!actual || !sameSymbolNodeSemantics(actual, expected)) return false;
   }
@@ -1437,7 +1502,17 @@ async function isDetailedSymbolGraphCompatibleWithProject(
     if (base.nodes.has(node.id)) continue;
     if (!indexDefinesSymbolNode(index, node)) return false;
   }
-  return symbolEdgeMultisetContains(graph.edges, base.edges);
+  if (!nodeAliases.size) return symbolEdgeMultisetContains(graph.edges, base.edges);
+  const canonicalBaseEdges = new Map<string, SymbolEdge>();
+  for (const edge of base.edges) {
+    const canonicalEdge = {
+      ...edge,
+      from: nodeAliases.get(edge.from) ?? edge.from,
+      to: nodeAliases.get(edge.to) ?? edge.to,
+    };
+    canonicalBaseEdges.set(symbolEdgeKey(canonicalEdge), canonicalEdge);
+  }
+  return symbolEdgeMultisetContains(graph.edges, [...canonicalBaseEdges.values()]);
 }
 
 function symbolEdgeMultisetContains(haystack: readonly SymbolEdge[], needles: readonly SymbolEdge[]): boolean {

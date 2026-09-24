@@ -38,7 +38,7 @@ export type SymbolDef = {
 };
 
 export type ExportEntry =
-  | { type: "local"; exportedAs: string; target: SymbolDef }
+  | { type: "local"; exportedAs: string; qualifiedAs?: string; target: SymbolDef }
   | {
       type: "reexport";
       exportedAs: string;
