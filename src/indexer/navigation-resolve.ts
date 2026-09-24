@@ -183,6 +183,7 @@ function resolveImplicitUnitExport(
   matchesOptions: (def: SymbolDef, namespace: ResolveExportOptions["cNamespace"]) => boolean,
   namespace: ResolveExportOptions["cNamespace"],
   useIndex?: number,
+  qualification?: string,
 ): SymbolDef | null {
   // Only the implicit compilation-unit languages have bare-name unit visibility. C and C++
   // keep their include-scope tag precedence and PHP its case-folded namespaces; the unit
@@ -202,6 +203,7 @@ function resolveImplicitUnitExport(
           declaration: target.range,
           useFile: file,
           ...(useIndex !== undefined ? { useIndex } : {}),
+          ...(qualification !== undefined ? { qualification } : {}),
         })
       ) {
         continue;
@@ -322,9 +324,22 @@ export function resolveExport(
     const names = moduleNameLookup(index, moduleEntry.file);
     if (!names) return null;
     const normalizedFile = normalizePath(moduleEntry.file);
-    const canonicalName = names.normalizeIdentifier(name);
     const referenceIndex = fileIdentityKey(fileInner) === fileIdentityKey(file) ? opts?.referenceIndex : undefined;
-    const key = `${cacheKey(normalizedFile, canonicalName)}::${opts?.preferredKind ?? ""}::${namespace ?? ""}::${allowLocalFallback ? "local" : "export"}::${referenceIndex ?? ""}`;
+    const filtersUseNamespace =
+      referenceIndex !== undefined &&
+      supportForFileWithoutHeaderSample(normalizedFile, index.languageExtensions)?.id === "csharp";
+    const separator = filtersUseNamespace ? name.lastIndexOf(".") : -1;
+    let qualification: string | undefined;
+    let unqualifiedName = name;
+    if (separator >= 0) {
+      qualification = name.slice(0, separator);
+      unqualifiedName = name.slice(separator + 1);
+    } else if (filtersUseNamespace && name.startsWith("global::")) {
+      qualification = "global::";
+      unqualifiedName = name.slice("global::".length);
+    }
+    const canonicalName = names.normalizeIdentifier(unqualifiedName);
+    const key = `${cacheKey(normalizedFile, names.normalizeIdentifier(name))}::${opts?.preferredKind ?? ""}::${namespace ?? ""}::${allowLocalFallback ? "local" : "export"}::${referenceIndex ?? ""}`;
     if (index.exportCache.has(key)) return index.exportCache.get(key)!;
 
     const cycleKey = `${cacheKey(normalizedFile, canonicalName)}::${namespace ?? ""}`;
@@ -338,6 +353,7 @@ export function resolveExport(
       matchesOptions,
       namespace,
       referenceIndex,
+      qualification,
     );
     if (implicitUnitExport) {
       const result: ResolvedExport = { kind: "resolved", def: implicitUnitExport };
@@ -349,6 +365,15 @@ export function resolveExport(
     for (const target of names.localExports.get(canonicalName) ?? []) {
       if (
         matchesOptions(target, namespace) &&
+        (!filtersUseNamespace ||
+          isUnitBareNameVisible({
+            index,
+            declarationFile: target.file,
+            declaration: target.range,
+            useFile: file,
+            useIndex: referenceIndex,
+            ...(qualification !== undefined ? { qualification } : {}),
+          })) &&
         !localCandidates.some((candidate) => sameSymbolDef(index, candidate, target))
       ) {
         localCandidates.push(target);
@@ -442,8 +467,27 @@ export function resolveExport(
     }
 
     const localFallbackCandidates: SymbolDef[] = [];
-    if (allowLocalFallback && !shouldSkipVisibilityLocalFallback(index, moduleEntry)) {
+    // C# lexical bindings have already been checked. Only namespace-level types
+    // can remain visible from another region without a shared lexical scope.
+    if (allowLocalFallback && (filtersUseNamespace || !shouldSkipVisibilityLocalFallback(index, moduleEntry))) {
       for (const local of names.locals.get(canonicalName) ?? []) {
+        if (
+          filtersUseNamespace &&
+          (local.isMember ||
+            (local.kind !== SymbolKind.Class &&
+              local.kind !== SymbolKind.Interface &&
+              local.kind !== SymbolKind.TypeAlias) ||
+            !isUnitBareNameVisible({
+              index,
+              declarationFile: local.file,
+              declaration: local.range,
+              useFile: file,
+              useIndex: referenceIndex,
+              ...(qualification !== undefined ? { qualification } : {}),
+            }))
+        ) {
+          continue;
+        }
         if (
           matchesOptions(local, namespace) &&
           !localFallbackCandidates.some((candidate) => sameSymbolDef(index, candidate, local))

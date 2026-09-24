@@ -16,6 +16,20 @@ import {
   type SymbolDef,
 } from "./types.js";
 
+/** Preserve an explicit C# namespace instead of resolving its final token as a bare name. */
+export function csharpLookupName(node: SyntaxNodeLike, source: string, fallback: string): string {
+  let qualified = node;
+  while (
+    qualified.parent &&
+    (qualified.parent.type === "qualified_name" || qualified.parent.type === "alias_qualified_name") &&
+    qualified.parent.endIndex === qualified.endIndex
+  ) {
+    qualified = qualified.parent;
+  }
+  if (qualified.type !== "qualified_name" && qualified.type !== "alias_qualified_name") return fallback;
+  return source.slice(qualified.startIndex, qualified.endIndex).replace(/\s+/gu, "");
+}
+
 export function findDeclarationNameNode(
   sup: LanguageSupport,
   currentNode: SyntaxNodeLike | null,
@@ -70,6 +84,19 @@ export function findClosestScopeBinding(
   currentNode: SyntaxNodeLike,
   support: LanguageSupport,
 ): Binding | null {
+  if (support.id === "csharp" && bindingName.includes(".")) {
+    const names = bindingName.split(".");
+    const first = names.shift()!;
+    let owner = findClosestScopeBinding(scopeIndex, first, currentNode, support);
+    for (const name of names) {
+      if (owner?.kind !== "class") return null;
+      const body = owner.node?.parent?.childForFieldName("body");
+      if (!body) return null;
+      const bodyScope = scopeIndex.allScopes.find((scope) => scope.node.id === body.id);
+      owner = bodyScope?.map.get(support.normalizeIdentifier(name)) ?? null;
+    }
+    return owner;
+  }
   const canonicalName = support.normalizeIdentifier(bindingName);
   const normalizedName = support.id === "c" && cTagRole(currentNode) ? cScopeName(canonicalName, "tag") : canonicalName;
   let currentScope = scopeIndex.allScopes.find((scope) => {

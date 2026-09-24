@@ -861,6 +861,101 @@ describe("C# same-namespace sibling visibility", () => {
   });
 });
 
+describe("C# same-file namespace boundaries", () => {
+  const lines = [
+    "namespace Q { public class Target {} class Direct { Target DirectMake() => new Target(); } }",
+    "namespace P { class Rejected { Target RejectedMake() => new Target(); } }",
+    "namespace Q { class Allowed { Target AllowedMake() => new Target(); } }",
+    "class GlobalRejected { Target GlobalMake() => new Target(); }",
+    "namespace Q.Child { class Nested { Target NestedMake() => new Target(); } }",
+    "namespace P { class Shadow { int Local() { int Target = 1; return Target; } } }",
+    "namespace Q { internal class Hidden {} }",
+    "namespace Q { class HiddenUse { Hidden InternalMake() => new Hidden(); } }",
+    "namespace P { class Qualified { Q.Target QualifiedMake() => new Q.Target(); } }",
+    "namespace P { class RootQualified { global::Q.Target RootMake() => new global::Q.Target(); } }",
+    "namespace Q { class Unknown { Missing.Target UnknownMake() => new Missing.Target(); } }",
+  ];
+
+  it("resolves only visible declarations and finds uses in reopened namespaces", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-local-namespace-"));
+    try {
+      const paths = await writeFixtureFiles(root, { "Use.cs": lines.join("\n") });
+      const file = paths["Use.cs"]!;
+      const index = await buildProjectIndexFromFiles(root, [file]);
+      for (const line of [1, 2, 3, 4, 5]) {
+        const result = await goToDefinition(index, {
+          file,
+          line,
+          column: columnOf(lines, line, "new Target") + 4,
+        });
+        const visible = line === 1 || line === 3 || line === 5;
+        expect(result.status, `constructor on line ${line}`).toBe(visible ? "ok" : "not_found");
+        if (result.status === "ok") {
+          expect(result.definition.range.start).toMatchObject({ line: 1, column: columnOf(lines, 1, "Target") });
+        }
+      }
+      for (const [line, token, visible] of [
+        [9, "new Q.", true],
+        [10, "new global::Q.", true],
+        [11, "new Missing.", false],
+      ] as const) {
+        const qualified = await goToDefinition(index, {
+          file,
+          line,
+          column: columnOf(lines, line, token) + token.length,
+        });
+        expect(qualified.status, `qualified constructor on line ${line}`).toBe(visible ? "ok" : "not_found");
+        if (qualified.status === "ok") expect(qualified.definition.range.start.line).toBe(1);
+      }
+      const shadow = await goToDefinition(index, {
+        file,
+        line: 6,
+        column: columnOf(lines, 6, "return Target") + 7,
+      });
+      expect(shadow.status).toBe("ok");
+      if (shadow.status !== "ok") throw new Error("Expected the local variable");
+      expect(shadow.definition.range.start).toMatchObject({ line: 6, column: columnOf(lines, 6, "Target") });
+
+      const hidden = await goToDefinition(index, {
+        file,
+        line: 8,
+        column: columnOf(lines, 8, "new Hidden") + 4,
+      });
+      expect(hidden.status).toBe("ok");
+      if (hidden.status !== "ok") throw new Error("Expected the same-file internal class");
+      expect(hidden.definition.range.start.line).toBe(7);
+      const hiddenReferences = await findReferences(index, { file, line: 7, column: columnOf(lines, 7, "Hidden") });
+      expect(hiddenReferences.status).toBe("ok");
+      if (hiddenReferences.status !== "ok") throw new Error("Expected same-file internal class references");
+      expect(hiddenReferences.references.map((reference) => reference.range.start.line).sort()).toEqual([7, 8, 8]);
+      const references = await findReferences(index, { file, line: 1, column: columnOf(lines, 1, "Target") });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected namespace type references");
+      expect(references.references.map((reference) => reference.range.start.line).sort((a, b) => a - b)).toEqual([
+        1, 1, 1, 3, 3, 5, 5, 9, 9, 10, 10,
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not create constructor edges across unrelated namespace regions", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-local-namespace-graph-"));
+    try {
+      const paths = await writeFixtureFiles(root, { "Use.cs": lines.join("\n") });
+      const index = await buildProjectIndexFromFiles(root, [paths["Use.cs"]!]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const constructors = graph.edges
+        .filter((edge) => edge.label === "instantiates" && graph.nodes.get(edge.to)?.name === "Target")
+        .map((edge) => graph.nodes.get(edge.from)?.name)
+        .sort();
+      expect(constructors).toEqual(["AllowedMake", "DirectMake", "NestedMake", "QualifiedMake", "RootMake"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("C# partial class members across files", () => {
   // #378: members declared in one part file are the same owner as the call site in the other part
   // file, so navigation, references, and the detailed graph must all connect them.

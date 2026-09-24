@@ -191,6 +191,7 @@ function tryResolveNode(context: EdgePassContext, node: SyntaxNodeLike, fromId: 
   if (
     isIdentifierType(context.sup, node.type) ||
     node.type === "type_identifier" ||
+    (context.sup.id === "csharp" && (node.type === "qualified_name" || node.type === "alias_qualified_name")) ||
     (context.sup.id === "cpp" && (node.type === "operator_name" || node.type === "destructor_name"))
   ) {
     const name = sliceText(node, context.source);

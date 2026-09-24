@@ -455,15 +455,20 @@ export async function resolveMemberAccessDefinition(params: {
         }
       }
 
-      const local = mod.locals.find((candidate) => {
-        if (candidate.localName === exprName) return true;
-        return (
-          sup.id === "php" &&
-          declaresMembers(candidate) &&
-          foldPhpIdentifierCase(candidate.localName) === foldPhpIdentifierCase(exprName)
-        );
-      });
-      if (local) return { kind: "resolved", def: local };
+      if (sup.id === "csharp") {
+        const local = resolveExport(index, mod.file, exprName, { referenceIndex: expr.startIndex });
+        if (local) return local;
+      } else {
+        const local = mod.locals.find((candidate) => {
+          if (candidate.localName === exprName) return true;
+          return (
+            sup.id === "php" &&
+            declaresMembers(candidate) &&
+            foldPhpIdentifierCase(candidate.localName) === foldPhpIdentifierCase(exprName)
+          );
+        });
+        if (local) return { kind: "resolved", def: local };
+      }
 
       for (const starImport of mod.imports.filter((candidate) => candidate.kind === "star")) {
         const result = resolveImported(index, starImport, exprName);
@@ -491,7 +496,7 @@ export async function resolveMemberAccessDefinition(params: {
           return resolveExport(index, base.file, memberName, { allowLocalFallback: false });
         }
         if (base?.kind === "resolved") {
-          if (sup.id === "java") {
+          if (sup.id === "java" || sup.id === "csharp") {
             const memberDef = await resolveMemberDefinitionForBase(index, base.def, memberName);
             return memberDef ? { kind: "resolved", def: memberDef } : null;
           }

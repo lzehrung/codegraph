@@ -126,6 +126,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
   css: { omittedReason: "Style language; no member-access concept." },
   csharp: {
     memberAccessShapes: [{ object: { index: 0 }, property: { index: 2 } }],
+    extraTraversalTypes: ["qualified_name"],
     receiverKeywords: { own: ["this"], instanceOwn: ["this"], supertype: ["base"] },
     receiverAncestry: {
       clauses: [{ nodeType: "base_list", relation: "superclass-first", supertype: "first-child" }],

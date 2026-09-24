@@ -5,6 +5,7 @@ import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js"
 import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
 import { resolveMemberAccessDefinition, supportsReceiverMemberNavigation } from "./navigation-goto.js";
 import {
+  csharpLookupName,
   findClosestBinding,
   findClosestScopeBinding,
   findDeclarationNameNode,
@@ -329,6 +330,7 @@ export async function goToDefinition(
   }
 
   if (name) {
+    const lookupName = sup.id === "csharp" ? csharpLookupName(node, source, name) : name;
     if (sup.id === "php") {
       const alias = await resolvePhpAliasDefinition(index, mod, file, name, phpImportType ?? "const");
       if (alias) {
@@ -340,7 +342,7 @@ export async function goToDefinition(
       }
     }
     const scopeIndex = getOrBuildScopeIndex(index, file, source, sup, mod, tree);
-    const closestBinding = findClosestScopeBinding(scopeIndex, name, node, sup);
+    const closestBinding = findClosestScopeBinding(scopeIndex, lookupName, node, sup);
     const usingTarget =
       sup.id === "cpp" && closestBinding ? cppUsingDeclarationTarget(closestBinding, source) : undefined;
     if (usingTarget) {
@@ -364,7 +366,7 @@ export async function goToDefinition(
         confidence: "high",
       });
     }
-    const local = findClosestBinding(scopeIndex, file, name, node, sup, source);
+    const local = findClosestBinding(scopeIndex, file, lookupName, node, sup, source);
     if (local) {
       return okGoToResult(index, local, {
         resolution: "exact",
@@ -392,7 +394,7 @@ export async function goToDefinition(
     if (sup.supportsCrossModuleSymbols) {
       let cNamespace: "tag" | "ordinary" | undefined;
       if (sup.id === "c") cNamespace = cTagRole(node) ? "tag" : "ordinary";
-      const resolvedName = resolveNamedDefinition(index, mod, file, sup, name, cNamespace, node.startIndex);
+      const resolvedName = resolveNamedDefinition(index, mod, file, sup, lookupName, cNamespace, node.startIndex);
       if (resolvedName) {
         return resolvedName;
       }
@@ -662,10 +664,17 @@ async function findReferencesInternal(
   const exportedNameSet = new Set(exportedNames);
   const phpQualifiedNames = await buildPhpQualifiedNames(index, definitionFile, definition);
   const scansReceiverReferences = shouldScanVerifiedReferences(definition, parsedContext, receiverMemberDefinition);
+  const scansNamespaceReferences =
+    parsedContext.sup.id === "csharp" &&
+    !definition.isMember &&
+    (definition.kind === SymbolKind.Class ||
+      definition.kind === SymbolKind.Interface ||
+      definition.kind === SymbolKind.TypeAlias);
   const requiresSameFileVerifiedScan =
-    (parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp") &&
-    definition.kind === SymbolKind.Function &&
-    !receiverMemberDefinition;
+    ((parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp") &&
+      definition.kind === SymbolKind.Function &&
+      !receiverMemberDefinition) ||
+    scansNamespaceReferences;
   let sameFileVerifiedScanExecuted = false;
   if (localBinding && localBinding.occurrencesComplete !== false && !scansReceiverReferences) {
     for (const occurrence of localBinding.occurrences) {
@@ -1130,10 +1139,9 @@ async function findReferencesInternal(
       languageId: parsedContext.sup.id,
       phpQualifiedNames,
       sameFileOccurrence: {
-        // Only non-member C/C++ function definitions need this strategy: their names
-        // self-scope-register, so sibling same-file call sites stay invisible to the scope
-        // layer. Receiver members use the receiver/equivalent-declaration scan instead.
-        // Parameters and local variables already collect every same-file occurrence lexically.
+        // C/C++ callable siblings and reopened C# namespace regions can refer to a
+        // declaration without sharing its lexical scope. Verify those uses through
+        // navigation; parameters and local variables remain lexical-only.
         applicable: requiresSameFileVerifiedScan,
         executed: sameFileVerifiedScanExecuted,
       },

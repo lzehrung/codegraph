@@ -358,6 +358,7 @@ export function isUnitBareNameVisible(args: {
   declaration: Range;
   useFile: FileId;
   useIndex?: number;
+  qualification?: string;
 }): boolean {
   const declarationFact = unitFactFor(args.index, args.declarationFile);
   if (declarationFact.identity.kind !== "namespaces") return true;
@@ -367,6 +368,18 @@ export function isUnitBareNameVisible(args: {
   if (useFact.identity.kind !== "namespaces") return true;
   const useRegions = useFact.identity.regions;
   if (!useRegions) return false;
+  if (args.qualification !== undefined) {
+    const declared = csharpNamespaceAtIndex(declarationRegions, args.declaration.start.index);
+    const qualifier = args.qualification;
+    if (qualifier.startsWith("global::")) return declared === qualifier.slice("global::".length);
+    let enclosing = csharpNamespaceAtIndex(useRegions, args.useIndex);
+    while (enclosing) {
+      if (declared === `${enclosing}.${qualifier}`) return true;
+      const separator = enclosing.lastIndexOf(".");
+      enclosing = separator < 0 ? "" : enclosing.slice(0, separator);
+    }
+    return declared === qualifier;
+  }
   return csharpNamespaceVisibleFromUseFile(
     csharpNamespaceAtIndex(declarationRegions, args.declaration.start.index),
     useRegions,

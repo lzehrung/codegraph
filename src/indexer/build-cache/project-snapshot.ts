@@ -73,7 +73,8 @@ const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 // v10: C/C++ void-parameter arity changes persisted memberArity and call edges.
 // v11: canonical C/C++ declaration aliases preserve base-graph compatibility across cache loads.
 // v12: shared callable ranges, cross-file ownership, and Zig visibility change detailed call edges.
-export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 12;
+// v13: same-file C# constructor edges respect namespace visibility instead of file-wide names.
+export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 13;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";

@@ -21,7 +21,12 @@ import {
   resolveVisibleCppCallableName,
 } from "../indexer/navigation-cpp.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
-import { findClosestScopeBinding, getOrBuildScopeIndex, resolveNamedDefinition } from "../indexer/navigation-local.js";
+import {
+  csharpLookupName,
+  findClosestScopeBinding,
+  getOrBuildScopeIndex,
+  resolveNamedDefinition,
+} from "../indexer/navigation-local.js";
 import { ensureParsedContext, type ParsedFileContext } from "../indexer/parse-context.js";
 import {
   SymbolKind,
@@ -375,7 +380,8 @@ export async function buildSymbolGraphDetailed(
         return resolveCppExportedCallables(index, [target], node, src, loadCppParsedFile);
       };
       const resolveIdentifier = (name: string, node: SyntaxNodeLike): SymbolDef | null => {
-        const binding = findClosestScopeBinding(scopeIndex, name, node, sup);
+        const lookupName = sup.id === "csharp" ? csharpLookupName(node, src, name) : name;
+        const binding = findClosestScopeBinding(scopeIndex, lookupName, node, sup);
         const usingTarget = sup.id === "cpp" && binding ? cppUsingDeclarationTarget(binding, src) : undefined;
         if (usingTarget) {
           const visible = resolveVisibleCppCallableName(index, moduleEntry, usingTarget, node, src, loadCppParsedFile);
@@ -425,16 +431,21 @@ export async function buildSymbolGraphDetailed(
         }
         if (binding) return resolveCppAliasTarget(aliasToTargetDef.get(binding.name), node);
 
-        const localCandidates = moduleEntry.locals.filter(
-          (local) => sup.normalizeIdentifier(local.localName) === sup.normalizeIdentifier(name),
-        );
+        // C# namespace regions can reopen within one file. Without a lexical binding,
+        // resolve through the position-aware unit lookup, not file-wide local names.
+        const localCandidates =
+          sup.id === "csharp"
+            ? []
+            : moduleEntry.locals.filter(
+                (local) => sup.normalizeIdentifier(local.localName) === sup.normalizeIdentifier(name),
+              );
         if (localCandidates.length === 1) {
           const only = localCandidates[0]!;
           return sup.id === "cpp" && only.kind === SymbolKind.Function
             ? resolveCppExportedCallables(index, [only], node, src, loadCppParsedFile)
             : only;
         }
-        const aliasTarget = resolveCppAliasTarget(aliasToTargetDef.get(name), node);
+        const aliasTarget = resolveCppAliasTarget(aliasToTargetDef.get(lookupName), node);
         if (aliasTarget) return aliasTarget;
         // A bare name owned by no scope binding or local declaration can still name a
         // sibling declaration of the file's implicit compilation unit (Go/JVM package,
@@ -443,7 +454,7 @@ export async function buildSymbolGraphDetailed(
         // navigation agree on the target. The C# use site is pinned to its namespace
         // region by `referenceIndex`; every other unit language reads its whole unit.
         if (localCandidates.length === 0 && IMPLICIT_UNIT_LANGUAGES[sup.id]) {
-          const resolved = resolveExport(index, file, name, {
+          const resolved = resolveExport(index, file, lookupName, {
             ...(sup.id === "csharp" ? { referenceIndex: node.startIndex } : {}),
           });
           if (resolved?.kind === "resolved") return resolved.def;

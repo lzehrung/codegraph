@@ -99,8 +99,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 50 preserves PHP alias-use roles, C++ parameter-pack minima, and qualified base identities.
  * Epoch 51 resolves C++ using-declarations through included exports.
  * Epoch 52 shares callable ranges, resolves implicit compilation-unit peers, and filters Zig exports by visibility.
+ * Epoch 53 preserves C# namespace visibility through same-file lookup and reference fallbacks.
  */
-export const CORE_ALGORITHM_EPOCH = 52;
+export const CORE_ALGORITHM_EPOCH = 53;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
