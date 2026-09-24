@@ -2337,6 +2337,11 @@ describe("Import Resolution", () => {
       "int qualified_inline_call() { return v1::versioned(); }",
       "int nested_inline_call() { return outer::visible(); }",
       "int invalid_nested_inline_call() { return visible(); }",
+      "int inline_alias() { return exported_only(); }",
+      "int qualified_inline_alias() { return current::exported_only(); }",
+      "int nested_inline_alias() { return enclosing::nested_only(); }",
+      "int qualified_nested_inline_alias() { return enclosing::nested::nested_only(); }",
+      "int invalid_nested_inline_alias() { return nested_only(); }",
     ];
     try {
       await fsp.writeFile(
@@ -2353,6 +2358,9 @@ describe("Import Resolution", () => {
           "namespace alias { using tools::run; }",
           "inline namespace v1 { int versioned(); }",
           "namespace outer { inline namespace v2 { int visible(); } }",
+          "namespace original { int exported_only(); int nested_only(); }",
+          "inline namespace current { using original::exported_only; }",
+          "namespace enclosing { inline namespace nested { using original::nested_only; } }",
         ].join("\n"),
       );
       await fsp.writeFile(consumer, source.join("\n"));
@@ -2368,6 +2376,11 @@ describe("Import Resolution", () => {
         [9, "versioned", 10],
         [10, "visible", 11],
         [11, "visible", undefined],
+        [12, "exported_only", 12],
+        [13, "exported_only", 12],
+        [14, "nested_only", 12],
+        [15, "nested_only", 12],
+        [16, "nested_only", undefined],
       ] as const) {
         const result = await goToDefinition(index, {
           file: consumer,
@@ -2410,6 +2423,16 @@ describe("Import Resolution", () => {
           "outer::v2",
           "outer::v2::visible",
           "outer::visible",
+          "original",
+          "original::exported_only",
+          "original::nested_only",
+          "current",
+          "current::exported_only",
+          "exported_only",
+          "enclosing",
+          "enclosing::nested",
+          "enclosing::nested::nested_only",
+          "enclosing::nested_only",
         ].sort(),
       );
       const graph = await buildSymbolGraphDetailed(index);
@@ -2421,10 +2444,14 @@ describe("Import Resolution", () => {
       ).toEqual([
         ["alias_call", "run"],
         ["exposed_call", "exposed"],
+        ["inline_alias", "exported_only"],
         ["inline_call", "versioned"],
+        ["nested_inline_alias", "nested_only"],
         ["nested_inline_call", "visible"],
         ["plain", "global"],
+        ["qualified_inline_alias", "exported_only"],
         ["qualified_inline_call", "versioned"],
+        ["qualified_nested_inline_alias", "nested_only"],
         ["valid", "run"],
       ]);
     } finally {

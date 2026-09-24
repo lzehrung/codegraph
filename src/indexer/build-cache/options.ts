@@ -90,8 +90,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 42 preserves C++ signature tokens and qualified exports, merges member arity ranges,
  * and keeps PHP import roles and member-name case rules consistent across consumers.
  * Epoch 43 applies C++ call arity to single entities and overloaded using aliases.
+ * Epoch 44 exposes using-declaration aliases through enclosing inline namespaces.
  */
-export const CORE_ALGORITHM_EPOCH = 43;
+export const CORE_ALGORITHM_EPOCH = 44;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

@@ -1156,38 +1156,36 @@ export function collectLocalsAndExportsFromSource(
         if (qualified) {
           const importedSegments = cppQualifiedNameSegments(qualified, source);
           const importedName = importedSegments.join("::");
-          const namespaceSegments: string[][] = [];
-          let current = node.parent;
-          while (current) {
-            if (current.type === "namespace_definition") {
-              const namespaceName = current.childForFieldName("name");
-              if (namespaceName) namespaceSegments.unshift(cppQualifiedNameSegments(namespaceName, source));
-            }
-            current = current.parent;
-          }
           const localName = importedSegments.at(-1);
-          const exportedName = localName ? [...namespaceSegments.flat(), localName].join("::") : "";
+          if (!localName) return;
+          const exportedName = cppQualifiedExportName(node, source, localName);
+          const exportedNames = [exportedName];
+          if (exportedName !== localName) {
+            const visibleAs = cppQualifiedExportName(node, source, localName, true);
+            if (visibleAs !== exportedName) exportedNames.push(visibleAs);
+          }
           const targets = exports.filter(
             (entry): entry is Extract<ExportEntry, { type: "local" }> =>
               entry.type === "local" && entry.exportedAs === importedName,
           );
-          if (!localName || !exportedName) return;
-          for (const target of targets) {
-            if (
-              exports.some(
-                (entry) =>
-                  entry.type === "local" &&
-                  entry.exportedAs === exportedName &&
-                  entry.target.range.start.index === target.target.range.start.index,
-              )
-            ) {
-              continue;
+          for (const exportedAs of exportedNames) {
+            for (const target of targets) {
+              if (
+                exports.some(
+                  (entry) =>
+                    entry.type === "local" &&
+                    entry.exportedAs === exportedAs &&
+                    entry.target.range.start.index === target.target.range.start.index,
+                )
+              ) {
+                continue;
+              }
+              exports.push({
+                type: "local",
+                exportedAs,
+                target: target.target,
+              });
             }
-            exports.push({
-              type: "local",
-              exportedAs: exportedName,
-              target: target.target,
-            });
           }
         }
         return;

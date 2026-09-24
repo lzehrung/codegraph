@@ -1714,7 +1714,7 @@ describe("Go to Definition", () => {
           "int pick();",
           "int pick(int);",
           "}",
-          "namespace alias { using left::pick; }",
+          "namespace alias { inline namespace v1 { using left::pick; } }",
         ];
         const lines = [
           '#include "api.hpp"',
