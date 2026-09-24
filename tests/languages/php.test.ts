@@ -751,6 +751,21 @@ describe("PHP import symbol namespaces", () => {
       "    Alias();",
       "    return Alias;",
       "}",
+      "function constantsOnly() {",
+      "    return Alias;",
+      "}",
+      "function wrongCaseConstants() {",
+      "    return ALIAS;",
+      "    return aLiAs;",
+      "}",
+      "function typedOnly(ALIAS $a): aLiAs {",
+      "    return $a;",
+      "}",
+      "function mixedCaseCalls() {",
+      "    ALIAS();",
+      "    new ALIAS();",
+      "    return alias;",
+      "}",
       "",
     ];
 
@@ -850,24 +865,45 @@ describe("PHP import symbol namespaces", () => {
         }
       }
 
-      const callerNode = [...detailed.nodes.values()].find(
-        (node) =>
-          fileIdentityKey(node.file) === fileIdentityKey(consumerFile) &&
-          node.kind === "function" &&
-          node.name === "caller",
+      const functionEdges = (functionName: string): { uses: Set<string>; calls: string[] } => {
+        const node = [...detailed.nodes.values()].find(
+          (candidate) =>
+            fileIdentityKey(candidate.file) === fileIdentityKey(consumerFile) &&
+            candidate.kind === "function" &&
+            candidate.name === functionName,
+        );
+        expect(node, `${functionName} should appear in the detailed graph`).toBeDefined();
+        if (!node) return { uses: new Set<string>(), calls: [] };
+        const outgoing = detailed.edges.filter((edge) => edge.from === node.id);
+        return {
+          uses: new Set(outgoing.filter((edge) => edge.label === "uses").map((edge) => edge.to)),
+          calls: outgoing.filter((edge) => edge.label === "calls").map((edge) => edge.to),
+        };
+      };
+
+      // Each occurrence resolves through its own import namespace: the instantiation
+      // occurrence uses the class, the call occurrence uses the function, and the bare
+      // return uses the constant.
+      const caller = functionEdges("caller");
+      expect(caller.uses).toEqual(
+        new Set([targetIds.get("class"), targetIds.get("function"), targetIds.get("variable")]),
       );
-      expect(callerNode).toBeDefined();
-      if (callerNode) {
-        const callEdges = detailed.edges.filter((edge) => edge.label === "calls" && edge.from === callerNode.id);
-        expect(callEdges).toHaveLength(1);
-        expect(callEdges[0]?.to).toBe(targetIds.get("function"));
-        expect(
-          detailed.edges.filter(
-            (edge) =>
-              edge.from === callerNode.id && edge.to === targetIds.get("class") && edge.label !== "instantiates",
-          ),
-        ).toEqual([]);
-      }
+      expect(caller.calls).toEqual([targetIds.get("function")]);
+
+      // A constant-only function must not inherit the class or function aliases.
+      expect(functionEdges("constantsOnly").uses).toEqual(new Set([targetIds.get("variable")]));
+
+      // Constants compare exactly: folded class or function spellings satisfy no const use.
+      expect(functionEdges("wrongCaseConstants").uses).toEqual(new Set<string>());
+
+      // Type positions use the class alias, folded ASCII-case-insensitively, and nothing else.
+      expect(functionEdges("typedOnly").uses).toEqual(new Set([targetIds.get("class")]));
+
+      // Mixed-case call and instantiation occurrences resolve their own roles, while the
+      // exact-case constant `alias` must not bind the function or any other role's target.
+      const mixed = functionEdges("mixedCaseCalls");
+      expect(mixed.uses).toEqual(new Set([targetIds.get("function"), targetIds.get("class")]));
+      expect(mixed.calls).toEqual([targetIds.get("function")]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

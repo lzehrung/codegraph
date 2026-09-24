@@ -96,8 +96,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 47 preserves C forward-tag scope and namespace-specific symbol-graph aliases.
  * Epoch 48 retains forward-tag references when a completed tag replaces an include binding.
  * Epoch 49 preserves PHP import-role graph identities and avoids C namespaces on C++ header imports.
+ * Epoch 50 preserves PHP alias-use roles, C++ parameter-pack minima, and qualified base identities.
  */
-export const CORE_ALGORITHM_EPOCH = 49;
+export const CORE_ALGORITHM_EPOCH = 50;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

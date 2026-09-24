@@ -4596,6 +4596,28 @@ describe("Find References: keyword receiver scope and coverage", () => {
     }
   });
 
+  it("groups a C++ parameter pack with calls that bind no trailing arguments", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-parameter-pack-refs-"));
+    try {
+      const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+      const lines = [
+        "template<class T, class... Ts> int pack(T first, Ts... rest);",
+        "template<class T, class... Ts> int pack(T first, Ts... rest) { return first; }",
+        "int use_one() { return pack(1); }",
+        "int use_two() { return pack(1, 2); }",
+        "int use_zero() { return pack(); }",
+      ];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const refs = await testFindReferences(index, file, 2, lines[1]!.indexOf("pack") + 1, 4);
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual([1, 2, 3, 4]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("groups adjusted C++ parameter shapes in references without merging near neighbors", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-adjusted-shape-refs-"));
     try {

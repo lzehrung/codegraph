@@ -616,6 +616,105 @@ describe("C++ classification and same-file navigation", () => {
     }
   });
 
+  it("preserves qualified bases through included headers and inherited calls", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-qualified-base-"));
+    const header = path.join(root, "base.hpp");
+    const file = path.join(root, "main.cpp");
+    const call = "struct Derived : public ns::Base { int relay() { return this->run(); } };";
+    try {
+      await fs.writeFile(header, "namespace ns { struct Base { int run() { return 1; } }; }\n");
+      await fs.writeFile(file, `#include "base.hpp"\n${call}\n`);
+      const index = await createTestIndexFromFiles(root, [header, file]);
+      const target = await goToDefinition(index, { file, line: 2, column: call.indexOf("run()") + 1 });
+      expect(target.status).toBe("ok");
+      if (target.status !== "ok") throw new Error("Expected the qualified base member");
+      expect(normalizePath(target.definition.file)).toBe(normalizePath(header));
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "extends")
+          .map((edge) => [graph.nodes.get(edge.from)?.name, graph.nodes.get(edge.to)?.name]),
+      ).toEqual([["Derived", "Base"]]);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls")
+          .map((edge) => [graph.nodes.get(edge.from)?.name, graph.nodes.get(edge.to)?.name]),
+      ).toEqual([["relay", "run"]]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts a C++ parameter pack that binds no trailing arguments", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-parameter-pack-"));
+    const file = path.join(root, "probe.cpp");
+    const lines = [
+      "template<class T, class... Ts> int pack(T first, Ts... rest);",
+      "template<class T, class... Ts> int pack(T first, Ts... rest) { return first; }",
+      "int pick(int, int);",
+      "int pick(int, ...);",
+      "int use_pack_one() { return pack(1); }",
+      "int use_pack_two() { return pack(1, 2); }",
+      "int use_pack_zero() { return pack(); }",
+      "int use_pick_one() { return pick(1); }",
+      "int use_pick_two() { return pick(1, 2); }",
+      "int use_pick_zero() { return pick(); }",
+      "void arity(int);",
+      "void arity(int, ...);",
+      "void callbacks(void (*fn)(void));",
+      "void callbacks(void (*fn)(...));",
+    ];
+    try {
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      // A pack may bind zero arguments, so only its fixed parameter sets the minimum.
+      const one = await goToDefinition(index, { file, line: 5, column: lines[4]!.lastIndexOf("pack") + 1 });
+      expect(one.status).toBe("ok");
+      if (one.status !== "ok") throw new Error("Expected the pack definition for one fixed argument");
+      expect(one.definition.range.start.line).toBe(2);
+      const two = await goToDefinition(index, { file, line: 6, column: lines[5]!.lastIndexOf("pack") + 1 });
+      expect(two.status).toBe("ok");
+      if (two.status !== "ok") throw new Error("Expected the pack definition for extra arguments");
+      expect(two.definition.range.start.line).toBe(2);
+      // The fixed parameter is still required.
+      expect(await goToDefinition(index, { file, line: 7, column: lines[6]!.lastIndexOf("pack") + 1 })).toMatchObject({
+        status: "not_found",
+      });
+      // A bare ellipsis already accepts the fixed minimum and keeps its overload separate.
+      const ellipsisOne = await goToDefinition(index, { file, line: 8, column: lines[7]!.lastIndexOf("pick") + 1 });
+      expect(ellipsisOne.status).toBe("ok");
+      if (ellipsisOne.status !== "ok") throw new Error("Expected the variadic overload for one argument");
+      expect(ellipsisOne.definition.range.start.line).toBe(4);
+      expect(await goToDefinition(index, { file, line: 9, column: lines[8]!.lastIndexOf("pick") + 1 })).toMatchObject({
+        status: "not_found",
+      });
+      expect(await goToDefinition(index, { file, line: 10, column: lines[9]!.lastIndexOf("pick") + 1 })).toMatchObject({
+        status: "not_found",
+      });
+      const references = await findReferences(index, { file, line: 1, column: lines[0]!.indexOf("pack") + 1 });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected parameter pack references");
+      expect(references.references.map((reference) => reference.range.start.line)).toEqual([1, 2, 5, 6]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const nodes = [...graph.nodes.values()];
+      expect(nodes.filter((node) => node.name === "pack")).toHaveLength(1);
+      expect(nodes.filter((node) => node.name === "pick")).toHaveLength(2);
+      expect(nodes.filter((node) => node.name === "arity")).toHaveLength(2);
+      expect(nodes.filter((node) => node.name === "callbacks")).toHaveLength(2);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls")
+          .map((edge) => [graph.nodes.get(edge.from)?.name, graph.nodes.get(edge.to)?.name]),
+      ).toEqual([
+        ["use_pack_one", "pack"],
+        ["use_pack_two", "pack"],
+        ["use_pick_one", "pick"],
+      ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps same-signature functions from different namespaces ambiguous under one alias", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-alias-namespace-identity-"));
     const file = path.join(root, "probe.cpp");

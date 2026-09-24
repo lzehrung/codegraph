@@ -1,4 +1,4 @@
-import { declarationMemberArity } from "../graphs/symbol-graph-detailed/ast.js";
+import { declarationMemberArity, isVariadicParameterMarker } from "../graphs/symbol-graph-detailed/ast.js";
 import { callArgumentCount } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import type { Binding } from "./scope-types.js";
@@ -231,7 +231,9 @@ function appendArrayExtentTokens(node: SyntaxNodeLike, omittedSpans: Set<string>
 function appendParameterListTokens(node: SyntaxNodeLike, omittedSpans: Set<string>, tokens: string[]): void {
   const parameters = node.childForFieldName("parameters");
   if (!parameters) return;
-  if (declarationMemberArity(node, "cpp") === 0) {
+  // `(void)` is the C/C++ zero-parameter spelling. A variadic parameter list is not empty, so it
+  // keeps its pack/ellipsis tokens instead of collapsing to `()`.
+  if (declarationMemberArity(node, "cpp") === 0 && !parameterListIsVariadic(parameters)) {
     tokens.push("(", ")");
     return;
   }
@@ -393,7 +395,10 @@ export function cppCallableShapeForNode(node: SyntaxNodeLike): CppCallableShape 
   const arity = declarationMemberArity(declarator, "cpp");
   if (arity === undefined) return null;
   let parameterNodes = parameters.namedChildren.filter((child) => child.type !== "comment");
-  if (!arity) parameterNodes = [];
+  // A `(void)` parameter list is the C/C++ zero-parameter spelling and shares identity with `()`.
+  // C++ variadic markers are not zero parameters: a pack `Args... rest` (arity 0 when it is the
+  // only parameter) keeps its fingerprint so it stays distinct from a zero-parameter overload.
+  if (!arity) parameterNodes = parameterNodes.filter((child) => isVariadicParameterMarker(child));
   const optionalCount = parameterNodes.filter(
     (parameter) =>
       parameter.type === "optional_parameter_declaration" || !!parameter.childForFieldName("default_value"),
@@ -404,10 +409,11 @@ export function cppCallableShapeForNode(node: SyntaxNodeLike): CppCallableShape 
     if (!child) break;
     if (child.startIndex >= parameters.endIndex) appendLeafTokens(child, new Set<string>(), suffixTokens);
   }
+  const variadic = parameterListIsVariadic(parameters);
   return {
-    signature: `${parameterNodes.map(parameterFingerprint).join("|")}::${JSON.stringify(suffixTokens)}`,
+    signature: `${parameterNodes.map(parameterFingerprint).join("|")}::${variadic ? "variadic" : "fixed"}::${JSON.stringify(suffixTokens)}`,
     minArity: Math.max(0, arity - optionalCount),
-    maxArity: parameterListIsVariadic(parameters) ? null : arity,
+    maxArity: variadic ? null : arity,
   };
 }
 

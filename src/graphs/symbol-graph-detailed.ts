@@ -438,7 +438,7 @@ export async function buildSymbolGraphDetailed(
       emitPythonDecoratorEdges(edgePassContext, tree.rootNode);
       emitFunctionBodyEdges(edgePassContext, functionNodes);
       await emitMemberOwnershipEdges(edgePassContext, functionNodes, classNodes);
-      emitClassInheritanceEdges(edgePassContext, classNodes);
+      await emitClassInheritanceEdges(edgePassContext, classNodes);
       emitRustImplEdges(edgePassContext, tree.rootNode);
     } catch (error) {
       if (isNativeRequiredUnavailableError(error)) {

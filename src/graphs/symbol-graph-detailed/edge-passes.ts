@@ -1,6 +1,8 @@
 import type { ModuleIndex, ProjectIndex, SymbolDef } from "../../indexer/types.js";
 import { cppCallableShapeForNode, type CppCallableShape } from "../../indexer/cpp-callables.js";
 import { resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp.js";
+import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../../indexer/navigation-php.js";
+import { resolvePhpExportByImportType } from "../../indexer/navigation-resolve.js";
 import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { sliceText, toRange } from "../../util/ast.js";
@@ -529,6 +531,24 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
     const recordAliasUse = (node: SyntaxNodeLike): void => {
       if (context.membersOnly || !isIdentifierType(context.sup, node.type)) return;
       const name = sliceText(node, context.source);
+      if (context.sup.id === "php") {
+        // Resolve the occurrence's namespace; a plain-name map cannot distinguish PHP roles.
+        const importType = inferPhpQualifiedReferenceImportType(node) ?? "const";
+        const aliasName = importType === "const" ? name : foldPhpIdentifierCase(name);
+        const seenKey = `${importType}:${aliasName}`;
+        if (seenAliases.has(seenKey)) return;
+        seenAliases.add(seenKey);
+        const phpImport = findPhpImportAlias(context.moduleEntry.imports, name, importType);
+        if (!phpImport || typeof phpImport.resolved !== "string") return;
+        const resolved = resolvePhpExportByImportType(
+          context.index,
+          phpImport.resolved,
+          phpImport.imported,
+          importType,
+        );
+        if (resolved?.kind === "resolved") recordDefEdge(context, fromId, resolved.def, "uses");
+        return;
+      }
       if (seenAliases.has(name)) return;
       let target: SymbolDef | null = context.aliasToTargetDef.get(name) ?? null;
       if (!target) {
@@ -820,6 +840,10 @@ function narrowBaseSpecifierNode(node: SyntaxNodeLike): SyntaxNodeLike {
 function collectBaseSpecifierIdentifiers(node: SyntaxNodeLike, sup: LanguageSupport, out: SyntaxNodeLike[]): void {
   if (isUnprovenHeritageExpression(node)) return;
   if (BASE_TYPE_IGNORED_TYPES[node.type]) return;
+  if (sup.id === "cpp" && node.type === "qualified_identifier") {
+    out.push(node);
+    return;
+  }
   const narrowed = narrowBaseSpecifierNode(node);
   if (isIdentifierType(sup, narrowed.type) || narrowed.type === "type_identifier") {
     out.push(narrowed);
@@ -828,7 +852,7 @@ function collectBaseSpecifierIdentifiers(node: SyntaxNodeLike, sup: LanguageSupp
   for (const child of narrowed.namedChildren ?? []) collectBaseSpecifierIdentifiers(child, sup, out);
 }
 
-function recordIdentifierRelations(
+async function recordIdentifierRelations(
   context: EdgePassContext,
   fromId: string,
   container: SyntaxNodeLike,
@@ -837,12 +861,26 @@ function recordIdentifierRelations(
     index: number,
     identifier: SyntaxNodeLike,
   ) => "extends" | "implements" | "trait" | "mixin",
-): void {
+): Promise<void> {
   const identifiers: SyntaxNodeLike[] = [];
   collectBaseSpecifierIdentifiers(container, context.sup, identifiers);
   const seen = new Set<string>();
   for (const [index, identifier] of identifiers.entries()) {
-    const target = context.resolveIdentifier(sliceText(identifier, context.source), identifier);
+    let target: SymbolDef | null;
+    if (context.sup.id === "cpp" && identifier.type === "qualified_identifier") {
+      const qualifiedPath = cppQualifiedNameSegments(identifier, context.source);
+      target = await resolveCppQualifiedMemberContainer(
+        context.index,
+        context.moduleEntry,
+        qualifiedPath,
+        context.loadParsedFile,
+      );
+      if (!target && qualifiedPath.length > 1) {
+        target = context.resolveIdentifier(qualifiedPath.join("::"), identifier);
+      }
+    } else {
+      target = context.resolveIdentifier(sliceText(identifier, context.source), identifier);
+    }
     if (!target) continue;
     const targetId = defNodeId(target);
     if (seen.has(targetId)) continue;
@@ -886,12 +924,12 @@ function baseClauseRelation(
 }
 
 /** Records `implements` for every embedded type of a Go interface or struct declaration. */
-function recordEmbedRelations(
+async function recordEmbedRelations(
   context: EdgePassContext,
   fromId: string,
   declaration: SyntaxNodeLike,
   embeds: readonly ReceiverAncestorEmbed[],
-): void {
+): Promise<void> {
   const declaredType = declaration.childForFieldName("type");
   if (!declaredType) return;
   for (const rule of embeds) {
@@ -903,12 +941,15 @@ function recordEmbedRelations(
       if (rule.nameless && member.childForFieldName("name")) continue;
       const specifier = rule.typeField ? member.childForFieldName(rule.typeField) : member;
       if (!specifier) continue;
-      recordIdentifierRelations(context, fromId, specifier, () => "implements");
+      await recordIdentifierRelations(context, fromId, specifier, () => "implements");
     }
   }
 }
 
-export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: DetailedClassNode[]): void {
+export async function emitClassInheritanceEdges(
+  context: EdgePassContext,
+  classNodes: DetailedClassNode[],
+): Promise<void> {
   const rules = MEMBER_ACCESS_ROWS[context.sup.id]?.receiverAncestry;
   if (!rules) return;
 
@@ -938,7 +979,7 @@ export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: 
       }
       for (const clause of clauses) {
         const specifiers = rule.field ? (clause.childForFieldName(rule.field) ?? clause) : clause;
-        recordIdentifierRelations(context, fromId, specifiers, (target, index, identifier) =>
+        await recordIdentifierRelations(context, fromId, specifiers, (target, index, identifier) =>
           baseClauseRelation(rule.relation, target, index, interfaceIds, identifier, context.sup.id === "kotlin"),
         );
       }
@@ -953,11 +994,11 @@ export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: 
         const methodName = methodNode ? sliceText(methodNode, context.source) : undefined;
         if (!methodName || !rules.mixinCalls.includes(methodName)) continue;
         const args = call.childForFieldName("arguments");
-        if (args) recordIdentifierRelations(context, fromId, args, () => "mixin");
+        if (args) await recordIdentifierRelations(context, fromId, args, () => "mixin");
       }
     }
 
-    if (rules.embeds) recordEmbedRelations(context, fromId, cls.node, rules.embeds);
+    if (rules.embeds) await recordEmbedRelations(context, fromId, cls.node, rules.embeds);
   }
 }
 

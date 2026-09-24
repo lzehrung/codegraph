@@ -1402,6 +1402,56 @@ nativeDescribe("native semantic coverage", () => {
     // deterministic assertions can exceed 60 seconds, so retain headroom for host variance.
   }, 120_000);
 
+  it("keeps qualified C++ ancestry and empty pack expansions in native graphs", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-qualified-base-"));
+    tempDirs.push(root);
+    const header = normalizeFile(path.join(root, "base.hpp"));
+    const consumer = normalizeFile(path.join(root, "main.cpp"));
+    await fsp.writeFile(
+      header,
+      [
+        "namespace ns { struct Base { int run() { return 1; } }; }",
+        "template<class... Args> int packed(int first, Args... rest) { return first; }",
+      ].join("\n"),
+    );
+    await fsp.writeFile(
+      consumer,
+      [
+        '#include "base.hpp"',
+        "struct Derived : public ns::Base { int relay() { return this->run(); } };",
+        "struct Missing : public absent::Base { int reject() { return this->run(); } };",
+        "int pack_min() { return packed(1); }",
+        "int pack_bad() { return packed(); }",
+      ].join("\n"),
+    );
+    await withNativeRuntimeModeAsync("native", async () => {
+      const index = await buildProjectIndexFromFiles(root, [header, consumer]);
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "extends")
+          .map((edge) => [
+            graph.nodes.get(edge.from)?.name,
+            graph.nodes.get(edge.to)?.name,
+            graph.nodes.get(edge.to)?.file,
+          ]),
+      ).toEqual([["Derived", "Base", header]]);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls")
+          .map((edge) => [
+            graph.nodes.get(edge.from)?.name,
+            graph.nodes.get(edge.to)?.name,
+            graph.nodes.get(edge.to)?.file,
+          ])
+          .sort(),
+      ).toEqual([
+        ["pack_min", "packed", header],
+        ["relay", "run", header],
+      ]);
+    });
+  });
+
   it("keeps C++ callable redeclarations connected across files", async () => {
     const fixture = await createCppCallableRedeclarationCase();
     const index = await expectNativeSemantics(fixture);

@@ -790,6 +790,47 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(callsiteTexts(graph, helper, run, files)).toEqual(["cpp_helper"]);
   });
 
+  it("keeps qualified C++ base paths separate from same-named decoys", async () => {
+    const files: Record<string, string> = {
+      "base.hpp": "namespace ns { struct Base { int run() { return 1; } }; }",
+      "decoy.hpp": [
+        "namespace other { struct Base { int run() { return 2; } }; }",
+        "struct Base { int run() { return 3; } };",
+      ].join("\n"),
+      "main.cpp": [
+        '#include "base.hpp"',
+        '#include "decoy.hpp"',
+        "struct Derived : public ns::Base { int relay() { return this->run(); } };",
+        "struct Global : public ::ns::Base { int relay_global() { return this->run(); } };",
+        "struct Missing : public absent::Base { int reject() { return this->run(); } };",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cpp-qualified-base-", files);
+    const base = [...graph.nodes.values()].find(
+      (node) => node.name === "Base" && path.basename(node.file) === "base.hpp",
+    );
+    expect(base).toBeDefined();
+    expect(
+      graph.edges
+        .filter((edge) => edge.label === "extends")
+        .map((edge) => [graph.nodes.get(edge.from)?.name, edge.to])
+        .sort(),
+    ).toEqual([
+      ["Derived", base!.id],
+      ["Global", base!.id],
+    ]);
+    const run = nodeIn(graph, "base.hpp", "run");
+    expect(
+      graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => [graph.nodes.get(edge.from)?.name, edge.to])
+        .sort(),
+    ).toEqual([
+      ["relay", run],
+      ["relay_global", run],
+    ]);
+  });
+
   it("uses one graph node for C and C++ function declarations with definitions", async () => {
     const files: Record<string, string> = {
       "probe.c": [

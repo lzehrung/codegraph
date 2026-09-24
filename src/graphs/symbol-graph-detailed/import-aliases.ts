@@ -25,7 +25,6 @@ export function buildImportAliasMaps(
 ): ImportAliasMaps {
   const aliasToTargetDef = new Map<string, SymbolDef>();
   const aliasToTargetModule = new Map<string, string>();
-  const phpAliasSpellings = new Set<string>();
 
   for (const imp of moduleEntry.imports) {
     const targetModule = targetModuleForImport(index, imp);
@@ -41,15 +40,10 @@ export function buildImportAliasMaps(
       }
       if (phpNamedImportRole(imp) !== undefined) {
         // PHP class, function, and constant imports are independent namespaces that can share
-        // one alias spelling. A plain-name key cannot identify a target across roles, so drop
-        // the ambiguous alias instead of pinning one role's target for every use; role-aware
-        // resolution picks the right declaration per use context.
-        const ambiguous = phpAliasSpellings.has(imp.local);
-        phpAliasSpellings.add(imp.local);
-        if (ambiguous) {
-          aliasToTargetDef.delete(imp.local);
-          continue;
-        }
+        // one alias spelling, so this plain-name map cannot identify a target across roles and
+        // keeps only a fallback entry. Use recording resolves each occurrence through its own
+        // namespace; this map still serves call targets and receiver typing when the
+        // occurrence's namespace has no matching import.
         const resolved = resolveImported(index, imp, imp.imported, { allowLocalFallback: false });
         if (resolved && !("namespace" in resolved)) aliasToTargetDef.set(imp.local, resolved);
         continue;

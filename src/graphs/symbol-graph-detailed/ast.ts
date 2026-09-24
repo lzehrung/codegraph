@@ -230,11 +230,33 @@ export const PARAMETER_LIST_NODE_TYPES: Record<string, true> = {
 };
 
 /**
+ * C/C++ trailing parameter-list markers that accept zero or more arguments and so are not fixed
+ * positional parameters. tree-sitter-c spells a bare `...` as a named `variadic_parameter`;
+ * tree-sitter-cpp spells a parameter pack `T... name` as `variadic_parameter_declaration` (its
+ * bare `...` is an unnamed token the parser already omits from the named children). Go's
+ * `variadic_parameter_declaration` shares the C++ name but is a different language's rest form,
+ * so callers gate on the C/C++ language ids.
+ */
+const VARIADIC_PARAMETER_MARKER_TYPES: Record<string, true> = {
+  variadic_parameter: true,
+  variadic_parameter_declaration: true,
+};
+
+/** Whether a parameter node is a C/C++ variadic marker rather than a fixed positional parameter. */
+export function isVariadicParameterMarker(node: SyntaxNodeLike): boolean {
+  return !!VARIADIC_PARAMETER_MARKER_TYPES[node.type];
+}
+
+/**
  * Positional parameter count of a member/function declaration node, or undefined when the node
  * declares no parameter list. Swift exposes parameters as direct declaration children, so its
  * language id is required to distinguish a zero-parameter declaration from an unknown shape.
  * Shared by the receiver-call edge pass and keyword receiver navigation so overload selection
  * uses one arity scanner.
+ *
+ * The count is the number of *required-or-defaulted* fixed parameters; C/C++ variadic markers are
+ * excluded because they accept zero arguments, while each language's own maximum-arity handling
+ * keeps their upper bound unbounded.
  */
 export function declarationMemberArity(declarationNode: SyntaxNodeLike, languageId?: string): number | undefined {
   let parameters = declarationNode.childForFieldName("parameters");
@@ -249,7 +271,10 @@ export function declarationMemberArity(declarationNode: SyntaxNodeLike, language
     if (languageId !== "swift") return undefined;
     return (declarationNode.namedChildren ?? []).filter((child) => child.type === "parameter").length;
   }
-  const positionalParameters = (parameters.namedChildren ?? []).filter((child) => child.type !== "comment");
+  let positionalParameters = (parameters.namedChildren ?? []).filter((child) => child.type !== "comment");
+  if (languageId === "c" || languageId === "cpp") {
+    positionalParameters = positionalParameters.filter((child) => !isVariadicParameterMarker(child));
+  }
   if ((languageId === "c" || languageId === "cpp") && positionalParameters.length === 1) {
     const parameterParts = positionalParameters[0]!.namedChildren.filter((child) => child.type !== "comment");
     if (

@@ -1799,6 +1799,29 @@ describe("Go to Definition", () => {
       }
     });
 
+    it("accepts a C++ parameter pack that binds no trailing arguments", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-parameter-pack-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "template<class T, class... Ts> int pack(T first, Ts... rest);",
+          "template<class T, class... Ts> int pack(T first, Ts... rest) { return first; }",
+          "int use_one() { return pack(1); }",
+          "int use_two() { return pack(1, 2); }",
+          "int use_zero() { return pack(); }",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        // The pack binds zero trailing arguments; the fixed parameter is still required.
+        await testGoToDefinition(index, file, 3, lines[2]!.lastIndexOf("pack") + 1, file, 2);
+        await testGoToDefinition(index, file, 4, lines[3]!.lastIndexOf("pack") + 1, file, 2);
+        await testGoToDefinition(index, file, 5, lines[4]!.lastIndexOf("pack") + 1, undefined, undefined, "not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("resolves C++ declarations whose parameters differ only by language adjustments", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-adjusted-shape-goto-"));
       try {
