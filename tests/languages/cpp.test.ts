@@ -15,11 +15,15 @@ import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js"
 import type { LanguageSupport } from "../../src/languages.js";
 import {
   buildProjectIndex,
+  buildProjectIndexIncremental,
   buildScopeIndexFromSource,
+  buildSymbolGraph,
   buildSymbolGraphDetailed,
   findReferences,
   goToDefinition,
+  goToDefinitionById,
   listSymbols,
+  queryWorkspaceSymbols,
 } from "../../src/index.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
@@ -1178,6 +1182,104 @@ describe("C++ quoted include resolution", () => {
         expect(memberReferences.references.map((reference) => reference.range.start.line)).toEqual(
           expect.arrayContaining([3, 5]),
         );
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C++ header include identity", () => {
+  it("keeps a C++ .h include out of the C tag namespace across cache modes", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-header-include-namespace-"));
+    const header = normalizePath(path.join(root, "api.h"));
+    const consumer = normalizePath(path.join(root, "main.cpp"));
+    // The extractor recognizes C++ syntax, but a filename-only `.h` lookup would choose C.
+    const headerLines = [
+      "namespace widgets {",
+      "class Widget {",
+      "public:",
+      "  int value;",
+      "};",
+      "}",
+      "",
+      "int run(int amount) { return amount; }",
+      "",
+      "struct Point {",
+      "  int x;",
+      "};",
+      "",
+    ];
+    const lines = [
+      '#include "api.h"',
+      "int main() {",
+      "  widgets::Widget widget;",
+      "  Point point;",
+      "  return run(1);",
+      "}",
+      "",
+    ];
+    try {
+      await fs.writeFile(header, headerLines.join("\n"), "utf8");
+      await fs.writeFile(consumer, lines.join("\n"), "utf8");
+      const callColumn = lines[4]!.indexOf("run(1)") + 1;
+      const runDefinitionColumn = headerLines[7]!.indexOf("run(") + 1;
+      for (const cache of ["off", "disk", "disk"] as const) {
+        const index = await buildProjectIndexIncremental(root, { cache });
+        const expectedNames = new Set(["widgets::Widget", "run", "Point"]);
+        const expectedImportIds = [...expectedNames].map((name) => `${consumer}::${name}::import`).sort();
+        expect(
+          listSymbols(index, { file: consumer, includeImports: true })
+            .filter((symbol) => symbol.kind === "import" && expectedNames.has(symbol.name))
+            .map((symbol) => symbol.id)
+            .sort(),
+        ).toEqual(expectedImportIds);
+        expect(
+          [...(await buildSymbolGraph(index)).nodes.values()]
+            .filter((node) => node.kind === "import" && node.file === consumer && expectedNames.has(node.name))
+            .map((node) => node.id)
+            .sort(),
+        ).toEqual(expectedImportIds);
+        for (const [name, line] of [
+          ["widgets::Widget", 2],
+          ["run", 8],
+          ["Point", 10],
+        ] as const) {
+          expect(goToDefinitionById(index, `${consumer}::${name}::import`)).toMatchObject({
+            status: "ok",
+            definition: { file: header, range: { start: { line } } },
+          });
+        }
+
+        const workspaceImportIds = (await queryWorkspaceSymbols(index, { query: "run", includeImports: true })).symbols
+          .filter((symbol) => symbol.imported)
+          .map((symbol) => symbol.id);
+        expect(workspaceImportIds).toHaveLength(1);
+        expect(workspaceImportIds[0]!.endsWith("::run::import")).toBe(true);
+
+        const call = await goToDefinition(index, { file: consumer, line: 5, column: callColumn });
+        expect(call.status).toBe("ok");
+        if (call.status !== "ok") throw new Error("Expected the included C++ callable");
+        expect(normalizePath(call.definition.file)).toBe(header);
+        expect(call.definition.range.start.line).toBe(8);
+
+        const references = await findReferences(index, {
+          file: header,
+          line: 8,
+          column: runDefinitionColumn,
+        });
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error("Expected references for the included callable");
+        expect(
+          references.references.map((reference) => [normalizePath(reference.file), reference.range.start.line]),
+        ).toContainEqual([consumer, 5]);
+
+        const detailed = await buildSymbolGraphDetailed(index);
+        expect(
+          detailed.edges
+            .filter((edge) => edge.label === "calls" && detailed.nodes.get(edge.from)?.name === "main")
+            .map((edge) => detailed.nodes.get(edge.to)?.name),
+        ).toEqual(["run"]);
       }
     } finally {
       await fs.rm(root, { recursive: true, force: true });

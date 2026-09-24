@@ -1,6 +1,6 @@
-import type { ProjectIndex, ResolvedExport } from "../indexer/types.js";
-import { resolveExport, resolveModuleExports } from "../indexer/navigation-resolve.js";
-import { importNodeId } from "../indexer/import-types.js";
+import type { ImportBinding, ProjectIndex, ResolvedExport, SymbolDef } from "../indexer/types.js";
+import { resolveExport, resolveImported, resolveModuleExports } from "../indexer/navigation-resolve.js";
+import { importIdRoleSegment, importNodeId, phpNamedImportRole } from "../indexer/import-types.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { FileId, Range } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
@@ -107,7 +107,7 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
   const edges: SymbolEdge[] = [];
   const seenEdges = new Set<string>();
   const includedFiles = normalizeFileFilter(opts?.files);
-  const exportResolutions = new Map<string, ResolvedExport | null>();
+  const exportResolutions = new Map<string, SymbolDef | null>();
   const moduleExportResolutions = new Map<string, Map<string, ResolvedExport>>();
 
   const shouldIncludeFile = (file: FileId): boolean => {
@@ -127,23 +127,30 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
     targetFile: FileId,
     exportedName: string,
     label: string,
-    cNamespace?: "tag" | "ordinary",
+    imp?: Extract<ImportBinding, { kind: "named" }>,
   ): boolean => {
     const languageId = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions)?.id;
     const allowLocalFallback = languageId !== "c" && languageId !== "cpp";
-    const resolutionKey = `${fileIdentityKey(targetFile)}::${exportedName}::${cNamespace ?? ""}::${allowLocalFallback ? "local" : "export"}`;
-    let resolved: ResolvedExport | null;
+    const roleSegment = imp ? importIdRoleSegment(imp) : undefined;
+    const resolutionKey = `${fileIdentityKey(targetFile)}::${exportedName}::${roleSegment ?? ""}::${allowLocalFallback ? "local" : "export"}`;
+    let def: SymbolDef | null;
     if (exportResolutions.has(resolutionKey)) {
-      resolved = exportResolutions.get(resolutionKey)!;
+      def = exportResolutions.get(resolutionKey)!;
+    } else if (imp && phpNamedImportRole(imp) !== undefined) {
+      // PHP class, function, and constant imports resolve through separate namespaces, so the
+      // role decides which same-spelled declaration this alias names.
+      const resolved = resolveImported(index, imp, exportedName, { allowLocalFallback });
+      def = resolved && !("namespace" in resolved) ? resolved : null;
+      exportResolutions.set(resolutionKey, def);
     } else {
-      resolved = resolveExport(index, targetFile, exportedName, {
+      const resolved = resolveExport(index, targetFile, exportedName, {
         allowLocalFallback,
-        ...(cNamespace ? { cNamespace } : {}),
+        ...(imp?.cNamespace ? { cNamespace: imp.cNamespace } : {}),
       });
-      exportResolutions.set(resolutionKey, resolved);
+      def = resolved?.kind === "resolved" ? resolved.def : null;
+      exportResolutions.set(resolutionKey, def);
     }
-    if (!resolved || resolved.kind !== "resolved") return false;
-    const def = resolved.def;
+    if (!def) return false;
     const targetId = defNodeId(def);
     if (!nodes.has(targetId)) nodes.set(targetId, nodeForDef(def));
     addEdge(aliasId, targetId, label);
@@ -175,7 +182,7 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
             kind: "import",
           });
         }
-        if (targetFile) addDefinitionEdge(aliasId, targetFile, imp.imported, imp.imported, imp.cNamespace);
+        if (targetFile) addDefinitionEdge(aliasId, targetFile, imp.imported, imp.imported, imp);
       } else if (imp.kind === "default") {
         const aliasId = importNodeId(displayFile, imp);
         if (!nodes.has(aliasId)) {

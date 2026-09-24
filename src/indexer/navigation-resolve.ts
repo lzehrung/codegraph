@@ -10,6 +10,7 @@ import {
   KOTLIN_IDENTIFIER_SOURCE,
 } from "../util/identifiers.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
+import { phpNamedImportRole } from "./import-types.js";
 import {
   type ExportEntry,
   type ImportBinding,
@@ -628,13 +629,13 @@ export function resolveImported(
   const namespace = opts?.cNamespace ?? (imp.kind === "named" ? imp.cNamespace : undefined);
   if (opts?.cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== opts.cNamespace) return null;
 
-  const hit =
-    imp.kind === "named" && imp.phpImportType
-      ? resolvePhpExportByImportType(index, targetFile, exportedName, imp.phpImportType)
-      : resolveExport(index, targetFile, exportedName, {
-          ...opts,
-          ...(namespace ? { cNamespace: namespace } : {}),
-        });
+  const phpRole = phpNamedImportRole(imp);
+  const hit = phpRole
+    ? resolvePhpExportByImportType(index, targetFile, exportedName, phpRole)
+    : resolveExport(index, targetFile, exportedName, {
+        ...opts,
+        ...(namespace ? { cNamespace: namespace } : {}),
+      });
   if (hit?.kind === "resolved") return hit.def;
   if (hit?.kind === "namespace") return { namespace: hit.file };
 

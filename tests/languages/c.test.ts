@@ -12,6 +12,7 @@ import {
   buildSymbolGraphDetailed,
   findReferences,
   goToDefinition,
+  goToDefinitionById,
   listSymbols,
   resolveExport,
 } from "../../src/index.js";
@@ -1310,6 +1311,12 @@ describe("C tag and typedef namespaces", () => {
             expect(importedSymbols.map((symbol) => symbol.id).sort()).toEqual(
               aliasEdges.map((edge) => edge.from).sort(),
             );
+            for (const edge of aliasEdges) {
+              const target = goToDefinitionById(index, edge.from);
+              expect(target.status).toBe("ok");
+              if (target.status !== "ok") throw new Error("Expected a role-specific import handle");
+              expect(defNodeId(target.definition)).toBe(edge.to);
+            }
           }
           if (buildGraph === buildSymbolGraphDetailed) {
             expect(

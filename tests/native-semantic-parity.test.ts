@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   buildProjectIndexFromFiles,
+  buildSymbolGraph,
+  buildSymbolGraphDetailed,
   extractSqlFactsFromSource,
   findReferences,
   goToDefinition,
@@ -1701,6 +1703,21 @@ nativeDescribe("native semantic coverage", () => {
     await fsp.writeFile(consumer, lines.join("\n"));
     await withNativeRuntimeModeAsync("native", async () => {
       const index = await buildProjectIndexFromFiles(root, [source, consumer]);
+      const imports = listSymbols(index, { file: consumer, includeImports: true }).filter(
+        (symbol) => symbol.kind === "import" && symbol.name === "Alias",
+      );
+      expect(new Set(imports.map((symbol) => symbol.id)).size).toBe(3);
+      for (const buildGraph of [buildSymbolGraph, buildSymbolGraphDetailed]) {
+        const graph = await buildGraph(index);
+        const aliasEdges = graph.edges.filter((edge) => {
+          const from = graph.nodes.get(edge.from);
+          return from?.file === consumer && from.kind === "import" && from.name === "Alias";
+        });
+        expect(aliasEdges.map((edge) => graph.nodes.get(edge.to)?.name).sort()).toEqual(
+          ["Service", "helper", "TOKEN"].sort(),
+        );
+        expect(aliasEdges.map((edge) => edge.from).sort()).toEqual(imports.map((symbol) => symbol.id).sort());
+      }
       for (const [line, fromEnd, targetLine] of [
         [5, false, 2],
         [5, true, 4],

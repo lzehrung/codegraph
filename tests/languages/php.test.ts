@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
+import { buildSymbolGraph, defNodeId } from "../../src/graphs/symbol-graph.js";
 import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
 import { findCallHierarchy } from "../../src/indexer/call-hierarchy.js";
+import { findReferencesById, goToDefinitionById, listSymbols } from "../../src/indexer/symbols.js";
 import { findImplementations } from "../../src/indexer/type-hierarchy.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
@@ -722,6 +724,150 @@ describe("PHP import symbol namespaces", () => {
           .filter((ref) => fileIdentityKey(ref.file) === fileIdentityKey(consumerFile))
           .map((ref) => ref.range.start.line),
       ).toEqual([12]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("keeps same-spelled class, function, and constant imports distinct in lists and graphs", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-alias-role-ids-"));
+    const sourceFile = path.join(root, "source.php");
+    const consumerFile = path.join(root, "consumer.php");
+    const source = [
+      "<?php",
+      "namespace App;",
+      "class Service {}",
+      "function Service() { return 1; }",
+      "const Service = 2;",
+      "",
+    ].join("\n");
+    const consumerLines = [
+      "<?php",
+      "namespace Client;",
+      "use App\\Service as Alias;",
+      "use function App\\Service as Alias;",
+      "use const App\\Service as Alias;",
+      "function caller() {",
+      "    new Alias();",
+      "    Alias();",
+      "    return Alias;",
+      "}",
+      "",
+    ];
+
+    try {
+      await writeFile(sourceFile, source, "utf8");
+      await writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+      const targetIds = new Map<string, string>();
+      const sourceModule = [...index.byFile.values()].find(
+        (module) => fileIdentityKey(module.file) === fileIdentityKey(sourceFile),
+      );
+      expect(sourceModule).toBeDefined();
+      for (const def of sourceModule?.locals ?? []) {
+        if (
+          def.localName === "Service" &&
+          (def.kind === "class" || def.kind === "function" || def.kind === "variable")
+        ) {
+          targetIds.set(def.kind, defNodeId(def));
+        }
+      }
+      expect([...targetIds.keys()].sort()).toEqual(["class", "function", "variable"]);
+
+      const listEntries = listSymbols(index, { file: consumerFile, includeImports: true }).filter(
+        (entry) => entry.kind === "import" && entry.name === "Alias",
+      );
+      expect(listEntries).toHaveLength(3);
+      expect(new Set(listEntries.map((entry) => entry.id)).size).toBe(3);
+      const entryByRole = new Map(
+        listEntries.map((entry) => [entry.id.slice(entry.id.lastIndexOf(":") + 1), entry] as const),
+      );
+      expect([...entryByRole.keys()].sort()).toEqual(["class", "const", "function"]);
+
+      for (const [role, expectedKind] of [
+        ["class", "class"],
+        ["function", "function"],
+        ["const", "variable"],
+      ] as const) {
+        const entry = entryByRole.get(role);
+        expect(entry, `missing ${role} list entry`).toBeDefined();
+        if (!entry) continue;
+        const gotoResult = goToDefinitionById(index, entry.id);
+        expect(gotoResult.status, `${role} role ID should resolve`).toBe("ok");
+        if (gotoResult.status === "ok") {
+          expect(gotoResult.definition.kind).toBe(expectedKind);
+          expect(fileIdentityKey(gotoResult.definition.file)).toBe(fileIdentityKey(sourceFile));
+        }
+      }
+
+      const classEntry = entryByRole.get("class");
+      expect(classEntry).toBeDefined();
+      if (classEntry) {
+        const unknownRoleId = `${classEntry.id.slice(0, classEntry.id.lastIndexOf(":") + 1)}unknown`;
+        expect(goToDefinitionById(index, unknownRoleId).status).toBe("not_found");
+      }
+
+      for (const [role, expectedLine] of [
+        ["class", 7],
+        ["function", 8],
+        ["const", 9],
+      ] as const) {
+        const entry = entryByRole.get(role);
+        expect(entry, `missing ${role} list entry for references`).toBeDefined();
+        if (!entry) continue;
+        const refs = await findReferencesById(index, entry.id);
+        expect(refs.status, `${role} role references should resolve`).toBe("ok");
+        if (refs.status !== "ok") continue;
+        const refLines = refs.references
+          .filter((reference) => fileIdentityKey(reference.file) === fileIdentityKey(consumerFile))
+          .map((reference) => reference.range.start.line);
+        expect(refLines, `${role} role should see its own use`).toContain(expectedLine);
+        for (const otherLine of [7, 8, 9]) {
+          if (otherLine !== expectedLine) expect(refLines).not.toContain(otherLine);
+        }
+      }
+
+      const [compact, detailed] = await Promise.all([buildSymbolGraph(index), buildSymbolGraphDetailed(index)]);
+      for (const graph of [compact, detailed]) {
+        const aliasNodes = [...graph.nodes.values()].filter(
+          (node) =>
+            fileIdentityKey(node.file) === fileIdentityKey(consumerFile) &&
+            node.kind === "import" &&
+            node.name === "Alias",
+        );
+        expect(aliasNodes).toHaveLength(3);
+        expect(new Set(aliasNodes.map((node) => node.id)).size).toBe(3);
+        const aliasEdges = graph.edges.filter((edge) => aliasNodes.some((node) => node.id === edge.from));
+        expect(aliasEdges).toHaveLength(3);
+        expect(new Set(aliasEdges.map((edge) => edge.to))).toEqual(new Set(targetIds.values()));
+        for (const edge of aliasEdges) {
+          const role = edge.from.slice(edge.from.lastIndexOf(":") + 1);
+          const target = graph.nodes.get(edge.to);
+          expect(target, `alias ${role} edge target should exist`).toBeDefined();
+          if (!target) continue;
+          expect(fileIdentityKey(target.file)).toBe(fileIdentityKey(sourceFile));
+          expect(target.kind).toBe(role === "const" ? "variable" : role);
+        }
+      }
+
+      const callerNode = [...detailed.nodes.values()].find(
+        (node) =>
+          fileIdentityKey(node.file) === fileIdentityKey(consumerFile) &&
+          node.kind === "function" &&
+          node.name === "caller",
+      );
+      expect(callerNode).toBeDefined();
+      if (callerNode) {
+        const callEdges = detailed.edges.filter((edge) => edge.label === "calls" && edge.from === callerNode.id);
+        expect(callEdges).toHaveLength(1);
+        expect(callEdges[0]?.to).toBe(targetIds.get("function"));
+        expect(
+          detailed.edges.filter(
+            (edge) =>
+              edge.from === callerNode.id && edge.to === targetIds.get("class") && edge.label !== "instantiates",
+          ),
+        ).toEqual([]);
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }

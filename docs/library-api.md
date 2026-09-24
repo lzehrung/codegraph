@@ -939,10 +939,14 @@ const sqlContext = await collectSqlReviewContext(process.cwd(), {
 
 Use stable handles instead of cursor positions.
 
-A handle is either:
+Handle forms:
 
 - `${file}::${localName}::${startIndex}` for a definition
-- `${file}::${alias}::import` for an import alias
+- `${file}::${alias}::import` for an import alias without a language-specific namespace
+- `${file}::${alias}::import:tag` or `::import:ordinary` for namespace-specific C includes
+- `${file}::${alias}::import:class`, `::import:function`, or `::import:const` for PHP named imports
+
+Use the ID returned by `listSymbols` or `queryWorkspaceSymbols`, rather than constructing it. `goToDefinitionById` and `findReferencesById` preserve the import role; an unknown role returns `not_found`. Qualified C++ aliases can contain `::`. An untyped PHP named import uses the class role.
 
 ```ts
 import { buildProjectIndex, listSymbols, goToDefinitionById, findReferencesById } from "@lzehrung/codegraph-core";

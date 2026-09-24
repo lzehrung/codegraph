@@ -1,5 +1,6 @@
 import type { ModuleIndex, ProjectIndex, ResolvedExport, SymbolDef } from "../../indexer/types.js";
 import type { ImportBinding } from "../../indexer/types.js";
+import { phpNamedImportRole } from "../../indexer/import-types.js";
 import { resolveImported } from "../../indexer/navigation-resolve.js";
 import { fileIdentityKey, normalizePath } from "../../util/paths.js";
 
@@ -24,6 +25,7 @@ export function buildImportAliasMaps(
 ): ImportAliasMaps {
   const aliasToTargetDef = new Map<string, SymbolDef>();
   const aliasToTargetModule = new Map<string, string>();
+  const phpAliasSpellings = new Set<string>();
 
   for (const imp of moduleEntry.imports) {
     const targetModule = targetModuleForImport(index, imp);
@@ -33,6 +35,21 @@ export function buildImportAliasMaps(
       if (imp.cNamespace) {
         // This map resolves expression names, not C tag-form type references.
         if (imp.cNamespace === "tag") continue;
+        const resolved = resolveImported(index, imp, imp.imported, { allowLocalFallback: false });
+        if (resolved && !("namespace" in resolved)) aliasToTargetDef.set(imp.local, resolved);
+        continue;
+      }
+      if (phpNamedImportRole(imp) !== undefined) {
+        // PHP class, function, and constant imports are independent namespaces that can share
+        // one alias spelling. A plain-name key cannot identify a target across roles, so drop
+        // the ambiguous alias instead of pinning one role's target for every use; role-aware
+        // resolution picks the right declaration per use context.
+        const ambiguous = phpAliasSpellings.has(imp.local);
+        phpAliasSpellings.add(imp.local);
+        if (ambiguous) {
+          aliasToTargetDef.delete(imp.local);
+          continue;
+        }
         const resolved = resolveImported(index, imp, imp.imported, { allowLocalFallback: false });
         if (resolved && !("namespace" in resolved)) aliasToTargetDef.set(imp.local, resolved);
         continue;

@@ -85,11 +85,13 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
         target,
         !!targetSupport && STYLESHEET_LANGUAGE_IDS.has(targetSupport.id),
       );
+      // `.h` defaults to C in filename-only lookup. Only extracted C tags prove the namespace split.
+      const hasCTagExports = exportedSymbols.some(({ symbol }) => Boolean(symbol.cTag));
       const seen = new Set<string>();
       for (const { name, symbol } of exportedSymbols) {
         let namespace: "tag" | "ordinary" | undefined;
         if (symbol.cTag) namespace = "tag";
-        else if (targetSupport?.id === "c") namespace = "ordinary";
+        else if (hasCTagExports) namespace = "ordinary";
         const symbolKey = namespace ? `${name}\0${namespace}` : name;
         if (!name || seen.has(symbolKey)) continue;
         seen.add(symbolKey);
