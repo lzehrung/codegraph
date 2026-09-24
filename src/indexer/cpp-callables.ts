@@ -116,6 +116,21 @@ export function cppBindingCallableShape(binding: Binding): CppCallableShape | nu
   return binding.node ? cppCallableShapeForNode(binding.node) : null;
 }
 
+function syntaxRoot(node: SyntaxNodeLike): SyntaxNodeLike {
+  let current = node;
+  while (current.parent) current = current.parent;
+  return current;
+}
+
+function isCppDeclarationSite(binding: Binding, node: SyntaxNodeLike): boolean {
+  const candidate = binding.node;
+  if (!candidate) return false;
+  if (candidate.startIndex !== node.startIndex || candidate.endIndex !== node.endIndex) return false;
+  const root = syntaxRoot(candidate);
+  // Offset coincidence across files is not a declaration site.
+  return root === syntaxRoot(node);
+}
+
 function cppCallArgumentCount(node: SyntaxNodeLike, source: string): number | null {
   let current = node.parent;
   while (current) {
@@ -131,14 +146,20 @@ function cppCallArgumentCount(node: SyntaxNodeLike, source: string): number | nu
   return null;
 }
 
-function cppCallableEntities(bindings: readonly Binding[]): Map<string, CppCallableEntity> | null {
+function cppCallableEntities(
+  bindings: readonly Binding[],
+  canonicalNames?: ReadonlyMap<Binding, string>,
+): Map<string, CppCallableEntity> | null {
   const entities = new Map<string, CppCallableEntity>();
   for (const binding of bindings) {
     const shape = cppBindingCallableShape(binding);
     if (!shape) return null;
-    const existing = entities.get(shape.signature);
+    const canonicalName = canonicalNames?.get(binding);
+    if (canonicalNames && canonicalName === undefined) return null;
+    const key = canonicalName === undefined ? shape.signature : `${canonicalName}\0${shape.signature}`;
+    const existing = entities.get(key);
     if (!existing) {
-      entities.set(shape.signature, {
+      entities.set(key, {
         bindings: [binding],
         minArity: shape.minArity,
         maxArity: shape.maxArity,
@@ -156,8 +177,8 @@ function cppCallableEntities(bindings: readonly Binding[]): Map<string, CppCalla
   return entities;
 }
 
-function preferredCppCallableBinding(entity: CppCallableEntity): Binding {
-  return entity.bindings.find((binding) => cppCallableIsDefinition(binding.node)) ?? entity.bindings[0]!;
+function preferredCppCallableBinding(bindings: readonly Binding[]): Binding {
+  return bindings.find((binding) => cppCallableIsDefinition(binding.node)) ?? bindings[0]!;
 }
 
 /** Same-shape declarations and definitions for one C++ callable binding. */
@@ -171,29 +192,43 @@ export function cppEquivalentCallableBindings(binding: Binding): readonly Bindin
   return [binding];
 }
 
+/**
+ * Call-count selection without the declaration-site shortcut. Use when the query
+ * node may come from a different file than the candidate bindings.
+ */
+export function cppSelectCallableByCallArity(
+  bindings: readonly Binding[],
+  node: SyntaxNodeLike,
+  source: string,
+  canonicalNames?: ReadonlyMap<Binding, string>,
+): Binding | null {
+  const entities = cppCallableEntities(bindings, canonicalNames);
+  if (!entities?.size) return null;
+
+  const argumentCount = cppCallArgumentCount(node, source);
+  const matches =
+    argumentCount === null
+      ? [...entities.values()]
+      : [...entities.values()].filter(
+          (entity) =>
+            argumentCount >= entity.minArity && (entity.maxArity === null || argumentCount <= entity.maxArity),
+        );
+  // Multiple arity-viable entities stay unresolved: default arguments and
+  // variadics can overlap, and this matcher does not implement C++ ranking.
+  // One canonical entity still has to accept a known call count: below its
+  // minimum or above a finite maximum is not a unique match.
+  if (matches.length === 1) return preferredCppCallableBinding(matches[0]!.bindings);
+  return null;
+}
+
 export function cppSelectCallableBinding(
   bindings: readonly Binding[],
   node: SyntaxNodeLike,
   source: string,
 ): Binding | null {
-  const declaration = bindings.find(
-    (candidate) => candidate.node?.startIndex === node.startIndex && candidate.node?.endIndex === node.endIndex,
-  );
-  if (declaration) return declaration;
-
-  const entities = cppCallableEntities(bindings);
-  if (!entities?.size) return null;
-  if (entities.size === 1) return preferredCppCallableBinding(entities.values().next().value!);
-
-  const argumentCount = cppCallArgumentCount(node, source);
-  if (argumentCount === null) return null;
-  const matches = [...entities.values()].filter(
-    (entity) => argumentCount >= entity.minArity && (entity.maxArity === null || argumentCount <= entity.maxArity),
-  );
-  // Multiple arity-viable entities stay unresolved: default arguments and
-  // variadics can overlap, and this matcher does not implement C++ ranking.
-  if (matches.length === 1) return preferredCppCallableBinding(matches[0]!);
-  return null;
+  const declaration = bindings.find((candidate) => isCppDeclarationSite(candidate, node));
+  if (declaration) return preferredCppCallableBinding(cppEquivalentCallableBindings(declaration));
+  return cppSelectCallableByCallArity(bindings, node, source);
 }
 
 export function cppCallableIsDefinition(node: SyntaxNodeLike | null | undefined): boolean {

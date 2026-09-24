@@ -848,21 +848,37 @@ async function createImportedSuperclassMemberCase(kind: "ts" | "js"): Promise<Se
 async function createCppCallableRedeclarationCase(): Promise<SemanticExpectation> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-cpp-callable-redeclaration-"));
   tempDirs.push(root);
-  const headerFile = path.join(root, "api.hpp");
+  const headerFile = path.join(root, "api.h");
   const implementationFile = path.join(root, "api.cpp");
   const consumerFile = path.join(root, "consumer.cpp");
-  await fsp.writeFile(headerFile, "namespace left { int run(int*); }\n", "utf8");
+  await fsp.writeFile(
+    headerFile,
+    [
+      "namespace left { int run(int*);",
+      "int pick();",
+      "int pick(int);",
+      "}",
+      "namespace alias { using left::pick; }",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
   await fsp.writeFile(
     implementationFile,
-    ['#include "api.hpp"', "int left::run(int* value) { return *value; }", ""].join("\n"),
+    ['#include "api.h"', "int left::run(int* value) { return *value; }", ""].join("\n"),
     "utf8",
   );
   await fsp.writeFile(
     consumerFile,
     [
-      '#include "api.hpp"',
+      '#include "api.h"',
       "int call() { return left::run(nullptr); }",
       "int invalid() { return run(nullptr); }",
+      "int missing() { return left::run(); }",
+      "int extra() { return left::run(nullptr, nullptr); }",
+      "int zero() { return alias::pick(); }",
+      "int one() { return alias::pick(1); }",
+      "int two() { return alias::pick(1, 2); }",
       "",
     ].join("\n"),
     "utf8",
@@ -1385,14 +1401,46 @@ nativeDescribe("native semantic coverage", () => {
   it("keeps C++ callable redeclarations connected across files", async () => {
     const fixture = await createCppCallableRedeclarationCase();
     const index = await expectNativeSemantics(fixture);
-    expect(
-      await normalizeGoto(index, {
-        file: fixture.files[2]!,
-        line: 3,
-        column: 24,
-        expectedStatus: "not_found",
-      }),
-    ).toEqual({ status: "not_found" });
+    const consumerFile = normalizeFile(fixture.files[2]!);
+    const consumerLines = (await fsp.readFile(consumerFile, "utf8")).split("\n");
+    for (const line of [3, 4, 5, 8]) {
+      const text = consumerLines[line - 1]!;
+      const token = line === 8 ? "pick" : "run";
+      expect(
+        await normalizeGoto(index, {
+          file: consumerFile,
+          line,
+          column: text.indexOf(token) + 1,
+          expectedStatus: "not_found",
+        }),
+      ).toEqual({ status: "not_found" });
+    }
+    for (const [line, targetLine] of [
+      [6, 2],
+      [7, 3],
+    ] as const) {
+      const result = await goToDefinition(index, {
+        file: consumerFile,
+        line,
+        column: consumerLines[line - 1]!.indexOf("pick") + 1,
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected a unique C++ using overload");
+      expect(normalizeFile(result.definition.file)).toBe(normalizeFile(fixture.files[0]!));
+      expect(result.definition.range.start.line).toBe(targetLine);
+      const references = await findReferences(index, {
+        file: fixture.files[0]!,
+        line: targetLine,
+        column: 5,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected C++ using overload references");
+      expect(
+        references.references
+          .filter((reference) => normalizeFile(reference.file) === consumerFile)
+          .map((reference) => reference.range.start.line),
+      ).toEqual([line]);
+    }
   });
 
   it("keeps PHP type operands separate from same-spelled argument aliases", async () => {

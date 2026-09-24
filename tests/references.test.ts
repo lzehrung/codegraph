@@ -112,7 +112,7 @@ describe("Find References", () => {
       const def = index.byFile.get(fileIdentityKey(aFile))?.locals.find((local) => local.localName === "target");
       if (!def) throw new Error("Expected target definition");
 
-      const candidates = getCachedReferenceCandidateFiles(index, def, ["target"], false);
+      const candidates = getCachedReferenceCandidateFiles(index, def, ["target"], false, "ts");
 
       expect(candidates).toContain(cFile);
       expect(candidates).not.toContain(dFile);
@@ -137,7 +137,7 @@ describe("Find References", () => {
       if (!def) throw new Error("Expected target definition");
 
       const cache = createReferenceLookupCache();
-      expect(getCachedReferenceCandidateFiles(index, def, ["target"], false)).toContain(barrelFile);
+      expect(getCachedReferenceCandidateFiles(index, def, ["target"], false, "ts")).toContain(barrelFile);
       const cold = await cache.get(index, def);
       const warm = await cache.get(index, def);
 
@@ -721,7 +721,7 @@ describe("Find References", () => {
         const index = await createTestIndexFromFiles(root, [typesFile, barrelFile, consumerFile]);
         const def = index.byFile.get(fileIdentityKey(typesFile))?.locals.find((local) => local.localName === "Light");
         if (!def) throw new Error("Expected enum member definition");
-        expect(getCachedReferenceCandidateFiles(index, def, [], false)).not.toContain(consumerFile);
+        expect(getCachedReferenceCandidateFiles(index, def, [], false, "ts")).not.toContain(consumerFile);
         markCandidateParserDegraded(index, consumerFile);
 
         const result = await indexer.findReferences(index, { def });
@@ -4432,6 +4432,74 @@ describe("Find References: keyword receiver scope and coverage", () => {
     }
   });
 
+  it("omits invalid arity calls from unique C++ declaration references", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-unique-arity-refs-"));
+    try {
+      const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+      const lines = [
+        "int f(int value);",
+        "int f(int value) { return value; }",
+        "int zero() { return f(); }",
+        "int one() { return f(1); }",
+        "int two() { return f(1, 2); }",
+        "int (*ptr)(int) = f;",
+      ];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      for (const line of [1, 2]) {
+        const refs = await testFindReferences(index, file, line, lines[line - 1]!.indexOf("f") + 1, 4);
+        if (refs.status === "ok") {
+          expect(refs.references.map((reference) => reference.range.start.line)).toEqual([1, 2, 4, 6]);
+        }
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps using-alias C++ overload references on their matching consumer calls", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-using-alias-overload-refs-"));
+    try {
+      const header = path.join(root, "api.h").replace(/\\/g, "/");
+      const file = path.join(root, "use.cpp").replace(/\\/g, "/");
+      const headerLines = [
+        "namespace left {",
+        "int run(int*);",
+        "int pick();",
+        "int pick(int);",
+        "}",
+        "namespace alias { using left::pick; }",
+      ];
+      const lines = [
+        '#include "api.h"',
+        "int invalid_zero() { return left::run(); }",
+        "int invalid_two() { return left::run(nullptr, nullptr); }",
+        "int zero() { return alias::pick(); }",
+        "int one() { return alias::pick(1); }",
+        "int too_many() { return alias::pick(1, 2); }",
+        "int (*ptr)(int*) = &left::run;",
+      ];
+      await fsp.writeFile(header, headerLines.join("\n"), "utf8");
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [header, file]);
+      const pickZero = await testFindReferences(index, header, 3, headerLines[2]!.indexOf("pick") + 1, 2);
+      const pickOne = await testFindReferences(index, header, 4, headerLines[3]!.indexOf("pick") + 1, 2);
+      const runRefs = await testFindReferences(index, header, 2, headerLines[1]!.indexOf("run") + 1, 2);
+      const sites = (result: Awaited<ReturnType<typeof testFindReferences>>): string[] =>
+        result.status === "ok"
+          ? result.references.map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`)
+          : [];
+      expect(sites(pickZero)).toEqual(expect.arrayContaining(["api.h:3", "use.cpp:4"]));
+      expect(sites(pickZero).some((site: string) => site === "use.cpp:5" || site === "use.cpp:6")).toBe(false);
+      expect(sites(pickOne)).toEqual(expect.arrayContaining(["api.h:4", "use.cpp:5"]));
+      expect(sites(pickOne).some((site: string) => site === "use.cpp:4" || site === "use.cpp:6")).toBe(false);
+      expect(sites(runRefs)).toEqual(expect.arrayContaining(["api.h:2", "use.cpp:7"]));
+      expect(sites(runRefs).some((site: string) => site === "use.cpp:2" || site === "use.cpp:3")).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("uses free-function references for namespace-qualified C++ definitions", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-namespace-function-refs-"));
     try {
@@ -5079,6 +5147,7 @@ describe("Find References: reference coverage honesty", () => {
         buildIndexedCandidateCoverage({
           index,
           def,
+          languageId: "ts",
           exportedNames: [],
           candidateFiles: [],
           scannedFiles: [sourceFile],
@@ -5092,6 +5161,7 @@ describe("Find References: reference coverage honesty", () => {
         buildIndexedCandidateCoverage({
           index,
           def,
+          languageId: "ts",
           exportedNames: [],
           candidateFiles: [],
           scannedFiles: [sourceFile],

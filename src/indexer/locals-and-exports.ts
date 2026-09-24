@@ -1171,21 +1171,22 @@ export function collectLocalsAndExportsFromSource(
             (entry): entry is Extract<ExportEntry, { type: "local" }> =>
               entry.type === "local" && entry.exportedAs === importedName,
           );
-          if (
-            localName &&
-            exportedName &&
-            targets.length === 1 &&
-            !exports.some(
-              (entry) =>
-                entry.type === "local" &&
-                entry.exportedAs === exportedName &&
-                entry.target.range.start.index === targets[0]!.target.range.start.index,
-            )
-          ) {
+          if (!localName || !exportedName) return;
+          for (const target of targets) {
+            if (
+              exports.some(
+                (entry) =>
+                  entry.type === "local" &&
+                  entry.exportedAs === exportedName &&
+                  entry.target.range.start.index === target.target.range.start.index,
+              )
+            ) {
+              continue;
+            }
             exports.push({
               type: "local",
               exportedAs: exportedName,
-              target: targets[0]!.target,
+              target: target.target,
             });
           }
         }

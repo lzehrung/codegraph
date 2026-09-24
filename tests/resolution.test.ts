@@ -2244,6 +2244,62 @@ describe("Import Resolution", () => {
   });
 
   it.each(["c", "cpp"] as const)(
+    "resolves hinted angle %s includes with parent segments inside projectRoot and keeps outside-root paths external",
+    async (languageId) => {
+      const parent = await mkTmpDir(`dg-resolve-c-family-angle-parent-${languageId}-`);
+      const root = path.join(parent, "project");
+      const sourceFile = path.join(root, languageId === "c" ? "main.c" : "main.cpp");
+      const includeDir = path.join(root, "include");
+      const privateDir = path.join(root, "private");
+      const secretHeader = path.join(privateDir, "secret.h");
+      const secretExact = path.join(privateDir, "secret");
+      const decoyDir = path.join(privateDir, "decoy");
+      const outsideHeader = path.join(parent, "outside.h");
+
+      await fsp.mkdir(includeDir, { recursive: true });
+      await fsp.mkdir(decoyDir, { recursive: true });
+      await fsp.writeFile(sourceFile, "#include <../private/secret.h>\n", "utf8");
+      await fsp.writeFile(secretHeader, "int secret(void);\n", "utf8");
+      await fsp.writeFile(secretExact, "int secret_exact(void);\n", "utf8");
+      await fsp.writeFile(path.join(privateDir, "decoy.ts"), "export const decoy = 1;\n", "utf8");
+      await fsp.writeFile(path.join(decoyDir, "index.ts"), "export const decoy = 2;\n", "utf8");
+      await fsp.writeFile(outsideHeader, "int leaked(void);\n", "utf8");
+
+      clearImportResolutionCaches();
+      const hintOpts = { includeForm: "angle" as const, resolutionHints: ["include"] };
+
+      const sibling = await resolveImportSpecifier(root, sourceFile, "../private/secret.h", languageId, hintOpts);
+      expect(typeof sibling).toBe("string");
+      expect(String(sibling).replace(/\\/g, "/")).toBe(secretHeader.replace(/\\/g, "/"));
+
+      const bracketed = await resolveImportSpecifier(root, sourceFile, "<../private/secret.h>", languageId, hintOpts);
+      expect(typeof bracketed).toBe("string");
+      expect(String(bracketed).replace(/\\/g, "/")).toBe(secretHeader.replace(/\\/g, "/"));
+
+      const exact = await resolveImportSpecifier(root, sourceFile, "../private/secret", languageId, hintOpts);
+      expect(typeof exact).toBe("string");
+      expect(String(exact).replace(/\\/g, "/")).toBe(secretExact.replace(/\\/g, "/"));
+
+      await expect(resolveImportSpecifier(root, sourceFile, "../private/decoy", languageId, hintOpts)).resolves.toEqual(
+        {
+          external: "../private/decoy",
+        },
+      );
+
+      const inProjectAbsolute = await resolveImportSpecifier(root, sourceFile, secretHeader, languageId, hintOpts);
+      expect(typeof inProjectAbsolute).toBe("string");
+      expect(String(inProjectAbsolute).replace(/\\/g, "/")).toBe(secretHeader.replace(/\\/g, "/"));
+
+      await expect(resolveImportSpecifier(root, sourceFile, "../../outside.h", languageId, hintOpts)).resolves.toEqual({
+        external: "../../outside.h",
+      });
+      await expect(resolveImportSpecifier(root, sourceFile, outsideHeader, languageId, hintOpts)).resolves.toEqual({
+        external: outsideHeader,
+      });
+    },
+  );
+
+  it.each(["c", "cpp"] as const)(
     "resolves an exact literal %s include inside a configured include root",
     async (languageId) => {
       const root = await mkTmpDir(`dg-resolve-c-family-literal-hint-${languageId}-`);

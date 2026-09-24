@@ -3,6 +3,7 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { okGoToResult } from "./navigation-provenance.js";
+import { cppBindingCallableShape, cppSelectCallableBinding } from "./cpp-callables.js";
 import { buildScopeIndexFromSource, type Binding, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
 import {
@@ -105,9 +106,23 @@ export function findClosestBinding(
   bindingName: string,
   currentNode: SyntaxNodeLike,
   support: LanguageSupport,
+  source?: string,
 ): SymbolDef | null {
   const binding = findClosestScopeBinding(scopeIndex, bindingName, currentNode, support);
   if (!binding?.def) return null;
+  if (support.id === "cpp" && binding.kind === "function" && source) {
+    const collisions = binding.sameScopeFunctionBindings ?? [binding];
+    if (collisions.length > 1 || cppBindingCallableShape(binding)) {
+      const selected = cppSelectCallableBinding(collisions, currentNode, source);
+      if (!selected?.def) return null;
+      return {
+        file,
+        localName: selected.name,
+        kind: SymbolKind.Function,
+        range: selected.def,
+      };
+    }
+  }
   let kind = SymbolKind.Variable;
   if (binding.kind === "function") {
     kind = SymbolKind.Function;

@@ -1658,6 +1658,108 @@ describe("Go to Definition", () => {
       }
     });
 
+    it("rejects invalid arity for a unique C++ declaration and keeps non-call references", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-unique-arity-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "int f(int value);",
+          "int zero() { return f(); }",
+          "int one() { return f(1); }",
+          "int two() { return f(1, 2); }",
+          "int (*ptr)(int) = f;",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        await testGoToDefinition(index, file, 2, lines[1]!.indexOf("f()") + 1, undefined, undefined, "not_found");
+        await testGoToDefinition(index, file, 3, lines[2]!.indexOf("f(1)") + 1, file, 1);
+        await testGoToDefinition(index, file, 4, lines[3]!.indexOf("f(1, 2)") + 1, undefined, undefined, "not_found");
+        await testGoToDefinition(index, file, 5, lines[4]!.lastIndexOf("f;") + 1, file, 1);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("uses default arguments from a C++ declaration separate from its definition", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-default-decl-def-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "int f(int value = 0);",
+          "int f(int value) { return value; }",
+          "int zero() { return f(); }",
+          "int one() { return f(1); }",
+          "int two() { return f(1, 2); }",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        await testGoToDefinition(index, file, 3, lines[2]!.indexOf("f()") + 1, file, 2);
+        await testGoToDefinition(index, file, 4, lines[3]!.indexOf("f(1)") + 1, file, 2);
+        await testGoToDefinition(index, file, 5, lines[4]!.indexOf("f(1, 2)") + 1, undefined, undefined, "not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("selects namespace-level using overload aliases by call argument count", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-using-alias-overload-goto-"));
+      try {
+        const header = path.join(root, "api.hpp").replace(/\\/g, "/");
+        const file = path.join(root, "use.cpp").replace(/\\/g, "/");
+        const headerLines = [
+          "namespace left {",
+          "int run(int*);",
+          "int pick();",
+          "int pick(int);",
+          "}",
+          "namespace alias { using left::pick; }",
+        ];
+        const lines = [
+          '#include "api.hpp"',
+          "int invalid_zero() { return left::run(); }",
+          "int invalid_two() { return left::run(nullptr, nullptr); }",
+          "int zero() { return alias::pick(); }",
+          "int one() { return alias::pick(1); }",
+          "int too_many() { return alias::pick(1, 2); }",
+        ];
+        await fsp.writeFile(header, headerLines.join("\n"), "utf8");
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [header, file]);
+
+        await testGoToDefinition(index, file, 2, lines[1]!.lastIndexOf("run") + 1, undefined, undefined, "not_found");
+        await testGoToDefinition(index, file, 3, lines[2]!.lastIndexOf("run") + 1, undefined, undefined, "not_found");
+        await testGoToDefinition(index, file, 4, lines[3]!.lastIndexOf("pick") + 1, header, 3);
+        await testGoToDefinition(index, file, 5, lines[4]!.lastIndexOf("pick") + 1, header, 4);
+        await testGoToDefinition(index, file, 6, lines[5]!.lastIndexOf("pick") + 1, undefined, undefined, "not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps overlapping default and variadic C++ using aliases unresolved", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-using-alias-overlap-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "namespace tools { int log(const char* format, ...); int log(int code); }",
+          "namespace alias { using tools::log; }",
+          "int call() { return alias::log(1); }",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+        const unresolved = await goToDefinition(index, {
+          file,
+          line: 3,
+          column: lines[2]!.lastIndexOf("log") + 1,
+        });
+        expect(unresolved.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it.each([
       {
         name: "unnamed pointer parameters",

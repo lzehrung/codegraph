@@ -2069,6 +2069,59 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     expect(oneTargets).toHaveLength(1);
     expect(new Set([...zeroTargets, ...oneTargets])).toEqual(overloadIds);
   });
+  it("rejects invalid C++ arity for unique free functions and included using-alias overloads", async () => {
+    const files: Record<string, string> = {
+      "api.hpp": [
+        "namespace left {",
+        "int run(int*);",
+        "int pick();",
+        "int pick(int);",
+        "}",
+        "namespace alias { using left::pick; }",
+      ].join("\n"),
+      "use.cpp": [
+        '#include "api.hpp"',
+        "int invalid_zero() { return left::run(); }",
+        "int invalid_two() { return left::run(nullptr, nullptr); }",
+        "int zero() { return alias::pick(); }",
+        "int one() { return alias::pick(1); }",
+        "int too_many() { return alias::pick(1, 2); }",
+      ].join("\n"),
+      "unique.cpp": [
+        "int f(int value = 0);",
+        "int f(int value) { return value; }",
+        "int zero() { return f(); }",
+        "int one() { return f(1); }",
+        "int two() { return f(1, 2); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-cpp-unique-alias-arity-call-", files);
+    const run = nodeIn(graph, "api.hpp", "run");
+    const picks = overloadMembers(graph, "api.hpp", "pick");
+    const invalidZero = nodeIn(graph, "use.cpp", "invalid_zero");
+    const invalidTwo = nodeIn(graph, "use.cpp", "invalid_two");
+    const zero = nodeIn(graph, "use.cpp", "zero");
+    const one = nodeIn(graph, "use.cpp", "one");
+    const tooMany = nodeIn(graph, "use.cpp", "too_many");
+    expect(outgoingCallCount(graph, invalidZero)).toBe(0);
+    expect(outgoingCallCount(graph, invalidTwo)).toBe(0);
+    expect(outgoingCallCount(graph, tooMany)).toBe(0);
+    expect(callsiteTexts(graph, run, invalidZero, files)).toBeNull();
+    expect(picks).toHaveLength(2);
+    const zeroPick = picks.filter((node) => callsiteTexts(graph, node.id, zero, files));
+    const onePick = picks.filter((node) => callsiteTexts(graph, node.id, one, files));
+    expect(zeroPick).toHaveLength(1);
+    expect(onePick).toHaveLength(1);
+    expect(zeroPick[0]!.id).not.toBe(onePick[0]!.id);
+    const unique = nodeIn(graph, "unique.cpp", "f");
+    const uniqueZero = nodeIn(graph, "unique.cpp", "zero");
+    const uniqueOne = nodeIn(graph, "unique.cpp", "one");
+    const uniqueTwo = nodeIn(graph, "unique.cpp", "two");
+    expect(outgoingCallCount(graph, uniqueTwo)).toBe(0);
+    expect(callsiteTexts(graph, unique, uniqueZero, files)).toEqual(["f"]);
+    expect(callsiteTexts(graph, unique, uniqueOne, files)).toEqual(["f"]);
+  });
+
   it("records the two-parameter Kotlin overload for a this-receiver call", async () => {
     const files: Record<string, string> = {
       "ktover.kt": [

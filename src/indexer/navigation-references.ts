@@ -690,6 +690,7 @@ function importCanReferenceDefinition(
   imp: ImportBinding,
   def: SymbolDef,
   exportedNames: readonly string[],
+  languageId: string,
 ): boolean {
   const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile) return false;
@@ -698,6 +699,9 @@ function importCanReferenceDefinition(
     const hit = resolveExport(index, targetFile, exportedName);
     if (hit?.kind === "resolved") {
       return sameDef(hit.def, def, index.languageExtensions);
+    }
+    if (cppCanonicalStructuralExport(index, targetFile, exportedName, def, languageId)) {
+      return true;
     }
     return imp.kind === "namespace" && fileIdentityKey(targetFile) === fileIdentityKey(def.file);
   };
@@ -741,7 +745,12 @@ function moduleExportProbeNames(
   return [...names];
 }
 
-function filesExportingDefinition(index: ProjectIndex, def: SymbolDef, exportedNames: readonly string[]): string[] {
+function filesExportingDefinition(
+  index: ProjectIndex,
+  def: SymbolDef,
+  exportedNames: readonly string[],
+  languageId: string,
+): string[] {
   const files = new Map<string, string>([[fileIdentityKey(def.file), def.file]]);
   for (const moduleIndex of index.byFile.values()) {
     const fileId = moduleIndex.file;
@@ -749,6 +758,10 @@ function filesExportingDefinition(index: ProjectIndex, def: SymbolDef, exportedN
     for (const exportedName of moduleExportProbeNames(index, moduleIndex, exportedNames)) {
       const resolved = resolveExport(index, fileId, exportedName);
       if (resolved?.kind === "resolved" && sameDef(resolved.def, def, index.languageExtensions)) {
+        files.set(fileIdentityKey(fileId), fileId);
+        break;
+      }
+      if (cppCanonicalStructuralExport(index, fileId, exportedName, def, languageId)) {
         files.set(fileIdentityKey(fileId), fileId);
         break;
       }
@@ -771,10 +784,11 @@ function getIndexedReferenceCandidateFiles(
   index: ProjectIndex,
   def: SymbolDef,
   exportedNames: readonly string[],
+  languageId: string,
 ): readonly string[] | undefined {
   if (!index.referenceCandidates) return undefined;
   const files = new Map<string, string>();
-  for (const exportingFile of filesExportingDefinition(index, def, exportedNames)) {
+  for (const exportingFile of filesExportingDefinition(index, def, exportedNames, languageId)) {
     for (const importingFile of candidateFilesImportingTarget(index.referenceCandidates, exportingFile) ?? []) {
       files.set(fileIdentityKey(importingFile), importingFile);
     }
@@ -786,7 +800,7 @@ function getIndexedReferenceCandidateFiles(
       moduleIndex.imports.some(
         (imp) =>
           (imp.kind === "star" || imp.kind === "namespace") &&
-          importCanReferenceDefinition(index, imp, def, exportedNames),
+          importCanReferenceDefinition(index, imp, def, exportedNames, languageId),
       )
     ) {
       files.set(fileIdentityKey(fileId), fileId);
@@ -800,6 +814,7 @@ export function getCachedReferenceCandidateFiles(
   def: SymbolDef,
   exportedNames: readonly string[],
   hasGlobalNameReferences: boolean,
+  languageId: string,
 ): string[] {
   if (hasGlobalNameReferences) {
     // Callers only set this for a PHP definition (`buildPhpQualifiedNames` returns names for no
@@ -818,16 +833,16 @@ export function getCachedReferenceCandidateFiles(
     referenceCandidateCache.set(index, cache);
   }
 
-  const key = referenceCandidateCacheKey(index, def, exportedNames);
+  const key = `${languageId}:${referenceCandidateCacheKey(index, def, exportedNames)}`;
   const cached = cache.get(key);
   if (cached) return cached;
 
   const candidates = new Map<string, string>();
   if (def.isMember) candidates.set(fileIdentityKey(def.file), def.file);
   const candidateFileEntries =
-    getIndexedReferenceCandidateFiles(index, def, exportedNames) ??
+    getIndexedReferenceCandidateFiles(index, def, exportedNames, languageId) ??
     Array.from(index.byFile.values(), (module) => module.file);
-  const exportingFileIds = filesExportingDefinition(index, def, exportedNames);
+  const exportingFileIds = filesExportingDefinition(index, def, exportedNames, languageId);
   const exportingFiles = new Set(exportingFileIds.map((file) => fileIdentityKey(file)));
   for (const fileId of exportingFileIds) {
     if (fileIdentityKey(fileId) !== fileIdentityKey(def.file)) {
@@ -843,7 +858,7 @@ export function getCachedReferenceCandidateFiles(
         if (typeof imp.resolved !== "string") return false;
         return (
           exportingFiles.has(fileIdentityKey(imp.resolved)) ||
-          importCanReferenceDefinition(index, imp, def, exportedNames)
+          importCanReferenceDefinition(index, imp, def, exportedNames, languageId)
         );
       })
     ) {
@@ -1043,11 +1058,24 @@ function structurallyExportsDefinition(
   return false;
 }
 
+/** Recover C++ overload candidates through real exports, never the unresolved-import name shortcut. */
+export function cppCanonicalStructuralExport(
+  index: ProjectIndex,
+  targetFile: string,
+  exportedName: string,
+  def: SymbolDef,
+  languageId: string,
+): boolean {
+  if (languageId !== "cpp") return false;
+  return structurallyExportsDefinition(index, targetFile, exportedName, def, []);
+}
+
 function isUnresolvedIndexedImport(
   index: ProjectIndex,
   imp: ImportBinding,
   def: SymbolDef,
   exportedNames: readonly string[],
+  languageId: string,
 ): boolean {
   if (typeof imp.resolved !== "string") return false;
   let importedName: string;
@@ -1055,7 +1083,7 @@ function isUnresolvedIndexedImport(
   else if (imp.kind === "default") importedName = "default";
   else return false;
   if (!structurallyExportsDefinition(index, imp.resolved, importedName, def, exportedNames)) return false;
-  return !importCanReferenceDefinition(index, imp, def, exportedNames);
+  return !importCanReferenceDefinition(index, imp, def, exportedNames, languageId);
 }
 
 function parserDegradedCandidateFiles(
@@ -1088,6 +1116,7 @@ function parserDegradedCandidateFiles(
 export function buildIndexedCandidateCoverage(args: {
   index: ProjectIndex;
   def: SymbolDef;
+  languageId: string;
   exportedNames: readonly string[];
   candidateFiles: readonly string[];
   scannedFiles: readonly string[];
@@ -1104,6 +1133,7 @@ export function buildIndexedCandidateCoverage(args: {
   const {
     index,
     def,
+    languageId,
     exportedNames,
     candidateFiles,
     scannedFiles,
@@ -1131,7 +1161,7 @@ export function buildIndexedCandidateCoverage(args: {
   for (const fileId of candidateFiles) {
     const moduleIndex = index.byFile.get(fileIdentityKey(fileId));
     if (!moduleIndex) continue;
-    if (moduleIndex.imports.some((imp) => isUnresolvedIndexedImport(index, imp, def, exportedNames))) {
+    if (moduleIndex.imports.some((imp) => isUnresolvedIndexedImport(index, imp, def, exportedNames, languageId))) {
       unresolvedFiles.push(fileId);
     }
   }

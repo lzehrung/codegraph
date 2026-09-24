@@ -34,6 +34,7 @@ Checklist for landing a new first-class source language without drifting from re
 - Set `membersAreImplicitlyInScope: true` only when the language runtime resolves a bare member name inside a type body. It defaults to false, so a language whose members need a receiver requires no entry.
 - When changing a function-valued language behavior hook, bump `LANGUAGE_BEHAVIOR_EPOCH` in `src/indexer/build-cache/options.ts`. The disk-cache fingerprint deliberately uses this declared epoch rather than hook source text so bundled CLI and library builds share caches. Changes to scope construction, resolution, classification, or export visibility bump `CORE_ALGORITHM_EPOCH` instead.
 - Prefer shared pipeline hooks over language-specific branches. Add a language-specific branch only when the grammar shape actually requires it, and say which grammar limitation forces it.
+- After parsing, pass `ParsedFileContext.sup` or its language id to consumers. Do not infer the language again from the extension: `.h` files can be C or C++, and custom extension mappings must remain effective.
 
 ## 5. Implement import binding and resolution
 

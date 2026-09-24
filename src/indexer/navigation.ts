@@ -21,6 +21,7 @@ import {
 import {
   buildIndexedCandidateCoverage,
   buildPhpQualifiedNames,
+  cppCanonicalStructuralExport,
   describeReferenceStrategies,
   collectVerifiedNamedNodeReferences,
   type VerifiedNamedNodeReference,
@@ -57,11 +58,13 @@ import {
   cppOutOfLineMemberDeclarationNode,
   cppQualifiedNameSegments,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
-import { cppCallableShapeForNode } from "./cpp-callables.js";
+import { cppBindingCallableShape, cppCallableShapeForNode, cppEquivalentCallableBindings } from "./cpp-callables.js";
+import type { Binding } from "./scope-types.js";
 import {
   resolveCppCallableBindings,
   resolveCppCollidingBinding,
   resolveCppQualifiedMemberContainer,
+  resolveVisibleCppCallableNameAsync,
 } from "./navigation-cpp.js";
 import {
   type FindReferencesResult,
@@ -255,7 +258,7 @@ export async function goToDefinition(
               ) {
                 return null;
               }
-              return findClosestBinding(scopeIndex, file, receiverName, receiver, sup);
+              return findClosestBinding(scopeIndex, file, receiverName, receiver, sup, source);
             },
           }
         : {}),
@@ -270,6 +273,17 @@ export async function goToDefinition(
         const target = resolveCppCallableBindings(file, qualifiedBindings, node, source);
         if (!target) return { status: "not_found", reason: "Ambiguous C++ overload" };
         return okGoToResult(index, target, {
+          resolution: "exact",
+          confidence: "high",
+        });
+      }
+      const visibleQualified = await resolveVisibleCppCallableNameAsync(index, mod, qualifiedName, node, source, {
+        file,
+        parsed: { source, tree, sup },
+      });
+      if (visibleQualified !== undefined) {
+        if (!visibleQualified) return { status: "not_found", reason: "Ambiguous C++ overload" };
+        return okGoToResult(index, visibleQualified, {
           resolution: "exact",
           confidence: "high",
         });
@@ -333,12 +347,29 @@ export async function goToDefinition(
         confidence: "high",
       });
     }
-    const local = findClosestBinding(scopeIndex, file, name, node, sup);
+    const local = findClosestBinding(scopeIndex, file, name, node, sup, source);
     if (local) {
       return okGoToResult(index, local, {
         resolution: "exact",
         confidence: "high",
       });
+    }
+    if (sup.id === "cpp" && closestBinding?.kind === "function" && cppBindingCallableShape(closestBinding)) {
+      return { status: "not_found", reason: "Ambiguous C++ overload" };
+    }
+
+    if (sup.id === "cpp") {
+      const visible = await resolveVisibleCppCallableNameAsync(index, mod, name, node, source, {
+        file,
+        parsed: { source, tree, sup },
+      });
+      if (visible !== undefined) {
+        if (!visible) return { status: "not_found", reason: "Ambiguous C++ overload" };
+        return okGoToResult(index, visible, {
+          resolution: "exact",
+          confidence: "high",
+        });
+      }
     }
 
     if (sup.supportsCrossModuleSymbols) {
@@ -551,9 +582,13 @@ async function findReferencesInternal(
   const localBinding = localBindings.find(
     (binding) => binding.def && binding.def.start.index === def.range.start.index,
   );
-  const cFunctionEquivalentDefinitions =
-    parsedContext.sup.id === "c" && def.kind === SymbolKind.Function
-      ? localBindings.flatMap((binding) => {
+  let sameFileFunctionBindings: readonly Binding[] = localBindings;
+  if (parsedContext.sup.id === "cpp") {
+    sameFileFunctionBindings = localBinding ? cppEquivalentCallableBindings(localBinding) : [];
+  }
+  const sameFileFunctionEquivalentDefinitions =
+    (parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp") && def.kind === SymbolKind.Function
+      ? sameFileFunctionBindings.flatMap((binding) => {
           const bindingRange = binding.def;
           if (!bindingRange || bindingRange.start.index === def.range.start.index) return [];
           const local = mod.locals.find(
@@ -580,14 +615,12 @@ async function findReferencesInternal(
   } else if (def.isMember && parsedContext.sup.id === "cpp") {
     equivalentDefinitions = await cppInClassMemberEquivalentDefinitions(index, def, parsedContext, definitionNameNode);
   } else if (parsedContext.sup.id === "cpp") {
-    equivalentDefinitions = await cppNamespaceFunctionEquivalentDefinitions(
-      index,
-      def,
-      parsedContext,
-      definitionNameNode,
-    );
+    equivalentDefinitions = [
+      ...sameFileFunctionEquivalentDefinitions,
+      ...(await cppNamespaceFunctionEquivalentDefinitions(index, def, parsedContext, definitionNameNode)),
+    ];
   } else {
-    equivalentDefinitions = cFunctionEquivalentDefinitions;
+    equivalentDefinitions = sameFileFunctionEquivalentDefinitions;
   }
   for (const equivalent of equivalentDefinitions) {
     pushRef({ file: equivalent.file, range: equivalent.range });
@@ -655,7 +688,13 @@ async function findReferencesInternal(
     ...new Map(
       [referenceDef, ...equivalentDefinitions]
         .flatMap((candidate) =>
-          getCachedReferenceCandidateFiles(index, candidate, exportedNames, !!phpQualifiedNames.length),
+          getCachedReferenceCandidateFiles(
+            index,
+            candidate,
+            exportedNames,
+            !!phpQualifiedNames.length,
+            parsedContext.sup.id,
+          ),
         )
         .map((candidateFile) => [fileIdentityKey(candidateFile), candidateFile]),
     ).values(),
@@ -833,7 +872,8 @@ async function findReferencesInternal(
         } else if (imp.kind === "star") {
           const result = resolveImported(index, imp, exportedName);
           const matchesDef = !!result && !("namespace" in result) && matchesReferenceDefinition(result);
-          if (!matchesDef) continue;
+          if (!matchesDef && !cppCanonicalStructuralExport(index, targetFile, exportedName, def, parsedContext.sup.id))
+            continue;
           if (hasExpandedNamedImport(module, targetFile, exportedName)) {
             continue;
           }
@@ -867,16 +907,25 @@ async function findReferencesInternal(
           }
           const hit = resolveExport(index, targetFile, exported);
           let matchesDef = hit?.kind === "resolved" && matchesReferenceDefinition(hit.def);
+          let attributedByProof = matchesDef;
           if (!matchesDef && bindingSites.length) {
             matchesDef = await bindingMatchesDefinition();
+            attributedByProof = matchesDef;
+          }
+          if (!matchesDef && cppCanonicalStructuralExport(index, targetFile, exported, def, parsedContext.sup.id)) {
+            // Recover candidates, but prove each overload call through goToDefinition.
+            // Structural visibility alone cannot attribute the import token.
+            matchesDef = true;
           }
           if (!matchesDef) continue;
-          for (const site of bindingSites) {
-            pushRef({
-              file: fileId,
-              range: site.range,
-              via: { import: imp, importBinding: site.importBinding },
-            });
+          if (attributedByProof) {
+            for (const site of bindingSites) {
+              pushRef({
+                file: fileId,
+                range: site.range,
+                via: { import: imp, importBinding: site.importBinding },
+              });
+            }
           }
           const scansQualifiedCppImport =
             parsedContext.sup.id === "cpp" && imp.kind === "named" && imp.local.includes("::");
@@ -1016,6 +1065,7 @@ async function findReferencesInternal(
   const referenceCoverage = buildIndexedCandidateCoverage({
     index,
     def,
+    languageId: parsedContext.sup.id,
     exportedNames,
     candidateFiles,
     scannedFiles,

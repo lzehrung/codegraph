@@ -151,6 +151,15 @@ function tryResolveChain(context: EdgePassContext, node: SyntaxNodeLike, fromId?
 
 /** Records an edge for a resolvable target node. Returns whether a target was resolved. */
 function tryResolveNode(context: EdgePassContext, node: SyntaxNodeLike, fromId: string, label: string): boolean {
+  if (context.sup.id === "cpp" && node.type === "qualified_identifier") {
+    const name = cppQualifiedNameSegments(node, context.source).join("::");
+    const target = context.resolveIdentifier(name, node);
+    if (target) {
+      recordDefEdge(context, fromId, target, label, node);
+      return true;
+    }
+    return false;
+  }
   if (
     isIdentifierType(context.sup, node.type) ||
     node.type === "type_identifier" ||
@@ -653,6 +662,10 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
             recordDefEdge(context, fromId, qualifiedTarget, "calls", access.property);
             return;
           }
+          // A qualified name that resolves to no free function is still a candidate
+          // class-scoped static call. Falling through reaches `recordReceiverCall`
+          // (the `typeScopedCppCall` arm below), which only resolves against a proven
+          // member container, so namespace names cannot be revived by a bare-name match.
         }
         if (
           keywordReceiverKind(context.sup.id, receiverName) ||

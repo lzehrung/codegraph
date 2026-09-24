@@ -1,6 +1,9 @@
 import path from "node:path";
 import { findUsageReferences, goToDefinition } from "../indexer/navigation.js";
 import { ensureParsedContext, type ParsedFileContext } from "../indexer/parse-context.js";
+import { findClosestScopeBinding, getOrBuildScopeIndex, resolveNamedDefinition } from "../indexer/navigation-local.js";
+import { cppCallableIsDefinition, cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
+import { getCachedReferenceCandidateFiles } from "../indexer/navigation-references.js";
 import { SymbolKind, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
@@ -842,18 +845,68 @@ function bestGotoNode(target: SyntaxNodeLike, symbolName: string, source: string
   return best;
 }
 
+function cppUnqualifiedCallTarget(
+  index: ProjectIndex,
+  file: string,
+  parsed: ParsedFileContext,
+  target: SyntaxNodeLike,
+): SymbolDef | null {
+  if (parsed.sup.id !== "cpp" || target.type !== "identifier") return null;
+  const module = index.byFile.get(fileIdentityKey(file));
+  if (!module) return null;
+  const name = sliceText(target, parsed.source);
+  const scope = getOrBuildScopeIndex(index, file, parsed.source, parsed.sup, module, parsed.tree);
+  const binding = findClosestScopeBinding(scope, name, target, parsed.sup);
+  if (binding?.kind === "function") {
+    const equivalents = cppEquivalentCallableBindings(binding);
+    if (equivalents.length !== (binding.sameScopeFunctionBindings?.length ?? 1)) return null;
+    const canonical = equivalents.find((candidate) => cppCallableIsDefinition(candidate.node)) ?? equivalents[0];
+    const range = canonical?.def;
+    if (!range) return null;
+    return module.locals.find((local) => sameRangeStart(local.range, range)) ?? null;
+  }
+  // A local variable or parameter shadows the function; member expressions and
+  // ambiguous overload sets cannot be recovered as unqualified calls.
+  if (binding && !binding.import) return null;
+  const resolved = resolveNamedDefinition(index, module, file, parsed.sup, name);
+  if (resolved?.status !== "ok" || resolved.definition.kind !== SymbolKind.Function) return null;
+  return resolved.definition;
+}
+
 async function collectVerifiedCallsiteReferences(
   index: ProjectIndex,
   changedSymbol: ChangedSymbol,
   maxRefs: number,
   shouldIncludeReference: (file: string) => boolean,
   diagnostics: ImpactDiagnostics["callCompatibility"] | undefined,
+  languageId: string,
+  excludedReferences: ReadonlySet<string>,
 ): Promise<Reference[]> {
   const refs: Reference[] = [];
   const seen = new Set<string>();
+  const def: SymbolDef = {
+    file: changedSymbol.file,
+    localName: changedSymbol.name,
+    kind: changedSymbol.kind,
+    range: changedSymbol.range,
+  };
+  let candidateFiles: Set<string> | undefined;
+  if ((languageId === "c" || languageId === "cpp") && changedSymbol.kind === SymbolKind.Function) {
+    const module = index.byFile.get(fileIdentityKey(changedSymbol.file));
+    const exportedNames =
+      module?.exports.flatMap((entry) =>
+        entry.type === "local" && sameDefinition(entry.target, def) ? [entry.exportedAs] : [],
+      ) ?? [];
+    if (!exportedNames.length) exportedNames.push(changedSymbol.name);
+    candidateFiles = new Set([
+      fileIdentityKey(changedSymbol.file),
+      ...getCachedReferenceCandidateFiles(index, def, exportedNames, false, languageId).map(fileIdentityKey),
+    ]);
+  }
 
   for (const module of index.byFile.values()) {
     const file = module.file;
+    if (candidateFiles && !candidateFiles.has(fileIdentityKey(file))) continue;
     if (refs.length >= maxRefs) {
       break;
     }
@@ -883,22 +936,24 @@ async function collectVerifiedCallsiteReferences(
         if (target) {
           const gotoNode = bestGotoNode(target, changedSymbol.name, parsed.source);
           if (sliceText(gotoNode, parsed.source) === changedSymbol.name) {
-            const result = await goToDefinition(index, {
-              file,
-              line: gotoNode.startPosition.row + 1,
-              column: gotoNode.startPosition.column + 1,
-            });
-            if (result.status === "ok") {
-              const def: SymbolDef = {
-                file: changedSymbol.file,
-                localName: changedSymbol.name,
-                kind: changedSymbol.kind,
-                range: changedSymbol.range,
-              };
-              if (sameDefinition(result.definition, def)) {
+            const result = await goToDefinition(
+              index,
+              {
+                file,
+                line: gotoNode.startPosition.row + 1,
+                column: gotoNode.startPosition.column + 1,
+              },
+              parsed,
+            );
+            // Navigation rejects invalid C++ arity. Compatibility diagnostics need
+            // the unique lexical/import binding before judging the argument count.
+            const definition =
+              result.status === "ok" ? result.definition : cppUnqualifiedCallTarget(index, file, parsed, target);
+            if (definition) {
+              if (sameDefinition(definition, def)) {
                 const range = toRange(gotoNode);
                 const key = `${fileIdentityKey(file)}:${range.start.line}:${range.start.column}`;
-                if (!seen.has(key)) {
+                if (!seen.has(key) && !excludedReferences.has(key)) {
                   seen.add(key);
                   refs.push({ file, range });
                 }
@@ -1108,7 +1163,9 @@ export async function attachCallCompatibilityHints(
       refs = referenceResult.references.filter((ref) => shouldIncludeReference(ref.file));
     }
 
-    const seenRefs = new Set(refs.map((ref) => `${ref.file}:${ref.range.start.line}:${ref.range.start.column}`));
+    const seenRefs = new Set(
+      refs.map((ref) => `${fileIdentityKey(ref.file)}:${ref.range.start.line}:${ref.range.start.column}`),
+    );
     const hints: CallCompatibilityHint[] = [];
     let consideredCallsites = 0;
 
@@ -1140,7 +1197,11 @@ export async function attachCallCompatibilityHints(
     }
 
     const shouldRunVerifiedScan =
-      consideredCallsites < options.maxRefs && (referenceResult.status !== "ok" || !consideredCallsites);
+      consideredCallsites < options.maxRefs &&
+      (parsedDefinition.sup.id === "c" ||
+        parsedDefinition.sup.id === "cpp" ||
+        referenceResult.status !== "ok" ||
+        !consideredCallsites);
     if (shouldRunVerifiedScan) {
       const verifiedScanLimit = Math.max(
         0,
@@ -1153,12 +1214,14 @@ export async function attachCallCompatibilityHints(
           verifiedScanLimit,
           shouldIncludeReference,
           diagnostics,
+          parsedDefinition.sup.id,
+          seenRefs,
         );
         for (const ref of verifiedCallsites) {
           if (consideredCallsites >= options.maxRefs) {
             break;
           }
-          const key = `${ref.file}:${ref.range.start.line}:${ref.range.start.column}`;
+          const key = `${fileIdentityKey(ref.file)}:${ref.range.start.line}:${ref.range.start.column}`;
           if (seenRefs.has(key)) {
             continue;
           }

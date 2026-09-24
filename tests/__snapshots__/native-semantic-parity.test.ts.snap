@@ -3,14 +3,14 @@
 exports[`native semantic coverage > keeps C++ callable redeclarations connected across files 1`] = `
 {
   "goto": {
-    "file": "api.hpp",
+    "file": "api.h",
     "line": 1,
     "status": "ok",
   },
   "references": {
     "refs": [
       "api.cpp:2",
-      "api.hpp:1",
+      "api.h:1",
       "consumer.cpp:2",
     ],
     "status": "ok",

@@ -10,7 +10,12 @@ import {
 } from "../native/tree-sitter-native.js";
 import { cppCallableIsDefinition, cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
 import { resolveExport, resolvePhpExportByImportType } from "../indexer/navigation-resolve.js";
-import { resolveCppCallableBindings, resolveCppCollidingBinding } from "../indexer/navigation-cpp.js";
+import {
+  resolveCppCallableBindings,
+  resolveCppCollidingBinding,
+  resolveCppExportedCallables,
+  resolveVisibleCppCallableName,
+} from "../indexer/navigation-cpp.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
 import { findClosestScopeBinding, getOrBuildScopeIndex, resolveNamedDefinition } from "../indexer/navigation-local.js";
 import { ensureParsedContext, type ParsedFileContext } from "../indexer/parse-context.js";
@@ -329,11 +334,39 @@ export async function buildSymbolGraphDetailed(
 
       const scopeIndex = getOrBuildScopeIndex(index, file, src, sup, moduleEntry, tree);
       recordCallableDeclarationAliases(moduleEntry, sup.id, scopeIndex.all, nodeAliases);
+      const cppParsedByFile = sup.id === "cpp" ? new Map<string, ParsedFileContext>() : null;
+      if (cppParsedByFile) {
+        cppParsedByFile.set(fileIdentityKey(file), { source: src, tree, sup });
+        const importedFiles = new Set<string>();
+        for (const imp of moduleEntry.imports) {
+          if (typeof imp.resolved === "string") importedFiles.add(imp.resolved);
+        }
+        for (const importedFile of importedFiles) {
+          const parsedImport = await loadParsedFile(importedFile);
+          if (parsedImport) cppParsedByFile.set(fileIdentityKey(importedFile), parsedImport);
+        }
+      }
+      const loadCppParsedFile = (targetFile: string): ParsedFileContext | null =>
+        cppParsedByFile?.get(fileIdentityKey(targetFile)) ?? null;
+      const resolveCppAliasTarget = (target: SymbolDef | undefined, node: SyntaxNodeLike): SymbolDef | null => {
+        if (!target) return null;
+        if (sup.id !== "cpp" || target.kind !== SymbolKind.Function) return target;
+        return resolveCppExportedCallables(index, [target], node, src, loadCppParsedFile);
+      };
       const resolveIdentifier = (name: string, node: SyntaxNodeLike): SymbolDef | null => {
         const binding = findClosestScopeBinding(scopeIndex, name, node, sup);
         if (sup.id === "cpp" && name.includes("::")) {
           const qualifiedBindings = scopeIndex.cppQualifiedFunctionBindings.get(name);
           if (qualifiedBindings) return resolveCppCallableBindings(file, qualifiedBindings, node, src);
+          const visibleQualified = resolveVisibleCppCallableName(
+            index,
+            moduleEntry,
+            name,
+            node,
+            src,
+            loadCppParsedFile,
+          );
+          if (visibleQualified !== undefined) return visibleQualified;
           const qualifiedDefinition = resolveNamedDefinition(index, moduleEntry, file, sup, name);
           if (qualifiedDefinition?.status === "ok") return qualifiedDefinition.definition;
         }
@@ -358,13 +391,22 @@ export async function buildSymbolGraphDetailed(
             if (resolved?.kind === "resolved") return resolved.def;
           }
         }
-        if (binding) return aliasToTargetDef.get(binding.name) ?? null;
+        if (sup.id === "cpp") {
+          const visible = resolveVisibleCppCallableName(index, moduleEntry, name, node, src, loadCppParsedFile);
+          if (visible !== undefined) return visible;
+        }
+        if (binding) return resolveCppAliasTarget(aliasToTargetDef.get(binding.name), node);
 
         const localCandidates = moduleEntry.locals.filter(
           (local) => sup.normalizeIdentifier(local.localName) === sup.normalizeIdentifier(name),
         );
-        if (localCandidates.length === 1) return localCandidates[0] ?? null;
-        return aliasToTargetDef.get(name) ?? null;
+        if (localCandidates.length === 1) {
+          const only = localCandidates[0]!;
+          return sup.id === "cpp" && only.kind === SymbolKind.Function
+            ? resolveCppExportedCallables(index, [only], node, src, loadCppParsedFile)
+            : only;
+        }
+        return resolveCppAliasTarget(aliasToTargetDef.get(name), node);
       };
 
       const edgePassContext = {

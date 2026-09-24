@@ -81,9 +81,11 @@ async function resolveCFamilyAngleIncludeFromHints(
 }
 
 /**
- * A configured C-family include root is combined with the include's inner path verbatim:
- * no extension or index probing. This keeps quoted and angle includes from binding script
- * files whose basename happens to match the header spelling.
+ * Combine a C-family include search directory with the include's inner path verbatim:
+ * no extension or index probing, so quoted and angle includes cannot bind a same-stem script.
+ * Hints are search directories; projectRoot is the boundary. Parent segments such as
+ * `../private/secret.h` remain first-party when the exact candidate stays inside
+ * projectRoot, and candidates that resolve outside it stay external.
  */
 async function resolveCFamilyExactIncludeFromHints(
   projectRoot: string,

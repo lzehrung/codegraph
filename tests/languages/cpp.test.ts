@@ -442,6 +442,102 @@ describe("C++ classification and same-file navigation", () => {
     }
   });
 
+  it("selects included using-alias overloads and rejects invalid C++ arity", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-included-alias-arity-"));
+    const header = path.join(root, "api.hpp");
+    const file = path.join(root, "use.cpp");
+    const headerLines = [
+      "namespace left {",
+      "int run(int*);",
+      "int pick();",
+      "int pick(int);",
+      "}",
+      "namespace alias { using left::pick; }",
+    ];
+    const lines = [
+      '#include "api.hpp"',
+      "int invalid_zero() { return left::run(); }",
+      "int invalid_two() { return left::run(nullptr, nullptr); }",
+      "int zero() { return alias::pick(); }",
+      "int one() { return alias::pick(1); }",
+      "int too_many() { return alias::pick(1, 2); }",
+    ];
+    try {
+      await fs.writeFile(header, headerLines.join("\n"), "utf8");
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [header, file]);
+      const zero = await goToDefinition(index, { file, line: 4, column: lines[3]!.lastIndexOf("pick") + 1 });
+      const one = await goToDefinition(index, { file, line: 5, column: lines[4]!.lastIndexOf("pick") + 1 });
+      const tooMany = await goToDefinition(index, { file, line: 6, column: lines[5]!.lastIndexOf("pick") + 1 });
+      const invalidZero = await goToDefinition(index, { file, line: 2, column: lines[1]!.lastIndexOf("run") + 1 });
+      expect(zero.status).toBe("ok");
+      if (zero.status === "ok") expect(zero.definition.range.start.line).toBe(3);
+      expect(one.status).toBe("ok");
+      if (one.status === "ok") expect(one.definition.range.start.line).toBe(4);
+      expect(tooMany.status).toBe("not_found");
+      expect(invalidZero.status).toBe("not_found");
+      const graph = await buildSymbolGraphDetailed(index);
+      const callerTargets = (name: string) =>
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === name)
+          .map((edge) => graph.nodes.get(edge.to)?.name);
+      expect(callerTargets("zero")).toEqual(["pick"]);
+      expect(callerTargets("one")).toEqual(["pick"]);
+      expect(callerTargets("too_many")).toEqual([]);
+      expect(callerTargets("invalid_zero")).toEqual([]);
+      expect(callerTargets("invalid_two")).toEqual([]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps same-signature functions from different namespaces ambiguous under one alias", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-alias-namespace-identity-"));
+    const file = path.join(root, "probe.cpp");
+    const lines = [
+      "namespace a { int pick(int); }",
+      "namespace b { int pick(int); }",
+      "namespace alias { using a::pick; using b::pick; }",
+      "int ambiguous() { return alias::pick(1); }",
+      "int direct() { return a::pick(1); }",
+    ];
+    try {
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const ambiguous = await goToDefinition(index, {
+        file,
+        line: 4,
+        column: lines[3]!.indexOf("pick") + 1,
+      });
+      expect(ambiguous.status).toBe("not_found");
+      const direct = await goToDefinition(index, {
+        file,
+        line: 5,
+        column: lines[4]!.indexOf("pick") + 1,
+      });
+      expect(direct.status).toBe("ok");
+      if (direct.status !== "ok") throw new Error("Expected the qualified namespace function");
+      expect(direct.definition.range.start.line).toBe(1);
+      const references = await findReferences(index, {
+        file,
+        line: 1,
+        column: lines[0]!.indexOf("pick") + 1,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected qualified namespace references");
+      const referenceLines = references.references.map((reference) => reference.range.start.line);
+      expect(referenceLines).toContain(5);
+      expect(referenceLines).not.toContain(4);
+      const graph = await buildSymbolGraphDetailed(index);
+      const callers = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => graph.nodes.get(edge.from)?.name);
+      expect(callers).toEqual(["direct"]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("classifies nested namespaces and unions, and resolves concepts and macros", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-classify-"));
     const file = path.join(root, "probe.cpp");

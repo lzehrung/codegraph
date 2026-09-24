@@ -469,6 +469,7 @@ export async function findSqlReferences(
     referenceCoverage: buildIndexedCandidateCoverage({
       index,
       def: definition,
+      languageId: "sql",
       exportedNames: [],
       candidateFiles,
       scannedFiles,

@@ -638,6 +638,11 @@ export function buildScopeIndexFromSource(
     }
     for (const binding of bindings) binding.occurrencesComplete = false;
   };
+  const cppOccurrenceBindings = (binding: Binding): readonly Binding[] | null => {
+    const collisions = binding.sameScopeFunctionBindings ?? [binding];
+    if (collisions.length > 1 || cppBindingCallableShape(binding)) return collisions;
+    return null;
+  };
 
   collectHoistedDeclarations(tree.rootNode);
   walk(tree.rootNode);
@@ -650,9 +655,9 @@ export function buildScopeIndexFromSource(
     if (prepareCppCallableBindings(callableBindings)) cppQualifiedCallableBindings.set(key, callableBindings);
   }
   for (const occurrence of cppFunctionOccurrences) {
-    const collisions = occurrence.binding.sameScopeFunctionBindings;
-    if (collisions && collisions.length > 1) {
-      assignCppCallableOccurrence(collisions, occurrence.node, occurrence.range);
+    const group = cppOccurrenceBindings(occurrence.binding);
+    if (group) {
+      assignCppCallableOccurrence(group, occurrence.node, occurrence.range);
     } else {
       occurrence.binding.occurrences.push(occurrence.range);
     }
@@ -667,9 +672,9 @@ export function buildScopeIndexFromSource(
     for (const occurrence of occurrences) {
       const fallback = occurrence.fallback;
       if (!fallback) continue;
-      const collisions = fallback.sameScopeFunctionBindings;
-      if (collisions && collisions.length > 1) {
-        assignCppCallableOccurrence(collisions, occurrence.node, occurrence.range);
+      const group = cppOccurrenceBindings(fallback);
+      if (group) {
+        assignCppCallableOccurrence(group, occurrence.node, occurrence.range);
       } else {
         fallback.occurrences.push(occurrence.range);
       }

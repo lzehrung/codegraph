@@ -281,6 +281,56 @@ describe("Impact Analyzer Edge Cases", () => {
       }
     });
 
+    it("keeps invalid C++ import calls in compatibility hints without attributing shadowed names", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-impact-cpp-binding-"));
+      try {
+        await fsp.writeFile(path.join(root, "api.hpp"), "int helper(int a, int b);\n", "utf8");
+        await fsp.writeFile(
+          path.join(root, "use.cpp"),
+          [
+            '#include "api.hpp"',
+            "void fixed() { helper(1, 2); }",
+            "void broken() { helper(1); }",
+            "void shadow(int (*helper)(int)) { helper(1); }",
+            "namespace other { void helper(int); void call() { helper(1); } }",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText: [
+            "diff --git a/api.hpp b/api.hpp",
+            "--- a/api.hpp",
+            "+++ b/api.hpp",
+            "@@ -1,1 +1,1 @@",
+            "-int helper(int a);",
+            "+int helper(int a, int b);",
+            "",
+          ].join("\n"),
+          includeTests: true,
+          maxRefs: 2,
+        });
+        if ("files" in result) throw new Error("Expected full impact report");
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+        expect(
+          helper?.callCompatibility
+            ?.map((hint) => ({
+              file: hint.callsiteFile,
+              line: hint.callsiteRange.start.line,
+              status: hint.status,
+              count: hint.actual.argCount,
+            }))
+            .sort((left, right) => left.line - right.line),
+        ).toEqual([
+          { file: "use.cpp", line: 2, status: "compatible", count: 2 },
+          { file: "use.cpp", line: 3, status: "likely_mismatch", count: 1 },
+        ]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
     it.each([
       {
         label: "Python",
