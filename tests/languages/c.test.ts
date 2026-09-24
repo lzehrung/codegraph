@@ -1265,6 +1265,24 @@ describe("C tag and typedef namespaces", () => {
             range: { start: { line: 9, column: lines[8]!.lastIndexOf("Forward") + 1 } },
           },
         });
+        for (const [line, column] of [
+          [9, lines[8]!.indexOf("Forward") + 1],
+          [9, lines[8]!.lastIndexOf("Forward") + 1],
+          [10, lines[9]!.indexOf("Forward") + 1],
+        ] as const) {
+          const completedReferences = await findReferences(index, { file, line, column });
+          expect(completedReferences.status).toBe("ok");
+          if (completedReferences.status !== "ok") throw new Error("Expected completed tag references");
+          expect(
+            completedReferences.references
+              .filter((ref) => normalizePath(ref.file) === file)
+              .map((ref) => [ref.range.start.line, ref.range.start.column]),
+          ).toEqual([
+            [9, lines[8]!.indexOf("Forward") + 1],
+            [9, lines[8]!.lastIndexOf("Forward") + 1],
+            [10, lines[9]!.indexOf("Forward") + 1],
+          ]);
+        }
         const headerDefinitions = index.byFile
           .get(fileIdentityKey(header))!
           .exports.flatMap((entry) => (entry.type === "local" ? [entry.target] : []));

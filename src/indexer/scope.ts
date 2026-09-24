@@ -184,6 +184,10 @@ export function buildScopeIndexFromSource(
       existing.occurrences.push(binding.def!);
       return;
     }
+    if (tagRole === "declaration" && existing?.import) {
+      binding.occurrences = existing.occurrences;
+      preserveExtraBinding(existing);
+    }
     if (tagRole && existing?.def) {
       if (existing.def.start.index === binding.def?.start.index) return;
       binding.occurrences = existing.occurrences;
