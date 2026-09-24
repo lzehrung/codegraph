@@ -1,22 +1,42 @@
 import type { ModuleIndex, ProjectIndex, SymbolDef } from "../../indexer/types.js";
+import { cppCallableShapeForNode, type CppCallableShape } from "../../indexer/cpp-callables.js";
+import { resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp.js";
+import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../../indexer/navigation-php.js";
+import { resolvePhpExportByImportType } from "../../indexer/navigation-resolve.js";
 import type { LanguageSupport } from "../../languages.js";
-import type { SyntaxNodeLike } from "../../languages/types.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { sliceText, toRange } from "../../util/ast.js";
 import { getMemberAccessParts } from "../../util/member-access.js";
+import { foldPhpIdentifierCase } from "../../util/identifiers.js";
+import {
+  MEMBER_ACCESS_ROWS,
+  keywordReceiverKind,
+  type ReceiverAncestorClause,
+  type ReceiverAncestorEmbed,
+  type ReceiverAncestryRelation,
+} from "../../util/member-access-tables.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { defNodeId, nodeForDef, type SymbolGraph } from "../symbol-graph.js";
 import type { DetailedClassNode, DetailedFunctionNode } from "./ast.js";
-import { collectNodesByType, findFirstNodeByType, isIdentifierType } from "./ast.js";
+import { collectNodesByType, declarationMemberArity, findFirstNodeByType, isIdentifierType } from "./ast.js";
 import {
   CALL_ARGUMENT_NODE_TYPES,
   callArgumentCount,
   classifyReceiver,
+  declarationNodeIsStatic,
+  cppOutOfLineOwnerPath,
+  cppOutOfLineMemberDeclarationNode,
+  cppQualifiedNameSegments,
   declaresMembers,
+  isUnprovenHeritageExpression,
   nearestMemberContainer,
   receiverCallAccess,
+  supportsReceiverMemberOverloads,
   type ReceiverCallAccess,
-  type ReceiverProof,
   type ReceiverCallCandidate,
+  type ReceiverMemberScope,
+  type MemberArityRange,
+  type ReceiverProof,
 } from "./receiver-calls.js";
 
 type EdgePassContext = {
@@ -37,8 +57,16 @@ type EdgePassContext = {
   recordEdge: (fromId: string, toId: string, label?: string, site?: SymbolGraph["edges"][number]["site"]) => boolean;
   /** Receiver calls whose target needs the completed graph; resolved after every module. */
   receiverCalls: ReceiverCallCandidate[];
-  /** Whether any indexed project file declares a callable with this name. */
-  hasCallableNamed: (name: string) => boolean;
+  /** Proven static or instance scope for callable members, keyed by graph node id. */
+  receiverMemberScopes: Map<string, ReceiverMemberScope>;
+  /** Accepted argument-count range for C++ members, keyed by graph node id. */
+  receiverMemberArities: Map<string, MemberArityRange>;
+  /** Definition-node ids that collapse into their declaration-node id. */
+  nodeAliases: Map<string, string>;
+  /** Registers a name the detailed pass proved callable (function-valued bindings). */
+  noteCallableName: (name: string, phpCaseInsensitive?: boolean) => void;
+  /** Loads syntax needed to recover declaration metadata for cross-file member definitions. */
+  loadParsedFile: (file: string) => Promise<{ source: string; tree: SyntaxTreeLike } | null>;
 };
 
 function ensureNode(context: EdgePassContext, def: SymbolDef): string {
@@ -50,9 +78,10 @@ function markImplementationTarget(
   context: EdgePassContext,
   id: string,
   declarationNode: SyntaxNodeLike,
+  declarationSource: string,
   def: SymbolDef,
 ): void {
-  const declaration = sliceText(declarationNode, context.source);
+  const declaration = sliceText(declarationNode, declarationSource);
   const nameIndex = declaration.indexOf(def.localName);
   const prefix = nameIndex >= 0 ? declaration.slice(0, nameIndex) : declaration;
   if (!/\b(?:abstract|virtual|override)\b/.test(prefix)) return;
@@ -60,23 +89,41 @@ function markImplementationTarget(
   if (node) node.implementationTarget = true;
 }
 function markMemberArity(context: EdgePassContext, id: string, declarationNode: SyntaxNodeLike): void {
-  let parameters = declarationNode.childForFieldName("parameters");
-  if (!parameters) {
-    for (const type of [
-      "formal_parameters",
-      "parameter_list",
-      "parameters",
-      "method_parameters",
-      "function_parameter_clause",
-    ]) {
-      parameters = findFirstNodeByType(declarationNode, type);
-      if (parameters) break;
-    }
-  }
-  if (!parameters) return;
-  const arity = (parameters.namedChildren ?? []).filter((child) => child.type !== "comment").length;
+  const arity = declarationMemberArity(declarationNode, context.sup.id);
+  if (arity === undefined) return;
   const node = context.nodes.get(id);
   if (node) node.memberArity = arity;
+}
+
+function cppShapeNode(node: SyntaxNodeLike): SyntaxNodeLike {
+  return node.type === "function_declarator" ? node : (findFirstNodeByType(node, "function_declarator") ?? node);
+}
+
+function mergeCppCallableShapes(...shapes: Array<CppCallableShape | null | undefined>): MemberArityRange | undefined {
+  const present = shapes.filter((shape): shape is CppCallableShape => !!shape);
+  if (!present.length) return undefined;
+  let min = present[0]!.minArity;
+  let max = present[0]!.maxArity;
+  for (const shape of present.slice(1)) {
+    min = Math.min(min, shape.minArity);
+    if (max === null || shape.maxArity === null) max = null;
+    else max = Math.max(max, shape.maxArity);
+  }
+  return { min, max };
+}
+
+function recordMemberLookupIdentity(
+  context: EdgePassContext,
+  definitionId: string,
+  memberId: string,
+  memberScope: ReceiverMemberScope,
+  arityRange: MemberArityRange | undefined,
+): void {
+  context.receiverMemberScopes.set(definitionId, memberScope);
+  if (memberId !== definitionId) context.receiverMemberScopes.set(memberId, memberScope);
+  if (!arityRange) return;
+  context.receiverMemberArities.set(definitionId, arityRange);
+  if (memberId !== definitionId) context.receiverMemberArities.set(memberId, arityRange);
 }
 
 function recordDefEdge(
@@ -106,7 +153,20 @@ function tryResolveChain(context: EdgePassContext, node: SyntaxNodeLike, fromId?
 
 /** Records an edge for a resolvable target node. Returns whether a target was resolved. */
 function tryResolveNode(context: EdgePassContext, node: SyntaxNodeLike, fromId: string, label: string): boolean {
-  if (isIdentifierType(context.sup, node.type) || node.type === "type_identifier") {
+  if (context.sup.id === "cpp" && node.type === "qualified_identifier") {
+    const name = cppQualifiedNameSegments(node, context.source).join("::");
+    const target = context.resolveIdentifier(name, node);
+    if (target) {
+      recordDefEdge(context, fromId, target, label, node);
+      return true;
+    }
+    return false;
+  }
+  if (
+    isIdentifierType(context.sup, node.type) ||
+    node.type === "type_identifier" ||
+    (context.sup.id === "cpp" && (node.type === "operator_name" || node.type === "destructor_name"))
+  ) {
     const name = sliceText(node, context.source);
     const target = context.resolveIdentifier(name, node);
     if (target) {
@@ -199,41 +259,131 @@ export function emitPythonDecoratorEdges(context: EdgePassContext, rootNode: Syn
   addDecoratorUses(rootNode);
 }
 
-export function emitMemberOwnershipEdges(
+/** Whether a function declaration can participate in class member lookup and ownership. */
+function isClassMemberFunction(fn: DetailedFunctionNode): boolean {
+  return fn.node.type !== "local_function_statement";
+}
+
+export async function emitMemberOwnershipEdges(
   context: EdgePassContext,
   functionNodes: DetailedFunctionNode[],
   classNodes: DetailedClassNode[],
-): void {
+): Promise<void> {
   for (const fn of functionNodes) {
-    const ownerDef = memberOwnerDef(context, fn, classNodes);
-    if (!ownerDef) continue;
-    const memberId = ensureNode(context, fn.def);
-    markImplementationTarget(context, memberId, fn.node, fn.def);
-    markMemberArity(context, memberId, fn.node);
-    recordDefEdge(context, memberId, ownerDef, "member_of");
+    const owner = await memberOwner(context, fn, classNodes);
+    if (!owner) continue;
+    const outOfLineDeclaration = owner.cppOutOfLine
+      ? await cppOutOfLineMemberDeclaration(context, fn, owner.def)
+      : null;
+    const definitionId = ensureNode(context, fn.def);
+    let memberDef = fn.def;
+    if (outOfLineDeclaration) {
+      const declarationModule = context.index.byFile.get(fileIdentityKey(owner.def.file));
+      const declarationDef = declarationModule?.locals.find(
+        (candidate) =>
+          candidate.localName === fn.def.localName &&
+          candidate.kind === fn.def.kind &&
+          candidate.range.start.index === outOfLineDeclaration.nameNode.startIndex &&
+          candidate.range.end.index === outOfLineDeclaration.nameNode.endIndex,
+      );
+      if (declarationDef) memberDef = declarationDef;
+    }
+    const memberId = ensureNode(context, memberDef);
+    if (definitionId !== memberId) context.nodeAliases.set(definitionId, memberId);
+    markImplementationTarget(
+      context,
+      memberId,
+      outOfLineDeclaration?.node ?? fn.node,
+      outOfLineDeclaration?.source ?? context.source,
+      fn.def,
+    );
+    const arityNode = outOfLineDeclaration?.node ?? fn.node;
+    markMemberArity(context, definitionId, arityNode);
+    if (memberId !== definitionId) markMemberArity(context, memberId, arityNode);
+    const memberScope = memberScopeForDefinition(context, fn, owner.cppOutOfLine, outOfLineDeclaration);
+    const arityRange =
+      context.sup.id === "cpp"
+        ? mergeCppCallableShapes(
+            cppCallableShapeForNode(cppShapeNode(fn.node)),
+            outOfLineDeclaration ? cppCallableShapeForNode(cppShapeNode(outOfLineDeclaration.node)) : undefined,
+          )
+        : undefined;
+    recordMemberLookupIdentity(context, definitionId, memberId, memberScope, arityRange);
+    recordDefEdge(context, definitionId, owner.def, "member_of");
   }
 }
 
-/** Lexical class body, or the named Go receiver type for an out-of-line method. */
-function memberOwnerDef(
+function memberScopeForDefinition(
+  context: EdgePassContext,
+  fn: DetailedFunctionNode,
+  cppOutOfLine: boolean,
+  outOfLineDeclaration: MemberDeclarationSource | null,
+): ReceiverMemberScope {
+  if (outOfLineDeclaration) {
+    return declarationNodeIsStatic(outOfLineDeclaration.node, outOfLineDeclaration.source) ? "static" : "instance";
+  }
+  if (cppOutOfLine) return "any";
+  const declarationNode =
+    fn.node.parent?.type === "public_field_definition" || fn.node.parent?.type === "field_definition"
+      ? fn.node.parent
+      : fn.node;
+  return declarationNodeIsStatic(declarationNode, context.source) ? "static" : "instance";
+}
+
+type MemberOwner = { def: SymbolDef; cppOutOfLine: boolean };
+
+/** Lexical type body, named Go receiver type, or named C++ out-of-line owner. */
+async function memberOwner(
   context: EdgePassContext,
   fn: DetailedFunctionNode,
   classNodes: DetailedClassNode[],
-): SymbolDef | null {
+): Promise<MemberOwner | null> {
+  if (!isClassMemberFunction(fn)) return null;
   if (context.sup.id === "go" && fn.node.type === "method_declaration") {
-    return goMethodReceiverTypeDef(context, fn.node);
+    const def = goMethodReceiverTypeDef(context, fn.node);
+    return def ? { def, cppOutOfLine: false } : null;
   }
   const owners = classNodes
     .filter(
       (candidate) => candidate.node.startIndex <= fn.node.startIndex && candidate.node.endIndex >= fn.node.endIndex,
     )
     .sort((left, right) => left.node.endIndex - left.node.startIndex - (right.node.endIndex - right.node.startIndex));
-  if (owners[0]?.def) return owners[0].def;
+  if (owners[0]?.def) return { def: owners[0].def, cppOutOfLine: false };
+  if (context.sup.id === "cpp") {
+    const ownerPath = cppOutOfLineOwnerPath(fn.node, context.source, context.sup);
+    const def = ownerPath
+      ? await resolveCppQualifiedMemberContainer(context.index, context.moduleEntry, ownerPath, context.loadParsedFile)
+      : null;
+    return def ? { def, cppOutOfLine: true } : null;
+  }
   if (context.sup.id !== "zig") return null;
   const container = nearestMemberContainer(fn.node);
   if (container?.type !== "struct_declaration") return null;
   const name = container.parent?.namedChildren.find((child) => child.type === "identifier");
-  return name ? resolveNamedType(context, sliceText(name, context.source), name) : null;
+  const def = name ? resolveNamedType(context, sliceText(name, context.source), name) : null;
+  return def ? { def, cppOutOfLine: false } : null;
+}
+
+type MemberDeclarationSource = { node: SyntaxNodeLike; nameNode: SyntaxNodeLike; source: string };
+
+async function cppOutOfLineMemberDeclaration(
+  context: EdgePassContext,
+  fn: DetailedFunctionNode,
+  ownerDef: SymbolDef,
+): Promise<MemberDeclarationSource | null> {
+  const parsed = await context.loadParsedFile(ownerDef.file);
+  const startIndex = ownerDef.range.start.index;
+  const endIndex = ownerDef.range.end.index;
+  if (!parsed || startIndex === undefined || endIndex === undefined) return null;
+  const ownerNameNode = parsed.tree.rootNode.descendantForIndex(startIndex, endIndex);
+  const declaration = cppOutOfLineMemberDeclarationNode(
+    fn.node,
+    fn.def.localName,
+    ownerNameNode,
+    parsed.source,
+    context.sup,
+  );
+  return declaration ? { node: declaration.node, nameNode: declaration.nameNode, source: parsed.source } : null;
 }
 
 /** Receiver type of `func (b *T) M()` / `func (b T) M()`, unwrapped through pointers. */
@@ -274,7 +424,50 @@ function resolveNamedType(context: EdgePassContext, name: string, node: SyntaxNo
   const typed = context.moduleEntry.locals.filter(
     (local) => context.sup.normalizeIdentifier(local.localName) === normalized && declaresMembers(local),
   );
-  return typed.length === 1 ? typed[0]! : null;
+  if (typed.length === 1) return typed[0]!;
+  const imported = context.aliasToTargetDef.get(name);
+  return imported && declaresMembers(imported) ? imported : null;
+}
+
+/**
+ * Collection can attach an arrow to any same-name local when the binding site is
+ * not that local (`obj.helper = () => 1` beside `const helper = 1`). Prove that
+ * this function is the value of `fn.def` itself: the declarator name is that
+ * definition, or an identifier assignment resolves to it. Member and pattern
+ * left-hand sides do not prove a local binding.
+ */
+function provesCallableBinding(context: EdgePassContext, fn: DetailedFunctionNode): boolean {
+  const parent = fn.node.parent;
+  if (!parent) return false;
+  const start = fn.def.range.start.index;
+  const end = fn.def.range.end.index;
+  if (start === undefined || end === undefined) return false;
+
+  const sameNodeRange = (candidate: SyntaxNodeLike | null): boolean =>
+    !!candidate && candidate.startIndex === fn.node.startIndex && candidate.endIndex === fn.node.endIndex;
+  if (
+    (parent.type === "variable_declarator" ||
+      parent.type === "public_field_definition" ||
+      parent.type === "field_definition") &&
+    sameNodeRange(parent.childForFieldName("value"))
+  ) {
+    const bindingName = parent.childForFieldName("name") ?? parent.childForFieldName("property");
+    return (
+      !!bindingName &&
+      (isIdentifierType(context.sup, bindingName.type) || context.propertyIdentifierTypes.includes(bindingName.type)) &&
+      bindingName.startIndex === start &&
+      bindingName.endIndex === end
+    );
+  }
+
+  if (parent.type === "assignment_expression" && sameNodeRange(parent.childForFieldName("right"))) {
+    const left = parent.childForFieldName("left");
+    if (!left || !isIdentifierType(context.sup, left.type)) return false;
+    const resolved = context.resolveIdentifier(sliceText(left, context.source), left);
+    return !!resolved && defNodeId(resolved) === defNodeId(fn.def);
+  }
+
+  return false;
 }
 
 export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: DetailedFunctionNode[]): void {
@@ -295,13 +488,14 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
     "struct_expression",
     "composite_literal",
   ]);
-  // Receiver typing and lexical member lookup are only needed once a receiver call
-  // fails the cheaper identifier and import-chain resolution, so both are lazy.
+  // Receiver typing and lexical member lookup are initialized only for receiver calls.
+  const receiverProofs = new Map<string, ReceiverProof>();
   let membersByContainer: Map<number, DetailedFunctionNode[]> | undefined;
   const lexicalMembers = (container: SyntaxNodeLike): DetailedFunctionNode[] => {
     if (!membersByContainer) {
       membersByContainer = new Map();
       for (const candidate of functionNodes) {
+        if (!isClassMemberFunction(candidate)) continue;
         const owner = nearestMemberContainer(candidate.node);
         if (!owner) continue;
         const members = membersByContainer.get(owner.startIndex);
@@ -311,10 +505,17 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
     }
     return membersByContainer.get(container.startIndex) ?? [];
   };
-  const receiverProofs = new Map<string, ReceiverProof>();
 
   for (const fn of functionNodes) {
+    const phpCaseInsensitive = context.sup.id === "php";
     const fromId = ensureNode(context, fn.def);
+    const provenNode = context.nodes.get(fromId);
+    // Function-valued bindings (`const helper = () => 1`) keep their `variable` kind;
+    // the callable metadata records that this binding was proven to hold a function.
+    if (provenNode && provenNode.kind !== "function" && provesCallableBinding(context, fn)) {
+      provenNode.callable = true;
+      context.noteCallableName(fn.name, context.sup.id === "php");
+    }
     const seenAliases = new Set<string>();
     const nestedFunctions = new Set(
       functionNodes
@@ -330,6 +531,24 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
     const recordAliasUse = (node: SyntaxNodeLike): void => {
       if (context.membersOnly || !isIdentifierType(context.sup, node.type)) return;
       const name = sliceText(node, context.source);
+      if (context.sup.id === "php") {
+        // Resolve the occurrence's namespace; a plain-name map cannot distinguish PHP roles.
+        const importType = inferPhpQualifiedReferenceImportType(node) ?? "const";
+        const aliasName = importType === "const" ? name : foldPhpIdentifierCase(name);
+        const seenKey = `${importType}:${aliasName}`;
+        if (seenAliases.has(seenKey)) return;
+        seenAliases.add(seenKey);
+        const phpImport = findPhpImportAlias(context.moduleEntry.imports, name, importType);
+        if (!phpImport || typeof phpImport.resolved !== "string") return;
+        const resolved = resolvePhpExportByImportType(
+          context.index,
+          phpImport.resolved,
+          phpImport.imported,
+          importType,
+        );
+        if (resolved?.kind === "resolved") recordDefEdge(context, fromId, resolved.def, "uses");
+        return;
+      }
       if (seenAliases.has(name)) return;
       let target: SymbolDef | null = context.aliasToTargetDef.get(name) ?? null;
       if (!target) {
@@ -375,7 +594,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
      */
     const recordReceiverCall = (node: SyntaxNodeLike, access: ReceiverCallAccess): void => {
       const memberName = sliceText(access.property, context.source);
-      if (!memberName || !context.hasCallableNamed(memberName)) return;
+      if (!memberName) return;
       const binding = classifyReceiver(
         context.sup,
         access.receiver,
@@ -387,7 +606,9 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
       if (!binding) return;
 
       const site = { file: context.moduleEntry.file, range: toRange(access.property) };
-      const argumentCount = callArgumentCount(node);
+      const argumentCount = supportsReceiverMemberOverloads(context.sup.id)
+        ? callArgumentCount(node, context.source)
+        : null;
       if (binding.kind === "named-type") {
         const typeDef = resolveNamedType(context, binding.typeName, access.receiver);
         if (!typeDef) return;
@@ -398,27 +619,46 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
           memberName,
           argumentCount,
           site,
+          memberScope: binding.memberScope,
+          caseInsensitiveMemberName: phpCaseInsensitive,
         });
         return;
       }
-
       if (binding.kind === "own-type") {
         const container = nearestMemberContainer(fn.node);
         const declared = container
-          ? lexicalMembers(container).filter((candidate) => candidate.def.localName === memberName)
+          ? lexicalMembers(container).filter((candidate) => {
+              const candidateName = candidate.def.localName;
+              const nameMatches = phpCaseInsensitive
+                ? foldPhpIdentifierCase(candidateName) === foldPhpIdentifierCase(memberName)
+                : candidateName === memberName;
+              if (!nameMatches) return false;
+              if (binding.memberScope === "any") return true;
+              return declarationNodeIsStatic(candidate.node, context.source) === (binding.memberScope === "static");
+            })
           : [];
         if (declared.length === 1) {
           recordDefEdge(context, fromId, declared[0]!.def, "calls", access.property);
-          return;
         }
       }
+
+      const receiverContainer = nearestMemberContainer(access.accessNode);
+      const receiverContainerName = receiverContainer?.childForFieldName("name");
+      const receiverOwnerDef = receiverContainerName
+        ? context.moduleEntry.locals.find(
+            (local) => local.range.start.index === receiverContainerName.startIndex && declaresMembers(local),
+          )
+        : undefined;
+
       context.receiverCalls.push({
         callerId: fromId,
-        ownerId: null,
+        ownerId: receiverOwnerDef ? ensureNode(context, receiverOwnerDef) : null,
         viaSupertypes: binding.kind === "supertype",
         memberName,
         argumentCount,
         site,
+        memberScope: binding.memberScope,
+        caseInsensitiveMemberName: phpCaseInsensitive,
       });
     };
 
@@ -431,7 +671,29 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
     const resolveCallTarget = (node: SyntaxNodeLike, callee: SyntaxNodeLike | null): void => {
       const access = receiverCallAccess(context.sup, node, callee);
       if (access) {
-        if (!tryResolveChain(context, access.accessNode, fromId, "calls")) recordReceiverCall(node, access);
+        const receiverName = sliceText(access.receiver, context.source);
+        const typeScopedCppCall =
+          context.sup.id === "cpp" &&
+          context.source.slice(access.receiver.endIndex, access.property.startIndex).includes("::");
+        if (typeScopedCppCall) {
+          const qualifiedName = cppQualifiedNameSegments(access.accessNode, context.source).join("::");
+          const qualifiedTarget = context.resolveIdentifier(qualifiedName, access.property);
+          if (qualifiedTarget) {
+            recordDefEdge(context, fromId, qualifiedTarget, "calls", access.property);
+            return;
+          }
+          // A qualified name that resolves to no free function is still a candidate
+          // class-scoped static call. Falling through reaches `recordReceiverCall`
+          // (the `typeScopedCppCall` arm below), which only resolves against a proven
+          // member container, so namespace names cannot be revived by a bare-name match.
+        }
+        if (
+          keywordReceiverKind(context.sup.id, receiverName) ||
+          typeScopedCppCall ||
+          !tryResolveChain(context, access.accessNode, fromId, "calls")
+        ) {
+          recordReceiverCall(node, access);
+        }
         return;
       }
       if (callee) tryResolveNode(context, callee, fromId, "calls");
@@ -576,7 +838,12 @@ function narrowBaseSpecifierNode(node: SyntaxNodeLike): SyntaxNodeLike {
 
 /** Collect one type identifier per direct base or interface specifier. */
 function collectBaseSpecifierIdentifiers(node: SyntaxNodeLike, sup: LanguageSupport, out: SyntaxNodeLike[]): void {
+  if (isUnprovenHeritageExpression(node)) return;
   if (BASE_TYPE_IGNORED_TYPES[node.type]) return;
+  if (sup.id === "cpp" && node.type === "qualified_identifier") {
+    out.push(node);
+    return;
+  }
   const narrowed = narrowBaseSpecifierNode(node);
   if (isIdentifierType(sup, narrowed.type) || narrowed.type === "type_identifier") {
     out.push(narrowed);
@@ -585,22 +852,40 @@ function collectBaseSpecifierIdentifiers(node: SyntaxNodeLike, sup: LanguageSupp
   for (const child of narrowed.namedChildren ?? []) collectBaseSpecifierIdentifiers(child, sup, out);
 }
 
-function recordIdentifierRelations(
+async function recordIdentifierRelations(
   context: EdgePassContext,
   fromId: string,
   container: SyntaxNodeLike,
-  relationForTarget: (target: SymbolDef, index: number) => "extends" | "implements" | "trait" | "mixin",
-): void {
+  relationForTarget: (
+    target: SymbolDef,
+    index: number,
+    identifier: SyntaxNodeLike,
+  ) => "extends" | "implements" | "trait" | "mixin",
+): Promise<void> {
   const identifiers: SyntaxNodeLike[] = [];
   collectBaseSpecifierIdentifiers(container, context.sup, identifiers);
   const seen = new Set<string>();
   for (const [index, identifier] of identifiers.entries()) {
-    const target = context.resolveIdentifier(sliceText(identifier, context.source), identifier);
+    let target: SymbolDef | null;
+    if (context.sup.id === "cpp" && identifier.type === "qualified_identifier") {
+      const qualifiedPath = cppQualifiedNameSegments(identifier, context.source);
+      target = await resolveCppQualifiedMemberContainer(
+        context.index,
+        context.moduleEntry,
+        qualifiedPath,
+        context.loadParsedFile,
+      );
+      if (!target && qualifiedPath.length > 1) {
+        target = context.resolveIdentifier(qualifiedPath.join("::"), identifier);
+      }
+    } else {
+      target = context.resolveIdentifier(sliceText(identifier, context.source), identifier);
+    }
     if (!target) continue;
     const targetId = defNodeId(target);
     if (seen.has(targetId)) continue;
     seen.add(targetId);
-    recordDefEdge(context, fromId, target, relationForTarget(target, index), identifier);
+    recordDefEdge(context, fromId, target, relationForTarget(target, index, identifier), identifier);
   }
 }
 
@@ -615,120 +900,36 @@ function collectDirectCallsExcludingNestedScopes(node: SyntaxNodeLike, out: Synt
   }
 }
 
-type InheritanceRelation = "extends" | "implements" | "trait" | "mixin";
-
-/** `superclass-first` extends the first non-interface specifier and conforms to every later one. */
-type BaseClauseLabel = InheritanceRelation | "superclass-first";
-
-/** One clause form that names base types on a class-like declaration. */
-type BaseClauseRule = {
-  /** Node type naming the clause. */
-  type: string;
-  label: BaseClauseLabel;
-  /** Descend into this field of the clause before collecting specifiers. */
-  field?: string;
-  /** Treat every matching clause separately, so its specifier index restarts at zero. */
-  each?: boolean;
-};
-
-/**
- * Go embeds a member type rather than naming a base clause: an interface embeds
- * `type_elem` members, a struct embeds unnamed `field_declaration` members, and
- * each embedded type is a conformance relation.
- */
-type EmbedRule = {
-  /** Direct declared type node that carries the embedded members. */
-  body: string;
-  /** Child list node that holds the members, when the body is not already the list. */
-  memberList?: string;
-  /** Member node type that may carry an embedded type. */
-  member: string;
-  /** Field of the member holding the embedded type; the member itself when omitted. */
-  typeField?: string;
-  /** Only members with no name field embed. */
-  nameless?: boolean;
-};
-
-type InheritanceRuleSet = {
-  clauses: readonly BaseClauseRule[];
-  embeds?: readonly EmbedRule[];
-  /** Ruby module-inclusion calls in the class body whose arguments are mixins. */
-  mixinCalls?: readonly string[];
-};
-
-const TYPESCRIPT_INHERITANCE_RULES: InheritanceRuleSet = {
-  clauses: [
-    // The value field is the superclass expression; the sibling type_arguments
-    // field holds super-call type arguments, which are not base types.
-    { type: "extends_clause", label: "extends", field: "value" },
-    { type: "implements_clause", label: "implements" },
-  ],
-};
-
-/**
- * Per-language class hierarchy forms. The grammar and the language runtime are
- * the only sources of these node names: JavaScript emits `class_heritage` for
- * `extends`, while TypeScript emits `extends_clause` and `implements_clause`.
- */
-const INHERITANCE_RULES: Record<string, InheritanceRuleSet> = {
-  js: { clauses: [{ type: "class_heritage", label: "extends" }] },
-  ts: TYPESCRIPT_INHERITANCE_RULES,
-  tsx: TYPESCRIPT_INHERITANCE_RULES,
-  java: {
-    clauses: [
-      { type: "superclass", label: "extends" },
-      { type: "super_interfaces", label: "implements" },
-    ],
-  },
-  csharp: { clauses: [{ type: "base_list", label: "superclass-first" }] },
-  kotlin: { clauses: [{ type: "delegation_specifiers", label: "superclass-first" }] },
-  swift: { clauses: [{ type: "inheritance_specifier", label: "superclass-first", each: true }] },
-  python: { clauses: [{ type: "argument_list", label: "extends" }] },
-  php: {
-    clauses: [
-      { type: "base_clause", label: "extends" },
-      { type: "class_interface_clause", label: "implements" },
-      { type: "use_declaration", label: "trait", each: true },
-    ],
-  },
-  ruby: {
-    clauses: [{ type: "superclass", label: "extends" }],
-    mixinCalls: ["include", "extend", "prepend"],
-  },
-  cpp: { clauses: [{ type: "base_class_clause", label: "extends" }] },
-  go: {
-    clauses: [],
-    embeds: [
-      { body: "interface_type", member: "type_elem" },
-      {
-        body: "struct_type",
-        memberList: "field_declaration_list",
-        member: "field_declaration",
-        typeField: "type",
-        nameless: true,
-      },
-    ],
-  },
-};
+type InheritanceRelation = ReceiverAncestryRelation;
 
 function baseClauseRelation(
-  label: BaseClauseLabel,
+  label: ReceiverAncestorClause["relation"],
   target: SymbolDef,
   index: number,
   interfaceIds: Set<string>,
+  identifier: SyntaxNodeLike,
+  kotlin: boolean,
 ): InheritanceRelation {
   if (label !== "superclass-first") return label;
+  if (kotlin) {
+    let current = identifier.parent;
+    while (current && current.type !== "delegation_specifiers") {
+      if (current.type === "constructor_invocation") return "extends";
+      current = current.parent;
+    }
+    return "implements";
+  }
   if (interfaceIds.has(defNodeId(target)) || index > 0) return "implements";
   return "extends";
 }
 
 /** Records `implements` for every embedded type of a Go interface or struct declaration. */
-function recordEmbedRelations(
+async function recordEmbedRelations(
   context: EdgePassContext,
   fromId: string,
   declaration: SyntaxNodeLike,
-  embeds: readonly EmbedRule[],
-): void {
+  embeds: readonly ReceiverAncestorEmbed[],
+): Promise<void> {
   const declaredType = declaration.childForFieldName("type");
   if (!declaredType) return;
   for (const rule of embeds) {
@@ -740,13 +941,16 @@ function recordEmbedRelations(
       if (rule.nameless && member.childForFieldName("name")) continue;
       const specifier = rule.typeField ? member.childForFieldName(rule.typeField) : member;
       if (!specifier) continue;
-      recordIdentifierRelations(context, fromId, specifier, () => "implements");
+      await recordIdentifierRelations(context, fromId, specifier, () => "implements");
     }
   }
 }
 
-export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: DetailedClassNode[]): void {
-  const rules = INHERITANCE_RULES[context.sup.id];
+export async function emitClassInheritanceEdges(
+  context: EdgePassContext,
+  classNodes: DetailedClassNode[],
+): Promise<void> {
+  const rules = MEMBER_ACCESS_ROWS[context.sup.id]?.receiverAncestry;
   if (!rules) return;
 
   const interfaceIds = new Set(
@@ -763,20 +967,20 @@ export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: 
 
   for (const cls of classNodes) {
     const fromId = ensureNode(context, cls.def);
-    markImplementationTarget(context, fromId, cls.node, cls.def);
+    markImplementationTarget(context, fromId, cls.node, context.source, cls.def);
 
     for (const rule of rules.clauses) {
       const clauses: SyntaxNodeLike[] = [];
       if (rule.each) {
-        collectNodesByType(cls.node, rule.type, clauses);
+        collectNodesByType(cls.node, rule.nodeType, clauses);
       } else {
-        const found = findFirstNodeByType(cls.node, rule.type);
+        const found = findFirstNodeByType(cls.node, rule.nodeType);
         if (found) clauses.push(found);
       }
       for (const clause of clauses) {
         const specifiers = rule.field ? (clause.childForFieldName(rule.field) ?? clause) : clause;
-        recordIdentifierRelations(context, fromId, specifiers, (target, index) =>
-          baseClauseRelation(rule.label, target, index, interfaceIds),
+        await recordIdentifierRelations(context, fromId, specifiers, (target, index, identifier) =>
+          baseClauseRelation(rule.relation, target, index, interfaceIds, identifier, context.sup.id === "kotlin"),
         );
       }
     }
@@ -790,11 +994,11 @@ export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: 
         const methodName = methodNode ? sliceText(methodNode, context.source) : undefined;
         if (!methodName || !rules.mixinCalls.includes(methodName)) continue;
         const args = call.childForFieldName("arguments");
-        if (args) recordIdentifierRelations(context, fromId, args, () => "mixin");
+        if (args) await recordIdentifierRelations(context, fromId, args, () => "mixin");
       }
     }
 
-    if (rules.embeds) recordEmbedRelations(context, fromId, cls.node, rules.embeds);
+    if (rules.embeds) await recordEmbedRelations(context, fromId, cls.node, rules.embeds);
   }
 }
 

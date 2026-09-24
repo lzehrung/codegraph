@@ -13,7 +13,18 @@ import { parseSyntaxTree, runQuery } from "@lzehrung/codegraph-native";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
 import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js";
 import type { LanguageSupport } from "../../src/languages.js";
-import { findReferences, goToDefinition, listSymbols } from "../../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexIncremental,
+  buildScopeIndexFromSource,
+  buildSymbolGraph,
+  buildSymbolGraphDetailed,
+  findReferences,
+  goToDefinition,
+  goToDefinitionById,
+  listSymbols,
+  queryWorkspaceSymbols,
+} from "../../src/index.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 
@@ -193,7 +204,7 @@ describe("C++ native queries", () => {
     const names = collectCppNames("probe.cpp", source);
 
     expect(names.exports).toEqual(
-      expect.arrayContaining(["FOO", "outer", "inner", "U", "f", "~A", "operator+=", "foo"]),
+      expect.arrayContaining(["FOO", "outer", "outer::inner", "U", "A::f", "A::~A", "A::operator+=", "foo"]),
     );
     expect(names.exports).not.toContain("module");
     expect(names.exports).not.toContain("std");
@@ -207,6 +218,8 @@ describe("C++ native queries", () => {
       "static int helper;",
       "int static_count = 1;",
       "int ready() { static int once = 0; class Local {}; enum Hidden { Secret }; return once; }",
+      "namespace tools { int scoped_run(); }",
+      "void local_alias() { using tools::scoped_run; }",
     ].join("\n");
     try {
       await fs.writeFile(file, source, "utf8");
@@ -214,7 +227,7 @@ describe("C++ native queries", () => {
       const module = index.byFile.get(fileIdentityKey(file));
       const exportedNames = module?.exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : []));
 
-      expect(exportedNames?.sort()).toEqual(["ready", "static_count"]);
+      expect(exportedNames?.sort()).toEqual(["local_alias", "ready", "static_count", "tools", "tools::scoped_run"]);
       expect(module?.locals.map((entry) => entry.localName)).toEqual(
         expect.arrayContaining(["Local", "Hidden", "Secret"]),
       );
@@ -268,21 +281,24 @@ describe("C++ native queries", () => {
     expect(namespaced.exports).toEqual(
       expect.arrayContaining([
         "api",
-        "nsDefined",
-        "nsPrototype",
-        "nsCounter",
-        "NsPair",
-        "Widget",
-        "nestedFn",
+        "api::nsDefined",
+        "api::nsPrototype",
+        "api::nsCounter",
+        "api::NsPair",
+        "api::Widget",
+        "api::inner::nestedFn",
         "outer",
-        "leaf",
-        "nestedFn17",
+        "outer::leaf",
+        "outer::leaf::nestedFn17",
         "tmplPrototype",
         "tmplDefined",
-        "nsTmpl",
+        "api::nsTmpl",
         "container",
       ]),
     );
+    expect(
+      namespaced.exports.filter((name) => ["nsDefined", "nsPrototype", "nestedFn", "nestedFn17"].includes(name)),
+    ).toEqual([]);
     expect(namespaced.exports).not.toContain("method");
     expect(namespaced.exports).not.toContain("hiddenHelper");
     expect(namespaced.exports).not.toContain("Local");
@@ -358,7 +374,9 @@ describe("C++ native queries", () => {
         "struct Outer { struct Inner { int x; }; };",
       ].join("\n"),
     );
-    expect(namespaced.exports).toEqual(expect.arrayContaining(["api", "nsFn", "Widget", "Holder", "compute", "Outer"]));
+    expect(namespaced.exports).toEqual(
+      expect.arrayContaining(["api", "api::nsFn", "api::Widget", "Holder", "compute", "Outer"]),
+    );
     expect(namespaced.exports).not.toContain("method");
     expect(namespaced.exports).not.toContain("get");
     expect(namespaced.exports).not.toContain("Inner");
@@ -366,12 +384,416 @@ describe("C++ native queries", () => {
     expect(namespaced.locals).toEqual(expect.arrayContaining(["method", "get", "Inner", "x"]));
 
     const outlined = collectCppNames("probe.cpp", "class Widget { void method(); };\nvoid Widget::method() {}\n");
-    expect(outlined.exports).toEqual(expect.arrayContaining(["Widget", "method"]));
+    expect(outlined.exports).toEqual(expect.arrayContaining(["Widget", "Widget::method"]));
     expect(outlined.locals).toEqual(expect.arrayContaining(["Widget", "method"]));
   });
 });
 
 describe("C++ classification and same-file navigation", () => {
+  it("keeps callable identity consistent across navigation, references, and calls", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-callable-identity-"));
+    const file = path.join(root, "probe.cpp");
+    const lines = [
+      "int pointer(int*);",
+      "int pointer(int* value) { return 1; }",
+      "int use_pointer() { return pointer(nullptr); }",
+      "int reference(int& value);",
+      "int reference(int&& value);",
+      "int use_reference(int& value) { return reference(value); }",
+      "namespace tools { int run(); int run() { return 1; } }",
+      "namespace alias { using tools::run; }",
+      "int via_alias() { return alias::run(); }",
+    ];
+    try {
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const pointer = await goToDefinition(index, {
+        file,
+        line: 3,
+        column: lines[2]!.lastIndexOf("pointer") + 1,
+      });
+      expect(pointer.status).toBe("ok");
+      if (pointer.status !== "ok") throw new Error("Expected the pointer function definition");
+      expect(pointer.definition.range.start.line).toBe(2);
+      for (const [line, expectedLines] of [
+        [1, [1, 2, 3]],
+        [4, [4]],
+        [5, [5]],
+      ] as const) {
+        const refs = await findReferences(index, { file, line, column: 5 });
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") throw new Error("Expected C++ declaration references");
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual(expectedLines);
+      }
+      const alias = await goToDefinition(index, { file, line: 9, column: lines[8]!.indexOf("run") + 1 });
+      expect(alias.status).toBe("ok");
+      if (alias.status !== "ok") throw new Error("Expected the aliased callable definition");
+      expect(alias.definition.range.start.line).toBe(7);
+      const graph = await buildSymbolGraphDetailed(index);
+      const nodes = [...graph.nodes.values()];
+      expect(nodes.filter((node) => node.name === "pointer")).toHaveLength(1);
+      expect(nodes.filter((node) => node.name === "reference")).toHaveLength(2);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls")
+          .map((edge) => [graph.nodes.get(edge.from)?.name, graph.nodes.get(edge.to)?.name]),
+      ).toEqual([
+        ["use_pointer", "pointer"],
+        ["via_alias", "run"],
+      ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps adjusted parameter shapes on one C++ callable identity", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-adjusted-identity-"));
+    const file = path.join(root, "probe.cpp");
+    const lines = [
+      "int pick(int values[]);",
+      "int pick(int* values) { return values ? 1 : 0; }",
+      "int relay(void handler(int));",
+      "int relay(void (*handler)(int)) { return handler ? 1 : 0; }",
+      "int total(const int sum);",
+      "int total(int sum) { return sum; }",
+      "int exact(const int* values);",
+      "int exact(int* values) { return values ? 1 : 0; }",
+      "int bind(int& value);",
+      "int bind(int* value) { return value ? 1 : 0; }",
+      "void paint(int tiles[][3]);",
+      "void paint(int* tiles) { }",
+      "int use_pick(int* buf) { return pick(buf); }",
+      "int use_relay() { return relay(nullptr); }",
+      "int use_total() { return total(3); }",
+      "int use_exact(int* buf) { return exact(buf); }",
+      "int use_bind(int boxed) { return bind(boxed); }",
+      "int use_paint() { paint(nullptr); return 0; }",
+      "int empty(int callback(void));",
+      "int empty(int (*callback)()) { return callback ? 1 : 0; }",
+      "int use_empty() { return empty(nullptr); }",
+      "int grid(int tiles[][3]);",
+      "int grid(int (*tiles)[3]) { return tiles ? 1 : 0; }",
+      "int use_grid() { return grid(nullptr); }",
+      "int hold(int* const value);",
+      "int hold(int* value) { return value ? 1 : 0; }",
+      "int use_hold() { return hold(nullptr); }",
+      "using Alias = int[3];",
+      "int opaque(const Alias value);",
+      "int opaque(Alias value) { return value ? 1 : 0; }",
+      "int use_opaque() { return opaque(nullptr); }",
+    ];
+    try {
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      for (const [callLine, callText, definitionLine] of [
+        [13, "pick", 2],
+        [14, "relay", 4],
+        [15, "total", 6],
+        [21, "empty", 20],
+        [24, "grid", 23],
+        [27, "hold", 26],
+      ] as const) {
+        const resolved = await goToDefinition(index, {
+          file,
+          line: callLine,
+          column: lines[callLine - 1]!.lastIndexOf(callText) + 1,
+        });
+        expect(resolved.status).toBe("ok");
+        if (resolved.status !== "ok") throw new Error("Expected the adjusted callable definition");
+        expect(resolved.definition.range.start.line).toBe(definitionLine);
+      }
+      for (const [line, name, expectedLines] of [
+        [2, "pick", [1, 2, 13]],
+        [4, "relay", [3, 4, 14]],
+        [6, "total", [5, 6, 15]],
+        [20, "empty", [19, 20, 21]],
+        [23, "grid", [22, 23, 24]],
+        [26, "hold", [25, 26, 27]],
+      ] as const) {
+        const refs = await findReferences(index, {
+          file,
+          line,
+          column: lines[line - 1]!.indexOf(name) + 1,
+        });
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") throw new Error("Expected adjusted callable references");
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual(expectedLines);
+      }
+      for (const [line, name, callLine] of [
+        [7, "exact", 16],
+        [9, "bind", 17],
+        [11, "paint", 18],
+        [29, "opaque", 31],
+      ] as const) {
+        const prototypeRefs = await findReferences(index, {
+          file,
+          line,
+          column: lines[line - 1]!.indexOf(name) + 1,
+        });
+        expect(prototypeRefs.status).toBe("ok");
+        if (prototypeRefs.status !== "ok") throw new Error("Expected a distinct overload declaration");
+        expect(prototypeRefs.references.map((reference) => reference.range.start.line)).toEqual([line]);
+        expect(
+          await goToDefinition(index, {
+            file,
+            line: callLine,
+            column: lines[callLine - 1]!.lastIndexOf(name) + 1,
+          }),
+        ).toMatchObject({ status: "not_found" });
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const nodes = [...graph.nodes.values()];
+      for (const merged of ["pick", "relay", "total", "empty", "grid", "hold"]) {
+        expect(nodes.filter((node) => node.name === merged)).toHaveLength(1);
+      }
+      for (const split of ["exact", "bind", "paint", "opaque"]) {
+        expect(nodes.filter((node) => node.name === split)).toHaveLength(2);
+      }
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls")
+          .map((edge) => [graph.nodes.get(edge.from)?.name, graph.nodes.get(edge.to)?.name])
+          .sort(),
+      ).toEqual([
+        ["use_empty", "empty"],
+        ["use_grid", "grid"],
+        ["use_hold", "hold"],
+        ["use_pick", "pick"],
+        ["use_relay", "relay"],
+        ["use_total", "total"],
+      ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects included using-alias overloads and rejects invalid C++ arity", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-included-alias-arity-"));
+    const header = path.join(root, "api.hpp");
+    const file = path.join(root, "use.cpp");
+    const headerLines = [
+      "namespace left {",
+      "int run(int*);",
+      "int pick();",
+      "int pick(int);",
+      "}",
+      "namespace alias { inline namespace v1 { using left::pick; } }",
+    ];
+    const lines = [
+      '#include "api.hpp"',
+      "int invalid_zero() { return left::run(); }",
+      "int invalid_two() { return left::run(nullptr, nullptr); }",
+      "int zero() { return alias::pick(); }",
+      "int one() { return alias::pick(1); }",
+      "int too_many() { return alias::pick(1, 2); }",
+      "using left::pick;",
+      "int direct_zero() { return pick(); }",
+      "int direct_one() { return pick(1); }",
+      "int direct_invalid() { return pick(1, 2); }",
+      "int shadow(int pick) { return pick; }",
+      "namespace imported { using left::pick; }",
+      "int qualified() { return imported::pick(1); }",
+    ];
+    try {
+      await fs.writeFile(header, headerLines.join("\n"), "utf8");
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      for (const cache of ["off", "disk", "disk"] as const) {
+        const index = await buildProjectIndexIncremental(root, { cache });
+        const zero = await goToDefinition(index, { file, line: 4, column: lines[3]!.lastIndexOf("pick") + 1 });
+        const one = await goToDefinition(index, { file, line: 5, column: lines[4]!.lastIndexOf("pick") + 1 });
+        const tooMany = await goToDefinition(index, { file, line: 6, column: lines[5]!.lastIndexOf("pick") + 1 });
+        const invalidZero = await goToDefinition(index, { file, line: 2, column: lines[1]!.lastIndexOf("run") + 1 });
+        expect(zero.status).toBe("ok");
+        if (zero.status === "ok") expect(zero.definition.range.start.line).toBe(3);
+        expect(one.status).toBe("ok");
+        if (one.status === "ok") expect(one.definition.range.start.line).toBe(4);
+        expect(tooMany.status).toBe("not_found");
+        expect(invalidZero.status).toBe("not_found");
+        for (const [line, targetLine] of [
+          [8, 3],
+          [9, 4],
+          [13, 4],
+        ] as const) {
+          const result = await goToDefinition(index, { file, line, column: lines[line - 1]!.lastIndexOf("pick") + 1 });
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") {
+            expect(normalizePath(result.definition.file)).toBe(normalizePath(header));
+            expect(result.definition.range.start.line).toBe(targetLine);
+          }
+        }
+        expect(
+          await goToDefinition(index, { file, line: 10, column: lines[9]!.lastIndexOf("pick") + 1 }),
+        ).toMatchObject({ status: "not_found" });
+        expect(
+          await goToDefinition(index, { file, line: 11, column: lines[10]!.lastIndexOf("pick") + 1 }),
+        ).toMatchObject({ status: "ok", definition: { range: { start: { line: 11 } } } });
+        const graph = await buildSymbolGraphDetailed(index);
+        const callerTargets = (name: string) =>
+          graph.edges
+            .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === name)
+            .map((edge) => graph.nodes.get(edge.to)?.name);
+        expect(callerTargets("zero")).toEqual(["pick"]);
+        expect(callerTargets("one")).toEqual(["pick"]);
+        expect(callerTargets("too_many")).toEqual([]);
+        expect(callerTargets("invalid_zero")).toEqual([]);
+        expect(callerTargets("invalid_two")).toEqual([]);
+        expect(callerTargets("direct_zero")).toEqual(["pick"]);
+        expect(callerTargets("direct_one")).toEqual(["pick"]);
+        expect(callerTargets("direct_invalid")).toEqual([]);
+        expect(callerTargets("shadow")).toEqual([]);
+        expect(callerTargets("qualified")).toEqual(["pick"]);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves qualified bases through included headers and inherited calls", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-qualified-base-"));
+    const header = path.join(root, "base.hpp");
+    const file = path.join(root, "main.cpp");
+    const call = "struct Derived : public ns::Base { int relay() { return this->run(); } };";
+    try {
+      await fs.writeFile(header, "namespace ns { struct Base { int run() { return 1; } }; }\n");
+      await fs.writeFile(file, `#include "base.hpp"\n${call}\n`);
+      const index = await createTestIndexFromFiles(root, [header, file]);
+      const target = await goToDefinition(index, { file, line: 2, column: call.indexOf("run()") + 1 });
+      expect(target.status).toBe("ok");
+      if (target.status !== "ok") throw new Error("Expected the qualified base member");
+      expect(normalizePath(target.definition.file)).toBe(normalizePath(header));
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "extends")
+          .map((edge) => [graph.nodes.get(edge.from)?.name, graph.nodes.get(edge.to)?.name]),
+      ).toEqual([["Derived", "Base"]]);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls")
+          .map((edge) => [graph.nodes.get(edge.from)?.name, graph.nodes.get(edge.to)?.name]),
+      ).toEqual([["relay", "run"]]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts a C++ parameter pack that binds no trailing arguments", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-parameter-pack-"));
+    const file = path.join(root, "probe.cpp");
+    const lines = [
+      "template<class T, class... Ts> int pack(T first, Ts... rest);",
+      "template<class T, class... Ts> int pack(T first, Ts... rest) { return first; }",
+      "int pick(int, int);",
+      "int pick(int, ...);",
+      "int use_pack_one() { return pack(1); }",
+      "int use_pack_two() { return pack(1, 2); }",
+      "int use_pack_zero() { return pack(); }",
+      "int use_pick_one() { return pick(1); }",
+      "int use_pick_two() { return pick(1, 2); }",
+      "int use_pick_zero() { return pick(); }",
+      "void arity(int);",
+      "void arity(int, ...);",
+      "void callbacks(void (*fn)(void));",
+      "void callbacks(void (*fn)(...));",
+    ];
+    try {
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      // A pack may bind zero arguments, so only its fixed parameter sets the minimum.
+      const one = await goToDefinition(index, { file, line: 5, column: lines[4]!.lastIndexOf("pack") + 1 });
+      expect(one.status).toBe("ok");
+      if (one.status !== "ok") throw new Error("Expected the pack definition for one fixed argument");
+      expect(one.definition.range.start.line).toBe(2);
+      const two = await goToDefinition(index, { file, line: 6, column: lines[5]!.lastIndexOf("pack") + 1 });
+      expect(two.status).toBe("ok");
+      if (two.status !== "ok") throw new Error("Expected the pack definition for extra arguments");
+      expect(two.definition.range.start.line).toBe(2);
+      // The fixed parameter is still required.
+      expect(await goToDefinition(index, { file, line: 7, column: lines[6]!.lastIndexOf("pack") + 1 })).toMatchObject({
+        status: "not_found",
+      });
+      // A bare ellipsis already accepts the fixed minimum and keeps its overload separate.
+      const ellipsisOne = await goToDefinition(index, { file, line: 8, column: lines[7]!.lastIndexOf("pick") + 1 });
+      expect(ellipsisOne.status).toBe("ok");
+      if (ellipsisOne.status !== "ok") throw new Error("Expected the variadic overload for one argument");
+      expect(ellipsisOne.definition.range.start.line).toBe(4);
+      expect(await goToDefinition(index, { file, line: 9, column: lines[8]!.lastIndexOf("pick") + 1 })).toMatchObject({
+        status: "not_found",
+      });
+      expect(await goToDefinition(index, { file, line: 10, column: lines[9]!.lastIndexOf("pick") + 1 })).toMatchObject({
+        status: "not_found",
+      });
+      const references = await findReferences(index, { file, line: 1, column: lines[0]!.indexOf("pack") + 1 });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected parameter pack references");
+      expect(references.references.map((reference) => reference.range.start.line)).toEqual([1, 2, 5, 6]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const nodes = [...graph.nodes.values()];
+      expect(nodes.filter((node) => node.name === "pack")).toHaveLength(1);
+      expect(nodes.filter((node) => node.name === "pick")).toHaveLength(2);
+      expect(nodes.filter((node) => node.name === "arity")).toHaveLength(2);
+      expect(nodes.filter((node) => node.name === "callbacks")).toHaveLength(2);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls")
+          .map((edge) => [graph.nodes.get(edge.from)?.name, graph.nodes.get(edge.to)?.name]),
+      ).toEqual([
+        ["use_pack_one", "pack"],
+        ["use_pack_two", "pack"],
+        ["use_pick_one", "pick"],
+      ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps same-signature functions from different namespaces ambiguous under one alias", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-alias-namespace-identity-"));
+    const file = path.join(root, "probe.cpp");
+    const lines = [
+      "namespace a { int pick(int); }",
+      "namespace b { int pick(int); }",
+      "namespace alias { using a::pick; using b::pick; }",
+      "int ambiguous() { return alias::pick(1); }",
+      "int direct() { return a::pick(1); }",
+    ];
+    try {
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const ambiguous = await goToDefinition(index, {
+        file,
+        line: 4,
+        column: lines[3]!.indexOf("pick") + 1,
+      });
+      expect(ambiguous.status).toBe("not_found");
+      const direct = await goToDefinition(index, {
+        file,
+        line: 5,
+        column: lines[4]!.indexOf("pick") + 1,
+      });
+      expect(direct.status).toBe("ok");
+      if (direct.status !== "ok") throw new Error("Expected the qualified namespace function");
+      expect(direct.definition.range.start.line).toBe(1);
+      const references = await findReferences(index, {
+        file,
+        line: 1,
+        column: lines[0]!.indexOf("pick") + 1,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected qualified namespace references");
+      const referenceLines = references.references.map((reference) => reference.range.start.line);
+      expect(referenceLines).toContain(5);
+      expect(referenceLines).not.toContain(4);
+      const graph = await buildSymbolGraphDetailed(index);
+      const callers = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => graph.nodes.get(edge.from)?.name);
+      expect(callers).toEqual(["direct"]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("classifies nested namespaces and unions, and resolves concepts and macros", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-classify-"));
     const file = path.join(root, "probe.cpp");
@@ -480,6 +902,555 @@ describe("C++ classification and same-file navigation", () => {
             { line: 13, column: 1 },
           ]),
         );
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C++ quoted include resolution", () => {
+  it("resolves bare and subdirectory quoted includes while preserving explicit and angle forms", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-quoted-includes-"));
+    const siblingHeader = path.join(root, "lib.h");
+    const nestedHeader = path.join(root, "inc", "lib.h");
+    const bareFile = path.join(root, "main-bare.cpp");
+    const nestedFile = path.join(root, "main-subdirectory.cpp");
+    const relativeFile = path.join(root, "main-relative.cpp");
+    const angleFile = path.join(root, "main-angle.cpp");
+    const bareSource = '#include "lib.h"\nint main() { return helper(1); }\n';
+    const nestedSource = '#include "inc/lib.h"\nint main() { return nested_helper(1); }\n';
+    const relativeSource = '#include "./lib.h"\nint main() { return helper(1); }\n';
+    try {
+      await fs.mkdir(path.dirname(nestedHeader), { recursive: true });
+      await Promise.all([
+        fs.writeFile(siblingHeader, "int helper(int a);\n", "utf8"),
+        fs.writeFile(nestedHeader, "int nested_helper(int a);\n", "utf8"),
+        fs.writeFile(bareFile, bareSource, "utf8"),
+        fs.writeFile(nestedFile, nestedSource, "utf8"),
+        fs.writeFile(relativeFile, relativeSource, "utf8"),
+        fs.writeFile(angleFile, "#include <lib.h>\nint main() { return 0; }\n", "utf8"),
+      ]);
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const importTarget = (file: string) => index.byFile.get(fileIdentityKey(file))?.imports[0]?.resolved;
+
+      expect(importTarget(bareFile)).toBe(normalizePath(siblingHeader));
+      expect(importTarget(nestedFile)).toBe(normalizePath(nestedHeader));
+      expect(importTarget(relativeFile)).toBe(normalizePath(siblingHeader));
+      expect(importTarget(angleFile)).toEqual({ external: "<lib.h>" });
+
+      const bareCallColumn = bareSource.split("\n")[1]!.indexOf("helper") + 1;
+      const bareGoto = await goToDefinition(index, { file: bareFile, line: 2, column: bareCallColumn });
+      expect(bareGoto.status).toBe("ok");
+      if (bareGoto.status === "ok") {
+        expect(bareGoto.definition.file).toBe(normalizePath(siblingHeader));
+        expect(bareGoto.definition.range.start.line).toBe(1);
+      }
+
+      const siblingRefs = await findReferences(index, { file: siblingHeader, line: 1, column: 5 });
+      expect(siblingRefs.status).toBe("ok");
+      if (siblingRefs.status === "ok") {
+        expect(
+          siblingRefs.references.map((reference) => ({
+            file: normalizePath(reference.file),
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          })),
+        ).toEqual(
+          expect.arrayContaining([
+            { file: normalizePath(siblingHeader), line: 1, column: 5 },
+            { file: normalizePath(bareFile), line: 2, column: bareCallColumn },
+          ]),
+        );
+      }
+
+      const nestedCallColumn = nestedSource.split("\n")[1]!.indexOf("nested_helper") + 1;
+      const nestedGoto = await goToDefinition(index, { file: nestedFile, line: 2, column: nestedCallColumn });
+      expect(nestedGoto.status).toBe("ok");
+      if (nestedGoto.status === "ok") {
+        expect(nestedGoto.definition.file).toBe(normalizePath(nestedHeader));
+        expect(nestedGoto.definition.range.start.line).toBe(1);
+      }
+
+      const nestedRefs = await findReferences(index, { file: nestedHeader, line: 1, column: 5 });
+      expect(nestedRefs.status).toBe("ok");
+      if (nestedRefs.status === "ok") {
+        expect(
+          nestedRefs.references.map((reference) => ({
+            file: normalizePath(reference.file),
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          })),
+        ).toEqual(
+          expect.arrayContaining([
+            { file: normalizePath(nestedHeader), line: 1, column: 5 },
+            { file: normalizePath(nestedFile), line: 2, column: nestedCallColumn },
+          ]),
+        );
+      }
+
+      const relativeCallColumn = relativeSource.split("\n")[1]!.indexOf("helper") + 1;
+      const relativeGoto = await goToDefinition(index, { file: relativeFile, line: 2, column: relativeCallColumn });
+      expect(relativeGoto.status).toBe("ok");
+      if (relativeGoto.status === "ok") {
+        expect(relativeGoto.definition.file).toBe(normalizePath(siblingHeader));
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve an identifier include macro to a sibling decoy file", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-include-macro-decoy-"));
+    const decoy = path.join(root, "HEADER");
+    const file = path.join(root, "main.cpp");
+    const source = ['#define HEADER "x.h"', "#include HEADER", "int main() { return 0; }", ""].join("\n");
+    try {
+      await fs.writeFile(decoy, "int decoy();\n", "utf8");
+      await fs.writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const imports = index.byFile.get(fileIdentityKey(file))?.imports ?? [];
+      expect(imports.map((entry) => entry.from)).toEqual(["HEADER"]);
+      expect(imports.map((entry) => entry.resolved)).toEqual([{ external: "HEADER" }]);
+      expect(imports.map((entry) => entry.resolved)).not.toContain(normalizePath(decoy));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("classifies a quoted and a macro include of the same text per occurrence", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-include-form-per-occurrence-"));
+    const header = path.join(root, "HEADER");
+    const file = path.join(root, "main.cpp");
+    const source = ['#include "HEADER"', "#include HEADER", "int main() { return 0; }", ""].join("\n");
+    try {
+      await fs.writeFile(header, "int decoy();\n", "utf8");
+      await fs.writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const imports = index.byFile.get(fileIdentityKey(file))?.imports ?? [];
+      expect(imports.map((entry) => entry.from)).toEqual(["HEADER", "HEADER"]);
+      expect(imports.map((entry) => entry.resolved)).toEqual([normalizePath(header), { external: "HEADER" }]);
+
+      const fileEdges = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file));
+      expect(fileEdges).toContainEqual(expect.objectContaining({ to: { type: "file", path: normalizePath(header) } }));
+      expect(fileEdges).toContainEqual(expect.objectContaining({ to: { type: "external", name: "HEADER" } }));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves an angle include through resolution hints and keeps it external without them", async () => {
+    const hintRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-angle-hints-"));
+    const plainRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-angle-no-hints-"));
+    try {
+      const hintDir = path.join(hintRoot, "include");
+      const hintHeader = path.join(hintDir, "lib.h");
+      const hintFile = path.join(hintRoot, "main.cpp");
+      const source = "#include <lib.h>\nint main() { return helper(1); }\n";
+      await fs.mkdir(hintDir, { recursive: true });
+      await fs.writeFile(hintHeader, "int helper(int a);\n", "utf8");
+      await fs.writeFile(hintFile, source, "utf8");
+
+      const index = await buildProjectIndex(hintRoot, { cache: "off", graph: { resolutionHints: ["include"] } });
+      expect(index.byFile.get(fileIdentityKey(hintFile))?.imports[0]?.resolved).toBe(normalizePath(hintHeader));
+      expect(
+        index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(hintFile)),
+      ).toContainEqual(expect.objectContaining({ to: { type: "file", path: normalizePath(hintHeader) } }));
+
+      const callColumn = source.split("\n")[1]!.indexOf("helper") + 1;
+      const gotoResult = await goToDefinition(index, { file: hintFile, line: 2, column: callColumn });
+      expect(gotoResult.status).toBe("ok");
+      if (gotoResult.status === "ok") {
+        expect(gotoResult.definition.file).toBe(normalizePath(hintHeader));
+      }
+      const refs = await findReferences(index, { file: hintHeader, line: 1, column: 5 });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => normalizePath(reference.file))).toEqual(
+          expect.arrayContaining([normalizePath(hintHeader), normalizePath(hintFile)]),
+        );
+      }
+
+      const plainFile = path.join(plainRoot, "main.cpp");
+      await fs.writeFile(plainFile, source, "utf8");
+      const plainIndex = await buildProjectIndex(plainRoot, { cache: "off" });
+      expect(plainIndex.byFile.get(fileIdentityKey(plainFile))?.imports[0]?.resolved).toEqual({ external: "<lib.h>" });
+      expect(
+        plainIndex.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(plainFile)),
+      ).toContainEqual(expect.objectContaining({ to: { type: "external", name: "<lib.h>" } }));
+    } finally {
+      await fs.rm(hintRoot, { recursive: true, force: true });
+      await fs.rm(plainRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a quoted extensionless include to the exact sibling file and not a same-stem script", async () => {
+    const hitRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-quoted-config-hit-"));
+    const missRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-quoted-config-miss-"));
+    try {
+      const configFile = path.join(hitRoot, "config");
+      const hitFile = path.join(hitRoot, "main.cpp");
+      await fs.writeFile(configFile, "int cfg();\n", "utf8");
+      await fs.writeFile(hitFile, '#include "config"\nint main() { return 0; }\n', "utf8");
+      const hitIndex = await buildProjectIndex(hitRoot, { cache: "off" });
+      expect(hitIndex.byFile.get(fileIdentityKey(hitFile))?.imports[0]?.resolved).toBe(normalizePath(configFile));
+
+      const missFile = path.join(missRoot, "main.cpp");
+      const tsDecoy = path.join(missRoot, "config.ts");
+      const jsDecoy = path.join(missRoot, "config.js");
+      await fs.writeFile(tsDecoy, "export const decoy = 1;\n", "utf8");
+      await fs.writeFile(jsDecoy, "export const decoy = 2;\n", "utf8");
+      await fs.writeFile(missFile, '#include "config"\nint main() { return 0; }\n', "utf8");
+      const missIndex = await buildProjectIndex(missRoot, { cache: "off" });
+      const resolved = missIndex.byFile.get(fileIdentityKey(missFile))?.imports[0]?.resolved;
+      expect(resolved).toEqual({ external: "config" });
+      expect(resolved).not.toBe(normalizePath(tsDecoy));
+      expect(resolved).not.toBe(normalizePath(jsDecoy));
+    } finally {
+      await fs.rm(hitRoot, { recursive: true, force: true });
+      await fs.rm(missRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an unresolved quoted include external when hints, workspace, and node_modules could bind decoys", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-quoted-config-decoys-"));
+    try {
+      const file = path.join(root, "main.cpp");
+      await fs.writeFile(file, '#include "config"\nint main() { return 0; }\n', "utf8");
+      await fs.writeFile(path.join(root, "config.ts"), "export const decoy = 1;\n", "utf8");
+      await fs.mkdir(path.join(root, "config"), { recursive: true });
+      await fs.writeFile(path.join(root, "config", "index.ts"), "export const decoy = 2;\n", "utf8");
+      await fs.mkdir(path.join(root, "node_modules", "config"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "node_modules", "config", "package.json"),
+        JSON.stringify({ name: "config", main: "index.ts" }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "node_modules", "config", "index.ts"), "export const decoy = 3;\n", "utf8");
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ private: true, workspaces: ["packages/*"] }),
+        "utf8",
+      );
+      await fs.mkdir(path.join(root, "packages", "config"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "packages", "config", "package.json"),
+        JSON.stringify({ name: "config", main: "index.ts" }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "packages", "config", "index.ts"), "export const decoy = 4;\n", "utf8");
+
+      const index = await buildProjectIndex(root, {
+        cache: "off",
+        graph: { resolutionHints: ["."], resolveNodeModules: true },
+      });
+      const resolved = index.byFile.get(fileIdentityKey(file))?.imports[0]?.resolved;
+      expect(resolved).toEqual({ external: "config" });
+      const fileEdges = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file));
+      expect(fileEdges).toContainEqual(expect.objectContaining({ to: { type: "external", name: "config" } }));
+      expect(fileEdges.some((edge) => edge.to.type === "file")).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a quoted include through an exact file in a configured include root", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-quoted-config-hint-"));
+    try {
+      const includeDir = path.join(root, "include");
+      const hintFile = path.join(includeDir, "config");
+      const file = path.join(root, "main.cpp");
+      await fs.mkdir(includeDir, { recursive: true });
+      await fs.writeFile(hintFile, "int cfg();\n", "utf8");
+      await fs.writeFile(file, '#include "config"\nint main() { return 0; }\n', "utf8");
+
+      const index = await buildProjectIndex(root, { cache: "off", graph: { resolutionHints: ["include"] } });
+      expect(index.byFile.get(fileIdentityKey(file))?.imports[0]?.resolved).toBe(normalizePath(hintFile));
+      const fileEdges = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file));
+      expect(fileEdges).toContainEqual(
+        expect.objectContaining({ to: { type: "file", path: normalizePath(hintFile) } }),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("attaches C++ free, in-class, and out-of-line member calls exactly once", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-same-file-refs-"));
+    const file = path.join(root, "main.cpp");
+    const source = [
+      "int free_helper() { return 1; }",
+      "int use_free() { return free_helper(); }",
+      "",
+      "class A {",
+      "public:",
+      "  int member() { return 2; }",
+      "  int use_member() { return this->member(); }",
+      "  static void f();",
+      "};",
+      "void A::f() {}",
+      "int use_f() { A::f(); return 0; }",
+      "",
+    ].join("\n");
+    try {
+      await fs.writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const scope = buildScopeIndexFromSource(file, source, CPP_SUPPORT);
+      const functionBindings = scope.all.filter((binding) => binding.kind === "function");
+      const functionDefinitionIndexes = functionBindings.map((binding) => binding.def?.start.index);
+      expect(
+        functionDefinitionIndexes.filter(
+          (definitionIndex, index) => functionDefinitionIndexes.indexOf(definitionIndex) !== index,
+        ),
+      ).toEqual([]);
+      expect(
+        functionBindings.filter((binding) => binding.def?.start.index === source.indexOf("A::f") + "A::".length),
+      ).toHaveLength(1);
+
+      const freeCallColumn = source.split("\n")[1]!.indexOf("free_helper") + 1;
+      const freeRefs = await findReferences(index, { file, line: 1, column: 5 });
+      expect(freeRefs.status).toBe("ok");
+      if (freeRefs.status === "ok") {
+        expect(
+          freeRefs.references.map((reference) => ({
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          })),
+        ).toEqual([
+          { line: 1, column: 5 },
+          { line: 2, column: freeCallColumn },
+        ]);
+      }
+
+      const memberDefinition = source.split("\n")[5]!;
+      const memberCallColumn = source.split("\n")[6]!.lastIndexOf("member") + 1;
+      const memberRefs = await findReferences(index, {
+        file,
+        line: 6,
+        column: memberDefinition.indexOf("member") + 1,
+      });
+      expect(memberRefs.status).toBe("ok");
+      if (memberRefs.status === "ok") {
+        expect(
+          memberRefs.references.map((reference) => ({
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          })),
+        ).toEqual(
+          expect.arrayContaining([
+            { line: 6, column: memberDefinition.indexOf("member") + 1 },
+            { line: 7, column: memberCallColumn },
+          ]),
+        );
+      }
+
+      const outOfLineDefinition = source.split("\n")[9]!;
+      const outOfLineRefs = await findReferences(index, {
+        file,
+        line: 10,
+        column: outOfLineDefinition.lastIndexOf("f") + 1,
+      });
+      expect(outOfLineRefs.status).toBe("ok");
+      if (outOfLineRefs.status === "ok") {
+        expect(outOfLineRefs.references.map((reference) => reference.range.start.line)).toEqual(
+          expect.arrayContaining([10, 11]),
+        );
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps qualified out-of-line members out of free-function scope", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-out-of-line-scope-"));
+    const file = path.join(root, "main.cpp");
+    const lines = [
+      "int f() { return 1; }",
+      "class A { public: static int f(); };",
+      "int A::f() { return 2; }",
+      "int use_free() { return f(); }",
+      "int use_member() { return A::f(); }",
+      "",
+    ];
+    try {
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const freeCall = await goToDefinition(index, {
+        file,
+        line: 4,
+        column: lines[3]!.indexOf("f()") + 1,
+      });
+      expect(freeCall.status).toBe("ok");
+      if (freeCall.status === "ok") {
+        expect(freeCall.definition.range.start.line).toBe(1);
+      }
+
+      const memberCall = await goToDefinition(index, {
+        file,
+        line: 5,
+        column: lines[4]!.lastIndexOf("f()") + 1,
+      });
+      expect(memberCall.status).toBe("ok");
+      if (memberCall.status === "ok") {
+        expect(memberCall.definition.range.start.line).toBe(2);
+      }
+
+      const freeReferences = await findReferences(index, { file, line: 1, column: lines[0]!.indexOf("f()") + 1 });
+      expect(freeReferences.status).toBe("ok");
+      if (freeReferences.status === "ok") {
+        expect(freeReferences.references.map((reference) => reference.range.start.line)).toEqual([1, 4]);
+      }
+
+      const memberReferences = await findReferences(index, {
+        file,
+        line: 3,
+        column: lines[2]!.lastIndexOf("f()") + 1,
+      });
+      expect(memberReferences.status).toBe("ok");
+      if (memberReferences.status === "ok") {
+        expect(memberReferences.references.map((reference) => reference.range.start.line)).toEqual(
+          expect.arrayContaining([3, 5]),
+        );
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C++ header include identity", () => {
+  it("keeps a C++ .h include out of the C tag namespace across cache modes", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-header-include-namespace-"));
+    const header = normalizePath(path.join(root, "api.h"));
+    const consumer = normalizePath(path.join(root, "main.cpp"));
+    // The extractor recognizes C++ syntax, but a filename-only `.h` lookup would choose C.
+    const headerLines = [
+      "namespace widgets {",
+      "class Widget {",
+      "public:",
+      "  int value;",
+      "};",
+      "}",
+      "",
+      "int run(int amount) { return amount; }",
+      "",
+      "struct Point {",
+      "  int x;",
+      "};",
+      "",
+    ];
+    const lines = [
+      '#include "api.h"',
+      "int main() {",
+      "  widgets::Widget widget;",
+      "  Point point;",
+      "  return run(1);",
+      "}",
+      "",
+    ];
+    try {
+      await fs.writeFile(header, headerLines.join("\n"), "utf8");
+      await fs.writeFile(consumer, lines.join("\n"), "utf8");
+      const callColumn = lines[4]!.indexOf("run(1)") + 1;
+      const runDefinitionColumn = headerLines[7]!.indexOf("run(") + 1;
+      for (const cache of ["off", "disk", "disk"] as const) {
+        const index = await buildProjectIndexIncremental(root, { cache });
+        const expectedNames = new Set(["widgets::Widget", "run", "Point"]);
+        const expectedImportIds = [...expectedNames].map((name) => `${consumer}::${name}::import`).sort();
+        expect(
+          listSymbols(index, { file: consumer, includeImports: true })
+            .filter((symbol) => symbol.kind === "import" && expectedNames.has(symbol.name))
+            .map((symbol) => symbol.id)
+            .sort(),
+        ).toEqual(expectedImportIds);
+        expect(
+          [...(await buildSymbolGraph(index)).nodes.values()]
+            .filter((node) => node.kind === "import" && node.file === consumer && expectedNames.has(node.name))
+            .map((node) => node.id)
+            .sort(),
+        ).toEqual(expectedImportIds);
+        for (const [name, line] of [
+          ["widgets::Widget", 2],
+          ["run", 8],
+          ["Point", 10],
+        ] as const) {
+          expect(goToDefinitionById(index, `${consumer}::${name}::import`)).toMatchObject({
+            status: "ok",
+            definition: { file: header, range: { start: { line } } },
+          });
+        }
+
+        const workspaceImportIds = (await queryWorkspaceSymbols(index, { query: "run", includeImports: true })).symbols
+          .filter((symbol) => symbol.imported)
+          .map((symbol) => symbol.id);
+        expect(workspaceImportIds).toHaveLength(1);
+        expect(workspaceImportIds[0]!.endsWith("::run::import")).toBe(true);
+
+        const call = await goToDefinition(index, { file: consumer, line: 5, column: callColumn });
+        expect(call.status).toBe("ok");
+        if (call.status !== "ok") throw new Error("Expected the included C++ callable");
+        expect(normalizePath(call.definition.file)).toBe(header);
+        expect(call.definition.range.start.line).toBe(8);
+
+        const references = await findReferences(index, {
+          file: header,
+          line: 8,
+          column: runDefinitionColumn,
+        });
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error("Expected references for the included callable");
+        expect(
+          references.references.map((reference) => [normalizePath(reference.file), reference.range.start.line]),
+        ).toContainEqual([consumer, 5]);
+
+        const detailed = await buildSymbolGraphDetailed(index);
+        expect(
+          detailed.edges
+            .filter((edge) => edge.label === "calls" && detailed.nodes.get(edge.from)?.name === "main")
+            .map((edge) => detailed.nodes.get(edge.to)?.name),
+        ).toEqual(["run"]);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C++ reference-returning free functions", () => {
+  it("resolves a sibling call to a free function with a reference return type", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-ref-return-free-"));
+    const file = path.join(root, "main.cpp");
+    const source = [
+      "int& free_ref() { static int value = 1; return value; }",
+      "int use_value() { return free_ref(); }",
+      "",
+    ].join("\n");
+    try {
+      await fs.writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const defColumn = source.split("\n")[0]!.indexOf("free_ref") + 1;
+      const callColumn = source.split("\n")[1]!.indexOf("free_ref") + 1;
+      const gotoResult = await goToDefinition(index, { file, line: 2, column: callColumn });
+      expect(gotoResult.status).toBe("ok");
+      if (gotoResult.status === "ok") {
+        expect(fileIdentityKey(gotoResult.definition.file)).toBe(fileIdentityKey(file));
+        expect(gotoResult.definition.range.start.line).toBe(1);
+        expect(gotoResult.definition.range.start.column).toBe(defColumn);
+      }
+      const refs = await findReferences(index, { file, line: 1, column: defColumn });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(
+          refs.references.map((reference) => ({
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          })),
+        ).toEqual([
+          { line: 1, column: defColumn },
+          { line: 2, column: callColumn },
+        ]);
       }
     } finally {
       await fs.rm(root, { recursive: true, force: true });

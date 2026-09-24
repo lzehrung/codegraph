@@ -747,9 +747,16 @@ if (refs.status === "ok") {
 }
 ```
 
-A successful `FindReferencesResult` always includes `referenceCoverage`. `complete` means that every statically linked candidate known to the current index was checked and the search was not capped. `partial` reports `parser_degraded`, `unresolved_import`, or `truncated`, with `affectedFiles` when a known file caused the incomplete scan. The `indexed_candidates` scope does not certify dynamic imports or bare imports that the index cannot associate with the target. Definition-selection `provenance` does not imply complete reference coverage.
+A successful `FindReferencesResult` always includes `referenceCoverage`. `complete` means that every statically linked candidate known to the current index was checked and the search was not capped. `partial` reports one or more reasons in a fixed order: `parser_degraded`, `unresolved_import`, `strategy_unavailable`, `name_equivalence_unavailable`, then `truncated`. It includes `affectedFiles` when a known file caused the incomplete scan. `strategy_unavailable` means that an applicable reference strategy could not prove all candidate sites, such as when a required scan did not run or a member access had an unknown receiver type. A strategy that ran and found no uses still counts as executed. `name_equivalence_unavailable` means that a name-equivalence decision could not be verified, as for a PHP reference whose name comparison against the definition stays unverified. The `indexed_candidates` scope does not certify dynamic imports or bare imports that the index cannot associate with the target. Definition-selection `provenance` does not imply complete reference coverage.
 
 The result keeps the definition site as a reference. Import declarations are also references. `Reference.via.importBinding` is `imported` for the source-side name and `local` for a distinct alias or default binding. The root and `indexer` entry points export `ImportBindingRole`, `ReferenceCoverage`, and `ReferenceCoverageReason`.
+
+C symbol lookup keeps tag and ordinary identifier namespaces separate:
+
+- `goToDefinition` and `findReferences` select the namespace from source syntax, including uses through header includes.
+- Lower-level `resolveExport(index, file, name, options)` and `resolveImported(index, importBinding, name, options)` accept `cNamespace: "tag" | "ordinary"`. `preferredKind` alone cannot distinguish an enum tag from a same-spelled typedef.
+- `SymbolDef.cTag` records `"declaration"`, `"forward"`, or `"reference"` for C tags. A bodyless tag use can introduce an incomplete tag when no visible tag exists. A file-scope forward declaration reuses an included tag; a block-scope forward declaration can hide an outer tag.
+- Expanded named C imports retain `ImportBinding.cNamespace`. Symbol lists and compact and detailed symbol graphs keep separate import identities for tag and ordinary namespaces.
 
 ## Incremental indexing
 
@@ -932,10 +939,14 @@ const sqlContext = await collectSqlReviewContext(process.cwd(), {
 
 Use stable handles instead of cursor positions.
 
-A handle is either:
+Handle forms:
 
 - `${file}::${localName}::${startIndex}` for a definition
-- `${file}::${alias}::import` for an import alias
+- `${file}::${alias}::import` for an import alias without a language-specific namespace
+- `${file}::${alias}::import:tag` or `::import:ordinary` for namespace-specific C includes
+- `${file}::${alias}::import:class`, `::import:function`, or `::import:const` for PHP named imports
+
+Use the ID returned by `listSymbols` or `queryWorkspaceSymbols`, rather than constructing it. `goToDefinitionById` and `findReferencesById` preserve the import role; an unknown role returns `not_found`. Qualified C++ aliases can contain `::`. An untyped PHP named import uses the class role.
 
 ```ts
 import { buildProjectIndex, listSymbols, goToDefinitionById, findReferencesById } from "@lzehrung/codegraph-core";
@@ -1022,6 +1033,7 @@ Coverage is intentionally conservative:
 
 - Compatible callsites may be present in structured data but are omitted from human summaries.
 - Unsupported languages, unknown signatures, spread calls, ambiguous callsites, and overload sets are skipped until codegraph can prove the call target. JS/TS method-level call compatibility is included only for verified receivers such as `new Service().run()` and `const service = new Service(); service.run()`.
+- C++ equivalent prototypes and definitions share argument-count limits, including defaults declared only on a prototype. In-class member declarations and their out-of-line definitions report the same proven member callsites. This uses existing receiver resolution; unrelated same-named members and overload sets remain excluded.
 
 Include reference context snippets when needed:
 

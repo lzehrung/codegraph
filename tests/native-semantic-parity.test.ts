@@ -4,13 +4,17 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   buildProjectIndexFromFiles,
+  buildSymbolGraph,
+  buildSymbolGraphDetailed,
   extractSqlFactsFromSource,
   findReferences,
   goToDefinition,
   listSymbols,
+  SymbolKind,
   type ProjectIndex,
   type SqlFactKind,
 } from "../src/index.js";
+import { resolveExport } from "../src/indexer/navigation-resolve.js";
 import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 import { withNativeRuntimeModeAsync } from "./helpers/native.js";
 
@@ -247,7 +251,7 @@ async function normalizeSqlFacts(
   return normalized;
 }
 
-async function expectNativeSemantics(expectation: SemanticExpectation): Promise<void> {
+async function expectNativeSemantics(expectation: SemanticExpectation): Promise<ProjectIndex> {
   const nativeIndex = await buildSemanticIndex(expectation, "native");
 
   normalizeSymbols(nativeIndex, expectation.symbols);
@@ -332,6 +336,7 @@ async function expectNativeSemantics(expectation: SemanticExpectation): Promise<
   } else {
     expect(nativeReferences).toEqual({ status: "not_found" });
   }
+  return nativeIndex;
 }
 
 async function createRustPathAttributeCase(): Promise<SemanticExpectation> {
@@ -802,6 +807,99 @@ async function createTypeScriptNormalizationCase(): Promise<SemanticExpectation>
   };
 }
 
+async function createImportedSuperclassMemberCase(kind: "ts" | "js"): Promise<SemanticExpectation> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-native-${kind}-super-imported-`));
+  tempDirs.push(root);
+  const baseFile = path.join(root, `base.${kind}`);
+  const derivedFile = path.join(root, `derived.${kind}`);
+  const typed = kind === "ts";
+  const base = [
+    "export default class Base {",
+    typed ? "  helper(): number { return 1; }" : "  helper() { return 1; }",
+    "}",
+    "",
+  ].join("\n");
+  const derived = [
+    'import Base from "./base";',
+    "class Derived extends Base {",
+    typed ? "  helper(): number { return 2; }" : "  helper() { return 2; }",
+    typed ? "  run(): number { return super.helper(); }" : "  run() { return super.helper(); }",
+    "}",
+    "",
+  ].join("\n");
+  await fsp.writeFile(baseFile, base, "utf8");
+  await fsp.writeFile(derivedFile, derived, "utf8");
+  const callColumn = derived.split("\n")[3]!.indexOf("helper()") + 1;
+  const defColumn = base.split("\n")[1]!.indexOf("helper()") + 1;
+  return {
+    root,
+    files: [baseFile, derivedFile],
+    goto: {
+      file: derivedFile,
+      line: 4,
+      column: callColumn,
+      expectedStatus: "ok",
+    },
+    references: {
+      file: baseFile,
+      line: 2,
+      column: defColumn,
+      expectedStatus: "ok",
+    },
+  };
+}
+
+async function createCppCallableRedeclarationCase(): Promise<SemanticExpectation> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-cpp-callable-redeclaration-"));
+  tempDirs.push(root);
+  const headerFile = path.join(root, "api.h");
+  const implementationFile = path.join(root, "api.cpp");
+  const consumerFile = path.join(root, "consumer.cpp");
+  await fsp.writeFile(
+    headerFile,
+    [
+      "namespace left { int run(int values[]);",
+      "int pick();",
+      "int pick(int);",
+      "}",
+      "namespace alias { inline namespace v1 { using left::pick; } }",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  await fsp.writeFile(
+    implementationFile,
+    ['#include "api.h"', "int left::run(int* value) { return *value; }", ""].join("\n"),
+    "utf8",
+  );
+  await fsp.writeFile(
+    consumerFile,
+    [
+      '#include "api.h"',
+      "int call() { return left::run(nullptr); }",
+      "int invalid() { return run(nullptr); }",
+      "int missing() { return left::run(); }",
+      "int extra() { return left::run(nullptr, nullptr); }",
+      "int zero() { return alias::pick(); }",
+      "int one() { return alias::pick(1); }",
+      "int two() { return alias::pick(1, 2); }",
+      "using left::pick;",
+      "int direct_zero() { return pick(); }",
+      "int direct_one() { return pick(1); }",
+      "int direct_invalid() { return pick(1, 2); }",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  return {
+    root,
+    files: [headerFile, implementationFile, consumerFile],
+    symbols: [{ file: headerFile, names: ["left", "run"] }],
+    goto: { file: consumerFile, line: 2, column: 27, expectedStatus: "ok" },
+    references: { file: headerFile, line: 1, column: 22, expectedStatus: "ok" },
+  };
+}
+
 nativeDescribe("native semantic coverage", () => {
   it("keeps native semantics stable for representative language fixtures", async () => {
     const cases: SemanticExpectation[] = [
@@ -1048,7 +1146,7 @@ nativeDescribe("native semantic coverage", () => {
         ["main.c", "utils.h", "utils.c", "helpers.h", "helpers.c"],
         [{ file: "utils.h", names: ["helper_function", "Utility"] }],
         { file: "main.c", line: 5, column: 15, expectedStatus: "ok" },
-        { file: "utils.h", line: 4, column: 16, expectedStatus: "ok" },
+        { file: "utils.h", line: 6, column: 3, expectedStatus: "ok" },
       ),
       sampleExpectation(
         "c",
@@ -1308,6 +1406,416 @@ nativeDescribe("native semantic coverage", () => {
     // deterministic assertions can exceed 60 seconds, so retain headroom for host variance.
   }, 120_000);
 
+  it("keeps qualified C++ ancestry and empty pack expansions in native graphs", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-qualified-base-"));
+    tempDirs.push(root);
+    const header = normalizeFile(path.join(root, "base.hpp"));
+    const consumer = normalizeFile(path.join(root, "main.cpp"));
+    await fsp.writeFile(
+      header,
+      [
+        "namespace ns { struct Base { int run() { return 1; } }; }",
+        "template<class... Args> int packed(int first, Args... rest) { return first; }",
+      ].join("\n"),
+    );
+    await fsp.writeFile(
+      consumer,
+      [
+        '#include "base.hpp"',
+        "struct Derived : public ns::Base { int relay() { return this->run(); } };",
+        "struct Missing : public absent::Base { int reject() { return this->run(); } };",
+        "int pack_min() { return packed(1); }",
+        "int pack_bad() { return packed(); }",
+      ].join("\n"),
+    );
+    await withNativeRuntimeModeAsync("native", async () => {
+      const index = await buildProjectIndexFromFiles(root, [header, consumer]);
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "extends")
+          .map((edge) => [
+            graph.nodes.get(edge.from)?.name,
+            graph.nodes.get(edge.to)?.name,
+            graph.nodes.get(edge.to)?.file,
+          ]),
+      ).toEqual([["Derived", "Base", header]]);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls")
+          .map((edge) => [
+            graph.nodes.get(edge.from)?.name,
+            graph.nodes.get(edge.to)?.name,
+            graph.nodes.get(edge.to)?.file,
+          ])
+          .sort(),
+      ).toEqual([
+        ["pack_min", "packed", header],
+        ["relay", "run", header],
+      ]);
+    });
+  });
+
+  it("keeps C++ callable redeclarations connected across files", async () => {
+    const fixture = await createCppCallableRedeclarationCase();
+    const index = await expectNativeSemantics(fixture);
+    const consumerFile = normalizeFile(fixture.files[2]!);
+    const consumerLines = (await fsp.readFile(consumerFile, "utf8")).split("\n");
+    for (const line of [3, 4, 5, 8, 12]) {
+      const text = consumerLines[line - 1]!;
+      const token = line >= 8 ? "pick" : "run";
+      expect(
+        await normalizeGoto(index, {
+          file: consumerFile,
+          line,
+          column: text.indexOf(token) + 1,
+          expectedStatus: "not_found",
+        }),
+      ).toEqual({ status: "not_found" });
+    }
+    for (const [line, targetLine] of [
+      [6, 2],
+      [7, 3],
+      [10, 2],
+      [11, 3],
+    ] as const) {
+      const result = await goToDefinition(index, {
+        file: consumerFile,
+        line,
+        column: consumerLines[line - 1]!.indexOf("pick") + 1,
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected a unique C++ using overload");
+      expect(normalizeFile(result.definition.file)).toBe(normalizeFile(fixture.files[0]!));
+      expect(result.definition.range.start.line).toBe(targetLine);
+      const references = await findReferences(index, {
+        file: fixture.files[0]!,
+        line: targetLine,
+        column: 5,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected C++ using overload references");
+      expect(
+        references.references
+          .filter((reference) => normalizeFile(reference.file) === consumerFile)
+          .map((reference) => reference.range.start.line),
+      ).toEqual(targetLine === 2 ? [6, 10] : [7, 11]);
+    }
+  });
+
+  it("keeps native C tag and typedef export identities distinct", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-c-tag-typedef-"));
+    tempDirs.push(root);
+    const header = normalizeFile(path.join(root, "api.h"));
+    const consumer = normalizeFile(path.join(root, "main.c"));
+    await fsp.writeFile(header, "struct Item { int value; };\ntypedef struct Item *Item;\n", "utf8");
+    await fsp.writeFile(consumer, '#include "api.h"\nstruct Item item;\nItem alias;\n', "utf8");
+    const index = await withNativeRuntimeModeAsync("native", () =>
+      buildProjectIndexFromFiles(root, [header, consumer], { cache: "off" }),
+    );
+    for (const [kind, line] of [
+      [SymbolKind.Class, 1],
+      [SymbolKind.TypeAlias, 2],
+    ] as const) {
+      const resolved = resolveExport(index, header, "Item", { preferredKind: kind, allowLocalFallback: false });
+      expect(resolved?.kind).toBe("resolved");
+      if (resolved?.kind !== "resolved") throw new Error("Expected a distinct C export");
+      expect(resolved.def.kind).toBe(kind);
+      expect(resolved.def.range.start.line).toBe(line);
+    }
+  });
+
+  it("keeps native C tag and typedef navigation in separate namespaces", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-c-tag-namespace-"));
+    tempDirs.push(root);
+    const header = normalizeFile(path.join(root, "api.h"));
+    const consumer = normalizeFile(path.join(root, "main.c"));
+    // Same spellings for struct/union/enum tags and ordinary typedefs, each on its own line, plus
+    // a local ordinary shadow that must not hide the tag.
+    const headerLines = [
+      "struct Item { int value; };",
+      "typedef struct Item Item;",
+      "union Value { int raw; };",
+      "typedef union Value Value;",
+      "enum Color { COLOR_RED };",
+      "typedef enum Color Color;",
+      "",
+      "struct Item header_item_tag;",
+      "Item header_item_alias;",
+      "union Value header_value_tag;",
+      "Value header_value_alias;",
+      "enum Color header_color_tag;",
+      "Color header_color_alias;",
+      "",
+    ];
+    const consumerLines = [
+      '#include "api.h"',
+      "struct Item consumer_item_tag;",
+      "Item consumer_item_alias;",
+      "union Value consumer_value_tag;",
+      "Value consumer_value_alias;",
+      "enum Color consumer_color_tag;",
+      "Color consumer_color_alias;",
+      "int touch(void) {",
+      "  int Item = 0;",
+      "  struct Item shadow_item_tag;",
+      "  return Item;",
+      "}",
+      "struct Item; union Value; enum Color;",
+    ];
+    await fsp.writeFile(header, headerLines.join("\n"), "utf8");
+    await fsp.writeFile(consumer, consumerLines.join("\n"), "utf8");
+    const index = await withNativeRuntimeModeAsync("native", () =>
+      buildProjectIndexFromFiles(root, [header, consumer], { cache: "off" }),
+    );
+
+    const tokenColumn = (lines: readonly string[], line: number, token: string, occurrence = 0): number => {
+      const text = lines[line - 1]!;
+      let at = -1;
+      for (let seen = 0; seen <= occurrence; seen += 1) {
+        at = text.indexOf(token, at + 1);
+      }
+      return at + 1;
+    };
+    const names: ReadonlyArray<{
+      name: string;
+      tagLine: number;
+      typedefLine: number;
+      headerTagUseLine: number;
+      headerAliasUseLine: number;
+      consumerTagLine: number;
+      consumerAliasLine: number;
+      shadowTagLine?: number;
+    }> = [
+      {
+        name: "Item",
+        tagLine: 1,
+        typedefLine: 2,
+        headerTagUseLine: 8,
+        headerAliasUseLine: 9,
+        consumerTagLine: 2,
+        consumerAliasLine: 3,
+        shadowTagLine: 10,
+      },
+      {
+        name: "Value",
+        tagLine: 3,
+        typedefLine: 4,
+        headerTagUseLine: 10,
+        headerAliasUseLine: 11,
+        consumerTagLine: 4,
+        consumerAliasLine: 5,
+      },
+      {
+        name: "Color",
+        tagLine: 5,
+        typedefLine: 6,
+        headerTagUseLine: 12,
+        headerAliasUseLine: 13,
+        consumerTagLine: 6,
+        consumerAliasLine: 7,
+      },
+    ];
+
+    const expectDefinitionAt = async (
+      file: string,
+      lines: readonly string[],
+      line: number,
+      token: string,
+      occurrence: number,
+      expectedFile: string,
+      expectedLine: number,
+      expectedColumn: number,
+    ): Promise<void> => {
+      const result = await goToDefinition(index, {
+        file,
+        line,
+        column: tokenColumn(lines, line, token, occurrence),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected a definition");
+      expect(normalizeFile(result.definition.file)).toBe(normalizeFile(expectedFile));
+      expect(result.definition.range.start.line).toBe(expectedLine);
+      expect(result.definition.range.start.column).toBe(expectedColumn);
+    };
+
+    // Tag syntax targets the tag declaration and a bare name targets the typedef, in the header
+    // itself and through the include alike, including the enum tag/typedef same-kind pair.
+    for (const kind of names) {
+      const tagColumn = tokenColumn(headerLines, kind.tagLine, kind.name);
+      const typedefColumn = tokenColumn(headerLines, kind.typedefLine, kind.name, 1);
+      for (const [file, lines, tagUseLine, aliasUseLine] of [
+        [header, headerLines, kind.headerTagUseLine, kind.headerAliasUseLine],
+        [consumer, consumerLines, kind.consumerTagLine, kind.consumerAliasLine],
+      ] as const) {
+        await expectDefinitionAt(file, lines, tagUseLine, kind.name, 0, header, kind.tagLine, tagColumn);
+        await expectDefinitionAt(file, lines, aliasUseLine, kind.name, 0, header, kind.typedefLine, typedefColumn);
+      }
+      await expectDefinitionAt(header, headerLines, kind.typedefLine, kind.name, 0, header, kind.tagLine, tagColumn);
+    }
+
+    // The local ordinary shadow hides the typedef inside the function but never the tag.
+    const item = names[0]!;
+    await expectDefinitionAt(
+      consumer,
+      consumerLines,
+      item.shadowTagLine!,
+      item.name,
+      0,
+      header,
+      item.tagLine,
+      tokenColumn(headerLines, item.tagLine, item.name),
+    );
+    await expectDefinitionAt(
+      consumer,
+      consumerLines,
+      item.shadowTagLine! + 1,
+      item.name,
+      0,
+      consumer,
+      9,
+      tokenColumn(consumerLines, 9, item.name),
+    );
+
+    const referenceSites = async (file: string, line: number, column: number) => {
+      const result = await findReferences(index, { file, line, column });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected references");
+      return result.references.map((reference) => ({
+        file: normalizeFile(reference.file),
+        line: reference.range.start.line,
+        column: reference.range.start.column,
+      }));
+    };
+    const consumerKey = normalizeFile(consumer);
+
+    // Exact disjoint consumer sets: tag-form uses (including the shadowed one) belong to the tag,
+    // bare uses to the typedef, and the shadowed local occurrences belong to neither.
+    for (const kind of names) {
+      const tagReferences = await referenceSites(
+        header,
+        kind.tagLine,
+        tokenColumn(headerLines, kind.tagLine, kind.name),
+      );
+      const aliasReferences = await referenceSites(
+        header,
+        kind.typedefLine,
+        tokenColumn(headerLines, kind.typedefLine, kind.name, 1),
+      );
+      expect(tagReferences.filter((site) => site.file === consumerKey)).toEqual([
+        {
+          file: consumerKey,
+          line: kind.consumerTagLine,
+          column: tokenColumn(consumerLines, kind.consumerTagLine, kind.name),
+        },
+        ...(kind.shadowTagLine === undefined
+          ? []
+          : [
+              {
+                file: consumerKey,
+                line: kind.shadowTagLine,
+                column: tokenColumn(consumerLines, kind.shadowTagLine, kind.name),
+              },
+            ]),
+        {
+          file: consumerKey,
+          line: 13,
+          column: tokenColumn(consumerLines, 13, kind.name),
+        },
+      ]);
+      expect(aliasReferences.filter((site) => site.file === consumerKey)).toEqual([
+        {
+          file: consumerKey,
+          line: kind.consumerAliasLine,
+          column: tokenColumn(consumerLines, kind.consumerAliasLine, kind.name),
+        },
+      ]);
+    }
+  });
+
+  it("keeps PHP type operands separate from same-spelled argument aliases", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-php-alias-roles-"));
+    tempDirs.push(root);
+    const source = normalizeFile(path.join(root, "source.php"));
+    const consumer = normalizeFile(path.join(root, "consumer.php"));
+    await fsp.writeFile(
+      source,
+      ["<?php namespace App;", "class Service { public $field; }", "function helper() {}", "const TOKEN = 1;"].join(
+        "\n",
+      ),
+    );
+    const lines = [
+      "<?php namespace Client;",
+      "use App\\Service as Alias;",
+      "use function App\\helper as Alias;",
+      "use const App\\TOKEN as Alias;",
+      "$value = new Alias(Alias);",
+      "$is = $value instanceof Alias;",
+      "try {} catch (Alias $error) {}",
+      "Alias();",
+      "$value->field;",
+      "$value->FIELD;",
+    ];
+    await fsp.writeFile(consumer, lines.join("\n"));
+    await withNativeRuntimeModeAsync("native", async () => {
+      const index = await buildProjectIndexFromFiles(root, [source, consumer]);
+      const imports = listSymbols(index, { file: consumer, includeImports: true }).filter(
+        (symbol) => symbol.kind === "import" && symbol.name === "Alias",
+      );
+      expect(new Set(imports.map((symbol) => symbol.id)).size).toBe(3);
+      for (const buildGraph of [buildSymbolGraph, buildSymbolGraphDetailed]) {
+        const graph = await buildGraph(index);
+        const aliasEdges = graph.edges.filter((edge) => {
+          const from = graph.nodes.get(edge.from);
+          return from?.file === consumer && from.kind === "import" && from.name === "Alias";
+        });
+        expect(aliasEdges.map((edge) => graph.nodes.get(edge.to)?.name).sort()).toEqual(
+          ["Service", "helper", "TOKEN"].sort(),
+        );
+        expect(aliasEdges.map((edge) => edge.from).sort()).toEqual(imports.map((symbol) => symbol.id).sort());
+      }
+      for (const [line, fromEnd, targetLine] of [
+        [5, false, 2],
+        [5, true, 4],
+        [6, false, 2],
+        [7, false, 2],
+        [8, false, 3],
+      ] as const) {
+        const text = lines[line - 1]!;
+        const column = (fromEnd ? text.lastIndexOf("Alias") : text.indexOf("Alias")) + 1;
+        const result = await goToDefinition(index, { file: consumer, line, column });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected a PHP alias definition");
+        expect(normalizeFile(result.definition.file)).toBe(source);
+        expect(result.definition.range.start.line).toBe(targetLine);
+      }
+      const refs = await findReferences(index, { file: source, line: 4, column: 7 });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Expected PHP constant references");
+      expect(
+        refs.references
+          .filter((ref) => normalizeFile(ref.file) === consumer)
+          .map((ref) => [ref.range.start.line, ref.range.start.column]),
+      ).toEqual([
+        [4, lines[3]!.indexOf("TOKEN") + 1],
+        [4, lines[3]!.indexOf("Alias") + 1],
+        [5, lines[4]!.lastIndexOf("Alias") + 1],
+      ]);
+      const propertyRefs = await findReferences(index, {
+        file: source,
+        line: 2,
+        column: "class Service { public $field; }".indexOf("field") + 1,
+      });
+      expect(propertyRefs.status).toBe("ok");
+      if (propertyRefs.status !== "ok") throw new Error("Expected PHP property references");
+      expect(
+        propertyRefs.references
+          .filter((ref) => normalizeFile(ref.file) === consumer)
+          .map((ref) => ref.range.start.line),
+      ).toEqual([9]);
+    });
+  });
+
   it("scss go-to-definition resolves indexed declaration locals", async () => {
     await expectNativeSemantics(
       sampleExpectation(
@@ -1342,6 +1850,32 @@ nativeDescribe("native semantic coverage", () => {
   it("keeps native semantics stable for normalization-sensitive TypeScript export assignment", async () => {
     const testCase = await createTypeScriptNormalizationCase();
     await expectNativeSemantics(testCase);
+  });
+
+  it("keeps native TypeScript and JavaScript semantics aligned for an imported superclass member", async () => {
+    const tsCase = await createImportedSuperclassMemberCase("ts");
+    const jsCase = await createImportedSuperclassMemberCase("js");
+    const snapshots: Array<{ gotoLine: number | undefined; refLines: string[] }> = [];
+    for (const [kind, testCase] of [
+      ["ts", tsCase],
+      ["js", jsCase],
+    ] as const) {
+      const nativeIndex = await buildSemanticIndex(testCase, "native");
+      const nativeGoto = await normalizeGoto(nativeIndex, testCase.goto);
+      const nativeRefs = await normalizeReferences(nativeIndex, testCase.references);
+      const gotoSnapshot = stableGotoSnapshot(testCase.root, nativeGoto);
+      const refsSnapshot = stableReferencesSnapshot(testCase.root, nativeRefs);
+      expect(gotoSnapshot).toEqual({ status: "ok", file: `base.${kind}`, line: 2 });
+      expect(refsSnapshot).toEqual({
+        status: "ok",
+        refs: [`base.${kind}:2`, `derived.${kind}:4`].sort(),
+      });
+      snapshots.push({
+        gotoLine: gotoSnapshot.status === "ok" ? gotoSnapshot.line : undefined,
+        refLines: refsSnapshot.status === "ok" ? refsSnapshot.refs.map((ref) => ref.replace(/^[^:]+:/, "")).sort() : [],
+      });
+    }
+    expect(snapshots[0]).toEqual(snapshots[1]);
   });
 
   it("keeps native semantics stable for Rust path-attribute crate resolution", async () => {

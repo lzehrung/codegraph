@@ -45,8 +45,61 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * a leading BOM no longer discards tsconfig path mappings, lone-CR sources report
  * real line numbers, and cached modules persist `declaredContainers` so a consumer
  * whose declaring file changed elsewhere is re-resolved on an incremental build.
+ * Epoch 21 resolves C and C++ quoted includes relative to the including file, routes C through
+ * the graph edge resolver, registers C-family function names in the enclosing scope through the
+ * declarator chain so same-file call sites become references, and resolves keyword and supertype
+ * receiver members for every language that declares receiver keywords.
+ * Epoch 22 resolves a keyword receiver through direct members and declared ancestors, and
+ * binds a quoted C/C++ include to the exact includer-relative file only.
+ * Epoch 23 derives keyword receiver scope from static context, preserves Kotlin's superclass
+ * relation, and filters overloaded keyword receiver members by known call arity.
+ * Epoch 24 preserves reduced-mode C-family include forms per occurrence, registers C++ functions
+ * with reference return types in their enclosing scope, rejects JavaScript and TypeScript `this`
+ * across dynamic function boundaries, and stops an ambiguous shallow ancestor lookup instead of
+ * selecting a shared grandparent.
+ * Epoch 25 shares C function occurrences between a file-scope prototype and its definition.
+ * Epoch 26 preserves distinct C++ redeclarations and marks their name-only occurrence sets partial.
+ * Epoch 27 preserves receiver boundaries and static scope across goto, references, and call
+ * edges; rejects computed heritage expressions; and validates deferred calls against exact edges.
+ * Epoch 28 restricts PHP global-namespace reference candidates to PHP files and stores PHP
+ * bloom-filter identifiers in both their original and ASCII-case-folded spelling so
+ * case-insensitive PHP references are narrowed correctly.
+ * Epoch 29 uses exact configured-root matching for C-family angle includes and applies PHP
+ * method-name case folding to receiver call edges.
+ * Epoch 30 restores reduced-mode C-family include bindings when native import capture is unavailable
+ * and shares one ancestry model across keyword-receiver navigation and detailed graph edges.
+ * Epoch 31 distinguishes imported Kotlin interfaces from constructor-invoked classes, preserves
+ * static PHP keyword scope, and resolves members through imported interface and type-alias bases.
+ * Epoch 32 resolves reduced-mode C++ header-unit imports and keeps PHP class, function, and
+ * constant imports in their separate symbol namespaces during navigation and reference scans.
+ * Epoch 33 keeps C++ class members in member scope and classifies PHP type-position aliases before
+ * selecting among separate import namespaces.
+ * Epoch 34 links C++ out-of-line definitions to their in-class declarations for ownership,
+ * calls, and references, and indexes JavaScript and TypeScript function-valued fields as
+ * callable members independently of file order.
+ * Epoch 35 requires a parsed class, struct, or union before assigning C++ out-of-line member
+ * ownership and stops ancestor lookup when shallow overloads reject a known call arity.
+ * Epoch 36 resolves PHP class-namespace imports across class, interface, trait, and enum definitions.
+ * Epoch 37 rejects incomplete C++ overload occurrence bindings when reporting references.
+ * Epoch 38 preserves C++ overload groups and resolves qualified namespace/type paths exactly.
+ * Epoch 39 treats a sole C/C++ void parameter as zero arity and resolves PHP class-like and
+ * function exports with PHP's ASCII case-insensitive name rules.
+ * Epoch 40 preserves PHP import roles in dependency extraction and groups C++ callable
+ * redeclarations by signature for overload resolution and reference ownership.
+ * Epoch 41 resolves extensionless relative imports whose basenames contain dots.
+ * Epoch 42 preserves C++ signature tokens and qualified exports, merges member arity ranges,
+ * and keeps PHP import roles and member-name case rules consistent across consumers.
+ * Epoch 43 applies C++ call arity to single entities and overloaded using aliases.
+ * Epoch 44 exposes using-declaration aliases through enclosing inline namespaces.
+ * Epoch 45 adjusts C++ parameter signatures and preserves distinct C tag and typedef exports.
+ * Epoch 46 preserves C tag and ordinary namespaces through scopes, includes, and references.
+ * Epoch 47 preserves C forward-tag scope and namespace-specific symbol-graph aliases.
+ * Epoch 48 retains forward-tag references when a completed tag replaces an include binding.
+ * Epoch 49 preserves PHP import-role graph identities and avoids C namespaces on C++ header imports.
+ * Epoch 50 preserves PHP alias-use roles, C++ parameter-pack minima, and qualified base identities.
+ * Epoch 51 resolves C++ using-declarations through included exports.
  */
-export const CORE_ALGORITHM_EPOCH = 20;
+export const CORE_ALGORITHM_EPOCH = 51;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -60,8 +113,13 @@ export const CORE_ALGORITHM_EPOCH = 20;
  * parameter locals, Java constructor and spread-parameter declaration names, PHP block
  * scope, Ruby query-driven locals, JavaScript type-only imports, and Ruby and PHP
  * dynamic-import heuristics.
+ * Epoch 9 classifies a PHP trait as `class` so it reaches SymbolKind.Class and matches Rust. It
+ * also classifies JavaScript and TypeScript method declarations, private properties, and static
+ * blocks for receiver-aware member resolution, and records Python and Ruby keyword receiver
+ * members in the owning class scope.
+ * Epoch 10 classifies C++ class, struct, and union declarations as receiver members.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 8;
+export const LANGUAGE_BEHAVIOR_EPOCH = 10;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];

@@ -1,3 +1,4 @@
+import { cTagRole } from "../languages/definitions/c.js";
 import type { LogLevel } from "../logging.js";
 import { isGraphOnlyLanguage } from "../document-links.js";
 import { capturesByName, capturesNamed, rangeFromNativeCapture } from "../native/query-results.js";
@@ -25,6 +26,8 @@ import type { Range } from "../types.js";
 
 import { ECMASCRIPT_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { isExportedDeclaration } from "./declaration-visibility.js";
+import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { cppCallableIsDefinition, cppCallableShapeForNode } from "./cpp-callables.js";
 
 /**
  * Matches one `exportScopeBlockers` entry against an ancestor node. A plain entry compares the
@@ -106,6 +109,9 @@ const MEMBER_CONTAINER_NODE_TYPES: Record<string, true> = {
   class_declaration: true,
   abstract_class_declaration: true,
   class_definition: true,
+  class_specifier: true,
+  struct_specifier: true,
+  union_specifier: true,
   class: true,
   interface_declaration: true,
   impl_item: true,
@@ -134,6 +140,43 @@ function isTypeMemberDeclaration(node: SyntaxNodeLike): boolean {
     current = current.parent;
   }
   return false;
+}
+function cppQualifiedExportName(
+  nameNode: SyntaxNodeLike,
+  source: string,
+  name: string,
+  omitInlineNamespaces = false,
+): string {
+  const namespaceSegments: string[][] = [];
+  let qualifiedSegments: string[] | null = null;
+  let current: SyntaxNodeLike | null = nameNode;
+  while (current) {
+    if (!qualifiedSegments && current.type === "qualified_identifier" && current.parent?.type !== "using_declaration") {
+      const segments = cppQualifiedNameSegments(current, source);
+      if (segments.length > 1) qualifiedSegments = segments;
+    }
+    if (current.type === "namespace_definition") {
+      const namespaceName = current.childForFieldName("name");
+      if (!namespaceName) {
+        current = current.parent;
+        continue;
+      }
+      const declaresNamespaceSegment =
+        namespaceName.startIndex <= nameNode.startIndex && namespaceName.endIndex >= nameNode.endIndex;
+      if (declaresNamespaceSegment) {
+        qualifiedSegments =
+          namespaceName.type === "nested_namespace_specifier"
+            ? namespaceName.namedChildren
+                .filter((child) => child.type === "namespace_identifier" && child.endIndex <= nameNode.endIndex)
+                .map((child) => sliceText(child, source))
+            : [name];
+      } else if (!omitInlineNamespaces || current.child(0)?.type !== "inline") {
+        namespaceSegments.unshift(cppQualifiedNameSegments(namespaceName, source));
+      }
+    }
+    current = current.parent;
+  }
+  return [...namespaceSegments.flat(), ...(qualifiedSegments ?? [name])].join("::");
 }
 
 const C_DECLARATOR_IDENTIFIER_PATTERN = new RegExp(`^${XID_IDENTIFIER_SOURCE}`, "u");
@@ -176,28 +219,42 @@ function declaratorNameNode(node: SyntaxNodeLike | undefined): SyntaxNodeLike | 
   return undefined;
 }
 
-function declaratorCaptureName(capture: NativeCapture, node?: SyntaxNodeLike): string | undefined {
-  const fromNode = declaratorNameNode(node)?.text;
-  if (fromNode) return fromNode;
-  if (capture.nodeType === "identifier" || capture.nodeType === "type_identifier") return capture.text;
-  return cDeclaratorDeclaredName(capture.text)?.name;
-}
-
-function localExportDedupeKey(entry: Extract<ExportEntry, { type: "local" }>): string {
+// C function and tag redeclarations share an identity. Tags remain separate from
+// typedefs and other ordinary names, even when both are classified as TypeAlias.
+function localExportDedupeKey(entry: Extract<ExportEntry, { type: "local" }>, languageId: string): string {
+  if (languageId === "c") {
+    if (entry.target.kind === SymbolKind.Function) return `${entry.exportedAs}\0function`;
+    if (entry.target.cTag) {
+      return `${entry.exportedAs}\0tag`;
+    }
+  }
   return `${entry.exportedAs}\0${entry.target.localName}\0${entry.target.range.start.index ?? 0}\0${entry.target.range.end.index ?? 0}`;
 }
 
-function dedupeExportEntries(entries: ExportEntry[]): ExportEntry[] {
-  const seen = new Set<string>();
+function dedupeExportEntries(entries: ExportEntry[], languageId: string): ExportEntry[] {
+  const seen = new Map<string, number>();
   const out: ExportEntry[] = [];
   for (const entry of entries) {
     if (entry.type !== "local") {
       out.push(entry);
       continue;
     }
-    const key = localExportDedupeKey(entry);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const key = localExportDedupeKey(entry, languageId);
+    const previousIndex = seen.get(key);
+    if (previousIndex !== undefined) {
+      const previous = out[previousIndex];
+      if (
+        languageId === "c" &&
+        entry.target.cTag === "declaration" &&
+        previous?.type === "local" &&
+        previous.target.cTag &&
+        previous.target.cTag !== "declaration"
+      ) {
+        out[previousIndex] = entry;
+      }
+      continue;
+    }
+    seen.set(key, out.length);
     out.push(entry);
   }
   return out;
@@ -485,6 +542,10 @@ export function collectLocalsAndExportsFromSource(
       range,
     };
     if (node && isTypeMemberDeclaration(node)) base.isMember = true;
+    if (support.id === "c" && node) {
+      const tagRole = cTagRole(node);
+      if (tagRole) base.cTag = tagRole;
+    }
     if (docstring) base.docstring = docstring;
     if (lineSpan) base.lineSpan = lineSpan;
     if (typeof complexity === "number") base.complexity = complexity;
@@ -987,19 +1048,51 @@ export function collectLocalsAndExportsFromSource(
         if (isOutsideModuleScope(nameCapture)) continue;
         const visibilityNameNode = nodeForCapture(nameCapture);
         if (visibilityNameNode && !isExportedDeclaration(support.id, visibilityNameNode)) continue;
-        const nameText = map["declarator"]
-          ? declaratorCaptureName(nameCapture, nodeForCapture(nameCapture))
-          : nameCapture.text;
+        let nameText = nameCapture.text;
+        let nameRange = rangeFromNativeCapture(nameCapture, ensureByteIndexMap());
+        if (map["declarator"]) {
+          const namedNode = declaratorNameNode(visibilityNameNode);
+          if (namedNode) {
+            nameText = namedNode.text;
+            nameRange = toRange(namedNode);
+          } else {
+            const extracted = cDeclaratorDeclaredName(nameCapture.text);
+            if (!extracted) continue;
+            nameText = extracted.name;
+            const captureStart = nameRange.start.index ?? 0;
+            nameRange = rangeFromOffsets(captureStart + extracted.start, captureStart + extracted.end);
+          }
+        }
         if (!nameText) continue;
-        const local = locals.find((def) => def.localName === nameText);
+        const local =
+          locals.find(
+            (def) =>
+              def.localName === nameText &&
+              def.range.start.index === nameRange.start.index &&
+              def.range.end.index === nameRange.end.index,
+          ) ?? locals.find((def) => def.localName === nameText);
         if (local) {
           const isDefaultExport = /^\s*export\s+default\b/.test(stmtText);
+          const exportedName =
+            support.id === "cpp" && visibilityNameNode
+              ? cppQualifiedExportName(visibilityNameNode, source, nameText)
+              : nameText;
           if (!isDefaultExport) {
             exports.push({
               type: "local",
-              exportedAs: nameText,
+              exportedAs: exportedName,
               target: local,
             });
+            if (support.id === "cpp" && visibilityNameNode && exportedName !== nameText) {
+              const visibleAs = cppQualifiedExportName(visibilityNameNode, source, nameText, true);
+              if (visibleAs !== exportedName) {
+                exports.push({
+                  type: "local",
+                  exportedAs: visibleAs,
+                  target: local,
+                });
+              }
+            }
           }
           if (isDefaultExport && !hasDefaultExport()) {
             exports.push({
@@ -1048,6 +1141,98 @@ export function collectLocalsAndExportsFromSource(
     } catch (error) {
       if (isNativeRequiredUnavailableError(error)) throw error;
     }
+  }
+
+  if (support.id === "cpp") {
+    const treeForUsingDeclarations = ensureTree();
+    if (treeForUsingDeclarations) {
+      const callableExports = new Map<string, { index: number; isDefinition: boolean }>();
+      let retainedCount = 0;
+      for (const entry of exports) {
+        if (entry.type === "local" && entry.target.kind === SymbolKind.Function) {
+          const { start, end } = entry.target.range;
+          const nameNode = treeForUsingDeclarations.rootNode.descendantForPosition(
+            { row: start.line - 1, column: start.column - 1 },
+            { row: end.line - 1, column: end.column - 1 },
+          );
+          const shape = cppCallableShapeForNode(nameNode);
+          if (shape) {
+            const key = `${entry.exportedAs}\0${shape.signature}`;
+            const isDefinition = cppCallableIsDefinition(nameNode);
+            const existing = callableExports.get(key);
+            if (existing) {
+              if (isDefinition && !existing.isDefinition) {
+                exports[existing.index] = entry;
+                existing.isDefinition = true;
+              }
+              continue;
+            }
+            callableExports.set(key, { index: retainedCount, isDefinition });
+          }
+        }
+        exports[retainedCount++] = entry;
+      }
+      exports.length = retainedCount;
+    }
+    const visitUsingDeclaration = (node: SyntaxNodeLike): void => {
+      if (support.exportScopeBlockers.some((blocker) => matchesExportScopeBlocker(node, blocker))) return;
+      if (node.type === "using_declaration") {
+        const qualified =
+          node.namedChildren.find((child) => child.type === "qualified_identifier") ??
+          node.namedChildren
+            .flatMap((child) => child.namedChildren)
+            .find((child) => child.type === "qualified_identifier");
+        if (qualified) {
+          const importedSegments = cppQualifiedNameSegments(qualified, source);
+          const importedName = importedSegments.join("::");
+          const localName = importedSegments.at(-1);
+          if (!localName) return;
+          const exportedName = cppQualifiedExportName(node, source, localName);
+          const exportedNames = [exportedName];
+          if (exportedName !== localName) {
+            const visibleAs = cppQualifiedExportName(node, source, localName, true);
+            if (visibleAs !== exportedName) exportedNames.push(visibleAs);
+          }
+          const targets = exports.filter(
+            (entry): entry is Extract<ExportEntry, { type: "local" }> =>
+              entry.type === "local" && entry.exportedAs === importedName,
+          );
+          for (const exportedAs of exportedNames) {
+            // Included declarations are not available during per-file extraction.
+            // Retain the qualified target for resolution against the completed index.
+            for (const imp of imports) {
+              if (imp.kind !== "star" || typeof imp.resolved !== "string") continue;
+              exports.push({
+                type: "reexport",
+                exportedAs,
+                fromModule: imp.resolved,
+                sourceSpecifier: importedName,
+              });
+            }
+            for (const target of targets) {
+              if (
+                exports.some(
+                  (entry) =>
+                    entry.type === "local" &&
+                    entry.exportedAs === exportedAs &&
+                    entry.target.range.start.index === target.target.range.start.index,
+                )
+              ) {
+                continue;
+              }
+              exports.push({
+                type: "local",
+                exportedAs,
+                target: target.target,
+              });
+            }
+          }
+        }
+        return;
+      }
+      for (const child of node.namedChildren) visitUsingDeclaration(child);
+    };
+    if (treeForUsingDeclarations) visitUsingDeclaration(treeForUsingDeclarations.rootNode);
   }
 
   // The native query does not cover CommonJS member assignments and some
@@ -1142,5 +1327,5 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
-  return { file, exports: dedupeExportEntries(exports), imports, locals };
+  return { file, exports: dedupeExportEntries(exports, support.id), imports, locals };
 }

@@ -192,7 +192,7 @@ function appendRelationship(map: Map<string, CallRelationship[]>, key: string, r
 }
 
 function isCallable(node: SymbolNode): boolean {
-  return node.kind === "function";
+  return node.kind === "function" || !!node.callable;
 }
 
 function compareCallRelationships(graph: SymbolGraph, left: CallRelationship, right: CallRelationship): number {

@@ -3,8 +3,14 @@ import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { languageHasDeclarationVisibility } from "./declaration-visibility.js";
 import type { FileId } from "../types.js";
-import { GO_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../util/identifiers.js";
+import {
+  foldPhpIdentifierCase,
+  GO_IDENTIFIER_SOURCE,
+  JAVA_IDENTIFIER_SOURCE,
+  KOTLIN_IDENTIFIER_SOURCE,
+} from "../util/identifiers.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
+import { phpNamedImportRole } from "./import-types.js";
 import {
   type ExportEntry,
   type ImportBinding,
@@ -63,7 +69,9 @@ const packageNameCaches = new WeakMap<ProjectIndex, PackageNameCaches>();
 export type ResolveExportOptions = {
   preferredKind?: SymbolKind;
   allowLocalFallback?: boolean;
+  cNamespace?: "tag" | "ordinary";
 };
+const PHP_CLASS_NAMESPACE_KINDS = [SymbolKind.Class, SymbolKind.Interface, SymbolKind.TypeAlias] as const;
 
 function moduleFor(index: ProjectIndex, file: FileId): ModuleIndex | undefined {
   return index.byFile.get(fileIdentityKey(file));
@@ -347,27 +355,27 @@ export function resolveExport(
   opts?: ResolveExportOptions,
 ): ResolvedExport | null {
   const visited = new Set<string>();
-  const matchesPreferredKind = (def: SymbolDef): boolean => !opts?.preferredKind || def.kind === opts.preferredKind;
+  const matchesOptions = (def: SymbolDef, namespace: ResolveExportOptions["cNamespace"]): boolean =>
+    (!opts?.preferredKind || def.kind === opts.preferredKind) &&
+    (namespace === undefined || (def.cTag ? "tag" : "ordinary") === namespace);
   const allowLocalFallback = opts?.allowLocalFallback ?? true;
 
-  function resolveFromFile(fileInner: FileId, name: string): ResolvedExport | null {
+  function resolveFromFile(fileInner: FileId, name: string, namespace = opts?.cNamespace): ResolvedExport | null {
     const moduleEntry = moduleFor(index, fileInner);
     if (!moduleEntry) return null;
     const names = moduleNameLookup(index, moduleEntry.file);
     if (!names) return null;
     const normalizedFile = normalizePath(moduleEntry.file);
     const canonicalName = names.normalizeIdentifier(name);
-    const key = opts?.preferredKind
-      ? `${cacheKey(normalizedFile, canonicalName)}::${opts.preferredKind}::${allowLocalFallback ? "local" : "export"}`
-      : `${cacheKey(normalizedFile, canonicalName)}::${allowLocalFallback ? "local" : "export"}`;
+    const key = `${cacheKey(normalizedFile, canonicalName)}::${opts?.preferredKind ?? ""}::${namespace ?? ""}::${allowLocalFallback ? "local" : "export"}`;
     if (index.exportCache.has(key)) return index.exportCache.get(key)!;
 
-    const cycleKey = cacheKey(normalizedFile, canonicalName);
+    const cycleKey = `${cacheKey(normalizedFile, canonicalName)}::${namespace ?? ""}`;
     if (visited.has(cycleKey)) return null;
     visited.add(cycleKey);
 
     const goPackageExport = resolveGoPackageExport(index, normalizedFile, canonicalName);
-    if (goPackageExport && matchesPreferredKind(goPackageExport)) {
+    if (goPackageExport && matchesOptions(goPackageExport, namespace)) {
       const result: ResolvedExport = { kind: "resolved", def: goPackageExport };
       index.exportCache.set(key, result);
       return result;
@@ -376,10 +384,33 @@ export function resolveExport(
     const localCandidates: SymbolDef[] = [];
     for (const target of names.localExports.get(canonicalName) ?? []) {
       if (
-        matchesPreferredKind(target) &&
+        matchesOptions(target, namespace) &&
         !localCandidates.some((candidate) => sameSymbolDef(index, candidate, target))
       ) {
         localCandidates.push(target);
+      }
+    }
+    // A bodyless C tag use can introduce an incomplete tag, but must reuse a tag
+    // already brought into scope by an include. Do not let that use hide its header.
+    if (
+      namespace &&
+      (!localCandidates.length ||
+        localCandidates.every((candidate) => candidate.cTag === "reference" || candidate.cTag === "forward"))
+    ) {
+      const included: ResolvedExport[] = [];
+      for (const imp of moduleEntry.imports) {
+        if (typeof imp.resolved !== "string") continue;
+        if (imp.kind !== "star" && !(imp.kind === "named" && imp.local === name)) continue;
+        if (imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== namespace) continue;
+        const downstream = resolveFromFile(imp.resolved, imp.kind === "named" ? imp.imported : name, namespace);
+        if (downstream && !included.some((candidate) => sameResolvedExport(index, candidate, downstream))) {
+          included.push(downstream);
+        }
+      }
+      if (included.length) {
+        const result = included.length === 1 ? included[0]! : null;
+        index.exportCache.set(key, result);
+        return result;
       }
     }
     if (localCandidates.length === 1) {
@@ -411,8 +442,9 @@ export function resolveExport(
     const reexportCandidates: ResolvedExport[] = [];
     for (const entry of names.reexports.get(canonicalName) ?? []) {
       const downstream =
-        resolveFromFile(entry.fromModule, entry.sourceSpecifier || canonicalName) ??
-        resolveFromFile(entry.fromModule, canonicalName);
+        resolveFromFile(entry.fromModule, entry.sourceSpecifier || canonicalName, namespace) ??
+        // A qualified using target cannot fall back to an unrelated bare export.
+        (entry.sourceSpecifier.includes("::") ? null : resolveFromFile(entry.fromModule, canonicalName, namespace));
       if (downstream && !reexportCandidates.some((candidate) => sameResolvedExport(index, candidate, downstream))) {
         reexportCandidates.push(downstream);
       }
@@ -430,7 +462,7 @@ export function resolveExport(
     const starCandidates: ResolvedExport[] = [];
     for (const entry of moduleEntry.exports) {
       if (entry.type !== "exportStar") continue;
-      const downstream = resolveFromFile(entry.fromModule, canonicalName);
+      const downstream = resolveFromFile(entry.fromModule, canonicalName, namespace);
       if (downstream && !starCandidates.some((candidate) => sameResolvedExport(index, candidate, downstream))) {
         starCandidates.push(downstream);
       }
@@ -449,7 +481,7 @@ export function resolveExport(
     if (allowLocalFallback && !shouldSkipVisibilityLocalFallback(index, moduleEntry)) {
       for (const local of names.locals.get(canonicalName) ?? []) {
         if (
-          matchesPreferredKind(local) &&
+          matchesOptions(local, namespace) &&
           !localFallbackCandidates.some((candidate) => sameSymbolDef(index, candidate, local))
         ) {
           localFallbackCandidates.push(local);
@@ -472,6 +504,75 @@ export function resolveExport(
   }
 
   return resolveFromFile(file, exportedName);
+}
+
+function resolvePhpCaseInsensitiveExport(
+  index: ProjectIndex,
+  targetFile: FileId,
+  exportedName: string,
+  preferredKind: SymbolKind,
+): ResolvedExport | null {
+  const exactExport = resolveExport(index, targetFile, exportedName, { preferredKind, allowLocalFallback: false });
+  if (exactExport) return exactExport;
+
+  const moduleEntry = moduleFor(index, targetFile);
+  if (!moduleEntry) return null;
+  const foldedName = foldPhpIdentifierCase(exportedName);
+  const resolveUnique = (sourceSpellings: Set<string>, allowLocalFallback: boolean): ResolvedExport | null => {
+    const matches: ResolvedExport[] = [];
+    for (const sourceSpelling of sourceSpellings) {
+      const hit = resolveExport(index, targetFile, sourceSpelling, { preferredKind, allowLocalFallback });
+      if (hit && !matches.some((candidate) => sameResolvedExport(index, candidate, hit))) {
+        matches.push(hit);
+      }
+    }
+    return matches.length === 1 ? matches[0]! : null;
+  };
+
+  const exportSpellings = new Set<string>();
+  for (const entry of moduleEntry.exports) {
+    if (
+      entry.type === "local" &&
+      entry.target.kind === preferredKind &&
+      foldPhpIdentifierCase(entry.exportedAs) === foldedName
+    ) {
+      exportSpellings.add(entry.exportedAs);
+    }
+  }
+  if (exportSpellings.size) return resolveUnique(exportSpellings, false);
+
+  const exactLocal = resolveExport(index, targetFile, exportedName, { preferredKind });
+  if (exactLocal) return exactLocal;
+  const localSpellings = new Set<string>();
+  for (const local of moduleEntry.locals) {
+    if (local.kind === preferredKind && foldPhpIdentifierCase(local.localName) === foldedName) {
+      localSpellings.add(local.localName);
+    }
+  }
+  return resolveUnique(localSpellings, true);
+}
+
+/** Resolves a PHP symbol through its separate class, function, or constant import namespace. */
+export function resolvePhpExportByImportType(
+  index: ProjectIndex,
+  targetFile: FileId,
+  exportedName: string,
+  importType: "class" | "function" | "const" | undefined,
+): ResolvedExport | null {
+  if (importType === "class") {
+    for (const preferredKind of PHP_CLASS_NAMESPACE_KINDS) {
+      const hit = resolvePhpCaseInsensitiveExport(index, targetFile, exportedName, preferredKind);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (importType === "function") {
+    return resolvePhpCaseInsensitiveExport(index, targetFile, exportedName, SymbolKind.Function);
+  }
+  if (importType === "const") {
+    return resolveExport(index, targetFile, exportedName, { preferredKind: SymbolKind.Variable });
+  }
+  return resolveExport(index, targetFile, exportedName);
 }
 
 function collectExportedNames(
@@ -522,24 +623,20 @@ export function resolveImported(
   index: ProjectIndex,
   imp: ImportBinding,
   exportedName: string,
+  opts?: ResolveExportOptions,
 ): SymbolDef | { namespace: FileId } | null {
   const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile) return null;
+  const namespace = opts?.cNamespace ?? (imp.kind === "named" ? imp.cNamespace : undefined);
+  if (opts?.cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== opts.cNamespace) return null;
 
-  let preferredKind: SymbolKind | undefined;
-  if (imp.kind === "named") {
-    if (imp.phpImportType === "function") {
-      preferredKind = SymbolKind.Function;
-    } else if (imp.phpImportType === "class") {
-      preferredKind = SymbolKind.Class;
-    } else if (imp.phpImportType === "const") {
-      preferredKind = SymbolKind.Variable;
-    }
-  }
-
-  const hit = resolveExport(index, targetFile, exportedName, {
-    ...(preferredKind ? { preferredKind } : {}),
-  });
+  const phpRole = phpNamedImportRole(imp);
+  const hit = phpRole
+    ? resolvePhpExportByImportType(index, targetFile, exportedName, phpRole)
+    : resolveExport(index, targetFile, exportedName, {
+        ...opts,
+        ...(namespace ? { cNamespace: namespace } : {}),
+      });
   if (hit?.kind === "resolved") return hit.def;
   if (hit?.kind === "namespace") return { namespace: hit.file };
 

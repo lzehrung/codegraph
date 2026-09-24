@@ -6,6 +6,7 @@ import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } 
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION } from "../src/indexer/build-cache/project-snapshot.js";
 import { buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import {
   AGENT_FRESHNESS_CHECK_INTERVAL_MS,
@@ -104,6 +105,7 @@ type MutableDetailedSymbolGraphSidecar = {
       file: string;
       name: string;
       complexity?: number;
+      callable?: true;
     }>;
     edges: Array<{
       from: string;
@@ -117,6 +119,7 @@ type MutableDetailedSymbolGraphSidecar = {
         };
       };
     }>;
+    nodeAliases: Array<[string, string]>;
   };
 };
 function refreshDetailedSidecarHash(sidecar: MutableDetailedSymbolGraphSidecar): void {
@@ -327,11 +330,11 @@ describe("agent session", () => {
       projectRoot: string;
       implementationFingerprint: string;
       projectSnapshotIdentity: string;
-      graph: { nodes: unknown[]; edges: unknown[] };
+      graph: { nodes: unknown[]; edges: unknown[]; nodeAliases: unknown[] };
     };
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
-    expect(sidecar.version).toBe(4);
+    expect(sidecar.version).toBe(DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION);
     expect(sidecar.projectRoot).toBe(normalizePath(root));
     expect(sidecar.implementationFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(sidecar.projectSnapshotIdentity).toBe(cold.index.projectSnapshotIdentity);
@@ -343,7 +346,7 @@ describe("agent session", () => {
       "projectSnapshotIdentity",
       "version",
     ]);
-    expect(Object.keys(sidecar.graph).sort()).toEqual(["edges", "nodes"]);
+    expect(Object.keys(sidecar.graph).sort()).toEqual(["edges", "nodeAliases", "nodes"]);
 
     symbolGraphSpy.mockClear();
     const warmSession = createAgentSession({ root });
@@ -357,6 +360,39 @@ describe("agent session", () => {
     expect(warm.symbolGraph.edges).toEqual(cold.symbolGraph.edges);
     expect(cold.symbolGraph.edges.some((edge) => edge.label === "extends")).toBe(true);
     expect(cold.symbolGraph.edges.some((edge) => edge.label === "member_of")).toBe(true);
+  });
+
+  it("reuses a canonicalized C++ detailed graph from the persisted sidecar", async () => {
+    const root = await mkGitRepo();
+    await fs.writeFile(path.join(root, "api.hpp"), "class Box { public: int run(int*); };\n", "utf8");
+    await fs.writeFile(
+      path.join(root, "impl.cpp"),
+      [
+        '#include "api.hpp"',
+        "int Box::run(int* value) { return *value; }",
+        "int call(Box& box, int* value) { return box.run(value); }",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const cold = await createAgentSession({ root }).loadProject();
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+    expect([...cold.symbolGraph.nodes.values()].filter((node) => node.name === "run")).toHaveLength(1);
+    expect(
+      cold.symbolGraph.edges
+        .filter((edge) => edge.label === "calls" && cold.symbolGraph.nodes.get(edge.from)?.name === "call")
+        .map((edge) => cold.symbolGraph.nodes.get(edge.to)?.name),
+    ).toEqual(["run"]);
+
+    const sidecarStat = await fs.stat(sidecarPath);
+    await fs.utimes(sidecarPath, sidecarStat.atime, new Date(sidecarStat.mtimeMs + 2_000));
+    symbolGraphSpy.mockClear();
+    const warm = await createAgentSession({ root }).loadProject();
+
+    expect(symbolGraphSpy).not.toHaveBeenCalled();
+    expect([...warm.symbolGraph.nodes]).toEqual([...cold.symbolGraph.nodes]);
+    expect(warm.symbolGraph.edges).toEqual(cold.symbolGraph.edges);
   });
 
   it("memoizes a validated detailed sidecar until its file identity changes", async () => {
@@ -425,7 +461,7 @@ describe("agent session", () => {
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
     expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
-    expect(refreshed.version).toBe(4);
+    expect(refreshed.version).toBe(DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION);
   });
 
   it("does not publish an identity or sidecar when the project snapshot write fails", async () => {
@@ -545,6 +581,51 @@ describe("agent session", () => {
     }
   });
 
+  it("rejects a sidecar node whose callable marker is not literal true", async () => {
+    const root = await mkGitRepo();
+    await createAgentSession({ root }).loadProject();
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+    const original = await fs.readFile(sidecarPath);
+
+    const writeCallable = async (callable: unknown) => {
+      await fs.writeFile(sidecarPath, original);
+      const sidecar = (await readDetailedSidecar(sidecarPath)) as MutableDetailedSymbolGraphSidecar;
+      const node = sidecar.graph.nodes[0];
+      if (!node) throw new Error("expected at least one persisted symbol node");
+      (node as { callable?: unknown }).callable = callable;
+      refreshDetailedSidecarHash(sidecar);
+      await writeDetailedSidecar(sidecarPath, sidecar);
+    };
+
+    await writeCallable("true");
+    const malformedSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const rebuilt = await createAgentSession({ root }).loadProject();
+    expect(malformedSpy).toHaveBeenCalledTimes(1);
+    expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
+    malformedSpy.mockRestore();
+
+    await writeCallable(true);
+    const literalSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const loadedLiteral = await createAgentSession({ root }).loadProject();
+    expect(literalSpy).not.toHaveBeenCalled();
+    expect(loadedLiteral.symbolGraph.nodes.size).toBeGreaterThan(0);
+    literalSpy.mockRestore();
+
+    await writeCallable(false);
+    const falseSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const rebuiltFalse = await createAgentSession({ root }).loadProject();
+    expect(falseSpy).toHaveBeenCalledTimes(1);
+    expect(rebuiltFalse.symbolGraph.nodes.size).toBeGreaterThan(0);
+    falseSpy.mockRestore();
+
+    await fs.writeFile(sidecarPath, original);
+    const absentSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const loadedAbsent = await createAgentSession({ root }).loadProject();
+    expect(absentSpy).not.toHaveBeenCalled();
+    expect(loadedAbsent.symbolGraph.nodes.size).toBeGreaterThan(0);
+    absentSpy.mockRestore();
+  });
+
   it("loads a valid sidecar from disk without re-verifying its self-reported graphHash", async () => {
     const root = await mkGitRepo();
     const cold = await createAgentSession({ root }).loadProject();
@@ -587,7 +668,7 @@ describe("agent session", () => {
     const refreshed = (await readDetailedSidecar(sidecarPath)) as { version: number };
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
-    expect(refreshed.version).toBe(4);
+    expect(refreshed.version).toBe(DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION);
   });
 
   it("invalidates module, project snapshot, and detailed sidecar on core epoch drift", async () => {

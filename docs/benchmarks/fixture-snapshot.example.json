@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-21T03:15:51.198Z",
+  "generatedAt": "2026-09-24T13:00:42.115Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.16.0",
-  "numTotalTests": 465,
+  "numTotalTests": 505,
   "numFailedTests": 0,
   "languages": [
     {
@@ -33,8 +33,8 @@
       "files": [
         "tests/languages/c.test.ts"
       ],
-      "tests": 18,
-      "passed": 18,
+      "tests": 37,
+      "passed": 37,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -55,8 +55,8 @@
       "files": [
         "tests/languages/cpp.test.ts"
       ],
-      "tests": 22,
-      "passed": 22,
+      "tests": 39,
+      "passed": 39,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -176,8 +176,8 @@
       "files": [
         "tests/languages/php.test.ts"
       ],
-      "tests": 54,
-      "passed": 54,
+      "tests": 58,
+      "passed": 58,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -323,8 +323,8 @@
       "tests/languages/import-from-captures.test.ts",
       "tests/languages/query-hygiene.test.ts"
     ],
-    "tests": 75,
-    "passed": 75,
+    "tests": 76,
+    "passed": 76,
     "failed": 0,
     "skipped": 0
   }

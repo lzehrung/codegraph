@@ -30,6 +30,8 @@ export type ImportBinding =
        */
       localRange?: Range;
       phpImportType?: "class" | "function" | "const";
+      /** Namespace retained when a C include expands tags and ordinary names. */
+      cNamespace?: "tag" | "ordinary";
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
       mechanism?: "es" | "cjs" | "python" | "php";
@@ -63,3 +65,28 @@ export type ImportBinding =
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
     };
+
+/**
+ * PHP resolves named imports through separate class, function, and constant namespaces, and
+ * PHP spells an untyped named import as a class alias. Non-PHP bindings carry no PHP role.
+ */
+export function phpNamedImportRole(binding: ImportBinding): "class" | "function" | "const" | undefined {
+  if (binding.kind !== "named") return undefined;
+  if (binding.mechanism !== "php" && binding.phpImportType === undefined) return undefined;
+  return binding.phpImportType ?? "class";
+}
+
+/**
+ * The role segment a named binding contributes to its import node ID: a PHP import role or a
+ * C include namespace. Bindings with neither keep the plain `import` segment.
+ */
+export function importIdRoleSegment(binding: Extract<ImportBinding, { kind: "named" }>): string | undefined {
+  return phpNamedImportRole(binding) ?? binding.cNamespace;
+}
+
+/** Use the caller's normalized file path and keep PHP import roles and C namespaces distinct. */
+export function importNodeId(file: string, binding: Exclude<ImportBinding, { kind: "star" }>): string {
+  const name = binding.kind === "namespace" ? binding.localNS : binding.local;
+  const role = binding.kind === "named" ? importIdRoleSegment(binding) : undefined;
+  return `${file}::${name}::import${role ? `:${role}` : ""}`;
+}

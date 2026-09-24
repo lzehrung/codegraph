@@ -1,4 +1,4 @@
-import { supportForFile } from "../languages.js";
+import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { FileId } from "../types.js";
 import { SymbolKind, type BuildOptions, type ModuleIndex, type SymbolDef } from "./types.js";
@@ -52,7 +52,15 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
   const expandedImportKey = (binding: ImportBinding): string | null => {
     const typeOnly = binding.typeOnly ?? false;
     if (binding.kind === "named") {
-      return JSON.stringify(["named", binding.from, binding.resolved, typeOnly, binding.local, binding.imported]);
+      return JSON.stringify([
+        "named",
+        binding.from,
+        binding.resolved,
+        typeOnly,
+        binding.local,
+        binding.imported,
+        binding.cNamespace,
+      ]);
     }
     if (binding.kind === "namespace") {
       return JSON.stringify(["namespace", binding.from, binding.resolved, typeOnly, binding.localNS]);
@@ -70,15 +78,23 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
       if (imp.kind !== "star" || typeof imp.resolved !== "string") continue;
       const target = modules.get(fileIdentityKey(imp.resolved));
       if (!target) continue;
-      const targetSupport = supportForFile(imp.resolved, opts?.languageExtensions);
+      // Only stylesheet and Ruby membership is asked below, and C and C++ answer both the same,
+      // so a `.h` target must not pay for a header sample read here.
+      const targetSupport = supportForFileWithoutHeaderSample(imp.resolved, opts?.languageExtensions);
       const exportedSymbols = symbolsForStarImport(
         target,
         !!targetSupport && STYLESHEET_LANGUAGE_IDS.has(targetSupport.id),
       );
+      // `.h` defaults to C in filename-only lookup. Only extracted C tags prove the namespace split.
+      const hasCTagExports = exportedSymbols.some(({ symbol }) => Boolean(symbol.cTag));
       const seen = new Set<string>();
       for (const { name, symbol } of exportedSymbols) {
-        if (!name || seen.has(name)) continue;
-        seen.add(name);
+        let namespace: "tag" | "ordinary" | undefined;
+        if (symbol.cTag) namespace = "tag";
+        else if (hasCTagExports) namespace = "ordinary";
+        const symbolKey = namespace ? `${name}\0${namespace}` : name;
+        if (!name || seen.has(symbolKey)) continue;
+        seen.add(symbolKey);
         const treatAsNamespace = targetSupport?.id === "ruby" && symbol.kind === SymbolKind.Class;
         const expandedImport: ImportBinding = treatAsNamespace
           ? {
@@ -94,6 +110,7 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
               imported: name,
               from: imp.from,
               resolved: imp.resolved,
+              ...(namespace ? { cNamespace: namespace } : {}),
               ...(imp.typeOnly !== undefined ? { typeOnly: imp.typeOnly } : {}),
             };
         const expandedImportKeyValue = expandedImportKey(expandedImport);

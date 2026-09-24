@@ -5,14 +5,18 @@ import { buildSymbolGraphDetailed, type DetailedSymbolGraph } from "../src/graph
 import {
   emitReceiverCallEdges,
   type ReceiverCallCandidate,
+  type ReceiverMemberScope,
 } from "../src/graphs/symbol-graph-detailed/receiver-calls.js";
 import type { SymbolGraph, SymbolNode } from "../src/graphs/symbol-graph.js";
 import { findCallHierarchy } from "../src/indexer/call-hierarchy.js";
 import { buildProjectIndex } from "../src/indexer/build-index.js";
-import * as nativeRuntime from "../src/native/tree-sitter-native.js";
+import { extractCallableSignature } from "../src/impact/call-compatibility.js";
+import { prepareSourceInput } from "../src/languages/file-prep.js";
+import { ProjectedSyntaxTree } from "../src/native/projected-tree.js";
+import { getNativeSyntaxTreeExecution, isNativeTreeSitterAvailable } from "../src/native/tree-sitter-native.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
-const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
+const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
 const roots: string[] = [];
 
 afterAll(async () => {
@@ -34,8 +38,18 @@ async function buildFixture(prefix: string, files: Record<string, string>): Prom
 }
 
 /** Function members named `memberName` owned by the type named `ownerName`. */
-function membersOwnedBy(graph: DetailedSymbolGraph, ownerName: string, memberName: string): string[] {
-  const owners = [...graph.nodes.values()].filter((node) => node.name === ownerName && node.kind !== "function");
+function membersOwnedBy(
+  graph: DetailedSymbolGraph,
+  ownerName: string,
+  memberName: string,
+  ownerFile?: string,
+): string[] {
+  const owners = [...graph.nodes.values()].filter(
+    (node) =>
+      node.name === ownerName &&
+      node.kind !== "function" &&
+      (ownerFile === undefined || path.basename(node.file) === ownerFile),
+  );
   expect(owners, `expected exactly one ${ownerName} type`).toHaveLength(1);
   const ownerId = owners[0]!.id;
   return graph.edges
@@ -52,8 +66,10 @@ function nodeIn(graph: DetailedSymbolGraph, file: string, name: string): string 
   const matches = [...graph.nodes.values()].filter(
     (node) => node.name === name && path.basename(node.file) === file && node.kind === "function",
   );
-  expect(matches, `expected exactly one ${name} function in ${file}`).toHaveLength(1);
-  return matches[0]!.id;
+  const preferred = matches.filter((node) => node.implementationTarget || node.memberArity !== undefined);
+  const candidates = preferred.length ? preferred : matches;
+  expect(candidates, `expected exactly one ${name} function in ${file}`).toHaveLength(1);
+  return candidates[0]!.id;
 }
 
 /** Package-level function that is not a `member_of` any type. */
@@ -118,6 +134,108 @@ nativeDescribe("receiver method call edges", () => {
     const plain = nodeIn(graph, "caller.ts", "plain");
     const viaThis = nodeIn(graph, "caller.ts", "viaThis");
     expect(callsiteTexts(graph, plain, viaThis, TS_REPORTER_FIXTURE)).toEqual(["plain"]);
+  });
+
+  it("keeps JavaScript arrow this calls on the class while rejecting nested dynamic this", async () => {
+    const files: Record<string, string> = {
+      "box.js": [
+        "export class Box {",
+        "  helper() {}",
+        "  run() {",
+        "    function nested() { this.helper(); }",
+        "    const arrow = () => this.helper();",
+        "    arrow();",
+        "  }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-js-this-boundary-", files);
+    const helper = nodeIn(graph, "box.js", "helper");
+    const arrow = [...graph.nodes.values()].find((node) => node.name === "arrow")?.id;
+    expect(arrow).toBeDefined();
+    const sites = graph.edges
+      .filter((edge) => edge.label === "calls" && edge.from === arrow && edge.to === helper)
+      .map((edge) => edge.site?.range.start.line);
+    expect(sites).toEqual([5]);
+  });
+
+  it("walks TypeScript inheritance when this names no member on the derived class", async () => {
+    const files: Record<string, string> = {
+      "base.ts": "export class Base { helper(): void {} }\n",
+      "derived.ts": [
+        'import { Base } from "./base";',
+        "export class Derived extends Base { run(): void { this.helper(); } }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-ts-inherited-", files);
+    const helper = nodeIn(graph, "base.ts", "helper");
+    const run = nodeIn(graph, "derived.ts", "run");
+    expect(callsiteTexts(graph, helper, run, files)).toEqual(["helper"]);
+  });
+
+  it("does not turn names inside a computed TypeScript extends expression into inheritance", async () => {
+    const files: Record<string, string> = {
+      "box.ts": [
+        "class Base { helper(): void {} }",
+        "function mixin<T>(base: T): T { return base; }",
+        "class Derived extends mixin(Base) { run(): void { super.helper(); } }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-ts-computed-base-", files);
+    const helper = nodeIn(graph, "box.ts", "helper");
+    const run = nodeIn(graph, "box.ts", "run");
+    const base = [...graph.nodes.values()].find((node) => node.name === "Base" && node.kind === "class");
+    const derived = [...graph.nodes.values()].find((node) => node.name === "Derived" && node.kind === "class");
+    expect(base).toBeDefined();
+    expect(derived).toBeDefined();
+    expect(
+      graph.edges.some((edge) => edge.label === "extends" && edge.from === derived?.id && edge.to === base?.id),
+    ).toBe(false);
+    expect(callsiteTexts(graph, helper, run, files)).toBeNull();
+  });
+
+  it("uses the enclosing TypeScript and Swift member to scope keyword receivers", async () => {
+    const cases = [
+      {
+        prefix: "cg-receiver-ts-static-this-",
+        file: "box.ts",
+        source: [
+          "class Box {",
+          "  static load(): void {}",
+          "  static boot(): void { this.load(); }",
+          "  run(): void { this.load(); }",
+          "}",
+        ].join("\n"),
+        target: "load",
+        staticCaller: "boot",
+        instanceCaller: "run",
+      },
+      {
+        prefix: "cg-receiver-swift-static-self-",
+        file: "Box.swift",
+        source: [
+          "class Box {",
+          "  class func load() {}",
+          "  class func boot() { self.load() }",
+          "  func run() { self.load() }",
+          "}",
+        ].join("\n"),
+        target: "load",
+        staticCaller: "boot",
+        instanceCaller: "run",
+      },
+    ];
+    const failures: string[] = [];
+    for (const testCase of cases) {
+      const files = { [testCase.file]: testCase.source };
+      const graph = await buildFixture(testCase.prefix, files);
+      const target = nodeIn(graph, testCase.file, testCase.target);
+      const staticCaller = nodeIn(graph, testCase.file, testCase.staticCaller);
+      const instanceCaller = nodeIn(graph, testCase.file, testCase.instanceCaller);
+      if (!callsiteTexts(graph, target, staticCaller, files)) failures.push(`${testCase.file}:static`);
+      if (callsiteTexts(graph, target, instanceCaller, files)) failures.push(`${testCase.file}:instance`);
+    }
+    expect(failures).toEqual([]);
   });
 
   it("keeps the free-function control case resolved", async () => {
@@ -261,10 +379,10 @@ nativeDescribe("receiver method call edges", () => {
         "    static function shared() {}",
         "    function run() {",
         "        php_free();",
-        "        $this->helper();",
-        "        self::helper();",
-        "        static::shared();",
-        "        Example::shared();",
+        "        $this->HELPER();",
+        "        self::HeLpEr();",
+        "        static::SHARED();",
+        "        Example::ShArEd();",
         "    }",
         "}",
       ].join("\n"),
@@ -274,9 +392,20 @@ nativeDescribe("receiver method call edges", () => {
     const shared = nodeIn(graph, "example.php", "shared");
     const free = nodeIn(graph, "example.php", "php_free");
     const run = nodeIn(graph, "example.php", "run");
-    expect(callsiteTexts(graph, helper, run, files)).toEqual(["helper", "helper"]);
-    expect(callsiteTexts(graph, shared, run, files)).toEqual(["shared", "shared"]);
+    expect(callsiteTexts(graph, helper, run, files)).toEqual(["HELPER", "HeLpEr"]);
+    expect(callsiteTexts(graph, shared, run, files)).toEqual(["SHARED", "ShArEd"]);
     expect(callsiteTexts(graph, free, run, files)).toEqual(["php_free"]);
+  });
+
+  it("records PHP static calls through case-variant imported aliases", async () => {
+    const files: Record<string, string> = {
+      "source.php": ["<?php", "namespace App;", "class Service { public static function run() {} }"].join("\n"),
+      "consumer.php": ["<?php", "use aPp\\sErViCe as Foo;", "function boot() { fOo::run(); }"].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-php-alias-case-", files);
+    const run = nodeIn(graph, "source.php", "run");
+    const boot = nodeIn(graph, "consumer.php", "boot");
+    expect(callsiteTexts(graph, run, boot, files)).toEqual(["run"]);
   });
 
   it("records PHP nullsafe receiver calls", async () => {
@@ -507,6 +636,24 @@ nativeDescribe("receiver method call edge language parity", () => {
     }
   });
 
+  it("does not walk past one shallow member whose arity rejects the call", async () => {
+    const files: Record<string, string> = {
+      "single.java": [
+        "class GrandSingle { void shared() {} }",
+        "class MidSingle extends GrandSingle { void shared(int value) {} }",
+        "class LeafSingle extends MidSingle { void go() { this.shared(); } }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-java-single-", files);
+    const go = nodeIn(graph, "single.java", "go");
+    const midShared = membersOwnedBy(graph, "MidSingle", "shared");
+    const grandShared = membersOwnedBy(graph, "GrandSingle", "shared");
+    expect(midShared).toHaveLength(1);
+    expect(grandShared).toHaveLength(1);
+    expect(callsiteTexts(graph, midShared[0]!, go, files)).toBeNull();
+    expect(callsiteTexts(graph, grandShared[0]!, go, files)).toBeNull();
+  });
+
   it("records the arity-unique overload at the shallowest type instead of a deeper unique member", async () => {
     const files: Record<string, string> = {
       "uni.java": [
@@ -633,13 +780,325 @@ nativeDescribe("receiver method call edge language parity", () => {
     const files: Record<string, string> = {
       "box.cpp": [
         "class CppBase { public: void cpp_helper() {} };",
-        "class CppChild : public CppBase { public: void cpp_run() { this->cpp_helper(); } };",
+        "class CppChild : public CppBase { public: void cpp_run(); };",
+        "void CppChild::cpp_run() { this->cpp_helper(); }",
       ].join("\n"),
     };
     const graph = await buildFixture("cg-receiver-cpp-", files);
     const helper = nodeIn(graph, "box.cpp", "cpp_helper");
     const run = nodeIn(graph, "box.cpp", "cpp_run");
     expect(callsiteTexts(graph, helper, run, files)).toEqual(["cpp_helper"]);
+  });
+
+  it("keeps qualified C++ base paths separate from same-named decoys", async () => {
+    const files: Record<string, string> = {
+      "base.hpp": "namespace ns { struct Base { int run() { return 1; } }; }",
+      "decoy.hpp": [
+        "namespace other { struct Base { int run() { return 2; } }; }",
+        "struct Base { int run() { return 3; } };",
+      ].join("\n"),
+      "main.cpp": [
+        '#include "base.hpp"',
+        '#include "decoy.hpp"',
+        "struct Derived : public ns::Base { int relay() { return this->run(); } };",
+        "struct Global : public ::ns::Base { int relay_global() { return this->run(); } };",
+        "struct Missing : public absent::Base { int reject() { return this->run(); } };",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cpp-qualified-base-", files);
+    const base = [...graph.nodes.values()].find(
+      (node) => node.name === "Base" && path.basename(node.file) === "base.hpp",
+    );
+    expect(base).toBeDefined();
+    expect(
+      graph.edges
+        .filter((edge) => edge.label === "extends")
+        .map((edge) => [graph.nodes.get(edge.from)?.name, edge.to])
+        .sort(),
+    ).toEqual([
+      ["Derived", base!.id],
+      ["Global", base!.id],
+    ]);
+    const run = nodeIn(graph, "base.hpp", "run");
+    expect(
+      graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => [graph.nodes.get(edge.from)?.name, edge.to])
+        .sort(),
+    ).toEqual([
+      ["relay", run],
+      ["relay_global", run],
+    ]);
+  });
+
+  it("uses one graph node for C and C++ function declarations with definitions", async () => {
+    const files: Record<string, string> = {
+      "probe.c": [
+        "int c_run(int value);",
+        "int c_run(int value) { return value; }",
+        "int c_call() { return c_run(1); }",
+      ].join("\n"),
+      "probe.cpp": [
+        "int cpp_run(int value);",
+        "int cpp_run(int value) { return value; }",
+        "int cpp_call() { return cpp_run(1); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-function-declaration-graph-", files);
+    const cRun = nodeIn(graph, "probe.c", "c_run");
+    const cCall = nodeIn(graph, "probe.c", "c_call");
+    const cppRun = nodeIn(graph, "probe.cpp", "cpp_run");
+    const cppCall = nodeIn(graph, "probe.cpp", "cpp_call");
+
+    expect(callsiteTexts(graph, cRun, cCall, files)).toEqual(["c_run"]);
+    expect(callsiteTexts(graph, cppRun, cppCall, files)).toEqual(["cpp_run"]);
+  });
+
+  it("uses one graph node for C++ declarations with adjusted parameter shapes", async () => {
+    const files: Record<string, string> = {
+      "probe.cpp": [
+        "int pick(int values[]);",
+        "int pick(int* values) { return values ? 1 : 0; }",
+        "int relay(void handler(int));",
+        "int relay(void (*handler)(int)) { return handler ? 1 : 0; }",
+        "int total(const int sum);",
+        "int total(int sum) { return sum; }",
+        "int exact(const int* values);",
+        "int exact(int* values) { return values ? 1 : 0; }",
+        "int use_pick(int* buf) { return pick(buf); }",
+        "int use_relay() { return relay(nullptr); }",
+        "int use_total() { return total(3); }",
+        "int use_exact(int* buf) { return exact(buf); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-adjusted-shape-graph-", files);
+    const functionCount = (name: string) =>
+      [...graph.nodes.values()].filter((node) => node.name === name && node.kind === "function").length;
+    expect(functionCount("pick")).toBe(1);
+    expect(functionCount("relay")).toBe(1);
+    expect(functionCount("total")).toBe(1);
+    expect(functionCount("exact")).toBe(2);
+
+    const pick = nodeIn(graph, "probe.cpp", "pick");
+    const relay = nodeIn(graph, "probe.cpp", "relay");
+    const total = nodeIn(graph, "probe.cpp", "total");
+    const usePick = nodeIn(graph, "probe.cpp", "use_pick");
+    const useRelay = nodeIn(graph, "probe.cpp", "use_relay");
+    const useTotal = nodeIn(graph, "probe.cpp", "use_total");
+
+    expect(callsiteTexts(graph, pick, usePick, files)).toEqual(["pick"]);
+    expect(callsiteTexts(graph, relay, useRelay, files)).toEqual(["relay"]);
+    expect(callsiteTexts(graph, total, useTotal, files)).toEqual(["total"]);
+
+    const useExact = [...graph.nodes.values()].find((node) => node.name === "use_exact" && node.kind === "function");
+    expect(useExact).toBeDefined();
+    expect(outgoingCallCount(graph, useExact!.id)).toBe(0);
+  });
+
+  it("owns C++ out-of-line definitions and preserves declaration scope", async () => {
+    const files: Record<string, string> = {
+      "box.hpp": [
+        "class Box {",
+        "public:",
+        "  static int make(int value);",
+        "  virtual int run(int value);",
+        "  virtual ~Box();",
+        "  virtual int operator()(int value);",
+        "  virtual Box& operator+=(int value);",
+        "};",
+      ].join("\n"),
+      "box.cpp": [
+        '#include "box.hpp"',
+        "int Box::make(int value) { return value; }",
+        "int Box::run(int value) { return value; }",
+        "Box::~Box() {}",
+        "int Box::operator()(int value) { return value; }",
+        "Box& Box::operator+=(int value) { return *this; }",
+      ].join("\n"),
+      "use.cpp": [
+        '#include "box.hpp"',
+        "int use_static() { return Box::make(1); }",
+        "int invalid_instance() { return Box::run(1); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cpp-out-of-line-", files);
+    const make = nodeIn(graph, "box.hpp", "make");
+    const run = nodeIn(graph, "box.hpp", "run");
+    const destructor = nodeIn(graph, "box.hpp", "~Box");
+    const callOperator = nodeIn(graph, "box.cpp", "operator()");
+    const addOperator = nodeIn(graph, "box.hpp", "operator+=");
+    const useStatic = nodeIn(graph, "use.cpp", "use_static");
+    const invalidInstance = nodeIn(graph, "use.cpp", "invalid_instance");
+    expect(membersOwnedBy(graph, "Box", "make", "box.hpp")).toEqual([make]);
+    expect(membersOwnedBy(graph, "Box", "run", "box.hpp")).toEqual([run]);
+    expect(membersOwnedBy(graph, "Box", "~Box", "box.hpp")).toEqual([destructor]);
+    expect(membersOwnedBy(graph, "Box", "operator()", "box.hpp")).toEqual([callOperator]);
+    expect(membersOwnedBy(graph, "Box", "operator+=", "box.hpp")).toEqual([addOperator]);
+    expect(graph.nodes.get(make)?.memberArity).toBe(1);
+    expect(graph.nodes.get(run)?.memberArity).toBe(1);
+    expect(graph.nodes.get(run)?.implementationTarget).toBe(true);
+    expect(graph.nodes.get(destructor)?.implementationTarget).toBe(true);
+    expect(graph.nodes.get(callOperator)?.implementationTarget).toBe(true);
+    expect(graph.nodes.get(addOperator)?.implementationTarget).toBe(true);
+    expect(callsiteTexts(graph, make, useStatic, files)).toEqual(["make"]);
+    expect(outgoingCallCount(graph, invalidInstance)).toBe(0);
+    expect(
+      [...graph.nodes.values()].filter(
+        (node) => path.basename(node.file) === "box.cpp" && ["make", "run", "~Box", "operator+="].includes(node.name),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("records one canonical C++ target for this and typed out-of-line receivers", async () => {
+    const files: Record<string, string> = {
+      "box.hpp": ["class Box {", "public:", "  int run();", "  int relay();", "};"].join("\n"),
+      "box.cpp": [
+        '#include "box.hpp"',
+        "int Box::run() { return 1; }",
+        "int Box::relay() { return this->run(); }",
+      ].join("\n"),
+      "use.cpp": ['#include "box.hpp"', "int call(Box& box) { return box.run(); }"].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cpp-canonical-run-", files);
+    const run = nodeIn(graph, "box.hpp", "run");
+    const relay = nodeIn(graph, "box.hpp", "relay");
+    const call = nodeIn(graph, "use.cpp", "call");
+    expect(membersOwnedBy(graph, "Box", "run", "box.hpp")).toEqual([run]);
+    expect(membersOwnedBy(graph, "Box", "relay", "box.hpp")).toEqual([relay]);
+    expect(callsiteTexts(graph, run, relay, files)).toEqual(["run"]);
+    expect(callsiteTexts(graph, run, call, files)).toEqual(["run"]);
+    expect(
+      [...graph.nodes.values()].filter(
+        (node) => path.basename(node.file) === "box.cpp" && ["run", "relay"].includes(node.name),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("selects a unique C++ default-argument member and keeps overlapping defaults unresolved", async () => {
+    const uniqueFiles: Record<string, string> = {
+      "unique.cpp": [
+        "class UniqueBox {",
+        "public:",
+        "  int run(int value = 0);",
+        "};",
+        "int UniqueBox::run(int value) { return value; }",
+        "int callZero(UniqueBox& box) { return box.run(); }",
+        "int callOne(UniqueBox& box) { return box.run(1); }",
+      ].join("\n"),
+    };
+    const uniqueGraph = await buildFixture("cg-receiver-cpp-default-unique-", uniqueFiles);
+    const uniqueRun = nodeIn(uniqueGraph, "unique.cpp", "run");
+    const callZero = nodeIn(uniqueGraph, "unique.cpp", "callZero");
+    const callOne = nodeIn(uniqueGraph, "unique.cpp", "callOne");
+    expect(membersOwnedBy(uniqueGraph, "UniqueBox", "run")).toEqual([uniqueRun]);
+    expect(callsiteTexts(uniqueGraph, uniqueRun, callZero, uniqueFiles)).toEqual(["run"]);
+    expect(callsiteTexts(uniqueGraph, uniqueRun, callOne, uniqueFiles)).toEqual(["run"]);
+
+    const overlapFiles: Record<string, string> = {
+      "overlap.cpp": [
+        "class OverlapBox {",
+        "public:",
+        "  int run();",
+        "  int run(int value = 0);",
+        "};",
+        "int OverlapBox::run() { return 0; }",
+        "int OverlapBox::run(int value) { return value; }",
+        "int call(OverlapBox& box) { return box.run(); }",
+      ].join("\n"),
+    };
+    const overlapGraph = await buildFixture("cg-receiver-cpp-default-overlap-", overlapFiles);
+    const caller = nodeIn(overlapGraph, "overlap.cpp", "call");
+    expect(outgoingCallCount(overlapGraph, caller)).toBe(0);
+  });
+
+  it("accepts a unique C++ variadic member across extra arguments", async () => {
+    const files: Record<string, string> = {
+      "variadic.cpp": [
+        "class VarBox {",
+        "public:",
+        "  int run(int first, ...);",
+        "};",
+        "int VarBox::run(int first, ...) { return first; }",
+        "int callOne(VarBox& box) { return box.run(1); }",
+        "int callTwo(VarBox& box) { return box.run(1, 2); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cpp-variadic-", files);
+    const run = nodeIn(graph, "variadic.cpp", "run");
+    const callOne = nodeIn(graph, "variadic.cpp", "callOne");
+    const callTwo = nodeIn(graph, "variadic.cpp", "callTwo");
+    expect(callsiteTexts(graph, run, callOne, files)).toEqual(["run"]);
+    expect(callsiteTexts(graph, run, callTwo, files)).toEqual(["run"]);
+  });
+
+  it("groups named and anonymous C++ pointer members and keeps reference-qualifier overloads distinct", async () => {
+    const files: Record<string, string> = {
+      "shape.cpp": [
+        "class ShapeBox {",
+        "public:",
+        "  int pointer(int*);",
+        "  int refs(int&);",
+        "  int refs(int&&);",
+        "};",
+        "int ShapeBox::pointer(int* value) { return 0; }",
+        "int ShapeBox::refs(int& value) { return 1; }",
+        "int ShapeBox::refs(int&& value) { return 2; }",
+        "int callPtr(ShapeBox& box) { return box.pointer(nullptr); }",
+        "int callRefs(ShapeBox& box) { return box.refs(1); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cpp-shape-fingerprint-", files);
+    const pointer = nodeIn(graph, "shape.cpp", "pointer");
+    const callPtr = nodeIn(graph, "shape.cpp", "callPtr");
+    const callRefs = nodeIn(graph, "shape.cpp", "callRefs");
+    expect(membersOwnedBy(graph, "ShapeBox", "pointer")).toEqual([pointer]);
+    expect(membersOwnedBy(graph, "ShapeBox", "refs")).toHaveLength(2);
+    expect(callsiteTexts(graph, pointer, callPtr, files)).toEqual(["pointer"]);
+    expect(outgoingCallCount(graph, callRefs)).toBe(0);
+  });
+
+  it("uses the full namespace path for C++ out-of-line ownership", async () => {
+    const files: Record<string, string> = {
+      "a.hpp": "namespace a { class Box { public: int run(); }; }",
+      "b.hpp": "namespace b { class Box { public: int run(); }; }",
+      "b.cpp": ['#include "a.hpp"', '#include "b.hpp"', "int b::Box::run() { return 1; }"].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cpp-qualified-owner-", files);
+    const run = nodeIn(graph, "b.hpp", "run");
+    expect(membersOwnedBy(graph, "Box", "run", "a.hpp")).toEqual([]);
+    expect(membersOwnedBy(graph, "Box", "run", "b.hpp")).toEqual([run]);
+  });
+
+  it("keeps namespace-qualified C++ free functions out of class ownership", async () => {
+    const files: Record<string, string> = {
+      "free.cpp": [
+        "class Holder { public: using tools = int; };",
+        "namespace tools { int run(); }",
+        "int tools::run() { return 1; }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cpp-namespace-owner-", files);
+    const ownershipEdges = graph.edges.filter(
+      (edge) =>
+        edge.label === "member_of" &&
+        graph.nodes.get(edge.from)?.name === "run" &&
+        graph.nodes.get(edge.to)?.name === "tools",
+    );
+    expect(ownershipEdges).toEqual([]);
+  });
+
+  it("does not record a C++ calls edge for a bare name imported from a namespace", async () => {
+    const files: Record<string, string> = {
+      "api.hpp": "namespace tools { int run(); }",
+      "main.cpp": ['#include "api.hpp"', "int f() { return run(); }", "int g() { return tools::run(); }"].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cpp-namespace-bare-", files);
+    const run = nodeIn(graph, "api.hpp", "run");
+    const f = nodeIn(graph, "main.cpp", "f");
+    const g = nodeIn(graph, "main.cpp", "g");
+    expect(callsiteTexts(graph, run, f, files)).toBeNull();
+    expect(outgoingCallCount(graph, f)).toBe(0);
+    expect(callsiteTexts(graph, run, g, files)).toEqual(["run"]);
   });
 
   it("records calls edges for Ruby self receivers, including unique mixins", async () => {
@@ -703,6 +1162,37 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(faceShared).toHaveLength(1);
     expect(callsiteTexts(graph, baseShared[0]!, go, files)).toEqual(["shared"]);
     expect(callsiteTexts(graph, faceShared[0]!, go, files)).toBeNull();
+  });
+
+  it("keeps an imported Kotlin interface out of the plain-super class chain", async () => {
+    const files: Record<string, string> = {
+      "face.kt": ["package sample", "interface Face {", "  fun helper(): Int { return 1 }", "}"].join("\n"),
+      "child.kt": [
+        "package sample",
+        "import sample.Face",
+        "class Child : Face {",
+        "  fun own(): Int { return this.helper() }",
+        "  fun parent(): Int { return super.helper() }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-kt-imported-interface-", files);
+    const face = [...graph.nodes.values()].find(
+      (node) => node.name === "Face" && path.basename(node.file) === "face.kt",
+    );
+    const child = [...graph.nodes.values()].find((node) => node.name === "Child");
+    expect(face).toBeDefined();
+    expect(child).toBeDefined();
+    const ancestry = graph.edges.filter((edge) => edge.from === child!.id && edge.to === face!.id);
+    expect(ancestry.map((edge) => edge.label)).toEqual(["implements"]);
+
+    const helper = graph.edges
+      .filter((edge) => edge.label === "member_of" && edge.to === face!.id)
+      .map((edge) => edge.from)
+      .filter((id) => graph.nodes.get(id)?.name === "helper");
+    expect(helper).toHaveLength(1);
+    expect(callsiteTexts(graph, helper[0]!, nodeIn(graph, "child.kt", "own"), files)).toEqual(["helper"]);
+    expect(callsiteTexts(graph, helper[0]!, nodeIn(graph, "child.kt", "parent"), files)).toBeNull();
   });
 
   it("records a Swift super call on the class ancestor when a protocol declares the same name", async () => {
@@ -1268,6 +1758,26 @@ nativeDescribe("receiver construction, reassignment, typed parameters, and stati
     }
     expect(leaked, "static and instance members must not cross-resolve").toEqual([]);
   });
+
+  it("keeps PHP self and static calls in a static method on static members", async () => {
+    const files: Record<string, string> = {
+      "scope.php": [
+        "<?php",
+        "class Scope {",
+        "    function instanceOnly() {}",
+        "    static function staticOnly() {}",
+        "    static function run() { self::instanceOnly(); static::staticOnly(); }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-php-static-keywords-", files);
+    const run = nodeIn(graph, "scope.php", "run");
+    const instanceOnly = nodeIn(graph, "scope.php", "instanceOnly");
+    const staticOnly = nodeIn(graph, "scope.php", "staticOnly");
+    expect(callsiteTexts(graph, instanceOnly, run, files)).toBeNull();
+    expect(callsiteTexts(graph, staticOnly, run, files)).toEqual(["staticOnly"]);
+    expect(outgoingCallCount(graph, run)).toBe(1);
+  });
 });
 
 describe("emitReceiverCallEdges hierarchy walk", () => {
@@ -1320,6 +1830,49 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
       ...overrides,
     };
   }
+
+  it("collapses aliased declaration and definition members to one receiver target", () => {
+    const graph: SymbolGraph = {
+      nodes: new Map([
+        ["Box", node("Box", "Box", { kind: "class" })],
+        ["caller", node("caller", "call")],
+        ["run.decl", node("run.decl", "run", { memberArity: 0 })],
+        ["run.def", node("run.def", "run", { memberArity: 0 })],
+      ]),
+      edges: [
+        { from: "caller", to: "Box", label: "member_of" },
+        { from: "run.decl", to: "Box", label: "member_of" },
+        { from: "run.def", to: "Box", label: "member_of" },
+      ],
+    };
+    const aliases = new Map([["run.def", "run.decl"]]);
+    const scopes = new Map<string, ReceiverMemberScope>([
+      ["run.decl", "instance"],
+      ["run.def", "instance"],
+    ]);
+    const recorded: Array<{ from: string; to: string }> = [];
+    emitReceiverCallEdges(
+      graph,
+      [
+        {
+          callerId: "caller",
+          ownerId: "Box",
+          viaSupertypes: false,
+          memberName: "run",
+          argumentCount: 0,
+          site,
+          memberScope: "instance",
+        },
+      ],
+      (from, to, label) => {
+        if (label === "calls") recorded.push({ from, to });
+        return true;
+      },
+      scopes,
+      aliases,
+    );
+    expect(recorded).toEqual([{ from: "caller", to: "run.decl" }]);
+  });
 
   it("does not record a deeper unique member when the shallowest level is ambiguous", () => {
     const graph: SymbolGraph = {
@@ -1520,5 +2073,413 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
     expect(recordedCalls(graph, candidate({ ownerId: "Child", viaSupertypes: true }))).toEqual([
       { from: "leaf.go", to: "base.run" },
     ]);
+  });
+  it("removes rejected exact edges from the caller's shared edge array", () => {
+    const nodes = new Map([
+      ["Mid", node("Mid", "Mid", { kind: "class" })],
+      ["leaf.go", node("leaf.go", "go")],
+      ["mid.run", node("mid.run", "run", { memberArity: 0 })],
+      ["wrong.run", node("wrong.run", "run", { memberArity: 0 })],
+    ]);
+    const edges: SymbolGraph["edges"] = [
+      { from: "leaf.go", to: "Mid", label: "member_of" },
+      { from: "mid.run", to: "Mid", label: "member_of" },
+      { from: "leaf.go", to: "wrong.run", label: "calls", site },
+    ];
+    const removed = emitReceiverCallEdges({ nodes, edges }, [candidate()], () => true);
+    expect(edges.some((edge) => edge.label === "calls" && edge.from === "leaf.go")).toBe(false);
+    expect(removed.map((edge) => edge.to)).toEqual(["wrong.run"]);
+  });
+
+  it("removes all pre-existing exact edges when the call site is ambiguous", () => {
+    const nodes = new Map([
+      ["Mid", node("Mid", "Mid", { kind: "class" })],
+      ["leaf.go", node("leaf.go", "go")],
+      ["mid.run", node("mid.run", "run", { memberArity: 0 })],
+      ["wrong.first", node("wrong.first", "run", { memberArity: 0 })],
+      ["wrong.second", node("wrong.second", "run", { memberArity: 0 })],
+    ]);
+    const edges: SymbolGraph["edges"] = [
+      { from: "leaf.go", to: "Mid", label: "member_of" },
+      { from: "mid.run", to: "Mid", label: "member_of" },
+      { from: "leaf.go", to: "wrong.first", label: "calls", site },
+      { from: "leaf.go", to: "wrong.second", label: "calls", site },
+    ];
+
+    const removed = emitReceiverCallEdges({ nodes, edges }, [candidate()], () => true);
+
+    expect(edges.some((edge) => edge.label === "calls" && edge.from === "leaf.go")).toBe(false);
+    expect(removed.map((edge) => edge.to).sort()).toEqual(["wrong.first", "wrong.second"]);
+  });
+});
+
+nativeDescribe("receiver call arity and callable metadata regressions", () => {
+  /** Every function node named `name` in `file`, ordered by member arity. */
+  const overloadMembers = (graph: DetailedSymbolGraph, file: string, name: string) =>
+    [...graph.nodes.values()]
+      .filter((node) => node.name === name && path.basename(node.file) === file && node.kind === "function")
+      .sort((left, right) => (left.memberArity ?? -1) - (right.memberArity ?? -1));
+
+  /** The single graph node named `name` in `file`, whatever its kind. */
+  const anyNodeIn = (graph: DetailedSymbolGraph, file: string, name: string): string => {
+    const matches = [...graph.nodes.values()].filter((node) => node.name === name && path.basename(node.file) === file);
+    expect(matches, `expected exactly one ${name} node in ${file}`).toHaveLength(1);
+    return matches[0]!.id;
+  };
+
+  it("selects same-scope C++ free-function overloads by call argument count", async () => {
+    const files: Record<string, string> = {
+      "free.cpp": [
+        "int pick(void) { return 0; }",
+        "int pick(int value) { return value; }",
+        "int callZero() { return pick(); }",
+        "int callOne() { return pick(1); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-cpp-free-overload-call-", files);
+    const overloads = overloadMembers(graph, "free.cpp", "pick");
+    const callZero = nodeIn(graph, "free.cpp", "callZero");
+    const callOne = nodeIn(graph, "free.cpp", "callOne");
+    const overloadIds = new Set(overloads.map((node) => node.id));
+    const targetsFor = (callerId: string): string[] =>
+      graph.edges
+        .filter((edge) => edge.label === "calls" && edge.from === callerId && overloadIds.has(edge.to))
+        .map((edge) => edge.to);
+    const zeroTargets = targetsFor(callZero);
+    const oneTargets = targetsFor(callOne);
+    expect(zeroTargets).toHaveLength(1);
+    expect(oneTargets).toHaveLength(1);
+    expect(new Set([...zeroTargets, ...oneTargets])).toEqual(overloadIds);
+  });
+  it("rejects invalid C++ arity for unique free functions and included using-alias overloads", async () => {
+    const files: Record<string, string> = {
+      "api.hpp": [
+        "namespace left {",
+        "int run(int*);",
+        "int pick();",
+        "int pick(int);",
+        "}",
+        "namespace alias { using left::pick; }",
+      ].join("\n"),
+      "use.cpp": [
+        '#include "api.hpp"',
+        "int invalid_zero() { return left::run(); }",
+        "int invalid_two() { return left::run(nullptr, nullptr); }",
+        "int zero() { return alias::pick(); }",
+        "int one() { return alias::pick(1); }",
+        "int too_many() { return alias::pick(1, 2); }",
+      ].join("\n"),
+      "unique.cpp": [
+        "int f(int value = 0);",
+        "int f(int value) { return value; }",
+        "int zero() { return f(); }",
+        "int one() { return f(1); }",
+        "int two() { return f(1, 2); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-cpp-unique-alias-arity-call-", files);
+    const run = nodeIn(graph, "api.hpp", "run");
+    const picks = overloadMembers(graph, "api.hpp", "pick");
+    const invalidZero = nodeIn(graph, "use.cpp", "invalid_zero");
+    const invalidTwo = nodeIn(graph, "use.cpp", "invalid_two");
+    const zero = nodeIn(graph, "use.cpp", "zero");
+    const one = nodeIn(graph, "use.cpp", "one");
+    const tooMany = nodeIn(graph, "use.cpp", "too_many");
+    expect(outgoingCallCount(graph, invalidZero)).toBe(0);
+    expect(outgoingCallCount(graph, invalidTwo)).toBe(0);
+    expect(outgoingCallCount(graph, tooMany)).toBe(0);
+    expect(callsiteTexts(graph, run, invalidZero, files)).toBeNull();
+    expect(picks).toHaveLength(2);
+    const zeroPick = picks.filter((node) => callsiteTexts(graph, node.id, zero, files));
+    const onePick = picks.filter((node) => callsiteTexts(graph, node.id, one, files));
+    expect(zeroPick).toHaveLength(1);
+    expect(onePick).toHaveLength(1);
+    expect(zeroPick[0]!.id).not.toBe(onePick[0]!.id);
+    const unique = nodeIn(graph, "unique.cpp", "f");
+    const uniqueZero = nodeIn(graph, "unique.cpp", "zero");
+    const uniqueOne = nodeIn(graph, "unique.cpp", "one");
+    const uniqueTwo = nodeIn(graph, "unique.cpp", "two");
+    expect(outgoingCallCount(graph, uniqueTwo)).toBe(0);
+    expect(callsiteTexts(graph, unique, uniqueZero, files)).toEqual(["f"]);
+    expect(callsiteTexts(graph, unique, uniqueOne, files)).toEqual(["f"]);
+  });
+
+  it("records the two-parameter Kotlin overload for a this-receiver call", async () => {
+    const files: Record<string, string> = {
+      "ktover.kt": [
+        "class KtOver {",
+        "  fun pick(a: Int): Int = a",
+        "  fun pick(a: Int, b: Int): Int = a + b",
+        "  fun caller(): Int { return this.pick(1, 2) }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-kt-overload-", files);
+    const caller = nodeIn(graph, "ktover.kt", "caller");
+    const overloads = overloadMembers(graph, "ktover.kt", "pick");
+    expect(overloads.map((node) => node.memberArity)).toEqual([1, 2]);
+    expect(callsiteTexts(graph, overloads[1]!.id, caller, files)).toEqual(["pick"]);
+    expect(callsiteTexts(graph, overloads[0]!.id, caller, files)).toBeNull();
+  });
+
+  it("records the two-parameter Swift overload for a self-receiver call", async () => {
+    const files: Record<string, string> = {
+      "swover.swift": [
+        "class SwOver {",
+        "  func pick(_ a: Int) -> Int { return a }",
+        "  func pick(_ a: Int, _ b: Int) -> Int { return a + b }",
+        "  func caller() -> Int { self.pick(1, 2) }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-swift-overload-", files);
+    const caller = nodeIn(graph, "swover.swift", "caller");
+    const overloads = overloadMembers(graph, "swover.swift", "pick");
+    expect(overloads.map((node) => node.memberArity)).toEqual([1, 2]);
+    expect(callsiteTexts(graph, overloads[1]!.id, caller, files)).toEqual(["pick"]);
+    expect(callsiteTexts(graph, overloads[0]!.id, caller, files)).toBeNull();
+  });
+
+  it("records the zero-parameter Swift overload for a self-receiver call", async () => {
+    const files: Record<string, string> = {
+      "swzero.swift": [
+        "class SwZero {",
+        "  func pick() -> Int { return 0 }",
+        "  func pick(_ value: Int) -> Int { return value }",
+        "  func caller() -> Int { return self.pick() }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-swift-zero-overload-", files);
+    const caller = nodeIn(graph, "swzero.swift", "caller");
+    const overloads = overloadMembers(graph, "swzero.swift", "pick");
+    expect(overloads.map((node) => node.memberArity)).toEqual([0, 1]);
+    expect(callsiteTexts(graph, overloads[0]!.id, caller, files)).toEqual(["pick"]);
+    expect(callsiteTexts(graph, overloads[1]!.id, caller, files)).toBeNull();
+  });
+
+  it("counts a Swift trailing closure as a call argument", async () => {
+    const files: Record<string, string> = {
+      "swtrail.swift": [
+        "class SwTrail {",
+        "  func pick(_ a: Int) -> Int { return a }",
+        "  func pick(_ a: Int, _ b: Int) -> Int { return a + b }",
+        "  func caller() -> Int { self.pick(1) { x in x } }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-swift-trailing-", files);
+    const caller = nodeIn(graph, "swtrail.swift", "caller");
+    const overloads = overloadMembers(graph, "swtrail.swift", "pick");
+    expect(overloads.map((node) => node.memberArity)).toEqual([1, 2]);
+    expect(callsiteTexts(graph, overloads[1]!.id, caller, files)).toEqual(["pick"]);
+    expect(callsiteTexts(graph, overloads[0]!.id, caller, files)).toBeNull();
+  });
+
+  it("counts labeled Swift trailing closures as call arguments", async () => {
+    const files: Record<string, string> = {
+      "swtrail-labeled.swift": [
+        "class SwTrailLabeled {",
+        "  func pick(_ value: Int, _ first: () -> Int) -> Int { return value }",
+        "  func pick(_ value: Int, _ first: () -> Int, second: () -> Int) -> Int { return value }",
+        '  func caller() -> Int { return self.pick(1) { let text = "}"; /* { */ return text.count } second: { 3 } }',
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-swift-labeled-trailing-", files);
+    const caller = nodeIn(graph, "swtrail-labeled.swift", "caller");
+    const overloads = overloadMembers(graph, "swtrail-labeled.swift", "pick");
+    expect(overloads.map((node) => node.memberArity)).toEqual([2, 3]);
+    expect(callsiteTexts(graph, overloads[1]!.id, caller, files)).toEqual(["pick"]);
+    expect(callsiteTexts(graph, overloads[0]!.id, caller, files)).toBeNull();
+  });
+
+  it("counts a Kotlin trailing lambda as a call argument", async () => {
+    const files: Record<string, string> = {
+      "kttrail.kt": [
+        "class KtTrail {",
+        "  fun pick(a: Int): Int = a",
+        "  fun pick(a: Int, b: Int): Int = a + b",
+        "  fun caller(): Int { return this.pick(1) { it } }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-kt-trailing-", files);
+    const caller = nodeIn(graph, "kttrail.kt", "caller");
+    const overloads = overloadMembers(graph, "kttrail.kt", "pick");
+    expect(overloads.map((node) => node.memberArity)).toEqual([1, 2]);
+    expect(callsiteTexts(graph, overloads[1]!.id, caller, files)).toEqual(["pick"]);
+    expect(callsiteTexts(graph, overloads[0]!.id, caller, files)).toBeNull();
+  });
+
+  it("omits arity resolution when the trailing-closure count is unknown", async () => {
+    // The comment between the labeled trailing closures makes the shared scanner
+    // return null: the call shape is unknown, so no arity may be fabricated. A
+    // fabricated parenthesized-only count of 1 would wrongly pick the arity-1 member.
+    const files: Record<string, string> = {
+      "swtrail-unknown.swift": [
+        "class SwTrailUnknown {",
+        "  func pick(_ value: Int) -> Int { return value }",
+        "  func pick(_ value: Int, _ first: () -> Int, second: () -> Int) -> Int { return value }",
+        "  func caller() -> Int { return self.pick(1) { 2 } /* mid */ second: { 3 } }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-swift-unknown-trailing-", files);
+    const caller = nodeIn(graph, "swtrail-unknown.swift", "caller");
+    const overloads = overloadMembers(graph, "swtrail-unknown.swift", "pick");
+    expect(overloads.map((node) => node.memberArity)).toEqual([1, 3]);
+    expect(callsiteTexts(graph, overloads[0]!.id, caller, files)).toBeNull();
+    expect(callsiteTexts(graph, overloads[1]!.id, caller, files)).toBeNull();
+  });
+
+  it("records union member ownership and receiver calls in C++", async () => {
+    const files: Record<string, string> = {
+      "union.cpp": [
+        "union Packet {",
+        "    int read(int offset) { return offset; }",
+        "};",
+        "int use(Packet p) { return p.read(1); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cpp-union-", files);
+    const read = nodeIn(graph, "union.cpp", "read");
+    expect(graph.nodes.get(read)?.memberArity).toBe(1);
+    expect(membersOwnedBy(graph, "Packet", "read")).toEqual([read]);
+    const use = nodeIn(graph, "union.cpp", "use");
+    expect(callsiteTexts(graph, read, use, files)).toEqual(["read"]);
+  });
+
+  it("signs C# local functions with their own arity and keeps them out of the class", async () => {
+    const root = await mkTmpDir("cg-receiver-cs-local-");
+    roots.push(root);
+    const source = [
+      "class Local {",
+      "    public int Outer() {",
+      "        int Inner(int a) { return a; }",
+      "        return Inner(1);",
+      "    }",
+      "}",
+    ].join("\n");
+    await fs.writeFile(path.join(root, "Local.cs"), source);
+    const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+    const prep = await prepareSourceInput(path.join(root, "Local.cs"), {});
+    const nativeExecution = getNativeSyntaxTreeExecution(prep.source, prep.sup, "on");
+    expect(nativeExecution.tree).toBeDefined();
+    const tree = new ProjectedSyntaxTree(prep.source, nativeExecution.tree!);
+
+    const signature = extractCallableSignature({
+      languageId: "csharp",
+      source,
+      symbolStartIndex: source.indexOf("Inner"),
+      tree,
+    });
+    expect(signature).toEqual({ minArgs: 1, maxArgs: 1, confidence: "high" });
+
+    const graph = await buildSymbolGraphDetailed(index);
+    const inner = nodeIn(graph, "Local.cs", "Inner");
+    const memberOfTargets = graph.edges.filter((edge) => edge.label === "member_of" && edge.from === inner);
+    expect(memberOfTargets).toEqual([]);
+  });
+
+  it("resolves a C# this receiver to a member instead of a same-named local function", async () => {
+    const files: Record<string, string> = {
+      "LocalMember.cs": [
+        "class LocalMember {",
+        "    public int Inner() { return 0; }",
+        "    public int Outer() {",
+        "        int Inner(int value) { return value; }",
+        "        return this.Inner();",
+        "    }",
+        "    public int Invalid() {",
+        "        int OnlyLocal() { return 0; }",
+        "        return this.OnlyLocal();",
+        "    }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cs-local-member-", files);
+    const outer = nodeIn(graph, "LocalMember.cs", "Outer");
+    const invalid = nodeIn(graph, "LocalMember.cs", "Invalid");
+    const members = membersOwnedBy(graph, "LocalMember", "Inner");
+    expect(members).toHaveLength(1);
+    const member = members[0]!;
+    const local = overloadMembers(graph, "LocalMember.cs", "Inner").find((node) => node.id !== member);
+    expect(local).toBeDefined();
+    expect(graph.edges.filter((edge) => edge.label === "member_of" && edge.from === local?.id)).toEqual([]);
+    expect(callsiteTexts(graph, member, outer, files)).toEqual(["Inner"]);
+    expect(callsiteTexts(graph, local!.id, outer, files)).toBeNull();
+    expect(outgoingCallCount(graph, invalid)).toBe(0);
+  });
+
+  it("treats function-valued variables as callable targets in call hierarchy", async () => {
+    const files: Record<string, string> = {
+      "arrow.js": ["const helper = () => 1;", "function caller() { return helper(); }"].join("\n"),
+      "arrow.ts": ["const helper = (): number => 1;", "function caller(): number { return helper(); }"].join("\n"),
+      "arrow.tsx": ["const helper = (): number => 1;", "export function Caller(): number { return helper(); }"].join(
+        "\n",
+      ),
+      "assign.js": ["let helper;", "helper = () => 1;", "function caller() { return helper(); }"].join("\n"),
+      "plain.js": ["const data = 1;", "function reader() { return data; }"].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-arrow-", files);
+    for (const file of ["arrow.js", "arrow.ts", "arrow.tsx", "assign.js"]) {
+      const helper = anyNodeIn(graph, file, "helper");
+      expect(graph.nodes.get(helper)?.kind).toBe("variable");
+      expect(graph.nodes.get(helper)?.callable).toBe(true);
+      const caller = nodeIn(graph, file, path.basename(file) === "arrow.tsx" ? "Caller" : "caller");
+      expect(callsiteTexts(graph, helper, caller, files)).toEqual(["helper"]);
+    }
+    const data = anyNodeIn(graph, "plain.js", "data");
+    expect(graph.nodes.get(data)?.callable).toBeUndefined();
+    expect(findCallHierarchy(graph, data, "incoming").status).toBe("invalid_target");
+    expect(findCallHierarchy(graph, data, "outgoing").status).toBe("invalid_target");
+  });
+
+  it("resolves receiver calls to function-valued fields declared in later files", async () => {
+    const files: Record<string, string> = {
+      "a-consumer.ts": [
+        'import { Box } from "./z-box";',
+        "export function caller(box: Box): number { return box.helper(); }",
+      ].join("\n"),
+      "z-box.ts": [
+        "export class Box {",
+        "  helper = (): number => 1;",
+        "  static shared = (): number => 2;",
+        "  static staticCaller(): number { return this.shared(); }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-callable-field-order-", files);
+    const helper = anyNodeIn(graph, "z-box.ts", "helper");
+    expect(graph.nodes.get(helper)?.callable).toBe(true);
+    const caller = nodeIn(graph, "a-consumer.ts", "caller");
+    expect(callsiteTexts(graph, helper, caller, files)).toEqual(["helper"]);
+    const shared = anyNodeIn(graph, "z-box.ts", "shared");
+    expect(graph.nodes.get(shared)?.callable).toBe(true);
+    const staticCaller = nodeIn(graph, "z-box.ts", "staticCaller");
+    expect(callsiteTexts(graph, shared, staticCaller, files)).toEqual(["shared"]);
+  });
+  it("does not mark a scalar binding callable from a same-named member assignment", async () => {
+    const files: Record<string, string> = {
+      "collide.js": [
+        "const helper = 1;",
+        "const bound = () => 1;",
+        "const obj = {};",
+        "obj.helper = () => 1;",
+        "function caller() { return bound(); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-member-assign-scalar-", files);
+    const helper = anyNodeIn(graph, "collide.js", "helper");
+    expect(graph.nodes.get(helper)?.kind).toBe("variable");
+    expect(graph.nodes.get(helper)?.callable).toBeUndefined();
+    expect(findCallHierarchy(graph, helper, "incoming").status).toBe("invalid_target");
+    expect(findCallHierarchy(graph, helper, "outgoing").status).toBe("invalid_target");
+    const bound = anyNodeIn(graph, "collide.js", "bound");
+    expect(graph.nodes.get(bound)?.kind).toBe("variable");
+    expect(graph.nodes.get(bound)?.callable).toBe(true);
+    const caller = nodeIn(graph, "collide.js", "caller");
+    expect(callsiteTexts(graph, bound, caller, files)).toEqual(["bound"]);
   });
 });

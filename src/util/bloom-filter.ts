@@ -5,7 +5,7 @@
  * allowing us to skip files that definitely don't contain the symbol.
  */
 
-import { BLOOM_FILTER_IDENTIFIER_SOURCE } from "./identifiers.js";
+import { BLOOM_FILTER_IDENTIFIER_SOURCE, foldPhpIdentifierCase } from "./identifiers.js";
 import type { LanguageSupport } from "../languages.js";
 import { fileIdentityKey } from "./paths.js";
 import crypto from "node:crypto";
@@ -168,21 +168,30 @@ export class BloomFilter {
 /**
  * Build a bloom filter from source code with auto-sizing.
  * Extracts all identifiers and adds them to an optimally-sized filter.
+ *
+ * PHP resolves class, interface, trait, enum, and function names case-insensitively, but a
+ * probe can only test one spelling per lookup. For a PHP file, every identifier token is
+ * stored both in its own spelling and ASCII-case-folded, so a folded probe (built the same
+ * way `comparePhpReferenceNames` compares names) can still get a sound "might contain"
+ * answer instead of a guaranteed miss on a case-variant reference.
  * @param source - The source code to analyze
  * @param support - The language support for the source file
  * @param falsePositiveRate - Target false positive rate (default: 0.01 = 1%)
  */
 export function buildBloomFilterFromSource(
   source: string,
-  support: Pick<LanguageSupport, "normalizeIdentifier">,
+  support: Pick<LanguageSupport, "normalizeIdentifier" | "id">,
   falsePositiveRate = 0.01,
 ): BloomFilter {
   const identifierPattern = new RegExp(BLOOM_FILTER_IDENTIFIER_SOURCE, "gu");
   const matches = source.match(identifierPattern);
+  const isPhp = support.id === "php";
 
   const unique = new Set<string>();
   for (const identifier of matches ?? []) {
-    unique.add(support.normalizeIdentifier(identifier));
+    const normalized = support.normalizeIdentifier(identifier);
+    unique.add(normalized);
+    if (isPhp) unique.add(foldPhpIdentifierCase(normalized));
   }
 
   const filter = BloomFilter.createOptimal(unique.size || 100, falsePositiveRate);

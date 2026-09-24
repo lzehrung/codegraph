@@ -2,7 +2,15 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { buildProjectIndex, clearImportResolutionCaches, collectGraph, goToDefinition } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildSymbolGraphDetailed,
+  clearImportResolutionCaches,
+  collectGraph,
+  findReferences,
+  goToDefinition,
+  SymbolKind,
+} from "../src/index.js";
 import {
   loadNearestTsconfigFor,
   loadWorkspaceConfig,
@@ -15,7 +23,7 @@ import {
 } from "../src/util.js";
 import { loadPhpComposerConfig } from "../src/util/resolution/php-composer.js";
 import { fileIdentityKey } from "../src/util/paths.js";
-import { resolveExport } from "../src/indexer/navigation-resolve.js";
+import { resolveExport, resolveModuleExports } from "../src/indexer/navigation-resolve.js";
 import { createTestIndexFromFiles } from "./test-utils.js";
 import { tryCreateDirectorySymlink } from "./helpers/filesystem.js";
 
@@ -158,6 +166,26 @@ describe("Import Resolution", () => {
     const helperImport = mainModule!.imports[0];
     expect(typeof helperImport!.resolved).toBe("string");
     expect(helperImport!.resolved).toBe(path.join(root, "utils.js").replace(/\\/g, "/"));
+  });
+
+  it("resolves extensionless TypeScript imports whose basenames contain dots", async () => {
+    const root = await mkTmpDir("cg-resolve-dotted-basename-");
+    try {
+      const sourceFile = path.join(root, "statement-fund-col-groups.model.ts");
+      const importerFile = path.join(root, "statement-config.model.ts");
+      await fsp.writeFile(sourceFile, "export enum FundColGroupType { BreakOut }\n", "utf8");
+      await fsp.writeFile(
+        importerFile,
+        'import { FundColGroupType } from "./statement-fund-col-groups.model";\n',
+        "utf8",
+      );
+
+      const resolved = await resolveSpecifier(importerFile, "./statement-fund-col-groups.model", root);
+
+      expect(resolved).toBe(sourceFile.replace(/\\/g, "/"));
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("resolves directory imports to index files instead of directory paths", async () => {
@@ -1132,7 +1160,7 @@ describe("Import Resolution", () => {
     }
   });
 
-  it("resolves fully-qualified PHP class references without use statements", async () => {
+  it("resolves case-variant fully-qualified PHP class references without use statements", async () => {
     const root = await mkTmpDir("dg-resolve-php-qualified-");
     const srcDir = path.join(root, "src", "Domain");
     const consumerFile = path.join(root, "consumer.php");
@@ -1149,7 +1177,7 @@ describe("Import Resolution", () => {
       ["<?php", "", "namespace App\\Domain;", "", "class Service {}", ""].join("\n"),
       "utf8",
     );
-    await fsp.writeFile(consumerFile, ["<?php", "", "$service = new App\\Domain\\Service();", ""].join("\n"), "utf8");
+    await fsp.writeFile(consumerFile, ["<?php", "", "$service = new aPp\\dOmAiN\\sErViCe();", ""].join("\n"), "utf8");
 
     const index = await buildProjectIndex(root);
     const result = await goToDefinition(index, {
@@ -2132,5 +2160,474 @@ describe("Import Resolution", () => {
     if (typeof specifier === "string") {
       expect(specifier.replace(/\\/g, "/")).toBe(pkgFile.replace(/\\/g, "/"));
     }
+  });
+
+  it.each(["c", "cpp"] as const)(
+    "keeps an unresolved literal %s include external despite decoys",
+    async (languageId) => {
+      const root = await mkTmpDir(`dg-resolve-c-family-literal-decoys-${languageId}-`);
+      const sourceFile = path.join(root, languageId === "c" ? "main.c" : "main.cpp");
+      const configDir = path.join(root, "config");
+      const nodeModulesDir = path.join(root, "node_modules", "config");
+      const workspaceDir = path.join(root, "packages", "config");
+
+      await fsp.mkdir(configDir, { recursive: true });
+      await fsp.mkdir(nodeModulesDir, { recursive: true });
+      await fsp.mkdir(workspaceDir, { recursive: true });
+      await fsp.writeFile(sourceFile, '#include "config"\n', "utf8");
+      await fsp.writeFile(path.join(root, "config.ts"), "export const decoy = 1;\n", "utf8");
+      await fsp.writeFile(path.join(configDir, "index.ts"), "export const decoy = 2;\n", "utf8");
+      await fsp.writeFile(
+        path.join(nodeModulesDir, "package.json"),
+        JSON.stringify({ name: "config", main: "index.ts" }),
+        "utf8",
+      );
+      await fsp.writeFile(path.join(nodeModulesDir, "index.ts"), "export const decoy = 3;\n", "utf8");
+      await fsp.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ private: true, workspaces: ["packages/*"] }),
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(workspaceDir, "package.json"),
+        JSON.stringify({ name: "config", main: "index.ts" }),
+        "utf8",
+      );
+      await fsp.writeFile(path.join(workspaceDir, "index.ts"), "export const decoy = 4;\n", "utf8");
+      await fsp.writeFile(
+        path.join(root, "tsconfig.json"),
+        JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { config: ["config.ts"] } } }),
+        "utf8",
+      );
+
+      clearImportResolutionCaches();
+      const { matchPath } = await loadNearestTsconfigFor(sourceFile, root);
+      const workspaceConfig = await loadWorkspaceConfig(root);
+
+      await expect(
+        resolveImportSpecifier(root, sourceFile, "config", languageId, {
+          includeForm: "literal",
+          ...(matchPath ? { matchPath } : {}),
+          ...(workspaceConfig ? { workspaceConfig } : {}),
+          resolveNodeModules: true,
+          resolutionHints: ["."],
+        }),
+      ).resolves.toEqual({ external: "config" });
+    },
+  );
+
+  it.each(["c", "cpp"] as const)("uses exact-file matching for extensionless angle %s includes", async (languageId) => {
+    const root = await mkTmpDir(`dg-resolve-c-family-angle-decoys-${languageId}-`);
+    const sourceFile = path.join(root, languageId === "c" ? "main.c" : "main.cpp");
+    const includeDir = path.join(root, "include");
+    const exactFile = path.join(includeDir, "exact");
+
+    await fsp.mkdir(path.join(includeDir, "config"), { recursive: true });
+    await fsp.writeFile(sourceFile, "#include <config>\n", "utf8");
+    await fsp.writeFile(path.join(includeDir, "config.ts"), "export const decoy = 1;\n", "utf8");
+    await fsp.writeFile(path.join(includeDir, "config", "index.ts"), "export const decoy = 2;\n", "utf8");
+    await fsp.writeFile(exactFile, "int exact(void);\n", "utf8");
+
+    clearImportResolutionCaches();
+    await expect(
+      resolveImportSpecifier(root, sourceFile, "config", languageId, {
+        includeForm: "angle",
+        resolutionHints: ["include"],
+      }),
+    ).resolves.toEqual({ external: "config" });
+
+    const resolved = await resolveImportSpecifier(root, sourceFile, "exact", languageId, {
+      includeForm: "angle",
+      resolutionHints: ["include"],
+    });
+    expect(typeof resolved).toBe("string");
+    expect(String(resolved).replace(/\\/g, "/")).toBe(exactFile.replace(/\\/g, "/"));
+  });
+
+  it.each(["c", "cpp"] as const)(
+    "resolves hinted angle %s includes with parent segments inside projectRoot and keeps outside-root paths external",
+    async (languageId) => {
+      const parent = await mkTmpDir(`dg-resolve-c-family-angle-parent-${languageId}-`);
+      const root = path.join(parent, "project");
+      const sourceFile = path.join(root, languageId === "c" ? "main.c" : "main.cpp");
+      const includeDir = path.join(root, "include");
+      const privateDir = path.join(root, "private");
+      const secretHeader = path.join(privateDir, "secret.h");
+      const secretExact = path.join(privateDir, "secret");
+      const decoyDir = path.join(privateDir, "decoy");
+      const outsideHeader = path.join(parent, "outside.h");
+
+      await fsp.mkdir(includeDir, { recursive: true });
+      await fsp.mkdir(decoyDir, { recursive: true });
+      await fsp.writeFile(sourceFile, "#include <../private/secret.h>\n", "utf8");
+      await fsp.writeFile(secretHeader, "int secret(void);\n", "utf8");
+      await fsp.writeFile(secretExact, "int secret_exact(void);\n", "utf8");
+      await fsp.writeFile(path.join(privateDir, "decoy.ts"), "export const decoy = 1;\n", "utf8");
+      await fsp.writeFile(path.join(decoyDir, "index.ts"), "export const decoy = 2;\n", "utf8");
+      await fsp.writeFile(outsideHeader, "int leaked(void);\n", "utf8");
+
+      clearImportResolutionCaches();
+      const hintOpts = { includeForm: "angle" as const, resolutionHints: ["include"] };
+
+      const sibling = await resolveImportSpecifier(root, sourceFile, "../private/secret.h", languageId, hintOpts);
+      expect(typeof sibling).toBe("string");
+      expect(String(sibling).replace(/\\/g, "/")).toBe(secretHeader.replace(/\\/g, "/"));
+
+      const bracketed = await resolveImportSpecifier(root, sourceFile, "<../private/secret.h>", languageId, hintOpts);
+      expect(typeof bracketed).toBe("string");
+      expect(String(bracketed).replace(/\\/g, "/")).toBe(secretHeader.replace(/\\/g, "/"));
+
+      const exact = await resolveImportSpecifier(root, sourceFile, "../private/secret", languageId, hintOpts);
+      expect(typeof exact).toBe("string");
+      expect(String(exact).replace(/\\/g, "/")).toBe(secretExact.replace(/\\/g, "/"));
+
+      await expect(resolveImportSpecifier(root, sourceFile, "../private/decoy", languageId, hintOpts)).resolves.toEqual(
+        {
+          external: "../private/decoy",
+        },
+      );
+
+      const inProjectAbsolute = await resolveImportSpecifier(root, sourceFile, secretHeader, languageId, hintOpts);
+      expect(typeof inProjectAbsolute).toBe("string");
+      expect(String(inProjectAbsolute).replace(/\\/g, "/")).toBe(secretHeader.replace(/\\/g, "/"));
+
+      await expect(resolveImportSpecifier(root, sourceFile, "../../outside.h", languageId, hintOpts)).resolves.toEqual({
+        external: "../../outside.h",
+      });
+      await expect(resolveImportSpecifier(root, sourceFile, outsideHeader, languageId, hintOpts)).resolves.toEqual({
+        external: outsideHeader,
+      });
+    },
+  );
+
+  it.each(["c", "cpp"] as const)(
+    "resolves an exact literal %s include inside a configured include root",
+    async (languageId) => {
+      const root = await mkTmpDir(`dg-resolve-c-family-literal-hint-${languageId}-`);
+      const sourceFile = path.join(root, languageId === "c" ? "main.c" : "main.cpp");
+      const includeDir = path.join(root, "include");
+      const hintFile = path.join(includeDir, "config");
+
+      await fsp.mkdir(includeDir, { recursive: true });
+      await fsp.writeFile(hintFile, "int cfg(void);\n", "utf8");
+      await fsp.writeFile(sourceFile, '#include "config"\n', "utf8");
+
+      clearImportResolutionCaches();
+      const resolved = await resolveImportSpecifier(root, sourceFile, "config", languageId, {
+        includeForm: "literal",
+        resolutionHints: ["include"],
+      });
+      expect(typeof resolved).toBe("string");
+      expect(String(resolved).replace(/\\/g, "/")).toBe(hintFile.replace(/\\/g, "/"));
+    },
+  );
+
+  it("keeps C++ namespace exports and local using declarations out of bare import lookup", async () => {
+    const root = await mkTmpDir("cg-cpp-import-scope-");
+    const header = path.join(root, "api.hpp").replace(/\\/g, "/");
+    const consumer = path.join(root, "use.cpp").replace(/\\/g, "/");
+    const source = [
+      '#include "api.hpp"',
+      "int invalid() { return run(); }",
+      "int valid() { return tools::run(); }",
+      "int plain() { return global(); }",
+      "int invalid_scoped() { return scoped_run(); }",
+      "int exposed_call() { return exposed(); }",
+      "int alias_call() { return alias::run(); }",
+      "int inline_call() { return versioned(); }",
+      "int qualified_inline_call() { return v1::versioned(); }",
+      "int nested_inline_call() { return outer::visible(); }",
+      "int invalid_nested_inline_call() { return visible(); }",
+      "int inline_alias() { return exported_only(); }",
+      "int qualified_inline_alias() { return current::exported_only(); }",
+      "int nested_inline_alias() { return enclosing::nested_only(); }",
+      "int qualified_nested_inline_alias() { return enclosing::nested::nested_only(); }",
+      "int invalid_nested_inline_alias() { return nested_only(); }",
+    ];
+    try {
+      await fsp.writeFile(
+        header,
+        [
+          "namespace tools {",
+          "int run();",
+          "int scoped_run();",
+          "int exposed();",
+          "}",
+          "int global();",
+          "using tools::exposed;",
+          "inline void local() { using tools::scoped_run; }",
+          "namespace alias { using tools::run; }",
+          "inline namespace v1 { int versioned(); }",
+          "namespace outer { inline namespace v2 { int visible(); } }",
+          "namespace original { int exported_only(); int nested_only(); }",
+          "inline namespace current { using original::exported_only; }",
+          "namespace enclosing { inline namespace nested { using original::nested_only; } }",
+        ].join("\n"),
+      );
+      await fsp.writeFile(consumer, source.join("\n"));
+      const index = await createTestIndexFromFiles(root, [header, consumer]);
+      for (const [line, name, definitionLine] of [
+        [2, "run", undefined],
+        [3, "run", 2],
+        [4, "global", 6],
+        [5, "scoped_run", undefined],
+        [6, "exposed", 4],
+        [7, "run", 2],
+        [8, "versioned", 10],
+        [9, "versioned", 10],
+        [10, "visible", 11],
+        [11, "visible", undefined],
+        [12, "exported_only", 12],
+        [13, "exported_only", 12],
+        [14, "nested_only", 12],
+        [15, "nested_only", 12],
+        [16, "nested_only", undefined],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: consumer,
+          line,
+          column: source[line - 1]!.indexOf(`${name}()`) + 1,
+        });
+        if (definitionLine === undefined) {
+          expect(result.status).toBe("not_found");
+        } else {
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") throw new Error("Expected a visible C++ export");
+          expect(result.definition.file).toBe(header);
+          expect(result.definition.range.start.line).toBe(definitionLine);
+        }
+      }
+      const references = await findReferences(index, { file: header, line: 2, column: 5 });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected namespace function references");
+      expect(
+        references.references
+          .filter((reference) => reference.file === consumer)
+          .map((reference) => reference.range.start.line),
+      ).toEqual([3, 7]);
+      const exports = resolveModuleExports(index, header, { allowLocalFallback: false });
+      expect([...exports.keys()].sort()).toEqual(
+        [
+          "tools",
+          "tools::run",
+          "tools::scoped_run",
+          "tools::exposed",
+          "global",
+          "exposed",
+          "local",
+          "alias",
+          "alias::run",
+          "v1",
+          "v1::versioned",
+          "versioned",
+          "outer",
+          "outer::v2",
+          "outer::v2::visible",
+          "outer::visible",
+          "original",
+          "original::exported_only",
+          "original::nested_only",
+          "current",
+          "current::exported_only",
+          "exported_only",
+          "enclosing",
+          "enclosing::nested",
+          "enclosing::nested::nested_only",
+          "enclosing::nested_only",
+        ].sort(),
+      );
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.file === consumer)
+          .map((edge) => [graph.nodes.get(edge.from)?.name, graph.nodes.get(edge.to)?.name])
+          .sort(),
+      ).toEqual([
+        ["alias_call", "run"],
+        ["exposed_call", "exposed"],
+        ["inline_alias", "exported_only"],
+        ["inline_call", "versioned"],
+        ["nested_inline_alias", "nested_only"],
+        ["nested_inline_call", "visible"],
+        ["plain", "global"],
+        ["qualified_inline_alias", "exported_only"],
+        ["qualified_inline_call", "versioned"],
+        ["qualified_nested_inline_alias", "nested_only"],
+        ["valid", "run"],
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps C struct tag and typedef exports distinct and selects each by kind", async () => {
+    const root = await mkTmpDir("cg-c-tag-typedef-exports-");
+    const header = path.join(root, "api.h").replace(/\\/g, "/");
+    const consumer = path.join(root, "main.c").replace(/\\/g, "/");
+    try {
+      await fsp.writeFile(
+        header,
+        [
+          "struct Item { int value; };",
+          "typedef struct Item Item;",
+          "struct OnlyTag { int n; };",
+          "typedef int OnlyAlias;",
+          "int pick(int value);",
+          "int pick(int value) { return value; }",
+          "enum Color { RED };",
+          "typedef enum Color Color;",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(consumer, '#include "api.h"\nstruct Item item;\nItem alias;\n', "utf8");
+      const index = await createTestIndexFromFiles(root, [header, consumer]);
+
+      // The struct tag namespace and the typedef name are separate C symbols, so each preferred
+      // kind selects its own declaration instead of the other namespace's row.
+      for (const [kind, line] of [
+        [SymbolKind.Class, 1],
+        [SymbolKind.TypeAlias, 2],
+      ] as const) {
+        const resolved = resolveExport(index, header, "Item", { preferredKind: kind, allowLocalFallback: false });
+        expect(resolved?.kind).toBe("resolved");
+        if (resolved?.kind !== "resolved") throw new Error("Expected a distinct C export for the preferred kind");
+        expect(resolved.def.kind).toBe(kind);
+        expect(resolved.def.range.start.line).toBe(line);
+      }
+
+      // Without a namespace, both symbols remain candidates rather than choosing the tag.
+      expect(resolveExport(index, header, "Item", { allowLocalFallback: false })).toBeNull();
+      expect(
+        resolveExport(index, header, "Color", { preferredKind: SymbolKind.TypeAlias, allowLocalFallback: false }),
+      ).toBeNull();
+      for (const [cNamespace, line] of [
+        ["tag", 7],
+        ["ordinary", 8],
+      ] as const) {
+        const resolved = resolveExport(index, header, "Color", { cNamespace, allowLocalFallback: false });
+        expect(resolved?.kind).toBe("resolved");
+        if (resolved?.kind !== "resolved") throw new Error("Expected a distinct C namespace");
+        expect(resolved.def.range.start.line).toBe(line);
+      }
+
+      // A kind preference excludes the other namespace rather than falling back to it.
+      expect(
+        resolveExport(index, header, "OnlyAlias", { preferredKind: SymbolKind.Class, allowLocalFallback: false }),
+      ).toBeNull();
+      expect(
+        resolveExport(index, header, "OnlyTag", { preferredKind: SymbolKind.TypeAlias, allowLocalFallback: false }),
+      ).toBeNull();
+
+      // A prototype and its definition collapse into one callable export.
+      const pick = resolveExport(index, header, "pick", { allowLocalFallback: false });
+      expect(pick?.kind).toBe("resolved");
+      if (pick?.kind !== "resolved") throw new Error("Expected the C function export");
+      expect(pick.def.kind).toBe(SymbolKind.Function);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves C++ exports and using aliases for one callable redeclaration group", async () => {
+    const root = await mkTmpDir("dg-cpp-export-redeclaration-");
+    try {
+      const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+      const lines = [
+        "namespace tools {",
+        "int run();",
+        "int run() { return 1; }",
+        "int pick(int);",
+        "int pick(double);",
+        "}",
+        "namespace alias { using tools::run; using tools::pick; }",
+        "int via_alias() { return alias::run(); }",
+        "int direct() { return tools::run(); }",
+        "int ambiguous() { return alias::pick(1); }",
+      ];
+      await fsp.writeFile(file, lines.join("\n"));
+      const index = await createTestIndexFromFiles(root, [file]);
+      for (const line of [8, 9]) {
+        const result = await goToDefinition(index, { file, line, column: lines[line - 1]!.indexOf("run") + 1 });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected one callable entity");
+        expect(result.definition.range.start.line).toBe(3);
+      }
+      expect((await goToDefinition(index, { file, line: 10, column: lines[9]!.indexOf("pick") + 1 })).status).toBe(
+        "not_found",
+      );
+      const exported = resolveModuleExports(index, file, { allowLocalFallback: false });
+      expect(exported.get("tools::run")?.kind).toBe("resolved");
+      expect(exported.get("alias::run")?.kind).toBe("resolved");
+      expect(exported.has("tools::pick")).toBe(false);
+      const refs = await findReferences(index, { file, line: 2, column: 5 });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Expected callable references");
+      expect(refs.references.map((ref) => ref.range.start.line)).toEqual(expect.arrayContaining([2, 3, 8, 9]));
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls")
+          .map((edge) => [graph.nodes.get(edge.from)?.name, graph.nodes.get(edge.to)?.name])
+          .sort(),
+      ).toEqual([
+        ["direct", "run"],
+        ["via_alias", "run"],
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["c", "cpp"] as const)("keeps a macro %s include external despite decoys", async (languageId) => {
+    const root = await mkTmpDir(`dg-resolve-c-family-macro-decoys-${languageId}-`);
+    const sourceFile = path.join(root, languageId === "c" ? "main.c" : "main.cpp");
+    const nodeModulesDir = path.join(root, "node_modules", "HEADER");
+    const workspaceDir = path.join(root, "packages", "HEADER");
+    const moduleFile = path.join(root, "declaring.cpp");
+
+    await fsp.mkdir(nodeModulesDir, { recursive: true });
+    await fsp.mkdir(workspaceDir, { recursive: true });
+    await fsp.writeFile(sourceFile, ['#define HEADER "x.h"', "#include HEADER", ""].join("\n"), "utf8");
+    await fsp.writeFile(moduleFile, "export module HEADER;\n", "utf8");
+    await fsp.writeFile(path.join(root, "HEADER.ts"), "export const decoy = 1;\n", "utf8");
+    await fsp.writeFile(
+      path.join(nodeModulesDir, "package.json"),
+      JSON.stringify({ name: "HEADER", main: "index.ts" }),
+      "utf8",
+    );
+    await fsp.writeFile(path.join(nodeModulesDir, "index.ts"), "export const decoy = 2;\n", "utf8");
+    await fsp.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ private: true, workspaces: ["packages/*"] }),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(workspaceDir, "package.json"),
+      JSON.stringify({ name: "HEADER", main: "index.ts" }),
+      "utf8",
+    );
+    await fsp.writeFile(path.join(workspaceDir, "index.ts"), "export const decoy = 3;\n", "utf8");
+
+    clearImportResolutionCaches();
+    const workspaceConfig = await loadWorkspaceConfig(root);
+    if (languageId === "cpp") {
+      await expect(
+        resolveImportSpecifier(root, sourceFile, "HEADER", languageId, {
+          ...(workspaceConfig ? { workspaceConfig } : {}),
+          resolveNodeModules: true,
+          resolutionHints: ["."],
+        }),
+      ).resolves.toBe(moduleFile.replace(/\\/g, "/"));
+    }
+
+    await expect(
+      resolveImportSpecifier(root, sourceFile, "HEADER", languageId, {
+        includeForm: "macro",
+        ...(workspaceConfig ? { workspaceConfig } : {}),
+        resolveNodeModules: true,
+        resolutionHints: ["."],
+      }),
+    ).resolves.toEqual({ external: "HEADER" });
   });
 });

@@ -1,5 +1,7 @@
 import type { ModuleIndex, ProjectIndex, ResolvedExport, SymbolDef } from "../../indexer/types.js";
 import type { ImportBinding } from "../../indexer/types.js";
+import { phpNamedImportRole } from "../../indexer/import-types.js";
+import { resolveImported } from "../../indexer/navigation-resolve.js";
 import { fileIdentityKey, normalizePath } from "../../util/paths.js";
 
 export type ImportAliasMaps = {
@@ -29,6 +31,23 @@ export function buildImportAliasMaps(
     const targetFile = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
     if (!targetModule || !targetFile) continue;
     if (imp.kind === "named") {
+      if (imp.cNamespace) {
+        // This map resolves expression names, not C tag-form type references.
+        if (imp.cNamespace === "tag") continue;
+        const resolved = resolveImported(index, imp, imp.imported, { allowLocalFallback: false });
+        if (resolved && !("namespace" in resolved)) aliasToTargetDef.set(imp.local, resolved);
+        continue;
+      }
+      if (phpNamedImportRole(imp) !== undefined) {
+        // PHP class, function, and constant imports are independent namespaces that can share
+        // one alias spelling, so this plain-name map cannot identify a target across roles and
+        // keeps only a fallback entry. Use recording resolves each occurrence through its own
+        // namespace; this map still serves call targets and receiver typing when the
+        // occurrence's namespace has no matching import.
+        const resolved = resolveImported(index, imp, imp.imported, { allowLocalFallback: false });
+        if (resolved && !("namespace" in resolved)) aliasToTargetDef.set(imp.local, resolved);
+        continue;
+      }
       const localFallback = targetModule.locals.find((local) => local.localName === imp.imported);
       const fallbackResolved: ResolvedExport | null = localFallback
         ? {

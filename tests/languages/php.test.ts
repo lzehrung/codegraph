@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
+import { buildSymbolGraph, defNodeId } from "../../src/graphs/symbol-graph.js";
 import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
 import { findCallHierarchy } from "../../src/indexer/call-hierarchy.js";
+import { findReferencesById, goToDefinitionById, listSymbols } from "../../src/indexer/symbols.js";
 import { findImplementations } from "../../src/indexer/type-hierarchy.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
@@ -591,6 +593,323 @@ const definition: LanguageTestDefinition = {
 
 runLanguageTests(definition);
 
+describe("PHP import symbol namespaces", () => {
+  it("resolves each same-spelled alias declaration by its import role", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-alias-role-declarations-"));
+    const sourceFile = path.join(root, "source.php");
+    const consumerFile = path.join(root, "consumer.php");
+    const source = [
+      "<?php",
+      "namespace App;",
+      "class Service {}",
+      "function helper() { return 1; }",
+      "const TOKEN = 1;",
+      "",
+    ].join("\n");
+    const consumerLines = [
+      "<?php",
+      "namespace Client;",
+      "use App\\Service as Alias;",
+      "use function App\\helper as Alias;",
+      "use const App\\TOKEN as Alias;",
+      "",
+    ];
+
+    try {
+      await writeFile(sourceFile, source, "utf8");
+      await writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+      for (const [line, expectedLine] of [
+        [3, 3],
+        [4, 4],
+        [5, 5],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: consumerFile,
+          line,
+          column: consumerLines[line - 1]!.lastIndexOf("Alias") + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") continue;
+        expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(sourceFile));
+        expect(result.definition.range.start.line).toBe(expectedLine);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("resolves instanceof, catch, and constructor-argument aliases by PHP import role", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-alias-type-contexts-"));
+    const sourceFile = path.join(root, "source.php");
+    const consumerFile = path.join(root, "consumer.php");
+    const source = [
+      "<?php",
+      "namespace App;",
+      "class Service { public $field; }",
+      "function helper() { return 1; }",
+      "const TOKEN = 1;",
+      "",
+    ].join("\n");
+    const consumerLines = [
+      "<?php",
+      "namespace Client;",
+      "use App\\Service as Alias;",
+      "use function App\\helper as Alias;",
+      "use const App\\TOKEN as Alias;",
+      "$service = new Alias();",
+      "$withArg = new Alias(Alias);",
+      "$is = $service instanceof Alias;",
+      "try { throw $service; } catch (Alias $e) {}",
+      "$value = Alias();",
+      "$constant = Alias;",
+      "$service->field;",
+      "$service->FIELD;",
+      "",
+    ];
+
+    try {
+      await writeFile(sourceFile, source, "utf8");
+      await writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+      const cases: Array<{ line: number; column: number; expectedLine: number }> = [
+        { line: 6, column: consumerLines[5]!.indexOf("Alias") + 1, expectedLine: 3 },
+        { line: 7, column: consumerLines[6]!.indexOf("Alias") + 1, expectedLine: 3 },
+        { line: 7, column: consumerLines[6]!.lastIndexOf("Alias") + 1, expectedLine: 5 },
+        { line: 8, column: consumerLines[7]!.indexOf("Alias") + 1, expectedLine: 3 },
+        { line: 9, column: consumerLines[8]!.indexOf("Alias") + 1, expectedLine: 3 },
+        { line: 10, column: consumerLines[9]!.indexOf("Alias") + 1, expectedLine: 4 },
+        { line: 11, column: consumerLines[10]!.indexOf("Alias") + 1, expectedLine: 5 },
+      ];
+      for (const { line, column, expectedLine } of cases) {
+        const result = await goToDefinition(index, { file: consumerFile, line, column });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") continue;
+        expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(sourceFile));
+        expect(result.definition.range.start.line).toBe(expectedLine);
+      }
+
+      const classRefs = await findReferences(index, {
+        file: sourceFile,
+        line: 3,
+        column: "class Service {}".indexOf("Service") + 1,
+      });
+      expect(classRefs.status).toBe("ok");
+      if (classRefs.status === "ok") {
+        expect(
+          classRefs.references.some(
+            (reference) =>
+              fileIdentityKey(reference.file) === fileIdentityKey(consumerFile) && reference.range.start.line === 8,
+          ),
+        ).toBe(true);
+        expect(
+          classRefs.references.some(
+            (reference) =>
+              fileIdentityKey(reference.file) === fileIdentityKey(consumerFile) &&
+              reference.range.start.line === 7 &&
+              reference.range.start.column === consumerLines[6]!.lastIndexOf("Alias") + 1,
+          ),
+        ).toBe(false);
+      }
+      const propertyRefs = await findReferences(index, {
+        file: sourceFile,
+        line: 3,
+        column: "class Service { public $field; }".indexOf("field") + 1,
+      });
+      expect(propertyRefs.status).toBe("ok");
+      if (propertyRefs.status !== "ok") throw new Error("Expected PHP property references");
+      expect(
+        propertyRefs.references
+          .filter((ref) => fileIdentityKey(ref.file) === fileIdentityKey(consumerFile))
+          .map((ref) => ref.range.start.line),
+      ).toEqual([12]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("keeps same-spelled class, function, and constant imports distinct in lists and graphs", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-alias-role-ids-"));
+    const sourceFile = path.join(root, "source.php");
+    const consumerFile = path.join(root, "consumer.php");
+    const source = [
+      "<?php",
+      "namespace App;",
+      "class Service {}",
+      "function Service() { return 1; }",
+      "const Service = 2;",
+      "",
+    ].join("\n");
+    const consumerLines = [
+      "<?php",
+      "namespace Client;",
+      "use App\\Service as Alias;",
+      "use function App\\Service as Alias;",
+      "use const App\\Service as Alias;",
+      "function caller() {",
+      "    new Alias();",
+      "    Alias();",
+      "    return Alias;",
+      "}",
+      "function constantsOnly() {",
+      "    return Alias;",
+      "}",
+      "function wrongCaseConstants() {",
+      "    return ALIAS;",
+      "    return aLiAs;",
+      "}",
+      "function typedOnly(ALIAS $a): aLiAs {",
+      "    return $a;",
+      "}",
+      "function mixedCaseCalls() {",
+      "    ALIAS();",
+      "    new ALIAS();",
+      "    return alias;",
+      "}",
+      "",
+    ];
+
+    try {
+      await writeFile(sourceFile, source, "utf8");
+      await writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+      const targetIds = new Map<string, string>();
+      const sourceModule = [...index.byFile.values()].find(
+        (module) => fileIdentityKey(module.file) === fileIdentityKey(sourceFile),
+      );
+      expect(sourceModule).toBeDefined();
+      for (const def of sourceModule?.locals ?? []) {
+        if (
+          def.localName === "Service" &&
+          (def.kind === "class" || def.kind === "function" || def.kind === "variable")
+        ) {
+          targetIds.set(def.kind, defNodeId(def));
+        }
+      }
+      expect([...targetIds.keys()].sort()).toEqual(["class", "function", "variable"]);
+
+      const listEntries = listSymbols(index, { file: consumerFile, includeImports: true }).filter(
+        (entry) => entry.kind === "import" && entry.name === "Alias",
+      );
+      expect(listEntries).toHaveLength(3);
+      expect(new Set(listEntries.map((entry) => entry.id)).size).toBe(3);
+      const entryByRole = new Map(
+        listEntries.map((entry) => [entry.id.slice(entry.id.lastIndexOf(":") + 1), entry] as const),
+      );
+      expect([...entryByRole.keys()].sort()).toEqual(["class", "const", "function"]);
+
+      for (const [role, expectedKind] of [
+        ["class", "class"],
+        ["function", "function"],
+        ["const", "variable"],
+      ] as const) {
+        const entry = entryByRole.get(role);
+        expect(entry, `missing ${role} list entry`).toBeDefined();
+        if (!entry) continue;
+        const gotoResult = goToDefinitionById(index, entry.id);
+        expect(gotoResult.status, `${role} role ID should resolve`).toBe("ok");
+        if (gotoResult.status === "ok") {
+          expect(gotoResult.definition.kind).toBe(expectedKind);
+          expect(fileIdentityKey(gotoResult.definition.file)).toBe(fileIdentityKey(sourceFile));
+        }
+      }
+
+      const classEntry = entryByRole.get("class");
+      expect(classEntry).toBeDefined();
+      if (classEntry) {
+        const unknownRoleId = `${classEntry.id.slice(0, classEntry.id.lastIndexOf(":") + 1)}unknown`;
+        expect(goToDefinitionById(index, unknownRoleId).status).toBe("not_found");
+      }
+
+      for (const [role, expectedLine] of [
+        ["class", 7],
+        ["function", 8],
+        ["const", 9],
+      ] as const) {
+        const entry = entryByRole.get(role);
+        expect(entry, `missing ${role} list entry for references`).toBeDefined();
+        if (!entry) continue;
+        const refs = await findReferencesById(index, entry.id);
+        expect(refs.status, `${role} role references should resolve`).toBe("ok");
+        if (refs.status !== "ok") continue;
+        const refLines = refs.references
+          .filter((reference) => fileIdentityKey(reference.file) === fileIdentityKey(consumerFile))
+          .map((reference) => reference.range.start.line);
+        expect(refLines, `${role} role should see its own use`).toContain(expectedLine);
+        for (const otherLine of [7, 8, 9]) {
+          if (otherLine !== expectedLine) expect(refLines).not.toContain(otherLine);
+        }
+      }
+
+      const [compact, detailed] = await Promise.all([buildSymbolGraph(index), buildSymbolGraphDetailed(index)]);
+      for (const graph of [compact, detailed]) {
+        const aliasNodes = [...graph.nodes.values()].filter(
+          (node) =>
+            fileIdentityKey(node.file) === fileIdentityKey(consumerFile) &&
+            node.kind === "import" &&
+            node.name === "Alias",
+        );
+        expect(aliasNodes).toHaveLength(3);
+        expect(new Set(aliasNodes.map((node) => node.id)).size).toBe(3);
+        const aliasEdges = graph.edges.filter((edge) => aliasNodes.some((node) => node.id === edge.from));
+        expect(aliasEdges).toHaveLength(3);
+        expect(new Set(aliasEdges.map((edge) => edge.to))).toEqual(new Set(targetIds.values()));
+        for (const edge of aliasEdges) {
+          const role = edge.from.slice(edge.from.lastIndexOf(":") + 1);
+          const target = graph.nodes.get(edge.to);
+          expect(target, `alias ${role} edge target should exist`).toBeDefined();
+          if (!target) continue;
+          expect(fileIdentityKey(target.file)).toBe(fileIdentityKey(sourceFile));
+          expect(target.kind).toBe(role === "const" ? "variable" : role);
+        }
+      }
+
+      const functionEdges = (functionName: string): { uses: Set<string>; calls: string[] } => {
+        const node = [...detailed.nodes.values()].find(
+          (candidate) =>
+            fileIdentityKey(candidate.file) === fileIdentityKey(consumerFile) &&
+            candidate.kind === "function" &&
+            candidate.name === functionName,
+        );
+        expect(node, `${functionName} should appear in the detailed graph`).toBeDefined();
+        if (!node) return { uses: new Set<string>(), calls: [] };
+        const outgoing = detailed.edges.filter((edge) => edge.from === node.id);
+        return {
+          uses: new Set(outgoing.filter((edge) => edge.label === "uses").map((edge) => edge.to)),
+          calls: outgoing.filter((edge) => edge.label === "calls").map((edge) => edge.to),
+        };
+      };
+
+      // Each occurrence resolves through its own import namespace: the instantiation
+      // occurrence uses the class, the call occurrence uses the function, and the bare
+      // return uses the constant.
+      const caller = functionEdges("caller");
+      expect(caller.uses).toEqual(
+        new Set([targetIds.get("class"), targetIds.get("function"), targetIds.get("variable")]),
+      );
+      expect(caller.calls).toEqual([targetIds.get("function")]);
+
+      // A constant-only function must not inherit the class or function aliases.
+      expect(functionEdges("constantsOnly").uses).toEqual(new Set([targetIds.get("variable")]));
+
+      // Constants compare exactly: folded class or function spellings satisfy no const use.
+      expect(functionEdges("wrongCaseConstants").uses).toEqual(new Set<string>());
+
+      // Type positions use the class alias, folded ASCII-case-insensitively, and nothing else.
+      expect(functionEdges("typedOnly").uses).toEqual(new Set([targetIds.get("class")]));
+
+      // Mixed-case call and instantiation occurrences resolve their own roles, while the
+      // exact-case constant `alias` must not bind the function or any other role's target.
+      const mixed = functionEdges("mixedCaseCalls");
+      expect(mixed.uses).toEqual(new Set([targetIds.get("function"), targetIds.get("class")]));
+      expect(mixed.calls).toEqual([targetIds.get("function")]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("PHP enum interface conformance", () => {
   it("emits an implements edge and returns the enum from implementation lookup", async () => {
     const sampleDir = path.resolve(process.cwd(), "tests", "samples", "php");
@@ -800,6 +1119,37 @@ describe("PHP nested function export exclusion", () => {
       // PHP only hoists nested function definitions to visibility when the outer function
       // runs; the nested name is not a module export.
       expect(exported).not.toContain("inner");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("PHP parent:: member navigation", () => {
+  it("resolves parent::helper() to the base declaration, not the derived override", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-parent-goto-"));
+    const file = path.join(root, "box.php");
+    const source = [
+      "<?php",
+      "class Base {",
+      "  function helper() { return 1; }",
+      "}",
+      "class Derived extends Base {",
+      "  function helper() { return 2; }",
+      "  function run() { return parent::helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const column = source.split("\n")[6]!.indexOf("helper()") + 1;
+      const result = await goToDefinition(index, { file, line: 7, column });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.definition.range.start.line).toBe(3);
+      expect(result.definition.range.start.line).not.toBe(6);
+      expect(result.provenance?.resolution).toBe("member-access");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -40,6 +40,9 @@ export function cFunctionNameQuery(captureName: string, includeFieldIdentifier: 
     patterns.push(
       `(function_declarator declarator: (parenthesized_declarator (pointer_declarator declarator: (${identifierType}) @${captureName})))`,
     );
+    if (includeFieldIdentifier) {
+      patterns.push(`(reference_declarator (function_declarator declarator: (${identifierType}) @${captureName}))`);
+    }
   }
   if (includeFieldIdentifier) {
     patterns.push(
@@ -241,6 +244,7 @@ export function cFamilyContainerClassifyDefinition(node: SyntaxNodeLike): string
   const container = findAncestor(node, cFamilyContainerTypes);
   if (container?.type === "function_definition") return "function";
   if (container?.type === "declaration" && isFunctionDeclarator(node)) return "function";
+  if (container?.type === "field_declaration" && isFunctionDeclarator(node)) return "function";
   if (container?.type === "type_definition") return "type";
   return "variable";
 }

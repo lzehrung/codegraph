@@ -1,10 +1,12 @@
 import { readFileSync } from "node:fs";
+import { findCommentEnd } from "../../impact/call-compatibility/text-scanner.js";
 import { SymbolKind, type SymbolDef } from "../../indexer/types.js";
 import type { LanguageSupport } from "../../languages.js";
-import type { SyntaxNodeLike } from "../../languages/types.js";
+import { isJsTsLanguage } from "../../languages/js-family.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { sliceText } from "../../util/ast.js";
-import { XID_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
-import { MEMBER_ACCESS_ROWS } from "../../util/member-access-tables.js";
+import { foldPhpIdentifierCase, XID_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
+import { keywordReceiverKind, ownReceiverMemberScope } from "../../util/member-access-tables.js";
 import {
   getMemberAccessParts,
   getNavigationExpressionProperty,
@@ -13,6 +15,7 @@ import {
   isReceiverNameNode,
 } from "../../util/member-access.js";
 import type { SymbolGraph } from "../symbol-graph.js";
+import { declarationMemberArity, findFirstNodeByType, isIdentifierType, PARAMETER_LIST_NODE_TYPES } from "./ast.js";
 
 /**
  * A receiver method call whose target could not be proven from the calling module
@@ -27,14 +30,17 @@ export type ReceiverCallCandidate = {
   /** Resolve only through supertypes, for explicit `parent`/`super`/`base` receivers. */
   viaSupertypes: boolean;
   memberName: string;
-  /** Argument count, used only to separate same-named overloads on one type. */
-  argumentCount: number;
+  /** Match the member name with PHP's ASCII case-insensitive method rule. */
+  caseInsensitiveMemberName?: boolean;
+  /**
+   * Argument count, used only to separate same-named overloads on one type.
+   * `null` means the call shape is unknown, so arity-based resolution is omitted.
+   */
+  argumentCount: number | null;
   site: NonNullable<SymbolGraph["edges"][number]["site"]>;
   /** Required static/instance scope; omitted candidates are classified from `site`. */
   memberScope?: ReceiverMemberScope;
 };
-
-const INSTANCE_RECEIVER_KEYWORDS = new Set(["this", "$this"]);
 
 /** Languages whose grammar distinguishes static members from instance members. */
 const STATIC_MEMBER_LANGUAGES: Record<string, true> = {
@@ -47,6 +53,21 @@ const STATIC_MEMBER_LANGUAGES: Record<string, true> = {
   ts: true,
   tsx: true,
 };
+
+const MEMBER_OVERLOAD_LANGUAGE_IDS: Record<string, true> = {
+  cpp: true,
+  csharp: true,
+  java: true,
+  kotlin: true,
+  swift: true,
+  ts: true,
+  tsx: true,
+};
+
+/** Whether member lookup uses call arity to select or reject same-name declarations. */
+export function supportsReceiverMemberOverloads(languageId: string): boolean {
+  return !!MEMBER_OVERLOAD_LANGUAGE_IDS[languageId];
+}
 
 /** Every language with a static-member distinction, guarded by the registry-consistency test. */
 export const staticMemberLanguageIds: readonly string[] = Object.keys(STATIC_MEMBER_LANGUAGES);
@@ -86,6 +107,16 @@ const MEMBER_CONTAINER_TYPES: Record<string, true> = {
   struct_specifier: true,
   trait_declaration: true,
   trait_item: true,
+  type_alias_declaration: true,
+  // C/C++ unions declare members exactly like structs (tree-sitter-cpp captures
+  // union names and classifies them as classes).
+  union_specifier: true,
+};
+
+const CPP_MEMBER_CONTAINER_TYPES: Record<string, true> = {
+  class_specifier: true,
+  struct_specifier: true,
+  union_specifier: true,
 };
 
 /** Nodes holding a call's argument list across the supported grammars. */
@@ -103,6 +134,17 @@ const HIERARCHY_LABELS: Record<string, true> = {
   mixin: true,
   trait: true,
 };
+const UNPROVEN_HERITAGE_EXPRESSION_TYPES = new Set([
+  "binary_expression",
+  "call_expression",
+  "new_expression",
+  "subscript_expression",
+  "ternary_expression",
+]);
+
+export function isUnprovenHeritageExpression(node: SyntaxNodeLike): boolean {
+  return UNPROVEN_HERITAGE_EXPRESSION_TYPES.has(node.type);
+}
 
 /**
  * Nodes that bind a value name across the supported grammars: locals, parameters,
@@ -127,22 +169,6 @@ const VALUE_BINDING_TYPES: Record<string, true> = {
   var_spec: true,
   variable_declaration: true,
   variable_declarator: true,
-};
-
-/**
- * Parameter lists whose identifier children are value bindings (Ruby has no wrapping param node).
- * Union of the receiver-call and call-compatibility lists so Kotlin `function_value_parameters`
- * and Ruby `block_parameters` are both recognized.
- */
-export const PARAMETER_LIST_NODE_TYPES: Record<string, true> = {
-  block_parameters: true,
-  formal_parameters: true,
-  function_parameter_clause: true,
-  function_value_parameters: true,
-  lambda_parameters: true,
-  method_parameters: true,
-  parameter_list: true,
-  parameters: true,
 };
 
 /**
@@ -300,6 +326,12 @@ export function receiverCallAccess(
 }
 
 export type ReceiverMemberScope = "any" | "instance" | "static";
+
+/** Inclusive accepted argument count for one C++ callable entity. `max: null` is variadic. */
+export type MemberArityRange = {
+  min: number;
+  max: number | null;
+};
 
 export type ReceiverBinding =
   | { kind: "own-type"; memberScope: ReceiverMemberScope }
@@ -546,7 +578,7 @@ function bindingValueExpression(node: SyntaxNodeLike): SyntaxNodeLike | null {
 
 function declaredTypeNameNode(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
   const typeField = node.childForFieldName("type");
-  if (typeField) return unwrapNamedType(typeField, sup);
+  if (typeField) return unwrapNamedType(typeField, sup) ?? typeField;
   const typedChild = node.namedChildren.find(
     (child) =>
       child.type === "named_type" ||
@@ -554,7 +586,7 @@ function declaredTypeNameNode(node: SyntaxNodeLike, sup: LanguageSupport): Synta
       child.type === "type_annotation" ||
       child.type === "type",
   );
-  if (typedChild) return unwrapNamedType(typedChild, sup);
+  if (typedChild) return unwrapNamedType(typedChild, sup) ?? typedChild;
   const ids = node.namedChildren.filter(
     (child) => isReceiverNameNode(sup, child.type) || child.type === "type_identifier" || child.type === "name",
   );
@@ -763,8 +795,259 @@ export function receiverConstructorExpression(
   return findVisiblePriorConstructor(obj, receiverName, source, sup);
 }
 
-function ownTypeMemberScope(receiverName: string): ReceiverMemberScope {
-  return INSTANCE_RECEIVER_KEYWORDS.has(receiverName) ? "instance" : "any";
+/** Identifier segments in a C++ qualified name, excluding template arguments. */
+export function cppQualifiedNameSegments(node: SyntaxNodeLike, source: string): string[] {
+  const text = sliceText(node, source);
+  const segments: string[] = [];
+  let segmentStart = 0;
+  let templateDepth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "<") {
+      templateDepth += 1;
+      continue;
+    }
+    if (char === ">") {
+      templateDepth = Math.max(0, templateDepth - 1);
+      continue;
+    }
+    if (char !== ":" || text[index + 1] !== ":" || templateDepth !== 0) continue;
+    const segment = text.slice(segmentStart, index).trim();
+    if (segment) segments.push(segment.replace(/<.*$/u, "").trim());
+    segmentStart = index + 2;
+    index += 1;
+  }
+  const finalSegment = text.slice(segmentStart).trim();
+  if (finalSegment) segments.push(finalSegment.replace(/<.*$/u, "").trim());
+  return segments.filter(Boolean);
+}
+
+/** Exact namespace/type path that qualifies a C++ out-of-line function definition. */
+export function cppOutOfLineOwnerPath(node: SyntaxNodeLike, source: string, sup: LanguageSupport): string[] | null {
+  if (sup.id !== "cpp") return null;
+  let current: SyntaxNodeLike | null = node;
+  while (current) {
+    if (current.type === "function_definition") {
+      let declarator = current.childForFieldName("declarator");
+      while (declarator) {
+        if (declarator.type === "qualified_identifier") {
+          const path = cppQualifiedNameSegments(declarator, source);
+          path.pop();
+          if (!sliceText(declarator, source).trimStart().startsWith("::")) {
+            const namespaces: string[][] = [];
+            let parent = current.parent;
+            while (parent) {
+              if (parent.type === "namespace_definition") {
+                const name = parent.childForFieldName("name");
+                if (name) namespaces.push(cppQualifiedNameSegments(name, source));
+              }
+              parent = parent.parent;
+            }
+            for (const namespace of namespaces.reverse()) path.unshift(...namespace);
+          }
+          return path.length ? path : null;
+        }
+        const nested = declarator.childForFieldName("declarator") ?? declarator.namedChildren.at(-1);
+        if (!nested || nested.id === declarator.id) break;
+        declarator = nested;
+      }
+      return null;
+    }
+    current = current.parent;
+  }
+  return null;
+}
+
+/** Unqualified member name from a C++ out-of-line function definition. */
+export function cppOutOfLineMemberName(node: SyntaxNodeLike, source: string, sup: LanguageSupport): string | null {
+  if (sup.id !== "cpp") return null;
+  let current: SyntaxNodeLike | null = node;
+  while (current) {
+    if (current.type === "function_definition") {
+      const nameNode = cppFunctionDeclaratorName(current, sup);
+      return nameNode ? sliceText(nameNode, source) : null;
+    }
+    current = current.parent;
+  }
+  return null;
+}
+function sameSyntaxNode(left: SyntaxNodeLike | null, right: SyntaxNodeLike): boolean {
+  if (!left) return false;
+  if (left.id !== undefined && right.id !== undefined) return left.id === right.id;
+  return left.type === right.type && left.startIndex === right.startIndex && left.endIndex === right.endIndex;
+}
+
+function cppFunctionDeclaratorName(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
+  const functionDeclarator =
+    node.type === "function_declarator" ? node : findFirstNodeByType(node, "function_declarator");
+  let current = functionDeclarator?.childForFieldName("declarator") ?? null;
+  while (current) {
+    if (isIdentifierType(sup, current.type) || current.type === "operator_name" || current.type === "destructor_name") {
+      return current;
+    }
+    let name = current.childForFieldName("name");
+    while (name?.childForFieldName("name")) name = name.childForFieldName("name");
+    if (
+      name &&
+      (isIdentifierType(sup, name.type) || name.type === "operator_name" || name.type === "destructor_name")
+    ) {
+      return name;
+    }
+    const nested = current.childForFieldName("declarator");
+    if (!nested || nested.id === current.id) return null;
+    current = nested;
+  }
+  return null;
+}
+
+function cppMemberArityFromAncestor(node: SyntaxNodeLike): number | undefined {
+  let current: SyntaxNodeLike | null = node;
+  while (current) {
+    const arity = declarationMemberArity(current, "cpp");
+    if (arity !== undefined) return arity;
+    current = current.parent;
+  }
+  return undefined;
+}
+
+function collectCppMemberDeclarations(
+  node: SyntaxNodeLike,
+  ownerNode: SyntaxNodeLike,
+  localName: string,
+  ownerSource: string,
+  sup: LanguageSupport,
+  expectedArity: number | undefined,
+  out: Array<{ node: SyntaxNodeLike; nameNode: SyntaxNodeLike }>,
+): void {
+  if (
+    (node.type === "field_declaration" || node.type === "declaration") &&
+    sameSyntaxNode(nearestMemberContainer(node), ownerNode)
+  ) {
+    const nameNode = cppFunctionDeclaratorName(node, sup);
+    if (
+      nameNode &&
+      sup.normalizeIdentifier(sliceText(nameNode, ownerSource)) === sup.normalizeIdentifier(localName) &&
+      declarationMemberArity(node, sup.id) === expectedArity
+    ) {
+      out.push({ node, nameNode });
+    }
+    return;
+  }
+  for (const child of node.namedChildren) {
+    collectCppMemberDeclarations(child, ownerNode, localName, ownerSource, sup, expectedArity, out);
+  }
+}
+
+export type CppOutOfLineMemberDeclaration = {
+  node: SyntaxNodeLike;
+  nameNode: SyntaxNodeLike;
+};
+
+/**
+ * Finds the unique in-class declaration corresponding to a C++ out-of-line member
+ * definition. Name and arity must both match so overloads do not collapse.
+ */
+export function cppOutOfLineMemberDeclarationNode(
+  definitionNameNode: SyntaxNodeLike,
+  localName: string,
+  ownerNameNode: SyntaxNodeLike,
+  ownerSource: string,
+  sup: LanguageSupport,
+): CppOutOfLineMemberDeclaration | null {
+  if (sup.id !== "cpp") return null;
+  const ownerNode = nearestMemberContainer(ownerNameNode);
+  if (!ownerNode) return null;
+  const expectedArity = cppMemberArityFromAncestor(definitionNameNode);
+  const declarations: CppOutOfLineMemberDeclaration[] = [];
+  collectCppMemberDeclarations(ownerNode, ownerNode, localName, ownerSource, sup, expectedArity, declarations);
+  return declarations.length === 1 ? declarations[0]! : null;
+}
+
+export function nodeDeclaresStatic(node: SyntaxNodeLike, source: string): boolean {
+  if (node.type === "static" || node.type === "static_modifier") return true;
+  if (node.type === "storage_class_specifier" || node.type === "modifier" || node.type === "property_modifier") {
+    return sliceText(node, source).trim() === "static";
+  }
+  if (node.type === "class") {
+    const parentType = node.parent?.type;
+    return (
+      parentType === "function_declaration" ||
+      parentType === "property_declaration" ||
+      parentType === "subscript_declaration"
+    );
+  }
+  if (node.type === "modifiers") {
+    for (let childIndex = 0; ; childIndex += 1) {
+      const child = node.child(childIndex);
+      if (!child) break;
+      if (nodeDeclaresStatic(child, source)) return true;
+    }
+  }
+  return false;
+}
+export function declarationNodeIsStatic(node: SyntaxNodeLike, source: string): boolean {
+  if (nodeDeclaresStatic(node, source)) return true;
+  for (let childIndex = 0; ; childIndex += 1) {
+    const child = node.child(childIndex);
+    if (!child) return false;
+    if (nodeDeclaresStatic(child, source)) return true;
+  }
+}
+
+function nodeInStaticMemberContext(node: SyntaxNodeLike, source: string): boolean {
+  const container = nearestMemberContainer(node);
+  if (!container) return false;
+  let current: SyntaxNodeLike | null = node;
+  while (current && current !== container) {
+    if (declarationNodeIsStatic(current, source)) return true;
+    current = current.parent;
+  }
+  return false;
+}
+
+const JS_TS_DYNAMIC_THIS_FUNCTION_TYPES: Record<string, true> = {
+  function: true,
+  function_declaration: true,
+  function_expression: true,
+  generator_function: true,
+  generator_function_declaration: true,
+  method_definition: true,
+};
+
+/**
+ * Ordinary JS/TS functions and object-literal methods own `this`/`super`; arrows preserve the
+ * enclosing class member's receiver. Crossing one of those dynamic boundaries makes the class
+ * receiver unproven.
+ */
+export function keywordReceiverCrossesDynamicBoundary(sup: LanguageSupport, node: SyntaxNodeLike): boolean {
+  if (!isJsTsLanguage(sup.id)) return false;
+  const container = nearestMemberContainer(node);
+  if (!container) return false;
+  let current: SyntaxNodeLike | null = node.parent;
+  while (current && current !== container) {
+    if (JS_TS_DYNAMIC_THIS_FUNCTION_TYPES[current.type]) {
+      const directlyOwnedClassMethod =
+        current.type === "method_definition" &&
+        current.parent?.type === "class_body" &&
+        current.parent.parent?.startIndex === container.startIndex;
+      return !directlyOwnedClassMethod;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
+export function keywordReceiverMemberScope(
+  sup: LanguageSupport,
+  receiverName: string,
+  node: SyntaxNodeLike,
+  source: string,
+): ReceiverMemberScope {
+  if (!hasStaticMemberDistinction(sup.id)) return "any";
+  if (nodeInStaticMemberContext(node, source)) return "static";
+  const kind = keywordReceiverKind(sup.id, receiverName);
+  if (kind === "supertype") return "instance";
+  return ownReceiverMemberScope(sup.id, receiverName) ?? "any";
 }
 
 /**
@@ -780,11 +1063,14 @@ export function classifyReceiver(
   cacheScope: number,
   accessNode: SyntaxNodeLike,
 ): ReceiverBinding | null {
-  const keywords = MEMBER_ACCESS_ROWS[sup.id]?.receiverKeywords;
   const text = sliceText(receiver, source).trim();
   if (!text) return null;
-  if (keywords?.own.includes(text)) return { kind: "own-type", memberScope: ownTypeMemberScope(text) };
-  if (keywords?.supertype.includes(text)) return { kind: "supertype", memberScope: "any" };
+  const keywordKind = keywordReceiverKind(sup.id, text);
+  if (keywordKind) {
+    if (keywordReceiverCrossesDynamicBoundary(sup, accessNode)) return null;
+    const memberScope = keywordReceiverMemberScope(sup, text, accessNode, source);
+    return keywordKind === "own" ? { kind: "own-type", memberScope } : { kind: "supertype", memberScope };
+  }
 
   const receiverIsName = isReceiverNameNode(sup, receiver.type);
 
@@ -828,6 +1114,19 @@ export function declaresMembers(def: SymbolDef): boolean {
   return def.kind === SymbolKind.Class || def.kind === SymbolKind.Interface || def.kind === SymbolKind.TypeAlias;
 }
 
+/** Whether a C++ definition denotes a class, struct, or union that can own methods. */
+export function isCppMemberContainerDefinition(tree: SyntaxTreeLike, def: SymbolDef): boolean {
+  const position = {
+    row: Math.max(0, def.range.start.line - 1),
+    column: Math.max(0, def.range.start.column - 1),
+  };
+  const nameNode = tree.rootNode.descendantForPosition(position, position);
+  const container = nearestMemberContainer(nameNode);
+  if (!container || CPP_MEMBER_CONTAINER_TYPES[container.type] === undefined) return false;
+  const containerName = container.childForFieldName("name");
+  return containerName?.startPosition.row === position.row && containerName.startPosition.column === position.column;
+}
+
 /** Nearest enclosing declaration that lexically owns `node` as a member. */
 export function nearestMemberContainer(node: SyntaxNodeLike): SyntaxNodeLike | null {
   let current = node.parent;
@@ -838,27 +1137,174 @@ export function nearestMemberContainer(node: SyntaxNodeLike): SyntaxNodeLike | n
   return null;
 }
 
-/** Positional argument count of a call, ignoring comments. */
-export function callArgumentCount(callNode: SyntaxNodeLike): number {
-  const explicit = callNode.childForFieldName("arguments") ?? callNode.childForFieldName("argument_list");
-  let argumentNode =
-    explicit ?? (callNode.namedChildren ?? []).find((child) => CALL_ARGUMENT_NODE_TYPES[child.type]) ?? null;
+/** Positional argument count of a call, including Kotlin/Swift trailing lambdas. */
+export function callArgumentCount(callNode: SyntaxNodeLike, source: string): number | null {
+  // Kotlin wraps `pick(1) { }` in an outer call node whose only other child is the
+  // callee call; the trailing lambda belongs to the inner call's argument list.
+  let scope = callNode;
+  for (let wrapper = trailingLambdaWrapper(scope); wrapper; wrapper = trailingLambdaWrapper(scope)) {
+    scope = wrapper;
+  }
+
+  let argumentNode: SyntaxNodeLike | null =
+    callNode.childForFieldName("arguments") ??
+    callNode.childForFieldName("argument_list") ??
+    (callNode.namedChildren ?? []).find((child) => CALL_ARGUMENT_NODE_TYPES[child.type]) ??
+    null;
   if (argumentNode?.type === "call_suffix") {
     argumentNode = (argumentNode.namedChildren ?? []).find((child) => child.type === "value_arguments") ?? null;
   }
-  if (!argumentNode) return 0;
-  return (argumentNode.namedChildren ?? []).filter((argument) => argument.type !== "comment").length;
+  if (!argumentNode) {
+    // Swift allows a call suffix with only a trailing lambda (`pick { }`), and Kotlin
+    // `pick { }` keeps the lambda directly on the call node: no argument list exists.
+    const suffix = (callNode.namedChildren ?? []).find((child) => child.type === "call_suffix");
+    return ((suffix ?? scope).namedChildren ?? []).filter(
+      (child) => TRAILING_LAMBDA_NODE_TYPES[child.type] && child.startIndex >= callNode.startIndex,
+    ).length;
+  }
+
+  let count = (argumentNode.namedChildren ?? []).filter((argument) => argument.type !== "comment").length;
+  const trailingEnd = argumentNode.parent?.type === "call_suffix" ? argumentNode.parent.endIndex : scope.endIndex;
+  if (trailingEnd > argumentNode.endIndex && containsTrailingLambdaNode(scope, argumentNode.endIndex, trailingEnd)) {
+    const trailing = countTrailingClosureArguments(source.slice(argumentNode.endIndex, trailingEnd));
+    // A null scan means the trailing-closure count is unknown, so the whole call
+    // arity is unknown rather than the parenthesized count alone.
+    if (trailing === null) return null;
+    count += trailing;
+  }
+  return count;
 }
 
-function parseDefNodeId(id: string): { file: string; name: string; index: number } | null {
-  const indexSep = id.lastIndexOf("::");
-  if (indexSep <= 0) return null;
-  const index = Number(id.slice(indexSep + 2));
-  if (!Number.isFinite(index)) return null;
-  const rest = id.slice(0, indexSep);
-  const nameSep = rest.lastIndexOf("::");
-  if (nameSep <= 0) return null;
-  return { file: rest.slice(0, nameSep), name: rest.slice(nameSep + 2), index };
+/** Trailing lambda nodes across the supported grammars. */
+const TRAILING_LAMBDA_NODE_TYPES: Record<string, true> = {
+  annotated_lambda: true, // Kotlin wraps the lambda on the outer call node.
+  lambda_literal: true, // Swift keeps trailing lambdas inside `call_suffix`.
+};
+
+/** Call nodes that can wrap a callee call plus a Kotlin trailing lambda. */
+const TRAILING_LAMBDA_WRAPPER_TYPES: Record<string, true> = {
+  call: true,
+  call_expression: true,
+};
+
+/**
+ * The outer call node attaching a trailing lambda to `node`, or null. The wrapper
+ * never carries its own argument list, which distinguishes it from a chained call.
+ */
+function trailingLambdaWrapper(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  const parent = node.parent;
+  if (!parent || !TRAILING_LAMBDA_WRAPPER_TYPES[parent.type]) return null;
+  const children = parent.namedChildren ?? [];
+  if (children.some((child) => CALL_ARGUMENT_NODE_TYPES[child.type])) return null;
+  return children.some((child) => TRAILING_LAMBDA_NODE_TYPES[child.type]) ? parent : null;
+}
+
+/** Whether a trailing lambda node overlaps `[start, end)` anywhere under `node`. */
+function containsTrailingLambdaNode(node: SyntaxNodeLike, start: number, end: number): boolean {
+  for (const child of node.namedChildren ?? []) {
+    if (child.endIndex <= start || child.startIndex >= end) continue;
+    if (TRAILING_LAMBDA_NODE_TYPES[child.type]) return true;
+    if (containsTrailingLambdaNode(child, start, end)) return true;
+  }
+  return false;
+}
+
+/** End index after a Swift trailing-closure label and its colon, or null when absent. */
+function trailingClosureLabelEnd(text: string, startIndex: number): number | null {
+  if (text[startIndex] === "`") {
+    const escapedEnd = text.indexOf("`", startIndex + 1);
+    if (escapedEnd < 0 || text[escapedEnd + 1] !== ":") return null;
+    return escapedEnd + 2;
+  }
+  const identifier = /^[_\p{ID_Start}][_\p{ID_Continue}]*/u.exec(text.slice(startIndex));
+  if (!identifier) return null;
+  const colonIndex = startIndex + identifier[0].length;
+  return text[colonIndex] === ":" ? colonIndex + 1 : null;
+}
+
+/**
+ * Counts the top-level `{ ... }` blocks in trailing call text, one per trailing
+ * closure, or null when the text is not a well-formed trailing-closure run.
+ * Shared with call-compatibility extraction so both paths count identically.
+ */
+export function countTrailingClosureArguments(text: string): number | null {
+  let startIndex = 0;
+  let count = 0;
+
+  while (startIndex < text.length) {
+    while (/\s/.test(text[startIndex] ?? "")) {
+      startIndex += 1;
+    }
+    if (startIndex === text.length) {
+      return count;
+    }
+    if (text[startIndex] !== "{") {
+      const labelEnd = trailingClosureLabelEnd(text, startIndex);
+      if (labelEnd === null) return null;
+      startIndex = labelEnd;
+      while (/\s/.test(text[startIndex] ?? "")) {
+        startIndex += 1;
+      }
+      if (text[startIndex] !== "{") return null;
+    }
+
+    let braceDepth = 0;
+    let quote: string | null = null;
+    let escaped = false;
+    let closed = false;
+    for (let index = startIndex; index < text.length; index += 1) {
+      const char = text[index];
+      if (quote) {
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (char === "\\") {
+          escaped = true;
+          continue;
+        }
+        if (char === quote) {
+          quote = null;
+        }
+        continue;
+      }
+
+      const commentEnd = findCommentEnd(text, index);
+      if (commentEnd !== null) {
+        if (commentEnd < 0) {
+          return null;
+        }
+        index = commentEnd - 1;
+        continue;
+      }
+
+      if (char === '"' || char === "'" || char === "`") {
+        quote = char;
+        continue;
+      }
+      if (char === "{") {
+        braceDepth += 1;
+        continue;
+      }
+      if (char === "}") {
+        braceDepth -= 1;
+        if (braceDepth < 0) {
+          return null;
+        }
+        if (!braceDepth) {
+          startIndex = index + 1;
+          count += 1;
+          closed = true;
+          break;
+        }
+      }
+    }
+    if (!closed) {
+      return null;
+    }
+  }
+
+  return count;
 }
 
 function loadSource(file: string, cache: Map<string, string>): string {
@@ -874,19 +1320,6 @@ function loadSource(file: string, cache: Map<string, string>): string {
   }
 }
 
-function memberIdLooksStatic(memberId: string, sourceCache: Map<string, string>): boolean {
-  const parsed = parseDefNodeId(memberId);
-  if (!parsed) return false;
-  const source = loadSource(parsed.file, sourceCache);
-  if (!source) return false;
-  const beforeBrace = source.lastIndexOf("{", parsed.index);
-  const beforeSemi = source.lastIndexOf(";", parsed.index);
-  const beforeClose = source.lastIndexOf("}", parsed.index);
-  const declStart = Math.max(beforeBrace, beforeSemi, beforeClose);
-  const prefix = source.slice(declStart + 1, parsed.index);
-  return /(?:^|[^\w$])static(?:$|[^\w$])/.test(prefix) || /(?:^|[^\w$])def\s+self\s*\./.test(prefix);
-}
-
 function inferCallMemberScope(
   site: ReceiverCallCandidate["site"],
   sourceCache: Map<string, string>,
@@ -899,11 +1332,14 @@ function inferCallMemberScope(
   if (/::\s*$/.test(before)) return "static";
   if (/\?->\s*$/.test(before) || /->\s*$/.test(before)) return "instance";
   if (/\)\s*\.\s*$/.test(before)) return "instance";
-  // HeritageEdges does not yet copy classifyReceiver.memberScope onto candidates.
-  // A lowercase dotted receiver is an instance value (`c.StaticMethod()`), not a type.
+  // Older serialized candidates lack memberScope. Infer the common dotted-receiver cases.
   if (/(?:^|[^A-Za-z0-9_$])[a-z_][A-Za-z0-9_]*\s*\.\s*$/.test(before)) return "instance";
   if (/(?:^|[^A-Za-z0-9_$])[A-Z][A-Za-z0-9_]*\s*\.\s*$/.test(before)) return "static";
   return "any";
+}
+function callSiteKey(callerId: string, site: ReceiverCallCandidate["site"]): string {
+  const { start, end } = site.range;
+  return `${callerId}\u0000${site.file}\u0000${start.line}:${start.column}:${start.index ?? ""}-${end.line}:${end.column}:${end.index ?? ""}`;
 }
 
 /**
@@ -915,8 +1351,11 @@ export function emitReceiverCallEdges(
   graph: SymbolGraph,
   candidates: readonly ReceiverCallCandidate[],
   recordEdge: (fromId: string, toId: string, label?: string, site?: SymbolGraph["edges"][number]["site"]) => boolean,
-): void {
-  if (!candidates.length) return;
+  memberScopes: ReadonlyMap<string, ReceiverMemberScope> = new Map(),
+  nodeAliases: ReadonlyMap<string, string> = new Map(),
+  memberArities: ReadonlyMap<string, MemberArityRange> = new Map(),
+): SymbolGraph["edges"][number][] {
+  if (!candidates.length) return [];
 
   const membersByOwner = new Map<string, string[]>();
   const ownerByMember = new Map<string, string>();
@@ -944,20 +1383,60 @@ export function emitReceiverCallEdges(
     return (classAncestorsByOwner.get(ownerId) ?? []).filter((id) => graph.nodes.get(id)?.kind === "class");
   };
 
+  const callTargetsBySite = new Map<string, Set<string>>();
+  for (const edge of graph.edges) {
+    if (edge.label !== "calls" || !edge.site) continue;
+    const key = callSiteKey(edge.from, edge.site);
+    const targets = callTargetsBySite.get(key);
+    if (targets) targets.add(edge.to);
+    else callTargetsBySite.set(key, new Set([edge.to]));
+  }
+  const rejectedCallSites = new Set<string>();
+
   const sourceCache = new Map<string, string>();
   for (const candidate of candidates) {
+    const siteKey = callSiteKey(candidate.callerId, candidate.site);
+    const existingTargets = callTargetsBySite.get(siteKey) ?? new Set<string>();
+    if (existingTargets.size > 1) {
+      rejectedCallSites.add(siteKey);
+      continue;
+    }
     const owner = candidate.ownerId ?? ownerByMember.get(candidate.callerId);
     if (!owner) continue;
     const memberScope = candidate.memberScope ?? inferCallMemberScope(candidate.site, sourceCache);
     let level = candidate.viaSupertypes ? nextOwners(owner, true) : [owner];
     const visited = new Set<string>(level);
+    let receiverDisposition: "none" | "resolved" | "ambiguous" = "none";
     for (let depth = 0; depth < MAX_SUPERTYPE_DEPTH && level.length; depth += 1) {
-      const lookup = provenMemberTarget(graph, membersByOwner, level, candidate, memberScope, sourceCache);
+      const lookup = provenMemberTarget(
+        graph,
+        membersByOwner,
+        level,
+        candidate,
+        memberScope,
+        memberScopes,
+        nodeAliases,
+        memberArities,
+      );
       if (lookup.status === "unique") {
-        recordEdge(candidate.callerId, lookup.memberId, "calls", candidate.site);
+        receiverDisposition = "resolved";
+        const combinedTargets = new Set(existingTargets);
+        combinedTargets.add(lookup.memberId);
+        if (combinedTargets.size === 1) {
+          if (existingTargets.size === 0 && recordEdge(candidate.callerId, lookup.memberId, "calls", candidate.site)) {
+            existingTargets.add(lookup.memberId);
+            callTargetsBySite.set(siteKey, existingTargets);
+          }
+        } else {
+          rejectedCallSites.add(siteKey);
+        }
         break;
       }
-      if (lookup.status === "ambiguous") break;
+      if (lookup.status === "ambiguous") {
+        receiverDisposition = "ambiguous";
+        if (existingTargets.size) rejectedCallSites.add(siteKey);
+        break;
+      }
       const next: string[] = [];
       for (const ownerId of level) {
         for (const supertype of nextOwners(ownerId, candidate.viaSupertypes)) {
@@ -968,10 +1447,50 @@ export function emitReceiverCallEdges(
       }
       level = next;
     }
+    if (receiverDisposition === "none" && existingTargets.size) {
+      rejectedCallSites.add(siteKey);
+    }
   }
+  const removed: SymbolGraph["edges"][number][] = [];
+  if (rejectedCallSites.size) {
+    let writeIndex = 0;
+    for (const edge of graph.edges) {
+      if (edge.label === "calls" && edge.site && rejectedCallSites.has(callSiteKey(edge.from, edge.site))) {
+        removed.push(edge);
+        continue;
+      }
+      graph.edges[writeIndex] = edge;
+      writeIndex += 1;
+    }
+    graph.edges.length = writeIndex;
+  }
+  return removed;
 }
 
 type MemberTargetLookup = { status: "none" } | { status: "unique"; memberId: string } | { status: "ambiguous" };
+
+function canonicalMemberId(id: string, aliases: ReadonlyMap<string, string>): string {
+  let current = id;
+  const seen = new Set<string>();
+  while (aliases.has(current) && !seen.has(current)) {
+    seen.add(current);
+    current = aliases.get(current)!;
+  }
+  return current;
+}
+
+function memberArityMatches(
+  graph: SymbolGraph,
+  memberId: string,
+  argumentCount: number | null,
+  memberArities: ReadonlyMap<string, MemberArityRange>,
+): boolean {
+  if (argumentCount === null) return true;
+  const range = memberArities.get(memberId);
+  if (range) return argumentCount >= range.min && (range.max === null || argumentCount <= range.max);
+  const memberArity = graph.nodes.get(memberId)?.memberArity;
+  return memberArity === undefined || memberArity === argumentCount;
+}
 
 /**
  * The single callable member named by `candidate` across `owners`.
@@ -981,28 +1500,41 @@ type MemberTargetLookup = { status: "none" } | { status: "unique"; memberId: str
  */
 function provenMemberTarget(
   graph: SymbolGraph,
-  membersByOwner: ReadonlyMap<string, string[]>,
+  membersByOwner: ReadonlyMap<string, readonly string[]>,
   owners: readonly string[],
   candidate: ReceiverCallCandidate,
   memberScope: ReceiverMemberScope,
-  sourceCache: Map<string, string>,
+  memberScopes: ReadonlyMap<string, ReceiverMemberScope>,
+  nodeAliases: ReadonlyMap<string, string>,
+  memberArities: ReadonlyMap<string, MemberArityRange>,
 ): MemberTargetLookup {
   const matches = new Set<string>();
   for (const ownerId of owners) {
     for (const memberId of membersByOwner.get(ownerId) ?? []) {
-      const node = graph.nodes.get(memberId);
-      if (!node || node.kind !== "function" || node.name !== candidate.memberName) continue;
-      if (memberScope === "static" && !memberIdLooksStatic(memberId, sourceCache)) continue;
-      if (memberScope === "instance" && memberIdLooksStatic(memberId, sourceCache)) continue;
-      matches.add(memberId);
+      const canonicalId = canonicalMemberId(memberId, nodeAliases);
+      const node = graph.nodes.get(memberId) ?? graph.nodes.get(canonicalId);
+      if (!node || (node.kind !== "function" && !node.callable)) continue;
+      const nameMatches = candidate.caseInsensitiveMemberName
+        ? foldPhpIdentifierCase(node.name) === foldPhpIdentifierCase(candidate.memberName)
+        : node.name === candidate.memberName;
+      if (!nameMatches) continue;
+      const scope = memberScopes.get(memberId) ?? memberScopes.get(canonicalId);
+      if (memberScope !== "any" && scope !== memberScope) continue;
+      matches.add(canonicalId);
     }
   }
   if (!matches.size) return { status: "none" };
   if (matches.size === 1) {
     const [memberId] = matches;
-    return { status: "unique", memberId: memberId! };
+    if (memberArityMatches(graph, memberId!, candidate.argumentCount, memberArities)) {
+      return { status: "unique", memberId: memberId! };
+    }
+    return { status: "ambiguous" };
   }
-  const byArity = [...matches].filter((memberId) => graph.nodes.get(memberId)?.memberArity === candidate.argumentCount);
+  const byArity =
+    candidate.argumentCount === null
+      ? []
+      : [...matches].filter((memberId) => memberArityMatches(graph, memberId, candidate.argumentCount, memberArities));
   if (byArity.length === 1) return { status: "unique", memberId: byArity[0]! };
   return { status: "ambiguous" };
 }

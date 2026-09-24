@@ -846,6 +846,52 @@ describe("Go to Definition", () => {
   });
 
   describe("PHP", () => {
+    it("folds PHP method names but keeps property and constant names exact", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-member-case-goto-"));
+      try {
+        const file = path.join(root, "probe.php").replace(/\\/g, "/");
+        const lines = [
+          "<?php",
+          "class Box {",
+          "  public $field;",
+          "  public const Limit = 1;",
+          "  public function run() {}",
+          "  public function relay() { $this->RUN(); return $this->FIELD; }",
+          "  public static function read() { return self::limit; }",
+          "}",
+          "$svc = new Box();",
+          "$svc->RUN();",
+          "$svc->field;",
+          "$svc->FIELD;",
+          "Box::Limit;",
+          "Box::limit;",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+        for (const [line, name, targetLine] of [
+          [6, "RUN", 5],
+          [6, "FIELD", undefined],
+          [7, "limit", undefined],
+          [10, "RUN", 5],
+          [11, "field", 3],
+          [12, "FIELD", undefined],
+          [13, "Limit", 4],
+          [14, "limit", undefined],
+        ] as const) {
+          const result = await goToDefinition(index, { file, line, column: lines[line - 1]!.lastIndexOf(name) + 1 });
+          if (targetLine === undefined) {
+            expect(result.status, `${line}:${name}`).toBe("not_found");
+          } else {
+            expect(result.status, `${line}:${name}`).toBe("ok");
+            if (result.status !== "ok") throw new Error("Expected a PHP member definition");
+            expect(result.definition.range.start.line).toBe(targetLine);
+          }
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("should find definition of imported function", async () => {
       const index = await createTestIndex("php");
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "php");
@@ -873,6 +919,194 @@ describe("Go to Definition", () => {
         expect(result.definition.range.start.line).toBe(5);
       }
     });
+    it("keeps PHP class, function, and constant aliases in separate symbol namespaces", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-alias-role-goto-"));
+      try {
+        const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+        const sourceLines = [
+          "<?php",
+          "namespace App;",
+          "class Service {}",
+          "function helper() { return 1; }",
+          "const TOKEN = 1;",
+          "",
+        ];
+        const consumerLines = [
+          "<?php",
+          "namespace Client;",
+          "use App\\Service as Alias;",
+          "use function App\\HELPER as Alias;",
+          "use const App\\TOKEN as Alias;",
+          "$service = new ALIAS();",
+          "$value = ALIAS();",
+          "$constant = Alias;",
+          "$wrong = ALIAS;",
+          "",
+        ];
+        await fsp.writeFile(sourceFile, sourceLines.join("\n"), "utf8");
+        await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+        const aliasColumn = (line: number): number => consumerLines[line - 1]!.lastIndexOf("Alias") + 1;
+
+        await testGoToDefinition(index, consumerFile, 6, consumerLines[5]!.indexOf("ALIAS") + 1, sourceFile, 3);
+        await testGoToDefinition(index, consumerFile, 7, consumerLines[6]!.indexOf("ALIAS") + 1, sourceFile, 4);
+        await testGoToDefinition(index, consumerFile, 8, aliasColumn(8), sourceFile, 5);
+        await testGoToDefinition(
+          index,
+          consumerFile,
+          9,
+          consumerLines[8]!.indexOf("ALIAS") + 1,
+          undefined,
+          undefined,
+          "not_found",
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves PHP members through a case-variant imported receiver type", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-member-alias-case-goto-"));
+      try {
+        const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+        const sourceLines = [
+          "<?php",
+          "namespace App;",
+          "class Service {",
+          "  public static function Run() {}",
+          "  public function Go() {}",
+          "}",
+        ];
+        const consumerLines = [
+          "<?php",
+          "use App\\Service as Foo;",
+          "fOo::run();",
+          "function invoke(FOO $service) { $service->go(); }",
+        ];
+        await fsp.writeFile(sourceFile, sourceLines.join("\n"), "utf8");
+        await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+        await testGoToDefinition(index, consumerFile, 3, consumerLines[2]!.indexOf("run") + 1, sourceFile, 4);
+        await testGoToDefinition(index, consumerFile, 4, consumerLines[3]!.indexOf("go") + 1, sourceFile, 5);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves same-spelled aliases as classes in PHP type contexts", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-alias-type-contexts-"));
+      try {
+        const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+        const sourceLines = [
+          "<?php",
+          "namespace App;",
+          "class BaseType { public $field; }",
+          "interface ContractType {}",
+          "#[\\Attribute] class RouteType {}",
+          "class ProblemType extends \\Exception {}",
+          "function baseFunction() {}",
+          "function contractFunction() {}",
+          "function routeFunction() {}",
+          "function problemFunction() {}",
+          "const TOKEN = 1;",
+          "",
+        ];
+        const consumerLines = [
+          "<?php",
+          "namespace Client;",
+          "use App\\BaseType as BaseAlias;",
+          "use function App\\baseFunction as BaseAlias;",
+          "use App\\ContractType as ContractAlias;",
+          "use function App\\contractFunction as ContractAlias;",
+          "use App\\RouteType as RouteAlias;",
+          "use function App\\routeFunction as RouteAlias;",
+          "use App\\ProblemType as ProblemAlias;",
+          "use function App\\problemFunction as ProblemAlias;",
+          "function accepts(BASEALIAS $value): basealias { return $value; }",
+          "class Child extends BASEALIAS implements contractalias {}",
+          "#[routealias]",
+          "class Marked {}",
+          "try {} catch (PROBLEMALIAS $error) {}",
+          "use const App\\TOKEN as BaseAlias;",
+          "$value = new BaseAlias(BaseAlias);",
+          "$is = $value instanceof BaseAlias;",
+          "$function = BaseAlias();",
+          "$value->field;",
+          "$value->FIELD;",
+          "",
+        ];
+        await fsp.writeFile(sourceFile, sourceLines.join("\n"), "utf8");
+        await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+        for (const [line, token, fromEnd, expectedLine] of [
+          [11, "BASEALIAS", false, 3],
+          [11, "basealias", true, 3],
+          [12, "BASEALIAS", false, 3],
+          [12, "contractalias", false, 4],
+          [13, "routealias", false, 5],
+          [15, "PROBLEMALIAS", false, 6],
+          [17, "BaseAlias", false, 3],
+          [17, "BaseAlias", true, 11],
+          [18, "BaseAlias", false, 3],
+          [19, "BaseAlias", false, 7],
+        ] as const) {
+          const sourceLine = consumerLines[line - 1]!;
+          const tokenIndex = fromEnd ? sourceLine.lastIndexOf(token) : sourceLine.indexOf(token);
+          await testGoToDefinition(index, consumerFile, line, tokenIndex + 1, sourceFile, expectedLine);
+        }
+        await testGoToDefinition(index, consumerFile, 20, consumerLines[19]!.indexOf("field") + 1, sourceFile, 3);
+        expect(
+          (
+            await goToDefinition(index, {
+              file: consumerFile,
+              line: 21,
+              column: consumerLines[20]!.indexOf("FIELD") + 1,
+            })
+          ).status,
+        ).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves imported and fully qualified PHP interfaces and enums through the class namespace", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-qualified-class-namespace-"));
+      try {
+        const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+        const sourceLines = ["<?php", "namespace App\\Domain;", "interface Contract {}", "enum State { case Ready; }"];
+        const consumerLines = [
+          "<?php",
+          "use aPp\\dOmAiN\\cOnTrAcT as ContractAlias;",
+          "use APP\\DOMAIN\\sTaTe as StateAlias;",
+          "class QualifiedChild implements \\App\\domain\\CONTRACT {}",
+          "class ImportedChild implements ContractAlias {}",
+          "function accepts(\\app\\Domain\\state $state): StateAlias { return $state; }",
+        ];
+        await fsp.writeFile(sourceFile, sourceLines.join("\n"), "utf8");
+        await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+        for (const [line, token, fromEnd, expectedLine] of [
+          [4, "CONTRACT", false, 3],
+          [5, "ContractAlias", false, 3],
+          [6, "state", false, 4],
+          [6, "StateAlias", true, 4],
+        ] as const) {
+          const sourceLine = consumerLines[line - 1]!;
+          const tokenIndex = fromEnd ? sourceLine.lastIndexOf(token) : sourceLine.indexOf(token);
+          await testGoToDefinition(index, consumerFile, line, tokenIndex + 1, sourceFile, expectedLine);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("resolves typed, untyped, and static properties to their declarations", async () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "php");
       const propertiesFile = path.join(samplePath, "properties.php").replace(/\\/g, "/");
@@ -1285,10 +1519,8 @@ describe("Go to Definition", () => {
       const helpersFile = path.join(samplePath, "helpers.h").replace(/\\/g, "/");
       const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
 
-      // `typedef struct Utility { ... } Utility;` declares two symbols: the struct tag on line 4 and
-      // the typedef alias on line 6. C now uses query-driven locals like C++, so both exist and the
-      // tag owns the exported name.
-      await testGoToDefinition(index, mainFile, 6, 3, utilsFile, 4);
+      // The bare name selects the typedef alias, not the struct tag on line 4.
+      await testGoToDefinition(index, mainFile, 6, 3, utilsFile, 6);
     });
 
     it("should find definition of function-pointer typedef", async () => {
@@ -1298,6 +1530,175 @@ describe("Go to Definition", () => {
       const index = await createTestIndexFromFiles(samplePath, [advancedUseFile, functionPointersFile]);
 
       await testGoToDefinition(index, advancedUseFile, 4, 3, functionPointersFile, 3);
+    });
+
+    it("resolves same-spelled C tags and typedefs to distinct declarations across an included header", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-c-tag-typedef-goto-"));
+      try {
+        const headerFile = path.join(root, "shapes.h").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "use.c").replace(/\\/g, "/");
+        const headerLines = [
+          "#pragma once",
+          "",
+          "struct Item {",
+          "  int value;",
+          "};",
+          "",
+          "struct Item *header_item_ptr;",
+          "",
+          "union Value {",
+          "  int as_int;",
+          "  float as_float;",
+          "};",
+          "",
+          "union Value *header_value_ptr;",
+          "",
+          "enum Color {",
+          "  COLOR_RED,",
+          "  COLOR_GREEN,",
+          "};",
+          "",
+          "enum Color *header_color_ptr;",
+          "",
+          "typedef struct Item Item;",
+          "typedef union Value Value;",
+          "typedef enum Color Color;",
+          "",
+          "Item header_item_alias;",
+          "Value header_value_alias;",
+          "Color header_color_alias;",
+          "",
+        ];
+        const consumerLines = [
+          '#include "./shapes.h"',
+          "",
+          "struct Item *consumer_item_tag;",
+          "Item *consumer_item_alias;",
+          "union Value *consumer_value_tag;",
+          "Value *consumer_value_alias;",
+          "enum Color *consumer_color_tag;",
+          "Color *consumer_color_alias;",
+          "",
+          "/* Item Value Color */",
+          "int main(void) {",
+          "  struct Item *tag_item = header_item_ptr;",
+          "  Item *alias_item = &header_item_alias;",
+          "  union Value *tag_value = header_value_ptr;",
+          "  Value *alias_value = &header_value_alias;",
+          "  enum Color *tag_color = header_color_ptr;",
+          "  Color *alias_color = &header_color_alias;",
+          "  /* struct Item union Value enum Color */",
+          "  return tag_item->value + alias_item->value;",
+          "}",
+          "",
+        ];
+        await fsp.writeFile(headerFile, headerLines.join("\n"), "utf8");
+        await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [headerFile, consumerFile]);
+
+        // A header declares separate struct/union/enum tags and same-spelled ordinary typedefs. Tag
+        // syntax targets the tag; a bare name targets the typedef. Each namespace has its own
+        // declaration line so a kind-only choice is visible.
+        for (const kind of [
+          { name: "Item", tagLine: 3, typedefLine: 23, consumerTagLine: 3, consumerAliasLine: 4 },
+          { name: "Value", tagLine: 9, typedefLine: 24, consumerTagLine: 5, consumerAliasLine: 6 },
+          { name: "Color", tagLine: 16, typedefLine: 25, consumerTagLine: 7, consumerAliasLine: 8 },
+        ]) {
+          for (const consumerLine of [kind.consumerTagLine, kind.consumerTagLine + 9]) {
+            await testGoToDefinition(
+              index,
+              consumerFile,
+              consumerLine,
+              consumerLines[consumerLine - 1]!.indexOf(kind.name) + 1,
+              headerFile,
+              kind.tagLine,
+            );
+          }
+          for (const consumerLine of [kind.consumerAliasLine, kind.consumerAliasLine + 9]) {
+            await testGoToDefinition(
+              index,
+              consumerFile,
+              consumerLine,
+              consumerLines[consumerLine - 1]!.indexOf(kind.name) + 1,
+              headerFile,
+              kind.typedefLine,
+            );
+          }
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("points C header tag uses at the tag declaration instead of a self-declaration", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-c-header-tag-use-goto-"));
+      try {
+        const headerFile = path.join(root, "shapes.h").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "use.c").replace(/\\/g, "/");
+        const headerLines = [
+          "#pragma once",
+          "",
+          "struct Item {",
+          "  int value;",
+          "};",
+          "",
+          "struct Item *header_item_ptr;",
+          "",
+          "union Value {",
+          "  int as_int;",
+          "  float as_float;",
+          "};",
+          "",
+          "union Value *header_value_ptr;",
+          "",
+          "enum Color {",
+          "  COLOR_RED,",
+          "  COLOR_GREEN,",
+          "};",
+          "",
+          "enum Color *header_color_ptr;",
+          "",
+          "typedef struct Item Item;",
+          "typedef union Value Value;",
+          "typedef enum Color Color;",
+          "",
+          "Item header_item_alias;",
+          "Value header_value_alias;",
+          "Color header_color_alias;",
+          "",
+        ];
+        await fsp.writeFile(headerFile, headerLines.join("\n"), "utf8");
+        await fsp.writeFile(
+          consumerFile,
+          '#include "./shapes.h"\nstruct Item;\nstruct Item *outer;\nvoid nested(void) {\n  struct Item;\n  struct Item *inner;\n}\n',
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [headerFile, consumerFile]);
+
+        // The tag token in `typedef struct Item Item;` is a tag reference, so it resolves to the
+        // struct tag declaration, not to the typedef on the same line.
+        await testGoToDefinition(index, headerFile, 23, headerLines[22]!.indexOf("Item") + 1, headerFile, 3);
+        await testGoToDefinition(index, headerFile, 24, headerLines[23]!.indexOf("Value") + 1, headerFile, 9);
+        await testGoToDefinition(index, headerFile, 25, headerLines[24]!.indexOf("Color") + 1, headerFile, 16);
+        // The alias token in the same statements is the typedef definition itself.
+        await testGoToDefinition(index, headerFile, 23, headerLines[22]!.lastIndexOf("Item") + 1, headerFile, 23);
+        await testGoToDefinition(index, headerFile, 24, headerLines[23]!.lastIndexOf("Value") + 1, headerFile, 24);
+        await testGoToDefinition(index, headerFile, 25, headerLines[24]!.lastIndexOf("Color") + 1, headerFile, 25);
+        // A file-scope tag use resolves to the tag declaration rather than to itself.
+        await testGoToDefinition(index, headerFile, 7, headerLines[6]!.indexOf("Item") + 1, headerFile, 3);
+        await testGoToDefinition(index, headerFile, 14, headerLines[13]!.indexOf("Value") + 1, headerFile, 9);
+        await testGoToDefinition(index, headerFile, 21, headerLines[20]!.indexOf("Color") + 1, headerFile, 16);
+        // A file-scope typedef use resolves to the typedef definition.
+        await testGoToDefinition(index, headerFile, 27, headerLines[26]!.indexOf("Item") + 1, headerFile, 23);
+        await testGoToDefinition(index, headerFile, 28, headerLines[27]!.indexOf("Value") + 1, headerFile, 24);
+        await testGoToDefinition(index, headerFile, 29, headerLines[28]!.indexOf("Color") + 1, headerFile, 25);
+        await testGoToDefinition(index, consumerFile, 2, 8, headerFile, 3);
+        await testGoToDefinition(index, consumerFile, 3, 8, headerFile, 3);
+        await testGoToDefinition(index, consumerFile, 5, 10, consumerFile, 5);
+        await testGoToDefinition(index, consumerFile, 6, 10, consumerFile, 5);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
     });
   });
 
@@ -1329,6 +1730,388 @@ describe("Go to Definition", () => {
       const index = await createTestIndexFromFiles(samplePath, [usageFile, namespaceFile]);
 
       await testGoToDefinition(index, usageFile, 4, 12, namespaceFile, 4);
+    });
+
+    it("selects same-scope C++ overloads by call argument count", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-local-overload-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "int pick(void);",
+          "int pick(int value);",
+          "int zero() { return pick(); }",
+          "int one() { return pick(1); }",
+          "int choose(int value);",
+          "int choose(double value);",
+          "int unresolved() { return choose(1); }",
+          "",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        await testGoToDefinition(index, file, 3, lines[2]!.indexOf("pick") + 1, file, 1);
+        await testGoToDefinition(index, file, 4, lines[3]!.indexOf("pick") + 1, file, 2);
+        const ambiguous = await goToDefinition(index, {
+          file,
+          line: 7,
+          column: lines[6]!.indexOf("choose") + 1,
+        });
+        expect(ambiguous).toEqual({ status: "not_found", reason: "Ambiguous C++ overload" });
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("groups C++ redeclarations and accepts default and variadic arguments", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-callable-shape-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "int add(int left, int right);",
+          "int add(double value);",
+          "int add(int left, int right) { return left + right; }",
+          "int call_add() { return add(1, 2); }",
+          "int defaults(int left, int right = 0);",
+          "int defaults(int first, int second, int third);",
+          "int call_default() { return defaults(1); }",
+          "int spread(int first, ...);",
+          "int spread();",
+          "int call_spread() { return spread(1, 2, 3); }",
+          "int log(const char* format, ...);",
+          "int log(int code);",
+          "int call_log() { return log(1); }",
+          "",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        await testGoToDefinition(index, file, 4, lines[3]!.lastIndexOf("add") + 1, file, 3);
+        await testGoToDefinition(index, file, 7, lines[6]!.lastIndexOf("defaults") + 1, file, 5);
+        await testGoToDefinition(index, file, 10, lines[9]!.lastIndexOf("spread") + 1, file, 8);
+        const overlappingLog = await goToDefinition(index, {
+          file,
+          line: 13,
+          column: lines[12]!.lastIndexOf("log") + 1,
+        });
+        expect(overlappingLog.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("accepts a C++ parameter pack that binds no trailing arguments", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-parameter-pack-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "template<class T, class... Ts> int pack(T first, Ts... rest);",
+          "template<class T, class... Ts> int pack(T first, Ts... rest) { return first; }",
+          "int use_one() { return pack(1); }",
+          "int use_two() { return pack(1, 2); }",
+          "int use_zero() { return pack(); }",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        // The pack binds zero trailing arguments; the fixed parameter is still required.
+        await testGoToDefinition(index, file, 3, lines[2]!.lastIndexOf("pack") + 1, file, 2);
+        await testGoToDefinition(index, file, 4, lines[3]!.lastIndexOf("pack") + 1, file, 2);
+        await testGoToDefinition(index, file, 5, lines[4]!.lastIndexOf("pack") + 1, undefined, undefined, "not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves C++ declarations whose parameters differ only by language adjustments", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-adjusted-shape-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "int pick(int values[]);",
+          "int pick(int* values) { return values ? 1 : 0; }",
+          "int relay(void handler(int));",
+          "int relay(void (*handler)(int)) { return handler ? 1 : 0; }",
+          "int total(const int sum);",
+          "int total(int sum) { return sum; }",
+          "int exact(const int* values);",
+          "int exact(int* values) { return values ? 1 : 0; }",
+          "int use_pick(int* buf) { return pick(buf); }",
+          "int use_relay() { return relay(nullptr); }",
+          "int use_total() { return total(3); }",
+          "int use_exact(int* buf) { return exact(buf); }",
+          "int use_pick_invalid() { return pick(); }",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        await testGoToDefinition(index, file, 9, lines[8]!.lastIndexOf("pick") + 1, file, 2);
+        await testGoToDefinition(index, file, 10, lines[9]!.lastIndexOf("relay") + 1, file, 4);
+        await testGoToDefinition(index, file, 11, lines[10]!.lastIndexOf("total") + 1, file, 6);
+        const ambiguous = await goToDefinition(index, {
+          file,
+          line: 12,
+          column: lines[11]!.lastIndexOf("exact") + 1,
+        });
+        expect(ambiguous.status).toBe("not_found");
+        const invalidArity = await goToDefinition(index, {
+          file,
+          line: 13,
+          column: lines[12]!.lastIndexOf("pick") + 1,
+        });
+        expect(invalidArity.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not rank overlapping C++ default-argument overloads", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-default-overlap-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "int f();",
+          "int f(int value = 0);",
+          "int zero() { return f(); }",
+          "int one() { return f(1); }",
+          "",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        const ambiguous = await goToDefinition(index, {
+          file,
+          line: 3,
+          column: lines[2]!.lastIndexOf("f()") + 1,
+        });
+        expect(ambiguous.status).toBe("not_found");
+        await testGoToDefinition(index, file, 4, lines[3]!.lastIndexOf("f(") + 1, file, 2);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects invalid arity for a unique C++ declaration and keeps non-call references", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-unique-arity-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "int f(int value);",
+          "int zero() { return f(); }",
+          "int one() { return f(1); }",
+          "int two() { return f(1, 2); }",
+          "int (*ptr)(int) = f;",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        await testGoToDefinition(index, file, 2, lines[1]!.indexOf("f()") + 1, undefined, undefined, "not_found");
+        await testGoToDefinition(index, file, 3, lines[2]!.indexOf("f(1)") + 1, file, 1);
+        await testGoToDefinition(index, file, 4, lines[3]!.indexOf("f(1, 2)") + 1, undefined, undefined, "not_found");
+        await testGoToDefinition(index, file, 5, lines[4]!.lastIndexOf("f;") + 1, file, 1);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("uses default arguments from a C++ declaration separate from its definition", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-default-decl-def-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "int f(int value = 0);",
+          "int f(int value) { return value; }",
+          "int zero() { return f(); }",
+          "int one() { return f(1); }",
+          "int two() { return f(1, 2); }",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        await testGoToDefinition(index, file, 3, lines[2]!.indexOf("f()") + 1, file, 2);
+        await testGoToDefinition(index, file, 4, lines[3]!.indexOf("f(1)") + 1, file, 2);
+        await testGoToDefinition(index, file, 5, lines[4]!.indexOf("f(1, 2)") + 1, undefined, undefined, "not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("selects namespace-level using overload aliases by call argument count", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-using-alias-overload-goto-"));
+      try {
+        const header = path.join(root, "api.hpp").replace(/\\/g, "/");
+        const file = path.join(root, "use.cpp").replace(/\\/g, "/");
+        const headerLines = [
+          "namespace left {",
+          "int run(int*);",
+          "int pick();",
+          "int pick(int);",
+          "}",
+          "namespace alias { inline namespace v1 { using left::pick; } }",
+        ];
+        const lines = [
+          '#include "api.hpp"',
+          "int invalid_zero() { return left::run(); }",
+          "int invalid_two() { return left::run(nullptr, nullptr); }",
+          "int zero() { return alias::pick(); }",
+          "int one() { return alias::pick(1); }",
+          "int too_many() { return alias::pick(1, 2); }",
+          "using left::pick;",
+          "int direct_zero() { return pick(); }",
+          "int direct_one() { return pick(1); }",
+          "int direct_invalid() { return pick(1, 2); }",
+        ];
+        await fsp.writeFile(header, headerLines.join("\n"), "utf8");
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [header, file]);
+
+        await testGoToDefinition(index, file, 2, lines[1]!.lastIndexOf("run") + 1, undefined, undefined, "not_found");
+        await testGoToDefinition(index, file, 3, lines[2]!.lastIndexOf("run") + 1, undefined, undefined, "not_found");
+        await testGoToDefinition(index, file, 4, lines[3]!.lastIndexOf("pick") + 1, header, 3);
+        await testGoToDefinition(index, file, 5, lines[4]!.lastIndexOf("pick") + 1, header, 4);
+        await testGoToDefinition(index, file, 6, lines[5]!.lastIndexOf("pick") + 1, undefined, undefined, "not_found");
+        await testGoToDefinition(index, file, 8, lines[7]!.lastIndexOf("pick") + 1, header, 3);
+        await testGoToDefinition(index, file, 9, lines[8]!.lastIndexOf("pick") + 1, header, 4);
+        await testGoToDefinition(index, file, 10, lines[9]!.lastIndexOf("pick") + 1, undefined, undefined, "not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps overlapping default and variadic C++ using aliases unresolved", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-using-alias-overlap-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "namespace tools { int log(const char* format, ...); int log(int code); }",
+          "namespace alias { using tools::log; }",
+          "int call() { return alias::log(1); }",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+        const unresolved = await goToDefinition(index, {
+          file,
+          line: 3,
+          column: lines[2]!.lastIndexOf("log") + 1,
+        });
+        expect(unresolved.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      {
+        name: "unnamed pointer parameters",
+        declarations: ["int pick(int*);", "int pick(int* value) { return 1; }"],
+        call: "pick(nullptr)",
+        targetLine: 2,
+      },
+      {
+        name: "renamed reference parameters",
+        declarations: ["int pick(int&);", "int pick(int& value) { return value; }"],
+        call: "pick(value)",
+        targetLine: 2,
+      },
+      {
+        name: "nested callback parameter names",
+        declarations: ["int pick(void (*)(int));", "int pick(void (*callback)(int value)) { return 1; }"],
+        call: "pick(nullptr)",
+        targetLine: 2,
+      },
+      {
+        name: "distinct reference operators",
+        declarations: ["int pick(int& value);", "int pick(int&& value);"],
+        call: "pick(value)",
+        targetLine: undefined,
+      },
+      {
+        name: "distinct array-bound operators",
+        declarations: ["int pick(int (*value)[2+3]) { return 1; }", "int pick(int (*value)[2*3]) { return 2; }"],
+        call: "pick(nullptr)",
+        targetLine: undefined,
+      },
+    ])("preserves C++ callable identity for $name", async ({ declarations, call, targetLine }) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-signature-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [...declarations, `int use(int& value) { return ${call}; }`];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+        const result = await goToDefinition(index, {
+          file,
+          line: 3,
+          column: lines[2]!.indexOf("pick") + 1,
+        });
+        if (targetLine === undefined) {
+          expect(result.status).toBe("not_found");
+        } else {
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") throw new Error("Expected one C++ callable entity");
+          expect(result.definition.range.start.line).toBe(targetLine);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("links namespace-qualified free definitions to bare and qualified calls", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-namespace-definition-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "namespace tools { int run(); int call() { return run(); } }",
+          "int tools::run() { return 1; }",
+          "int outside() { return tools::run(); }",
+          "",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        await testGoToDefinition(index, file, 1, lines[0]!.lastIndexOf("run();") + 1, file, 2);
+        await testGoToDefinition(index, file, 3, lines[2]!.lastIndexOf("run();") + 1, file, 2);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("models named, unnamed, inline, and nested C++ namespaces", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-namespace-scope-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "namespace named { int isolated() { return 1; } }",
+          "namespace { int hidden() { return 2; } }",
+          "inline namespace v1 { int versioned() { return 3; } }",
+          "namespace outer::inner { int nested() { return 4; } }",
+          "int use_hidden() { return hidden(); }",
+          "int use_versioned() { return versioned(); }",
+          "int use_nested() { return outer::inner::nested(); }",
+          "int invalid_bare() { return isolated(); }",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        await testGoToDefinition(index, file, 5, lines[4]!.lastIndexOf("hidden") + 1, file, 2);
+        await testGoToDefinition(index, file, 6, lines[5]!.lastIndexOf("versioned") + 1, file, 3);
+        await testGoToDefinition(index, file, 7, lines[6]!.lastIndexOf("nested") + 1, file, 4);
+        await testGoToDefinition(index, file, 8, lines[7]!.indexOf("isolated") + 1, undefined, undefined, "not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("returns safely for an incomplete C++ base clause", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-incomplete-base-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const source = "class Derived : public { int run() { return this->missing(); } };\n";
+        await fsp.writeFile(file, source, "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        await testGoToDefinition(index, file, 1, source.indexOf("missing") + 1, undefined, undefined, "not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
     });
   });
 
@@ -2982,6 +3765,1350 @@ describe("Receiver construction, reassignment, typed parameters, and static scop
       await fsp.rm(csFix.root, { recursive: true, force: true });
       await fsp.rm(javaFix.root, { recursive: true, force: true });
       await fsp.rm(phpFix.root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Keyword-receiver member navigation", () => {
+  function columnOf(source: string, line: number, token: string): number {
+    const lines = source.split("\n");
+    const index = lines[line - 1]!.indexOf(token);
+    if (index < 0) throw new Error(`Expected token ${token} on fixture line ${line}`);
+    return index + 1;
+  }
+
+  async function buildFiles(
+    prefix: string,
+    files: Record<string, string>,
+  ): Promise<{ root: string; paths: Record<string, string>; index: ProjectIndex }> {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
+    const paths: Record<string, string> = {};
+    for (const [name, source] of Object.entries(files)) {
+      const file = path.join(root, name).replace(/\\/g, "/");
+      await fsp.mkdir(path.dirname(file), { recursive: true });
+      await fsp.writeFile(file, source, "utf8");
+      paths[name] = file;
+    }
+    return { root, paths, index: await createTestIndexFromFiles(root, Object.values(paths)) };
+  }
+
+  async function expectMemberAccess(
+    index: ProjectIndex,
+    file: string,
+    line: number,
+    column: number,
+    expectedLine: number,
+  ): Promise<void> {
+    const result = await goToDefinition(index, { file, line, column });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.definition.range.start.line).toBe(expectedLine);
+    expect(result.provenance?.resolution).toBe("member-access");
+  }
+
+  it("resolves C++ this-> method and field through member-access", async () => {
+    const source = [
+      "class Box {",
+      " public:",
+      "  int field = 1;",
+      "  int target() { return 1; }",
+      "  int run() { return this->field + this->target(); }",
+      "};",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cpp-this-goto-", { "box.cpp": source });
+    try {
+      await expectMemberAccess(index, paths["box.cpp"]!, 5, columnOf(source, 5, "field"), 3);
+      await expectMemberAccess(index, paths["box.cpp"]!, 5, columnOf(source, 5, "target()"), 4);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a C++ static call to its class declaration when its implementation is out of line", async () => {
+    const header = ["class Box {", " public:", "  static int make(int value);", "  int run(int value);", "};", ""].join(
+      "\n",
+    );
+    const implementation = [
+      '#include "box.hpp"',
+      "int Box::make(int value) { return value; }",
+      "int Box::run(int value) { return make(value); }",
+      "",
+    ].join("\n");
+    const consumer = ['#include "box.hpp"', "int use() { return Box::make(1); }", ""].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cpp-out-of-line-goto-", {
+      "box.hpp": header,
+      "box.cpp": implementation,
+      "use.cpp": consumer,
+    });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["use.cpp"]!,
+        line: 2,
+        column: columnOf(consumer, 2, "make"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.definition.file).toBe(paths["box.hpp"]);
+      expect(result.definition.range.start.line).toBe(3);
+      expect(result.provenance?.resolution).toBe("member-access");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves C# this. method and field through member-access", async () => {
+    const source = [
+      "class Box {",
+      "  public int field = 1;",
+      "  public int Target() { return 1; }",
+      "  public int Run() { return this.field + this.Target(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cs-this-goto-", { "Box.cs": source });
+    try {
+      await expectMemberAccess(index, paths["Box.cs"]!, 4, columnOf(source, 4, "field"), 2);
+      await expectMemberAccess(index, paths["Box.cs"]!, 4, columnOf(source, 4, "Target()"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Java this. method and field through member-access", async () => {
+    const source = [
+      "class Box {",
+      "  int field = 1;",
+      "  int target() { return 1; }",
+      "  int run() { return this.field + this.target(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-java-this-goto-", { "Box.java": source });
+    try {
+      await expectMemberAccess(index, paths["Box.java"]!, 4, columnOf(source, 4, "field"), 2);
+      await expectMemberAccess(index, paths["Box.java"]!, 4, columnOf(source, 4, "target()"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Java this members through interfaces but keeps super on the class chain", async () => {
+    const source = [
+      "class Base {}",
+      "interface Face { default int target() { return 1; } }",
+      "class Box extends Base implements Face {",
+      "  int own() { return this.target(); }",
+      "  int inherited() { return super.target(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-java-interface-goto-", { "Box.java": source });
+    try {
+      await expectMemberAccess(index, paths["Box.java"]!, 4, columnOf(source, 4, "target()"), 2);
+      const result = await goToDefinition(index, {
+        file: paths["Box.java"]!,
+        line: 5,
+        column: columnOf(source, 5, "target()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Kotlin this. method and field through member-access", async () => {
+    const source = [
+      "class Box {",
+      "  val field = 1",
+      "  fun target(): Int = 1",
+      "  fun run(): Int = this.field + this.target()",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-kt-this-goto-", { "Box.kt": source });
+    try {
+      await expectMemberAccess(index, paths["Box.kt"]!, 4, columnOf(source, 4, "field"), 2);
+      await expectMemberAccess(index, paths["Box.kt"]!, 4, columnOf(source, 4, "target()"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Ruby self. method through member-access", async () => {
+    const source = ["class Box", "  def target", "  end", "  def run", "    self.target", "  end", "end", ""].join(
+      "\n",
+    );
+    const { root, paths, index } = await buildFiles("cg-rb-self-goto-", { "box.rb": source });
+    try {
+      await expectMemberAccess(index, paths["box.rb"]!, 5, columnOf(source, 5, "target"), 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves PHP $this members through used traits", async () => {
+    const source = [
+      "<?php",
+      "trait Greeter { function target() {} }",
+      "class Box {",
+      "  use Greeter;",
+      "  function run() { $this->target(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-php-trait-goto-", { "box.php": source });
+    try {
+      await expectMemberAccess(index, paths["box.php"]!, 5, columnOf(source, 5, "target()"), 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Ruby self members through included mixins", async () => {
+    const source = [
+      "module Greeter",
+      "  def target",
+      "  end",
+      "end",
+      "class Box",
+      "  include Greeter",
+      "  def run",
+      "    self.target",
+      "  end",
+      "end",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ruby-mixin-goto-", { "box.rb": source });
+    try {
+      await expectMemberAccess(index, paths["box.rb"]!, 8, columnOf(source, 8, "target"), 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Swift self. method through member-access", async () => {
+    const source = [
+      "class Box {",
+      "  var field = 1",
+      "  func target() -> Int { return 1 }",
+      "  func run() -> Int { return self.target() }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-swift-self-goto-", { "Box.swift": source });
+    try {
+      await expectMemberAccess(index, paths["Box.swift"]!, 4, columnOf(source, 4, "target()"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("resolves C# this members without selecting method-local or nested-class declarations", async () => {
+    const source = [
+      "class Box {",
+      "  public void Run() { int helper = 0; this.helper(); }",
+      "  class Nested { public void target() {} }",
+      "  public void RunNested() { this.target(); }",
+      "  public void helper() {}",
+      "  public void target() {}",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cs-this-direct-goto-", { "Box.cs": source });
+    try {
+      await expectMemberAccess(index, paths["Box.cs"]!, 2, columnOf(source, 2, "helper()"), 5);
+      await expectMemberAccess(index, paths["Box.cs"]!, 4, columnOf(source, 4, "target()"), 6);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves TypeScript this members through unique ancestors and rejects same-depth ambiguity", async () => {
+    const source = [
+      "class Base {",
+      "  helper(): number { return 1; }",
+      "}",
+      "class Left {",
+      "  helper(): number { return 2; }",
+      "}",
+      "class Right {",
+      "  helper(): number { return 3; }",
+      "}",
+      "class Derived extends Base {",
+      "  run(): number { return this.helper(); }",
+      "}",
+      "class Ambiguous extends Left, Right {",
+      "  run(): number { return this.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-this-ancestor-goto-", { "Box.ts": source });
+    try {
+      await expectMemberAccess(index, paths["Box.ts"]!, 11, columnOf(source, 11, "helper()"), 2);
+      const result = await goToDefinition(index, {
+        file: paths["Box.ts"]!,
+        line: 14,
+        column: columnOf(source, 14, "helper()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve this.member when shallow bases are ambiguous even with a shared grandparent", async () => {
+    const source = [
+      "class Grand {",
+      "  helper(): number { return 0; }",
+      "}",
+      "class Left extends Grand {",
+      "  helper(): number { return 1; }",
+      "}",
+      "class Right extends Grand {",
+      "  helper(): number { return 2; }",
+      "}",
+      "class Ambiguous extends Left, Right {",
+      "  run(): number { return this.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-this-grandparent-goto-", { "Box.ts": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["Box.ts"]!,
+        line: 11,
+        column: columnOf(source, 11, "helper()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps instance and type receiver member scopes separate", async () => {
+    const csharp = [
+      "class Box {",
+      "  public static void helper() {}",
+      "  public void Run() { this.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const php = [
+      "<?php",
+      "class Box {",
+      "  public static function helper() {}",
+      "  public function run() { static::helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const csharpFix = await buildFiles("cg-cs-this-static-goto-", { "Box.cs": csharp });
+    const phpFix = await buildFiles("cg-php-static-goto-", { "Box.php": php });
+    try {
+      const csharpResult = await goToDefinition(csharpFix.index, {
+        file: csharpFix.paths["Box.cs"]!,
+        line: 3,
+        column: columnOf(csharp, 3, "helper()"),
+      });
+      expect(csharpResult.status).toBe("not_found");
+      await expectMemberAccess(phpFix.index, phpFix.paths["Box.php"]!, 4, columnOf(php, 4, "helper()"), 3);
+    } finally {
+      await fsp.rm(csharpFix.root, { recursive: true, force: true });
+      await fsp.rm(phpFix.root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves TypeScript static this to static members while instance contexts stay instance-only", async () => {
+    const source = [
+      "class Box {",
+      "  static helper(): number { return 1; }",
+      "  member(): number { return 2; }",
+      "  static run(): number { return this.helper(); }",
+      "  static run2(): number { return this.member(); }",
+      "  run(): number { return this.member(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-static-this-goto-", { "Box.ts": source });
+    try {
+      await expectMemberAccess(index, paths["Box.ts"]!, 4, columnOf(source, 4, "helper()"), 2);
+      const instanceMemberFromStatic = await goToDefinition(index, {
+        file: paths["Box.ts"]!,
+        line: 5,
+        column: columnOf(source, 5, "member()"),
+      });
+      expect(instanceMemberFromStatic.status).toBe("not_found");
+      await expectMemberAccess(index, paths["Box.ts"]!, 6, columnOf(source, 6, "member()"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve this.member across a nested ordinary function and keeps lexical this through arrows", async () => {
+    const source = [
+      "class Box {",
+      "  helper(): number { return 1; }",
+      "  static helperStatic(): number { return 2; }",
+      "  run(): number {",
+      "    function inner() { return this.helper(); }",
+      "    const expr = function named() { return this.helper(); };",
+      "    const object = { nested() { return this.helper(); } };",
+      "    const arrow = () => this.helper();",
+      "    const nested = () => { const innerArrow = () => this.helper(); return innerArrow(); };",
+      "    return arrow() + nested();",
+      "  }",
+      "  static runStatic(): number {",
+      "    function inner() { return this.helperStatic(); }",
+      "    const arrow = () => this.helperStatic();",
+      "    return arrow();",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const js = source.replaceAll(": number", "");
+    const tsx = [
+      "class Box {",
+      "  helper() { return 1; }",
+      "  run() {",
+      "    function inner() { return <span>{this.helper()}</span>; }",
+      "    const object = { nested() { return <span>{this.helper()}</span>; } };",
+      "    const arrow = () => <span>{this.helper()}</span>;",
+      "    return arrow();",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const tsFix = await buildFiles("cg-ts-this-nested-fn-goto-", { "Box.ts": source });
+    const jsFix = await buildFiles("cg-js-this-nested-fn-goto-", { "box.js": js });
+    const tsxFix = await buildFiles("cg-tsx-this-nested-fn-goto-", { "Box.tsx": tsx });
+    try {
+      for (const { index, file, helperLine } of [
+        { index: tsFix.index, file: tsFix.paths["Box.ts"]!, helperLine: 2 },
+        { index: jsFix.index, file: jsFix.paths["box.js"]!, helperLine: 2 },
+      ]) {
+        const inner = await goToDefinition(index, { file, line: 5, column: columnOf(source, 5, "helper()") });
+        expect(inner.status).toBe("not_found");
+        const named = await goToDefinition(index, { file, line: 6, column: columnOf(source, 6, "helper()") });
+        expect(named.status).toBe("not_found");
+        const objectMethod = await goToDefinition(index, {
+          file,
+          line: 7,
+          column: columnOf(source, 7, "helper()"),
+        });
+        expect(objectMethod.status).toBe("not_found");
+        await expectMemberAccess(index, file, 8, columnOf(source, 8, "helper()"), helperLine);
+        await expectMemberAccess(index, file, 9, columnOf(source, 9, "helper()"), helperLine);
+        const staticInner = await goToDefinition(index, {
+          file,
+          line: 13,
+          column: columnOf(source, 13, "helperStatic()"),
+        });
+        expect(staticInner.status).toBe("not_found");
+        await expectMemberAccess(index, file, 14, columnOf(source, 14, "helperStatic()"), 3);
+      }
+      const innerTsx = await goToDefinition(tsxFix.index, {
+        file: tsxFix.paths["Box.tsx"]!,
+        line: 4,
+        column: columnOf(tsx, 4, "helper()"),
+      });
+      expect(innerTsx.status).toBe("not_found");
+      const objectMethodTsx = await goToDefinition(tsxFix.index, {
+        file: tsxFix.paths["Box.tsx"]!,
+        line: 5,
+        column: columnOf(tsx, 5, "helper()"),
+      });
+      expect(objectMethodTsx.status).toBe("not_found");
+      await expectMemberAccess(tsxFix.index, tsxFix.paths["Box.tsx"]!, 6, columnOf(tsx, 6, "helper()"), 2);
+    } finally {
+      await fsp.rm(tsFix.root, { recursive: true, force: true });
+      await fsp.rm(jsFix.root, { recursive: true, force: true });
+      await fsp.rm(tsxFix.root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Swift static and class self to type members while instance self stays instance-only", async () => {
+    const source = [
+      "class Box {",
+      "  static func a() -> Int { return 1 }",
+      "  class func b() -> Int { return 2 }",
+      "  func c() -> Int { return 3 }",
+      "  static func runA() -> Int { return self.a() }",
+      "  class func runB() -> Int { return self.b() }",
+      "  func runC() -> Int { return self.c() }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-swift-static-self-goto-", { "Box.swift": source });
+    try {
+      await expectMemberAccess(index, paths["Box.swift"]!, 5, columnOf(source, 5, "a()"), 2);
+      await expectMemberAccess(index, paths["Box.swift"]!, 6, columnOf(source, 6, "b()"), 3);
+      await expectMemberAccess(index, paths["Box.swift"]!, 7, columnOf(source, 7, "c()"), 4);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects TypeScript this overloads by known call argument count", async () => {
+    const source = [
+      "class Box {",
+      "  helper(): number { return 1; }",
+      "  helper(x: number): number { return 2; }",
+      "  run(): number { return this.helper(); }",
+      "  run2(x: number): number { return this.helper(x); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-this-overload-goto-", { "Box.ts": source });
+    try {
+      await expectMemberAccess(index, paths["Box.ts"]!, 4, columnOf(source, 4, "helper()"), 2);
+      await expectMemberAccess(index, paths["Box.ts"]!, 5, columnOf(source, 5, "helper(x)"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("stops ancestor lookup when shallow overloads reject a known argument count", async () => {
+    const source = [
+      "class Grand {",
+      "  helper(): number { return 0; }",
+      "}",
+      "class Base extends Grand {",
+      "  helper(x: number): number { return x; }",
+      "  helper(x: number, y: number): number { return x + y; }",
+      "}",
+      "class Child extends Base {",
+      "  run(): number { return this.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-this-overload-shadow-goto-", { "Box.ts": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["Box.ts"]!,
+        line: 9,
+        column: columnOf(source, 9, "helper()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("stops ancestor lookup when one shallow member rejects a known argument count", async () => {
+    const source = [
+      "class Grand {",
+      "  helper(): number { return 0; }",
+      "}",
+      "class Base extends Grand {",
+      "  helper(x: number): number { return x; }",
+      "}",
+      "class Child extends Base {",
+      "  run(): number { return this.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-this-single-shadow-goto-", { "Box.ts": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["Box.ts"]!,
+        line: 8,
+        column: columnOf(source, 8, "helper()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an unknown argument count ambiguous for this overloads", async () => {
+    const source = [
+      "class Box {",
+      "  helper(): number { return 1; }",
+      "  helper(x: number): number { return 2; }",
+      "  run(): number { const fn = this.helper; return fn(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-this-overload-unknown-goto-", { "Box.ts": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["Box.ts"]!,
+        line: 4,
+        column: columnOf(source, 4, "helper;"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects Java this overloads by known call argument count", async () => {
+    const source = [
+      "class Box {",
+      "  void helper() {}",
+      "  void helper(int a) {}",
+      "  void run() { this.helper(); }",
+      "  void run2(int a) { this.helper(a); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-java-this-overload-goto-", { "Box.java": source });
+    try {
+      await expectMemberAccess(index, paths["Box.java"]!, 4, columnOf(source, 4, "helper()"), 2);
+      await expectMemberAccess(index, paths["Box.java"]!, 5, columnOf(source, 5, "helper(a)"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects C# this overloads by known call argument count", async () => {
+    const source = [
+      "class Box {",
+      "  public void Helper() {}",
+      "  public void Helper(int a) {}",
+      "  public void Run() { this.Helper(); }",
+      "  public void Run2(int a) { this.Helper(a); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cs-this-overload-goto-", { "Box.cs": source });
+    try {
+      await expectMemberAccess(index, paths["Box.cs"]!, 4, columnOf(source, 4, "Helper()"), 2);
+      await expectMemberAccess(index, paths["Box.cs"]!, 5, columnOf(source, 5, "Helper(a)"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves an inherited Kotlin interface member through this", async () => {
+    const source = [
+      "interface Face {",
+      "  fun helper(): Int { return 3 }",
+      "}",
+      "class Derived : Face {",
+      "  fun run(): Int { return this.helper() }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-kt-this-interface-goto-", { "box.kt": source });
+    try {
+      await expectMemberAccess(index, paths["box.kt"]!, 5, columnOf(source, 5, "helper()"), 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a member through an imported named type alias", async () => {
+    const namedFace = ["export type NamedFace = {", "  fromAlias(): number", "}", ""].join("\n");
+    const child = [
+      'import { NamedFace } from "./named-face";',
+      "class AliasChild implements NamedFace {",
+      "  run(): number { return this.fromAlias() }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-imported-type-alias-goto-", {
+      "named-face.ts": namedFace,
+      "child.ts": child,
+    });
+    try {
+      await testGoToDefinition(
+        index,
+        paths["child.ts"]!,
+        3,
+        columnOf(child, 3, "fromAlias()"),
+        paths["named-face.ts"]!,
+        2,
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a member through an imported Java interface", async () => {
+    const face = ["package api;", "public interface Face {", "  default int helper() { return 1; }", "}", ""].join(
+      "\n",
+    );
+    const child = [
+      "package app;",
+      "import api.Face;",
+      "class Child implements Face {",
+      "  int run() { return this.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-java-imported-interface-goto-", {
+      "api/Face.java": face,
+      "app/Child.java": child,
+    });
+    try {
+      await testGoToDefinition(
+        index,
+        paths["app/Child.java"]!,
+        4,
+        columnOf(child, 4, "helper()"),
+        paths["api/Face.java"]!,
+        3,
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects C++ this-> overloads by known call argument count", async () => {
+    const source = [
+      "struct Box {",
+      " public:",
+      "  void helper() {}",
+      "  void helper(int a) {}",
+      "  void run() { this->helper(); }",
+      "  void run2(int a) { this->helper(a); }",
+      "};",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cpp-this-overload-goto-", { "box.cpp": source });
+    try {
+      await expectMemberAccess(index, paths["box.cpp"]!, 5, columnOf(source, 5, "helper()"), 3);
+      await expectMemberAccess(index, paths["box.cpp"]!, 6, columnOf(source, 6, "helper(a)"), 4);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Supertype keyword member navigation", () => {
+  function columnOf(source: string, line: number, token: string): number {
+    const lines = source.split("\n");
+    const index = lines[line - 1]!.indexOf(token);
+    if (index < 0) throw new Error(`Expected token ${token} on fixture line ${line}`);
+    return index + 1;
+  }
+
+  async function buildFiles(
+    prefix: string,
+    files: Record<string, string>,
+  ): Promise<{ root: string; paths: Record<string, string>; index: ProjectIndex }> {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
+    const paths: Record<string, string> = {};
+    for (const [name, source] of Object.entries(files)) {
+      const file = path.join(root, name).replace(/\\/g, "/");
+      await fsp.mkdir(path.dirname(file), { recursive: true });
+      await fsp.writeFile(file, source, "utf8");
+      paths[name] = file;
+    }
+    return { root, paths, index: await createTestIndexFromFiles(root, Object.values(paths)) };
+  }
+
+  async function expectMemberAccess(
+    index: ProjectIndex,
+    file: string,
+    line: number,
+    column: number,
+    expectedLine: number,
+  ): Promise<void> {
+    const result = await goToDefinition(index, { file, line, column });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.definition.range.start.line).toBe(expectedLine);
+    expect(result.provenance?.resolution).toBe("member-access");
+  }
+
+  it("resolves TypeScript super.helper() to the base declaration, not the derived override", async () => {
+    const source = [
+      "class Base {",
+      "  helper(): number { return 1; }",
+      "}",
+      "class Derived extends Base {",
+      "  helper(): number { return 2; }",
+      "  run(): number { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-super-goto-", { "box.ts": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["box.ts"]!,
+        line: 6,
+        column: columnOf(source, 6, "helper()"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.definition.range.start.line).toBe(2);
+      expect(result.definition.range.start.line).not.toBe(5);
+      expect(result.provenance?.resolution).toBe("member-access");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Swift super on the class ancestor and excludes protocols", async () => {
+    const source = [
+      "protocol Face { func helper() -> Int }",
+      "class Base { func helper() -> Int { return 1 } }",
+      "class Derived: Base, Face {",
+      "  override func helper() -> Int { return 2 }",
+      "  func run() -> Int { return super.helper() }",
+      "}",
+      "class ProtocolOnly: Face {",
+      "  func helper() -> Int { return 3 }",
+      "  func run() -> Int { return super.helper() }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-swift-super-goto-", { "box.swift": source });
+    try {
+      await expectMemberAccess(index, paths["box.swift"]!, 5, columnOf(source, 5, "helper()"), 2);
+      const protocolOnly = await goToDefinition(index, {
+        file: paths["box.swift"]!,
+        line: 9,
+        column: columnOf(source, 9, "helper()"),
+      });
+      expect(protocolOnly.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not infer a superclass from inside a computed TypeScript extends expression", async () => {
+    const source = [
+      "class Base {",
+      "  helper(): number { return 1; }",
+      "}",
+      "function mixin<T>(base: T): T { return base; }",
+      "class Derived extends mixin(Base) {",
+      "  run(): number { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-computed-super-goto-", { "box.ts": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["box.ts"]!,
+        line: 6,
+        column: columnOf(source, 6, "helper()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fall back to a same-named module-level function for super.missing()", async () => {
+    const source = [
+      "function missing(): number { return 0; }",
+      "class Base {}",
+      "class Derived extends Base {",
+      "  run(): number { return super.missing(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-super-missing-goto-", { "box.ts": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["box.ts"]!,
+        line: 4,
+        column: columnOf(source, 4, "missing()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve super.helper() when two same-level ancestors declare helper", async () => {
+    const source = [
+      "class Left {",
+      "  helper(): number { return 1; }",
+      "}",
+      "class Right {",
+      "  helper(): number { return 2; }",
+      "}",
+      "class Derived extends Left, Right {",
+      "  run(): number { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-super-ambiguous-goto-", { "box.ts": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["box.ts"]!,
+        line: 8,
+        column: columnOf(source, 8, "helper()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve super.helper() through a shared grandparent when direct bases are ambiguous", async () => {
+    const source = [
+      "class Grand {",
+      "  helper(): number { return 0; }",
+      "}",
+      "class Left extends Grand {",
+      "  helper(): number { return 1; }",
+      "}",
+      "class Right extends Grand {",
+      "  helper(): number { return 2; }",
+      "}",
+      "class Derived extends Left, Right {",
+      "  run(): number { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-super-grandparent-goto-", { "box.ts": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["box.ts"]!,
+        line: 11,
+        column: columnOf(source, 11, "helper()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("skips an interface base when a class ancestor declares the member", async () => {
+    // `base` follows class ancestors. C# lists the superclass and every interface in one
+    // `base_list`, so an interface declaration must never answer the keyword.
+    const source = [
+      "interface IShape {",
+      "  int Area();",
+      "}",
+      "class Base {",
+      "  public virtual int Area() { return 1; }",
+      "}",
+      "class Square : Base, IShape {",
+      "  public override int Area() { return base.Area(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cs-base-interface-goto-", { "shapes.cs": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["shapes.cs"]!,
+        line: 8,
+        column: columnOf(source, 8, "Area();"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.definition.range.start.line).toBe(5);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve base.Area() to an interface-only base", async () => {
+    const source = [
+      "interface IShape {",
+      "  int Area();",
+      "}",
+      "class Square : IShape {",
+      "  public int Area() { return base.Area(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cs-base-interface-only-goto-", { "shapes.cs": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["shapes.cs"]!,
+        line: 5,
+        column: columnOf(source, 5, "Area();"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves C++ this members through an exact namespace-qualified base", async () => {
+    const source = [
+      "namespace decoy { class Base { public: int inherited() { return 0; } }; }",
+      "namespace ns { class Base { public: int inherited() { return 1; } }; }",
+      "class Derived : public ns::Base { public: int use() { return this->inherited(); } };",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cpp-qualified-base-goto-", { "derived.cpp": source });
+    try {
+      await expectMemberAccess(index, paths["derived.cpp"]!, 3, columnOf(source, 3, "inherited()"), 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves C++ this members through an unqualified base", async () => {
+    const source = [
+      "class Base { public: int inherited() { return 1; } };",
+      "class Derived : public Base { public: int use() { return this->inherited(); } };",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cpp-unqualified-base-goto-", { "derived.cpp": source });
+    try {
+      await expectMemberAccess(index, paths["derived.cpp"]!, 2, columnOf(source, 2, "inherited()"), 1);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves C++ members through every base in a base clause", async () => {
+    const source = [
+      "class Left { public: int left_only() { return 1; } };",
+      "class Right { public: int right_only() { return 2; } };",
+      "class Derived : public Left, public Right { public: int use() { return this->right_only(); } };",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cpp-multiple-base-goto-", { "derived.cpp": source });
+    try {
+      await expectMemberAccess(index, paths["derived.cpp"]!, 3, columnOf(source, 3, "right_only()"), 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves TypeScript super.helper() through a namespace-imported qualified base", async () => {
+    const imported = ["export class Base {", "  helper(): number { return 1; }", "}", ""].join("\n");
+    const derived = [
+      'import * as ns from "./imported";',
+      "class Base {",
+      "  helper(): number { return 0; }",
+      "}",
+      "class Derived extends ns.Base {",
+      "  helper(): number { return 2; }",
+      "  run(): number { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-super-ns-goto-", {
+      "imported.ts": imported,
+      "derived.ts": derived,
+    });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["derived.ts"]!,
+        line: 7,
+        column: columnOf(derived, 7, "helper()"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(paths["imported.ts"]!));
+      expect(result.definition.range.start.line).toBe(2);
+      expect(result.definition.range.start.line).not.toBe(3);
+      expect(result.provenance?.resolution).toBe("member-access");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves TypeScript super.helper() through a default-import base", async () => {
+    const base = ["export default class Base {", "  helper(): number { return 1; }", "}", ""].join("\n");
+    const derived = [
+      'import Base from "./base";',
+      "class Derived extends Base {",
+      "  helper(): number { return 2; }",
+      "  run(): number { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-super-default-goto-", {
+      "base.ts": base,
+      "derived.ts": derived,
+    });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["derived.ts"]!,
+        line: 4,
+        column: columnOf(derived, 4, "helper()"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(paths["base.ts"]!));
+      expect(result.definition.range.start.line).toBe(2);
+      expect(result.provenance?.resolution).toBe("member-access");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves JavaScript super.helper() through a default-import base", async () => {
+    const base = ["export default class Base {", "  helper() { return 1; }", "}", ""].join("\n");
+    const derived = [
+      'import Base from "./base";',
+      "class Derived extends Base {",
+      "  helper() { return 2; }",
+      "  run() { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-js-super-default-goto-", {
+      "base.js": base,
+      "derived.js": derived,
+    });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["derived.js"]!,
+        line: 4,
+        column: columnOf(derived, 4, "helper()"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(paths["base.js"]!));
+      expect(result.definition.range.start.line).toBe(2);
+      expect(result.provenance?.resolution).toBe("member-access");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fall back to a simple-name Base decoy when a qualified base is unresolved or ambiguous", async () => {
+    const empty = ["export const value = 1;", ""].join("\n");
+    const left = ["export class Base {", "  helper(): number { return 1; }", "}", ""].join("\n");
+    const right = ["export class Base {", "  helper(): number { return 2; }", "}", ""].join("\n");
+    const unresolved = [
+      'import * as ns from "./empty";',
+      "class Base {",
+      "  helper(): number { return 0; }",
+      "}",
+      "class Derived extends ns.Base {",
+      "  run(): number { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const missingQualifier = [
+      "class Base {",
+      "  helper(): number { return 0; }",
+      "}",
+      "class Derived extends ns.Base {",
+      "  run(): number { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const ambiguous = [
+      'import * as ns from "./left";',
+      'import * as ns from "./right";',
+      "class Base {",
+      "  helper(): number { return 0; }",
+      "}",
+      "class Derived extends ns.Base {",
+      "  run(): number { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const unresolvedFix = await buildFiles("cg-ts-super-unresolved-qual-goto-", {
+      "empty.ts": empty,
+      "derived.ts": unresolved,
+    });
+    const missingFix = await buildFiles("cg-ts-super-missing-qual-goto-", { "derived.ts": missingQualifier });
+    const ambiguousFix = await buildFiles("cg-ts-super-ambiguous-qual-goto-", {
+      "left.ts": left,
+      "right.ts": right,
+      "derived.ts": ambiguous,
+    });
+    try {
+      const unresolvedResult = await goToDefinition(unresolvedFix.index, {
+        file: unresolvedFix.paths["derived.ts"]!,
+        line: 6,
+        column: columnOf(unresolved, 6, "helper()"),
+      });
+      expect(unresolvedResult.status).toBe("not_found");
+      const missingResult = await goToDefinition(missingFix.index, {
+        file: missingFix.paths["derived.ts"]!,
+        line: 5,
+        column: columnOf(missingQualifier, 5, "helper()"),
+      });
+      expect(missingResult.status).toBe("not_found");
+      const ambiguousResult = await goToDefinition(ambiguousFix.index, {
+        file: ambiguousFix.paths["derived.ts"]!,
+        line: 7,
+        column: columnOf(ambiguous, 7, "helper()"),
+      });
+      expect(ambiguousResult.status).toBe("not_found");
+    } finally {
+      await fsp.rm(unresolvedFix.root, { recursive: true, force: true });
+      await fsp.rm(missingFix.root, { recursive: true, force: true });
+      await fsp.rm(ambiguousFix.root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects TypeScript super overloads by known call argument count", async () => {
+    const source = [
+      "class Base {",
+      "  helper(): number { return 1; }",
+      "  helper(x: number): number { return 2; }",
+      "}",
+      "class Derived extends Base {",
+      "  run(): number { return super.helper(); }",
+      "  run2(x: number): number { return super.helper(x); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-ts-super-overload-goto-", { "box.ts": source });
+    try {
+      await expectMemberAccess(index, paths["box.ts"]!, 6, columnOf(source, 6, "helper()"), 2);
+      await expectMemberAccess(index, paths["box.ts"]!, 7, columnOf(source, 7, "helper(x)"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects Java super overloads by known call argument count", async () => {
+    const source = [
+      "class Base {",
+      "  void helper() {}",
+      "  void helper(int a) {}",
+      "}",
+      "class Derived extends Base {",
+      "  void run() { super.helper(); }",
+      "  void run2(int a) { super.helper(a); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-java-super-overload-goto-", { "Box.java": source });
+    try {
+      await expectMemberAccess(index, paths["Box.java"]!, 6, columnOf(source, 6, "helper()"), 2);
+      await expectMemberAccess(index, paths["Box.java"]!, 7, columnOf(source, 7, "helper(a)"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects C# base overloads by known call argument count", async () => {
+    const source = [
+      "class Base {",
+      "  public void Helper() {}",
+      "  public void Helper(int a) {}",
+      "}",
+      "class Derived : Base {",
+      "  public void Run() { base.Helper(); }",
+      "  public void Run2(int a) { base.Helper(a); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-cs-base-overload-goto-", { "Box.cs": source });
+    try {
+      await expectMemberAccess(index, paths["Box.cs"]!, 6, columnOf(source, 6, "Helper()"), 2);
+      await expectMemberAccess(index, paths["Box.cs"]!, 7, columnOf(source, 7, "Helper(a)"), 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves PHP parent members through case-variant local class and method names", async () => {
+    const source = [
+      "<?php",
+      "class Base { function helper() { return 1; } }",
+      "class Derived extends bAsE {",
+      "  function run() { return parent::HELPER(); }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-php-parent-case-goto-", { "box.php": source });
+    try {
+      await expectMemberAccess(index, paths["box.php"]!, 4, columnOf(source, 4, "HELPER()"), 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves PHP parent members through a case-variant imported alias", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-parent-alias-case-goto-"));
+    const baseFile = path.join(root, "src", "Base.php").replace(/\\/g, "/");
+    const derivedFile = path.join(root, "Derived.php").replace(/\\/g, "/");
+    const base = ["<?php", "namespace App;", "class Base {", "  function helper() { return 1; }", "}", ""].join("\n");
+    const derived = [
+      "<?php",
+      "namespace Client;",
+      "use App\\Base as ParentBase;",
+      "class Derived extends pArEnTbAsE {",
+      "  function run() { return parent::HELPER(); }",
+      "}",
+      "",
+    ].join("\n");
+    try {
+      await fsp.mkdir(path.dirname(baseFile), { recursive: true });
+      await fsp.writeFile(
+        path.join(root, "composer.json"),
+        JSON.stringify({ autoload: { "psr-4": { "App\\": "src/" } } }),
+        "utf8",
+      );
+      await fsp.writeFile(baseFile, base, "utf8");
+      await fsp.writeFile(derivedFile, derived, "utf8");
+      const index = await createTestIndexFromPath(root);
+      const result = await goToDefinition(index, {
+        file: derivedFile,
+        line: 5,
+        column: columnOf(derived, 5, "HELPER()"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(baseFile));
+      expect(result.definition.range.start.line).toBe(4);
+      expect(result.provenance?.resolution).toBe("member-access");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("follows the Kotlin constructor-invocation superclass over a same-kind interface base", async () => {
+    // `Base()` and `Face` both classify as SymbolKind.Class, so `super` must identify the
+    // superclass syntactically: the delegation-specifier entry written as a constructor
+    // invocation. The interface entry never answers the keyword.
+    const source = [
+      "interface Face {",
+      "  fun helper(): Int {",
+      "    return 3",
+      "  }",
+      "}",
+      "open class Base {",
+      "  open fun helper(): Int {",
+      "    return 1",
+      "  }",
+      "}",
+      "class Derived : Base(), Face {",
+      "  override fun helper(): Int {",
+      "    return 2",
+      "  }",
+      "  fun run(): Int {",
+      "    return super.helper()",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-kt-super-class-goto-", { "box.kt": source });
+    try {
+      await expectMemberAccess(index, paths["box.kt"]!, 16, columnOf(source, 16, "helper()"), 7);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve a Kotlin super member through an interface-only base list", async () => {
+    const source = [
+      "interface Face {",
+      "  fun helper(): Int {",
+      "    return 3",
+      "  }",
+      "}",
+      "class OnlyFace : Face {",
+      "  override fun helper(): Int {",
+      "    return 4",
+      "  }",
+      "  fun run(): Int {",
+      "    return super.helper()",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-kt-super-interface-only-goto-", { "box.kt": source });
+    try {
+      const result = await goToDefinition(index, {
+        file: paths["box.kt"]!,
+        line: 11,
+        column: columnOf(source, 11, "helper()"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
     }
   });
 });

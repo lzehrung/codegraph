@@ -1,4 +1,5 @@
 import { registerLanguage } from "../registry.js";
+import type { SyntaxNodeLike } from "../types.js";
 import { nodeTypeIn } from "./shared.js";
 import {
   cFamilyBlock,
@@ -10,6 +11,27 @@ import {
   isInField,
   isSpecifierNameField,
 } from "./c-family.js";
+
+/** C tags share one namespace, separate from typedefs and ordinary identifiers. */
+export function cTagRole(node: SyntaxNodeLike): "declaration" | "forward" | "reference" | undefined {
+  if (!isSpecifierNameField(node, ["struct_specifier", "union_specifier", "enum_specifier"])) return undefined;
+  const specifier = node.parent!;
+  if (specifier.childForFieldName("body")) return "declaration";
+  const statement = specifier.parent;
+  if (
+    statement?.type === "translation_unit" ||
+    statement?.type === "compound_statement" ||
+    statement?.type.startsWith("preproc_") ||
+    (statement?.type === "declaration" && !statement.childForFieldName("declarator"))
+  ) {
+    return "forward";
+  }
+  return "reference";
+}
+
+export function cScopeName(name: string, namespace: "tag" | "ordinary"): string {
+  return namespace === "tag" ? `c:tag\0${name}` : name;
+}
 
 export const C_DEF = createCFamilyLanguageDefinition({
   id: "c",

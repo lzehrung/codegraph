@@ -34,7 +34,12 @@ import {
   collectTextImportSpecifiers,
   rustSpecifierForParsedImport,
 } from "../indexer/imports/text-import-extractors.js";
-import { extractJsTsSpecifiers, isJsTsTypeOnlySpecifierStatement, type ModuleSpecifier } from "../util/specifiers.js";
+import {
+  cFamilyImportFormFromText,
+  extractJsTsSpecifiers,
+  isJsTsTypeOnlySpecifierStatement,
+  type ModuleSpecifier,
+} from "../util/specifiers.js";
 
 export type FallbackImportExtractionReason =
   | "fast"
@@ -129,12 +134,15 @@ function normalizeModuleSpecifiers(specifiers: ModuleSpecifier[]): ModuleSpecifi
           ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}),
           ...(entry.pathAttribute ? { pathAttribute: entry.pathAttribute } : {}),
           ...(entry.statementStartIndex !== undefined ? { statementStartIndex: entry.statementStartIndex } : {}),
+          ...(entry.includeForm ? { includeForm: entry.includeForm } : {}),
         },
   );
 }
 
 function moduleSpecifierKey(entry: ModuleSpecifier): string {
-  return `${entry.spec}::${entry.typeOnly ? 1 : 0}::${entry.exportCondition ?? ""}::${entry.pathAttribute ?? ""}`;
+  return `${entry.spec}::${entry.typeOnly ? 1 : 0}::${entry.phpImportType ?? ""}::${
+    entry.exportCondition ?? ""
+  }::${entry.pathAttribute ?? ""}::${entry.includeForm ?? ""}`;
 }
 
 function appendUniqueSpecifiers(target: ModuleSpecifier[], incoming: ModuleSpecifier[], seen: Set<string>): void {
@@ -419,15 +427,18 @@ export function collectModuleSpecifiersFromSource(
         }
         const stylesheetImport = support.id === "css" || support.id === "scss" || support.id === "less";
         const isJsFamily = support.id === "js" || support.id === "ts" || support.id === "tsx";
+        const isCFamily = support.id === "c" || support.id === "cpp";
         // CommonJS require() and TS `import x = require(...)` both use the require condition.
         const exportCondition = isJsFamily && /\brequire\s*\(/.test(stmtText) ? ("require" as const) : undefined;
         for (const capture of match.captures) {
           if (capture.name !== "from") continue;
+          const includeForm = isCFamily ? cFamilyImportFormFromText(stmtText, capture.text) : undefined;
           out.push({
             spec: unquote(capture.text),
             typeOnly,
             ...(stylesheetImport ? { resolutionKind: "stylesheet" } : {}),
             ...(exportCondition ? { exportCondition } : {}),
+            ...(includeForm ? { includeForm } : {}),
           });
         }
       }

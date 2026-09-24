@@ -2,7 +2,13 @@ import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { buildProjectIndexFromFiles, collectGraph, type BuildReport } from "../src/index.js";
+import {
+  buildProjectIndexFromFiles,
+  collectGraph,
+  findReferences,
+  goToDefinition,
+  type BuildReport,
+} from "../src/index.js";
 import { extractDynamicImportSpecifiers, extractJsTsSpecifiers, stripJsLikeComments } from "../src/util.js";
 import {
   getNativeTreeSitterSupportedLanguageIds,
@@ -1011,6 +1017,7 @@ describe("reduced-mode text import extraction registry", () => {
         "main.c": '#include "./dep.h"\n\nint main(void) { return dep(); }\n',
       },
       target: "dep.h",
+      binding: { kind: "star", from: "./dep.h" },
     },
     {
       label: "cpp",
@@ -1021,6 +1028,7 @@ describe("reduced-mode text import extraction registry", () => {
         "main.cpp": '#include "./dep.h"\n\nint main() { return dep(); }\n',
       },
       target: "dep.h",
+      binding: { kind: "star", from: "./dep.h" },
     },
     {
       label: "swift",
@@ -1230,6 +1238,290 @@ describe("reduced-mode text import extraction registry", () => {
         });
         const bindingSources = Array.from(new Set(bindings.map((binding) => binding.from))).sort();
         expect(bindingSources, `${testCase.language} specifiers`).toEqual(graphSpecifiers);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("reduced-mode C-family include form extraction", () => {
+  type IncludeExtraction = { spec: string; includeForm: "literal" | "angle" | "macro" | undefined };
+
+  function reducedIncludeSpecifiers(language: string, source: string, file: string): IncludeExtraction[] {
+    const support = supportById(language);
+    expect(support, language).toBeDefined();
+    if (!support) return [];
+    return collectModuleSpecifiersFromSource(support, source, { file, native: "off" }).map((entry) => ({
+      spec: entry.spec,
+      includeForm: entry.includeForm,
+    }));
+  }
+
+  const firstTokenCases: Array<{
+    label: string;
+    language: string;
+    file: string;
+    source: string;
+    expected: IncludeExtraction[];
+  }> = [
+    {
+      label: "quoted",
+      language: "c",
+      file: "main.c",
+      source: '#include "x.h"\n',
+      expected: [{ spec: "x.h", includeForm: "literal" }],
+    },
+    {
+      label: "quoted subdirectory",
+      language: "cpp",
+      file: "main.cpp",
+      source: '#include "inc/x.h"\n',
+      expected: [{ spec: "inc/x.h", includeForm: "literal" }],
+    },
+    {
+      label: "quoted after a comment",
+      language: "c",
+      file: "main.c",
+      source: '#include /* note */ "x.h"\n',
+      expected: [{ spec: "x.h", includeForm: "literal" }],
+    },
+    {
+      label: "angle",
+      language: "c",
+      file: "main.c",
+      source: "#include <stdio.h>\n",
+      expected: [{ spec: "stdio.h", includeForm: "angle" }],
+    },
+    {
+      label: "angle with a path",
+      language: "cpp",
+      file: "main.cpp",
+      source: "#include <sys/types.h>\n",
+      expected: [{ spec: "sys/types.h", includeForm: "angle" }],
+    },
+    {
+      label: "spaced directive",
+      language: "cpp",
+      file: "main.cpp",
+      source: "#  include\t<vector>\n",
+      expected: [{ spec: "vector", includeForm: "angle" }],
+    },
+    {
+      label: "identifier macro",
+      language: "c",
+      file: "main.c",
+      source: "#include HEADER\n",
+      expected: [{ spec: "HEADER", includeForm: "macro" }],
+    },
+    {
+      label: "identifier macro after a comment",
+      language: "cpp",
+      file: "main.cpp",
+      source: "#include /* guard */ HEADER\n",
+      expected: [{ spec: "HEADER", includeForm: "macro" }],
+    },
+    {
+      label: "identifier macro with a trailing comment",
+      language: "c",
+      file: "main.c",
+      source: "#include HEADER // guard\n",
+      expected: [{ spec: "HEADER", includeForm: "macro" }],
+    },
+  ];
+
+  it("classifies every include by its first token after the directive", () => {
+    for (const testCase of firstTokenCases) {
+      const extracted = reducedIncludeSpecifiers(testCase.language, testCase.source, testCase.file);
+      expect(extracted, testCase.label).toEqual(testCase.expected);
+    }
+  });
+
+  it("rejects a function-like include macro instead of the string nested inside it", () => {
+    const sources = [
+      '#include MACRO("x.h")\n',
+      '#include MACRO ("x.h")\n',
+      "#include MACRO(<x.h>)\n",
+      '#include MACRO("x.h", 1)\n',
+      "#include HEADER trailing\n",
+    ];
+    for (const language of ["c", "cpp"]) {
+      for (const source of sources) {
+        const extracted = reducedIncludeSpecifiers(language, source, language === "c" ? "main.c" : "main.cpp");
+        expect(extracted, `${language} ${JSON.stringify(source)}`).toEqual([]);
+        expect(extracted.map((entry) => entry.spec)).not.toContain("x.h");
+      }
+    }
+  });
+
+  it("keeps mixed include occurrences in source order with their own form", () => {
+    const source = [
+      '#include "local.h"',
+      "#include <system.h>",
+      "#include HEADER",
+      '#include MACRO("ignored.h")',
+      "int main(void) { return 0; }",
+      "",
+    ].join("\n");
+
+    expect(reducedIncludeSpecifiers("c", source, "main.c")).toEqual([
+      { spec: "local.h", includeForm: "literal" },
+      { spec: "system.h", includeForm: "angle" },
+      { spec: "HEADER", includeForm: "macro" },
+    ]);
+  });
+
+  it("keeps the same include text once literal and once as a macro", () => {
+    const source = ['#include "HEADER"', "#include HEADER", "int main(void) { return 0; }", ""].join("\n");
+
+    expect(reducedIncludeSpecifiers("c", source, "main.c")).toEqual([
+      { spec: "HEADER", includeForm: "literal" },
+      { spec: "HEADER", includeForm: "macro" },
+    ]);
+  });
+
+  it("binds only the literal occurrence and keeps a macro include external in reduced mode", async () => {
+    const root = await mkTmpDir("cg-reduced-include-forms-");
+    try {
+      await writeReducedFixture(root, {
+        HEADER: "int header_decl(void);\n",
+        "x.h": "int decoy(void);\n",
+        "main.c": [
+          '#include "HEADER"',
+          "#include HEADER",
+          '#include MACRO("x.h")',
+          "int main(void) { return 0; }",
+          "",
+        ].join("\n"),
+      });
+      const main = path.join(root, "main.c");
+      const index = await buildProjectIndexFromFiles(
+        root,
+        ["HEADER", "x.h", "main.c"].map((relative) => path.join(root, relative)),
+        { native: "off" },
+      );
+
+      const edges = index.graph.edges.filter((edge) => normalizedAbsolute(edge.from) === normalizedAbsolute(main));
+      expect(edges).toContainEqual(
+        expect.objectContaining({ to: { type: "file", path: normalizedAbsolute(path.join(root, "HEADER")) } }),
+      );
+      expect(edges).toContainEqual(expect.objectContaining({ to: { type: "external", name: "HEADER" } }));
+
+      const decoy = normalizedAbsolute(path.join(root, "x.h"));
+      const decoyEdges = edges.filter((edge) =>
+        edge.to.type === "file" ? edge.to.path === decoy : edge.to.name.includes("x.h"),
+      );
+      expect(decoyEdges).toEqual([]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["c", "cpp"] as const)(
+    "feeds reduced-mode %s includes into navigation and references",
+    async (languageId) => {
+      const root = await mkTmpDir(`cg-reduced-include-navigation-${languageId}-`);
+      try {
+        const sourceFile = path.join(root, languageId === "c" ? "main.c" : "main.cpp");
+        const headerFile = path.join(root, languageId === "c" ? "lib.h" : "lib.hpp");
+        const declaration = languageId === "c" ? "int helper(void) { return 1; }\n" : "int helper() { return 1; }\n";
+        const include = `#include "${path.basename(headerFile)}"`;
+        const source = `${include}\nint run(void) { return helper(); }\n`;
+        await fsp.writeFile(headerFile, declaration, "utf8");
+        await fsp.writeFile(sourceFile, source, "utf8");
+
+        const index = await buildProjectIndexFromFiles(root, [headerFile, sourceFile]);
+        const sourceModule = index.byFile.get(fileIdentityKey(sourceFile));
+        const support = supportById(languageId);
+        expect(sourceModule).toBeDefined();
+        expect(support).toBeDefined();
+        if (!sourceModule || !support) return;
+        sourceModule.imports = await collectImportsForFile(sourceFile, root, {
+          source,
+          sup: support,
+          native: "off",
+        });
+        const callColumn = source.split("\n")[1]!.indexOf("helper") + 1;
+        const definition = await goToDefinition(index, { file: sourceFile, line: 2, column: callColumn });
+        expect(definition.status).toBe("ok");
+        if (definition.status === "ok") {
+          expect(fileIdentityKey(definition.definition.file)).toBe(fileIdentityKey(headerFile));
+        }
+
+        const references = await findReferences(index, { file: headerFile, line: 1, column: 5 });
+        expect(references.status).toBe("ok");
+        if (references.status === "ok") {
+          expect(
+            references.references.some(
+              (reference) =>
+                fileIdentityKey(reference.file) === fileIdentityKey(sourceFile) && reference.range.start.line === 2,
+            ),
+          ).toBe(true);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("classifies C++ header units without treating named modules as file specifiers", () => {
+    const source = [
+      'import "local.hpp";',
+      "export import <system.hpp>;",
+      "import widgets.core;",
+      "import HEADER;",
+      '// import "commented.hpp";',
+      'const char *text = "import \\"string.hpp\\";";',
+      "",
+    ].join("\n");
+
+    expect(reducedIncludeSpecifiers("cpp", source, "main.cpp")).toEqual([
+      { spec: "local.hpp", includeForm: "literal" },
+      { spec: "system.hpp", includeForm: "angle" },
+    ]);
+  });
+
+  it("resolves a reduced-mode C++ header-unit import as a literal file", async () => {
+    const root = await mkTmpDir("cg-reduced-header-unit-");
+    try {
+      const headerFile = path.join(root, "header.hpp");
+      const sourceFile = path.join(root, "main.cpp");
+      const declaration = "int helper() { return 1; }\n";
+      const source = 'import "header.hpp";\nint run() { return helper(); }\n';
+      await fsp.writeFile(headerFile, declaration, "utf8");
+      await fsp.writeFile(sourceFile, source, "utf8");
+
+      const index = await buildProjectIndexFromFiles(root, [headerFile, sourceFile]);
+      const sourceModule = index.byFile.get(fileIdentityKey(sourceFile));
+      const support = supportById("cpp");
+      expect(sourceModule).toBeDefined();
+      expect(support).toBeDefined();
+      if (!sourceModule || !support) return;
+      sourceModule.imports = await collectImportsForFile(sourceFile, root, {
+        source,
+        sup: support,
+        native: "off",
+      });
+
+      const definition = await goToDefinition(index, {
+        file: sourceFile,
+        line: 2,
+        column: source.split("\n")[1]!.indexOf("helper") + 1,
+      });
+      expect(definition.status).toBe("ok");
+      if (definition.status === "ok") {
+        expect(fileIdentityKey(definition.definition.file)).toBe(fileIdentityKey(headerFile));
+      }
+
+      const references = await findReferences(index, { file: headerFile, line: 1, column: 5 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(
+          references.references.some(
+            (reference) =>
+              fileIdentityKey(reference.file) === fileIdentityKey(sourceFile) && reference.range.start.line === 2,
+          ),
+        ).toBe(true);
       }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

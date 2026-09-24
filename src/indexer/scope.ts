@@ -1,14 +1,65 @@
 import { sliceText, toRange } from "../util/ast.js";
 import { getNativeSyntaxTreeExecution, type NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
+import { getMemberAccessParts, isMemberAccessNode } from "../util/member-access.js";
 import { declarationKindToBindingKind } from "./declarations.js";
+import { cppBindingCallableShape, cppSelectCallableBinding } from "./cpp-callables.js";
+import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import type { LanguageSupport } from "../languages.js";
-import { scopeNodesFor } from "./scope-nodes.js";
+import { scopeNodesFor, type ScopeNodeRow } from "./scope-nodes.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import type { Range } from "../types.js";
 import type { ImportBinding } from "./types.js";
 import type { Binding, BindingKind, Scope, ScopeIndex } from "./scope-types.js";
 
 export type { Binding, BindingKind, Scope, ScopeIndex };
+
+const FUNCTION_DECLARATOR_NAME_TYPES: Record<string, true> = {
+  identifier: true,
+  field_identifier: true,
+  destructor_name: true,
+  operator_name: true,
+};
+function nestedFunctionDeclaratorName(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  let current: SyntaxNodeLike | null = node;
+  for (let depth = 0; current && depth < 8; depth += 1) {
+    if (FUNCTION_DECLARATOR_NAME_TYPES[current.type]) return current;
+    current = current.childForFieldName("name");
+  }
+  return null;
+}
+
+function declaredNameNode(node: SyntaxNodeLike, row: ScopeNodeRow): SyntaxNodeLike | null {
+  const directName = node.childForFieldName("name");
+  if (directName) return directName;
+  if (!row.functionNameTypes?.has(node.type)) return null;
+
+  let current = node.childForFieldName("declarator");
+  for (let depth = 0; current && depth < 8; depth += 1) {
+    const name = current.childForFieldName("name");
+    const declaredName = name ? nestedFunctionDeclaratorName(name) : nestedFunctionDeclaratorName(current);
+    if (declaredName) return declaredName;
+    current =
+      current.childForFieldName("declarator") ??
+      (current.type === "reference_declarator" ? (current.namedChildren[0] ?? null) : null);
+  }
+  return null;
+}
+
+function qualifiedCppIdentifierForName(nameNode: SyntaxNodeLike, boundary?: SyntaxNodeLike): SyntaxNodeLike | null {
+  let current = nameNode.parent;
+  while (current && current !== boundary) {
+    if (current.type === "qualified_identifier") {
+      const memberName = current.childForFieldName("name");
+      const containsName =
+        memberName && memberName.startIndex <= nameNode.startIndex && memberName.endIndex >= nameNode.endIndex;
+      if (containsName && current.parent?.type !== "qualified_identifier") return current;
+    }
+    current = current.parent;
+  }
+  return null;
+}
 
 export function buildScopeIndexFromSource(
   file: string,
@@ -36,7 +87,33 @@ export function buildScopeIndexFromSource(
   };
   const stack: Scope[] = [rootScope];
   const allScopes: Scope[] = [rootScope];
+  const cppNamespaceMaps = new Map<string, Map<string, Binding>>();
+  const cppNamespaceScopes = new Map<string, Scope>();
+  const cppNamespacePath: string[] = [];
+  const cppNamespacePathByMap = new WeakMap<Map<string, Binding>, string>();
   const extraBindings: Binding[] = [];
+  const cppQualifiedMemberBindings = new Map<string, Binding[]>();
+  const cppQualifiedMemberOccurrences = new Map<
+    string,
+    Array<{ node: SyntaxNodeLike; range: Range; fallback?: Binding }>
+  >();
+  const cppFunctionCollisionGroups = new Set<Binding[]>();
+  const cppFunctionOccurrences: Array<{ binding: Binding; node: SyntaxNodeLike; range: Range }> = [];
+  const extraBindingSpans = new Set<string>();
+  const preserveExtraBinding = (binding: Binding): void => {
+    const start = binding.def?.start.index;
+    const end = binding.def?.end.index;
+    const key = `${binding.canonicalName}:${start ?? ""}:${end ?? ""}`;
+    if (extraBindingSpans.has(key)) return;
+    extraBindingSpans.add(key);
+    extraBindings.push(binding);
+  };
+  /**
+   * Name nodes already registered before their construct's own scope was pushed. Keyed by source
+   * span rather than `node.id`, which the projected tree leaves optional.
+   */
+  const preRegisteredNameSpans = new Set<string>();
+  const nameSpanKey = (node: SyntaxNodeLike): string => `${node.startIndex}:${node.endIndex}`;
 
   const normalizeIdentifier = support.normalizeIdentifier;
   const buildBinding = (nameNode: SyntaxNodeLike, kind: BindingKind): Binding => {
@@ -59,7 +136,11 @@ export function buildScopeIndexFromSource(
       occurrences: [],
       import: importBinding,
     };
-    rootScope.map.set(binding.canonicalName, binding);
+    const key =
+      support.id === "c" && importBinding.kind === "named" && importBinding.cNamespace === "tag"
+        ? cScopeName(binding.canonicalName, "tag")
+        : binding.canonicalName;
+    rootScope.map.set(key, binding);
   };
 
   for (const imp of imports) {
@@ -89,7 +170,61 @@ export function buildScopeIndexFromSource(
 
   const addBinding = (target: Scope, nameNode: SyntaxNodeLike, kind: BindingKind): void => {
     const binding = buildBinding(nameNode, kind);
-    target.map.set(binding.canonicalName, binding);
+    const tagRole = support.id === "c" ? cTagRole(nameNode) : undefined;
+    const key = tagRole ? cScopeName(binding.canonicalName, "tag") : binding.canonicalName;
+    if (tagRole === "reference") {
+      const visible = lookup(binding.name, nameNode);
+      if (visible) {
+        visible.occurrences.push(binding.def!);
+        return;
+      }
+    }
+    const existing = target.map.get(key);
+    if (tagRole === "forward" && existing?.import) {
+      existing.occurrences.push(binding.def!);
+      return;
+    }
+    if (tagRole === "declaration" && existing?.import) {
+      binding.occurrences = existing.occurrences;
+      preserveExtraBinding(existing);
+    }
+    if (tagRole && existing?.def) {
+      if (existing.def.start.index === binding.def?.start.index) return;
+      binding.occurrences = existing.occurrences;
+      if (tagRole === "declaration" && existing.node && cTagRole(existing.node) !== "declaration") {
+        binding.occurrences.push(existing.def);
+        preserveExtraBinding(existing);
+        target.map.set(key, binding);
+        return;
+      }
+      binding.occurrences.push(binding.def!);
+      preserveExtraBinding(binding);
+      return;
+    }
+    if (kind === "function" && existing?.kind === "function") {
+      if (support.id === "c") {
+        // C prototypes and their definitions are declarations of one function. Keep each
+        // declaration addressable while sharing the occurrence list collected for that name.
+        binding.occurrences = existing.occurrences;
+        preserveExtraBinding(binding);
+        return;
+      }
+      if (support.id === "cpp") {
+        const collisions = existing.sameScopeFunctionBindings ?? [existing];
+        collisions.push(binding);
+        for (const collision of collisions) collision.sameScopeFunctionBindings = collisions;
+        cppFunctionCollisionGroups.add(collisions);
+        preserveExtraBinding(existing);
+      }
+    }
+    target.map.set(key, binding);
+    const cppNamespace = cppNamespacePathByMap.get(target.map);
+    if (support.id === "cpp" && kind === "function" && cppNamespace) {
+      const qualifiedKey = `${cppNamespace}::${binding.name}`;
+      const qualifiedBindings = cppQualifiedMemberBindings.get(qualifiedKey) ?? [];
+      qualifiedBindings.push(binding);
+      cppQualifiedMemberBindings.set(qualifiedKey, qualifiedBindings);
+    }
   };
 
   const addDecl = (nameNode: SyntaxNodeLike, kind: BindingKind): void => {
@@ -114,8 +249,10 @@ export function buildScopeIndexFromSource(
     addBinding(target, nameNode, kind);
   };
 
-  const lookup = (name: string): Binding | undefined => {
-    const canonicalName = normalizeIdentifier(name);
+  const lookup = (name: string, node?: SyntaxNodeLike): Binding | undefined => {
+    const normalizedName = normalizeIdentifier(name);
+    const canonicalName =
+      support.id === "c" && node && cTagRole(node) ? cScopeName(normalizedName, "tag") : normalizedName;
     for (let index = stack.length - 1; index >= 0; index--) {
       const hit = stack[index]!.map.get(canonicalName);
       if (hit) return hit;
@@ -291,15 +428,35 @@ export function buildScopeIndexFromSource(
   };
 
   const walk = (node: SyntaxNodeLike) => {
+    let scopedFunctionName: { node: SyntaxNodeLike; qualifiedKey: string } | null = null;
+    let qualifiedNamespaceScope: Scope | undefined;
     // A name-registering node puts its name in the *current* (enclosing) scope before the push
     // below creates the node's own scope. C# local functions need that: they are callable from
     // sibling statements in the enclosing method, unlike a JS named function expression's
     // self-only visibility, which the language's `scopeDeclarationNames` hook handles instead.
     if (row.functionNameTypes?.has(node.type)) {
-      const name = node.childForFieldName("name");
+      const name = declaredNameNode(node, row);
       if (name && (support.membersAreImplicitlyInScope || !isMemberFunction(node))) {
-        if (row.hoistedFunctionTypes?.has(node.type)) addHoistedDecl(name, "function");
-        else addDecl(name, "function");
+        // The declarator chain that carries a C-family function name also carries its parameter
+        // list, so the child walk must still descend into it. Remember the exact name node instead
+        // and skip only that node below, which keeps one binding per function without hiding
+        // `function_declarator > parameter_list` from parameter registration.
+        preRegisteredNameSpans.add(nameSpanKey(name));
+        const qualifiedName = support.id === "cpp" ? qualifiedCppIdentifierForName(name, node) : null;
+        if (qualifiedName) {
+          const qualifiedKey = cppQualifiedNameSegments(qualifiedName, source).join("::");
+          const ownerKey = qualifiedKey.slice(0, qualifiedKey.lastIndexOf("::"));
+          qualifiedNamespaceScope = cppNamespaceScopes.get(ownerKey);
+          if (qualifiedNamespaceScope) {
+            addBinding(qualifiedNamespaceScope, name, "function");
+          } else {
+            scopedFunctionName = { node: name, qualifiedKey };
+          }
+        } else if (row.hoistedFunctionTypes?.has(node.type)) {
+          addHoistedDecl(name, "function");
+        } else {
+          addDecl(name, "function");
+        }
       }
     }
     if (row.classNameTypes?.has(node.type)) {
@@ -329,21 +486,59 @@ export function buildScopeIndexFromSource(
     }
 
     let pushed = false;
-    if (support.createsFunctionScope(node)) {
+    let pushedScopeCount = 0;
+    const namespacePathStart = cppNamespacePath.length;
+    const cppNamespaceName =
+      support.id === "cpp" && node.type === "namespace_definition" ? node.childForFieldName("name") : null;
+    const cppNamespaceIsInline = !!cppNamespaceName && /^\s*inline\s+namespace\b/u.test(sliceText(node, source));
+    const createsCppNamespaceScope = !!cppNamespaceName && !cppNamespaceIsInline;
+    const createsCppMemberScope = support.id === "cpp" && node.type === "field_declaration_list";
+    if (createsCppNamespaceScope) {
+      const name = cppNamespaceName;
+      const segments = sliceText(name, source).replace(/\s+/gu, "").split("::").filter(Boolean);
+      for (const segment of segments) {
+        cppNamespacePath.push(segment);
+        const key = cppNamespacePath.join("::");
+        const map = cppNamespaceMaps.get(key) ?? new Map<string, Binding>();
+        cppNamespaceMaps.set(key, map);
+        cppNamespacePathByMap.set(map, key);
+        const scope: Scope = {
+          kind: "block",
+          map,
+          node,
+          parent: stack[stack.length - 1],
+        };
+        stack.push(scope);
+        allScopes.push(scope);
+        if (!cppNamespaceScopes.has(key)) cppNamespaceScopes.set(key, scope);
+        pushed = true;
+        pushedScopeCount += 1;
+      }
+    } else if (support.createsFunctionScope(node)) {
       const scope: Scope = {
         kind: "function",
         map: new Map(),
         node,
-        parent: stack[stack.length - 1],
+        parent: qualifiedNamespaceScope ?? stack[stack.length - 1],
       };
       stack.push(scope);
       allScopes.push(scope);
       pushed = true;
+      pushedScopeCount = 1;
+      if (scopedFunctionName) {
+        addDecl(scopedFunctionName.node, "function");
+        const binding = scope.map.get(normalizeIdentifier(sliceText(scopedFunctionName.node, source)));
+        if (binding) {
+          const bindings = cppQualifiedMemberBindings.get(scopedFunctionName.qualifiedKey) ?? [];
+          bindings.push(binding);
+          cppQualifiedMemberBindings.set(scopedFunctionName.qualifiedKey, bindings);
+        }
+      }
 
       const params = node.childForFieldName("parameters");
       if (params) addPatternDecls(params, "param");
       collectHoistedDeclarations(node);
-    } else if (support.createsBlockScope(node)) {
+    } else if (support.createsBlockScope(node) || createsCppMemberScope) {
       if (!row.moduleRootTypes?.has(node.type)) {
         const scope: Scope = {
           kind: "block",
@@ -354,6 +549,7 @@ export function buildScopeIndexFromSource(
         stack.push(scope);
         allScopes.push(scope);
         pushed = true;
+        pushedScopeCount = 1;
       }
     } else if (row.typeScopeTypes?.has(node.type)) {
       // Go generic type declarations idiomatically reuse `T` as the type-parameter
@@ -370,6 +566,7 @@ export function buildScopeIndexFromSource(
       stack.push(scope);
       allScopes.push(scope);
       pushed = true;
+      pushedScopeCount = 1;
     }
 
     if (row.variableDeclarationTypes?.has(node.type)) {
@@ -397,16 +594,37 @@ export function buildScopeIndexFromSource(
       scopeDeclarationNames(node) &&
       idSet.has(node.type) &&
       support.isDeclarationName(node) &&
-      !isScopedEnumeratorName(node)
+      !isScopedEnumeratorName(node) &&
+      !preRegisteredNameSpans.has(nameSpanKey(node))
     ) {
       const kind = isParamNode(node) ? "param" : declarationKindToBindingKind(support.classifyDefinition(node));
       addDeclSkippingTypeScope(node, kind);
     }
 
     if (idSet.has(node.type) && !support.isDeclarationName(node)) {
-      const binding = lookup(sliceText(node, source));
-      if (binding) {
-        binding.occurrences.push(toRange(node));
+      const qualifiedName = support.id === "cpp" ? qualifiedCppIdentifierForName(node) : null;
+      if (qualifiedName) {
+        const key = cppQualifiedNameSegments(qualifiedName, source).join("::");
+        const occurrences = cppQualifiedMemberOccurrences.get(key) ?? [];
+        const fallback = lookup(sliceText(node, source));
+        occurrences.push({ node, range: toRange(node), ...(fallback ? { fallback } : {}) });
+        cppQualifiedMemberOccurrences.set(key, occurrences);
+      } else {
+        const parent = node.parent;
+        const memberProperty =
+          support.id === "cpp" && parent && isMemberAccessNode(support, parent)
+            ? getMemberAccessParts(support, parent).property
+            : null;
+        const isCppMemberProperty =
+          !!memberProperty && memberProperty.startIndex <= node.startIndex && memberProperty.endIndex >= node.endIndex;
+        if (!isCppMemberProperty) {
+          const binding = lookup(sliceText(node, source), node);
+          if (support.id === "cpp" && binding?.kind === "function") {
+            cppFunctionOccurrences.push({ binding, node, range: toRange(node) });
+          } else if (binding) {
+            binding.occurrences.push(toRange(node));
+          }
+        }
       }
     }
 
@@ -417,22 +635,95 @@ export function buildScopeIndexFromSource(
         const skipsNameOrParameters =
           (row.functionNameTypes?.has(node.type) || row.classNameTypes?.has(node.type)) &&
           row.childSkipNameTypes?.has(child.type);
-        if (skipsFunctionParameters || skipsNameOrParameters) {
+        const skipsCppNamespaceName = createsCppNamespaceScope && node.childForFieldName("name")?.id === child.id;
+        if (skipsFunctionParameters || skipsNameOrParameters || skipsCppNamespaceName) {
           continue;
         }
       }
       walk(child);
     }
+    for (let index = 0; index < pushedScopeCount; index += 1) stack.pop();
+    cppNamespacePath.length = namespacePathStart;
+  };
 
-    if (pushed) stack.pop();
+  const prepareCppCallableBindings = (bindings: readonly Binding[]): boolean => {
+    const bySignature = new Map<string, Binding[]>();
+    for (const binding of bindings) {
+      const shape = cppBindingCallableShape(binding);
+      if (!shape) {
+        for (const candidate of bindings) candidate.occurrencesComplete = false;
+        return false;
+      }
+      const entity = bySignature.get(shape.signature) ?? [];
+      entity.push(binding);
+      bySignature.set(shape.signature, entity);
+    }
+    for (const entity of bySignature.values()) {
+      const occurrences = entity.flatMap((binding) => (binding.def ? [binding.def] : []));
+      for (const binding of entity) {
+        binding.occurrences = occurrences;
+        delete binding.occurrencesComplete;
+      }
+    }
+    return true;
+  };
+  const assignCppCallableOccurrence = (bindings: readonly Binding[], node: SyntaxNodeLike, range: Range): void => {
+    const selected = cppSelectCallableBinding(bindings, node, source);
+    if (selected) {
+      selected.occurrences.push(range);
+      return;
+    }
+    for (const binding of bindings) binding.occurrencesComplete = false;
+  };
+  const cppOccurrenceBindings = (binding: Binding): readonly Binding[] | null => {
+    const collisions = binding.sameScopeFunctionBindings ?? [binding];
+    if (collisions.length > 1 || cppBindingCallableShape(binding)) return collisions;
+    return null;
   };
 
   collectHoistedDeclarations(tree.rootNode);
   walk(tree.rootNode);
+  for (const collisions of cppFunctionCollisionGroups) prepareCppCallableBindings(collisions);
+  const cppQualifiedCallableBindings = new Map<string, Binding[]>();
+  for (const [key, memberBindings] of cppQualifiedMemberBindings) {
+    const callableBindings = [
+      ...new Set(memberBindings.flatMap((binding) => binding.sameScopeFunctionBindings ?? [binding])),
+    ];
+    if (prepareCppCallableBindings(callableBindings)) cppQualifiedCallableBindings.set(key, callableBindings);
+  }
+  for (const occurrence of cppFunctionOccurrences) {
+    const group = cppOccurrenceBindings(occurrence.binding);
+    if (group) {
+      assignCppCallableOccurrence(group, occurrence.node, occurrence.range);
+    } else {
+      occurrence.binding.occurrences.push(occurrence.range);
+    }
+  }
+  for (const [key, callableBindings] of cppQualifiedCallableBindings) {
+    for (const occurrence of cppQualifiedMemberOccurrences.get(key) ?? []) {
+      assignCppCallableOccurrence(callableBindings, occurrence.node, occurrence.range);
+    }
+  }
+  for (const [key, occurrences] of cppQualifiedMemberOccurrences) {
+    if (cppQualifiedCallableBindings.has(key)) continue;
+    for (const occurrence of occurrences) {
+      const fallback = occurrence.fallback;
+      if (!fallback) continue;
+      const group = cppOccurrenceBindings(fallback);
+      if (group) {
+        assignCppCallableOccurrence(group, occurrence.node, occurrence.range);
+      } else {
+        fallback.occurrences.push(occurrence.range);
+      }
+    }
+  }
 
   const bindings = new Map<string, Binding[]>();
   const all: Binding[] = [];
+  const flushedMaps = new Set<Map<string, Binding>>();
   const flush = (scope: Scope) => {
+    if (flushedMaps.has(scope.map)) return;
+    flushedMaps.add(scope.map);
     for (const binding of scope.map.values()) {
       if (!bindings.has(binding.canonicalName)) bindings.set(binding.canonicalName, []);
       bindings.get(binding.canonicalName)!.push(binding);
@@ -445,5 +736,5 @@ export function buildScopeIndexFromSource(
     bindings.get(binding.canonicalName)!.push(binding);
     all.push(binding);
   }
-  return { bindings, all, allScopes };
+  return { bindings, all, allScopes, cppQualifiedFunctionBindings: cppQualifiedCallableBindings };
 }

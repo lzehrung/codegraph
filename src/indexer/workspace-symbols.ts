@@ -7,6 +7,7 @@ import { resolveImported } from "./navigation-resolve.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import { boundList } from "../presentation/bounds.js";
 import type { ImportBinding, ProjectIndex, SymbolDef, SymbolKind } from "./types.js";
+import { importNodeId } from "./import-types.js";
 
 export const DEFAULT_WORKSPACE_SYMBOL_LIMIT = 50;
 export const MAX_WORKSPACE_SYMBOL_LIMIT = 500;
@@ -179,13 +180,13 @@ async function buildImportCandidates(index: ProjectIndex): Promise<ImportCandida
         if (!binding.import) continue;
         const range = binding.def ?? binding.occurrences[0];
         const target = resolveImportDefinition(index, binding.import);
-        if (!range || !target) {
+        if (!range || !target || binding.import.kind === "star") {
           omitted += 1;
           continue;
         }
         const displayFile = toProjectDisplayPath(index.projectRoot, file);
         symbols.push({
-          id: `${displayFile}::${binding.name}::import`,
+          id: importNodeId(displayFile, binding.import),
           def: target,
           file: displayFile,
           name: binding.name,

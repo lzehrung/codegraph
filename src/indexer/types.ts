@@ -32,6 +32,8 @@ export type SymbolDef = {
   kind: SymbolKind;
   range: Range;
   isMember?: boolean;
+  /** C tag identity; a reference can introduce an incomplete tag if no visible tag exists. */
+  cTag?: "declaration" | "forward" | "reference";
   docstring?: string;
   lineSpan?: number;
   complexity?: number;
@@ -429,7 +431,12 @@ export type GoToResult =
 
 export type ImportBindingRole = "imported" | "local";
 
-export type ReferenceCoverageReason = "parser_degraded" | "unresolved_import" | "truncated";
+export type ReferenceCoverageReason =
+  | "parser_degraded"
+  | "unresolved_import"
+  | "strategy_unavailable"
+  | "name_equivalence_unavailable"
+  | "truncated";
 
 export type ReferenceCoverage = {
   scope: "indexed_candidates";

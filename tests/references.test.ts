@@ -4,9 +4,15 @@ import os from "node:os";
 import fsp from "node:fs/promises";
 import * as indexer from "../src/indexer.js";
 import * as scopeModule from "../src/indexer/scope.js";
-import { getCachedReferenceCandidateFiles } from "../src/indexer/navigation-references.js";
+import * as navigationReferences from "../src/indexer/navigation-references.js";
+import {
+  buildIndexedCandidateCoverage,
+  describeReferenceStrategies,
+  getCachedReferenceCandidateFiles,
+  REFERENCE_COVERAGE_REASON_ORDER,
+} from "../src/indexer/navigation-references.js";
 import { findUsageReferences } from "../src/indexer/navigation.js";
-import type { ProjectIndex } from "../src/index.js";
+import { goToDefinition, type ProjectIndex } from "../src/index.js";
 import { createReferenceLookupCache } from "../src/impact/reference-cache.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import {
@@ -106,7 +112,7 @@ describe("Find References", () => {
       const def = index.byFile.get(fileIdentityKey(aFile))?.locals.find((local) => local.localName === "target");
       if (!def) throw new Error("Expected target definition");
 
-      const candidates = getCachedReferenceCandidateFiles(index, def, ["target"], false);
+      const candidates = getCachedReferenceCandidateFiles(index, def, ["target"], false, "ts");
 
       expect(candidates).toContain(cFile);
       expect(candidates).not.toContain(dFile);
@@ -131,7 +137,7 @@ describe("Find References", () => {
       if (!def) throw new Error("Expected target definition");
 
       const cache = createReferenceLookupCache();
-      expect(getCachedReferenceCandidateFiles(index, def, ["target"], false)).toContain(barrelFile);
+      expect(getCachedReferenceCandidateFiles(index, def, ["target"], false, "ts")).toContain(barrelFile);
       const cold = await cache.get(index, def);
       const warm = await cache.get(index, def);
 
@@ -661,28 +667,27 @@ describe("Find References", () => {
     it("finds references to exported enum declarations", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-enum-refs-"));
       try {
-        const typesFile = path.join(root, "types.ts").replace(/\\/g, "/");
-        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
-        await fsp.writeFile(typesFile, "export enum Mode {\n  Light,\n  Dark,\n}\n", "utf8");
-        await fsp.writeFile(
-          consumerFile,
-          ['import { Mode } from "./types";', "const selected = Mode.Light;", ""].join("\n"),
-          "utf8",
-        );
+        const typesFile = path.join(root, "statement-fund-col-groups.model.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "statement-config.model.ts").replace(/\\/g, "/");
+        await fsp.writeFile(typesFile, "export enum FundColGroupType {\n  BreakOut,\n  Other,\n}\n", "utf8");
+        const importLine = 'import { FundColGroupType } from "./statement-fund-col-groups.model";';
+        const typeUseLine = "interface Config { group: FundColGroupType }";
+        const valueUseLine = "const selected = FundColGroupType.BreakOut;";
+        await fsp.writeFile(consumerFile, [importLine, typeUseLine, valueUseLine, ""].join("\n"), "utf8");
         const index = await createTestIndexFromFiles(root, [typesFile, consumerFile]);
 
-        const importedColumn = tokenColumn('import { Mode } from "./types";', "Mode");
-        const useColumn = tokenColumn("const selected = Mode.Light;", "Mode");
         const result = await testFindReferences(index, typesFile, 1, 13, [
           { file: typesFile, line: 1, column: 13 },
-          { file: consumerFile, line: 1, column: importedColumn },
-          { file: consumerFile, line: 2, column: useColumn },
+          { file: consumerFile, line: 1, column: tokenColumn(importLine, "FundColGroupType") },
+          { file: consumerFile, line: 2, column: tokenColumn(typeUseLine, "FundColGroupType") },
+          { file: consumerFile, line: 3, column: tokenColumn(valueUseLine, "FundColGroupType") },
         ]);
 
         expect(result.status).toBe("ok");
         expectReferenceAt(result, typesFile, 1);
         expectReferenceAt(result, consumerFile, 1);
         expectReferenceAt(result, consumerFile, 2);
+        expectReferenceAt(result, consumerFile, 3);
         if (result.status === "ok") {
           const imported = result.references.find(
             (reference) => reference.file === consumerFile && reference.range.start.line === 1,
@@ -691,6 +696,11 @@ describe("Find References", () => {
           expect(imported?.via?.import).toBeDefined();
           expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
         }
+
+        await testFindReferences(index, typesFile, 2, 3, [
+          { file: typesFile, line: 2, column: 3 },
+          { file: consumerFile, line: 3, column: tokenColumn(valueUseLine, "BreakOut") },
+        ]);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
@@ -711,7 +721,7 @@ describe("Find References", () => {
         const index = await createTestIndexFromFiles(root, [typesFile, barrelFile, consumerFile]);
         const def = index.byFile.get(fileIdentityKey(typesFile))?.locals.find((local) => local.localName === "Light");
         if (!def) throw new Error("Expected enum member definition");
-        expect(getCachedReferenceCandidateFiles(index, def, [], false)).not.toContain(consumerFile);
+        expect(getCachedReferenceCandidateFiles(index, def, [], false, "ts")).not.toContain(consumerFile);
         markCandidateParserDegraded(index, consumerFile);
 
         const result = await indexer.findReferences(index, { def });
@@ -806,15 +816,18 @@ describe("Find References", () => {
         const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
         await fsp.writeFile(typesFile, 'export type Mode = "light" | "dark";\n', "utf8");
         const importLine = 'import type { Mode } from "./types";';
+        const aliasLine = "type Alias = Mode;";
         const useLine = 'const value: Mode = "light";';
-        await fsp.writeFile(consumerFile, [importLine, useLine, ""].join("\n"), "utf8");
+        await fsp.writeFile(consumerFile, [importLine, aliasLine, useLine, ""].join("\n"), "utf8");
         const index = await createTestIndexFromFiles(root, [typesFile, consumerFile]);
         const importedColumn = tokenColumn(importLine, "Mode");
+        const aliasColumn = tokenColumn(aliasLine, "Mode");
         const useColumn = tokenColumn(useLine, "Mode");
         const result = await testFindReferences(index, typesFile, 1, 13, [
           { file: typesFile, line: 1, column: 13 },
           { file: consumerFile, line: 1, column: importedColumn },
-          { file: consumerFile, line: 2, column: useColumn },
+          { file: consumerFile, line: 2, column: aliasColumn },
+          { file: consumerFile, line: 3, column: useColumn },
         ]);
         expect(result.status).toBe("ok");
         if (result.status !== "ok") return;
@@ -2861,12 +2874,11 @@ describe("Find References", () => {
       const helpersFile = path.join(samplePath, "helpers.h").replace(/\\/g, "/");
       const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
 
-      // The struct tag on line 4 and the typedef alias on line 6 are separate symbols now that C
-      // uses query-driven locals like C++. References for the tag keep its own declaration plus the
-      // cross-file use; the alias occurrence belongs to the alias symbol.
-      const result = await testFindReferences(index, utilsFile, 4, 16, 2);
-      expectReferenceAt(result, utilsFile, 4);
-      expectReferenceAt(result, mainFile, 6);
+      await testFindReferences(index, utilsFile, 6, 3, [
+        { file: utilsFile, line: 6, column: 3 },
+        { file: mainFile, line: 6, column: 3 },
+      ]);
+      await testFindReferences(index, utilsFile, 4, 16, [{ file: utilsFile, line: 4, column: 16 }]);
     });
 
     it("should find references to function-pointer typedef use sites", async () => {
@@ -2902,6 +2914,146 @@ describe("Find References", () => {
           (reference) => reference.file === macroUseFile && reference.range.start.line === 4,
         );
         expect(macroInvocationRecovered).toBe(false);
+      }
+    });
+
+    it("keeps same-spelled C tags and typedefs in disjoint reference sets across an included header", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-c-tag-typedef-references-"));
+      try {
+        const headerFile = path.join(root, "shapes.h").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "use.c").replace(/\\/g, "/");
+        const headerLines = [
+          "#pragma once",
+          "",
+          "struct Item {",
+          "  int value;",
+          "};",
+          "",
+          "struct Item *header_item_ptr;",
+          "",
+          "union Value {",
+          "  int as_int;",
+          "  float as_float;",
+          "};",
+          "",
+          "union Value *header_value_ptr;",
+          "",
+          "enum Color {",
+          "  COLOR_RED,",
+          "  COLOR_GREEN,",
+          "};",
+          "",
+          "enum Color *header_color_ptr;",
+          "",
+          "typedef struct Item Item;",
+          "typedef union Value Value;",
+          "typedef enum Color Color;",
+          "",
+          "Item header_item_alias;",
+          "Value header_value_alias;",
+          "Color header_color_alias;",
+          "",
+        ];
+        const consumerLines = [
+          '#include "./shapes.h"',
+          "struct Item; union Value; enum Color;",
+          "struct Item *consumer_item_tag;",
+          "Item *consumer_item_alias;",
+          "union Value *consumer_value_tag;",
+          "Value *consumer_value_alias;",
+          "enum Color *consumer_color_tag;",
+          "Color *consumer_color_alias;",
+          "",
+          "/* Item Value Color */",
+          "int main(void) {",
+          "  struct Item *tag_item = header_item_ptr;",
+          "  Item *alias_item = &header_item_alias;",
+          "  union Value *tag_value = header_value_ptr;",
+          "  Value *alias_value = &header_value_alias;",
+          "  enum Color *tag_color = header_color_ptr;",
+          "  Color *alias_color = &header_color_alias;",
+          "  /* struct Item union Value enum Color */",
+          "  return tag_item->value + alias_item->value;",
+          "}",
+          "",
+        ];
+        await fsp.writeFile(headerFile, headerLines.join("\n"), "utf8");
+        await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [headerFile, consumerFile]);
+
+        for (const kind of [
+          {
+            name: "Item",
+            tagDeclLine: 3,
+            tagUseLine: 7,
+            typedefLine: 23,
+            aliasUseLine: 27,
+            consumerTagLine: 3,
+            consumerAliasLine: 4,
+            consumerTagUseLine: 12,
+            consumerAliasUseLine: 13,
+          },
+          {
+            name: "Value",
+            tagDeclLine: 9,
+            tagUseLine: 14,
+            typedefLine: 24,
+            aliasUseLine: 28,
+            consumerTagLine: 5,
+            consumerAliasLine: 6,
+            consumerTagUseLine: 14,
+            consumerAliasUseLine: 15,
+          },
+          {
+            name: "Color",
+            tagDeclLine: 16,
+            tagUseLine: 21,
+            typedefLine: 25,
+            aliasUseLine: 29,
+            consumerTagLine: 7,
+            consumerAliasLine: 8,
+            consumerTagUseLine: 16,
+            consumerAliasUseLine: 17,
+          },
+        ]) {
+          const tagColumn = tokenColumn(headerLines[kind.typedefLine - 1]!, kind.name, 0);
+          const aliasColumn = tokenColumn(headerLines[kind.typedefLine - 1]!, kind.name, 1);
+          const tagDeclColumn = tokenColumn(headerLines[kind.tagDeclLine - 1]!, kind.name);
+          const tagUseColumn = tokenColumn(headerLines[kind.tagUseLine - 1]!, kind.name);
+          const aliasUseColumn = tokenColumn(headerLines[kind.aliasUseLine - 1]!, kind.name);
+          const consumerTagColumn = tokenColumn(consumerLines[kind.consumerTagLine - 1]!, kind.name);
+          const consumerAliasColumn = tokenColumn(consumerLines[kind.consumerAliasLine - 1]!, kind.name);
+          const consumerTagUseColumn = tokenColumn(consumerLines[kind.consumerTagUseLine - 1]!, kind.name);
+          const consumerAliasUseColumn = tokenColumn(consumerLines[kind.consumerAliasUseLine - 1]!, kind.name);
+
+          const tagExpectedLocations = [
+            { file: headerFile, line: kind.tagDeclLine, column: tagDeclColumn },
+            { file: headerFile, line: kind.tagUseLine, column: tagUseColumn },
+            { file: headerFile, line: kind.typedefLine, column: tagColumn },
+            { file: consumerFile, line: 2, column: tokenColumn(consumerLines[1]!, kind.name) },
+            { file: consumerFile, line: kind.consumerTagLine, column: consumerTagColumn },
+            { file: consumerFile, line: kind.consumerTagUseLine, column: consumerTagUseColumn },
+          ];
+          const aliasExpectedLocations = [
+            { file: headerFile, line: kind.typedefLine, column: aliasColumn },
+            { file: headerFile, line: kind.aliasUseLine, column: aliasUseColumn },
+            { file: consumerFile, line: kind.consumerAliasLine, column: consumerAliasColumn },
+            { file: consumerFile, line: kind.consumerAliasUseLine, column: consumerAliasUseColumn },
+          ];
+          // Exact sets exclude the other namespace and comment text from either lookup direction.
+          await testFindReferences(index, headerFile, kind.tagDeclLine, tagDeclColumn, tagExpectedLocations);
+          await testFindReferences(index, headerFile, kind.typedefLine, aliasColumn, aliasExpectedLocations);
+          await testFindReferences(index, consumerFile, kind.consumerTagLine, consumerTagColumn, tagExpectedLocations);
+          await testFindReferences(
+            index,
+            consumerFile,
+            kind.consumerAliasLine,
+            consumerAliasColumn,
+            aliasExpectedLocations,
+          );
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
       }
     });
   });
@@ -4227,6 +4379,443 @@ describe("Find References: Python receiver member resolution", () => {
   });
 });
 
+describe("Find References: keyword receiver scope and coverage", () => {
+  it("keeps TypeScript static and instance members separate for the same spelling", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-keyword-scope-refs-"));
+    try {
+      const file = path.join(root, "box.ts").replace(/\\/g, "/");
+      const source = [
+        "class StaticBox {",
+        "  static run(): void {}",
+        "  callInstance(): void { this.run(); }",
+        "  static callStatic(): void { this.run(); }",
+        "}",
+        "class InstanceBox {",
+        "  run(): void {}",
+        "  callInstance(): void { this.run(); }",
+        "  static callStatic(): void { this.run(); }",
+        "}",
+      ].join("\n");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+
+      const staticRefs = await testFindReferences(index, file, 2, source.split("\n")[1]!.indexOf("run") + 1, 2);
+      if (staticRefs.status === "ok") {
+        expect(staticRefs.references.map((reference) => reference.range.start.line)).toEqual([2, 4]);
+        expect(staticRefs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+
+      const instanceRefs = await testFindReferences(index, file, 7, source.split("\n")[6]!.indexOf("run") + 1, 2);
+      if (instanceRefs.status === "ok") {
+        expect(instanceRefs.references.map((reference) => reference.range.start.line)).toEqual([7, 8]);
+        expect(instanceRefs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial coverage when JavaScript dynamic this prevents receiver proof", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-js-dynamic-this-refs-"));
+    try {
+      const file = path.join(root, "box.js").replace(/\\/g, "/");
+      const source = [
+        "class Box {",
+        "  helper() {}",
+        "  run() {",
+        "    function nested() { this.helper(); }",
+        "    const arrow = () => this.helper();",
+        "  }",
+        "}",
+      ].join("\n");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const refs = await testFindReferences(index, file, 2, source.split("\n")[1]!.indexOf("helper") + 1, 2);
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual([2, 5]);
+        expect(refs.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["strategy_unavailable"],
+          affectedFiles: [file],
+        });
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds an inherited C++ member from an out-of-line this call", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-out-of-line-refs-"));
+    try {
+      const file = path.join(root, "box.cpp").replace(/\\/g, "/");
+      const source = [
+        "class Base { public: void helper() {} };",
+        "class Child : public Base { public: void run(); };",
+        "void Child::run() { this->helper(); }",
+      ].join("\n");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const refs = await testFindReferences(index, file, 1, source.split("\n")[0]!.indexOf("helper") + 1, 2);
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual([1, 3]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds typed receiver calls for an out-of-line C++ definition", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-out-of-line-target-refs-"));
+    try {
+      const headerFile = path.join(root, "box.hpp").replace(/\\/g, "/");
+      const implementationFile = path.join(root, "box.cpp").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "use.cpp").replace(/\\/g, "/");
+      const header = "class Box { public: int run(int run); };";
+      const implementation = ['#include "box.hpp"', "int Box::run(int run) { return run; }"].join("\n");
+      const consumer = ['#include "box.hpp"', "int use(Box& box) { return box.run(1); }"].join("\n");
+      await fsp.writeFile(headerFile, header, "utf8");
+      await fsp.writeFile(implementationFile, implementation, "utf8");
+      await fsp.writeFile(consumerFile, consumer, "utf8");
+      const index = await createTestIndexFromFiles(root, [headerFile, implementationFile, consumerFile]);
+      const refs = await testFindReferences(
+        index,
+        implementationFile,
+        2,
+        implementation.split("\n")[1]!.indexOf("run") + 1,
+        3,
+      );
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => path.basename(reference.file)).sort()).toEqual([
+          "box.cpp",
+          "box.hpp",
+          "use.cpp",
+        ]);
+        expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+      const declarationRefs = await testFindReferences(index, headerFile, 1, header.indexOf("run") + 1, 3);
+      if (declarationRefs.status === "ok") {
+        expect(declarationRefs.references.map((reference) => path.basename(reference.file)).sort()).toEqual([
+          "box.cpp",
+          "box.hpp",
+          "use.cpp",
+        ]);
+        expect(declarationRefs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the full namespace path for C++ out-of-line member references", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-qualified-owner-refs-"));
+    try {
+      const aHeader = path.join(root, "a.hpp").replace(/\\/g, "/");
+      const bHeader = path.join(root, "b.hpp").replace(/\\/g, "/");
+      const implementationFile = path.join(root, "b.cpp").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "use.cpp").replace(/\\/g, "/");
+      await fsp.writeFile(aHeader, "namespace a { class Box { public: int run(); }; }", "utf8");
+      await fsp.writeFile(bHeader, "namespace b { class Box { public: int run(); }; }", "utf8");
+      const implementation = ['#include "a.hpp"', '#include "b.hpp"', "int b::Box::run() { return 1; }"].join("\n");
+      const consumer = [
+        '#include "a.hpp"',
+        '#include "b.hpp"',
+        "int use_a(a::Box& box) { return box.run(); }",
+        "int use_b(b::Box& box) { return box.run(); }",
+      ].join("\n");
+      await fsp.writeFile(implementationFile, implementation, "utf8");
+      await fsp.writeFile(consumerFile, consumer, "utf8");
+      const index = await createTestIndexFromFiles(root, [aHeader, bHeader, implementationFile, consumerFile]);
+      const refs = await testFindReferences(
+        index,
+        implementationFile,
+        3,
+        implementation.split("\n")[2]!.indexOf("run") + 1,
+        3,
+      );
+      if (refs.status === "ok") {
+        const sites = refs.references
+          .map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`)
+          .sort();
+        expect(sites).toEqual(["b.cpp:3", "b.hpp:1", "use.cpp:4"]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("groups a C++ prototype and definition without merging an overload", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-overload-entity-refs-"));
+    try {
+      const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+      const lines = [
+        "int add(int left, int right);",
+        "int add(double value);",
+        "int add(int left, int right) { return left + right; }",
+        "int call_pair() { return add(1, 2); }",
+        "int call_double() { return add(1.0); }",
+      ];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const refs = await testFindReferences(index, file, 3, lines[2]!.indexOf("add") + 1, 3);
+
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual([1, 3, 4]);
+        expect(refs.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "complete",
+        });
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("omits invalid arity calls from unique C++ declaration references", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-unique-arity-refs-"));
+    try {
+      const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+      const lines = [
+        "int f(int value);",
+        "int f(int value) { return value; }",
+        "int zero() { return f(); }",
+        "int one() { return f(1); }",
+        "int two() { return f(1, 2); }",
+        "int (*ptr)(int) = f;",
+      ];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      for (const line of [1, 2]) {
+        const refs = await testFindReferences(index, file, line, lines[line - 1]!.indexOf("f") + 1, 4);
+        if (refs.status === "ok") {
+          expect(refs.references.map((reference) => reference.range.start.line)).toEqual([1, 2, 4, 6]);
+        }
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("groups a C++ parameter pack with calls that bind no trailing arguments", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-parameter-pack-refs-"));
+    try {
+      const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+      const lines = [
+        "template<class T, class... Ts> int pack(T first, Ts... rest);",
+        "template<class T, class... Ts> int pack(T first, Ts... rest) { return first; }",
+        "int use_one() { return pack(1); }",
+        "int use_two() { return pack(1, 2); }",
+        "int use_zero() { return pack(); }",
+      ];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const refs = await testFindReferences(index, file, 2, lines[1]!.indexOf("pack") + 1, 4);
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual([1, 2, 3, 4]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("groups adjusted C++ parameter shapes in references without merging near neighbors", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-adjusted-shape-refs-"));
+    try {
+      const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+      const lines = [
+        "int pick(int values[]);",
+        "int pick(int* values) { return values ? 1 : 0; }",
+        "int relay(void handler(int));",
+        "int relay(void (*handler)(int)) { return handler ? 1 : 0; }",
+        "int total(const int sum);",
+        "int total(int sum) { return sum; }",
+        "int exact(const int* values);",
+        "int exact(int* values) { return values ? 1 : 0; }",
+        "int use_pick(int* buf) { return pick(buf); }",
+        "int use_relay() { return relay(nullptr); }",
+        "int use_total() { return total(3); }",
+        "int use_exact(int* buf) { return exact(buf); }",
+      ];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+
+      const pick = await testFindReferences(index, file, 2, lines[1]!.indexOf("pick") + 1, 3);
+      if (pick.status === "ok") {
+        expect(pick.references.map((reference) => reference.range.start.line)).toEqual([1, 2, 9]);
+      }
+      const relay = await testFindReferences(index, file, 4, lines[3]!.indexOf("relay") + 1, 3);
+      if (relay.status === "ok") {
+        expect(relay.references.map((reference) => reference.range.start.line)).toEqual([3, 4, 10]);
+      }
+      const total = await testFindReferences(index, file, 6, lines[5]!.indexOf("total") + 1, 3);
+      if (total.status === "ok") {
+        expect(total.references.map((reference) => reference.range.start.line)).toEqual([5, 6, 11]);
+      }
+      const exact = await testFindReferences(index, file, 7, lines[6]!.indexOf("exact") + 1, 1);
+      if (exact.status === "ok") {
+        const exactLines = exact.references.map((reference) => reference.range.start.line);
+        expect(exactLines).toContain(7);
+        expect(exactLines).not.toContain(12);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps using-alias C++ overload references on their matching consumer calls", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-using-alias-overload-refs-"));
+    try {
+      const header = path.join(root, "api.h").replace(/\\/g, "/");
+      const file = path.join(root, "use.cpp").replace(/\\/g, "/");
+      const headerLines = [
+        "namespace left {",
+        "int run(int*);",
+        "int pick();",
+        "int pick(int);",
+        "}",
+        "namespace alias { inline namespace v1 { using left::pick; } }",
+      ];
+      const lines = [
+        '#include "api.h"',
+        "int invalid_zero() { return left::run(); }",
+        "int invalid_two() { return left::run(nullptr, nullptr); }",
+        "int zero() { return alias::pick(); }",
+        "int one() { return alias::pick(1); }",
+        "int too_many() { return alias::pick(1, 2); }",
+        "int (*ptr)(int*) = &left::run;",
+        "using left::pick;",
+        "int direct_zero() { return pick(); }",
+        "int direct_one() { return pick(1); }",
+        "int direct_invalid() { return pick(1, 2); }",
+      ];
+      await fsp.writeFile(header, headerLines.join("\n"), "utf8");
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [header, file]);
+      const pickZero = await testFindReferences(index, header, 3, headerLines[2]!.indexOf("pick") + 1, 3);
+      const pickOne = await testFindReferences(index, header, 4, headerLines[3]!.indexOf("pick") + 1, 3);
+      const runRefs = await testFindReferences(index, header, 2, headerLines[1]!.indexOf("run") + 1, 2);
+      const sites = (result: Awaited<ReturnType<typeof testFindReferences>>): string[] =>
+        result.status === "ok"
+          ? result.references.map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`)
+          : [];
+      expect(sites(pickZero)).toEqual(["api.h:3", "use.cpp:4", "use.cpp:9"]);
+      expect(sites(pickOne)).toEqual(["api.h:4", "use.cpp:5", "use.cpp:10"]);
+      expect(sites(runRefs)).toEqual(expect.arrayContaining(["api.h:2", "use.cpp:7"]));
+      expect(sites(runRefs).some((site: string) => site === "use.cpp:2" || site === "use.cpp:3")).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses free-function references for namespace-qualified C++ definitions", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-namespace-function-refs-"));
+    try {
+      const file = path.join(root, "free.cpp").replace(/\\/g, "/");
+      const source = [
+        "namespace tools { int run(); }",
+        "int tools::run() { return 1; }",
+        "int call() { return tools::run(); }",
+        "int unrelated(auto& value) { return value.run(); }",
+      ].join("\n");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const refs = await testFindReferences(index, file, 2, source.split("\n")[1]!.indexOf("run") + 1, 2);
+      if (refs.status === "ok") {
+        const lines = refs.references.map((reference) => reference.range.start.line);
+        expect(lines).toContain(3);
+        expect(lines).not.toContain(4);
+        expect(refs.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "complete",
+        });
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps same-named C++ namespace functions disjoint", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-namespace-identity-refs-"));
+    try {
+      const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+      const lines = [
+        "namespace left { int run(); }",
+        "namespace right { int run(); }",
+        "int left::run() { return 1; }",
+        "int right::run() { return 2; }",
+        "int call() { return left::run() + right::run(); }",
+      ];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const left = await testFindReferences(index, file, 1, lines[0]!.indexOf("run") + 1, 3);
+      const right = await testFindReferences(index, file, 2, lines[1]!.indexOf("run") + 1, 3);
+
+      if (left.status === "ok") {
+        expect(left.references.map((reference) => reference.range.start.line)).toEqual([1, 3, 5]);
+      }
+      if (right.status === "ok") {
+        expect(right.references.map((reference) => reference.range.start.line)).toEqual([2, 4, 5]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("tracks explicit C++ template member definitions by their nested name", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-template-member-refs-"));
+    try {
+      const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+      const lines = [
+        "class Box { public: template <class T> static int run(T value); };",
+        "template <> int Box::run<int>(int value) { return value; }",
+        "int call() { return Box::run<int>(1); }",
+      ];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const refs = await testFindReferences(index, file, 2, lines[1]!.indexOf("run") + 1, 3);
+      const declarationRefs = await testFindReferences(index, file, 1, lines[0]!.indexOf("run") + 1, 3);
+
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual([1, 2, 3]);
+      }
+      if (declarationRefs.status === "ok") {
+        expect(declarationRefs.references.map((reference) => reference.range.start.line)).toEqual([1, 2, 3]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("links C++ destructor and operator declarations with out-of-line definitions in both directions", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-special-member-refs-"));
+    try {
+      const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+      const lines = [
+        "class A { public: ~A(); A& operator+=(int value); };",
+        "A::~A() {}",
+        "A& A::operator+=(int value) { return *this; }",
+      ];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const cases = [
+        { line: 1, column: lines[0]!.indexOf("~A") + 1, expected: [1, 2] },
+        { line: 2, column: lines[1]!.indexOf("~A") + 1, expected: [1, 2] },
+        { line: 1, column: lines[0]!.indexOf("operator") + 1, expected: [1, 3] },
+        { line: 3, column: lines[2]!.indexOf("operator") + 1, expected: [1, 3] },
+      ];
+      for (const probe of cases) {
+        const refs = await testFindReferences(index, file, probe.line, probe.column, 2);
+        if (refs.status === "ok") {
+          expect(refs.references.map((reference) => reference.range.start.line)).toEqual(probe.expected);
+          expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        }
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Find References: PHP unproven receiver is not a bare-name hit", () => {
   it("does not treat $unknown->helper() as a reference to an imported helper", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-misattr-refs-"));
@@ -4247,6 +4836,1029 @@ describe("Find References: PHP unproven receiver is not a bare-name hit", () => 
       await testFindReferences(index, hostFile, 4, helperColumn, 0, "not_found");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: PHP fallback syntax", () => {
+  it("does not treat an unproven member call as a reference to Box::helper", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-box-member-refs-"));
+    try {
+      const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+      const sourceLine = "<?php class Box { function helper() {} }";
+      const consumerLine = "<?php $unknown->helper();";
+      await fsp.writeFile(sourceFile, `${sourceLine}\n`, "utf8");
+      await fsp.writeFile(consumerFile, `${consumerLine}\n`, "utf8");
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+      const result = await testFindReferences(index, sourceFile, 1, tokenColumn(sourceLine, "helper"), 1);
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expectReferenceAt(result, sourceFile, 1);
+      expect(result.references.some((reference) => reference.file === consumerFile)).toBe(false);
+      expect(result.referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["strategy_unavailable"],
+        affectedFiles: [consumerFile],
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat a bare function call as a reference to a same-named class", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-class-function-refs-"));
+    try {
+      const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+      const sourceLine = "<?php class helper {}";
+      const consumerLines = ["<?php", "helper();", "new helper();", ""];
+      await fsp.writeFile(sourceFile, `${sourceLine}\n`, "utf8");
+      await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+      const result = await testFindReferences(index, sourceFile, 1, tokenColumn(sourceLine, "helper"), 2);
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expectReferenceAt(result, sourceFile, 1);
+      expect(
+        result.references.some((reference) => reference.file === consumerFile && reference.range.start.line === 2),
+      ).toBe(false);
+      expectReferenceAt(result, consumerFile, 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: PHP global-namespace symbols", () => {
+  it("finds a no-use consumer reference for a global-namespace class", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-global-class-refs-"));
+    try {
+      const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+      const sourceLine = "<?php class GlobalService { function run() { return 1; } }";
+      await fsp.writeFile(sourceFile, `${sourceLine}\n`, "utf8");
+      await fsp.writeFile(consumerFile, "<?php $svc = new GlobalService(); $svc->run();\n", "utf8");
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+      const result = await testFindReferences(index, sourceFile, 1, tokenColumn(sourceLine, "GlobalService"), 2);
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expectReferenceAt(result, sourceFile, 1);
+      expectReferenceAt(result, consumerFile, 1);
+      expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds a no-use consumer reference for a global-namespace function", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-global-function-refs-"));
+    try {
+      const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+      const sourceLine = "<?php function globalHelper() { return 1; }";
+      await fsp.writeFile(sourceFile, `${sourceLine}\n`, "utf8");
+      await fsp.writeFile(consumerFile, "<?php $x = globalHelper();\n", "utf8");
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+      const result = await testFindReferences(index, sourceFile, 1, tokenColumn(sourceLine, "globalHelper"), 2);
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expectReferenceAt(result, sourceFile, 1);
+      expectReferenceAt(result, consumerFile, 1);
+      expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds a case-variant reference to a namespaced class", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-case-class-refs-"));
+    try {
+      const serviceFile = path.join(root, "service.php").replace(/\\/g, "/");
+      const useFile = path.join(root, "use.php").replace(/\\/g, "/");
+      const serviceLine = "<?php namespace App; class Service { function run() { return 1; } }";
+      await fsp.writeFile(serviceFile, `${serviceLine}\n`, "utf8");
+      await fsp.writeFile(
+        useFile,
+        ["<?php", "$svc = new \\app\\service();", "$match = $svc instanceof \\APP\\SERVICE;", ""].join("\n"),
+        "utf8",
+      );
+      const index = await createTestIndexFromFiles(root, [serviceFile, useFile]);
+
+      const result = await testFindReferences(index, serviceFile, 1, tokenColumn(serviceLine, "Service"), 3);
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expectReferenceAt(result, serviceFile, 1);
+      expectReferenceAt(result, useFile, 2);
+      expectReferenceAt(result, useFile, 3);
+      expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds a case-variant reference to a namespaced function", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-case-function-refs-"));
+    try {
+      const serviceFile = path.join(root, "service.php").replace(/\\/g, "/");
+      const useFile = path.join(root, "use.php").replace(/\\/g, "/");
+      const serviceLine = "<?php namespace App; function Helper() { return 1; }";
+      await fsp.writeFile(serviceFile, `${serviceLine}\n`, "utf8");
+      await fsp.writeFile(useFile, "<?php $x = \\app\\helper();\n", "utf8");
+      const index = await createTestIndexFromFiles(root, [serviceFile, useFile]);
+
+      const result = await testFindReferences(index, serviceFile, 1, tokenColumn(serviceLine, "Helper"), 2);
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expectReferenceAt(result, serviceFile, 1);
+      expectReferenceAt(result, useFile, 1);
+      expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps class, function, and constant aliases in separate PHP symbol namespaces", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-alias-role-refs-"));
+    try {
+      const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+      const sourceLines = [
+        "<?php",
+        "namespace App\\Domain;",
+        "class Service {}",
+        "function helper() { return 1; }",
+        "const TOKEN = 1;",
+        "",
+      ];
+      const consumerLines = [
+        "<?php",
+        "namespace Client;",
+        "use aPp\\dOmAiN\\sErViCe as Alias;",
+        "use function APP\\DOMAIN\\HELPER as Alias;",
+        "use const App\\domain\\TOKEN as Alias;",
+        "$service = new ALIAS();",
+        "$value = ALIAS();",
+        "$constant = Alias;",
+        "$wrong = ALIAS;",
+        "",
+      ];
+      await fsp.writeFile(sourceFile, sourceLines.join("\n"), "utf8");
+      await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+      await testFindReferences(index, sourceFile, 3, tokenColumn(sourceLines[2]!, "Service"), [
+        { file: sourceFile, line: 3, column: tokenColumn(sourceLines[2]!, "Service") },
+        { file: consumerFile, line: 3, column: tokenColumn(consumerLines[2]!, "sErViCe") },
+        { file: consumerFile, line: 3, column: tokenColumn(consumerLines[2]!, "Alias") },
+        { file: consumerFile, line: 6, column: tokenColumn(consumerLines[5]!, "ALIAS") },
+      ]);
+      await testFindReferences(index, sourceFile, 4, tokenColumn(sourceLines[3]!, "helper"), [
+        { file: sourceFile, line: 4, column: tokenColumn(sourceLines[3]!, "helper") },
+        { file: consumerFile, line: 4, column: tokenColumn(consumerLines[3]!, "HELPER") },
+        { file: consumerFile, line: 4, column: tokenColumn(consumerLines[3]!, "Alias") },
+        { file: consumerFile, line: 7, column: tokenColumn(consumerLines[6]!, "ALIAS") },
+      ]);
+      await testFindReferences(index, sourceFile, 5, tokenColumn(sourceLines[4]!, "TOKEN"), [
+        { file: sourceFile, line: 5, column: tokenColumn(sourceLines[4]!, "TOKEN") },
+        { file: consumerFile, line: 5, column: tokenColumn(consumerLines[4]!, "TOKEN") },
+        { file: consumerFile, line: 5, column: tokenColumn(consumerLines[4]!, "Alias") },
+        { file: consumerFile, line: 8, column: tokenColumn(consumerLines[7]!, "Alias") },
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps instanceof, catch, and constructor-argument aliases in their PHP namespaces", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-alias-type-contexts-"));
+    try {
+      const sourceFile = path.join(root, "source.php").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+      const sourceLines = [
+        "<?php",
+        "namespace App\\Domain;",
+        "class Service {}",
+        "function helper() { return 1; }",
+        "const TOKEN = 1;",
+        "",
+      ];
+      const consumerLines = [
+        "<?php",
+        "namespace Client;",
+        "use App\\Domain\\Service as Alias;",
+        "use function App\\Domain\\helper as Alias;",
+        "use const App\\Domain\\TOKEN as Alias;",
+        "$service = new Alias();",
+        "$withArg = new Alias(Alias);",
+        "$is = $service instanceof Alias;",
+        "try { throw $service; } catch (Alias $e) {}",
+        "$value = Alias();",
+        "$constant = Alias;",
+        "",
+      ];
+      await fsp.writeFile(sourceFile, sourceLines.join("\n"), "utf8");
+      await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+
+      await testFindReferences(index, sourceFile, 3, tokenColumn(sourceLines[2]!, "Service"), [
+        { file: sourceFile, line: 3, column: tokenColumn(sourceLines[2]!, "Service") },
+        { file: consumerFile, line: 3, column: tokenColumn(consumerLines[2]!, "Service") },
+        { file: consumerFile, line: 3, column: tokenColumn(consumerLines[2]!, "Alias") },
+        { file: consumerFile, line: 6, column: tokenColumn(consumerLines[5]!, "Alias") },
+        { file: consumerFile, line: 7, column: tokenColumn(consumerLines[6]!, "Alias") },
+        { file: consumerFile, line: 8, column: tokenColumn(consumerLines[7]!, "Alias") },
+        { file: consumerFile, line: 9, column: tokenColumn(consumerLines[8]!, "Alias") },
+      ]);
+      await testFindReferences(index, sourceFile, 4, tokenColumn(sourceLines[3]!, "helper"), [
+        { file: sourceFile, line: 4, column: tokenColumn(sourceLines[3]!, "helper") },
+        { file: consumerFile, line: 4, column: tokenColumn(consumerLines[3]!, "helper") },
+        { file: consumerFile, line: 4, column: tokenColumn(consumerLines[3]!, "Alias") },
+        { file: consumerFile, line: 10, column: tokenColumn(consumerLines[9]!, "Alias") },
+      ]);
+      await testFindReferences(index, sourceFile, 5, tokenColumn(sourceLines[4]!, "TOKEN"), [
+        { file: sourceFile, line: 5, column: tokenColumn(sourceLines[4]!, "TOKEN") },
+        { file: consumerFile, line: 5, column: tokenColumn(consumerLines[4]!, "TOKEN") },
+        { file: consumerFile, line: 5, column: tokenColumn(consumerLines[4]!, "Alias") },
+        { file: consumerFile, line: 7, column: tokenColumn(consumerLines[6]!, "Alias", 1) },
+        { file: consumerFile, line: 11, column: tokenColumn(consumerLines[10]!, "Alias") },
+      ]);
+
+      const instanceofHit = await goToDefinition(index, {
+        file: consumerFile,
+        line: 8,
+        column: tokenColumn(consumerLines[7]!, "Alias"),
+      });
+      expect(instanceofHit.status).toBe("ok");
+      if (instanceofHit.status === "ok") {
+        expect(fileIdentityKey(instanceofHit.definition.file)).toBe(fileIdentityKey(sourceFile));
+        expect(instanceofHit.definition.range.start.line).toBe(3);
+      }
+
+      const catchHit = await goToDefinition(index, {
+        file: consumerFile,
+        line: 9,
+        column: tokenColumn(consumerLines[8]!, "Alias"),
+      });
+      expect(catchHit.status).toBe("ok");
+      if (catchHit.status === "ok") {
+        expect(fileIdentityKey(catchHit.definition.file)).toBe(fileIdentityKey(sourceFile));
+        expect(catchHit.definition.range.start.line).toBe(3);
+      }
+
+      const argumentHit = await goToDefinition(index, {
+        file: consumerFile,
+        line: 7,
+        column: tokenColumn(consumerLines[6]!, "Alias", 1),
+      });
+      expect(argumentHit.status).toBe("ok");
+      if (argumentHit.status === "ok") {
+        expect(fileIdentityKey(argumentHit.definition.file)).toBe(fileIdentityKey(sourceFile));
+        expect(argumentHit.definition.range.start.line).toBe(5);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps namespaced PHP constants case-sensitive", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-constant-case-refs-"));
+    try {
+      const file = path.join(root, "constants.php").replace(/\\/g, "/");
+      const lines = ["<?php", "namespace App;", "const TOKEN = 1;", "$value = TOKEN;", "$other = token;", ""];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+
+      await testFindReferences(index, file, 3, tokenColumn(lines[2]!, "TOKEN"), [
+        { file, line: 3, column: tokenColumn(lines[2]!, "TOKEN") },
+        { file, line: 4, column: tokenColumn(lines[3]!, "TOKEN") },
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps PHP variables and properties case-sensitive", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-case-variable-refs-"));
+    try {
+      const file = path.join(root, "props.php").replace(/\\/g, "/");
+      const lines = [
+        "<?php",
+        "class Box {",
+        "  public $value = 1;",
+        "  public $Value = 2;",
+        "  function read() { return $this->value + $this->Value; }",
+        "}",
+        "",
+      ];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const readLine = lines[4]!;
+
+      const lower = await indexer.findReferences(index, { file, line: 3, column: tokenColumn(lines[2]!, "value") });
+      expect(lower.status).toBe("ok");
+      if (lower.status === "ok") {
+        expect(
+          lower.references.some(
+            (reference) =>
+              reference.range.start.line === 5 && reference.range.start.column === tokenColumn(readLine, "value"),
+          ),
+        ).toBe(true);
+        expect(
+          lower.references.some(
+            (reference) =>
+              reference.range.start.line === 5 && reference.range.start.column === tokenColumn(readLine, "Value"),
+          ),
+        ).toBe(false);
+      }
+
+      const upper = await indexer.findReferences(index, { file, line: 4, column: tokenColumn(lines[3]!, "Value") });
+      expect(upper.status).toBe("ok");
+      if (upper.status === "ok") {
+        expect(
+          upper.references.some(
+            (reference) =>
+              reference.range.start.line === 5 && reference.range.start.column === tokenColumn(readLine, "Value"),
+          ),
+        ).toBe(true);
+        expect(
+          upper.references.some(
+            (reference) =>
+              reference.range.start.line === 5 && reference.range.start.column === tokenColumn(readLine, "value"),
+          ),
+        ).toBe(false);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: PHP trait case-insensitivity", () => {
+  it("matches a case-variant trait reference across files", async () => {
+    // A PHP trait is class-like and its name is case-insensitive. The indexer's kind mapping has
+    // no `trait` entry, so classifying it as anything other than `class` collapses it to
+    // `variable`, which the comparator treats as case-sensitive and the reference is lost.
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-trait-case-"));
+    try {
+      const traitFile = path.join(root, "trait.php").replace(/\\/g, "/");
+      const useFile = path.join(root, "use.php").replace(/\\/g, "/");
+      await fsp.writeFile(
+        traitFile,
+        ["<?php", "namespace App;", "trait Greets {", "  public function hello() { return 1; }", "}", ""].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(useFile, ["<?php", "namespace App;", "class Host { use greets; }", ""].join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [traitFile, useFile]);
+
+      const declared = index.byFile
+        .get(fileIdentityKey(traitFile))
+        ?.locals.find((local) => local.localName === "Greets");
+      expect(declared?.kind).toBe("class");
+
+      const result = await indexer.findReferences(index, { file: traitFile, line: 3, column: 7 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expectReferenceAt(result, useFile, 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a case-variant consumer past bloom-filter narrowing", async () => {
+    // PHP bloom filters store each identifier in its source spelling and ASCII-case-folded.
+    // Candidate narrowing must fold a case-insensitive class probe the same way so the
+    // comparator can verify `sErViCe` against `Service`.
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-bloom-case-"));
+    try {
+      const serviceFile = path.join(root, "service.php").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+      await fsp.writeFile(
+        serviceFile,
+        ["<?php", "namespace App;", "class Service {", "  public function run() { return 1; }", "}", ""].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(consumerFile, ["<?php", "$svc = new \\App\\sErViCe();", ""].join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [serviceFile, consumerFile]);
+      expect(index.bloomFilters).toBeDefined();
+
+      const result = await indexer.findReferences(index, { file: serviceFile, line: 3, column: 7 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expectReferenceAt(result, consumerFile, 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps namespaced PHP property consumers through exact-case Bloom narrowing", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-property-bloom-"));
+    try {
+      const definition = path.join(root, "box.php").replace(/\\/g, "/");
+      const consumer = path.join(root, "use.php").replace(/\\/g, "/");
+      const declaration = "class Box { public $field; }";
+      await fsp.writeFile(definition, `<?php\nnamespace App;\n${declaration}\n`);
+      await fsp.writeFile(
+        consumer,
+        ["<?php", "namespace Client;", "use App\\Box;", "$box = new Box();", "$box->field;", "$box->FIELD;"].join("\n"),
+      );
+      for (const useBloomFilters of [true, false]) {
+        const index = await indexer.buildProjectIndexFromFiles(root, [definition, consumer], { useBloomFilters });
+        const result = await indexer.findReferences(index, {
+          file: definition,
+          line: 3,
+          column: declaration.indexOf("field") + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected PHP property references");
+        expect(
+          result.references
+            .filter((ref) => fileIdentityKey(ref.file) === fileIdentityKey(consumer))
+            .map((ref) => ref.range.start.line),
+        ).toEqual([5]);
+        expect(result.referenceCoverage.state).toBe("complete");
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: same-file strategy execution", () => {
+  it("keeps coverage complete for a C definition that simply has no same-file uses", async () => {
+    // `executed` records that the same-file scan ran, not that it found uses. Deriving it from
+    // the occurrence count downgrades every unused C or C++ declaration to partial.
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-c-zero-use-coverage-"));
+    try {
+      const file = path.join(root, "lonely.c").replace(/\\/g, "/");
+      // A file-scope prototype registers in the enclosing module scope. A definition
+      // name that landed only inside its own function scope is not a correct scan.
+      await fsp.writeFile(file, "int lonely(void);\n", "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+
+      const result = await indexer.findReferences(index, { file, line: 1, column: 5 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: reference coverage honesty", () => {
+  it("reports partial coverage when an applicable strategy never ran", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-coverage-strategy-"));
+    try {
+      const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+      await fsp.writeFile(sourceFile, "export function target() { return 1; }\n", "utf8");
+      const index = await createTestIndexFromFiles(root, [sourceFile]);
+      const def = index.byFile.get(fileIdentityKey(sourceFile))?.locals.find((local) => local.localName === "target");
+      if (!def) throw new Error("Expected a definition for target");
+
+      const strategies = describeReferenceStrategies({
+        languageId: "cpp",
+        phpQualifiedNames: [],
+        sameFileOccurrence: { applicable: true, executed: false },
+      });
+      expect(strategies.applicable).toEqual(["same_file_occurrence"]);
+      expect(strategies.executed).toEqual([]);
+
+      // The PHP qualified-name scan is required for every PHP definition; an empty probe set
+      // means the scan never ran, which must not be reported as complete.
+      expect(describeReferenceStrategies({ languageId: "php", phpQualifiedNames: [] })).toEqual({
+        applicable: ["php_qualified_name"],
+        executed: [],
+      });
+      expect(describeReferenceStrategies({ languageId: "php", phpQualifiedNames: ["App\\Service"] })).toEqual({
+        applicable: ["php_qualified_name"],
+        executed: ["php_qualified_name"],
+      });
+      expect(describeReferenceStrategies({ languageId: "ts", phpQualifiedNames: [] })).toEqual({
+        applicable: [],
+        executed: [],
+      });
+
+      expect(
+        buildIndexedCandidateCoverage({
+          index,
+          def,
+          languageId: "ts",
+          exportedNames: [],
+          candidateFiles: [],
+          scannedFiles: [sourceFile],
+          truncated: false,
+          strategies,
+        }),
+      ).toEqual({ scope: "indexed_candidates", state: "partial", reasons: ["strategy_unavailable"] });
+
+      // The strategy report is optional: without it the historical file-count behavior stands.
+      expect(
+        buildIndexedCandidateCoverage({
+          index,
+          def,
+          languageId: "ts",
+          exportedNames: [],
+          candidateFiles: [],
+          scannedFiles: [sourceFile],
+          truncated: false,
+        }),
+      ).toEqual({ scope: "indexed_candidates", state: "complete" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports name_equivalence_unavailable for a bare case-variant PHP reference", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-coverage-name-equivalence-"));
+    try {
+      const serviceFile = path.join(root, "service.php").replace(/\\/g, "/");
+      const useFile = path.join(root, "use.php").replace(/\\/g, "/");
+      const serviceLine = "<?php namespace App; class Service { function run() { return 1; } }";
+      await fsp.writeFile(serviceFile, `${serviceLine}\n`, "utf8");
+      await fsp.writeFile(useFile, "<?php namespace App; $svc = new service();\n", "utf8");
+      const index = await createTestIndexFromFiles(root, [serviceFile, useFile]);
+
+      const result = await indexer.findReferences(index, {
+        file: serviceFile,
+        line: 1,
+        column: tokenColumn(serviceLine, "Service"),
+      });
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      // The bare `service` spelling is a legal case-variant reference, but a bare name could
+      // also be a same-named constant, so the equivalence is unproven and coverage says so.
+      expectReferenceAt(result, useFile, 1);
+      expect(result.referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["name_equivalence_unavailable"],
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("orders direct and bounded-cache coverage reasons through one table", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-coverage-order-"));
+    try {
+      const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+      await fsp.writeFile(sourceFile, "export function target() { return 1; }\n", "utf8");
+      await fsp.writeFile(
+        consumerFile,
+        ['import { target } from "./source";', "const a = target();", "const b = target();", ""].join("\n"),
+        "utf8",
+      );
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+      markCandidateParserDegraded(index, consumerFile);
+
+      const direct = await indexer.findReferences(index, { file: sourceFile, line: 1, column: 17 });
+      expect(direct.status).toBe("ok");
+      if (direct.status !== "ok") return;
+      expect(direct.referenceCoverage.state).toBe("partial");
+      expect(direct.referenceCoverage.reasons).toEqual(
+        REFERENCE_COVERAGE_REASON_ORDER.filter((reason) => direct.referenceCoverage.reasons?.includes(reason)),
+      );
+
+      const bounded = await createReferenceLookupCache().get(index, direct.definition, { maxReferences: 1 });
+      expect(bounded.status).toBe("ok");
+      if (bounded.status !== "ok") return;
+      expect(bounded.referenceCoverage.reasons).toEqual(
+        REFERENCE_COVERAGE_REASON_ORDER.filter((reason) => bounded.referenceCoverage.reasons?.includes(reason)),
+      );
+      expect(bounded.referenceCoverage.reasons).toEqual(["parser_degraded", "truncated"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: PHP use-alias and global-function fallback", () => {
+  it("resolves a case-variant use alias before the current namespace", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-use-alias-case-"));
+    try {
+      const serviceFile = path.join(root, "service.php").replace(/\\/g, "/");
+      const clientFile = path.join(root, "client.php").replace(/\\/g, "/");
+      const serviceLine = "<?php namespace App; class Service { function run() { return 1; } }";
+      const clientLines = ["<?php", "namespace Client;", "use App\\Service;", "$svc = new service();", ""];
+      await fsp.writeFile(serviceFile, `${serviceLine}\n`, "utf8");
+      await fsp.writeFile(clientFile, clientLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [serviceFile, clientFile]);
+
+      const result = await indexer.findReferences(index, {
+        file: serviceFile,
+        line: 1,
+        column: tokenColumn(serviceLine, "Service"),
+      });
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expectReferenceAt(result, clientFile, 4);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a qualified function through a plain namespace alias", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-qualified-function-alias-"));
+    try {
+      const functionFile = path.join(root, "helper.php").replace(/\\/g, "/");
+      const clientFile = path.join(root, "client.php").replace(/\\/g, "/");
+      const functionLines = ["<?php", "namespace Vendor\\Sub;", "function Helper() { return 1; }", ""];
+      const clientLines = ["<?php", "namespace Client;", "use Vendor\\Sub;", "$value = sub\\hElPeR();", ""];
+      await fsp.writeFile(functionFile, functionLines.join("\n"), "utf8");
+      await fsp.writeFile(clientFile, clientLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [functionFile, clientFile]);
+
+      const result = await indexer.findReferences(index, {
+        file: functionFile,
+        line: 3,
+        column: tokenColumn(functionLines[2]!, "Helper"),
+      });
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expectReferenceAt(result, functionFile, 3);
+      expectReferenceAt(result, clientFile, 4);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to a global function from a namespace, but not a global class", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-global-fallback-"));
+    try {
+      const helperFile = path.join(root, "helper.php").replace(/\\/g, "/");
+      const boxFile = path.join(root, "box.php").replace(/\\/g, "/");
+      const clientFile = path.join(root, "client.php").replace(/\\/g, "/");
+      const helperLine = "<?php function globalHelper() { return 1; }";
+      const boxLine = "<?php class GlobalBox {}";
+      const clientLines = ["<?php", "namespace Client;", "globalHelper();", "new GlobalBox();", ""];
+      await fsp.writeFile(helperFile, `${helperLine}\n`, "utf8");
+      await fsp.writeFile(boxFile, `${boxLine}\n`, "utf8");
+      await fsp.writeFile(clientFile, clientLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [helperFile, boxFile, clientFile]);
+
+      const helperRefs = await indexer.findReferences(index, {
+        file: helperFile,
+        line: 1,
+        column: tokenColumn(helperLine, "globalHelper"),
+      });
+      expect(helperRefs.status).toBe("ok");
+      if (helperRefs.status === "ok") {
+        expectReferenceAt(helperRefs, clientFile, 3);
+      }
+
+      const boxRefs = await indexer.findReferences(index, {
+        file: boxFile,
+        line: 1,
+        column: tokenColumn(boxLine, "GlobalBox"),
+      });
+      expect(boxRefs.status).toBe("ok");
+      if (boxRefs.status === "ok") {
+        expect(boxRefs.references.some((reference) => reference.file === clientFile)).toBe(false);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("binds a namespaced case-variant call to the namespaced function, not the global fallback", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-ns-fn-precedence-"));
+    try {
+      const clientFile = path.join(root, "client.php").replace(/\\/g, "/");
+      const globalFile = path.join(root, "global.php").replace(/\\/g, "/");
+      const clientLines = ["<?php", "namespace Client;", "function helper() { return 1; }", "HELPER();", ""];
+      const globalLine = "<?php function Helper() { return 2; }";
+      await fsp.writeFile(clientFile, clientLines.join("\n"), "utf8");
+      await fsp.writeFile(globalFile, `${globalLine}\n`, "utf8");
+      const index = await createTestIndexFromFiles(root, [clientFile, globalFile]);
+
+      const namespaced = await indexer.findReferences(index, {
+        file: clientFile,
+        line: 3,
+        column: tokenColumn(clientLines[2]!, "helper"),
+      });
+      expect(namespaced.status).toBe("ok");
+      if (namespaced.status === "ok") {
+        expectReferenceAt(namespaced, clientFile, 3);
+        expectReferenceAt(namespaced, clientFile, 4);
+        expect(namespaced.references.some((reference) => reference.file === globalFile)).toBe(false);
+      }
+
+      const global = await indexer.findReferences(index, {
+        file: globalFile,
+        line: 1,
+        column: tokenColumn(globalLine, "Helper"),
+      });
+      expect(global.status).toBe("ok");
+      if (global.status === "ok") {
+        expectReferenceAt(global, globalFile, 1);
+        expect(
+          global.references.some((reference) => reference.file === clientFile && reference.range.start.line === 4),
+        ).toBe(false);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: PHP method case-insensitivity", () => {
+  it("resolves a proven receiver method through a case-variant spelling", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-method-case-"));
+    try {
+      const file = path.join(root, "service.php").replace(/\\/g, "/");
+      const lines = [
+        "<?php",
+        "class Service {",
+        "  function run() { return 1; }",
+        "}",
+        "$svc = new Service();",
+        "$svc->RUN();",
+        "",
+      ];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+
+      const result = await indexer.findReferences(index, { file, line: 3, column: tokenColumn(lines[2]!, "run") });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expectReferenceAt(result, file, 3);
+      expectReferenceAt(result, file, 6);
+      expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("uses the source range to select a same-named PHP method owner", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-method-owner-range-"));
+    try {
+      const file = path.join(root, "service.php").replace(/\\/g, "/");
+      const lines = [
+        "<?php",
+        "namespace One {",
+        "  class Box { function run() {} }",
+        "}",
+        "namespace Two {",
+        "  class Box { function run() {} }",
+        "}",
+        "namespace Consumer {",
+        "  $box = new \\Two\\Box();",
+        "  $box->RUN();",
+        "}",
+        "",
+      ];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      await testFindReferences(index, file, 6, tokenColumn(lines[5]!, "run"), [
+        { file, line: 6, column: tokenColumn(lines[5]!, "run") },
+        { file, line: 10, column: tokenColumn(lines[9]!, "RUN") },
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("treats PHP attributes as class references without matching same-named functions", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-attribute-class-refs-"));
+    try {
+      const sourceFile = path.join(root, "route.php").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+      const sourceLines = ["<?php", "namespace App;", "class Route {}", ""];
+      const consumerLines = ["<?php", "#[\\app\\route]", "class Controller {}", "function route() {}", "route();", ""];
+      await fsp.writeFile(sourceFile, sourceLines.join("\n"), "utf8");
+      await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [sourceFile, consumerFile]);
+      await testFindReferences(index, sourceFile, 3, tokenColumn(sourceLines[2]!, "Route"), [
+        { file: sourceFile, line: 3, column: tokenColumn(sourceLines[2]!, "Route") },
+        { file: consumerFile, line: 2, column: tokenColumn(consumerLines[1]!, "\\app\\route") },
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: C/C++ enclosing-scope occurrence strategy", () => {
+  it("reports complete coverage for function definitions and unused enclosing declarations", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-c-enclosing-coverage-"));
+    try {
+      const file = path.join(root, "pair.c").replace(/\\/g, "/");
+      const lines = [
+        "int unused_proto(void);",
+        "",
+        "int target(void) { return 1; }",
+        "int caller(void) { return target(); }",
+        "",
+      ];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+
+      const functionScope = await indexer.findReferences(index, {
+        file,
+        line: 3,
+        column: tokenColumn(lines[2]!, "target"),
+      });
+      expect(functionScope.status).toBe("ok");
+      if (functionScope.status === "ok") {
+        expect(functionScope.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+
+      const enclosing = await indexer.findReferences(index, {
+        file,
+        line: 1,
+        column: tokenColumn(lines[0]!, "unused_proto"),
+      });
+      expect(enclosing.status).toBe("ok");
+      if (enclosing.status === "ok") {
+        expect(enclosing.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: PHP candidate walk count", () => {
+  it("walks the admitted PHP candidate file once and never walks a decoy with no matching identifier", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-walk-once-"));
+    try {
+      const serviceFile = path.join(root, "service.php").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+      const decoyFile = path.join(root, "decoy.php").replace(/\\/g, "/");
+      await fsp.writeFile(
+        serviceFile,
+        ["<?php", "namespace App;", "class Service {", "  public function run() { return 1; }", "}", ""].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(consumerFile, ["<?php", "$svc = new \\App\\sErViCe();", ""].join("\n"), "utf8");
+      await fsp.writeFile(decoyFile, ["<?php", "$other = 1;", ""].join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [serviceFile, consumerFile, decoyFile]);
+
+      const walkSpy = vi.spyOn(navigationReferences, "collectVerifiedNamedNodeReferences");
+      try {
+        const result = await indexer.findReferences(index, { file: serviceFile, line: 3, column: 7 });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expectReferenceAt(result, consumerFile, 2);
+        expect(walkSpy.mock.calls.filter((call) => call[1] === consumerFile)).toHaveLength(1);
+        // `decoy.php` never spells the class name in any case variant, so the case-folded
+        // identifier prefilter must reject it before the AST walk ever runs.
+        expect(walkSpy.mock.calls.filter((call) => call[1] === decoyFile)).toHaveLength(0);
+      } finally {
+        walkSpy.mockRestore();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds the candidate walk across many unrelated PHP and non-PHP decoys", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-walk-bounded-"));
+    try {
+      const serviceFile = path.join(root, "service.php").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.php").replace(/\\/g, "/");
+      await fsp.writeFile(
+        serviceFile,
+        ["<?php", "namespace App;", "class Service {", "  public function run() { return 1; }", "}", ""].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(consumerFile, ["<?php", "$svc = new \\App\\sErViCe();", ""].join("\n"), "utf8");
+
+      const phpDecoyFiles: string[] = [];
+      for (let i = 0; i < 12; i += 1) {
+        const decoyFile = path.join(root, `decoy${i}.php`).replace(/\\/g, "/");
+        await fsp.writeFile(decoyFile, ["<?php", `function unrelated${i}() { return ${i}; }`, ""].join("\n"), "utf8");
+        phpDecoyFiles.push(decoyFile);
+      }
+
+      // Non-PHP decoys, one of which spells the exact class name: language alone must reject
+      // them, since a PHP symbol can never be referenced from a file a different parser owns.
+      const nonPhpDecoyFiles: string[] = [];
+      for (let i = 0; i < 5; i += 1) {
+        const decoyFile = path.join(root, `decoy${i}.ts`).replace(/\\/g, "/");
+        await fsp.writeFile(decoyFile, [`export function unrelated${i}() { return ${i}; }`, ""].join("\n"), "utf8");
+        nonPhpDecoyFiles.push(decoyFile);
+      }
+      const exactNameDecoyFile = path.join(root, "exact-name-decoy.ts").replace(/\\/g, "/");
+      await fsp.writeFile(exactNameDecoyFile, ["export class Service {}", ""].join("\n"), "utf8");
+      nonPhpDecoyFiles.push(exactNameDecoyFile);
+
+      const index = await createTestIndexFromFiles(root, [
+        serviceFile,
+        consumerFile,
+        ...phpDecoyFiles,
+        ...nonPhpDecoyFiles,
+      ]);
+
+      const walkSpy = vi.spyOn(navigationReferences, "collectVerifiedNamedNodeReferences");
+      try {
+        const result = await indexer.findReferences(index, { file: serviceFile, line: 3, column: 7 });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expectReferenceAt(result, consumerFile, 2);
+        expect(walkSpy.mock.calls.filter((call) => call[1] === consumerFile)).toHaveLength(1);
+        for (const decoyFile of [...phpDecoyFiles, ...nonPhpDecoyFiles]) {
+          expect(walkSpy.mock.calls.some((call) => call[1] === decoyFile)).toBe(false);
+        }
+      } finally {
+        walkSpy.mockRestore();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: imported superclass member through super", () => {
+  function columnOf(source: string, line: number, token: string): number {
+    const lines = source.split("\n");
+    const index = lines[line - 1]!.indexOf(token);
+    if (index < 0) throw new Error(`Expected token ${token} on fixture line ${line}`);
+    return index + 1;
+  }
+
+  it("includes the super.helper() call as a reference to the imported base member", async () => {
+    for (const kind of ["ts", "js"] as const) {
+      const typed = kind === "ts";
+      const base = [
+        "export default class Base {",
+        typed ? "  helper(): number { return 1; }" : "  helper() { return 1; }",
+        "}",
+        "",
+      ].join("\n");
+      const derived = [
+        'import Base from "./base";',
+        "class Derived extends Base {",
+        typed ? "  helper(): number { return 2; }" : "  helper() { return 2; }",
+        typed ? "  run(): number { return super.helper(); }" : "  run() { return super.helper(); }",
+        "}",
+        "",
+      ].join("\n");
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-${kind}-super-imported-refs-`));
+      const baseFile = path.join(root, `base.${kind}`).replace(/\\/g, "/");
+      const derivedFile = path.join(root, `derived.${kind}`).replace(/\\/g, "/");
+      try {
+        await fsp.writeFile(baseFile, base, "utf8");
+        await fsp.writeFile(derivedFile, derived, "utf8");
+        const index = await createTestIndexFromFiles(root, [baseFile, derivedFile]);
+        const defColumn = columnOf(base, 2, "helper()");
+        const callColumn = columnOf(derived, 4, "helper()");
+        const overrideColumn = columnOf(derived, 3, "helper()");
+
+        const gotoFromCall = await goToDefinition(index, { file: derivedFile, line: 4, column: callColumn });
+        expect(gotoFromCall.status).toBe("ok");
+        if (gotoFromCall.status === "ok") {
+          expect(fileIdentityKey(gotoFromCall.definition.file)).toBe(fileIdentityKey(baseFile));
+          expect(gotoFromCall.definition.range.start.line).toBe(2);
+          expect(gotoFromCall.definition.range.start.column).toBe(defColumn);
+          expect(gotoFromCall.provenance?.resolution).toBe("member-access");
+        }
+
+        const fromDef = await testFindReferences(index, baseFile, 2, defColumn, [
+          { file: baseFile, line: 2, column: defColumn },
+          { file: derivedFile, line: 4, column: callColumn },
+        ]);
+        if (fromDef.status === "ok") {
+          expect(
+            fromDef.references.some(
+              (reference) =>
+                fileIdentityKey(reference.file) === fileIdentityKey(derivedFile) &&
+                reference.range.start.line === 3 &&
+                reference.range.start.column === overrideColumn,
+            ),
+          ).toBe(false);
+        }
+
+        const fromCall = await testFindReferences(index, derivedFile, 4, callColumn, [
+          { file: baseFile, line: 2, column: defColumn },
+          { file: derivedFile, line: 4, column: callColumn },
+        ]);
+        if (fromCall.status === "ok") {
+          expect(
+            fromCall.references.some(
+              (reference) =>
+                fileIdentityKey(reference.file) === fileIdentityKey(derivedFile) && reference.range.start.line === 3,
+            ),
+          ).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
     }
   });
 });

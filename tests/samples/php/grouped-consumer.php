@@ -3,7 +3,7 @@
 include './helpers.php';
 include_once './partials/shared.php';
 
-use App\Support\{Toolbox as SupportToolbox, function support_helper, const DEFAULT_NAME};
+use aPp\sUpPoRt\{tOoLbOx as SupportToolbox, function SuPpOrT_hElPeR, const DEFAULT_NAME};
 
 $tool = SupportToolbox::make();
 $value = support_helper(DEFAULT_NAME);

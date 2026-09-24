@@ -2,7 +2,6 @@ import type {
   ApiSurface,
   ExportEntry,
   GoToResult,
-  ImportBinding,
   ProjectIndex,
   SymbolDef,
   SymbolHandle,
@@ -11,6 +10,7 @@ import type {
 import { fileIdentityKey, normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { findReferences, resolveExport, resolveImported } from "./navigation.js";
 import { parseSourceLocationInput } from "../util/source-location.js";
+import { importNodeId } from "./import-types.js";
 
 export function symbolId(def: SymbolDef): SymbolHandle {
   const index = def?.range?.start?.index ?? 0;
@@ -153,30 +153,25 @@ export function defFromSymbolId(index: ProjectIndex, id: SymbolHandle): SymbolDe
 
 export function resolveSymbolId(index: ProjectIndex, id: SymbolHandle): SymbolDef | null {
   if (!id) return null;
-  const parts = id.split("::");
-  if (parts.length === 3 && parts[2] === "import") {
-    const rawFile = parts[0]!;
-    const alias = parts[1]!;
-    const file = normalizePath(rawFile);
+  const tailStart = id.lastIndexOf("::");
+  const tail = id.slice(tailStart + 2);
+  if (tail === "import" || tail.startsWith("import:")) {
+    const fileSeparator = id.indexOf("::");
+    if (fileSeparator < 0 || fileSeparator === tailStart) return null;
+    const file = normalizePath(id.slice(0, fileSeparator));
     const mod = index.byFile.get(fileIdentityKey(file));
     if (!mod) return null;
 
-    const named = mod.imports.find(
-      (imp): imp is ImportBinding & { kind: "named" } => imp.kind === "named" && imp.local === alias,
-    );
+    // Match through the shared ID rule, including roles and qualified alias names.
+    const normalizedId = `${file}${id.slice(fileSeparator)}`;
+    const binding = mod.imports.find((imp) => imp.kind !== "star" && importNodeId(file, imp) === normalizedId);
+    const named = binding?.kind === "named" ? binding : undefined;
     if (named) {
       const result = resolveImported(index, named, named.imported);
-      if (result && !("namespace" in result)) return result;
-      const target = typeof named.resolved === "string" ? named.resolved : undefined;
-      if (target) {
-        const hit = resolveExport(index, target, named.imported);
-        if (hit?.kind === "resolved") return hit.def;
-      }
+      return result && !("namespace" in result) ? result : null;
     }
 
-    const defaultImport = mod.imports.find(
-      (imp): imp is ImportBinding & { kind: "default" } => imp.kind === "default" && imp.local === alias,
-    );
+    const defaultImport = binding?.kind === "default" ? binding : undefined;
     if (defaultImport) {
       const result = resolveImported(index, defaultImport, "default");
       if (result && !("namespace" in result)) return result;
@@ -192,7 +187,7 @@ export function resolveSymbolId(index: ProjectIndex, id: SymbolHandle): SymbolDe
       }
     }
 
-    const namespaceImport = mod.imports.find((imp) => imp.kind === "namespace" && imp.localNS === alias);
+    const namespaceImport = binding?.kind === "namespace" ? binding : undefined;
     if (namespaceImport) {
       const target = typeof namespaceImport.resolved === "string" ? namespaceImport.resolved : undefined;
       if (target) {
@@ -251,14 +246,14 @@ export function listSymbols(index: ProjectIndex, opts?: { file?: string; include
       for (const imp of mod.imports) {
         if (imp.kind === "named" || imp.kind === "default") {
           out.push({
-            id: `${displayFile}::${imp.local}::import`,
+            id: importNodeId(displayFile, imp),
             file: displayFile,
             name: imp.local,
             kind: "import",
           });
         } else if (imp.kind === "namespace") {
           out.push({
-            id: `${displayFile}::${imp.localNS}::import`,
+            id: importNodeId(displayFile, imp),
             file: displayFile,
             name: imp.localNS,
             kind: "namespaceImport",

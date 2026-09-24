@@ -28,6 +28,7 @@ export type DetailedDeclarationPassResult = {
 
 export const isIdentifierType = (sup: LanguageSupport, type: string): boolean =>
   Array.isArray(sup.nodeTypes?.identifier) && sup.nodeTypes.identifier.includes(type);
+const FUNCTION_NAME_NODE_TYPES = new Set(["identifier", "field_identifier", "operator_name", "destructor_name"]);
 
 /** C and C++ put the function name in a nested declarator, not a `name` field. */
 function functionNameNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
@@ -35,15 +36,19 @@ function functionNameNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
   if (named) return named;
   let current = node.childForFieldName("declarator");
   while (current) {
-    if (current.type === "identifier" || current.type === "field_identifier") return current;
-    const nested = current.childForFieldName("declarator");
-    if (nested) {
+    if (FUNCTION_NAME_NODE_TYPES.has(current.type)) return current;
+    let name = current.childForFieldName("name");
+    while (name?.childForFieldName("name")) name = name.childForFieldName("name");
+    if (name && FUNCTION_NAME_NODE_TYPES.has(name.type)) return name;
+    const nested =
+      current.childForFieldName("declarator") ??
+      current.namedChildren.find((child) => child.type.includes("declarator")) ??
+      null;
+    if (nested && nested.id !== current.id) {
       current = nested;
       continue;
     }
-    return (
-      current.namedChildren.find((child) => child.type === "identifier" || child.type === "field_identifier") ?? null
-    );
+    return current.namedChildren.find((child) => FUNCTION_NAME_NODE_TYPES.has(child.type)) ?? null;
   }
   return node.childForFieldName("type");
 }
@@ -72,6 +77,9 @@ export function collectDetailedDeclarations(
     "method",
     "protocol_function_declaration",
     "singleton_method",
+    // C# local functions are callable in their own right; ownership stays with the
+    // enclosing method, not the containing class.
+    "local_function_statement",
   ]);
   const typeNodeTypes = new Set([
     "class_declaration",
@@ -88,6 +96,9 @@ export function collectDetailedDeclarations(
     "struct_declaration",
     "class_specifier",
     "struct_specifier",
+    // C/C++ unions declare members like structs (cpp.ts captures and classifies
+    // union names as classes).
+    "union_specifier",
     // Go methods sit beside the type, not inside it. Collect the type_spec so
     // member_of can name the receiver type the same way class bodies do.
     "type_spec",
@@ -131,8 +142,12 @@ export function collectDetailedDeclarations(
         const def = findDefinition(name, nameNode!);
         if (def) classNodes.push({ name, node, def });
       }
-    } else if (node.type === "variable_declarator") {
-      const nameNode = node.childForFieldName("name");
+    } else if (
+      node.type === "variable_declarator" ||
+      node.type === "public_field_definition" ||
+      node.type === "field_definition"
+    ) {
+      const nameNode = node.childForFieldName("name") ?? node.childForFieldName("property");
       const valueNode = node.childForFieldName("value");
       if (nameNode && valueNode) {
         if (valueNode.type === "string") {
@@ -197,6 +212,80 @@ export function findFirstNodeByType(node: SyntaxNodeLike, type: string): SyntaxN
     if (found) return found;
   }
   return null;
+}
+/**
+ * Parameter-list nodes shared by receiver classification and declaration arity. The union keeps
+ * Kotlin `function_value_parameters` and Ruby `block_parameters` recognized; declaration arity
+ * excludes the block and lambda forms because they belong to nested scopes.
+ */
+export const PARAMETER_LIST_NODE_TYPES: Record<string, true> = {
+  block_parameters: true,
+  formal_parameters: true,
+  function_parameter_clause: true,
+  function_value_parameters: true,
+  lambda_parameters: true,
+  method_parameters: true,
+  parameter_list: true,
+  parameters: true,
+};
+
+/**
+ * C/C++ trailing parameter-list markers that accept zero or more arguments and so are not fixed
+ * positional parameters. tree-sitter-c spells a bare `...` as a named `variadic_parameter`;
+ * tree-sitter-cpp spells a parameter pack `T... name` as `variadic_parameter_declaration` (its
+ * bare `...` is an unnamed token the parser already omits from the named children). Go's
+ * `variadic_parameter_declaration` shares the C++ name but is a different language's rest form,
+ * so callers gate on the C/C++ language ids.
+ */
+const VARIADIC_PARAMETER_MARKER_TYPES: Record<string, true> = {
+  variadic_parameter: true,
+  variadic_parameter_declaration: true,
+};
+
+/** Whether a parameter node is a C/C++ variadic marker rather than a fixed positional parameter. */
+export function isVariadicParameterMarker(node: SyntaxNodeLike): boolean {
+  return !!VARIADIC_PARAMETER_MARKER_TYPES[node.type];
+}
+
+/**
+ * Positional parameter count of a member/function declaration node, or undefined when the node
+ * declares no parameter list. Swift exposes parameters as direct declaration children, so its
+ * language id is required to distinguish a zero-parameter declaration from an unknown shape.
+ * Shared by the receiver-call edge pass and keyword receiver navigation so overload selection
+ * uses one arity scanner.
+ *
+ * The count is the number of *required-or-defaulted* fixed parameters; C/C++ variadic markers are
+ * excluded because they accept zero arguments, while each language's own maximum-arity handling
+ * keeps their upper bound unbounded.
+ */
+export function declarationMemberArity(declarationNode: SyntaxNodeLike, languageId?: string): number | undefined {
+  let parameters = declarationNode.childForFieldName("parameters");
+  if (!parameters) {
+    for (const type of Object.keys(PARAMETER_LIST_NODE_TYPES)) {
+      if (type === "block_parameters" || type === "lambda_parameters") continue;
+      parameters = findFirstNodeByType(declarationNode, type);
+      if (parameters) break;
+    }
+  }
+  if (!parameters) {
+    if (languageId !== "swift") return undefined;
+    return (declarationNode.namedChildren ?? []).filter((child) => child.type === "parameter").length;
+  }
+  let positionalParameters = (parameters.namedChildren ?? []).filter((child) => child.type !== "comment");
+  if (languageId === "c" || languageId === "cpp") {
+    positionalParameters = positionalParameters.filter((child) => !isVariadicParameterMarker(child));
+  }
+  if ((languageId === "c" || languageId === "cpp") && positionalParameters.length === 1) {
+    const parameterParts = positionalParameters[0]!.namedChildren.filter((child) => child.type !== "comment");
+    if (
+      parameterParts.length === 1 &&
+      parameterParts[0]?.type === "primitive_type" &&
+      parameterParts[0].text === "void"
+    ) {
+      return 0;
+    }
+  }
+  return positionalParameters.length;
 }
 
 export function collectNodesByType(node: SyntaxNodeLike, type: string, out: SyntaxNodeLike[]): void {

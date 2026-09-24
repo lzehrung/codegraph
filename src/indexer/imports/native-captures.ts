@@ -5,6 +5,7 @@ import { unquote } from "../../util/ast.js";
 import { maskJsLikeCommentsStringsAndRegex } from "../../util/comments.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { collectLineStartOffsets } from "../../util/lines.js";
+import { cFamilyImportFormFromText, type CFamilyIncludeForm } from "../../util/specifiers.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rust-test-modules.js";
 import type { ImportBinding } from "../types.js";
 import { importCapture } from "../../languages/graph-captures.js";
@@ -129,9 +130,10 @@ async function pushStandardBindings(
   typeOnly: boolean,
   byteIndexMap: ByteToStringIndexMap,
   statementStartIndex: number | undefined,
+  includeForm: CFamilyIncludeForm | undefined,
 ): Promise<void> {
   if (!from) return;
-  const resolved = await context.resolveFrom(from);
+  const resolved = await context.resolveFrom(from, undefined, includeForm ? { includeForm } : undefined);
   const defaultCapture = importCapture(caps, "def");
   if (defaultCapture) {
     context.pushBinding({
@@ -212,6 +214,12 @@ export async function collectNativeCaptureImportBindings(
     }
     const fromCapture = importCapture(caps, "from");
     const from = fromCapture ? unquote(fromCapture.text) : undefined;
+    // The extracted `from` drops delimiters, so an occurrence's literal/angle/macro form travels
+    // separately. A bare C++ module import also has an unquoted target, but it is not an include.
+    const includeForm =
+      context.languageId === "c" || context.languageId === "cpp"
+        ? cFamilyImportFormFromText(stmtText, fromCapture?.text)
+        : undefined;
     const patterns = capturesNamed(match, "pattern");
     if (patterns.length) {
       const rangeLineStarts = lineStarts ?? collectLineStartOffsets(context.source);
@@ -228,6 +236,7 @@ export async function collectNativeCaptureImportBindings(
       typeOnly,
       byteIndexMap,
       statementStartIndex,
+      includeForm,
     );
   }
 }

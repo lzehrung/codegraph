@@ -23,6 +23,10 @@ export type Binding = {
   def?: Range;
   node?: SyntaxNodeLike;
   occurrences: Range[];
+  /** False when same-scope overloads or redeclarations prevent exact occurrence ownership. */
+  occurrencesComplete?: boolean;
+  /** Same-scope function declarations that collide by name and need semantic disambiguation. */
+  sameScopeFunctionBindings?: Binding[];
   import?: ScopeImportBinding;
 };
 
@@ -37,4 +41,5 @@ export type ScopeIndex = {
   bindings: Map<string, Binding[]>;
   all: Binding[];
   allScopes: Scope[];
+  cppQualifiedFunctionBindings: Map<string, Binding[]>;
 };

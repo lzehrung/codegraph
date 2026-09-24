@@ -22,11 +22,20 @@ type ProvenCall = {
 
 const PROVEN_CALLS: ProvenCall[] = [
   { file: "calls.ts", caller: "tsCaller", callee: "tsCallee" },
+  { file: "calls.tsx", caller: "tsxCaller", callee: "tsxCallee" },
+  { file: "calls.js", caller: "jsCaller", callee: "jsCallee" },
+  { file: "calls.py", caller: "py_caller", callee: "py_callee" },
+  { file: "Calls.php", caller: "phpCaller", callee: "phpCallee" },
   { file: "Calls.java", caller: "javaCaller", callee: "javaCallee" },
   { file: "Calls.cs", caller: "CsCaller", callee: "CsCallee" },
   { file: "calls.go", caller: "goCaller", callee: "goCallee" },
   { file: "calls.rs", caller: "rust_caller", callee: "rust_callee" },
   { file: "calls.rb", caller: "ruby_caller", callee: "ruby_callee" },
+  { file: "Calls.kt", caller: "ktCaller", callee: "ktCallee" },
+  { file: "Calls.swift", caller: "swiftCaller", callee: "swiftCallee" },
+  { file: "calls.zig", caller: "zigCaller", callee: "zigCallee" },
+  { file: "calls.c", caller: "c_caller", callee: "c_callee" },
+  { file: "calls.cpp", caller: "cpp_caller", callee: "cpp_callee" },
   { file: "Calls.svelte", caller: "svelteCaller", callee: "svelteCallee" },
 ];
 
@@ -36,6 +45,10 @@ nativeDescribe("call hierarchy language parity", () => {
     roots.push(root);
     const fixtures: Record<string, string> = {
       "calls.ts": ["function tsCallee(): void {}", "function tsCaller(): void { tsCallee(); }"].join("\n"),
+      "calls.tsx": ["function tsxCallee(): void {}", "function tsxCaller(): void { tsxCallee(); }"].join("\n"),
+      "calls.js": ["function jsCallee() {}", "function jsCaller() { jsCallee(); }"].join("\n"),
+      "calls.py": ["def py_callee():", "    pass", "def py_caller():", "    py_callee()"].join("\n"),
+      "Calls.php": ["<?php", "function phpCallee() {}", "function phpCaller() { phpCallee(); }"].join("\n"),
       "Calls.java": ["class Calls {", "  void javaCallee() {}", "  void javaCaller() { javaCallee(); }", "}"].join(
         "\n",
       ),
@@ -43,6 +56,11 @@ nativeDescribe("call hierarchy language parity", () => {
       "calls.go": ["package calls", "func goCallee() {}", "func goCaller() { goCallee() }"].join("\n"),
       "calls.rs": ["fn rust_callee() {}", "fn rust_caller() { rust_callee(); }"].join("\n"),
       "calls.rb": ["def ruby_callee", "end", "def ruby_caller", "  ruby_callee()", "end"].join("\n"),
+      "Calls.kt": ["fun ktCallee() {}", "fun ktCaller() { ktCallee() }"].join("\n"),
+      "Calls.swift": ["func swiftCallee() {}", "func swiftCaller() { swiftCallee() }"].join("\n"),
+      "calls.zig": ["fn zigCallee() void {}", "fn zigCaller() void { zigCallee(); }"].join("\n"),
+      "calls.c": ["void c_callee() {}", "void c_caller() { c_callee(); }"].join("\n"),
+      "calls.cpp": ["void cpp_callee() {}", "void cpp_caller() { cpp_callee(); }"].join("\n"),
       "Calls.svelte": [
         "<script>",
         "function svelteCallee() {}",
