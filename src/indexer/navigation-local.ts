@@ -4,6 +4,7 @@ import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { cppBindingCallableShape, cppSelectCallableBinding } from "./cpp-callables.js";
+import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import { buildScopeIndexFromSource, type Binding, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
 import {
@@ -69,7 +70,8 @@ export function findClosestScopeBinding(
   currentNode: SyntaxNodeLike,
   support: LanguageSupport,
 ): Binding | null {
-  const normalizedName = support.normalizeIdentifier(bindingName);
+  const canonicalName = support.normalizeIdentifier(bindingName);
+  const normalizedName = support.id === "c" && cTagRole(currentNode) ? cScopeName(canonicalName, "tag") : canonicalName;
   let currentScope = scopeIndex.allScopes.find((scope) => {
     const start = scope.node.startIndex;
     const end = scope.node.endIndex;
@@ -131,11 +133,13 @@ export function findClosestBinding(
   } else if (binding.kind === "type") {
     kind = SymbolKind.TypeAlias;
   }
+  const tagRole = support.id === "c" && binding.node ? cTagRole(binding.node) : undefined;
   return {
     file,
     localName: binding.name,
     kind,
     range: binding.def,
+    ...(tagRole ? { cTag: tagRole } : {}),
   };
 }
 
@@ -150,29 +154,36 @@ export function resolveNamedDefinition(
   file: FileId,
   support: LanguageSupport,
   name: string,
+  cNamespace?: "tag" | "ordinary",
 ): GoToResult | null {
   const normalizedName = support.normalizeIdentifier(name);
   const requiresExplicitReceiver = !support.membersAreImplicitlyInScope;
-  const directExport = requiresExplicitReceiver
-    ? mod.exports.find(
-        (entry) =>
-          entry.type === "local" &&
-          support.normalizeIdentifier(entry.exportedAs) === normalizedName &&
-          !entry.target.isMember,
-      )
-    : undefined;
+  const directExport =
+    requiresExplicitReceiver && support.id !== "c"
+      ? mod.exports.find(
+          (entry) =>
+            entry.type === "local" &&
+            support.normalizeIdentifier(entry.exportedAs) === normalizedName &&
+            !entry.target.isMember,
+        )
+      : undefined;
   const suppressCppUnqualifiedLocalExport = support.id === "cpp" && !name.includes("::");
   let hit: ResolvedExport | null = null;
   if (!suppressCppUnqualifiedLocalExport) {
     hit =
       directExport && directExport.type === "local"
         ? { kind: "resolved", def: directExport.target }
-        : resolveExport(index, file, name, { allowLocalFallback: support.membersAreImplicitlyInScope });
+        : resolveExport(index, file, name, {
+            allowLocalFallback: support.membersAreImplicitlyInScope,
+            ...(cNamespace ? { cNamespace } : {}),
+          });
   }
   if (hit?.kind === "resolved" && (!requiresExplicitReceiver || !hit.def.isMember)) {
+    const importedFrom =
+      support.id === "c" && fileIdentityKey(file) !== fileIdentityKey(hit.def.file) ? hit.def.file : undefined;
     return okGoToResult(index, hit.def, {
-      via: { exportedName: name },
-      resolution: "exact",
+      via: { exportedName: name, ...(importedFrom ? { importedFrom } : {}) },
+      resolution: importedFrom ? "import" : "exact",
       confidence: "high",
     });
   }
@@ -202,7 +213,7 @@ export function resolveNamedDefinition(
         });
       }
     } else if (imp.kind === "named" && support.normalizeIdentifier(imp.local) === normalizedName) {
-      const result = resolveImported(index, imp, imp.imported);
+      const result = resolveImported(index, imp, imp.imported, cNamespace ? { cNamespace } : undefined);
       if (result && !("namespace" in result)) {
         return okGoToResult(index, result, {
           via: {
@@ -214,7 +225,7 @@ export function resolveNamedDefinition(
         });
       }
     } else if (imp.kind === "star") {
-      const result = resolveImported(index, imp, name);
+      const result = resolveImported(index, imp, name, cNamespace ? { cNamespace } : undefined);
       if (result && !("namespace" in result)) {
         return okGoToResult(index, result, {
           via: {

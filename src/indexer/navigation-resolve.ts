@@ -68,6 +68,7 @@ const packageNameCaches = new WeakMap<ProjectIndex, PackageNameCaches>();
 export type ResolveExportOptions = {
   preferredKind?: SymbolKind;
   allowLocalFallback?: boolean;
+  cNamespace?: "tag" | "ordinary";
 };
 const PHP_CLASS_NAMESPACE_KINDS = [SymbolKind.Class, SymbolKind.Interface, SymbolKind.TypeAlias] as const;
 
@@ -353,27 +354,27 @@ export function resolveExport(
   opts?: ResolveExportOptions,
 ): ResolvedExport | null {
   const visited = new Set<string>();
-  const matchesPreferredKind = (def: SymbolDef): boolean => !opts?.preferredKind || def.kind === opts.preferredKind;
+  const matchesOptions = (def: SymbolDef, namespace: ResolveExportOptions["cNamespace"]): boolean =>
+    (!opts?.preferredKind || def.kind === opts.preferredKind) &&
+    (namespace === undefined || (def.cTag ? "tag" : "ordinary") === namespace);
   const allowLocalFallback = opts?.allowLocalFallback ?? true;
 
-  function resolveFromFile(fileInner: FileId, name: string): ResolvedExport | null {
+  function resolveFromFile(fileInner: FileId, name: string, namespace = opts?.cNamespace): ResolvedExport | null {
     const moduleEntry = moduleFor(index, fileInner);
     if (!moduleEntry) return null;
     const names = moduleNameLookup(index, moduleEntry.file);
     if (!names) return null;
     const normalizedFile = normalizePath(moduleEntry.file);
     const canonicalName = names.normalizeIdentifier(name);
-    const key = opts?.preferredKind
-      ? `${cacheKey(normalizedFile, canonicalName)}::${opts.preferredKind}::${allowLocalFallback ? "local" : "export"}`
-      : `${cacheKey(normalizedFile, canonicalName)}::${allowLocalFallback ? "local" : "export"}`;
+    const key = `${cacheKey(normalizedFile, canonicalName)}::${opts?.preferredKind ?? ""}::${namespace ?? ""}::${allowLocalFallback ? "local" : "export"}`;
     if (index.exportCache.has(key)) return index.exportCache.get(key)!;
 
-    const cycleKey = cacheKey(normalizedFile, canonicalName);
+    const cycleKey = `${cacheKey(normalizedFile, canonicalName)}::${namespace ?? ""}`;
     if (visited.has(cycleKey)) return null;
     visited.add(cycleKey);
 
     const goPackageExport = resolveGoPackageExport(index, normalizedFile, canonicalName);
-    if (goPackageExport && matchesPreferredKind(goPackageExport)) {
+    if (goPackageExport && matchesOptions(goPackageExport, namespace)) {
       const result: ResolvedExport = { kind: "resolved", def: goPackageExport };
       index.exportCache.set(key, result);
       return result;
@@ -382,10 +383,32 @@ export function resolveExport(
     const localCandidates: SymbolDef[] = [];
     for (const target of names.localExports.get(canonicalName) ?? []) {
       if (
-        matchesPreferredKind(target) &&
+        matchesOptions(target, namespace) &&
         !localCandidates.some((candidate) => sameSymbolDef(index, candidate, target))
       ) {
         localCandidates.push(target);
+      }
+    }
+    // A bodyless C tag use can introduce an incomplete tag, but must reuse a tag
+    // already brought into scope by an include. Do not let that use hide its header.
+    if (
+      namespace &&
+      (!localCandidates.length || localCandidates.every((candidate) => candidate.cTag === "reference"))
+    ) {
+      const included: ResolvedExport[] = [];
+      for (const imp of moduleEntry.imports) {
+        if (typeof imp.resolved !== "string") continue;
+        if (imp.kind !== "star" && !(imp.kind === "named" && imp.local === name)) continue;
+        if (imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== namespace) continue;
+        const downstream = resolveFromFile(imp.resolved, imp.kind === "named" ? imp.imported : name, namespace);
+        if (downstream && !included.some((candidate) => sameResolvedExport(index, candidate, downstream))) {
+          included.push(downstream);
+        }
+      }
+      if (included.length) {
+        const result = included.length === 1 ? included[0]! : null;
+        index.exportCache.set(key, result);
+        return result;
       }
     }
     if (localCandidates.length === 1) {
@@ -393,22 +416,6 @@ export function resolveExport(
       const result: ResolvedExport = { kind: "resolved", def: target };
       index.exportCache.set(key, result);
       return result;
-    }
-    if (localCandidates.length > 1) {
-      const support = supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions);
-      if (support?.id === "c") {
-        const tagCandidates = localCandidates.filter((candidate) => candidate.kind === SymbolKind.Class);
-        const typedefCandidates = localCandidates.filter((candidate) => candidate.kind === SymbolKind.TypeAlias);
-        if (
-          tagCandidates.length === 1 &&
-          typedefCandidates.length === 1 &&
-          localCandidates.length === tagCandidates.length + typedefCandidates.length
-        ) {
-          const result: ResolvedExport = { kind: "resolved", def: tagCandidates[0]! };
-          index.exportCache.set(key, result);
-          return result;
-        }
-      }
     }
     if (localCandidates.length) {
       index.exportCache.set(key, null);
@@ -433,8 +440,8 @@ export function resolveExport(
     const reexportCandidates: ResolvedExport[] = [];
     for (const entry of names.reexports.get(canonicalName) ?? []) {
       const downstream =
-        resolveFromFile(entry.fromModule, entry.sourceSpecifier || canonicalName) ??
-        resolveFromFile(entry.fromModule, canonicalName);
+        resolveFromFile(entry.fromModule, entry.sourceSpecifier || canonicalName, namespace) ??
+        resolveFromFile(entry.fromModule, canonicalName, namespace);
       if (downstream && !reexportCandidates.some((candidate) => sameResolvedExport(index, candidate, downstream))) {
         reexportCandidates.push(downstream);
       }
@@ -452,7 +459,7 @@ export function resolveExport(
     const starCandidates: ResolvedExport[] = [];
     for (const entry of moduleEntry.exports) {
       if (entry.type !== "exportStar") continue;
-      const downstream = resolveFromFile(entry.fromModule, canonicalName);
+      const downstream = resolveFromFile(entry.fromModule, canonicalName, namespace);
       if (downstream && !starCandidates.some((candidate) => sameResolvedExport(index, candidate, downstream))) {
         starCandidates.push(downstream);
       }
@@ -471,7 +478,7 @@ export function resolveExport(
     if (allowLocalFallback && !shouldSkipVisibilityLocalFallback(index, moduleEntry)) {
       for (const local of names.locals.get(canonicalName) ?? []) {
         if (
-          matchesPreferredKind(local) &&
+          matchesOptions(local, namespace) &&
           !localFallbackCandidates.some((candidate) => sameSymbolDef(index, candidate, local))
         ) {
           localFallbackCandidates.push(local);
@@ -613,14 +620,20 @@ export function resolveImported(
   index: ProjectIndex,
   imp: ImportBinding,
   exportedName: string,
+  opts?: ResolveExportOptions,
 ): SymbolDef | { namespace: FileId } | null {
   const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile) return null;
+  const namespace = opts?.cNamespace ?? (imp.kind === "named" ? imp.cNamespace : undefined);
+  if (opts?.cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== opts.cNamespace) return null;
 
   const hit =
     imp.kind === "named" && imp.phpImportType
       ? resolvePhpExportByImportType(index, targetFile, exportedName, imp.phpImportType)
-      : resolveExport(index, targetFile, exportedName);
+      : resolveExport(index, targetFile, exportedName, {
+          ...opts,
+          ...(namespace ? { cNamespace: namespace } : {}),
+        });
   if (hit?.kind === "resolved") return hit.def;
   if (hit?.kind === "namespace") return { namespace: hit.file };
 

@@ -92,8 +92,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 43 applies C++ call arity to single entities and overloaded using aliases.
  * Epoch 44 exposes using-declaration aliases through enclosing inline namespaces.
  * Epoch 45 adjusts C++ parameter signatures and preserves distinct C tag and typedef exports.
+ * Epoch 46 preserves C tag and ordinary namespaces through scopes, includes, and references.
  */
-export const CORE_ALGORITHM_EPOCH = 45;
+export const CORE_ALGORITHM_EPOCH = 46;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

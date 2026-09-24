@@ -1,3 +1,4 @@
+import { cTagRole } from "../languages/definitions/c.js";
 import type { LogLevel } from "../logging.js";
 import { isGraphOnlyLanguage } from "../document-links.js";
 import { capturesByName, capturesNamed, rangeFromNativeCapture } from "../native/query-results.js";
@@ -220,25 +221,17 @@ function declaratorNameNode(node: SyntaxNodeLike | undefined): SyntaxNodeLike | 
 
 // C function and tag redeclarations share an identity. Tags remain separate from
 // typedefs and other ordinary names, even when both are classified as TypeAlias.
-function localExportDedupeKey(
-  entry: Extract<ExportEntry, { type: "local" }>,
-  languageId: string,
-  cEnumTags?: ReadonlySet<SymbolDef>,
-): string {
+function localExportDedupeKey(entry: Extract<ExportEntry, { type: "local" }>, languageId: string): string {
   if (languageId === "c") {
     if (entry.target.kind === SymbolKind.Function) return `${entry.exportedAs}\0function`;
-    if (entry.target.kind === SymbolKind.Class || cEnumTags?.has(entry.target)) {
+    if (entry.target.cTag) {
       return `${entry.exportedAs}\0tag`;
     }
   }
   return `${entry.exportedAs}\0${entry.target.localName}\0${entry.target.range.start.index ?? 0}\0${entry.target.range.end.index ?? 0}`;
 }
 
-function dedupeExportEntries(
-  entries: ExportEntry[],
-  languageId: string,
-  cEnumTags?: ReadonlySet<SymbolDef>,
-): ExportEntry[] {
+function dedupeExportEntries(entries: ExportEntry[], languageId: string): ExportEntry[] {
   const seen = new Set<string>();
   const out: ExportEntry[] = [];
   for (const entry of entries) {
@@ -246,7 +239,7 @@ function dedupeExportEntries(
       out.push(entry);
       continue;
     }
-    const key = localExportDedupeKey(entry, languageId, cEnumTags);
+    const key = localExportDedupeKey(entry, languageId);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(entry);
@@ -536,6 +529,10 @@ export function collectLocalsAndExportsFromSource(
       range,
     };
     if (node && isTypeMemberDeclaration(node)) base.isMember = true;
+    if (support.id === "c" && node) {
+      const tagRole = cTagRole(node);
+      if (tagRole) base.cTag = tagRole;
+    }
     if (docstring) base.docstring = docstring;
     if (lineSpan) base.lineSpan = lineSpan;
     if (typeof complexity === "number") base.complexity = complexity;
@@ -579,7 +576,6 @@ export function collectLocalsAndExportsFromSource(
 
   const locals: SymbolDef[] = [];
   const seenLocals = new Set<string>();
-  let cEnumTags: Set<SymbolDef> | undefined;
   const toKind = (s: string): SymbolKind => {
     if (s === "function") return SymbolKind.Function;
     if (s === "method") return SymbolKind.Function;
@@ -1063,9 +1059,6 @@ export function collectLocalsAndExportsFromSource(
               def.range.end.index === nameRange.end.index,
           ) ?? locals.find((def) => def.localName === nameText);
         if (local) {
-          if (support.id === "c" && visibilityNameNode?.parent?.type === "enum_specifier") {
-            (cEnumTags ??= new Set<SymbolDef>()).add(local);
-          }
           const isDefaultExport = /^\s*export\s+default\b/.test(stmtText);
           const exportedName =
             support.id === "cpp" && visibilityNameNode
@@ -1310,5 +1303,5 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
-  return { file, exports: dedupeExportEntries(exports, support.id, cEnumTags), imports, locals };
+  return { file, exports: dedupeExportEntries(exports, support.id), imports, locals };
 }

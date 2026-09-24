@@ -1,3 +1,4 @@
+import { cTagRole } from "../languages/definitions/c.js";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
@@ -373,7 +374,9 @@ export async function goToDefinition(
     }
 
     if (sup.supportsCrossModuleSymbols) {
-      const resolvedName = resolveNamedDefinition(index, mod, file, sup, name);
+      let cNamespace: "tag" | "ordinary" | undefined;
+      if (sup.id === "c") cNamespace = cTagRole(node) ? "tag" : "ordinary";
+      const resolvedName = resolveNamedDefinition(index, mod, file, sup, name, cNamespace);
       if (resolvedName) {
         return resolvedName;
       }
@@ -534,6 +537,17 @@ async function findReferencesInternal(
   if (!def) {
     return { status: "not_found", reason: "Could not resolve definition" };
   }
+  if (def.cTag) {
+    const canonical = await goToDefinition(index, {
+      file: def.file,
+      line: def.range.start.line,
+      column: def.range.start.column,
+    });
+    if (canonical.status === "ok") {
+      def = canonical.definition;
+      provenance = canonical.provenance;
+    }
+  }
 
   const maxReferences =
     typeof opts?.maxReferences === "number" && opts.maxReferences > 0 ? opts.maxReferences : undefined;
@@ -565,6 +579,9 @@ async function findReferencesInternal(
   };
   const parsedDef = index.parsed?.get(fileIdentityKey(definitionFile));
   const parsedContext = await ensureParsedContext(definitionFile, parsedDef, index.languageExtensions);
+  let cNamespace: "tag" | "ordinary" | undefined;
+  if (parsedContext.sup.id === "c") cNamespace = def.cTag ? "tag" : "ordinary";
+  const exportOptions = cNamespace ? { cNamespace } : undefined;
 
   const mod = index.byFile.get(fileIdentityKey(definitionFile));
   if (!mod) return { status: "not_found", reason: "Module not found" };
@@ -760,6 +777,7 @@ async function findReferencesInternal(
 
     for (const imp of module.imports) {
       if (hasReachedCollectionLimit()) break;
+      if (cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== cNamespace) continue;
       const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
       const bindingSites = importBindingReferenceSites(imp);
       let verifiedBindingMatches: boolean | undefined;
@@ -824,7 +842,7 @@ async function findReferencesInternal(
       for (const exportedName of exportedNames) {
         if (hasReachedCollectionLimit()) break;
         if (imp.kind === "namespace") {
-          const hit = resolveExport(index, targetFile, exportedName);
+          const hit = resolveExport(index, targetFile, exportedName, exportOptions);
           const matchesDef =
             hit?.kind === "resolved"
               ? matchesReferenceDefinition(hit.def)
@@ -850,7 +868,7 @@ async function findReferencesInternal(
             });
           }
         } else if (imp.kind === "star") {
-          const result = resolveImported(index, imp, exportedName);
+          const result = resolveImported(index, imp, exportedName, exportOptions);
           const matchesDef = !!result && !("namespace" in result) && matchesReferenceDefinition(result);
           if (
             !matchesDef &&
@@ -888,7 +906,7 @@ async function findReferencesInternal(
           } else if (imp.kind === "default") {
             exported = "default";
           }
-          const hit = resolveExport(index, targetFile, exported);
+          const hit = resolveExport(index, targetFile, exported, exportOptions);
           let matchesDef = hit?.kind === "resolved" && matchesReferenceDefinition(hit.def);
           let attributedByProof = matchesDef;
           if (!matchesDef && bindingSites.length) {

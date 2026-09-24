@@ -30,6 +30,8 @@ export type ImportBinding =
        */
       localRange?: Range;
       phpImportType?: "class" | "function" | "const";
+      /** Namespace retained when a C include expands tags and ordinary names. */
+      cNamespace?: "tag" | "ordinary";
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
       mechanism?: "es" | "cjs" | "python" | "php";

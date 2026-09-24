@@ -5,6 +5,7 @@ import { getMemberAccessParts, isMemberAccessNode } from "../util/member-access.
 import { declarationKindToBindingKind } from "./declarations.js";
 import { cppBindingCallableShape, cppSelectCallableBinding } from "./cpp-callables.js";
 import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import type { LanguageSupport } from "../languages.js";
 import { scopeNodesFor, type ScopeNodeRow } from "./scope-nodes.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
@@ -98,13 +99,13 @@ export function buildScopeIndexFromSource(
   >();
   const cppFunctionCollisionGroups = new Set<Binding[]>();
   const cppFunctionOccurrences: Array<{ binding: Binding; node: SyntaxNodeLike; range: Range }> = [];
-  const extraFunctionBindingSpans = new Set<string>();
-  const preserveExtraFunctionBinding = (binding: Binding): void => {
+  const extraBindingSpans = new Set<string>();
+  const preserveExtraBinding = (binding: Binding): void => {
     const start = binding.def?.start.index;
     const end = binding.def?.end.index;
     const key = `${binding.canonicalName}:${start ?? ""}:${end ?? ""}`;
-    if (extraFunctionBindingSpans.has(key)) return;
-    extraFunctionBindingSpans.add(key);
+    if (extraBindingSpans.has(key)) return;
+    extraBindingSpans.add(key);
     extraBindings.push(binding);
   };
   /**
@@ -135,7 +136,11 @@ export function buildScopeIndexFromSource(
       occurrences: [],
       import: importBinding,
     };
-    rootScope.map.set(binding.canonicalName, binding);
+    const key =
+      support.id === "c" && importBinding.kind === "named" && importBinding.cNamespace === "tag"
+        ? cScopeName(binding.canonicalName, "tag")
+        : binding.canonicalName;
+    rootScope.map.set(key, binding);
   };
 
   for (const imp of imports) {
@@ -165,13 +170,29 @@ export function buildScopeIndexFromSource(
 
   const addBinding = (target: Scope, nameNode: SyntaxNodeLike, kind: BindingKind): void => {
     const binding = buildBinding(nameNode, kind);
-    const existing = target.map.get(binding.canonicalName);
+    const tagRole = support.id === "c" ? cTagRole(nameNode) : undefined;
+    const key = tagRole ? cScopeName(binding.canonicalName, "tag") : binding.canonicalName;
+    if (tagRole === "reference") {
+      const visible = lookup(binding.name, nameNode);
+      if (visible) {
+        visible.occurrences.push(binding.def!);
+        return;
+      }
+    }
+    const existing = target.map.get(key);
+    if (tagRole && existing?.def) {
+      if (existing.def.start.index === binding.def?.start.index) return;
+      binding.occurrences = existing.occurrences;
+      binding.occurrences.push(binding.def!);
+      preserveExtraBinding(binding);
+      return;
+    }
     if (kind === "function" && existing?.kind === "function") {
       if (support.id === "c") {
         // C prototypes and their definitions are declarations of one function. Keep each
         // declaration addressable while sharing the occurrence list collected for that name.
         binding.occurrences = existing.occurrences;
-        preserveExtraFunctionBinding(binding);
+        preserveExtraBinding(binding);
         return;
       }
       if (support.id === "cpp") {
@@ -179,10 +200,10 @@ export function buildScopeIndexFromSource(
         collisions.push(binding);
         for (const collision of collisions) collision.sameScopeFunctionBindings = collisions;
         cppFunctionCollisionGroups.add(collisions);
-        preserveExtraFunctionBinding(existing);
+        preserveExtraBinding(existing);
       }
     }
-    target.map.set(binding.canonicalName, binding);
+    target.map.set(key, binding);
     const cppNamespace = cppNamespacePathByMap.get(target.map);
     if (support.id === "cpp" && kind === "function" && cppNamespace) {
       const qualifiedKey = `${cppNamespace}::${binding.name}`;
@@ -214,8 +235,10 @@ export function buildScopeIndexFromSource(
     addBinding(target, nameNode, kind);
   };
 
-  const lookup = (name: string): Binding | undefined => {
-    const canonicalName = normalizeIdentifier(name);
+  const lookup = (name: string, node?: SyntaxNodeLike): Binding | undefined => {
+    const normalizedName = normalizeIdentifier(name);
+    const canonicalName =
+      support.id === "c" && node && cTagRole(node) ? cScopeName(normalizedName, "tag") : normalizedName;
     for (let index = stack.length - 1; index >= 0; index--) {
       const hit = stack[index]!.map.get(canonicalName);
       if (hit) return hit;
@@ -581,7 +604,7 @@ export function buildScopeIndexFromSource(
         const isCppMemberProperty =
           !!memberProperty && memberProperty.startIndex <= node.startIndex && memberProperty.endIndex >= node.endIndex;
         if (!isCppMemberProperty) {
-          const binding = lookup(sliceText(node, source));
+          const binding = lookup(sliceText(node, source), node);
           if (support.id === "cpp" && binding?.kind === "function") {
             cppFunctionOccurrences.push({ binding, node, range: toRange(node) });
           } else if (binding) {

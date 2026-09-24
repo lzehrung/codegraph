@@ -751,6 +751,12 @@ A successful `FindReferencesResult` always includes `referenceCoverage`. `comple
 
 The result keeps the definition site as a reference. Import declarations are also references. `Reference.via.importBinding` is `imported` for the source-side name and `local` for a distinct alias or default binding. The root and `indexer` entry points export `ImportBindingRole`, `ReferenceCoverage`, and `ReferenceCoverageReason`.
 
+C symbol lookup keeps tag and ordinary identifier namespaces separate:
+
+- `goToDefinition` and `findReferences` select the namespace from source syntax, including uses through header includes.
+- Lower-level `resolveExport(index, file, name, options)` and `resolveImported(index, importBinding, name, options)` accept `cNamespace: "tag" | "ordinary"`. `preferredKind` alone cannot distinguish an enum tag from a same-spelled typedef.
+- `SymbolDef.cTag` records `"declaration"` or `"reference"` for C tags. A bodyless tag use can introduce an incomplete tag when no visible tag exists. Expanded named C imports retain `ImportBinding.cNamespace`; ordinary names do not hide tags.
+
 ## Incremental indexing
 
 ```ts

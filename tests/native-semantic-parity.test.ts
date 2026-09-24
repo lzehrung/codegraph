@@ -1140,7 +1140,7 @@ nativeDescribe("native semantic coverage", () => {
         ["main.c", "utils.h", "utils.c", "helpers.h", "helpers.c"],
         [{ file: "utils.h", names: ["helper_function", "Utility"] }],
         { file: "main.c", line: 5, column: 15, expectedStatus: "ok" },
-        { file: "utils.h", line: 4, column: 16, expectedStatus: "ok" },
+        { file: "utils.h", line: 6, column: 3, expectedStatus: "ok" },
       ),
       sampleExpectation(
         "c",
@@ -1464,6 +1464,209 @@ nativeDescribe("native semantic coverage", () => {
       if (resolved?.kind !== "resolved") throw new Error("Expected a distinct C export");
       expect(resolved.def.kind).toBe(kind);
       expect(resolved.def.range.start.line).toBe(line);
+    }
+  });
+
+  it("keeps native C tag and typedef navigation in separate namespaces", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-c-tag-namespace-"));
+    tempDirs.push(root);
+    const header = normalizeFile(path.join(root, "api.h"));
+    const consumer = normalizeFile(path.join(root, "main.c"));
+    // Same spellings for struct/union/enum tags and ordinary typedefs, each on its own line, plus
+    // a local ordinary shadow that must not hide the tag.
+    const headerLines = [
+      "struct Item { int value; };",
+      "typedef struct Item Item;",
+      "union Value { int raw; };",
+      "typedef union Value Value;",
+      "enum Color { COLOR_RED };",
+      "typedef enum Color Color;",
+      "",
+      "struct Item header_item_tag;",
+      "Item header_item_alias;",
+      "union Value header_value_tag;",
+      "Value header_value_alias;",
+      "enum Color header_color_tag;",
+      "Color header_color_alias;",
+      "",
+    ];
+    const consumerLines = [
+      '#include "api.h"',
+      "struct Item consumer_item_tag;",
+      "Item consumer_item_alias;",
+      "union Value consumer_value_tag;",
+      "Value consumer_value_alias;",
+      "enum Color consumer_color_tag;",
+      "Color consumer_color_alias;",
+      "int touch(void) {",
+      "  int Item = 0;",
+      "  struct Item shadow_item_tag;",
+      "  return Item;",
+      "}",
+      "",
+    ];
+    await fsp.writeFile(header, headerLines.join("\n"), "utf8");
+    await fsp.writeFile(consumer, consumerLines.join("\n"), "utf8");
+    const index = await withNativeRuntimeModeAsync("native", () =>
+      buildProjectIndexFromFiles(root, [header, consumer], { cache: "off" }),
+    );
+
+    const tokenColumn = (lines: readonly string[], line: number, token: string, occurrence = 0): number => {
+      const text = lines[line - 1]!;
+      let at = -1;
+      for (let seen = 0; seen <= occurrence; seen += 1) {
+        at = text.indexOf(token, at + 1);
+      }
+      return at + 1;
+    };
+    const names: ReadonlyArray<{
+      name: string;
+      tagLine: number;
+      typedefLine: number;
+      headerTagUseLine: number;
+      headerAliasUseLine: number;
+      consumerTagLine: number;
+      consumerAliasLine: number;
+      shadowTagLine?: number;
+    }> = [
+      {
+        name: "Item",
+        tagLine: 1,
+        typedefLine: 2,
+        headerTagUseLine: 8,
+        headerAliasUseLine: 9,
+        consumerTagLine: 2,
+        consumerAliasLine: 3,
+        shadowTagLine: 10,
+      },
+      {
+        name: "Value",
+        tagLine: 3,
+        typedefLine: 4,
+        headerTagUseLine: 10,
+        headerAliasUseLine: 11,
+        consumerTagLine: 4,
+        consumerAliasLine: 5,
+      },
+      {
+        name: "Color",
+        tagLine: 5,
+        typedefLine: 6,
+        headerTagUseLine: 12,
+        headerAliasUseLine: 13,
+        consumerTagLine: 6,
+        consumerAliasLine: 7,
+      },
+    ];
+
+    const expectDefinitionAt = async (
+      file: string,
+      lines: readonly string[],
+      line: number,
+      token: string,
+      occurrence: number,
+      expectedFile: string,
+      expectedLine: number,
+      expectedColumn: number,
+    ): Promise<void> => {
+      const result = await goToDefinition(index, {
+        file,
+        line,
+        column: tokenColumn(lines, line, token, occurrence),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected a definition");
+      expect(normalizeFile(result.definition.file)).toBe(normalizeFile(expectedFile));
+      expect(result.definition.range.start.line).toBe(expectedLine);
+      expect(result.definition.range.start.column).toBe(expectedColumn);
+    };
+
+    // Tag syntax targets the tag declaration and a bare name targets the typedef, in the header
+    // itself and through the include alike, including the enum tag/typedef same-kind pair.
+    for (const kind of names) {
+      const tagColumn = tokenColumn(headerLines, kind.tagLine, kind.name);
+      const typedefColumn = tokenColumn(headerLines, kind.typedefLine, kind.name, 1);
+      for (const [file, lines, tagUseLine, aliasUseLine] of [
+        [header, headerLines, kind.headerTagUseLine, kind.headerAliasUseLine],
+        [consumer, consumerLines, kind.consumerTagLine, kind.consumerAliasLine],
+      ] as const) {
+        await expectDefinitionAt(file, lines, tagUseLine, kind.name, 0, header, kind.tagLine, tagColumn);
+        await expectDefinitionAt(file, lines, aliasUseLine, kind.name, 0, header, kind.typedefLine, typedefColumn);
+      }
+      await expectDefinitionAt(header, headerLines, kind.typedefLine, kind.name, 0, header, kind.tagLine, tagColumn);
+    }
+
+    // The local ordinary shadow hides the typedef inside the function but never the tag.
+    const item = names[0]!;
+    await expectDefinitionAt(
+      consumer,
+      consumerLines,
+      item.shadowTagLine!,
+      item.name,
+      0,
+      header,
+      item.tagLine,
+      tokenColumn(headerLines, item.tagLine, item.name),
+    );
+    await expectDefinitionAt(
+      consumer,
+      consumerLines,
+      item.shadowTagLine! + 1,
+      item.name,
+      0,
+      consumer,
+      9,
+      tokenColumn(consumerLines, 9, item.name),
+    );
+
+    const referenceSites = async (file: string, line: number, column: number) => {
+      const result = await findReferences(index, { file, line, column });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected references");
+      return result.references.map((reference) => ({
+        file: normalizeFile(reference.file),
+        line: reference.range.start.line,
+        column: reference.range.start.column,
+      }));
+    };
+    const consumerKey = normalizeFile(consumer);
+
+    // Exact disjoint consumer sets: tag-form uses (including the shadowed one) belong to the tag,
+    // bare uses to the typedef, and the shadowed local occurrences belong to neither.
+    for (const kind of names) {
+      const tagReferences = await referenceSites(
+        header,
+        kind.tagLine,
+        tokenColumn(headerLines, kind.tagLine, kind.name),
+      );
+      const aliasReferences = await referenceSites(
+        header,
+        kind.typedefLine,
+        tokenColumn(headerLines, kind.typedefLine, kind.name, 1),
+      );
+      expect(tagReferences.filter((site) => site.file === consumerKey)).toEqual([
+        {
+          file: consumerKey,
+          line: kind.consumerTagLine,
+          column: tokenColumn(consumerLines, kind.consumerTagLine, kind.name),
+        },
+        ...(kind.shadowTagLine === undefined
+          ? []
+          : [
+              {
+                file: consumerKey,
+                line: kind.shadowTagLine,
+                column: tokenColumn(consumerLines, kind.shadowTagLine, kind.name),
+              },
+            ]),
+      ]);
+      expect(aliasReferences.filter((site) => site.file === consumerKey)).toEqual([
+        {
+          file: consumerKey,
+          line: kind.consumerAliasLine,
+          column: tokenColumn(consumerLines, kind.consumerAliasLine, kind.name),
+        },
+      ]);
     }
   });
 

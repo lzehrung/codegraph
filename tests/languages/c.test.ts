@@ -946,3 +946,255 @@ describe("C function redeclarations", () => {
     }
   });
 });
+
+describe("C tag and typedef namespaces", () => {
+  it("sends tag-form and bare uses of same-spelled names to separate declarations", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-tag-typedef-namespaces-"));
+    try {
+      const header = path.join(root, "api.h").replace(/\\/g, "/");
+      const consumer = path.join(root, "main.c").replace(/\\/g, "/");
+      // Tags and typedefs share spellings, so every declaration sits on its own line and every
+      // namespace mistake shows up as a wrong line or a wrong reference set.
+      const headerLines = [
+        "struct Item { int value; };",
+        "typedef struct Item Item;",
+        "union Value { int raw; };",
+        "typedef union Value Value;",
+        "enum Color { COLOR_RED };",
+        "typedef enum Color Color;",
+        "",
+        "struct Item header_item_tag;",
+        "Item header_item_alias;",
+        "union Value header_value_tag;",
+        "Value header_value_alias;",
+        "enum Color header_color_tag;",
+        "Color header_color_alias;",
+        "",
+      ];
+      const consumerLines = [
+        '#include "api.h"',
+        "struct Item consumer_item_tag;",
+        "Item consumer_item_alias;",
+        "union Value consumer_value_tag;",
+        "Value consumer_value_alias;",
+        "enum Color consumer_color_tag;",
+        "Color consumer_color_alias;",
+        "int touch(void) {",
+        "  int Item = 0;",
+        "  struct Item shadow_item_tag;",
+        "  return Item;",
+        "}",
+        "",
+      ];
+      await writeFile(header, headerLines.join("\n"), "utf8");
+      await writeFile(consumer, consumerLines.join("\n"), "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const tokenColumn = (lines: readonly string[], line: number, token: string, occurrence = 0): number => {
+        const text = lines[line - 1]!;
+        let at = -1;
+        for (let seen = 0; seen <= occurrence; seen += 1) {
+          at = text.indexOf(token, at + 1);
+        }
+        return at + 1;
+      };
+      const names: ReadonlyArray<{
+        name: string;
+        tagLine: number;
+        typedefLine: number;
+        headerTagUseLine: number;
+        headerAliasUseLine: number;
+        consumerTagLine: number;
+        consumerAliasLine: number;
+        shadowTagLine?: number;
+      }> = [
+        {
+          name: "Item",
+          tagLine: 1,
+          typedefLine: 2,
+          headerTagUseLine: 8,
+          headerAliasUseLine: 9,
+          consumerTagLine: 2,
+          consumerAliasLine: 3,
+          shadowTagLine: 10,
+        },
+        {
+          name: "Value",
+          tagLine: 3,
+          typedefLine: 4,
+          headerTagUseLine: 10,
+          headerAliasUseLine: 11,
+          consumerTagLine: 4,
+          consumerAliasLine: 5,
+        },
+        {
+          name: "Color",
+          tagLine: 5,
+          typedefLine: 6,
+          headerTagUseLine: 12,
+          headerAliasUseLine: 13,
+          consumerTagLine: 6,
+          consumerAliasLine: 7,
+        },
+      ];
+
+      const expectDefinitionAt = async (
+        file: string,
+        lines: readonly string[],
+        line: number,
+        token: string,
+        occurrence: number,
+        expectedFile: string,
+        expectedLine: number,
+        expectedColumn: number,
+      ): Promise<void> => {
+        const result = await goToDefinition(index, {
+          file,
+          line,
+          column: tokenColumn(lines, line, token, occurrence),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected a definition");
+        expect(normalizePath(result.definition.file)).toBe(normalizePath(expectedFile));
+        expect(result.definition.range.start.line).toBe(expectedLine);
+        expect(result.definition.range.start.column).toBe(expectedColumn);
+      };
+
+      // Tag syntax targets the tag declaration and a bare name targets the typedef, in the
+      // declaring header itself and through the include alike.
+      for (const kind of names) {
+        const tagColumn = tokenColumn(headerLines, kind.tagLine, kind.name);
+        const typedefColumn = tokenColumn(headerLines, kind.typedefLine, kind.name, 1);
+        for (const [file, lines, tagUseLine, aliasUseLine] of [
+          [header, headerLines, kind.headerTagUseLine, kind.headerAliasUseLine],
+          [consumer, consumerLines, kind.consumerTagLine, kind.consumerAliasLine],
+        ] as const) {
+          await expectDefinitionAt(file, lines, tagUseLine, kind.name, 0, header, kind.tagLine, tagColumn);
+          await expectDefinitionAt(file, lines, aliasUseLine, kind.name, 0, header, kind.typedefLine, typedefColumn);
+        }
+        // The tag token inside `typedef struct Item Item;` is a tag reference, not the typedef
+        // declared on the same line.
+        await expectDefinitionAt(header, headerLines, kind.typedefLine, kind.name, 0, header, kind.tagLine, tagColumn);
+      }
+
+      // The enum tag and typedef share SymbolKind.TypeAlias, so both declarations must resolve to
+      // themselves instead of each other.
+      const color = names[2]!;
+      await expectDefinitionAt(
+        header,
+        headerLines,
+        color.tagLine,
+        color.name,
+        0,
+        header,
+        color.tagLine,
+        tokenColumn(headerLines, color.tagLine, color.name),
+      );
+      await expectDefinitionAt(
+        header,
+        headerLines,
+        color.typedefLine,
+        color.name,
+        1,
+        header,
+        color.typedefLine,
+        tokenColumn(headerLines, color.typedefLine, color.name, 1),
+      );
+
+      // A nested local ordinary-name shadow hides the typedef inside the function but never the
+      // tag: `struct Item` still reaches the header tag while bare `Item` reaches the local.
+      const item = names[0]!;
+      await expectDefinitionAt(
+        consumer,
+        consumerLines,
+        item.shadowTagLine!,
+        item.name,
+        0,
+        header,
+        item.tagLine,
+        tokenColumn(headerLines, item.tagLine, item.name),
+      );
+      await expectDefinitionAt(
+        consumer,
+        consumerLines,
+        item.shadowTagLine! + 1,
+        item.name,
+        0,
+        consumer,
+        9,
+        tokenColumn(consumerLines, 9, item.name),
+      );
+
+      const referenceSites = async (file: string, line: number, column: number) => {
+        const result = await findReferences(index, { file, line, column });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected references");
+        return result.references.map((reference) => ({
+          file: normalizePath(reference.file),
+          line: reference.range.start.line,
+          column: reference.range.start.column,
+        }));
+      };
+      const hasSite = (
+        sites: ReadonlyArray<{ file: string; line: number; column: number }>,
+        file: string,
+        line: number,
+        column: number,
+      ): boolean =>
+        sites.some((site) => site.file === normalizePath(file) && site.line === line && site.column === column);
+      const consumerKey = normalizePath(consumer);
+
+      for (const kind of names) {
+        const tagDeclColumn = tokenColumn(headerLines, kind.tagLine, kind.name);
+        const typedefColumn = tokenColumn(headerLines, kind.typedefLine, kind.name, 1);
+        const typedefTagColumn = tokenColumn(headerLines, kind.typedefLine, kind.name);
+        const headerTagUseColumn = tokenColumn(headerLines, kind.headerTagUseLine, kind.name);
+        const headerAliasUseColumn = tokenColumn(headerLines, kind.headerAliasUseLine, kind.name);
+        const tagReferences = await referenceSites(header, kind.tagLine, tagDeclColumn);
+        const aliasReferences = await referenceSites(header, kind.typedefLine, typedefColumn);
+
+        // Exact consumer sets: tag-form uses belong to the tag (including the use inside the
+        // shadowed function) and bare uses to the typedef, with no cross-namespace rows.
+        expect(tagReferences.filter((site) => site.file === consumerKey)).toEqual([
+          {
+            file: consumerKey,
+            line: kind.consumerTagLine,
+            column: tokenColumn(consumerLines, kind.consumerTagLine, kind.name),
+          },
+          ...(kind.shadowTagLine === undefined
+            ? []
+            : [
+                {
+                  file: consumerKey,
+                  line: kind.shadowTagLine,
+                  column: tokenColumn(consumerLines, kind.shadowTagLine, kind.name),
+                },
+              ]),
+        ]);
+        expect(aliasReferences.filter((site) => site.file === consumerKey)).toEqual([
+          {
+            file: consumerKey,
+            line: kind.consumerAliasLine,
+            column: tokenColumn(consumerLines, kind.consumerAliasLine, kind.name),
+          },
+        ]);
+
+        // Same-file rows follow the same split: the tag owns its declaration, the file-scope tag
+        // use, and the tag token inside the typedef statement; the typedef owns only its own token
+        // and the bare alias use.
+        expect(hasSite(tagReferences, header, kind.tagLine, tagDeclColumn)).toBe(true);
+        expect(hasSite(tagReferences, header, kind.headerTagUseLine, headerTagUseColumn)).toBe(true);
+        expect(hasSite(tagReferences, header, kind.typedefLine, typedefTagColumn)).toBe(true);
+        expect(hasSite(tagReferences, header, kind.typedefLine, typedefColumn)).toBe(false);
+        expect(hasSite(tagReferences, header, kind.headerAliasUseLine, headerAliasUseColumn)).toBe(false);
+        expect(hasSite(aliasReferences, header, kind.typedefLine, typedefColumn)).toBe(true);
+        expect(hasSite(aliasReferences, header, kind.headerAliasUseLine, headerAliasUseColumn)).toBe(true);
+        expect(hasSite(aliasReferences, header, kind.tagLine, tagDeclColumn)).toBe(false);
+        expect(hasSite(aliasReferences, header, kind.headerTagUseLine, headerTagUseColumn)).toBe(false);
+        expect(hasSite(aliasReferences, header, kind.typedefLine, typedefTagColumn)).toBe(false);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

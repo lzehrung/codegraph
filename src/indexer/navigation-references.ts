@@ -694,9 +694,13 @@ function importCanReferenceDefinition(
 ): boolean {
   const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile) return false;
+  let cNamespace: "tag" | "ordinary" | undefined;
+  if (languageId === "c") cNamespace = def.cTag ? "tag" : "ordinary";
+  const exportOptions = cNamespace ? { cNamespace } : undefined;
+  if (cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== cNamespace) return false;
 
   const resolvesToDefinition = (exportedName: string): boolean => {
-    const hit = resolveExport(index, targetFile, exportedName);
+    const hit = resolveExport(index, targetFile, exportedName, exportOptions);
     if (hit?.kind === "resolved") {
       return sameDef(hit.def, def, index.languageExtensions);
     }
@@ -714,7 +718,7 @@ function importCanReferenceDefinition(
   }
   if (imp.kind === "star") {
     return exportedNames.some((exportedName) => {
-      const result = resolveImported(index, imp, exportedName);
+      const result = resolveImported(index, imp, exportedName, exportOptions);
       return !!result && !("namespace" in result) && sameDef(result, def, index.languageExtensions);
     });
   }

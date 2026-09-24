@@ -2474,6 +2474,8 @@ describe("Import Resolution", () => {
           "typedef int OnlyAlias;",
           "int pick(int value);",
           "int pick(int value) { return value; }",
+          "enum Color { RED };",
+          "typedef enum Color Color;",
           "",
         ].join("\n"),
         "utf8",
@@ -2494,12 +2496,20 @@ describe("Import Resolution", () => {
         expect(resolved.def.range.start.line).toBe(line);
       }
 
-      // Unqualified lookup keeps the existing precedence: one tag plus one typedef selects the tag.
-      const unqualified = resolveExport(index, header, "Item", { allowLocalFallback: false });
-      expect(unqualified?.kind).toBe("resolved");
-      if (unqualified?.kind !== "resolved") throw new Error("Expected the C struct tag by default");
-      expect(unqualified.def.kind).toBe(SymbolKind.Class);
-      expect(unqualified.def.range.start.line).toBe(1);
+      // Without a namespace, both symbols remain candidates rather than choosing the tag.
+      expect(resolveExport(index, header, "Item", { allowLocalFallback: false })).toBeNull();
+      expect(
+        resolveExport(index, header, "Color", { preferredKind: SymbolKind.TypeAlias, allowLocalFallback: false }),
+      ).toBeNull();
+      for (const [cNamespace, line] of [
+        ["tag", 7],
+        ["ordinary", 8],
+      ] as const) {
+        const resolved = resolveExport(index, header, "Color", { cNamespace, allowLocalFallback: false });
+        expect(resolved?.kind).toBe("resolved");
+        if (resolved?.kind !== "resolved") throw new Error("Expected a distinct C namespace");
+        expect(resolved.def.range.start.line).toBe(line);
+      }
 
       // A kind preference excludes the other namespace rather than falling back to it.
       expect(

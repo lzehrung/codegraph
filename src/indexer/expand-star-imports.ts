@@ -52,7 +52,15 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
   const expandedImportKey = (binding: ImportBinding): string | null => {
     const typeOnly = binding.typeOnly ?? false;
     if (binding.kind === "named") {
-      return JSON.stringify(["named", binding.from, binding.resolved, typeOnly, binding.local, binding.imported]);
+      return JSON.stringify([
+        "named",
+        binding.from,
+        binding.resolved,
+        typeOnly,
+        binding.local,
+        binding.imported,
+        binding.cNamespace,
+      ]);
     }
     if (binding.kind === "namespace") {
       return JSON.stringify(["namespace", binding.from, binding.resolved, typeOnly, binding.localNS]);
@@ -79,8 +87,12 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
       );
       const seen = new Set<string>();
       for (const { name, symbol } of exportedSymbols) {
-        if (!name || seen.has(name)) continue;
-        seen.add(name);
+        let namespace: "tag" | "ordinary" | undefined;
+        if (symbol.cTag) namespace = "tag";
+        else if (targetSupport?.id === "c") namespace = "ordinary";
+        const symbolKey = namespace ? `${name}\0${namespace}` : name;
+        if (!name || seen.has(symbolKey)) continue;
+        seen.add(symbolKey);
         const treatAsNamespace = targetSupport?.id === "ruby" && symbol.kind === SymbolKind.Class;
         const expandedImport: ImportBinding = treatAsNamespace
           ? {
@@ -96,6 +108,7 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
               imported: name,
               from: imp.from,
               resolved: imp.resolved,
+              ...(namespace ? { cNamespace: namespace } : {}),
               ...(imp.typeOnly !== undefined ? { typeOnly: imp.typeOnly } : {}),
             };
         const expandedImportKeyValue = expandedImportKey(expandedImport);

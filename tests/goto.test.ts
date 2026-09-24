@@ -1519,10 +1519,8 @@ describe("Go to Definition", () => {
       const helpersFile = path.join(samplePath, "helpers.h").replace(/\\/g, "/");
       const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
 
-      // `typedef struct Utility { ... } Utility;` declares two symbols: the struct tag on line 4 and
-      // the typedef alias on line 6. C now uses query-driven locals like C++, so both exist and the
-      // tag owns the exported name.
-      await testGoToDefinition(index, mainFile, 6, 3, utilsFile, 4);
+      // The bare name selects the typedef alias, not the struct tag on line 4.
+      await testGoToDefinition(index, mainFile, 6, 3, utilsFile, 6);
     });
 
     it("should find definition of function-pointer typedef", async () => {
@@ -1532,6 +1530,167 @@ describe("Go to Definition", () => {
       const index = await createTestIndexFromFiles(samplePath, [advancedUseFile, functionPointersFile]);
 
       await testGoToDefinition(index, advancedUseFile, 4, 3, functionPointersFile, 3);
+    });
+
+    it("resolves same-spelled C tags and typedefs to distinct declarations across an included header", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-c-tag-typedef-goto-"));
+      try {
+        const headerFile = path.join(root, "shapes.h").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "use.c").replace(/\\/g, "/");
+        const headerLines = [
+          "#pragma once",
+          "",
+          "struct Item {",
+          "  int value;",
+          "};",
+          "",
+          "struct Item *header_item_ptr;",
+          "",
+          "union Value {",
+          "  int as_int;",
+          "  float as_float;",
+          "};",
+          "",
+          "union Value *header_value_ptr;",
+          "",
+          "enum Color {",
+          "  COLOR_RED,",
+          "  COLOR_GREEN,",
+          "};",
+          "",
+          "enum Color *header_color_ptr;",
+          "",
+          "typedef struct Item Item;",
+          "typedef union Value Value;",
+          "typedef enum Color Color;",
+          "",
+          "Item header_item_alias;",
+          "Value header_value_alias;",
+          "Color header_color_alias;",
+          "",
+        ];
+        const consumerLines = [
+          '#include "./shapes.h"',
+          "",
+          "struct Item *consumer_item_tag;",
+          "Item *consumer_item_alias;",
+          "union Value *consumer_value_tag;",
+          "Value *consumer_value_alias;",
+          "enum Color *consumer_color_tag;",
+          "Color *consumer_color_alias;",
+          "",
+          "/* Item Value Color */",
+          "int main(void) {",
+          "  struct Item *tag_item = header_item_ptr;",
+          "  Item *alias_item = &header_item_alias;",
+          "  union Value *tag_value = header_value_ptr;",
+          "  Value *alias_value = &header_value_alias;",
+          "  enum Color *tag_color = header_color_ptr;",
+          "  Color *alias_color = &header_color_alias;",
+          "  /* struct Item union Value enum Color */",
+          "  return tag_item->value + alias_item->value;",
+          "}",
+          "",
+        ];
+        await fsp.writeFile(headerFile, headerLines.join("\n"), "utf8");
+        await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [headerFile, consumerFile]);
+
+        // A header declares separate struct/union/enum tags and same-spelled ordinary typedefs. Tag
+        // syntax targets the tag; a bare name targets the typedef. Each namespace has its own
+        // declaration line so a kind-only choice is visible.
+        for (const kind of [
+          { name: "Item", tagLine: 3, typedefLine: 23, consumerTagLine: 3, consumerAliasLine: 4 },
+          { name: "Value", tagLine: 9, typedefLine: 24, consumerTagLine: 5, consumerAliasLine: 6 },
+          { name: "Color", tagLine: 16, typedefLine: 25, consumerTagLine: 7, consumerAliasLine: 8 },
+        ]) {
+          for (const consumerLine of [kind.consumerTagLine, kind.consumerTagLine + 9]) {
+            await testGoToDefinition(
+              index,
+              consumerFile,
+              consumerLine,
+              consumerLines[consumerLine - 1]!.indexOf(kind.name) + 1,
+              headerFile,
+              kind.tagLine,
+            );
+          }
+          for (const consumerLine of [kind.consumerAliasLine, kind.consumerAliasLine + 9]) {
+            await testGoToDefinition(
+              index,
+              consumerFile,
+              consumerLine,
+              consumerLines[consumerLine - 1]!.indexOf(kind.name) + 1,
+              headerFile,
+              kind.typedefLine,
+            );
+          }
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("points C header tag uses at the tag declaration instead of a self-declaration", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-c-header-tag-use-goto-"));
+      try {
+        const headerFile = path.join(root, "shapes.h").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "use.c").replace(/\\/g, "/");
+        const headerLines = [
+          "#pragma once",
+          "",
+          "struct Item {",
+          "  int value;",
+          "};",
+          "",
+          "struct Item *header_item_ptr;",
+          "",
+          "union Value {",
+          "  int as_int;",
+          "  float as_float;",
+          "};",
+          "",
+          "union Value *header_value_ptr;",
+          "",
+          "enum Color {",
+          "  COLOR_RED,",
+          "  COLOR_GREEN,",
+          "};",
+          "",
+          "enum Color *header_color_ptr;",
+          "",
+          "typedef struct Item Item;",
+          "typedef union Value Value;",
+          "typedef enum Color Color;",
+          "",
+          "Item header_item_alias;",
+          "Value header_value_alias;",
+          "Color header_color_alias;",
+          "",
+        ];
+        await fsp.writeFile(headerFile, headerLines.join("\n"), "utf8");
+        await fsp.writeFile(consumerFile, '#include "./shapes.h"\n', "utf8");
+        const index = await createTestIndexFromFiles(root, [headerFile, consumerFile]);
+
+        // The tag token in `typedef struct Item Item;` is a tag reference, so it resolves to the
+        // struct tag declaration, not to the typedef on the same line.
+        await testGoToDefinition(index, headerFile, 23, headerLines[22]!.indexOf("Item") + 1, headerFile, 3);
+        await testGoToDefinition(index, headerFile, 24, headerLines[23]!.indexOf("Value") + 1, headerFile, 9);
+        await testGoToDefinition(index, headerFile, 25, headerLines[24]!.indexOf("Color") + 1, headerFile, 16);
+        // The alias token in the same statements is the typedef definition itself.
+        await testGoToDefinition(index, headerFile, 23, headerLines[22]!.lastIndexOf("Item") + 1, headerFile, 23);
+        await testGoToDefinition(index, headerFile, 24, headerLines[23]!.lastIndexOf("Value") + 1, headerFile, 24);
+        await testGoToDefinition(index, headerFile, 25, headerLines[24]!.lastIndexOf("Color") + 1, headerFile, 25);
+        // A file-scope tag use resolves to the tag declaration rather than to itself.
+        await testGoToDefinition(index, headerFile, 7, headerLines[6]!.indexOf("Item") + 1, headerFile, 3);
+        await testGoToDefinition(index, headerFile, 14, headerLines[13]!.indexOf("Value") + 1, headerFile, 9);
+        await testGoToDefinition(index, headerFile, 21, headerLines[20]!.indexOf("Color") + 1, headerFile, 16);
+        // A file-scope typedef use resolves to the typedef definition.
+        await testGoToDefinition(index, headerFile, 27, headerLines[26]!.indexOf("Item") + 1, headerFile, 23);
+        await testGoToDefinition(index, headerFile, 28, headerLines[27]!.indexOf("Value") + 1, headerFile, 24);
+        await testGoToDefinition(index, headerFile, 29, headerLines[28]!.indexOf("Color") + 1, headerFile, 25);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
     });
   });
 

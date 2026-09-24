@@ -2874,12 +2874,11 @@ describe("Find References", () => {
       const helpersFile = path.join(samplePath, "helpers.h").replace(/\\/g, "/");
       const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
 
-      // The struct tag on line 4 and the typedef alias on line 6 are separate symbols now that C
-      // uses query-driven locals like C++. References for the tag keep its own declaration plus the
-      // cross-file use; the alias occurrence belongs to the alias symbol.
-      const result = await testFindReferences(index, utilsFile, 4, 16, 2);
-      expectReferenceAt(result, utilsFile, 4);
-      expectReferenceAt(result, mainFile, 6);
+      await testFindReferences(index, utilsFile, 6, 3, [
+        { file: utilsFile, line: 6, column: 3 },
+        { file: mainFile, line: 6, column: 3 },
+      ]);
+      await testFindReferences(index, utilsFile, 4, 16, [{ file: utilsFile, line: 4, column: 16 }]);
     });
 
     it("should find references to function-pointer typedef use sites", async () => {
@@ -2915,6 +2914,145 @@ describe("Find References", () => {
           (reference) => reference.file === macroUseFile && reference.range.start.line === 4,
         );
         expect(macroInvocationRecovered).toBe(false);
+      }
+    });
+
+    it("keeps same-spelled C tags and typedefs in disjoint reference sets across an included header", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-c-tag-typedef-references-"));
+      try {
+        const headerFile = path.join(root, "shapes.h").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "use.c").replace(/\\/g, "/");
+        const headerLines = [
+          "#pragma once",
+          "",
+          "struct Item {",
+          "  int value;",
+          "};",
+          "",
+          "struct Item *header_item_ptr;",
+          "",
+          "union Value {",
+          "  int as_int;",
+          "  float as_float;",
+          "};",
+          "",
+          "union Value *header_value_ptr;",
+          "",
+          "enum Color {",
+          "  COLOR_RED,",
+          "  COLOR_GREEN,",
+          "};",
+          "",
+          "enum Color *header_color_ptr;",
+          "",
+          "typedef struct Item Item;",
+          "typedef union Value Value;",
+          "typedef enum Color Color;",
+          "",
+          "Item header_item_alias;",
+          "Value header_value_alias;",
+          "Color header_color_alias;",
+          "",
+        ];
+        const consumerLines = [
+          '#include "./shapes.h"',
+          "",
+          "struct Item *consumer_item_tag;",
+          "Item *consumer_item_alias;",
+          "union Value *consumer_value_tag;",
+          "Value *consumer_value_alias;",
+          "enum Color *consumer_color_tag;",
+          "Color *consumer_color_alias;",
+          "",
+          "/* Item Value Color */",
+          "int main(void) {",
+          "  struct Item *tag_item = header_item_ptr;",
+          "  Item *alias_item = &header_item_alias;",
+          "  union Value *tag_value = header_value_ptr;",
+          "  Value *alias_value = &header_value_alias;",
+          "  enum Color *tag_color = header_color_ptr;",
+          "  Color *alias_color = &header_color_alias;",
+          "  /* struct Item union Value enum Color */",
+          "  return tag_item->value + alias_item->value;",
+          "}",
+          "",
+        ];
+        await fsp.writeFile(headerFile, headerLines.join("\n"), "utf8");
+        await fsp.writeFile(consumerFile, consumerLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [headerFile, consumerFile]);
+
+        for (const kind of [
+          {
+            name: "Item",
+            tagDeclLine: 3,
+            tagUseLine: 7,
+            typedefLine: 23,
+            aliasUseLine: 27,
+            consumerTagLine: 3,
+            consumerAliasLine: 4,
+            consumerTagUseLine: 12,
+            consumerAliasUseLine: 13,
+          },
+          {
+            name: "Value",
+            tagDeclLine: 9,
+            tagUseLine: 14,
+            typedefLine: 24,
+            aliasUseLine: 28,
+            consumerTagLine: 5,
+            consumerAliasLine: 6,
+            consumerTagUseLine: 14,
+            consumerAliasUseLine: 15,
+          },
+          {
+            name: "Color",
+            tagDeclLine: 16,
+            tagUseLine: 21,
+            typedefLine: 25,
+            aliasUseLine: 29,
+            consumerTagLine: 7,
+            consumerAliasLine: 8,
+            consumerTagUseLine: 16,
+            consumerAliasUseLine: 17,
+          },
+        ]) {
+          const tagColumn = tokenColumn(headerLines[kind.typedefLine - 1]!, kind.name, 0);
+          const aliasColumn = tokenColumn(headerLines[kind.typedefLine - 1]!, kind.name, 1);
+          const tagDeclColumn = tokenColumn(headerLines[kind.tagDeclLine - 1]!, kind.name);
+          const tagUseColumn = tokenColumn(headerLines[kind.tagUseLine - 1]!, kind.name);
+          const aliasUseColumn = tokenColumn(headerLines[kind.aliasUseLine - 1]!, kind.name);
+          const consumerTagColumn = tokenColumn(consumerLines[kind.consumerTagLine - 1]!, kind.name);
+          const consumerAliasColumn = tokenColumn(consumerLines[kind.consumerAliasLine - 1]!, kind.name);
+          const consumerTagUseColumn = tokenColumn(consumerLines[kind.consumerTagUseLine - 1]!, kind.name);
+          const consumerAliasUseColumn = tokenColumn(consumerLines[kind.consumerAliasUseLine - 1]!, kind.name);
+
+          const tagExpectedLocations = [
+            { file: headerFile, line: kind.tagDeclLine, column: tagDeclColumn },
+            { file: headerFile, line: kind.tagUseLine, column: tagUseColumn },
+            { file: headerFile, line: kind.typedefLine, column: tagColumn },
+            { file: consumerFile, line: kind.consumerTagLine, column: consumerTagColumn },
+            { file: consumerFile, line: kind.consumerTagUseLine, column: consumerTagUseColumn },
+          ];
+          const aliasExpectedLocations = [
+            { file: headerFile, line: kind.typedefLine, column: aliasColumn },
+            { file: headerFile, line: kind.aliasUseLine, column: aliasUseColumn },
+            { file: consumerFile, line: kind.consumerAliasLine, column: consumerAliasColumn },
+            { file: consumerFile, line: kind.consumerAliasUseLine, column: consumerAliasUseColumn },
+          ];
+          // Exact sets exclude the other namespace and comment text from either lookup direction.
+          await testFindReferences(index, headerFile, kind.tagDeclLine, tagDeclColumn, tagExpectedLocations);
+          await testFindReferences(index, headerFile, kind.typedefLine, aliasColumn, aliasExpectedLocations);
+          await testFindReferences(index, consumerFile, kind.consumerTagLine, consumerTagColumn, tagExpectedLocations);
+          await testFindReferences(
+            index,
+            consumerFile,
+            kind.consumerAliasLine,
+            consumerAliasColumn,
+            aliasExpectedLocations,
+          );
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
       }
     });
   });

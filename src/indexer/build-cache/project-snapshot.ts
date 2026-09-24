@@ -1868,6 +1868,7 @@ function isSymbolDef(value: unknown): value is SymbolDef {
     typeof symbol.localName === "string" &&
     isSymbolKind(symbol.kind) &&
     isRange(symbol.range) &&
+    (symbol.cTag === undefined || symbol.cTag === "declaration" || symbol.cTag === "reference") &&
     (symbol.docstring === undefined || typeof symbol.docstring === "string") &&
     (symbol.lineSpan === undefined || typeof symbol.lineSpan === "number") &&
     (symbol.complexity === undefined || typeof symbol.complexity === "number")
@@ -1897,6 +1898,7 @@ function isImportBinding(value: unknown): value is ImportBinding {
       isOptionalBoolean(binding.explicitAlias) &&
       isOptionalRange(binding.importedRange) &&
       isOptionalRange(binding.localRange) &&
+      (binding.cNamespace === undefined || binding.cNamespace === "tag" || binding.cNamespace === "ordinary") &&
       (binding.phpImportType === undefined ||
         binding.phpImportType === "class" ||
         binding.phpImportType === "function" ||
