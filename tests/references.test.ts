@@ -3330,6 +3330,59 @@ describe("Find References", () => {
         await fsp.rm(root, { recursive: true, force: true });
       }
     });
+
+    it("includes namespace alias-qualified uses and excludes missing aliases and same-named decoys", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-qualified-refs-"));
+      try {
+        const declared = ["namespace Project.Model {", "  public class Target {}", "}", ""].join("\n");
+        const decoy = ["namespace Other {", "  public class Target {}", "}", ""].join("\n");
+        const useLines = [
+          "using X = Project.Model;",
+          "class Use {",
+          "  X::Target AliasMake() => new X::Target();",
+          "  Project.Model.Target DotMake() => new Project.Model.Target();",
+          "  global::Project.Model.Target RootMake() => new global::Project.Model.Target();",
+          "  Missing::Target MissingMake() => new Missing::Target();",
+          "}",
+          "namespace A {",
+          "  using X = Project.Model;",
+          "  class AUse { X::Target Make() => new X::Target(); }",
+          "}",
+          "namespace B {",
+          "  using X = Other;",
+          "  class BUse { X::Target Make() => new X::Target(); }",
+          "}",
+          "",
+        ];
+        const declaredFile = path.join(root, "Declared.cs").replace(/\\/g, "/");
+        const decoyFile = path.join(root, "Decoy.cs").replace(/\\/g, "/");
+        const useFile = path.join(root, "Use.cs").replace(/\\/g, "/");
+        await fsp.writeFile(declaredFile, declared, "utf8");
+        await fsp.writeFile(decoyFile, decoy, "utf8");
+        await fsp.writeFile(useFile, useLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [declaredFile, decoyFile, useFile]);
+
+        await testFindReferences(index, declaredFile, 2, tokenColumn("  public class Target {}", "Target"), [
+          { file: declaredFile, line: 2, column: tokenColumn("  public class Target {}", "Target") },
+          { file: useFile, line: 3, column: tokenColumn(useLines[2]!, "Target", 0) },
+          { file: useFile, line: 3, column: tokenColumn(useLines[2]!, "Target", 1) },
+          { file: useFile, line: 4, column: tokenColumn(useLines[3]!, "Target", 0) },
+          { file: useFile, line: 4, column: tokenColumn(useLines[3]!, "Target", 1) },
+          { file: useFile, line: 5, column: tokenColumn(useLines[4]!, "Target", 0) },
+          { file: useFile, line: 5, column: tokenColumn(useLines[4]!, "Target", 1) },
+          { file: useFile, line: 10, column: tokenColumn(useLines[9]!, "Target", 0) },
+          { file: useFile, line: 10, column: tokenColumn(useLines[9]!, "Target", 1) },
+        ]);
+
+        await testFindReferences(index, decoyFile, 2, tokenColumn("  public class Target {}", "Target"), [
+          { file: decoyFile, line: 2, column: tokenColumn("  public class Target {}", "Target") },
+          { file: useFile, line: 14, column: tokenColumn(useLines[13]!, "Target", 0) },
+          { file: useFile, line: 14, column: tokenColumn(useLines[13]!, "Target", 1) },
+        ]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("Java", () => {
@@ -6157,6 +6210,35 @@ describe("Find References: implicit compilation-unit peers", () => {
       expect(subGoto.status).toBe("ok");
       if (subGoto.status === "ok") {
         expect(subGoto.definition.file).toBe(decoyFile);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial C# coverage when another directory can contain qualified namespace uses", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-qualified-boundary-"));
+    try {
+      await fsp.mkdir(path.join(root, "other"));
+      const targetFile = path.join(root, "Target.cs").replace(/\\/g, "/");
+      const useFile = path.join(root, "Use.cs").replace(/\\/g, "/");
+      const outsideFile = path.join(root, "other", "Use.cs").replace(/\\/g, "/");
+      const declaration = "namespace P { public class Target {} }";
+      const use = "namespace Q { class Use { P.Target value; } }";
+      await fsp.writeFile(targetFile, declaration);
+      await fsp.writeFile(useFile, use);
+      await fsp.writeFile(outsideFile, use);
+      const index = await createTestIndexFromFiles(root, [targetFile, useFile, outsideFile]);
+      const result = await testFindReferences(index, targetFile, 1, tokenColumn(declaration, "Target"), [
+        { file: targetFile, line: 1, column: tokenColumn(declaration, "Target") },
+        { file: useFile, line: 1, column: tokenColumn(use, "Target") },
+      ]);
+      if (result.status === "ok") {
+        expect(result.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["strategy_unavailable"],
+        });
       }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

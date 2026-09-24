@@ -8,7 +8,9 @@ import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
 import {
+  buildProjectIndex,
   buildProjectIndexFromFiles,
+  buildProjectIndexIncremental,
   buildSymbolGraphDetailed,
   findReferences,
   goToDefinition,
@@ -958,9 +960,39 @@ describe("C# same-file namespace boundaries", () => {
 
 describe("C# partial class members across files", () => {
   // #378: members declared in one part file are the same owner as the call site in the other part
-  // file, so navigation, references, and the detailed graph must all connect them.
-  const partALines = ["namespace P;", "public partial class Box {", "  public void Helper() {}", "}"];
-  const partBLines = ["namespace P;", "public partial class Box {", "  void Use() {", "    this.Helper();", "  }", "}"];
+  // file, so navigation, references, and the detailed graph must all connect them. A third
+  // same-namespace file must resolve the shared partial type without treating the parts as
+  // competing exports.
+  const partALines = [
+    "namespace P;",
+    "public partial class Box {",
+    "  public void Helper() {}",
+    "  public static void Left() {}",
+    "}",
+  ];
+  const partBLines = [
+    "namespace P;",
+    "public partial class Box {",
+    "  void Use() {",
+    "    this.Helper();",
+    "  }",
+    "  public void Other() {}",
+    "  public static void Right() {}",
+    "}",
+  ];
+  const callerLines = [
+    "namespace P;",
+    "class Caller {",
+    "  Box Make() => new Box();",
+    "  void Run() {",
+    "    var box = new Box();",
+    "    box.Helper();",
+    "    box.Other();",
+    "    Box.Left();",
+    "    Box.Right();",
+    "  }",
+    "}",
+  ];
   const decoyLines = [
     "namespace Q;",
     "public partial class Box {",
@@ -970,62 +1002,375 @@ describe("C# partial class members across files", () => {
     "  }",
     "}",
   ];
+  const namespaceDecoyLines = ["namespace Q;", "public partial class Box {", "  public void Helper() {}", "}"];
+  const nestedDecoyLines = [
+    "namespace P;",
+    "public partial class Outer {",
+    "  public partial class Box {",
+    "    public void Helper() {}",
+    "  }",
+    "}",
+  ];
+  const nonPartialDecoyLines = ["namespace R;", "public class Box {", "  public void Helper() {}", "}"];
+
+  function expectedBoxRepresentative(partAPath: string, partBPath: string): string {
+    return fileIdentityKey(partAPath) < fileIdentityKey(partBPath) ? partAPath : partBPath;
+  }
+
+  function happyPathFiles(): Record<string, string> {
+    return {
+      "Box.A.cs": `${partALines.join("\n")}\n`,
+      "Box.B.cs": `${partBLines.join("\n")}\n`,
+      "Caller.cs": `${callerLines.join("\n")}\n`,
+      "Q/Box.Decoy.cs": `${decoyLines.join("\n")}\n`,
+      "Decoy.Namespace.cs": `${namespaceDecoyLines.join("\n")}\n`,
+      "Decoy.Nested.cs": `${nestedDecoyLines.join("\n")}\n`,
+      "Decoy.NonPartial.cs": `${nonPartialDecoyLines.join("\n")}\n`,
+    };
+  }
+
+  async function assertSharedPartialConsumers(index: ProjectIndex, paths: Record<string, string>): Promise<string> {
+    const partAPath = paths["Box.A.cs"]!;
+    const partBPath = paths["Box.B.cs"]!;
+    const callerPath = paths["Caller.cs"]!;
+    const decoyPath = paths["Q/Box.Decoy.cs"]!;
+    const namespaceDecoyPath = paths["Decoy.Namespace.cs"]!;
+    const nestedPath = paths["Decoy.Nested.cs"]!;
+    const nonPartialPath = paths["Decoy.NonPartial.cs"]!;
+    const representative = expectedBoxRepresentative(partAPath, partBPath);
+    const decoyFiles = new Set([decoyPath, namespaceDecoyPath, nestedPath, nonPartialPath]);
+
+    const goto = await goToDefinition(index, {
+      file: partBPath,
+      line: 4,
+      column: columnOf(partBLines, 4, "Helper"),
+    });
+    expect(goto.status).toBe("ok");
+    if (goto.status !== "ok") throw new Error("Expected the partial-class member declaration");
+    expect(normalizePath(goto.definition.file)).toBe(partAPath);
+    expect(goto.definition.range.start.line).toBe(3);
+
+    const gotoBox = await goToDefinition(index, {
+      file: callerPath,
+      line: 3,
+      column: columnOf(callerLines, 3, "Box Make"),
+    });
+    expect(gotoBox.status).toBe("ok");
+    if (gotoBox.status !== "ok") throw new Error("Expected the shared partial type");
+    expect(normalizePath(gotoBox.definition.file)).toBe(representative);
+
+    const gotoNewBox = await goToDefinition(index, {
+      file: callerPath,
+      line: 5,
+      column: columnOf(callerLines, 5, "new Box") + 4,
+    });
+    expect(gotoNewBox.status).toBe("ok");
+    if (gotoNewBox.status !== "ok") throw new Error("Expected the constructed partial type");
+    expect(normalizePath(gotoNewBox.definition.file)).toBe(representative);
+
+    const gotoHelper = await goToDefinition(index, {
+      file: callerPath,
+      line: 6,
+      column: columnOf(callerLines, 6, "Helper"),
+    });
+    expect(gotoHelper.status).toBe("ok");
+    if (gotoHelper.status !== "ok") throw new Error("Expected Helper through the resolved Box");
+    expect(normalizePath(gotoHelper.definition.file)).toBe(partAPath);
+    expect(gotoHelper.definition.range.start.line).toBe(3);
+
+    const gotoOther = await goToDefinition(index, {
+      file: callerPath,
+      line: 7,
+      column: columnOf(callerLines, 7, "Other"),
+    });
+    expect(gotoOther.status).toBe("ok");
+    if (gotoOther.status !== "ok") throw new Error("Expected Other through the resolved Box");
+    expect(normalizePath(gotoOther.definition.file)).toBe(partBPath);
+    expect(gotoOther.definition.range.start.line).toBe(6);
+
+    const gotoLeft = await goToDefinition(index, {
+      file: callerPath,
+      line: 8,
+      column: columnOf(callerLines, 8, "Left"),
+    });
+    expect(gotoLeft.status).toBe("ok");
+    if (gotoLeft.status !== "ok") throw new Error("Expected Left through the resolved Box");
+    expect(normalizePath(gotoLeft.definition.file)).toBe(partAPath);
+    expect(gotoLeft.definition.range.start.line).toBe(4);
+
+    const gotoRight = await goToDefinition(index, {
+      file: callerPath,
+      line: 9,
+      column: columnOf(callerLines, 9, "Right"),
+    });
+    expect(gotoRight.status).toBe("ok");
+    if (gotoRight.status !== "ok") throw new Error("Expected Right through the resolved Box");
+    expect(normalizePath(gotoRight.definition.file)).toBe(partBPath);
+    expect(gotoRight.definition.range.start.line).toBe(7);
+
+    const helperReferences = await findReferences(index, {
+      file: partAPath,
+      line: 3,
+      column: columnOf(partALines, 3, "Helper"),
+    });
+    expect(helperReferences.status).toBe("ok");
+    if (helperReferences.status !== "ok") throw new Error("Expected partial-class member references");
+    const helperSites = helperReferences.references.map(
+      (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
+    );
+    expect(helperSites).toContain(`${partBPath}:4`);
+    expect(helperSites).toContain(`${callerPath}:6`);
+    expect(helperReferences.references.some((reference) => decoyFiles.has(normalizePath(reference.file)))).toBe(false);
+
+    const leftReferences = await findReferences(index, {
+      file: partAPath,
+      line: 4,
+      column: columnOf(partALines, 4, "Left"),
+    });
+    expect(leftReferences.status).toBe("ok");
+    if (leftReferences.status !== "ok") throw new Error("Expected static Left references");
+    const leftSites = leftReferences.references.map(
+      (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
+    );
+    expect(leftSites).toContain(`${callerPath}:8`);
+    expect(leftReferences.references.some((reference) => decoyFiles.has(normalizePath(reference.file)))).toBe(false);
+
+    const rightReferences = await findReferences(index, {
+      file: partBPath,
+      line: 7,
+      column: columnOf(partBLines, 7, "Right"),
+    });
+    expect(rightReferences.status).toBe("ok");
+    if (rightReferences.status !== "ok") throw new Error("Expected static Right references");
+    const rightSites = rightReferences.references.map(
+      (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
+    );
+    expect(rightSites).toContain(`${callerPath}:9`);
+    expect(rightReferences.references.some((reference) => decoyFiles.has(normalizePath(reference.file)))).toBe(false);
+
+    const otherPart = representative === partAPath ? partBPath : partAPath;
+    const otherPartLines = representative === partAPath ? partBLines : partALines;
+    for (const [file, lines] of [
+      [representative, representative === partAPath ? partALines : partBLines],
+      [otherPart, otherPartLines],
+    ] as const) {
+      const boxReferences = await findReferences(index, {
+        file,
+        line: 2,
+        column: columnOf(lines, 2, "Box"),
+      });
+      expect(boxReferences.status).toBe("ok");
+      if (boxReferences.status !== "ok") throw new Error("Expected shared partial type references");
+      const boxSites = boxReferences.references.map(
+        (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
+      );
+      expect(boxSites).toContain(`${partAPath}:2`);
+      expect(boxSites).toContain(`${partBPath}:2`);
+      expect(boxSites).toContain(`${callerPath}:3`);
+      expect(boxSites).toContain(`${callerPath}:5`);
+      expect(boxSites).toContain(`${callerPath}:8`);
+      expect(boxSites).toContain(`${callerPath}:9`);
+      expect(
+        boxReferences.references.some(
+          (reference) =>
+            normalizePath(reference.file) === decoyPath || normalizePath(reference.file) === namespaceDecoyPath,
+        ),
+      ).toBe(false);
+    }
+
+    const graph = await buildSymbolGraphDetailed(index);
+    const useNode = [...graph.nodes.values()].find(
+      (node) => node.name === "Use" && normalizePath(node.file) === partBPath,
+    );
+    expect(useNode).toBeDefined();
+    const runNode = [...graph.nodes.values()].find(
+      (node) => node.name === "Run" && normalizePath(node.file) === callerPath,
+    );
+    expect(runNode).toBeDefined();
+
+    const callTargetsFrom = (fromId: string): string[] => {
+      const callTargets: string[] = [];
+      for (const edge of graph.edges) {
+        if (edge.label !== "calls" || edge.from !== fromId) continue;
+        const node = graph.nodes.get(edge.to);
+        if (node) callTargets.push(`${normalizePath(node.file)}::${node.name}`);
+      }
+      return callTargets;
+    };
+    const useTargets = callTargetsFrom(useNode!.id);
+    expect(useTargets).toContain(`${partAPath}::Helper`);
+    expect(useTargets.some((target) => [...decoyFiles].some((file) => target.startsWith(`${file}::`)))).toBe(false);
+
+    const runTargets = callTargetsFrom(runNode!.id);
+    expect(runTargets).toContain(`${partAPath}::Helper`);
+    expect(runTargets).toContain(`${partBPath}::Other`);
+    expect(runTargets).toContain(`${partAPath}::Left`);
+    expect(runTargets).toContain(`${partBPath}::Right`);
+    expect(runTargets.some((target) => [...decoyFiles].some((file) => target.startsWith(`${file}::`)))).toBe(false);
+
+    const instantiated = graph.edges
+      .filter((edge) => edge.label === "instantiates" && edge.from === runNode!.id)
+      .map((edge) => graph.nodes.get(edge.to))
+      .filter((node): node is NonNullable<typeof node> => !!node);
+    expect(instantiated.some((node) => node.name === "Box" && normalizePath(node.file) === representative)).toBe(true);
+    expect(instantiated.some((node) => decoyFiles.has(normalizePath(node.file)))).toBe(false);
+
+    return representative;
+  }
 
   it("connects navigation, references, and calls to the declaring part", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-owner-"));
     try {
+      const paths = await writeFixtureFiles(root, happyPathFiles());
+      const index = await buildProjectIndexFromFiles(root, [
+        paths["Box.A.cs"]!,
+        paths["Box.B.cs"]!,
+        paths["Caller.cs"]!,
+        paths["Q/Box.Decoy.cs"]!,
+        paths["Decoy.Namespace.cs"]!,
+        paths["Decoy.Nested.cs"]!,
+        paths["Decoy.NonPartial.cs"]!,
+      ]);
+      await assertSharedPartialConsumers(index, paths);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("picks the same partial representative across candidate order and disk reload", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-reload-"));
+    const cacheDir = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-cache-"));
+    try {
+      const paths = await writeFixtureFiles(root, happyPathFiles());
+      const listed = [
+        paths["Caller.cs"]!,
+        paths["Decoy.NonPartial.cs"]!,
+        paths["Box.B.cs"]!,
+        paths["Decoy.Namespace.cs"]!,
+        paths["Q/Box.Decoy.cs"]!,
+        paths["Decoy.Nested.cs"]!,
+        paths["Box.A.cs"]!,
+      ];
+      const off = await buildProjectIndexFromFiles(root, listed);
+      const offTarget = await assertSharedPartialConsumers(off, paths);
+
+      const buildOptions = { cache: "disk" as const, cacheDir, threads: 1 };
+      const cold = await buildProjectIndex(root, buildOptions);
+      const coldTarget = await assertSharedPartialConsumers(cold, paths);
+      expect(coldTarget).toBe(offTarget);
+
+      const warm = await buildProjectIndexIncremental(root, buildOptions);
+      const warmTarget = await assertSharedPartialConsumers(warm, paths);
+      expect(warmTarget).toBe(offTarget);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not coalesce ordinary same-name classes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-nonpartial-duplicate-"));
+    try {
+      const first = ["namespace P;", "public class Box {}"];
+      const second = ["namespace P;", "public class Box {}"];
+      const caller = ["namespace P;", "class Caller {", "  Box Make() => new Box();", "}"];
       const paths = await writeFixtureFiles(root, {
-        "Box.A.cs": `${partALines.join("\n")}\n`,
-        "Box.B.cs": `${partBLines.join("\n")}\n`,
-        "Q/Box.Decoy.cs": `${decoyLines.join("\n")}\n`,
+        "Box.A.cs": `${first.join("\n")}\n`,
+        "Box.B.cs": `${second.join("\n")}\n`,
+        "Caller.cs": `${caller.join("\n")}\n`,
       });
       const index = await buildProjectIndexFromFiles(root, [
         paths["Box.A.cs"]!,
         paths["Box.B.cs"]!,
-        paths["Q/Box.Decoy.cs"]!,
+        paths["Caller.cs"]!,
       ]);
-      const partAPath = paths["Box.A.cs"]!;
-      const partBPath = paths["Box.B.cs"]!;
-      const decoyPath = paths["Q/Box.Decoy.cs"]!;
-
-      const goto = await goToDefinition(index, {
-        file: partBPath,
-        line: 4,
-        column: columnOf(partBLines, 4, "Helper"),
-      });
-      expect(goto.status).toBe("ok");
-      if (goto.status !== "ok") throw new Error("Expected the partial-class member declaration");
-      expect(normalizePath(goto.definition.file)).toBe(partAPath);
-      expect(goto.definition.range.start.line).toBe(3);
-
-      const references = await findReferences(index, {
-        file: partAPath,
+      const result = await goToDefinition(index, {
+        file: paths["Caller.cs"]!,
         line: 3,
-        column: columnOf(partALines, 3, "Helper"),
+        column: columnOf(caller, 3, "new Box") + 4,
       });
-      expect(references.status).toBe("ok");
-      if (references.status !== "ok") throw new Error("Expected partial-class member references");
-      const sites = references.references.map(
-        (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
-      );
-      expect(sites).toContain(`${partBPath}:4`);
-      expect(references.references.some((reference) => normalizePath(reference.file) === decoyPath)).toBe(false);
+      expect(result.status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
-      const graph = await buildSymbolGraphDetailed(index);
-      const useNode = [...graph.nodes.values()].find(
-        (node) => node.name === "Use" && normalizePath(node.file) === partBPath,
-      );
-      expect(useNode).toBeDefined();
-      const callTargets: string[] = [];
-      for (const edge of graph.edges) {
-        if (edge.label !== "calls" || edge.from !== useNode!.id) continue;
-        const node = graph.nodes.get(edge.to);
-        if (node) {
-          callTargets.push(`${normalizePath(node.file)}::${node.name}`);
-        }
-      }
-      expect(callTargets).toContain(`${partAPath}::Helper`);
-      expect(callTargets.some((target) => target.startsWith(`${decoyPath}::`))).toBe(false);
+  it("does not coalesce partials with different generic arities", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-arity-"));
+    try {
+      const plain = ["namespace P;", "public partial class Box {", "  public void Helper() {}", "}"];
+      const generic = ["namespace P;", "public partial class Box<T> {", "  public void Helper() {}", "}"];
+      const caller = ["namespace P;", "class Caller {", "  Box Make() => new Box();", "}"];
+      const paths = await writeFixtureFiles(root, {
+        "Box.A.cs": `${plain.join("\n")}\n`,
+        "Box.Generic.cs": `${generic.join("\n")}\n`,
+        "Caller.cs": `${caller.join("\n")}\n`,
+      });
+      const index = await buildProjectIndexFromFiles(root, [
+        paths["Box.A.cs"]!,
+        paths["Box.Generic.cs"]!,
+        paths["Caller.cs"]!,
+      ]);
+      const result = await goToDefinition(index, {
+        file: paths["Caller.cs"]!,
+        line: 3,
+        column: columnOf(caller, 3, "new Box") + 4,
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not coalesce partials with different kinds or enclosing owners", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-kind-owner-"));
+    try {
+      const classPart = ["namespace P;", "public partial class Box {}"];
+      const structPart = ["namespace P;", "public partial struct Box {}"];
+      const classCaller = ["namespace P;", "class KindCaller {", "  Box Make() => new Box();", "}"];
+      const outerUse = [
+        "namespace P;",
+        "public partial class Outer {",
+        "  public partial class Item {",
+        "    void Use() { this.Helper(); }",
+        "  }",
+        "}",
+      ];
+      const otherHelper = [
+        "namespace P;",
+        "public partial class Other {",
+        "  public partial class Item {",
+        "    public void Helper() {}",
+        "  }",
+        "}",
+      ];
+      const paths = await writeFixtureFiles(root, {
+        "Box.Class.cs": `${classPart.join("\n")}\n`,
+        "Box.Struct.cs": `${structPart.join("\n")}\n`,
+        "KindCaller.cs": `${classCaller.join("\n")}\n`,
+        "Outer.cs": `${outerUse.join("\n")}\n`,
+        "Other.cs": `${otherHelper.join("\n")}\n`,
+      });
+      const index = await buildProjectIndexFromFiles(root, [
+        paths["Box.Class.cs"]!,
+        paths["Box.Struct.cs"]!,
+        paths["KindCaller.cs"]!,
+        paths["Outer.cs"]!,
+        paths["Other.cs"]!,
+      ]);
+      const kind = await goToDefinition(index, {
+        file: paths["KindCaller.cs"]!,
+        line: 3,
+        column: columnOf(classCaller, 3, "new Box") + 4,
+      });
+      expect(kind.status).toBe("not_found");
+
+      const nested = await goToDefinition(index, {
+        file: paths["Outer.cs"]!,
+        line: 4,
+        column: columnOf(outerUse, 4, "Helper"),
+      });
+      expect(nested.status).toBe("not_found");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

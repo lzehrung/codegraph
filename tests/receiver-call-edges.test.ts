@@ -2964,16 +2964,53 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
   });
   it("records C# partial and Swift extension receiver calls across shared owners", async () => {
     const csFiles = {
-      "Box.A.cs": ["namespace P;", "partial class Box {", "  public void Helper() {}", "}"].join("\n"),
-      "Box.B.cs": ["namespace P;", "partial class Box {", "  void Use() { this.Helper(); }", "}"].join("\n"),
+      "Box.A.cs": [
+        "namespace P;",
+        "partial class Box {",
+        "  public void Helper() {}",
+        "  public static void Left() {}",
+        "}",
+      ].join("\n"),
+      "Box.B.cs": [
+        "namespace P;",
+        "partial class Box {",
+        "  public void Other() {}",
+        "  public static void Right() {}",
+        "  void Use() { this.Helper(); }",
+        "}",
+      ].join("\n"),
+      "Caller.cs": [
+        "namespace P;",
+        "class Caller {",
+        "  void Run() {",
+        "    var box = new Box();",
+        "    box.Helper();",
+        "    box.Other();",
+        "    Box.Left();",
+        "    Box.Right();",
+        "  }",
+        "}",
+      ].join("\n"),
       "Q/Box.Decoy.cs": ["namespace Q;", "partial class Box {", "  public void Helper() {}", "}"].join("\n"),
+      "Decoy.NonPartial.cs": ["namespace R;", "public class Box {", "  public void Helper() {}", "}"].join("\n"),
     };
     const csGraph = await buildFixture("cg-shared-owner-cs-partial-", csFiles);
     const csHelper = nodeIn(csGraph, "Box.A.cs", "Helper");
+    const csOther = nodeIn(csGraph, "Box.B.cs", "Other");
+    const csLeft = nodeIn(csGraph, "Box.A.cs", "Left");
+    const csRight = nodeIn(csGraph, "Box.B.cs", "Right");
     const csUse = nodeIn(csGraph, "Box.B.cs", "Use");
+    const csCaller = nodeIn(csGraph, "Caller.cs", "Run");
     expect(callsiteTexts(csGraph, csHelper, csUse, csFiles)).toEqual(["Helper"]);
+    expect(callsiteTexts(csGraph, csHelper, csCaller, csFiles)).toEqual(["Helper"]);
+    expect(callsiteTexts(csGraph, csOther, csCaller, csFiles)).toEqual(["Other"]);
+    expect(callsiteTexts(csGraph, csLeft, csCaller, csFiles)).toEqual(["Left"]);
+    expect(callsiteTexts(csGraph, csRight, csCaller, csFiles)).toEqual(["Right"]);
     const csDecoyHelper = nodeIn(csGraph, "Box.Decoy.cs", "Helper");
     expect(callsiteTexts(csGraph, csDecoyHelper, csUse, csFiles)).toBeNull();
+    expect(callsiteTexts(csGraph, csDecoyHelper, csCaller, csFiles)).toBeNull();
+    const csNonPartialHelper = nodeIn(csGraph, "Decoy.NonPartial.cs", "Helper");
+    expect(callsiteTexts(csGraph, csNonPartialHelper, csCaller, csFiles)).toBeNull();
 
     const swiftFiles = {
       "A.swift": ["struct Box {", "  func helper() {}", "}"].join("\n"),

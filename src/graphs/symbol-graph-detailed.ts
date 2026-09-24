@@ -12,7 +12,7 @@ import { IMPLICIT_UNIT_LANGUAGES } from "../indexer/compilation-units.js";
 import { cppCallableIsDefinition, cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
 import { resolveExport, resolvePhpExportByImportType } from "../indexer/navigation-resolve.js";
 import { languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
-import { innermostNamespaceImport } from "../indexer/navigation-goto.js";
+import { csharpAliasQualifiedLookupName, innermostNamespaceImport } from "../indexer/navigation-goto.js";
 import {
   cppUsingDeclarationTarget,
   resolveCppCallableBindings,
@@ -344,11 +344,13 @@ export async function buildSymbolGraphDetailed(
         constStringOf,
         aliasToTargetModule,
         resolveMemberPathFromModule,
-        ...(sup.id === "zig"
+        ...(sup.id === "zig" || sup.id === "csharp"
           ? {
               resolveNamespaceAlias: (alias: string, useNode: SyntaxNodeLike): string | undefined => {
-                const binding = findClosestScopeBinding(scopeIndex, alias, useNode, sup);
-                if (binding && binding.kind !== "namespace") return undefined;
+                if (sup.id === "zig") {
+                  const binding = findClosestScopeBinding(scopeIndex, alias, useNode, sup);
+                  if (binding && binding.kind !== "namespace") return undefined;
+                }
                 const imported = innermostNamespaceImport(moduleEntry.imports, alias, useNode);
                 return typeof imported?.resolved === "string" ? imported.resolved : undefined;
               },
@@ -381,6 +383,8 @@ export async function buildSymbolGraphDetailed(
       };
       const resolveIdentifier = (name: string, node: SyntaxNodeLike): SymbolDef | null => {
         const lookupName = sup.id === "csharp" ? csharpLookupName(node, src, name) : name;
+        const csharpExportName =
+          sup.id === "csharp" ? csharpAliasQualifiedLookupName(node, src, lookupName, moduleEntry.imports) : lookupName;
         const binding = findClosestScopeBinding(scopeIndex, lookupName, node, sup);
         const usingTarget = sup.id === "cpp" && binding ? cppUsingDeclarationTarget(binding, src) : undefined;
         if (usingTarget) {
@@ -454,7 +458,7 @@ export async function buildSymbolGraphDetailed(
         // navigation agree on the target. The C# use site is pinned to its namespace
         // region by `referenceIndex`; every other unit language reads its whole unit.
         if (localCandidates.length === 0 && IMPLICIT_UNIT_LANGUAGES[sup.id]) {
-          const resolved = resolveExport(index, file, lookupName, {
+          const resolved = resolveExport(index, file, csharpExportName, {
             ...(sup.id === "csharp" ? { referenceIndex: node.startIndex } : {}),
           });
           if (resolved?.kind === "resolved") return resolved.def;

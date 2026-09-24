@@ -1,4 +1,4 @@
-import type { LanguageSupport } from "../languages.js";
+import { CSHARP_SUPPORT, type LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isPythonReceiverAttributeAssignmentName } from "../languages/definitions/python.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
@@ -36,10 +36,17 @@ import {
 import { getCallableArity, getCallArgumentCount, type CallableArity } from "../languages/callable-arity.js";
 import { getCompilationUnitPeers } from "./compilation-units.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
+import { csharpLookupName } from "./navigation-local.js";
 import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { comparePhpReferenceNames, findPhpImportAlias } from "./navigation-php.js";
 import { resolveExport, resolveImported, resolvePhpExportByImportType } from "./navigation-resolve.js";
+import {
+  CSHARP_PARTIAL_CONTAINER_TYPES,
+  getSharedOwnerIdentity,
+  isSwiftExtensionContainer,
+  sharedOwnerIdentitiesEqual,
+} from "./shared-owner-identity.js";
 import {
   SymbolKind,
   type GoToResult,
@@ -57,152 +64,6 @@ import {
  * drifting to different semantic cutoffs.
  */
 const RECEIVER_HIERARCHY_DEPTH = 16;
-type SharedOwnerIdentity = {
-  languageId: string;
-  fullPath: string;
-};
-
-const CSHARP_PARTIAL_CONTAINER_TYPES = new Set([
-  "class_declaration",
-  "struct_declaration",
-  "record_declaration",
-  "interface_declaration",
-]);
-
-function csharpModifierIsPartial(node: SyntaxNodeLike, source: string): boolean {
-  const text = sliceText(node, source).trim();
-  return text === "partial" || text.split(/\s+/).includes("partial");
-}
-
-function isCSharpPartialContainer(container: SyntaxNodeLike, source: string): boolean {
-  if (!CSHARP_PARTIAL_CONTAINER_TYPES.has(container.type)) return false;
-  const body = container.childForFieldName("body");
-  for (const child of container.namedChildren ?? []) {
-    if (body && child.id === body.id) continue;
-    if (child.type === "declaration_list" || child.type === "class_body" || child.type === "base_list") {
-      continue;
-    }
-    if (child.type === "modifier" && csharpModifierIsPartial(child, source)) return true;
-    if (child.type === "modifiers") {
-      for (const nested of child.namedChildren ?? []) {
-        if (nested.type === "modifier" && csharpModifierIsPartial(nested, source)) return true;
-      }
-    }
-  }
-  return false;
-}
-
-function csharpNameText(node: SyntaxNodeLike | null, source: string): string {
-  if (!node) return "";
-  return sliceText(node, source).trim();
-}
-
-function getCSharpFullPath(container: SyntaxNodeLike, source: string): string | null {
-  const nameNode = container.childForFieldName("name");
-  const typeName = csharpNameText(nameNode, source);
-  if (!typeName) return null;
-  const outer: string[] = [];
-  const namespaces: string[] = [];
-  let current = container.parent;
-  while (current) {
-    if (CSHARP_PARTIAL_CONTAINER_TYPES.has(current.type)) {
-      const outerName = csharpNameText(current.childForFieldName("name"), source);
-      if (outerName) outer.push(outerName);
-    }
-    if (current.type === "namespace_declaration" || current.type === "file_scoped_namespace_declaration") {
-      const nsNode =
-        current.childForFieldName("name") ??
-        (current.namedChildren ?? []).find((child) => child.type === "identifier" || child.type === "qualified_name");
-      const nsText = csharpNameText(nsNode ?? null, source);
-      if (nsText) namespaces.push(nsText);
-    }
-    current = current.parent;
-  }
-  outer.reverse();
-  namespaces.reverse();
-  const parts = [...namespaces, ...outer, typeName];
-  return parts.join(".");
-}
-
-function swiftKeywordText(container: SyntaxNodeLike, source: string): string {
-  const kind = container.childForFieldName("declaration_kind");
-  if (kind) {
-    const text = sliceText(kind, source).trim();
-    if (text) return text;
-  }
-  const first = container.child(0);
-  return first ? sliceText(first, source).trim() : "";
-}
-
-function isSwiftExtensionContainer(container: SyntaxNodeLike, source: string): boolean {
-  return container.type === "class_declaration" && swiftKeywordText(container, source) === "extension";
-}
-
-function isSwiftTypeContainer(container: SyntaxNodeLike, source: string): boolean {
-  if (container.type !== "class_declaration") return false;
-  const text = swiftKeywordText(container, source);
-  return text === "class" || text === "struct" || text === "enum" || text === "actor";
-}
-
-function swiftNameText(container: SyntaxNodeLike, source: string): string | null {
-  const nameNode = container.childForFieldName("name");
-  if (!nameNode) return null;
-  const text = sliceText(nameNode, source).trim();
-  return text ? text : null;
-}
-
-function getSwiftFullPath(container: SyntaxNodeLike, source: string): string | null {
-  const raw = swiftNameText(container, source);
-  if (!raw) return null;
-  const nameParts = raw
-    .split(".")
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
-  if (!nameParts.length) return null;
-  const outer: string[] = [];
-  let current = container.parent;
-  while (current) {
-    if (current.type === "class_declaration") {
-      const outerRaw = swiftNameText(current, source);
-      if (outerRaw) {
-        const outerParts = outerRaw
-          .split(".")
-          .map((part) => part.trim())
-          .filter((part) => part.length > 0);
-        for (let i = outerParts.length - 1; i >= 0; i -= 1) outer.push(outerParts[i] as string);
-      }
-    }
-    current = current.parent;
-  }
-  outer.reverse();
-  return [...outer, ...nameParts].join(".");
-}
-
-function getSharedOwnerIdentity(
-  container: SyntaxNodeLike,
-  source: string,
-  languageId: string,
-): SharedOwnerIdentity | null {
-  if (languageId === "csharp") {
-    if (!isCSharpPartialContainer(container, source)) return null;
-    const fullPath = getCSharpFullPath(container, source);
-    if (!fullPath) return null;
-    return { languageId, fullPath };
-  }
-  if (languageId === "swift") {
-    if (isSwiftExtensionContainer(container, source) || isSwiftTypeContainer(container, source)) {
-      const fullPath = getSwiftFullPath(container, source);
-      if (!fullPath) return null;
-      return { languageId, fullPath };
-    }
-    return null;
-  }
-  return null;
-}
-
-function sharedOwnerIdentitiesEqual(left: SharedOwnerIdentity, right: SharedOwnerIdentity): boolean {
-  return left.languageId === right.languageId && left.fullPath === right.fullPath;
-}
 
 function collectSharedOwnerContainers(root: SyntaxNodeLike, languageId: string, out: SyntaxNodeLike[]): void {
   if (languageId === "csharp") {
@@ -301,6 +162,52 @@ export async function resolveSharedOwnerContainers(params: {
   return out;
 }
 
+/**
+ * Other C# `partial` type parts that share owner identity with `def`.
+ * Reference collection treats them as one type so uses that resolve to the
+ * coalesced representative still match a query started on any part.
+ */
+export async function findCsharpPartialTypeEquivalents(index: ProjectIndex, def: SymbolDef): Promise<SymbolDef[]> {
+  if (!declaresMembers(def)) return [];
+  const module = index.byFile.get(fileIdentityKey(def.file));
+  if (!module) return [];
+  let context: ParsedFileContext;
+  try {
+    context = await ensureParsedContext(
+      def.file,
+      index.parsed?.get(fileIdentityKey(def.file)),
+      index.languageExtensions,
+    );
+  } catch {
+    return [];
+  }
+  if (context.sup.id !== "csharp") return [];
+  const start = def.range.start;
+  const nameNode = context.tree.rootNode.descendantForPosition(
+    { row: start.line - 1, column: start.column - 1 },
+    { row: start.line - 1, column: start.column - 1 },
+  );
+  const container = nearestMemberContainer(nameNode);
+  if (!container) return [];
+  const peers = await resolveSharedOwnerContainers({
+    index,
+    ownerFile: def.file,
+    ownerContainer: container,
+    ownerSource: context.source,
+    languageId: "csharp",
+  });
+  const out: SymbolDef[] = [];
+  for (const peer of peers) {
+    const peerName = peer.container.childForFieldName("name");
+    if (!peerName) continue;
+    const peerDef = peer.module.locals.find(
+      (local) => declaresMembers(local) && local.range.start.index === peerName.startIndex,
+    );
+    if (peerDef) out.push(peerDef);
+  }
+  return out;
+}
+
 /** Reusable shared-owner member lookup for keyword navigation and receiver graphs. */
 export async function findSharedOwnerMemberDefinitions(params: {
   index: ProjectIndex;
@@ -336,8 +243,67 @@ export async function findSharedOwnerMemberDefinitions(params: {
 
 function enclosingImportScope(declarationName: SyntaxNodeLike): SyntaxNodeLike | null {
   let current: SyntaxNodeLike | null = declarationName;
-  while (current && current.type !== "variable_declaration") current = current.parent;
+  while (current && current.type !== "variable_declaration" && current.type !== "using_directive") {
+    current = current.parent;
+  }
   return current?.parent ?? null;
+}
+
+/**
+ * Rewrites a valid C# `using X = Namespace; X::Target` lookup into the dotted form
+ * export resolution already understands. `global::` and ordinary dotted names keep
+ * their source spelling; an unknown alias stays `X::Target` instead of a bare name.
+ */
+export function csharpAliasQualifiedLookupName(
+  node: SyntaxNodeLike,
+  source: string,
+  fallback: string,
+  imports: readonly ImportBinding[],
+): string {
+  const raw = csharpLookupName(node, source, fallback);
+  if (raw.startsWith("global::")) return raw;
+  let chainNode = node;
+  while (chainNode.parent) {
+    const parent = chainNode.parent;
+    if (parent.type === "generic_name") {
+      const genericName = parent.childForFieldName("name") ?? parent.namedChildren[0];
+      if (genericName && (genericName.id === chainNode.id || genericName.startIndex === chainNode.startIndex)) {
+        chainNode = parent;
+        continue;
+      }
+      break;
+    }
+    if (
+      (parent.type === "qualified_name" || parent.type === "alias_qualified_name") &&
+      parent.endIndex === chainNode.endIndex
+    ) {
+      chainNode = parent;
+      continue;
+    }
+    break;
+  }
+  if (chainNode.type !== "qualified_name" && chainNode.type !== "alias_qualified_name") return raw;
+  const sourceForm = source.slice(chainNode.startIndex, chainNode.endIndex).replace(/\s+/gu, "");
+  if (sourceForm.startsWith("global::") || !sourceForm.includes("::")) return raw;
+  const names: string[] = [];
+  let current: SyntaxNodeLike | null = chainNode;
+  let base: SyntaxNodeLike | null = null;
+  while (current && (current.type === "qualified_name" || current.type === "alias_qualified_name")) {
+    const parts = getMemberAccessParts(CSHARP_SUPPORT, current);
+    base = parts.object ?? base;
+    let property = parts.property;
+    if (property?.type === "generic_name") {
+      property = property.childForFieldName("name") ?? property.namedChildren[0] ?? property;
+    }
+    if (property?.type === "identifier") names.push(sliceText(property, source));
+    current = base;
+  }
+  if (!base || !isReceiverNameNode(CSHARP_SUPPORT, base.type) || !names.length) return raw;
+  const alias = sliceText(base, source);
+  if (alias === "global") return raw;
+  const imported = innermostNamespaceImport(imports, alias, base);
+  if (!imported) return raw;
+  return `${imported.from}.${[...names].reverse().join(".")}`;
 }
 
 export function innermostNamespaceImport(
@@ -416,8 +382,14 @@ export async function resolveMemberAccessDefinition(params: {
   const resolveExpression = async (expr: SyntaxNodeLike): Promise<ResolvedExport | null> => {
     const exprIsId = isReceiverNameNode(sup, expr.type) && !isMemberAccessNode(sup, expr);
     if (exprIsId) {
-      const lexicalBinding = resolveLexicalBinding?.(expr);
-      if (lexicalBinding) return { kind: "resolved", def: lexicalBinding };
+      const aliasQualifier =
+        sup.id === "csharp" &&
+        expr.parent?.type === "alias_qualified_name" &&
+        getMemberAccessParts(sup, expr.parent).object?.id === expr.id;
+      if (!aliasQualifier) {
+        const lexicalBinding = resolveLexicalBinding?.(expr);
+        if (lexicalBinding) return { kind: "resolved", def: lexicalBinding };
+      }
       const exprName = sliceText(expr, source);
       let imp: ImportBinding | undefined;
       if (sup.id === "php") {
@@ -428,6 +400,19 @@ export async function resolveMemberAccessDefinition(params: {
           imp = mod.imports.find(
             (candidate) => (candidate.kind === "named" || candidate.kind === "default") && candidate.local === exprName,
           );
+        }
+      } else if (sup.id === "csharp") {
+        if (aliasQualifier) {
+          if (exprName !== "global") imp = innermostNamespaceImport(mod.imports, exprName, expr);
+          if (!imp) return null;
+        } else {
+          imp = innermostNamespaceImport(mod.imports, exprName, expr);
+          if (!imp) {
+            imp = mod.imports.find(
+              (candidate) =>
+                (candidate.kind === "named" || candidate.kind === "default") && candidate.local === exprName,
+            );
+          }
         }
       } else {
         imp = mod.imports.find((candidate) => {

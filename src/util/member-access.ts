@@ -157,10 +157,15 @@ export function collectMemberAccessChain(args: {
       names.push(unquote(sliceText(propNode, args.source)));
       return;
     }
-    if (propNode.type !== "identifier") return;
-    const keyName = sliceText(propNode, args.source);
+    let nameNode = propNode;
+    if (args.sup.id === "csharp" && nameNode.type === "generic_name") {
+      nameNode = nameNode.childForFieldName("name") ?? nameNode.namedChildren[0] ?? nameNode;
+    }
+    if (nameNode.type !== "identifier") return;
+    const keyName = sliceText(nameNode, args.source);
     const value = args.constStringOf?.get(keyName);
     if (typeof value === "string") names.push(value);
+    else if (args.sup.id === "csharp") names.push(keyName);
   };
 
   while (current && traversalTypes.has(current.type)) {

@@ -11,7 +11,8 @@ import { CSHARP_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
 import { extractRustModPathAttribute, resolveRustImportPath } from "../../util/resolution/rust.js";
-import { attributeNamedBindingRanges, maskImportBindingTrivia } from "./binding-ranges.js";
+import { collectLineStartOffsets } from "../../util/lines.js";
+import { attributeNamedBindingRanges, maskImportBindingTrivia, sourceRangeFromOffsets } from "./binding-ranges.js";
 import type { Range } from "../../types.js";
 import type { ImportBinding } from "../types.js";
 import type { ImportBindingSink, ImportResolver, ResolvedImportTarget } from "./context.js";
@@ -129,10 +130,28 @@ function pushCsharpOverride(
 
 const CSHARP_EXTERN_ALIAS_PATTERN = new RegExp(String.raw`^extern\s+alias\s+(${CSHARP_IDENTIFIER_SOURCE})\s*;$`, "u");
 
+function csharpUsingAliasLocalRange(
+  source: string,
+  statementStartIndex: number | undefined,
+  alias: string,
+): Range | undefined {
+  if (statementStartIndex === undefined || !alias) return undefined;
+  const semicolon = source.indexOf(";", statementStartIndex);
+  const window = source.slice(statementStartIndex, semicolon < 0 ? source.length : semicolon + 1);
+  const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = window.match(new RegExp(`\\busing\\s+(${escaped})\\s*=`));
+  if (!match || match.index === undefined) return undefined;
+  const aliasOffset = match[0].lastIndexOf(alias);
+  if (aliasOffset < 0) return undefined;
+  const start = statementStartIndex + match.index + aliasOffset;
+  return sourceRangeFromOffsets(collectLineStartOffsets(source), start, start + alias.length);
+}
+
 async function applyCsharpStatementOverride(
   context: LanguageSpecificImportContext,
   normalizedStmt: string,
   typeOnly: boolean,
+  statementStartIndex?: number,
 ): Promise<boolean> {
   const externAlias = normalizedStmt.match(CSHARP_EXTERN_ALIAS_PATTERN)?.[1];
   if (externAlias) {
@@ -153,12 +172,14 @@ async function applyCsharpStatementOverride(
   // as an unresolved namespace rather than claiming one of the declaring files.
   const namespaceTargets = await resolveCsharpNamespaceImportPaths(context.projectRoot, parsed.from, context.file);
   if (parsed.alias && namespaceTargets.length) {
+    const localRange = csharpUsingAliasLocalRange(context.source, statementStartIndex, parsed.alias);
     context.pushBinding({
       kind: "namespace",
       localNS: parsed.alias,
       from: parsed.from,
       ...(namespaceTargets.length === 1 ? { resolved: namespaceTargets[0]!.replace(/\\/g, "/") } : {}),
       typeOnly,
+      ...(localRange ? { localRange } : {}),
     });
     return true;
   }

@@ -3,7 +3,13 @@ import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type Lang
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
-import { resolveMemberAccessDefinition, supportsReceiverMemberNavigation } from "./navigation-goto.js";
+import {
+  csharpAliasQualifiedLookupName,
+  findCsharpPartialTypeEquivalents,
+  innermostNamespaceImport,
+  resolveMemberAccessDefinition,
+  supportsReceiverMemberNavigation,
+} from "./navigation-goto.js";
 import {
   csharpLookupName,
   findClosestBinding,
@@ -331,6 +337,8 @@ export async function goToDefinition(
 
   if (name) {
     const lookupName = sup.id === "csharp" ? csharpLookupName(node, source, name) : name;
+    const csharpExportName =
+      sup.id === "csharp" ? csharpAliasQualifiedLookupName(node, source, lookupName, mod.imports) : lookupName;
     if (sup.id === "php") {
       const alias = await resolvePhpAliasDefinition(index, mod, file, name, phpImportType ?? "const");
       if (alias) {
@@ -394,7 +402,15 @@ export async function goToDefinition(
     if (sup.supportsCrossModuleSymbols) {
       let cNamespace: "tag" | "ordinary" | undefined;
       if (sup.id === "c") cNamespace = cTagRole(node) ? "tag" : "ordinary";
-      const resolvedName = resolveNamedDefinition(index, mod, file, sup, lookupName, cNamespace, node.startIndex);
+      const resolvedName = resolveNamedDefinition(
+        index,
+        mod,
+        file,
+        sup,
+        sup.id === "csharp" ? csharpExportName : lookupName,
+        cNamespace,
+        node.startIndex,
+      );
       if (resolvedName) {
         return resolvedName;
       }
@@ -433,6 +449,7 @@ function isUnresolvedReceiverMemberProperty(sup: LanguageSupport, node: SyntaxNo
   // paths below; only value-receiver members must not fall back to a bare name.
   if (
     parent.type === "qualified_name" ||
+    parent.type === "alias_qualified_name" ||
     parent.type === "qualified_identifier" ||
     parent.type === "qualified_type" ||
     parent.type === "scoped_identifier" ||
@@ -636,7 +653,15 @@ async function findReferencesInternal(
   const localBinding = family.localBinding;
   pushRef({ file: definitionFile, range: definition.range });
   const receiverMemberDefinition = isReceiverMemberDefinition(definition, parsedContext, !!family.receiverOwner);
-  const equivalentDefinitions = family.equivalents;
+  const csharpPartialEquivalents =
+    parsedContext.sup.id === "csharp" &&
+    !definition.isMember &&
+    (definition.kind === SymbolKind.Class ||
+      definition.kind === SymbolKind.Interface ||
+      definition.kind === SymbolKind.TypeAlias)
+      ? await findCsharpPartialTypeEquivalents(index, definition)
+      : [];
+  const equivalentDefinitions = [...family.equivalents, ...csharpPartialEquivalents];
   for (const equivalent of equivalentDefinitions) {
     pushRef({ file: equivalent.file, range: equivalent.range });
   }
@@ -726,7 +751,11 @@ async function findReferencesInternal(
   // them as bare-name reference sources in addition to the import-derived branches.
   const unitPeerKeys = new Set<string>();
   for (const candidate of [referenceDef, ...equivalentDefinitions]) {
-    for (const unitPeer of getCompilationUnitPeers(index, candidate.file).files) {
+    for (const unitPeer of getCompilationUnitPeers(
+      index,
+      candidate.file,
+      parsedContext.sup.id === "csharp" ? { csharpQualifiedName: true } : undefined,
+    ).files) {
       unitPeerKeys.add(fileIdentityKey(unitPeer));
     }
   }
@@ -892,6 +921,8 @@ async function findReferencesInternal(
             exportedName,
             parsed,
             index.languageExtensions,
+            imp,
+            module.imports,
           );
           for (const range of ranges) {
             if (hasReachedCollectionLimit()) break;
@@ -1148,7 +1179,16 @@ async function findReferencesInternal(
       // An unproven compilation-unit boundary means the peer universe may extend beyond the
       // enumerated files, so coverage must not imply that every possible consumer was scanned.
       ...(implicitUnitLanguage
-        ? { implicitUnitPeers: { applicable: true, executed: getCompilationUnitPeers(index, definitionFile).complete } }
+        ? {
+            implicitUnitPeers: {
+              applicable: true,
+              executed: getCompilationUnitPeers(
+                index,
+                definitionFile,
+                parsedContext.sup.id === "csharp" ? { csharpQualifiedName: true } : undefined,
+              ).complete,
+            },
+          }
         : {}),
     }),
     strategyUnavailableFiles: [...receiverProofUnavailableFiles.values()],
@@ -1491,6 +1531,8 @@ export async function collectNamespaceMemberRefs(
   member: string,
   parsedContext?: ParsedFileContext,
   languageExtensions?: LanguageExtensionMap,
+  namespaceImport?: Extract<ImportBinding, { kind: "namespace" }>,
+  imports?: readonly ImportBinding[],
 ): Promise<Range[]> {
   const parsed = parsedContext ?? (await ensureParsedContext(file, undefined, languageExtensions));
   const sup = parsed.sup;
@@ -1505,7 +1547,13 @@ export async function collectNamespaceMemberRefs(
         const objectName = sliceText(obj, source);
         const propertyName = sliceText(prop, source);
         if (objectName === ns && propertyName === member) {
-          ranges.push(toRange(prop));
+          const inAliasScope =
+            sup.id !== "csharp" ||
+            !namespaceImport ||
+            !imports ||
+            !namespaceImport.localRange ||
+            innermostNamespaceImport(imports, objectName, obj) === namespaceImport;
+          if (inAliasScope) ranges.push(toRange(prop));
         }
       }
     }

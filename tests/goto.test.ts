@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { goToDefinition, type ProjectIndex } from "../src/index.js";
+import { buildSymbolGraphDetailed, goToDefinition, type ProjectIndex } from "../src/index.js";
 import { JAVA_SUPPORT } from "../src/languages.js";
 import { resolveNamedDefinition } from "../src/indexer/navigation-local.js";
 import { fileIdentityKey } from "../src/util/paths.js";
@@ -2574,6 +2574,98 @@ describe("Go to Definition", () => {
         await testGoToDefinition(index, mainFile, 4, 5, mainFile, 3);
         // "Local();" in RunB (line 8) resolves to RunB's own local function (line 7), not RunA's.
         await testGoToDefinition(index, mainFile, 8, 5, mainFile, 7);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves namespace alias-qualified types and keeps decoys, global::, and nested lookup intact", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-qualified-goto-"));
+      try {
+        const declared = [
+          "namespace Project.Model {",
+          "  public class Target {}",
+          "  public class Outer { public class Inner {} }",
+          "}",
+          "",
+        ].join("\n");
+        const decoy = [
+          "namespace Other {",
+          "  public class Target {}",
+          "  public class X { public class Target {} }",
+          "}",
+          "",
+        ].join("\n");
+        const useLines = [
+          "using X = Project.Model;",
+          "class Use {",
+          "  X::Target AliasMake() => new X::Target();",
+          "  Project.Model.Target DotMake() => new Project.Model.Target();",
+          "  global::Project.Model.Target RootMake() => new global::Project.Model.Target();",
+          "  X::Outer.Inner NestedMake() => new X::Outer.Inner();",
+          "  Missing::Target MissingMake() => new Missing::Target();",
+          "}",
+          "namespace A {",
+          "  using X = Project.Model;",
+          "  class AUse { X::Target Make() => new X::Target(); }",
+          "}",
+          "namespace B {",
+          "  using X = Other;",
+          "  class BUse { X::Target Make() => new X::Target(); }",
+          "}",
+          "",
+        ];
+        const use = useLines.join("\n");
+        const declaredFile = path.join(root, "Declared.cs").replace(/\\/g, "/");
+        const decoyFile = path.join(root, "Decoy.cs").replace(/\\/g, "/");
+        const useFile = path.join(root, "Use.cs").replace(/\\/g, "/");
+        await fsp.writeFile(declaredFile, declared, "utf8");
+        await fsp.writeFile(decoyFile, decoy, "utf8");
+        await fsp.writeFile(useFile, use, "utf8");
+        const index = await createTestIndexFromFiles(root, [declaredFile, decoyFile, useFile]);
+        const columnOn = (line: number, token: string, occurrence = 0): number => {
+          const text = useLines[line - 1];
+          if (!text) throw new Error(`missing line ${line}`);
+          let fromIndex = 0;
+          for (let index = 0; index <= occurrence; index += 1) {
+            const at = text.indexOf(token, fromIndex);
+            if (at < 0) throw new Error(`token ${token} not found on line ${line}`);
+            if (index === occurrence) return at + 1;
+            fromIndex = at + token.length;
+          }
+          throw new Error(`token ${token} not found on line ${line}`);
+        };
+
+        await testGoToDefinition(index, useFile, 3, columnOn(3, "Target", 0), declaredFile, 2);
+        await testGoToDefinition(index, useFile, 3, columnOn(3, "Target", 1), declaredFile, 2);
+        await testGoToDefinition(index, useFile, 4, columnOn(4, "Target", 0), declaredFile, 2);
+        await testGoToDefinition(index, useFile, 5, columnOn(5, "Target", 0), declaredFile, 2);
+        await testGoToDefinition(index, useFile, 6, columnOn(6, "Inner", 0), declaredFile, 3);
+        await testGoToDefinition(index, useFile, 7, columnOn(7, "Target", 0), undefined, undefined, "not_found");
+        await testGoToDefinition(index, useFile, 11, columnOn(11, "Target", 0), declaredFile, 2);
+        await testGoToDefinition(index, useFile, 15, columnOn(15, "Target", 0), decoyFile, 2);
+
+        const graph = await buildSymbolGraphDetailed(index);
+        const constructedFrom = (targetFile: string): string[] =>
+          graph.edges
+            .filter((edge) => {
+              const node = graph.nodes.get(edge.to);
+              return (
+                edge.label === "instantiates" &&
+                node?.name === "Target" &&
+                fileIdentityKey(node.file) === fileIdentityKey(targetFile)
+              );
+            })
+            .map((edge) => graph.nodes.get(edge.from)?.name)
+            .filter((name): name is string => !!name)
+            .sort();
+        expect(constructedFrom(declaredFile)).toEqual(["AliasMake", "DotMake", "Make", "RootMake"]);
+        expect(constructedFrom(decoyFile)).toEqual(["Make"]);
+        expect(
+          graph.edges.some(
+            (edge) => edge.label === "instantiates" && graph.nodes.get(edge.from)?.name === "MissingMake",
+          ),
+        ).toBe(false);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

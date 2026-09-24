@@ -1989,7 +1989,7 @@ nativeDescribe("native semantic coverage", () => {
       files: Record<string, string[]>;
       goto: { file: string; line: number; token: string; expectedFile: string; expectedLine: number };
       references: { file: string; line: number; token: string; expectedSites: string[]; decoyFile: string };
-      edge: { caller: string; callerFile: string; expectedTarget: string };
+      edge: { caller: string; callerFile: string; expectedTarget: string; label?: "calls" | "instantiates" };
     };
     const peerCases: PeerCase[] = [
       {
@@ -2027,17 +2027,47 @@ nativeDescribe("native semantic coverage", () => {
             "  }",
             "}",
           ],
+          "csharp/C.cs": [
+            "namespace P;",
+            "class Consumer {",
+            "  void ThirdUse() {",
+            "    new Box().Helper();",
+            "  }",
+            "}",
+          ],
           "csharp/decoy/Box.cs": ["namespace Q;", "public partial class Box {", "  public void Helper() {}", "}"],
         },
-        goto: { file: "csharp/B.cs", line: 4, token: "Helper", expectedFile: "csharp/A.cs", expectedLine: 3 },
+        goto: { file: "csharp/C.cs", line: 4, token: "Box", expectedFile: "csharp/A.cs", expectedLine: 2 },
         references: {
           file: "csharp/A.cs",
           line: 3,
           token: "Helper",
-          expectedSites: ["csharp/A.cs:3", "csharp/B.cs:4"],
+          expectedSites: ["csharp/A.cs:3", "csharp/B.cs:4", "csharp/C.cs:4"],
           decoyFile: "csharp/decoy/Box.cs",
         },
-        edge: { caller: "Use", callerFile: "csharp/B.cs", expectedTarget: "csharp/A.cs::Helper" },
+        edge: { caller: "ThirdUse", callerFile: "csharp/C.cs", expectedTarget: "csharp/A.cs::Helper" },
+      },
+      {
+        name: "C# alias-qualified constructor",
+        files: {
+          "alias/Api.cs": ["namespace Api;", "public class Target {}"],
+          "alias/Use.cs": ["using X = Api;", "class Use {", "  X::Target Make() => new X::Target();", "}"],
+          "alias/decoy/Target.cs": ["namespace Other;", "public class Target {}"],
+        },
+        goto: { file: "alias/Use.cs", line: 3, token: "Target", expectedFile: "alias/Api.cs", expectedLine: 2 },
+        references: {
+          file: "alias/Api.cs",
+          line: 2,
+          token: "Target",
+          expectedSites: ["alias/Api.cs:2", "alias/Use.cs:3"],
+          decoyFile: "alias/decoy/Target.cs",
+        },
+        edge: {
+          caller: "Make",
+          callerFile: "alias/Use.cs",
+          expectedTarget: "alias/Api.cs::Target",
+          label: "instantiates",
+        },
       },
       {
         name: "Swift extension member over a base type in another file",
@@ -2101,7 +2131,12 @@ nativeDescribe("native semantic coverage", () => {
       if (at < 0) throw new Error(`token ${token} not found on line ${line}: ${text}`);
       return at + 1;
     };
-    const callTargetsOf = async (index: ProjectIndex, caller: string, callerFile: string): Promise<string[]> => {
+    const callTargetsOf = async (
+      index: ProjectIndex,
+      caller: string,
+      callerFile: string,
+      label = "calls",
+    ): Promise<string[]> => {
       const graph = await buildSymbolGraphDetailed(index);
       const callerPath = normalizeFile(path.join(root, callerFile));
       const callerNode = [...graph.nodes.values()].find(
@@ -2110,7 +2145,7 @@ nativeDescribe("native semantic coverage", () => {
       expect(callerNode, `${caller} must be indexed`).toBeDefined();
       const targets: string[] = [];
       for (const edge of graph.edges) {
-        if (edge.label !== "calls" || edge.from !== callerNode!.id) continue;
+        if (edge.label !== label || edge.from !== callerNode!.id) continue;
         const node = graph.nodes.get(edge.to);
         if (node) {
           targets.push(`${relativeFile(root, node.file)}::${node.name}`);
@@ -2156,9 +2191,19 @@ nativeDescribe("native semantic coverage", () => {
       const warmReferences = stableReferencesSnapshot(root, await normalizeReferences(warm, referenceRequest));
       expect(warmReferences, `${peerCase.name}: warm reload references`).toEqual(coldReferences);
 
-      const coldTargets = await callTargetsOf(cold, peerCase.edge.caller, peerCase.edge.callerFile);
+      const coldTargets = await callTargetsOf(
+        cold,
+        peerCase.edge.caller,
+        peerCase.edge.callerFile,
+        peerCase.edge.label,
+      );
       expect(coldTargets, `${peerCase.name}: cold call edge`).toContain(peerCase.edge.expectedTarget);
-      const warmTargets = await callTargetsOf(warm, peerCase.edge.caller, peerCase.edge.callerFile);
+      const warmTargets = await callTargetsOf(
+        warm,
+        peerCase.edge.caller,
+        peerCase.edge.callerFile,
+        peerCase.edge.label,
+      );
       expect(warmTargets, `${peerCase.name}: warm call edge`).toEqual(coldTargets);
     }
   });

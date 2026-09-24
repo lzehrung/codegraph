@@ -845,10 +845,15 @@ export function getCachedReferenceCandidateFiles(
   const candidates = new Map<string, string>();
   if (def.isMember) candidates.set(fileIdentityKey(def.file), def.file);
   // Files sharing the definition's compilation unit can name it without any import edge (Go and
-  // JVM packages, C# namespaces, Swift modules), so they bypass the import filter below. The
-  // unit relation is the same proven visibility fact bare-name resolution uses, keeping the
-  // candidate universe and resolution in agreement.
-  for (const unitPeer of getCompilationUnitPeers(index, def.file).files) {
+  // JVM packages, C# namespaces, Swift modules), so they bypass the import filter below. C#
+  // also includes same-directory files that can reach the type only through a qualified name,
+  // so dotted and `global::` uses are candidates even when the consumer declares unrelated
+  // namespaces. Bare-name resolution still uses the related-namespace peer set.
+  for (const unitPeer of getCompilationUnitPeers(
+    index,
+    def.file,
+    languageId === "csharp" ? { csharpQualifiedName: true } : undefined,
+  ).files) {
     if (fileIdentityKey(unitPeer) !== fileIdentityKey(def.file)) {
       candidates.set(fileIdentityKey(unitPeer), unitPeer);
     }

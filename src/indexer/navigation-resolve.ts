@@ -12,6 +12,7 @@ import {
   isUnitBareNameVisible,
 } from "./compilation-units.js";
 import { phpNamedImportRole } from "./import-types.js";
+import { coalesceEquivalentCsharpPartialExports } from "./shared-owner-identity.js";
 import {
   type ExportEntry,
   type ImportBinding,
@@ -173,8 +174,9 @@ function sameResolvedExport(index: ProjectIndex, left: ResolvedExport, right: Re
  * name top-level declarations of their package, namespace, or module without an import;
  * candidates come from the same proven unit relation used for reference-candidate discovery
  * (`getCompilationUnitPeers`), never from a project-wide name scan. A name matching more than
- * one unit declaration is ambiguous and stays unresolved, and members are excluded because
- * they resolve through receiver/owner identity rather than as bare unit names.
+ * one unit declaration is ambiguous and stays unresolved, except proven-equivalent C# `partial`
+ * type parts, which collapse to one representative before uniqueness is judged. Members are
+ * excluded because they resolve through receiver/owner identity rather than as bare unit names.
  */
 function resolveImplicitUnitExport(
   index: ProjectIndex,
@@ -191,7 +193,12 @@ function resolveImplicitUnitExport(
   const languageId = supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id;
   if (!languageId || !IMPLICIT_UNIT_LANGUAGES[languageId]) return null;
   const matches: SymbolDef[] = [];
-  for (const peerFile of getCompilationUnitPeers(index, file).files) {
+  const peers = getCompilationUnitPeers(
+    index,
+    file,
+    languageId === "csharp" && qualification !== undefined ? { csharpQualifiedName: true } : undefined,
+  );
+  for (const peerFile of peers.files) {
     const names = moduleNameLookup(index, peerFile);
     if (!names) continue;
     for (const target of names.localExports.get(names.normalizeIdentifier(exportedName)) ?? []) {
@@ -213,7 +220,8 @@ function resolveImplicitUnitExport(
       }
     }
   }
-  return matches.length === 1 ? (matches[0] ?? null) : null;
+  const unique = languageId === "csharp" ? coalesceEquivalentCsharpPartialExports(index, matches) : matches;
+  return unique.length === 1 ? (unique[0] ?? null) : null;
 }
 
 function packageDirectoryLookup(

@@ -22,7 +22,10 @@ import type { ProjectIndex } from "./types.js";
  * namespaces (including the global namespace), and the containing directory for Swift, whose
  * module identity is not declared in source. Lookup never falls back to a project-wide
  * same-name scan, so unrelated same-named declarations in other directories, packages,
- * namespaces, or modules are never peers.
+ * namespaces, or modules are never bare-name peers. C# `Namespace.Type` and
+ * `global::Namespace.Type` names may additionally search other same-directory C# files
+ * whose namespaces are not related for bare-name lookup; that qualified set still stops
+ * at the unit directory.
  *
  * Documented limits:
  * - No compiler/build-target inference: Maven/Gradle source roots, csproj items, and SwiftPM
@@ -298,9 +301,10 @@ function unitFactFor(index: ProjectIndex, file: FileId): UnitFact {
 
 /**
  * C# namespace names are related when they are equal, one nests inside the other, or either is
- * the global namespace. Two files are potentially visible to each other when any pair of their
- * declared namespaces is related; that is exactly the file pair set whose declarations can
- * appear as bare names somewhere in the other file.
+ * the global namespace. Two files are potentially visible to each other as bare names when any
+ * pair of their declared namespaces is related. A file that also declares unrelated namespaces
+ * is still not a bare-name peer of those namespaces; qualified lookup uses the same-directory
+ * set instead.
  */
 function csharpNamespacesRelated(left: string, right: string): boolean {
   if (left === right || left === "" || right === "") return true;
@@ -414,23 +418,37 @@ const unitPeerCaches = new WeakMap<ProjectIndex, Map<string, CompilationUnitPeer
  * exist outside the unit directory so the unit may extend beyond it. Consumers must retain
  * the proven peer set and report partial coverage instead of implying that every possible
  * peer was considered.
+ *
+ * Pass `csharpQualifiedName` for C# `Namespace.Type` / `global::Namespace.Type` lookup so
+ * same-directory files whose namespaces are not related for bare names are still searched.
+ * Qualified names can also cross otherwise unrelated namespaces outside the directory,
+ * so those files leave the qualified candidate set incomplete. Other languages ignore the flag.
  */
-export function getCompilationUnitPeers(index: ProjectIndex, file: FileId): CompilationUnitPeers {
+export function getCompilationUnitPeers(
+  index: ProjectIndex,
+  file: FileId,
+  options?: { csharpQualifiedName?: boolean },
+): CompilationUnitPeers {
   let cache = unitPeerCaches.get(index);
   if (!cache) {
     cache = new Map<string, CompilationUnitPeers>();
     unitPeerCaches.set(index, cache);
   }
   const fileKey = fileIdentityKey(file);
-  const cached = cache.get(fileKey);
+  const cacheKey = options?.csharpQualifiedName ? `${fileKey}::qualified` : fileKey;
+  const cached = cache.get(cacheKey);
   if (cached) return cached;
 
-  const result = computeUnitPeers(index, unitFactFor(index, file));
-  cache.set(fileKey, result);
+  const result = computeUnitPeers(index, unitFactFor(index, file), !!options?.csharpQualifiedName);
+  cache.set(cacheKey, result);
   return result;
 }
 
-function computeUnitPeers(index: ProjectIndex, own: UnitFact): CompilationUnitPeers {
+function computeUnitPeers(
+  index: ProjectIndex,
+  own: UnitFact,
+  includeUnrelatedCsharpDirectoryPeers = false,
+): CompilationUnitPeers {
   const files = new Set<FileId>([own.file]);
   if (own.identity.kind === "single-file") return { files, complete: true };
   if (own.identity.kind === "unsupported") return { files, complete: false };
@@ -471,10 +489,21 @@ function computeUnitPeers(index: ProjectIndex, own: UnitFact): CompilationUnitPe
   if (own.identity.kind === "namespaces") {
     if (!own.identity.regions) return { files, complete: false };
     for (const fact of groupFiles) {
-      if (fact.dirKey === own.dirKey && identityCompatible(own.identity, fact.identity)) files.add(fact.file);
+      if (fact.dirKey !== own.dirKey) continue;
+      if (
+        includeUnrelatedCsharpDirectoryPeers &&
+        fact.identity.kind === "namespaces" &&
+        fact.identity.regions !== null
+      ) {
+        files.add(fact.file);
+        continue;
+      }
+      if (identityCompatible(own.identity, fact.identity)) files.add(fact.file);
     }
     const complete = !groupFiles.some(
-      (fact) => fact.dirKey !== own.dirKey && identityCompatible(own.identity, fact.identity),
+      (fact) =>
+        fact.dirKey !== own.dirKey &&
+        (includeUnrelatedCsharpDirectoryPeers || identityCompatible(own.identity, fact.identity)),
     );
     return { files, complete };
   }

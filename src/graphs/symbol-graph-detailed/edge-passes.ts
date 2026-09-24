@@ -4,6 +4,7 @@ import { resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../../indexer/navigation-php.js";
 import { resolvePhpExportByImportType } from "../../indexer/navigation-resolve.js";
 import { resolveSharedOwnerContainers, type SharedOwnerContainer } from "../../indexer/navigation-goto.js";
+import { selectCsharpPartialRepresentative } from "../../indexer/shared-owner-identity.js";
 import type { LanguageSupport } from "../../languages.js";
 import { getCallableArity, getCallArgumentCount } from "../../languages/callable-arity.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
@@ -68,7 +69,7 @@ type EdgePassContext = {
    * can declare same-spanned containers (identical partial bodies) whose peer sets differ.
    */
   sharedOwnerPeers: Map<string, Promise<SharedOwnerPeer[]>>;
-  /** Swift extension def id mapped to its extended-type def id for receiver lookup. */
+  /** Swift extension / C# partial owner def id mapped to the coalesced type identity. */
   sharedOwnerAnchors: Map<string, string>;
   /** Definition-node ids that collapse into their declaration-node id. */
   nodeAliases: Map<string, string>;
@@ -365,8 +366,9 @@ function sharedOwnerPeerDef(peer: SharedOwnerContainer): SharedOwnerPeer | null 
  * C# partial declarations and Swift extensions declare members of one type
  * identity. Each member joins every same-identity owner def in its compilation
  * unit so receiver lookups see complete member sets, while same-named types in
- * other namespaces or nested paths stay separate. Swift extension defs anchor to
- * their extended type so receiver lookups start on the full member set.
+ * other namespaces or nested paths stay separate. Swift extension defs and C#
+ * partial owner defs anchor to one coalesced type so keyword and static
+ * type-name receiver lookups start on the full member set.
  */
 async function emitSharedOwnerMembershipEdges(
   context: EdgePassContext,
@@ -397,9 +399,15 @@ async function emitSharedOwnerMembershipEdges(
   }
   const peerDefs = await peers;
   for (const peer of peerDefs) recordDefEdge(context, definitionId, peer.def, "member_of");
-  if (!isExtension) return;
-  const anchor = peerDefs.find((peer) => !peer.isExtension);
-  context.sharedOwnerAnchors.set(defNodeId(owner.def), defNodeId(anchor ? anchor.def : owner.def));
+  if (isExtension) {
+    const anchor = peerDefs.find((peer) => !peer.isExtension);
+    context.sharedOwnerAnchors.set(defNodeId(owner.def), defNodeId(anchor ? anchor.def : owner.def));
+    return;
+  }
+  if (context.sup.id === "csharp" && peerDefs.length) {
+    const representative = selectCsharpPartialRepresentative([owner.def, ...peerDefs.map((peer) => peer.def)]);
+    context.sharedOwnerAnchors.set(defNodeId(owner.def), defNodeId(representative));
+  }
 }
 
 function memberScopeForDefinition(
@@ -845,6 +853,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
 /** Qualifiers name a container, not another base type. */
 const QUALIFIER_NAME_FIELD: Record<string, string> = {
   qualified_name: "name", // C#: Namespace.Base, Outer.Inner
+  alias_qualified_name: "name", // C#: X::Base, global::Namespace.Base
   qualified_identifier: "name", // C++: ns::Base
   scope_resolution: "name", // Ruby: Module::Base
   qualified_type: "name", // Go: pkg.Base

@@ -1095,17 +1095,19 @@ export function classifyReceiver(
   // A name bound by a local or parameter is a value, not a type. Without this guard
   // `Example::shared()` would still be attributed to a colliding parameter named Example.
   if (proof.locallyBound) return null;
-  // Dotted `Cfg.load()` is not proof: the identifier may be a value. Type-scoped `::`
-  // is the remaining named-type proof. Ruby capitalized names are `constant` tokens
-  // even when they name a parameter, so `constant` is not itself type proof.
+  // Dotted `Cfg.load()` is not proof in languages where the identifier may be a
+  // value. Type-scoped `::` is one named-type proof; C# `Box.Left()` is another
+  // because a capitalized unbound name is the static type receiver. Ruby
+  // capitalized names are `constant` tokens even when they name a parameter, so
+  // `constant` is not itself type proof.
   const property = getMemberAccessParts(sup, accessNode).property;
   const between = property ? source.slice(receiver.endIndex, property.startIndex) : "";
   const typeScoped = TYPE_SCOPED_ACCESS_TYPES[accessNode.type] === true || between.includes("::");
   if (receiver.type !== "type_identifier" && !typeScoped) {
-    // A capitalized bare name is type proof only where the language's construction
-    // conventions already type `Box()` as a Box (Python, Kotlin, Swift, Rust). The
-    // named type must still resolve to a members-declaring definition before any
-    // call edge is recorded, so a name alone never invents a target.
+    // A capitalized bare name is type proof where construction already types
+    // `Box()` as a Box, and for C# static type-name receivers (`Box.Left()`).
+    // The named type must still resolve to a members-declaring definition
+    // before any call edge is recorded, so a name alone never invents a target.
     if (!capitalizedTypeReceiverName(sup, receiver, text)) return null;
     return {
       kind: "named-type",
@@ -1129,9 +1131,22 @@ const UNBOUND_INSTANCE_CALL_LANGUAGE_IDS: Record<string, true> = {
   python: true,
 };
 
+/**
+ * Languages whose dotted type-name receivers (`Box.Left()`) name the type itself.
+ * Distinct from `capitalizedCall`, which also treats `Box()` as construction.
+ */
+const STATIC_TYPE_NAME_RECEIVER_LANGUAGE_IDS: Record<string, true> = {
+  csharp: true,
+};
+
 /** Whether a receiver name is capitalized like a type in a capitalized-name language. */
 function capitalizedTypeReceiverName(sup: LanguageSupport, receiver: SyntaxNodeLike, text: string): boolean {
-  if (LANGUAGE_CONSTRUCTION_FORMS[sup.id]?.capitalizedCall !== true) return false;
+  if (
+    LANGUAGE_CONSTRUCTION_FORMS[sup.id]?.capitalizedCall !== true &&
+    !STATIC_TYPE_NAME_RECEIVER_LANGUAGE_IDS[sup.id]
+  ) {
+    return false;
+  }
   if (!isReceiverNameNode(sup, receiver.type)) return false;
   const first = text[0];
   return !!first && first === first.toUpperCase() && first !== first.toLowerCase();
@@ -1432,8 +1447,8 @@ export function emitReceiverCallEdges(
     }
     const rawOwner = candidate.ownerId ?? ownerByMember.get(candidate.callerId);
     if (!rawOwner) continue;
-    // Shared-owner anchors redirect Swift extension owners to their extended type
-    // so lookup starts on the whole type identity's member set.
+    // Shared-owner anchors redirect Swift extension and C# partial owners to the
+    // coalesced type identity so lookup starts on the whole member set.
     const owner = ownerAnchors.get(rawOwner) ?? rawOwner;
     const memberScope = candidate.memberScope ?? inferCallMemberScope(candidate.site, sourceCache);
     let level = candidate.viaSupertypes ? nextOwners(owner, true) : [owner];
