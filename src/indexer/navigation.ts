@@ -476,6 +476,31 @@ export async function findRenameReferences(
   return findReferencesInternal(index, { def }, opts, "rename");
 }
 
+/**
+ * Proven equivalent callable definition family for one definition site.
+ *
+ * Returns the incoming definition first — enriched to its indexed SymbolDef when the definition
+ * file's module.locals holds an exact identity match (same file, kind, localName, and full range
+ * span), restoring metadata such as `isMember` — followed by every equivalent
+ * declaration/definition that reference collection itself proves: same-scope prototype/definition
+ * pairs (C and C++), namespace-qualified equivalents, the in-class declaration for out-of-line
+ * member definitions, and out-of-line definitions for in-class member declarations linked through
+ * the export index. Matching stays conservative: candidates must already exist in the definition
+ * file's scope bindings or the export index with a proven signature; no name-only or arity-only
+ * equivalence is introduced, and overload sets are never collapsed.
+ *
+ * `parsedContext` is optional; when omitted the definition file is parsed on demand. Definitions
+ * outside C/C++ return just the enriched definition.
+ */
+export async function getCppEquivalentCallableDefinitions(
+  index: ProjectIndex,
+  def: SymbolDef,
+  parsedContext?: ParsedFileContext,
+): Promise<SymbolDef[]> {
+  const family = await cppEquivalentCallableFamily(index, def, parsedContext);
+  return [family.definition, ...family.equivalents];
+}
+
 async function findReferencesInternal(
   index: ProjectIndex,
   req: FindReferencesRequest,
@@ -544,7 +569,6 @@ async function findReferencesInternal(
   const mod = index.byFile.get(fileIdentityKey(definitionFile));
   if (!mod) return { status: "not_found", reason: "Module not found" };
 
-  const scope = getCachedScope(index, definitionFile, mod, parsedContext);
   const refs: Reference[] = [];
   const seenRefs = new Map<string, number>();
   const collectionLimit = maxReferences !== undefined ? maxReferences + 1 : undefined;
@@ -571,66 +595,22 @@ async function findReferencesInternal(
     refs.push(ref);
   };
 
-  const definitionNameNode = syntaxNodeForDefinition(parsedContext, def);
-  const cppReceiverOwner = await cppOutOfLineReceiverOwner(index, mod, def, parsedContext, definitionNameNode);
-  const cppMemberName = cppReceiverOwner
-    ? cppOutOfLineMemberName(definitionNameNode, parsedContext.source, parsedContext.sup)
-    : null;
-  const referenceDef = cppMemberName && cppMemberName !== def.localName ? { ...def, localName: cppMemberName } : def;
-  const normalizedLocalName = parsedContext.sup.normalizeIdentifier(referenceDef.localName);
-  const localBindings = scope.bindings.get(normalizedLocalName) ?? [];
-  const localBinding = localBindings.find(
-    (binding) => binding.def && binding.def.start.index === def.range.start.index,
-  );
-  let sameFileFunctionBindings: readonly Binding[] = localBindings;
-  if (parsedContext.sup.id === "cpp") {
-    sameFileFunctionBindings = localBinding ? cppEquivalentCallableBindings(localBinding) : [];
-  }
-  const sameFileFunctionEquivalentDefinitions =
-    (parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp") && def.kind === SymbolKind.Function
-      ? sameFileFunctionBindings.flatMap((binding) => {
-          const bindingRange = binding.def;
-          if (!bindingRange || bindingRange.start.index === def.range.start.index) return [];
-          const local = mod.locals.find(
-            (candidate) =>
-              candidate.kind === SymbolKind.Function &&
-              candidate.localName === def.localName &&
-              candidate.range.start.index === bindingRange.start.index &&
-              candidate.range.end.index === bindingRange.end.index,
-          );
-          return local ? [local] : [];
-        })
-      : [];
-  pushRef({ file: definitionFile, range: def.range });
-  const receiverMemberDefinition = isReceiverMemberDefinition(def, parsedContext, !!cppReceiverOwner);
-  let equivalentDefinitions: SymbolDef[];
-  if (cppReceiverOwner) {
-    equivalentDefinitions = await cppOutOfLineEquivalentDefinitions(
-      index,
-      referenceDef,
-      parsedContext,
-      definitionNameNode,
-      cppReceiverOwner,
-    );
-  } else if (def.isMember && parsedContext.sup.id === "cpp") {
-    equivalentDefinitions = await cppInClassMemberEquivalentDefinitions(index, def, parsedContext, definitionNameNode);
-  } else if (parsedContext.sup.id === "cpp") {
-    equivalentDefinitions = [
-      ...sameFileFunctionEquivalentDefinitions,
-      ...(await cppNamespaceFunctionEquivalentDefinitions(index, def, parsedContext, definitionNameNode)),
-    ];
-  } else {
-    equivalentDefinitions = sameFileFunctionEquivalentDefinitions;
-  }
+  const family = await cppEquivalentCallableFamily(index, def, parsedContext);
+  const definition = family.definition;
+  const referenceDef = family.referenceDef;
+  const localBinding = family.localBinding;
+  pushRef({ file: definitionFile, range: definition.range });
+  const receiverMemberDefinition = isReceiverMemberDefinition(definition, parsedContext, !!family.receiverOwner);
+  const equivalentDefinitions = family.equivalents;
   for (const equivalent of equivalentDefinitions) {
     pushRef({ file: equivalent.file, range: equivalent.range });
   }
   const matchesReferenceDefinition = (candidate: SymbolDef): boolean =>
-    sameDef(candidate, def, index.languageExtensions) ||
+    sameDef(candidate, definition, index.languageExtensions) ||
     equivalentDefinitions.some((equivalent) => sameDef(candidate, equivalent, index.languageExtensions));
 
   const exportedNames: string[] = [];
-  for (const candidate of [def, ...equivalentDefinitions]) {
+  for (const candidate of [definition, ...equivalentDefinitions]) {
     const candidateModule = index.byFile.get(fileIdentityKey(candidate.file));
     for (const entry of candidateModule?.exports ?? []) {
       if (
@@ -643,15 +623,15 @@ async function findReferencesInternal(
     }
   }
   if (!exportedNames.length && !receiverMemberDefinition) {
-    exportedNames.push(def.localName);
+    exportedNames.push(definition.localName);
   }
 
   const exportedNameSet = new Set(exportedNames);
-  const phpQualifiedNames = await buildPhpQualifiedNames(index, definitionFile, def);
-  const scansReceiverReferences = shouldScanVerifiedReferences(def, parsedContext, receiverMemberDefinition);
+  const phpQualifiedNames = await buildPhpQualifiedNames(index, definitionFile, definition);
+  const scansReceiverReferences = shouldScanVerifiedReferences(definition, parsedContext, receiverMemberDefinition);
   const requiresSameFileVerifiedScan =
     (parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp") &&
-    def.kind === SymbolKind.Function &&
+    definition.kind === SymbolKind.Function &&
     !receiverMemberDefinition;
   let sameFileVerifiedScanExecuted = false;
   if (localBinding && localBinding.occurrencesComplete !== false && !scansReceiverReferences) {
@@ -706,7 +686,7 @@ async function findReferencesInternal(
   // and ASCII-case-folded, so folding the probe's last identifier segment here narrows those
   // kinds exactly instead of skipping narrowing and walking every indexed PHP file. Variables,
   // properties, and constants stay case-sensitive and probe with their own spelling.
-  const phpCaseInsensitiveDefinition = phpQualifiedNames.length && isPhpCaseInsensitiveSymbolKind(def.kind);
+  const phpCaseInsensitiveDefinition = phpQualifiedNames.length && isPhpCaseInsensitiveSymbolKind(definition.kind);
   if (index.bloomFilters && phpQualifiedNames.length) {
     candidateFiles = candidateFiles.filter((candidateFile) => {
       const module = index.byFile.get(fileIdentityKey(candidateFile));
@@ -765,7 +745,7 @@ async function findReferencesInternal(
           index,
           fileId,
           entry.sourceSpecifier,
-          def,
+          definition,
           (params, parsed) => goToDefinition(index, params, parsed),
           remainingReferences,
           verifiedReferenceFilter(fileId),
@@ -786,7 +766,7 @@ async function findReferencesInternal(
       const bindingMatchesDefinition = async (): Promise<boolean> => {
         if (verifiedBindingMatches !== undefined) return verifiedBindingMatches;
         verifiedBindingMatches = false;
-        if (!phpImportMatchesDefinition(imp, def)) return verifiedBindingMatches;
+        if (!phpImportMatchesDefinition(imp, definition)) return verifiedBindingMatches;
         const parsed = await ensureCandidateParsed();
         for (const verificationSite of importBindingIdentityVerificationSites(imp)) {
           const resolved = await goToDefinition(
@@ -824,7 +804,7 @@ async function findReferencesInternal(
             index,
             fileId,
             imp.local,
-            def,
+            definition,
             (params, parsed) => goToDefinition(index, params, parsed),
             remainingCollectionSlots(),
             verifiedReferenceFilter(fileId),
@@ -849,7 +829,7 @@ async function findReferencesInternal(
             hit?.kind === "resolved"
               ? matchesReferenceDefinition(hit.def)
               : imp.kind === "namespace" &&
-                [def, ...equivalentDefinitions].some(
+                [definition, ...equivalentDefinitions].some(
                   (candidate) => fileIdentityKey(targetFile) === fileIdentityKey(candidate.file),
                 );
           if (!matchesDef) continue;
@@ -872,7 +852,10 @@ async function findReferencesInternal(
         } else if (imp.kind === "star") {
           const result = resolveImported(index, imp, exportedName);
           const matchesDef = !!result && !("namespace" in result) && matchesReferenceDefinition(result);
-          if (!matchesDef && !cppCanonicalStructuralExport(index, targetFile, exportedName, def, parsedContext.sup.id))
+          if (
+            !matchesDef &&
+            !cppCanonicalStructuralExport(index, targetFile, exportedName, definition, parsedContext.sup.id)
+          )
             continue;
           if (hasExpandedNamedImport(module, targetFile, exportedName)) {
             continue;
@@ -882,7 +865,7 @@ async function findReferencesInternal(
             index,
             fileId,
             parsedContext.sup.id === "cpp" ? (exportedName.split("::").pop() ?? exportedName) : exportedName,
-            def,
+            definition,
             (params, parsed) => goToDefinition(index, params, parsed),
             remainingReferences,
             verifiedReferenceFilter(fileId),
@@ -912,7 +895,10 @@ async function findReferencesInternal(
             matchesDef = await bindingMatchesDefinition();
             attributedByProof = matchesDef;
           }
-          if (!matchesDef && cppCanonicalStructuralExport(index, targetFile, exported, def, parsedContext.sup.id)) {
+          if (
+            !matchesDef &&
+            cppCanonicalStructuralExport(index, targetFile, exported, definition, parsedContext.sup.id)
+          ) {
             // Recover candidates, but prove each overload call through goToDefinition.
             // Structural visibility alone cannot attribute the import token.
             matchesDef = true;
@@ -935,7 +921,7 @@ async function findReferencesInternal(
               index,
               fileId,
               scansQualifiedCppImport ? (imp.local.split("::").pop() ?? imp.local) : imp.local,
-              def,
+              definition,
               (params, parsed) => goToDefinition(index, params, parsed),
               remainingReferences,
               verifiedReferenceFilter(fileId),
@@ -1002,7 +988,7 @@ async function findReferencesInternal(
       // Bloom filters store folded PHP identifiers in addition to their source spelling.
       const normalizedName = candidateSupport?.normalizeIdentifier(referenceDef.localName) ?? referenceDef.localName;
       const canonicalName =
-        candidateSupport?.id === "php" && isPhpCaseInsensitiveSymbolKind(def.kind)
+        candidateSupport?.id === "php" && isPhpCaseInsensitiveSymbolKind(definition.kind)
           ? foldPhpIdentifierCase(normalizedName)
           : normalizedName;
       if (filter && !filter.mightContain(canonicalName)) continue;
@@ -1064,7 +1050,7 @@ async function findReferencesInternal(
   const scannedFiles = [definitionFile, ...candidateFiles, ...receiverScannedFiles];
   const referenceCoverage = buildIndexedCandidateCoverage({
     index,
-    def,
+    def: definition,
     languageId: parsedContext.sup.id,
     exportedNames,
     candidateFiles,
@@ -1087,7 +1073,7 @@ async function findReferencesInternal(
 
   return {
     status: "ok",
-    definition: def,
+    definition,
     references: refs,
     referenceCoverage,
     ...(provenance ? { provenance } : {}),
@@ -1100,6 +1086,117 @@ function syntaxNodeForDefinition(parsedContext: ParsedFileContext, def: SymbolDe
     column: def.range.start.column - 1,
   };
   return parsedContext.tree.rootNode.descendantForPosition(position, position);
+}
+
+/**
+ * Restores indexed metadata for definitions that arrive without it — impact fabricates reference
+ * defs from changed-symbol projections, dropping fields such as `isMember`. Matching is exact
+ * identity against the definition file's module.locals: same kind, localName, and full range span.
+ * Definitions without byte indices or without a matching local are returned unchanged.
+ */
+function indexedDefinitionByIdentity(index: ProjectIndex, def: SymbolDef): SymbolDef {
+  const mod = index.byFile.get(fileIdentityKey(def.file));
+  if (!mod) return def;
+  const startIndex = def.range.start.index;
+  const endIndex = def.range.end.index;
+  if (startIndex === undefined || endIndex === undefined) return def;
+  return (
+    mod.locals.find(
+      (candidate) =>
+        candidate.kind === def.kind &&
+        candidate.localName === def.localName &&
+        candidate.range.start.index === startIndex &&
+        candidate.range.end.index === endIndex,
+    ) ?? def
+  );
+}
+
+/** Equivalence context shared by reference collection and getCppEquivalentCallableDefinitions. */
+type CppEquivalentCallableFamily = {
+  /** Incoming definition enriched to its indexed SymbolDef when module.locals holds an exact identity match. */
+  definition: SymbolDef;
+  /** Definition with the out-of-line member name normalized (Box::helper -> helper) for reference scans. */
+  referenceDef: SymbolDef;
+  /** Resolved receiver owner for out-of-line member definitions (e.g. Box for Box::helper). */
+  receiverOwner: SymbolDef | null;
+  /** Definition-file scope binding at the definition site, when that scope registers one. */
+  localBinding: Binding | undefined;
+  /** Proven equivalent declarations/definitions, excluding definition itself. */
+  equivalents: SymbolDef[];
+};
+
+/**
+ * Single calculation behind reference collection and getCppEquivalentCallableDefinitions: resolves
+ * the receiver owner, the normalized reference name, the definition-site scope binding, and the
+ * proven equivalent definition family for one callable definition site.
+ */
+async function cppEquivalentCallableFamily(
+  index: ProjectIndex,
+  def: SymbolDef,
+  parsedContext?: ParsedFileContext,
+): Promise<CppEquivalentCallableFamily> {
+  const definition = indexedDefinitionByIdentity(index, def);
+  const mod = index.byFile.get(fileIdentityKey(definition.file));
+  if (!mod) {
+    return { definition, referenceDef: definition, receiverOwner: null, localBinding: undefined, equivalents: [] };
+  }
+  const context =
+    parsedContext ??
+    (await ensureParsedContext(
+      definition.file,
+      index.parsed?.get(fileIdentityKey(definition.file)),
+      index.languageExtensions,
+    ));
+  const definitionNameNode = syntaxNodeForDefinition(context, definition);
+  const receiverOwner = await cppOutOfLineReceiverOwner(index, mod, definition, context, definitionNameNode);
+  const memberName = receiverOwner ? cppOutOfLineMemberName(definitionNameNode, context.source, context.sup) : null;
+  const referenceDef =
+    memberName && memberName !== definition.localName ? { ...definition, localName: memberName } : definition;
+  const normalizedLocalName = context.sup.normalizeIdentifier(referenceDef.localName);
+  const scope = getCachedScope(index, definition.file, mod, context);
+  const localBindings = scope.bindings.get(normalizedLocalName) ?? [];
+  const localBinding = localBindings.find(
+    (binding) => binding.def && binding.def.start.index === definition.range.start.index,
+  );
+  let sameFileFunctionBindings: readonly Binding[] = localBindings;
+  if (context.sup.id === "cpp") {
+    sameFileFunctionBindings = localBinding ? cppEquivalentCallableBindings(localBinding) : [];
+  }
+  const sameFileFunctionEquivalentDefinitions =
+    (context.sup.id === "c" || context.sup.id === "cpp") && definition.kind === SymbolKind.Function
+      ? sameFileFunctionBindings.flatMap((binding) => {
+          const bindingRange = binding.def;
+          if (!bindingRange || bindingRange.start.index === definition.range.start.index) return [];
+          const local = mod.locals.find(
+            (candidate) =>
+              candidate.kind === SymbolKind.Function &&
+              candidate.localName === definition.localName &&
+              candidate.range.start.index === bindingRange.start.index &&
+              candidate.range.end.index === bindingRange.end.index,
+          );
+          return local ? [local] : [];
+        })
+      : [];
+  let equivalents: SymbolDef[];
+  if (receiverOwner) {
+    equivalents = await cppOutOfLineEquivalentDefinitions(
+      index,
+      referenceDef,
+      context,
+      definitionNameNode,
+      receiverOwner,
+    );
+  } else if (definition.isMember && context.sup.id === "cpp") {
+    equivalents = await cppInClassMemberEquivalentDefinitions(index, definition, context, definitionNameNode);
+  } else if (context.sup.id === "cpp") {
+    equivalents = [
+      ...sameFileFunctionEquivalentDefinitions,
+      ...(await cppNamespaceFunctionEquivalentDefinitions(index, definition, context, definitionNameNode)),
+    ];
+  } else {
+    equivalents = sameFileFunctionEquivalentDefinitions;
+  }
+  return { definition, referenceDef, receiverOwner, localBinding, equivalents };
 }
 
 async function cppOutOfLineReceiverOwner(

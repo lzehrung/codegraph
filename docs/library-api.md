@@ -1022,6 +1022,7 @@ Coverage is intentionally conservative:
 
 - Compatible callsites may be present in structured data but are omitted from human summaries.
 - Unsupported languages, unknown signatures, spread calls, ambiguous callsites, and overload sets are skipped until codegraph can prove the call target. JS/TS method-level call compatibility is included only for verified receivers such as `new Service().run()` and `const service = new Service(); service.run()`.
+- C++ equivalent prototypes and definitions share argument-count limits, including defaults declared only on a prototype. In-class member declarations and their out-of-line definitions report the same proven member callsites. This uses existing receiver resolution; unrelated same-named members and overload sets remain excluded.
 
 Include reference context snippets when needed:
 

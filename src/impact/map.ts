@@ -512,6 +512,7 @@ const SIGNATURE_DECL_TYPES = new Set([
   "method",
   "singleton_method",
   "function_declaration",
+  "function_declarator",
   "function_definition",
   "method_definition",
   "method_declaration",

@@ -395,6 +395,215 @@ describe("Impact Analyzer Edge Cases", () => {
 
     it.each([
       {
+        label: "an in-class prototype and its out-of-line definition",
+        afterDeclaration: "  int helper(int a, int b);",
+        afterDefinition: "int Box::helper(int a, int b) { return a; }",
+        expectedArity: { minArgs: 2, maxArgs: 2 },
+        shortCallStatus: "likely_mismatch",
+        shortCallReason: "argument_count_below_minimum",
+      },
+      {
+        label: "a default argument declared only on the prototype",
+        afterDeclaration: "  int helper(int a, int b = 0);",
+        afterDefinition: "int Box::helper(int a, int b) { return a; }",
+        expectedArity: { minArgs: 1, maxArgs: 2 },
+        shortCallStatus: "compatible",
+        shortCallReason: "compatible_argument_count",
+      },
+    ])(
+      "shares C++ member identity across a struct prototype and out-of-line definition ($label)",
+      async ({ afterDeclaration, afterDefinition, expectedArity, shortCallStatus, shortCallReason }) => {
+        const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-impact-cpp-member-"));
+        try {
+          const beforeLines = [
+            "struct Box {",
+            "  int helper(int a);",
+            "};",
+            "int Box::helper(int a) { return a; }",
+            "int valid(Box& b) { return b.helper(1, 2); }",
+            "int broken(Box& b) { return b.helper(1); }",
+          ];
+          const afterLines = [
+            "struct Box {",
+            afterDeclaration,
+            "};",
+            afterDefinition,
+            "int valid(Box& b) { return b.helper(1, 2); }",
+            "int broken(Box& b) { return b.helper(1); }",
+          ];
+          await fsp.writeFile(path.join(root, "box.cpp"), `${afterLines.join("\n")}\n`, "utf8");
+          const index = await buildProjectIndex(root, { cache: "memory" });
+          const diffText = [
+            "diff --git a/box.cpp b/box.cpp",
+            "--- a/box.cpp",
+            "+++ b/box.cpp",
+            ...[2, 4].flatMap((line) => [
+              `@@ -${line},1 +${line},1 @@`,
+              `-${beforeLines[line - 1]}`,
+              `+${afterLines[line - 1]}`,
+            ]),
+            "",
+          ].join("\n");
+
+          const result = await analyzeImpactFromDiff(root, index, {
+            provider: "raw",
+            diffText,
+            includeTests: true,
+            maxRefs: 2,
+          });
+          if ("files" in result) throw new Error("Expected full impact report");
+
+          const helpers = result.changedSymbols.filter((symbol) => symbol.name === "helper");
+          expect(helpers.map((symbol) => symbol.range.start.line).sort((left, right) => left - right)).toEqual([2, 4]);
+          for (const declarationLine of [2, 4]) {
+            const helper = helpers.find((symbol) => symbol.range.start.line === declarationLine);
+            expect(
+              helper?.callCompatibility
+                ?.map((hint) => ({
+                  file: hint.callsiteFile,
+                  line: hint.callsiteRange.start.line,
+                  status: hint.status,
+                  reason: hint.reason,
+                  count: hint.actual.argCount,
+                  expected: hint.expected,
+                }))
+                .sort((left, right) => left.line - right.line),
+            ).toEqual([
+              {
+                file: "box.cpp",
+                line: 5,
+                status: "compatible",
+                reason: "compatible_argument_count",
+                count: 2,
+                expected: { ...expectedArity, confidence: "high" },
+              },
+              {
+                file: "box.cpp",
+                line: 6,
+                status: shortCallStatus,
+                reason: shortCallReason,
+                count: 1,
+                expected: { ...expectedArity, confidence: "high" },
+              },
+            ]);
+          }
+        } finally {
+          await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        }
+      },
+    );
+
+    it("keeps C++ member identity scoped to the changed type, excluding an unrelated same-named member", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-impact-cpp-member-other-"));
+      try {
+        const beforeLines = [
+          "struct Box {",
+          "  int helper(int a);",
+          "};",
+          "int Box::helper(int a) { return a; }",
+          "int valid(Box& b) { return b.helper(1, 2); }",
+          "int broken(Box& b) { return b.helper(1); }",
+          "struct Other {",
+          "  int helper(int a, int b, int c);",
+          "};",
+          "int Other::helper(int a, int b, int c) { return a; }",
+          "int otherFixed(Other& o) { return o.helper(1, 2, 3); }",
+        ];
+        const afterLines = [...beforeLines];
+        afterLines[1] = "  int helper(int a, int b);";
+        afterLines[3] = "int Box::helper(int a, int b) { return a; }";
+        await fsp.writeFile(path.join(root, "box.cpp"), `${afterLines.join("\n")}\n`, "utf8");
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const diffText = [
+          "diff --git a/box.cpp b/box.cpp",
+          "--- a/box.cpp",
+          "+++ b/box.cpp",
+          ...[2, 4].flatMap((line) => [
+            `@@ -${line},1 +${line},1 @@`,
+            `-${beforeLines[line - 1]}`,
+            `+${afterLines[line - 1]}`,
+          ]),
+          "",
+        ].join("\n");
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+          maxRefs: 2,
+        });
+        if ("files" in result) throw new Error("Expected full impact report");
+
+        const helpers = result.changedSymbols.filter((symbol) => symbol.name === "helper");
+        expect(helpers.map((symbol) => symbol.range.start.line).sort((left, right) => left - right)).toEqual([2, 4]);
+        for (const helper of helpers) {
+          expect(
+            helper.callCompatibility
+              ?.map((hint) => ({
+                line: hint.callsiteRange.start.line,
+                status: hint.status,
+                count: hint.actual.argCount,
+              }))
+              .sort((left, right) => left.line - right.line),
+          ).toEqual([
+            { line: 5, status: "compatible", count: 2 },
+            { line: 6, status: "likely_mismatch", count: 1 },
+          ]);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("does not emit C++ member compatibility hints for a same-type member overload set", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-impact-cpp-member-overload-"));
+      try {
+        const beforeLines = [
+          "struct Box {",
+          "  int helper(int a);",
+          "  int helper(int a, int b, int c = 0);",
+          "};",
+          "int Box::helper(int a) { return a; }",
+          "int Box::helper(int a, int b, int c) { return a; }",
+          "int fixed(Box& b) { return b.helper(1, 2); }",
+        ];
+        const afterLines = [...beforeLines];
+        afterLines[1] = "  int helper(int a, int b);";
+        afterLines[4] = "int Box::helper(int a, int b) { return a; }";
+        await fsp.writeFile(path.join(root, "box.cpp"), `${afterLines.join("\n")}\n`, "utf8");
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const diffText = [
+          "diff --git a/box.cpp b/box.cpp",
+          "--- a/box.cpp",
+          "+++ b/box.cpp",
+          ...[2, 5].flatMap((line) => [
+            `@@ -${line},1 +${line},1 @@`,
+            `-${beforeLines[line - 1]}`,
+            `+${afterLines[line - 1]}`,
+          ]),
+          "",
+        ].join("\n");
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+          maxRefs: 2,
+        });
+        if ("files" in result) throw new Error("Expected full impact report");
+
+        const helpers = result.changedSymbols.filter((symbol) => symbol.name === "helper");
+        expect(helpers.map((symbol) => symbol.range.start.line).sort((left, right) => left - right)).toEqual([2, 5]);
+        for (const helper of helpers) {
+          expect(helper.callCompatibility ?? []).toHaveLength(0);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it.each([
+      {
         label: "Python",
         file: "main.py",
         before: "def helper(a):\n    return a\n\nvalue = helper(1)\n",

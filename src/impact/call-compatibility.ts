@@ -1,9 +1,9 @@
 import path from "node:path";
-import { findUsageReferences, goToDefinition } from "../indexer/navigation.js";
+import { findUsageReferences, getCppEquivalentCallableDefinitions, goToDefinition } from "../indexer/navigation.js";
 import { ensureParsedContext, type ParsedFileContext } from "../indexer/parse-context.js";
 import { findClosestScopeBinding, getOrBuildScopeIndex, resolveNamedDefinition } from "../indexer/navigation-local.js";
 import {
-  cppBindingCallableShape,
+  cppCallableShapeForNode,
   cppCallableIsDefinition,
   cppEquivalentCallableBindings,
 } from "../indexer/cpp-callables.js";
@@ -172,6 +172,7 @@ function hasTopLevelEquals(text: string): boolean {
 
 const callableDeclarationTypes = new Set([
   "function_declaration",
+  "function_declarator",
   "function_definition",
   "function_item",
   "method",
@@ -898,32 +899,33 @@ async function collectVerifiedCallsiteReferences(
   shouldIncludeReference: (file: string) => boolean,
   diagnostics: ImpactDiagnostics["callCompatibility"] | undefined,
   parsedDefinition: ParsedFileContext,
-  equivalentBindings: readonly Binding[] | undefined,
+  equivalentDefinitions: readonly SymbolDef[] | undefined,
   excludedReferences: ReadonlySet<string>,
 ): Promise<Reference[]> {
   const refs: Reference[] = [];
   const seen = new Set<string>();
   const languageId = parsedDefinition.sup.id;
-  const canonical =
-    equivalentBindings?.find((candidate) => cppCallableIsDefinition(candidate.node)) ?? equivalentBindings?.[0];
   const def: SymbolDef = {
     file: changedSymbol.file,
     localName: changedSymbol.name,
     kind: changedSymbol.kind,
-    range: canonical?.def ?? changedSymbol.range,
+    range: changedSymbol.range,
   };
   let candidateFiles: Set<string> | undefined;
   if ((languageId === "c" || languageId === "cpp") && changedSymbol.kind === SymbolKind.Function) {
-    const module = index.byFile.get(fileIdentityKey(changedSymbol.file));
-    const exportedNames =
-      module?.exports.flatMap((entry) =>
-        entry.type === "local" && sameDefinition(entry.target, def) ? [entry.exportedAs] : [],
-      ) ?? [];
-    if (!exportedNames.length) exportedNames.push(changedSymbol.name);
-    candidateFiles = new Set([
-      fileIdentityKey(changedSymbol.file),
-      ...getCachedReferenceCandidateFiles(index, def, exportedNames, false, languageId).map(fileIdentityKey),
-    ]);
+    candidateFiles = new Set<string>();
+    for (const definition of equivalentDefinitions ?? [def]) {
+      const module = index.byFile.get(fileIdentityKey(definition.file));
+      const exportedNames =
+        module?.exports.flatMap((entry) =>
+          entry.type === "local" && sameDefinition(entry.target, definition) ? [entry.exportedAs] : [],
+        ) ?? [];
+      if (!exportedNames.length) exportedNames.push(definition.localName);
+      candidateFiles.add(fileIdentityKey(definition.file));
+      for (const file of getCachedReferenceCandidateFiles(index, definition, exportedNames, false, languageId)) {
+        candidateFiles.add(fileIdentityKey(file));
+      }
+    }
   }
 
   for (const module of index.byFile.values()) {
@@ -972,7 +974,10 @@ async function collectVerifiedCallsiteReferences(
             const definition =
               result.status === "ok" ? result.definition : cppUnqualifiedCallTarget(index, file, parsed, target);
             if (definition) {
-              if (sameDefinition(definition, def)) {
+              if (
+                sameDefinition(definition, def) ||
+                equivalentDefinitions?.some((candidate) => sameDefinition(definition, candidate))
+              ) {
                 const range = toRange(gotoNode);
                 const key = `${fileIdentityKey(file)}:${range.start.line}:${range.start.column}`;
                 if (!seen.has(key) && !excludedReferences.has(key)) {
@@ -1163,11 +1168,37 @@ export async function attachCallCompatibilityHints(
       incrementSkippedReason(diagnostics, "overload_set");
       continue;
     }
+    const module = index.byFile.get(fileIdentityKey(changedSymbol.file));
+    const referenceDef: SymbolDef = module?.locals.find(
+      (local) => local.kind === changedSymbol.kind && sameRangeStart(local.range, changedSymbol.range),
+    ) ?? {
+      file: changedSymbol.file,
+      localName: changedSymbol.name,
+      kind: changedSymbol.kind,
+      range: changedSymbol.range,
+    };
+    const equivalentDefinitions =
+      parsedDefinition.sup.id === "cpp"
+        ? await getCppEquivalentCallableDefinitions(index, referenceDef, parsedDefinition)
+        : undefined;
     // Default arguments can live on a prototype rather than its definition.
     // Both sites describe the same accepted range.
-    if (equivalentBindings) {
-      for (const binding of equivalentBindings) {
-        const shape = cppBindingCallableShape(binding);
+    if (equivalentDefinitions) {
+      for (const definition of equivalentDefinitions) {
+        const startIndex = definition.range.start.index;
+        if (startIndex === undefined) continue;
+        const parsed =
+          fileIdentityKey(definition.file) === fileIdentityKey(referenceDef.file)
+            ? parsedDefinition
+            : await tryEnsureParsedContext(
+                definition.file,
+                index.parsed?.get(fileIdentityKey(definition.file)),
+                index.languageExtensions,
+                diagnostics,
+              );
+        if (!parsed) continue;
+        const node = parsed.tree.rootNode.descendantForIndex(startIndex, startIndex);
+        const shape = cppCallableShapeForNode(node);
         if (!shape) continue;
         signature.minArgs = Math.min(signature.minArgs, shape.minArity);
         if (signature.maxArgs === null || shape.maxArity === null) {
@@ -1179,12 +1210,6 @@ export async function attachCallCompatibilityHints(
     }
 
     const referenceScanLimit = referenceScanLimitForCallsites(options.maxRefs);
-    const referenceDef = {
-      file: changedSymbol.file,
-      localName: changedSymbol.name,
-      kind: changedSymbol.kind,
-      range: changedSymbol.range,
-    };
     if (options.workBudget) {
       recordReferenceLookupStarted(options.workBudget);
     }
@@ -1249,7 +1274,7 @@ export async function attachCallCompatibilityHints(
           shouldIncludeReference,
           diagnostics,
           parsedDefinition,
-          equivalentBindings,
+          equivalentDefinitions,
           seenRefs,
         );
         for (const ref of verifiedCallsites) {
