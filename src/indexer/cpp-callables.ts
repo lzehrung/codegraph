@@ -338,8 +338,8 @@ function appendAdjustedDeclaratorTokens(
  * Language-defined adjustments only; no alias resolution and no general type
  * equivalence:
  * - array-to-pointer: the outermost array dimension of a parameter becomes a
- *   pointer, so `T p[]`, `T p[N]`, and `T* p` share one identity while inner
- *   extents (`T p[][3]` versus `T (*p)[3]`) stay significant;
+ *   pointer, so `T p[]`, `T p[N]`, and `T* p` share one identity. Likewise,
+ *   `T p[][3]` equals `T (*p)[3]`, but differs from `T* p` or `T p[][4]`;
  * - function-to-pointer: `T f(P)` and `T (*f)(P)` share one identity;
  * - top-level const/volatile is dropped for provably scalar base types with no
  *   declarator operator (`const int p` equals `int p`) and for the top pointer

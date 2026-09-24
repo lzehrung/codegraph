@@ -467,6 +467,16 @@ describe("C++ classification and same-file navigation", () => {
       "int empty(int callback(void));",
       "int empty(int (*callback)()) { return callback ? 1 : 0; }",
       "int use_empty() { return empty(nullptr); }",
+      "int grid(int tiles[][3]);",
+      "int grid(int (*tiles)[3]) { return tiles ? 1 : 0; }",
+      "int use_grid() { return grid(nullptr); }",
+      "int hold(int* const value);",
+      "int hold(int* value) { return value ? 1 : 0; }",
+      "int use_hold() { return hold(nullptr); }",
+      "using Alias = int[3];",
+      "int opaque(const Alias value);",
+      "int opaque(Alias value) { return value ? 1 : 0; }",
+      "int use_opaque() { return opaque(nullptr); }",
     ];
     try {
       await fs.writeFile(file, lines.join("\n"), "utf8");
@@ -476,6 +486,8 @@ describe("C++ classification and same-file navigation", () => {
         [14, "relay", 4],
         [15, "total", 6],
         [21, "empty", 20],
+        [24, "grid", 23],
+        [27, "hold", 26],
       ] as const) {
         const resolved = await goToDefinition(index, {
           file,
@@ -491,6 +503,8 @@ describe("C++ classification and same-file navigation", () => {
         [4, "relay", [3, 4, 14]],
         [6, "total", [5, 6, 15]],
         [20, "empty", [19, 20, 21]],
+        [23, "grid", [22, 23, 24]],
+        [26, "hold", [25, 26, 27]],
       ] as const) {
         const refs = await findReferences(index, {
           file,
@@ -501,10 +515,11 @@ describe("C++ classification and same-file navigation", () => {
         if (refs.status !== "ok") throw new Error("Expected adjusted callable references");
         expect(refs.references.map((reference) => reference.range.start.line)).toEqual(expectedLines);
       }
-      for (const [line, name] of [
-        [7, "exact"],
-        [9, "bind"],
-        [11, "paint"],
+      for (const [line, name, callLine] of [
+        [7, "exact", 16],
+        [9, "bind", 17],
+        [11, "paint", 18],
+        [29, "opaque", 31],
       ] as const) {
         const prototypeRefs = await findReferences(index, {
           file,
@@ -514,13 +529,20 @@ describe("C++ classification and same-file navigation", () => {
         expect(prototypeRefs.status).toBe("ok");
         if (prototypeRefs.status !== "ok") throw new Error("Expected a distinct overload declaration");
         expect(prototypeRefs.references.map((reference) => reference.range.start.line)).toEqual([line]);
+        expect(
+          await goToDefinition(index, {
+            file,
+            line: callLine,
+            column: lines[callLine - 1]!.lastIndexOf(name) + 1,
+          }),
+        ).toMatchObject({ status: "not_found" });
       }
       const graph = await buildSymbolGraphDetailed(index);
       const nodes = [...graph.nodes.values()];
-      for (const merged of ["pick", "relay", "total", "empty"]) {
+      for (const merged of ["pick", "relay", "total", "empty", "grid", "hold"]) {
         expect(nodes.filter((node) => node.name === merged)).toHaveLength(1);
       }
-      for (const split of ["exact", "bind", "paint"]) {
+      for (const split of ["exact", "bind", "paint", "opaque"]) {
         expect(nodes.filter((node) => node.name === split)).toHaveLength(2);
       }
       expect(
@@ -530,6 +552,8 @@ describe("C++ classification and same-file navigation", () => {
           .sort(),
       ).toEqual([
         ["use_empty", "empty"],
+        ["use_grid", "grid"],
+        ["use_hold", "hold"],
         ["use_pick", "pick"],
         ["use_relay", "relay"],
         ["use_total", "total"],
