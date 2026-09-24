@@ -883,6 +883,10 @@ async function createCppCallableRedeclarationCase(): Promise<SemanticExpectation
       "int zero() { return alias::pick(); }",
       "int one() { return alias::pick(1); }",
       "int two() { return alias::pick(1, 2); }",
+      "using left::pick;",
+      "int direct_zero() { return pick(); }",
+      "int direct_one() { return pick(1); }",
+      "int direct_invalid() { return pick(1, 2); }",
       "",
     ].join("\n"),
     "utf8",
@@ -1457,9 +1461,9 @@ nativeDescribe("native semantic coverage", () => {
     const index = await expectNativeSemantics(fixture);
     const consumerFile = normalizeFile(fixture.files[2]!);
     const consumerLines = (await fsp.readFile(consumerFile, "utf8")).split("\n");
-    for (const line of [3, 4, 5, 8]) {
+    for (const line of [3, 4, 5, 8, 12]) {
       const text = consumerLines[line - 1]!;
-      const token = line === 8 ? "pick" : "run";
+      const token = line >= 8 ? "pick" : "run";
       expect(
         await normalizeGoto(index, {
           file: consumerFile,
@@ -1472,6 +1476,8 @@ nativeDescribe("native semantic coverage", () => {
     for (const [line, targetLine] of [
       [6, 2],
       [7, 3],
+      [10, 2],
+      [11, 3],
     ] as const) {
       const result = await goToDefinition(index, {
         file: consumerFile,
@@ -1493,7 +1499,7 @@ nativeDescribe("native semantic coverage", () => {
         references.references
           .filter((reference) => normalizeFile(reference.file) === consumerFile)
           .map((reference) => reference.range.start.line),
-      ).toEqual([line]);
+      ).toEqual(targetLine === 2 ? [6, 10] : [7, 11]);
     }
   });
 

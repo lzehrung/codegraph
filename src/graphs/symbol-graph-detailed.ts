@@ -11,6 +11,7 @@ import {
 import { cppCallableIsDefinition, cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
 import { resolveExport, resolvePhpExportByImportType } from "../indexer/navigation-resolve.js";
 import {
+  cppUsingDeclarationTarget,
   resolveCppCallableBindings,
   resolveCppCollidingBinding,
   resolveCppExportedCallables,
@@ -358,6 +359,13 @@ export async function buildSymbolGraphDetailed(
       };
       const resolveIdentifier = (name: string, node: SyntaxNodeLike): SymbolDef | null => {
         const binding = findClosestScopeBinding(scopeIndex, name, node, sup);
+        const usingTarget = sup.id === "cpp" && binding ? cppUsingDeclarationTarget(binding, src) : undefined;
+        if (usingTarget) {
+          const visible = resolveVisibleCppCallableName(index, moduleEntry, usingTarget, node, src, loadCppParsedFile);
+          if (visible !== undefined) return visible;
+          const target = resolveNamedDefinition(index, moduleEntry, file, sup, usingTarget);
+          return target?.status === "ok" ? target.definition : null;
+        }
         if (sup.id === "cpp" && name.includes("::")) {
           const qualifiedBindings = scopeIndex.cppQualifiedFunctionBindings.get(name);
           if (qualifiedBindings) return resolveCppCallableBindings(file, qualifiedBindings, node, src);

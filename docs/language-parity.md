@@ -89,6 +89,7 @@ Vue and Svelte show `Partial` for the native addon because the addon parses thei
 - An unqualified name inside a type body resolves against the type's own members only in Java, C#, Kotlin, Swift, Ruby, and C++. Every other language requires the member's receiver. Inside a Zig container a sibling member is reachable as `Self.helper()`, `@This().helper()`, or through an instance, never as a bare `helper()`: an unqualified call emits no edge and navigates to `not_found`, because container member names are not file-scope bindings.
 - PHP method names use ASCII case-insensitive matching; properties and class constants remain case-sensitive. Class constants are static members. Import-role lookup distinguishes constructor and type operands (`instanceof`, `catch`) from arguments, even when class, function, and constant aliases have the same spelling.
 - PHP import-alias `uses` edges follow the occurrence's class, function, or constant role. Class and function aliases fold ASCII case; constants require exact spelling. Different roles used in one function keep separate targets.
+- C++ `using` declarations resolve function targets in directly included headers. Go-to-definition, references, and call edges preserve overload arity and local shadowing with cache off and with cold and warm disk caches.
 
 ### Calls, call hierarchy, and call compatibility
 

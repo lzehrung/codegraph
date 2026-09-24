@@ -1955,6 +1955,10 @@ describe("Go to Definition", () => {
           "int zero() { return alias::pick(); }",
           "int one() { return alias::pick(1); }",
           "int too_many() { return alias::pick(1, 2); }",
+          "using left::pick;",
+          "int direct_zero() { return pick(); }",
+          "int direct_one() { return pick(1); }",
+          "int direct_invalid() { return pick(1, 2); }",
         ];
         await fsp.writeFile(header, headerLines.join("\n"), "utf8");
         await fsp.writeFile(file, lines.join("\n"), "utf8");
@@ -1965,6 +1969,9 @@ describe("Go to Definition", () => {
         await testGoToDefinition(index, file, 4, lines[3]!.lastIndexOf("pick") + 1, header, 3);
         await testGoToDefinition(index, file, 5, lines[4]!.lastIndexOf("pick") + 1, header, 4);
         await testGoToDefinition(index, file, 6, lines[5]!.lastIndexOf("pick") + 1, undefined, undefined, "not_found");
+        await testGoToDefinition(index, file, 8, lines[7]!.lastIndexOf("pick") + 1, header, 3);
+        await testGoToDefinition(index, file, 9, lines[8]!.lastIndexOf("pick") + 1, header, 4);
+        await testGoToDefinition(index, file, 10, lines[9]!.lastIndexOf("pick") + 1, undefined, undefined, "not_found");
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

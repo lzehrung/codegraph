@@ -1198,6 +1198,17 @@ export function collectLocalsAndExportsFromSource(
               entry.type === "local" && entry.exportedAs === importedName,
           );
           for (const exportedAs of exportedNames) {
+            // Included declarations are not available during per-file extraction.
+            // Retain the qualified target for resolution against the completed index.
+            for (const imp of imports) {
+              if (imp.kind !== "star" || typeof imp.resolved !== "string") continue;
+              exports.push({
+                type: "reexport",
+                exportedAs,
+                fromModule: imp.resolved,
+                sourceSpecifier: importedName,
+              });
+            }
             for (const target of targets) {
               if (
                 exports.some(

@@ -586,31 +586,63 @@ describe("C++ classification and same-file navigation", () => {
       "int zero() { return alias::pick(); }",
       "int one() { return alias::pick(1); }",
       "int too_many() { return alias::pick(1, 2); }",
+      "using left::pick;",
+      "int direct_zero() { return pick(); }",
+      "int direct_one() { return pick(1); }",
+      "int direct_invalid() { return pick(1, 2); }",
+      "int shadow(int pick) { return pick; }",
+      "namespace imported { using left::pick; }",
+      "int qualified() { return imported::pick(1); }",
     ];
     try {
       await fs.writeFile(header, headerLines.join("\n"), "utf8");
       await fs.writeFile(file, lines.join("\n"), "utf8");
-      const index = await createTestIndexFromFiles(root, [header, file]);
-      const zero = await goToDefinition(index, { file, line: 4, column: lines[3]!.lastIndexOf("pick") + 1 });
-      const one = await goToDefinition(index, { file, line: 5, column: lines[4]!.lastIndexOf("pick") + 1 });
-      const tooMany = await goToDefinition(index, { file, line: 6, column: lines[5]!.lastIndexOf("pick") + 1 });
-      const invalidZero = await goToDefinition(index, { file, line: 2, column: lines[1]!.lastIndexOf("run") + 1 });
-      expect(zero.status).toBe("ok");
-      if (zero.status === "ok") expect(zero.definition.range.start.line).toBe(3);
-      expect(one.status).toBe("ok");
-      if (one.status === "ok") expect(one.definition.range.start.line).toBe(4);
-      expect(tooMany.status).toBe("not_found");
-      expect(invalidZero.status).toBe("not_found");
-      const graph = await buildSymbolGraphDetailed(index);
-      const callerTargets = (name: string) =>
-        graph.edges
-          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === name)
-          .map((edge) => graph.nodes.get(edge.to)?.name);
-      expect(callerTargets("zero")).toEqual(["pick"]);
-      expect(callerTargets("one")).toEqual(["pick"]);
-      expect(callerTargets("too_many")).toEqual([]);
-      expect(callerTargets("invalid_zero")).toEqual([]);
-      expect(callerTargets("invalid_two")).toEqual([]);
+      for (const cache of ["off", "disk", "disk"] as const) {
+        const index = await buildProjectIndexIncremental(root, { cache });
+        const zero = await goToDefinition(index, { file, line: 4, column: lines[3]!.lastIndexOf("pick") + 1 });
+        const one = await goToDefinition(index, { file, line: 5, column: lines[4]!.lastIndexOf("pick") + 1 });
+        const tooMany = await goToDefinition(index, { file, line: 6, column: lines[5]!.lastIndexOf("pick") + 1 });
+        const invalidZero = await goToDefinition(index, { file, line: 2, column: lines[1]!.lastIndexOf("run") + 1 });
+        expect(zero.status).toBe("ok");
+        if (zero.status === "ok") expect(zero.definition.range.start.line).toBe(3);
+        expect(one.status).toBe("ok");
+        if (one.status === "ok") expect(one.definition.range.start.line).toBe(4);
+        expect(tooMany.status).toBe("not_found");
+        expect(invalidZero.status).toBe("not_found");
+        for (const [line, targetLine] of [
+          [8, 3],
+          [9, 4],
+          [13, 4],
+        ] as const) {
+          const result = await goToDefinition(index, { file, line, column: lines[line - 1]!.lastIndexOf("pick") + 1 });
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") {
+            expect(normalizePath(result.definition.file)).toBe(normalizePath(header));
+            expect(result.definition.range.start.line).toBe(targetLine);
+          }
+        }
+        expect(
+          await goToDefinition(index, { file, line: 10, column: lines[9]!.lastIndexOf("pick") + 1 }),
+        ).toMatchObject({ status: "not_found" });
+        expect(
+          await goToDefinition(index, { file, line: 11, column: lines[10]!.lastIndexOf("pick") + 1 }),
+        ).toMatchObject({ status: "ok", definition: { range: { start: { line: 11 } } } });
+        const graph = await buildSymbolGraphDetailed(index);
+        const callerTargets = (name: string) =>
+          graph.edges
+            .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === name)
+            .map((edge) => graph.nodes.get(edge.to)?.name);
+        expect(callerTargets("zero")).toEqual(["pick"]);
+        expect(callerTargets("one")).toEqual(["pick"]);
+        expect(callerTargets("too_many")).toEqual([]);
+        expect(callerTargets("invalid_zero")).toEqual([]);
+        expect(callerTargets("invalid_two")).toEqual([]);
+        expect(callerTargets("direct_zero")).toEqual(["pick"]);
+        expect(callerTargets("direct_one")).toEqual(["pick"]);
+        expect(callerTargets("direct_invalid")).toEqual([]);
+        expect(callerTargets("shadow")).toEqual([]);
+        expect(callerTargets("qualified")).toEqual(["pick"]);
+      }
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

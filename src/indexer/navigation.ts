@@ -62,6 +62,7 @@ import {
 import { cppBindingCallableShape, cppCallableShapeForNode, cppEquivalentCallableBindings } from "./cpp-callables.js";
 import type { Binding } from "./scope-types.js";
 import {
+  cppUsingDeclarationTarget,
   resolveCppCallableBindings,
   resolveCppCollidingBinding,
   resolveCppQualifiedMemberContainer,
@@ -339,6 +340,20 @@ export async function goToDefinition(
     }
     const scopeIndex = getOrBuildScopeIndex(index, file, source, sup, mod, tree);
     const closestBinding = findClosestScopeBinding(scopeIndex, name, node, sup);
+    const usingTarget =
+      sup.id === "cpp" && closestBinding ? cppUsingDeclarationTarget(closestBinding, source) : undefined;
+    if (usingTarget) {
+      const visible = await resolveVisibleCppCallableNameAsync(index, mod, usingTarget, node, source, {
+        file,
+        parsed: { source, tree, sup },
+      });
+      if (visible) return okGoToResult(index, visible, { resolution: "import", confidence: "high" });
+      if (visible === undefined) {
+        const target = resolveNamedDefinition(index, mod, file, sup, usingTarget);
+        if (target) return target;
+      }
+      return { status: "not_found", reason: "No unique C++ using-declaration target" };
+    }
     const cppCollision =
       sup.id === "cpp" && closestBinding ? resolveCppCollidingBinding(file, closestBinding, node, source) : undefined;
     if (cppCollision !== undefined) {

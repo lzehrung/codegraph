@@ -60,18 +60,41 @@ function definitionIdentityKey(def: SymbolDef): string {
   return `${fileIdentityKey(def.file)}:${def.range.start.index ?? `${def.range.start.line}:${def.range.start.column}`}`;
 }
 
+/** A using-declaration introduces its target, not a new local definition. */
+export function cppUsingDeclarationTarget(binding: Binding, source: string): string | undefined {
+  const qualified = binding.node?.parent;
+  if (qualified?.type !== "qualified_identifier" || qualified.parent?.type !== "using_declaration") {
+    return undefined;
+  }
+  return cppQualifiedNameSegments(qualified, source).join("::") || undefined;
+}
+
 function addCppFunctionExportTargets(
+  index: ProjectIndex,
   moduleEntry: ModuleIndex,
   name: string,
   defs: SymbolDef[],
   seen: Set<string>,
 ): void {
+  const moduleKey = `${fileIdentityKey(moduleEntry.file)}\0${name}`;
+  if (seen.has(moduleKey)) return;
+  seen.add(moduleKey);
   for (const entry of moduleEntry.exports) {
-    if (entry.type !== "local" || entry.exportedAs !== name || entry.target.kind !== SymbolKind.Function) continue;
-    const key = definitionIdentityKey(entry.target);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    defs.push(entry.target);
+    if (entry.type === "exportStar" || entry.exportedAs !== name) continue;
+    if (entry.type === "local" && entry.target.kind === SymbolKind.Function) {
+      const key = definitionIdentityKey(entry.target);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      defs.push(entry.target);
+    } else if (entry.type === "reexport") {
+      const target = index.byFile.get(fileIdentityKey(entry.fromModule));
+      if (target) addCppFunctionExportTargets(index, target, entry.sourceSpecifier, defs, seen);
+    }
+  }
+  for (const imp of moduleEntry.imports) {
+    if (imp.kind !== "star" || typeof imp.resolved !== "string") continue;
+    const target = index.byFile.get(fileIdentityKey(imp.resolved));
+    if (target) addCppFunctionExportTargets(index, target, name, defs, seen);
   }
 }
 
@@ -83,7 +106,7 @@ export function collectVisibleCppFunctionExports(
 ): SymbolDef[] {
   const defs: SymbolDef[] = [];
   const seen = new Set<string>();
-  addCppFunctionExportTargets(sourceModule, name, defs, seen);
+  addCppFunctionExportTargets(index, sourceModule, name, defs, seen);
   for (const imp of sourceModule.imports) {
     const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
     if (!targetFile) continue;
@@ -91,10 +114,8 @@ export function collectVisibleCppFunctionExports(
     if (!targetModule) continue;
     if (imp.kind === "named") {
       if (imp.local === name || imp.imported === name) {
-        addCppFunctionExportTargets(targetModule, imp.imported, defs, seen);
+        addCppFunctionExportTargets(index, targetModule, imp.imported, defs, seen);
       }
-    } else if (imp.kind === "star") {
-      addCppFunctionExportTargets(targetModule, name, defs, seen);
     }
   }
   return defs;

@@ -4683,21 +4683,23 @@ describe("Find References: keyword receiver scope and coverage", () => {
         "int one() { return alias::pick(1); }",
         "int too_many() { return alias::pick(1, 2); }",
         "int (*ptr)(int*) = &left::run;",
+        "using left::pick;",
+        "int direct_zero() { return pick(); }",
+        "int direct_one() { return pick(1); }",
+        "int direct_invalid() { return pick(1, 2); }",
       ];
       await fsp.writeFile(header, headerLines.join("\n"), "utf8");
       await fsp.writeFile(file, lines.join("\n"), "utf8");
       const index = await createTestIndexFromFiles(root, [header, file]);
-      const pickZero = await testFindReferences(index, header, 3, headerLines[2]!.indexOf("pick") + 1, 2);
-      const pickOne = await testFindReferences(index, header, 4, headerLines[3]!.indexOf("pick") + 1, 2);
+      const pickZero = await testFindReferences(index, header, 3, headerLines[2]!.indexOf("pick") + 1, 3);
+      const pickOne = await testFindReferences(index, header, 4, headerLines[3]!.indexOf("pick") + 1, 3);
       const runRefs = await testFindReferences(index, header, 2, headerLines[1]!.indexOf("run") + 1, 2);
       const sites = (result: Awaited<ReturnType<typeof testFindReferences>>): string[] =>
         result.status === "ok"
           ? result.references.map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`)
           : [];
-      expect(sites(pickZero)).toEqual(expect.arrayContaining(["api.h:3", "use.cpp:4"]));
-      expect(sites(pickZero).some((site: string) => site === "use.cpp:5" || site === "use.cpp:6")).toBe(false);
-      expect(sites(pickOne)).toEqual(expect.arrayContaining(["api.h:4", "use.cpp:5"]));
-      expect(sites(pickOne).some((site: string) => site === "use.cpp:4" || site === "use.cpp:6")).toBe(false);
+      expect(sites(pickZero)).toEqual(["api.h:3", "use.cpp:4", "use.cpp:9"]);
+      expect(sites(pickOne)).toEqual(["api.h:4", "use.cpp:5", "use.cpp:10"]);
       expect(sites(runRefs)).toEqual(expect.arrayContaining(["api.h:2", "use.cpp:7"]));
       expect(sites(runRefs).some((site: string) => site === "use.cpp:2" || site === "use.cpp:3")).toBe(false);
     } finally {

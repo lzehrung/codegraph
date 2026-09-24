@@ -443,7 +443,8 @@ export function resolveExport(
     for (const entry of names.reexports.get(canonicalName) ?? []) {
       const downstream =
         resolveFromFile(entry.fromModule, entry.sourceSpecifier || canonicalName, namespace) ??
-        resolveFromFile(entry.fromModule, canonicalName, namespace);
+        // A qualified using target cannot fall back to an unrelated bare export.
+        (entry.sourceSpecifier.includes("::") ? null : resolveFromFile(entry.fromModule, canonicalName, namespace));
       if (downstream && !reexportCandidates.some((candidate) => sameResolvedExport(index, candidate, downstream))) {
         reexportCandidates.push(downstream);
       }
