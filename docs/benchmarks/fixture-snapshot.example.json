@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-23T14:07:20.272Z",
+  "generatedAt": "2026-09-24T02:29:09.529Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.16.0",
   "numTotalTests": 489,
@@ -323,8 +323,8 @@
       "tests/languages/import-from-captures.test.ts",
       "tests/languages/query-hygiene.test.ts"
     ],
-    "tests": 75,
-    "passed": 75,
+    "tests": 76,
+    "passed": 76,
     "failed": 0,
     "skipped": 0
   }
