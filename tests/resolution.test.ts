@@ -9,6 +9,7 @@ import {
   collectGraph,
   findReferences,
   goToDefinition,
+  SymbolKind,
 } from "../src/index.js";
 import {
   loadNearestTsconfigFor,
@@ -2454,6 +2455,65 @@ describe("Import Resolution", () => {
         ["qualified_nested_inline_alias", "nested_only"],
         ["valid", "run"],
       ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps C struct tag and typedef exports distinct and selects each by kind", async () => {
+    const root = await mkTmpDir("cg-c-tag-typedef-exports-");
+    const header = path.join(root, "api.h").replace(/\\/g, "/");
+    const consumer = path.join(root, "main.c").replace(/\\/g, "/");
+    try {
+      await fsp.writeFile(
+        header,
+        [
+          "struct Item { int value; };",
+          "typedef struct Item Item;",
+          "struct OnlyTag { int n; };",
+          "typedef int OnlyAlias;",
+          "int pick(int value);",
+          "int pick(int value) { return value; }",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(consumer, '#include "api.h"\nstruct Item item;\nItem alias;\n', "utf8");
+      const index = await createTestIndexFromFiles(root, [header, consumer]);
+
+      // The struct tag namespace and the typedef name are separate C symbols, so each preferred
+      // kind selects its own declaration instead of the other namespace's row.
+      for (const [kind, line] of [
+        [SymbolKind.Class, 1],
+        [SymbolKind.TypeAlias, 2],
+      ] as const) {
+        const resolved = resolveExport(index, header, "Item", { preferredKind: kind, allowLocalFallback: false });
+        expect(resolved?.kind).toBe("resolved");
+        if (resolved?.kind !== "resolved") throw new Error("Expected a distinct C export for the preferred kind");
+        expect(resolved.def.kind).toBe(kind);
+        expect(resolved.def.range.start.line).toBe(line);
+      }
+
+      // Unqualified lookup keeps the existing precedence: one tag plus one typedef selects the tag.
+      const unqualified = resolveExport(index, header, "Item", { allowLocalFallback: false });
+      expect(unqualified?.kind).toBe("resolved");
+      if (unqualified?.kind !== "resolved") throw new Error("Expected the C struct tag by default");
+      expect(unqualified.def.kind).toBe(SymbolKind.Class);
+      expect(unqualified.def.range.start.line).toBe(1);
+
+      // A kind preference excludes the other namespace rather than falling back to it.
+      expect(
+        resolveExport(index, header, "OnlyAlias", { preferredKind: SymbolKind.Class, allowLocalFallback: false }),
+      ).toBeNull();
+      expect(
+        resolveExport(index, header, "OnlyTag", { preferredKind: SymbolKind.TypeAlias, allowLocalFallback: false }),
+      ).toBeNull();
+
+      // A prototype and its definition collapse into one callable export.
+      const pick = resolveExport(index, header, "pick", { allowLocalFallback: false });
+      expect(pick?.kind).toBe("resolved");
+      if (pick?.kind !== "resolved") throw new Error("Expected the C function export");
+      expect(pick.def.kind).toBe(SymbolKind.Function);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

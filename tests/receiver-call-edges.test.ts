@@ -813,6 +813,47 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(callsiteTexts(graph, cppRun, cppCall, files)).toEqual(["cpp_run"]);
   });
 
+  it("uses one graph node for C++ declarations with adjusted parameter shapes", async () => {
+    const files: Record<string, string> = {
+      "probe.cpp": [
+        "int pick(int values[]);",
+        "int pick(int* values) { return values ? 1 : 0; }",
+        "int relay(void handler(int));",
+        "int relay(void (*handler)(int)) { return handler ? 1 : 0; }",
+        "int total(const int sum);",
+        "int total(int sum) { return sum; }",
+        "int exact(const int* values);",
+        "int exact(int* values) { return values ? 1 : 0; }",
+        "int use_pick(int* buf) { return pick(buf); }",
+        "int use_relay() { return relay(nullptr); }",
+        "int use_total() { return total(3); }",
+        "int use_exact(int* buf) { return exact(buf); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-adjusted-shape-graph-", files);
+    const functionCount = (name: string) =>
+      [...graph.nodes.values()].filter((node) => node.name === name && node.kind === "function").length;
+    expect(functionCount("pick")).toBe(1);
+    expect(functionCount("relay")).toBe(1);
+    expect(functionCount("total")).toBe(1);
+    expect(functionCount("exact")).toBe(2);
+
+    const pick = nodeIn(graph, "probe.cpp", "pick");
+    const relay = nodeIn(graph, "probe.cpp", "relay");
+    const total = nodeIn(graph, "probe.cpp", "total");
+    const usePick = nodeIn(graph, "probe.cpp", "use_pick");
+    const useRelay = nodeIn(graph, "probe.cpp", "use_relay");
+    const useTotal = nodeIn(graph, "probe.cpp", "use_total");
+
+    expect(callsiteTexts(graph, pick, usePick, files)).toEqual(["pick"]);
+    expect(callsiteTexts(graph, relay, useRelay, files)).toEqual(["relay"]);
+    expect(callsiteTexts(graph, total, useTotal, files)).toEqual(["total"]);
+
+    const useExact = [...graph.nodes.values()].find((node) => node.name === "use_exact" && node.kind === "function");
+    expect(useExact).toBeDefined();
+    expect(outgoingCallCount(graph, useExact!.id)).toBe(0);
+  });
+
   it("owns C++ out-of-line definitions and preserves declaration scope", async () => {
     const files: Record<string, string> = {
       "box.hpp": [

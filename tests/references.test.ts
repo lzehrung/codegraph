@@ -4457,6 +4457,50 @@ describe("Find References: keyword receiver scope and coverage", () => {
     }
   });
 
+  it("groups adjusted C++ parameter shapes in references without merging near neighbors", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-adjusted-shape-refs-"));
+    try {
+      const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+      const lines = [
+        "int pick(int values[]);",
+        "int pick(int* values) { return values ? 1 : 0; }",
+        "int relay(void handler(int));",
+        "int relay(void (*handler)(int)) { return handler ? 1 : 0; }",
+        "int total(const int sum);",
+        "int total(int sum) { return sum; }",
+        "int exact(const int* values);",
+        "int exact(int* values) { return values ? 1 : 0; }",
+        "int use_pick(int* buf) { return pick(buf); }",
+        "int use_relay() { return relay(nullptr); }",
+        "int use_total() { return total(3); }",
+        "int use_exact(int* buf) { return exact(buf); }",
+      ];
+      await fsp.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+
+      const pick = await testFindReferences(index, file, 2, lines[1]!.indexOf("pick") + 1, 3);
+      if (pick.status === "ok") {
+        expect(pick.references.map((reference) => reference.range.start.line)).toEqual([1, 2, 9]);
+      }
+      const relay = await testFindReferences(index, file, 4, lines[3]!.indexOf("relay") + 1, 3);
+      if (relay.status === "ok") {
+        expect(relay.references.map((reference) => reference.range.start.line)).toEqual([3, 4, 10]);
+      }
+      const total = await testFindReferences(index, file, 6, lines[5]!.indexOf("total") + 1, 3);
+      if (total.status === "ok") {
+        expect(total.references.map((reference) => reference.range.start.line)).toEqual([5, 6, 11]);
+      }
+      const exact = await testFindReferences(index, file, 7, lines[6]!.indexOf("exact") + 1, 1);
+      if (exact.status === "ok") {
+        const exactLines = exact.references.map((reference) => reference.range.start.line);
+        expect(exactLines).toContain(7);
+        expect(exactLines).not.toContain(12);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps using-alias C++ overload references on their matching consumer calls", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-using-alias-overload-refs-"));
     try {

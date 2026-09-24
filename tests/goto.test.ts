@@ -1632,6 +1632,48 @@ describe("Go to Definition", () => {
       }
     });
 
+    it("resolves C++ declarations whose parameters differ only by language adjustments", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-adjusted-shape-goto-"));
+      try {
+        const file = path.join(root, "probe.cpp").replace(/\\/g, "/");
+        const lines = [
+          "int pick(int values[]);",
+          "int pick(int* values) { return values ? 1 : 0; }",
+          "int relay(void handler(int));",
+          "int relay(void (*handler)(int)) { return handler ? 1 : 0; }",
+          "int total(const int sum);",
+          "int total(int sum) { return sum; }",
+          "int exact(const int* values);",
+          "int exact(int* values) { return values ? 1 : 0; }",
+          "int use_pick(int* buf) { return pick(buf); }",
+          "int use_relay() { return relay(nullptr); }",
+          "int use_total() { return total(3); }",
+          "int use_exact(int* buf) { return exact(buf); }",
+          "int use_pick_invalid() { return pick(); }",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        await testGoToDefinition(index, file, 9, lines[8]!.lastIndexOf("pick") + 1, file, 2);
+        await testGoToDefinition(index, file, 10, lines[9]!.lastIndexOf("relay") + 1, file, 4);
+        await testGoToDefinition(index, file, 11, lines[10]!.lastIndexOf("total") + 1, file, 6);
+        const ambiguous = await goToDefinition(index, {
+          file,
+          line: 12,
+          column: lines[11]!.lastIndexOf("exact") + 1,
+        });
+        expect(ambiguous.status).toBe("not_found");
+        const invalidArity = await goToDefinition(index, {
+          file,
+          line: 13,
+          column: lines[12]!.lastIndexOf("pick") + 1,
+        });
+        expect(invalidArity.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("does not rank overlapping C++ default-argument overloads", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-default-overlap-goto-"));
       try {

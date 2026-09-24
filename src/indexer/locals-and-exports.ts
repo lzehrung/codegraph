@@ -218,19 +218,27 @@ function declaratorNameNode(node: SyntaxNodeLike | undefined): SyntaxNodeLike | 
   return undefined;
 }
 
-function declaratorCaptureName(capture: NativeCapture, node?: SyntaxNodeLike): string | undefined {
-  const fromNode = declaratorNameNode(node)?.text;
-  if (fromNode) return fromNode;
-  if (capture.nodeType === "identifier" || capture.nodeType === "type_identifier") return capture.text;
-  return cDeclaratorDeclaredName(capture.text)?.name;
-}
-
-function localExportDedupeKey(entry: Extract<ExportEntry, { type: "local" }>, languageId: string): string {
-  if (languageId === "c") return entry.exportedAs;
+// C function and tag redeclarations share an identity. Tags remain separate from
+// typedefs and other ordinary names, even when both are classified as TypeAlias.
+function localExportDedupeKey(
+  entry: Extract<ExportEntry, { type: "local" }>,
+  languageId: string,
+  cEnumTags?: ReadonlySet<SymbolDef>,
+): string {
+  if (languageId === "c") {
+    if (entry.target.kind === SymbolKind.Function) return `${entry.exportedAs}\0function`;
+    if (entry.target.kind === SymbolKind.Class || cEnumTags?.has(entry.target)) {
+      return `${entry.exportedAs}\0tag`;
+    }
+  }
   return `${entry.exportedAs}\0${entry.target.localName}\0${entry.target.range.start.index ?? 0}\0${entry.target.range.end.index ?? 0}`;
 }
 
-function dedupeExportEntries(entries: ExportEntry[], languageId: string): ExportEntry[] {
+function dedupeExportEntries(
+  entries: ExportEntry[],
+  languageId: string,
+  cEnumTags?: ReadonlySet<SymbolDef>,
+): ExportEntry[] {
   const seen = new Set<string>();
   const out: ExportEntry[] = [];
   for (const entry of entries) {
@@ -238,7 +246,7 @@ function dedupeExportEntries(entries: ExportEntry[], languageId: string): Export
       out.push(entry);
       continue;
     }
-    const key = localExportDedupeKey(entry, languageId);
+    const key = localExportDedupeKey(entry, languageId, cEnumTags);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(entry);
@@ -571,6 +579,7 @@ export function collectLocalsAndExportsFromSource(
 
   const locals: SymbolDef[] = [];
   const seenLocals = new Set<string>();
+  let cEnumTags: Set<SymbolDef> | undefined;
   const toKind = (s: string): SymbolKind => {
     if (s === "function") return SymbolKind.Function;
     if (s === "method") return SymbolKind.Function;
@@ -1030,11 +1039,22 @@ export function collectLocalsAndExportsFromSource(
         if (isOutsideModuleScope(nameCapture)) continue;
         const visibilityNameNode = nodeForCapture(nameCapture);
         if (visibilityNameNode && !isExportedDeclaration(support.id, visibilityNameNode)) continue;
-        const nameText = map["declarator"]
-          ? declaratorCaptureName(nameCapture, nodeForCapture(nameCapture))
-          : nameCapture.text;
+        let nameText = nameCapture.text;
+        let nameRange = rangeFromNativeCapture(nameCapture, ensureByteIndexMap());
+        if (map["declarator"]) {
+          const namedNode = declaratorNameNode(visibilityNameNode);
+          if (namedNode) {
+            nameText = namedNode.text;
+            nameRange = toRange(namedNode);
+          } else {
+            const extracted = cDeclaratorDeclaredName(nameCapture.text);
+            if (!extracted) continue;
+            nameText = extracted.name;
+            const captureStart = nameRange.start.index ?? 0;
+            nameRange = rangeFromOffsets(captureStart + extracted.start, captureStart + extracted.end);
+          }
+        }
         if (!nameText) continue;
-        const nameRange = rangeFromNativeCapture(nameCapture, ensureByteIndexMap());
         const local =
           locals.find(
             (def) =>
@@ -1043,6 +1063,9 @@ export function collectLocalsAndExportsFromSource(
               def.range.end.index === nameRange.end.index,
           ) ?? locals.find((def) => def.localName === nameText);
         if (local) {
+          if (support.id === "c" && visibilityNameNode?.parent?.type === "enum_specifier") {
+            (cEnumTags ??= new Set<SymbolDef>()).add(local);
+          }
           const isDefaultExport = /^\s*export\s+default\b/.test(stmtText);
           const exportedName =
             support.id === "cpp" && visibilityNameNode
@@ -1287,5 +1310,5 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
-  return { file, exports: dedupeExportEntries(exports, support.id), imports, locals };
+  return { file, exports: dedupeExportEntries(exports, support.id, cEnumTags), imports, locals };
 }

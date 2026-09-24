@@ -442,6 +442,103 @@ describe("C++ classification and same-file navigation", () => {
     }
   });
 
+  it("keeps adjusted parameter shapes on one C++ callable identity", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-adjusted-identity-"));
+    const file = path.join(root, "probe.cpp");
+    const lines = [
+      "int pick(int values[]);",
+      "int pick(int* values) { return values ? 1 : 0; }",
+      "int relay(void handler(int));",
+      "int relay(void (*handler)(int)) { return handler ? 1 : 0; }",
+      "int total(const int sum);",
+      "int total(int sum) { return sum; }",
+      "int exact(const int* values);",
+      "int exact(int* values) { return values ? 1 : 0; }",
+      "int bind(int& value);",
+      "int bind(int* value) { return value ? 1 : 0; }",
+      "void paint(int tiles[][3]);",
+      "void paint(int* tiles) { }",
+      "int use_pick(int* buf) { return pick(buf); }",
+      "int use_relay() { return relay(nullptr); }",
+      "int use_total() { return total(3); }",
+      "int use_exact(int* buf) { return exact(buf); }",
+      "int use_bind(int boxed) { return bind(boxed); }",
+      "int use_paint() { paint(nullptr); return 0; }",
+      "int empty(int callback(void));",
+      "int empty(int (*callback)()) { return callback ? 1 : 0; }",
+      "int use_empty() { return empty(nullptr); }",
+    ];
+    try {
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      for (const [callLine, callText, definitionLine] of [
+        [13, "pick", 2],
+        [14, "relay", 4],
+        [15, "total", 6],
+        [21, "empty", 20],
+      ] as const) {
+        const resolved = await goToDefinition(index, {
+          file,
+          line: callLine,
+          column: lines[callLine - 1]!.lastIndexOf(callText) + 1,
+        });
+        expect(resolved.status).toBe("ok");
+        if (resolved.status !== "ok") throw new Error("Expected the adjusted callable definition");
+        expect(resolved.definition.range.start.line).toBe(definitionLine);
+      }
+      for (const [line, name, expectedLines] of [
+        [2, "pick", [1, 2, 13]],
+        [4, "relay", [3, 4, 14]],
+        [6, "total", [5, 6, 15]],
+        [20, "empty", [19, 20, 21]],
+      ] as const) {
+        const refs = await findReferences(index, {
+          file,
+          line,
+          column: lines[line - 1]!.indexOf(name) + 1,
+        });
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") throw new Error("Expected adjusted callable references");
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual(expectedLines);
+      }
+      for (const [line, name] of [
+        [7, "exact"],
+        [9, "bind"],
+        [11, "paint"],
+      ] as const) {
+        const prototypeRefs = await findReferences(index, {
+          file,
+          line,
+          column: lines[line - 1]!.indexOf(name) + 1,
+        });
+        expect(prototypeRefs.status).toBe("ok");
+        if (prototypeRefs.status !== "ok") throw new Error("Expected a distinct overload declaration");
+        expect(prototypeRefs.references.map((reference) => reference.range.start.line)).toEqual([line]);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const nodes = [...graph.nodes.values()];
+      for (const merged of ["pick", "relay", "total", "empty"]) {
+        expect(nodes.filter((node) => node.name === merged)).toHaveLength(1);
+      }
+      for (const split of ["exact", "bind", "paint"]) {
+        expect(nodes.filter((node) => node.name === split)).toHaveLength(2);
+      }
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls")
+          .map((edge) => [graph.nodes.get(edge.from)?.name, graph.nodes.get(edge.to)?.name])
+          .sort(),
+      ).toEqual([
+        ["use_empty", "empty"],
+        ["use_pick", "pick"],
+        ["use_relay", "relay"],
+        ["use_total", "total"],
+      ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("selects included using-alias overloads and rejects invalid C++ arity", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-included-alias-arity-"));
     const header = path.join(root, "api.hpp");

@@ -7,6 +7,7 @@ import { collectModuleSpecifiersFromSource } from "../../src/graphs.js";
 import { buildProjectIndex, buildScopeIndexFromSource, findReferences, goToDefinition } from "../../src/index.js";
 import { collectImportsForFile } from "../../src/indexer.js";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
+import type { ExportEntry } from "../../src/indexer/types.js";
 import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js";
 
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
@@ -16,6 +17,15 @@ import type { LanguageTestDefinition } from "./types.js";
 function moduleFromSource(file: string, source: string, support: LanguageSupport) {
   const native = getNativeQueryExecution(source, support);
   return collectLocalsAndExportsFromSource(file, source, support, [], { nativeQueries: native.results });
+}
+
+type LocalExport = Extract<ExportEntry, { type: "local" }>;
+
+/** Local export rows for one visible C name, in the order `collectLocalsAndExportsFromSource` kept them. */
+function localExportsNamed(file: string, source: string, name: string): LocalExport[] {
+  return moduleFromSource(file, source, C_SUPPORT).exports.filter(
+    (entry): entry is LocalExport => entry.type === "local" && entry.exportedAs === name,
+  );
 }
 
 function localIdentity(source: string, support: LanguageSupport): string[] {
@@ -557,20 +567,93 @@ describe("C native queries", () => {
 });
 
 describe("C export de-duplication", () => {
-  it("exports typedef struct X {} X once", () => {
-    const source = "typedef struct X { int v; } X;\n";
-    const exports = moduleFromSource("once.c", source, C_SUPPORT).exports.filter(
-      (entry) => entry.type === "local" && entry.exportedAs === "X",
-    );
-    expect(exports).toHaveLength(1);
+  it("keeps same-spelled struct tag and typedef exports distinct", () => {
+    const source = "struct Item { int value; };\ntypedef struct Item Item;\n";
+    const exports = localExportsNamed("item.h", source, "Item");
+    // The tag declaration on line 1 and the typedef alias on line 2 are separate C symbols.
+    expect(exports.map((entry) => [entry.target.kind, entry.target.range.start.index]).sort()).toEqual([
+      ["class", 7],
+      ["type", 48],
+    ]);
   });
 
-  it("collapses struct tag and typedef export rows that resolve to the same local", () => {
-    const source = "struct Quad { int a; };\ntypedef struct Quad Quad;\n";
-    const exports = moduleFromSource("dup.c", source, C_SUPPORT).exports.filter(
-      (entry) => entry.type === "local" && entry.exportedAs === "Quad",
-    );
+  it("keeps an inline typedef struct tag and alias distinct", () => {
+    const source = "typedef struct X { int v; } X;\n";
+    const exports = localExportsNamed("once.c", source, "X");
+    expect(exports.map((entry) => entry.target.kind).sort()).toEqual(["class", "type"]);
+  });
+
+  it("collapses a repeated struct tag reference onto its declaration", () => {
+    const source = "struct Quad { int a; };\nstruct Quad value;\n";
+    const exports = localExportsNamed("dup.c", source, "Quad");
     expect(exports).toHaveLength(1);
+    expect(exports[0]!.target.kind).toBe("class");
+    expect(exports[0]!.target.range.start.index).toBe(7);
+  });
+
+  it("collapses enum tag references without collapsing a same-spelled typedef", () => {
+    const source = "enum Color { RED };\nenum Color color;\ntypedef enum Color Color;\n";
+    const exports = localExportsNamed("color.h", source, "Color");
+    expect(exports.map((entry) => entry.target.range.start.line).sort((a, b) => a - b)).toEqual([1, 3]);
+  });
+
+  it("keeps nested typedef declarators separate from same-spelled tags", () => {
+    const source = [
+      "struct Pointer { int value; };",
+      "typedef struct Pointer *Pointer;",
+      "struct Callback { int value; };",
+      "typedef int (*Callback)(int);",
+      "struct Array { int value; };",
+      "typedef struct Array Array[3];",
+    ].join("\n");
+    const module = moduleFromSource("declarators.h", source, C_SUPPORT);
+    expect(
+      module.exports
+        .flatMap((entry) =>
+          entry.type === "local" && entry.target.kind === "type"
+            ? [[entry.exportedAs, entry.target.range.start.line]]
+            : [],
+        )
+        .sort(),
+    ).toEqual([
+      ["Array", 6],
+      ["Callback", 4],
+      ["Pointer", 2],
+    ]);
+  });
+
+  it("collapses a C function prototype and definition onto one entity", () => {
+    const source = "int pick(int value);\nint pick(int value) { return value; }\n";
+    const exports = localExportsNamed("pick.h", source, "pick");
+    expect(exports).toHaveLength(1);
+    expect(exports[0]!.target.kind).toBe("function");
+  });
+
+  it("keeps tags separate from typedefs and other ordinary names", () => {
+    const source = [
+      "struct X { int a; };",
+      "void X(void) {}",
+      "int Y;",
+      "struct Y { int b; };",
+      "typedef int Z;",
+      "struct Z { int c; };",
+      "",
+    ].join("\n");
+    expect(
+      localExportsNamed("namespaces.h", source, "X")
+        .map((entry) => entry.target.kind)
+        .sort(),
+    ).toEqual(["class", "function"]);
+    expect(
+      localExportsNamed("namespaces.h", source, "Y")
+        .map((entry) => entry.target.kind)
+        .sort(),
+    ).toEqual(["class", "variable"]);
+    expect(
+      localExportsNamed("namespaces.h", source, "Z")
+        .map((entry) => entry.target.kind)
+        .sort(),
+    ).toEqual(["class", "type"]);
   });
 });
 

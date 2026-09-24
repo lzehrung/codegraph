@@ -8,9 +8,11 @@ import {
   findReferences,
   goToDefinition,
   listSymbols,
+  SymbolKind,
   type ProjectIndex,
   type SqlFactKind,
 } from "../src/index.js";
+import { resolveExport } from "../src/indexer/navigation-resolve.js";
 import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 import { withNativeRuntimeModeAsync } from "./helpers/native.js";
 
@@ -854,7 +856,7 @@ async function createCppCallableRedeclarationCase(): Promise<SemanticExpectation
   await fsp.writeFile(
     headerFile,
     [
-      "namespace left { int run(int*);",
+      "namespace left { int run(int values[]);",
       "int pick();",
       "int pick(int);",
       "}",
@@ -1440,6 +1442,28 @@ nativeDescribe("native semantic coverage", () => {
           .filter((reference) => normalizeFile(reference.file) === consumerFile)
           .map((reference) => reference.range.start.line),
       ).toEqual([line]);
+    }
+  });
+
+  it("keeps native C tag and typedef export identities distinct", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-c-tag-typedef-"));
+    tempDirs.push(root);
+    const header = normalizeFile(path.join(root, "api.h"));
+    const consumer = normalizeFile(path.join(root, "main.c"));
+    await fsp.writeFile(header, "struct Item { int value; };\ntypedef struct Item *Item;\n", "utf8");
+    await fsp.writeFile(consumer, '#include "api.h"\nstruct Item item;\nItem alias;\n', "utf8");
+    const index = await withNativeRuntimeModeAsync("native", () =>
+      buildProjectIndexFromFiles(root, [header, consumer], { cache: "off" }),
+    );
+    for (const [kind, line] of [
+      [SymbolKind.Class, 1],
+      [SymbolKind.TypeAlias, 2],
+    ] as const) {
+      const resolved = resolveExport(index, header, "Item", { preferredKind: kind, allowLocalFallback: false });
+      expect(resolved?.kind).toBe("resolved");
+      if (resolved?.kind !== "resolved") throw new Error("Expected a distinct C export");
+      expect(resolved.def.kind).toBe(kind);
+      expect(resolved.def.range.start.line).toBe(line);
     }
   });
 
