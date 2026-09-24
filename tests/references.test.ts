@@ -2956,7 +2956,7 @@ describe("Find References", () => {
         ];
         const consumerLines = [
           '#include "./shapes.h"',
-          "",
+          "struct Item; union Value; enum Color;",
           "struct Item *consumer_item_tag;",
           "Item *consumer_item_alias;",
           "union Value *consumer_value_tag;",
@@ -3030,6 +3030,7 @@ describe("Find References", () => {
             { file: headerFile, line: kind.tagDeclLine, column: tagDeclColumn },
             { file: headerFile, line: kind.tagUseLine, column: tagUseColumn },
             { file: headerFile, line: kind.typedefLine, column: tagColumn },
+            { file: consumerFile, line: 2, column: tokenColumn(consumerLines[1]!, kind.name) },
             { file: consumerFile, line: kind.consumerTagLine, column: consumerTagColumn },
             { file: consumerFile, line: kind.consumerTagUseLine, column: consumerTagUseColumn },
           ];

@@ -4,7 +4,18 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { C_SUPPORT, CPP_SUPPORT, KOTLIN_SUPPORT, type LanguageSupport } from "../../src/languages.js";
 import { collectModuleSpecifiersFromSource } from "../../src/graphs.js";
-import { buildProjectIndex, buildScopeIndexFromSource, findReferences, goToDefinition } from "../../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexIncremental,
+  buildScopeIndexFromSource,
+  buildSymbolGraph,
+  buildSymbolGraphDetailed,
+  findReferences,
+  goToDefinition,
+  listSymbols,
+  resolveExport,
+} from "../../src/index.js";
+import { defNodeId } from "../../src/graphs/symbol-graph.js";
 import { collectImportsForFile } from "../../src/indexer.js";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
 import type { ExportEntry } from "../../src/indexer/types.js";
@@ -1192,6 +1203,104 @@ describe("C tag and typedef namespaces", () => {
         expect(hasSite(aliasReferences, header, kind.tagLine, tagDeclColumn)).toBe(false);
         expect(hasSite(aliasReferences, header, kind.headerTagUseLine, headerTagUseColumn)).toBe(false);
         expect(hasSite(aliasReferences, header, kind.typedefLine, typedefTagColumn)).toBe(false);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves forward-tag scope and namespace-specific graph aliases through disk reloads", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-forward-graph-"));
+    try {
+      const header = normalizePath(path.join(root, "api.h"));
+      const file = normalizePath(path.join(root, "main.c"));
+      await writeFile(
+        header,
+        [
+          "struct Item { int value; };",
+          "typedef struct Item Item;",
+          "enum Color { RED };",
+          "typedef enum Color Color;",
+          "struct run { int value; };",
+          "int run(void);",
+          "struct Forward;",
+        ].join("\n"),
+      );
+      const lines = [
+        '#include "api.h"',
+        "struct Item;",
+        "struct Item *outer;",
+        "Item ordinary;",
+        "void nested(void) {",
+        "  struct Item;",
+        "  struct Item *inner;",
+        "}",
+        "struct Forward; struct Forward { int value; };",
+        "struct Forward *completed;",
+        "int caller(void) { return run(); }",
+      ];
+      await writeFile(file, lines.join("\n"));
+      for (const cache of ["off", "disk", "disk"] as const) {
+        const index = await buildProjectIndexIncremental(root, { cache });
+        for (const [line, name, target, targetLine] of [
+          [2, "Item", header, 1],
+          [3, "Item", header, 1],
+          [4, "Item", header, 2],
+          [6, "Item", file, 6],
+          [7, "Item", file, 6],
+          [10, "Forward", file, 9],
+        ] as const) {
+          const result = await goToDefinition(index, { file, line, column: lines[line - 1]!.indexOf(name) + 1 });
+          expect(result).toMatchObject({
+            status: "ok",
+            definition: { file: target, range: { start: { line: targetLine } } },
+          });
+        }
+        const refs = await findReferences(index, { file: header, line: 1, column: 8 });
+        expect(refs.status).toBe("ok");
+        expect(resolveExport(index, file, "Forward", { cNamespace: "tag", allowLocalFallback: false })).toMatchObject({
+          kind: "resolved",
+          def: {
+            file,
+            range: { start: { line: 9, column: lines[8]!.lastIndexOf("Forward") + 1 } },
+          },
+        });
+        const headerDefinitions = index.byFile
+          .get(fileIdentityKey(header))!
+          .exports.flatMap((entry) => (entry.type === "local" ? [entry.target] : []));
+        if (refs.status !== "ok") throw new Error("Expected header tag references");
+        expect(
+          refs.references.filter((ref) => normalizePath(ref.file) === file).map((ref) => ref.range.start.line),
+        ).toEqual([2, 3]);
+        for (const buildGraph of [buildSymbolGraph, buildSymbolGraphDetailed]) {
+          const graph = await buildGraph(index);
+          for (const name of ["Item", "Color", "run"]) {
+            const aliasEdges = graph.edges.filter((edge) => {
+              const from = graph.nodes.get(edge.from);
+              return from?.file === file && from.kind === "import" && from.name === name;
+            });
+            expect(aliasEdges.map((edge) => edge.to).sort()).toEqual(
+              headerDefinitions
+                .filter((def) => def.localName === name)
+                .map(defNodeId)
+                .sort(),
+            );
+            expect(new Set(aliasEdges.map((edge) => edge.from)).size).toBe(2);
+            const importedSymbols = listSymbols(index, { file, includeImports: true }).filter(
+              (symbol) => symbol.kind === "import" && symbol.name === name,
+            );
+            expect(importedSymbols.map((symbol) => symbol.id).sort()).toEqual(
+              aliasEdges.map((edge) => edge.from).sort(),
+            );
+          }
+          if (buildGraph === buildSymbolGraphDetailed) {
+            expect(
+              graph.edges
+                .filter((edge) => edge.label === "calls")
+                .map((edge) => [graph.nodes.get(edge.from)?.name, graph.nodes.get(edge.to)?.name]),
+            ).toEqual([["caller", "run"]]);
+          }
+        }
       }
     } finally {
       await rm(root, { recursive: true, force: true });

@@ -310,7 +310,10 @@ export async function buildSymbolGraphDetailed(
       );
       if (sup.id === "c" || sup.id === "cpp") {
         for (const [alias, def] of [...aliasToTargetDef]) {
-          const exported = resolveExport(index, def.file, alias, { allowLocalFallback: false });
+          const exported = resolveExport(index, def.file, alias, {
+            allowLocalFallback: false,
+            ...(sup.id === "c" ? { cNamespace: "ordinary" as const } : {}),
+          });
           if (exported?.kind !== "resolved") aliasToTargetDef.delete(alias);
         }
       }

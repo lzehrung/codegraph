@@ -1668,7 +1668,11 @@ describe("Go to Definition", () => {
           "",
         ];
         await fsp.writeFile(headerFile, headerLines.join("\n"), "utf8");
-        await fsp.writeFile(consumerFile, '#include "./shapes.h"\n', "utf8");
+        await fsp.writeFile(
+          consumerFile,
+          '#include "./shapes.h"\nstruct Item;\nstruct Item *outer;\nvoid nested(void) {\n  struct Item;\n  struct Item *inner;\n}\n',
+          "utf8",
+        );
         const index = await createTestIndexFromFiles(root, [headerFile, consumerFile]);
 
         // The tag token in `typedef struct Item Item;` is a tag reference, so it resolves to the
@@ -1688,6 +1692,10 @@ describe("Go to Definition", () => {
         await testGoToDefinition(index, headerFile, 27, headerLines[26]!.indexOf("Item") + 1, headerFile, 23);
         await testGoToDefinition(index, headerFile, 28, headerLines[27]!.indexOf("Value") + 1, headerFile, 24);
         await testGoToDefinition(index, headerFile, 29, headerLines[28]!.indexOf("Color") + 1, headerFile, 25);
+        await testGoToDefinition(index, consumerFile, 2, 8, headerFile, 3);
+        await testGoToDefinition(index, consumerFile, 3, 8, headerFile, 3);
+        await testGoToDefinition(index, consumerFile, 5, 10, consumerFile, 5);
+        await testGoToDefinition(index, consumerFile, 6, 10, consumerFile, 5);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

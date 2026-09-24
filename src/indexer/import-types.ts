@@ -65,3 +65,10 @@ export type ImportBinding =
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
     };
+
+/** Use the caller's normalized file path and preserve separate C include namespaces. */
+export function importNodeId(file: string, binding: Exclude<ImportBinding, { kind: "star" }>): string {
+  const name = binding.kind === "namespace" ? binding.localNS : binding.local;
+  const namespace = binding.kind === "named" ? binding.cNamespace : undefined;
+  return `${file}::${name}::import${namespace ? `:${namespace}` : ""}`;
+}

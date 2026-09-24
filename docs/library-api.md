@@ -755,7 +755,8 @@ C symbol lookup keeps tag and ordinary identifier namespaces separate:
 
 - `goToDefinition` and `findReferences` select the namespace from source syntax, including uses through header includes.
 - Lower-level `resolveExport(index, file, name, options)` and `resolveImported(index, importBinding, name, options)` accept `cNamespace: "tag" | "ordinary"`. `preferredKind` alone cannot distinguish an enum tag from a same-spelled typedef.
-- `SymbolDef.cTag` records `"declaration"` or `"reference"` for C tags. A bodyless tag use can introduce an incomplete tag when no visible tag exists. Expanded named C imports retain `ImportBinding.cNamespace`; ordinary names do not hide tags.
+- `SymbolDef.cTag` records `"declaration"`, `"forward"`, or `"reference"` for C tags. A bodyless tag use can introduce an incomplete tag when no visible tag exists. A file-scope forward declaration reuses an included tag; a block-scope forward declaration can hide an outer tag.
+- Expanded named C imports retain `ImportBinding.cNamespace`. Symbol lists and compact and detailed symbol graphs keep separate import identities for tag and ordinary namespaces.
 
 ## Incremental indexing
 

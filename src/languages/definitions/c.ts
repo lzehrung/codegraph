@@ -13,16 +13,18 @@ import {
 } from "./c-family.js";
 
 /** C tags share one namespace, separate from typedefs and ordinary identifiers. */
-export function cTagRole(node: SyntaxNodeLike): "declaration" | "reference" | undefined {
+export function cTagRole(node: SyntaxNodeLike): "declaration" | "forward" | "reference" | undefined {
   if (!isSpecifierNameField(node, ["struct_specifier", "union_specifier", "enum_specifier"])) return undefined;
   const specifier = node.parent!;
   if (specifier.childForFieldName("body")) return "declaration";
   const statement = specifier.parent;
   if (
     statement?.type === "translation_unit" ||
+    statement?.type === "compound_statement" ||
+    statement?.type.startsWith("preproc_") ||
     (statement?.type === "declaration" && !statement.childForFieldName("declarator"))
   ) {
-    return "declaration";
+    return "forward";
   }
   return "reference";
 }

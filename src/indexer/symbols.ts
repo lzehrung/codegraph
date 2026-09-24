@@ -11,6 +11,7 @@ import type {
 import { fileIdentityKey, normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { findReferences, resolveExport, resolveImported } from "./navigation.js";
 import { parseSourceLocationInput } from "../util/source-location.js";
+import { importNodeId } from "./import-types.js";
 
 export function symbolId(def: SymbolDef): SymbolHandle {
   const index = def?.range?.start?.index ?? 0;
@@ -251,14 +252,14 @@ export function listSymbols(index: ProjectIndex, opts?: { file?: string; include
       for (const imp of mod.imports) {
         if (imp.kind === "named" || imp.kind === "default") {
           out.push({
-            id: `${displayFile}::${imp.local}::import`,
+            id: importNodeId(displayFile, imp),
             file: displayFile,
             name: imp.local,
             kind: "import",
           });
         } else if (imp.kind === "namespace") {
           out.push({
-            id: `${displayFile}::${imp.localNS}::import`,
+            id: importNodeId(displayFile, imp),
             file: displayFile,
             name: imp.localNS,
             kind: "namespaceImport",

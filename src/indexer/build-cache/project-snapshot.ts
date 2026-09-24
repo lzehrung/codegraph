@@ -13,6 +13,7 @@ import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot, normal
 import { getNativeRuntimeFingerprint } from "../../native/tree-sitter-native.js";
 import { logWithLevel } from "../../logging.js";
 import { SymbolKind } from "../types.js";
+import { importNodeId } from "../import-types.js";
 import type {
   BackendReport,
   BuildOptions,
@@ -1431,11 +1432,10 @@ function indexDefinesSymbolNode(index: ProjectIndex, node: SymbolNode): boolean 
   const moduleEntry = index.byFile.get(fileIdentityKey(node.file));
   if (!moduleEntry) return false;
   if (moduleEntry.locals.some((local) => defNodeId(local) === node.id)) return true;
-  const filePrefix = `${normalizePath(moduleEntry.file)}::`;
+  const displayFile = normalizePath(moduleEntry.file);
   return moduleEntry.imports.some((imp) => {
     if (imp.kind === "star") return false;
-    const local = imp.kind === "namespace" ? imp.localNS : imp.local;
-    return node.id === `${filePrefix}${local}::import`;
+    return node.id === importNodeId(displayFile, imp);
   });
 }
 
@@ -1868,7 +1868,10 @@ function isSymbolDef(value: unknown): value is SymbolDef {
     typeof symbol.localName === "string" &&
     isSymbolKind(symbol.kind) &&
     isRange(symbol.range) &&
-    (symbol.cTag === undefined || symbol.cTag === "declaration" || symbol.cTag === "reference") &&
+    (symbol.cTag === undefined ||
+      symbol.cTag === "declaration" ||
+      symbol.cTag === "forward" ||
+      symbol.cTag === "reference") &&
     (symbol.docstring === undefined || typeof symbol.docstring === "string") &&
     (symbol.lineSpan === undefined || typeof symbol.lineSpan === "number") &&
     (symbol.complexity === undefined || typeof symbol.complexity === "number")

@@ -33,7 +33,7 @@ export type SymbolDef = {
   range: Range;
   isMember?: boolean;
   /** C tag identity; a reference can introduce an incomplete tag if no visible tag exists. */
-  cTag?: "declaration" | "reference";
+  cTag?: "declaration" | "forward" | "reference";
   docstring?: string;
   lineSpan?: number;
   complexity?: number;

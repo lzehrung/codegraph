@@ -1,5 +1,6 @@
 import type { ProjectIndex, ResolvedExport } from "../indexer/types.js";
 import { resolveExport, resolveModuleExports } from "../indexer/navigation-resolve.js";
+import { importNodeId } from "../indexer/import-types.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { FileId, Range } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
@@ -121,20 +122,24 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
     edges.push(label ? { from, to, label } : { from, to });
   };
 
-  const addDefinitionEdge = (aliasId: string, targetFile: FileId, exportedName: string, label: string): boolean => {
+  const addDefinitionEdge = (
+    aliasId: string,
+    targetFile: FileId,
+    exportedName: string,
+    label: string,
+    cNamespace?: "tag" | "ordinary",
+  ): boolean => {
     const languageId = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions)?.id;
     const allowLocalFallback = languageId !== "c" && languageId !== "cpp";
-    const resolutionKey = `${fileIdentityKey(targetFile)}::${exportedName}::${allowLocalFallback ? "local" : "export"}`;
+    const resolutionKey = `${fileIdentityKey(targetFile)}::${exportedName}::${cNamespace ?? ""}::${allowLocalFallback ? "local" : "export"}`;
     let resolved: ResolvedExport | null;
     if (exportResolutions.has(resolutionKey)) {
       resolved = exportResolutions.get(resolutionKey)!;
     } else {
-      resolved = resolveExport(
-        index,
-        targetFile,
-        exportedName,
-        allowLocalFallback ? undefined : { allowLocalFallback: false },
-      );
+      resolved = resolveExport(index, targetFile, exportedName, {
+        allowLocalFallback,
+        ...(cNamespace ? { cNamespace } : {}),
+      });
       exportResolutions.set(resolutionKey, resolved);
     }
     if (!resolved || resolved.kind !== "resolved") return false;
@@ -161,7 +166,7 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
       const targetFile = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
 
       if (imp.kind === "named") {
-        const aliasId = `${displayFile}::${imp.local}::import`;
+        const aliasId = importNodeId(displayFile, imp);
         if (!nodes.has(aliasId)) {
           nodes.set(aliasId, {
             id: aliasId,
@@ -170,9 +175,9 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
             kind: "import",
           });
         }
-        if (targetFile) addDefinitionEdge(aliasId, targetFile, imp.imported, imp.imported);
+        if (targetFile) addDefinitionEdge(aliasId, targetFile, imp.imported, imp.imported, imp.cNamespace);
       } else if (imp.kind === "default") {
-        const aliasId = `${displayFile}::${imp.local}::import`;
+        const aliasId = importNodeId(displayFile, imp);
         if (!nodes.has(aliasId)) {
           nodes.set(aliasId, {
             id: aliasId,
@@ -192,7 +197,7 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
           }
         }
       } else if (imp.kind === "namespace") {
-        const aliasId = `${displayFile}::${imp.localNS}::import`;
+        const aliasId = importNodeId(displayFile, imp);
         if (!nodes.has(aliasId)) {
           nodes.set(aliasId, {
             id: aliasId,

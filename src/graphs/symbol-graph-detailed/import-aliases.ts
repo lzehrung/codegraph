@@ -1,5 +1,6 @@
 import type { ModuleIndex, ProjectIndex, ResolvedExport, SymbolDef } from "../../indexer/types.js";
 import type { ImportBinding } from "../../indexer/types.js";
+import { resolveImported } from "../../indexer/navigation-resolve.js";
 import { fileIdentityKey, normalizePath } from "../../util/paths.js";
 
 export type ImportAliasMaps = {
@@ -29,6 +30,13 @@ export function buildImportAliasMaps(
     const targetFile = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
     if (!targetModule || !targetFile) continue;
     if (imp.kind === "named") {
+      if (imp.cNamespace) {
+        // This map resolves expression names, not C tag-form type references.
+        if (imp.cNamespace === "tag") continue;
+        const resolved = resolveImported(index, imp, imp.imported, { allowLocalFallback: false });
+        if (resolved && !("namespace" in resolved)) aliasToTargetDef.set(imp.local, resolved);
+        continue;
+      }
       const localFallback = targetModule.locals.find((local) => local.localName === imp.imported);
       const fallbackResolved: ResolvedExport | null = localFallback
         ? {

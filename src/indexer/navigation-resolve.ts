@@ -393,7 +393,8 @@ export function resolveExport(
     // already brought into scope by an include. Do not let that use hide its header.
     if (
       namespace &&
-      (!localCandidates.length || localCandidates.every((candidate) => candidate.cTag === "reference"))
+      (!localCandidates.length ||
+        localCandidates.every((candidate) => candidate.cTag === "reference" || candidate.cTag === "forward"))
     ) {
       const included: ResolvedExport[] = [];
       for (const imp of moduleEntry.imports) {

@@ -232,7 +232,7 @@ function localExportDedupeKey(entry: Extract<ExportEntry, { type: "local" }>, la
 }
 
 function dedupeExportEntries(entries: ExportEntry[], languageId: string): ExportEntry[] {
-  const seen = new Set<string>();
+  const seen = new Map<string, number>();
   const out: ExportEntry[] = [];
   for (const entry of entries) {
     if (entry.type !== "local") {
@@ -240,8 +240,21 @@ function dedupeExportEntries(entries: ExportEntry[], languageId: string): Export
       continue;
     }
     const key = localExportDedupeKey(entry, languageId);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const previousIndex = seen.get(key);
+    if (previousIndex !== undefined) {
+      const previous = out[previousIndex];
+      if (
+        languageId === "c" &&
+        entry.target.cTag === "declaration" &&
+        previous?.type === "local" &&
+        previous.target.cTag &&
+        previous.target.cTag !== "declaration"
+      ) {
+        out[previousIndex] = entry;
+      }
+      continue;
+    }
+    seen.set(key, out.length);
     out.push(entry);
   }
   return out;

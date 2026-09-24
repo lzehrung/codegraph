@@ -180,9 +180,19 @@ export function buildScopeIndexFromSource(
       }
     }
     const existing = target.map.get(key);
+    if (tagRole === "forward" && existing?.import) {
+      existing.occurrences.push(binding.def!);
+      return;
+    }
     if (tagRole && existing?.def) {
       if (existing.def.start.index === binding.def?.start.index) return;
       binding.occurrences = existing.occurrences;
+      if (tagRole === "declaration" && existing.node && cTagRole(existing.node) !== "declaration") {
+        binding.occurrences.push(existing.def);
+        preserveExtraBinding(existing);
+        target.map.set(key, binding);
+        return;
+      }
       binding.occurrences.push(binding.def!);
       preserveExtraBinding(binding);
       return;

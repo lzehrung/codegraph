@@ -1503,7 +1503,7 @@ nativeDescribe("native semantic coverage", () => {
       "  struct Item shadow_item_tag;",
       "  return Item;",
       "}",
-      "",
+      "struct Item; union Value; enum Color;",
     ];
     await fsp.writeFile(header, headerLines.join("\n"), "utf8");
     await fsp.writeFile(consumer, consumerLines.join("\n"), "utf8");
@@ -1659,6 +1659,11 @@ nativeDescribe("native semantic coverage", () => {
                 column: tokenColumn(consumerLines, kind.shadowTagLine, kind.name),
               },
             ]),
+        {
+          file: consumerKey,
+          line: 13,
+          column: tokenColumn(consumerLines, 13, kind.name),
+        },
       ]);
       expect(aliasReferences.filter((site) => site.file === consumerKey)).toEqual([
         {
