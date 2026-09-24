@@ -251,8 +251,8 @@ export function isVariadicParameterMarker(node: SyntaxNodeLike): boolean {
  * Positional parameter count of a member/function declaration node, or undefined when the node
  * declares no parameter list. Swift exposes parameters as direct declaration children, so its
  * language id is required to distinguish a zero-parameter declaration from an unknown shape.
- * Shared by the receiver-call edge pass and keyword receiver navigation so overload selection
- * uses one arity scanner.
+ * Used for public declaration metadata and C++ declaration correspondence, never to establish
+ * accepted call ranges. Receiver call selection uses the shared callable ranges instead.
  *
  * The count is the number of *required-or-defaulted* fixed parameters; C/C++ variadic markers are
  * excluded because they accept zero arguments, while each language's own maximum-arity handling

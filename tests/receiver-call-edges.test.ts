@@ -1791,12 +1791,23 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
     return { id, file: "leaf.ts", name, kind: extra.kind ?? "function", ...extra };
   }
 
-  function recordedCalls(graph: SymbolGraph, candidate: ReceiverCallCandidate): Array<{ from: string; to: string }> {
+  function recordedCalls(
+    graph: SymbolGraph,
+    candidate: ReceiverCallCandidate,
+    arities?: ReadonlyMap<string, MemberArityRange>,
+  ): Array<{ from: string; to: string }> {
     const recorded: Array<{ from: string; to: string }> = [];
-    emitReceiverCallEdges(graph, [candidate], (from, to, label) => {
-      if (label === "calls") recorded.push({ from, to });
-      return true;
-    });
+    emitReceiverCallEdges(
+      graph,
+      [candidate],
+      (from, to, label) => {
+        if (label === "calls") recorded.push({ from, to });
+        return true;
+      },
+      undefined,
+      undefined,
+      arities,
+    );
     return recorded;
   }
 
@@ -1925,6 +1936,27 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
     expect(recorded).toEqual([{ from: "caller", to: "run.decl" }]);
   });
 
+  it("does not infer accepted call ranges from declaration parameter counts", () => {
+    const graph: SymbolGraph = {
+      nodes: new Map([
+        ["Mid", node("Mid", "Mid", { kind: "class" })],
+        ["leaf.go", node("leaf.go", "go")],
+        ["mid.run", node("mid.run", "run", { memberArity: 1 })],
+      ]),
+      edges: [
+        { from: "leaf.go", to: "Mid", label: "member_of" },
+        { from: "mid.run", to: "Mid", label: "member_of" },
+      ],
+    };
+    // One declared parameter does not establish whether a default permits this call.
+    expect(recordedCalls(graph, candidate())).toEqual([{ from: "leaf.go", to: "mid.run" }]);
+
+    // Counts alone must not choose one overload when neither accepted range is known.
+    graph.nodes.set("mid.run.zero", node("mid.run.zero", "run", { memberArity: 0 }));
+    graph.edges.push({ from: "mid.run.zero", to: "Mid", label: "member_of" });
+    expect(recordedCalls(graph, candidate())).toEqual([]);
+  });
+
   it("does not record a deeper unique member when the shallowest level is ambiguous", () => {
     const graph: SymbolGraph = {
       nodes: new Map([
@@ -1964,7 +1996,12 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
         { from: "Mid", to: "Base", label: "extends" },
       ],
     };
-    expect(recordedCalls(graph, candidate())).toEqual([]);
+    const arities = new Map([
+      ["mid.run.1", { min: 1, max: 1 }],
+      ["mid.run.2", { min: 2, max: 2 }],
+      ["base.run", { min: 0, max: 0 }],
+    ]);
+    expect(recordedCalls(graph, candidate(), arities)).toEqual([]);
   });
 
   it("records the arity-unique member at the shallowest level instead of a deeper unique member", () => {
@@ -1985,7 +2022,12 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
         { from: "Mid", to: "Base", label: "extends" },
       ],
     };
-    expect(recordedCalls(graph, candidate())).toEqual([{ from: "leaf.go", to: "mid.run.0" }]);
+    const arities = new Map([
+      ["mid.run.0", { min: 0, max: 0 }],
+      ["mid.run.1", { min: 1, max: 1 }],
+      ["base.run", { min: 0, max: 0 }],
+    ]);
+    expect(recordedCalls(graph, candidate(), arities)).toEqual([{ from: "leaf.go", to: "mid.run.0" }]);
   });
 
   it("still records a unique inherited member when the declaring type has no match", () => {

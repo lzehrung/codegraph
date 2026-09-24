@@ -1512,16 +1512,15 @@ function canonicalMemberId(id: string, aliases: ReadonlyMap<string, string>): st
 }
 
 function memberArityMatches(
-  graph: SymbolGraph,
   memberId: string,
   argumentCount: number | null,
   memberArities: ReadonlyMap<string, MemberArityRange>,
 ): boolean {
   if (argumentCount === null) return true;
   const range = memberArities.get(memberId);
-  if (range) return argumentCount >= range.min && (range.max === null || argumentCount <= range.max);
-  const memberArity = graph.nodes.get(memberId)?.memberArity;
-  return memberArity === undefined || memberArity === argumentCount;
+  // Declaration parameter counts do not prove required/default/variadic call bounds.
+  // An unknown range cannot reject a unique target or eliminate an overload.
+  return !range || (argumentCount >= range.min && (range.max === null || argumentCount <= range.max));
 }
 
 /**
@@ -1558,7 +1557,7 @@ function provenMemberTarget(
   if (!matches.size) return { status: "none" };
   if (matches.size === 1) {
     const [memberId] = matches;
-    if (memberArityMatches(graph, memberId!, candidate.argumentCount, memberArities)) {
+    if (memberArityMatches(memberId!, candidate.argumentCount, memberArities)) {
       return { status: "unique", memberId: memberId! };
     }
     return { status: "ambiguous" };
@@ -1566,7 +1565,7 @@ function provenMemberTarget(
   const byArity =
     candidate.argumentCount === null
       ? []
-      : [...matches].filter((memberId) => memberArityMatches(graph, memberId, candidate.argumentCount, memberArities));
+      : [...matches].filter((memberId) => memberArityMatches(memberId, candidate.argumentCount, memberArities));
   if (byArity.length === 1) return { status: "unique", memberId: byArity[0]! };
   return { status: "ambiguous" };
 }
