@@ -1,9 +1,13 @@
 import type { ModuleIndex, ProjectIndex, SymbolDef } from "../../indexer/types.js";
 import { cppCallableShapeForNode, type CppCallableShape } from "../../indexer/cpp-callables.js";
+import {
+  isSwiftCrossFileHiddenSharedOwnerMember,
+  isSwiftFileHiddenSharedOwnerMember,
+} from "../../indexer/declaration-visibility.js";
 import { resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp.js";
+import { resolveSharedOwnerContainers, type SharedOwnerContainer } from "../../indexer/navigation-goto.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../../indexer/navigation-php.js";
 import { resolvePhpExportByImportType } from "../../indexer/navigation-resolve.js";
-import { resolveSharedOwnerContainers, type SharedOwnerContainer } from "../../indexer/navigation-goto.js";
 import { selectCsharpPartialRepresentative } from "../../indexer/shared-owner-identity.js";
 import type { LanguageSupport } from "../../languages.js";
 import { getCallableArity, getCallArgumentCount } from "../../languages/callable-arity.js";
@@ -338,7 +342,7 @@ export async function emitMemberOwnershipEdges(
         : acceptedMemberArityRange(context, arityNode, outOfLineDeclaration?.source ?? context.source);
     recordMemberLookupIdentity(context, definitionId, memberId, memberScope, arityRange);
     recordDefEdge(context, definitionId, owner.def, "member_of");
-    await emitSharedOwnerMembershipEdges(context, owner, definitionId);
+    await emitSharedOwnerMembershipEdges(context, owner, definitionId, fn.node);
   }
 }
 
@@ -374,6 +378,7 @@ async function emitSharedOwnerMembershipEdges(
   context: EdgePassContext,
   owner: MemberOwner,
   definitionId: string,
+  memberNode: SyntaxNodeLike,
 ): Promise<void> {
   const container = owner.container;
   if (!container) return;
@@ -398,7 +403,12 @@ async function emitSharedOwnerMembershipEdges(
     context.sharedOwnerPeers.set(cacheKey, peers);
   }
   const peerDefs = await peers;
-  for (const peer of peerDefs) recordDefEdge(context, definitionId, peer.def, "member_of");
+  for (const peer of peerDefs) {
+    if (isSwiftCrossFileHiddenSharedOwnerMember(context.sup.id, peer.def.file, context.moduleEntry.file, memberNode)) {
+      continue;
+    }
+    recordDefEdge(context, definitionId, peer.def, "member_of");
+  }
   if (isExtension) {
     const anchor = peerDefs.find((peer) => !peer.isExtension);
     context.sharedOwnerAnchors.set(defNodeId(owner.def), defNodeId(anchor ? anchor.def : owner.def));
@@ -740,7 +750,11 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
             })
           : [];
         if (declared.length === 1) {
-          recordDefEdge(context, fromId, declared[0]!.def, "calls", access.property);
+          const unique = declared[0]!;
+          recordDefEdge(context, fromId, unique.def, "calls", access.property);
+          // File-hidden Swift members stay off cross-file shared owners. Skipping the
+          // coalesced deferred lookup keeps a same-container private call from being stripped.
+          if (isSwiftFileHiddenSharedOwnerMember(context.sup.id, unique.node)) return;
         }
       }
 

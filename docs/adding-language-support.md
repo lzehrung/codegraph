@@ -71,6 +71,7 @@ Checklist for landing a new first-class source language without drifting from re
 - Add reduced-mode safety or recovery coverage when the language has graph-only or regex fallback behavior.
 - Use one fixture to check that extraction, `goToDefinition`, `findReferences`, and `buildSymbolGraphDetailed` agree on symbol identity. Include a same-spelled declaration that must not match, plus cold and persisted-cache results when derived data changes.
 - Check the native grammar's actual child fields and tokens before writing a language rule. Named-child walks omit operators; a valid parse can still classify a declaration as a different construct.
+- For a shared type declared across files, include every enclosing type's generic arity in its owner identity. Check access modifiers on both members and enclosing declarations before cross-file navigation or graph edges; keep legal same-file uses. Test a same-named owner that must stay separate.
 
 ## 8. Update public docs in the same change
 

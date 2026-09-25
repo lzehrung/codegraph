@@ -3025,6 +3025,38 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     expect(callsiteTexts(swiftGraph, swiftDecoyHelper, swiftUse, swiftFiles)).toBeNull();
   });
 
+  it("filters Swift private extension members across files and keeps visible members", async () => {
+    const files = {
+      "A.swift": "struct Box {\n  func use() { self.hidden(); self.shown(); self.masked() }\n}\n",
+      "B.swift": [
+        "extension Box {",
+        "  fileprivate func hidden() {}",
+        "  func shown() {}",
+        "  func sameFile() { self.hidden() }",
+        "}",
+        "private extension Box {",
+        "  func masked() {}",
+        "  func samePrivateExtension() { self.masked() }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-swift-extension-hidden-members-", files);
+    expect(membersOwnedBy(graph, "Box", "hidden", "A.swift")).toEqual([]);
+    expect(membersOwnedBy(graph, "Box", "masked", "A.swift")).toEqual([]);
+    expect(membersOwnedBy(graph, "Box", "shown", "A.swift")).toHaveLength(1);
+    const hidden = nodeIn(graph, "B.swift", "hidden");
+    const shown = nodeIn(graph, "B.swift", "shown");
+    const masked = nodeIn(graph, "B.swift", "masked");
+    const use = nodeIn(graph, "A.swift", "use");
+    const sameFile = nodeIn(graph, "B.swift", "sameFile");
+    const samePrivateExtension = nodeIn(graph, "B.swift", "samePrivateExtension");
+    expect(callsiteTexts(graph, hidden, use, files)).toBeNull();
+    expect(callsiteTexts(graph, shown, use, files)).toEqual(["shown"]);
+    expect(callsiteTexts(graph, masked, use, files)).toBeNull();
+    expect(callsiteTexts(graph, hidden, sameFile, files)).toEqual(["hidden"]);
+    expect(callsiteTexts(graph, masked, samePrivateExtension, files)).toEqual(["masked"]);
+  });
+
   it("keeps Zig imported calls inside alias scope and public export visibility", async () => {
     const files = {
       "first.zig": "pub fn target() i32 { return 1; }\nfn hidden() i32 { return 0; }",

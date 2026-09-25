@@ -1375,4 +1375,114 @@ describe("C# partial class members across files", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  // r4100398996: each enclosing type's generic arity belongs to the shared owner
+  // identity, so `Outer.Inner` and `Outer<T>.Inner` never share partial members
+  // while matching nested partials across files still connect.
+  it("does not share nested partial members across distinct generic enclosing owners", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-nested-arity-"));
+    try {
+      const plainPart = [
+        "namespace P;",
+        "public partial class Outer {",
+        "  public partial class Inner {",
+        "    public void PlainOnly() {}",
+        "  }",
+        "}",
+      ];
+      const genericPart = [
+        "namespace P;",
+        "public partial class Outer<T> {",
+        "  public partial class Inner {",
+        "    public void GenericOnly() {}",
+        "  }",
+        "}",
+      ];
+      const plainUse = [
+        "namespace P;",
+        "public partial class Outer {",
+        "  public partial class Inner {",
+        "    void UsePlain() {",
+        "      this.PlainOnly();",
+        "      this.GenericOnly();",
+        "    }",
+        "  }",
+        "}",
+      ];
+      const genericUse = [
+        "namespace P;",
+        "public partial class Outer<T> {",
+        "  public partial class Inner {",
+        "    void UseGeneric() {",
+        "      this.GenericOnly();",
+        "      this.PlainOnly();",
+        "    }",
+        "  }",
+        "}",
+      ];
+      const paths = await writeFixtureFiles(root, {
+        "Nested.A.cs": `${plainPart.join("\n")}\n`,
+        "Nested.B.cs": `${genericPart.join("\n")}\n`,
+        "Nested.Use.cs": `${plainUse.join("\n")}\n`,
+        "Nested.GenericUse.cs": `${genericUse.join("\n")}\n`,
+      });
+      const index = await buildProjectIndexFromFiles(root, [
+        paths["Nested.A.cs"]!,
+        paths["Nested.B.cs"]!,
+        paths["Nested.Use.cs"]!,
+        paths["Nested.GenericUse.cs"]!,
+      ]);
+
+      // Matching nested partials under the same enclosing owner still cross files.
+      const plain = await goToDefinition(index, {
+        file: paths["Nested.Use.cs"]!,
+        line: 5,
+        column: columnOf(plainUse, 5, "PlainOnly"),
+      });
+      expect(plain.status).toBe("ok");
+      if (plain.status !== "ok") throw new Error("Expected PlainOnly through the plain enclosing owner");
+      expect(normalizePath(plain.definition.file)).toBe(paths["Nested.A.cs"]!);
+      expect(plain.definition.range.start.line).toBe(4);
+
+      const generic = await goToDefinition(index, {
+        file: paths["Nested.GenericUse.cs"]!,
+        line: 5,
+        column: columnOf(genericUse, 5, "GenericOnly"),
+      });
+      expect(generic.status).toBe("ok");
+      if (generic.status !== "ok") throw new Error("Expected GenericOnly through the generic enclosing owner");
+      expect(normalizePath(generic.definition.file)).toBe(paths["Nested.B.cs"]!);
+      expect(generic.definition.range.start.line).toBe(4);
+
+      // Outer.Inner and Outer<T>.Inner do not share members in either direction.
+      const leaked = await goToDefinition(index, {
+        file: paths["Nested.Use.cs"]!,
+        line: 6,
+        column: columnOf(plainUse, 6, "GenericOnly"),
+      });
+      expect(leaked.status).toBe("not_found");
+
+      const reverseLeak = await goToDefinition(index, {
+        file: paths["Nested.GenericUse.cs"]!,
+        line: 6,
+        column: columnOf(genericUse, 6, "PlainOnly"),
+      });
+      expect(reverseLeak.status).toBe("not_found");
+
+      const genericRefs = await findReferences(index, {
+        file: paths["Nested.B.cs"]!,
+        line: 4,
+        column: columnOf(genericPart, 4, "GenericOnly"),
+      });
+      expect(genericRefs.status).toBe("ok");
+      if (genericRefs.status !== "ok") throw new Error("Expected GenericOnly references");
+      const genericSites = genericRefs.references.map(
+        (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
+      );
+      expect(genericSites).toContain(`${paths["Nested.GenericUse.cs"]}:5`);
+      expect(genericSites).not.toContain(`${paths["Nested.Use.cs"]}:6`);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

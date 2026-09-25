@@ -1,8 +1,10 @@
 import type { SyntaxNodeLike } from "../languages/types.js";
+import { fileIdentityKey } from "../util/paths.js";
 
 /**
- * Per-language declaration visibility for module exports. Rows are keyed by language id and live
- * next to `locals-and-exports.ts` because that is the only consumer this wave.
+ * Per-language declaration visibility for module exports and Swift shared-owner member lookup.
+ * Rows are keyed by language id. `locals-and-exports.ts` filters module exports; Swift
+ * shared-owner navigation and detailed membership reuse the same hidden-modifier tokens.
  *
  * A missing row keeps today's behavior: every module-scope capture is exported. Python stays on
  * its existing `__all__` / underscore filter rather than a row here.
@@ -265,4 +267,57 @@ export function isExportedDeclaration(languageId: string, node: SyntaxNodeLike):
   const declaration = findVisibilityDeclaration(node, row);
   if (!declaration) return true;
   return isExportedByRow(declaration, row);
+}
+
+function swiftDeclarationKind(container: SyntaxNodeLike): string {
+  const kind = container.childForFieldName("declaration_kind");
+  if (kind) {
+    const text = kind.text.trim();
+    if (text) return text;
+  }
+  for (let index = 0; ; index += 1) {
+    const child = container.child(index);
+    if (!child) return "";
+    const text = child.text.trim();
+    if (text === "extension" || text === "class" || text === "struct" || text === "enum" || text === "actor") {
+      return text;
+    }
+  }
+}
+
+function enclosingSwiftExtension(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  let current: SyntaxNodeLike | null = node;
+  while (current) {
+    if (current.type === "class_declaration") {
+      return swiftDeclarationKind(current) === "extension" ? current : null;
+    }
+    current = current.parent;
+  }
+  return null;
+}
+
+/**
+ * Swift `private`/`fileprivate` is file-scoped, including when that modifier is on the
+ * enclosing `extension` rather than the member.
+ */
+export function isSwiftFileHiddenSharedOwnerMember(languageId: string, memberNode: SyntaxNodeLike): boolean {
+  if (languageId !== "swift") return false;
+  if (!isExportedDeclaration("swift", memberNode)) return true;
+  const extension = enclosingSwiftExtension(memberNode);
+  return !!extension && !isExportedDeclaration("swift", extension);
+}
+
+/**
+ * Shared-owner navigation and detailed membership drop Swift file-hidden members when
+ * the owner lives in another file, and keep same-file matches plus ordinary cross-file
+ * internal/public members.
+ */
+export function isSwiftCrossFileHiddenSharedOwnerMember(
+  languageId: string,
+  ownerFile: string,
+  memberFile: string,
+  memberNode: SyntaxNodeLike,
+): boolean {
+  if (fileIdentityKey(ownerFile) === fileIdentityKey(memberFile)) return false;
+  return isSwiftFileHiddenSharedOwnerMember(languageId, memberNode);
 }

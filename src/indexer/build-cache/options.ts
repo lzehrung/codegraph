@@ -102,8 +102,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 53 preserves C# namespace visibility through same-file lookup and reference fallbacks.
  * Epoch 54 preserves C# alias-qualified targets and coalesces proven partial-type owners.
  * Epoch 55 ignores comments and string literals when identifying Go and JVM package peers.
+ * Epoch 56 enforces Swift cross-file extension visibility and distinct nested C# generic owners.
  */
-export const CORE_ALGORITHM_EPOCH = 55;
+export const CORE_ALGORITHM_EPOCH = 56;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

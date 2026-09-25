@@ -392,4 +392,75 @@ describe("Swift same-module and shared-owner visibility", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("excludes cross-file hidden extension members and keeps visible and same-file members", async () => {
+    const baseLines = ["struct Box {", "  func use() { self.hidden(); self.shown(); self.masked() }", "}"];
+    const extensionLines = [
+      "extension Box {",
+      "  fileprivate func hidden() {}",
+      "  func shown() {}",
+      "  func sameFile() { self.hidden() }",
+      "}",
+      "private extension Box {",
+      "  func masked() {}",
+      "  func samePrivateExtension() { self.masked() }",
+      "}",
+    ];
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-extension-visibility-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "A.swift": `${baseLines.join("\n")}\n`,
+        "B.swift": `${extensionLines.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const basePath = paths["A.swift"]!;
+      const extensionPath = paths["B.swift"]!;
+
+      const hiddenGoto = await goToDefinition(index, {
+        file: basePath,
+        line: 2,
+        column: columnOf(baseLines, 2, "hidden"),
+      });
+      expect(hiddenGoto.status).toBe("not_found");
+
+      const shownGoto = await goToDefinition(index, {
+        file: basePath,
+        line: 2,
+        column: columnOf(baseLines, 2, "shown"),
+      });
+      expect(shownGoto.status).toBe("ok");
+      if (shownGoto.status !== "ok") throw new Error("Expected the visible extension member");
+      expect(normalizePath(shownGoto.definition.file)).toBe(extensionPath);
+      expect(shownGoto.definition.range.start.line).toBe(3);
+
+      const maskedGoto = await goToDefinition(index, {
+        file: basePath,
+        line: 2,
+        column: columnOf(baseLines, 2, "masked"),
+      });
+      expect(maskedGoto.status).toBe("not_found");
+
+      const sameFileGoto = await goToDefinition(index, {
+        file: extensionPath,
+        line: 4,
+        column: columnOf(extensionLines, 4, "hidden"),
+      });
+      expect(sameFileGoto.status).toBe("ok");
+      if (sameFileGoto.status !== "ok") throw new Error("Expected the same-file private member");
+      expect(normalizePath(sameFileGoto.definition.file)).toBe(extensionPath);
+      expect(sameFileGoto.definition.range.start.line).toBe(2);
+
+      const sameMaskedGoto = await goToDefinition(index, {
+        file: extensionPath,
+        line: 8,
+        column: columnOf(extensionLines, 8, "masked"),
+      });
+      expect(sameMaskedGoto.status).toBe("ok");
+      if (sameMaskedGoto.status !== "ok") throw new Error("Expected the same-file private extension member");
+      expect(normalizePath(sameMaskedGoto.definition.file)).toBe(extensionPath);
+      expect(sameMaskedGoto.definition.range.start.line).toBe(7);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

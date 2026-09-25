@@ -35,6 +35,7 @@ import {
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { getCallableArity, getCallArgumentCount, type CallableArity } from "../languages/callable-arity.js";
 import { getCompilationUnitPeers } from "./compilation-units.js";
+import { isSwiftCrossFileHiddenSharedOwnerMember } from "./declaration-visibility.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { csharpLookupName } from "./navigation-local.js";
 import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
@@ -235,10 +236,22 @@ export async function findSharedOwnerMemberDefinitions(params: {
       predicate,
     );
     for (const hit of hits) {
+      const hitNode = nameNodeForDef(peer.context, hit);
+      if (languageId === "swift" && fileIdentityKey(ownerFile) !== fileIdentityKey(peer.file)) {
+        if (!hitNode || isSwiftCrossFileHiddenSharedOwnerMember(languageId, ownerFile, peer.file, hitNode)) continue;
+      }
       if (!out.includes(hit)) out.push(hit);
     }
   }
   return out;
+}
+
+function nameNodeForDef(context: ParsedFileContext, def: SymbolDef): SyntaxNodeLike | null {
+  const start = def.range.start;
+  const index = start.index;
+  if (index !== undefined) return context.tree.rootNode.descendantForIndex(index, index);
+  const position = { row: start.line - 1, column: start.column - 1 };
+  return context.tree.rootNode.descendantForPosition(position, position);
 }
 
 function enclosingImportScope(declarationName: SyntaxNodeLike): SyntaxNodeLike | null {
@@ -1078,10 +1091,19 @@ async function resolveKeywordReceiverMember(
         languageId: candidate.context.sup.id,
       });
       for (const shared of sharedContainers) {
-        const sharedPredicate =
-          memberScope === "any"
-            ? undefined
-            : (local: SymbolDef) => matchesReceiverMemberScope(local, memberScope, shared.context, shared.container);
+        const crossFileSwift =
+          candidate.context.sup.id === "swift" && fileIdentityKey(candidate.file) !== fileIdentityKey(shared.file);
+        const sharedPredicate = (local: SymbolDef): boolean => {
+          if (
+            memberScope !== "any" &&
+            !matchesReceiverMemberScope(local, memberScope, shared.context, shared.container)
+          ) {
+            return false;
+          }
+          if (!crossFileSwift) return true;
+          const nameNode = nameNodeForDef(shared.context, local);
+          return !!nameNode && !isSwiftCrossFileHiddenSharedOwnerMember("swift", candidate.file, shared.file, nameNode);
+        };
         appendDirectKeywordMembers(
           shared.module.locals,
           member,

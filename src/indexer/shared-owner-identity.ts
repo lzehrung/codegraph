@@ -11,8 +11,9 @@ import type { ProjectIndex, SymbolDef } from "./types.js";
 
 /**
  * Owner identity shared by C# `partial` type parts and Swift types/extensions.
- * C# includes declaration kind and generic arity so `Box` and `Box<T>`, or a
- * class and a same-named struct, never match. Swift keeps path-only identity.
+ * C# includes declaration kind, own generic arity, and enclosing generic arities
+ * so `Box` and `Box<T>`, `Outer.Inner` and `Outer<T>.Inner`, or a class and a
+ * same-named struct, never match. Swift keeps path-only identity.
  */
 export type SharedOwnerIdentity = {
   languageId: string;
@@ -68,7 +69,18 @@ function csharpGenericArity(container: SyntaxNodeLike): number {
 }
 
 /**
- * Namespace + enclosing type names + the type name. Generic arity is stored on
+ * Enclosing type segment carrying its generic arity compiler-style (`Outer`1`).
+ * A backtick cannot appear in a C# type or namespace name, so an encoded
+ * segment can never collide with a declared name and dot-joined namespace
+ * parts stay unambiguous.
+ */
+function csharpEnclosingSegment(name: string, arity: number): string {
+  return arity > 0 ? `${name}\`${arity}` : name;
+}
+
+/**
+ * Namespace + enclosing type names (each carrying its generic arity) + the
+ * type name. The container's own arity is stored on
  * {@link SharedOwnerIdentity} instead of encoding it into this path.
  */
 function getCSharpFullPath(container: SyntaxNodeLike, source: string): string | null {
@@ -81,7 +93,7 @@ function getCSharpFullPath(container: SyntaxNodeLike, source: string): string | 
   while (current) {
     if (CSHARP_PARTIAL_CONTAINER_TYPES.has(current.type)) {
       const outerName = csharpNameText(current.childForFieldName("name"), source);
-      if (outerName) outer.push(outerName);
+      if (outerName) outer.push(csharpEnclosingSegment(outerName, csharpGenericArity(current)));
     }
     if (current.type === "namespace_declaration" || current.type === "file_scoped_namespace_declaration") {
       const nsNode =
