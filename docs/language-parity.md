@@ -1,5 +1,7 @@
 # Language coverage parity matrix
 
+Semantic support targets correct results for ordinary code in every listed language, from syntax and facts proven in source. codegraph is not a compiler. When a result needs expression type inference, overload ranking beyond arity, generic constraint solving, or build-system membership, it returns `not_found` or `partial` coverage instead of guessing. The limits below name the known cases.
+
 Status key:
 
 - Yes = supported and covered

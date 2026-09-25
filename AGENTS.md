@@ -57,6 +57,41 @@
 - `packages/codegraph-native/Cargo.lock` is committed because the crate ships prebuilt binaries.
   Update it in the same change as any `Cargo.toml` dependency edit.
 
+## Semantic Accuracy Bar
+
+codegraph is not a compiler. Every supported language must give correct results for ordinary code,
+using syntax and facts proven from source. It must not emulate the full language specification.
+
+- Required in every language that claims a capability:
+  - Resolve common forms: imports and aliases; same-package, module, or namespace peers; members
+    through proven receivers (`this`/`self`/`super`, a named type, a constructed local); and
+    partial or extension owners where the language has them.
+  - Count arguments with the shared callable rules: defaults, variadics, explicit receivers, and
+    unknown spreads.
+  - Never return a confident wrong answer: a wrong target, a false reference, a false call edge, or
+    `complete` coverage when candidates were not checked.
+- When proof is missing, return `not_found`, leave the call ambiguous, or report `partial`
+  coverage with a reason. A miss is acceptable. A wrong answer is not.
+- Out of scope. Document the limit instead of implementing it:
+  - Expression type inference, such as C# `value.M()` extension dispatch or method return types.
+  - Overload ranking beyond arity, generic constraint solving, and logical equivalence of
+    constraints.
+  - Build-system membership (`.csproj`, Maven/Gradle, SwiftPM), macro or preprocessor expansion,
+    reflection, and runtime metaprogramming.
+- Triage review findings against this bar:
+  - Fix in the current change: regressions it introduced, any confident wrong answer, and misses
+    on common code.
+  - For a rare language form, prefer the conservative fix: exclude the form or report `partial`.
+    Do not model the full language rule.
+  - A miss on a rare form that returns `not_found` or `partial` goes to its own issue or to the
+    limits in `docs/language-parity.md`. It does not block the current change.
+- Before adding a language-specific rule, confirm that it affects common code and fits an existing
+  capability table or shared helper. If it needs type inference or cross-file data flow, stop and
+  document the limit.
+- When a gap is fixed in one language, check the same capability in the other supported languages.
+- Include this bar in review acceptance criteria, so reviewers report wrong answers and
+  common-code misses, not every language-specification gap.
+
 ## Path, Cache, and Review Safety
 
 - Path-bearing code MUST keep the requested logical root, resolved physical root, and owning Git
