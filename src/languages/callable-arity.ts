@@ -39,10 +39,12 @@ export type CallableArity = { minArgs: number; maxArgs: number | null };
 export type CallableBinding = "bound" | "unbound";
 
 /**
- * Call form that receiver-member lookup (detailed graph and receiver navigation) resolves. Those
- * consumers reach a C# extension method only through its declaring static class (`Ext.M(value)`)
- * or a bare call inside it, never through the extended value (`value.M()`), so its `this`
- * receiver is an explicit argument there. Every other language's member lookup binds the receiver.
+ * Call form that resolved C# member callsites use, shared by the detailed graph, receiver
+ * navigation, and impact. Codegraph resolves a C# extension method only through its declaring
+ * static class (`Ext.M(value)`, including alias- and namespace-qualified owners) or a bare call
+ * inside it, never through the extended value (`value.M()` needs receiver-type inference and
+ * stays unresolved), so the `this` receiver is an explicit argument at every resolved callsite.
+ * Every other language's member lookup binds the receiver.
  */
 export function memberLookupBinding(languageId: string): CallableBinding {
   return languageId === "csharp" ? "unbound" : "bound";

@@ -714,6 +714,16 @@ describe("impact call-form binding (#378 consumer behavior)", () => {
       expectedStatus: "likely_mismatch",
     },
     {
+      label: "counts a C# extension receiver at a bare call inside its static class",
+      fileName: "Ext.cs",
+      after:
+        "static class Ext {\n  public static int target(this string value, int n = 1) { return n; }\n  static int caller(string s) { return target(s, 2); }\n}\n",
+      beforeSignature: "  public static int target(this string value) { return 0; }",
+      afterSignature: "  public static int target(this string value, int n = 1) { return n; }",
+      callsiteNeedle: "target(s, 2)",
+      expectedStatus: "compatible",
+    },
+    {
       label: "does not count Ruby block capture as a positional slot",
       fileName: "box.rb",
       after: "def target(*args, &block)\n  1\nend\n\ndef caller\n  target()\nend\n",
@@ -761,6 +771,42 @@ describe("impact call-form binding (#378 consumer behavior)", () => {
       const callsiteLine = after.split("\n").findIndex((line) => line.includes(callsiteNeedle)) + 1;
       const hint = changed?.callCompatibility?.find((item) => item.callsiteRange.start.line === callsiteLine);
       expect(hint ? hint.status : null).toBe(expectedStatus);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+});
+
+describe("impact call-form binding for alias-qualified C# extension calls", () => {
+  it.each([
+    ["Alias.Ext.target(s, 2)", "compatible"],
+    ["Alias.Ext.target()", "likely_mismatch"],
+  ])("classifies %s against the receiver-inclusive range", async (call, expectedStatus) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-cs-alias-"));
+    try {
+      const extLines = [
+        "namespace N;",
+        "public static class Ext {",
+        "  public static int target(this string value, int n = 1) { return n; }",
+        "}",
+      ];
+      const useLines = ["using Alias = N;", `class Use { int Go(string s) { return ${call}; } }`];
+      await fsp.writeFile(path.join(root, "Ext.cs"), `${extLines.join("\n")}\n`, "utf8");
+      await fsp.writeFile(path.join(root, "Use.cs"), `${useLines.join("\n")}\n`, "utf8");
+      const index = await buildProjectIndex(root, { cache: "memory" });
+      const diffText = `diff --git a/Ext.cs b/Ext.cs
+--- a/Ext.cs
++++ b/Ext.cs
+@@ -3,1 +3,1 @@
+-  public static int target(this string value) { return 0; }
++${extLines[2]}
+`;
+      const result = await analyzeImpactFromDiff(root, index, { provider: "raw", diffText, includeTests: true });
+      if ("files" in result) throw new Error("Expected non-compact impact report");
+      const hints = result.changedSymbols.find((symbol) => symbol.name === "target")?.callCompatibility ?? [];
+      const hint = hints.find((item) => path.basename(item.callsiteFile) === "Use.cs");
+      expect(hint?.expected).toMatchObject({ minArgs: 1, maxArgs: 2 });
+      expect(hint?.status).toBe(expectedStatus);
     } finally {
       await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }

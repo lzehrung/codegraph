@@ -19,6 +19,7 @@ import {
   getCallableDeclarationKind,
   getCallArgumentCount,
   getCallArgumentCountFromArgumentText,
+  memberLookupBinding,
   type CallableBinding,
   type CallableDeclarationKind,
 } from "../languages/callable-arity.js";
@@ -605,8 +606,9 @@ function ownerTypeNameOf(declaration: SyntaxNodeLike, source: string): string | 
  * Resolve which receiver binding form a callsite uses. Python bare calls reach the plain function
  * and pass the receiver explicitly; Python member calls on a provably class-valued receiver do the
  * same only for instance methods, because class and static methods bind (or declare) no instance
- * receiver. Rust `Type::target(...)` calls are unbound UFCS forms. A C# extension method called
- * through its declaring static class (`Ext.M(value)`) passes the `this` receiver explicitly.
+ * receiver. Rust `Type::target(...)` calls are unbound UFCS forms. C# follows the shared member
+ * lookup rule: resolved extension callsites are static-class (`Ext.M(value)`, `Alias.Ext.M(value)`)
+ * or bare calls inside the class, all of which pass the `this` receiver explicitly.
  * Everything else supplies the receiver through the call form.
  */
 function callBindingForm(input: {
@@ -625,9 +627,7 @@ function callBindingForm(input: {
     return callee?.type === "scoped_identifier" ? "unbound" : "bound";
   }
   if (languageId === "csharp") {
-    const receiver = callee?.type === "member_access_expression" ? callee.childForFieldName("expression") : null;
-    const receiverText = receiver ? sliceText(receiver, source).trim() : "";
-    return ownerTypeName && receiverText === ownerTypeName ? "unbound" : "bound";
+    return memberLookupBinding(languageId);
   }
   if (languageId !== "python" || !callee) {
     return "bound";
