@@ -259,6 +259,10 @@ One bounded CLI `explore` response can combine ranked anchors, relevant source, 
 
 Results include source paths, symbol ranges, stable handles, rank reasons, graph relationships, confidence, and omission counts. An agent can inspect why something ranked, jump to the definition or references, and continue from an exact target instead of treating a fuzzy match as an answer.
 
+### Trust the answer, or know why not
+
+Definitions, references, and call edges come from scopes, imports, packages, and receivers proven from source, not from name matching alone. When codegraph cannot prove a target, it returns `not_found` or reports `referenceCoverage` as `partial` with a reason instead of guessing. An agent can act on a `complete` result and fall back to text search or a compiler for the rest; `complete` covers every candidate known to the index, not unknown dynamic loading. See the [`refs` coverage contract](./docs/cli.md#symbols-navigation-grep-and-chunking) and the [language parity matrix](./docs/language-parity.md) for per-language support and tested limits.
+
 ### Reuse one map from discovery through review
 
 Search, navigation, dependency analysis, impact, and review reuse the same graph and semantic index. A target found during discovery can flow directly into `explain`, `refs`, `deps`, impact analysis, and candidate-test selection.
@@ -419,7 +423,7 @@ Disk caching avoids repository-wide source reads on exact warm text-search hits.
 
 The honest boundaries matter:
 
-- codegraph is not a compiler or type checker. Reflection, generated code, macros, overload behavior, and dynamic dispatch can be missed.
+- codegraph is not a compiler or type checker. Reflection, generated code, macros, overload behavior, and dynamic dispatch can be missed. When a result would need expression type inference, overload ranking beyond arity, or build-system membership, codegraph reports `not_found` or `partial` coverage rather than a guessed target.
 - Precise navigation depends on successful parsing and language queries. Without a compatible native runtime, codegraph falls back to reduced graph-only and regex recovery rather than claiming equivalent semantics.
 - Call-compatibility findings are conservative review leads, not compiler diagnostics.
 - Duplicate matches and candidate tests are ranked leads that still require human or agent judgment.
