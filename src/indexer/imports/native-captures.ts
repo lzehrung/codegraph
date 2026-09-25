@@ -181,7 +181,8 @@ async function pushStandardBindings(
   }
 
   if (!defaultCapture && !importCapture(caps, "ns") && !inames.length && !patternCount) {
-    const alias = importCapture(caps, "alias")?.text;
+    const aliasCapture = importCapture(caps, "alias");
+    const alias = aliasCapture?.text;
     appendImplicitImportBinding(context.languageContext, {
       from,
       resolved,
@@ -189,6 +190,7 @@ async function pushStandardBindings(
       stmtText,
       ...(statementStartIndex !== undefined ? { stmtStartIndex: statementStartIndex, source: context.source } : {}),
       ...(alias ? { alias } : {}),
+      ...(aliasCapture ? { localRange: rangeFromNativeCapture(aliasCapture, byteIndexMap) } : {}),
     });
   }
 }

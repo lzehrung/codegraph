@@ -34,6 +34,7 @@ CLI `goto` / `refs` accepts `file:line:column`, project-relative `file::symbol`,
 MCP takes separate `file`, `line`, `column` fields, or `handle`; do not mix forms or invent handles.
 Use `codegraph refs <file>` to check every definition in a file.
 For absence claims, require `referenceCoverage.state: complete`; `strategy_unavailable` means an applicable reference strategy could not prove all candidate sites, and `name_equivalence_unavailable` means language-specific name equivalence could not be verified. Coverage covers indexed candidates, not unknown dynamic imports. CLI and library import declaration hits label source and alias/default tokens in `via.importBinding`; MCP `refs` flattens this role to top-level `importBinding`.
+Implicit peer lookup uses same-directory package/namespace facts, not compiler build targets. Wider JVM/C# units and Swift files in other directories can make coverage partial; do not treat unresolved peers as proof that a symbol is unused.
 `deps`, `rdeps`, and `file_deps` accept symbol handles but traverse the declaring file.
 
 ## Follow the task, not the catalog

@@ -16,6 +16,7 @@ import {
 } from "../src/agent/session.js";
 import type { QueryIndexHandle } from "../src/agent/query-index/update.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
+import type { SymbolGraph } from "../src/graphs/symbol-graph.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import { createProjectSnapshotIdentity } from "../src/indexer/build-cache.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
@@ -140,6 +141,20 @@ function firstSidecarEdge(
   const edge = { from: from.id, to: to.id, label: "tamper-edge" };
   sidecar.graph.edges.push(edge);
   return edge;
+}
+
+/** Persisted `file::name` targets of the `calls` edges emitted from the named callable. */
+function detailedCallTargets(graph: SymbolGraph, fromName: string): string[] {
+  const targets: string[] = [];
+  for (const edge of graph.edges) {
+    if (edge.label !== "calls") continue;
+    const from = graph.nodes.get(edge.from);
+    if (!from || from.name !== fromName) continue;
+    const to = graph.nodes.get(edge.to);
+    if (!to) continue;
+    targets.push(`${normalizePath(to.file)}::${to.name}`);
+  }
+  return targets;
 }
 
 describe("agent session", () => {
@@ -393,6 +408,157 @@ describe("agent session", () => {
     expect(symbolGraphSpy).not.toHaveBeenCalled();
     expect([...warm.symbolGraph.nodes]).toEqual([...cold.symbolGraph.nodes]);
     expect(warm.symbolGraph.edges).toEqual(cold.symbolGraph.edges);
+  });
+
+  it("reuses default-parameter and variadic call edges from the persisted detailed sidecar", async () => {
+    const root = await mkGitRepo();
+    await fs.writeFile(
+      path.join(root, "defaults.ts"),
+      [
+        "export class Box {",
+        "  target(value = 1) { return value; }",
+        "  zeroArgCaller() { return this.target(); }",
+        "  oneArgCaller() { return this.target(1); }",
+        "  overArgCaller() { return this.target(1, 2); }",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(root, "Variadic.java"),
+      [
+        "public class Box {",
+        "    int target(int... values) { return values.length; }",
+        "    int twoArgCaller() { return this.target(1, 2); }",
+        "    int javaOneArgCaller() { return this.target(1); }",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const defaultsTarget = `${normalizePath(path.join(root, "defaults.ts"))}::target`;
+    const variadicTarget = `${normalizePath(path.join(root, "Variadic.java"))}::target`;
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const cold = await createAgentSession({ root }).loadProject();
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+
+    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+    // The zero-argument default-parameter call and the two-argument varargs call are the
+    // #378 gaps: both must emit calls edges, while the beyond-maximum call stays excluded.
+    expect(detailedCallTargets(cold.symbolGraph, "zeroArgCaller")).toContain(defaultsTarget);
+    expect(detailedCallTargets(cold.symbolGraph, "oneArgCaller")).toContain(defaultsTarget);
+    expect(detailedCallTargets(cold.symbolGraph, "overArgCaller")).not.toContain(defaultsTarget);
+    expect(detailedCallTargets(cold.symbolGraph, "twoArgCaller")).toContain(variadicTarget);
+    expect(detailedCallTargets(cold.symbolGraph, "javaOneArgCaller")).toContain(variadicTarget);
+
+    // Bump the sidecar identity so the warm load reads the persisted bytes instead of the
+    // in-process memoized graph; the edges above must survive that real reload.
+    const sidecarStat = await fs.stat(sidecarPath);
+    await fs.utimes(sidecarPath, sidecarStat.atime, new Date(sidecarStat.mtimeMs + 2_000));
+    symbolGraphSpy.mockClear();
+    const warm = await createAgentSession({ root }).loadProject();
+
+    expect(symbolGraphSpy).not.toHaveBeenCalled();
+    expect([...warm.symbolGraph.nodes]).toEqual([...cold.symbolGraph.nodes]);
+    expect(warm.symbolGraph.edges).toEqual(cold.symbolGraph.edges);
+    expect(detailedCallTargets(warm.symbolGraph, "zeroArgCaller")).toContain(defaultsTarget);
+    expect(detailedCallTargets(warm.symbolGraph, "twoArgCaller")).toContain(variadicTarget);
+    expect(detailedCallTargets(warm.symbolGraph, "overArgCaller")).not.toContain(defaultsTarget);
+  });
+
+  it("reuses cross-file shared-owner call edges from the persisted detailed sidecar", async () => {
+    const root = await mkGitRepo();
+    await fs.writeFile(
+      path.join(root, "A.cs"),
+      ["namespace P;", "partial class Box", "{", "    public void Helper() { }", "}", ""].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(root, "B.cs"),
+      ["namespace P;", "partial class Box", "{", "    void Use() { this.Helper(); }", "}", ""].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(root, "Other.cs"),
+      ["namespace Q;", "public class Other", "{", "    public void Helper() { }", "}", ""].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(root, "Box.swift"),
+      ["struct Box {", "  func helper() {}", "}", ""].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(root, "BoxExtension.swift"),
+      ["extension Box {", "  func use() { self.helper() }", "}", ""].join("\n"),
+      "utf8",
+    );
+    const partialHelperTarget = `${normalizePath(path.join(root, "A.cs"))}::Helper`;
+    const extensionHelperTarget = `${normalizePath(path.join(root, "Box.swift"))}::helper`;
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const cold = await createAgentSession({ root }).loadProject();
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+
+    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+    // Each shared-owner call resolves to exactly one member: the partial-class member
+    // declared in A.cs and the base-type member declared in Box.swift. The same-named
+    // Helper in the unrelated namespace must never become a target.
+    expect(detailedCallTargets(cold.symbolGraph, "Use")).toEqual([partialHelperTarget]);
+    expect(detailedCallTargets(cold.symbolGraph, "use")).toEqual([extensionHelperTarget]);
+
+    const sidecarStat = await fs.stat(sidecarPath);
+    await fs.utimes(sidecarPath, sidecarStat.atime, new Date(sidecarStat.mtimeMs + 2_000));
+    symbolGraphSpy.mockClear();
+    const warm = await createAgentSession({ root }).loadProject();
+
+    expect(symbolGraphSpy).not.toHaveBeenCalled();
+    expect([...warm.symbolGraph.nodes]).toEqual([...cold.symbolGraph.nodes]);
+    expect(warm.symbolGraph.edges).toEqual(cold.symbolGraph.edges);
+    expect(detailedCallTargets(warm.symbolGraph, "Use")).toEqual([partialHelperTarget]);
+    expect(detailedCallTargets(warm.symbolGraph, "use")).toEqual([extensionHelperTarget]);
+  });
+
+  it("rejects the persisted detailed sidecar after a signature-changing edit and rebuilds consumer edges", async () => {
+    const root = await mkGitRepo();
+    const defaultsPath = path.join(root, "defaults.ts");
+    await fs.writeFile(
+      defaultsPath,
+      [
+        "export class Box {",
+        "  target(value = 1) { return value; }",
+        "  zeroArgCaller() { return this.target(); }",
+        "  oneArgCaller() { return this.target(1); }",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const targetId = `${normalizePath(defaultsPath)}::target`;
+    const cold = await createAgentSession({ root }).loadProject();
+    expect(detailedCallTargets(cold.symbolGraph, "zeroArgCaller")).toContain(targetId);
+
+    // Removing the default turns the persisted zero-argument edge invalid. The sidecar
+    // written from the old source must be rejected, not reloaded as if it were current.
+    await fs.writeFile(
+      defaultsPath,
+      [
+        "export class Box {",
+        "  target(value: number) { return value; }",
+        "  zeroArgCaller() { return this.target(); }",
+        "  oneArgCaller() { return this.target(1); }",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const rebuilt = await createAgentSession({ root }).loadProject();
+
+    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+    expect(rebuilt.index.projectSnapshotIdentity).not.toBe(cold.index.projectSnapshotIdentity);
+    expect(detailedCallTargets(rebuilt.symbolGraph, "zeroArgCaller")).not.toContain(targetId);
+    expect(detailedCallTargets(rebuilt.symbolGraph, "oneArgCaller")).toContain(targetId);
   });
 
   it("memoizes a validated detailed sidecar until its file identity changes", async () => {
@@ -655,20 +821,26 @@ describe("agent session", () => {
     const root = await mkGitRepo();
     await createAgentSession({ root }).loadProject();
     const sidecarPath = detailedSymbolGraphSnapshotPath(root);
-    const legacy = (await readDetailedSidecar(sidecarPath)) as {
-      version: number;
-      projectSnapshotIdentity: string;
-      graph: unknown;
-    };
-    legacy.version = 0;
-    await writeDetailedSidecar(sidecarPath, legacy);
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    // Version 0 stands for a pre-schema sidecar; the previous persisted version stands for a
+    // sidecar written before the persisted call-edge semantics changed. Both must rebuild
+    // instead of being reinterpreted under the current meaning.
+    for (const legacyVersion of [0, DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION - 1]) {
+      const legacy = (await readDetailedSidecar(sidecarPath)) as {
+        version: number;
+        projectSnapshotIdentity: string;
+        graph: unknown;
+      };
+      legacy.version = legacyVersion;
+      await writeDetailedSidecar(sidecarPath, legacy);
+      symbolGraphSpy.mockClear();
 
-    await createAgentSession({ root }).loadProject();
-    const refreshed = (await readDetailedSidecar(sidecarPath)) as { version: number };
+      await createAgentSession({ root }).loadProject();
+      const refreshed = (await readDetailedSidecar(sidecarPath)) as { version: number };
 
-    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
-    expect(refreshed.version).toBe(DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION);
+      expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+      expect(refreshed.version).toBe(DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION);
+    }
   });
 
   it("invalidates module, project snapshot, and detailed sidecar on core epoch drift", async () => {

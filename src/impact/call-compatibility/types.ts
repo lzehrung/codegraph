@@ -1,3 +1,4 @@
+import type { CallableBinding } from "../../languages/callable-arity.js";
 import type { SyntaxTreeLike } from "../../languages/types.js";
 
 export interface CallableSignature {
@@ -11,6 +12,11 @@ export interface ExtractCallableSignatureRequest {
   source: string;
   symbolStartIndex: number;
   tree?: SyntaxTreeLike;
+  /**
+   * Call form to measure: `"bound"` (default) drops the receiver parameter, `"unbound"` counts it
+   * as an explicit argument. See `languages/callable-arity.ts`.
+   */
+  binding?: CallableBinding;
 }
 
 export interface CallsiteArguments {

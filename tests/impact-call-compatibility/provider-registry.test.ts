@@ -10,7 +10,7 @@ import {
   getCallCompatibilitySupportedLanguages,
   isCallCompatibilityLanguageSupported,
 } from "../../src/impact/call-compatibility/providers/index.js";
-import { CALL_COMPATIBILITY_LANGUAGE_PROFILES } from "../../src/impact/call-compatibility/providers/profiles.js";
+import { CALLABLE_ARITY_LANGUAGE_PROFILES } from "../../src/languages/callable-arity.js";
 import { getAllLanguages, getLanguageById } from "../../src/languages/registry.js";
 
 /**
@@ -60,10 +60,10 @@ describe("call compatibility provider registry", () => {
   });
 
   it("keys the profile table to exactly the declared call-compatibility languages", () => {
-    expect(Object.keys(CALL_COMPATIBILITY_LANGUAGE_PROFILES).sort()).toEqual(
+    expect(Object.keys(CALLABLE_ARITY_LANGUAGE_PROFILES).sort()).toEqual(
       [...callCompatibilityLanguageIdDeclarations].sort(),
     );
-    for (const languageId of Object.keys(CALL_COMPATIBILITY_LANGUAGE_PROFILES)) {
+    for (const languageId of Object.keys(CALLABLE_ARITY_LANGUAGE_PROFILES)) {
       expect(getLanguageById(languageId), `${languageId} is not a registered language`).toBeDefined();
     }
   });

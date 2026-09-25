@@ -3,14 +3,16 @@ import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { languageHasDeclarationVisibility } from "./declaration-visibility.js";
 import type { FileId } from "../types.js";
-import {
-  foldPhpIdentifierCase,
-  GO_IDENTIFIER_SOURCE,
-  JAVA_IDENTIFIER_SOURCE,
-  KOTLIN_IDENTIFIER_SOURCE,
-} from "../util/identifiers.js";
+import { foldPhpIdentifierCase, normalizeCsharpQualifiedName } from "../util/identifiers.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
+import {
+  getCompilationUnitPeers,
+  getPackageDeclarationName,
+  IMPLICIT_UNIT_LANGUAGES,
+  isUnitBareNameVisible,
+} from "./compilation-units.js";
 import { phpNamedImportRole } from "./import-types.js";
+import { coalesceEquivalentCsharpPartialExports } from "./shared-owner-identity.js";
 import {
   type ExportEntry,
   type ImportBinding,
@@ -20,16 +22,6 @@ import {
   type SymbolDef,
   SymbolKind,
 } from "./types.js";
-
-const GO_PACKAGE_PATTERN = new RegExp(String.raw`^\s*package\s+(${GO_IDENTIFIER_SOURCE})`, "mu");
-const JAVA_PACKAGE_NAME_PATTERN = new RegExp(
-  String.raw`^\s*package\s+(${JAVA_IDENTIFIER_SOURCE}(?:\.${JAVA_IDENTIFIER_SOURCE})*)\s*;`,
-  "mu",
-);
-const KOTLIN_PACKAGE_NAME_PATTERN = new RegExp(
-  String.raw`^\s*package\s+(${KOTLIN_IDENTIFIER_SOURCE}(?:\.${KOTLIN_IDENTIFIER_SOURCE})*)`,
-  "mu",
-);
 
 /**
  * Files that can carry the package declaration each lookup language searches for. Java and Kotlin
@@ -54,7 +46,6 @@ type ModuleNameLookup = {
 };
 
 type PackageDirectoryLookup = {
-  all: ModuleIndex[];
   byName: Map<string, ModuleIndex[]>;
 };
 
@@ -63,13 +54,13 @@ const packageDirectoryLookups = new WeakMap<
   ProjectIndex,
   Map<"go" | "java" | "kotlin", Map<string, PackageDirectoryLookup>>
 >();
-type PackageNameCaches = Record<"go" | "jvm", Map<string, string | null>>;
-const packageNameCaches = new WeakMap<ProjectIndex, PackageNameCaches>();
 
 export type ResolveExportOptions = {
   preferredKind?: SymbolKind;
   allowLocalFallback?: boolean;
   cNamespace?: "tag" | "ordinary";
+  /** Source position for implicit C# namespace lookup in the initial file. */
+  referenceIndex?: number;
 };
 const PHP_CLASS_NAMESPACE_KINDS = [SymbolKind.Class, SymbolKind.Interface, SymbolKind.TypeAlias] as const;
 
@@ -178,83 +169,59 @@ function sameResolvedExport(index: ProjectIndex, left: ResolvedExport, right: Re
   return false;
 }
 
-function packageNameCacheFor(index: ProjectIndex): PackageNameCaches {
-  let caches = packageNameCaches.get(index);
-  if (!caches) {
-    caches = { go: new Map<string, string | null>(), jvm: new Map<string, string | null>() };
-    packageNameCaches.set(index, caches);
-  }
-  return caches;
-}
-
 /**
- * Source to read a package declaration from: the text the index already parsed when it retained
- * one, and otherwise the file itself. Reusing the retained text keeps the package name consistent
- * with the symbols resolved from that same snapshot.
+ * Unique same-compilation-unit match for a bare name. Go, the JVM languages, C#, and Swift can
+ * name top-level declarations of their package, namespace, or module without an import;
+ * candidates come from the same proven unit relation used for reference-candidate discovery
+ * (`getCompilationUnitPeers`), never from a project-wide name scan. A name matching more than
+ * one unit declaration is ambiguous and stays unresolved, except proven-equivalent C# `partial`
+ * type parts, which collapse to one representative before uniqueness is judged. Members are
+ * excluded because they resolve through receiver/owner identity rather than as bare unit names.
  */
-function packageDeclarationSource(index: ProjectIndex, filePath: string, fileKey: string): string | null {
-  const retained = index.parsed?.get(fileKey)?.source;
-  if (retained !== undefined) return retained;
-  try {
-    return fs.readFileSync(filePath, "utf8");
-  } catch {
-    return null;
-  }
-}
-
-function readGoPackageName(index: ProjectIndex, filePath: string): string | null {
-  const cache = packageNameCacheFor(index).go;
-  const key = fileIdentityKey(filePath);
-  const cached = cache.get(key);
-  if (cached !== undefined) return cached;
-  const source = packageDeclarationSource(index, filePath, key);
-  if (source === null) {
-    cache.set(key, null);
-    return null;
-  }
-  const packageName = GO_PACKAGE_PATTERN.exec(source)?.[1] ?? null;
-  cache.set(key, packageName);
-  return packageName;
-}
-
-function resolveGoPackageExport(index: ProjectIndex, file: FileId, exportedName: string): SymbolDef | null {
-  if (supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id !== "go") return null;
-  const directory = packageDirectoryLookup(index, "go").get(fileIdentityKey(path.dirname(file)));
-  if (!directory) return null;
-  const sourcePackage = readGoPackageName(index, file);
-  const candidates = sourcePackage ? (directory.byName.get(sourcePackage) ?? []) : directory.all;
+function resolveImplicitUnitExport(
+  index: ProjectIndex,
+  file: FileId,
+  exportedName: string,
+  matchesOptions: (def: SymbolDef, namespace: ResolveExportOptions["cNamespace"]) => boolean,
+  namespace: ResolveExportOptions["cNamespace"],
+  useIndex?: number,
+  qualification?: string,
+): SymbolDef | null {
+  // Only the implicit compilation-unit languages have bare-name unit visibility. C and C++
+  // keep their include-scope tag precedence and PHP its case-folded namespaces; the unit
+  // lookup must not preempt those established fallbacks.
+  const languageId = supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id;
+  if (!languageId || !IMPLICIT_UNIT_LANGUAGES[languageId]) return null;
   const matches: SymbolDef[] = [];
-  for (const moduleEntry of candidates) {
-    const names = moduleNameLookup(index, moduleEntry.file);
+  const peers = getCompilationUnitPeers(
+    index,
+    file,
+    languageId === "csharp" && qualification !== undefined ? { csharpQualifiedName: true } : undefined,
+  );
+  for (const peerFile of peers.files) {
+    const names = moduleNameLookup(index, peerFile);
     if (!names) continue;
     for (const target of names.localExports.get(names.normalizeIdentifier(exportedName)) ?? []) {
+      if (target.isMember || !matchesOptions(target, namespace)) continue;
+      if (
+        !isUnitBareNameVisible({
+          index,
+          declarationFile: target.file,
+          declaration: target.range,
+          useFile: file,
+          ...(useIndex !== undefined ? { useIndex } : {}),
+          ...(qualification !== undefined ? { qualification } : {}),
+        })
+      ) {
+        continue;
+      }
       if (!matches.some((candidate) => sameSymbolDef(index, candidate, target))) {
         matches.push(target);
       }
     }
   }
-  return matches.length === 1 ? (matches[0] ?? null) : null;
-}
-
-function readPackageNameForLanguage(
-  index: ProjectIndex,
-  filePath: string,
-  languageId: "java" | "kotlin",
-): string | null {
-  const cache = packageNameCacheFor(index).jvm;
-  const fileKey = fileIdentityKey(filePath);
-  const key = `${languageId}::${fileKey}`;
-  const cached = cache.get(key);
-  if (cached !== undefined) return cached;
-  const source = packageDeclarationSource(index, filePath, fileKey);
-  if (source === null) {
-    cache.set(key, null);
-    return null;
-  }
-  const pattern = languageId === "kotlin" ? KOTLIN_PACKAGE_NAME_PATTERN : JAVA_PACKAGE_NAME_PATTERN;
-  const packageName = pattern.exec(source)?.[1] ?? null;
-  cache.set(key, packageName);
-  return packageName;
+  const unique = languageId === "csharp" ? coalesceEquivalentCsharpPartialExports(index, matches) : matches;
+  return unique.length === 1 ? (unique[0] ?? null) : null;
 }
 
 function packageDirectoryLookup(
@@ -274,16 +241,15 @@ function packageDirectoryLookup(
     const directoryKey = fileIdentityKey(path.dirname(moduleEntry.file));
     let directory = directories.get(directoryKey);
     if (!directory) {
-      directory = { all: [], byName: new Map<string, ModuleIndex[]>() };
+      directory = { byName: new Map<string, ModuleIndex[]>() };
       directories.set(directoryKey, directory);
     }
-    directory.all.push(moduleEntry);
     const moduleLanguageId = supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions)?.id;
     if (!moduleLanguageId || !PACKAGE_DECLARING_LANGUAGE_IDS[languageId].has(moduleLanguageId)) continue;
     const packageName =
       languageId === "go"
-        ? readGoPackageName(index, moduleEntry.file)
-        : readPackageNameForLanguage(index, moduleEntry.file, languageId);
+        ? getPackageDeclarationName(index, moduleEntry.file, "go")
+        : getPackageDeclarationName(index, moduleEntry.file, languageId);
     if (!packageName) continue;
     const entries = directory.byName.get(packageName) ?? [];
     entries.push(moduleEntry);
@@ -298,7 +264,7 @@ function resolveSiblingPackageExport(
   exportedName: string,
   languageId: "java" | "kotlin",
 ): ResolvedExport | null {
-  const packageName = readPackageNameForLanguage(index, targetFile, languageId);
+  const packageName = getPackageDeclarationName(index, targetFile, languageId);
   if (!packageName) return null;
   const directory = packageDirectoryLookup(index, languageId).get(fileIdentityKey(path.dirname(targetFile)));
   if (!directory) return null;
@@ -366,17 +332,40 @@ export function resolveExport(
     const names = moduleNameLookup(index, moduleEntry.file);
     if (!names) return null;
     const normalizedFile = normalizePath(moduleEntry.file);
-    const canonicalName = names.normalizeIdentifier(name);
-    const key = `${cacheKey(normalizedFile, canonicalName)}::${opts?.preferredKind ?? ""}::${namespace ?? ""}::${allowLocalFallback ? "local" : "export"}`;
+    const referenceIndex = fileIdentityKey(fileInner) === fileIdentityKey(file) ? opts?.referenceIndex : undefined;
+    const filtersUseNamespace =
+      referenceIndex !== undefined &&
+      supportForFileWithoutHeaderSample(normalizedFile, index.languageExtensions)?.id === "csharp";
+    const separator = filtersUseNamespace ? name.lastIndexOf(".") : -1;
+    let qualification: string | undefined;
+    let unqualifiedName = name;
+    if (separator >= 0) {
+      // `@P.Target` and `P.Target` name the same namespace path.
+      qualification = normalizeCsharpQualifiedName(name.slice(0, separator));
+      unqualifiedName = name.slice(separator + 1);
+    } else if (filtersUseNamespace && name.startsWith("global::")) {
+      qualification = "global::";
+      unqualifiedName = name.slice("global::".length);
+    }
+    const canonicalName = names.normalizeIdentifier(unqualifiedName);
+    const key = `${cacheKey(normalizedFile, names.normalizeIdentifier(name))}::${opts?.preferredKind ?? ""}::${namespace ?? ""}::${allowLocalFallback ? "local" : "export"}::${referenceIndex ?? ""}`;
     if (index.exportCache.has(key)) return index.exportCache.get(key)!;
 
     const cycleKey = `${cacheKey(normalizedFile, canonicalName)}::${namespace ?? ""}`;
     if (visited.has(cycleKey)) return null;
     visited.add(cycleKey);
 
-    const goPackageExport = resolveGoPackageExport(index, normalizedFile, canonicalName);
-    if (goPackageExport && matchesOptions(goPackageExport, namespace)) {
-      const result: ResolvedExport = { kind: "resolved", def: goPackageExport };
+    const implicitUnitExport = resolveImplicitUnitExport(
+      index,
+      normalizedFile,
+      canonicalName,
+      matchesOptions,
+      namespace,
+      referenceIndex,
+      qualification,
+    );
+    if (implicitUnitExport) {
+      const result: ResolvedExport = { kind: "resolved", def: implicitUnitExport };
       index.exportCache.set(key, result);
       return result;
     }
@@ -385,6 +374,17 @@ export function resolveExport(
     for (const target of names.localExports.get(canonicalName) ?? []) {
       if (
         matchesOptions(target, namespace) &&
+        // Nested types resolve through their owner, not as bare namespace names.
+        (!filtersUseNamespace ||
+          (!target.isMember &&
+            isUnitBareNameVisible({
+              index,
+              declarationFile: target.file,
+              declaration: target.range,
+              useFile: file,
+              useIndex: referenceIndex,
+              ...(qualification !== undefined ? { qualification } : {}),
+            }))) &&
         !localCandidates.some((candidate) => sameSymbolDef(index, candidate, target))
       ) {
         localCandidates.push(target);
@@ -478,8 +478,27 @@ export function resolveExport(
     }
 
     const localFallbackCandidates: SymbolDef[] = [];
-    if (allowLocalFallback && !shouldSkipVisibilityLocalFallback(index, moduleEntry)) {
+    // C# lexical bindings have already been checked. Only namespace-level types
+    // can remain visible from another region without a shared lexical scope.
+    if (allowLocalFallback && (filtersUseNamespace || !shouldSkipVisibilityLocalFallback(index, moduleEntry))) {
       for (const local of names.locals.get(canonicalName) ?? []) {
+        if (
+          filtersUseNamespace &&
+          (local.isMember ||
+            (local.kind !== SymbolKind.Class &&
+              local.kind !== SymbolKind.Interface &&
+              local.kind !== SymbolKind.TypeAlias) ||
+            !isUnitBareNameVisible({
+              index,
+              declarationFile: local.file,
+              declaration: local.range,
+              useFile: file,
+              useIndex: referenceIndex,
+              ...(qualification !== undefined ? { qualification } : {}),
+            }))
+        ) {
+          continue;
+        }
         if (
           matchesOptions(local, namespace) &&
           !localFallbackCandidates.some((candidate) => sameSymbolDef(index, candidate, local))
@@ -488,13 +507,19 @@ export function resolveExport(
         }
       }
     }
-    if (localFallbackCandidates.length === 1) {
-      const local = localFallbackCandidates[0]!;
+    // Hidden same-file C# types are omitted from exports, so equivalent internal
+    // `partial` parts both land here. Collapse them with the same shared-owner
+    // identity used for exported candidates before uniqueness is judged.
+    const uniqueLocalFallback = filtersUseNamespace
+      ? coalesceEquivalentCsharpPartialExports(index, localFallbackCandidates)
+      : localFallbackCandidates;
+    if (uniqueLocalFallback.length === 1) {
+      const local = uniqueLocalFallback[0]!;
       const result: ResolvedExport = { kind: "resolved", def: local };
       index.exportCache.set(key, result);
       return result;
     }
-    if (localFallbackCandidates.length) {
+    if (uniqueLocalFallback.length) {
       index.exportCache.set(key, null);
       return null;
     }

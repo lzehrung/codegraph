@@ -72,7 +72,21 @@ const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 // v9: exact C++ qualified ownership changes persisted member ownership and receiver call edges.
 // v10: C/C++ void-parameter arity changes persisted memberArity and call edges.
 // v11: canonical C/C++ declaration aliases preserve base-graph compatibility across cache loads.
-export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 11;
+// v12: shared callable ranges, cross-file ownership, and Zig visibility change detailed call edges.
+// v13: same-file C# constructor edges respect namespace visibility instead of file-wide names.
+// v14: C# alias-qualified targets and shared partial-type identity change persisted edges.
+// v15: trivia-safe package peers can change cross-file detailed call edges.
+// v16: Swift extension visibility and nested C# partial owner identity change persisted call edges.
+// v17: qualified C# generic type uses can change persisted constructor/type edges.
+// v18: constrained Swift extensions no longer donate members to unproven nominal owners.
+// v19: Swift constraint-token equivalence can restore peer call edges across formatting.
+// v20: C# verbatim namespace/type identifiers can merge shared-owner identities and call edges.
+// v21: C# `file` types lose cross-file edges; extension receivers change persisted member arity.
+// v22: C# verbatim namespace aliases (`@X` vs `X`) can add alias-qualified type and constructor edges.
+// v23: C# `file partial` owners in different files no longer share member and call edges.
+// v24: C# top-level types beside block namespaces become global-namespace peers with new edges.
+// v25: identical C# aliases in separate namespace blocks each resolve their own scoped uses.
+export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 25;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";

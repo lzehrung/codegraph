@@ -1,4 +1,4 @@
-import type { LanguageSupport } from "../languages.js";
+import { CSHARP_SUPPORT, type LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isPythonReceiverAttributeAssignmentName } from "../languages/definitions/python.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
@@ -18,11 +18,8 @@ import {
   MEMBER_ACCESS_ROWS,
   supportsReceiverMemberNavigation,
 } from "../util/member-access-tables.js";
-import { declarationMemberArity } from "../graphs/symbol-graph-detailed/ast.js";
 import { cppCallableShapeForNode } from "./cpp-callables.js";
 import {
-  CALL_ARGUMENT_NODE_TYPES,
-  callArgumentCount,
   cppOutOfLineOwnerPath,
   cppQualifiedNameSegments,
   declarationNodeIsStatic,
@@ -32,19 +29,35 @@ import {
   keywordReceiverCrossesDynamicBoundary,
   isUnprovenHeritageExpression,
   keywordReceiverMemberScope,
+  nodeInStaticMemberContext,
   receiverConstructorExpression,
-  supportsReceiverMemberOverloads,
   unwrapNamedType,
   type ReceiverMemberScope,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import {
+  getCallableArity,
+  getCallArgumentCount,
+  memberLookupBinding,
+  type CallableArity,
+} from "../languages/callable-arity.js";
+import { getCompilationUnitPeers } from "./compilation-units.js";
+import { isSwiftCrossFileHiddenSharedOwnerMember } from "./declaration-visibility.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
+import { csharpLookupName, csharpQualifiedNameNode } from "./navigation-local.js";
 import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { comparePhpReferenceNames, findPhpImportAlias } from "./navigation-php.js";
 import { resolveExport, resolveImported, resolvePhpExportByImportType } from "./navigation-resolve.js";
 import {
+  CSHARP_PARTIAL_CONTAINER_TYPES,
+  getSharedOwnerIdentity,
+  isSwiftExtensionContainer,
+  sharedOwnerCanUseMembers,
+} from "./shared-owner-identity.js";
+import {
   SymbolKind,
   type GoToResult,
+  type ImportBinding,
   type ModuleIndex,
   type ProjectIndex,
   type ResolvedExport,
@@ -58,6 +71,329 @@ import {
  * drifting to different semantic cutoffs.
  */
 const RECEIVER_HIERARCHY_DEPTH = 16;
+
+function collectSharedOwnerContainers(root: SyntaxNodeLike, languageId: string, out: SyntaxNodeLike[]): void {
+  if (languageId === "csharp") {
+    if (CSHARP_PARTIAL_CONTAINER_TYPES.has(root.type)) out.push(root);
+  } else if (languageId === "swift") {
+    if (root.type === "class_declaration") out.push(root);
+  }
+  for (const child of root.namedChildren ?? []) collectSharedOwnerContainers(child, languageId, out);
+}
+
+const sharedOwnerContainersByRoot = new WeakMap<SyntaxNodeLike, Map<string, readonly SyntaxNodeLike[]>>();
+
+function sharedOwnerContainersInTree(root: SyntaxNodeLike, languageId: string): readonly SyntaxNodeLike[] {
+  let byLanguage = sharedOwnerContainersByRoot.get(root);
+  if (!byLanguage) {
+    byLanguage = new Map();
+    sharedOwnerContainersByRoot.set(root, byLanguage);
+  }
+  const cached = byLanguage.get(languageId);
+  if (cached) return cached;
+  const collected: SyntaxNodeLike[] = [];
+  collectSharedOwnerContainers(root, languageId, collected);
+  byLanguage.set(languageId, collected);
+  return collected;
+}
+
+/**
+ * Same-identity compilation-unit owners excluding `ownerContainer` itself.
+ * C# requires a proven `partial` modifier and the full namespace/type path.
+ * Swift pairs a type with extensions (and extensions with each other), never two
+ * same-named type declarations that are not extensions. Peers come from
+ * `getCompilationUnitPeers` and stay directory/language-group bounded.
+ * Graph membership should reuse this export rather than a per-name lookup.
+ */
+export type SharedOwnerContainer = {
+  file: string;
+  container: SyntaxNodeLike;
+  context: ParsedFileContext;
+  module: ModuleIndex;
+};
+
+export async function resolveSharedOwnerContainers(params: {
+  index: ProjectIndex;
+  ownerFile: string;
+  ownerContainer: SyntaxNodeLike;
+  ownerSource: string;
+  languageId: string;
+}): Promise<SharedOwnerContainer[]> {
+  const { index, ownerFile, ownerContainer, ownerSource, languageId } = params;
+  if (languageId !== "csharp" && languageId !== "swift") return [];
+  const ownerIdentity = getSharedOwnerIdentity(ownerContainer, ownerSource, languageId, ownerFile);
+  if (!ownerIdentity) return [];
+  // A C# `file` owner has only same-file parts, so no other file is a candidate peer.
+  const peers = ownerIdentity.fileLocalTo
+    ? { files: new Set([ownerFile]), complete: true }
+    : getCompilationUnitPeers(index, ownerFile);
+  const out: SharedOwnerContainer[] = [];
+  const seen = new Set<string>();
+  const ownerIsExtension = languageId === "swift" ? isSwiftExtensionContainer(ownerContainer, ownerSource) : false;
+  const ownerKey = fileIdentityKey(ownerFile);
+  const units: ModuleIndex[] = [];
+  for (const file of peers.files) {
+    const peer = index.byFile.get(fileIdentityKey(file));
+    if (peer) units.push(peer);
+  }
+  for (const peer of units) {
+    let peerContext: ParsedFileContext;
+    try {
+      peerContext = await ensureParsedContext(
+        peer.file,
+        index.parsed?.get(fileIdentityKey(peer.file)),
+        index.languageExtensions,
+      );
+    } catch {
+      continue;
+    }
+    if (peerContext.sup.id !== languageId) continue;
+    const containers = sharedOwnerContainersInTree(peerContext.tree.rootNode, languageId);
+    for (const container of containers) {
+      if (
+        fileIdentityKey(peer.file) === ownerKey &&
+        container.startIndex === ownerContainer.startIndex &&
+        container.endIndex === ownerContainer.endIndex
+      ) {
+        continue;
+      }
+      const identity = getSharedOwnerIdentity(container, peerContext.source, languageId, peer.file);
+      if (!identity || !sharedOwnerCanUseMembers(ownerIdentity, identity)) continue;
+      if (languageId === "swift") {
+        const peerIsExtension = isSwiftExtensionContainer(container, peerContext.source);
+        if (!ownerIsExtension && !peerIsExtension) continue;
+      }
+      const key = fileIdentityKey(peer.file) + ":" + container.startIndex + ":" + container.endIndex;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ file: peer.file, container, context: peerContext, module: peer });
+    }
+  }
+  return out;
+}
+
+/**
+ * Unit-boundary completeness for a C# partial or Swift type/extension member. Its other
+ * owner parts, and therefore its uses, are bounded by `getCompilationUnitPeers`, so an
+ * unproven unit boundary leaves the member's reference set incomplete. Returns null when
+ * the member's owner cannot be shared across files.
+ */
+export async function sharedOwnerMemberUnitComplete(index: ProjectIndex, def: SymbolDef): Promise<boolean | null> {
+  if (!def.isMember) return null;
+  let context: ParsedFileContext;
+  try {
+    context = await ensureParsedContext(
+      def.file,
+      index.parsed?.get(fileIdentityKey(def.file)),
+      index.languageExtensions,
+    );
+  } catch {
+    return null;
+  }
+  const languageId = context.sup.id;
+  if (languageId !== "csharp" && languageId !== "swift") return null;
+  const nameNode = nameNodeForDef(context, def);
+  const container = nameNode ? nearestMemberContainer(nameNode) : null;
+  const identity = container ? getSharedOwnerIdentity(container, context.source, languageId, def.file) : null;
+  if (!identity) return null;
+  // File-local owners have no parts in other files, so the reference set is complete.
+  if (identity.fileLocalTo) return true;
+  // A C# member is reachable through a qualified owner (`P.Box`) from any namespace, so use the
+  // same qualified peer relation as reference candidate discovery.
+  return getCompilationUnitPeers(index, def.file, languageId === "csharp" ? { csharpQualifiedName: true } : undefined)
+    .complete;
+}
+
+/**
+ * Other C# `partial` type parts that share owner identity with `def`.
+ * Reference collection treats them as one type so uses that resolve to the
+ * coalesced representative still match a query started on any part.
+ */
+export async function findCsharpPartialTypeEquivalents(index: ProjectIndex, def: SymbolDef): Promise<SymbolDef[]> {
+  if (!declaresMembers(def)) return [];
+  const module = index.byFile.get(fileIdentityKey(def.file));
+  if (!module) return [];
+  let context: ParsedFileContext;
+  try {
+    context = await ensureParsedContext(
+      def.file,
+      index.parsed?.get(fileIdentityKey(def.file)),
+      index.languageExtensions,
+    );
+  } catch {
+    return [];
+  }
+  if (context.sup.id !== "csharp") return [];
+  const start = def.range.start;
+  const nameNode = context.tree.rootNode.descendantForPosition(
+    { row: start.line - 1, column: start.column - 1 },
+    { row: start.line - 1, column: start.column - 1 },
+  );
+  const container = nearestMemberContainer(nameNode);
+  if (!container) return [];
+  const peers = await resolveSharedOwnerContainers({
+    index,
+    ownerFile: def.file,
+    ownerContainer: container,
+    ownerSource: context.source,
+    languageId: "csharp",
+  });
+  const out: SymbolDef[] = [];
+  for (const peer of peers) {
+    const peerName = peer.container.childForFieldName("name");
+    if (!peerName) continue;
+    const peerDef = peer.module.locals.find(
+      (local) => declaresMembers(local) && local.range.start.index === peerName.startIndex,
+    );
+    if (peerDef) out.push(peerDef);
+  }
+  return out;
+}
+
+/** Reusable shared-owner member lookup for keyword navigation and receiver graphs. */
+export async function findSharedOwnerMemberDefinitions(params: {
+  index: ProjectIndex;
+  ownerFile: string;
+  ownerContainer: SyntaxNodeLike;
+  ownerSource: string;
+  languageId: string;
+  member: string;
+  memberScope?: ReceiverMemberScope;
+}): Promise<SymbolDef[]> {
+  const { index, ownerFile, ownerContainer, ownerSource, languageId, member, memberScope } = params;
+  const peers = await resolveSharedOwnerContainers({ index, ownerFile, ownerContainer, ownerSource, languageId });
+  const out: SymbolDef[] = [];
+  for (const peer of peers) {
+    const predicate =
+      !memberScope || memberScope === "any"
+        ? undefined
+        : (local: SymbolDef) => matchesReceiverMemberScope(local, memberScope, peer.context, peer.container);
+    const hits = findDirectLocalsWithinNode(
+      peer.module.locals,
+      member,
+      peer.container,
+      peer.context,
+      peer.context.sup.normalizeIdentifier,
+      predicate,
+    );
+    for (const hit of hits) {
+      const hitNode = nameNodeForDef(peer.context, hit);
+      if (languageId === "swift" && fileIdentityKey(ownerFile) !== fileIdentityKey(peer.file)) {
+        if (!hitNode || isSwiftCrossFileHiddenSharedOwnerMember(languageId, ownerFile, peer.file, hitNode)) continue;
+      }
+      if (!out.includes(hit)) out.push(hit);
+    }
+  }
+  return out;
+}
+
+function nameNodeForDef(context: ParsedFileContext, def: SymbolDef): SyntaxNodeLike | null {
+  const start = def.range.start;
+  const index = start.index;
+  if (index !== undefined) return context.tree.rootNode.descendantForIndex(index, index);
+  const position = { row: start.line - 1, column: start.column - 1 };
+  return context.tree.rootNode.descendantForPosition(position, position);
+}
+
+function enclosingImportScope(declarationName: SyntaxNodeLike): SyntaxNodeLike | null {
+  let current: SyntaxNodeLike | null = declarationName;
+  while (current && current.type !== "variable_declaration" && current.type !== "using_directive") {
+    current = current.parent;
+  }
+  return current?.parent ?? null;
+}
+
+/**
+ * Rewrites a valid C# `using X = Namespace; X::Target` lookup into the dotted form
+ * export resolution already understands. `global::` and ordinary dotted names keep
+ * their source spelling; an unknown alias stays `X::Target` instead of a bare name.
+ */
+export function csharpAliasQualifiedLookupName(
+  node: SyntaxNodeLike,
+  source: string,
+  fallback: string,
+  imports: readonly ImportBinding[],
+): string {
+  const raw = csharpLookupName(node, source, fallback);
+  if (raw.startsWith("global::")) return raw;
+  const chainNode = csharpQualifiedNameNode(node);
+  if (!chainNode || !raw.includes("::")) return raw;
+  const names: string[] = [];
+  let current: SyntaxNodeLike | null = chainNode;
+  let base: SyntaxNodeLike | null = null;
+  while (current && (current.type === "qualified_name" || current.type === "alias_qualified_name")) {
+    const parts = getMemberAccessParts(CSHARP_SUPPORT, current);
+    base = parts.object ?? base;
+    let property = parts.property;
+    if (property?.type === "generic_name") {
+      property = property.childForFieldName("name") ?? property.namedChildren[0] ?? property;
+    }
+    if (property?.type === "identifier") names.push(sliceText(property, source));
+    current = base;
+  }
+  if (!base || !isReceiverNameNode(CSHARP_SUPPORT, base.type) || !names.length) return raw;
+  const alias = sliceText(base, source);
+  if (alias === "global") return raw;
+  const imported = innermostNamespaceImport(imports, alias, base, CSHARP_SUPPORT.normalizeIdentifier);
+  if (!imported) return raw;
+  return `${imported.from}.${[...names].reverse().join(".")}`;
+}
+
+/**
+ * Innermost in-scope namespace import bound to `alias`. `normalize` applies the language's
+ * identifier equality (C# `@X` and `X` are one alias); the default compares exact spelling.
+ */
+export function innermostNamespaceImport(
+  imports: readonly ImportBinding[],
+  alias: string,
+  useNode: SyntaxNodeLike,
+  normalize: (name: string) => string = (name) => name,
+): ImportBinding | undefined {
+  const normalizedAlias = normalize(alias);
+  const matches = imports.filter(
+    (candidate): candidate is Extract<ImportBinding, { kind: "namespace" }> =>
+      candidate.kind === "namespace" && normalize(candidate.localNS) === normalizedAlias,
+  );
+  if (!matches.length) return undefined;
+  let root: SyntaxNodeLike = useNode;
+  while (root.parent) root = root.parent;
+  let best: ImportBinding | undefined;
+  let bestScopeSpan = Number.POSITIVE_INFINITY;
+  let bestStart = -1;
+  for (const match of matches) {
+    const start = match.localRange?.start.index;
+    if (start === undefined) continue;
+    let nameNode = root;
+    for (;;) {
+      const child = nameNode.namedChildren.find(
+        (candidate) => candidate.startIndex <= start && start < candidate.endIndex,
+      );
+      if (!child) break;
+      nameNode = child;
+    }
+    const scope = enclosingImportScope(nameNode);
+    if (!scope) continue;
+    if (start > useNode.startIndex && scope.parent) continue;
+    if (scope.startIndex > useNode.startIndex || scope.endIndex < useNode.endIndex) continue;
+    const span = scope.endIndex - scope.startIndex;
+    if (span < bestScopeSpan || (span === bestScopeSpan && start >= bestStart)) {
+      bestScopeSpan = span;
+      bestStart = start;
+      best = match;
+    }
+  }
+  if (best) return best;
+  const unlocated = matches.filter((match) => match.localRange?.start.index === undefined);
+  if (unlocated.length === 1) return unlocated[0];
+  const files = new Map<string, ImportBinding>();
+  for (const match of unlocated) {
+    if (typeof match.resolved !== "string") continue;
+    const key = fileIdentityKey(match.resolved);
+    if (!files.has(key)) files.set(key, match);
+  }
+  if (files.size === 1) return [...files.values()][0];
+  return undefined;
+}
 
 export async function resolveMemberAccessDefinition(params: {
   index: ProjectIndex;
@@ -85,16 +421,45 @@ export async function resolveMemberAccessDefinition(params: {
   const resolveExpression = async (expr: SyntaxNodeLike): Promise<ResolvedExport | null> => {
     const exprIsId = isReceiverNameNode(sup, expr.type) && !isMemberAccessNode(sup, expr);
     if (exprIsId) {
-      const lexicalBinding = resolveLexicalBinding?.(expr);
-      if (lexicalBinding) return { kind: "resolved", def: lexicalBinding };
+      const aliasQualifier =
+        sup.id === "csharp" &&
+        expr.parent?.type === "alias_qualified_name" &&
+        getMemberAccessParts(sup, expr.parent).object?.id === expr.id;
+      if (!aliasQualifier) {
+        const lexicalBinding = resolveLexicalBinding?.(expr);
+        if (lexicalBinding) return { kind: "resolved", def: lexicalBinding };
+      }
       const exprName = sliceText(expr, source);
-      const imp =
-        sup.id === "php"
-          ? findPhpImportAlias(mod.imports, exprName, "class")
-          : mod.imports.find((candidate) => {
-              if (candidate.kind === "named" || candidate.kind === "default") return candidate.local === exprName;
-              return candidate.kind === "namespace" && candidate.localNS === exprName;
-            });
+      let imp: ImportBinding | undefined;
+      if (sup.id === "php") {
+        imp = findPhpImportAlias(mod.imports, exprName, "class") ?? undefined;
+      } else if (sup.id === "zig") {
+        imp = innermostNamespaceImport(mod.imports, exprName, expr);
+        if (!imp) {
+          imp = mod.imports.find(
+            (candidate) => (candidate.kind === "named" || candidate.kind === "default") && candidate.local === exprName,
+          );
+        }
+      } else if (sup.id === "csharp") {
+        if (aliasQualifier) {
+          if (exprName !== "global")
+            imp = innermostNamespaceImport(mod.imports, exprName, expr, sup.normalizeIdentifier);
+          if (!imp) return null;
+        } else {
+          imp = innermostNamespaceImport(mod.imports, exprName, expr, sup.normalizeIdentifier);
+          if (!imp) {
+            imp = mod.imports.find(
+              (candidate) =>
+                (candidate.kind === "named" || candidate.kind === "default") && candidate.local === exprName,
+            );
+          }
+        }
+      } else {
+        imp = mod.imports.find((candidate) => {
+          if (candidate.kind === "named" || candidate.kind === "default") return candidate.local === exprName;
+          return candidate.kind === "namespace" && candidate.localNS === exprName;
+        });
+      }
       if (imp) {
         if (imp.kind === "namespace") {
           return {
@@ -115,15 +480,20 @@ export async function resolveMemberAccessDefinition(params: {
         }
       }
 
-      const local = mod.locals.find((candidate) => {
-        if (candidate.localName === exprName) return true;
-        return (
-          sup.id === "php" &&
-          declaresMembers(candidate) &&
-          foldPhpIdentifierCase(candidate.localName) === foldPhpIdentifierCase(exprName)
-        );
-      });
-      if (local) return { kind: "resolved", def: local };
+      if (sup.id === "csharp") {
+        const local = resolveExport(index, mod.file, exprName, { referenceIndex: expr.startIndex });
+        if (local) return local;
+      } else {
+        const local = mod.locals.find((candidate) => {
+          if (candidate.localName === exprName) return true;
+          return (
+            sup.id === "php" &&
+            declaresMembers(candidate) &&
+            foldPhpIdentifierCase(candidate.localName) === foldPhpIdentifierCase(exprName)
+          );
+        });
+        if (local) return { kind: "resolved", def: local };
+      }
 
       for (const starImport of mod.imports.filter((candidate) => candidate.kind === "star")) {
         const result = resolveImported(index, starImport, exprName);
@@ -151,7 +521,7 @@ export async function resolveMemberAccessDefinition(params: {
           return resolveExport(index, base.file, memberName, { allowLocalFallback: false });
         }
         if (base?.kind === "resolved") {
-          if (sup.id === "java") {
+          if (sup.id === "java" || sup.id === "csharp") {
             const memberDef = await resolveMemberDefinitionForBase(index, base.def, memberName);
             return memberDef ? { kind: "resolved", def: memberDef } : null;
           }
@@ -241,7 +611,7 @@ export async function resolveMemberAccessDefinition(params: {
         member,
         keywordScope,
         false,
-        keywordCallArgumentCount(memberNode, source, sup.id),
+        getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined,
       );
       if (memberDef) {
         return okGoToResult(index, memberDef, {
@@ -262,7 +632,7 @@ export async function resolveMemberAccessDefinition(params: {
           member,
           keywordScope,
           false,
-          keywordCallArgumentCount(memberNode, source, sup.id),
+          getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined,
           outOfLineOwner,
         );
         if (outOfLineMember) {
@@ -272,6 +642,9 @@ export async function resolveMemberAccessDefinition(params: {
           });
         }
       }
+      // A failed `self` lookup is not a license to bind an unrelated same-file
+      // extension member by its bare name (including an unproven where clause).
+      if (sup.id === "swift") return { status: "not_found", reason: "No matching Swift member definition" };
     } else if (receiverKind === "supertype") {
       const memberDef = await resolveKeywordReceiverMember(
         index,
@@ -280,7 +653,7 @@ export async function resolveMemberAccessDefinition(params: {
         member,
         keywordScope,
         true,
-        keywordCallArgumentCount(memberNode, source, sup.id),
+        getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined,
       );
       if (!memberDef) return { status: "not_found", reason: "No matching supertype member definition" };
       return okGoToResult(index, memberDef, {
@@ -319,7 +692,8 @@ export async function resolveMemberAccessDefinition(params: {
             receiver.memberScope === "any"
               ? undefined
               : (local: SymbolDef) => matchesReceiverMemberScope(local, receiver.memberScope, targetContext, container);
-          const knownArgumentCount = keywordCallArgumentCount(memberNode, source, sup.id);
+          const knownArgumentCount =
+            getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined;
           let memberDef: SymbolDef | undefined;
           if (receiver.runtimeTypeOnly || targetContext.sup.id === "java") {
             const candidates = findDirectLocalsWithinNode(
@@ -737,6 +1111,40 @@ async function resolveKeywordReceiverMember(
         matches,
       );
     }
+    for (const candidate of level) {
+      if (candidate.context.sup.id !== "csharp" && candidate.context.sup.id !== "swift") continue;
+      const sharedContainers = await resolveSharedOwnerContainers({
+        index,
+        ownerFile: candidate.file,
+        ownerContainer: candidate.container,
+        ownerSource: candidate.context.source,
+        languageId: candidate.context.sup.id,
+      });
+      for (const shared of sharedContainers) {
+        const crossFileSwift =
+          candidate.context.sup.id === "swift" && fileIdentityKey(candidate.file) !== fileIdentityKey(shared.file);
+        const sharedPredicate = (local: SymbolDef): boolean => {
+          if (
+            memberScope !== "any" &&
+            !matchesReceiverMemberScope(local, memberScope, shared.context, shared.container)
+          ) {
+            return false;
+          }
+          if (!crossFileSwift) return true;
+          const nameNode = nameNodeForDef(shared.context, local);
+          return !!nameNode && !isSwiftCrossFileHiddenSharedOwnerMember("swift", candidate.file, shared.file, nameNode);
+        };
+        appendDirectKeywordMembers(
+          shared.module.locals,
+          member,
+          shared.container,
+          shared.context,
+          shared.context.sup.normalizeIdentifier,
+          sharedPredicate,
+          matches,
+        );
+      }
+    }
     const uniqueMatches = uniqueReceiverMemberCandidates(matches);
     if (uniqueMatches.length) {
       const allowUniqueArityMismatch = !startAtAncestor && depth === 0;
@@ -761,6 +1169,39 @@ async function resolveKeywordReceiverMember(
     level = next;
   }
   return undefined;
+}
+/**
+ * Validate an unqualified member use against its actual lexical owner, including shared
+ * owner parts in other files. Swift checks every bare name; C# checks only invocation
+ * callees, matching the detailed graph's implicit-self call candidates. A C# static
+ * context reaches only static members.
+ */
+export async function resolveImplicitSelfMember(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  node: SyntaxNodeLike,
+  name: string,
+  source: string,
+  languageId: string,
+): Promise<SymbolDef | undefined> {
+  const call = node.parent ?? node;
+  if (languageId === "csharp") {
+    const callee = call.type === "invocation_expression" ? call.childForFieldName("function") : null;
+    if (!callee || callee.startIndex !== node.startIndex || callee.endIndex !== node.endIndex) return undefined;
+  } else if (languageId !== "swift") {
+    return undefined;
+  }
+  const memberScope: ReceiverMemberScope =
+    languageId === "csharp" && nodeInStaticMemberContext(node, source) ? "static" : "any";
+  return resolveKeywordReceiverMember(
+    index,
+    mod,
+    node,
+    name,
+    memberScope,
+    false,
+    getCallArgumentCount({ languageId, source, call }) ?? undefined,
+  );
 }
 
 export { supportsReceiverCallEdges, supportsReceiverMemberNavigation } from "../util/member-access-tables.js";
@@ -907,8 +1348,23 @@ async function findReceiverMemberDefinition(
     normalizeIdentifier,
     memberPredicate,
   );
-  if (containerMatches.length) {
-    return await selectReceiverMemberCandidates(index, containerMatches, knownArgumentCount);
+  const allReceiverMatches = [...containerMatches];
+  if (targetContext.sup.id === "csharp" || targetContext.sup.id === "swift") {
+    const shared = await findSharedOwnerMemberDefinitions({
+      index,
+      ownerFile: receiverDef.file,
+      ownerContainer: container,
+      ownerSource: targetContext.source,
+      languageId: targetContext.sup.id,
+      member,
+      memberScope,
+    });
+    for (const hit of shared) {
+      if (!allReceiverMatches.includes(hit)) allReceiverMatches.push(hit);
+    }
+  }
+  if (allReceiverMatches.length) {
+    return await selectReceiverMemberCandidates(index, allReceiverMatches, knownArgumentCount);
   }
   if (targetContext.sup.id === "rust") {
     const implNode = findRustImplForType(targetContext.tree.rootNode, receiverDef.localName, targetContext.source);
@@ -963,41 +1419,21 @@ function matchesReceiverMemberScope(
   return hasStaticModifier(local, targetContext, container) === (memberScope === "static");
 }
 
-const KEYWORD_CALLEE_FIELD_NAMES = ["function", "callee", "called_expression", "expression"];
-
-/**
- * Positional argument count of the call wrapping a keyword receiver's member access, or
- * undefined when the access is not an invocation with a known argument list. Reuses the shared
- * `callArgumentCount` scanner.
- */
-function keywordCallArgumentCount(memberNode: SyntaxNodeLike, source: string, languageId: string): number | undefined {
-  if (!supportsReceiverMemberOverloads(languageId)) return undefined;
-  const carriesArguments = (node: SyntaxNodeLike): boolean =>
-    Boolean(node.childForFieldName("arguments") ?? node.childForFieldName("argument_list")) ||
-    (node.namedChildren ?? []).some((child) => CALL_ARGUMENT_NODE_TYPES[child.type]);
-  if (carriesArguments(memberNode)) return callArgumentCount(memberNode, source) ?? undefined;
-  const parent = memberNode.parent;
-  if (!parent || !carriesArguments(parent)) return undefined;
-  for (const fieldName of KEYWORD_CALLEE_FIELD_NAMES) {
-    if (parent.childForFieldName(fieldName) === memberNode) return callArgumentCount(parent, source) ?? undefined;
-  }
-  return (parent.namedChildren ?? [])[0] === memberNode ? (callArgumentCount(parent, source) ?? undefined) : undefined;
-}
-
-/** Declared positional parameter count of a keyword-receiver candidate member. */
-async function keywordMemberDeclarationArity(index: ProjectIndex, def: SymbolDef): Promise<number | undefined> {
+async function getCallableArityForDef(index: ProjectIndex, def: SymbolDef): Promise<CallableArity | undefined> {
   const context = await ensureParsedContext(def.file, undefined, index.languageExtensions);
   const start = def.range.start;
-  const position = {
-    row: start.line - 1,
-    column: start.column - 1,
-  };
+  const position = { row: start.line - 1, column: start.column - 1 };
   const nameNode = context.tree.rootNode.descendantForPosition(position, position);
   const container = nearestMemberContainer(nameNode);
   let current: SyntaxNodeLike | null = nameNode;
   while (current && current !== container) {
-    const arity = declarationMemberArity(current, context.sup.id);
-    if (arity !== undefined) return arity;
+    const range = getCallableArity({
+      languageId: context.sup.id,
+      source: context.source,
+      declaration: current,
+      binding: memberLookupBinding(context.sup.id),
+    });
+    if (range) return range;
     current = current.parent;
   }
   return undefined;
@@ -1021,8 +1457,9 @@ async function receiverMemberAcceptsArgumentCount(
       ? argumentCount >= shape.minArity && (shape.maxArity === null || argumentCount <= shape.maxArity)
       : undefined;
   }
-  const arity = await keywordMemberDeclarationArity(index, def);
-  return arity === undefined ? undefined : arity === argumentCount;
+  const range = await getCallableArityForDef(index, def);
+  if (!range) return undefined;
+  return argumentCount >= range.minArgs && (range.maxArgs === null || argumentCount <= range.maxArgs);
 }
 
 function uniqueReceiverMemberCandidates(candidates: readonly SymbolDef[]): SymbolDef[] {
@@ -1205,10 +1642,13 @@ function appendDirectKeywordMembers(
   }
 }
 
-function isDirectKeywordMemberDeclaration(declarationNode: SyntaxNodeLike, container: SyntaxNodeLike): boolean {
+export function isDirectKeywordMemberDeclaration(declarationNode: SyntaxNodeLike, container: SyntaxNodeLike): boolean {
   if (nearestMemberContainer(declarationNode) !== container) return false;
+  let functionDepth = 0;
   let current: SyntaxNodeLike | null = declarationNode;
   while (current && current !== container) {
+    // Swift local functions can nest inside a member; only the outer function is a member.
+    if (current.type === "function_declaration" && ++functionDepth > 1) return false;
     const isMethodBody =
       (current.type === "block" || current.type === "compound_statement" || current.type === "statement_block") &&
       current.parent !== container;

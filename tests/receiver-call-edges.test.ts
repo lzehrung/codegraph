@@ -4,6 +4,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { buildSymbolGraphDetailed, type DetailedSymbolGraph } from "../src/graphs/symbol-graph-detailed.js";
 import {
   emitReceiverCallEdges,
+  type MemberArityRange,
   type ReceiverCallCandidate,
   type ReceiverMemberScope,
 } from "../src/graphs/symbol-graph-detailed/receiver-calls.js";
@@ -1790,12 +1791,23 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
     return { id, file: "leaf.ts", name, kind: extra.kind ?? "function", ...extra };
   }
 
-  function recordedCalls(graph: SymbolGraph, candidate: ReceiverCallCandidate): Array<{ from: string; to: string }> {
+  function recordedCalls(
+    graph: SymbolGraph,
+    candidate: ReceiverCallCandidate,
+    arities?: ReadonlyMap<string, MemberArityRange>,
+  ): Array<{ from: string; to: string }> {
     const recorded: Array<{ from: string; to: string }> = [];
-    emitReceiverCallEdges(graph, [candidate], (from, to, label) => {
-      if (label === "calls") recorded.push({ from, to });
-      return true;
-    });
+    emitReceiverCallEdges(
+      graph,
+      [candidate],
+      (from, to, label) => {
+        if (label === "calls") recorded.push({ from, to });
+        return true;
+      },
+      undefined,
+      undefined,
+      arities,
+    );
     return recorded;
   }
 
@@ -1874,6 +1886,77 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
     expect(recorded).toEqual([{ from: "caller", to: "run.decl" }]);
   });
 
+  it("matches aliased members through accepted arity ranges instead of fixed memberArity", () => {
+    // The fixed counts here reject a zero-argument call; the accepted range proves
+    // the default-parameter member reachable at zero arguments through its alias.
+    const graph: SymbolGraph = {
+      nodes: new Map([
+        ["Box", node("Box", "Box", { kind: "class" })],
+        ["caller", node("caller", "call")],
+        ["run.decl", node("run.decl", "run", { memberArity: 2 })],
+        ["run.def", node("run.def", "run", { memberArity: 2 })],
+      ]),
+      edges: [
+        { from: "caller", to: "Box", label: "member_of" },
+        { from: "run.decl", to: "Box", label: "member_of" },
+        { from: "run.def", to: "Box", label: "member_of" },
+      ],
+    };
+    const aliases = new Map([["run.def", "run.decl"]]);
+    const scopes = new Map<string, ReceiverMemberScope>([
+      ["run.decl", "instance"],
+      ["run.def", "instance"],
+    ]);
+    const arities = new Map<string, MemberArityRange>([
+      ["run.decl", { min: 0, max: 1 }],
+      ["run.def", { min: 0, max: 1 }],
+    ]);
+    const recorded: Array<{ from: string; to: string }> = [];
+    emitReceiverCallEdges(
+      graph,
+      [
+        {
+          callerId: "caller",
+          ownerId: "Box",
+          viaSupertypes: false,
+          memberName: "run",
+          argumentCount: 0,
+          site,
+          memberScope: "instance",
+        },
+      ],
+      (from, to, label) => {
+        if (label === "calls") recorded.push({ from, to });
+        return true;
+      },
+      scopes,
+      aliases,
+      arities,
+    );
+    expect(recorded).toEqual([{ from: "caller", to: "run.decl" }]);
+  });
+
+  it("does not infer accepted call ranges from declaration parameter counts", () => {
+    const graph: SymbolGraph = {
+      nodes: new Map([
+        ["Mid", node("Mid", "Mid", { kind: "class" })],
+        ["leaf.go", node("leaf.go", "go")],
+        ["mid.run", node("mid.run", "run", { memberArity: 1 })],
+      ]),
+      edges: [
+        { from: "leaf.go", to: "Mid", label: "member_of" },
+        { from: "mid.run", to: "Mid", label: "member_of" },
+      ],
+    };
+    // One declared parameter does not establish whether a default permits this call.
+    expect(recordedCalls(graph, candidate())).toEqual([{ from: "leaf.go", to: "mid.run" }]);
+
+    // Counts alone must not choose one overload when neither accepted range is known.
+    graph.nodes.set("mid.run.zero", node("mid.run.zero", "run", { memberArity: 0 }));
+    graph.edges.push({ from: "mid.run.zero", to: "Mid", label: "member_of" });
+    expect(recordedCalls(graph, candidate())).toEqual([]);
+  });
+
   it("does not record a deeper unique member when the shallowest level is ambiguous", () => {
     const graph: SymbolGraph = {
       nodes: new Map([
@@ -1913,7 +1996,12 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
         { from: "Mid", to: "Base", label: "extends" },
       ],
     };
-    expect(recordedCalls(graph, candidate())).toEqual([]);
+    const arities = new Map([
+      ["mid.run.1", { min: 1, max: 1 }],
+      ["mid.run.2", { min: 2, max: 2 }],
+      ["base.run", { min: 0, max: 0 }],
+    ]);
+    expect(recordedCalls(graph, candidate(), arities)).toEqual([]);
   });
 
   it("records the arity-unique member at the shallowest level instead of a deeper unique member", () => {
@@ -1934,7 +2022,12 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
         { from: "Mid", to: "Base", label: "extends" },
       ],
     };
-    expect(recordedCalls(graph, candidate())).toEqual([{ from: "leaf.go", to: "mid.run.0" }]);
+    const arities = new Map([
+      ["mid.run.0", { min: 0, max: 0 }],
+      ["mid.run.1", { min: 1, max: 1 }],
+      ["base.run", { min: 0, max: 0 }],
+    ]);
+    expect(recordedCalls(graph, candidate(), arities)).toEqual([{ from: "leaf.go", to: "mid.run.0" }]);
   });
 
   it("still records a unique inherited member when the declaring type has no match", () => {
@@ -2312,25 +2405,26 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     expect(callsiteTexts(graph, overloads[0]!.id, caller, files)).toBeNull();
   });
 
-  it("omits arity resolution when the trailing-closure count is unknown", async () => {
-    // The comment between the labeled trailing closures makes the shared scanner
-    // return null: the call shape is unknown, so no arity may be fabricated. A
-    // fabricated parenthesized-only count of 1 would wrongly pick the arity-1 member.
+  it("counts a comment-separated labeled trailing-closure run from the call shape", async () => {
+    // The shared callable-arity leaf reads the trailing-closure run from the call's syntax
+    // shape, so a comment between the labeled closures does not hide them: `pick(1) { 2 }
+    // /* mid */ second: { 3 }` passes three positional arguments. Only the arity-3 member
+    // may match; a parenthesized-only count of 1 would wrongly pick the arity-1 member.
     const files: Record<string, string> = {
-      "swtrail-unknown.swift": [
-        "class SwTrailUnknown {",
+      "swtrail-labeled-comment.swift": [
+        "class SwTrailLabeledComment {",
         "  func pick(_ value: Int) -> Int { return value }",
         "  func pick(_ value: Int, _ first: () -> Int, second: () -> Int) -> Int { return value }",
         "  func caller() -> Int { return self.pick(1) { 2 } /* mid */ second: { 3 } }",
         "}",
       ].join("\n"),
     };
-    const graph = await buildFixture("cg-receiver-swift-unknown-trailing-", files);
-    const caller = nodeIn(graph, "swtrail-unknown.swift", "caller");
-    const overloads = overloadMembers(graph, "swtrail-unknown.swift", "pick");
+    const graph = await buildFixture("cg-receiver-swift-labeled-comment-trailing-", files);
+    const caller = nodeIn(graph, "swtrail-labeled-comment.swift", "caller");
+    const overloads = overloadMembers(graph, "swtrail-labeled-comment.swift", "pick");
     expect(overloads.map((node) => node.memberArity)).toEqual([1, 3]);
     expect(callsiteTexts(graph, overloads[0]!.id, caller, files)).toBeNull();
-    expect(callsiteTexts(graph, overloads[1]!.id, caller, files)).toBeNull();
+    expect(callsiteTexts(graph, overloads[1]!.id, caller, files)).toEqual(["pick"]);
   });
 
   it("records union member ownership and receiver calls in C++", async () => {
@@ -2380,6 +2474,49 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     const inner = nodeIn(graph, "Local.cs", "Inner");
     const memberOfTargets = graph.edges.filter((edge) => edge.label === "member_of" && edge.from === inner);
     expect(memberOfTargets).toEqual([]);
+  });
+
+  it("does not attribute instance calls from a local function inside a static C# method", async () => {
+    const files = {
+      "StaticLocal.cs": [
+        "class StaticLocal {",
+        "  void Instance() {}",
+        "  static void Shared() {}",
+        "  static void Run() { void Local() { Instance(); Shared(); } Local(); }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cs-static-local-", files);
+    const local = nodeIn(graph, "StaticLocal.cs", "Local");
+    const run = nodeIn(graph, "StaticLocal.cs", "Run");
+    const shared = nodeIn(graph, "StaticLocal.cs", "Shared");
+    const instance = nodeIn(graph, "StaticLocal.cs", "Instance");
+    expect(callsiteTexts(graph, local, run, files)).toEqual(["Local"]);
+    expect(callsiteTexts(graph, shared, local, files)).toEqual(["Shared"]);
+    expect(callsiteTexts(graph, instance, local, files)).toBeNull();
+  });
+
+  it("counts a C# extension receiver as an argument of static-class and bare calls", async () => {
+    const files = {
+      "Ext.cs": [
+        "class Box {}",
+        "static class Ext {",
+        "  public static int M(this Box value, int n = 1) { return n; }",
+        "  static int Inside(Box b) { return M(b, 2); }",
+        "  static int TooMany(Box b) { return M(b, 2, 3); }",
+        "}",
+        "class Use {",
+        "  int Qualified(Box b) { return Ext.M(b, 2); }",
+        "  int Missing() { return Ext.M(); }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cs-extension-", files);
+    const target = nodeIn(graph, "Ext.cs", "M");
+    expect(callsiteTexts(graph, target, nodeIn(graph, "Ext.cs", "Inside"), files)).toEqual(["M"]);
+    expect(callsiteTexts(graph, target, nodeIn(graph, "Ext.cs", "Qualified"), files)).toEqual(["M"]);
+    expect(callsiteTexts(graph, target, nodeIn(graph, "Ext.cs", "TooMany"), files)).toBeNull();
+    expect(callsiteTexts(graph, target, nodeIn(graph, "Ext.cs", "Missing"), files)).toBeNull();
   });
 
   it("resolves a C# this receiver to a member instead of a same-named local function", async () => {
@@ -2481,5 +2618,516 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     expect(graph.nodes.get(bound)?.callable).toBe(true);
     const caller = nodeIn(graph, "collide.js", "caller");
     expect(callsiteTexts(graph, bound, caller, files)).toEqual(["bound"]);
+  });
+  it("emits receiver call edges across default-parameter arity ranges", async () => {
+    const cases: {
+      prefix: string;
+      file: string;
+      source: string;
+      member: string;
+      zeroCaller: string;
+      oneCaller: string;
+      badCaller: string;
+    }[] = [
+      {
+        prefix: "cg-arity-ts-default-",
+        file: "box.ts",
+        member: "target",
+        zeroCaller: "caller",
+        oneCaller: "callerOne",
+        badCaller: "callerBad",
+        source: [
+          "class Box {",
+          "  target(value = 1) { return value; }",
+          "  caller() { return this.target(); }",
+          "  callerOne() { return this.target(1); }",
+          "  callerBad() { return this.target(1, 2); }",
+          "}",
+        ].join("\n"),
+      },
+      {
+        prefix: "cg-arity-tsx-default-",
+        file: "box.tsx",
+        member: "target",
+        zeroCaller: "caller",
+        oneCaller: "callerOne",
+        badCaller: "callerBad",
+        source: [
+          "class Box {",
+          "  target(value = 1) { return value; }",
+          "  caller() { return this.target(); }",
+          "  callerOne() { return this.target(1); }",
+          "  callerBad() { return this.target(1, 2); }",
+          "}",
+        ].join("\n"),
+      },
+      {
+        prefix: "cg-arity-cs-default-",
+        file: "Box.cs",
+        member: "Target",
+        zeroCaller: "Caller",
+        oneCaller: "CallerOne",
+        badCaller: "CallerBad",
+        source: [
+          "class Box {",
+          "  int Target(int value = 1) { return value; }",
+          "  int Caller() { return this.Target(); }",
+          "  int CallerOne() { return this.Target(1); }",
+          "  int CallerBad() { return this.Target(1, 2); }",
+          "}",
+        ].join("\n"),
+      },
+      {
+        prefix: "cg-arity-kt-default-",
+        file: "box.kt",
+        member: "target",
+        zeroCaller: "caller",
+        oneCaller: "callerOne",
+        badCaller: "callerBad",
+        source: [
+          "class Box {",
+          "  fun target(value: Int = 1): Int { return value }",
+          "  fun caller(): Int { return this.target() }",
+          "  fun callerOne(): Int { return this.target(1) }",
+          "  fun callerBad(): Int { return this.target(1, 2) }",
+          "}",
+        ].join("\n"),
+      },
+      {
+        prefix: "cg-arity-sw-default-",
+        file: "box.swift",
+        member: "target",
+        zeroCaller: "caller",
+        oneCaller: "callerOne",
+        badCaller: "callerBad",
+        source: [
+          "class Box {",
+          "  func target(_ value: Int = 1) -> Int { return value }",
+          "  func caller() -> Int { return self.target() }",
+          "  func callerOne() -> Int { return self.target(1) }",
+          "  func callerBad() -> Int { return self.target(1, 2) }",
+          "}",
+        ].join("\n"),
+      },
+    ];
+    for (const testCase of cases) {
+      const files = { [testCase.file]: testCase.source };
+      const graph = await buildFixture(testCase.prefix, files);
+      const member = nodeIn(graph, testCase.file, testCase.member);
+      expect(
+        callsiteTexts(graph, member, nodeIn(graph, testCase.file, testCase.zeroCaller), files),
+        `${testCase.file} zero-argument default call`,
+      ).toEqual([testCase.member]);
+      expect(
+        callsiteTexts(graph, member, nodeIn(graph, testCase.file, testCase.oneCaller), files),
+        `${testCase.file} one-argument control call`,
+      ).toEqual([testCase.member]);
+      expect(
+        callsiteTexts(graph, member, nodeIn(graph, testCase.file, testCase.badCaller), files),
+        `${testCase.file} over-arity call must stay unresolved`,
+      ).toBeNull();
+    }
+  });
+  it("reports fixed positional member arity without default, modifier, or explicit-receiver noise", async () => {
+    // Verified shapes: kotlin-ng keeps a default value as a bare `expression`
+    // sibling and `vararg` as `parameter_modifiers` beside its `parameter`; the
+    // Java explicit receiver is a `receiver_parameter` sibling of the value
+    // parameter. None of them may inflate the public fixed positional count.
+    const files = {
+      "meta.kt": [
+        "class Meta {",
+        "  fun defaulted(value: Int = 1): Int { return value }",
+        "  fun variadic(vararg values: Int): Int { return 1 }",
+        "}",
+      ].join("\n"),
+      "Meta.java": ["class Meta {", "  int explicitReceiver(Meta this, int value) { return value; }", "}"].join("\n"),
+    };
+    const graph = await buildFixture("cg-member-arity-metadata-", files);
+    expect(graph.nodes.get(nodeIn(graph, "meta.kt", "defaulted"))?.memberArity).toBe(1);
+    expect(graph.nodes.get(nodeIn(graph, "meta.kt", "variadic"))?.memberArity).toBe(1);
+    expect(graph.nodes.get(nodeIn(graph, "Meta.java", "explicitReceiver"))?.memberArity).toBe(1);
+  });
+  it("accepts Java variadic calls at every count and excludes explicit receivers from the count", async () => {
+    const variadicFiles = {
+      "Var.java": [
+        "class Var {",
+        "  int target(int... values) { return 1; }",
+        "  int callerZero() { return this.target(); }",
+        "  int callerOne() { return this.target(1); }",
+        "  int callerTwo() { return this.target(1, 2); }",
+        "}",
+      ].join("\n"),
+    };
+    const variadicGraph = await buildFixture("cg-arity-java-variadic-", variadicFiles);
+    const variadicTarget = nodeIn(variadicGraph, "Var.java", "target");
+    for (const caller of ["callerZero", "callerOne", "callerTwo"]) {
+      expect(
+        callsiteTexts(variadicGraph, variadicTarget, nodeIn(variadicGraph, "Var.java", caller), variadicFiles),
+        `variadic ${caller}`,
+      ).toEqual(["target"]);
+    }
+
+    const receiverFiles = {
+      "Box.java": [
+        "class Box {",
+        "  int target(Box this, int value) { return value; }",
+        "  int callerOne() { return this.target(1); }",
+        "  int callerBad() { return this.target(1, 2); }",
+        "}",
+      ].join("\n"),
+    };
+    const receiverGraph = await buildFixture("cg-arity-java-receiver-param-", receiverFiles);
+    const receiverTarget = nodeIn(receiverGraph, "Box.java", "target");
+    expect(
+      callsiteTexts(receiverGraph, receiverTarget, nodeIn(receiverGraph, "Box.java", "callerOne"), receiverFiles),
+    ).toEqual(["target"]);
+    expect(
+      callsiteTexts(receiverGraph, receiverTarget, nodeIn(receiverGraph, "Box.java", "callerBad"), receiverFiles),
+    ).toBeNull();
+  });
+  it("records Python static, class, and unbound instance calls through type-named receivers", async () => {
+    const files = {
+      "box.py": [
+        "class Box:",
+        "    @staticmethod",
+        "    def target(self):",
+        "        return self",
+        "    @classmethod",
+        "    def make(cls):",
+        "        return cls()",
+        "    def instance_target(self):",
+        "        return 1",
+        "    def caller(self):",
+        "        return Box.target(1)",
+        "    def callerCls(self):",
+        "        return Box.make()",
+        "    def callerUnbound(self):",
+        "        return Box.instance_target(1)",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-arity-py-static-", files);
+    expect(callsiteTexts(graph, nodeIn(graph, "box.py", "target"), nodeIn(graph, "box.py", "caller"), files)).toEqual([
+      "target",
+    ]);
+    expect(callsiteTexts(graph, nodeIn(graph, "box.py", "make"), nodeIn(graph, "box.py", "callerCls"), files)).toEqual([
+      "make",
+    ]);
+    expect(
+      callsiteTexts(graph, nodeIn(graph, "box.py", "instance_target"), nodeIn(graph, "box.py", "callerUnbound"), files),
+    ).toEqual(["instance_target"]);
+
+    // Parameter spelling is a signature concern; graph resolution must not depend on it.
+    const renamedFiles = {
+      "box.py": [
+        "class Box:",
+        "    @staticmethod",
+        "    def target(value):",
+        "        return value",
+        "    def caller(self):",
+        "        return Box.target(1)",
+      ].join("\n"),
+    };
+    const renamedGraph = await buildFixture("cg-arity-py-static-rename-", renamedFiles);
+    expect(
+      callsiteTexts(
+        renamedGraph,
+        nodeIn(renamedGraph, "box.py", "target"),
+        nodeIn(renamedGraph, "box.py", "caller"),
+        renamedFiles,
+      ),
+    ).toEqual(["target"]);
+  });
+  it("keeps overlapping default-parameter overload ranges ambiguous and selects arity-unique members", async () => {
+    const kotlinFiles = {
+      "over.kt": [
+        "class Over {",
+        "  fun pick(a: Int = 1): Int { return a }",
+        "  fun pick(a: Int, b: Int = 2): Int { return a + b }",
+        "  fun callZero(): Int { return this.pick() }",
+        "  fun callOne(): Int { return this.pick(1) }",
+        "  fun callTwo(): Int { return this.pick(1, 2) }",
+        "}",
+      ].join("\n"),
+    };
+    const kotlinGraph = await buildFixture("cg-arity-kt-overload-overlap-", kotlinFiles);
+    // Identify each overload by its declaration position (defNodeId carries the
+    // name start index), never by arity counts.
+    const kotlinSource = kotlinFiles["over.kt"]!;
+    const oneParamPick = [...kotlinGraph.nodes.values()].find((node) =>
+      node.id.endsWith(`::pick::${kotlinSource.indexOf("pick(a: Int = 1)")}`),
+    );
+    const twoParamPick = [...kotlinGraph.nodes.values()].find((node) =>
+      node.id.endsWith(`::pick::${kotlinSource.indexOf("pick(a: Int, b: Int = 2)")}`),
+    );
+    expect(oneParamPick, "one-parameter pick declaration").toBeDefined();
+    expect(twoParamPick, "two-parameter pick declaration").toBeDefined();
+    expect(
+      callsiteTexts(kotlinGraph, oneParamPick!.id, nodeIn(kotlinGraph, "over.kt", "callZero"), kotlinFiles),
+    ).toEqual(["pick"]);
+    expect(
+      callsiteTexts(kotlinGraph, twoParamPick!.id, nodeIn(kotlinGraph, "over.kt", "callZero"), kotlinFiles),
+    ).toBeNull();
+    expect(
+      callsiteTexts(kotlinGraph, oneParamPick!.id, nodeIn(kotlinGraph, "over.kt", "callTwo"), kotlinFiles),
+    ).toBeNull();
+    expect(
+      callsiteTexts(kotlinGraph, twoParamPick!.id, nodeIn(kotlinGraph, "over.kt", "callTwo"), kotlinFiles),
+    ).toEqual(["pick"]);
+    // `pick(1)` satisfies both accepted ranges, so no overload may be chosen.
+    expect(
+      callsiteTexts(kotlinGraph, oneParamPick!.id, nodeIn(kotlinGraph, "over.kt", "callOne"), kotlinFiles),
+    ).toBeNull();
+    expect(
+      callsiteTexts(kotlinGraph, twoParamPick!.id, nodeIn(kotlinGraph, "over.kt", "callOne"), kotlinFiles),
+    ).toBeNull();
+
+    const swiftFiles = {
+      "over.swift": [
+        "class Over {",
+        "  func pick(_ a: Int = 1) -> Int { return a }",
+        "  func pick(_ a: Int, _ b: Int) -> Int { return a + b }",
+        "  func callZero() -> Int { return self.pick() }",
+        "  func callOne() -> Int { return self.pick(1) }",
+        "  func callTwo() -> Int { return self.pick(1, 2) }",
+        "}",
+      ].join("\n"),
+    };
+    const swiftGraph = await buildFixture("cg-arity-sw-overload-select-", swiftFiles);
+    const swiftPicks = overloadMembers(swiftGraph, "over.swift", "pick");
+    expect(swiftPicks.map((node) => node.memberArity)).toEqual([1, 2]);
+    expect(
+      callsiteTexts(swiftGraph, swiftPicks[0]!.id, nodeIn(swiftGraph, "over.swift", "callZero"), swiftFiles),
+    ).toEqual(["pick"]);
+    expect(
+      callsiteTexts(swiftGraph, swiftPicks[0]!.id, nodeIn(swiftGraph, "over.swift", "callOne"), swiftFiles),
+    ).toEqual(["pick"]);
+    expect(
+      callsiteTexts(swiftGraph, swiftPicks[1]!.id, nodeIn(swiftGraph, "over.swift", "callTwo"), swiftFiles),
+    ).toEqual(["pick"]);
+    expect(
+      callsiteTexts(swiftGraph, swiftPicks[1]!.id, nodeIn(swiftGraph, "over.swift", "callOne"), swiftFiles),
+    ).toBeNull();
+  });
+  it("leaves type-named receivers unresolved when a local shadows the type name", async () => {
+    const pyFiles = {
+      "shadow.py": [
+        "class Box:",
+        "    def target(self):",
+        "        return 1",
+        "def caller():",
+        "    Box = make_box()",
+        "    return Box.target(1)",
+      ].join("\n"),
+    };
+    const pyGraph = await buildFixture("cg-shadow-py-type-name-", pyFiles);
+    expect(
+      callsiteTexts(pyGraph, nodeIn(pyGraph, "shadow.py", "target"), nodeIn(pyGraph, "shadow.py", "caller"), pyFiles),
+    ).toBeNull();
+
+    const ktFiles = {
+      "shadow.kt": [
+        "class Box { fun target(): Int { return 1 } }",
+        "fun caller(): Int { val Box = makeBox(); return Box.target() }",
+      ].join("\n"),
+    };
+    const ktGraph = await buildFixture("cg-shadow-kt-type-name-", ktFiles);
+    expect(
+      callsiteTexts(ktGraph, nodeIn(ktGraph, "shadow.kt", "target"), nodeIn(ktGraph, "shadow.kt", "caller"), ktFiles),
+    ).toBeNull();
+  });
+  it("matches type-named receivers only to statically declared members", async () => {
+    const swiftFiles = {
+      "box.swift": [
+        "class Box {",
+        "  static func staticHelper() {}",
+        "  func instanceHelper() {}",
+        "  func caller() { Box.staticHelper() }",
+        "  func badCaller() { Box.instanceHelper() }",
+        "}",
+      ].join("\n"),
+    };
+    const swiftGraph = await buildFixture("cg-static-instance-sw-type-", swiftFiles);
+    expect(
+      callsiteTexts(
+        swiftGraph,
+        nodeIn(swiftGraph, "box.swift", "staticHelper"),
+        nodeIn(swiftGraph, "box.swift", "caller"),
+        swiftFiles,
+      ),
+    ).toEqual(["staticHelper"]);
+    expect(
+      callsiteTexts(
+        swiftGraph,
+        nodeIn(swiftGraph, "box.swift", "instanceHelper"),
+        nodeIn(swiftGraph, "box.swift", "badCaller"),
+        swiftFiles,
+      ),
+    ).toBeNull();
+
+    const kotlinFiles = {
+      "box.kt": ["class Box {", "  fun instanceHelper() {}", "  fun badCaller() { Box.instanceHelper() }", "}"].join(
+        "\n",
+      ),
+    };
+    const kotlinGraph = await buildFixture("cg-static-instance-kt-type-", kotlinFiles);
+    expect(
+      callsiteTexts(
+        kotlinGraph,
+        nodeIn(kotlinGraph, "box.kt", "instanceHelper"),
+        nodeIn(kotlinGraph, "box.kt", "badCaller"),
+        kotlinFiles,
+      ),
+    ).toBeNull();
+  });
+  it("does not call non-callable members or attribute them to same-named free functions", async () => {
+    const tsFiles = {
+      "box.ts": [
+        "function helper(): number { return 1; }",
+        "class Box {",
+        "  helper = 2;",
+        "  caller(): number { return this.helper(); }",
+        "}",
+      ].join("\n"),
+    };
+    const tsGraph = await buildFixture("cg-noncallable-ts-field-", tsFiles);
+    expect(outgoingCallCount(tsGraph, nodeIn(tsGraph, "box.ts", "caller"))).toBe(0);
+
+    const pyFiles = {
+      "box.py": [
+        "def count():",
+        "    return 0",
+        "class Box:",
+        "    count = 1",
+        "    def caller(self):",
+        "        return Box.count()",
+      ].join("\n"),
+    };
+    const pyGraph = await buildFixture("cg-noncallable-py-attr-", pyFiles);
+    expect(outgoingCallCount(pyGraph, nodeIn(pyGraph, "box.py", "caller"))).toBe(0);
+  });
+  it("records C# partial and Swift extension receiver calls across shared owners", async () => {
+    const csFiles = {
+      "Box.A.cs": [
+        "namespace P;",
+        "partial class Box {",
+        "  public void Helper() {}",
+        "  public static void Left() {}",
+        "}",
+      ].join("\n"),
+      "Box.B.cs": [
+        "namespace P;",
+        "partial class Box {",
+        "  public void Other() {}",
+        "  public static void Right() {}",
+        "  void Use() { this.Helper(); }",
+        "}",
+      ].join("\n"),
+      "Caller.cs": [
+        "namespace P;",
+        "class Caller {",
+        "  void Run() {",
+        "    var box = new Box();",
+        "    box.Helper();",
+        "    box.Other();",
+        "    Box.Left();",
+        "    Box.Right();",
+        "  }",
+        "}",
+      ].join("\n"),
+      "Q/Box.Decoy.cs": ["namespace Q;", "partial class Box {", "  public void Helper() {}", "}"].join("\n"),
+      "Decoy.NonPartial.cs": ["namespace R;", "public class Box {", "  public void Helper() {}", "}"].join("\n"),
+    };
+    const csGraph = await buildFixture("cg-shared-owner-cs-partial-", csFiles);
+    const csHelper = nodeIn(csGraph, "Box.A.cs", "Helper");
+    const csOther = nodeIn(csGraph, "Box.B.cs", "Other");
+    const csLeft = nodeIn(csGraph, "Box.A.cs", "Left");
+    const csRight = nodeIn(csGraph, "Box.B.cs", "Right");
+    const csUse = nodeIn(csGraph, "Box.B.cs", "Use");
+    const csCaller = nodeIn(csGraph, "Caller.cs", "Run");
+    expect(callsiteTexts(csGraph, csHelper, csUse, csFiles)).toEqual(["Helper"]);
+    expect(callsiteTexts(csGraph, csHelper, csCaller, csFiles)).toEqual(["Helper"]);
+    expect(callsiteTexts(csGraph, csOther, csCaller, csFiles)).toEqual(["Other"]);
+    expect(callsiteTexts(csGraph, csLeft, csCaller, csFiles)).toEqual(["Left"]);
+    expect(callsiteTexts(csGraph, csRight, csCaller, csFiles)).toEqual(["Right"]);
+    const csDecoyHelper = nodeIn(csGraph, "Box.Decoy.cs", "Helper");
+    expect(callsiteTexts(csGraph, csDecoyHelper, csUse, csFiles)).toBeNull();
+    expect(callsiteTexts(csGraph, csDecoyHelper, csCaller, csFiles)).toBeNull();
+    const csNonPartialHelper = nodeIn(csGraph, "Decoy.NonPartial.cs", "Helper");
+    expect(callsiteTexts(csGraph, csNonPartialHelper, csCaller, csFiles)).toBeNull();
+
+    const swiftFiles = {
+      "A.swift": ["struct Box {", "  func helper() {}", "}"].join("\n"),
+      "B.swift": ["extension Box {", "  func use() { self.helper() }", "}"].join("\n"),
+      "Q/Decoy.swift": ["enum Q {", "  struct Box {", "    func helper() {}", "  }", "}"].join("\n"),
+    };
+    const swiftGraph = await buildFixture("cg-shared-owner-sw-extension-", swiftFiles);
+    const swiftHelper = nodeIn(swiftGraph, "A.swift", "helper");
+    const swiftUse = nodeIn(swiftGraph, "B.swift", "use");
+    expect(callsiteTexts(swiftGraph, swiftHelper, swiftUse, swiftFiles)).toEqual(["helper"]);
+    const swiftDecoyHelper = nodeIn(swiftGraph, "Decoy.swift", "helper");
+    expect(callsiteTexts(swiftGraph, swiftDecoyHelper, swiftUse, swiftFiles)).toBeNull();
+  });
+
+  it("filters Swift private extension members across files and keeps visible members", async () => {
+    const files = {
+      "A.swift": "struct Box {\n  func use() { self.hidden(); self.shown(); self.masked() }\n}\n",
+      "B.swift": [
+        "extension Box {",
+        "  fileprivate func hidden() {}",
+        "  func shown() {}",
+        "  func sameFile() { self.hidden() }",
+        "}",
+        "private extension Box {",
+        "  func masked() {}",
+        "  func samePrivateExtension() { self.masked() }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-swift-extension-hidden-members-", files);
+    expect(membersOwnedBy(graph, "Box", "hidden", "A.swift")).toEqual([]);
+    expect(membersOwnedBy(graph, "Box", "masked", "A.swift")).toEqual([]);
+    expect(membersOwnedBy(graph, "Box", "shown", "A.swift")).toHaveLength(1);
+    const hidden = nodeIn(graph, "B.swift", "hidden");
+    const shown = nodeIn(graph, "B.swift", "shown");
+    const masked = nodeIn(graph, "B.swift", "masked");
+    const use = nodeIn(graph, "A.swift", "use");
+    const sameFile = nodeIn(graph, "B.swift", "sameFile");
+    const samePrivateExtension = nodeIn(graph, "B.swift", "samePrivateExtension");
+    expect(callsiteTexts(graph, hidden, use, files)).toBeNull();
+    expect(callsiteTexts(graph, shown, use, files)).toEqual(["shown"]);
+    expect(callsiteTexts(graph, masked, use, files)).toBeNull();
+    expect(callsiteTexts(graph, hidden, sameFile, files)).toEqual(["hidden"]);
+    expect(callsiteTexts(graph, masked, samePrivateExtension, files)).toEqual(["masked"]);
+  });
+
+  it("keeps Zig imported calls inside alias scope and public export visibility", async () => {
+    const files = {
+      "first.zig": "pub fn target() i32 { return 1; }\nfn hidden() i32 { return 0; }",
+      "second.zig": "pub fn target() i32 { return 2; }",
+      "use.zig": [
+        'const api = @import("first.zig");',
+        "pub fn first() i32 {",
+        '  const dep = @import("first.zig");',
+        "  return dep.target();",
+        "}",
+        "pub fn second() i32 {",
+        '  const dep = @import("second.zig");',
+        "  return dep.target();",
+        "}",
+        "pub fn rejectedPrivate() i32 { return api.hidden(); }",
+        "pub fn rejectedScope() i32 { return dep.target(); }",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-zig-import-call-boundaries-", files);
+    const firstTarget = nodeIn(graph, "first.zig", "target");
+    const secondTarget = nodeIn(graph, "second.zig", "target");
+    const first = nodeIn(graph, "use.zig", "first");
+    const second = nodeIn(graph, "use.zig", "second");
+    expect(callsiteTexts(graph, firstTarget, first, files)).toEqual(["dep.target"]);
+    expect(callsiteTexts(graph, secondTarget, second, files)).toEqual(["dep.target"]);
+    expect(callsiteTexts(graph, secondTarget, first, files)).toBeNull();
+    expect(callsiteTexts(graph, firstTarget, second, files)).toBeNull();
+    expect(outgoingCallCount(graph, nodeIn(graph, "use.zig", "rejectedPrivate"))).toBe(0);
+    expect(outgoingCallCount(graph, nodeIn(graph, "use.zig", "rejectedScope"))).toBe(0);
   });
 });

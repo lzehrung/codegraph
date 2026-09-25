@@ -16,6 +16,59 @@ import {
   type SymbolDef,
 } from "./types.js";
 
+/** Follow a C# name token through generic arguments and qualified-name segments. */
+export function csharpQualifiedNameNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  let qualified = node;
+  while (qualified.parent) {
+    const parent = qualified.parent;
+    if (parent.type === "generic_name") {
+      const name = parent.childForFieldName("name") ?? parent.namedChildren[0];
+      if (name && name.startIndex === qualified.startIndex && name.endIndex === qualified.endIndex) {
+        qualified = parent;
+        continue;
+      }
+    }
+    if (
+      (parent.type === "qualified_name" || parent.type === "alias_qualified_name") &&
+      parent.endIndex === qualified.endIndex
+    ) {
+      qualified = parent;
+      continue;
+    }
+    break;
+  }
+  return qualified.type === "qualified_name" || qualified.type === "alias_qualified_name" ? qualified : null;
+}
+
+/** Preserve the full C# namespace or alias path, excluding generic type arguments. */
+export function csharpLookupName(node: SyntaxNodeLike, source: string, fallback: string): string {
+  const qualified = csharpQualifiedNameNode(node);
+  if (!qualified) return fallback;
+  const text = source.slice(qualified.startIndex, qualified.endIndex);
+  if (!text.includes("<")) return text.replace(/\s+/gu, "");
+  const argumentsNodes: SyntaxNodeLike[] = [];
+  const collect = (current: SyntaxNodeLike): void => {
+    if (current.type === "generic_name") {
+      const argumentsNode = (current.namedChildren ?? []).find((child) => child.type === "type_argument_list");
+      if (argumentsNode) argumentsNodes.push(argumentsNode);
+      return;
+    }
+    for (const child of current.namedChildren ?? []) {
+      if (child.type === "generic_name" || child.type === "qualified_name" || child.type === "alias_qualified_name") {
+        collect(child);
+      }
+    }
+  };
+  collect(qualified);
+  let result = "";
+  let from = qualified.startIndex;
+  for (const argumentsNode of argumentsNodes) {
+    result += source.slice(from, argumentsNode.startIndex);
+    from = argumentsNode.endIndex;
+  }
+  return (result + source.slice(from, qualified.endIndex)).replace(/\s+/gu, "");
+}
+
 export function findDeclarationNameNode(
   sup: LanguageSupport,
   currentNode: SyntaxNodeLike | null,
@@ -70,6 +123,19 @@ export function findClosestScopeBinding(
   currentNode: SyntaxNodeLike,
   support: LanguageSupport,
 ): Binding | null {
+  if (support.id === "csharp" && bindingName.includes(".")) {
+    const names = bindingName.split(".");
+    const first = names.shift()!;
+    let owner = findClosestScopeBinding(scopeIndex, first, currentNode, support);
+    for (const name of names) {
+      if (owner?.kind !== "class") return null;
+      const body = owner.node?.parent?.childForFieldName("body");
+      if (!body) return null;
+      const bodyScope = scopeIndex.allScopes.find((scope) => scope.node.id === body.id);
+      owner = bodyScope?.map.get(support.normalizeIdentifier(name)) ?? null;
+    }
+    return owner;
+  }
   const canonicalName = support.normalizeIdentifier(bindingName);
   const normalizedName = support.id === "c" && cTagRole(currentNode) ? cScopeName(canonicalName, "tag") : canonicalName;
   let currentScope = scopeIndex.allScopes.find((scope) => {
@@ -155,6 +221,7 @@ export function resolveNamedDefinition(
   support: LanguageSupport,
   name: string,
   cNamespace?: "tag" | "ordinary",
+  referenceIndex?: number,
 ): GoToResult | null {
   const normalizedName = support.normalizeIdentifier(name);
   const requiresExplicitReceiver = !support.membersAreImplicitlyInScope;
@@ -176,6 +243,7 @@ export function resolveNamedDefinition(
         : resolveExport(index, file, name, {
             allowLocalFallback: support.membersAreImplicitlyInScope,
             ...(cNamespace ? { cNamespace } : {}),
+            ...(support.id === "csharp" && referenceIndex !== undefined ? { referenceIndex } : {}),
           });
   }
   if (hit?.kind === "resolved" && (!requiresExplicitReceiver || !hit.def.isMember)) {

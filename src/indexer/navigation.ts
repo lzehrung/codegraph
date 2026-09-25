@@ -2,8 +2,18 @@ import { cTagRole } from "../languages/definitions/c.js";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
-import { resolveMemberAccessDefinition, supportsReceiverMemberNavigation } from "./navigation-goto.js";
+import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
 import {
+  csharpAliasQualifiedLookupName,
+  findCsharpPartialTypeEquivalents,
+  innermostNamespaceImport,
+  resolveMemberAccessDefinition,
+  sharedOwnerMemberUnitComplete,
+  resolveImplicitSelfMember,
+  supportsReceiverMemberNavigation,
+} from "./navigation-goto.js";
+import {
+  csharpLookupName,
   findClosestBinding,
   findClosestScopeBinding,
   findDeclarationNameNode,
@@ -328,6 +338,9 @@ export async function goToDefinition(
   }
 
   if (name) {
+    const lookupName = sup.id === "csharp" ? csharpLookupName(node, source, name) : name;
+    const csharpExportName =
+      sup.id === "csharp" ? csharpAliasQualifiedLookupName(node, source, lookupName, mod.imports) : lookupName;
     if (sup.id === "php") {
       const alias = await resolvePhpAliasDefinition(index, mod, file, name, phpImportType ?? "const");
       if (alias) {
@@ -339,7 +352,7 @@ export async function goToDefinition(
       }
     }
     const scopeIndex = getOrBuildScopeIndex(index, file, source, sup, mod, tree);
-    const closestBinding = findClosestScopeBinding(scopeIndex, name, node, sup);
+    const closestBinding = findClosestScopeBinding(scopeIndex, lookupName, node, sup);
     const usingTarget =
       sup.id === "cpp" && closestBinding ? cppUsingDeclarationTarget(closestBinding, source) : undefined;
     if (usingTarget) {
@@ -363,7 +376,17 @@ export async function goToDefinition(
         confidence: "high",
       });
     }
-    const local = findClosestBinding(scopeIndex, file, name, node, sup, source);
+    const local = findClosestBinding(scopeIndex, file, lookupName, node, sup, source);
+    if (
+      sup.id === "swift" &&
+      local &&
+      closestBinding &&
+      scopeIndex.allScopes[0]?.map.get(closestBinding.canonicalName) === closestBinding
+    ) {
+      // Method-local bindings still win; only module-level names yield to proven members.
+      const member = await resolveImplicitSelfMember(index, mod, node, lookupName, source, sup.id);
+      if (member) return okGoToResult(index, member, { resolution: "member-access", confidence: "medium" });
+    }
     if (local) {
       return okGoToResult(index, local, {
         resolution: "exact",
@@ -391,10 +414,25 @@ export async function goToDefinition(
     if (sup.supportsCrossModuleSymbols) {
       let cNamespace: "tag" | "ordinary" | undefined;
       if (sup.id === "c") cNamespace = cTagRole(node) ? "tag" : "ordinary";
-      const resolvedName = resolveNamedDefinition(index, mod, file, sup, name, cNamespace);
-      if (resolvedName) {
-        return resolvedName;
+      const resolvedName = resolveNamedDefinition(
+        index,
+        mod,
+        file,
+        sup,
+        sup.id === "csharp" ? csharpExportName : lookupName,
+        cNamespace,
+        node.startIndex,
+      );
+      if (sup.id === "swift" || sup.id === "csharp") {
+        // Inside a type, a proven member takes precedence over a same-named module name. C#
+        // partial members declared in another file reach this path only as invocation callees.
+        const visible = await resolveImplicitSelfMember(index, mod, node, lookupName, source, sup.id);
+        if (visible) return okGoToResult(index, visible, { resolution: "member-access", confidence: "medium" });
+        if (sup.id === "swift" && resolvedName?.status === "ok" && resolvedName.definition.isMember) {
+          return { status: "not_found", reason: "No matching Swift member definition" };
+        }
       }
+      if (resolvedName) return resolvedName;
     }
   }
 
@@ -430,6 +468,7 @@ function isUnresolvedReceiverMemberProperty(sup: LanguageSupport, node: SyntaxNo
   // paths below; only value-receiver members must not fall back to a bare name.
   if (
     parent.type === "qualified_name" ||
+    parent.type === "alias_qualified_name" ||
     parent.type === "qualified_identifier" ||
     parent.type === "qualified_type" ||
     parent.type === "scoped_identifier" ||
@@ -633,7 +672,15 @@ async function findReferencesInternal(
   const localBinding = family.localBinding;
   pushRef({ file: definitionFile, range: definition.range });
   const receiverMemberDefinition = isReceiverMemberDefinition(definition, parsedContext, !!family.receiverOwner);
-  const equivalentDefinitions = family.equivalents;
+  const csharpPartialEquivalents =
+    parsedContext.sup.id === "csharp" &&
+    !definition.isMember &&
+    (definition.kind === SymbolKind.Class ||
+      definition.kind === SymbolKind.Interface ||
+      definition.kind === SymbolKind.TypeAlias)
+      ? await findCsharpPartialTypeEquivalents(index, definition)
+      : [];
+  const equivalentDefinitions = [...family.equivalents, ...csharpPartialEquivalents];
   for (const equivalent of equivalentDefinitions) {
     pushRef({ file: equivalent.file, range: equivalent.range });
   }
@@ -661,10 +708,17 @@ async function findReferencesInternal(
   const exportedNameSet = new Set(exportedNames);
   const phpQualifiedNames = await buildPhpQualifiedNames(index, definitionFile, definition);
   const scansReceiverReferences = shouldScanVerifiedReferences(definition, parsedContext, receiverMemberDefinition);
+  const scansNamespaceReferences =
+    parsedContext.sup.id === "csharp" &&
+    !definition.isMember &&
+    (definition.kind === SymbolKind.Class ||
+      definition.kind === SymbolKind.Interface ||
+      definition.kind === SymbolKind.TypeAlias);
   const requiresSameFileVerifiedScan =
-    (parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp") &&
-    definition.kind === SymbolKind.Function &&
-    !receiverMemberDefinition;
+    ((parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp") &&
+      definition.kind === SymbolKind.Function &&
+      !receiverMemberDefinition) ||
+    scansNamespaceReferences;
   let sameFileVerifiedScanExecuted = false;
   if (localBinding && localBinding.occurrencesComplete !== false && !scansReceiverReferences) {
     for (const occurrence of localBinding.occurrences) {
@@ -711,6 +765,19 @@ async function findReferencesInternal(
         .map((candidateFile) => [fileIdentityKey(candidateFile), candidateFile]),
     ).values(),
   ].sort((left, right) => left.localeCompare(right));
+  // Candidates that share a compilation unit with the definition (or an equivalent
+  // declaration) can name it without an import edge; the per-candidate scan below treats
+  // them as bare-name reference sources in addition to the import-derived branches.
+  const unitPeerKeys = new Set<string>();
+  for (const candidate of [referenceDef, ...equivalentDefinitions]) {
+    for (const unitPeer of getCompilationUnitPeers(
+      index,
+      candidate.file,
+      parsedContext.sup.id === "csharp" ? { csharpQualifiedName: true } : undefined,
+    ).files) {
+      unitPeerKeys.add(fileIdentityKey(unitPeer));
+    }
+  }
   // A bloom filter holds each candidate file's identifiers in that file's own spelling, and a
   // probe can only test one spelling. PHP resolves class, interface, trait, enum, and function
   // names case-insensitively, so `new \App\sErViCe()` must still match a `Service` definition.
@@ -873,6 +940,8 @@ async function findReferencesInternal(
             exportedName,
             parsed,
             index.languageExtensions,
+            imp,
+            module.imports,
           );
           for (const range of ranges) {
             if (hasReachedCollectionLimit()) break;
@@ -990,6 +1059,32 @@ async function findReferencesInternal(
       }
     }
 
+    // A unit peer names the definition directly (Go and JVM package siblings, C# namespace
+    // peers, Swift module siblings), with no import binding to attribute. The single bare-name
+    // scan keeps reference sites in agreement with what bare-name resolution can prove.
+    if (
+      !definition.isMember &&
+      fileIdentityKey(fileId) !== fileIdentityKey(definitionFile) &&
+      unitPeerKeys.has(fileIdentityKey(fileId)) &&
+      !hasReachedCollectionLimit()
+    ) {
+      const ranges = await collectVerifiedNamedNodeReferences(
+        index,
+        fileId,
+        referenceDef.localName,
+        definition,
+        (params, parsed) => goToDefinition(index, params, parsed),
+        remainingCollectionSlots(),
+        verifiedReferenceFilter(fileId),
+        undefined,
+        equivalentDefinitions,
+      );
+      for (const { range, provenance, via } of ranges) {
+        if (hasReachedCollectionLimit()) break;
+        pushRef({ file: fileId, range, ...(via ? { via } : {}), ...(provenance ? { provenance } : {}) });
+      }
+    }
+
     if (phpQualifiedNames.length) {
       const remainingReferences = remainingCollectionSlots();
       const ranges = await collectVerifiedNamedNodeReferences(
@@ -1081,6 +1176,16 @@ async function findReferencesInternal(
   }
 
   const scannedFiles = [definitionFile, ...candidateFiles, ...receiverScannedFiles];
+  // Top-level implicit-unit names and C# partial / Swift shared-owner members are both bounded
+  // by the source-unit relation; an unproven boundary leaves their reference set partial.
+  const implicitUnitComplete =
+    !definition.isMember && IMPLICIT_UNIT_LANGUAGES[parsedContext.sup.id]
+      ? getCompilationUnitPeers(
+          index,
+          definitionFile,
+          parsedContext.sup.id === "csharp" ? { csharpQualifiedName: true } : undefined,
+        ).complete
+      : await sharedOwnerMemberUnitComplete(index, definition);
   const referenceCoverage = buildIndexedCandidateCoverage({
     index,
     def: definition,
@@ -1093,13 +1198,17 @@ async function findReferencesInternal(
       languageId: parsedContext.sup.id,
       phpQualifiedNames,
       sameFileOccurrence: {
-        // Only non-member C/C++ function definitions need this strategy: their names
-        // self-scope-register, so sibling same-file call sites stay invisible to the scope
-        // layer. Receiver members use the receiver/equivalent-declaration scan instead.
-        // Parameters and local variables already collect every same-file occurrence lexically.
+        // C/C++ callable siblings and reopened C# namespace regions can refer to a
+        // declaration without sharing its lexical scope. Verify those uses through
+        // navigation; parameters and local variables remain lexical-only.
         applicable: requiresSameFileVerifiedScan,
         executed: sameFileVerifiedScanExecuted,
       },
+      // An unproven compilation-unit boundary means the peer universe may extend beyond the
+      // enumerated files, so coverage must not imply that every possible consumer was scanned.
+      ...(implicitUnitComplete !== null
+        ? { implicitUnitPeers: { applicable: true, executed: implicitUnitComplete } }
+        : {}),
     }),
     strategyUnavailableFiles: [...receiverProofUnavailableFiles.values()],
   });
@@ -1441,6 +1550,8 @@ export async function collectNamespaceMemberRefs(
   member: string,
   parsedContext?: ParsedFileContext,
   languageExtensions?: LanguageExtensionMap,
+  namespaceImport?: Extract<ImportBinding, { kind: "namespace" }>,
+  imports?: readonly ImportBinding[],
 ): Promise<Range[]> {
   const parsed = parsedContext ?? (await ensureParsedContext(file, undefined, languageExtensions));
   const sup = parsed.sup;
@@ -1448,14 +1559,24 @@ export async function collectNamespaceMemberRefs(
   const tree = parsed.tree;
   const ranges: Range[] = [];
 
+  // Identifier equality follows the language rule, so C# `@X::@Target` matches alias `X` member `Target`.
+  const normalize = sup.normalizeIdentifier;
+  const normalizedNs = normalize(ns);
+  const normalizedMember = normalize(member);
   const walk = (node: SyntaxNodeLike): void => {
     if (isMemberAccessNode(sup, node)) {
       const { object: obj, property: prop } = getMemberAccessParts(sup, node);
       if (obj && prop && isMemberObjectIdentifier(obj.type) && isMemberReferencePropertyIdentifier(sup, prop.type)) {
         const objectName = sliceText(obj, source);
         const propertyName = sliceText(prop, source);
-        if (objectName === ns && propertyName === member) {
-          ranges.push(toRange(prop));
+        if (normalize(objectName) === normalizedNs && normalize(propertyName) === normalizedMember) {
+          const inAliasScope =
+            sup.id !== "csharp" ||
+            !namespaceImport ||
+            !imports ||
+            !namespaceImport.localRange ||
+            innermostNamespaceImport(imports, objectName, obj, normalize) === namespaceImport;
+          if (inAliasScope) ranges.push(toRange(prop));
         }
       }
     }

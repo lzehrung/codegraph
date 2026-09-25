@@ -24,6 +24,7 @@ import {
 import { loadPhpComposerConfig } from "../src/util/resolution/php-composer.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { resolveExport, resolveModuleExports } from "../src/indexer/navigation-resolve.js";
+import { getCompilationUnitPeers } from "../src/indexer/compilation-units.js";
 import { createTestIndexFromFiles } from "./test-utils.js";
 import { tryCreateDirectorySymlink } from "./helpers/filesystem.js";
 
@@ -2629,5 +2630,291 @@ describe("Import Resolution", () => {
         resolutionHints: ["."],
       }),
     ).resolves.toEqual({ external: "HEADER" });
+  });
+});
+
+describe("Implicit compilation-unit peers", () => {
+  function peerKeys(peers: { files: ReadonlySet<string> }): Set<string> {
+    return new Set(Array.from(peers.files, (file) => fileIdentityKey(file)));
+  }
+
+  it("keeps Go package peers directory-exact even when the same package spelling exists in another directory", async () => {
+    const root = await mkTmpDir("dg-go-unit-peers-");
+    try {
+      await fsp.mkdir(path.join(root, "other"), { recursive: true });
+      const packageFile = path.join(root, "a.go").replace(/\\/g, "/");
+      const siblingFile = path.join(root, "b.go").replace(/\\/g, "/");
+      const decoyFile = path.join(root, "other", "c.go").replace(/\\/g, "/");
+      await fsp.writeFile(packageFile, "package p\nfunc Shared() int { return 1 }\n", "utf8");
+      await fsp.writeFile(siblingFile, "package p\nfunc Use() int { return Shared() }\n", "utf8");
+      await fsp.writeFile(decoyFile, "package p\nfunc Other() int { return 1 }\n", "utf8");
+
+      const index = await createTestIndexFromFiles(root, [packageFile, siblingFile, decoyFile]);
+      const packagePeers = getCompilationUnitPeers(index, packageFile);
+      expect(peerKeys(packagePeers)).toEqual(new Set([fileIdentityKey(packageFile), fileIdentityKey(siblingFile)]));
+      // A Go package is exactly one directory, so the spelling in `other/` is a different
+      // package and cannot make this unit's boundary unproven.
+      expect(packagePeers.complete).toBe(true);
+
+      const decoyPeers = getCompilationUnitPeers(index, decoyFile);
+      expect(peerKeys(decoyPeers)).toEqual(new Set([fileIdentityKey(decoyFile)]));
+      expect(decoyPeers.complete).toBe(true);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("groups Java and Kotlin same-package siblings and rejects same-named declarations in other packages", async () => {
+    const root = await mkTmpDir("dg-jvm-unit-peers-");
+    try {
+      const javaFile = path.join(root, "Target.java").replace(/\\/g, "/");
+      const kotlinFile = path.join(root, "Lib.kt").replace(/\\/g, "/");
+      const decoyFile = path.join(root, "Decoy.java").replace(/\\/g, "/");
+      await fsp.writeFile(javaFile, "package p;\npublic class Target {}\n", "utf8");
+      await fsp.writeFile(kotlinFile, "package p\nclass Lib\n", "utf8");
+      await fsp.writeFile(decoyFile, "package q;\npublic class Target {}\n", "utf8");
+
+      const index = await createTestIndexFromFiles(root, [javaFile, kotlinFile, decoyFile]);
+      // Java and Kotlin share the JVM package namespace, so same-package siblings in both
+      // languages are peers while a same-named class in another package is not.
+      const peers = getCompilationUnitPeers(index, javaFile);
+      expect(peerKeys(peers)).toEqual(new Set([fileIdentityKey(javaFile), fileIdentityKey(kotlinFile)]));
+      expect(peers.complete).toBe(true);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks a JVM unit incomplete when the same package exists in another directory", async () => {
+    const root = await mkTmpDir("dg-jvm-unit-incomplete-");
+    try {
+      await fsp.mkdir(path.join(root, "other"), { recursive: true });
+      const targetFile = path.join(root, "Target.java").replace(/\\/g, "/");
+      const useFile = path.join(root, "Use.java").replace(/\\/g, "/");
+      const extraFile = path.join(root, "other", "Extra.java").replace(/\\/g, "/");
+      await fsp.writeFile(targetFile, "package p;\npublic class Target {}\n", "utf8");
+      await fsp.writeFile(useFile, "package p;\nclass Use {}\n", "utf8");
+      await fsp.writeFile(extraFile, "package p;\nclass Extra {}\n", "utf8");
+
+      const index = await createTestIndexFromFiles(root, [targetFile, useFile, extraFile]);
+      const peers = getCompilationUnitPeers(index, useFile);
+      expect(peerKeys(peers)).toEqual(new Set([fileIdentityKey(targetFile), fileIdentityKey(useFile)]));
+      // Directory-only evidence cannot prove whether the package also covers `other/`, so the
+      // peer set is retained but the boundary is reported unproven.
+      expect(peers.complete).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("groups C# same-namespace files, relates global-namespace files, and rejects other namespaces", async () => {
+    const root = await mkTmpDir("dg-csharp-unit-peers-");
+    try {
+      const targetFile = path.join(root, "Target.cs").replace(/\\/g, "/");
+      const globalFile = path.join(root, "Global.cs").replace(/\\/g, "/");
+      const useFile = path.join(root, "Use.cs").replace(/\\/g, "/");
+      const decoyFile = path.join(root, "Decoy.cs").replace(/\\/g, "/");
+      await fsp.writeFile(targetFile, "namespace P; public class Target {}\n", "utf8");
+      await fsp.writeFile(globalFile, "public class Global {}\n", "utf8");
+      await fsp.writeFile(useFile, "namespace P; class Use { Global Make() => new Global(); }\n", "utf8");
+      await fsp.writeFile(decoyFile, "namespace Q; public class Target {}\n", "utf8");
+
+      const index = await createTestIndexFromFiles(root, [targetFile, globalFile, useFile, decoyFile]);
+      const targetPeers = getCompilationUnitPeers(index, targetFile);
+      expect(peerKeys(targetPeers)).toEqual(
+        new Set([fileIdentityKey(targetFile), fileIdentityKey(globalFile), fileIdentityKey(useFile)]),
+      );
+      expect(targetPeers.complete).toBe(true);
+
+      // Global-namespace declarations are visible from every namespace, so a global-namespace
+      // file relates to the whole unit.
+      const globalPeers = getCompilationUnitPeers(index, globalFile);
+      expect(peerKeys(globalPeers)).toEqual(
+        new Set([
+          fileIdentityKey(targetFile),
+          fileIdentityKey(globalFile),
+          fileIdentityKey(useFile),
+          fileIdentityKey(decoyFile),
+        ]),
+      );
+
+      // A use inside `namespace P` names the global declaration without any using directive.
+      const useGoto = await goToDefinition(index, {
+        file: useFile,
+        line: 1,
+        column: "namespace P; class Use { Global Make() => new Global(); }".indexOf("Global") + 1,
+      });
+      expect(useGoto.status).toBe("ok");
+      if (useGoto.status === "ok") {
+        expect(useGoto.definition.file).toBe(globalFile);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("treats the Swift directory as the module boundary and reports incomplete when Swift files live elsewhere", async () => {
+    const flatRoot = await mkTmpDir("dg-swift-unit-flat-");
+    const nestedRoot = await mkTmpDir("dg-swift-unit-nested-");
+    try {
+      const apiFile = path.join(flatRoot, "Api.swift").replace(/\\/g, "/");
+      const useFile = path.join(flatRoot, "Use.swift").replace(/\\/g, "/");
+      await fsp.writeFile(apiFile, "func target(_ value: Int) -> Int { return value }\n", "utf8");
+      await fsp.writeFile(useFile, "func caller() -> Int { return target(1) }\n", "utf8");
+      const flatIndex = await createTestIndexFromFiles(flatRoot, [apiFile, useFile]);
+      const flatPeers = getCompilationUnitPeers(flatIndex, apiFile);
+      expect(peerKeys(flatPeers)).toEqual(new Set([fileIdentityKey(apiFile), fileIdentityKey(useFile)]));
+      expect(flatPeers.complete).toBe(true);
+
+      await fsp.mkdir(path.join(nestedRoot, "sub"), { recursive: true });
+      const nestedApi = path.join(nestedRoot, "Api.swift").replace(/\\/g, "/");
+      const nestedUse = path.join(nestedRoot, "Use.swift").replace(/\\/g, "/");
+      const subFile = path.join(nestedRoot, "sub", "Sub.swift").replace(/\\/g, "/");
+      await fsp.writeFile(nestedApi, "func target(_ value: Int) -> Int { return value }\n", "utf8");
+      await fsp.writeFile(nestedUse, "func caller() -> Int { return target(1) }\n", "utf8");
+      await fsp.writeFile(subFile, "func other() -> Int { return 1 }\n", "utf8");
+      const nestedIndex = await createTestIndexFromFiles(nestedRoot, [nestedApi, nestedUse, subFile]);
+      const nestedPeers = getCompilationUnitPeers(nestedIndex, nestedApi);
+      expect(peerKeys(nestedPeers)).toEqual(new Set([fileIdentityKey(nestedApi), fileIdentityKey(nestedUse)]));
+      // Swift module membership is not declared in source: another directory might belong to
+      // the same module, so the boundary stays unproven.
+      expect(nestedPeers.complete).toBe(false);
+    } finally {
+      await fsp.rm(flatRoot, { recursive: true, force: true });
+      await fsp.rm(nestedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Java, Kotlin, C#, and Swift same-unit bare names through goToDefinition", async () => {
+    const root = await mkTmpDir("dg-unit-peer-goto-");
+    try {
+      const javaTarget = path.join(root, "JavaTarget.java").replace(/\\/g, "/");
+      const javaUse = path.join(root, "JavaUse.java").replace(/\\/g, "/");
+      const kotlinTarget = path.join(root, "KotlinTarget.kt").replace(/\\/g, "/");
+      const kotlinUse = path.join(root, "KotlinUse.kt").replace(/\\/g, "/");
+      const csharpTarget = path.join(root, "CsharpTarget.cs").replace(/\\/g, "/");
+      const csharpUse = path.join(root, "CsharpUse.cs").replace(/\\/g, "/");
+      const swiftTarget = path.join(root, "SwiftTarget.swift").replace(/\\/g, "/");
+      const swiftUse = path.join(root, "SwiftUse.swift").replace(/\\/g, "/");
+      const javaUses = "class JavaUse { JavaTarget make() { return new JavaTarget(); } }";
+      const kotlinUses = "class KotlinUse { fun make(): KotlinTarget = KotlinTarget() }";
+      const csharpUses = "namespace C; class CsharpUse { CsharpTarget Make() => new CsharpTarget(); }";
+      const swiftCall = "func swiftCaller() -> Int { return swiftTarget(1) }";
+      await fsp.writeFile(javaTarget, "package j;\npublic class JavaTarget {}\n", "utf8");
+      await fsp.writeFile(javaUse, `package j;\n${javaUses}\n`, "utf8");
+      await fsp.writeFile(kotlinTarget, "package k\nclass KotlinTarget\n", "utf8");
+      await fsp.writeFile(kotlinUse, `package k\n${kotlinUses}\n`, "utf8");
+      await fsp.writeFile(csharpTarget, "namespace C; public class CsharpTarget {}\n", "utf8");
+      await fsp.writeFile(csharpUse, `${csharpUses}\n`, "utf8");
+      await fsp.writeFile(swiftTarget, "func swiftTarget(_ value: Int) -> Int { return value }\n", "utf8");
+      await fsp.writeFile(swiftUse, `${swiftCall}\n`, "utf8");
+
+      const index = await createTestIndexFromFiles(root, [
+        javaTarget,
+        javaUse,
+        kotlinTarget,
+        kotlinUse,
+        csharpTarget,
+        csharpUse,
+        swiftTarget,
+        swiftUse,
+      ]);
+
+      // Return-type and constructor uses both navigate to the same-unit declaration.
+      const javaOccurrences = [javaUses.indexOf("JavaTarget"), javaUses.lastIndexOf("JavaTarget")];
+      for (const occurrence of javaOccurrences) {
+        const javaGoto = await goToDefinition(index, {
+          file: javaUse,
+          line: 2,
+          column: occurrence + 1,
+        });
+        expect(javaGoto.status).toBe("ok");
+        if (javaGoto.status === "ok") {
+          expect(javaGoto.definition.file).toBe(javaTarget);
+          expect(javaGoto.definition.range.start.line).toBe(2);
+        }
+      }
+      const kotlinOccurrences = [kotlinUses.indexOf("KotlinTarget"), kotlinUses.lastIndexOf("KotlinTarget")];
+      for (const occurrence of kotlinOccurrences) {
+        const kotlinGoto = await goToDefinition(index, {
+          file: kotlinUse,
+          line: 2,
+          column: occurrence + 1,
+        });
+        expect(kotlinGoto.status).toBe("ok");
+        if (kotlinGoto.status === "ok") {
+          expect(kotlinGoto.definition.file).toBe(kotlinTarget);
+        }
+      }
+      const csharpOccurrences = [csharpUses.indexOf("CsharpTarget"), csharpUses.lastIndexOf("CsharpTarget")];
+      for (const occurrence of csharpOccurrences) {
+        const csharpGoto = await goToDefinition(index, {
+          file: csharpUse,
+          line: 1,
+          column: occurrence + 1,
+        });
+        expect(csharpGoto.status).toBe("ok");
+        if (csharpGoto.status === "ok") {
+          expect(csharpGoto.definition.file).toBe(csharpTarget);
+        }
+      }
+      const swiftGoto = await goToDefinition(index, {
+        file: swiftUse,
+        line: 1,
+        column: swiftCall.indexOf("swiftTarget") + 1,
+      });
+      expect(swiftGoto.status).toBe("ok");
+      if (swiftGoto.status === "ok") {
+        expect(swiftGoto.definition.file).toBe(swiftTarget);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves Java unnamed-package siblings unresolved across files with incomplete unit coverage", async () => {
+    const root = await mkTmpDir("dg-java-unnamed-unit-");
+    try {
+      const siblingFile = path.join(root, "Sibling.java").replace(/\\/g, "/");
+      const useFile = path.join(root, "Use.java").replace(/\\/g, "/");
+      const uses = "class Use { Sibling make() { return new Sibling(); } }";
+      await fsp.writeFile(siblingFile, "class Sibling {}\n", "utf8");
+      await fsp.writeFile(useFile, `${uses}\n`, "utf8");
+
+      const index = await createTestIndexFromFiles(root, [siblingFile, useFile]);
+      const peers = getCompilationUnitPeers(index, useFile);
+      expect(peerKeys(peers)).toEqual(new Set([fileIdentityKey(useFile)]));
+      expect(peers.complete).toBe(false);
+
+      // The unnamed package has no provable unit beyond the file, so the sibling stays
+      // unresolved instead of being matched by name.
+      const useGoto = await goToDefinition(index, {
+        file: useFile,
+        line: 1,
+        column: uses.indexOf("Sibling") + 1,
+      });
+      expect(useGoto.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps module-per-file languages at self-only complete peers", async () => {
+    const root = await mkTmpDir("dg-module-per-file-peers-");
+    try {
+      const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+      const mainFile = path.join(root, "main.ts").replace(/\\/g, "/");
+      await fsp.writeFile(sourceFile, "export function helper() { return 1; }\n", "utf8");
+      await fsp.writeFile(mainFile, 'import { helper } from "./source";\nexport const used = helper();\n', "utf8");
+
+      const index = await createTestIndexFromFiles(root, [sourceFile, mainFile]);
+      for (const file of [sourceFile, mainFile]) {
+        const peers = getCompilationUnitPeers(index, file);
+        expect(peerKeys(peers)).toEqual(new Set([fileIdentityKey(file)]));
+        expect(peers.complete).toBe(true);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });

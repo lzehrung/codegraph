@@ -31,6 +31,7 @@ export const ZIG_DEF: LanguageDefinition = {
       (builtin_function (builtin_identifier) @from (arguments) (#eq? @from "@cImport")) @stmt
     `,
     exports: `
+      ;; Top-level names. The Zig declaration-visibility row keeps only pub declarations.
       (source_file (function_declaration name: (identifier) @name))
       (source_file (variable_declaration . (identifier) @name (_)))
     `,
@@ -56,6 +57,7 @@ export const ZIG_DEF: LanguageDefinition = {
   nodeTypes: {
     identifier: ["identifier"],
     memberExpression: "field_expression",
+    propertyIdentifier: ["identifier"],
   },
   supportsCrossModuleSymbols: true,
   classifyDefinition: (node) => {

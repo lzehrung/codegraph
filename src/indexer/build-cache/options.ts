@@ -98,8 +98,26 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 49 preserves PHP import-role graph identities and avoids C namespaces on C++ header imports.
  * Epoch 50 preserves PHP alias-use roles, C++ parameter-pack minima, and qualified base identities.
  * Epoch 51 resolves C++ using-declarations through included exports.
+ * Epoch 52 shares callable ranges, resolves implicit compilation-unit peers, and filters Zig exports by visibility.
+ * Epoch 53 preserves C# namespace visibility through same-file lookup and reference fallbacks.
+ * Epoch 54 preserves C# alias-qualified targets and coalesces proven partial-type owners.
+ * Epoch 55 ignores comments and string literals when identifying Go and JVM package peers.
+ * Epoch 56 enforces Swift cross-file extension visibility and distinct nested C# generic owners.
+ * Epoch 57 retains qualified C# paths through generic type arguments for navigation and references.
+ * Epoch 58 separates constrained Swift extensions from unproven shared-owner members.
+ * Epoch 59 equates token-identical Swift constraints with differing trivia.
+ * Epoch 60 equates C# verbatim namespace/type identifiers, resolves bare C# calls to partial
+ * members in other parts, and reports partial coverage for unproven shared-owner units.
+ * Epoch 61 hides C# `file` types from other files and treats an extension method's `this`
+ * parameter as its receiver.
+ * Epoch 62 matches C# namespace aliases and alias-qualified members by identifier equality.
+ * Epoch 63 keeps C# `file partial` owners in different files as distinct shared owners.
+ * Epoch 64 adds a C# global-namespace region for top-level types beside block namespaces and
+ * uses qualified peers for C# shared-owner member coverage.
+ * Epoch 65 keeps one C# using-directive binding per statement offset, so identical aliases in
+ * separate namespace blocks each keep their own scope.
  */
-export const CORE_ALGORITHM_EPOCH = 51;
+export const CORE_ALGORITHM_EPOCH = 65;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

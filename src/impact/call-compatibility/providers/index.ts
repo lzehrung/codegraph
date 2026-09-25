@@ -1,23 +1,23 @@
 import "../../../languages/all.js";
-import { getLanguageById } from "../../../languages/registry.js";
 import {
-  CALL_COMPATIBILITY_LANGUAGE_ID_DECLARATIONS,
-  CALL_COMPATIBILITY_LANGUAGE_PROFILES,
-  type CallCompatibilityLanguageId,
-  type CallCompatibilityLanguageProfile,
-} from "./profiles.js";
+  CALLABLE_ARITY_LANGUAGE_ID_DECLARATIONS,
+  CALLABLE_ARITY_LANGUAGE_PROFILES,
+  type CallableArityLanguageId,
+  type CallableArityLanguageProfile,
+} from "../../../languages/callable-arity.js";
+import { getLanguageById } from "../../../languages/registry.js";
 import type { CallCompatibilityProvider, ExtractCallsiteRequest, ExtractSignatureRequest } from "./types.js";
 import type { CallableSignature, CallsiteArguments } from "../types.js";
 
 /**
  * Source languages the structural extractor understands, declared and documented in
- * `./profiles.js` and filtered through the registry here: a stale id such as the old
- * `javascript`/`typescript`/`jsx` spellings can never be reported as supported.
+ * `src/languages/callable-arity.ts`. Registry filtering prevents stale ids such as the old
+ * `javascript`/`typescript`/`jsx` spellings from appearing as supported.
  * `tests/language-capability-registry.test.ts` asserts every declaration is registered.
  */
-export const callCompatibilityLanguageIdDeclarations: readonly string[] = CALL_COMPATIBILITY_LANGUAGE_ID_DECLARATIONS;
+export const callCompatibilityLanguageIdDeclarations: readonly string[] = CALLABLE_ARITY_LANGUAGE_ID_DECLARATIONS;
 
-export const callCompatibilityLanguageIds: readonly string[] = CALL_COMPATIBILITY_LANGUAGE_ID_DECLARATIONS.filter(
+export const callCompatibilityLanguageIds: readonly string[] = CALLABLE_ARITY_LANGUAGE_ID_DECLARATIONS.filter(
   (languageId) => getLanguageById(languageId) !== undefined,
 );
 
@@ -25,11 +25,11 @@ export const callCompatibilityLanguageIds: readonly string[] = CALL_COMPATIBILIT
  * Resolved arity profile for a supported language, or null when the id is not a registered
  * call-compatibility language. The extractors branch on this profile, never on language ids.
  */
-export function getCallCompatibilityLanguageProfile(languageId: string): CallCompatibilityLanguageProfile | null {
+export function getCallCompatibilityLanguageProfile(languageId: string): CallableArityLanguageProfile | null {
   if (!callCompatibilityLanguageIds.includes(languageId)) {
     return null;
   }
-  return CALL_COMPATIBILITY_LANGUAGE_PROFILES[languageId as CallCompatibilityLanguageId];
+  return CALLABLE_ARITY_LANGUAGE_PROFILES[languageId as CallableArityLanguageId];
 }
 
 interface RegisteredCallCompatibilityExtractors {

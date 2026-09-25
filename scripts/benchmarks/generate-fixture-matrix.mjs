@@ -49,6 +49,7 @@ const EXCLUDED_STEMS = new Set([
   "types",
   "runner",
   "parity",
+  "callable-consumer-matrix",
   "chunk-sfc",
   "query-hygiene",
   "graph-captures",

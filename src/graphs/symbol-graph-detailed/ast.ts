@@ -251,8 +251,8 @@ export function isVariadicParameterMarker(node: SyntaxNodeLike): boolean {
  * Positional parameter count of a member/function declaration node, or undefined when the node
  * declares no parameter list. Swift exposes parameters as direct declaration children, so its
  * language id is required to distinguish a zero-parameter declaration from an unknown shape.
- * Shared by the receiver-call edge pass and keyword receiver navigation so overload selection
- * uses one arity scanner.
+ * Used for public declaration metadata and C++ declaration correspondence, never to establish
+ * accepted call ranges. Receiver call selection uses the shared callable ranges instead.
  *
  * The count is the number of *required-or-defaulted* fixed parameters; C/C++ variadic markers are
  * excluded because they accept zero arguments, while each language's own maximum-arity handling
@@ -274,6 +274,16 @@ export function declarationMemberArity(declarationNode: SyntaxNodeLike, language
   let positionalParameters = (parameters.namedChildren ?? []).filter((child) => child.type !== "comment");
   if (languageId === "c" || languageId === "cpp") {
     positionalParameters = positionalParameters.filter((child) => !isVariadicParameterMarker(child));
+  }
+  if (languageId === "kotlin") {
+    // kotlin-ng keeps default values as bare `expression` siblings and `vararg` as
+    // `parameter_modifiers` beside the parameter they modify; only `parameter`
+    // nodes occupy positional argument slots.
+    positionalParameters = positionalParameters.filter((child) => child.type === "parameter");
+  }
+  if (languageId === "java") {
+    // An explicit receiver parameter (`Box this`) is not a call argument.
+    positionalParameters = positionalParameters.filter((child) => child.type !== "receiver_parameter");
   }
   if ((languageId === "c" || languageId === "cpp") && positionalParameters.length === 1) {
     const parameterParts = positionalParameters[0]!.namedChildren.filter((child) => child.type !== "comment");

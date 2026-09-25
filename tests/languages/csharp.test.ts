@@ -4,10 +4,20 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runQuery } from "@lzehrung/codegraph-native";
 import { CSHARP_SUPPORT } from "../../src/languages.js";
-import { fileIdentityKey } from "../../src/util/paths.js";
+import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
-import { buildProjectIndexFromFiles, goToDefinition, listSymbols, type ProjectIndex } from "../../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexFromFiles,
+  buildProjectIndexIncremental,
+  buildSymbolGraphDetailed,
+  findReferences,
+  goToDefinition,
+  listSymbols,
+  type ProjectIndex,
+} from "../../src/index.js";
+import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
@@ -749,6 +759,1273 @@ describe("C# method parameters as locals", () => {
         expect(goto.definition.localName).toBe("name");
         expect(goto.definition.range.start.line).toBe(2);
       }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C# same-namespace sibling visibility", () => {
+  // #378: a type declared in the same namespace is visible without a using directive, so the
+  // sibling type must resolve and be referenced, while a same-named type in another namespace
+  // must stay out of both results.
+  const targetLines = ["namespace P;", "public class Target {}"];
+  const useLines = ["namespace P;", "public class Use {", "  Target Make() => new Target();", "}"];
+  const decoyTargetLines = ["namespace Q;", "public class Target {}"];
+  const decoyUseLines = ["namespace Q;", "public class UseDecoy {", "  Target Make() => new Target();", "}"];
+
+  it("resolves sibling return types and constructors and excludes the other namespace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-peer-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "Target.cs": `${targetLines.join("\n")}\n`,
+        "Use.cs": `${useLines.join("\n")}\n`,
+        "Q/DecoyTarget.cs": `${decoyTargetLines.join("\n")}\n`,
+        "Q/DecoyUse.cs": `${decoyUseLines.join("\n")}\n`,
+      });
+      const index = await buildProjectIndexFromFiles(root, [
+        paths["Target.cs"]!,
+        paths["Use.cs"]!,
+        paths["Q/DecoyTarget.cs"]!,
+        paths["Q/DecoyUse.cs"]!,
+      ]);
+      const targetPath = paths["Target.cs"]!;
+      const usePath = paths["Use.cs"]!;
+
+      for (const token of ["Target", "Target()"]) {
+        const goto = await goToDefinition(index, {
+          file: usePath,
+          line: 3,
+          column: columnOf(useLines, 3, token),
+        });
+        expect(goto.status, `Use.cs:3 ${token} must resolve`).toBe("ok");
+        if (goto.status !== "ok") throw new Error("Expected the same-namespace class declaration");
+        expect(normalizePath(goto.definition.file)).toBe(targetPath);
+        expect(goto.definition.range.start.line).toBe(2);
+      }
+
+      const references = await findReferences(index, {
+        file: targetPath,
+        line: 2,
+        column: columnOf(targetLines, 2, "Target"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected same-namespace class references");
+      expect(
+        references.references.map((reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`),
+      ).toContain(`${usePath}:3`);
+      expect(references.references.some((reference) => normalizePath(reference.file) === paths["Q/DecoyUse.cs"])).toBe(
+        false,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the other namespace out of a sibling reference scan", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-decoy-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "Target.cs": `${targetLines.join("\n")}\n`,
+        "Use.cs": `${useLines.join("\n")}\n`,
+        "Q/DecoyTarget.cs": `${decoyTargetLines.join("\n")}\n`,
+        "Q/DecoyUse.cs": `${decoyUseLines.join("\n")}\n`,
+      });
+      const index = await buildProjectIndexFromFiles(root, [
+        paths["Target.cs"]!,
+        paths["Use.cs"]!,
+        paths["Q/DecoyTarget.cs"]!,
+        paths["Q/DecoyUse.cs"]!,
+      ]);
+      const references = await findReferences(index, {
+        file: paths["Target.cs"]!,
+        line: 2,
+        column: columnOf(targetLines, 2, "Target"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected same-namespace class references");
+      expect(references.references.some((reference) => normalizePath(reference.file) === paths["Q/DecoyUse.cs"])).toBe(
+        false,
+      );
+      const decoyReferences = await findReferences(index, {
+        file: paths["Q/DecoyTarget.cs"]!,
+        line: 2,
+        column: columnOf(decoyTargetLines, 2, "Target"),
+      });
+      expect(decoyReferences.status).toBe("ok");
+      if (decoyReferences.status !== "ok") throw new Error("Expected decoy namespace references");
+      expect(decoyReferences.references.some((reference) => normalizePath(reference.file) === paths["Use.cs"])).toBe(
+        false,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C# same-file namespace boundaries", () => {
+  const lines = [
+    "namespace Q { public class Target {} class Direct { Target DirectMake() => new Target(); } }",
+    "namespace P { class Rejected { Target RejectedMake() => new Target(); } }",
+    "namespace Q { class Allowed { Target AllowedMake() => new Target(); } }",
+    "class GlobalRejected { Target GlobalMake() => new Target(); }",
+    "namespace Q.Child { class Nested { Target NestedMake() => new Target(); } }",
+    "namespace P { class Shadow { int Local() { int Target = 1; return Target; } } }",
+    "namespace Q { internal class Hidden {} }",
+    "namespace Q { class HiddenUse { Hidden InternalMake() => new Hidden(); } }",
+    "namespace P { class Qualified { Q.Target QualifiedMake() => new Q.Target(); } }",
+    "namespace P { class RootQualified { global::Q.Target RootMake() => new global::Q.Target(); } }",
+    "namespace Q { class Unknown { Missing.Target UnknownMake() => new Missing.Target(); } }",
+  ];
+
+  it("resolves only visible declarations and finds uses in reopened namespaces", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-local-namespace-"));
+    try {
+      const paths = await writeFixtureFiles(root, { "Use.cs": lines.join("\n") });
+      const file = paths["Use.cs"]!;
+      const index = await buildProjectIndexFromFiles(root, [file]);
+      for (const line of [1, 2, 3, 4, 5]) {
+        const result = await goToDefinition(index, {
+          file,
+          line,
+          column: columnOf(lines, line, "new Target") + 4,
+        });
+        const visible = line === 1 || line === 3 || line === 5;
+        expect(result.status, `constructor on line ${line}`).toBe(visible ? "ok" : "not_found");
+        if (result.status === "ok") {
+          expect(result.definition.range.start).toMatchObject({ line: 1, column: columnOf(lines, 1, "Target") });
+        }
+      }
+      for (const [line, token, visible] of [
+        [9, "new Q.", true],
+        [10, "new global::Q.", true],
+        [11, "new Missing.", false],
+      ] as const) {
+        const qualified = await goToDefinition(index, {
+          file,
+          line,
+          column: columnOf(lines, line, token) + token.length,
+        });
+        expect(qualified.status, `qualified constructor on line ${line}`).toBe(visible ? "ok" : "not_found");
+        if (qualified.status === "ok") expect(qualified.definition.range.start.line).toBe(1);
+      }
+      const shadow = await goToDefinition(index, {
+        file,
+        line: 6,
+        column: columnOf(lines, 6, "return Target") + 7,
+      });
+      expect(shadow.status).toBe("ok");
+      if (shadow.status !== "ok") throw new Error("Expected the local variable");
+      expect(shadow.definition.range.start).toMatchObject({ line: 6, column: columnOf(lines, 6, "Target") });
+
+      const hidden = await goToDefinition(index, {
+        file,
+        line: 8,
+        column: columnOf(lines, 8, "new Hidden") + 4,
+      });
+      expect(hidden.status).toBe("ok");
+      if (hidden.status !== "ok") throw new Error("Expected the same-file internal class");
+      expect(hidden.definition.range.start.line).toBe(7);
+      const hiddenReferences = await findReferences(index, { file, line: 7, column: columnOf(lines, 7, "Hidden") });
+      expect(hiddenReferences.status).toBe("ok");
+      if (hiddenReferences.status !== "ok") throw new Error("Expected same-file internal class references");
+      expect(hiddenReferences.references.map((reference) => reference.range.start.line).sort()).toEqual([7, 8, 8]);
+      const references = await findReferences(index, { file, line: 1, column: columnOf(lines, 1, "Target") });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected namespace type references");
+      expect(references.references.map((reference) => reference.range.start.line).sort((a, b) => a - b)).toEqual([
+        1, 1, 1, 3, 3, 5, 5, 9, 9, 10, 10,
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not create constructor edges across unrelated namespace regions", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-local-namespace-graph-"));
+    try {
+      const paths = await writeFixtureFiles(root, { "Use.cs": lines.join("\n") });
+      const index = await buildProjectIndexFromFiles(root, [paths["Use.cs"]!]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const constructors = graph.edges
+        .filter((edge) => edge.label === "instantiates" && graph.nodes.get(edge.to)?.name === "Target")
+        .map((edge) => graph.nodes.get(edge.from)?.name)
+        .sort();
+      expect(constructors).toEqual(["AllowedMake", "DirectMake", "NestedMake", "QualifiedMake", "RootMake"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C# same-file internal partial types", () => {
+  // r4100785497: hidden same-file `internal partial class Box` parts are omitted from
+  // exports. A use from a reopened namespace must coalesce proven-equivalent parts
+  // instead of treating them as competing locals, while a namespace decoy, a nested
+  // owner, and a cross-file internal use stay outside that lookup.
+  const lines = [
+    "namespace Q { internal partial class Box { public void Decoy() {} } }",
+    "namespace P { internal partial class Box { public void Helper() {} } }",
+    "namespace P { internal partial class Outer { internal partial class Box { Box NestedMake() => new Box(); } } }",
+    "namespace P { internal partial class Box {} }",
+    "namespace P { class Allowed { Box AllowedMake() => new Box(); } }",
+    "namespace Q { class DecoyUse { Box DecoyMake() => new Box(); } }",
+    "namespace R { class Rejected { Box RejectedMake() => new Box(); } }",
+  ];
+  const peerLines = ["namespace P { class Peer { Box PeerMake() => new Box(); } }"];
+
+  it("coalesces equivalent internal partials from a reopened namespace without crossing owners or files", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-internal-partial-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "Use.cs": `${lines.join("\n")}\n`,
+        "Peer.cs": `${peerLines.join("\n")}\n`,
+      });
+      const file = paths["Use.cs"]!;
+      const peerFile = paths["Peer.cs"]!;
+      const index = await buildProjectIndexFromFiles(root, [file, peerFile]);
+
+      const allowed = await goToDefinition(index, {
+        file,
+        line: 5,
+        column: columnOf(lines, 5, "new Box") + 4,
+      });
+      expect(allowed.status).toBe("ok");
+      if (allowed.status !== "ok") throw new Error("Expected the same-file internal partial Box");
+      expect(normalizePath(allowed.definition.file)).toBe(file);
+      expect(allowed.definition.range.start.line).toBe(2);
+
+      const decoy = await goToDefinition(index, {
+        file,
+        line: 6,
+        column: columnOf(lines, 6, "new Box") + 4,
+      });
+      expect(decoy.status).toBe("ok");
+      if (decoy.status !== "ok") throw new Error("Expected the decoy namespace Box");
+      expect(decoy.definition.range.start.line).toBe(1);
+
+      const nested = await goToDefinition(index, {
+        file,
+        line: 3,
+        column: columnOf(lines, 3, "new Box") + 4,
+      });
+      expect(nested.status).toBe("ok");
+      if (nested.status !== "ok") throw new Error("Expected the nested owner Box");
+      expect(nested.definition.range.start.line).toBe(3);
+
+      const rejected = await goToDefinition(index, {
+        file,
+        line: 7,
+        column: columnOf(lines, 7, "new Box") + 4,
+      });
+      expect(rejected.status).toBe("not_found");
+
+      const peer = await goToDefinition(index, {
+        file: peerFile,
+        line: 1,
+        column: columnOf(peerLines, 1, "new Box") + 4,
+      });
+      expect(peer.status).toBe("not_found");
+
+      const boxReferences = await findReferences(index, {
+        file,
+        line: 2,
+        column: columnOf(lines, 2, "class Box") + 6,
+      });
+      expect(boxReferences.status).toBe("ok");
+      if (boxReferences.status !== "ok") throw new Error("Expected internal partial Box references");
+      const boxSites = boxReferences.references.map(
+        (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
+      );
+      expect(boxSites).toContain(`${file}:2`);
+      expect(boxSites).toContain(`${file}:4`);
+      expect(boxSites).toContain(`${file}:5`);
+      expect(boxSites).not.toContain(`${file}:1`);
+      expect(boxSites).not.toContain(`${file}:3`);
+      expect(boxSites).not.toContain(`${file}:6`);
+      expect(boxSites).not.toContain(`${file}:7`);
+      expect(boxSites.some((site) => site.startsWith(`${peerFile}:`))).toBe(false);
+
+      const pBoxId = `${file}::Box::${allowed.definition.range.start.index ?? 0}`;
+      const qBoxId = `${file}::Box::${decoy.definition.range.start.index ?? 0}`;
+      const nestedBoxId = `${file}::Box::${nested.definition.range.start.index ?? 0}`;
+      const graph = await buildSymbolGraphDetailed(index);
+      const instantiations = graph.edges
+        .filter((edge) => edge.label === "instantiates")
+        .map((edge) => {
+          const toNode = graph.nodes.get(edge.to);
+          return {
+            from: graph.nodes.get(edge.from)?.name,
+            to: edge.to,
+            toFile: toNode ? normalizePath(toNode.file) : undefined,
+          };
+        });
+      expect(instantiations.some((edge) => edge.from === "AllowedMake" && edge.to === pBoxId)).toBe(true);
+      expect(instantiations.some((edge) => edge.from === "DecoyMake" && edge.to === qBoxId)).toBe(true);
+      expect(instantiations.some((edge) => edge.from === "NestedMake" && edge.to === nestedBoxId)).toBe(true);
+      expect(instantiations.some((edge) => edge.from === "RejectedMake")).toBe(false);
+      expect(instantiations.some((edge) => edge.from === "PeerMake")).toBe(false);
+      expect(instantiations.some((edge) => edge.toFile === peerFile)).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not coalesce internal types that are not proven-equivalent parts", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-internal-partial-kind-"));
+    try {
+      const kindLines = [
+        "namespace P { internal partial class Box {} }",
+        "namespace P { internal partial struct Box {} }",
+        "namespace P { class KindUse { Box Make() => new Box(); } }",
+      ];
+      const paths = await writeFixtureFiles(root, { "Use.cs": `${kindLines.join("\n")}\n` });
+      const index = await buildProjectIndexFromFiles(root, [paths["Use.cs"]!]);
+      const result = await goToDefinition(index, {
+        file: paths["Use.cs"]!,
+        line: 3,
+        column: columnOf(kindLines, 3, "new Box") + 4,
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C# partial class members across files", () => {
+  // #378: members declared in one part file are the same owner as the call site in the other part
+  // file, so navigation, references, and the detailed graph must all connect them. A third
+  // same-namespace file must resolve the shared partial type without treating the parts as
+  // competing exports.
+  const partALines = [
+    "namespace P;",
+    "public partial class Box {",
+    "  public void Helper() {}",
+    "  public static void Left() {}",
+    "}",
+  ];
+  const partBLines = [
+    "namespace P;",
+    "public partial class Box {",
+    "  void Use() {",
+    "    this.Helper();",
+    "  }",
+    "  public void Other() {}",
+    "  public static void Right() {}",
+    "}",
+  ];
+  const callerLines = [
+    "namespace P;",
+    "class Caller {",
+    "  Box Make() => new Box();",
+    "  void Run() {",
+    "    var box = new Box();",
+    "    box.Helper();",
+    "    box.Other();",
+    "    Box.Left();",
+    "    Box.Right();",
+    "  }",
+    "}",
+  ];
+  const decoyLines = [
+    "namespace Q;",
+    "public partial class Box {",
+    "  public void Helper() {}",
+    "  void DecoyUse() {",
+    "    this.Helper();",
+    "  }",
+    "}",
+  ];
+  const namespaceDecoyLines = ["namespace Q;", "public partial class Box {", "  public void Helper() {}", "}"];
+  const nestedDecoyLines = [
+    "namespace P;",
+    "public partial class Outer {",
+    "  public partial class Box {",
+    "    public void Helper() {}",
+    "  }",
+    "}",
+  ];
+  const nonPartialDecoyLines = ["namespace R;", "public class Box {", "  public void Helper() {}", "}"];
+
+  function expectedBoxRepresentative(partAPath: string, partBPath: string): string {
+    return fileIdentityKey(partAPath) < fileIdentityKey(partBPath) ? partAPath : partBPath;
+  }
+
+  function happyPathFiles(): Record<string, string> {
+    return {
+      "Box.A.cs": `${partALines.join("\n")}\n`,
+      "Box.B.cs": `${partBLines.join("\n")}\n`,
+      "Caller.cs": `${callerLines.join("\n")}\n`,
+      "Q/Box.Decoy.cs": `${decoyLines.join("\n")}\n`,
+      "Decoy.Namespace.cs": `${namespaceDecoyLines.join("\n")}\n`,
+      "Decoy.Nested.cs": `${nestedDecoyLines.join("\n")}\n`,
+      "Decoy.NonPartial.cs": `${nonPartialDecoyLines.join("\n")}\n`,
+    };
+  }
+
+  async function assertSharedPartialConsumers(index: ProjectIndex, paths: Record<string, string>): Promise<string> {
+    const partAPath = paths["Box.A.cs"]!;
+    const partBPath = paths["Box.B.cs"]!;
+    const callerPath = paths["Caller.cs"]!;
+    const decoyPath = paths["Q/Box.Decoy.cs"]!;
+    const namespaceDecoyPath = paths["Decoy.Namespace.cs"]!;
+    const nestedPath = paths["Decoy.Nested.cs"]!;
+    const nonPartialPath = paths["Decoy.NonPartial.cs"]!;
+    const representative = expectedBoxRepresentative(partAPath, partBPath);
+    const decoyFiles = new Set([decoyPath, namespaceDecoyPath, nestedPath, nonPartialPath]);
+
+    const goto = await goToDefinition(index, {
+      file: partBPath,
+      line: 4,
+      column: columnOf(partBLines, 4, "Helper"),
+    });
+    expect(goto.status).toBe("ok");
+    if (goto.status !== "ok") throw new Error("Expected the partial-class member declaration");
+    expect(normalizePath(goto.definition.file)).toBe(partAPath);
+    expect(goto.definition.range.start.line).toBe(3);
+
+    const gotoBox = await goToDefinition(index, {
+      file: callerPath,
+      line: 3,
+      column: columnOf(callerLines, 3, "Box Make"),
+    });
+    expect(gotoBox.status).toBe("ok");
+    if (gotoBox.status !== "ok") throw new Error("Expected the shared partial type");
+    expect(normalizePath(gotoBox.definition.file)).toBe(representative);
+
+    const gotoNewBox = await goToDefinition(index, {
+      file: callerPath,
+      line: 5,
+      column: columnOf(callerLines, 5, "new Box") + 4,
+    });
+    expect(gotoNewBox.status).toBe("ok");
+    if (gotoNewBox.status !== "ok") throw new Error("Expected the constructed partial type");
+    expect(normalizePath(gotoNewBox.definition.file)).toBe(representative);
+
+    const gotoHelper = await goToDefinition(index, {
+      file: callerPath,
+      line: 6,
+      column: columnOf(callerLines, 6, "Helper"),
+    });
+    expect(gotoHelper.status).toBe("ok");
+    if (gotoHelper.status !== "ok") throw new Error("Expected Helper through the resolved Box");
+    expect(normalizePath(gotoHelper.definition.file)).toBe(partAPath);
+    expect(gotoHelper.definition.range.start.line).toBe(3);
+
+    const gotoOther = await goToDefinition(index, {
+      file: callerPath,
+      line: 7,
+      column: columnOf(callerLines, 7, "Other"),
+    });
+    expect(gotoOther.status).toBe("ok");
+    if (gotoOther.status !== "ok") throw new Error("Expected Other through the resolved Box");
+    expect(normalizePath(gotoOther.definition.file)).toBe(partBPath);
+    expect(gotoOther.definition.range.start.line).toBe(6);
+
+    const gotoLeft = await goToDefinition(index, {
+      file: callerPath,
+      line: 8,
+      column: columnOf(callerLines, 8, "Left"),
+    });
+    expect(gotoLeft.status).toBe("ok");
+    if (gotoLeft.status !== "ok") throw new Error("Expected Left through the resolved Box");
+    expect(normalizePath(gotoLeft.definition.file)).toBe(partAPath);
+    expect(gotoLeft.definition.range.start.line).toBe(4);
+
+    const gotoRight = await goToDefinition(index, {
+      file: callerPath,
+      line: 9,
+      column: columnOf(callerLines, 9, "Right"),
+    });
+    expect(gotoRight.status).toBe("ok");
+    if (gotoRight.status !== "ok") throw new Error("Expected Right through the resolved Box");
+    expect(normalizePath(gotoRight.definition.file)).toBe(partBPath);
+    expect(gotoRight.definition.range.start.line).toBe(7);
+
+    const helperReferences = await findReferences(index, {
+      file: partAPath,
+      line: 3,
+      column: columnOf(partALines, 3, "Helper"),
+    });
+    expect(helperReferences.status).toBe("ok");
+    if (helperReferences.status !== "ok") throw new Error("Expected partial-class member references");
+    const helperSites = helperReferences.references.map(
+      (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
+    );
+    expect(helperSites).toContain(`${partBPath}:4`);
+    expect(helperSites).toContain(`${callerPath}:6`);
+    expect(helperReferences.references.some((reference) => decoyFiles.has(normalizePath(reference.file)))).toBe(false);
+
+    const leftReferences = await findReferences(index, {
+      file: partAPath,
+      line: 4,
+      column: columnOf(partALines, 4, "Left"),
+    });
+    expect(leftReferences.status).toBe("ok");
+    if (leftReferences.status !== "ok") throw new Error("Expected static Left references");
+    const leftSites = leftReferences.references.map(
+      (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
+    );
+    expect(leftSites).toContain(`${callerPath}:8`);
+    expect(leftReferences.references.some((reference) => decoyFiles.has(normalizePath(reference.file)))).toBe(false);
+
+    const rightReferences = await findReferences(index, {
+      file: partBPath,
+      line: 7,
+      column: columnOf(partBLines, 7, "Right"),
+    });
+    expect(rightReferences.status).toBe("ok");
+    if (rightReferences.status !== "ok") throw new Error("Expected static Right references");
+    const rightSites = rightReferences.references.map(
+      (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
+    );
+    expect(rightSites).toContain(`${callerPath}:9`);
+    expect(rightReferences.references.some((reference) => decoyFiles.has(normalizePath(reference.file)))).toBe(false);
+
+    const otherPart = representative === partAPath ? partBPath : partAPath;
+    const otherPartLines = representative === partAPath ? partBLines : partALines;
+    for (const [file, lines] of [
+      [representative, representative === partAPath ? partALines : partBLines],
+      [otherPart, otherPartLines],
+    ] as const) {
+      const boxReferences = await findReferences(index, {
+        file,
+        line: 2,
+        column: columnOf(lines, 2, "Box"),
+      });
+      expect(boxReferences.status).toBe("ok");
+      if (boxReferences.status !== "ok") throw new Error("Expected shared partial type references");
+      const boxSites = boxReferences.references.map(
+        (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
+      );
+      expect(boxSites).toContain(`${partAPath}:2`);
+      expect(boxSites).toContain(`${partBPath}:2`);
+      expect(boxSites).toContain(`${callerPath}:3`);
+      expect(boxSites).toContain(`${callerPath}:5`);
+      expect(boxSites).toContain(`${callerPath}:8`);
+      expect(boxSites).toContain(`${callerPath}:9`);
+      expect(
+        boxReferences.references.some(
+          (reference) =>
+            normalizePath(reference.file) === decoyPath || normalizePath(reference.file) === namespaceDecoyPath,
+        ),
+      ).toBe(false);
+    }
+
+    const graph = await buildSymbolGraphDetailed(index);
+    const useNode = [...graph.nodes.values()].find(
+      (node) => node.name === "Use" && normalizePath(node.file) === partBPath,
+    );
+    expect(useNode).toBeDefined();
+    const runNode = [...graph.nodes.values()].find(
+      (node) => node.name === "Run" && normalizePath(node.file) === callerPath,
+    );
+    expect(runNode).toBeDefined();
+
+    const callTargetsFrom = (fromId: string): string[] => {
+      const callTargets: string[] = [];
+      for (const edge of graph.edges) {
+        if (edge.label !== "calls" || edge.from !== fromId) continue;
+        const node = graph.nodes.get(edge.to);
+        if (node) callTargets.push(`${normalizePath(node.file)}::${node.name}`);
+      }
+      return callTargets;
+    };
+    const useTargets = callTargetsFrom(useNode!.id);
+    expect(useTargets).toContain(`${partAPath}::Helper`);
+    expect(useTargets.some((target) => [...decoyFiles].some((file) => target.startsWith(`${file}::`)))).toBe(false);
+
+    const runTargets = callTargetsFrom(runNode!.id);
+    expect(runTargets).toContain(`${partAPath}::Helper`);
+    expect(runTargets).toContain(`${partBPath}::Other`);
+    expect(runTargets).toContain(`${partAPath}::Left`);
+    expect(runTargets).toContain(`${partBPath}::Right`);
+    expect(runTargets.some((target) => [...decoyFiles].some((file) => target.startsWith(`${file}::`)))).toBe(false);
+
+    const instantiated = graph.edges
+      .filter((edge) => edge.label === "instantiates" && edge.from === runNode!.id)
+      .map((edge) => graph.nodes.get(edge.to))
+      .filter((node): node is NonNullable<typeof node> => !!node);
+    expect(instantiated.some((node) => node.name === "Box" && normalizePath(node.file) === representative)).toBe(true);
+    expect(instantiated.some((node) => decoyFiles.has(normalizePath(node.file)))).toBe(false);
+
+    return representative;
+  }
+
+  it("connects navigation, references, and calls to the declaring part", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-owner-"));
+    try {
+      const paths = await writeFixtureFiles(root, happyPathFiles());
+      const index = await buildProjectIndexFromFiles(root, [
+        paths["Box.A.cs"]!,
+        paths["Box.B.cs"]!,
+        paths["Caller.cs"]!,
+        paths["Q/Box.Decoy.cs"]!,
+        paths["Decoy.Namespace.cs"]!,
+        paths["Decoy.Nested.cs"]!,
+        paths["Decoy.NonPartial.cs"]!,
+      ]);
+      await assertSharedPartialConsumers(index, paths);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("picks the same partial representative across candidate order and disk reload", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-reload-"));
+    const cacheDir = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-cache-"));
+    try {
+      const paths = await writeFixtureFiles(root, happyPathFiles());
+      const listed = [
+        paths["Caller.cs"]!,
+        paths["Decoy.NonPartial.cs"]!,
+        paths["Box.B.cs"]!,
+        paths["Decoy.Namespace.cs"]!,
+        paths["Q/Box.Decoy.cs"]!,
+        paths["Decoy.Nested.cs"]!,
+        paths["Box.A.cs"]!,
+      ];
+      const off = await buildProjectIndexFromFiles(root, listed);
+      const offTarget = await assertSharedPartialConsumers(off, paths);
+
+      const buildOptions = { cache: "disk" as const, cacheDir, threads: 1 };
+      const cold = await buildProjectIndex(root, buildOptions);
+      const coldTarget = await assertSharedPartialConsumers(cold, paths);
+      expect(coldTarget).toBe(offTarget);
+
+      const warm = await buildProjectIndexIncremental(root, buildOptions);
+      const warmTarget = await assertSharedPartialConsumers(warm, paths);
+      expect(warmTarget).toBe(offTarget);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not coalesce ordinary same-name classes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-nonpartial-duplicate-"));
+    try {
+      const first = ["namespace P;", "public class Box {}"];
+      const second = ["namespace P;", "public class Box {}"];
+      const caller = ["namespace P;", "class Caller {", "  Box Make() => new Box();", "}"];
+      const paths = await writeFixtureFiles(root, {
+        "Box.A.cs": `${first.join("\n")}\n`,
+        "Box.B.cs": `${second.join("\n")}\n`,
+        "Caller.cs": `${caller.join("\n")}\n`,
+      });
+      const index = await buildProjectIndexFromFiles(root, [
+        paths["Box.A.cs"]!,
+        paths["Box.B.cs"]!,
+        paths["Caller.cs"]!,
+      ]);
+      const result = await goToDefinition(index, {
+        file: paths["Caller.cs"]!,
+        line: 3,
+        column: columnOf(caller, 3, "new Box") + 4,
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not coalesce partials with different generic arities", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-arity-"));
+    try {
+      const plain = ["namespace P;", "public partial class Box {", "  public void Helper() {}", "}"];
+      const generic = ["namespace P;", "public partial class Box<T> {", "  public void Helper() {}", "}"];
+      const caller = ["namespace P;", "class Caller {", "  Box Make() => new Box();", "}"];
+      const paths = await writeFixtureFiles(root, {
+        "Box.A.cs": `${plain.join("\n")}\n`,
+        "Box.Generic.cs": `${generic.join("\n")}\n`,
+        "Caller.cs": `${caller.join("\n")}\n`,
+      });
+      const index = await buildProjectIndexFromFiles(root, [
+        paths["Box.A.cs"]!,
+        paths["Box.Generic.cs"]!,
+        paths["Caller.cs"]!,
+      ]);
+      const result = await goToDefinition(index, {
+        file: paths["Caller.cs"]!,
+        line: 3,
+        column: columnOf(caller, 3, "new Box") + 4,
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves bare calls to members of another partial part and keeps them in its reference set", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-bare-"));
+    try {
+      const declaring = [
+        "namespace P;",
+        "public partial class Box {",
+        "  public void Helper() {}",
+        "  public static void Shared() {}",
+        "}",
+      ];
+      const callerLines = [
+        "namespace P;",
+        "public partial class Box {",
+        "  void Use() { Helper(); }",
+        "  static void StaticUse() { Helper(); Shared(); }",
+        "  void Shadow() { void Helper() {} Helper(); }",
+        "}",
+      ];
+      const unrelated = ["namespace P;", "class Other {", "  void Use() { Helper(); }", "}"];
+      const paths = await writeFixtureFiles(root, {
+        "Box.A.cs": `${declaring.join("\n")}\n`,
+        "Box.B.cs": `${callerLines.join("\n")}\n`,
+        "Other.cs": `${unrelated.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const at = (file: string, lines: readonly string[], line: number, token: string, last = false) => {
+        const text = lines[line - 1]!;
+        return { file: paths[file]!, line, column: (last ? text.lastIndexOf(token) : text.indexOf(token)) + 1 };
+      };
+
+      const instanceCall = await goToDefinition(index, at("Box.B.cs", callerLines, 3, "Helper"));
+      expect(instanceCall.status).toBe("ok");
+      if (instanceCall.status !== "ok") throw new Error("Expected the partial member");
+      expect(normalizePath(instanceCall.definition.file)).toBe(paths["Box.A.cs"]);
+      expect(instanceCall.definition.range.start.line).toBe(3);
+
+      // A static context reaches only static members; the shadowing local function still wins.
+      expect((await goToDefinition(index, at("Box.B.cs", callerLines, 4, "Helper"))).status).toBe("not_found");
+      const staticCall = await goToDefinition(index, at("Box.B.cs", callerLines, 4, "Shared"));
+      expect(staticCall.status === "ok" && normalizePath(staticCall.definition.file)).toBe(paths["Box.A.cs"]);
+      const shadow = await goToDefinition(index, at("Box.B.cs", callerLines, 5, "Helper", true));
+      expect(shadow.status === "ok" && normalizePath(shadow.definition.file)).toBe(paths["Box.B.cs"]);
+      // A same-namespace class that is not a partial part does not gain the member.
+      expect((await goToDefinition(index, at("Other.cs", unrelated, 3, "Helper"))).status).toBe("not_found");
+
+      const references = await findReferences(index, at("Box.A.cs", declaring, 3, "Helper"));
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected partial member references");
+      const sites = references.references.map((ref) => `${path.basename(ref.file)}:${ref.range.start.line}`);
+      expect(sites).toContain("Box.B.cs:3");
+      expect(sites).not.toContain("Box.B.cs:4");
+      expect(sites).not.toContain("Box.B.cs:5");
+      expect(sites).not.toContain("Other.cs:3");
+      expect(references.referenceCoverage?.state).toBe("complete");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial member coverage when another partial part can sit outside the directory", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-coverage-"));
+    try {
+      const declaring = ["namespace P;", "public partial class Box {", "  public void Helper() {}", "}"];
+      const paths = await writeFixtureFiles(root, {
+        "a/Box.A.cs": `${declaring.join("\n")}\n`,
+        "b/Box.B.cs": "namespace P;\npublic partial class Box {\n  void Use() { Helper(); }\n}\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const references = await findReferences(index, {
+        file: paths["a/Box.A.cs"]!,
+        line: 3,
+        column: columnOf(declaring, 3, "Helper"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected partial member references");
+      expect(references.referenceCoverage).toMatchObject({ state: "partial", reasons: ["strategy_unavailable"] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial member coverage when an unrelated namespace elsewhere can qualify the owner", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-qualified-coverage-"));
+    try {
+      const declaring = ["namespace P;", "public partial class Box {", "  public void Helper() {}", "}"];
+      const sameDirectory = {
+        "a/Box.A.cs": `${declaring.join("\n")}\n`,
+        "a/Box.B.cs": "namespace P;\npublic partial class Box {\n  void Use() { Helper(); }\n}\n",
+      };
+      const request = (paths: Record<string, string>) => ({
+        file: paths["a/Box.A.cs"]!,
+        line: 3,
+        column: columnOf(declaring, 3, "Helper"),
+      });
+      // Every part in one directory with no other C# directory: all candidates were checked.
+      const closedPaths = await writeFixtureFiles(root, sameDirectory);
+      const closed = await findReferences(await buildProjectIndex(root, { cache: "off" }), request(closedPaths));
+      expect(closed.status === "ok" && closed.referenceCoverage?.state).toBe("complete");
+      // An unrelated namespace in another directory can still name `P.Box`.
+      const openPaths = await writeFixtureFiles(root, {
+        "c/Other.cs": "namespace Q;\nclass Other { void Go(P.Box box) { box.Helper(); } }\n",
+      });
+      const open = await findReferences(
+        await buildProjectIndex(root, { cache: "off" }),
+        request({ ...closedPaths, ...openPaths }),
+      );
+      expect(open.status).toBe("ok");
+      if (open.status !== "ok") throw new Error("Expected partial member references");
+      expect(open.referenceCoverage).toMatchObject({ state: "partial", reasons: ["strategy_unavailable"] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("treats a type beside a block namespace as a global-namespace peer", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-global-beside-block-"));
+    try {
+      const declaring = ["class Global {}", "namespace P { class Inner {} }"];
+      const consumer = [
+        "namespace Q;",
+        "class Use { Global MakeGlobal() => new Global(); Inner MakeInner() => new Inner(); }",
+      ];
+      const paths = await writeFixtureFiles(root, {
+        "A.cs": `${declaring.join("\n")}\n`,
+        "B.cs": `${consumer.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const global = await goToDefinition(index, {
+        file: paths["B.cs"]!,
+        line: 2,
+        column: consumer[1]!.lastIndexOf("Global") + 1,
+      });
+      expect(global.status === "ok" && normalizePath(global.definition.file)).toBe(paths["A.cs"]);
+      // The namespace-scoped type in the same file stays invisible to an unrelated namespace.
+      const inner = await goToDefinition(index, {
+        file: paths["B.cs"]!,
+        line: 2,
+        column: consumer[1]!.lastIndexOf("Inner") + 1,
+      });
+      expect(inner.status).toBe("not_found");
+
+      const references = await findReferences(index, { file: paths["A.cs"]!, line: 1, column: 7 });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected global type references");
+      expect(references.references.some((ref) => normalizePath(ref.file) === paths["B.cs"])).toBe(true);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const edgeTargets = graph.edges
+        .filter(
+          (edge) =>
+            edge.label === "instantiates" && normalizePath(graph.nodes.get(edge.from)?.file ?? "") === paths["B.cs"],
+        )
+        .map((edge) => graph.nodes.get(edge.to)?.name);
+      expect(edgeTargets).toContain("Global");
+      expect(edgeTargets).not.toContain("Inner");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps identical namespace aliases declared in separate namespace blocks", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-scoped-duplicate-alias-"));
+    try {
+      const useLines = [
+        "namespace A {",
+        "  using X = P;",
+        "  class First { X::Target Make() => new X::Target(); }",
+        "}",
+        "namespace B {",
+        "  using X = P;",
+        "  class Second { X::Target Make() => new X::Target(); }",
+        "}",
+        "namespace C {",
+        "  class Third { X::Target Make() => new X::Target(); }",
+        "}",
+      ];
+      const paths = await writeFixtureFiles(root, {
+        "Target.cs": "namespace P;\npublic class Target {}\n",
+        "Use.cs": `${useLines.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const gotoLine = (line: number) =>
+        goToDefinition(index, { file: paths["Use.cs"]!, line, column: useLines[line - 1]!.lastIndexOf("Target") + 1 });
+      for (const line of [3, 7]) {
+        const result = await gotoLine(line);
+        expect(result.status === "ok" && normalizePath(result.definition.file), `line ${line}`).toBe(
+          paths["Target.cs"],
+        );
+      }
+      // Namespace C declares no alias, so the scoped aliases in A and B do not reach it.
+      expect((await gotoLine(10)).status).toBe("not_found");
+
+      const references = await findReferences(index, { file: paths["Target.cs"]!, line: 2, column: 14 });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected scoped alias references");
+      const lines = new Set(
+        references.references
+          .filter((ref) => normalizePath(ref.file) === paths["Use.cs"])
+          .map((ref) => ref.range.start.line),
+      );
+      expect([...lines].sort((left, right) => left - right)).toEqual([3, 7]);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const callers = new Set(
+        graph.edges
+          .filter(
+            (edge) =>
+              edge.label === "instantiates" &&
+              graph.nodes.get(edge.to)?.name === "Target" &&
+              normalizePath(graph.nodes.get(edge.from)?.file ?? "") === paths["Use.cs"],
+          )
+          .map((edge) => edge.from),
+      );
+      // One `Make` in First and one in Second; Third has no alias in scope.
+      expect(callers.size).toBe(2);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("matches verbatim namespace-alias spellings in navigation, references, and graph edges", async () => {
+    const cases = [
+      { name: "verbatim declaration", declaration: "using @X = P;", use: "X" },
+      { name: "verbatim use", declaration: "using X = P;", use: "@X" },
+    ];
+    for (const testCase of cases) {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-verbatim-alias-"));
+      try {
+        const useLines = [
+          testCase.declaration,
+          `class Use { ${testCase.use}::Target Make() => new ${testCase.use}::Target(); }`,
+        ];
+        const decoyLines = ["using Y = P;", "class Decoy { X::Target Make() => new X::Target(); }"];
+        const paths = await writeFixtureFiles(root, {
+          "Target.cs": "namespace P;\npublic class Target {}\n",
+          "Use.cs": `${useLines.join("\n")}\n`,
+          "Decoy.cs": `${decoyLines.join("\n")}\n`,
+        });
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const useColumn = useLines[1]!.lastIndexOf("Target") + 1;
+        const goto = await goToDefinition(index, { file: paths["Use.cs"]!, line: 2, column: useColumn });
+        expect(goto.status === "ok" && normalizePath(goto.definition.file), testCase.name).toBe(paths["Target.cs"]);
+        const decoy = await goToDefinition(index, {
+          file: paths["Decoy.cs"]!,
+          line: 2,
+          column: decoyLines[1]!.lastIndexOf("Target") + 1,
+        });
+        expect(decoy.status, testCase.name).toBe("not_found");
+
+        const references = await findReferences(index, { file: paths["Target.cs"]!, line: 2, column: 14 });
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error("Expected alias-qualified references");
+        const sites = references.references.map((ref) => `${path.basename(ref.file)}:${ref.range.start.column}`);
+        expect(sites, testCase.name).toContain(`Use.cs:${useColumn}`);
+        expect(
+          sites.some((site) => site.startsWith("Decoy.cs:")),
+          testCase.name,
+        ).toBe(false);
+
+        const graph = await buildSymbolGraphDetailed(index);
+        const instantiates = graph.edges.some(
+          (edge) =>
+            edge.label === "instantiates" &&
+            normalizePath(graph.nodes.get(edge.from)?.file ?? "") === paths["Use.cs"] &&
+            normalizePath(graph.nodes.get(edge.to)?.file ?? "") === paths["Target.cs"],
+        );
+        expect(instantiates, testCase.name).toBe(true);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("treats verbatim namespace identifiers as the same namespace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-verbatim-namespace-"));
+    try {
+      const useLines = [
+        "namespace P;",
+        "public partial class Box {",
+        "  void Use() { this.Helper(); }",
+        "  Target Make() => new Target();",
+        "}",
+      ];
+      const decoy = ["namespace Q;", "public class Target {}"];
+      const paths = await writeFixtureFiles(root, {
+        "Target.cs": "namespace @P;\npublic class Target {}\n",
+        "Box.A.cs": "namespace @P;\npublic partial class @Box {\n  public void Helper() {}\n}\n",
+        "Box.B.cs": `${useLines.join("\n")}\n`,
+        "Decoy.cs": `${decoy.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const type = await goToDefinition(index, {
+        file: paths["Box.B.cs"]!,
+        line: 4,
+        column: columnOf(useLines, 4, "Target"),
+      });
+      expect(type.status === "ok" && normalizePath(type.definition.file)).toBe(paths["Target.cs"]);
+      const member = await goToDefinition(index, {
+        file: paths["Box.B.cs"]!,
+        line: 3,
+        column: columnOf(useLines, 3, "Helper"),
+      });
+      expect(member.status === "ok" && normalizePath(member.definition.file)).toBe(paths["Box.A.cs"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps C# file-local types inside their declaring file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-file-local-"));
+    try {
+      const declaring = [
+        "namespace P;",
+        "file class Target { public static void Run() {} }",
+        "class Local { Target Make() => new Target(); }",
+      ];
+      const outside = ["namespace P;", "class Use { Target Make() => new Target(); void Go() { Target.Run(); } }"];
+      const paths = await writeFixtureFiles(root, {
+        "A.cs": `${declaring.join("\n")}\n`,
+        "B.cs": `${outside.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const sameFile = await goToDefinition(index, {
+        file: paths["A.cs"]!,
+        line: 3,
+        column: columnOf(declaring, 3, "Target"),
+      });
+      expect(sameFile.status === "ok" && normalizePath(sameFile.definition.file)).toBe(paths["A.cs"]);
+      const crossFile = await goToDefinition(index, {
+        file: paths["B.cs"]!,
+        line: 2,
+        column: columnOf(outside, 2, "Target"),
+      });
+      expect(crossFile.status).toBe("not_found");
+
+      const references = await findReferences(index, {
+        file: paths["A.cs"]!,
+        line: 2,
+        column: columnOf(declaring, 2, "Target"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected file-local type references");
+      const files = new Set(references.references.map((ref) => normalizePath(ref.file)));
+      expect(files.has(paths["A.cs"]!)).toBe(true);
+      expect(files.has(paths["B.cs"]!)).toBe(false);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const edgesFromOutside = graph.edges.filter((edge) => {
+        const from = graph.nodes.get(edge.from);
+        const to = graph.nodes.get(edge.to);
+        return from && to && normalizePath(from.file) === paths["B.cs"] && normalizePath(to.file) === paths["A.cs"];
+      });
+      expect(edgesFromOutside).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps same-named C# file partial owners in different files separate", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-file-partial-"));
+    try {
+      const first = [
+        "namespace P;",
+        "file partial class Box { public void Helper() {} }",
+        "file partial class Box { void Same() { this.Helper(); Helper(); } }",
+      ];
+      const second = ["namespace P;", "file partial class Box { void Other() { this.Helper(); Helper(); } }"];
+      const paths = await writeFixtureFiles(root, {
+        "A.cs": `${first.join("\n")}\n`,
+        "B.cs": `${second.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const column of [first[2]!.indexOf("Helper") + 1, first[2]!.lastIndexOf("Helper") + 1]) {
+        const sameFile = await goToDefinition(index, { file: paths["A.cs"]!, line: 3, column });
+        expect(sameFile.status === "ok" && normalizePath(sameFile.definition.file)).toBe(paths["A.cs"]);
+      }
+      for (const column of [second[1]!.indexOf("Helper") + 1, second[1]!.lastIndexOf("Helper") + 1]) {
+        expect((await goToDefinition(index, { file: paths["B.cs"]!, line: 2, column })).status).toBe("not_found");
+      }
+
+      const references = await findReferences(index, {
+        file: paths["A.cs"]!,
+        line: 2,
+        column: first[1]!.indexOf("Helper") + 1,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected file partial member references");
+      const files = new Set(references.references.map((ref) => normalizePath(ref.file)));
+      expect(files.has(paths["B.cs"]!)).toBe(false);
+      expect(references.referenceCoverage?.state).toBe("complete");
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const crossFile = graph.edges.filter(
+        (edge) =>
+          normalizePath(graph.nodes.get(edge.from)?.file ?? "") === paths["B.cs"] &&
+          normalizePath(graph.nodes.get(edge.to)?.file ?? "") === paths["A.cs"],
+      );
+      expect(crossFile).toEqual([]);
+      const sameFileCalls = graph.edges.filter(
+        (edge) =>
+          edge.label === "calls" &&
+          graph.nodes.get(edge.from)?.name === "Same" &&
+          graph.nodes.get(edge.to)?.name === "Helper",
+      );
+      expect(sameFileCalls.length).toBeGreaterThan(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not coalesce partials with different kinds or enclosing owners", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-kind-owner-"));
+    try {
+      const classPart = ["namespace P;", "public partial class Box {}"];
+      const structPart = ["namespace P;", "public partial struct Box {}"];
+      const classCaller = ["namespace P;", "class KindCaller {", "  Box Make() => new Box();", "}"];
+      const outerUse = [
+        "namespace P;",
+        "public partial class Outer {",
+        "  public partial class Item {",
+        "    void Use() { this.Helper(); }",
+        "  }",
+        "}",
+      ];
+      const otherHelper = [
+        "namespace P;",
+        "public partial class Other {",
+        "  public partial class Item {",
+        "    public void Helper() {}",
+        "  }",
+        "}",
+      ];
+      const paths = await writeFixtureFiles(root, {
+        "Box.Class.cs": `${classPart.join("\n")}\n`,
+        "Box.Struct.cs": `${structPart.join("\n")}\n`,
+        "KindCaller.cs": `${classCaller.join("\n")}\n`,
+        "Outer.cs": `${outerUse.join("\n")}\n`,
+        "Other.cs": `${otherHelper.join("\n")}\n`,
+      });
+      const index = await buildProjectIndexFromFiles(root, [
+        paths["Box.Class.cs"]!,
+        paths["Box.Struct.cs"]!,
+        paths["KindCaller.cs"]!,
+        paths["Outer.cs"]!,
+        paths["Other.cs"]!,
+      ]);
+      const kind = await goToDefinition(index, {
+        file: paths["KindCaller.cs"]!,
+        line: 3,
+        column: columnOf(classCaller, 3, "new Box") + 4,
+      });
+      expect(kind.status).toBe("not_found");
+
+      const nested = await goToDefinition(index, {
+        file: paths["Outer.cs"]!,
+        line: 4,
+        column: columnOf(outerUse, 4, "Helper"),
+      });
+      expect(nested.status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // r4100398996: each enclosing type's generic arity belongs to the shared owner
+  // identity, so `Outer.Inner` and `Outer<T>.Inner` never share partial members
+  // while matching nested partials across files still connect.
+  it("does not share nested partial members across distinct generic enclosing owners", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-nested-arity-"));
+    try {
+      const plainPart = [
+        "namespace P;",
+        "public partial class Outer {",
+        "  public partial class Inner {",
+        "    public void PlainOnly() {}",
+        "  }",
+        "}",
+      ];
+      const genericPart = [
+        "namespace P;",
+        "public partial class Outer<T> {",
+        "  public partial class Inner {",
+        "    public void GenericOnly() {}",
+        "  }",
+        "}",
+      ];
+      const plainUse = [
+        "namespace P;",
+        "public partial class Outer {",
+        "  public partial class Inner {",
+        "    void UsePlain() {",
+        "      this.PlainOnly();",
+        "      this.GenericOnly();",
+        "    }",
+        "  }",
+        "}",
+      ];
+      const genericUse = [
+        "namespace P;",
+        "public partial class Outer<T> {",
+        "  public partial class Inner {",
+        "    void UseGeneric() {",
+        "      this.GenericOnly();",
+        "      this.PlainOnly();",
+        "    }",
+        "  }",
+        "}",
+      ];
+      const paths = await writeFixtureFiles(root, {
+        "Nested.A.cs": `${plainPart.join("\n")}\n`,
+        "Nested.B.cs": `${genericPart.join("\n")}\n`,
+        "Nested.Use.cs": `${plainUse.join("\n")}\n`,
+        "Nested.GenericUse.cs": `${genericUse.join("\n")}\n`,
+      });
+      const index = await buildProjectIndexFromFiles(root, [
+        paths["Nested.A.cs"]!,
+        paths["Nested.B.cs"]!,
+        paths["Nested.Use.cs"]!,
+        paths["Nested.GenericUse.cs"]!,
+      ]);
+
+      // Matching nested partials under the same enclosing owner still cross files.
+      const plain = await goToDefinition(index, {
+        file: paths["Nested.Use.cs"]!,
+        line: 5,
+        column: columnOf(plainUse, 5, "PlainOnly"),
+      });
+      expect(plain.status).toBe("ok");
+      if (plain.status !== "ok") throw new Error("Expected PlainOnly through the plain enclosing owner");
+      expect(normalizePath(plain.definition.file)).toBe(paths["Nested.A.cs"]!);
+      expect(plain.definition.range.start.line).toBe(4);
+
+      const generic = await goToDefinition(index, {
+        file: paths["Nested.GenericUse.cs"]!,
+        line: 5,
+        column: columnOf(genericUse, 5, "GenericOnly"),
+      });
+      expect(generic.status).toBe("ok");
+      if (generic.status !== "ok") throw new Error("Expected GenericOnly through the generic enclosing owner");
+      expect(normalizePath(generic.definition.file)).toBe(paths["Nested.B.cs"]!);
+      expect(generic.definition.range.start.line).toBe(4);
+
+      // Outer.Inner and Outer<T>.Inner do not share members in either direction.
+      const leaked = await goToDefinition(index, {
+        file: paths["Nested.Use.cs"]!,
+        line: 6,
+        column: columnOf(plainUse, 6, "GenericOnly"),
+      });
+      expect(leaked.status).toBe("not_found");
+
+      const reverseLeak = await goToDefinition(index, {
+        file: paths["Nested.GenericUse.cs"]!,
+        line: 6,
+        column: columnOf(genericUse, 6, "PlainOnly"),
+      });
+      expect(reverseLeak.status).toBe("not_found");
+
+      const genericRefs = await findReferences(index, {
+        file: paths["Nested.B.cs"]!,
+        line: 4,
+        column: columnOf(genericPart, 4, "GenericOnly"),
+      });
+      expect(genericRefs.status).toBe("ok");
+      if (genericRefs.status !== "ok") throw new Error("Expected GenericOnly references");
+      const genericSites = genericRefs.references.map(
+        (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
+      );
+      expect(genericSites).toContain(`${paths["Nested.GenericUse.cs"]}:5`);
+      expect(genericSites).not.toContain(`${paths["Nested.Use.cs"]}:6`);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

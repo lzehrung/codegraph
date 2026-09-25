@@ -33,13 +33,15 @@ export type ReceiverCallCandidate = {
   /** Match the member name with PHP's ASCII case-insensitive method rule. */
   caseInsensitiveMemberName?: boolean;
   /**
-   * Argument count, used only to separate same-named overloads on one type.
+   * Argument count rejects incompatible known targets and separates overloads on one type.
    * `null` means the call shape is unknown, so arity-based resolution is omitted.
    */
   argumentCount: number | null;
   site: NonNullable<SymbolGraph["edges"][number]["site"]>;
-  /** Required static/instance scope; omitted candidates are classified from `site`. */
+  /** Required static/instance scope; omitted candidates are classified from site. */
   memberScope?: ReceiverMemberScope;
+  /** Free function to use only if a Swift receiver has no matching member. */
+  fallbackTargetId?: string | undefined;
 };
 
 /** Languages whose grammar distinguishes static members from instance members. */
@@ -63,6 +65,17 @@ const MEMBER_OVERLOAD_LANGUAGE_IDS: Record<string, true> = {
   ts: true,
   tsx: true,
 };
+
+/** Bare calls inside members can target a proven member even without an explicit receiver. */
+const IMPLICIT_SELF_MEMBER_CALL_LANGUAGES: Record<string, true> = {
+  csharp: true,
+  swift: true,
+};
+
+/** Whether a bare, receiver-less call inside a member function may target `this`/an inherited member. */
+export function supportsImplicitSelfMemberCalls(languageId: string): boolean {
+  return !!IMPLICIT_SELF_MEMBER_CALL_LANGUAGES[languageId];
+}
 
 /** Whether member lookup uses call arity to select or reject same-name declarations. */
 export function supportsReceiverMemberOverloads(languageId: string): boolean {
@@ -327,7 +340,7 @@ export function receiverCallAccess(
 
 export type ReceiverMemberScope = "any" | "instance" | "static";
 
-/** Inclusive accepted argument count for one C++ callable entity. `max: null` is variadic. */
+/** Inclusive accepted argument count for one callable member. `max: null` is variadic. */
 export type MemberArityRange = {
   min: number;
   max: number | null;
@@ -994,7 +1007,7 @@ export function declarationNodeIsStatic(node: SyntaxNodeLike, source: string): b
   }
 }
 
-function nodeInStaticMemberContext(node: SyntaxNodeLike, source: string): boolean {
+export function nodeInStaticMemberContext(node: SyntaxNodeLike, source: string): boolean {
   const container = nearestMemberContainer(node);
   if (!container) return false;
   let current: SyntaxNodeLike | null = node;
@@ -1095,18 +1108,61 @@ export function classifyReceiver(
   // A name bound by a local or parameter is a value, not a type. Without this guard
   // `Example::shared()` would still be attributed to a colliding parameter named Example.
   if (proof.locallyBound) return null;
-  // Dotted `Cfg.load()` is not proof: the identifier may be a value. Type-scoped `::`
-  // is the remaining named-type proof. Ruby capitalized names are `constant` tokens
-  // even when they name a parameter, so `constant` is not itself type proof.
+  // Dotted `Cfg.load()` is not proof in languages where the identifier may be a
+  // value. Type-scoped `::` is one named-type proof; C# `Box.Left()` is another
+  // because a capitalized unbound name is the static type receiver. Ruby
+  // capitalized names are `constant` tokens even when they name a parameter, so
+  // `constant` is not itself type proof.
   const property = getMemberAccessParts(sup, accessNode).property;
   const between = property ? source.slice(receiver.endIndex, property.startIndex) : "";
   const typeScoped = TYPE_SCOPED_ACCESS_TYPES[accessNode.type] === true || between.includes("::");
-  if (receiver.type !== "type_identifier" && !typeScoped) return null;
+  if (receiver.type !== "type_identifier" && !typeScoped) {
+    // A capitalized bare name is type proof where construction already types
+    // `Box()` as a Box, and for C# static type-name receivers (`Box.Left()`).
+    // The named type must still resolve to a members-declaring definition
+    // before any call edge is recorded, so a name alone never invents a target.
+    if (!capitalizedTypeReceiverName(sup, receiver, text)) return null;
+    return {
+      kind: "named-type",
+      typeName: text,
+      memberScope: UNBOUND_INSTANCE_CALL_LANGUAGE_IDS[sup.id] ? "any" : "static",
+    };
+  }
   return {
     kind: "named-type",
     typeName: text,
     memberScope: hasStaticMemberDistinction(sup.id) && typeScoped ? "static" : "any",
   };
+}
+
+/**
+ * Languages whose runtime allows an instance member to be invoked through a type
+ * name (`Box.instanceMethod(args)` is a real unbound call), so a type-named
+ * receiver restricts nothing about static versus instance members.
+ */
+const UNBOUND_INSTANCE_CALL_LANGUAGE_IDS: Record<string, true> = {
+  python: true,
+};
+
+/**
+ * Languages whose dotted type-name receivers (`Box.Left()`) name the type itself.
+ * Distinct from `capitalizedCall`, which also treats `Box()` as construction.
+ */
+const STATIC_TYPE_NAME_RECEIVER_LANGUAGE_IDS: Record<string, true> = {
+  csharp: true,
+};
+
+/** Whether a receiver name is capitalized like a type in a capitalized-name language. */
+function capitalizedTypeReceiverName(sup: LanguageSupport, receiver: SyntaxNodeLike, text: string): boolean {
+  if (
+    LANGUAGE_CONSTRUCTION_FORMS[sup.id]?.capitalizedCall !== true &&
+    !STATIC_TYPE_NAME_RECEIVER_LANGUAGE_IDS[sup.id]
+  ) {
+    return false;
+  }
+  if (!isReceiverNameNode(sup, receiver.type)) return false;
+  const first = text[0];
+  return !!first && first === first.toUpperCase() && first !== first.toLowerCase();
 }
 
 /** Whether a resolved definition can declare callable members. */
@@ -1354,6 +1410,8 @@ export function emitReceiverCallEdges(
   memberScopes: ReadonlyMap<string, ReceiverMemberScope> = new Map(),
   nodeAliases: ReadonlyMap<string, string> = new Map(),
   memberArities: ReadonlyMap<string, MemberArityRange> = new Map(),
+  ownerAnchors: ReadonlyMap<string, string> = new Map(),
+  accessibleMembers: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
 ): SymbolGraph["edges"][number][] {
   if (!candidates.length) return [];
 
@@ -1376,6 +1434,10 @@ export function emitReceiverCallEdges(
     if (!label || !HIERARCHY_LABELS[label]) continue;
     pushUnique(supertypesByOwner, edge.from, edge.to);
     if (label === "extends") pushUnique(classAncestorsByOwner, edge.from, edge.to);
+  }
+  // Receiver-local access does not change the nominal type's membership edges.
+  for (const [ownerId, memberIds] of accessibleMembers) {
+    for (const memberId of memberIds) pushUnique(membersByOwner, ownerId, memberId);
   }
 
   const nextOwners = (ownerId: string, viaSupertypes: boolean): string[] => {
@@ -1401,8 +1463,11 @@ export function emitReceiverCallEdges(
       rejectedCallSites.add(siteKey);
       continue;
     }
-    const owner = candidate.ownerId ?? ownerByMember.get(candidate.callerId);
-    if (!owner) continue;
+    const rawOwner = candidate.ownerId ?? ownerByMember.get(candidate.callerId);
+    if (!rawOwner) continue;
+    // Shared-owner anchors redirect Swift extension and C# partial owners to the
+    // coalesced type identity so lookup starts on the whole member set.
+    const owner = ownerAnchors.get(rawOwner) ?? rawOwner;
     const memberScope = candidate.memberScope ?? inferCallMemberScope(candidate.site, sourceCache);
     let level = candidate.viaSupertypes ? nextOwners(owner, true) : [owner];
     const visited = new Set<string>(level);
@@ -1447,8 +1512,12 @@ export function emitReceiverCallEdges(
       }
       level = next;
     }
-    if (receiverDisposition === "none" && existingTargets.size) {
-      rejectedCallSites.add(siteKey);
+    if (receiverDisposition === "none") {
+      if (candidate.fallbackTargetId && !existingTargets.size) {
+        recordEdge(candidate.callerId, candidate.fallbackTargetId, "calls", candidate.site);
+      } else if (existingTargets.size) {
+        rejectedCallSites.add(siteKey);
+      }
     }
   }
   const removed: SymbolGraph["edges"][number][] = [];
@@ -1480,16 +1549,15 @@ function canonicalMemberId(id: string, aliases: ReadonlyMap<string, string>): st
 }
 
 function memberArityMatches(
-  graph: SymbolGraph,
   memberId: string,
   argumentCount: number | null,
   memberArities: ReadonlyMap<string, MemberArityRange>,
 ): boolean {
   if (argumentCount === null) return true;
   const range = memberArities.get(memberId);
-  if (range) return argumentCount >= range.min && (range.max === null || argumentCount <= range.max);
-  const memberArity = graph.nodes.get(memberId)?.memberArity;
-  return memberArity === undefined || memberArity === argumentCount;
+  // Declaration parameter counts do not prove required/default/variadic call bounds.
+  // An unknown range cannot reject a unique target or eliminate an overload.
+  return !range || (argumentCount >= range.min && (range.max === null || argumentCount <= range.max));
 }
 
 /**
@@ -1526,7 +1594,7 @@ function provenMemberTarget(
   if (!matches.size) return { status: "none" };
   if (matches.size === 1) {
     const [memberId] = matches;
-    if (memberArityMatches(graph, memberId!, candidate.argumentCount, memberArities)) {
+    if (memberArityMatches(memberId!, candidate.argumentCount, memberArities)) {
       return { status: "unique", memberId: memberId! };
     }
     return { status: "ambiguous" };
@@ -1534,7 +1602,7 @@ function provenMemberTarget(
   const byArity =
     candidate.argumentCount === null
       ? []
-      : [...matches].filter((memberId) => memberArityMatches(graph, memberId, candidate.argumentCount, memberArities));
+      : [...matches].filter((memberId) => memberArityMatches(memberId, candidate.argumentCount, memberArities));
   if (byArity.length === 1) return { status: "unique", memberId: byArity[0]! };
   return { status: "ambiguous" };
 }

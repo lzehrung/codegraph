@@ -1,3 +1,4 @@
+import type { CallableBinding } from "../../../languages/callable-arity.js";
 import type { SyntaxTreeLike } from "../../../languages/types.js";
 import type { CallableSignature, CallsiteArguments } from "../types.js";
 
@@ -6,6 +7,7 @@ export interface ExtractSignatureRequest {
   source: string;
   symbolStartIndex: number;
   tree?: SyntaxTreeLike;
+  binding?: CallableBinding;
 }
 
 export interface ExtractCallsiteRequest {
