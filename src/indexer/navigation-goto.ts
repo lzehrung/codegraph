@@ -198,7 +198,10 @@ export async function sharedOwnerMemberUnitComplete(index: ProjectIndex, def: Sy
   if (!identity) return null;
   // File-local owners have no parts in other files, so the reference set is complete.
   if (identity.fileLocalTo) return true;
-  return getCompilationUnitPeers(index, def.file).complete;
+  // A C# member is reachable through a qualified owner (`P.Box`) from any namespace, so use the
+  // same qualified peer relation as reference candidate discovery.
+  return getCompilationUnitPeers(index, def.file, languageId === "csharp" ? { csharpQualifiedName: true } : undefined)
+    .complete;
 }
 
 /**

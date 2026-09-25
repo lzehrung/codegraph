@@ -170,7 +170,27 @@ function collectCsharpNamespaceRegions(source: string): CsharpNamespaceRegion[] 
   while (scopes.length) {
     scopes.pop()!.region.end = masked.length;
   }
+  // A block-scoped namespace does not cover the whole file, so a type declared outside every
+  // region (`class Global {}` beside `namespace P { }`) lives in the global namespace. A
+  // whole-file global region keeps that fact; nested named regions still win as innermost.
+  if (regions.length && csharpHasTopLevelTypeOutside(masked, regions)) {
+    regions.unshift({ name: "", start: 0, end: masked.length });
+  }
   return regions;
+}
+
+const CSHARP_TYPE_KEYWORD_PATTERN = /(?<![\w@])(?:class|struct|interface|enum|record|delegate)(?!\w)/u;
+
+/** True when trivia-masked source outside every namespace region declares a type. */
+function csharpHasTopLevelTypeOutside(masked: string, regions: readonly CsharpNamespaceRegion[]): boolean {
+  let cursor = 0;
+  const outside: string[] = [];
+  for (const region of [...regions].sort((left, right) => left.start - right.start)) {
+    if (region.start > cursor) outside.push(masked.slice(cursor, region.start));
+    cursor = Math.max(cursor, region.end + 1);
+  }
+  if (cursor < masked.length) outside.push(masked.slice(cursor));
+  return outside.some((text) => CSHARP_TYPE_KEYWORD_PATTERN.test(text));
 }
 
 type PackageDeclaration = { name: string | null; readable: boolean };

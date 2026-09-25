@@ -1538,6 +1538,85 @@ describe("C# partial class members across files", () => {
     }
   });
 
+  it("reports partial member coverage when an unrelated namespace elsewhere can qualify the owner", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-qualified-coverage-"));
+    try {
+      const declaring = ["namespace P;", "public partial class Box {", "  public void Helper() {}", "}"];
+      const sameDirectory = {
+        "a/Box.A.cs": `${declaring.join("\n")}\n`,
+        "a/Box.B.cs": "namespace P;\npublic partial class Box {\n  void Use() { Helper(); }\n}\n",
+      };
+      const request = (paths: Record<string, string>) => ({
+        file: paths["a/Box.A.cs"]!,
+        line: 3,
+        column: columnOf(declaring, 3, "Helper"),
+      });
+      // Every part in one directory with no other C# directory: all candidates were checked.
+      const closedPaths = await writeFixtureFiles(root, sameDirectory);
+      const closed = await findReferences(await buildProjectIndex(root, { cache: "off" }), request(closedPaths));
+      expect(closed.status === "ok" && closed.referenceCoverage?.state).toBe("complete");
+      // An unrelated namespace in another directory can still name `P.Box`.
+      const openPaths = await writeFixtureFiles(root, {
+        "c/Other.cs": "namespace Q;\nclass Other { void Go(P.Box box) { box.Helper(); } }\n",
+      });
+      const open = await findReferences(
+        await buildProjectIndex(root, { cache: "off" }),
+        request({ ...closedPaths, ...openPaths }),
+      );
+      expect(open.status).toBe("ok");
+      if (open.status !== "ok") throw new Error("Expected partial member references");
+      expect(open.referenceCoverage).toMatchObject({ state: "partial", reasons: ["strategy_unavailable"] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("treats a type beside a block namespace as a global-namespace peer", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-global-beside-block-"));
+    try {
+      const declaring = ["class Global {}", "namespace P { class Inner {} }"];
+      const consumer = [
+        "namespace Q;",
+        "class Use { Global MakeGlobal() => new Global(); Inner MakeInner() => new Inner(); }",
+      ];
+      const paths = await writeFixtureFiles(root, {
+        "A.cs": `${declaring.join("\n")}\n`,
+        "B.cs": `${consumer.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const global = await goToDefinition(index, {
+        file: paths["B.cs"]!,
+        line: 2,
+        column: consumer[1]!.lastIndexOf("Global") + 1,
+      });
+      expect(global.status === "ok" && normalizePath(global.definition.file)).toBe(paths["A.cs"]);
+      // The namespace-scoped type in the same file stays invisible to an unrelated namespace.
+      const inner = await goToDefinition(index, {
+        file: paths["B.cs"]!,
+        line: 2,
+        column: consumer[1]!.lastIndexOf("Inner") + 1,
+      });
+      expect(inner.status).toBe("not_found");
+
+      const references = await findReferences(index, { file: paths["A.cs"]!, line: 1, column: 7 });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected global type references");
+      expect(references.references.some((ref) => normalizePath(ref.file) === paths["B.cs"])).toBe(true);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const edgeTargets = graph.edges
+        .filter(
+          (edge) =>
+            edge.label === "instantiates" && normalizePath(graph.nodes.get(edge.from)?.file ?? "") === paths["B.cs"],
+        )
+        .map((edge) => graph.nodes.get(edge.to)?.name);
+      expect(edgeTargets).toContain("Global");
+      expect(edgeTargets).not.toContain("Inner");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("matches verbatim namespace-alias spellings in navigation, references, and graph edges", async () => {
     const cases = [
       { name: "verbatim declaration", declaration: "using @X = P;", use: "X" },
