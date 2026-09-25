@@ -483,7 +483,7 @@ describe("Swift same-module and shared-owner visibility", () => {
       "extension Box where T == String { func stringOnly() {} }",
       "func extra() {}",
     ];
-    const peerLines = ["extension Box where T == Int { func extra() {} }"];
+    const peerLines = ["extension Box where T /* same requirement */  ==  Int { func extra() {} }"];
     const plainLines = ["extension Box {", "  func invoke() { self.plain(); self.constrainedOnly() }", "}"];
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-constrained-owner-"));
     try {

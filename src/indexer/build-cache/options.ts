@@ -105,8 +105,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 56 enforces Swift cross-file extension visibility and distinct nested C# generic owners.
  * Epoch 57 retains qualified C# paths through generic type arguments for navigation and references.
  * Epoch 58 separates constrained Swift extensions from unproven shared-owner members.
+ * Epoch 59 equates token-identical Swift constraints with differing trivia.
  */
-export const CORE_ALGORITHM_EPOCH = 58;
+export const CORE_ALGORITHM_EPOCH = 59;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

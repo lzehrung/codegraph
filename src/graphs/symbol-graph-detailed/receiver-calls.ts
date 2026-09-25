@@ -33,7 +33,7 @@ export type ReceiverCallCandidate = {
   /** Match the member name with PHP's ASCII case-insensitive method rule. */
   caseInsensitiveMemberName?: boolean;
   /**
-   * Argument count, used only to separate same-named overloads on one type.
+   * Argument count rejects incompatible known targets and separates overloads on one type.
    * `null` means the call shape is unknown, so arity-based resolution is omitted.
    */
   argumentCount: number | null;

@@ -123,10 +123,30 @@ function swiftKeywordText(container: SyntaxNodeLike, source: string): string {
 export function isSwiftExtensionContainer(container: SyntaxNodeLike, source: string): boolean {
   return container.type === "class_declaration" && swiftKeywordText(container, source) === "extension";
 }
+function appendSwiftConstraintTokens(node: SyntaxNodeLike, source: string, tokens: string[]): void {
+  if (node.type === "comment" || node.type === "line_comment" || node.type === "multiline_comment") return;
+  const first = node.child(0);
+  if (!first) {
+    tokens.push(sliceText(node, source));
+    return;
+  }
+  appendSwiftConstraintTokens(first, source, tokens);
+  for (let index = 1; ; index += 1) {
+    const child = node.child(index);
+    if (!child) break;
+    appendSwiftConstraintTokens(child, source, tokens);
+  }
+}
+
 function swiftConstraintKey(container: SyntaxNodeLike, source: string): string | null {
   if (!isSwiftExtensionContainer(container, source)) return null;
   const constraints = (container.namedChildren ?? []).find((child) => child.type === "type_constraints");
-  return constraints ? sliceText(constraints, source).trim() : null;
+  if (!constraints) return null;
+  // Leaf tokens ignore trivia but preserve token boundaries and literal contents.
+  // Different constraint expressions remain separate; semantic equivalence is not inferred.
+  const tokens: string[] = [];
+  appendSwiftConstraintTokens(constraints, source, tokens);
+  return JSON.stringify(tokens);
 }
 
 export function isSwiftConstrainedExtension(container: SyntaxNodeLike, source: string): boolean {
